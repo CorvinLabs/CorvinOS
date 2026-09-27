@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import sys
 import time
 from contextlib import contextmanager
@@ -66,6 +67,11 @@ _log = logging.getLogger(__name__)
 # never a request that never answers.
 LOCK_TIMEOUT_SECONDS = 2.0
 LOCK_RETRY_INTERVAL_SECONDS = 0.01
+
+
+class ChatSettingsUnreadable(OSError):
+    """The channel settings file exists but cannot be parsed — the PATCH is
+    refused rather than overwriting it (it holds the bridge token)."""
 
 
 class ChatSettingsLockBusy(TimeoutError):
@@ -219,8 +225,12 @@ def _write_settings(p: Path, data: dict[str, Any]) -> None:
     replace — writing at the umask and chmod-ing after the move left the
     token world-readable for that window, and for good when the chmod failed."""
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".json.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # A name no other writer uses: the daemons' own writers (settings.js,
+    # in_chat_commands.js, auth.js, whatsapp/daemon.js) all use the fixed
+    # `settings.json.tmp` and are not under this lock — a shared temp name let
+    # one rename the other's half-written file into place.
+    tmp = p.with_name(f".{p.name}.console-{os.getpid()}-{secrets.token_hex(4)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         os.fchmod(fd, 0o600)
         os.write(fd, json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"))
@@ -243,7 +253,18 @@ def _update_channel(channel: str, mutate: Callable[[dict[str, Any]], dict[str, A
     daemon writes its own file without this lock (atomic replace); reading
     inside the lock narrows that race to the merge itself."""
     with _channel_lock(channel) as p:
-        current = _load_channel(channel)
+        # Read the SAME file that is locked and written — resolving the path
+        # again could read the canonical file and write the legacy one. An
+        # unreadable file is refused, never replaced: writing mutate({}) back
+        # would delete the bridge token and the whitelist.
+        try:
+            current = json.loads(p.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            current = {}
+        except (OSError, ValueError) as e:
+            raise ChatSettingsUnreadable(str(p.name)) from e
+        if not isinstance(current, dict):
+            raise ChatSettingsUnreadable(str(p.name))
         updated = mutate(dict(current))
         _write_settings(p, updated)
         return updated
@@ -508,6 +529,21 @@ def chat_settings_patch(
         raise HTTPException(
             http_status.HTTP_503_SERVICE_UNAVAILABLE,
             "lock_busy",
+        ) from e
+    except ChatSettingsUnreadable as e:
+        # The daemon's file is unparseable — refusing keeps the token and the
+        # whitelist; nothing was written.
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="chat_settings.write",
+            target_kind="chat_profile",
+            target_id=target_id,
+            reason="settings-unreadable",
+        )
+        raise HTTPException(
+            http_status.HTTP_409_CONFLICT,
+            "channel settings.json is unreadable — nothing was written",
         ) from e
     except OSError as e:
         console_audit.action_failed(

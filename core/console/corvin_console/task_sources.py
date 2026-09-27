@@ -969,8 +969,12 @@ def collect(tenant_id: str, *, now: float | None = None) -> dict[str, Any]:
 
 
 def query(tenant_id: str, *, types: set[str] | None = None, finished_limit: int = 100,
-          finished_offset: int = 0, now: float | None = None) -> dict[str, Any]:
-    """The payload the console renders: active + stale in full, finished paged."""
+          finished_offset: int = 0, now: float | None = None,
+          finished_since: float | None = None) -> dict[str, Any]:
+    """The payload the console renders: active + stale in full, finished paged.
+    ``finished_since`` (epoch s) drops finished runs that ended earlier, so a
+    view that shows only a recent window does not download the rest; totals
+    and per-type counts are unaffected."""
     agg = collect(tenant_id, now=now)
     recs = agg["records"]
     by_type: dict[str, dict[str, int]] = {}
@@ -987,7 +991,9 @@ def query(tenant_id: str, *, types: set[str] | None = None, finished_limit: int 
     sel = [r for r in recs if not types or r["type"] in types]
     active = sorted((r for r in sel if r["status"] in ACTIVE or r["status"] == "stale"),
                     key=lambda r: (r["status"] == "stale", -r["sort_ts"]))
-    finished = sorted((r for r in sel if r["status"] in FINISHED), key=lambda r: -r["sort_ts"])
+    finished = sorted((r for r in sel if r["status"] in FINISHED
+                       and (finished_since is None or r["sort_ts"] >= finished_since)),
+                      key=lambda r: -r["sort_ts"])
     day_ago = agg["now"] - 86400
     return {
         "server_time": _iso(agg["now"]),

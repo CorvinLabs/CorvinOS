@@ -90,12 +90,13 @@ export interface AllTasks {
 }
 
 export function getAllTasks(
-  opts: { types?: TaskType[]; finishedLimit?: number } = {},
+  opts: { types?: TaskType[]; finishedLimit?: number; finishedSinceS?: number } = {},
   signal?: AbortSignal,
 ): Promise<AllTasks> {
   const q = new URLSearchParams();
   if (opts.types?.length) q.set("types", opts.types.join(","));
   if (opts.finishedLimit) q.set("finished_limit", String(opts.finishedLimit));
+  if (opts.finishedSinceS !== undefined) q.set("finished_since", String(Math.floor(opts.finishedSinceS)));
   const qs = q.toString();
   return api<AllTasks>(`/initiatives/tasks${qs ? `?${qs}` : ""}`, { signal, timeoutMs: POLL_TIMEOUT_MS });
 }

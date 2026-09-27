@@ -59,6 +59,7 @@ def get_all_tasks(
     types: str = "",
     finished_limit: int = Query(default=100, ge=1, le=1000),
     finished_offset: int = Query(default=0, ge=0),
+    finished_since: float | None = Query(default=None, ge=0),
 ) -> dict:
     """Sync on purpose: FastAPI runs it in the threadpool, so the file scan
     (thousands of stats) never blocks the event loop."""
@@ -69,7 +70,7 @@ def get_all_tasks(
     if unknown:
         raise HTTPException(status_code=400, detail=f"unknown task types: {sorted(unknown)}")
     return task_sources.query(rec.tenant_id, types=wanted, finished_limit=finished_limit,
-                              finished_offset=finished_offset)
+                              finished_offset=finished_offset, finished_since=finished_since)
 
 
 _RETIRED = (

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ class AuditEventEnricher:
         """Initialize enricher for tenant."""
         self.tenant_id = tenant_id
         self._enriched_count = 0
+        self._lock = threading.Lock()  # Thread safety
 
     def enrich(
         self,
@@ -112,7 +114,9 @@ class AuditEventEnricher:
                 timestamp=datetime.utcnow(),
             )
 
-            self._enriched_count += 1
+            with self._lock:
+                self._enriched_count += 1
+
             logger.debug(
                 f"Stream B: Enriched {outcome_record.skill_id} "
                 f"outcomes={outcome_record.outcome_count} "

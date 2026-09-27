@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ class MetaOptimizer:
         self.tenant_id = tenant_id
         self.learning_rate = learning_rate
         self._recommendations_count = 0
+        self._lock = threading.Lock()  # Thread safety for state mutations
 
     def optimize(self, confidence_score) -> Optional[OptimizerConfig]:
         """
@@ -100,7 +102,9 @@ class MetaOptimizer:
                 timestamp=datetime.utcnow(),
             )
 
-            self._recommendations_count += 1
+            with self._lock:
+                self._recommendations_count += 1
+
             logger.debug(
                 f"A4 Phase 1: {confidence_score.skill_id} "
                 f"delta={config_delta:+.4f} "

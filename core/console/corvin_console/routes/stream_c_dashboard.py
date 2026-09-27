@@ -17,6 +17,8 @@ References: ADR-2089 (Stream C Design), ADR-0297 (Dashboard Observability)
 from typing import Optional, Dict, List
 from datetime import datetime
 import logging
+import threading
+from collections import deque
 
 logger = logging.getLogger(__name__)
 
@@ -36,31 +38,23 @@ class StreamCDashboard:
     - Multi-tenant: all data filtered by tenant_id
     """
 
-    def __init__(self, tenant_id: str):
+    def __init__(self, tenant_id: str, max_buffer_size: int = 10000):
         """Initialize dashboard for tenant."""
         self.tenant_id = tenant_id
-        self._confidence_series = []  # Phase 1: in-memory buffer
+        self._confidence_series = deque(maxlen=max_buffer_size)  # Bounded buffer
         self._config_deltas = {}  # Phase 1: skill → latest config_delta
         self._trends = {}  # Phase 1: skill → current trend
+        self._lock = threading.Lock()  # Thread safety
 
     def panel_confidence_scoreboard(self) -> Dict:
-        """
-        Panel 1: Confidence score time series.
+        """Panel 1: Confidence score time series (thread-safe)."""
+        with self._lock:
+            data = list(self._confidence_series)  # Snapshot
 
-        Returns:
-        {
-          "panel": "confidence_scoreboard",
-          "title": "Skill Confidence Trends",
-          "data": [
-            { "timestamp": "2026-09-27T10:30:00Z", "skill_id": "os.skill", "confidence_delta": 0.75, "trend": "improving" },
-            ...
-          ]
-        }
-        """
         return {
             "panel": "confidence_scoreboard",
             "title": "Skill Confidence Trends",
-            "data": self._confidence_series,
+            "data": data,
             "sla_ms": 100,
         }
 

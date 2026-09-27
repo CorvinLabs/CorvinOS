@@ -43,7 +43,7 @@ import { clockSkewMs, formatUtc } from "./format";
 import { LIVE_QUERY, freshness } from "./live";
 import { StatusIcon } from "./parts";
 import {
-  WORK_RUNS_FETCH, WORK_RUN_TYPES, isActiveRun, runningNow as pickRunningNow, windowTruncated, workRuns,
+  RUN_WINDOW_MS, WORK_RUNS_FETCH, WORK_RUN_TYPES, isActiveRun, runningNow as pickRunningNow, windowTruncated, workRuns,
 } from "./run-encodings";
 import { RunsTimeline, RunsTree } from "./run-views";
 import { BoardView, TableView, TimelineView, TreeView } from "./views";
@@ -216,7 +216,12 @@ export default function TasksPage() {
   // ACS, agent sessions … — and the "Running now" strip above every work view.
   const workRunsQ = useQuery({
     queryKey: ["task-tracking", "work-runs"],
-    queryFn: ({ signal }) => getAllTasks({ types: WORK_RUN_TYPES, finishedLimit: WORK_RUNS_FETCH }, signal),
+    // Only the 24 h window is fetched (finished_since); the limit is a cap,
+    // and windowTruncated says so when a busy window exceeds it.
+    queryFn: ({ signal }) => getAllTasks({
+      types: WORK_RUN_TYPES, finishedLimit: WORK_RUNS_FETCH,
+      finishedSinceS: (Date.now() - RUN_WINDOW_MS) / 1000,
+    }, signal),
     enabled: view !== "activity",
     ...LIVE_QUERY,
     placeholderData: (prev) => prev,

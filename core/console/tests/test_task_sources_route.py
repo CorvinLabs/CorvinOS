@@ -310,6 +310,18 @@ class TaskSourcesRouteTest(unittest.TestCase):
         self.assertEqual([r["task_id"] for r in ts._a2a_rows(feed)], ["t9"])
         self.assertTrue(all("text" not in r for r in ts._a2a_rows(feed)))
 
+    def test_finished_since_filters_server_side(self):
+        now = time.time()
+        with _sandbox(self._tmp) as (client, _csrf, home, _):
+            _seed(home, now)
+            full = client.get(URL + "?types=chat,forge").json()
+            recent = client.get(URL + f"?types=chat,forge&finished_since={now - 40}").json()
+            ids = {x["id"] for x in recent["finished"]}
+            self.assertIn("chat:d1", ids)            # ended now-30
+            self.assertNotIn("forge:f-ok", ids)      # ended now-49, before the window
+            self.assertLessEqual(recent["finished_total"], full["finished_total"])
+            self.assertEqual(recent["totals"], full["totals"])   # counts unaffected
+
     def test_tenant_from_session(self):
         with _sandbox(self._tmp, tenants=("_default", "acme")) as (_c, _s, home, clients):
             (home / "tenants/acme/global/console/sessions").mkdir(parents=True, exist_ok=True)

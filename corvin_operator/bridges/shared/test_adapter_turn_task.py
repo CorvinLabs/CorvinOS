@@ -343,7 +343,9 @@ def test_round3_rules() -> None:
         assert tm.get_task(t.task_id).status.value == "failed"
         # … and after /cancel it is a cancellation
         t = turn("cx")
-        adapter._cancel_chat("cx")
+        # what _cancel_chat records when it stopped this chat's engine
+        with adapter._TURN_CANCEL_LOCK:
+            adapter._TURN_CANCEL_REQUESTS.add("cx")
         adapter._close_turn_task(t, "", None, "m")
         assert tm.get_task(t.task_id).status.value == "cancelled"
         # a live owning process keeps a turn with no engine pid from the reaper;
@@ -371,6 +373,32 @@ def test_round3_rules() -> None:
     _run(body)
 
 
+def test_round4_rules() -> None:
+    def body(tmp: Path) -> None:
+        adapter = _setup(tmp, hang_first=False)
+        # a /cancel that stopped nothing (turn still preparing) marks nothing
+        assert adapter._cancel_chat("idle-chat") == 0
+        assert adapter._cancel_requested("idle-chat") is False
+        # the turn record carries the bridge's tenant, not "_default" by omission
+        os.environ["CORVIN_TENANT_ID"] = "acme"
+        try:
+            turn = adapter._open_turn_task(prompt="x", channel="discord", chat_key="tt10",
+                                           profile=None, msg_id="m", sender="")
+            meta = json.loads((turn.tasks_dir / f"{turn.task_id}.json").read_text())
+            assert meta["input"]["tenant_id"] == "acme", meta["input"]
+            assert "tenants/acme/" in str(turn.tasks_dir), turn.tasks_dir
+            adapter._close_turn_task(turn, "ok", None, "m")
+        finally:
+            os.environ.pop("CORVIN_TENANT_ID", None)
+        # a retry of an admitted turn is neither re-gated nor re-charged
+        adapter._budget_preflight = lambda chat_key, prompt: (False, "⛔ exhausted")
+        ans = adapter.call_claude_streaming("ship it", channel="discord", chat_key="tt11",
+                                            msg_id="m-11", _retry_count=1)
+        assert not ans.startswith("⛔"), ans
+        print("PASS: cancel-with-nothing-stopped / tenant stamp / retry not re-gated")
+    _run(body)
+
+
 if __name__ == "__main__":
     test_opened_at_pickup_and_closed_once()
     test_recovered_retry_ends_completed()
@@ -382,3 +410,4 @@ if __name__ == "__main__":
     test_escalation_retry_ends_completed()
     test_cancel_is_cancelled_not_failed()
     test_round3_rules()
+    test_round4_rules()

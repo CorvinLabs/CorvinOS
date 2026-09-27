@@ -1427,9 +1427,20 @@ _TURN_CANCEL_LOCK = threading.Lock()
 
 
 def _cancel_chat(chat_key: str) -> int:
+    stopped = _cancel_chat_impl(chat_key)
+    if stopped:
+        # Only a /cancel that actually stopped something marks the turn: one
+        # sent while the turn was still preparing (nothing to stop yet — the
+        # user is told so) must not relabel a turn that then answers.
+        with _TURN_CANCEL_LOCK:
+            _TURN_CANCEL_REQUESTS.add(str(chat_key))
+    return stopped
+
+
+def _cancel_requested(chat_key: str) -> bool:
+    """Whether the operator stopped this chat's running turn (not consumed)."""
     with _TURN_CANCEL_LOCK:
-        _TURN_CANCEL_REQUESTS.add(str(chat_key))
-    return _cancel_chat_impl(chat_key)
+        return str(chat_key) in _TURN_CANCEL_REQUESTS
 
 
 def _cancel_chat_impl(chat_key: str) -> int:
@@ -5375,6 +5386,16 @@ def _call_claude_streaming_via_engine(
     """
     assert _ClaudeCodeEngine is not None  # caller checks the import
 
+    # The bridge turn this attempt belongs to (ADR-2081). Resolved FIRST: every
+    # retry — through call_claude_streaming OR straight back into this function
+    # (model escalation, stale resume marker) — advances the attempt BEFORE any
+    # gate below can report a refusal, so the refusal lands on this attempt.
+    _turn = _current_turn_task()
+    if _turn is not None and not _turn.reused_by(workdir):
+        _turn = None
+    if _turn is not None:
+        _turn.attempt = max(_turn.attempt, _retry_count)
+
     resolved = _resolve_spawn_inputs(
         prompt, mode, profile, add_dir,
         channel=channel, chat_key=chat_key, msg_id=msg_id,
@@ -5484,15 +5505,8 @@ def _call_claude_streaming_via_engine(
     # direct-create branch is the fallback for callers outside that wrapper.
     task_id = None
     tm = None
-    _turn = _current_turn_task()
-    if _turn is not None and not _turn.reused_by(workdir):
-        _turn = None
     if _turn is not None:
         tm, task_id = _turn.tm, _turn.task_id
-        # Every retry — through call_claude_streaming OR straight back into this
-        # function (model escalation, stale resume marker) — advances the
-        # attempt; the attempt that answers is the one whose outcome counts.
-        _turn.attempt = max(_turn.attempt, _retry_count)
     elif _task_manager is not None:
         try:
             tasks_dir = workdir / "tasks"
@@ -5504,6 +5518,7 @@ def _call_claude_streaming_via_engine(
                 channel=channel,
                 msg_id=msg_id,
                 from_operator=_sender_is_operator(channel, (env or {}).get("CORVIN_ORIGIN_SENDER"), chat_key),
+                tenant_id=_bridge_tenant(),
             )
         except Exception as e:  # noqa: BLE001
             # Task tracking is best-effort; don't fail the turn if it breaks
@@ -5658,7 +5673,7 @@ def _call_claude_streaming_via_engine(
                     "event": "task.failed",
                     "exit_code": 1,
                     "reason": "spawn timeout",
-                })
+                }, tenant_id=_bridge_tenant())
             except Exception:  # noqa: BLE001
                 pass
         return "[adapter] engine spawn timed out before producing a process"
@@ -5690,7 +5705,7 @@ def _call_claude_streaming_via_engine(
                 "event": "task.engine_started" if _turn is not None else "task.started",
                 "engine": engine.__class__.__name__,
                 "pid": proc.pid,
-            })
+            }, tenant_id=_bridge_tenant())
             # M4.1: Emit to audit chain (allow-list: task_id, engine_id, chat_key)
             _audit_event(
                 "task.started",
@@ -6274,8 +6289,9 @@ def _call_claude_streaming_via_engine(
                         "error": error_text[:100] if error_text else "",
                         "timed_out": timed_out,
                     }
-                    _user_cancel = (rc is not None and rc < 0 and not timed_out
-                                    and abs(rc) in (signal.SIGTERM, signal.SIGKILL))
+                    # A kill is the operator's /cancel only when one was
+                    # requested — an OOM kill or a service stop is a failure.
+                    _user_cancel = _turn is not None and _cancel_requested(_turn.chat_key)
                     if _turn is not None and _user_cancel:
                         # /cancel (SIGTERM/SIGKILL from _cancel_chat) — the
                         # operator stopped it; not a model failure.
@@ -6283,7 +6299,7 @@ def _call_claude_streaming_via_engine(
                     elif _turn is not None:
                         _turn.report(_retry_count, _failed_evt)
                     else:
-                        tm.record_event(task_id, _failed_evt)
+                        tm.record_event(task_id, _failed_evt, tenant_id=_bridge_tenant())
                     # M4.1: Emit task.failed to audit chain
                     _audit_event(
                         "task.failed",
@@ -6304,7 +6320,7 @@ def _call_claude_streaming_via_engine(
                     if _turn is not None:
                         _turn.report(_retry_count, _done_evt)
                     else:
-                        tm.record_event(task_id, _done_evt)
+                        tm.record_event(task_id, _done_evt, tenant_id=_bridge_tenant())
                     # M4.1: Emit task.completed to audit chain (allow-list only)
                     if tm and task_id:
                         try:
@@ -6659,9 +6675,17 @@ def _call_codex_streaming_via_engine(
 
     final_text = "".join(accumulated).strip()
 
-    if error_text and not final_text:
-        _turn_refused("timeout" if timed_out else "engine_error")
-        log(f"codex streaming error: {error_text[:200]}")
+    if timed_out:
+        # The idle watchdog sets timed_out with NO error_text: without this a
+        # timed-out turn fell through to the success path — a truncated reply
+        # recorded completed. A partial reply is still delivered, as a timeout.
+        _turn_refused("timeout")
+    if (error_text or timed_out) and not final_text:
+        if _cancel_requested(chat_key):
+            _turn_refused("cancelled", cancelled=True)
+        elif not timed_out:
+            _turn_refused("engine_error")
+        log(f"codex streaming error: {(error_text or 'idle timeout')[:200]}")
         _audit_event(
             "codex.stream_timeout" if timed_out else "codex.turn_error",
             channel=channel, chat_key=str(chat_key),
@@ -6673,8 +6697,7 @@ def _call_codex_streaming_via_engine(
                 "⏱️ Request cancelled — Codex did not deliver stream events for too long.",
                 "The request was cancelled because Codex took too long to respond.",
             )
-        if proc is not None and rc < 0 and abs(rc) in (signal.SIGTERM, signal.SIGKILL):
-            _turn_refused("cancelled", cancelled=True)
+        if _cancel_requested(chat_key):
             return ""
         return with_voice_override(
             f"Codex CLI call failed: {error_text[:200]}",
@@ -6960,9 +6983,17 @@ def _call_opencode_streaming_via_engine(
 
     final_text = "".join(accumulated).strip()
 
-    if error_text and not final_text:
-        _turn_refused("timeout" if timed_out else "engine_error")
-        log(f"opencode streaming error: {error_text[:200]}")
+    if timed_out:
+        # The idle watchdog sets timed_out with NO error_text: without this a
+        # timed-out turn fell through to the success path — a truncated reply
+        # recorded completed. A partial reply is still delivered, as a timeout.
+        _turn_refused("timeout")
+    if (error_text or timed_out) and not final_text:
+        if _cancel_requested(chat_key):
+            _turn_refused("cancelled", cancelled=True)
+        elif not timed_out:
+            _turn_refused("engine_error")
+        log(f"opencode streaming error: {(error_text or 'idle timeout')[:200]}")
         # ADR-0067 M2.2 — error audit event
         _audit_event(
             "opencode.stream_timeout" if timed_out else "opencode.turn_error",
@@ -6975,8 +7006,7 @@ def _call_opencode_streaming_via_engine(
                 "⏱️ Request cancelled — OpenCode did not deliver stream events for too long.",
                 "The request was cancelled because OpenCode took too long to respond.",
             )
-        if rc < 0 and abs(rc) in (signal.SIGTERM, signal.SIGKILL):
-            _turn_refused("cancelled", cancelled=True)
+        if _cancel_requested(chat_key):
             return ""
         return with_voice_override(
             f"OpenCode API call failed: {error_text[:200]}",
@@ -7317,8 +7347,13 @@ def _call_hermes_streaming_via_engine(
         # after ~10s. Treat timed_out as a first-class surface-a-message condition
         # independent of error_text, mirroring ADR-0159's "degradation is not
         # silent" principle.
+        if timed_out:
+            _turn_refused("timeout")          # also when a partial reply is delivered
         if (error_text or timed_out) and not final_text:
-            _turn_refused("timeout" if timed_out else "engine_error")
+            if _cancel_requested(chat_key):
+                _turn_refused("cancelled", cancelled=True)
+            elif not timed_out:
+                _turn_refused("engine_error")
             if error_text:
                 log(f"hermes streaming error: {error_text[:200]}")
             else:
@@ -7493,6 +7528,14 @@ def _turn_refused(reason: str, retry_count: "int | None" = None, *, cancelled: b
     turn.report(retry_count, event)
 
 
+def _bridge_tenant() -> str:
+    """The tenant this bridge process serves — the one _session_dir files its
+    sessions under. Stamped on every bridge task record and its events, so a
+    turn's learning outcome and task.* audit land in ITS tenant, never
+    ``_default`` by omission."""
+    return (os.environ.get("CORVIN_TENANT_ID") or "").strip() or "_default"
+
+
 def _turn_engine_started(engine: str, pid: "int | None" = None) -> None:
     """Log the engine start on the current turn (``task.engine_started``,
     no state change): the console shows "engine running" instead of
@@ -7505,28 +7548,17 @@ def _turn_engine_started(engine: str, pid: "int | None" = None) -> None:
     if isinstance(pid, int) and pid > 0:
         event["pid"] = pid
     try:
-        turn.tm.record_event(turn.task_id, event)
+        turn.tm.record_event(turn.task_id, event, tenant_id=_bridge_tenant())
     except Exception:  # noqa: BLE001 — task tracking never breaks a turn
         pass
 
 
 def _proc_start_time(pid: int) -> "str | None":
-    """Kernel start time of *pid* (/proc/<pid>/stat field 22) — with the pid it
-    identifies ONE process, so a recycled pid is not mistaken for the owner.
-
-    Uses the canonical implementation from task_manager to avoid code duplication.
-    """
+    """Kernel start time of *pid* — with the pid it identifies ONE process, so a
+    recycled pid is not mistaken for the owner. One parser: TaskManager's (the
+    reaper compares against it); its only caller needs the task manager anyway."""
     if _task_manager is None:
-        # Fallback: implement inline if task_manager not available
-        try:
-            stat = Path(f"/proc/{pid}/stat").read_text()
-        except OSError:
-            return None
-        rest = stat[stat.rfind(")") + 2:].split()
-        return rest[19] if len(rest) > 19 else None
-    # _proc_start is a staticmethod of TaskManager, not a module function —
-    # calling it on the module raised AttributeError, which _open_turn_task
-    # swallowed: no bridge turn got its task record at pickup any more.
+        return None
     return _task_manager.TaskManager._proc_start(pid)
 
 
@@ -7543,6 +7575,7 @@ def _open_turn_task(*, prompt: str, channel: str, chat_key: str, profile: dict |
             chat_key=chat_key, instruction=prompt,
             persona=str((profile or {}).get("persona") or "assistant"),
             channel=channel, msg_id=msg_id, from_operator=owned,
+            tenant_id=_bridge_tenant(),
         )
         # Running from pickup: context assembly is part of the turn's work.
         # The owning process (this adapter / bg worker) is recorded so a boot
@@ -7552,7 +7585,7 @@ def _open_turn_task(*, prompt: str, channel: str, chat_key: str, profile: dict |
         _st = _proc_start_time(os.getpid())
         if _st:
             started["owner_start"] = _st
-        tm.record_event(task_id, started)
+        tm.record_event(task_id, started, tenant_id=_bridge_tenant())
         with _TURN_CANCEL_LOCK:
             _TURN_CANCEL_REQUESTS.discard(str(chat_key))   # a stale request is not this turn's
         return _TurnTask(tm, task_id, tasks_dir, workdir, owned=owned, chat_key=chat_key)
@@ -7601,7 +7634,7 @@ def _close_turn_task(turn: "_TurnTask | None", answer: "str | None",
             status = "completed"
         elif event["event"] == "task.cancelled":
             status = "refused" if event.get("refused") else "cancelled"
-        turn.tm.record_event(turn.task_id, event)
+        turn.tm.record_event(turn.task_id, event, tenant_id=_bridge_tenant())
     except Exception as e:  # noqa: BLE001
         log_debug(f"turn task close failed: {e}")
     # One turn.done per turn.start: the attempt-0 start is logged by the
@@ -7674,7 +7707,9 @@ def _call_claude_streaming_impl(
     # Phase-4.3 — pre-flight budget gate. Runs BEFORE the fake-claude
     # short-circuit so tests exercise the gate too. On reject, return the
     # refusal text directly; the caller writes it as the chat reply.
-    allowed, refusal = _budget_preflight(chat_key, prompt)
+    # A retry of an admitted turn is not a new turn: it is neither re-gated
+    # nor re-charged (the chat_turns_per_day charge below skips it too).
+    allowed, refusal = (True, None) if _retry_count else _budget_preflight(chat_key, prompt)
     if not allowed:
         _turn_refused("budget", _retry_count)
         return refusal or "[budget exceeded — request refused]"
@@ -7984,7 +8019,9 @@ def _call_claude_streaming_impl(
     # the charge inside _call_claude_streaming_via_engine, which the non-claude
     # branches below return before ever reaching.) Fail-CLOSED; deny = refusal
     # string (all four branches return a response string). Dual-env test bypass.
-    if not (
+    # Charged once per TURN: a retry re-enters here (call_claude_streaming with
+    # _retry_count > 0) and must not charge the chat a second turn.
+    if not _retry_count and not (
         os.environ.get("CORVIN_AGENTS_SKIP_LIVE") == "1"
         and os.environ.get("CORVIN_INTEGRATION_TEST") == "1"
     ):

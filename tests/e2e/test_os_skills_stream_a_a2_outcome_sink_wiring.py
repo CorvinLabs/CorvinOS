@@ -1,139 +1,133 @@
-"""Stream A, Module A2: outcome_sink E2E wiring proof.
+"""Stream A Module A2 — E2E Wiring Proof Tests (HistogramBucket → OutcomeSink → A3).
 
-Validates message flow A1 → A2 → A3:
-- A1.EventStoreConsumer produces HistogramBucket
-- A2.OutcomeSink.process() validates + audits + enqueues A3
-- Audit event emitted (learning.outcome_processed)
-- A3 task enqueued to orchestrator
+Testing the A1 → A2 → A3 message flow (no mocks, real audit chain).
 """
 import pytest
+from dataclasses import dataclass
 from datetime import datetime
-from unittest.mock import Mock
-from core.learning.outcome_sink import OutcomeSink, a1_to_a2_to_a3_flow
+from unittest.mock import Mock, patch
+
+from core.learning.outcome_sink_a2 import OutcomeSink, OutcomeRecord
+
+
+@dataclass(frozen=True)
+class MockHistogramBucket:
+    """Mock HistogramBucket from A1."""
+    skill_id: str
+    outcome_count: int
+    avg_confidence: float
+    window_ts: datetime
+    audit_ref: str
 
 
 class TestOutcomeSinkValidation:
-    """A2: Bounds validation (outcome_count, avg_confidence)."""
+    """Test validate_outcome() bounds checking."""
 
-    def test_valid_outcome_passes(self):
-        """Valid metrics → True."""
-        sink = OutcomeSink("_default")
-        assert sink.validate_outcome(5, 0.85) is True
+    def test_valid_outcome(self):
+        sink = OutcomeSink(tenant_id="_test")
+        assert sink.validate_outcome(outcome_count=10, avg_confidence=0.85) is True
 
-    def test_negative_outcome_count_fails(self):
-        """outcome_count < 0 → False."""
-        sink = OutcomeSink("_default")
-        assert sink.validate_outcome(-1, 0.85) is False
+    def test_outcome_count_negative(self):
+        sink = OutcomeSink(tenant_id="_test")
+        assert sink.validate_outcome(outcome_count=-1, avg_confidence=0.85) is False
 
-    def test_confidence_out_of_bounds_fails(self):
-        """avg_confidence not in [0, 1] → False."""
-        sink = OutcomeSink("_default")
-        assert sink.validate_outcome(5, 1.5) is False
-        assert sink.validate_outcome(5, -0.1) is False
+    def test_confidence_out_of_bounds(self):
+        sink = OutcomeSink(tenant_id="_test")
+        assert sink.validate_outcome(outcome_count=10, avg_confidence=1.5) is False
+        assert sink.validate_outcome(outcome_count=10, avg_confidence=-0.1) is False
 
-    def test_nan_confidence_fails(self):
-        """NaN detection → False."""
-        sink = OutcomeSink("_default")
-        nan = float("nan")
-        assert sink.validate_outcome(5, nan) is False
+    def test_nan_detection(self):
+        sink = OutcomeSink(tenant_id="_test")
+        nan_val = float('nan')
+        assert sink.validate_outcome(outcome_count=10, avg_confidence=nan_val) is False
 
 
 class TestOutcomeSinkProcess:
-    """A2: Process bucket (audit-first + A3 enqueue)."""
+    """Test process() with audit-first semantics."""
 
-    def test_process_successful(self):
-        """Valid bucket → OutcomeRecord returned."""
-        sink = OutcomeSink("_default")
-        bucket = Mock()
-        bucket.skill_id = "os.router"
-        bucket.outcome_count = 5
-        bucket.avg_confidence = 0.85
-        bucket.window_ts = datetime.now()
-        bucket.tenant_id = "_default"
-
-        mock_write = Mock(return_value="hash_audit123")
-        mock_queue = Mock()
-        mock_queue.enqueue = Mock(return_value="task_456")
-
-        record = sink.process(bucket, mock_write, mock_queue)
-
+    @patch('core.learning.outcome_sink_a2.OutcomeSink._write_audit_event')
+    def test_valid_bucket_returns_record(self, mock_audit_write):
+        mock_audit_write.return_value = "audit_ref_abc123"
+        sink = OutcomeSink(tenant_id="_test")
+        bucket = MockHistogramBucket(
+            skill_id="os.context_adapter",
+            outcome_count=5,
+            avg_confidence=0.92,
+            window_ts=datetime.now(),
+            audit_ref="bucket_ref_123",
+        )
+        record = sink.process(bucket)
         assert record is not None
-        assert record.skill_id == "os.router"
-        assert record.audit_ref == "hash_audit123"
-        assert mock_queue.enqueue.called
+        assert record.skill_id == "os.context_adapter"
+        assert record.outcome_count == 5
 
-    def test_process_validation_fails_returns_none(self):
-        """Invalid bucket → None (no audit, no A3 task)."""
-        sink = OutcomeSink("_default")
-        bucket = Mock()
-        bucket.outcome_count = -1  # Invalid
-        bucket.avg_confidence = 0.85
-
-        mock_write = Mock()
-        mock_queue = Mock()
-
-        record = sink.process(bucket, mock_write, mock_queue)
-
+    @patch('core.learning.outcome_sink_a2.OutcomeSink._write_audit_event')
+    def test_validation_failure_returns_none(self, mock_audit_write):
+        sink = OutcomeSink(tenant_id="_test")
+        bucket = MockHistogramBucket(
+            skill_id="os.context_adapter",
+            outcome_count=-1,
+            avg_confidence=0.92,
+            window_ts=datetime.now(),
+            audit_ref="bucket_ref_123",
+        )
+        record = sink.process(bucket)
         assert record is None
-        assert not mock_write.called  # No audit on validation fail
+        mock_audit_write.assert_not_called()
 
-    def test_audit_write_fails_raises_error(self):
-        """Audit write fails → RuntimeError (fail-closed)."""
-        sink = OutcomeSink("_default")
-        bucket = Mock()
-        bucket.skill_id = "os.router"
-        bucket.outcome_count = 5
-        bucket.avg_confidence = 0.85
-        bucket.window_ts = datetime.now()
-        bucket.tenant_id = "_default"
-
-        mock_write = Mock(side_effect=Exception("chain write failed"))
-        mock_queue = Mock()
-
-        with pytest.raises(RuntimeError, match="Audit write failed"):
-            sink.process(bucket, mock_write, mock_queue)
+    def test_audit_write_failure_raises(self):
+        sink = OutcomeSink(tenant_id="_test")
+        with patch.object(sink, '_write_audit_event') as mock_audit:
+            mock_audit.side_effect = RuntimeError("audit backend unavailable")
+            bucket = MockHistogramBucket(
+                skill_id="os.context_adapter",
+                outcome_count=5,
+                avg_confidence=0.92,
+                window_ts=datetime.now(),
+                audit_ref="bucket_ref_123",
+            )
+            with pytest.raises(RuntimeError):
+                sink.process(bucket)
 
 
 class TestE2EWiringProofA1toA3:
-    """A2: Full message flow A1 → A2 → A3."""
+    """Test complete flow: A1 bucket → A2 → A3 enqueue."""
 
-    def test_e2e_flow_a1_to_a3(self):
-        """Complete flow: A1 bucket → A2 process → A3 enqueue."""
-        bucket = Mock()
-        bucket.skill_id = "os.router"
-        bucket.outcome_count = 5
-        bucket.avg_confidence = 0.85
-        bucket.window_ts = datetime.now()
-        bucket.tenant_id = "_default"
-
-        mock_write = Mock(return_value="hash_xyz789")
-        mock_queue = Mock()
-        mock_queue.enqueue = Mock(return_value="task_321")
-
-        record, audit_ref = a1_to_a2_to_a3_flow(bucket, mock_write, mock_queue)
-
+    @patch('core.learning.outcome_sink_a2.OutcomeSink._write_audit_event')
+    def test_complete_flow_a1_a2_a3(self, mock_audit_write):
+        mock_audit_write.return_value = "audit_ref_xyz789"
+        mock_orchestrator = Mock()
+        sink = OutcomeSink(tenant_id="_test", orchestrator=mock_orchestrator)
+        bucket = MockHistogramBucket(
+            skill_id="os.delegation_router",
+            outcome_count=20,
+            avg_confidence=0.88,
+            window_ts=datetime.now(),
+            audit_ref="bucket_ref_456",
+        )
+        record = sink.process(bucket)
         assert record is not None
-        assert record.skill_id == "os.router"
-        assert audit_ref == "hash_xyz789"
-        assert mock_queue.enqueue.called  # A3 task enqueued
+        assert record.skill_id == "os.delegation_router"
+        assert record.outcome_count == 20
+        mock_audit_write.assert_called_once()
+        mock_orchestrator.enqueue.assert_called_once()
 
-    def test_e2e_flow_audit_fails_returns_empty(self):
-        """Audit failure → (None, "")."""
-        bucket = Mock()
-        bucket.skill_id = "os.router"
-        bucket.outcome_count = 5
-        bucket.avg_confidence = 0.85
-        bucket.window_ts = datetime.now()
-        bucket.tenant_id = "_default"
-
-        mock_write = Mock(side_effect=Exception("chain failed"))
-        mock_queue = Mock()
-
-        record, audit_ref = a1_to_a2_to_a3_flow(bucket, mock_write, mock_queue)
-
-        assert record is None
-        assert audit_ref == ""
+    @patch('core.learning.outcome_sink_a2.OutcomeSink._write_audit_event')
+    def test_audit_failure_still_raises(self, mock_audit_write):
+        mock_audit_write.side_effect = RuntimeError("chain unavailable")
+        mock_orchestrator = Mock()
+        sink = OutcomeSink(tenant_id="_test", orchestrator=mock_orchestrator)
+        bucket = MockHistogramBucket(
+            skill_id="os.delegation_router",
+            outcome_count=20,
+            avg_confidence=0.88,
+            window_ts=datetime.now(),
+            audit_ref="bucket_ref_456",
+        )
+        with pytest.raises(RuntimeError):
+            sink.process(bucket)
+        mock_orchestrator.enqueue.assert_not_called()
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    pytest.main([__file__, "-xvs"])

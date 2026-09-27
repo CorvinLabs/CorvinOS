@@ -278,6 +278,45 @@ def test_chat_settings_patch_keeps_a_concurrent_edit(tmp_path):
             assert saved["chat_profiles"]["555"]["persona"] == "coder", saved
 
 
+def test_chat_settings_patch_refuses_an_unreadable_file(tmp_path):
+    """An unparseable daemon settings file is refused, not replaced — writing
+    the merged profile over it would delete the bridge token and whitelist."""
+    with _console(tmp_path) as client:
+        from corvin_console.routes import chat_settings as cs
+        with _channel(tmp_path) as settings_path:
+            real_lock = cs._channel_lock
+            from contextlib import contextmanager
+
+            @contextmanager
+            def corrupt_then_lock(channel):
+                settings_path.write_text('{"discord_token": "tok", "whitelist": [', encoding="utf-8")
+                with real_lock(channel) as p:
+                    yield p
+
+            with patch.object(cs, "_channel_lock", corrupt_then_lock):
+                res = client.patch("/v1/console/chat-settings/discord/555", json={"persona": "coder"})
+            assert res.status_code == 409, res.text
+            assert settings_path.read_text(encoding="utf-8") == '{"discord_token": "tok", "whitelist": ['
+
+
+def test_chat_settings_temp_file_is_not_the_daemons(tmp_path):
+    """The daemons write through the fixed `settings.json.tmp` outside this
+    lock; the console must never use that name."""
+    opened: list[str] = []
+    real_open = os.open
+
+    def spy(path, *a, **kw):
+        opened.append(str(path))
+        return real_open(path, *a, **kw)
+
+    with _console(tmp_path) as client:
+        with _channel(tmp_path), patch("os.open", spy):
+            res = client.patch("/v1/console/chat-settings/discord/555", json={"persona": "coder"})
+            assert res.status_code == 200, res.text
+    tmps = [p for p in opened if p.endswith(".tmp") and "discord" in p]
+    assert tmps and not any(p.endswith("settings.json.tmp") for p in tmps), tmps
+
+
 def test_chat_settings_patch_succeeds_once_the_lock_is_free(tmp_path):
     with _console(tmp_path) as client:
         with _channel(tmp_path) as settings_path:
