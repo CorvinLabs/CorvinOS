@@ -7524,7 +7524,10 @@ def _proc_start_time(pid: int) -> "str | None":
             return None
         rest = stat[stat.rfind(")") + 2:].split()
         return rest[19] if len(rest) > 19 else None
-    return _task_manager._proc_start(pid)
+    # _proc_start is a staticmethod of TaskManager, not a module function —
+    # calling it on the module raised AttributeError, which _open_turn_task
+    # swallowed: no bridge turn got its task record at pickup any more.
+    return _task_manager.TaskManager._proc_start(pid)
 
 
 def _open_turn_task(*, prompt: str, channel: str, chat_key: str, profile: dict | None,
