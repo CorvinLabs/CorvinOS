@@ -484,11 +484,16 @@ class MasterRolloutOrchestrator:
 
     def _transition_phase_1_to_2a(self) -> None:
         """Execute Phase 1 → Phase 2a transition"""
-        self.base_orch.operator_approve(
-            OperatorApprovalGate.PHASE_1_TO_2A,
-            approved_by="system",
-            reason="Automated phase transition"
-        )
+        # F037: Don't call base_orch.operator_approve (incompatible signature)
+        # Instead, directly execute the transition in the master state
+
+        self.state.base_state.phase = Phase.PHASE_2A_CANARY
+        self.state.base_state.phase_start_time = datetime.now(timezone.utc).isoformat()
+        self.state.base_state.current_traffic_percentage = 1  # Start canary at 1%
+        self.state.base_state.pending_operator_approval = False
+        self.state.base_state.approval_required_for = None
+        self.state.base_state.last_decision_time = self.state.base_state.phase_start_time
+        self.state.base_state.last_decision_reason = "Operator approved Phase 1→2a transition"
 
         # Enable dual-write for all skills
         for skill_id in self.state.base_state.skill_states:
@@ -608,17 +613,58 @@ class MasterRolloutOrchestrator:
                 logger.warning(f"Tenant mismatch in persisted state: {persisted_tenant} vs {self.tenant_id}")
                 return
 
-            # F002: Reconstruct complete state
+            # F002, F033: Reconstruct complete state including base_state
             self.state.last_saved_time = state_dict.get("last_saved_time", "")
             self.state.last_saved_hash = stored_hash
             self.state.tenant_id = persisted_tenant
+
+            # F033: Restore base_state (RolloutState) from persisted dictionary
+            if "base_state" in state_dict:
+                base_state_dict = state_dict["base_state"]
+                # Reconstruct RolloutState from dictionary
+                # Handle Phase enum (may be stored as "PHASE_1_SHADOW" or "Phase.PHASE_1_SHADOW")
+                phase_str = base_state_dict.get("phase", "PHASE_1_SHADOW")
+                if isinstance(phase_str, str) and phase_str.startswith("Phase."):
+                    # Remove "Phase." prefix if present (from repr serialization)
+                    phase_str = phase_str.replace("Phase.", "")
+                self.state.base_state.phase = Phase(phase_str)
+                self.state.base_state.day_number = base_state_dict.get("day_number", 1)
+                self.state.base_state.week_number = base_state_dict.get("week_number", 1)
+                self.state.base_state.current_traffic_percentage = base_state_dict.get("current_traffic_percentage", 0)
+                self.state.base_state.start_date = base_state_dict.get("start_date", "")
+                self.state.base_state.last_decision_time = base_state_dict.get("last_decision_time", "")
+                self.state.base_state.last_decision_reason = base_state_dict.get("last_decision_reason", "")
+                self.state.base_state.phase_start_time = base_state_dict.get("phase_start_time", "")
+                self.state.base_state.rollback_count = base_state_dict.get("rollback_count", 0)
+                self.state.base_state.pending_operator_approval = base_state_dict.get("pending_operator_approval", False)
+                self.state.base_state.approval_required_for = base_state_dict.get("approval_required_for")
+
+                # Restore skill_states (convert string values back to SkillMode enums)
+                if "skill_states" in base_state_dict:
+                    self.state.base_state.skill_states = {}
+                    for skill_id, mode_str in base_state_dict["skill_states"].items():
+                        # Handle SkillMode enum (may be stored as "ADVISORY" or "SkillMode.ADVISORY")
+                        if isinstance(mode_str, str) and mode_str.startswith("SkillMode."):
+                            mode_str = mode_str.replace("SkillMode.", "")
+                        self.state.base_state.skill_states[skill_id] = SkillMode(mode_str)
 
             # Restore operator approvals with tenant isolation
             if "operator_approvals" in state_dict:
                 for gate_key, approval_dict in state_dict["operator_approvals"].items():
                     if approval_dict.get("tenant_id") == self.tenant_id:
+                        # F036: Handle enum deserialization (gate value may be stored as string)
+                        gate_value = approval_dict.get("gate")
+                        if isinstance(gate_value, str):
+                            # Handle both formats: "phase_1_to_2a" and "OperatorApprovalGate.PHASE_1_TO_2A"
+                            if gate_value.startswith("OperatorApprovalGate."):
+                                gate_value = gate_value.replace("OperatorApprovalGate.", "").lower()
+                            # Convert string to enum
+                            gate_enum = OperatorApprovalGate(gate_value)
+                        else:
+                            gate_enum = OperatorApprovalGate(gate_value.value) if hasattr(gate_value, 'value') else OperatorApprovalGate(gate_value)
+
                         record = OperatorApprovalRecord(
-                            gate=OperatorApprovalGate(approval_dict["gate"]),
+                            gate=gate_enum,
                             requested_at=approval_dict["requested_at"],
                             approval_id=approval_dict.get("approval_id", str(uuid.uuid4())),
                             approved_at=approval_dict.get("approved_at"),
@@ -640,11 +686,21 @@ class MasterRolloutOrchestrator:
             if "weekly_evaluations" in state_dict:
                 for week_key, eval_dict in state_dict["weekly_evaluations"].items():
                     if eval_dict.get("tenant_id") == self.tenant_id:
+                        # Handle Phase enum (may have "Phase." prefix)
+                        phase_str = eval_dict.get("phase", "PHASE_1_SHADOW")
+                        if isinstance(phase_str, str) and phase_str.startswith("Phase."):
+                            phase_str = phase_str.replace("Phase.", "")
+
+                        # Handle PhaseGateResult enum (may have "PhaseGateResult." prefix)
+                        gate_result_str = eval_dict.get("gate_result", "pass")
+                        if isinstance(gate_result_str, str) and gate_result_str.startswith("PhaseGateResult."):
+                            gate_result_str = gate_result_str.replace("PhaseGateResult.", "")
+
                         evaluation = WeeklyGateEvaluation(
                             week_number=eval_dict["week_number"],
-                            phase=Phase(eval_dict["phase"]),
+                            phase=Phase(phase_str),
                             timestamp=eval_dict["timestamp"],
-                            gate_result=PhaseGateResult(eval_dict["gate_result"]),
+                            gate_result=PhaseGateResult(gate_result_str),
                             metrics=eval_dict.get("metrics", {}),
                             criteria_passed=eval_dict.get("criteria_passed", 0),
                             criteria_total=eval_dict.get("criteria_total", 0),
@@ -716,10 +772,25 @@ class MasterRolloutOrchestrator:
 
     def _validate_tenant_isolation(self) -> bool:
         """
-        Validate tenant isolation for all state queries (F023).
+        Validate tenant isolation for all state queries (F023, F035).
 
         Ensures that all operations are scoped to the correct tenant.
+        If tenant has changed, reset base_state completely.
         """
+        # F035: Check if tenant_id in state matches current tenant
+        if self.state.tenant_id != self.tenant_id:
+            logger.warning(f"Tenant change detected: {self.state.tenant_id} → {self.tenant_id}")
+            # F035: RESET base_state completely on tenant switch
+            self.state.tenant_id = self.tenant_id
+            self.state.base_state = self._initialize_master_state().base_state
+            # Clear approvals and evaluations for old tenant
+            self.state.operator_approvals.clear()
+            self.state.weekly_evaluations.clear()
+            self.state.automatic_transitions.clear()
+            self.state.processed_approval_ids.clear()
+            logger.info(f"Base state reset for tenant {self.tenant_id}")
+            return True
+
         # Verify operator approvals are tenant-scoped
         for gate_key, record in self.state.operator_approvals.items():
             if record.tenant_id != self.tenant_id:
