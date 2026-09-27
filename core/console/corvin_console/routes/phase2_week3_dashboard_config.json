@@ -1,0 +1,63 @@
+{
+  "dashboard_id": "phase2_week3_canary_monitor",
+  "updated_at": "2026-09-27T17:48:16.612412+00:00",
+  "status": "ACTIVE",
+  "panels": {
+    "phase_status": {
+      "title": "WEEK 3 CANARY (1%) ACTIVE",
+      "current_phase": "PHASE_2_WEEK_3_1_PERCENT",
+      "traffic_percentage": 1,
+      "activation_time": "2026-09-27T17:48:16.612412+00:00",
+      "next_evaluation": "2026-10-04T00:00:00Z",
+      "days_remaining": 7
+    },
+    "metrics_live": {
+      "agreement_rate": {
+        "current": "STREAMING",
+        "target": 0.99,
+        "status": "MONITORING"
+      },
+      "latency_p99": {
+        "current": "STREAMING",
+        "baseline_ms": 250,
+        "threshold_ms": 300,
+        "status": "MONITORING"
+      },
+      "error_rate": {
+        "current": "STREAMING",
+        "target": 0.01,
+        "status": "MONITORING"
+      },
+      "confidence_score": {
+        "current": 0.7,
+        "target": 0.7,
+        "status": "ON_TARGET"
+      }
+    },
+    "operator_approval_buttons": {
+      "approve_escalation_10_percent": {
+        "enabled": false,
+        "available_after": "2026-10-04T00:00:00Z",
+        "label": "APPROVE 10% ESCALATION"
+      },
+      "hold_at_1_percent": {
+        "enabled": true,
+        "label": "HOLD AT 1%"
+      },
+      "reject_rollback": {
+        "enabled": true,
+        "label": "IMMEDIATE ROLLBACK"
+      }
+    },
+    "blocking_reasons": {
+      "status": "NONE",
+      "items": []
+    },
+    "audit_trail": {
+      "chain_status": "VERIFIED",
+      "events_recorded": 1,
+      "latest_event": "deployment_phase2_activated",
+      "hash_chain_verified": true
+    }
+  }
+}
