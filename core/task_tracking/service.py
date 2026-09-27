@@ -13,11 +13,17 @@ history view and the chain hash that ties it to the chain record.
 
 Rollups (progress, status counts, overdue) are derived on every read and never
 stored, so they cannot drift from the items they summarise.
+
+**ADR Deduplication (2026-09-27):** Task creation validates that external_ref
+(when it's an ADR ID) doesn't already exist in the registry with a different
+item ID. This prevents duplicate ADR IDs from silently creating multiple task rows.
+See :func:`_check_adr_uniqueness` + ADR-0516 knowledge-graph-foundation.
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import threading
 import uuid
@@ -149,6 +155,34 @@ def _fetch(conn: sqlite3.Connection, tenant_id: str, item_id: str, *, deleted_ok
     if r is None or (not deleted_ok and r["deleted_at"]):
         raise NotFound(f"item {item_id!r} not found")
     return _row(r)
+
+
+def _check_adr_uniqueness(conn: sqlite3.Connection, tenant_id: str, external_ref: Optional[str]) -> None:
+    """Validate that an ADR ID (external_ref) is not already assigned to another task.
+
+    If external_ref matches ADR-NNNN pattern, query the registry to ensure no other
+    item has this ADR ID. This prevents duplicate ADR task rows (ADR-0516 enforcement).
+
+    Raises TaskTrackingError if a duplicate is found.
+    """
+    if not external_ref:
+        return
+
+    # Check if this looks like an ADR ID (ADR-NNNN)
+    if not re.match(r'^ADR-\d{4}$', external_ref):
+        return  # Not an ADR; no dedup check needed
+
+    # Query: does any other item have this ADR ID?
+    existing = conn.execute(
+        "SELECT id, title FROM items WHERE tenant_id=? AND external_ref=? AND deleted_at IS NULL",
+        (tenant_id, external_ref),
+    ).fetchone()
+
+    if existing:
+        raise TaskTrackingError(
+            f"ADR {external_ref} is already tracked by task {existing['id']} ({existing['title']}). "
+            f"Each ADR can only have one task. Link to the existing task instead, or clear external_ref."
+        )
 
 
 def _check_parent(conn: sqlite3.Connection, tenant_id: str, kind: str,
@@ -509,6 +543,8 @@ def create(tenant_id: str, body: ItemCreate, *, actor: str, sid_fingerprint: Opt
         fields.update(extra)
 
     def fn(conn: sqlite3.Connection) -> dict[str, Any]:
+        # ADR deduplication check (ADR-0516 enforcement): external_ref must be unique per tenant
+        _check_adr_uniqueness(conn, tenant_id, fields.get("external_ref"))
         row = _insert(conn, tenant_id, fields, actor=actor)
         _record(conn, tenant_id, item_id=row["id"], event_type="task_item.created", actor=actor,
                 chain_details={"kind": row["kind"], "parent_id": row["parent_id"], "status": row["status"],
@@ -542,6 +578,11 @@ def update(tenant_id: str, item_id: str, patch: ItemPatch, *, actor: str,
         if not changed:
             return cur
         kind = changed.get("kind", cur["kind"])
+
+        # ADR deduplication check: if external_ref is being changed to an ADR ID, validate uniqueness
+        if "external_ref" in changed:
+            _check_adr_uniqueness(conn, tenant_id, changed.get("external_ref"))
+
         if "kind" in changed or "parent_id" in changed:
             _check_parent(conn, tenant_id, kind, changed.get("parent_id", cur["parent_id"]), item_id)
         if "kind" in changed:
