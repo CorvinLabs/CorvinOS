@@ -188,12 +188,12 @@ export const CorvinKnowledgePage = React.lazy(() =>
   import("@/pages/corvin-knowledge").then((m) => ({ default: m.CorvinKnowledgePage }))
 );
 
+// Video Producer — the console panel of the contributor plugin
+// plugins/contributor/media/video_producer (ADR-0892). Not a
+// static panel: it mounts only while the plugin is installed AND enabled
+// (capability manifest → manifestPanelRoutes), like CorvinKnowledgePage.
 export const VideoProducerPage = React.lazy(() =>
-  import("@/pages/video-producer")
-);
-
-export const VideoQualityMetricsPage = React.lazy(() =>
-  import("@/panels/video-quality-metrics").then((m) => ({ default: m.VideoQualityMetricsPanel }))
+  import("@/pages/video-producer").then((m) => ({ default: m.VideoProducerPage }))
 );
 
 export const DataHubUnifiedPage = React.lazy(() =>
