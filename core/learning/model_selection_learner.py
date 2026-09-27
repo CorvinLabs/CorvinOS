@@ -311,6 +311,9 @@ _MODEL_PRICING_USD_PER_1K: dict[str, tuple[float, float]] = {
     "claude-fable-5": (0.010, 0.050),
     "claude-mythos-5-1": (0.010, 0.050),
     "claude-mythos-5": (0.010, 0.050),
+    # Opus 5.5 is CHEAPER than Opus 5 — without its own key the longest-prefix
+    # match priced it at the Opus 5 rate (claude-opus-5 is its prefix).
+    "claude-opus-5-5": (0.004, 0.020),
     "claude-opus-5": (0.005, 0.025),
     "claude-opus-4-8": (0.005, 0.025),
     "claude-opus-4-7": (0.005, 0.025),
@@ -344,6 +347,15 @@ _BASELINE_MODEL_PREFIX = "claude-opus-5"
 # never a fabricated split, just a stated assumption on a real count.
 _CACHE_WRITE_MULTIPLIER = 1.25
 _CACHE_READ_MULTIPLIER = 0.1
+
+#: Published cache-READ rates ($/1K) that are NOT 0.1x input. Longest-prefix
+#: matched like the rate card. Opus 5.5 reads at $0.20/MTok (0.05x) and Fable
+#: 5.1 at $0.25/MTok (0.025x); the 0.1x rule priced those reads 2x and 4x too
+#: high, and cache reads dominate a long chat's token count.
+_CACHE_READ_USD_PER_1K: dict[str, float] = {
+    "claude-opus-5-5": 0.0002,
+    "claude-fable-5-1": 0.00025,
+}
 
 
 #: Routing prefixes a host prepends to the model id, in the two spellings that
@@ -415,10 +427,20 @@ def _price_for_model(model: str) -> Optional[tuple[float, float]]:
     return None
 
 
+def _cache_read_rate(model: str) -> Optional[float]:
+    candidate = _ROUTING_PREFIX.sub("", model or "")
+    best: Optional[str] = None
+    for prefix in _CACHE_READ_USD_PER_1K:
+        if candidate.startswith(prefix) and (best is None or len(prefix) > len(best)):
+            best = prefix
+    return _CACHE_READ_USD_PER_1K[best] if best else None
+
+
 def _turn_cost_usd(
     price: tuple[float, float],
     in_tok: int, out_tok: int,
     cache_write_tok: int, cache_read_tok: int,
+    model: str = "",
 ) -> float:
     """Real $ for one turn's full token accounting against one model's price.
 
@@ -430,7 +452,8 @@ def _turn_cost_usd(
         (in_tok / 1000.0) * price[0]
         + (out_tok / 1000.0) * price[1]
         + (cache_write_tok / 1000.0) * price[0] * _CACHE_WRITE_MULTIPLIER
-        + (cache_read_tok / 1000.0) * price[0] * _CACHE_READ_MULTIPLIER
+        + (cache_read_tok / 1000.0) * (
+            _cache_read_rate(model) or price[0] * _CACHE_READ_MULTIPLIER)
     )
 
 
@@ -498,8 +521,9 @@ def _price_and_baseline(
     if price is None:
         return None
     baseline_price = _MODEL_PRICING_USD_PER_1K[_BASELINE_MODEL_PREFIX]
-    actual = _turn_cost_usd(price, in_tok, out_tok, cache_write_tok, cache_read_tok)
-    baseline = _turn_cost_usd(baseline_price, in_tok, out_tok, cache_write_tok, cache_read_tok)
+    actual = _turn_cost_usd(price, in_tok, out_tok, cache_write_tok, cache_read_tok, model)
+    baseline = _turn_cost_usd(baseline_price, in_tok, out_tok, cache_write_tok, cache_read_tok,
+                              _BASELINE_MODEL_PREFIX)
     return actual, baseline
 
 
@@ -559,8 +583,10 @@ def compute_cost_efficiency(
         cache_read_tok = t.get("cache_read_input_tokens") or 0
         if price is None or (in_tok == 0 and out_tok == 0 and cache_write_tok == 0 and cache_read_tok == 0):
             continue
-        actual = _turn_cost_usd(price, in_tok, out_tok, cache_write_tok, cache_read_tok)
-        baseline = _turn_cost_usd(baseline_price, in_tok, out_tok, cache_write_tok, cache_read_tok)
+        actual = _turn_cost_usd(price, in_tok, out_tok, cache_write_tok, cache_read_tok,
+                                t.get("model") or "")
+        baseline = _turn_cost_usd(baseline_price, in_tok, out_tok, cache_write_tok, cache_read_tok,
+                                  _BASELINE_MODEL_PREFIX)
         by_day[day][0] += actual
         by_day[day][1] += baseline
         by_day_counted[day] += 1

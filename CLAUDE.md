@@ -923,6 +923,15 @@ a short work request is `medium` 0.75 → Sonnet; only conversation is `simple`
 `core.skills.os_skills.model_selector` — overwriting that module (4036473fe)
 silently kills Tier 2.9.
 
+**Model lineage (ADR-2090).** Automatic tiers route to the NEWEST version of a
+family (`model_selector.tier_model()`, `model_lineage.latest()`), so Opus 5.5
+serves complex today. Pins and saved per-tier choices are kept until their model
+is retired. Only the CLI's own `issue with the selected model (<id>)` answer
+retires a model (`retired_models.json`, 7-day TTL). The successor is applied at
+`ClaudeCodeEngine._build_args` for every surface. **Never** treat absence from
+the curated YAML or from the live `/v1/models` list as retirement. **Never**
+hardcode a model id where `tier_model()` / `top_model()` exists.
+
 **`CORVIN_OS_MODEL_AUTOSELECT=off` disables Tier 2.9 too.** It means "do not
 pick a model for me"; a kill-switch that silently stops killing is worse than
 none. Explicit pins are unaffected.

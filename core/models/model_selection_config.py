@@ -59,8 +59,10 @@ _TASK_TYPE_BY_COMPLEXITY: dict[str, str] = {
 _DEFAULTS: dict[str, dict[str, Any]] = {
     "corvinOS": {"selected_model": "claude-haiku-4-5-20251001", "provider": None, "alternatives": []},
     "SIMPLE": {"selected_model": "claude-haiku-4-5-20251001", "provider": None, "alternatives": ["claude-sonnet-5"]},
-    "MEDIUM": {"selected_model": "claude-sonnet-5", "provider": None, "alternatives": ["claude-haiku-4-5-20251001", "claude-opus-5"]},
-    "COMPLEX": {"selected_model": "claude-opus-5", "provider": None, "alternatives": ["claude-sonnet-5"]},
+    "MEDIUM": {"selected_model": "claude-sonnet-5", "provider": None, "alternatives": ["claude-haiku-4-5-20251001", "claude-opus-5-5"]},
+    # An UNSAVED tier routes to the newest version of its family regardless of
+    # this string (model_selector.tier_model); it is what the console shows.
+    "COMPLEX": {"selected_model": "claude-opus-5-5", "provider": None, "alternatives": ["claude-sonnet-5", "claude-opus-5"]},
 }
 
 
@@ -98,6 +100,22 @@ def load_config(tenant_id: str) -> dict[str, dict[str, Any]]:
                 "alternatives": entry.get("alternatives") if isinstance(entry.get("alternatives"), list) else [],
             }
     return out
+
+
+def saved_task_types(tenant_id: str) -> set[str]:
+    """Task types the operator actually SAVED (vs. ``_DEFAULTS`` fill-ins).
+
+    The OS router treats a saved choice as a pin (kept until that model is
+    retired) and an unsaved one as "newest version of the family"."""
+    try:
+        raw = json.loads(_config_path(tenant_id).read_text("utf-8"))
+    except Exception:
+        return set()
+    models = raw.get("models") if isinstance(raw, dict) else None
+    if not isinstance(models, dict):
+        return set()
+    return {t for t in TASK_TYPES
+            if isinstance(models.get(t), dict) and models[t].get("selected_model")}
 
 
 def save_config(tenant_id: str, models: dict[str, dict[str, Any]]) -> dict[str, Any]:

@@ -3130,6 +3130,48 @@ so a short "write the ADR" went to Haiku. Two rules now run first, in
 Only conversation stays SIMPLE → Haiku. A Tier 2.5 pin still wins over all of
 it.
 
+### Model lineage — newest versions, automatic succession (ADR-2090)
+
+`corvin_operator/bridges/shared/model_lineage.py` parses
+`claude-<family>-<major>[-<minor>][-<YYYYMMDD>]` (`claude-opus-5-5` → opus 5.5)
+and is the one place that knows which model is current:
+
+| Question | Function | Used by |
+|---|---|---|
+| Newest available model of a family | `latest(family)` | `model_selector.tier_model()` / `top_model()` / `low_model()` / `high_model()`, `apply_floor`, Tier 2.8 map, Tier 2.9 for unsaved tiers |
+| Is this id retired? | `is_retired(id)` | picker filter (`engine_models._drop_retired`) |
+| What runs instead? | `current(id)` → `successor(id)` | `ClaudeCodeEngine._build_args` (every spawn), `resolve_registry_id`, `normalise_pin` |
+
+**Automatic routing = newest version.** An automatic tier (a complexity tier the
+operator never saved in Settings, Tier 3, the floor) routes to the newest version
+of its family, which is Opus 5.5 for complex today. An explicit pin, or a per-tier
+choice the operator saved (`model_selection_config.saved_task_types`), is kept
+as long as its model exists.
+
+**Retired = hard evidence only.** When the Claude Code CLI answers
+`There's an issue with the selected model (<id>)`, the engine records `<id>` in
+`<corvin_home>/global/retired_models.json` (0600, 7-day TTL). From then on:
+
+- every spawn naming it launches the newest same-family model that is not older
+  (`opus 5` → `opus 5.5`, never `opus 4.8`);
+- the pickers drop it, and a dropped default moves to the successor.
+
+The failing turn itself still fails. Delete the file to undo a mistaken mark.
+
+Two things are deliberately NOT treated as retirement. Absence from the curated
+YAML is not: a valid older pin such as `claude-opus-4-8` passes through
+unchanged. Absence from the live `/v1/models` list is not either, because that
+list is what the API key can see and not what the CLI's subscription can run.
+
+**Rate card.** `claude-opus-5-5` has its own entry ($4/$20). Without it,
+longest-prefix matching priced it as `claude-opus-5`. Cache reads use
+`_CACHE_READ_USD_PER_1K` where the published rate is not 0.1x input: Opus 5.5
+$0.20/MTok, Fable 5.1 $0.25/MTok.
+
+**Adding a new model without an API key.** Add it to
+`engine_model_registry.yaml` with a version label. Routing picks it up as
+"newest" as soon as it is there.
+
 ### The pin tiers normalise too — the 2026-09-21 404 (follow-up to cause 4)
 
 Cause 4 above was fixed for Tier 2.9 by routing the classifier's answer through

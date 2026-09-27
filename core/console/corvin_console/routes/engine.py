@@ -553,8 +553,25 @@ def get_engine_catalog(
     """
     return EngineCatalogResponse(
         engines=[_ENGINE_METADATA["claude_code"]],
-        models=_CLAUDE_MODELS,
+        models=_claude_catalog_models(),
     )
+
+
+def _claude_catalog_models() -> list[dict]:
+    """The registry's current Claude Code models (retired ones already
+    dropped, newest versions included) — ``_CLAUDE_MODELS`` is only the
+    fallback for a process where the registry cannot be read."""
+    try:
+        from engine_models import load_registry  # type: ignore[import]  # noqa: PLC0415
+        spec = load_registry().get("claude_code")
+        entries = [m for m in (spec.worker_models if spec else []) if m.id]
+    except Exception:  # noqa: BLE001
+        entries = []
+    if not entries:
+        return _CLAUDE_MODELS
+    default = "claude-sonnet-5" if any(m.id == "claude-sonnet-5" for m in entries) else entries[0].id
+    return [{"id": m.id, "label": m.label.split(" — ", 1)[0], "default": m.id == default}
+            for m in entries]
 
 
 @router.get("/capabilities", response_model=EngineCapabilitiesResponse)

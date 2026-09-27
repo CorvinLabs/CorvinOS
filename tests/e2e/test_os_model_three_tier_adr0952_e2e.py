@@ -194,7 +194,7 @@ class TestThreeTierLadder:
         assert _resolve(MEDIUM_PROMPT) == "claude-sonnet-5"
 
     def test_complex_routes_to_opus_5(self, unpinned_tenant):
-        assert _resolve(COMPLEX_PROMPT) == "claude-opus-5", (
+        assert _resolve(COMPLEX_PROMPT) == MS.top_model(), (
             "cause 3: an id missing from _MODEL_RANK ranks 0 — below Haiku — "
             "so the cache guard reads the escalation as a downgrade"
         )
@@ -277,7 +277,7 @@ class TestAbstainGuards:
     def test_escalation_is_never_refused_however_large(self, unpinned_tenant):
         big = MS.threshold_chars() * 20
         assert MS.classify_os_model(
-            COMPLEX_PROMPT, tenant_id="_default", payload_chars=big) == "claude-opus-5"
+            COMPLEX_PROMPT, tenant_id="_default", payload_chars=big) == MS.top_model()
 
     def test_the_autoselect_kill_switch_also_disables_the_tier(
         self, unpinned_tenant, monkeypatch
@@ -356,10 +356,10 @@ class TestRankingCoversEveryRoutableModel:
         )
 
     def test_apply_floor_can_reach_the_top_tier(self):
-        assert MS.apply_floor("claude-haiku-4-5-20251001", "opus") == MS.DEFAULT_TOP
+        assert MS.apply_floor("claude-haiku-4-5-20251001", "opus") == MS.top_model()
 
     def test_apply_floor_never_downgrades(self):
-        assert MS.apply_floor(MS.DEFAULT_TOP, "haiku") == MS.DEFAULT_TOP
+        assert MS.apply_floor(MS.top_model(), "haiku") == MS.top_model()
 
 
 # ── 6. the decision is auditable ─────────────────────────────────────
@@ -382,7 +382,7 @@ class TestTheDecisionIsAuditable:
 
         chain = tmp_path / "audit.jsonl"
         monkeypatch.setenv("VOICE_AUDIT_PATH", str(chain))
-        assert MS.classify_os_model(COMPLEX_PROMPT, tenant_id="_default") == "claude-opus-5"
+        assert MS.classify_os_model(COMPLEX_PROMPT, tenant_id="_default") == MS.top_model()
 
         assert chain.exists(), "no audit record was written at all"
         rows = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
@@ -390,7 +390,7 @@ class TestTheDecisionIsAuditable:
         assert classified, "the routing decision left no os_model.classified record"
         details = classified[-1].get("details") or {}
         assert details.get("outcome") == "applied"
-        assert details.get("selected_model") == "claude-opus-5"
+        assert details.get("selected_model") == MS.top_model()
         assert details.get("complexity") == "complex"
         assert not details.get("_dropped_fields"), (
             f"the field floor dropped {details.get('_dropped_fields')}"
@@ -530,7 +530,7 @@ class TestOperatorRoutingPolicy:
         "convert these notes to markdown",
     ])
     def test_adr_review_and_markdown_work_routes_to_opus(self, unpinned_tenant, prompt):
-        assert _resolve(prompt) == MS.DEFAULT_TOP
+        assert _resolve(prompt) == MS.top_model()
 
     @pytest.mark.parametrize("prompt", [
         "schreib mir eine python funktion die eine csv summiert",

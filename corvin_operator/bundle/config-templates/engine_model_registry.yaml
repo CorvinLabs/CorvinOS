@@ -197,14 +197,21 @@ engines:
         note: "native CLAUDE_CODE_USE_FOUNDRY=1 + Azure credential chain (no base-url redirect)"
     os_models:
       - id: ""
-        label: "Adaptive — Haiku ≤60K chars, Sonnet above (default)"
+        label: "Adaptive — newest Haiku / Sonnet / Opus by task complexity (default)"
         default: true
+      # Newest version of each family first. A retired model is dropped from
+      # the pickers at runtime and any pin naming it launches its successor
+      # (model_lineage.py) — remove it here in the next release as well.
       - id: "claude-haiku-4-5-20251001"
         label: "Haiku 4.5 — fast, economical"
       - id: "claude-sonnet-5"
         label: "Sonnet 5 — balanced"
+      - id: "claude-opus-5-5"
+        label: "Opus 5.5 — max capability (newest Opus)"
       - id: "claude-opus-5"
         label: "Opus 5 — max capability"
+      - id: "claude-fable-5-1"
+        label: "Fable 5.1 — most capable (newest Fable)"
       - id: "claude-fable-5"
         label: "Fable 5 — creative reasoning"
     worker_models:
@@ -212,9 +219,13 @@ engines:
         label: "Haiku 4.5 — fast, economical"
       - id: "claude-sonnet-5"
         label: "Sonnet 5 — balanced"
-      - id: "claude-opus-5"
-        label: "Opus 5 — max capability (default)"
+      - id: "claude-opus-5-5"
+        label: "Opus 5.5 — max capability (newest Opus, default)"
         default: true
+      - id: "claude-opus-5"
+        label: "Opus 5 — max capability"
+      - id: "claude-fable-5-1"
+        label: "Fable 5.1 — most capable (newest Fable)"
       - id: "claude-fable-5"
         label: "Fable 5 — creative reasoning"
 
@@ -248,6 +259,8 @@ engines:
         default: true
       - id: "anthropic/claude-sonnet-5"
         label: "Claude Sonnet 5 (Anthropic)"
+      - id: "anthropic/claude-opus-5-5"
+        label: "Claude Opus 5.5 (Anthropic)"
       - id: "anthropic/claude-opus-5"
         label: "Claude Opus 5 (Anthropic)"
       - id: "ollama/qwen3:8b"

@@ -191,6 +191,37 @@ _EMAIL_LOCAL_CHARS = frozenset(
 )
 
 
+def _lineage():
+    try:
+        import model_lineage  # type: ignore  # noqa: PLC0415
+        return model_lineage
+    except Exception:  # noqa: BLE001 — optional on a stripped install
+        return None
+
+
+def _current_model(model: str) -> str:
+    """*model*, or its successor when it is retired. Never raises."""
+    ml = _lineage()
+    try:
+        return (ml.current(model) or model) if ml else model
+    except Exception:  # noqa: BLE001
+        return model
+
+
+def _note_unavailable_model(result_text: str | None) -> None:
+    """Record the CLI's "There's an issue with the selected model (<id>)" as
+    retirement evidence, so the NEXT spawn launches the successor."""
+    ml = _lineage()
+    if ml is None:
+        return
+    try:
+        mid = ml.unavailable_model_in(result_text)
+        if mid:
+            ml.mark_retired(mid)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def neutralise_at_references(text: str) -> str:
     """Disarm client-side ``@<path>`` expansion without deleting content.
 
@@ -573,7 +604,10 @@ class ClaudeCodeEngine:
                          " ".join(str(t) for t in disallowed_tools)]
 
         if isinstance(model, str) and model.strip():
-            args += ["--model", model.strip()]
+            # Every Claude Code spawn passes here (bridge, console, gateway,
+            # ACS, delegation), so a retired model is swapped for its
+            # successor ONCE, for all of them (model_lineage, 2026-09-27).
+            args += ["--model", _current_model(model.strip())]
 
         if mcp_config_path:
             args += ["--mcp-config", mcp_config_path]
@@ -1196,6 +1230,7 @@ class ClaudeCodeEngine:
                     or subtype
                     or "result-error"
                 )
+                _note_unavailable_model(text)
                 return [StreamEvent(type="error", error=str(err),
                                     raw=obj, usage=usage)]
             return [StreamEvent(

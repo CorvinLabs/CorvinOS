@@ -75,6 +75,49 @@ _FLOOR_TO_MODEL: Final[dict[str, str]] = {
     "opus": DEFAULT_TOP,
 }
 
+
+def _lineage():
+    """``model_lineage`` or ``None`` (a stripped install keeps the constants)."""
+    try:
+        import model_lineage  # type: ignore  # noqa: PLC0415
+        return model_lineage
+    except ImportError:
+        try:
+            from . import model_lineage  # type: ignore  # noqa: PLC0415
+            return model_lineage
+        except Exception:  # noqa: BLE001
+            return None
+
+
+def _rank(model_id: str | None) -> int:
+    """Capability rank: the curated table first, then the model's family, so a
+    newly released version (``claude-opus-5-5``) ranks with its family instead
+    of at 0 — below Haiku — where the cache guard would read it as a downgrade."""
+    if not model_id:
+        return 0
+    r = _MODEL_RANK.get(model_id)
+    if r is not None:
+        return r
+    ml = _lineage()
+    return ml.rank(model_id) if ml else 0
+
+
+def tier_model(family: str) -> str:
+    """The model an AUTOMATIC tier routes to: the newest available version of
+    *family* (operator rule 2026-09-27 — "immer neueste"), falling back to the
+    curated constant when the registry offers none."""
+    ml = _lineage()
+    try:
+        newest = ml.latest(family) if ml else None
+    except Exception:  # noqa: BLE001
+        newest = None
+    return newest or _FLOOR_TO_MODEL.get(family, DEFAULT_HIGH)
+
+
+def top_model() -> str:
+    """Top-tier (COMPLEX) model id — newest Opus."""
+    return tier_model("opus")
+
 # Curated values for audit fields — changing these requires an ADR amendment.
 _VALID_SELECTED_REASONS: Final[frozenset[str]] = frozenset({
     "override", "explicit", "autoselect_low", "autoselect_high",
@@ -193,11 +236,12 @@ def apply_floor(chosen: str, floor: str | None) -> str:
     """
     if not floor:
         return chosen
-    floor_model_id = _FLOOR_TO_MODEL.get((floor or "").lower())
-    if floor_model_id is None:
+    family = (floor or "").lower()
+    if family not in _FLOOR_TO_MODEL:
         return chosen
-    floor_rank = _MODEL_RANK.get(floor_model_id, 0)
-    chosen_rank = _MODEL_RANK.get(chosen, 0)
+    floor_model_id = tier_model(family)
+    floor_rank = _rank(floor_model_id)
+    chosen_rank = _rank(chosen)
     if chosen_rank < floor_rank:
         return floor_model_id
     return chosen
@@ -244,13 +288,13 @@ def threshold_chars() -> int:
 def low_model() -> str:
     """Low-tier model id (default Haiku 4.5)."""
     val = os.environ.get("CORVIN_OS_MODEL_LOW", "").strip()
-    return val if val else DEFAULT_LOW
+    return val if val else tier_model("haiku")
 
 
 def high_model() -> str:
     """High-tier model id (default Sonnet 4.6)."""
     val = os.environ.get("CORVIN_OS_MODEL_HIGH", "").strip()
-    return val if val else DEFAULT_HIGH
+    return val if val else tier_model("sonnet")
 
 
 def os_model_override() -> str | None:
@@ -643,6 +687,14 @@ def resolve_registry_id(model: str, engine_id: str) -> str | None:
     model = model.rsplit("/", 1)[-1].strip()
     if not model:
         return None
+    # A retired id is resolved to its successor FIRST — the registry no longer
+    # lists it, so without this every pin / saved tier naming it would abstain.
+    ml = _lineage()
+    if ml is not None:
+        try:
+            model = ml.current(model, engine_id) or model
+        except Exception:  # noqa: BLE001
+            pass
     try:
         try:
             from engine_models import load_registry, model_is_registered  # noqa: PLC0415
@@ -712,7 +764,15 @@ def normalise_pin(model: str | None, engine_id: str) -> str | None:
     if registry_id:
         return registry_id
     if "/" in model:
-        return model.rsplit("/", 1)[-1].strip() or None
+        model = model.rsplit("/", 1)[-1].strip()
+        if not model:
+            return None
+    ml = _lineage()
+    if ml is not None:
+        try:
+            return ml.current(model, engine_id) or model
+        except Exception:  # noqa: BLE001
+            pass
     return model
 
 
@@ -751,6 +811,17 @@ def _warm_classifier() -> None:
 
 
 _warm_classifier()
+
+
+def _tier_saved(tenant_id: str, complexity: str) -> bool:
+    """Did the operator save a model for this complexity tier?"""
+    try:
+        from core.models.model_selection_config import (  # noqa: PLC0415
+            COMPLEXITY_BY_TASK_TYPE, saved_task_types)
+    except Exception:  # noqa: BLE001
+        return False
+    saved = saved_task_types(tenant_id)
+    return any(COMPLEXITY_BY_TASK_TYPE.get(t) == complexity for t in saved)
 
 
 def classify_os_model(
@@ -868,9 +939,21 @@ def classify_os_model(
         _audit("abstain_not_registered", model)
         return None
 
+    # "Immer neueste" (operator rule 2026-09-27): a tier the operator never
+    # saved routes to the NEWEST version of the family the classifier chose.
+    # A saved choice is a pin and stays until its model is retired (handled
+    # inside resolve_registry_id).
+    if not _tier_saved(tenant_id, complexity):
+        ml = _lineage()
+        fam = ml.family_of(registry_id) if ml else None
+        if fam:
+            newest = tier_model(fam)
+            if resolve_registry_id(newest, engine_id):
+                registry_id = newest
+
     # Guard 3 — never de-escalate an already-large context (see docstring).
-    default_rank = _MODEL_RANK.get(high_model(), 0)
-    if _MODEL_RANK.get(registry_id, 0) < default_rank and payload_chars >= threshold_chars():
+    default_rank = _rank(high_model())
+    if _rank(registry_id) < default_rank and payload_chars >= threshold_chars():
         _audit("abstain_cache_guard", registry_id)
         return None
 
@@ -1071,9 +1154,9 @@ def resolve_os_model(
             if recommended and confidence > 0.0:
                 # Map shorthand names to actual models
                 model_map = {
-                    "haiku": DEFAULT_LOW,
-                    "sonnet": DEFAULT_HIGH,
-                    "opus": DEFAULT_TOP,
+                    "haiku": low_model(),
+                    "sonnet": high_model(),
+                    "opus": top_model(),
                 }
                 actual_model = model_map.get(recommended.lower())
 

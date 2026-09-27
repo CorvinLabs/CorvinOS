@@ -150,7 +150,7 @@ class TestRegistryMerge:
         ids = [m.id for m in reg["claude_code"].worker_models]
         assert ids.count("claude-sonnet-5") == 1
         # The curated default must still be the default — the live list only adds.
-        assert reg["claude_code"].default_worker_model() == "claude-opus-5"
+        assert reg["claude_code"].default_worker_model() == "claude-opus-5-5"
         assert reg["claude_code"].default_os_model() is None  # "" = adaptive
 
     def test_prefix_is_applied_per_engine(self) -> None:

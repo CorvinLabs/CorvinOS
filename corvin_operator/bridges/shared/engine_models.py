@@ -363,7 +363,47 @@ def load_registry(force_reload: bool = False) -> dict[str, EngineModelSpec]:
     of entries per call.
     """
     _load_raw(force_reload)
-    return _merge_live_models(_registry_cache or {})
+    return _drop_retired(_merge_live_models(_registry_cache or {}))
+
+
+def _drop_retired(specs: dict[str, EngineModelSpec]) -> dict[str, EngineModelSpec]:
+    """Remove models with retirement evidence (``model_lineage.is_retired``)
+    from every picker, so the console only offers models that exist.
+
+    A removed ``default`` moves to the entry's successor (newest same-family
+    model not older than it) when that is in the same list. Returns NEW spec
+    objects; the curated cache is never mutated, so an expired runtime mark
+    brings the model back on the next call."""
+    try:
+        try:
+            import model_lineage as _ml  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from . import model_lineage as _ml  # type: ignore  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — no lineage module ⇒ unfiltered
+        return specs
+
+    def _filtered(entries: list[EngineModelEntry]) -> list[EngineModelEntry]:
+        keep = [e for e in entries if not (e.id and _ml.is_retired(e.id))]
+        if len(keep) == len(entries):
+            return entries
+        lost_default = next((e for e in entries if e.default and e not in keep), None)
+        if lost_default is not None and not any(e.default for e in keep):
+            p = _ml.parse(lost_default.id)
+            succ = _ml.newest([e.id for e in keep], p[0], min_version=p[1]) if p else None
+            keep = [replace(e, default=True) if e.id == succ else e for e in keep]
+        return keep
+
+    out: dict[str, EngineModelSpec] = {}
+    for engine_id, spec in specs.items():
+        try:
+            out[engine_id] = replace(
+                spec,
+                os_models=_filtered(spec.os_models),
+                worker_models=_filtered(spec.worker_models),
+            )
+        except Exception:  # noqa: BLE001 — a filter bug must not break the picker
+            out[engine_id] = spec
+    return out
 
 
 def load_providers(force_reload: bool = False) -> dict[str, ProviderSpec]:

@@ -521,16 +521,15 @@ def format_delegation_badge(engine: str, orch_mode: "str | None" = None, model: 
     eng = _BADGE_ENGINE_LABELS.get((engine or "").lower(), engine or "native")
     mode = _BADGE_ORCH_LABELS.get((orch_mode or "").lower()) if orch_mode else None
 
-    # Extract short model name (e.g. "Opus 5" from "claude-opus-5")
+    # Short model name WITH its version: "claude-opus-5-5" → "Opus 5.5",
+    # "claude-haiku-4-5-20251001" → "Haiku 4.5" (the date is a snapshot).
     model_label = None
     if model:
-        model_lower = (model or "").lower()
-        if "opus" in model_lower:
-            model_label = "Opus 5" if "5" in model_lower else "Opus 4"
-        elif "sonnet" in model_lower:
-            model_label = "Sonnet"
-        elif "haiku" in model_lower:
-            model_label = "Haiku"
+        m = re.search(r"claude-(haiku|sonnet|opus|fable|mythos)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?$",
+                      (model or "").lower())
+        if m:
+            model_label = f"{m.group(1).capitalize()} {m.group(2)}" + (
+                f".{m.group(3)}" if m.group(3) else "")
 
     # Build badge: engine, optionally mode, optionally model
     parts = [eng]
