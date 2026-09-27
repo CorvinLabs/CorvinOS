@@ -127,14 +127,26 @@ def _get_phase_mode() -> str:
     """Detect which Phase of ACP Skills is active (ADR-0532).
 
     Returns:
-        'phase1_shadow' — L5 routes through bundled rule, Skill logged in shadow
-        'phase2_dual_write' — L5 routes through real Skill decision, dual-write monitoring
-        'phase1_shadow' — default (no env var or config override)
+        'phase1_shadow' — L5 routes through bundled rule, Skill logged in shadow only
+        'phase2_dual_write' — L5 routes through real Skill decision (confidence-threshold gated),
+                              dual-write monitoring, auto-rollback on degradation
+        'phase2_real' — L5 routes through real Skill decision unconditionally
+                       (no fallback to bundled, requires rollback recovery built-in)
+
+    Environment Variable:
+        CORVIN_ACP_PHASE (default: phase1_shadow)
+        - phase1_shadow: Advisory mode, bundled routing stands
+        - phase2_dual_write: Real Skill routing with confidence threshold + auto-rollback
+        - phase2_real: Skill-primary routing (requires Phase 2b rollback recovery)
+
+    The default is phase1_shadow (most conservative). Phase 2 progression requires
+    explicit operator opt-in via CORVIN_ACP_PHASE env var.
     """
     import os
 
-    mode = os.environ.get("CORVIN_ACP_PHASE", "phase1_shadow")
-    return mode if mode in ("phase1_shadow", "phase2_dual_write") else "phase1_shadow"
+    mode = os.environ.get("CORVIN_ACP_PHASE", "phase1_shadow").lower().strip()
+    valid_modes = ("phase1_shadow", "phase2_dual_write", "phase2_real")
+    return mode if mode in valid_modes else "phase1_shadow"
 
 
 def _acp_shadow_route(
@@ -229,6 +241,17 @@ def resolve_worker_engine(
         tenant_id=tenant_id,
     )
 
+    # Compute complexity from signals (heuristic for Skill input)
+    # High complexity: force_delegate, high tde_available, or big_data
+    if force_delegate or is_big_data:
+        complexity = 8
+    elif not tde_available or not quota_ok:
+        complexity = 5
+    else:
+        complexity = 3  # low complexity default
+
+    task_type = "delegate" if force_delegate else ("big_data" if is_big_data else "chat")
+
     if phase == "phase2_dual_write":
         # Phase 2a: real Skill decision, dual-write monitoring, auto-rollback
         try:
@@ -241,12 +264,47 @@ def resolve_worker_engine(
                 bundled_engine=bundled_engine,
                 bundled_confidence=1.0,
                 skill_decision=None,  # will be fetched by dual_write module
-                task_type="delegate"
-                if force_delegate
-                else ("big_data" if is_big_data else "chat"),
+                task_type=task_type,
+                complexity=complexity,
+                force_delegate=force_delegate,
+                is_big_data=is_big_data,
                 tenant_id=tenant_id,
             )
         except Exception:  # noqa: BLE001 — dual-write import failed, fall back to shadow
+            _acp_shadow_route(
+                mode=mode,
+                engine=bundled_engine,
+                force_delegate=force_delegate,
+                is_big_data=is_big_data,
+                tenant_id=tenant_id,
+            )
+            return bundled_engine
+
+    if phase == "phase2_real":
+        # Phase 2b: Skill-primary routing (no fallback to bundled).
+        # Requires rollback recovery to be built-in; currently not recommended
+        # for production without full rollback recovery mechanism (ADR-0532 Phase 2b).
+        try:
+            from core.skills.os_skills.monitoring.dual_write import (
+                resolve_worker_engine_dual_write,
+            )  # noqa: PLC0415
+
+            # In phase2_real, always use Skill decision (no confidence threshold gating)
+            engine = resolve_worker_engine_dual_write(
+                request_id=request_id or f"req_{int(__import__('time').time() * 1e6)}",
+                bundled_engine=bundled_engine,
+                bundled_confidence=1.0,
+                skill_decision=None,
+                task_type=task_type,
+                complexity=complexity,
+                force_delegate=force_delegate,
+                is_big_data=is_big_data,
+                tenant_id=tenant_id,
+            )
+            # Phase 2b: could override confidence threshold to 0.0 (always use Skill)
+            # This would require setting learned_config.confidence_threshold = 0.0
+            return engine
+        except Exception:  # noqa: BLE001 — phase2_real unavailable, degrade to phase1_shadow
             _acp_shadow_route(
                 mode=mode,
                 engine=bundled_engine,
