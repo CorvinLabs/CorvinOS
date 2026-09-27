@@ -14,9 +14,12 @@ function r(id: string, over: Partial<UnifiedTask> = {}): UnifiedTask {
 }
 
 describe("run encodings", () => {
-  it("never shows commits as work runs", () => {
+  it("never shows commits or scheduled reminders as work runs", () => {
     expect(WORK_RUN_TYPES).not.toContain("commit");
+    expect(WORK_RUN_TYPES).not.toContain("scheduled");
     expect(WORK_RUN_TYPES).toContain("a2a");
+    expect(workRuns([r("cron", { status: "scheduled", ended_at: null })], [], NOW)).toEqual([]);
+    expect(runningNow([r("cron", { status: "scheduled" })])).toEqual([]);
   });
 
   it("keeps every active run and only the finished ones inside the window, active first", () => {

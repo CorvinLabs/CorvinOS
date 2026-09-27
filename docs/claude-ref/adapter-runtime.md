@@ -612,17 +612,30 @@ for EVERY engine (claude_code, hermes, opencode, codex; previously only the
 claude_code path created one). It is `running` from pickup
 (`task.started` with `stage: preparing`); the engine path logs
 `task.engine_started` when the process exists. The wrapper closes it exactly
-once: the engine path only *reports* its attempt's terminal event
-(`_TurnTask.report`, highest `_retry_count` wins) because a retry recurses
-through the wrapper and the first attempt's `finally` runs AFTER the
-successful retry — closing there turned recovered turns into `failed`. With
-no report (other engines, refusals), a reply starting with an adapter-failure
-or refusal prefix (`_TURN_FAILED_PREFIXES`) closes it `failed`, an exception
-closes it `failed`, anything else `completed` with `result_summary` (reply
-preview, 280 chars — shown in the console only for the operator's own turns).
-`chat_debug.jsonl` gets a `turn.done` for every turn. The record's
+once. Engine paths and gates only *report* an attempt's outcome
+(`_TurnTask.report`, keyed by attempt; `_turn_refused(reason)` before every
+refusal/gate/engine-error `return`): a retry recurses through the wrapper and
+the first attempt's `finally` runs AFTER the successful retry, so the LAST
+attempt's outcome decides, whatever order the reports arrive in. Rules at
+close: an exception → `failed` (it outranks any report — no reply went out);
+else the last attempt's report; else an `[adapter]…` reply → `failed`; else
+`completed`. Outcome kinds: `engine_error`/`timeout` → `task.failed` (reaches
+the learning loop); `/cancel` → `task.cancelled`; every other reason (budget,
+quota, engine policy, L34, egress, engine trust, capability, house rules,
+gate, chain integrity, missing engine) → `task.cancelled` with
+`refused: true` and `result_summary: "refused: <reason>"` — nothing ran, so
+the learning loop (completed/failed only) never sees it.
+`test_every_gate_return_reports` fails on a gate `return` without
+`_turn_refused` right before it. `result_summary` (reply preview, 280 chars)
+is stored ONLY for the operator's own turns — someone else's conversation
+keeps `output_chars`, never text. `chat_debug.jsonl`: one `turn.start` per turn
+(attempt 0; retries log `turn.retry`) and one matching `turn.done`; a turn
+refused before `turn.start` logs neither. The engine pid is logged on
+`task.engine_started`, which `TaskManager` reads (`ENGINE_START_EVENTS`) for
+the boot reaper's liveness check and the learning outcome's engine. The record's
 `input.from_operator` is true only when the sender is explicitly on the
-daemon's channel whitelist (`_sender_is_operator`); the uid is not written.
+daemon's channel whitelist (`_sender_is_operator`, via `_load_channel_settings`,
+JID device suffix normalised); the uid is not written.
 
 ---
 

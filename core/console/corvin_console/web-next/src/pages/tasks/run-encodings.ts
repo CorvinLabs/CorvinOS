@@ -11,9 +11,11 @@ import type { TaskType, UnifiedStatus, UnifiedTask } from "@/lib/api/initiatives
 import type { ItemStatus } from "@/lib/api/task-tracking";
 
 /** Every run type the work views show. Commits are results, not work — they
- *  already appear as evidence on the items they are linked to. */
+ *  already appear as evidence on the items they are linked to. Scheduled
+ *  reminders are appointments, not runs: permanently "scheduled", they would
+ *  sit in Running now and the Open column forever. Both stay in Activity. */
 export const WORK_RUN_TYPES: TaskType[] = [
-  "chat", "background", "a2a", "acs", "workflow", "flow", "gateway", "forge", "compute", "scheduled", "skill_creator", "agent",
+  "chat", "background", "a2a", "acs", "workflow", "flow", "gateway", "forge", "compute", "skill_creator", "agent",
 ];
 
 /** The run lane shows every active run plus this many of the latest finished ones. */
@@ -37,13 +39,14 @@ export function workRuns(active: UnifiedTask[], finished: UnifiedTask[], nowMs: 
   const needle = q.trim().toLowerCase();
   const recent = finished.filter((t) => { const e = endMs(t); return e !== null && nowMs - e <= RUN_WINDOW_MS; });
   return [...active, ...recent]
+    .filter((t) => t.status !== "scheduled")
     .filter((t) => !needle || `${t.title} ${t.type_label} ${t.subtype ?? ""} ${t.detail ?? ""}`.toLowerCase().includes(needle))
     .sort((a, b) => Number(isActiveRun(b)) - Number(isActiveRun(a)) || b.sort_ts - a.sort_ts);
 }
 
 /** What is being worked on right now — running first, then waiting ones. */
 export function runningNow(active: UnifiedTask[]): UnifiedTask[] {
-  const rank: Partial<Record<UnifiedStatus, number>> = { running: 0, paused: 1, queued: 2, scheduled: 3 };
+  const rank: Partial<Record<UnifiedStatus, number>> = { running: 0, paused: 1, queued: 2 };
   return active.filter((t) => t.status in rank && t.type !== "commit")
     .sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || b.sort_ts - a.sort_ts);
 }

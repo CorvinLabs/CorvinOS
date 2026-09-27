@@ -260,6 +260,51 @@ class TaskSourcesRouteTest(unittest.TestCase):
             types = {t["type"]: t for t in b["types"]}
             self.assertEqual(types["a2a"]["label"], "A2A")
 
+    def test_review_round2_rules(self):
+        """JID device suffix and console-started background tasks count as the
+        operator's own; worker turns fold without losing their subagents; the
+        A2A feed is read incrementally and re-read whole after compaction."""
+        from corvin_console import task_sources as ts
+        now = time.time()
+        with _sandbox(self._tmp) as (client, _csrf, home, _), _claude_home(self._tmp):
+            _w(home / "bridges/whatsapp/settings.json", {"whitelist": ["4917000@s.whatsapp.net"]})
+            q = home / "pending_notifications"
+            _w(q / "bgt_111.json", {"id": "bgt_111", "channel": "whatsapp", "sender": "4917000:11@s.whatsapp.net",
+               "tenant_id": "_default", "label": "compile the report", "state": "pending", "created_at": now - 5})
+            _w(q / "bgt_222.json", {"id": "bgt_222", "channel": "web", "sender": "",
+               "tenant_id": "_default", "label": "reindex the docs", "state": "pending", "created_at": now - 5})
+            by_id = {x["id"]: x for x in (lambda b: b["active"] + b["finished"])(client.get(URL).json())}
+            self.assertEqual(by_id["background:bgt_111"]["title"], "compile the report")
+            self.assertEqual(by_id["background:bgt_222"]["title"], "reindex the docs")
+
+        def rec(i, **kw):
+            base = {"id": i, "type": "background", "status": "done", "started_at": None, "created_at": "2026-09-27T10:00:00Z",
+                    "ended_at": None, "duration_s": 1.0, "detail": "waiting for a worker", "stale_reason": None}
+            return {**base, **kw}
+        parent = rec("background:bgt_x", status="queued")
+        turns = [rec("chat:a", _bg_ref="bgt_x", status="done", steps={"total": 2, "running": 0, "items": []}),
+                 rec("chat:b", _bg_ref="bgt_x", status="running", steps={"total": 1, "running": 1, "items": []})]
+        out = ts._fold_background([parent, *turns])
+        self.assertEqual([r["id"] for r in out], ["background:bgt_x"])
+        self.assertEqual(parent["status"], "running")
+        self.assertEqual(parent["detail"], "worker running · 2 worker turns · 3 subagents")
+        self.assertEqual([i["title"] for i in parent["steps"]["items"]],
+                         ["Worker turn · 2 subagents", "Worker turn · 1 subagent"])
+
+        feed = self._tmp / "feed.jsonl"
+        row = lambda tid, st: json.dumps({"direction": "in", "kind": "task", "task_id": tid, "status": st, "text": SECRET}) + "\n"
+        feed.write_text(row("t1", "received"))
+        self.assertEqual([r["task_id"] for r in ts._a2a_rows(feed)], ["t1"])
+        with feed.open("a") as fh:
+            fh.write(row("t2", "received") + '{"direction": "in", "kind": "ta')   # torn tail
+        self.assertEqual([r["task_id"] for r in ts._a2a_rows(feed)], ["t1", "t2"])
+        with feed.open("a") as fh:
+            fh.write('sk", "task_id": "t3", "status": "received"}\n')
+        self.assertEqual([r["task_id"] for r in ts._a2a_rows(feed)], ["t1", "t2", "t3"])
+        feed.write_text(row("t9", "received"))                                   # compacted: smaller file
+        self.assertEqual([r["task_id"] for r in ts._a2a_rows(feed)], ["t9"])
+        self.assertTrue(all("text" not in r for r in ts._a2a_rows(feed)))
+
     def test_tenant_from_session(self):
         with _sandbox(self._tmp, tenants=("_default", "acme")) as (_c, _s, home, clients):
             (home / "tenants/acme/global/console/sessions").mkdir(parents=True, exist_ok=True)

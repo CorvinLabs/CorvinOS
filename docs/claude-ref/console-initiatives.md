@@ -80,8 +80,8 @@ Each source is read where its subsystem writes it — nothing is copied.
 |---|---|
 | Initiative | `global/initiatives.json` (this board) |
 | Chat | `sessions/<chat>/tasks/<id>.json` — web, CLI, Discord, Telegram turns |
-| Background task | `<corvin_home>/pending_notifications/*.json` (completion registry, host-wide, filtered by the record's `tenant_id`) — listed from registration on; the detached worker's own turns under `sessions/voice/<bridge>/bgtask__<chat>__<bgt_id>/tasks/` are folded into it as steps (a worker turn whose registry record was already pruned is listed on its own) |
-| A2A | `global/a2a_feed/messages.jsonl` — one record per exchange, both directions (`a2a:in:<task>` / `a2a:out:<task>`); status from the response record (`ok` → done, `rejected`/`filtered` → cancelled, anything else → failed, none yet → running) |
+| Background task | `<corvin_home>/pending_notifications/*.json` (completion registry, host-wide, filtered by the record's `tenant_id`) — listed from registration on; the detached worker's own turns under `sessions/voice/<bridge>/bgtask__<chat>__<bgt_id>/tasks/` are folded into it as steps ("Worker turn · N subagents"; the parent's detail states worker turns and subagents once; a worker turn whose registry record was already pruned is listed on its own). Owned (titled) when started from `web`/`cli` or by a whitelisted sender, JID device suffix normalised |
+| A2A | `global/a2a_feed/messages.jsonl` (append-only; read incrementally from the last complete line, re-read whole after compaction) — one record per exchange, both directions (`a2a:in:<task>` / `a2a:out:<task>`); status from the response record (`ok` → done, `rejected`/`filtered` → cancelled, anything else → failed, none yet → running) |
 | ACS | `global/acs/runs/*/manifest.json` + session run dirs without an index entry |
 | Workflow | `workflows/<wid>/runs/*.meta.json` (marketplace plugin) + `workflow_runs/*.json` (paused AWP) |
 | Flow | `global/flows/runs/*.manifest.jsonl` |

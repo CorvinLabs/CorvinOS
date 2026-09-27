@@ -233,6 +233,8 @@ from .routes import (
     cost_insights_routes as cost_insights_route,
     skill_manager as skill_manager_route,
     marketplace_routes as marketplace_skill_routes,
+    # Layer 1-4: Console Plugin File Upload (ADR-2085)
+    plugin_upload as plugin_upload_route,
     # ADR-0721/0722/0723 — Definition-of-Done Verifier Skill Dashboard (Wave 3)
     dod_verifier_dashboard as dod_verifier_dashboard_route,
 )
@@ -280,6 +282,8 @@ router.include_router(skill_manager_route.router, prefix="/skills-manager", tags
 # ADR-0682 — skill catalogue, the Marketplace's "Skills" tab (read-only; lists
 # installed skills). Own namespace so its {skill_id} route shadows nothing.
 router.include_router(marketplace_skill_routes.router, prefix="/marketplace/skills", tags=["console-marketplace"])
+# Layer 1-4: Console Plugin File Upload (ADR-2085) — upload, approve, staged list
+router.include_router(plugin_upload_route.router, tags=["console-plugin-upload"])
 router.include_router(skills_monitoring_route.router, tags=["console-skills-monitoring"])
 router.include_router(phase3_monitor_route.router, tags=["console-phase3-monitor"])
 router.include_router(learning_route.router, tags=["console-learning"])

@@ -289,3 +289,270 @@ async def trigger_optimization(
     except Exception as e:
         logger.error(f"Optimization failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# LOSS SIGNAL MONITORING ENDPOINTS (Phase 3)
+# ============================================================================
+
+class LossSignalRequest(BaseModel):
+    """Request to emit a loss signal."""
+    signal_type: str  # "latency" | "confidence" | "feedback" | "ab_test"
+    metric_value: float
+    threshold: float
+
+
+class LossSignalResponse(BaseModel):
+    """Response after loss signal detection."""
+    detected: bool
+    signal_type: Optional[str] = None
+    severity: Optional[str] = None
+    recommendation: Optional[str] = None
+    timestamp: str
+
+
+class LearningLoopStatusResponse(BaseModel):
+    """Response with learning loop status."""
+    tenant_id: str
+    convergence_status: str  # "converged" | "converging" | "stalled" | "diverging"
+    current_confidence: float
+    target_confidence: float = 0.90
+    estimated_days_to_target: float
+    loop_velocity_cycles_24h: int
+    mean_cycle_time_minutes: float
+
+
+def get_loss_signal_emitter():
+    """DI: Get loss signal emitter singleton."""
+    from core.vibe.loss_signal_emitter import get_emitter
+    return get_emitter()
+
+
+def get_learning_loop_tracker():
+    """DI: Get learning loop tracker singleton."""
+    from core.vibe.learning_loop_tracker import get_tracker
+    return get_tracker()
+
+
+@router.post("/loss-signals/detect", response_model=LossSignalResponse)
+async def detect_loss_signal(
+    req: LossSignalRequest,
+    emitter=Depends(get_loss_signal_emitter),
+) -> LossSignalResponse:
+    """
+    Detect and emit loss signals in real-time.
+
+    Routes:
+      - signal_type="latency": latency regression (p99 spike)
+      - signal_type="confidence": confidence decline (7-day slope)
+      - signal_type="feedback": negative feedback (<70% thumbs up)
+      - signal_type="ab_test": A/B regression (CI crosses zero)
+    """
+    try:
+        timestamp = datetime.utcnow().isoformat()
+        tenant_id = "_default"  # Would be extracted from auth context
+
+        signal = None
+        if req.signal_type == "latency":
+            # Latency: current value vs baseline threshold
+            signal = emitter.emit_latency_signal(
+                tenant_id=tenant_id,
+                p99_baseline=req.threshold,
+                p99_current=req.metric_value,
+                threshold_pct=20.0,
+            )
+        elif req.signal_type == "confidence":
+            # Confidence: would pass timeseries from caller
+            # For demo: single value with dummy timeseries
+            timeseries = [0.90 - (i * 0.02) for i in range(7)]
+            signal = emitter.emit_confidence_signal(
+                tenant_id=tenant_id,
+                confidence_timeseries=timeseries,
+            )
+        elif req.signal_type == "feedback":
+            # Feedback: metric_value is thumbs_up %, threshold is target
+            thumbs_up = int(req.metric_value)
+            thumbs_down = max(0, 100 - thumbs_up)
+            signal = emitter.emit_feedback_signal(
+                tenant_id=tenant_id,
+                thumbs_up=thumbs_up,
+                thumbs_down=thumbs_down,
+                threshold_pct=req.threshold,
+            )
+        elif req.signal_type == "ab_test":
+            # A/B test: metric_value is variant_mean, threshold is control_mean
+            signal = emitter.emit_ab_test_signal(
+                tenant_id=tenant_id,
+                control_mean=req.threshold,
+                variant_mean=req.metric_value,
+                ci_lower=-1.0,
+                ci_upper=1.0,
+            )
+
+        return LossSignalResponse(
+            detected=signal is not None,
+            signal_type=signal.signal_type if signal else None,
+            severity=signal.severity.value if signal else None,
+            recommendation=signal.recommendation if signal else None,
+            timestamp=timestamp,
+        )
+
+    except Exception as e:
+        logger.error(f"Loss signal detection failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/loss-signals/recent", response_model=List[Dict[str, Any]])
+async def get_recent_loss_signals(
+    minutes: int = 60,
+    emitter=Depends(get_loss_signal_emitter),
+) -> List[Dict[str, Any]]:
+    """
+    Get loss signals from recent time window.
+
+    Query params:
+      - minutes: Time window in minutes (default 60)
+
+    Returns:
+      List of signals with full metadata (newest first).
+    """
+    try:
+        signals = emitter.get_recent_signals(minutes=minutes)
+        return [
+            {
+                "timestamp": s.timestamp,
+                "signal_type": s.signal_type,
+                "severity": s.severity.value,
+                "metric_name": s.metric_name,
+                "current_value": s.current_value,
+                "threshold": s.threshold,
+                "deviation_pct": s.deviation_pct,
+                "recommendation": s.recommendation,
+            }
+            for s in signals
+        ]
+    except Exception as e:
+        logger.error(f"Retrieve signals failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/loss-signals/critical", response_model=List[Dict[str, Any]])
+async def get_critical_loss_signals(
+    emitter=Depends(get_loss_signal_emitter),
+) -> List[Dict[str, Any]]:
+    """
+    Get all critical-severity loss signals.
+
+    Returns:
+      List of CRITICAL signals (newest first).
+    """
+    try:
+        signals = emitter.get_critical_signals()
+        return [
+            {
+                "timestamp": s.timestamp,
+                "signal_type": s.signal_type,
+                "severity": s.severity.value,
+                "metric_name": s.metric_name,
+                "current_value": s.current_value,
+                "recommendation": s.recommendation,
+            }
+            for s in signals
+        ]
+    except Exception as e:
+        logger.error(f"Retrieve critical signals failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/learning-loop/status", response_model=LearningLoopStatusResponse)
+async def get_learning_loop_status(
+    tracker=Depends(get_learning_loop_tracker),
+) -> LearningLoopStatusResponse:
+    """
+    Get learning loop convergence and velocity status.
+
+    Returns:
+      Status, confidence, target, forecast, and velocity metrics.
+    """
+    try:
+        tenant_id = "_default"
+        convergence_status = tracker.get_convergence_status(tenant_id)
+        forecast = tracker.forecast_convergence(tenant_id)
+        velocity = tracker.get_loop_velocity(tenant_id, window_hours=24)
+
+        # Get latest confidence (from history if available)
+        history = tracker.convergence_history.get(tenant_id, [])
+        current_confidence = history[-1].confidence if history else 0.0
+
+        return LearningLoopStatusResponse(
+            tenant_id=tenant_id,
+            convergence_status=convergence_status.value,
+            current_confidence=current_confidence,
+            target_confidence=0.90,
+            estimated_days_to_target=forecast.estimated_days_to_target if forecast else 0.0,
+            loop_velocity_cycles_24h=velocity.get("cycle_count", 0),
+            mean_cycle_time_minutes=velocity.get("mean_cycle_time_minutes", 0.0),
+        )
+
+    except Exception as e:
+        logger.error(f"Get learning loop status failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/learning-loop/convergence-forecast", response_model=Dict[str, Any])
+async def get_convergence_forecast(
+    tracker=Depends(get_learning_loop_tracker),
+) -> Dict[str, Any]:
+    """
+    Get detailed convergence forecast.
+
+    Returns:
+      Forecast with confidence interval, slope, and convergence prediction.
+    """
+    try:
+        tenant_id = "_default"
+        forecast = tracker.forecast_convergence(tenant_id, forecast_days=30)
+
+        if not forecast:
+            return {
+                "error": "insufficient_data",
+                "message": "Not enough convergence history to forecast",
+            }
+
+        return {
+            "current_confidence": forecast.current_confidence,
+            "target_confidence": forecast.target_confidence,
+            "current_slope_7d": forecast.current_slope_7d,
+            "estimated_days_to_target": forecast.estimated_days_to_target,
+            "confidence_interval_lower": forecast.confidence_interval[0],
+            "confidence_interval_upper": forecast.confidence_interval[1],
+            "will_converge": forecast.will_converge,
+        }
+
+    except Exception as e:
+        logger.error(f"Get forecast failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/learning-loop/velocity", response_model=Dict[str, Any])
+async def get_learning_loop_velocity(
+    window_hours: int = 24,
+    tracker=Depends(get_learning_loop_tracker),
+) -> Dict[str, Any]:
+    """
+    Get learning loop velocity metrics.
+
+    Query params:
+      - window_hours: Time window for metrics (default 24)
+
+    Returns:
+      Cycle count, mean/median times, feedback per cycle, velocity trend.
+    """
+    try:
+        tenant_id = "_default"
+        velocity = tracker.get_loop_velocity(tenant_id, window_hours=window_hours)
+        return velocity
+
+    except Exception as e:
+        logger.error(f"Get velocity failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

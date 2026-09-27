@@ -196,7 +196,30 @@ def _operator_uids(channel: str) -> frozenset[str]:
     except (ImportError, AttributeError, OSError, ValueError):
         return frozenset()
     wl = data.get("whitelist") if isinstance(data, dict) else None
-    return frozenset(str(x) for x in wl if x) if isinstance(wl, list) else frozenset()
+    return frozenset(_norm_uid(x) for x in wl if x) if isinstance(wl, list) else frozenset()
+
+
+_JID_DEVICE_RE = re.compile(r":[0-9]+@")
+
+
+def _norm_uid(uid: Any) -> str:
+    """A platform uid as the whitelist compares it — the adapter's
+    ``_normalize_jid``: a WhatsApp JID drops its per-device suffix
+    (``4917…:11@s.whatsapp.net`` → ``4917…@s.whatsapp.net``)."""
+    return _JID_DEVICE_RE.sub("@", str(uid))
+
+
+def _is_operator(channel: str, sender: Any, cache: dict[str, frozenset[str]]) -> bool:
+    """The operator's own work: anything from the console or the terminal
+    (``web``/``cli``, as for chat turns), or a bridge sender explicitly on
+    that bridge's whitelist."""
+    if channel in ("web", "cli"):
+        return True
+    if not sender:
+        return False
+    if channel not in cache:
+        cache[channel] = _operator_uids(channel)
+    return _norm_uid(sender) in cache[channel]
 
 
 # ── subagents inside a turn (Claude Code transcripts) ────────────────────────
@@ -251,13 +274,37 @@ def _subagent_entry(path: Path) -> dict | None:
     return entry
 
 
+# subagents/ dir → (mtime_ns, transcript paths): a dir is re-listed only when
+# a transcript was added or removed in it.
+_SUB_DIRS: dict[str, tuple[int, list[Path]]] = {}
+
+
 def _subagents(workdir: Path) -> list[dict]:
     from . import host_activity as ha  # noqa: PLC0415
 
     proj = ha.claude_home() / "projects" / ha._encode_cwd(str(workdir))
-    if not proj.is_dir():
+    try:
+        sessions = [e.path for e in os.scandir(proj) if e.is_dir(follow_symlinks=False)]
+    except OSError:
         return []
-    return [e for e in (_subagent_entry(f) for f in proj.glob("*/subagents/agent-*.jsonl")) if e]
+    files: list[Path] = []
+    for sdir in sessions:
+        sub = os.path.join(sdir, "subagents")
+        try:
+            mtime = os.stat(sub).st_mtime_ns
+        except OSError:
+            continue
+        with _FILE_CACHE_LOCK:
+            hit = _SUB_DIRS.get(sub)
+        if hit is None or hit[0] != mtime:
+            listed = sorted(Path(sub).glob("agent-*.jsonl"))
+            with _FILE_CACHE_LOCK:
+                for gone in set(hit[1] if hit else ()) - set(listed):
+                    _SUB_CACHE.pop(str(gone), None)
+                _SUB_DIRS[sub] = (mtime, listed)
+            hit = (mtime, listed)
+        files.extend(hit[1])
+    return [e for e in (_subagent_entry(f) for f in files) if e]
 
 
 def _steps(subs: list[dict], *, owned: bool, turn_running: bool, now: float) -> dict:
@@ -711,9 +758,7 @@ def _background_registry(home: Path, now: float) -> Iterator[dict]:
         if status == "done" and d.get("ok") is False:
             status = "failed"
         channel = str(d.get("channel") or "")
-        if channel not in operators:
-            operators[channel] = _operator_uids(channel)
-        owned = bool(d.get("sender")) and str(d.get("sender")) in operators[channel]
+        owned = _is_operator(channel, d.get("sender"), operators)
         title = _preview(d.get("label")) if owned and d.get("label") else \
             f"{channel.capitalize() or 'Background'} background task"
         yield _record(id=f"background:{d['id']}", type="background", subtype=channel or None,
@@ -725,25 +770,38 @@ def _background_registry(home: Path, now: float) -> Iterator[dict]:
 
 def _fold_background(records: list[dict]) -> list[dict]:
     """Fold each detached worker's engine turns into its registry record, so a
-    background task is listed once, with its turns as steps."""
+    background task is listed once: its worker turns are its steps, each
+    titled with the subagents that turn fanned out into, and the parent's
+    detail states the totals once."""
     reg = {r["id"][len("background:"):]: r for r in records if r["id"].startswith("background:")}
+    children: dict[str, list[dict]] = {}
     out = []
     for r in records:
         ref = r.pop("_bg_ref", None)
-        parent = reg.get(ref) if ref else None
-        if parent is None:
+        if ref and ref in reg:
+            children.setdefault(ref, []).append(r)
+        else:
             out.append(r)
-            continue
-        steps = parent.setdefault("steps", {"total": 0, "running": 0, "items": []})
-        steps["total"] += 1
-        steps["running"] += r["status"] == "running"
-        steps["items"] = (steps["items"] + [{
-            "title": "Worker turn", "agent_type": None, "status": r["status"],
-            "started_at": r["started_at"] or r["created_at"], "ended_at": r["ended_at"],
-            "duration_s": r["duration_s"]}])[-STEP_ITEMS_MAX:]
-        if parent["status"] in ("queued", "stale") and r["status"] == "running":
-            parent["status"], parent["stale_reason"], parent["detail"] = "running", None, "worker running"
-        parent["detail"] = _join(parent["detail"], _steps_text(r.get("steps")))
+    for ref, turns in children.items():
+        parent = reg[ref]
+        turns.sort(key=lambda t: t["started_at"] or t["created_at"] or "")
+        items = []
+        subagents = 0
+        for t in turns:
+            n = (t.get("steps") or {}).get("total", 0)
+            subagents += n
+            items.append({
+                "title": f"Worker turn · {n} subagent{'' if n == 1 else 's'}" if n else "Worker turn",
+                "agent_type": None, "status": t["status"],
+                "started_at": t["started_at"] or t["created_at"], "ended_at": t["ended_at"],
+                "duration_s": t["duration_s"]})
+        running = sum(t["status"] == "running" for t in turns)
+        parent["steps"] = {"total": len(turns), "running": running, "items": items[-STEP_ITEMS_MAX:]}
+        if running and parent["status"] in ("queued", "stale"):
+            parent["status"], parent["stale_reason"] = "running", None
+        state = "worker running" if running else parent["detail"]
+        parent["detail"] = _join(state, f"{len(turns)} worker turn{'' if len(turns) == 1 else 's'}",
+                                 f"{subagents} subagent{'' if subagents == 1 else 's'}" if subagents else None)
     return out
 
 
@@ -753,13 +811,16 @@ def _fold_background(records: list[dict]) -> list[dict]:
 # from it — never ``text``/``data``/attachments, which are the peer's content.
 
 _A2A_KEYS = ("direction", "kind", "task_id", "peer_id", "peer_label", "status", "ts", "duration_ms", "error")
-_A2A_CACHE: dict[str, tuple[int, int, list[dict]]] = {}
+_A2A_CACHE: dict[str, tuple[int, int, int, list[dict]]] = {}   # ino, size, consumed offset, rows
 _A2A_DONE = {"ok", "success", "done", "completed"}
 _A2A_REFUSED = {"rejected", "filtered", "refused", "denied", "cancelled"}
 _ERR_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
 
 def _a2a_rows(path: Path) -> list[dict]:
+    """The feed's routing rows. The file is append-only, so a poll after an
+    append reads only the new bytes (from the last complete line); a smaller
+    file or a new inode means the store compacted — read it again whole."""
     try:
         st = path.stat()
     except OSError:
@@ -767,22 +828,28 @@ def _a2a_rows(path: Path) -> list[dict]:
     key = str(path)
     with _FILE_CACHE_LOCK:
         hit = _A2A_CACHE.get(key)
-        if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
-            return hit[2]
-    rows: list[dict] = []
+    if hit and hit[0] == st.st_ino and hit[1] == st.st_size:
+        return hit[3]
+    if hit and hit[0] == st.st_ino and st.st_size >= hit[2]:
+        rows, offset = list(hit[3]), hit[2]          # appended: read only the new bytes
+    else:
+        rows, offset = [], 0                         # first read, or compacted/replaced
     try:
-        with path.open("r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                try:
-                    d = json.loads(line)
-                except ValueError:
-                    continue   # a torn last line while the writer appends
-                if isinstance(d, dict) and d.get("task_id"):
-                    rows.append({k: d.get(k) for k in _A2A_KEYS})
+        with path.open("rb") as fh:
+            fh.seek(offset)
+            chunk = fh.read()
     except OSError:
-        return []
+        return hit[3] if hit else []
+    end = chunk.rfind(b"\n") + 1          # a torn last line waits for the next poll
+    for line in chunk[:end].splitlines():
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(d, dict) and d.get("task_id"):
+            rows.append({k: d.get(k) for k in _A2A_KEYS})
     with _FILE_CACHE_LOCK:
-        _A2A_CACHE[key] = (st.st_mtime_ns, st.st_size, rows)
+        _A2A_CACHE[key] = (st.st_ino, st.st_size, offset + end, rows)
     return rows
 
 

@@ -543,6 +543,10 @@ class TaskManager:
                 elif event["event"] == "task.cancelled":
                     task.status = TaskStatus.CANCELLED
                     task.ended_at = time.time()
+                    # A refused bridge turn says why ("refused: budget") — no
+                    # user content, only the gate that stopped it (ADR-2081).
+                    if event.get("summary"):
+                        task.result_summary = str(event["summary"])
                     self._write_audit_event(
                         task_id=task_id,
                         event_type="task.cancelled",

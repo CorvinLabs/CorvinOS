@@ -1574,17 +1574,12 @@ def _sender_is_operator(channel: str, sender: str | None) -> bool:
     itself is not written. Never raises."""
     if not sender or not channel or "/" in channel or ".." in channel:
         return False
-    p = _bridge_settings_file(channel)
-    if p is None or not p.exists():
-        return False
-    try:
-        wl = json.loads(p.read_text(encoding="utf-8")).get("whitelist")
-    except (OSError, ValueError, AttributeError):
-        return False
+    data = _load_channel_settings(channel)
+    wl = data.get("whitelist") if isinstance(data, dict) else None
     if not isinstance(wl, list):
         return False
-    allowed = {str(x) for x in wl if x}
-    return str(sender) in allowed or _normalize_jid(str(sender)) in allowed
+    allowed = {_normalize_jid(str(x)) for x in wl if x}
+    return _normalize_jid(str(sender)) in allowed
 
 
 def _normalize_jid(s: str) -> str:
@@ -5396,6 +5391,7 @@ def _call_claude_streaming_via_engine(
         gate_msg = _check_engine_trust_or_fail(engine, channel=channel,
                                                 chat_key=chat_key)
         if gate_msg is not None:
+            _turn_refused("engine_trust")
             return gate_msg
 
     # ADR-0042 / Layer 34 — Data Classification + Flow Guard. Pre-spawn
@@ -5412,6 +5408,7 @@ def _call_claude_streaming_via_engine(
         cc_local_mode=env.get("CORVIN_CC_LOCAL_MODE") == "1",
     )
     if compliance_msg is not None:
+        _turn_refused("l34_compliance")
         return compliance_msg
 
     # ADR-0043 / Layer 35 — Network Egress Gate. Pre-spawn check against
@@ -5422,6 +5419,7 @@ def _call_claude_streaming_via_engine(
     # policy is default_action=deny and the host isn't explicitly allowed.
     egress_msg = _check_egress_or_fail(engine, channel=channel, chat_key=chat_key)
     if egress_msg is not None:
+        _turn_refused("egress")
         return egress_msg
 
     # ADR-0133 CLAG M3 — chain integrity gate before OS-turn engine spawn (L22).
@@ -5433,6 +5431,7 @@ def _call_claude_streaming_via_engine(
     # ADR-0141 Tier 3 — mandatory security-layer presence gate before spawn.
     cap_msg = _check_capabilities_or_fail(channel=channel, chat_key=chat_key)
     if cap_msg is not None:
+        _turn_refused("capability")
         return cap_msg
 
     # ADR-0143 / Layer 44 — Acceptable-Use / House-Rules gate. Pre-spawn check
@@ -7396,17 +7395,34 @@ _TURN_FAILED_PREFIXES = ("[adapter]",)
 _TURN_SUMMARY_CHARS = 280
 
 
-class _TurnTask:
-    def __init__(self, tm, task_id: str, tasks_dir: Path, workdir: Path):
-        self.tm, self.task_id, self.tasks_dir, self.workdir = tm, task_id, tasks_dir, workdir
-        self.started = time.monotonic()
-        self._outcome: tuple[int, dict] | None = None
+# Reasons that are an engine's real failure — they reach the learning loop as
+# task.failed. Every other reported reason is a REFUSAL (budget, quota, policy,
+# gate, house rules, missing engine): nothing ran, so it is recorded
+# task.cancelled with refused=true, which the learning loop ignores — a chat
+# at its daily limit must not fill the store with synthetic model failures.
+_ENGINE_FAILURE_REASONS = frozenset({"engine_error", "timeout", "spawn_timeout"})
 
-    def report(self, retry_count: int, event: dict) -> None:
-        """An engine attempt's terminal event; the last attempt (highest
-        retry count) wins regardless of the order the `finally`s run in."""
-        if self._outcome is None or retry_count >= self._outcome[0]:
-            self._outcome = (retry_count, event)
+
+class _TurnTask:
+    """One bridge turn's task record. ``attempt`` is the retry the turn is on;
+    each attempt's reported outcome is kept apart, and the LAST attempt's
+    decides — whatever order the attempts' ``finally`` blocks run in."""
+
+    def __init__(self, tm, task_id: str, tasks_dir: Path, workdir: Path, *, owned: bool):
+        self.tm, self.task_id, self.tasks_dir, self.workdir = tm, task_id, tasks_dir, workdir
+        self.owned = owned
+        self.started = time.monotonic()
+        self.attempt = 0
+        self.start_logged = False
+        self._outcomes: dict[int, dict] = {}
+
+    def report(self, retry_count: "int | None", event: dict) -> None:
+        self._outcomes[self.attempt if retry_count is None else retry_count] = event
+
+    def final_outcome(self) -> "dict | None":
+        """The outcome the last attempt reported; None when it reported none
+        (an engine path that only reports failure answered)."""
+        return self._outcomes.get(self.attempt)
 
     def reused_by(self, workdir: Path) -> bool:
         return Path(workdir) / "tasks" == self.tasks_dir
@@ -7416,15 +7432,22 @@ def _current_turn_task() -> "_TurnTask | None":
     return getattr(_TURN_TASK, "cur", None)
 
 
-def _turn_refused(reason: str, retry_count: int = 0, *, cancelled: bool = False) -> None:
-    """Mark the current turn as not answered — a refusal, a gate denial, an
-    engine error — before the branch returns its explanatory text. Without
-    this the wrapper would record that text as a completed reply (and the
-    learning loop would count it a success)."""
+def _turn_refused(reason: str, retry_count: "int | None" = None, *, cancelled: bool = False) -> None:
+    """Mark the current attempt as not answered before its branch returns the
+    explanatory text — otherwise the wrapper records that text as a completed
+    reply. ``engine_error``/``timeout`` are failures; a user ``/cancel`` is a
+    cancellation; anything else is a refusal (see _ENGINE_FAILURE_REASONS)."""
     turn = _current_turn_task()
-    if turn is not None:
-        turn.report(retry_count, {"event": "task.cancelled" if cancelled else "task.failed",
-                                  "exit_code": 1, "reason": reason})
+    if turn is None:
+        return
+    if cancelled:
+        event = {"event": "task.cancelled", "reason": reason}
+    elif reason in _ENGINE_FAILURE_REASONS:
+        event = {"event": "task.failed", "exit_code": 1, "reason": reason}
+    else:
+        event = {"event": "task.cancelled", "reason": reason, "refused": True,
+                 "summary": f"refused: {reason}"}
+    turn.report(retry_count, event)
 
 
 def _open_turn_task(*, prompt: str, channel: str, chat_key: str, profile: dict | None,
@@ -7435,15 +7458,15 @@ def _open_turn_task(*, prompt: str, channel: str, chat_key: str, profile: dict |
         workdir = _session_dir(channel, chat_key)
         tasks_dir = workdir / "tasks"
         tm = _task_manager.TaskManager(tasks_dir)
+        owned = _sender_is_operator(channel, sender)
         task_id = tm.create_task(
             chat_key=chat_key, instruction=prompt,
             persona=str((profile or {}).get("persona") or "assistant"),
-            channel=channel, msg_id=msg_id,
-            from_operator=_sender_is_operator(channel, sender),
+            channel=channel, msg_id=msg_id, from_operator=owned,
         )
         # Running from pickup: context assembly is part of the turn's work.
         tm.record_event(task_id, {"event": "task.started", "stage": "preparing"})
-        return _TurnTask(tm, task_id, tasks_dir, workdir)
+        return _TurnTask(tm, task_id, tasks_dir, workdir, owned=owned)
     except Exception as e:  # noqa: BLE001 — task tracking never breaks a turn
         log_debug(f"turn task creation failed (non-blocking): {e}")
         return None
@@ -7460,30 +7483,40 @@ def _close_turn_task(turn: "_TurnTask | None", answer: "str | None",
         return
     status = "failed"
     try:
-        if turn._outcome is not None:
-            event = dict(turn._outcome[1])
-        elif exc is not None:
+        reported = turn.final_outcome()
+        if exc is not None:
+            # An exception after the engine answered still means no reply was
+            # delivered — it outranks whatever the engine reported.
             event = {"event": "task.failed", "exit_code": 1, "error": type(exc).__name__}
+        elif reported is not None:
+            event = dict(reported)
         elif answer is None or str(answer).startswith(_TURN_FAILED_PREFIXES):
             event = {"event": "task.failed", "exit_code": 1, "error": _summary(answer)[:100]}
         else:
             event = {"event": "task.completed", "exit_code": 0}
         if event["event"] == "task.completed":
-            event["summary"] = _summary(answer)
+            # The reply preview is kept only for the operator's own turns — the
+            # only ones the console shows it for. Someone else's conversation
+            # leaves its length, never its text (GDPR Art. 5(1)(c)).
+            if turn.owned:
+                event["summary"] = _summary(answer)
+            event["output_chars"] = len(answer or "")
             status = "completed"
         elif event["event"] == "task.cancelled":
-            status = "cancelled"
+            status = "refused" if event.get("refused") else "cancelled"
         turn.tm.record_event(turn.task_id, event)
     except Exception as e:  # noqa: BLE001
         log_debug(f"turn task close failed: {e}")
-    # The debug log's turn.start has had no turn.done since it was added —
-    # the repair job flushed every turn as an anomaly 5–10 min later.
-    try:
-        _chat_debug_event(turn.workdir, "turn.done", msg_id=str(msg_id or ""),
-                          task_id=turn.task_id[:8], status=status,
-                          duration_ms=int((time.monotonic() - turn.started) * 1000))
-    except Exception:  # noqa: BLE001
-        pass
+    # One turn.done per turn.start: the attempt-0 start is logged by the
+    # implementation (it knows the session/profile fields); a turn refused
+    # before that point logged no start and gets no done.
+    if turn.start_logged:
+        try:
+            _chat_debug_event(turn.workdir, "turn.done", msg_id=str(msg_id or ""),
+                              task_id=turn.task_id[:8], status=status,
+                              duration_ms=int((time.monotonic() - turn.started) * 1000))
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def call_claude_streaming(
@@ -7502,6 +7535,10 @@ def call_claude_streaming(
                   on_status=on_status, status_mode=status_mode, profile=profile,
                   _retry_count=_retry_count, msg_id=msg_id, sender=sender)
     if _retry_count:
+        # A retry continues the turn it retries; its outcome is the one that counts.
+        turn = _current_turn_task()
+        if turn is not None:
+            turn.attempt = max(turn.attempt, _retry_count)
         return _call_claude_streaming_impl(**kwargs)
     turn = _open_turn_task(prompt=prompt, channel=channel, chat_key=chat_key,
                            profile=profile, msg_id=msg_id, sender=sender)
@@ -7659,8 +7696,13 @@ def _call_claude_streaming_impl(
 
     # ── DEBUG: turn.start ────────────────────────────────────────────────
     _dbg_turn_start = time.monotonic()
+    # One turn.start per turn (the wrapper writes the matching turn.done); a
+    # retry of the same turn is logged as turn.retry.
+    _dbg_turn = _current_turn_task()
+    if _dbg_turn is not None and _retry_count == 0:
+        _dbg_turn.start_logged = True
     _chat_debug_event(
-        workdir, "turn.start",
+        workdir, "turn.start" if _retry_count == 0 else "turn.retry",
         chat_key=str(chat_key), channel=channel, msg_id=str(msg_id or ""),
         prompt_len=len(prompt),
         prompt_preview=prompt[:120],

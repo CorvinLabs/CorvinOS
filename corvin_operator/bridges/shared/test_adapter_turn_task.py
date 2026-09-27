@@ -18,6 +18,7 @@ Run: python3 test_adapter_turn_task.py
 from __future__ import annotations
 
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -33,6 +34,7 @@ sys.path.insert(0, str(ROOT.parents[2]))
 
 from test_adapter_stream_idle import _fresh_adapter  # noqa: E402
 
+OPERATOR = "op-uid-1"
 _ENV = ("PATH", "ADAPTER_INBOX", "ADAPTER_OUTBOX", "CORVIN_HOME", "VOICE_AUDIT_PATH",
         "ADAPTER_BRIDGES_DIR", "CLAUDE_CONFIG_DIR", "ADAPTER_STREAM_IDLE_TIMEOUT",
         "ADAPTER_HEARTBEAT_INTERVAL")
@@ -81,6 +83,8 @@ def _setup(tmp: Path, *, hang_first: bool):
     os.environ["VOICE_AUDIT_PATH"] = str(tmp / "audit.jsonl")
     os.environ["CLAUDE_CONFIG_DIR"] = str(tmp / "claude")
     os.environ["ADAPTER_BRIDGES_DIR"] = str(tmp / "bridges")
+    (tmp / "bridges" / "discord").mkdir(parents=True, exist_ok=True)
+    (tmp / "bridges" / "discord" / "settings.json").write_text(json.dumps({"whitelist": [OPERATOR]}))
     os.environ["ADAPTER_STREAM_IDLE_TIMEOUT"] = "2"
     os.environ["ADAPTER_HEARTBEAT_INTERVAL"] = "0"
     return _fresh_adapter()
@@ -107,7 +111,8 @@ def _run(fn) -> None:
 def test_opened_at_pickup_and_closed_once() -> None:
     def body(tmp: Path) -> None:
         adapter = _setup(tmp, hang_first=False)
-        ans = adapter.call_claude_streaming("ship it", channel="discord", chat_key="tt1", msg_id="m-1")
+        ans = adapter.call_claude_streaming("ship it", channel="discord", chat_key="tt1", msg_id="m-1",
+                                            sender=OPERATOR)
         assert "phases" in ans, ans
         [probe] = [json.loads(line) for line in (tmp / "probe.jsonl").read_text().splitlines()]
         assert probe == [{"status": "running", "preparing": True}], probe
@@ -123,6 +128,13 @@ def test_opened_at_pickup_and_closed_once() -> None:
         dbg = [json.loads(line) for line in (workdir / "chat_debug.jsonl").read_text().splitlines()]
         done = [d for d in dbg if d["event"] == "turn.done"]
         assert len(done) == 1 and done[0]["msg_id"] == "m-1" and done[0]["status"] == "completed", dbg
+        starts = [d for d in dbg if d["event"] == "turn.start"]
+        assert len(starts) == 1, dbg
+        # someone else's turn: its reply text is not kept, only its length
+        adapter.call_claude_streaming("ship it", channel="discord", chat_key="tt1b", msg_id="m-1b",
+                                      sender="stranger")
+        [other] = _records(adapter._session_dir("discord", "tt1b"))
+        assert other["status"] == "completed" and not other.get("result_summary"), other
         print("PASS: task opened at pickup (running, preparing), closed once with summary, turn.done logged")
     _run(body)
 
@@ -138,6 +150,10 @@ def test_recovered_retry_ends_completed() -> None:
         assert "phases" in ans, ans
         [rec] = _records(workdir)
         assert rec["status"] == "completed", rec
+        dbg = [json.loads(line) for line in (workdir / "chat_debug.jsonl").read_text().splitlines()]
+        kinds = [d["event"] for d in dbg if d["event"].startswith("turn.")]
+        assert kinds.count("turn.start") == 1 and kinds.count("turn.done") == 1, kinds
+        assert "turn.retry" in kinds, kinds
         print("PASS: a turn recovered by its retry is one record, completed")
     _run(body)
 
@@ -199,11 +215,77 @@ def test_refusal_is_not_a_completed_turn() -> None:
         ans = adapter.call_claude_streaming("ship it", channel="discord", chat_key="tt5", msg_id="m-5")
         assert ans.startswith("⛔"), ans
         [rec] = _records(adapter._session_dir("discord", "tt5"))
-        assert rec["status"] == "failed", rec
-        assert not rec.get("result_summary"), rec
+        # nothing ran: a refusal, not a model failure — the learning loop
+        # (task.completed/task.failed only) must not see it
+        assert rec["status"] == "cancelled", rec
+        assert rec.get("result_summary") == "refused: budget", rec
         assert not (tmp / "calls").exists(), "the engine ran despite the refusal"
-        print("PASS: a budget refusal is recorded failed, not completed")
+        dbg_file = adapter._session_dir("discord", "tt5") / "chat_debug.jsonl"
+        dbg = dbg_file.read_text().splitlines() if dbg_file.exists() else []
+        assert not any('"turn.done"' in l for l in dbg), "turn.done without a turn.start"
+        print("PASS: a budget refusal is recorded as refused (cancelled), not completed or failed")
     _run(body)
+
+
+def test_outcome_rules() -> None:
+    """The last attempt decides; an exception outranks any report."""
+    def body(tmp: Path) -> None:
+        adapter = _setup(tmp, hang_first=False)
+        tm = adapter._task_manager.TaskManager(tmp / "u" / "tasks")
+
+        def turn():
+            tid = tm.create_task(chat_key="c", instruction="x", check_quota=False)
+            tm.record_event(tid, {"event": "task.started", "stage": "preparing"})
+            return adapter._TurnTask(tm, tid, tmp / "u" / "tasks", tmp / "u", owned=True)
+
+        # engine reported completed, then post-processing raised: no reply went out
+        t1 = turn()
+        t1.report(0, {"event": "task.completed", "exit_code": 0})
+        adapter._close_turn_task(t1, None, RuntimeError("voice override"), "m")
+        assert tm.get_task(t1.task_id).status.value == "failed"
+        # attempt 0 failed on claude, the retry answered on an engine that never reports
+        t2 = turn()
+        t2.report(0, {"event": "task.failed", "exit_code": 1})
+        t2.attempt = 1
+        adapter._close_turn_task(t2, "the answer", None, "m")
+        assert tm.get_task(t2.task_id).status.value == "completed"
+        # attempt 0's finally reporting AFTER the successful retry changes nothing
+        t3 = turn()
+        t3.attempt = 1
+        t3.report(1, {"event": "task.completed", "exit_code": 0})
+        t3.report(0, {"event": "task.failed", "exit_code": 1})
+        adapter._close_turn_task(t3, "ok", None, "m")
+        assert tm.get_task(t3.task_id).status.value == "completed"
+        print("PASS: last attempt decides, an exception outranks any report")
+    _run(body)
+
+
+# Helpers that hand a denial BACK to their caller, which reports it — their
+# own returns do not end a turn.
+_RETURNS_TO_CALLER = {"_run_pre_dispatch_gates"}
+_GATE_RETURN = re.compile(r"^\s+return (\w*gate_denial|\w*_msg|_m7_hr|refusal or .*)\s*$")
+
+
+def test_every_gate_return_reports() -> None:
+    """Static guard: a gate/refusal branch that returns its message without
+    `_turn_refused(...)` right before it records the refusal as a completed
+    reply. Positive control first: the sweep must find the known gates."""
+    lines = (ROOT / "adapter.py").read_text(encoding="utf-8").splitlines()
+    enclosing, fn = [], ""
+    for l in lines:
+        if l.startswith("def "):
+            fn = l[4:].split("(", 1)[0]
+        enclosing.append(fn)
+    hits = [(n, l) for n, l in enumerate(lines)
+            if _GATE_RETURN.match(l) and enclosing[n] not in _RETURNS_TO_CALLER]
+    assert len(hits) >= 10, f"sweep found only {len(hits)} gate returns"
+    missing = []
+    for n, l in hits:
+        prev = next((lines[k] for k in range(n - 1, max(n - 4, 0), -1) if lines[k].strip()), "")
+        if "_turn_refused(" not in prev:
+            missing.append(f"adapter.py:{n + 1}: {l.strip()}")
+    assert not missing, "gate returns without _turn_refused:\n" + "\n".join(missing)
+    print(f"PASS: all {len(hits)} gate returns report the refusal")
 
 
 if __name__ == "__main__":
@@ -212,3 +294,5 @@ if __name__ == "__main__":
     test_task_list_shows_stage_of_running_turn()
     test_engine_pid_keeps_a_live_turn_from_the_reaper()
     test_refusal_is_not_a_completed_turn()
+    test_outcome_rules()
+    test_every_gate_return_reports()
