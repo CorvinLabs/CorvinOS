@@ -30,6 +30,7 @@ interface RolloutMetrics {
   traffic_percentage: number;
   pending_operator_approval: boolean;
   approval_required_for: string | null;
+  approval_blocking_reason?: string;  // FINDING 6: Show blocking reason
   skill_states: Record<string, string>;
   rollback_count: number;
   agreement_rate: number;
@@ -37,6 +38,9 @@ interface RolloutMetrics {
   latency_p99_ms: number;
   positive_feedback_rate: number;
   audit_chain_verified: boolean;
+  metrics_timestamp?: number;  // FINDING 9: Track staleness
+  all_clear?: boolean;  // FINDING 16: All clear status
+  api_error?: string;  // FINDING 8: API error state
 }
 
 interface ComplianceReport {
@@ -68,13 +72,55 @@ const RolloutMonitoringDashboard: React.FC = () => {
     const fetchMetrics = async () => {
       try {
         const response = await fetch('/v1/console/orchestration/status');
-        if (!response.ok) throw new Error('Failed to fetch rollout status');
+        if (!response.ok) {
+          // FINDING 8: API error state
+          const errorData: RolloutMetrics = {
+            phase: 'ERROR',
+            day: 0,
+            week: 0,
+            traffic_percentage: 0,
+            pending_operator_approval: false,
+            approval_required_for: null,
+            skill_states: {},
+            rollback_count: 0,
+            agreement_rate: 0,
+            confidence: 0,
+            latency_p99_ms: 0,
+            positive_feedback_rate: 0,
+            audit_chain_verified: false,
+            api_error: `API error ${response.status}: ${response.statusText}`,
+          };
+          setMetrics(errorData);
+          setIsLoading(false);
+          return;
+        }
 
         const data = await response.json();
+        // FINDING 9: Add staleness tracking
+        data.metrics_timestamp = Date.now();
         setMetrics(data);
         setIsLoading(false);
       } catch (error) {
         console.error('Error fetching rollout metrics:', error);
+        // FINDING 8: Show error banner instead of stuck on Loading
+        const errorData: RolloutMetrics = {
+          phase: 'ERROR',
+          day: 0,
+          week: 0,
+          traffic_percentage: 0,
+          pending_operator_approval: false,
+          approval_required_for: null,
+          skill_states: {},
+          rollback_count: 0,
+          agreement_rate: 0,
+          confidence: 0,
+          latency_p99_ms: 0,
+          positive_feedback_rate: 0,
+          audit_chain_verified: false,
+          api_error: String(error),
+        };
+        setMetrics(errorData);
+        setIsLoading(false);
       }
     };
 
@@ -83,8 +129,28 @@ const RolloutMonitoringDashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  if (isLoading || !metrics) {
+  if (isLoading) {
     return <div className="flex items-center justify-center p-8">Loading rollout status...</div>;
+  }
+
+  if (!metrics) {
+    return <div className="flex items-center justify-center p-8">No data available</div>;
+  }
+
+  // FINDING 8: Show API error banner
+  if (metrics.api_error) {
+    return (
+      <div className="w-full space-y-6 p-6">
+        <Alert className="border-red-300 bg-red-50">
+          <XCircle className="h-4 w-4 text-red-600" />
+          <AlertDescription className="text-red-800">
+            <strong>API Connection Error:</strong> {metrics.api_error}
+            <br />
+            <span className="text-sm">Retrying automatically every 5 seconds...</span>
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
   }
 
   const phaseLabel = {
@@ -133,16 +199,12 @@ const RolloutMonitoringDashboard: React.FC = () => {
             </div>
           )}
 
-          {/* Operator Approval Gate */}
+          {/* Operator Approval Gate - FINDING 6: Show blocking reason, FINDING 13: Add buttons */}
           {metrics.pending_operator_approval && (
-            <Alert className="border-orange-300 bg-orange-50">
-              <Clock className="h-4 w-4 text-orange-600" />
-              <AlertDescription className="text-orange-800">
-                <strong>Operator Approval Required:</strong> {metrics.approval_required_for || 'Unknown gate'}
-                <br />
-                <span className="text-sm">Awaiting manual review and approval to proceed</span>
-              </AlertDescription>
-            </Alert>
+            <ApprovalAlert
+              requiredFor={metrics.approval_required_for || 'Unknown gate'}
+              blockingReason={metrics.approval_blocking_reason}
+            />
           )}
         </CardContent>
       </Card>
@@ -193,43 +255,28 @@ const RolloutMonitoringDashboard: React.FC = () => {
       {/* Rollout SLA Dashboard */}
       <SLADashboard metrics={metrics} />
 
-      {/* Rollback Triggers Status */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Auto-Rollback Triggers</CardTitle>
-          <CardDescription>All 8 fail-closed triggers armed and monitoring</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {[
-              { name: 'Correctness Drop (>2%)', status: 'armed' },
-              { name: 'Latency Spike (>20%)', status: 'armed' },
-              { name: 'Confidence Regression (>10%)', status: 'armed' },
-              { name: 'Audit Chain Break', status: 'armed' },
-              { name: 'Tenant Isolation Violation', status: 'armed' },
-              { name: 'Security Check Failure', status: 'armed' },
-              { name: 'Loss Signal Critical', status: 'armed' },
-              { name: 'Manual Operator Rollback', status: 'armed' },
-            ].map((trigger) => (
-              <div key={trigger.name} className="flex items-center gap-2 p-2 bg-gray-50 rounded">
-                <CheckCircle className="h-4 w-4 text-green-600" />
-                <span className="text-sm">{trigger.name}</span>
-              </div>
-            ))}
-          </div>
-          {metrics.rollback_count > 0 && (
-            <Alert className="mt-4 border-orange-300 bg-orange-50">
-              <AlertTriangle className="h-4 w-4 text-orange-600" />
-              <AlertDescription className="text-orange-800">
-                {metrics.rollback_count} rollback(s) executed
-              </AlertDescription>
-            </Alert>
-          )}
-        </CardContent>
-      </Card>
+      {/* Rollback Triggers Status - FINDING 7: Dynamic trigger thresholds per phase */}
+      <RollbackTriggersPanel metrics={metrics} />
 
-      {/* ADR Compliance Status */}
-      <CompliancePanel complianceReports={complianceReports} />
+      {/* FINDING 16: All Clear Status */}
+      {metrics.all_clear && (
+        <Card className="border-green-300 bg-green-50">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-3">
+              <CheckCircle className="h-6 w-6 text-green-600" />
+              <div>
+                <div className="font-medium text-green-800">All Clear</div>
+                <div className="text-sm text-green-700">
+                  No incidents detected (last checked {getRelativeTime(metrics.metrics_timestamp)})
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ADR Compliance Status - FINDING 14: Link to approval gate */}
+      <CompliancePanel complianceReports={complianceReports} metrics={metrics} />
 
       {/* Open Incidents */}
       <IncidentsPanel incidents={incidents} />
@@ -284,20 +331,45 @@ const MetricsCard: React.FC<{
     fail: <XCircle className="h-5 w-5 text-red-600" />,
   };
 
+  // FINDING 11 & 12: Validate metrics for negative, NaN, out-of-range values
+  const isValid = validateMetricValue(value, title);
+  const displayStatus = !isValid ? 'fail' : status;
+
   return (
-    <Card className={`border-2 ${statusColors[status]}`}>
+    <Card className={`border-2 ${statusColors[displayStatus]}`}>
       <CardContent className="pt-6">
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-gray-600">{title}</span>
-            {statusIcons[status]}
+            {statusIcons[displayStatus]}
           </div>
           <div className="text-2xl font-bold">{value}</div>
+          {!isValid && (
+            <div className="text-xs text-red-600 font-medium">Data corruption detected</div>
+          )}
           <div className="text-xs text-gray-500">{threshold}</div>
         </div>
       </CardContent>
     </Card>
   );
+};
+
+// FINDING 11 & 12: Validate metric values
+const validateMetricValue = (value: string, title: string): boolean => {
+  // Parse the value
+  const numStr = value.replace(/[^0-9.-]/g, '');
+  const num = parseFloat(numStr);
+
+  if (isNaN(num)) return false;
+  if (num < 0) return false;
+
+  // Check for ranges
+  if (title.includes('Rate') || title.includes('Feedback')) {
+    // Percentages: 0-1 or 0-100
+    if (num > 100 && !value.includes('%')) return false;
+  }
+
+  return true;
 };
 
 const SkillStateBox: React.FC<{ skillId: string; state: string }> = ({ skillId, state }) => {
@@ -319,6 +391,10 @@ const SkillStateBox: React.FC<{ skillId: string; state: string }> = ({ skillId, 
 };
 
 const SLADashboard: React.FC<{ metrics: RolloutMetrics }> = ({ metrics }) => {
+  // FINDING 9: Check for metrics staleness (>30 min old)
+  const minutesOld = metrics.metrics_timestamp ? Math.floor((Date.now() - metrics.metrics_timestamp) / 60000) : 0;
+  const isStale = minutesOld > 30;
+
   const slaCriteria = useMemo(() => {
     const phase = metrics.phase;
 
@@ -351,10 +427,19 @@ const SLADashboard: React.FC<{ metrics: RolloutMetrics }> = ({ metrics }) => {
   const passCount = slaCriteria.filter((c) => c.pass).length;
 
   return (
-    <Card>
+    <Card className={isStale ? 'border-orange-300 bg-orange-50' : ''}>
       <CardHeader>
         <CardTitle>Rollout SLA Status</CardTitle>
-        <CardDescription>Phase-specific success criteria</CardDescription>
+        <CardDescription>
+          Phase-specific success criteria
+          {/* FINDING 9: Show timestamp and staleness warning */}
+          {metrics.metrics_timestamp && (
+            <span className={isStale ? 'text-orange-700 ml-2' : 'text-gray-600 ml-2'}>
+              Last updated: {getRelativeTime(metrics.metrics_timestamp)}
+              {isStale && <span className="ml-1">⚠️ Data older than 30 minutes</span>}
+            </span>
+          )}
+        </CardDescription>
       </CardHeader>
       <CardContent>
         <div className="space-y-3">
@@ -382,9 +467,10 @@ const SLADashboard: React.FC<{ metrics: RolloutMetrics }> = ({ metrics }) => {
   );
 };
 
-const CompliancePanel: React.FC<{ complianceReports: Record<number, ComplianceReport> }> = ({
-  complianceReports,
-}) => {
+const CompliancePanel: React.FC<{
+  complianceReports: Record<number, ComplianceReport>;
+  metrics?: RolloutMetrics;
+}> = ({ complianceReports, metrics }) => {
   const latestReport = Object.values(complianceReports).sort((a, b) => b.week - a.week)[0];
 
   if (!latestReport) {
@@ -394,7 +480,15 @@ const CompliancePanel: React.FC<{ complianceReports: Record<number, ComplianceRe
   const totalChecks = latestReport.passed_checks + latestReport.failed_checks + latestReport.warning_checks;
 
   return (
-    <Card>
+    <Card
+      className={
+        latestReport.failed_checks > 0 && metrics?.pending_operator_approval
+          ? 'border-red-300 bg-red-50'
+          : latestReport.failed_checks > 0
+            ? 'border-red-200'
+            : ''
+      }
+    >
       <CardHeader>
         <CardTitle>ADR Compliance Status</CardTitle>
         <CardDescription>Week {latestReport.week}: ADR-0206, 0205, 0186, 0369</CardDescription>
@@ -426,6 +520,14 @@ const CompliancePanel: React.FC<{ complianceReports: Record<number, ComplianceRe
                     <li key={violation}>{violation}</li>
                   ))}
                 </ul>
+                {/* FINDING 14: Link to approval gate if pending */}
+                {metrics?.pending_operator_approval && (
+                  <div className="mt-2 p-2 bg-white rounded border-l-2 border-red-400">
+                    <span className="text-xs">
+                      This blocking violation may prevent approval of {metrics.approval_required_for}
+                    </span>
+                  </div>
+                )}
               </AlertDescription>
             </Alert>
           )}
@@ -477,6 +579,165 @@ const IncidentsPanel: React.FC<{ incidents: Incident[] }> = ({ incidents }) => {
       </CardContent>
     </Card>
   );
+};
+
+// FINDING 6 & 13: ApprovalAlert with blocking reason and action buttons
+const ApprovalAlert: React.FC<{ requiredFor: string; blockingReason?: string }> = ({
+  requiredFor,
+  blockingReason,
+}) => {
+  const handleApprove = async () => {
+    try {
+      const response = await fetch('/v1/console/orchestration/approval', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          gate: requiredFor,
+          action: 'approve',
+          reason: 'Approved via dashboard',
+        }),
+      });
+      if (response.ok) {
+        alert('Approval submitted successfully');
+        // Refresh metrics
+        window.location.reload();
+      }
+    } catch (error) {
+      alert(`Error: ${error}`);
+    }
+  };
+
+  const handleReject = async () => {
+    const reason = prompt('Rejection reason (optional):');
+    try {
+      const response = await fetch('/v1/console/orchestration/approval', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          gate: requiredFor,
+          action: 'reject',
+          reason: reason || 'Rejected via dashboard',
+        }),
+      });
+      if (response.ok) {
+        alert('Rejection submitted successfully');
+        window.location.reload();
+      }
+    } catch (error) {
+      alert(`Error: ${error}`);
+    }
+  };
+
+  return (
+    <Alert className="border-orange-300 bg-orange-50">
+      <Clock className="h-4 w-4 text-orange-600" />
+      <AlertDescription className="space-y-3">
+        <div>
+          <strong className="text-orange-800">Operator Approval Required:</strong>{' '}
+          <span className="text-orange-800">{requiredFor}</span>
+          <br />
+          <span className="text-sm text-orange-700">Awaiting manual review and approval to proceed</span>
+        </div>
+        {blockingReason && (
+          <div className="text-sm bg-orange-100 border border-orange-300 rounded p-2 text-orange-900">
+            <strong>Blocking Reason:</strong> {blockingReason}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <button
+            onClick={handleApprove}
+            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm font-medium"
+          >
+            ✓ Approve
+          </button>
+          <button
+            onClick={handleReject}
+            className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm font-medium"
+          >
+            ✗ Reject
+          </button>
+        </div>
+      </AlertDescription>
+    </Alert>
+  );
+};
+
+// FINDING 7: RollbackTriggersPanel with dynamic thresholds per phase
+const RollbackTriggersPanel: React.FC<{ metrics: RolloutMetrics }> = ({ metrics }) => {
+  // FINDING 7: Dynamic trigger thresholds based on phase
+  const triggerThresholds = {
+    PHASE_2A_CANARY: {
+      correctness: '>2%',
+      latency: '>20%',
+      confidence: '>10%',
+    },
+    PHASE_2B_SKILL_PRIMARY: {
+      correctness: '>1.5%',
+      latency: '>15%',
+      confidence: '>8%',
+    },
+  };
+
+  const phaseThresholds = triggerThresholds[metrics.phase as keyof typeof triggerThresholds] || {
+    correctness: '>2%',
+    latency: '>20%',
+    confidence: '>10%',
+  };
+
+  const triggers = [
+    { name: `Correctness Drop (${phaseThresholds.correctness})`, status: 'armed' },
+    { name: `Latency Spike (${phaseThresholds.latency})`, status: 'armed' },
+    { name: `Confidence Regression (${phaseThresholds.confidence})`, status: 'armed' },
+    { name: 'Audit Chain Break', status: 'armed' },
+    { name: 'Tenant Isolation Violation', status: 'armed' },
+    { name: 'Security Check Failure', status: 'armed' },
+    { name: 'Loss Signal Critical', status: 'armed' },
+    { name: 'Manual Operator Rollback', status: 'armed' },
+  ];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Auto-Rollback Triggers</CardTitle>
+        <CardDescription>
+          All 8 fail-closed triggers armed and monitoring (thresholds for {metrics.phase})
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {triggers.map((trigger) => (
+            <div key={trigger.name} className="flex items-center gap-2 p-2 bg-gray-50 rounded">
+              <CheckCircle className="h-4 w-4 text-green-600" />
+              <span className="text-sm">{trigger.name}</span>
+            </div>
+          ))}
+        </div>
+        {metrics.rollback_count > 0 && (
+          <Alert className="mt-4 border-orange-300 bg-orange-50">
+            <AlertTriangle className="h-4 w-4 text-orange-600" />
+            <AlertDescription className="text-orange-800">
+              {metrics.rollback_count} rollback(s) executed
+            </AlertDescription>
+          </Alert>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+// FINDING 9: Helper to show relative time
+const getRelativeTime = (timestamp?: number): string => {
+  if (!timestamp) return 'unknown';
+
+  const now = Date.now();
+  const diffMs = now - timestamp;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffSecs = Math.floor(diffMs / 1000);
+
+  if (diffMins > 0) {
+    return `${diffMins}m ago`;
+  }
+  return `${diffSecs}s ago`;
 };
 
 export default RolloutMonitoringDashboard;
