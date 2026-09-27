@@ -21,7 +21,7 @@ import {
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
   MarketplacePage,
   GitHubPage, SyncMonitorPage,
-  QualityGatesPage, VideoProducerPage, VideoQualityMetricsPage, CorvinKnowledgePage,
+  QualityGatesPage, CorvinKnowledgePage,
   DataHubUnifiedPage,
   OTELTelemetryPage, VibeEngineeringPage, InitiativesPage, ModelsPage,
   ControlIntentRouterPage, ControlPlanePluginsPage, ControlSubsystemsPage, ControlOverridesPage, ControlSnapshotsPage,
@@ -65,9 +65,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   GitHubPage,
   SyncMonitorPage,
   QualityGatesPage,
-  VideoProducerPage,
   CorvinKnowledgePage,
-  VideoQualityMetricsPage,
   DataHubUnifiedPage,
   OTELTelemetryPage,
   ModelsPage,
@@ -108,19 +106,9 @@ export const PANELS: ConsolePanel[] = [
   rc("ldd", "LDD", LddPage, { nav: { label: "Quality", icon: "Boxes", group: "system" } }),
   rc("compliance", "Compliance", CompliancePage, { nav: { label: "Audit & Compliance", icon: "ShieldCheck", group: "system" } }),
   rc("quality", "Quality Gates", QualityGatesPage, { nav: { label: "Quality Gates", icon: "CheckCircle", group: "system" } }),
-  // Video Producer main panel. Until 2026-09-26 this was imported above but
-  // never passed to rc() — no route, no NAV_GROUPS entry — so the panel was
-  // dead UI: reachable by nobody, despite a working (marketplace-plugin-
-  // backed) API behind it. Reuses video_producer_enabled, same as its
-  // video-quality-metrics sub-panel below.
-  rc("video-producer", "Video Producer", VideoProducerPage, { nav: { label: "Video Producer", icon: "Video", group: "system" }, requiredFlag: "video_producer_enabled" }),
-  // ADR-0695 Phase 2 — Video Quality Metrics Dashboard.
-  // The comment here used to claim a NAV_GROUPS (layout.tsx) entry already
-  // existed ("reachable since 2026-09-20") — it never did (verified
-  // 2026-09-26: no /app/video-quality-metrics anywhere in layout.tsx), so
-  // this panel was unreachable from the sidebar the whole time despite a
-  // working route. Now added alongside video-producer's own entry.
-  rc("video-quality-metrics", "Video Quality", VideoQualityMetricsPage, { nav: { label: "Video Quality", icon: "Gauge", group: "system" }, requiredFlag: "video_producer_enabled" }),
+  // Video Producer panel migrated to Marketplace Plugin (ADR-0892: One-Marketplace).
+  // The plugin's VideoProducerPanel is now loaded dynamically via manifest.console_panels.
+  // Console-native pages removed 2026-09-27 in favor of plugin-based UI.
   rc("files", "Files", FilesPage, { nav: { label: "Files", icon: "FolderOpen", group: "intelligence" } }),
   // REMOVED 2026-09-15: "space" panel (superseded by modern UI, no nav entry)
   rc("memory", "Memory", MemoryPage, { nav: { label: "Memory", icon: "BookOpen", group: "intelligence" } }),
