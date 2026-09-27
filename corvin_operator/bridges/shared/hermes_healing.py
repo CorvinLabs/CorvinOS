@@ -81,11 +81,21 @@ def has_hermes_model(models: Optional[list[str]] = None,
     return any("qwen3" in m for m in ms)
 
 
-def get_health_status() -> dict[str, bool]:
-    """Return a health dict: {reachable, inference_ok, has_model, models}."""
+def get_health_status(*, probe_inference: bool = False) -> dict[str, bool | None]:
+    """Return a health dict: {reachable, inference_ok, has_model, models}.
+
+    The inference probe is OFF by default. It is a real /api/generate call: on a
+    CPU-only Ollama it loads the model (~6 GB for qwen3:8b) and pins every core
+    for seconds, and its 5 s timeout aborts client-side while Ollama keeps
+    computing. The periodic repair cycle (corvin-hermes-health.timer, every
+    5 min) only acts on ``reachable``/``has_model``, so probing there burned CPU
+    for a value nothing read. ``inference_ok`` is None when not probed.
+    """
     reachable = is_hermes_reachable()
     models = get_available_models() if reachable else []
-    inference_ok = is_hermes_inference_ready(models=models) if reachable else False
+    inference_ok: bool | None = None
+    if probe_inference:
+        inference_ok = is_hermes_inference_ready(models=models) if reachable else False
     return {
         "reachable": reachable,
         "inference_ok": inference_ok,
