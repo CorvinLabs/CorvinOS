@@ -22,6 +22,7 @@ import logging
 from dataclasses import dataclass
 
 from .skill_registry_phase1 import Skill, SkillMetadata, SkillOrigin, SkillTier
+from .os_skills.delegation_router import DelegationRouterSkill  # L5 routing skill (new module)
 
 logger = logging.getLogger(__name__)
 
@@ -211,116 +212,6 @@ def _flag_state(flag_id: str, tenant_id: Optional[str], default: bool) -> tuple[
         return bool(is_enabled(flag_id, tenant_id or "_default")), "feature_flags"
     except Exception as exc:  # noqa: BLE001 — unknown flag / unreadable overlay → default
         return default, f"default:{type(exc).__name__}"
-
-
-class DelegationRouterSkill(Skill):
-    """Route tasks to appropriate engine based on complexity/type.
-
-    Replaces feature flag: spec.features.vibe_engineering_v0_2
-
-    Input:
-        complexity: int (1-10, where 10 is most complex)
-        task_type: str (e.g., "analysis", "code", "chat")
-        user_context: dict (optional user/task context)
-
-    Output:
-        engine: str (e.g., "claude-opus-5", "claude-sonnet-4")
-        confidence: float (0.0-1.0, confidence in decision)
-        reasoning: str (why this engine was chosen)
-    """
-
-    def __init__(self):
-        metadata = SkillMetadata(
-            id="os.delegation_router",
-            name="Delegation Router",
-            description="Route tasks to appropriate Claude engine based on complexity and type",
-            version="0.1.0",
-            origin=SkillOrigin.BUILTIN,
-            owner="corvin-os-team",
-            tags=["routing", "delegation", "os-core"],
-        )
-        super().__init__(metadata)
-
-    def execute(self, input: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute routing decision.
-
-        Args:
-            input: Dictionary with complexity, task_type, user_context
-
-        Returns:
-            Dictionary with engine, confidence, reasoning
-        """
-        complexity = input.get("complexity", 5)  # Default: medium complexity
-        task_type = input.get("task_type", "general")
-        user_context = input.get("user_context", {})
-
-        # Simple heuristic: complexity → engine
-        # Real version would use ML model or more sophisticated logic
-        if complexity >= 8:
-            engine = "claude-opus-5"
-            confidence = 0.95
-            reasoning = "High complexity task requires most capable engine"
-        elif complexity >= 5:
-            engine = "claude-sonnet-4"
-            confidence = 0.85
-            reasoning = "Medium-high complexity routed to Sonnet"
-        else:
-            engine = "claude-haiku-4"
-            confidence = 0.90
-            reasoning = "Low-medium complexity uses efficient Haiku engine"
-
-        # Task-type adjustments
-        if task_type == "code" and complexity < 7:
-            engine = "claude-sonnet-4"
-            confidence = 0.80
-            reasoning = "Code tasks prefer Sonnet over Haiku"
-
-        # Learned config (ADR-0549 loop closure, 2026-09-06): the tenant's
-        # SkillAdapter config is the OUTPUT of the feedback → hypothesis →
-        # optimizer chain; reading it here is what makes an accepted hypothesis
-        # change the next decision. ``confidence_threshold`` gates escalation:
-        # a heuristic decision the tenant has learned to distrust (confidence
-        # below the learned threshold) is escalated one engine tier. With the
-        # default config (0.70) no heuristic branch is below threshold, so a
-        # tenant that never gave feedback routes exactly as before.
-        tenant_id = input.get("tenant_id")
-        learned_version = None
-        threshold = None
-        if isinstance(tenant_id, str) and tenant_id:
-            from .os_skills.skill_adapter import load_skill_config  # noqa: PLC0415
-
-            try:
-                cfg, learned_version = load_skill_config("os.delegation_router", tenant_id)
-                threshold = cfg.confidence_threshold
-            except Exception as exc:  # noqa: BLE001 — a config problem must not break routing
-                logger.warning("DelegationRouter: learned config unreadable (%s)", type(exc).__name__)
-            if threshold is not None and confidence < threshold:
-                escalation = {"claude-haiku-4": "claude-sonnet-4", "claude-sonnet-4": "claude-opus-5"}
-                if engine in escalation:
-                    engine = escalation[engine]
-                    reasoning = (
-                        f"{reasoning}; escalated: confidence {confidence:.2f} below learned "
-                        f"threshold {threshold:.2f} ({learned_version or 'default'})"
-                    )
-
-        logger.info(
-            f"DelegationRouter: complexity={complexity}, task_type={task_type} → {engine}"
-        )
-
-        result: Dict[str, Any] = {
-            "engine": engine,
-            "confidence": confidence,
-            "reasoning": reasoning,
-        }
-        if threshold is not None:
-            result["confidence_threshold"] = threshold
-            result["learned_config_version"] = learned_version
-        if input.get("shadow"):
-            # Advisory execution (L5 shadow wiring): the bundled engine decided;
-            # record both so the learning store can measure agreement.
-            result["shadow"] = True
-            result["bundled_engine"] = input.get("bundled_engine")
-        return result
 
 
 class VibeEngineeringSkill(Skill):
