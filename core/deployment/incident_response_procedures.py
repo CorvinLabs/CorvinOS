@@ -59,7 +59,7 @@ class IncidentType(Enum):
 
 @dataclass
 class Incident:
-    """Production incident record"""
+    """Production incident record (GDPR Art. 5/32 - tenant isolation + audit trail)"""
     incident_id: str
     incident_type: IncidentType
     severity: IncidentSeverity
@@ -69,9 +69,11 @@ class Incident:
     metric_name: str
     actual_value: float
     threshold: float
+    tenant_id: str = "_default"  # MANDATORY (ADR-0563 - tenant isolation)
     status: str = "open"  # open, investigating, mitigated, resolved
     resolution_time: Optional[str] = None
     resolution_notes: str = ""
+    audit_event_id: Optional[str] = None  # Reference to audit trail (ADR-0232)
 
 
 class IncidentDetector:
@@ -414,6 +416,11 @@ class IncidentNotifier:
     - PagerDuty: CRITICAL incidents only (auto-pages oncall)
     - Email: operator receipt (confirmation)
 
+    Compliance (GDPR + EU AI Act):
+    - GDPR Art. 32: Audit-first (write to audit trail before notifications)
+    - EU AI Act Art. 50: Real-time operator notification for auto-rollback
+    - ADR-0563: Tenant isolation (incidents scoped by tenant_id)
+
     FIXES:
     - IR-001: Per-channel success tracking, returns False if ANY channel fails
     - IR-002: SMTP email implementation with 3 retries
@@ -429,13 +436,14 @@ class IncidentNotifier:
     # Dead letter queue retry interval
     DLQ_RETRY_INTERVAL_SECONDS = 300
 
-    def __init__(self):
+    def __init__(self, audit_path: Optional[Path] = None):
         self.notifications_sent: List[Dict] = []
         self.failed_notifications_queue: Queue = Queue()  # IR-005: Dead letter queue
         self.incident_dedup_cache: Dict[str, float] = {}  # IR-003: incident_id → timestamp
         self.rate_limit_window: List[float] = []  # IR-003: sliding window of notification timestamps
         self.channel_results: Dict[str, bool] = {}  # IR-001: per-channel success tracking
         self.lock = threading.RLock()  # Thread-safe access
+        self.audit_path = audit_path or Path.home() / ".corvin" / "orchestrator_audit.jsonl"  # GDPR Art. 32
         # Start DLQ retry thread (IR-005)
         self._start_dlq_retry_thread()
 
@@ -452,6 +460,50 @@ class IncidentNotifier:
         thread = threading.Thread(target=retry_loop, daemon=True)
         thread.start()
 
+    def _write_incident_to_audit(self, incident: Incident) -> bool:
+        """
+        GDPR Art. 32: Write incident to audit trail before notifications (audit-first).
+
+        Fail-closed: if audit write fails, do not send notifications.
+        Returns: True if written successfully, False otherwise.
+        """
+        try:
+            import uuid
+
+            # Ensure tenant_id is present (ADR-0563)
+            tenant_id = incident.tenant_id or "_default"
+
+            # Create audit event
+            audit_event = {
+                "event_id": f"incident-{uuid.uuid4().hex[:12]}",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "tenant_id": tenant_id,  # MANDATORY (ADR-0563)
+                "event_type": "incident_detected",
+                "incident_id": incident.incident_id,
+                "incident_type": incident.incident_type.value,
+                "severity": incident.severity.value,
+                "metric_name": incident.metric_name,
+                "actual_value": incident.actual_value,
+                "threshold": incident.threshold,
+                "message": incident.message,
+                "details": dict(incident.details),
+            }
+
+            # Write to audit trail (fail-closed)
+            self.audit_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.audit_path, 'a') as f:
+                f.write(json.dumps(audit_event) + "\n")
+
+            # Store audit event ID in incident for traceability
+            incident.audit_event_id = audit_event["event_id"]
+
+            logger.info(f"Incident {incident.incident_id} written to audit trail (tenant {tenant_id})")
+            return True
+
+        except Exception as e:
+            logger.error(f"FAILED to write incident to audit trail (GDPR Art. 32): {e}")
+            return False  # Fail-closed
+
     def notify(
         self,
         incident: Incident,
@@ -462,12 +514,18 @@ class IncidentNotifier:
         """
         Send notifications for incident with per-channel tracking.
 
+        GDPR Art. 32: Audit-first (write to audit trail before notifications)
         IR-001: Returns False if ANY channel fails (per-channel success tracking)
         IR-003: Deduplication + rate limiting
         IR-004: Fallback chain on failure
 
         Returns True if all channels succeeded, False if any failed.
         """
+        # GDPR Art. 32: Write to audit trail first (fail-closed)
+        if not self._write_incident_to_audit(incident):
+            logger.critical(f"Incident {incident.incident_id} NOT notified due to audit trail failure (fail-closed)")
+            return False  # Fail-closed
+
         with self.lock:
             # IR-003: Check deduplication window
             if not self._check_dedup(incident.incident_id):
