@@ -7605,6 +7605,15 @@ def _call_claude_streaming_impl(
         env.pop("ANTHROPIC_AUTH_TOKEN", None)
         env.pop("ANTHROPIC_API_BASE", None)
 
+    # Ollama/Hermes env-stripping (ADR-XXXX): filter subprocess env to safe vars only.
+    # When hermes_bootstrap subprocess starts `ollama serve`, it must not inherit
+    # CLAUDE_* or other bridge-specific vars that can corrupt Ollama config → 404 errors.
+    # Whitelist: only Ollama-safe and system vars that Ollama/subprocess actually need.
+    _OLLAMA_ENV_WHITELIST = {"OLLAMA_HOST", "OLLAMA_NUM_PARALLEL", "PATH", "HOME", "USER", "TMPDIR"}
+    _env_for_ollama = {k: v for k, v in env.items() if k in _OLLAMA_ENV_WHITELIST}
+    # Store filtered env in a special key for hermes_bootstrap to use
+    env["_OLLAMA_SUBPROCESS_ENV"] = json.dumps(_env_for_ollama)
+
     has_session = any(workdir.glob(".claude*")) or (workdir / ".session_started").exists()
 
     # ADR-0050 §1 — main-thread session pinning via --resume <id>.
