@@ -62,6 +62,12 @@ class StagingManager:
 
         try:
             with zipfile.ZipFile(zip_path, "r") as zf:
+                # Validate all entry names for path traversal (fail-closed)
+                for entry_name in zf.namelist():
+                    if ".." in entry_name or entry_name.startswith("/"):
+                        errors.append(f"Disallowed path in ZIP entry: {entry_name}")
+                        return (False, {}, errors)
+
                 # Check for manifest.json
                 manifest_path = None
                 for name in zf.namelist():
@@ -197,20 +203,32 @@ class StagingManager:
     def delete_staged_upload(self, upload_id: str) -> None:
         """Delete staged upload and metadata.
 
-        Raises:
-            StagingError: Deletion failed
-        """
-        try:
-            zip_path = self.staging_root / f"{upload_id}.zip"
-            meta_path = self.staging_root / f"{upload_id}.meta"
+        Deletes ZIP first, then metadata. If metadata delete fails after ZIP
+        deletion, raises StagingError with clear indication of partial delete.
 
+        Raises:
+            StagingError: Deletion failed (may be partial)
+        """
+        zip_path = self.staging_root / f"{upload_id}.zip"
+        meta_path = self.staging_root / f"{upload_id}.meta"
+
+        zip_deleted = False
+        try:
             if zip_path.exists():
                 zip_path.unlink()
+            zip_deleted = True
+        except OSError as e:
+            raise StagingError(f"Failed to delete ZIP: {e}") from e
+
+        try:
             if meta_path.exists():
                 meta_path.unlink()
-
         except OSError as e:
-            raise StagingError(f"Failed to delete upload: {e}") from e
+            if zip_deleted:
+                raise StagingError(
+                    f"Partial delete: ZIP deleted but metadata unlink failed: {e}"
+                ) from e
+            raise StagingError(f"Failed to delete metadata: {e}") from e
 
     def move_to_installed(
         self,

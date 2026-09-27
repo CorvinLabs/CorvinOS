@@ -37,10 +37,35 @@ export const UploadTab: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    fetchUploads();
-    const interval = setInterval(fetchUploads, 2000);
-    return () => clearInterval(interval);
-  }, [fetchUploads]);
+    const controller = new AbortController();
+    let backoffMs = 2000;
+    const maxBackoffMs = 30000;
+
+    const fetchUploadsWithBackoff = async (): Promise<void> => {
+      try {
+        const response = await fetch('/v1/skills/uploads', {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        setUploads(data.uploads || []);
+        backoffMs = 2000; // reset on success
+      } catch (err) {
+        if (err instanceof Error && err.name !== 'AbortError') {
+          backoffMs = Math.min(backoffMs * 1.5, maxBackoffMs);
+          console.warn(`Fetch failed, backing off to ${backoffMs}ms:`, err);
+        }
+      }
+    };
+
+    fetchUploadsWithBackoff();
+    const interval = setInterval(fetchUploadsWithBackoff, backoffMs);
+
+    return () => {
+      clearInterval(interval);
+      controller.abort();
+    };
+  }, []);
 
   const handleApprove = useCallback(async (uploadId: string): Promise<void> => {
     setApprovingId(uploadId);

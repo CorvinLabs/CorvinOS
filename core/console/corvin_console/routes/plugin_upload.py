@@ -106,7 +106,7 @@ async def upload_skill(
         emit_audit(
             "plugin.upload_error",
             {
-                "reason": type(e).__name__,
+                "reason": "internal_error",
                 "tenant_id": rec.tenant_id,
             },
         )
@@ -181,7 +181,7 @@ def approve_upload(
             "plugin.approval_failed",
             {
                 "upload_id": uploadId,
-                "reason": type(e).__name__,
+                "reason": "internal_error",
                 "tenant_id": rec.tenant_id,
             },
         )
