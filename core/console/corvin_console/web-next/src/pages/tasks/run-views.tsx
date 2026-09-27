@@ -51,16 +51,21 @@ function RunLine({ run, now, onLink }: { run: UnifiedTask; now: number; onLink: 
 /** Tree: one collapsible group per type and channel, below the item tree. */
 export function RunsTree({ runs, now, onLink }: { runs: UnifiedTask[]; now: number; onLink: OnLink }) {
   const groups = groupRuns(runs);
-  const [open, setOpen] = useState<Set<string>>(() => new Set(groups.filter((g) => g.active > 0).map((g) => g.key)));
+  // Only what the operator toggled is stored; every other group follows the
+  // data — open while it has active runs. (An initial set computed on the
+  // first render saw no data yet and left every group closed.)
+  const [toggled, setToggled] = useState<Map<string, boolean>>(() => new Map());
   if (groups.length === 0) return null;
-  const toggle = (k: string) => setOpen((cur) => { const n = new Set(cur); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  const isOpenGroup = (k: string, active: number) => toggled.get(k) ?? active > 0;
+  const toggle = (k: string, active: number) =>
+    setToggled((cur) => new Map(cur).set(k, !(cur.get(k) ?? active > 0)));
   return (
     <ul className="divide-y rounded-lg border" data-testid="runs-tree" aria-label="Runs">
       {groups.map((g) => {
-        const isOpen = open.has(g.key);
+        const isOpen = isOpenGroup(g.key, g.active);
         return (
           <li key={g.key} data-testid={`run-group-${g.key}`}>
-            <button type="button" aria-expanded={isOpen} onClick={() => toggle(g.key)}
+            <button type="button" aria-expanded={isOpen} onClick={() => toggle(g.key, g.active)}
               className="flex w-full items-center gap-2 px-2 py-1.5 text-left hover:bg-muted/40">
               {isOpen ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
               <TypeBadge type={g.type} label={g.label} />

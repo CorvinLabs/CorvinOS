@@ -170,7 +170,7 @@ export function BoardView({ items, filters, now, byId, onSelect, onMove, busy, r
             {onLinkRun && (runCols.get(s) ?? []).filter((r) => !isActiveRun(r)).slice(0, BOARD_RUNS_PER_COLUMN).map((r) => (
               <RunCard key={r.id} run={r} now={now} onLink={onLinkRun} />
             ))}
-            {hiddenRuns(runCols.get(s) ?? []) > 0 && (
+            {onLinkRun && hiddenRuns(runCols.get(s) ?? []) > 0 && (
               <p className="px-1 text-center text-xs text-muted-foreground">+{hiddenRuns(runCols.get(s) ?? [])} more runs in Activity</p>
             )}
           </div>

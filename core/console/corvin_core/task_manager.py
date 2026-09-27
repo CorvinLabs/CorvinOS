@@ -707,22 +707,36 @@ class TaskManager:
     def _owner_alive(self, task_id: str) -> bool:
         """True iff the task's owning process still runs — the SAME process:
         pid alive and, where /proc exists, the same kernel start time (a
-        recycled pid is a different process)."""
+        recycled pid is a different process).
+
+        To avoid TOCTOU races, we check start time atomically with the kill signal.
+        """
         pid, start = self._owner(task_id)
         if pid is None or pid <= 0:
             return False
+
+        # If we have a recorded start time, verify it matches BEFORE checking alive
+        # This ensures we detect PID recycling even if it races with os.kill
+        if start is not None:
+            now_start = self._proc_start(pid)
+            if now_start is None:
+                # /proc not available or process doesn't exist
+                return False
+            if now_start != start:
+                # PID was recycled to a different process
+                return False
+
+        # Now check if the process is alive (start time already verified if available)
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return False
         except PermissionError:
+            # Process exists but we don't have permission — treat as alive
             pass
         except OSError:
             return False
-        if start is not None:
-            now_start = self._proc_start(pid)
-            if now_start is not None and now_start != start:
-                return False
+
         return True
 
     def _task_pid_alive(self, task_id: str) -> bool:

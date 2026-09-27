@@ -42,7 +42,9 @@ import {
 import { clockSkewMs, formatUtc } from "./format";
 import { LIVE_QUERY, freshness } from "./live";
 import { StatusIcon } from "./parts";
-import { WORK_RUN_TYPES, isActiveRun, runningNow as pickRunningNow, workRuns } from "./run-encodings";
+import {
+  WORK_RUNS_FETCH, WORK_RUN_TYPES, isActiveRun, runningNow as pickRunningNow, windowTruncated, workRuns,
+} from "./run-encodings";
 import { RunsTimeline, RunsTree } from "./run-views";
 import { BoardView, TableView, TimelineView, TreeView } from "./views";
 
@@ -214,7 +216,7 @@ export default function TasksPage() {
   // ACS, agent sessions … — and the "Running now" strip above every work view.
   const workRunsQ = useQuery({
     queryKey: ["task-tracking", "work-runs"],
-    queryFn: ({ signal }) => getAllTasks({ types: WORK_RUN_TYPES, finishedLimit: 300 }, signal),
+    queryFn: ({ signal }) => getAllTasks({ types: WORK_RUN_TYPES, finishedLimit: WORK_RUNS_FETCH }, signal),
     enabled: view !== "activity",
     ...LIVE_QUERY,
     placeholderData: (prev) => prev,
@@ -223,6 +225,10 @@ export default function TasksPage() {
   const runs = useMemo(
     () => workRuns(workRunsQ.data?.active ?? [], workRunsQ.data?.finished ?? [], now, filters.q),
     [workRunsQ.data, now, filters.q],
+  );
+  const runsTruncated = useMemo(
+    () => (workRunsQ.data ? windowTruncated(workRunsQ.data.finished, workRunsQ.data.finished_total, now) : false),
+    [workRunsQ.data, now],
   );
   const openLink = useCallback((t: UnifiedTask) => { setLinkRun(t); setLinkTarget(""); setLinkError(null); }, []);
   const link = useMutation({
@@ -366,6 +372,11 @@ export default function TasksPage() {
             <section className="space-y-2" data-testid="work-runs" aria-label="Runs">
               <h2 className="text-sm font-semibold">Runs <span className="font-normal text-muted-foreground">
                 — {runs.filter(isActiveRun).length} active, finished in the last 24 h · chat turns, background tasks, A2A, agent sessions …</span></h2>
+              {runsTruncated && (
+                <p className="text-xs text-muted-foreground" data-testid="runs-truncated">
+                  Showing the latest {WORK_RUNS_FETCH} finished runs — older runs of the last 24 h are listed in Activity.
+                </p>
+              )}
               {view === "timeline" ? <RunsTimeline runs={runs} now={now} onLink={openLink} /> : <RunsTree runs={runs} now={now} onLink={openLink} />}
             </section>
           )}
@@ -400,6 +411,11 @@ export default function TasksPage() {
                 {view === "timeline" && <TimelineView rows={rows} now={now} selected={selected} onSelect={(id) => setQuery({ item: id })} />}
                 {view === "table" && <TableView items={flat} now={now} selected={selected} onSelect={(id) => setQuery({ item: id })}
                   runs={runs} onLinkRun={openLink} />}
+                {(view === "table" || view === "board") && runsTruncated && (
+                  <p className="mt-2 text-xs text-muted-foreground" data-testid="runs-truncated">
+                    Runs: showing the latest {WORK_RUNS_FETCH} finished — older runs of the last 24 h are listed in Activity.
+                  </p>
+                )}
                 {view === "graph" && (
                   <Suspense fallback={<p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading graph…</p>}>
                     <GraphView items={items} now={now} selectedId={selected} onSelect={(id) => setQuery({ item: id })} />

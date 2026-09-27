@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { UnifiedTask } from "@/lib/api/initiatives";
 import {
-  LANE_FINISHED_MAX, RUN_WINDOW_MS, WORK_RUN_TYPES, groupRuns, runBoardColumn, runLane, runningNow, workRuns,
+  LANE_FINISHED_MAX, RUN_WINDOW_MS, windowTruncated, WORK_RUN_TYPES, groupRuns, runBoardColumn, runLane, runningNow, workRuns,
 } from "@/pages/tasks/run-encodings";
 
 const NOW = Date.parse("2026-09-27T12:00:00Z");
@@ -72,5 +72,13 @@ describe("run encodings", () => {
     expect(lane.hidden).toBe(25);
     expect(lane.rows.some((x) => x.run.id === "live")).toBe(true);
     expect(lane.rows.some((x) => x.run.id === "f0")).toBe(false);   // the oldest go to Activity
+  });
+
+  it("says when the fetched page ends inside the 24 h window", () => {
+    const recent = [r("a", { ended_at: iso(NOW - 3600_000) }), r("b", { ended_at: iso(NOW - 7200_000) })];
+    expect(windowTruncated(recent, 2, NOW)).toBe(false);          // everything returned
+    expect(windowTruncated(recent, 900, NOW)).toBe(true);         // more exist, page ends inside the window
+    const old = [r("c", { ended_at: iso(NOW - RUN_WINDOW_MS - 60_000) })];
+    expect(windowTruncated(old, 900, NOW)).toBe(false);           // page already reaches past the window
   });
 });

@@ -17,7 +17,9 @@ channel's daemon reads, in the daemon's order (canonical if it exists, else
 legacy; `ADAPTER_BRIDGES_DIR` overrides both for tests). The adapter
 (`_load_channel_settings`, `_sender_is_operator`), `roles.py`, `disclosure.py`
 and `phase3_cli.py` all call it, and so does the console's chat-settings editor
-(`routes/chat_settings.py`, which read AND wrote the legacy file). The resolver
+(`routes/chat_settings.py`, which read AND wrote the legacy file — it now
+re-reads the file under its lock before merging a PATCH, `_update_channel`,
+and writes it 0o600 from the first byte because it holds the bridge token). The resolver
 is mirrored byte-identically in `forge/forge/paths.py` and `cowork/lib/paths.py`,
 because `import paths` resolves to a different file per process — the forge copy
 in the console, where the route answered 500 until the mirror existed. Until 2026-09-27 those four composed the
@@ -610,32 +612,43 @@ Every bridge turn's task record is opened by the `call_claude_streaming`
 wrapper — before context assembly (60–80 s per turn, measured 2026-09-27) and
 for EVERY engine (claude_code, hermes, opencode, codex; previously only the
 claude_code path created one). It is `running` from pickup
-(`task.started` with `stage: preparing`); the engine path logs
-`task.engine_started` when the process exists. The wrapper closes it exactly
-once. Engine paths and gates only *report* an attempt's outcome
-(`_TurnTask.report`, keyed by attempt; `_turn_refused(reason)` before every
-refusal/gate/engine-error `return`): a retry recurses through the wrapper and
-the first attempt's `finally` runs AFTER the successful retry, so the LAST
-attempt's outcome decides, whatever order the reports arrive in. Rules at
-close: an exception → `failed` (it outranks any report — no reply went out);
-else the last attempt's report; else an `[adapter]…` reply → `failed`; else
-`completed`. Outcome kinds: `engine_error`/`timeout` → `task.failed` (reaches
-the learning loop); `/cancel` → `task.cancelled`; every other reason (budget,
-quota, engine policy, L34, egress, engine trust, capability, house rules,
-gate, chain integrity, missing engine) → `task.cancelled` with
-`refused: true` and `result_summary: "refused: <reason>"` — nothing ran, so
-the learning loop (completed/failed only) never sees it.
-`test_every_gate_return_reports` fails on a gate `return` without
-`_turn_refused` right before it. `result_summary` (reply preview, 280 chars)
-is stored ONLY for the operator's own turns — someone else's conversation
-keeps `output_chars`, never text. `chat_debug.jsonl`: one `turn.start` per turn
-(attempt 0; retries log `turn.retry`) and one matching `turn.done`; a turn
-refused before `turn.start` logs neither. The engine pid is logged on
-`task.engine_started`, which `TaskManager` reads (`ENGINE_START_EVENTS`) for
-the boot reaper's liveness check and the learning outcome's engine. The record's
-`input.from_operator` is true only when the sender is explicitly on the
-daemon's channel whitelist (`_sender_is_operator`, via `_load_channel_settings`,
-JID device suffix normalised); the uid is not written.
+(`task.started` with `stage: preparing` plus `owner_pid`/`owner_start` — the
+owning adapter or bg-worker process); every engine path logs
+`task.engine_started` when it runs (claude/codex/opencode with the process
+`pid`, hermes without — it has no subprocess), which the console reads as
+"engine running". The wrapper closes it exactly once. Engine paths and gates
+only *report* an attempt's outcome (`_TurnTask.report`, keyed by attempt;
+`_turn_refused(reason)` before every refusal/gate/engine-error `return`): a
+retry recurses — through the wrapper, or straight back into
+`_call_claude_streaming_via_engine` (model escalation, stale resume marker) —
+and the first attempt's `finally` runs AFTER the successful retry. Both kinds
+of retry advance `_TurnTask.attempt`, and the LAST attempt's outcome decides,
+whatever order the reports arrive in. Rules at close: a `/cancel` of this chat
+(`_cancel_chat` records it in `_TURN_CANCEL_REQUESTS`) → `task.cancelled`
+unless the attempt completed; an exception → `failed` (it outranks any report
+— no reply went out); else the last attempt's report; else an `[adapter]…`
+reply or an EMPTY reply → `failed` (`empty_reply`); else `completed`. Outcome
+kinds: `engine_error`/`timeout` → `task.failed` (reaches the learning loop);
+`/cancel` (claude: SIGTERM/SIGKILL without a timeout; other engines: the
+cancel request) → `task.cancelled`; every other reason (budget, quota, engine
+policy, L34, egress, engine trust, capability, house rules, gate, chain
+integrity, missing engine) → `task.cancelled` with `refused: true` and
+`result_summary: "refused: <reason>"` — nothing ran, so the learning loop
+(completed/failed only) never sees it. `test_every_gate_return_reports` fails
+on a gate `return` without `_turn_refused` right before it.
+`result_summary` (reply preview, 280 chars) is stored ONLY for the operator's
+own turns — someone else's conversation keeps `output_chars`, never text.
+`chat_debug.jsonl`: one `turn.start` per turn (attempt 0; retries log
+`turn.retry`) and one matching `turn.done`; a turn refused before
+`turn.start` logs neither. The boot reaper (`TaskManager.reap_stale_running`,
+run by the adapter AND by every console/gateway boot) never reaps a turn
+whose engine pid (`ENGINE_START_EVENTS`) OR owning process
+(`owner_pid` with the same `owner_start`, so a recycled pid is no owner) is
+alive. The record's `input.from_operator` is true only when the sender is
+explicitly on the daemon's channel whitelist (`_sender_is_operator`, via
+`_load_channel_settings`, JID device suffix normalised) AND the chat is not
+opened to everyone (`chat_profiles.<chat>|default.audience: all`); the uid
+is not written.
 
 ---
 

@@ -267,15 +267,20 @@ class TaskSourcesRouteTest(unittest.TestCase):
         from corvin_console import task_sources as ts
         now = time.time()
         with _sandbox(self._tmp) as (client, _csrf, home, _), _claude_home(self._tmp):
-            _w(home / "bridges/whatsapp/settings.json", {"whitelist": ["4917000@s.whatsapp.net"]})
+            _w(home / "bridges/whatsapp/settings.json", {"whitelist": ["4917000@s.whatsapp.net"],
+                                                          "chat_profiles": {"grp@g.us": {"audience": "all"}}})
             q = home / "pending_notifications"
             _w(q / "bgt_111.json", {"id": "bgt_111", "channel": "whatsapp", "sender": "4917000:11@s.whatsapp.net",
                "tenant_id": "_default", "label": "compile the report", "state": "pending", "created_at": now - 5})
+            _w(q / "bgt_333.json", {"id": "bgt_333", "channel": "whatsapp", "sender": "4917000@s.whatsapp.net",
+               "chat_id": "grp@g.us", "tenant_id": "_default", "label": SECRET, "state": "pending", "created_at": now - 5})
             _w(q / "bgt_222.json", {"id": "bgt_222", "channel": "web", "sender": "",
                "tenant_id": "_default", "label": "reindex the docs", "state": "pending", "created_at": now - 5})
             by_id = {x["id"]: x for x in (lambda b: b["active"] + b["finished"])(client.get(URL).json())}
             self.assertEqual(by_id["background:bgt_111"]["title"], "compile the report")
             self.assertEqual(by_id["background:bgt_222"]["title"], "reindex the docs")
+            # a chat opened to everyone has no operator — even the whitelisted sender stays untitled there
+            self.assertNotIn(SECRET, by_id["background:bgt_333"]["title"])
 
         def rec(i, **kw):
             base = {"id": i, "type": "background", "status": "done", "started_at": None, "created_at": "2026-09-27T10:00:00Z",

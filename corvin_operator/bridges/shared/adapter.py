@@ -7512,13 +7512,19 @@ def _turn_engine_started(engine: str, pid: "int | None" = None) -> None:
 
 def _proc_start_time(pid: int) -> "str | None":
     """Kernel start time of *pid* (/proc/<pid>/stat field 22) — with the pid it
-    identifies ONE process, so a recycled pid is not mistaken for the owner."""
-    try:
-        stat = Path(f"/proc/{pid}/stat").read_text()
-    except OSError:
-        return None
-    rest = stat[stat.rfind(")") + 2:].split()
-    return rest[19] if len(rest) > 19 else None
+    identifies ONE process, so a recycled pid is not mistaken for the owner.
+
+    Uses the canonical implementation from task_manager to avoid code duplication.
+    """
+    if _task_manager is None:
+        # Fallback: implement inline if task_manager not available
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except OSError:
+            return None
+        rest = stat[stat.rfind(")") + 2:].split()
+        return rest[19] if len(rest) > 19 else None
+    return _task_manager._proc_start(pid)
 
 
 def _open_turn_task(*, prompt: str, channel: str, chat_key: str, profile: dict | None,

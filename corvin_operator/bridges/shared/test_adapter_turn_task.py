@@ -40,7 +40,7 @@ _ENV = ("PATH", "ADAPTER_INBOX", "ADAPTER_OUTBOX", "CORVIN_HOME", "VOICE_AUDIT_P
         "ADAPTER_HEARTBEAT_INTERVAL")
 
 
-def _fake_claude(tmp: Path, *, hang_first: bool) -> Path:
+def _fake_claude(tmp: Path, *, hang_first: bool, overflow_first: bool = False) -> Path:
     """A `claude` that records the task records it finds at spawn time, then
     answers — or, on its first call when *hang_first*, hangs until killed."""
     bin_dir = tmp / "fake-bin"
@@ -62,6 +62,11 @@ def _fake_claude(tmp: Path, *, hang_first: bool) -> Path:
             fh.write(json.dumps(seen) + "\\n")
         sys.stdout.write(json.dumps({{"type": "system", "subtype": "init"}}) + "\\n")
         sys.stdout.flush()
+        if {overflow_first!r} and n == 0:
+            sys.stdout.write(json.dumps({{"type": "result", "is_error": True,
+                                          "result": "autocompact thrashing: prompt is too long"}}) + "\\n")
+            sys.stdout.flush()
+            sys.exit(1)
         if {hang_first!r} and n == 0:
             signal.signal(signal.SIGTERM, lambda *a: sys.exit(143))
             while True:
@@ -74,8 +79,8 @@ def _fake_claude(tmp: Path, *, hang_first: bool) -> Path:
     return bin_dir
 
 
-def _setup(tmp: Path, *, hang_first: bool):
-    bin_dir = _fake_claude(tmp, hang_first=hang_first)
+def _setup(tmp: Path, *, hang_first: bool, overflow_first: bool = False, profiles: dict | None = None):
+    bin_dir = _fake_claude(tmp, hang_first=hang_first, overflow_first=overflow_first)
     os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
     os.environ["ADAPTER_INBOX"] = str(tmp / "inbox")
     os.environ["ADAPTER_OUTBOX"] = str(tmp / "outbox")
@@ -84,7 +89,8 @@ def _setup(tmp: Path, *, hang_first: bool):
     os.environ["CLAUDE_CONFIG_DIR"] = str(tmp / "claude")
     os.environ["ADAPTER_BRIDGES_DIR"] = str(tmp / "bridges")
     (tmp / "bridges" / "discord").mkdir(parents=True, exist_ok=True)
-    (tmp / "bridges" / "discord" / "settings.json").write_text(json.dumps({"whitelist": [OPERATOR]}))
+    (tmp / "bridges" / "discord" / "settings.json").write_text(
+        json.dumps({"whitelist": [OPERATOR], "chat_profiles": profiles or {}}))
     os.environ["ADAPTER_STREAM_IDLE_TIMEOUT"] = "2"
     os.environ["ADAPTER_HEARTBEAT_INTERVAL"] = "0"
     return _fresh_adapter()
@@ -288,6 +294,83 @@ def test_every_gate_return_reports() -> None:
     print(f"PASS: all {len(hits)} gate returns report the refusal")
 
 
+def test_escalation_retry_ends_completed() -> None:
+    """A context-overflow on Haiku is retried on the higher model by recursing
+    STRAIGHT into the engine function (not through the wrapper). The attempt
+    that answered decides — the first attempt's failure, reported last by its
+    finally, must not."""
+    def body(tmp: Path) -> None:
+        adapter = _setup(tmp, hang_first=False, overflow_first=True)
+        ans = adapter.call_claude_streaming("ship it", channel="discord", chat_key="tt7", msg_id="m-7",
+                                            sender=OPERATOR, profile={"model": "claude-haiku-4-5-20251001"})
+        assert int((tmp / "calls").read_text()) == 2, "the escalation retry did not run"
+        assert "phases" in ans, ans
+        [rec] = _records(adapter._session_dir("discord", "tt7"))
+        assert rec["status"] == "completed", rec
+        print("PASS: a turn recovered by the model-escalation retry is completed")
+    _run(body)
+
+
+def test_cancel_is_cancelled_not_failed() -> None:
+    """/cancel on a running claude turn: recorded cancelled (the learning loop
+    ignores it), not a model failure."""
+    import threading
+    def body(tmp: Path) -> None:
+        adapter = _setup(tmp, hang_first=True)
+        os.environ["ADAPTER_STREAM_IDLE_TIMEOUT"] = "30"
+        threading.Timer(3.0, lambda: adapter._cancel_chat("tt8")).start()
+        adapter.call_claude_streaming("ship it", channel="discord", chat_key="tt8", msg_id="m-8", sender=OPERATOR)
+        [rec] = _records(adapter._session_dir("discord", "tt8"))
+        assert rec["status"] == "cancelled", rec
+        print("PASS: /cancel is recorded cancelled")
+    _run(body)
+
+
+def test_round3_rules() -> None:
+    def body(tmp: Path) -> None:
+        adapter = _setup(tmp, hang_first=False, profiles={"groupchat": {"audience": "all"}})
+        tm = adapter._task_manager.TaskManager(tmp / "u" / "tasks")
+
+        def turn(chat_key="c"):
+            tid = tm.create_task(chat_key=chat_key, instruction="x", check_quota=False)
+            tm.record_event(tid, {"event": "task.started", "stage": "preparing",
+                                  "owner_pid": os.getpid(), "owner_start": adapter._proc_start_time(os.getpid())})
+            return adapter._TurnTask(tm, tid, tmp / "u" / "tasks", tmp / "u", owned=True, chat_key=chat_key)
+
+        # an empty reply nobody cancelled is a silent engine failure …
+        t = turn()
+        adapter._close_turn_task(t, "", None, "m")
+        assert tm.get_task(t.task_id).status.value == "failed"
+        # … and after /cancel it is a cancellation
+        t = turn("cx")
+        adapter._cancel_chat("cx")
+        adapter._close_turn_task(t, "", None, "m")
+        assert tm.get_task(t.task_id).status.value == "cancelled"
+        # a live owning process keeps a turn with no engine pid from the reaper;
+        # the same pid with another start time is a recycled pid → reaped
+        live = turn()
+        assert tm.reap_stale_running() == [], "a live turn (owner alive) was reaped"
+        recycled = tm.create_task(chat_key="r", instruction="x", check_quota=False)
+        tm.record_event(recycled, {"event": "task.started", "stage": "preparing",
+                                   "owner_pid": os.getpid(), "owner_start": "1"})
+        assert tm.reap_stale_running() == [recycled]
+        adapter._close_turn_task(live, "ok", None, "m")
+        # audience: all — the whitelisted operator is not "the operator" there
+        assert adapter._sender_is_operator("discord", OPERATOR, "tt9") is True
+        assert adapter._sender_is_operator("discord", OPERATOR, "groupchat") is False
+        # an engine without a subprocess still shows it is running
+        from corvin_console import task_sources  # noqa: PLC0415
+        t = turn()
+        adapter._TURN_TASK.cur = t
+        try:
+            adapter._turn_engine_started("hermes")
+        finally:
+            adapter._TURN_TASK.cur = None
+        assert task_sources._turn_stage(tmp / "u" / "tasks" / f"{t.task_id}.events.jsonl") == "engine running"
+        print("PASS: empty reply / cancel / owner reaper / audience-all / engine stage")
+    _run(body)
+
+
 if __name__ == "__main__":
     test_opened_at_pickup_and_closed_once()
     test_recovered_retry_ends_completed()
@@ -296,3 +379,6 @@ if __name__ == "__main__":
     test_refusal_is_not_a_completed_turn()
     test_outcome_rules()
     test_every_gate_return_reports()
+    test_escalation_retry_ends_completed()
+    test_cancel_is_cancelled_not_failed()
+    test_round3_rules()

@@ -44,6 +44,18 @@ export function workRuns(active: UnifiedTask[], finished: UnifiedTask[], nowMs: 
     .sort((a, b) => Number(isActiveRun(b)) - Number(isActiveRun(a)) || b.sort_ts - a.sort_ts);
 }
 
+/** The server pages finished runs; this many are fetched for the work views. */
+export const WORK_RUNS_FETCH = 1000;
+
+/** True when the fetched page ends INSIDE the 24 h window — the server holds
+ *  more finished runs of that window than were returned, so "last 24 h" would
+ *  overstate what the views show. */
+export function windowTruncated(finished: UnifiedTask[], finishedTotal: number, nowMs: number): boolean {
+  if (finished.length >= finishedTotal || finished.length === 0) return false;
+  const e = endMs(finished[finished.length - 1]);
+  return e !== null && nowMs - e <= RUN_WINDOW_MS;
+}
+
 /** What is being worked on right now — running first, then waiting ones. */
 export function runningNow(active: UnifiedTask[]): UnifiedTask[] {
   const rank: Partial<Record<UnifiedStatus, number>> = { running: 0, paused: 1, queued: 2 };

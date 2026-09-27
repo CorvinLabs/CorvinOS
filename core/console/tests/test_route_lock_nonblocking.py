@@ -252,6 +252,32 @@ def test_chat_settings_write_never_exposes_the_token_file(tmp_path):
         os.umask(old_umask)
 
 
+def test_chat_settings_patch_keeps_a_concurrent_edit(tmp_path):
+    """Read-modify-write happens under ONE lock: an edit that lands after the
+    route's own first read (the daemon adding a whitelist entry, another
+    PATCH) survives instead of being overwritten by a stale snapshot."""
+    from contextlib import contextmanager
+    with _console(tmp_path) as client:
+        from corvin_console.routes import chat_settings as cs
+        with _channel(tmp_path) as settings_path:
+            real_lock = cs._channel_lock
+
+            @contextmanager
+            def lock_after_concurrent_edit(channel):
+                cur = json.loads(settings_path.read_text(encoding="utf-8"))
+                cur["whitelist"] = ["added-meanwhile"]
+                settings_path.write_text(json.dumps(cur), encoding="utf-8")
+                with real_lock(channel) as p:
+                    yield p
+
+            with patch.object(cs, "_channel_lock", lock_after_concurrent_edit):
+                res = client.patch("/v1/console/chat-settings/discord/555", json={"persona": "coder"})
+            assert res.status_code == 200, res.text
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            assert saved["whitelist"] == ["added-meanwhile"], saved
+            assert saved["chat_profiles"]["555"]["persona"] == "coder", saved
+
+
 def test_chat_settings_patch_succeeds_once_the_lock_is_free(tmp_path):
     with _console(tmp_path) as client:
         with _channel(tmp_path) as settings_path:

@@ -184,7 +184,12 @@ meaning (queued → Open, running/paused → In progress, failed/stale → Block
 done/cancelled → Complete), active runs on top, finished below the items, 8 +
 8 per column; **Timeline** — a separate 24 h lane with its own axis and legend
 (minutes-long runs are invisible on the items' axis), every active run plus
-the latest 40 finished; **Table** — a second body under the item rows. Each
+the latest 40 finished; **Table** — a second body under the item rows. The
+views fetch the latest 1000 finished runs; when that page ends inside the
+24 h window the views say so ("older runs of the last 24 h are listed in
+Activity") instead of claiming the whole window. Tree groups follow the data
+(a group opens while it has active runs); only the operator's own toggles are
+remembered. Each
 run can be linked to an item; a run's `steps` (subagents / worker turns)
 expand in place. Mappings: `pages/tasks/run-encodings.ts` (unit-tested).
 

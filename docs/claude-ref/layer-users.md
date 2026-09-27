@@ -25,7 +25,10 @@ Four canonical bundles, intrinsic ordering high → low:
 
 `owner` cannot be granted via this module — owners are intrinsic to the
 channel `whitelist` in the daemon's settings file
-(`paths.resolve_bridge_settings_file`, i.e. `<corvin_home>/bridges/<channel>/settings.json`). The
+(`paths.resolve_bridge_settings_file`, i.e. `<corvin_home>/bridges/<channel>/settings.json`).
+An EMPTY whitelist makes nobody an owner (no DEV-mode fail-open — same rule
+as `disclosure.py` F-A19); WhatsApp JIDs are compared without their
+per-device suffix. The
 `/grant owner` path returns `owner-not-grantable` for symmetry.
 
 ### Storage

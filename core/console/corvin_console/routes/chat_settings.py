@@ -30,8 +30,9 @@ import os
 import re
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Callable, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status as http_status
 from pydantic import BaseModel, Field, conint
@@ -178,23 +179,21 @@ def _load_channel(channel: str) -> dict[str, Any]:
         return {}
 
 
-def _save_channel(channel: str, data: dict[str, Any]) -> None:
-    """Atomic write + mode preservation under a BOUNDED exclusive file lock.
+@contextmanager
+def _channel_lock(channel: str):
+    """The channel settings file under a BOUNDED exclusive lock; yields its path.
 
-    The lock closes the read-modify-write TOCTOU between concurrent PATCHes.
-    It is ``LOCK_EX | LOCK_NB`` with a bounded retry (same contract and
-    constant style as ``core.infinite_session.event_store``): a wedged holder
-    raises :class:`ChatSettingsLockBusy` at the deadline, which the PATCH route
-    turns into a 503. It used to be a plain ``flock(LOCK_EX)`` with no timeout
-    on the operator's request path, where a stuck holder hung the request
-    forever — and no ``try/except`` can catch a hang.
+    ``LOCK_EX | LOCK_NB`` with a bounded retry (same contract and constant
+    style as ``core.infinite_session.event_store``): a wedged holder raises
+    :class:`ChatSettingsLockBusy` at the deadline, which the PATCH route turns
+    into a 503. It used to be a plain ``flock(LOCK_EX)`` with no timeout on the
+    operator's request path, where a stuck holder hung the request forever.
     """
     import fcntl  # noqa: PLC0415 - lazy: Windows seeds a stub via forge/_wincompat
 
     p = _channel_settings_path(channel)
     lock_path = p.with_suffix(".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-
     with open(lock_path, "a") as lock_fh:
         deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
         while True:
@@ -209,23 +208,45 @@ def _save_channel(channel: str, data: dict[str, Any]) -> None:
                     ) from None
                 time.sleep(LOCK_RETRY_INTERVAL_SECONDS)
         try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_suffix(".json.tmp")
-            # The file holds the bridge token (it is the daemon's settings
-            # file). Create the temp file 0o600 from its first byte and chmod
-            # BEFORE the replace: writing at the umask and chmod-ing after the
-            # move left the token world-readable for that window — and for
-            # good when the chmod failed.
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            try:
-                os.fchmod(fd, 0o600)
-                os.write(fd, json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"))
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-            os.replace(tmp, p)
+            yield p
         finally:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def _write_settings(p: Path, data: dict[str, Any]) -> None:
+    """Atomic write of the daemon's settings file. It holds the bridge token:
+    the temp file is 0o600 from its first byte and chmod-ed BEFORE the
+    replace — writing at the umask and chmod-ing after the move left the
+    token world-readable for that window, and for good when the chmod failed."""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".json.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        os.write(fd, json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, p)
+
+
+def _save_channel(channel: str, data: dict[str, Any]) -> None:
+    """Replace the whole channel settings file under the lock."""
+    with _channel_lock(channel) as p:
+        _write_settings(p, data)
+
+
+def _update_channel(channel: str, mutate: Callable[[dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
+    """Read-modify-write under ONE lock: the file is re-read inside the lock,
+    so two concurrent PATCHes (or a PATCH and a bridge-side edit that landed
+    since the caller's own read) never overwrite each other's change. The
+    daemon writes its own file without this lock (atomic replace); reading
+    inside the lock narrows that race to the merge itself."""
+    with _channel_lock(channel) as p:
+        current = _load_channel(channel)
+        updated = mutate(dict(current))
+        _write_settings(p, updated)
+        return updated
 
 
 def _project_chat_profile(raw: dict[str, Any] | None) -> dict[str, Any]:
@@ -458,23 +479,21 @@ def chat_settings_patch(
             f"channel {channel!r} has no settings.json — provision via bridge first",
         )
 
-    profiles = dict(ch.get("chat_profiles") or {})
-    raw = profiles.get(chat_key)
-    if not isinstance(raw, dict):
-        raw = {}
-
-    merged = _apply_patch(dict(raw), body)
-    if merged:
-        profiles[chat_key] = merged
-    else:
-        # The patch emptied the profile out. Drop the entry entirely so
-        # the chat falls back to the daemon's max-open default.
-        profiles.pop(chat_key, None)
-
-    ch["chat_profiles"] = profiles
+    def _merge(cur: dict[str, Any]) -> dict[str, Any]:
+        profiles = dict(cur.get("chat_profiles") or {})
+        raw = profiles.get(chat_key)
+        merged_profile = _apply_patch(dict(raw) if isinstance(raw, dict) else {}, body)
+        if merged_profile:
+            profiles[chat_key] = merged_profile
+        else:
+            # The patch emptied the profile out. Drop the entry entirely so
+            # the chat falls back to the daemon's max-open default.
+            profiles.pop(chat_key, None)
+        cur["chat_profiles"] = profiles
+        return cur
 
     try:
-        _save_channel(channel, ch)
+        ch = _update_channel(channel, _merge)
     except ChatSettingsLockBusy as e:
         # Nothing was written and the state is untouched — 503 (retry), not
         # 500. Content-free record: action + target id only.
@@ -512,7 +531,7 @@ def chat_settings_patch(
         target_id=target_id,
     )
 
-    projected = _project_chat_profile(profiles.get(chat_key))
+    projected = _project_chat_profile((ch.get("chat_profiles") or {}).get(chat_key))
     return {
         "ok":       True,
         "channel":  channel,
