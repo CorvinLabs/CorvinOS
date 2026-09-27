@@ -36,6 +36,7 @@ from core.skills.context_isolation import (
     ContextMutationValidator,
     ContextMerger,
 )
+from core.telemetry.otel_config import get_tracer
 
 
 class ErrorClass(str, Enum):
@@ -230,7 +231,7 @@ class SkillExecutor:
     async def execute(
         self, tenant_id: str, skill: Callable, context: Dict[str, Any]
     ) -> ExecutionResult:
-        """Execute a skill with monitoring and error handling.
+        """Execute a skill with monitoring and error handling (ADR-0637 tracing).
 
         Args:
             tenant_id: Tenant identifier (for isolation)
@@ -245,41 +246,59 @@ class SkillExecutor:
             - Resource limits are best-effort (OS-dependent)
             - All errors are classified and logged
             - Per-tenant execution history is maintained
+            - Skill execution is traced via OTEL (ADR-0637)
         """
         # Identifier first: ``id`` is the stats/audit key; ``name`` may be a
         # display string ("Test Skill"), ``__name__`` the bare function.
         skill_name = getattr(skill, "id", None) or getattr(skill, "name", None) \
             or getattr(skill, "__name__", "skill")
+        skill_version = getattr(skill, "version", "unknown")
         start_time = time.time()
 
-        try:
-            # Get timeout for this skill
-            timeout_s = self.get_timeout(skill_name) / 1000.0  # Convert ms to seconds
+        # Initialize OTEL tracing
+        tracer = get_tracer()
+        span_name = f"skill.{skill_name}.execute"
+        span_attributes = {
+            "skill_id": str(skill_name),
+            "skill_version": str(skill_version),
+            "tenant_id": str(tenant_id),
+        }
 
-            # Execute skill with timeout
-            try:
-                output = await asyncio.wait_for(skill(**context), timeout=timeout_s)
-            except asyncio.TimeoutError:
+        try:
+            with tracer.span(span_name, attributes=span_attributes, tenant_id=tenant_id) as span:
+                # Get timeout for this skill
+                timeout_s = self.get_timeout(skill_name) / 1000.0  # Convert ms to seconds
+
+                # Execute skill with timeout
+                try:
+                    output = await asyncio.wait_for(skill(**context), timeout=timeout_s)
+                except asyncio.TimeoutError:
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    result = ExecutionResult(
+                        status="failure",
+                        output=None,
+                        execution_time_ms=elapsed_ms,
+                        error_class=ErrorClass.TIMEOUT,
+                        error_message=f"Execution exceeded {self.get_timeout(skill_name)}ms timeout",
+                    )
+                    if span:
+                        span.set_attribute("latency_ms", round(elapsed_ms, 3))
+                        span.set_attribute("error_class", ErrorClass.TIMEOUT.value)
+                    self._record_execution(tenant_id, skill_name, result)
+                    return result
+
+                # Success case
                 elapsed_ms = (time.time() - start_time) * 1000
                 result = ExecutionResult(
-                    status="failure",
-                    output=None,
+                    status="success",
+                    output=output,
                     execution_time_ms=elapsed_ms,
-                    error_class=ErrorClass.TIMEOUT,
-                    error_message=f"Execution exceeded {self.get_timeout(skill_name)}ms timeout",
                 )
+                if span:
+                    span.set_attribute("latency_ms", round(elapsed_ms, 3))
+                    span.set_attribute("status", "success")
                 self._record_execution(tenant_id, skill_name, result)
                 return result
-
-            # Success case
-            elapsed_ms = (time.time() - start_time) * 1000
-            result = ExecutionResult(
-                status="success",
-                output=output,
-                execution_time_ms=elapsed_ms,
-            )
-            self._record_execution(tenant_id, skill_name, result)
-            return result
 
         except Exception as e:
             # Capture exception details (sanitized, no PII)
@@ -294,6 +313,12 @@ class SkillExecutor:
                 error_class=error_class,
                 error_message=error_message,
             )
+            # Set error attributes on span
+            with tracer.span(span_name, attributes=span_attributes, tenant_id=tenant_id) as span:
+                if span:
+                    span.set_attribute("latency_ms", round(elapsed_ms, 3))
+                    span.set_attribute("error_class", error_class.value if error_class else "unknown")
+                    span.set_attribute("status", "failure")
             self._record_execution(tenant_id, skill_name, result)
             return result
 
@@ -305,7 +330,7 @@ class SkillExecutor:
         context: Dict[str, Any],
         task_id: str = "unknown",
     ) -> ExecutionResult:
-        """Execute skill with context isolation (L4: Copy-on-Write).
+        """Execute skill with context isolation (L4: Copy-on-Write, ADR-0637 tracing).
 
         Args:
             tenant_id: Tenant identifier
@@ -322,95 +347,121 @@ class SkillExecutor:
             - Mutations are tracked and validated
             - Original context is never modified
             - Isolation is verified before returning
+            - Skill execution is traced via OTEL (ADR-0637)
         """
         # Get skill name for executor tracking
         skill_name = getattr(skill, "id", None) or getattr(skill, "name", None) \
             or skill_id or getattr(skill, "__name__", "skill")
+        skill_version = getattr(skill, "version", "unknown")
 
         start_time = time.time()
 
+        # Initialize OTEL tracing
+        tracer = get_tracer()
+        span_name = f"skill.{skill_name}.execute_isolated"
+        span_attributes = {
+            "skill_id": str(skill_id),
+            "skill_version": str(skill_version),
+            "tenant_id": str(tenant_id),
+            "task_id": str(task_id),
+        }
+
         try:
-            # Step 1: Create isolated context (Copy-on-Write)
-            try:
-                isolated_ctx = IsolatedTaskContext.create_isolated(
+            with tracer.span(span_name, attributes=span_attributes, tenant_id=tenant_id) as span:
+                # Step 1: Create isolated context (Copy-on-Write)
+                try:
+                    isolated_ctx = IsolatedTaskContext.create_isolated(
+                        original_context=context,
+                        skill_id=skill_id,
+                        task_id=task_id,
+                        tenant_id=tenant_id,
+                    )
+                except ValueError as e:
+                    # Tenant safety check failed
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    result = ExecutionResult(
+                        status="failure",
+                        output=None,
+                        execution_time_ms=elapsed_ms,
+                        error_class=ErrorClass.EXCEPTION,
+                        error_message=f"Context isolation setup failed: {str(e)}",
+                    )
+                    if span:
+                        span.set_attribute("latency_ms", round(elapsed_ms, 3))
+                        span.set_attribute("error_class", ErrorClass.EXCEPTION.value)
+                    self._record_execution(tenant_id, skill_name, result)
+                    return result
+
+                # Step 2: Execute skill with isolated context
+                timeout_s = self.get_timeout(skill_name) / 1000.0
+
+                try:
+                    # Pass isolated context to skill (as context_copy for mutation)
+                    skill_output = await asyncio.wait_for(
+                        skill(context=isolated_ctx._context_copy),
+                        timeout=timeout_s,
+                    )
+                except asyncio.TimeoutError:
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    result = ExecutionResult(
+                        status="failure",
+                        output=None,
+                        execution_time_ms=elapsed_ms,
+                        error_class=ErrorClass.TIMEOUT,
+                        error_message=f"Isolated execution exceeded {self.get_timeout(skill_name)}ms timeout",
+                    )
+                    if span:
+                        span.set_attribute("latency_ms", round(elapsed_ms, 3))
+                        span.set_attribute("error_class", ErrorClass.TIMEOUT.value)
+                    self._record_execution(tenant_id, skill_name, result)
+                    return result
+
+                # Step 3: Verify isolation is intact
+                try:
+                    isolated_ctx.assert_isolation_intact()
+                except RuntimeError as e:
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    result = ExecutionResult(
+                        status="failure",
+                        output=None,
+                        execution_time_ms=elapsed_ms,
+                        error_class=ErrorClass.EXCEPTION,
+                        error_message=f"Isolation violation detected: {str(e)}",
+                    )
+                    if span:
+                        span.set_attribute("latency_ms", round(elapsed_ms, 3))
+                        span.set_attribute("error_class", ErrorClass.EXCEPTION.value)
+                    self._record_execution(tenant_id, skill_name, result)
+                    return result
+
+                # Step 4: Compute deltas by diffing before/after context
+                deltas = self._compute_context_deltas(
                     original_context=context,
+                    modified_context=isolated_ctx._context_copy,
                     skill_id=skill_id,
-                    task_id=task_id,
-                    tenant_id=tenant_id,
                 )
-            except ValueError as e:
-                # Tenant safety check failed
+
+                # Step 5: Create augmented result with deltas
                 elapsed_ms = (time.time() - start_time) * 1000
                 result = ExecutionResult(
-                    status="failure",
-                    output=None,
+                    status="success",
+                    output=skill_output,
                     execution_time_ms=elapsed_ms,
-                    error_class=ErrorClass.EXCEPTION,
-                    error_message=f"Context isolation setup failed: {str(e)}",
                 )
+
+                # Attach isolation metadata (for audit chain linking)
+                result.context_state_before_hash = hashlib.sha256(
+                    json.dumps(context, sort_keys=True, default=str).encode()
+                ).hexdigest()
+                result.context_state_after_hash = isolated_ctx.get_context_hash()
+                result.mutations = deltas
+
+                if span:
+                    span.set_attribute("latency_ms", round(elapsed_ms, 3))
+                    span.set_attribute("status", "success")
+
                 self._record_execution(tenant_id, skill_name, result)
                 return result
-
-            # Step 2: Execute skill with isolated context
-            timeout_s = self.get_timeout(skill_name) / 1000.0
-
-            try:
-                # Pass isolated context to skill (as context_copy for mutation)
-                skill_output = await asyncio.wait_for(
-                    skill(context=isolated_ctx._context_copy),
-                    timeout=timeout_s,
-                )
-            except asyncio.TimeoutError:
-                elapsed_ms = (time.time() - start_time) * 1000
-                result = ExecutionResult(
-                    status="failure",
-                    output=None,
-                    execution_time_ms=elapsed_ms,
-                    error_class=ErrorClass.TIMEOUT,
-                    error_message=f"Isolated execution exceeded {self.get_timeout(skill_name)}ms timeout",
-                )
-                self._record_execution(tenant_id, skill_name, result)
-                return result
-
-            # Step 3: Verify isolation is intact
-            try:
-                isolated_ctx.assert_isolation_intact()
-            except RuntimeError as e:
-                elapsed_ms = (time.time() - start_time) * 1000
-                result = ExecutionResult(
-                    status="failure",
-                    output=None,
-                    execution_time_ms=elapsed_ms,
-                    error_class=ErrorClass.EXCEPTION,
-                    error_message=f"Isolation violation detected: {str(e)}",
-                )
-                self._record_execution(tenant_id, skill_name, result)
-                return result
-
-            # Step 4: Compute deltas by diffing before/after context
-            deltas = self._compute_context_deltas(
-                original_context=context,
-                modified_context=isolated_ctx._context_copy,
-                skill_id=skill_id,
-            )
-
-            # Step 5: Create augmented result with deltas
-            elapsed_ms = (time.time() - start_time) * 1000
-            result = ExecutionResult(
-                status="success",
-                output=skill_output,
-                execution_time_ms=elapsed_ms,
-            )
-
-            # Attach isolation metadata (for audit chain linking)
-            result.context_state_before_hash = hashlib.sha256(
-                json.dumps(context, sort_keys=True, default=str).encode()
-            ).hexdigest()
-            result.context_state_after_hash = isolated_ctx.get_context_hash()
-            result.mutations = deltas
-
-            self._record_execution(tenant_id, skill_name, result)
-            return result
 
         except Exception as e:
             elapsed_ms = (time.time() - start_time) * 1000
@@ -424,6 +475,12 @@ class SkillExecutor:
                 error_class=error_class,
                 error_message=error_message,
             )
+            # Set error attributes on span
+            with tracer.span(span_name, attributes=span_attributes, tenant_id=tenant_id) as span:
+                if span:
+                    span.set_attribute("latency_ms", round(elapsed_ms, 3))
+                    span.set_attribute("error_class", error_class.value if error_class else "unknown")
+                    span.set_attribute("status", "failure")
             self._record_execution(tenant_id, skill_name, result)
             return result
 
