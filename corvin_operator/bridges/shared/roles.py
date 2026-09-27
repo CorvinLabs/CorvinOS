@@ -188,10 +188,17 @@ def _audit_path(*, tenant_id: str | None = None) -> Path:
 
 def _channel_settings_path(channel: str) -> Path:
     """The bridge channel's settings.json — used to read the whitelist for
-    intrinsic owner classification. Mirrors the JS-side path resolution
-    (one dir above shared/, then into <channel>/)."""
-    here = Path(__file__).resolve().parent  # bridges/shared/
-    return here.parent / channel / "settings.json"
+    intrinsic owner classification. The file the daemon reads
+    (paths.resolve_bridge_settings_file); an invalid channel name falls back
+    to the in-repo path, which does not exist for it."""
+    try:
+        from .paths import resolve_bridge_settings_file  # type: ignore
+    except ImportError:
+        from paths import resolve_bridge_settings_file  # type: ignore
+    resolved = resolve_bridge_settings_file(channel)
+    if resolved is not None:
+        return resolved
+    return Path(__file__).resolve().parent.parent / "_invalid_channel" / "settings.json"
 
 
 # ── Audit emission (best-effort, mirrors consent / auth_elevation) ────

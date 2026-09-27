@@ -19,7 +19,7 @@ const path = require('path');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'roles-disp-'));
 process.env.CORVIN_HOME = path.join(TMP, 'corvin');
 
-const CHANNEL = '_test_l18';
+const CHANNEL = 'testl18';
 const CHAT = 'c-l18';
 const OWNER = 'owner-18';
 const ADMIN = 'admin-18';
@@ -28,7 +28,9 @@ const STRANGER = 'stranger-18';
 
 // Bridges-level fixture path the python CLI's _channel_settings_path will
 // hit. We write it for the duration of the test and rmdir at teardown.
-const BRIDGES_DIR = path.resolve(__dirname, '..', '..', CHANNEL);
+// The file the daemon (and paths.resolve_bridge_settings_file) reads:
+// <corvin_home>/bridges/<channel>/settings.json — inside this test's temp home.
+const BRIDGES_DIR = path.join(process.env.CORVIN_HOME, 'bridges', CHANNEL);
 const SETTINGS = path.join(BRIDGES_DIR, 'settings.json');
 
 function writeSettings(obj) {

@@ -24,7 +24,8 @@ Four canonical bundles, intrinsic ordering high → low:
 | `observer` | — | — | — | — | self only | pairs with consent.granted |
 
 `owner` cannot be granted via this module — owners are intrinsic to the
-channel `whitelist` in `bridges/<channel>/settings.json`. The
+channel `whitelist` in the daemon's settings file
+(`paths.resolve_bridge_settings_file`, i.e. `<corvin_home>/bridges/<channel>/settings.json`). The
 `/grant owner` path returns `owner-not-grantable` for symmetry.
 
 ### Storage

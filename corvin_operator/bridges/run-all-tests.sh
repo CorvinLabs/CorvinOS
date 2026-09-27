@@ -66,6 +66,7 @@ run "Python: adapter in-flight dedup" python3 shared/test_adapter_in_flight.py >
 run "Python: adapter profiles"   python3 shared/test_adapter_profiles.py >/dev/null   || fails=$((fails+1))
 run "Python: adapter task operator flag" python3 shared/test_adapter_task_operator_flag.py >/dev/null || fails=$((fails+1))
 run "Python: adapter turn task (pickup→close once)" python3 shared/test_adapter_turn_task.py >/dev/null || fails=$((fails+1))
+run "Python: bridge settings SSOT (daemon file)" python3 shared/test_bridge_settings_ssot.py >/dev/null || fails=$((fails+1))
 run "Python: adapter cowork"     python3 shared/test_adapter_cowork.py >/dev/null     || fails=$((fails+1))
 run "Python: adapter skill-inject" python3 shared/test_adapter_skill_inject.py >/dev/null || fails=$((fails+1))
 run "Python: skill auto-grade"   python3 shared/test_skill_auto_grade.py >/dev/null     || fails=$((fails+1))

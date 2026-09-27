@@ -1533,13 +1533,32 @@ def _load_channel_settings(channel: str) -> dict:
     # so a sandbox run never reads the real operator's bridges/<channel>/
     # settings.json — the source of the test-vs-real-config contamination that
     # made test_adapter_btw drop discord messages as private on a dev machine.
-    _bdir = os.environ.get("ADAPTER_BRIDGES_DIR")
-    base = Path(os.path.expanduser(_bdir)) if _bdir else ROOT.parent
-    p = base / channel / "settings.json"
+    p = _bridge_settings_file(channel)
+    if p is None:
+        return {}
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
+
+
+def _bridge_settings_file(channel: str) -> "Path | None":
+    """The settings file the channel's daemon reads — paths.resolve_bridge_settings_file.
+    Until 2026-09-27 this module read the legacy in-repo file while the daemon
+    read ``<corvin_home>/bridges/<channel>/settings.json``: the whitelist
+    re-check below saw no whitelist (fail-open, "no whitelist configured" on
+    every message) and every chat_profiles entry was ignored."""
+    try:
+        from .paths import resolve_bridge_settings_file as _rbs  # type: ignore
+    except ImportError:
+        try:
+            from paths import resolve_bridge_settings_file as _rbs  # type: ignore
+        except ImportError:
+            return None
+    try:
+        return _rbs(channel)
+    except Exception:  # noqa: BLE001 — unreadable config is "no settings", never a crash
+        return None
 
 
 def _sender_is_operator(channel: str, sender: str | None) -> bool:
@@ -1555,32 +1574,17 @@ def _sender_is_operator(channel: str, sender: str | None) -> bool:
     itself is not written. Never raises."""
     if not sender or not channel or "/" in channel or ".." in channel:
         return False
-    _bdir = os.environ.get("ADAPTER_BRIDGES_DIR")
-    if _bdir:
-        candidates = [Path(os.path.expanduser(_bdir)) / channel / "settings.json"]
-    else:
-        candidates = []
-        try:
-            try:
-                from .paths import bridge_settings_path as _bsp  # type: ignore
-            except ImportError:
-                from paths import bridge_settings_path as _bsp  # type: ignore
-            candidates.append(Path(_bsp(channel)))
-        except Exception:  # noqa: BLE001 — unknown channel / no paths module
-            pass
-        candidates.append(ROOT.parent / channel / "settings.json")
-    for p in candidates:
-        if not p.exists():
-            continue
-        try:
-            wl = json.loads(p.read_text(encoding="utf-8")).get("whitelist")
-        except (OSError, ValueError, AttributeError):
-            return False
-        if not isinstance(wl, list):
-            return False
-        allowed = {str(x) for x in wl if x}
-        return str(sender) in allowed or _normalize_jid(str(sender)) in allowed
-    return False
+    p = _bridge_settings_file(channel)
+    if p is None or not p.exists():
+        return False
+    try:
+        wl = json.loads(p.read_text(encoding="utf-8")).get("whitelist")
+    except (OSError, ValueError, AttributeError):
+        return False
+    if not isinstance(wl, list):
+        return False
+    allowed = {str(x) for x in wl if x}
+    return str(sender) in allowed or _normalize_jid(str(sender)) in allowed
 
 
 def _normalize_jid(s: str) -> str:

@@ -189,18 +189,18 @@ def test_import_workflow_refuses_503_when_create_lock_is_wedged(tmp_path):
 
 @contextmanager
 def _channel(tmp_path: Path, channel: str = "discord"):
-    """Redirect the in-repo bridges dir to a temp copy and seed settings.json.
+    """Redirect the bridge settings to a temp dir and seed settings.json.
 
-    ``chat_settings._VOICE_BRIDGES`` points at the CHECKED-IN
-    ``corvin_operator/bridges/`` tree; a test must never write there.
+    chat_settings resolves the daemon's file (paths.resolve_bridge_settings_file);
+    ``ADAPTER_BRIDGES_DIR`` is that resolver's override, so a test never writes
+    the operator's real ``<corvin_home>/bridges/`` or the checked-in tree.
     """
-    from corvin_console.routes import chat_settings as cs
     bridges = tmp_path / "bridges"
     (bridges / channel).mkdir(parents=True, exist_ok=True)
     (bridges / channel / "settings.json").write_text(
         json.dumps({"chat_profiles": {"555": {"persona": "assistant"}}}), encoding="utf-8"
     )
-    with patch.object(cs, "_VOICE_BRIDGES", bridges):
+    with patch.dict(os.environ, {"ADAPTER_BRIDGES_DIR": str(bridges)}):
         yield bridges / channel / "settings.json"
 
 

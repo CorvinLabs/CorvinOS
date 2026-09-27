@@ -384,15 +384,15 @@ def test_settings_json_stream_idle_timeout_overrides_env() -> None:
     # The fake claude hangs 3 s before returning.  Without settings.json the
     # 300 s default would let it succeed; with settings.json=2 s the watchdog
     # fires at 2 s — a clear falsifiable signal.
-    # _test_* prefix keeps the temp channel dir out of version control
-    # (operator/bridges/.gitignore covers _test_*/).
-    bridges_dir = ROOT.parent
-    ch_dir = bridges_dir / "_test_idle_settings"
+    # The fixture goes where the daemon (and paths.resolve_bridge_settings_file)
+    # reads it: <corvin_home>/bridges/<channel>/settings.json, inside this
+    # test's temp home — never the checked-in tree.
     tmp = Path(tempfile.mkdtemp(prefix="adapter-settings-idle-"))
+    ch_dir = tmp / "corvinOSHome" / "bridges" / "testidlesettings"
     _orig_path = os.environ.get("PATH", "")
     try:
         import json as _json
-        ch_dir.mkdir(exist_ok=True)
+        ch_dir.mkdir(parents=True, exist_ok=True)
         (ch_dir / "settings.json").write_text(
             _json.dumps({"stream_idle_timeout_seconds": 2})
         )
@@ -411,7 +411,7 @@ def test_settings_json_stream_idle_timeout_overrides_env() -> None:
 
         t0 = time.time()
         ans = adapter.call_claude_streaming(
-            "irrelevant", channel="_test_idle_settings",
+            "irrelevant", channel="testidlesettings",
             chat_key="settings-idle-1",
             mode="unrestricted", profile=None,
         )

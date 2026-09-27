@@ -18,12 +18,14 @@ const path = require('path');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'disc-disp-'));
 process.env.CORVIN_HOME = path.join(TMP, 'corvin');
 
-const CHANNEL = '_test_l19';
+const CHANNEL = 'testl19';
 const CHAT = 'c-l19';
 const OWNER = 'owner-19';
 const STRANGER = 'stranger-19';
 
-const BRIDGES_DIR = path.resolve(__dirname, '..', '..', CHANNEL);
+// The file the daemon (and paths.resolve_bridge_settings_file) reads:
+// <corvin_home>/bridges/<channel>/settings.json — inside this test's temp home.
+const BRIDGES_DIR = path.join(process.env.CORVIN_HOME, 'bridges', CHANNEL);
 const SETTINGS = path.join(BRIDGES_DIR, 'settings.json');
 fs.mkdirSync(BRIDGES_DIR, { recursive: true });
 fs.writeFileSync(SETTINGS, JSON.stringify({ whitelist: [OWNER] }));

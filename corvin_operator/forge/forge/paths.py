@@ -343,6 +343,36 @@ def bridge_log_path(channel: str) -> Path:
     return bridge_runtime_dir(channel, "log") / "voice.log"
 
 
+def resolve_bridge_settings_file(channel: str) -> Path | None:
+    """THE settings.json a bridge channel runs with — the file its DAEMON reads.
+
+    Order, identical to the daemon's own lookup (``discord/daemon.js``
+    ``SETTINGS_FILE``): ``<corvin_home>/bridges/<channel>/settings.json``
+    (ADR-0008 §8.3) when it exists, else the legacy in-repo file. The
+    ``ADAPTER_BRIDGES_DIR`` override (tests, isolated deploys) wins over both.
+    ``None`` for a channel name that fails the charset rule.
+
+    Every Python reader of a bridge's settings resolves through here. Until
+    2026-09-27 the adapter, roles.py, disclosure.py and phase3_cli.py each
+    composed ``<repo>/corvin_operator/bridges/<channel>/settings.json`` by
+    hand while the daemon had moved to the canonical file: the adapter's
+    whitelist re-check read a file with no whitelist (fail-open on every
+    message) and every ``chat_profiles`` entry was ignored.
+    Mirror of bridges/shared/paths.py — guard: test_bridge_settings_ssot.py."""
+    try:
+        channel = _validate_bridge_channel(channel)
+    except ValueError:
+        return None
+    override = os.environ.get("ADAPTER_BRIDGES_DIR")
+    if override:
+        return Path(os.path.expanduser(override)) / channel / "settings.json"
+    canonical = bridge_settings_path(channel)
+    if canonical.exists():
+        return canonical
+    legacy = legacy_bridge_runtime_dir(channel, "root")
+    return (legacy / "settings.json") if legacy is not None else canonical
+
+
 def legacy_bridge_runtime_dir(channel: str, kind: str) -> Path | None:
     """Return the legacy in-repo path for a bridge runtime dir, if it
     can be located. Returns None when no repo root can be derived.

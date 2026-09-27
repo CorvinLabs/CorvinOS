@@ -7,9 +7,27 @@ CLAUDE.md summarises; this file has the full contract.
 
 ## Hot-reload convention for bridge settings
 
-Settings changes under `corvin_operator/bridges/<channel>/settings.json` take
-effect **immediately** — no restart. Adapter re-reads per inbox message;
-daemons re-read on mtime change.
+Settings changes under `<corvin_home>/bridges/<channel>/settings.json` (ADR-0008
+§8.3; the legacy in-repo `corvin_operator/bridges/<channel>/settings.json` only
+while no canonical file exists) take effect **immediately** — no restart.
+Adapter re-reads per inbox message; daemons re-read on mtime change.
+
+**One resolver: `paths.resolve_bridge_settings_file(channel)`** — the file the
+channel's daemon reads, in the daemon's order (canonical if it exists, else
+legacy; `ADAPTER_BRIDGES_DIR` overrides both for tests). The adapter
+(`_load_channel_settings`, `_sender_is_operator`), `roles.py`, `disclosure.py`
+and `phase3_cli.py` all call it, and so does the console's chat-settings editor
+(`routes/chat_settings.py`, which read AND wrote the legacy file). The resolver
+is mirrored byte-identically in `forge/forge/paths.py` and `cowork/lib/paths.py`,
+because `import paths` resolves to a different file per process — the forge copy
+in the console, where the route answered 500 until the mirror existed. Until 2026-09-27 those four composed the
+legacy path by hand while the daemon read the canonical file: the adapter's
+whitelist re-check saw no whitelist (fail-open, "no whitelist configured" on
+every message), `roles.is_intrinsic_owner` treated the empty whitelist as
+DEV-mode and made EVERY sender an owner, and every `chat_profiles` entry and
+`stream_idle_timeout_seconds` were ignored. `test_bridge_settings_ssot.py`
+reproduces that layout and forbids hand-built settings paths in
+`bridges/shared`.
 
 | What hot-reloads | Where |
 |---|---|
@@ -127,6 +145,8 @@ explicit user action, not the automatic voice note.
 - READ paths (whitelist check, rate limit, profile lookup) MUST use
   `currentSettings()` (JS) or `_load_channel_settings()` (Python) —
   never the boot-time snapshot.
+- Never compose `<dir>/<channel>/settings.json` by hand in Python — call
+  `paths.resolve_bridge_settings_file()`.
 
 ---
 

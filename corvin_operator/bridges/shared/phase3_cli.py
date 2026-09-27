@@ -337,8 +337,12 @@ def _debug_state_for_chat(chat_id: str) -> tuple[bool, str]:
     if len(parts) != 2:
         return False, "invalid CORVIN_CHANNEL_ID format"
     channel, sanitised_chat = parts
-    settings_path = (HERE.parent / channel / "settings.json")
-    if not settings_path.exists():
+    try:
+        from paths import resolve_bridge_settings_file  # type: ignore
+    except ImportError:
+        from .paths import resolve_bridge_settings_file  # type: ignore
+    settings_path = resolve_bridge_settings_file(channel)
+    if settings_path is None or not settings_path.exists():
         return False, f"no settings.json for channel {channel!r}"
     try:
         with settings_path.open("r", encoding="utf-8") as fh:

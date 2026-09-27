@@ -146,8 +146,15 @@ def _audit_path(*, tenant_id: str | None = None) -> Path:
 
 
 def _channel_settings_path(channel: str) -> Path:
-    here = Path(__file__).resolve().parent
-    return here.parent / channel / "settings.json"
+    """The file the bridge daemon reads (paths.resolve_bridge_settings_file)."""
+    try:
+        from .paths import resolve_bridge_settings_file  # type: ignore
+    except ImportError:
+        from paths import resolve_bridge_settings_file  # type: ignore
+    resolved = resolve_bridge_settings_file(channel)
+    if resolved is not None:
+        return resolved
+    return Path(__file__).resolve().parent.parent / "_invalid_channel" / "settings.json"
 
 
 class ChainIntegrityFailureGateUnavailable(RuntimeError):

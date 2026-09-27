@@ -159,12 +159,16 @@ class ChatSettingsPatch(BaseModel):
 
 
 def _channel_settings_path(channel: str) -> Path:
-    """Resolve the per-channel settings.json. Single source of truth —
-    the legacy in-repo location under ``corvin_operator/bridges/<channel>/``.
-    ADR-0008's canonical XDG path lives under ``<corvin_home>/bridges``
-    but is wired in a separate phase; for now the in-repo path is what
-    the daemons read."""
-    return _VOICE_BRIDGES / channel / "settings.json"
+    """The per-channel settings.json the bridge DAEMON reads — resolved by
+    ``paths.resolve_bridge_settings_file`` (``<corvin_home>/bridges/<channel>/``
+    per ADR-0008 §8.3, the legacy in-repo file only while no canonical one
+    exists). Until 2026-09-27 this editor read and wrote the legacy file while
+    the daemons had moved: chat profiles saved here were ignored, and the ones
+    in effect were not shown."""
+    import paths as _bridge_paths  # noqa: PLC0415 — bridges/shared is on sys.path (above)
+
+    resolved = _bridge_paths.resolve_bridge_settings_file(channel)
+    return resolved if resolved is not None else _VOICE_BRIDGES / "_invalid_channel" / "settings.json"
 
 
 def _load_channel(channel: str) -> dict[str, Any]:

@@ -227,7 +227,8 @@ including default-profile fallback and invalid-value fail-open).
 
 `adapter._inbox_sender_authorized(channel, sender, chat_key)` is
 called from `process_one()` BEFORE any other handling. It re-loads
-`bridges/<channel>/settings.json` and re-checks the sender against
+the daemon's settings file (`paths.resolve_bridge_settings_file` →
+`<corvin_home>/bridges/<channel>/settings.json`) and re-checks the sender against
 the current whitelist; on `audience: "all"` chat profiles the check
 is bypassed (mirrors the daemon-side gate).
 
