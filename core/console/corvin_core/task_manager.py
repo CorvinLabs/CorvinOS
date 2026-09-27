@@ -715,14 +715,13 @@ class TaskManager:
         if pid is None or pid <= 0:
             return False
 
-        # If we have a recorded start time, verify it matches BEFORE checking alive
-        # This ensures we detect PID recycling even if it races with os.kill
+        # If we have a recorded start time, try to verify via /proc for PID recycling detection
+        # If /proc is unavailable, fall through to os.kill check as fallback
         if start is not None:
             now_start = self._proc_start(pid)
-            if now_start is None:
-                # /proc not available or process doesn't exist
-                return False
-            if now_start != start:
+            # Only return False if /proc is available AND start times don't match
+            # (indicating PID recycling). If /proc is unavailable, continue to os.kill check.
+            if now_start is not None and now_start != start:
                 # PID was recycled to a different process
                 return False
 
