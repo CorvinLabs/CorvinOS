@@ -3093,6 +3093,42 @@ went, its caller and its docs stayed.
 | ~1 000 words | medium 0.60 | `claude-sonnet-5` |
 | ~5 000 words | complex 0.90 | `claude-opus-5` |
 | `"Design a complex distributed architecture"` | complex 0.70 (keyword only) | abstain → Tier 3 → `claude-sonnet-5` |
+| `"schreib eine ADR …"` / `"review …"` / `"… README.md"` | complex 0.95 (operator policy) | `claude-opus-5` |
+| `"fix den bug im adapter"` (short work request) | medium 0.75 (work intent) | `claude-sonnet-5` |
+
+### Operator routing policy + the 2026-09-27 regression
+
+Operator report, 2026-09-27: *"das model routing gibt immer nur haiku"*. Causes
+1 and 2 above had both come back, measured on the live install
+(`CORVIN_HOME=<repo>/.corvin`, the home both `corvin-webui` and the bridge
+adapter run with — NOT `~/.corvin`):
+
+1. The Haiku pin was back in `tenants/_default/global/tenant.corvin.yaml`
+   (at mode `0664`). Removed; file rewritten at `0600`.
+2. `4036473fe` overwrote `core/skills/os_skills/model_selector.py` with a
+   105-line `Tier1Router`, deleting `ModelSelector`. `classify_os_model` reads
+   `ModelSelector` from `sys.modules`, got `None`, and abstained on every turn
+   without an error or an `os_model.classified` record. Separately,
+   `4efd92181` changed `any` → `Any` in `feature_extractor.py` without
+   importing it, so the module did not import at all. Both restored; the
+   router lives on in the same module. Guard:
+   `TestOperatorRoutingPolicy::test_the_classifier_module_still_exports_modelselector`.
+
+The classifier was also size-only: every prompt under 500 tokens was SIMPLE,
+so a short "write the ADR" went to Haiku. Two rules now run first, in
+`ModelSelector._classify_complexity`:
+
+- `_OPUS_DOMAIN_RE` — ADR work (`ADR`, `ADR-NNNN`), reviews (`review…`,
+  word-start anchored so `preview` does not match) and Markdown work (`.md`,
+  `markdown`, `readme`) → **complex 0.95**, admitted by the 0.90 bar → Opus.
+  0.95 keeps it distinguishable from size-measured 0.90 in the audit record.
+- `_WORK_INTENT_RE` — a request to do work (German + English verbs such as
+  schreib/erstell/fix/änder/implement…, and nouns like code/datei/bug) →
+  **medium 0.75** → Sonnet. Checked after the size and keyword-complex rules,
+  so keyword-only complex 0.70 still abstains to Tier 3.
+
+Only conversation stays SIMPLE → Haiku. A Tier 2.5 pin still wins over all of
+it.
 
 ### The pin tiers normalise too — the 2026-09-21 404 (follow-up to cause 4)
 

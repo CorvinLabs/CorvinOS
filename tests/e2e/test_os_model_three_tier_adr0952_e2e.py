@@ -493,3 +493,60 @@ class TestAPinNeverReachesTheCLIProviderQualified:
     def test_empty_and_non_string_pins_are_refused(self):
         for pin in ("", "   ", "anthropic/", None, 5, []):
             assert MS.normalise_pin(pin, "claude_code") is None, pin
+
+
+# ── 5. operator routing policy (2026-09-27) ─────────────────────────
+
+
+class TestOperatorRoutingPolicy:
+    """Operator report, 2026-09-27: *"das model routing gibt immer nur haiku"*.
+    Two regressions of this file's causes 1 and 2 at once: the live tenant YAML
+    carried the Haiku pin again, and 4036473fe overwrote
+    ``core/skills/os_skills/model_selector.py`` with a stratified router,
+    deleting ``ModelSelector`` — so ``classify_os_model`` read ``None`` from
+    ``sys.modules`` and abstained on every turn without an error.
+
+    The policy asserted here: ADR work, reviews and any work on Markdown files
+    are COMPLEX → Opus; a short work request is MEDIUM → Sonnet; only
+    conversation stays SIMPLE → Haiku. Size alone sent every short request to
+    Haiku.
+    """
+
+    def test_the_classifier_module_still_exports_modelselector(self):
+        mod = sys.modules["core.skills.os_skills.model_selector"]
+        assert hasattr(mod, "ModelSelector"), (
+            "classify_os_model reads ModelSelector from this module; without "
+            "it Tier 2.9 abstains on every turn and routing collapses to "
+            "Tier 3"
+        )
+
+    @pytest.mark.parametrize("prompt", [
+        "schreib eine ADR für die audit chain rotation",
+        "update ADR-0952 with the new policy",
+        "mach ein code review von core/console/app.py",
+        "please review this diff",
+        "aktualisiere die README.md",
+        "überarbeite docs/claude-ref/layer-engines.md",
+        "convert these notes to markdown",
+    ])
+    def test_adr_review_and_markdown_work_routes_to_opus(self, unpinned_tenant, prompt):
+        assert _resolve(prompt) == MS.DEFAULT_TOP
+
+    @pytest.mark.parametrize("prompt", [
+        "schreib mir eine python funktion die eine csv summiert",
+        "fix den bug im adapter",
+        "add a retry to the upload endpoint",
+    ])
+    def test_a_short_work_request_routes_to_sonnet(self, unpinned_tenant, prompt):
+        assert _resolve(prompt) == MS.DEFAULT_HIGH
+
+    @pytest.mark.parametrize("prompt", [
+        "wie spät ist es?",
+        "danke dir!",
+        "zeig mir ein preview",  # "preview" must not read as "review"
+    ])
+    def test_conversation_stays_on_haiku(self, unpinned_tenant, prompt):
+        assert _resolve(prompt) == MS.resolve_registry_id("claude-haiku-4-5", "claude_code")
+
+    def test_a_pin_still_beats_the_policy(self, pinned_tenant):
+        assert _resolve("schreib eine ADR") == "claude-haiku-4-5-20251001"

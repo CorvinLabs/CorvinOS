@@ -3068,6 +3068,12 @@ def _load_persona_engine_cfg(persona_name: str, tenant_id: str = "_default") -> 
     return None
 
 
+#: The OS model the last turn of each chat resolved to, for the delegation
+#: badge — call_claude_streaming returns only the answer text, and the badge
+#: referenced an undefined ``_os_model`` (NameError on every badged turn).
+_LAST_OS_MODEL: dict[str, str | None] = {}
+
+
 def _resolve_os_model(
     profile: dict | None,
     *,
@@ -3767,6 +3773,8 @@ def _resolve_spawn_inputs(
         ato_plan_hint=_ato_plan_hint,
         task_input=prompt,
     )
+    if chat_key:
+        _LAST_OS_MODEL[chat_key] = _resolved_model
 
     # Vibe Engineering (ADR-0275/0278) — inject the CEL brief into THIS turn's
     # system prompt, flag-gated (vibe_engineering) + fail-safe. ONE hook here
@@ -12233,7 +12241,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                         format_delegation_badge,
                     )
                     answer = (f"{answer}\n\n— ⚙ "
-                              f"{format_delegation_badge(_badge_engine, _badge_mode, model=_os_model)}")
+                              f"{format_delegation_badge(_badge_engine, _badge_mode, model=_LAST_OS_MODEL.get(chat_key))}")
             except Exception as e:  # noqa: BLE001 — a badge must never break a turn
                 log(f"delegation badge skipped ({e!r})")
     finally:

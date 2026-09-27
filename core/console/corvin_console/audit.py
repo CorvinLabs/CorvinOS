@@ -580,3 +580,16 @@ def system_event(
         details=details,
         severity=severity,
     )
+
+
+def emit_audit(event_type: str, details: dict[str, Any]) -> None:
+    """Positional form of :func:`system_event` for routes that carry the
+    tenant inside ``details`` (``routes/plugin_upload.py``,
+    ``routes/skills_v2.py``). Both imported this name before it existed; the
+    import in plugin_upload made the whole console app unimportable, which
+    removes ``/console`` and every ``/v1/console/*`` route on the next boot."""
+    system_event(
+        tenant_id=details.get("tenant_id"),
+        event=event_type,
+        details=details,
+    )

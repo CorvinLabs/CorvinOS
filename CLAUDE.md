@@ -916,7 +916,12 @@ four constants on four branches of a rule tree, not a probability. `simple`
 0.85, `medium` 0.60 and measured `complex` 0.90 route; keyword-only `complex`
 0.70 does not, and keeping it out is what gives the table a live subject.
 Admitting `medium` changes no served model — Tier 3 returns Sonnet 5 anyway —
-it makes the decision auditable.
+it makes the decision auditable. **Operator policy (2026-09-27):** ADR work,
+reviews and Markdown-file work are `complex` 0.95 → Opus regardless of length;
+a short work request is `medium` 0.75 → Sonnet; only conversation is `simple`
+→ Haiku. `classify_os_model` needs `ModelSelector` in
+`core.skills.os_skills.model_selector` — overwriting that module (4036473fe)
+silently kills Tier 2.9.
 
 **`CORVIN_OS_MODEL_AUTOSELECT=off` disables Tier 2.9 too.** It means "do not
 pick a model for me"; a kill-switch that silently stops killing is worse than

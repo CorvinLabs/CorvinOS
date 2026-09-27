@@ -1073,7 +1073,7 @@ def resolve_os_model(
                 model_map = {
                     "haiku": DEFAULT_LOW,
                     "sonnet": DEFAULT_HIGH,
-                    "opus": "claude-opus-4-7",
+                    "opus": DEFAULT_TOP,
                 }
                 actual_model = model_map.get(recommended.lower())
 
