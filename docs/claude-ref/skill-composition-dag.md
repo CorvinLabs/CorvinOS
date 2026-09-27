@@ -337,8 +337,10 @@ pytest core/skills/tests/test_skill_dag_e2e_integration.py -xvs
 
 ## Related
 
-- **ADR-0532**: OS-Skills Architecture (high-level system design)
-- **ADR-0533**: Skill Feedback Integration (learning loop)
-- **ADR-0534**: Skill Versioning (version management)
-- **ADR-0537**: LoM Cryptographic Binding (line-of-responsibility proof)
-- **ADR-0314**: Learning Infrastructure (feedback signals)
+- **ADR-0532**: OS-Skills Architecture (high-level system design, 5 control-plane layers)
+- **ADR-0533**: OS-Skill Manifest Schema & Versioning Strategy (manifest.yaml reference)
+- **ADR-0534**: Learning Loop Trust-Boundary (feedback validation, reality-check)
+- **ADR-0535**: OS-Skill Composition & Dependency Resolution (THIS ADR — DAG validation, topological sort)
+- **ADR-0314**: Learning Infrastructure (feedback events, optimizer loop)
+- **ADR-0232/0233**: Audit Chain Boot Tripwire (immutable audit trail, hash-chaining)
+- **ADR-0537**: Personas Elimination & Skills Migration (LoM cryptographic binding)
