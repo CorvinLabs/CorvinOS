@@ -1,0 +1,500 @@
+/**
+ * Skills Observability Dashboard Styles (ADR-0722)
+ *
+ * Design: Dataviz-validated palette + Corvin tokens
+ * Dark theme: #0e1320 surface
+ * Light theme: #ffffff surface
+ *
+ * Color tokens (validated via dataviz palette validator):
+ * - Categorical: 8 hues (blue, orange, aqua, yellow, magenta, green, violet, red)
+ * - Status: good (emerald), warning (amber), serious (orange), critical (rose)
+ * - Sequential: blue ramp (100-700)
+ * - Diverging: emerald ↔ rose
+ */
+
+:root {
+  /* Surfaces & Text */
+  --surface-chart-light: #fcfcfb;
+  --surface-chart-dark: #1a1a19;
+  --text-primary-light: #0b0b0b;
+  --text-primary-dark: #ffffff;
+  --text-secondary-light: #52514e;
+  --text-secondary-dark: #c3c2b7;
+  --text-muted: #898781;
+
+  /* Categorical palette (8 hues, fixed order, CVD-safe) */
+  --viz-cat-1-light: #2a78d6; /* blue */
+  --viz-cat-1-dark: #3987e5;
+  --viz-cat-2-light: #eb6834; /* orange */
+  --viz-cat-2-dark: #d95926;
+  --viz-cat-3-light: #1baf7a; /* aqua */
+  --viz-cat-3-dark: #199e70;
+  --viz-cat-4-light: #eda100; /* yellow */
+  --viz-cat-4-dark: #c98500;
+  --viz-cat-5-light: #e87ba4; /* magenta */
+  --viz-cat-5-dark: #d55181;
+  --viz-cat-6-light: #008300; /* green */
+  --viz-cat-6-dark: #008300;
+  --viz-cat-7-light: #4a3aa7; /* violet */
+  --viz-cat-7-dark: #9085e9;
+  --viz-cat-8-light: #e34948; /* red */
+  --viz-cat-8-dark: #e66767;
+
+  /* Sequential blue (magnitude) */
+  --viz-seq-blue-100: #cde2fb;
+  --viz-seq-blue-200: #b7d3f6;
+  --viz-seq-blue-250: #86b6ef;
+  --viz-seq-blue-300: #6da7ec;
+  --viz-seq-blue-350: #5598e7;
+  --viz-seq-blue-400: #3987e5;
+  --viz-seq-blue-450: #2a78d6;
+  --viz-seq-blue-500: #256abf;
+  --viz-seq-blue-550: #1c5cab;
+  --viz-seq-blue-600: #184f95;
+  --viz-seq-blue-650: #104281;
+  --viz-seq-blue-700: #0d366b;
+
+  /* Status palette (fixed, never themed) */
+  --viz-status-good: #0ca30c;
+  --viz-status-warning: #fab219;
+  --viz-status-serious: #ec835a;
+  --viz-status-critical: #d03b3b;
+
+  /* Diverging pair: emerald ↔ neutral ↔ rose */
+  --viz-div-emerald-light: #1baf7a;
+  --viz-div-emerald-dark: #199e70;
+  --viz-div-neutral-light: #f0efec;
+  --viz-div-neutral-dark: #383835;
+  --viz-div-rose-light: #e34948;
+  --viz-div-rose-dark: #e66767;
+
+  /* Grid & borders */
+  --viz-gridline-light: #e1e0d9;
+  --viz-gridline-dark: #2c2c2a;
+  --viz-border-light: rgba(11, 11, 11, 0.10);
+  --viz-border-dark: rgba(255, 255, 255, 0.10);
+
+  /* Chart surface (used in recharts context) */
+  --surface: var(--surface-chart-light);
+  --text-primary: var(--text-primary-light);
+  --text-secondary: var(--text-secondary-light);
+  --viz-gridline: var(--viz-gridline-light);
+  --viz-border: var(--viz-border-light);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    --surface: var(--surface-chart-dark);
+    --text-primary: var(--text-primary-dark);
+    --text-secondary: var(--text-secondary-dark);
+    --viz-gridline: var(--viz-gridline-dark);
+    --viz-border: var(--viz-border-dark);
+  }
+}
+
+:root[data-theme="dark"] {
+  --surface: var(--surface-chart-dark);
+  --text-primary: var(--text-primary-dark);
+  --text-secondary: var(--text-secondary-dark);
+  --viz-gridline: var(--viz-gridline-dark);
+  --viz-border: var(--viz-border-dark);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Container Layout */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 24px;
+  background-color: var(--surface);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Header Section */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--viz-gridline);
+}
+
+.titleSection {
+  flex: 1;
+}
+
+.title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+
+.description {
+  margin: 8px 0 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.buttonIcon {
+  margin-right: 6px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Status Messages */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.errorBanner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background-color: rgba(208, 59, 59, 0.15);
+  border: 1px solid var(--viz-status-critical);
+  border-radius: 6px;
+  color: var(--viz-status-critical);
+  font-size: 14px;
+}
+
+.loadingSpinner {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  padding: 48px;
+  min-height: 400px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.loadingSpinner svg {
+  color: var(--viz-seq-blue-400);
+}
+
+.lastUpdated {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Tabs Layout */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.tabsContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.tabsList {
+  display: flex;
+  gap: 4px;
+  border-bottom: 2px solid var(--viz-gridline);
+  padding: 0;
+  background-color: transparent;
+}
+
+.tabsTrigger {
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background-color: transparent;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.tabsTrigger:hover {
+  color: var(--text-primary);
+}
+
+.tabsTrigger[data-state="active"] {
+  color: var(--viz-seq-blue-400);
+  border-bottom-color: var(--viz-seq-blue-400);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Tab Content */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.tabContent {
+  animation: fadeIn 0.2s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.chartWrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 20px;
+  background-color: var(--surface);
+  border: 1px solid var(--viz-gridline);
+  border-radius: 8px;
+  overflow: auto;
+}
+
+.emptyState {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-align: center;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Chart Styles (Common) */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.chartContainer {
+  position: relative;
+  width: 100%;
+  min-height: 400px;
+}
+
+.chartTitle {
+  margin: 0 0 16px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chartSubtitle {
+  margin: 0 0 24px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* Recharts overrides */
+.chartContainer :global(.recharts-default-tooltip) {
+  background-color: var(--surface) !important;
+  border: 1px solid var(--viz-gridline) !important;
+  border-radius: 6px;
+  padding: 8px 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.chartContainer :global(.recharts-tooltip-label) {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chartContainer :global(.recharts-tooltip-item) {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* Grid & Axis */
+.chartContainer :global(.recharts-cartesian-axis) {
+  font-size: 12px;
+}
+
+.chartContainer :global(.recharts-cartesian-axis-tick) {
+  fill: var(--text-secondary);
+}
+
+.chartContainer :global(.recharts-cartesian-axis-line) {
+  stroke: var(--viz-gridline);
+}
+
+.chartContainer :global(.recharts-cartesian-grid-horizontal line) {
+  stroke: var(--viz-gridline);
+  stroke-dasharray: 4;
+  opacity: 0.5;
+}
+
+.chartContainer :global(.recharts-cartesian-grid-vertical line) {
+  display: none;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Legend & Labels (Dataviz Rule: Direct Labels, Then Legend) */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--viz-gridline);
+  font-size: 13px;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.legendItem:hover {
+  opacity: 0.8;
+}
+
+.legendColor {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.legendLabel {
+  color: var(--text-secondary);
+}
+
+/* Direct label (shown on chart directly, white text for contrast) */
+.directLabel {
+  font-size: 11px;
+  font-weight: 500;
+  fill: #ffffff;
+  pointer-events: none;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Table Fallback (for accessibility, when no chart interactivity) */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.tableFallback {
+  margin-top: 24px;
+  overflow-x: auto;
+}
+
+.tableContainer {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.tableContainer thead {
+  background-color: var(--viz-gridline);
+}
+
+.tableContainer th {
+  padding: 12px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--viz-gridline);
+}
+
+.tableContainer td {
+  padding: 12px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--viz-gridline);
+}
+
+.tableContainer tbody tr:hover {
+  background-color: rgba(0, 0, 0, 0.02);
+}
+
+@media (prefers-color-scheme: dark) {
+  .tableContainer tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.02);
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Accessibility: CVD Toggle (texture fill) */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.accessibilityControls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--viz-gridline);
+}
+
+.accessibilityToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.accessibilityToggle input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Responsive Design */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .container {
+    padding: 16px;
+  }
+
+  .header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .controls {
+    width: 100%;
+  }
+
+  .tabsList {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  .chartWrapper {
+    padding: 12px;
+    min-height: 300px;
+  }
+
+  .title {
+    font-size: 20px;
+  }
+
+  .chartTitle {
+    font-size: 14px;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Dark Mode Specific */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+:root[data-theme="dark"] .chartContainer :global(.recharts-default-tooltip) {
+  background-color: rgba(26, 26, 25, 0.95) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
