@@ -8,3 +8,5 @@ output_schema: {type: object, required: [context_depth]}
 learning_signal: {metrics: [memory_hit_rate], feedback_sources: [], sanitization: {disallow_fields: [prompt]}}
 boot_layer: bundled
 origin: builtin
+dependencies:
+  soft: ["os.delegation_router"]  # Uses HybridContextModel internal composition with L5
