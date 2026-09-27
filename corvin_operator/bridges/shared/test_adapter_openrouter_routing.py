@@ -10,7 +10,7 @@ subsequent turn to fail with an opaque upstream 400 instead of failing fast
 with the already-detected clear error.
 
 (The ADR-0126 claude_code_local Ollama redirect these tests once had to
-neutralise was removed by ADR-2087.)
+neutralise was removed by ADR-2091.)
 """
 from __future__ import annotations
 

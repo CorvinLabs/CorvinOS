@@ -402,7 +402,7 @@ class TestModelSelectionCostLearningE2E:
             task_type="code_gen",
         )
 
-        # With low learned threshold, simple task should go to OpenRouter (no local model, ADR-2087)
+        # With low learned threshold, simple task should go to OpenRouter (no local model, ADR-2091)
         if result.complexity == "simple":
             assert result.recommended_provider in ["openrouter"]
         else:

@@ -83,7 +83,7 @@ class EngineProbeResult:
     # One of CREDENTIAL_SOURCES, or None when binary is not installed.
     credential_source: Optional[str]
     version: Optional[str]
-    # Always empty since ADR-2087 removed Hermes (kept for payload shape).
+    # Always empty since ADR-2091 removed Hermes (kept for payload shape).
     models: List[str] = field(default_factory=list)
     # Human-readable single-line status for the console UI.
     detail: Optional[str] = None

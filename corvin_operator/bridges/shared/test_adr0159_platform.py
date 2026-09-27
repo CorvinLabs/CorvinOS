@@ -346,7 +346,7 @@ class TestM1AutoDetectEngine(unittest.TestCase):
         _env_engine = env_engine.strip()
         if _env_engine:
             profile["default_engine"] = _env_engine
-        # ADR-2087: there is no local fallback engine any more — a missing
+        # ADR-2091: there is no local fallback engine any more — a missing
         # claude CLI no longer auto-selects "hermes"; the engine stays unset
         # (claude_code fallback at the bottom of adapter).
         return profile.get("default_engine")

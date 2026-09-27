@@ -59,7 +59,7 @@ def _make_gate(cfg: dict[str, Any]) -> EgressGate:
 
 
 # EU_PRODUCTION-style config with a local engine (the Ollama preset was removed
-# per ADR-2087; opencode_http is the remaining bundled local engine id).
+# per ADR-2091; opencode_http is the remaining bundled local engine id).
 EU_PRODUCTION_LOCAL_CFG: dict[str, Any] = {
     "spec": {
         "data_residency": {
@@ -148,7 +148,7 @@ class TestDefaultEngineHosts(unittest.TestCase):
         self.assertEqual(DEFAULT_ENGINE_HOSTS["opencode_http"], "localhost")
 
     def test_removed_local_engines_unmapped(self):
-        # ADR-2087: no host mapping → "unknown" at every L35 call site.
+        # ADR-2091: no host mapping → "unknown" at every L35 call site.
         for eid in ("hermes", "opencode_ollama", "claude_code_local"):
             self.assertNotIn(eid, DEFAULT_ENGINE_HOSTS)
 
@@ -303,7 +303,7 @@ class TestCombinedGate(unittest.TestCase):
         self.assertTrue(allowed, reason)
 
     def test_removed_hermes_id_refused(self):
-        # ADR-2087: "hermes" is neither in the L34 registry nor the L35 host map.
+        # ADR-2091: "hermes" is neither in the L34 registry nor the L35 host map.
         allowed, reason = self._run_gates("hermes", "refactor this function",
                                           EU_PRODUCTION_LOCAL_CFG)
         self.assertFalse(allowed)

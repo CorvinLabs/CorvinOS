@@ -4,7 +4,7 @@ Covers:
   - load_policy: missing file → None, present JSON file → parsed,
     malformed → PolicyMalformed
   - resolve_engine_zone: per-engine defaults, OpenCode model-prefix
-    (every prefix → operator default since ADR-2087), env override
+    (every prefix → operator default since ADR-2091), env override
   - is_zone_compatible: full decision matrix
   - run_delegate integration:
       * no policy file → no enforcement
@@ -13,7 +13,7 @@ Covers:
       * engine in forbid_engines → fail
       * tenant zone matches engine zone → ok
       * tenant zone mismatch → fail with zone_policy_denied audit
-      * ollama/... no longer implies "local" (ADR-2087) → zone-checked
+      * ollama/... no longer implies "local" (ADR-2091) → zone-checked
       * malformed policy file → fail-loud with audit
 
 Real disk for policy + audit-chain writes; fake engines for spawn.
@@ -57,7 +57,7 @@ class ResolveEngineZoneTests(unittest.TestCase):
         self.assertEqual(tp.resolve_engine_zone("opencode"), "us")
 
     def test_opencode_ollama_prefix_is_no_longer_local(self):
-        # ADR-2087: a caller-chosen model prefix must not exempt a call
+        # ADR-2091: a caller-chosen model prefix must not exempt a call
         # from the tenant's residency constraint.
         self.assertEqual(
             tp.resolve_engine_zone("opencode", "ollama/some-model"),
@@ -77,7 +77,7 @@ class ResolveEngineZoneTests(unittest.TestCase):
         )
 
     def test_removed_hermes_is_unknown_and_fail_closed(self):
-        # ADR-2087: hermes was removed; its id must never resolve to
+        # ADR-2091: hermes was removed; its id must never resolve to
         # "local" (which would pass every tenant zone constraint).
         self.assertEqual(tp.resolve_engine_zone("hermes"), "unknown")
         ok, _ = tp.is_zone_compatible("eu-west",
@@ -109,7 +109,7 @@ class ResolveEngineZoneTests(unittest.TestCase):
             os.environ.pop("CORVIN_DELEGATE_CLAUDE_CODE_ZONE", None)
 
     def test_env_override_applies_to_every_opencode_prefix(self):
-        # ADR-2087: ollama/* is no longer structurally local; the
+        # ADR-2091: ollama/* is no longer structurally local; the
         # operator's zone applies to it like to any other provider.
         os.environ["CORVIN_DELEGATE_OPENCODE_ZONE"] = "eu"
         try:
@@ -383,7 +383,7 @@ class PolicyEnforcementTests(unittest.TestCase):
         self.assertEqual(details["engine_zone"], "us")
 
     def test_ollama_prefix_no_longer_bypasses_zone_check(self):
-        # ADR-2087: ollama/* used to count as local and skip the zone gate.
+        # ADR-2091: ollama/* used to count as local and skip the zone gate.
         self._write_policy(zone="eu-west")
         result = run_delegate(
             engine="opencode",

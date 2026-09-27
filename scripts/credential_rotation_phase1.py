@@ -246,7 +246,7 @@ class CredentialRotationPhase1:
             return False, f"test failed: {e}"
 
     def _test_ollama(self, token: str) -> Tuple[bool, str]:
-        """Test the Ollama Cloud API key (hosted; local Ollama was removed, ADR-2087)."""
+        """Test the Ollama Cloud API key (hosted; local Ollama was removed, ADR-2091)."""
         try:
             result = subprocess.run(
                 ["curl", "-s", "-H", f"Authorization: Bearer {token}",

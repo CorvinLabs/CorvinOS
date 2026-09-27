@@ -26,7 +26,7 @@ class TestModelSelectorClassification:
 
         assert result.complexity == "simple"
         assert result.confidence >= 0.5
-        assert result.recommended_provider == "openrouter"  # cheapest remote (ADR-2087)
+        assert result.recommended_provider == "openrouter"  # cheapest remote (ADR-2091)
 
     def test_medium_task_classification(self):
         """Test classification of a medium task."""
@@ -269,7 +269,7 @@ class TestModelSelectorProviderMapping:
     """Test provider selection logic."""
 
     def test_simple_to_openrouter(self):
-        """Simple tasks map to OpenRouter (local Ollama removed, ADR-2087)."""
+        """Simple tasks map to OpenRouter (local Ollama removed, ADR-2091)."""
         selector = ModelSelector()
         result = selector.classify("Simple task")
 
@@ -303,7 +303,7 @@ class TestModelSelectorProviderMapping:
         """Test that provider selection optimizes cost."""
         selector = ModelSelector()
 
-        # Simple → cheapest remote provider (no local model since ADR-2087)
+        # Simple → cheapest remote provider (no local model since ADR-2091)
         simple_result = selector.classify("Translate")
         assert simple_result.recommended_provider == "openrouter"
 

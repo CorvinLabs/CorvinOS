@@ -98,7 +98,7 @@ try:
 except Exception:  # noqa: BLE001
     _espan = None  # type: ignore
 
-# ADR-2087 — stored legacy engine ids (hermes, local, ...) map to claude_code.
+# ADR-2091 — stored legacy engine ids (hermes, local, ...) map to claude_code.
 try:
     from engine_registry import normalize_legacy_engine_id as _normalize_legacy_engine_id  # type: ignore
 except Exception:  # noqa: BLE001 — pragma: no cover
@@ -1071,7 +1071,7 @@ def _parse_manager_decision(text: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# ADR-0127 — engine selection + datasource binding for ACS workers. ADR-2087
+# ADR-0127 — engine selection + datasource binding for ACS workers. ADR-2091
 # removed the local-Ollama (Hermes) engine: every ACS worker/manager runs on
 # Claude Code. Workers still reason over LIVE data fetched from a registered
 # DSI v1 connection.
@@ -1103,7 +1103,7 @@ def _engine_locality(engine_id: str) -> str:
 def _resolve_worker_engine(model: str, tenant_id: str | None = None) -> tuple[str, str]:
     """Map a worker/manager model string to (engine_id, resolved_model).
 
-    engine_id is always ``"claude_code"`` since ADR-2087 removed the local
+    engine_id is always ``"claude_code"`` since ADR-2091 removed the local
     Ollama (Hermes) engine. A model name shaped like a local ``family:tag``
     no longer routes anywhere else — it is passed through to Claude Code
     unchanged. Stored legacy engine ids (``hermes``, ``local``, ...) are
@@ -1550,7 +1550,7 @@ def _call_manager_sync(
 ) -> tuple[str, int]:
     """Call the manager engine for a decision. Returns (stdout, tokens_estimate).
 
-    Always the claude CLI (ADR-2087 removed the local-Ollama route). The
+    Always the claude CLI (ADR-2091 removed the local-Ollama route). The
     manager must emit a single JSON decision.
 
     ``proc_holder`` (same class the worker call site uses) lets an awaiting
@@ -1731,7 +1731,7 @@ def _call_worker_sync(
     M3: uses --output-format json to extract actual model_id from API response;
     falls back to configured model with attested=False on parse failure.
 
-    Always the claude CLI (ADR-2087 removed the local-Ollama route).
+    Always the claude CLI (ADR-2091 removed the local-Ollama route).
     """
     engine_id, _ = _resolve_worker_engine(model, tenant_id)
     _assert_engine_licensed(engine_id)  # ADR-0150 LIC-ENG-USE-02 (fail-closed)

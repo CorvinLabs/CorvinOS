@@ -95,7 +95,7 @@ UNIT_CORVIN_WEBUI="corvin-webui.service"
 UNIT_WATCHDOG_SVC="corvin-voice-bridge-watchdog.service"
 UNIT_WATCHDOG_TIMER="corvin-voice-bridge-watchdog.timer"
 # Units this script no longer installs but must still clean up on hosts that
-# have them (ADR-2087 removed the Hermes/local-Ollama health timer). Stopped,
+# have them (ADR-2091 removed the Hermes/local-Ollama health timer). Stopped,
 # disabled and deleted by remove_legacy_units — idempotent, silent if absent.
 LEGACY_UNITS=("corvin-hermes-health.timer" "corvin-hermes-health.service")
 UNIT_CORVIN_BG_MONITOR_SVC="corvin-bg-monitor.service"

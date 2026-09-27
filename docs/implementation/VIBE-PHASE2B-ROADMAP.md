@@ -296,7 +296,7 @@ class ConfidenceScorer:
 
 | Risk | Mitigation |
 |---|---|
-| Whisper API rate limits | Cache results, implement backoff (no local-Ollama fallback — removed by ADR-2087) |
+| Whisper API rate limits | Cache results, implement backoff (no local-Ollama fallback — removed by ADR-2091) |
 | TTS latency high | Use local piper instead of cloud API; stream chunks asap |
 | Hub not ready | Wait for Hub team; Phase 2b can proceed with mock Hub until then |
 | WebSocket timeout during TTS | Keep-alive pings; buffer audio on client |

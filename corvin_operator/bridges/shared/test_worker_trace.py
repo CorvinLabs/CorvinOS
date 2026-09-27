@@ -110,7 +110,7 @@ def test_extract_claudecode_denied_call(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ADR-2087 — the Hermes extractor is gone
+# ADR-2091 — the Hermes extractor is gone
 # ---------------------------------------------------------------------------
 
 def test_extract_hermes_trace_removed() -> None:

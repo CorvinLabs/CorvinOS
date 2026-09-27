@@ -3,7 +3,7 @@
 Translates between MCP tool definitions/calls and the OpenAI-compatible
 function-calling format used by OpenAI-compatible engines and the Gemini
 API.  This allows non-MCP engines to call Forge tools.  (The local Ollama
-stream parser went with Hermes, ADR-2087.)
+stream parser went with Hermes, ADR-2091.)
 
 Translation surface
 -------------------

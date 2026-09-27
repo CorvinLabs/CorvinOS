@@ -122,13 +122,13 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # millisecond — the original "cost" rationale does not hold at this size.
 _INJECTION_SCAN_HEAD_CHARS = OUTPUT_CAP_MAX_CHARS
 
-# ADR-2087: ``hermes`` (local Ollama) was removed. A legacy id passed in is
+# ADR-2091: ``hermes`` (local Ollama) was removed. A legacy id passed in is
 # mapped to ``claude_code`` by ``_normalize_legacy_engine_id`` below.
 AVAILABLE_ENGINES: tuple[str, ...] = ("claude_code", "codex_cli", "opencode", "copilot")
 
 
 def _normalize_legacy_engine_id(engine_id: Any) -> Any:
-    """ADR-2087: map a removed engine id (``hermes``, ``ollama`` ...) to
+    """ADR-2091: map a removed engine id (``hermes``, ``ollama`` ...) to
     ``claude_code``. SSOT is ``engine_registry.normalize_legacy_engine_id``
     in ``corvin_operator/bridges/shared``; this wrapper only puts that
     directory on ``sys.path`` first. Non-string values pass through unchanged

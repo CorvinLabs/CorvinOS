@@ -1,4 +1,4 @@
-"""ADR-2087 — Hermes / local Ollama removed from the console OS-turn path.
+"""ADR-2091 — Hermes / local Ollama removed from the console OS-turn path.
 
 Drives the real ``chat_runtime.stream_turn`` resolver (and the WebSocket
 pre-turn guard ``get_engine_unavailable_message``) against a real

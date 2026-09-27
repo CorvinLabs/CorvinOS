@@ -95,7 +95,7 @@ class _ZonedEngine:
 
 # 30 s, not 5 s. Every gateway dispatch runs the L44 house-rules gate, which
 # ADJUDICATES THE PROMPT WITH AN LLM (house_rules_adjudicator; at the time a local
-# Ollama model or Haiku — the local backend was removed by ADR-2087). Measured
+# Ollama model or Haiku — the local backend was removed by ADR-2091). Measured
 # 2026-07-26: ~7-11 s for a trivial run with an instant stub engine. A 5 s budget
 # therefore passed or failed depending on how warm the classifier happened to be — engine-policy, zone-policy, durable-queue and dispatcher all
 # flipped between runs of the same commit. That is a fail-closed compliance gate doing

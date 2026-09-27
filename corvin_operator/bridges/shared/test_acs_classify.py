@@ -118,7 +118,7 @@ class TestHeuristicDelegate(unittest.TestCase):
         self._check("Delegiere diese Aufgabe an Codex.")
 
     def test_hermes_no_longer_a_delegate_signal(self):
-        # ADR-2087: Hermes was removed; naming it is not a delegation signal.
+        # ADR-2091: Hermes was removed; naming it is not a delegation signal.
         bp = ac.heuristic_classify("Use hermes-fast for this translation.")
         self.assertNotEqual(bp.primitive, ac.PRIMITIVE_DELEGATE)
 

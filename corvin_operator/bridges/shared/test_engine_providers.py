@@ -17,7 +17,7 @@ import engine_providers as EP  # type: ignore
 def test_providers_registry_loaded():
     prov = EM.providers_as_dict(force_reload=True)
     # ADR-0759 added the three native platform providers alongside the api_key
-    # ones; ADR-2087 removed the local-Ollama provider (``ollama_local``).
+    # ones; ADR-2091 removed the local-Ollama provider (``ollama_local``).
     # Asserted as an exact set on purpose: a provider silently
     # vanishing from the registry is exactly the failure this file exists for.
     assert set(prov) == {
@@ -35,7 +35,7 @@ def test_providers_registry_loaded():
         assert prov[pid]["platform_env"]["enable_var"].startswith("CLAUDE_CODE_USE_")
     assert prov["openrouter"]["kind"] == "cloud"
     assert prov["ollama_cloud"]["kind"] == "cloud"
-    # ADR-2087: no bundled provider runs local inference any more.
+    # ADR-2091: no bundled provider runs local inference any more.
     assert not any(v["kind"] == "local" for v in prov.values())
     # credential_env is a NAME, never a secret value
     assert prov["openrouter"]["credential_env"] == "OPENROUTER_API_KEY"
@@ -45,7 +45,7 @@ def test_supported_providers_per_engine():
     reg = EM.registry_as_dict(force_reload=True)
     cc = {p["provider"]: p for p in reg["claude_code"]["supported_providers"]}
     assert cc["anthropic"]["native"] is True
-    assert "ollama_local" not in cc                  # ADR-2087
+    assert "ollama_local" not in cc                  # ADR-2091
     assert cc["ollama_cloud"]["native"] is False   # via built-in translating proxy
     assert cc["openrouter"]["native"] is False      # via built-in translating proxy
     oc = [p["provider"] for p in reg["opencode"]["supported_providers"]]
@@ -135,7 +135,7 @@ def test_bad_reload_does_not_wipe_good_cache(tmp_path):
     importlib.reload(EM)
     EM.load_registry(force_reload=True)
     good = len(EM.load_providers())
-    assert good == 7  # ADR-2087 removed ollama_local
+    assert good == 7  # ADR-2091 removed ollama_local
     orig = EM._REGISTRY_FILE
     try:
         EM._REGISTRY_FILE = tmp_path / "missing.yaml"

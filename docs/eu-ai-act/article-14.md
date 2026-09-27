@@ -74,7 +74,7 @@ us_cloud]`) is the operator's explicit, audited choice in `tenant.corvin.yaml`.
 | `CONFIDENTIAL` (2) | Personal data (name / e-mail / phone) | `local` or `eu_cloud` |
 | `SECRET` (3) | Literal credentials / regulated data | `local` + `network_egress: none` |
 
-**No bundled local-inference engine (ADR-2087).** Hermes and every local-Ollama
+**No bundled local-inference engine (ADR-2091).** Hermes and every local-Ollama
 engine were removed. Of the bundled engines only `opencode_http` (self-hosted
 OpenCode HTTP on the tenant LAN, `local`/`local`) is admissible for CONFIDENTIAL,
 and **no bundled engine is admissible for SECRET** (none has `network_egress:
@@ -174,7 +174,7 @@ Corvin ships one ready-made configuration in `corvin_operator/bundle/config-temp
 | `eu_production_http` | `deny` | Self-hosted HTTP + local; all US cloud blocked |
 
 The former `eu_production_ollama` preset was removed with local Ollama inference
-(ADR-2087). A tenant whose `deployment_profile` still reads `eu_production_ollama`
+(ADR-2091). A tenant whose `deployment_profile` still reads `eu_production_ollama`
 keeps the strict EU-production checks (self-test and operator declaration treat
 it as `eu_production`).
 

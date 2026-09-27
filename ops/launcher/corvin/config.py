@@ -14,7 +14,7 @@ _DEFAULTS: dict[str, Any] = {
     "auto_update": True,
 }
 
-# Keys written by launchers before ADR-2087 (local Ollama removed). A config
+# Keys written by launchers before ADR-2091 (local Ollama removed). A config
 # file that still carries them loads normally; the keys are dropped on read
 # and disappear on the next save.
 _LEGACY_KEYS = frozenset({"ollama_url", "model"})

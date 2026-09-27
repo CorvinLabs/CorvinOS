@@ -4,7 +4,7 @@
 > Codex CLI, OpenCode, GitHub Copilot CLI, or any future engine plugged
 > into the same `WorkerEngine` Protocol.
 >
-> **ADR-2087:** the local `HermesEngine` and every path that ran inference on
+> **ADR-2091:** the local `HermesEngine` and every path that ran inference on
 > a local Ollama server were removed. A stored engine id `hermes`, `hermes-*`,
 > `local`, `ollama`, `opencode_ollama` or `claude_code_local` is mapped to
 > `claude_code` on read (`engine_registry.normalize_legacy_engine_id`, one
@@ -129,7 +129,7 @@ or the `/engine opencode` command.
 **File:** `bridges/shared/agents/opencode_cli.py`
 
 Driving a **local** Ollama server through OpenCode (`opencode_ollama`) was
-removed in ADR-2087 along with every other local-inference path; the L34
+removed in ADR-2091 along with every other local-inference path; the L34
 registry no longer knows that engine id.
 
 #### Cloud Ollama (hosted provider)
@@ -157,7 +157,7 @@ config).
 
 Wall-clock (rough): cloud `minimax-m2.7` ≈ 5 s warm / 20 s cold.
 
-### Removed: `HermesEngine` (ADR-2087)
+### Removed: `HermesEngine` (ADR-2091)
 
 `HermesEngine` (Ollama HTTP API on `localhost:11434`), its model aliases,
 `delegate_hermes`, the `_check_hermes_ollama()` self-test, the Hermes console
@@ -364,7 +364,7 @@ fields:
 format: an engine emits `tool_calls` in OpenAI format → FCB translates to
 MCP → TEB executes with L10/L16/L33 enforcement → FCB translates results
 back. `teb/fcb_copilot.py` applies it to Copilot. (Its first user,
-`HermesEngine`, was removed in ADR-2087.)
+`HermesEngine`, was removed in ADR-2091.)
 
 ### SkillCompiler
 

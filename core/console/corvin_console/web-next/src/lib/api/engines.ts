@@ -189,7 +189,7 @@ export interface ProviderSpec {
   base_url: string;
   model_source: string;   // static | ollama | openrouter
   credential_env: string; // env-var NAME only, never a secret value
-  kind: string;           // cloud (local providers were removed, ADR-2087)
+  kind: string;           // cloud (local providers were removed, ADR-2091)
 }
 
 export async function getEngineProviders(

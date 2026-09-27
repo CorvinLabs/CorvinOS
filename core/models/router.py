@@ -85,7 +85,7 @@ class ModelRouter:
     async def select_provider_by_complexity(self, complexity: str) -> str:
         """Select provider based on Skill complexity."""
         if complexity == "simple":
-            # Cheapest remote route (local Ollama removed, ADR-2087)
+            # Cheapest remote route (local Ollama removed, ADR-2091)
             return "openrouter"
 
         if complexity == "medium":

@@ -58,7 +58,7 @@ spec:
   # Set explicitly (optional, always claude_code):
   #   default_engine: claude_code  # Anthropic Claude (requires API key + claude CLI)
   #
-  # Note: Hermes and all local Ollama inference were removed (ADR-2087).
+  # Note: Hermes and all local Ollama inference were removed (ADR-2091).
   # A stored hermes / local-Ollama engine id is mapped to claude_code on read.
 
   # ── Sandbox tier (ADR-0159 M2) ───────────────────────────────────────────────

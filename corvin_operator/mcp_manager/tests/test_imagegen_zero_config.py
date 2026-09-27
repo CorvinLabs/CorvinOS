@@ -604,7 +604,7 @@ def test_provider_hang_is_bounded_not_whole_call_timeout(monkeypatch):
 # _TOTAL_TIMEOUT_S (the generic "please try again" backstop) instead of one
 # of the specific, more actionable per-step friendly messages. Root cause:
 # check_l44() had no bound of its own inside this module (its real worst case
-# chains a cloud classifier spawn — 3 attempts x 20s + backoff — THEN, until ADR-2087, a local
+# chains a cloud classifier spawn — 3 attempts x 20s + backoff — THEN, until ADR-2091, a local
 # Hermes/Ollama fallback, up to ~93s, not the "~35s" this module used to
 # assume), and each provider step was handed its own FULL static budget
 # regardless of how much of the shared total the earlier steps had already

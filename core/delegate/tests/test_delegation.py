@@ -339,14 +339,14 @@ class FailureTests(unittest.TestCase):
 
 class AvailableEnginesTests(unittest.TestCase):
     def test_four_engines(self):
-        # ADR-2087: hermes (local Ollama) was removed.
+        # ADR-2091: hermes (local Ollama) was removed.
         self.assertEqual(
             set(AVAILABLE_ENGINES),
             {"claude_code", "codex_cli", "opencode", "copilot"},
         )
 
     def test_legacy_hermes_engine_is_mapped_to_claude_code(self):
-        # ADR-2087: a stored/legacy engine id is mapped on read, never rejected.
+        # ADR-2091: a stored/legacy engine id is mapped on read, never rejected.
         seen: list[str] = []
 
         def factory(eid):

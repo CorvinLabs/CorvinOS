@@ -103,7 +103,7 @@ def _section_source_sweep(adapter) -> None:
         ("_call_opencode_streaming_via_engine", adapter._call_opencode_streaming_via_engine, 2),
         # call_claude_streaming is the turn-task wrapper (ADR-2081); the body
         # carrying the fallback text is _call_claude_streaming_impl. Two
-        # overrides: ClaudeCodeEngine unavailable + claude CLI missing (ADR-2087).
+        # overrides: ClaudeCodeEngine unavailable + claude CLI missing (ADR-2091).
         ("_call_claude_streaming_impl", adapter._call_claude_streaming_impl, 2),
     ]
 

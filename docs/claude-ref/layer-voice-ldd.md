@@ -503,7 +503,7 @@ the very first replies. `summarize.py` now carries `_claude_authenticated()`
 `ANTHROPIC_API_KEY`, fail-open on read errors) and checks it in all three
 CLI gate sites (`_summarize_via_cli`, `_appendix_via_cli`,
 `_metapher_via_cli`). The Hermes annex backends (`_appendix_via_hermes` /
-`_metapher_via_hermes` / `_ollama_generate`) were removed by ADR-2087:
+`_metapher_via_hermes` / `_ollama_generate`) were removed by ADR-2091:
 `generate_appendix` / `generate_metapher` now try only the CLI — and only when
 it is authenticated AND `_summary_cloud_permitted()` (not a local-only tenant,
 see below) — and otherwise return no annex.
@@ -597,7 +597,7 @@ exception. Regression guards: `core/console/tests/test_voice_archive.py` (pub/su
 `routes/voice.py:_publish_voice_live_event`), `chat-registry.test.ts` (the
 `"voice"` StreamEvent case, both mid-stream and post-done).
 
-**Summary backend ladder (ADR-2087): `cli` → `structural`.**
+**Summary backend ladder (ADR-2091): `cli` → `structural`.**
 `VOICE_SUMMARIZE_BACKEND=auto` (default) or `cli` tries the `claude -p` backend,
 then falls through to bounded structural compression. The local Hermes/Ollama
 stage (`_summarize_via_hermes`, `_ollama_generate`, its `think: false` /
@@ -651,7 +651,7 @@ Fixed server-side, no frontend change needed: `voice_tts()` now calls a new
 falling back to the old raw-truncated behaviour only if summarization is
 unavailable or fails. Timeout matches `build_voice_summary`'s own 120s
 parent cap (at the time `summarize.py`'s internal CLI+Hermes budget was up to
-105s; since ADR-2087 only the 90 s CLI budget remains, inside a 150 s cap).
+105s; since ADR-2091 only the 90 s CLI budget remains, inside a 150 s cap).
 
 Known follow-up, not fixed here (efficiency, not correctness): because the
 WS stream yields TWO `"result"` frames per turn when an annex suffix is

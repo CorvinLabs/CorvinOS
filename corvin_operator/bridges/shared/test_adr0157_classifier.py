@@ -5,7 +5,7 @@ Covers all 4 Milestones:
   M1/D  Exponential backoff retry (spawn_missing aborts; transient causes retry)
   M2    Clear-verdict cache (only CLEAR cached; DENY/ESCALATE never cached; TTL)
   M3    Provider-chain: cloud Haiku → fail-closed (local classifier removed,
-        ADR-2087; floor_only is covered in test_house_rules_floor_only.py)
+        ADR-2091; floor_only is covered in test_house_rules_floor_only.py)
   M4    Degradation clustering (emit WARNING after threshold errors in window)
 
 Security invariant (verified on every test path): fail-closed is NEVER
@@ -281,11 +281,11 @@ class TestRetryBackoff:
 
 
 # ---------------------------------------------------------------------------
-# ADR-2087 — Provider chain: cloud Haiku → fail-closed (local classifier removed)
+# ADR-2091 — Provider chain: cloud Haiku → fail-closed (local classifier removed)
 # ---------------------------------------------------------------------------
 
 class TestProviderChain:
-    """_house_rules_classify_with_chain: cloud_only / floor_only (ADR-2087)."""
+    """_house_rules_classify_with_chain: cloud_only / floor_only (ADR-2091)."""
 
     def test_cloud_only_calls_cloud(self, adp, monkeypatch, hr):
         cloud_called = []
@@ -329,11 +329,11 @@ class TestProviderChain:
 
 
 # ---------------------------------------------------------------------------
-# ADR-0161 / ADR-2087 — classifier ordering (cloud_only | floor_only)
+# ADR-0161 / ADR-2091 — classifier ordering (cloud_only | floor_only)
 # ---------------------------------------------------------------------------
 
 class TestClassifierOrdering:
-    """_house_rules_resolve_order (ADR-2087). Full floor_only behaviour is in
+    """_house_rules_resolve_order (ADR-2091). Full floor_only behaviour is in
     test_house_rules_floor_only.py."""
 
     def _wire(self, adp, monkeypatch, hr):
@@ -642,7 +642,7 @@ class TestFailClosedInvariant:
 
 class TestProductionAuditWiringF03:
     """F-03: classifier_degraded reaches a 3-arg writer (provider_fallback is
-    no longer emitted — single provider since ADR-2087)."""
+    no longer emitted — single provider since ADR-2091)."""
 
     def _install_recording_writer(self, monkeypatch):
         """Patch egress_gate.make_forge_audit_writer to return a 3-arg recorder.

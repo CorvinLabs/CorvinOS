@@ -615,7 +615,7 @@ class TestEngineHealer(unittest.TestCase):
         self.assertEqual(d["tts_action"], "installed_edge_tts")
 
     def test_no_hermes_fallback_when_claude_missing(self):
-        """ADR-2087: a missing claude binary is reported, never papered over by
+        """ADR-2091: a missing claude binary is reported, never papered over by
         falling back to Hermes; a stored legacy engine reads as claude_code."""
         from unittest import mock
         from corvin_console.aco import engine_healer as eh

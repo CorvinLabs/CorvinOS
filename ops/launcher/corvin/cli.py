@@ -321,7 +321,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     # ── 2. Bridge selection ───────────────────────────────────────────────────
     # The AI engine (Claude Code) is configured in the console setup wizard;
-    # the launcher no longer probes a local Ollama server (ADR-2087).
+    # the launcher no longer probes a local Ollama server (ADR-2091).
     bridge = cfg.get("bridge")
     if not args.yes:
         print(f"\n{_bold('Step 2/2 — Messaging bridge')}")

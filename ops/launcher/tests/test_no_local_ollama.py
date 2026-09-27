@@ -1,7 +1,7 @@
-"""ADR-2087: the launcher no longer probes, configures or injects a local Ollama.
+"""ADR-2091: the launcher no longer probes, configures or injects a local Ollama.
 
 Covers the upgrade path (an existing config.json that still carries the
-pre-ADR-2087 ``ollama_url`` / ``model`` keys must keep loading) and drives
+pre-ADR-2091 ``ollama_url`` / ``model`` keys must keep loading) and drives
 ``corvin setup`` / ``corvin status`` through the real ``python -m corvin``
 entry point in a throwaway HOME.
 """

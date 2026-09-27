@@ -81,7 +81,7 @@ Processing covers:
 - **Wahrscheinlichkeit:** Hoch ohne EU_PRODUCTION-Preset.
 - **Schadenshöhe:** Hoch (Bußgelder bis 4 % Jahresumsatz).
 - **Gegenmaßnahmen:**
-  - **L34** Default-Matrix: CONFIDENTIAL nur `local`/`eu_cloud`, SECRET nur `local` + `network_egress: none` (strukturell). Seit ADR-2087 ist keine lokale Inferenz mehr gebündelt: CONFIDENTIAL erreicht nur `opencode_http` oder eine vom Tenant deklarierte Engine; SECRET hat keine gebündelte Engine und wird blockiert, sofern der Tenant keine eigene Engine deklariert.
+  - **L34** Default-Matrix: CONFIDENTIAL nur `local`/`eu_cloud`, SECRET nur `local` + `network_egress: none` (strukturell). Seit ADR-2091 ist keine lokale Inferenz mehr gebündelt: CONFIDENTIAL erreicht nur `opencode_http` oder eine vom Tenant deklarierte Engine; SECRET hat keine gebündelte Engine und wird blockiert, sofern der Tenant keine eigene Engine deklariert.
   - **L35** egress lockdown mit `forbid_engines` + `egress.forbidden_hosts`.
   - **EU_PRODUCTION-Preset** (`tenant.corvin.eu-production-http.yaml`).
   - **Operator-Perimeter-Firewall** (iptables / Cloud-SG).

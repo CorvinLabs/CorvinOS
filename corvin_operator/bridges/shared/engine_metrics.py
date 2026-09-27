@@ -1,6 +1,6 @@
 """engine_metrics.py — Prometheus metrics for OpenCodeEngine OS-turns.
 
-ADR-2087 removed HermesEngine and its ``record_hermes_turn`` metric.
+ADR-2091 removed HermesEngine and its ``record_hermes_turn`` metric.
 
 ADR-0067 M2.5. Lazy-loads prometheus_client so the adapter stays importable
 on hosts without a monitoring stack. All functions are best-effort and never

@@ -9,7 +9,7 @@ OpenCode is provider-agnostic: the `--model provider/model` flag
 selects the backing LLM. When no model is given, no `--model` flag is
 passed and opencode uses the default from its own config
 (`~/.config/opencode/opencode.json`). The former local-Ollama default
-(`ollama/qwen3:8b`) was removed by ADR-2087.
+(`ollama/qwen3:8b`) was removed by ADR-2091.
 
 Event shape emitted by `opencode run --format json`:
 

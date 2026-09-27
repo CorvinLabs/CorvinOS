@@ -222,7 +222,7 @@ Four engines ship today:
   mid-stream inject.
 - `opencode_cli.py` — provider-agnostic (Claude/OpenAI/Google and other hosted providers);
   mcp + stream-json only.
-- (`hermes_engine.py`, the local Ollama engine, was removed in ADR-2087 —
+- (`hermes_engine.py`, the local Ollama engine, was removed in ADR-2091 —
   no bundled engine is zero-egress any more.)
 
 Capabilities are declared per engine and the adapter degrades gracefully

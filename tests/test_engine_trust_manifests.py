@@ -8,7 +8,7 @@ manifests parse, but it is a self-running script (``main()`` under
 collects ZERO tests from it — it only runs via
 ``operator/bridges/run-all-tests.sh``.  It also hard-codes three engine ids
 (``claude_code``, ``codex_cli``, ``opencode``), so ``copilot`` (and the
-since-removed ``hermes``, ADR-2087) were never covered at all.
+since-removed ``hermes``, ADR-2091) were never covered at all.
 
 Both gaps were load-bearing on 2026-09-15: commit fa16e74b added five fields
 to ``agents/trust/claude_code.yaml`` (``name``, ``schema_version``,

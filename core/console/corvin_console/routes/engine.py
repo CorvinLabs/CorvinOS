@@ -11,7 +11,7 @@ Endpoints
   GET  /settings/engine/capabilities → engine capability profile
 
 Settings are stored in tenant.corvin.yaml::spec.default_engine.
-Graceful degradation: a stored engine removed by ADR-2087 (hermes / local
+Graceful degradation: a stored engine removed by ADR-2091 (hermes / local
 Ollama) is mapped to "claude_code" via engine_registry.normalize_legacy_engine_id.
 
 MUST NOT import anthropic (CI AST lint enforces).

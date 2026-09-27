@@ -434,7 +434,7 @@ class ProxyTarget:
         # Opt-in: send the non-standard ``"think": false`` field so thinking
         # models skip generating a separate "reasoning" field (which our
         # response translation ignores anyway). No bundled caller sets it
-        # since ADR-2087 removed the local-Ollama provider; most
+        # since ADR-2091 removed the local-Ollama provider; most
         # OpenAI-compatible servers ignore unknown top-level fields.
         self.disable_reasoning = disable_reasoning
 

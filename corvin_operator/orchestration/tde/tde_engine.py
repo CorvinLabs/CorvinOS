@@ -120,7 +120,7 @@ async def default_local_step_executor(
     network boundary. It becomes a true network boundary once delegation
     targets remote A2A instances (Phase 3). Embedders that need a hard
     boundary inject their own ``local_step_executor`` (the bundled local
-    Hermes engine was removed by ADR-2087).
+    Hermes engine was removed by ADR-2091).
 
     ``proc_holder`` (a ``tde.worker_ipc.ProcHolder``), when given, is
     populated with the live subprocess so a cancelling caller — a parallel

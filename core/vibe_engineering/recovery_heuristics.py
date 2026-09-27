@@ -2,7 +2,7 @@
 
 This is the heuristic that used to live in ``hermes_bridge.py`` as the
 "Hermes unavailable" fallback. The Hermes client it bridged to was never
-wired and local-model inference was removed per ADR-2087, so the heuristic
+wired and local-model inference was removed per ADR-2091, so the heuristic
 is now the only diagnosis path: no model call, no network.
 """
 

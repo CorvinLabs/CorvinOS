@@ -2,7 +2,7 @@
 ## Model Selection, Provider Routing, Engine-to-Request Binding
 
 **Date:** 2026-07-26  
-**Note (2026-09-27):** the Hermes engine was removed by ADR-2087; it no longer appears in the registry sketch below.  
+**Note (2026-09-27):** the Hermes engine was removed by ADR-2091; it no longer appears in the registry sketch below.  
 **Decision:** Engine control (L22 engine layer, ADR-0181 provider model) belongs in Tier-1 Core.
 
 ---

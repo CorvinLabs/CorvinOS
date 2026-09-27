@@ -596,7 +596,7 @@ def resolve_claude_code_provider_env(tenant_id: str) -> dict[str, str]:
             if not model:
                 # No safe default exists for these providers ("auto" is not a
                 # valid OpenRouter model id; the local ``qwen3:8b`` fallback
-                # went with ADR-2087) — starting the proxy anyway would make
+                # went with ADR-2091) — starting the proxy anyway would make
                 # every turn fail with an opaque upstream 400 instead of a
                 # clear error. Leave base unset so CC falls through to its
                 # existing routing instead.

@@ -1,7 +1,7 @@
 """
 Integration Tests: External Providers (ADR-0607, ADR-0643)
 
-Tests for OpenAI and OpenRouter providers (local Ollama removed, ADR-2087).
+Tests for OpenAI and OpenRouter providers (local Ollama removed, ADR-2091).
 Tests health checks, invocation, and timeout handling.
 """
 

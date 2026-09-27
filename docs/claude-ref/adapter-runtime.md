@@ -68,7 +68,7 @@ language. Two long-standing behaviours that broke this were removed:
 
 **Degraded fallback is bounded, never full text.** When *no* LLM backend is
 reachable (no Claude auth, or a local-only tenant — `CORVIN_TTS_LOCAL_ONLY` or an
-egress policy that denies `api.anthropic.com`, ADR-2087), `summarize.py` cannot
+egress policy that denies `api.anthropic.com`, ADR-2091), `summarize.py` cannot
 summarise.
 It used to return `naive_truncate` = the whole answer whitespace-collapsed —
 which is exactly a verbatim readout. It now hard-caps that to `max_chars` via
@@ -125,12 +125,12 @@ Current budgets are derived bottom-up from that measurement, and the parent caps
 were raised to fit them: main summary CLI 90 s inside a 150 s cap
 (`adapter.py::build_voice_summary`, `routes/voice.py::_TTS_SUMMARIZE_TIMEOUT_S`);
 annex CLI 40 s inside 90 s. (The Hermes stage that used to share these caps was
-removed by ADR-2087; the ladder is now `cli` → `structural`.) `summarize.py::_MEASURED_CLI_P50_S` records the measurement and
+removed by ADR-2091; the ladder is now `cli` → `structural`.) `summarize.py::_MEASURED_CLI_P50_S` records the measurement and
 `test_summarize.py::test_cli_budget_covers_measured_latency` fails if a budget
 drops to or below it. When touching these numbers, **re-measure first** — a
 budget under the median silently disables a backend without failing anything.
 
-**No local model to keep warm (ADR-2087).** The summary ladder is `cli` →
+**No local model to keep warm (ADR-2091).** The summary ladder is `cli` →
 `structural`; the local Hermes/Ollama stage, its boot-time `summarize.py
 --prewarm` and `CORVIN_VOICE_PREWARM` were removed. `--prewarm` is still accepted
 and prints `prewarm-skipped`. A local-only tenant goes straight to the bounded
@@ -269,7 +269,7 @@ Fix: the loop tracks `last_event_type`. When the most recent event was a
 keeps the short hang-detection for the "awaiting tokens" state while letting a
 healthy long-running tool/delegation finish, with a finite backstop against a
 genuinely stuck tool. Applied identically across the Claude and OpenCode
-engine paths (the Hermes path was removed by ADR-2087). The cancellation message/log distinguishes
+engine paths (the Hermes path was removed by ADR-2091). The cancellation message/log distinguishes
 `awaiting tokens` from `awaiting tool result`.
 
 E2E coverage: `test_adapter_stream_idle.py` —

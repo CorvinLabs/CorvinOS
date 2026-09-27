@@ -21,7 +21,7 @@ class TestModelSelectionRoutingE2E:
 
     @pytest.mark.asyncio
     async def test_route_simple_task_to_openrouter(self):
-        """Simple tasks route to OpenRouter (local Ollama removed, ADR-2087)."""
+        """Simple tasks route to OpenRouter (local Ollama removed, ADR-2091)."""
         task = "Translate hello to French"
 
         with patch("core.models.router.ModelRouter.invoke_with_fallback") as mock_invoke:
@@ -37,7 +37,7 @@ class TestModelSelectionRoutingE2E:
 
             assert result.content == "Bonjour"
             assert result.model == "mistral:7b"
-            # Cheapest remote provider is preferred (no local model since ADR-2087)
+            # Cheapest remote provider is preferred (no local model since ADR-2091)
             assert mock_invoke.call_args[1]["model_preference"] == "openrouter"
 
     @pytest.mark.asyncio

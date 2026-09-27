@@ -192,7 +192,7 @@ class VaultCheckTests(unittest.TestCase):
 
 class EngineProbeTests(unittest.TestCase):
     def test_no_local_ollama_probe(self) -> None:
-        # ADR-2087: the boot self-test no longer probes a local Ollama.
+        # ADR-2091: the boot self-test no longer probes a local Ollama.
         self.assertFalse(hasattr(st, "_check_hermes_ollama"))
 
     def test_critical_when_claude_cli_missing(self) -> None:
@@ -550,7 +550,7 @@ spec:
         self.assertIn("min_version", pins[0].detail)
 
     def test_eu_production_ollama_no_min_version_emits_warning(self) -> None:
-        # Legacy profile value (ADR-2087 removed its local-Ollama preset); a
+        # Legacy profile value (ADR-2091 removed its local-Ollama preset); a
         # tenant still carrying it must keep the strict EU check.
         results = self._check_with_yaml("""
 apiVersion: corvin/v1

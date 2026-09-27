@@ -2,7 +2,7 @@
 
 Connects QualityOrchestrator to an LLM provider (Claude) with a static
 fallback. The local-Ollama provider and its redirect handler were removed
-per ADR-2087.
+per ADR-2091.
 """
 from __future__ import annotations
 

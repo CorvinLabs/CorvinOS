@@ -481,7 +481,7 @@ EVENT_SEVERITY: dict[str, str] = {
     "supply_chain.frozen_baseline_breach_attempted": "WARNING",
     "supply_chain.cve_check_skipped":       "WARNING",
     # ADR-0067 M2.2 — HermesEngine OS-turn lifecycle events. Historical only:
-    # Hermes was removed per ADR-2087; kept so existing chain records parse.
+    # Hermes was removed per ADR-2091; kept so existing chain records parse.
     # Metadata only — engine_id, persona, error_class. NEVER prompt/output/URL.
     "hermes.turn_start":        "INFO",
     "hermes.turn_end":          "INFO",
@@ -838,10 +838,10 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-0157 — L44 Resilient Classifier (house_rules.*).
     # Emitted by the provider-chain wrapper; details are metadata-only.
     # provider_fallback: historical only — the local classifier it fell back
-    # from was removed per ADR-2087; kept so existing chain records keep their severity.
+    # from was removed per ADR-2091; kept so existing chain records keep their severity.
     "house_rules.provider_fallback":    "INFO",    # M3: Hermes failed, cloud Haiku used
     "house_rules.classifier_degraded":  "WARNING", # M4: N errors in sliding window
-    # ADR-2087 — tenant runs floor_only (egress denies the cloud classifier
+    # ADR-2091 — tenant runs floor_only (egress denies the cloud classifier
     # host): the decision was taken on the Tier-0 floor, no classifier ran.
     "house_rules.floor_only":           "INFO",
     # PHASE 1: Critical Audit 100% Completeness (2026-09-24)
@@ -2799,7 +2799,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # Strictly metadata: provider identity, counts, window size. NEVER task text.
     "house_rules.provider_fallback":    frozenset({"provider", "cause", "fallback_to"}),
     "house_rules.classifier_degraded":  frozenset({"error_count", "window_s"}),
-    # ADR-2087 — same metadata as the house_rules.{denied,escalated} decision
+    # ADR-2091 — same metadata as the house_rules.{denied,escalated} decision
     # records plus tenant_id. NEVER task text, never a free-text reason.
     "house_rules.floor_only": frozenset({
         "tenant_id", "rule_id", "action", "reason", "persona", "channel",

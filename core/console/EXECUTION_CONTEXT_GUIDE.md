@@ -180,16 +180,16 @@ return {
 
 ### ModelSource
 - `CLAUDE` — Anthropic API models (claude-3-*, etc.)
-- `OLLAMA` — historical only (local Ollama removed by ADR-2087; parse-only)
+- `OLLAMA` — historical only (local Ollama removed by ADR-2091; parse-only)
 - `OPENROUTER` — OpenRouter API routing
-- `HERMES` — historical only (removed by ADR-2087; parse-only)
+- `HERMES` — historical only (removed by ADR-2091; parse-only)
 - `UNKNOWN` — Unrecognized
 
 ### EngineId
 - `CLAUDE_CODE` — Direct claude subprocess
 - `ACS` — ACS fan-out workers
 - `TDE` — Tiered Delegation Engine
-- `HERMES` — historical only (removed by ADR-2087; parse-only)
+- `HERMES` — historical only (removed by ADR-2091; parse-only)
 - `UNKNOWN` — Unrecognized
 
 ### DelegationMode

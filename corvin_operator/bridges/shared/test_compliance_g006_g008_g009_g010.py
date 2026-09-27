@@ -206,7 +206,7 @@ def test_g009_engine_manifests() -> None:
     t("opencode fails at min_tier=high (tier is low)", not v.passed,
       detail=f"reason={v.reason}")
 
-    # ADR-2087: the removed hermes engine has no manifest and is refused
+    # ADR-2091: the removed hermes engine has no manifest and is refused
     # (fail-closed on manifest-missing), even at the lowest tier.
     vh = evaluate_trust("hermes", min_tier="low")
     t("removed hermes engine is refused (manifest-missing)", not vh.passed,

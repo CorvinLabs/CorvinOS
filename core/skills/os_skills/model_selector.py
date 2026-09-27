@@ -594,7 +594,7 @@ class ModelSelector:
             provider = override.get("provider")
             model = override.get("model")
             if provider in ("ollama", "ollama_local"):
-                # Saved before ADR-2087 removed local Ollama: that model cannot
+                # Saved before ADR-2091 removed local Ollama: that model cannot
                 # run here, so the tier routes on native Anthropic instead.
                 provider = None
                 model = self._select_model_for_provider("anthropic", complexity)

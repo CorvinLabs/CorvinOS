@@ -140,7 +140,7 @@ the monthly report to learn about an integrity violation.
 ## 5. Glossary
 
 * **EU_PRODUCTION preset** — `tenant.corvin.eu-production-http.yaml` (the former
-  `-ollama` preset was removed with local Ollama inference, ADR-2087).
+  `-ollama` preset was removed with local Ollama inference, ADR-2091).
   Ships the three-layer defence (identity + classification + egress).
 * **Three-layer defence** — see the L35 egress lockdown docs.
 * **subject_id** — pseudonymous user identifier per L36 regex.

@@ -80,10 +80,10 @@ except Exception:  # noqa: BLE001
     _i18n = None
 
 
-# ── Voice-summary timeout budgets (VOICE-F7 / VOICE-F8 / ADR-2087) ─────────
+# ── Voice-summary timeout budgets (VOICE-F7 / VOICE-F8 / ADR-2091) ─────────
 # adapter.py spawns THIS script under a HARD subprocess cap. Inside that cap the
 # only LLM backend is the `claude` CLI, followed by the in-process structural
-# fallback (the local Hermes/Ollama stage was removed per ADR-2087). The CLI
+# fallback (the local Hermes/Ollama stage was removed per ADR-2091). The CLI
 # wait must stay comfortably LESS than the parent cap (with margin for process
 # spawn + extraction). Contract (parent caps mirrored in adapter.py
 # build_voice_summary / _append_lern_zugabe / _append_metapher):
@@ -1469,7 +1469,7 @@ _CLOUD_SUMMARY_HOST = "api.anthropic.com"
 def _summary_cloud_permitted() -> bool:
     """May the `claude` CLI backend (→ api.anthropic.com) see this text?
 
-    ADR-2087: the local Hermes/Ollama backend is gone, and the CLI backend has
+    ADR-2091: the local Hermes/Ollama backend is gone, and the CLI backend has
     no egress check of its own. A local-only tenant therefore gets the
     structural fallback directly and the CLI is never spawned:
       * ``CORVIN_TTS_LOCAL_ONLY`` truthy → False.
@@ -2156,7 +2156,7 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
     # No length-based bypass survives; the only fast exit is genuinely empty
     # input, handled by the caller.
 
-    # Backend 1: CLI — the only LLM backend (ADR-2087 removed the local
+    # Backend 1: CLI — the only LLM backend (ADR-2091 removed the local
     # Hermes/Ollama stage). It spawns `claude -p` → api.anthropic.com and has
     # no egress check of its own, so a local-only tenant (CORVIN_TTS_LOCAL_ONLY
     # or an egress policy that denies the cloud) goes straight to structural.
@@ -2343,12 +2343,12 @@ def main() -> int:
         ),
     )
     # Accepted as a no-op so an older caller does not fail on argparse; the
-    # local-model prewarm it triggered was removed per ADR-2087.
+    # local-model prewarm it triggered was removed per ADR-2091.
     ap.add_argument("--prewarm", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     if args.prewarm:
-        print("prewarm-skipped (no local summary model; removed per ADR-2087)")
+        print("prewarm-skipped (no local summary model; removed per ADR-2091)")
         return 0
 
     text = sys.stdin.read()

@@ -150,7 +150,7 @@ upgrade itself):
 - `~/.config/corvin-launcher/config.json` — launcher settings (auto-update flag)
 - bridge settings under `~/.corvin/bridges/<bridge>/settings.json`
 
-### Upgrading past the Hermes / local-Ollama removal (ADR-2087)
+### Upgrading past the Hermes / local-Ollama removal (ADR-2091)
 
 This release removes the Hermes engine and every path that ran inference on a
 local Ollama server. Nothing needs to be migrated by hand, but note:
@@ -247,7 +247,7 @@ instance and consult `docs/audit-and-compliance.md` before anything else; a
 broken chain is a CRITICAL security event, not a cosmetic one.
 
 **Chat reports that Claude Code is not installed or not logged in after
-upgrading from a Hermes install** — the Hermes engine was removed (ADR-2087) and a stored
+upgrading from a Hermes install** — the Hermes engine was removed (ADR-2091) and a stored
 `hermes` engine is now read as `claude_code`. There is no automatic fallback
 engine: install the Claude Code CLI and log in (`claude`), or pick another
 engine in Settings.

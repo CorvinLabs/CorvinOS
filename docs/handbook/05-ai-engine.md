@@ -59,7 +59,7 @@ When delegation is enabled (orchestrator persona), these cards show each worker 
 
 ### Local AI (no cloud) — removed
 
-The local Hermes (Ollama) engine was removed in ADR-2087; CorvinOS no longer runs inference on a local Ollama server. A stored `hermes` engine choice is read as Claude Code. To keep data off the cloud, declare your own engine on an endpoint your egress policy admits (tenant `engine_compliance`), or use a self-hosted OpenCode server (`opencode_http`).
+The local Hermes (Ollama) engine was removed in ADR-2091; CorvinOS no longer runs inference on a local Ollama server. A stored `hermes` engine choice is read as Claude Code. To keep data off the cloud, declare your own engine on an endpoint your egress policy admits (tenant `engine_compliance`), or use a self-hosted OpenCode server (`opencode_http`).
 
 ### Configure the default Claude model
 

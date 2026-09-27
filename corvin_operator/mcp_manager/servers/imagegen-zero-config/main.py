@@ -121,7 +121,7 @@ _PROVIDER_TIMEOUT_S = 75.0
 # per-provider messages) traced to a wrong budget assumption below. check_l44's
 # real worst case chains a cloud classifier spawn (3 attempts x 20s + backoff
 # ~= 63s, house_rules.py's _HOUSE_RULES_RETRIES/_HOUSE_RULES_ADJ_TIMEOUT_S) —
-# not the "~35s" this module used to assume. (Until ADR-2087 a further ~30s local
+# not the "~35s" this module used to assume. (Until ADR-2091 a further ~30s local
 # classifier fallback followed; that backend is gone, the bound keeps its
 # margin.) check_l44() itself takes no timeout parameter (it's shared by the
 # bridge adapter and ACS runtime, whose call sites have no analogous total

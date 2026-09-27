@@ -1451,7 +1451,7 @@ def _check_compliance_manifest() -> list[CheckResult]:
 
     # M4 (ADR-0057): eu_production deployments must pin spec.compliance_manifest.min_version
     # ``eu_production_ollama`` is a LEGACY value (its local-Ollama preset was
-    # removed by ADR-2087). A tenant that still carries it keeps the strict EU
+    # removed by ADR-2091). A tenant that still carries it keeps the strict EU
     # posture — dropping it here would silently relax the check (fail-open).
     _EU_PROFILES = frozenset({"eu_production", "eu_production_ollama"})
     if _deployment_profile in _EU_PROFILES and not tenant_compliance_cfg.get("min_version"):

@@ -90,7 +90,7 @@ def _tenant_default_engine(tenant_id: str) -> str | None:
         raw = (data.get("spec") or {}).get("default_engine") or None
     except Exception:
         return None
-    # ADR-2087: a removed engine (hermes / local Ollama) maps to claude_code.
+    # ADR-2091: a removed engine (hermes / local Ollama) maps to claude_code.
     return _normalize_engine(raw) if isinstance(raw, str) else None
 
 

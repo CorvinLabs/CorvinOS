@@ -36,7 +36,7 @@ Hybrid, three tiers:
             to the deterministic Tier-0 floor: prohibited-class patterns still BLOCK,
             benign passes. Fail-TO-FLOOR, not fail-open (the policy default ALLOW is
             reached only when NO rule pattern matches). See ``classify``.
-  floor_only (ADR-2087) — a tenant whose egress policy does not admit the cloud
+  floor_only (ADR-2091) — a tenant whose egress policy does not admit the cloud
             classifier host gets NO classifier at all (no subprocess, no
             network): a deny-pattern match denies, EVERY other task escalates
             (never the policy default), audited ``house_rules.floor_only``.
@@ -194,7 +194,7 @@ _AUDIT_ALLOWED: frozenset[str] = frozenset({
     "rule_id", "action", "persona", "channel", "chat_key",
     "engine_id", "reason", "confidence", "matched_pattern_count",
 })
-# ADR-2087 — ``house_rules.floor_only`` carries the decision metadata plus the
+# ADR-2091 — ``house_rules.floor_only`` carries the decision metadata plus the
 # tenant id. Content-free: never task text, never a free-text reason.
 _FLOOR_ONLY_AUDIT_ALLOWED: frozenset[str] = _AUDIT_ALLOWED | {"tenant_id"}
 
@@ -279,7 +279,7 @@ _REASON_CLASSIFIER_ERROR = "classifier_error"
 _REASON_CLASSIFIER_ERROR_DEGRADED = "classifier_error_tier0_degraded"
 _REASON_TIER0_MATCH = "tier0_match_no_classifier"
 _REASON_NO_MATCH = "no_rule_matched"
-# ADR-2087 floor_only (the tenant's egress denies the cloud classifier host, so
+# ADR-2091 floor_only (the tenant's egress denies the cloud classifier host, so
 # no classifier runs by design). Distinct from the degraded code above, which
 # keeps meaning "a classifier that should have run did not".
 _REASON_FLOOR_ONLY_MATCH = "floor_only_rule_match"
@@ -464,7 +464,7 @@ class HouseRulesGate:
         try:
             rid, confidence, _detail = self.classifier(task_text, self.policy.rules, auth)
         except HouseRulesFloorOnly as _fo:
-            # ADR-2087 floor_only: the tenant's egress policy does not admit the
+            # ADR-2091 floor_only: the tenant's egress policy does not admit the
             # cloud classifier host, so NO classifier ran (by design, not by
             # failure). The deterministic floor decides; a deny match stays
             # deny, EVERYTHING else escalates — a task no rule denies has not
@@ -597,7 +597,7 @@ class HouseRulesGate:
 
     def _emit_floor_only(self, d: HouseRulesDecision, tenant_id: str, persona: str,
                          channel: str, chat_key: str, engine_id: str, hits: int) -> None:
-        """ADR-2087 — record that this decision was taken on the floor ONLY.
+        """ADR-2091 — record that this decision was taken on the floor ONLY.
 
         Written through the gate's own audit writer, BEFORE ``_decide`` writes
         the ``house_rules.{denied,escalated}`` decision record and before the
@@ -998,14 +998,14 @@ def _house_rules_classify_chunk(chunk: str, rules_block: str, auth_str: str) -> 
     raise last if last is not None else _HouseRulesClassifierError("unknown")
 
 
-# ── ADR-0161 / ADR-2087 — classifier order: cloud_only or floor_only ─────────
+# ── ADR-0161 / ADR-2091 — classifier order: cloud_only or floor_only ─────────
 # The cloud classifier (`claude -p`) talks to this host. The cloud classifier is
 # a subprocess the L35 spawn gate does NOT see, so this probe of the tenant's
 # egress policy is what keeps an egress-denied tenant's task text off the wire.
 _HOUSE_RULES_CLOUD_HOST = "api.anthropic.com"
 
-# ADR-2087: the only two orders left (the local classifier and its orders
-# were removed per ADR-2087).
+# ADR-2091: the only two orders left (the local classifier and its orders
+# were removed per ADR-2091).
 #   cloud_only  — cloud Haiku → fail-closed (classifier error → gate degrades
 #                 to the Tier-0 floor, exactly as before).
 #   floor_only  — NO classifier, NO network: the deterministic Tier-0 floor
@@ -1018,7 +1018,7 @@ _HOUSE_RULES_VALID_ORDERS = (_HOUSE_RULES_ORDER_CLOUD_ONLY, _HOUSE_RULES_ORDER_F
 
 class HouseRulesFloorOnly(Exception):
     """Raised by the classifier instead of spawning anything when the tenant's
-    resolved order is ``floor_only`` (ADR-2087).
+    resolved order is ``floor_only`` (ADR-2091).
 
     It is NOT a classifier failure: ``HouseRulesGate.classify`` catches it
     BEFORE its generic backend-unavailable handler, so it never takes the
@@ -1056,7 +1056,7 @@ def _house_rules_cloud_egress_allowed(tenant_id: "str | None" = None) -> bool:
 
 
 def _house_rules_resolve_order(tenant_id: "str | None" = None) -> str:
-    """Resolve the classifier order for a tenant (ADR-2087).
+    """Resolve the classifier order for a tenant (ADR-2091).
 
     Computed order: ``floor_only`` when the tenant's egress policy does not
     admit ``api.anthropic.com``, else ``cloud_only``.
@@ -1083,7 +1083,7 @@ def _house_rules_classify_with_chain(
     order: "str | None" = None,
     tenant_id: "str | None" = None,
 ) -> "tuple[str, float, str]":
-    """Classify one chunk under the resolved order (ADR-2087).
+    """Classify one chunk under the resolved order (ADR-2091).
 
       * ``cloud_only`` — cloud Haiku; a failure propagates so the gate handles
         it (degrade to the Tier-0 floor, audited ``classifier_error_tier0_degraded``).
@@ -1137,7 +1137,7 @@ def _house_rules_classifier(
     """L44 (ADR-0143 M2 / ADR-0157) Tier-1 semantic classifier.
 
     Builds the chunk list then calls ``_house_rules_classify_with_chain`` per
-    chunk (ADR-2087: cloud Haiku → fail-closed; ``floor_only`` tenants raise
+    chunk (ADR-2091: cloud Haiku → fail-closed; ``floor_only`` tenants raise
     :class:`HouseRulesFloorOnly` before anything is spawned).
     ADR-0157 M2: CLEAR verdicts are cached (hash-keyed, 5-min TTL); DENY /
     ESCALATE are never cached.
@@ -1175,7 +1175,7 @@ def _house_rules_classifier(
     # egress probe / yaml read happens at most once even for multi-chunk tasks.
     order = _house_rules_resolve_order(tenant_id)
     if order == _HOUSE_RULES_ORDER_FLOOR_ONLY:
-        # ADR-2087: no classifier subprocess, no network, no cache — the gate
+        # ADR-2091: no classifier subprocess, no network, no cache — the gate
         # decides on the deterministic floor (HouseRulesGate.classify).
         raise HouseRulesFloorOnly(tenant_id or "")
     min_clear_conf = 1.0
@@ -1224,7 +1224,7 @@ def _house_rules_classifier(
 def house_rules_boot_health_check(log_fn: "object | None" = None) -> None:
     """Boot-time L44 classifier health check — call from any startup path.
 
-    ADR-2087: the only classifier backend is the cloud ``claude -p`` helper, so
+    ADR-2091: the only classifier backend is the cloud ``claude -p`` helper, so
     this checks that its CLI resolves. No network, no inference; never raises,
     never blocks boot. A tenant whose egress denies the cloud runs
     ``floor_only`` and needs no CLI at all. Without the CLI, a ``cloud_only``

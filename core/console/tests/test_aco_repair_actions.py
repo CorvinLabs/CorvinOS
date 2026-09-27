@@ -402,7 +402,7 @@ if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
 
 
-# ── ADR-2087: a persisted failcount for the removed hermes_health action ────
+# ── ADR-2091: a persisted failcount for the removed hermes_health action ────
 
 def test_stale_hermes_health_failcount_is_tolerated_and_pruned(tmp_path):
     """HermesHealthRepair was deleted; an install may still carry its

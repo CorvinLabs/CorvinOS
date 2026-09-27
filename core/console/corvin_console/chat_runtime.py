@@ -77,7 +77,7 @@ path: ``claude_code`` → the ``claude -p --output-format stream-json``
 subprocess path. The FOUR fail-closed pre-spawn gates (L44/LIP/L34/L35, via
 ``_spawn_gates.check_console_spawn_or_refusal``) run before it.
 
-A stored ``spec.default_engine`` naming an engine removed by ADR-2087 (Hermes
+A stored ``spec.default_engine`` naming an engine removed by ADR-2091 (Hermes
 and every local-Ollama engine) is mapped to ``claude_code`` on read through
 ``engine_registry.normalize_legacy_engine_id``. When Claude Code is missing or
 not authenticated the turn stays on ``claude_code`` and surfaces an actionable
@@ -309,7 +309,7 @@ try:
 except Exception:  # noqa: BLE001
     _model_selector = None
 
-# ADR-2087 legacy-engine mapping — ONE shared helper (bridges/shared), never a
+# ADR-2091 legacy-engine mapping — ONE shared helper (bridges/shared), never a
 # console-local copy. Absence (vendoring glitch) degrades to identity: a stored
 # legacy id then surfaces the honest "engine not drivable" message.
 try:
@@ -1343,7 +1343,7 @@ def _install_generated_panels(tenant_id: str, workdir: "Path") -> list[dict]:
 #     path (below).
 # Any OTHER engine_id (opencode / codex_cli / copilot) is genuinely not yet
 # drivable by the console and still gets the honest up-front mismatch message.
-# Hermes (local Ollama) was removed by ADR-2087; a stored legacy id is mapped
+# Hermes (local Ollama) was removed by ADR-2091; a stored legacy id is mapped
 # to claude_code on read by _configured_os_engine.
 _DIRECT_OS_ENGINES = frozenset({"claude_code"})
 
@@ -1368,7 +1368,7 @@ def _configured_os_engine(tenant_id: str) -> str:
     Mirrors the adapter's resolution floor: tenant spec.default_engine →
     "claude_code". Returns the canonical engine_id. Empty / unset → claude_code,
     matching engine_pref.py and the legacy default-spawn contract. A value
-    naming an engine removed by ADR-2087 (``hermes``, ``hermes-*``, ``local``,
+    naming an engine removed by ADR-2091 (``hermes``, ``hermes-*``, ``local``,
     ``ollama``, ``opencode_ollama``, ``claude_code_local``) maps to
     ``claude_code`` — mapped on read, never rejected.
     """
@@ -1379,7 +1379,7 @@ def _configured_os_engine(tenant_id: str) -> str:
 
 
 # `os_turn.engine_substituted` (F-E2) recorded the automatic Claude → Hermes
-# swap. ADR-2087 removed that swap, so nothing emits the event any more; its
+# swap. ADR-2091 removed that swap, so nothing emits the event any more; its
 # EVENT_SEVERITY entry and this allowlist stay so records already on the chain
 # keep their severity and fields.
 _ENGINE_SUBSTITUTED_EVENT = "os_turn.engine_substituted"
@@ -1395,7 +1395,7 @@ except Exception:  # noqa: BLE001 — forge missing: _console_audit itself is un
 def _effective_os_engine(tenant_id: str, *, audit: bool = True) -> str:
     """The engine the OS turn runs on — the configured one, always.
 
-    There is no automatic fallback engine (ADR-2087 removed Hermes): when the
+    There is no automatic fallback engine (ADR-2091 removed Hermes): when the
     claude binary is missing or not authenticated the turn STAYS on
     ``claude_code`` and ``_engine_unavailable_message`` returns an actionable
     error pointing at Setup. ``audit`` is accepted for call-site compatibility
@@ -1478,7 +1478,7 @@ def _engine_unavailable_message(engine_id: str) -> str | None:
     so instead of a raw "claude binary not found" we name the configured
     engine and point the operator at the Engines page.
     """
-    # 1. Engines removed by ADR-2087 (Hermes / local Ollama) map to claude_code.
+    # 1. Engines removed by ADR-2091 (Hermes / local Ollama) map to claude_code.
     engine_id = _normalize_legacy_engine_id(engine_id) or "claude_code"
 
     # 2. Genuinely-unsupported OS engine selected in Setup (opencode / codex /
@@ -1517,7 +1517,7 @@ def _engine_unavailable_message(engine_id: str) -> str | None:
         )
     # 4. claude present but not signed in (no OAuth session, no API key, no
     #    Bedrock/Vertex/Foundry flag). Spawning would fail every turn with a raw
-    #    CLI auth error; there is no fallback engine (ADR-2087), so say what to do.
+    #    CLI auth error; there is no fallback engine (ADR-2091), so say what to do.
     if not _claude_authenticated():
         return (
             f"Die Engine **Claude Code** ist ausgewählt, aber nicht angemeldet. "

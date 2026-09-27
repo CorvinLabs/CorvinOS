@@ -2866,7 +2866,7 @@ function dialecticReply(ctx, sub, rest) {
 //   /engine opencode         → opencode (its own configured default model)
 //   /engine cloud            → opencode + ollama-cloud
 //   /engine off              → clear; orchestrator decides freely
-//   /engine hermes           → claude_code + notice (Hermes removed, ADR-2087;
+//   /engine hermes           → claude_code + notice (Hermes removed, ADR-2091;
 //                              the Python CLI maps every legacy id)
 function engineReply(ctx, tail) {
   if (ctx && ctx.isOwner === false) {

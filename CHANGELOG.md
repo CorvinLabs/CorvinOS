@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-### BREAKING — Hermes and all local Ollama inference removed (ADR-2087)
+### BREAKING — Hermes and all local Ollama inference removed (ADR-2091)
 - The Hermes worker engine and every path that ran inference on a local Ollama
   server are gone: `hermes`, `claude_code_local` (Claude Code → Ollama redirect),
   `opencode_ollama`, the `ollama_local` model provider, the L44 local classifier

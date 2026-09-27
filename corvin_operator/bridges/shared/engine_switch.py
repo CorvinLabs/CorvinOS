@@ -15,7 +15,7 @@ Slash-command flow (in_chat_commands.js, owner-only):
 * ``/engine cloud``            — pin opencode + ollama-cloud/qwen3-coder-next
 * ``/engine off``              — clear the override; orchestrator decides freely
 
-``/engine hermes`` (and the other engines removed by ADR-2087 — ``local``,
+``/engine hermes`` (and the other engines removed by ADR-2091 — ``local``,
 ``ollama``, ``hermes-*`` …) is not an error: it pins ``claude_code`` and the
 CLI prints a short notice that Hermes was removed.
 
@@ -107,7 +107,7 @@ ENGINE_ALIASES: dict[str, dict[str, str | None]] = {
     "codex_cli":     {"engine": "codex_cli",   "model": None},
     "codex-cli":     {"engine": "codex_cli",   "model": None},
     # opencode — no model pin: OpenCode uses its own configured default
-    # (ADR-2087 removed the local-Ollama default ``ollama/qwen3:8b``).
+    # (ADR-2091 removed the local-Ollama default ``ollama/qwen3:8b``).
     "opencode":      {"engine": "opencode",    "model": None},
     # opencode (cloud-backed via ollama-cloud provider config)
     "cloud":         {"engine": "opencode",    "model": "ollama-cloud/qwen3-coder-next"},
@@ -126,14 +126,14 @@ ENGINE_ALIASES: dict[str, dict[str, str | None]] = {
 
 VALID_ENGINES: tuple[str, ...] = ("claude_code", "codex_cli", "opencode", "copilot")
 
-# Shown when ``/engine`` names an engine removed by ADR-2087.
+# Shown when ``/engine`` names an engine removed by ADR-2091.
 LEGACY_ENGINE_NOTICE = (
     "Hermes / local Ollama engines were removed — using Claude Code instead."
 )
 
 
 def _legacy_helpers():
-    """Import the shared ADR-2087 legacy-id helpers (engine_registry is SSOT)."""
+    """Import the shared ADR-2091 legacy-id helpers (engine_registry is SSOT)."""
     try:
         from engine_registry import (  # type: ignore
             is_legacy_engine_id, normalize_legacy_engine_id,
@@ -332,7 +332,7 @@ def resolve_alias(token: str) -> dict[str, str | None] | None:
     key = token.strip().lower()
     is_legacy, _norm = _legacy_helpers()
     if is_legacy(key):
-        # ADR-2087: map, never reject — the removed engine becomes claude_code.
+        # ADR-2091: map, never reject — the removed engine becomes claude_code.
         return {"engine": _norm(key), "model": None}
     spec = ENGINE_ALIASES.get(key)
     if spec is None:
@@ -351,7 +351,7 @@ def supported_aliases() -> list[str]:
 
 
 def is_legacy_alias(token: str) -> bool:
-    """True when ``token`` names an engine removed by ADR-2087."""
+    """True when ``token`` names an engine removed by ADR-2091."""
     if not token:
         return False
     is_legacy, _ = _legacy_helpers()
@@ -381,7 +381,7 @@ def current(channel: str, chat_key: str, *,
     model = data.get("model")
     is_legacy, _norm = _legacy_helpers()
     if isinstance(engine, str) and is_legacy(engine):
-        # ADR-2087: a stored Hermes / local-Ollama pin maps to claude_code on
+        # ADR-2091: a stored Hermes / local-Ollama pin maps to claude_code on
         # read; its model (a local Ollama tag) is meaningless there — dropped.
         engine, model = _norm(engine), ""
     if not isinstance(engine, str) or not _ENGINE_ID_RE.match(engine):

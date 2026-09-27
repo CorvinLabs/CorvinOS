@@ -207,8 +207,8 @@ DEFAULT_ENGINE_COMPLIANCE: dict[str, EngineCompliance] = {
     # ADR-0098 — AnthropicBatchEngine (ABP, fire-and-forget batch inference).
     # Calls api.anthropic.com — US jurisdiction, external egress.
     # Max classification: INTERNAL (PUBLIC or INTERNAL data only).
-    # No bundled engine takes CONFIDENTIAL/SECRET jobs from here (ADR-2087).
-    # ADR-2087: the local-inference engines ``hermes``, ``opencode_ollama`` and
+    # No bundled engine takes CONFIDENTIAL/SECRET jobs from here (ADR-2091).
+    # ADR-2091: the local-inference engines ``hermes``, ``opencode_ollama`` and
     # ``claude_code_local`` were removed. Their ids are no longer in this
     # registry, so ``validate`` refuses them as ``unknown_engine``. No bundled
     # engine has network_egress='none', so SECRET has no bundled admissible

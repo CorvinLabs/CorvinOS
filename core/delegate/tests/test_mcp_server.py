@@ -91,7 +91,7 @@ class HandshakeTests(unittest.TestCase):
             "delegate_claude_code", "delegate_codex", "delegate_opencode",
             "delegate_copilot",
         })
-        # ADR-2087: the local-Ollama delegate_hermes tool is gone.
+        # ADR-2091: the local-Ollama delegate_hermes tool is gone.
         self.assertNotIn("delegate_hermes", names)
         # schema is the same shape across all four
         for t in tools:

@@ -81,13 +81,13 @@ class AliasResolutionTests(unittest.TestCase):
         self.assertIsNone(spec["model"])
 
     def test_opencode_alias_pins_no_model(self):
-        # ADR-2087: no local-Ollama default — OpenCode uses its own default.
+        # ADR-2091: no local-Ollama default — OpenCode uses its own default.
         spec = engine_switch.resolve_alias("opencode")
         self.assertEqual(spec["engine"], "opencode")
         self.assertIsNone(spec["model"])
 
     def test_removed_engines_map_to_claude_code(self):
-        # ADR-2087: /engine hermes (and friends) switch to claude_code
+        # ADR-2091: /engine hermes (and friends) switch to claude_code
         # instead of erroring out.
         for token in ("hermes", "Hermes", " hermes-fast ", "hermes-large",
                       "local", "local-hermes", "ollama", "opencode_ollama",
@@ -509,7 +509,7 @@ class CLITests(unittest.TestCase):
             self.assertIn("unknown engine alias", r.stdout)
 
     def test_set_hermes_switches_to_claude_code_with_notice(self):
-        # ADR-2087: `/engine hermes` must not error — it pins claude_code
+        # ADR-2091: `/engine hermes` must not error — it pins claude_code
         # and tells the operator Hermes was removed.
         with _Sandbox() as sb:
             r = self._run("set", "discord", "chat-1", "hermes", sb_home=sb.home)

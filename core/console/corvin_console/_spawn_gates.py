@@ -166,7 +166,7 @@ def _check_l34_l35_or_fail(
     ``DataFlowGuard.validate`` / ``EgressGate.validate`` emit ``data_flow.blocked``
     / ``egress.blocked`` to the L16 chain BEFORE the refusal is returned
     (audit-first). The ADR-0126 ``CORVIN_CC_LOCAL_MODE`` remap is gone
-    (ADR-2087): claude_code is always validated as claude_code.
+    (ADR-2091): claude_code is always validated as claude_code.
 
     ``classification`` (e.g. ``"PUBLIC"``): when provided, bypasses the heuristic
     ``classify_task()`` and uses this level directly.  Use for spawn sites where

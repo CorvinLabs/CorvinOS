@@ -518,9 +518,9 @@ def test_engine_path_btw_routes_through_engine() -> None:
 
 
 def test_engine_path_no_engine_reachable_surfaces_clear_notice() -> None:
-    """ADR-2087: no claude CLI → a clear "run setup" notice, never a fallback.
+    """ADR-2091: no claude CLI → a clear "run setup" notice, never a fallback.
 
-    Before ADR-2087 the ADR-0159 M1 auto-detect switched a host without the
+    Before ADR-2091 the ADR-0159 M1 auto-detect switched a host without the
     claude CLI to the local Hermes/Ollama engine. That engine is gone. The OS
     turn now stays on claude_code and the user gets a CLEAR, NON-EMPTY,
     actionable notice (never a silent empty string, never the misleading
@@ -597,7 +597,7 @@ def test_engine_autodetect_offpath_claude_resolves_to_claude_code() -> None:
     a stripped PATH that lacks ``~/.local/bin`` (where Claude Code installs the
     CLI), so ``which()`` returned ``None`` EVEN WHEN claude was installed. The
     OS turn was then silently routed away from claude (to the local engine that
-    ADR-2087 later removed) although claude was the intended engine.
+    ADR-2091 later removed) although claude was the intended engine.
     The fix probes through the same hardened resolver
     (``helper_model.resolve_claude_bin``: ``CORVIN_CLAUDE_BIN`` → PATH → known
     install locations) the WorkerEngine and every helper spawn already use —
@@ -607,7 +607,7 @@ def test_engine_autodetect_offpath_claude_resolves_to_claude_code() -> None:
     Hermetic proof: a working fake ``claude`` is placed at an OFF-PATH location
     and registered via ``CORVIN_CLAUDE_BIN_FALLBACKS`` (production: the built-in
     ``~/.local/bin/claude``). ANY regression that re-introduces the bare
-    ``which()`` probe reports claude missing (ADR-2087 setup notice) and fails
+    ``which()`` probe reports claude missing (ADR-2091 setup notice) and fails
     this test loudly.
     """
     _section(

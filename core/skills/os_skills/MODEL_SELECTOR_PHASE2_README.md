@@ -6,7 +6,7 @@
 
 **Scope:** Weeks 3–5, ~800 LoC + 65 Tests
 
-> **Amendment (ADR-2087):** local Ollama inference was removed. No complexity
+> **Amendment (ADR-2091):** local Ollama inference was removed. No complexity
 > tier routes to a local model any more; the SIMPLE tier's cheapest provider is
 > OpenRouter. Hosted Ollama Cloud remains a remote provider. The local-Ollama
 > examples that used to be in this file were deleted.

@@ -8,7 +8,7 @@
 
 ## Quick Summary
 
-Refactor the engine configuration console from static "Cloud Code" → dynamic "Model Selection Skill" that classifies tasks (SIMPLE/MEDIUM/COMPLEX) and routes to the best model (Haiku/Sonnet/Opus/Fable + external providers: Ollama Cloud/OpenRouter/OpenAI — local Ollama inference was removed by ADR-2087). The system learns autonomously via feedback loop (ADR-0314).
+Refactor the engine configuration console from static "Cloud Code" → dynamic "Model Selection Skill" that classifies tasks (SIMPLE/MEDIUM/COMPLEX) and routes to the best model (Haiku/Sonnet/Opus/Fable + external providers: Ollama Cloud/OpenRouter/OpenAI — local Ollama inference was removed by ADR-2091). The system learns autonomously via feedback loop (ADR-0314).
 
 **Timeline:** 8–10 weeks | **Phases:** 3 | **Effort:** ~1,800 LoC | **Tests:** 200
 
@@ -94,7 +94,7 @@ Refactor the engine configuration console from static "Cloud Code" → dynamic "
 
 **Tasks:**
 - [ ] Provider factory pattern: `core/models/external_providers/__init__.py`
-- [ ] OllamaClient: `ollama_client.py` — **remote Ollama Cloud only** (`ollama_cloud`); no local Ollama server (ADR-2087)
+- [ ] OllamaClient: `ollama_client.py` — **remote Ollama Cloud only** (`ollama_cloud`); no local Ollama server (ADR-2091)
   - POST to /api/generate
   - Health checks
   - Timeout + retry (30s timeout, retry once)

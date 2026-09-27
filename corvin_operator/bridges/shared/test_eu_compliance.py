@@ -473,7 +473,7 @@ class TestPresetsLoadCleanly(unittest.TestCase):
     """Lift gate: both shipped EU_PRODUCTION presets parse without error."""
 
     def test_ollama_preset_removed(self):
-        # ADR-2087: the local-Ollama EU preset is no longer shipped.
+        # ADR-2091: the local-Ollama EU preset is no longer shipped.
         self.assertFalse((_PRESETS_DIR / "tenant.corvin.eu-production-ollama.yaml").exists())
 
     def test_http_preset_loads(self):

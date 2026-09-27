@@ -283,7 +283,7 @@ class TestCapabilityMatrixE2E:
             assert matrix.validate_all() is True
 
     def test_removed_hermes_engine_absent_from_matrix(self):
-        """ADR-2087: Hermes (local Ollama) is gone from the canonical matrix."""
+        """ADR-2091: Hermes (local Ollama) is gone from the canonical matrix."""
         assert "hermes" not in CANONICAL_CAPABILITY_MATRIX
         assert set(CANONICAL_CAPABILITY_MATRIX) == {
             "claude_code", "codex", "opencode", "copilot",

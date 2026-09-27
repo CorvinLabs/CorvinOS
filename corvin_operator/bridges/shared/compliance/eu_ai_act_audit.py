@@ -428,7 +428,7 @@ class ComplianceAuditor:
             from egress_gate import EgressGate
 
             # Check EU_PRODUCTION presets. The local-Ollama preset was removed
-            # by ADR-2087; the HTTP preset is the shipped EU_PRODUCTION one.
+            # by ADR-2091; the HTTP preset is the shipped EU_PRODUCTION one.
             import os
             eu_preset_file = str(_REPO_ROOT / "corvin_operator" / "bundle" / "config-templates" / "tenant.corvin.eu-production-http.yaml")
             if not os.path.exists(eu_preset_file):

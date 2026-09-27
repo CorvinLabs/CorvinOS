@@ -378,7 +378,7 @@ class GatewayComputeQuotaTests(unittest.TestCase):
 
         The pool is spent by charging the counter DIRECTLY, not by driving `limit` real
         dispatches. Every dispatch runs the L44 house-rules gate, which adjudicates the
-        prompt with an LLM (then a local Ollama, removed by ADR-2087) — driving 10 made this
+        prompt with an LLM (then a local Ollama, removed by ADR-2091) — driving 10 made this
         single test issue 10 LLM calls and saturated that shared resource for the whole
         run-all-tests.sh suite (measured: unrelated gateway, completion-E2E and Node
         E2E suites started timing out, 3 failures -> 9). What this test is actually

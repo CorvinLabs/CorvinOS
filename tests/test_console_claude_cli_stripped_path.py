@@ -71,7 +71,7 @@ def _fake_cli(path: Path) -> Path:
 ])
 def test_console_resolves_cli_off_service_path(tmp_path: Path, rel: str) -> None:
     fake = _fake_cli(tmp_path / rel)
-    # A signed-in CLI: since ADR-2087 the guard also reports an unauthenticated
+    # A signed-in CLI: since ADR-2091 the guard also reports an unauthenticated
     # claude (there is no fallback engine), so the fake HOME carries a session.
     creds = tmp_path / ".claude" / ".credentials.json"
     creds.parent.mkdir(parents=True, exist_ok=True)

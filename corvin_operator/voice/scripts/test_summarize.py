@@ -24,7 +24,7 @@ import summarize  # noqa: E402
 @pytest.fixture(autouse=True)
 def _isolated_tenant(monkeypatch, tmp_path):
     """summarize._summary_cloud_permitted() reads the tenant's egress policy
-    (ADR-2087). Isolate from the host's real ~/.corvin so a locked-down dev
+    (ADR-2091). Isolate from the host's real ~/.corvin so a locked-down dev
     box does not silently turn every CLI test into a structural one."""
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin_home"))
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
@@ -417,7 +417,7 @@ def test_naive_truncate_dash_bullets_recognised() -> None:
 
 
 def test_no_local_backend_after_cli_unavailable() -> None:
-    """ADR-2087: the local Hermes/Ollama backend is gone — when the CLI is
+    """ADR-2091: the local Hermes/Ollama backend is gone — when the CLI is
     unavailable summarize() goes straight to the structural fallback."""
     from unittest.mock import patch
     assert not hasattr(summarize, "_summarize_via_hermes")
@@ -541,7 +541,7 @@ def test_summarize_via_cli_oserror_falls_back_to_structural(monkeypatch) -> None
 def test_session_recap_cli_oserror_returns_empty(monkeypatch) -> None:
     """Same OSError gap on the session-recap CLI path — the transcript is
     the payload MOST likely to hit E2BIG (whole-session argv). No local
-    fallback exists any more (ADR-2087): the recap is "" (→ console 204)."""
+    fallback exists any more (ADR-2091): the recap is "" (→ console 204)."""
     monkeypatch.setattr(summarize.shutil, "which", lambda _: "/usr/bin/claude")
     monkeypatch.setattr(summarize, "_claude_authenticated", lambda: True)
 
@@ -677,7 +677,7 @@ def test_summarize_via_cli_skips_when_unauthenticated(monkeypatch) -> None:
 
 
 def test_appendix_returns_empty_when_cli_unavailable() -> None:
-    """ADR-2087: no local annex backend — CLI unavailable → "" (verbatim input
+    """ADR-2091: no local annex backend — CLI unavailable → "" (verbatim input
     is spoken without an annex; silence is not a failure mode)."""
     from unittest.mock import patch
     assert not hasattr(summarize, "_appendix_via_hermes")
@@ -701,7 +701,7 @@ def test_metapher_returns_empty_when_cli_unavailable() -> None:
 
 def test_voice_summary_timeout_budgets_fit_parent_caps() -> None:
     """The CLI backend runs inside the adapter's subprocess cap. Require a
-    >=10s margin for spawn + extract (ADR-2087: no second LLM stage)."""
+    >=10s margin for spawn + extract (ADR-2091: no second LLM stage)."""
     assert summarize._SUMMARY_CLI_TIMEOUT_S + 10 <= summarize._PARENT_CAP_MAIN_S
     assert summarize._ANNEX_CLI_TIMEOUT_S + 10 <= summarize._PARENT_CAP_ANNEX_S
     for gone in ("_SUMMARY_HERMES_TIMEOUT_S", "_ANNEX_HERMES_TIMEOUT_S",
@@ -1107,11 +1107,11 @@ def test_cap_to_budget_returns_at_least_one_unit_when_first_sentence_overruns() 
 
 
 def test_prewarm_is_gone() -> None:
-    """ADR-2087: the local-model prewarm is removed; --prewarm is a no-op."""
+    """ADR-2091: the local-model prewarm is removed; --prewarm is a no-op."""
     assert not hasattr(summarize, "prewarm_summary_model")
 
 # ---------------------------------------------------------------------------
-# ADR-2087 — local-only tenants never reach the cloud CLI backend.
+# ADR-2091 — local-only tenants never reach the cloud CLI backend.
 # ---------------------------------------------------------------------------
 
 _DENY_CLOUD = (

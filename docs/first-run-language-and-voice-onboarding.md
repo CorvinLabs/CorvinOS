@@ -95,7 +95,7 @@ Bridges, which already used the same shared endpoints independently of this
 wizard. The section below is kept as a historical design record — its
 described UI no longer exists. Its references to Hermes, Ollama and
 `ensure_hermes_ready()` are historical as well: the Hermes engine and all local
-Ollama inference were removed by ADR-2087, and the L44 boot health check no
+Ollama inference were removed by ADR-2091, and the L44 boot health check no
 longer probes Ollama.
 
 ### Current state (verified in code)

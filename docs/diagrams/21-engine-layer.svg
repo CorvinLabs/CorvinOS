@@ -4,7 +4,7 @@
   <desc>Four WorkerEngine implementations share the WorkerEngine Protocol. Corvin adapts
   capabilities per engine: ClaudeCode (native full set), Codex/OpenCode (TEB-bridged),
   CopilotCliEngine (worker-only, TEB-bridged, /btw=None,
-  L34=us_cloud, ADR-0071). HermesEngine (local Ollama) was removed by ADR-2087. ADR-0069 EAOS ensures all engines receive L10/L16/L33
+  L34=us_cloud, ADR-0071). HermesEngine (local Ollama) was removed by ADR-2091. ADR-0069 EAOS ensures all engines receive L10/L16/L33
   guarantees through the Tool Execution Broker in the Forge MCP server.</desc>
 
   <defs>

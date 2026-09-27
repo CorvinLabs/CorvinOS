@@ -128,7 +128,7 @@ def check_l34(
 
     The engine is validated under the id it actually runs as. The former
     ``cc_local_mode`` remap (``claude_code`` → ``claude_code_local``, the
-    ADR-0126 Ollama redirect) was removed with ADR-2087: a stale caller that
+    ADR-0126 Ollama redirect) was removed with ADR-2091: a stale caller that
     still passes it gets a ``TypeError`` (refused by the caller's fail-closed
     wrapper), never a silently different locality.
 
@@ -307,7 +307,7 @@ def check_l44(
     per-tenant forge writer) BEFORE this returns, so the deny/escalate event
     lands on the chain before the refusal string.
 
-    A ``floor_only`` tenant (ADR-2087 — egress denies the cloud classifier
+    A ``floor_only`` tenant (ADR-2091 — egress denies the cloud classifier
     host) spawns no classifier at all: a deny-pattern match denies, every
     other task escalates (operator-approval wording), audited
     ``house_rules.floor_only`` + ``house_rules.{denied,escalated}``.
@@ -486,7 +486,7 @@ def check_l44_floor(
     Tier-0 verdict INSTANTLY (regex over the prohibited-class patterns; military
     / offensive-cyber / disinformation still MATCH and BLOCK, a task matching no
     rule reaches the policy default). No classifier spawn, so it can never
-    hang. (This is the classifier-TIMEOUT fallback; it is not the ADR-2087
+    hang. (This is the classifier-TIMEOUT fallback; it is not the ADR-2091
     ``floor_only`` order, whose unmatched tasks escalate — see check_l44.)
 
     This is the exact degradation ``check_l44`` already documents for a

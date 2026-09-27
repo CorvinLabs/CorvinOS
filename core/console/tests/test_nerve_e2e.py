@@ -194,7 +194,7 @@ class TestEngineFiberCloudCode(unittest.TestCase):
 # ── Engine-Fiber: no engine available ────────────────────────────────────────
 
 class TestEngineFiberNoEngine(unittest.TestCase):
-    """EngineFiber ohne claude-Binary (kein Fallback-Engine mehr, ADR-2087)."""
+    """EngineFiber ohne claude-Binary (kein Fallback-Engine mehr, ADR-2091)."""
 
     def test_engine_fiber_handles_no_engine_available(self):
         """EngineFiber läuft durch wenn claude nicht verfügbar ist."""

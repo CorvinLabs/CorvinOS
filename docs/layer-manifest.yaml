@@ -260,7 +260,7 @@ layers:
 
   - id: L22
     name: "WorkerEngine Protocol"
-    description: "Four worker engines: ClaudeCode, Copilot, Codex, OpenCode (Hermes removed, ADR-2087)."
+    description: "Four worker engines: ClaudeCode, Copilot, Codex, OpenCode (Hermes removed, ADR-2091)."
     doc_files:
       - "docs/claude-ref/layer-22-worker-engines.md"
       - "docs/claude-ref/layer-22-task-engine-m2.md"

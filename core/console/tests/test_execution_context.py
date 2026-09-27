@@ -39,7 +39,7 @@ class TestModelSourceDetection:
         assert detect_model_source("CLAUDE-2") == ModelSource.CLAUDE
 
     def test_local_ollama_and_hermes_names_are_not_classified(self):
-        """ADR-2087: nothing classifies a NEW turn as local Ollama / Hermes."""
+        """ADR-2091: nothing classifies a NEW turn as local Ollama / Hermes."""
         for name in ("ollama:mistral", "ollama/mistral", "OLLAMA:llama2",
                      "hermes-local-3", "Hermes-2-Pro"):
             assert detect_model_source(name) == ModelSource.UNKNOWN, name
@@ -106,7 +106,7 @@ class TestEngineDetection:
         assert detect_engine({"delegation_mode": "tde"}) == EngineId.TDE
 
     def test_hermes_engine_is_not_detected(self):
-        """ADR-2087: runtime state never classifies as Hermes any more."""
+        """ADR-2091: runtime state never classifies as Hermes any more."""
         assert detect_engine({"engine_id": "hermes"}) == EngineId.UNKNOWN
         assert detect_engine({"spawn_via": "http"}) == EngineId.UNKNOWN
 

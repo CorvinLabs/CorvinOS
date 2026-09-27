@@ -58,7 +58,7 @@ class TestTestCaseTier1:
 
         assert len(tc.engine_ids) == 4
         assert set(tc.engine_ids) == {"claude_code", "codex", "opencode", "copilot"}
-        assert "hermes" not in tc.engine_ids  # removed (ADR-2087)
+        assert "hermes" not in tc.engine_ids  # removed (ADR-2091)
 
     def test_tier_classification_valid(self):
         """

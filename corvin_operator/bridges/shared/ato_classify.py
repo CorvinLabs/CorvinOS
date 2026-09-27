@@ -49,7 +49,7 @@ _QUESTION_START = re.compile(
     re.I,
 )
 
-# Data-classification values that require a local engine. ADR-2087 removed the
+# Data-classification values that require a local engine. ADR-2091 removed the
 # only bundled local engine (Hermes), so these classes produce an explicit L34
 # refusal (``DELEGATION_L34_BLOCK``) — they must NEVER fall through to a cloud
 # engine such as claude_code.

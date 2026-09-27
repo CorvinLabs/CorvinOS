@@ -1,4 +1,4 @@
-"""ADR-2087 — L44 house-rules classifier order ``floor_only``.
+"""ADR-2091 — L44 house-rules classifier order ``floor_only``.
 
 A tenant whose egress policy does not admit ``api.anthropic.com`` must not have
 task text sent to the cloud classifier (a ``claude -p`` subprocess the L35 gate

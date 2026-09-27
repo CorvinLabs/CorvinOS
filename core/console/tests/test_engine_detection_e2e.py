@@ -1,7 +1,7 @@
 """E2E tests for engine detection — all 4 registered engines + timeout scenarios.
 
 Tests the complete detection pipeline:
-1. Binary discovery (Claude, OpenCode, Codex, Copilot) — Hermes removed (ADR-2087)
+1. Binary discovery (Claude, OpenCode, Codex, Copilot) — Hermes removed (ADR-2091)
 2. Authentication detection (subscription, env_var, config_file, none)
 3. Timeout resilience (simulate slow probes)
 4. API integration (route returns correct response)
@@ -43,7 +43,7 @@ class TestAllFourEngines(unittest.TestCase):
                         f"Missing engines: {expected - ids}")
 
     def test_hermes_is_no_longer_probed(self):
-        """ADR-2087: no local-Ollama engine is detected or offered."""
+        """ADR-2091: no local-Ollama engine is detected or offered."""
         ids = {r.engine_id for r in detect_all()}
         self.assertNotIn("hermes", ids)
 

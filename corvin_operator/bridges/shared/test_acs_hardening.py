@@ -214,7 +214,7 @@ def test_m9_engine_locality_claude_is_us_cloud():
 
 
 def test_m9_engine_locality_removed_hermes_is_not_local():
-    # ADR-2087: Hermes was removed; the id no longer claims local locality.
+    # ADR-2091: Hermes was removed; the id no longer claims local locality.
     assert _rt._engine_locality("hermes") == "us_cloud"
 
 

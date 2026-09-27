@@ -9,7 +9,7 @@
 | **Python** | not required up front — the installer bootstraps its own via `uv` (3.10+ if you install manually) |
 | **OS** | Linux (Ubuntu 22.04+ recommended), macOS 12+ (Monterey), Windows 10 build 19041+ or Windows 11 |
 | **Disk** | ~1–2 GB (CorvinOS plus the Whisper STT + Piper TTS voice models) |
-| **RAM** | 4 GB minimum. CorvinOS runs no local LLM inference (ADR-2087); the AI engine is Claude Code, which runs against the Anthropic API. |
+| **RAM** | 4 GB minimum. CorvinOS runs no local LLM inference (ADR-2091); the AI engine is Claude Code, which runs against the Anthropic API. |
 
 > **Bridges only** (Discord, WhatsApp, Telegram, Slack, Email) additionally require Node.js 20+
 > and systemd (Linux) or launchd (macOS). On Windows, bridges require WSL2.
@@ -48,7 +48,7 @@ Both one-liners bootstrap the `uv` runtime (which brings its own Python — no s
 package manager needed), then `uv tool install corvinos` into an isolated tool environment and add
 it to your PATH. They also install the Claude Code CLI (skip with `--no-claude-code`) and provision
 the voice (STT + TTS) models so the install is voice-ready out of the box. No local LLM model is
-downloaded — local Ollama inference was removed in ADR-2087.
+downloaded — local Ollama inference was removed in ADR-2091.
 
 What the one-liners download, and how it is verified:
 

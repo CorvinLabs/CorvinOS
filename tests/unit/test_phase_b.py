@@ -47,7 +47,7 @@ class TestRouter:
         """Router initializes with all providers."""
         router = ModelRouter()
         assert "openai" in router.providers
-        assert "ollama" not in router.providers  # local Ollama removed (ADR-2087)
+        assert "ollama" not in router.providers  # local Ollama removed (ADR-2091)
         assert "openrouter" in router.providers
 
     def test_router_cost_tracking(self):

@@ -1,4 +1,4 @@
-"""ADR-2087 — the quality LLM bridge has no local-Ollama provider any more."""
+"""ADR-2091 — the quality LLM bridge has no local-Ollama provider any more."""
 from __future__ import annotations
 
 import urllib.request

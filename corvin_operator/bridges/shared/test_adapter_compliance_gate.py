@@ -137,7 +137,7 @@ spec:
                 persona="coder", channel="discord", chat_key="dm:42",
             )
             # opencode_http is locality=local in DEFAULT_ENGINE_COMPLIANCE
-            # (opencode_ollama was removed by ADR-2087)
+            # (opencode_ollama was removed by ADR-2091)
             self.assertIsNone(msg)
 
 

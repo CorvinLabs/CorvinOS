@@ -37,7 +37,7 @@ def test_house_rules_gate_with_real_haiku_classifier(tmp_path, monkeypatch):
     monkeypatch.setenv("CORVIN_AUDIT_ANCHOR_KEY", str(tmp_path / "anchor.key"))
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
     # The CLOUD classifier (real claude -p haiku) — the only classifier since
-    # ADR-2087; ``cloud_only`` resolves to the computed order (never loosens it).
+    # ADR-2091; ``cloud_only`` resolves to the computed order (never loosens it).
     monkeypatch.setenv("CORVIN_HOUSE_RULES_CLASSIFIER_ORDER", "cloud_only")
     from forge import security_events as se
     monkeypatch.setattr(se, "_ANCHOR_KEY", None)

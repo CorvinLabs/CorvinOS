@@ -128,7 +128,7 @@ class WorkerEngine(Protocol):
 Four implementations ship today: `ClaudeCodeEngine` (default),
 `CodexCliEngine`, `OpenCodeEngine`, and `CopilotCliEngine`
 (GitHub Copilot CLI, worker-only). The local `HermesEngine` (Ollama) was
-removed in ADR-2087; a stored `hermes` engine id is read as `claude_code`.
+removed in ADR-2091; a stored `hermes` engine id is read as `claude_code`.
 The adapter dispatches per call based on `profile.default_engine`.
 
 **EAOS — engine-agnostic guarantees:** Every engine now

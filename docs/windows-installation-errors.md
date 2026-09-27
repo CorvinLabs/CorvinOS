@@ -68,7 +68,7 @@ python -c "import httpcore; import httpx; print(f'httpcore: {httpcore.__version_
 ## ℹ️ Removed — Ollama Not in Windows Autostart
 
 This category no longer applies. CorvinOS does not use a local Ollama server
-since ADR-2087 (the Hermes engine and all local inference were removed), so
+since ADR-2091 (the Hermes engine and all local inference were removed), so
 `corvin serve` neither starts nor waits for Ollama. An `Ollama-Autostart`
 scheduled task left over from an older install is not used by CorvinOS and can
 be deleted (`Unregister-ScheduledTask -TaskName Ollama-Autostart`).

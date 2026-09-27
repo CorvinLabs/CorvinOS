@@ -182,7 +182,7 @@ rarely in normal use, and stops those credentials from egressing — a security
 *floor*, not a residency policy. See ADR-0042 (and the opt-in amendment) for the
 rationale.
 
-**Which bundled engine can take CONFIDENTIAL / SECRET (ADR-2087).** The local
+**Which bundled engine can take CONFIDENTIAL / SECRET (ADR-2091).** The local
 inference engines `hermes`, `opencode_ollama` and `claude_code_local` were
 removed from `DEFAULT_ENGINE_COMPLIANCE`; `validate` now refuses those ids as
 `unknown_engine`. Consequences under the default matrix:
@@ -346,7 +346,7 @@ ships + tests in isolation from the adapter wiring.
   default is a deliberate compliance decision (F-A10, ADR-0042 amendment).
 * Don't re-add a bundled engine to `DEFAULT_ENGINE_COMPLIANCE` as `local` to
   "unblock" CONFIDENTIAL/SECRET — a tenant declares its own engine under
-  `engine_compliance` (ADR-2087).
+  `engine_compliance` (ADR-2091).
 * Don't fail-open the gate on error: unknown engine / unparseable config must
   still enforce the DEFAULT matrix (which keeps the SECRET floor), never
   allow-all.
@@ -369,7 +369,7 @@ python3 corvin_operator/bridges/shared/test_data_classification.py
 
 * Enum ordering and parsing
 * Default registry shape (claude=us_cloud, opencode_http=local,
-  opencode=unknown; the ADR-2087-removed ids are absent)
+  opencode=unknown; the ADR-2091-removed ids are absent)
 * Matrix core (PUBLIC/INTERNAL allow us_cloud; CONFIDENTIAL is local/eu_cloud
   only; SECRET stays local + requires egress=none)
 * Opt-in tightening (operator matrix override blocks us_cloud per tier)

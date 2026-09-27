@@ -7,7 +7,7 @@
 
 ---
 
-> **Amendment (2026-09-27, ADR-2087):** Hermes and all local Ollama inference were removed. `hermes_bridge.py` and `test_phase3d_hermes_events.py` no longer exist; the deterministic fallback heuristic now lives in `recovery_heuristics.py` (tests: `tests/test_recovery_heuristics.py`) and is the only diagnosis path — no model call, no network. The Hermes references below are historical.
+> **Amendment (2026-09-27, ADR-2091):** Hermes and all local Ollama inference were removed. `hermes_bridge.py` and `test_phase3d_hermes_events.py` no longer exist; the deterministic fallback heuristic now lives in `recovery_heuristics.py` (tests: `tests/test_recovery_heuristics.py`) and is the only diagnosis path — no model call, no network. The Hermes references below are historical.
 
 ## PHASE 1: CORE SUBSYSTEMS (COMPLETE ✅)
 

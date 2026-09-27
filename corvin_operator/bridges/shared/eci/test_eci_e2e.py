@@ -3,7 +3,7 @@
 Coverage:
   1.  EngineCommandManifest present on all engines.
   2.  ClaudeCode: mid_stream_inject="stdin_json", cancel="sigterm".
-  3.  (removed with Hermes, ADR-2087)
+  3.  (removed with Hermes, ADR-2091)
   4.  Codex: mid_stream_inject=None.
   5.  OpenCode: mid_stream_inject=None, has model native cmd.
   6.  dispatch_btw / stdin_json → calls engine.inject(), returns success.
@@ -12,7 +12,7 @@ Coverage:
   9.  dispatch_native / valid cmd → calls handler_method on engine.
   10. dispatch_native / unknown cmd → returns success=False.
   11. format_commands output contains engine name and transport labels.
-  12-15. (removed with Hermes, ADR-2087)
+  12-15. (removed with Hermes, ADR-2091)
   16. OpenCode eci_set_model sets _override_model / rejects empty args.
   17. AST lint: no `import anthropic` in eci package.
   18. drain_btw_buffer in adapter returns joined text, empties buffer.

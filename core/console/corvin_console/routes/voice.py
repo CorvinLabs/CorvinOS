@@ -819,7 +819,7 @@ def _cut_at_sentence_boundary(text: str, limit: int,
     return cut
 # summarize.py's OWN internal budget is the CLI stage (90s, see summarize.py's
 # _SUMMARY_CLI_TIMEOUT_S) followed by the in-process structural fallback; the
-# local Hermes stage was removed (ADR-2087). The wrapper keeps its 150s cap: a
+# local Hermes stage was removed (ADR-2091). The wrapper keeps its 150s cap: a
 # shorter one would cut off a legitimate in-progress CLI attempt before
 # summarize.py's own fallback chain runs, and the value
 # matches adapter.py::build_voice_summary's identical 150s parent-cap

@@ -448,7 +448,7 @@ subprocess, parses the streaming output into normalised `StreamEvent`s
 `error`), and declares its capabilities (`mid_stream_inject`, `hooks`,
 `skills_tool`, `mcp`, `permission_modes`).
 
-In-tree today: `ClaudeCodeEngine`, `CodexCliEngine`, `OpenCodeEngine`, `CopilotCliEngine`. (The local `HermesEngine` on Ollama was removed in ADR-2087; zero-egress execution now needs an operator-written engine or a self-hosted `opencode_http` server.)
+In-tree today: `ClaudeCodeEngine`, `CodexCliEngine`, `OpenCodeEngine`, `CopilotCliEngine`. (The local `HermesEngine` on Ollama was removed in ADR-2091; zero-egress execution now needs an operator-written engine or a self-hosted `opencode_http` server.)
 Operator-written adapters in the field: AWS Bedrock CLI, vLLM
 streaming, Azure OpenAI streaming, internal model gateways. New
 adapter ≈ 200 LOC + one capability declaration + a per-subtask E2E

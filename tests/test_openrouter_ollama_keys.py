@@ -247,7 +247,7 @@ def test_build_spawn_env_auto_starts_local_proxy_when_no_proxy_base_url_configur
             except Exception as e:  # noqa: BLE001
                 pytest.skip(f"adapter/bridge import unavailable: {e}")
 
-            # ADR-2087: was an ollama_local spec; the local provider is gone,
+            # ADR-2091: was an ollama_local spec; the local provider is gone,
             # the auto-proxy path is exercised through openrouter instead.
             class _FakeOpenRouterSpec:
                 proxy_base_url = ""  # no operator override — must auto-start

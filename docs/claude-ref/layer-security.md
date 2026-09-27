@@ -386,8 +386,8 @@ debugging. The event type is `console.execution_context`.
 
 **Metadata only** — no PII, no prompt text, no user content. Per GDPR Art. 5
 data minimisation, the audit chain captures only:
-- `engine_id`: Which engine executed the turn (claude_code | acs | tde; `hermes` is a historical, parse-only value since ADR-2087)
-- `model_source`: Model provider (claude | openrouter; `ollama`/`hermes` are historical, parse-only values since ADR-2087)
+- `engine_id`: Which engine executed the turn (claude_code | acs | tde; `hermes` is a historical, parse-only value since ADR-2091)
+- `model_source`: Model provider (claude | openrouter; `ollama`/`hermes` are historical, parse-only values since ADR-2091)
 - `model_name`: Normalized model name (stripped of timestamps)
 - `delegation_mode`: How the turn was routed (native | acs | tde | fallback)
 - `acs_run_id`, `tde_router_decision`: Delegation correlation IDs (optional)

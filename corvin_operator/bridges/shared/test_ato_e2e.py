@@ -486,7 +486,7 @@ CASES: list[Case] = [
          "one_shot",
          data_classification="CONFIDENTIAL",
          expected_delegation="l34_block",
-         note="M5: CONFIDENTIAL → L34 refusal even for one_shot task (ADR-2087)"),
+         note="M5: CONFIDENTIAL → L34 refusal even for one_shot task (ADR-2091)"),
 
     Case("m5_02_secret_question",
          "What is the current API key rotation policy?",

@@ -1,4 +1,4 @@
-"""ADR-2087: removed engine ids (Hermes / local Ollama) are mapped, never rejected.
+"""ADR-2091: removed engine ids (Hermes / local Ollama) are mapped, never rejected.
 
 ``engine_registry.normalize_legacy_engine_id`` is the one shared helper the
 bridge and the console both use to read a stored ``default_engine`` /

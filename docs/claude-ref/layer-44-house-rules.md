@@ -190,10 +190,10 @@ This adds the LIP integrity pin on top of the committed-anchor check.
 - `escalate` currently blocks with an "operator approval required" message; the
   approval routing through the L21 proposal channel is ADR-0143 M3.
 
-### Classifier order — `cloud_only` / `floor_only` (ADR-0161, ADR-2087)
+### Classifier order — `cloud_only` / `floor_only` (ADR-0161, ADR-2091)
 
 The Tier-1 classifier used to be a two-provider chain (local Hermes/Ollama +
-cloud Haiku, orders `cloud_first` / `local_first` / `local_only`). ADR-2087
+cloud Haiku, orders `cloud_first` / `local_first` / `local_only`). ADR-2091
 removed all local Ollama inference, so exactly **two orders** remain, resolved
 once per task by `_house_rules_resolve_order(tenant_id)`:
 
@@ -233,7 +233,7 @@ force `floor_only`. Any other value — `cloud_only`, `auto`, the removed
 `local_first` / `local_only` / `cloud_first`, or garbage — resolves to the
 computed order, so it can never re-open the cloud path for an egress-denied
 tenant. An explicit `order=` passed by a caller is likewise re-resolved unless it
-is `floor_only`. Removed by ADR-2087: `CORVIN_HOUSE_RULES_DISABLE_HERMES`,
+is `floor_only`. Removed by ADR-2091: `CORVIN_HOUSE_RULES_DISABLE_HERMES`,
 `CORVIN_HOUSE_RULES_HERMES_TIMEOUT_S`, `CORVIN_HOUSE_RULES_KEEP_ALIVE`,
 `CORVIN_HOUSE_RULES_MODEL`. `house_rules.provider_fallback` is no longer emitted
 (its `EVENT_SEVERITY` entry stays so historical records keep their severity).
@@ -323,7 +323,7 @@ NOT mean allow — that was the original M2 bug, review R-1).
 `proactive._house_rules_allows()` (F-A19, 2026-09-07) builds the gate with the
 same Tier-1 semantic classifier the inbound bridge path wires
 (`house_rules._house_rules_classifier`, `cloud_only` / `floor_only` per
-tenant, ADR-2087) and the tenant overlay. Before, proactive text was checked by the
+tenant, ADR-2091) and the tenant overlay. Before, proactive text was checked by the
 Tier-0 regex floor only. Still fail-closed: a gate that cannot run denies.
 
 ## Tenant overlay

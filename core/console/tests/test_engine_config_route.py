@@ -133,7 +133,7 @@ class EngineConfigRouteTests(unittest.TestCase):
         self.assertIn("OPENROUTER_API_KEY", warnings[0])
 
     def test_put_removed_local_provider_is_rejected(self) -> None:
-        """ADR-2087 removed local-Ollama inference: ``ollama_local`` is no
+        """ADR-2091 removed local-Ollama inference: ``ollama_local`` is no
         longer a registered provider, so a pin to it is refused like any
         unknown provider rather than silently accepted."""
         r = self._client().put(
@@ -149,7 +149,7 @@ class EngineConfigRouteTests(unittest.TestCase):
 
     def test_get_maps_stored_legacy_hermes_engine_to_claude_code(self) -> None:
         """A tenant YAML still carrying ``default_engine: hermes`` reads back as
-        claude_code (mapped on read, never rejected — ADR-2087)."""
+        claude_code (mapped on read, never rejected — ADR-2091)."""
         cfg = Path(self._tmp.name) / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
         cfg.parent.mkdir(parents=True, exist_ok=True)
         cfg.write_text("spec:\n  default_engine: hermes\n  hermes_model: qwen3:8b\n")

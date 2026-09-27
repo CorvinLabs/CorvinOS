@@ -97,7 +97,7 @@ def _fresh_adapter(env_overrides: dict):
     # These tests monkeypatch adapter.subprocess.Popen to capture/short-circuit
     # the ClaudeCode spawn. Without a real `claude` CLI on PATH (every CI
     # runner), the engine must still be pinned explicitly so the tests do not
-    # depend on auto-detect (which, before ADR-2087, fell back to a local
+    # depend on auto-detect (which, before ADR-2091, fell back to a local
     # Hermes/Ollama engine and timed out instead of reaching this spawn).
     os.environ["CORVIN_OS_ENGINE"] = "claude_code"
     # voice_audience_learning defaults to 3 on a fresh profile (profile.py

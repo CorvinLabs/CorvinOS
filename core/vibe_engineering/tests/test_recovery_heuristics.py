@@ -1,4 +1,4 @@
-"""ADR-2087 — the VibeEngine's recovery diagnosis is a deterministic heuristic
+"""ADR-2091 — the VibeEngine's recovery diagnosis is a deterministic heuristic
 (the Hermes-Healing bridge was removed); behaviour carried over unchanged."""
 import importlib.util
 

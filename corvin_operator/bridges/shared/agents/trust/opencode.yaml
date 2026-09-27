@@ -17,7 +17,7 @@ spec:
     OpenCode is provider-agnostic — refusal behaviour depends on
     the chosen backend. The 2025-q4 evaluation ran against a small
     open-weight model (see evaluated_against; the local-Ollama
-    backend itself was removed by ADR-2087), whose refusal training
+    backend itself was removed by ADR-2091), whose refusal training
     is much weaker than Claude/GPT-4. Trust tier "low" is the honest
     default.
 

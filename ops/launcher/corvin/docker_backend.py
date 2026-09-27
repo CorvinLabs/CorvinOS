@@ -91,7 +91,7 @@ def _build_run_cmd(
         "-e", "CORVIN_GATEWAY_ENABLED=true",
         "-v", f"{data_dir}:/home/corvin",
         # Port mapping for the WebUI console. (Host networking was only used
-        # to reach a local Ollama server, removed by ADR-2087.)
+        # to reach a local Ollama server, removed by ADR-2091.)
         "-p", f"{console_port}:{CONSOLE_PORT}",
     ]
 

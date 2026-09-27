@@ -2,7 +2,7 @@
 
 Runs at every Boot-Healer cycle BEFORE the session scan.  Checks:
   1. Chat Engine — is the configured engine actually usable?  There is no
-     fallback engine: Hermes / local Ollama were removed (ADR-2087), and a
+     fallback engine: Hermes / local Ollama were removed (ADR-2091), and a
      stored legacy engine id reads as ``claude_code``.
   2. TTS — is edge-tts importable?  If not, install it silently.  edge-tts
      requires no API key and no local model — it is the universal TTS fallback.
@@ -59,7 +59,7 @@ class EngineHealResult:
 def _configured_engine(tenant_id: str) -> str:
     """Read the tenant's configured default_engine from tenant.corvin.yaml.
 
-    A removed legacy engine (ADR-2087: hermes / local Ollama) maps to
+    A removed legacy engine (ADR-2091: hermes / local Ollama) maps to
     ``claude_code`` through the shared ``engine_registry`` helper."""
     try:
         from forge import paths as _fp
@@ -115,7 +115,7 @@ def _claude_binary_ok() -> bool:
 def check_engine_readiness(tenant_id: str) -> tuple[bool, str, str]:
     """Check if the configured engine is ready.  Returns (ok, engine_id, action).
 
-    No automatic engine fallback (ADR-2087): a missing claude binary is
+    No automatic engine fallback (ADR-2091): a missing claude binary is
     reported, never papered over by switching engines."""
     engine = _configured_engine(tenant_id)
     if _claude_binary_ok():

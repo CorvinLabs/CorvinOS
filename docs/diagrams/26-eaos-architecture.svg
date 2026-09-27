@@ -4,7 +4,7 @@
   <desc>ADR-0069 EAOS full architecture. Top: four engines. Middle: ECI layer (EngineCommandManifest,
   CommandDispatcher, SkillCompiler). Bottom: Adapter routes to Forge MCP Server where Tool Execution
   Broker enforces L10 path-gate, L16 audit, and L33 artifact registration for every tool call,
-  regardless of engine. The Function-Call Bridge (FCB) is a pure MCP ↔ OpenAI-format translation module; since ADR-2087 removed HermesEngine no bundled engine calls it.
+  regardless of engine. The Function-Call Bridge (FCB) is a pure MCP ↔ OpenAI-format translation module; since ADR-2091 removed HermesEngine no bundled engine calls it.
   CopilotCliEngine (ADR-0071) is worker-only, /btw=None, locality=us_cloud.</desc>
 
   <defs>

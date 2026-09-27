@@ -144,7 +144,7 @@ _ENGINE_BUILDERS: dict[str, Callable[[], Any | None]] = {
 DEFAULT_ENGINE_ID = "claude_code"
 
 
-# ADR-2087: Hermes and every local-Ollama engine were removed. Stored config on
+# ADR-2091: Hermes and every local-Ollama engine were removed. Stored config on
 # existing installs (``default_engine``, ``worker_engine``, per-chat pins,
 # ``/engine`` arguments) is MAPPED on read, never rejected — rejecting would
 # turn a leftover config value into a chat that cannot start.
@@ -161,7 +161,7 @@ _legacy_warned: set[str] = set()
 
 
 def is_legacy_engine_id(engine_id: str | None) -> bool:
-    """True when ``engine_id`` names an engine removed by ADR-2087."""
+    """True when ``engine_id`` names an engine removed by ADR-2091."""
     if not isinstance(engine_id, str):
         return False
     v = engine_id.strip().lower()
@@ -169,7 +169,7 @@ def is_legacy_engine_id(engine_id: str | None) -> bool:
 
 
 def normalize_legacy_engine_id(engine_id: str | None) -> str | None:
-    """Map a removed (ADR-2087) engine id to ``claude_code``.
+    """Map a removed (ADR-2091) engine id to ``claude_code``.
 
     ``hermes``, ``hermes-*``, ``local``, ``local-hermes``, ``ollama``,
     ``opencode_ollama``, ``claude_code_local`` and ``hermes_engine``
@@ -184,7 +184,7 @@ def normalize_legacy_engine_id(engine_id: str | None) -> str | None:
     if key not in _legacy_warned:
         _legacy_warned.add(key)
         logger.warning(
-            "engine.legacy_mapped: engine_id=%r was removed (ADR-2087) — "
+            "engine.legacy_mapped: engine_id=%r was removed (ADR-2091) — "
             "using %r", key, DEFAULT_ENGINE_ID,
         )
     return DEFAULT_ENGINE_ID
@@ -269,7 +269,7 @@ def get_engine(engine_id: str) -> Any | None:
     """One-shot engine instantiation. Returns None on unknown id, license deny,
     or builder failure. Never raises.
 
-    A removed (ADR-2087) id such as ``hermes`` is deliberately NOT mapped here:
+    A removed (ADR-2091) id such as ``hermes`` is deliberately NOT mapped here:
     callers use ``get_engine`` to check an allow-list (engine_policy zones),
     and silently turning a local-only entry into ``claude_code`` would widen
     that allow-list to a cloud engine. It returns None (fail-closed); callers

@@ -275,4 +275,4 @@ all of the above, including token generation, import, and connection management.
   (L38), including security hardening and compliance details
 - [`docs/audit-and-compliance.md`](audit-and-compliance.md) — audit chain and EU AI Act compliance
 - [`docs/data-and-compute.md`](data-and-compute.md) — L25 Compute Worker and datacenter integration
-- [`docs/engine-layer.md`](engine-layer.md) — engine layer (the bundled local Hermes engine was removed in ADR-2087; zero-egress compute needs an operator-declared engine)
+- [`docs/engine-layer.md`](engine-layer.md) — engine layer (the bundled local Hermes engine was removed in ADR-2091; zero-egress compute needs an operator-declared engine)

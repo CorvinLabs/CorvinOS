@@ -413,7 +413,7 @@ def test_streaming_recursion_counter() -> None:
     try:
         # This test mocks adapter.subprocess.Popen and counts calls to verify
         # the ClaudeCode retry-bounding logic. Without a real `claude` CLI on
-        # PATH (any CI runner), the ADR-2087 claude-CLI presence check
+        # PATH (any CI runner), the ADR-2091 claude-CLI presence check
         # refuses the turn before subprocess.Popen is reached, so the mock
         # would see 0 calls instead of the expected 2. Pin the engine and
         # the CLI probe so the retry path under test is what runs.

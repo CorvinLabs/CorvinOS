@@ -4,7 +4,7 @@ TURN METADATA VERSION: Tracks turn-specific execution context for audit and rend
 
 Phase 1 foundation: capture execution context for every turn across all
 engines (Claude Code, ACS, TDE) and model sources (Anthropic, OpenRouter).
-Hermes and local Ollama were removed (ADR-2087): their enum values stay so
+Hermes and local Ollama were removed (ADR-2091): their enum values stay so
 records already written keep parsing, but nothing classifies a new turn as
 either.
 
@@ -36,9 +36,9 @@ from typing import Any, Optional
 class ModelSource(str, Enum):
     """Canonical model sources."""
     CLAUDE = "claude"           # Anthropic API models (claude-3-5-sonnet, etc.)
-    OLLAMA = "ollama"          # HISTORICAL (ADR-2087) — parse-only, never detected
+    OLLAMA = "ollama"          # HISTORICAL (ADR-2091) — parse-only, never detected
     OPENROUTER = "openrouter"  # OpenRouter API routing (e.g. openrouter:mistral)
-    HERMES = "hermes"          # HISTORICAL (ADR-2087) — parse-only, never detected
+    HERMES = "hermes"          # HISTORICAL (ADR-2091) — parse-only, never detected
     UNKNOWN = "unknown"        # Unrecognized model source
 
 
@@ -47,7 +47,7 @@ class EngineId(str, Enum):
     CLAUDE_CODE = "claude_code"  # Direct claude subprocess (ADR-0037)
     ACS = "acs"                   # ACS delegation (ADR-0114, ADR-0201)
     TDE = "tde"                   # Tiered Delegation Engine (ADR-0222)
-    HERMES = "hermes"             # HISTORICAL (ADR-2087) — parse-only, never detected
+    HERMES = "hermes"             # HISTORICAL (ADR-2091) — parse-only, never detected
     UNKNOWN = "unknown"           # Unrecognized engine
 
 
@@ -203,7 +203,7 @@ def detect_model_source(model_name: str) -> ModelSource:
       - "openrouter:meta-llama/llama-2" → OPENROUTER
       - "openrouter/meta-llama/llama-2" → OPENROUTER
 
-    Local-Ollama and Hermes names are no longer classified (ADR-2087) — they
+    Local-Ollama and Hermes names are no longer classified (ADR-2091) — they
     return UNKNOWN; the OLLAMA/HERMES enum values remain for historical records.
 
     Returns:
@@ -476,7 +476,7 @@ class ExecutionContextBuilder:
 _BADGE_ENGINE_LABELS = {
     "native": "native", "claude_code": "native",
     "acs": "ACS", "tde": "TDE", "tiered_delegation": "TDE",
-    "hermes": "Hermes",  # historical records only (ADR-2087)
+    "hermes": "Hermes",  # historical records only (ADR-2091)
 }
 _BADGE_ORCH_LABELS = {
     "delegation_loop": "loop", "dag": "graph", "chat": "chat",

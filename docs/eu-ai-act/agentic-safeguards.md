@@ -279,7 +279,7 @@ engines — of the bundled engines that is `opencode_http` alone. SECRET require
 `local` + `network_egress: none`, which **no bundled engine** has, so SECRET
 spawns are blocked unless the tenant declares its own engine via
 `engine_compliance`. Hermes and the local-Ollama engines were removed
-(ADR-2087); their ids are refused as `unknown_engine`.
+(ADR-2091); their ids are refused as `unknown_engine`.
 Any widening of this matrix requires an ADR.
 
 **GDPR data minimisation (Art. 5(1)(c)):** Workers receive only the task prompt

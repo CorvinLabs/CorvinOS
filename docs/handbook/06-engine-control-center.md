@@ -14,7 +14,7 @@ The Engine Control Center gives you **fine-grained, live control over the active
 
 ![Engine Control Center](assets/engine-control.png)
 
-*The Engine Control Center showing the Primary AI Engine selector (Claude Code active), ECI commands panel, and Capability Matrix. (The screenshot predates ADR-2087 and still shows the removed Hermes/Ollama status line.)*
+*The Engine Control Center showing the Primary AI Engine selector (Claude Code active), ECI commands panel, and Capability Matrix. (The screenshot predates ADR-2091 and still shows the removed Hermes/Ollama status line.)*
 
 ---
 
@@ -73,7 +73,7 @@ Key capabilities:
 | **MCP Tools** | Can call Forge tools, SkillForge, Data tools via Model Context Protocol |
 | **Skills** | Reusable skill blocks injected into the system prompt |
 | **Plan Mode** | Supports the Claude Code plan/implement cycle |
-| **Runs locally** | Zero cloud egress — since the local Hermes engine was removed (ADR-2087) only a self-hosted `opencode_http` server or a tenant-declared engine qualifies |
+| **Runs locally** | Zero cloud egress — since the local Hermes engine was removed (ADR-2091) only a self-hosted `opencode_http` server or a tenant-declared engine qualifies |
 
 ---
 
@@ -81,7 +81,7 @@ Key capabilities:
 
 ### Handle a confidential task
 
-The local Hermes engine was removed (ADR-2087). Under the default data-classification matrix, CONFIDENTIAL data is admissible only on `opencode_http` (a self-hosted OpenCode server) or on an engine your tenant declares in `engine_compliance`; SECRET data has no bundled admissible engine and is blocked.
+The local Hermes engine was removed (ADR-2091). Under the default data-classification matrix, CONFIDENTIAL data is admissible only on `opencode_http` (a self-hosted OpenCode server) or on an engine your tenant declares in `engine_compliance`; SECRET data has no bundled admissible engine and is blocked.
 
 ### Check why a capability is unavailable
 

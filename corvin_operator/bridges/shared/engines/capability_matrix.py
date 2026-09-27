@@ -15,10 +15,10 @@ New State (M8 refactor):
 Semantic Capability Strings (from M1–M6):
   - mid_stream_inject: "stdin_json" (CC) | "buffered" (Codex/OpenCode) | None (Copilot)
   - hooks: "native" (CC) | "teb_brokered" (others)
-  - skills: "append_system_prompt" (CC/Codex/OpenCode) | "system_message" (unused since ADR-2087) | "prompt_prefix" (Copilot)
+  - skills: "append_system_prompt" (CC/Codex/OpenCode) | "system_message" (unused since ADR-2091) | "prompt_prefix" (Copilot)
   - session_pinning: "native" (CC) | "checkpoint" (others) | None
   - mcp: "native" (CC/Codex/OpenCode) | "fcb_emulated" (Copilot, M5) | None
-  - system_prompt: "flag" (CC) | "message_role" (unused since ADR-2087) | "text_prefix" (Codex/OpenCode/Copilot)
+  - system_prompt: "flag" (CC) | "message_role" (unused since ADR-2091) | "text_prefix" (Codex/OpenCode/Copilot)
   - multi_turn: "native" (CC) | "sequential_wrapper" (Copilot, M7) | None (others)
 
 Architecture:

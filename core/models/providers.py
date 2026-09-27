@@ -1,7 +1,7 @@
 """
 Model Provider Implementations (ADR-0607, ADR-0377 Phase 3)
 OpenAI, OpenRouter, Claude (Anthropic), Gemini (Google)
-(The local Ollama provider was removed by ADR-2087.)
+(The local Ollama provider was removed by ADR-2091.)
 """
 
 import asyncio

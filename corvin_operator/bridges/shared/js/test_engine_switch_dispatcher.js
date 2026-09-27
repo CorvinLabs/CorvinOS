@@ -101,7 +101,7 @@ console.log('\n[/engine cloud — opencode + cloud model]');
      'cloud alias persists cloud model');
 }
 
-// ── 6: /engine opencode — no model pin (ADR-2087) ───────────────────
+// ── 6: /engine opencode — no model pin (ADR-2091) ───────────────────
 console.log('\n[/engine opencode — own default model]');
 {
   const r = engineReply(CTX(''), 'opencode');

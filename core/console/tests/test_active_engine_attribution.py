@@ -116,7 +116,7 @@ def test_no_signal_anywhere_is_unknown(tmp_path):
     assert hu._detect_active_engine(home) == "unknown"
 
 
-# ── ADR-2087: a stale stored ``hermes`` degrades to "unknown" ────────────────
+# ── ADR-2091: a stale stored ``hermes`` degrades to "unknown" ────────────────
 
 def test_hermes_is_not_recorded_any_more(tmp_path):
     home = _make_home(tmp_path)

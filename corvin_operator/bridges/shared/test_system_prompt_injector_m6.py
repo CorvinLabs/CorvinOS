@@ -181,7 +181,7 @@ class TestCapabilityStringsTier2:
         assert injector.capability_for_engine("claude_code") == "flag"
 
     def test_hermes_removed_is_unknown(self):
-        """ADR-2087: hermes is no longer an engine → ValueError"""
+        """ADR-2091: hermes is no longer an engine → ValueError"""
         injector = SystemPromptInjector()
         with pytest.raises(ValueError, match="Unknown engine_id"):
             injector.capability_for_engine("hermes")

@@ -108,7 +108,7 @@ class EgressPolicy:
 # active egress policy.  "unknown" is a deliberate sentinel: policies
 # with ``default_action=deny`` will refuse it; ``default_action=allow``
 # will pass it through — so the sentinel never silently grants access.
-# ADR-2087: hermes / opencode_ollama / claude_code_local (local-inference
+# ADR-2091: hermes / opencode_ollama / claude_code_local (local-inference
 # engines) were removed; those ids now resolve to "unknown" like any unmapped id.
 DEFAULT_ENGINE_HOSTS: dict[str, str] = {
     "claude_code":       "api.anthropic.com",

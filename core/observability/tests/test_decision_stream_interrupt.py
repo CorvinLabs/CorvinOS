@@ -166,7 +166,7 @@ class TestInterruptController:
         assert cmd.new_engine == "local_llama2"
 
     def test_issue_redirect_to_removed_hermes_is_refused(self):
-        """ADR-2087: hermes is no longer a redirect target."""
+        """ADR-2091: hermes is no longer a redirect target."""
         controller = InterruptController()
         controller.task_states["task-1"] = TaskState.RUNNING
         assert controller.issue_redirect(

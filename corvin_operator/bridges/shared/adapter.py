@@ -760,7 +760,7 @@ except Exception:  # noqa: BLE001
     except Exception:  # noqa: BLE001
         _CodexCliEngine = None  # type: ignore[assignment]
 
-# ADR-2087 — Hermes and every local-Ollama engine were removed. A stored
+# ADR-2091 — Hermes and every local-Ollama engine were removed. A stored
 # `hermes` / `local` / `ollama` … engine id (tenant default_engine, per-chat pin,
 # persona pin, CORVIN_OS_ENGINE) is mapped to claude_code on read, never
 # rejected. engine_registry is the single source of the mapping.
@@ -4429,7 +4429,7 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
         env.pop("CORVIN_ACS_WORKER_MODEL", None)
     # Always strip stale provider-redirect values first so a previous
     # redirect cannot leak in. (CORVIN_CC_LOCAL_MODE / CORVIN_CC_PROVIDER are
-    # leftovers of the ADR-0126 Ollama redirect, removed by ADR-2087 —
+    # leftovers of the ADR-0126 Ollama redirect, removed by ADR-2091 —
     # stripped so a stale parent env cannot resurrect it.)
     for _stale_var in (
         "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
@@ -5042,7 +5042,7 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
     env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile,
                            sender=sender, workload_hint=workload_hint)
     env["VOICE_HOOK_RECURSION"] = "1"
-    # (ADR-2087 removed the ADR-0126 claude_code_local Ollama redirect and its
+    # (ADR-2091 removed the ADR-0126 claude_code_local Ollama redirect and its
     # 'local' credential sentinel; _build_spawn_env strips any stale value.)
     # Always remove real API credentials from subprocess env to prevent leaks
     # — claude CLI must authenticate via claude.ai Connectors instead.
@@ -6661,7 +6661,7 @@ def _call_codex_streaming_via_engine(
 CLAUDE_CLI_MISSING_MESSAGE = (
     "[adapter] Claude Code CLI not found or not logged in — run `corvin setup` "
     "(install Claude Code and log in), or set CORVIN_CLAUDE_BIN to the claude "
-    "binary. The local Hermes/Ollama fallback was removed (ADR-2087)."
+    "binary. The local Hermes/Ollama fallback was removed (ADR-2091)."
 )
 
 
@@ -7559,7 +7559,7 @@ def _call_claude_streaming_impl(
                 _spec_engine = (_ty.get("spec") or {}).get("default_engine")
                 if _spec_engine and isinstance(_spec_engine, str):
                     profile = dict(profile or {})
-                    # ADR-2087: a stored `hermes` / local-Ollama engine maps to
+                    # ADR-2091: a stored `hermes` / local-Ollama engine maps to
                     # claude_code on read (spec.hermes_model is ignored).
                     profile["default_engine"] = (
                         _normalize_legacy_engine_id(_spec_engine) or _spec_engine
@@ -7569,7 +7569,7 @@ def _call_claude_streaming_impl(
 
     # ADR-0159 M1 — primary OS engine when nothing was set by policy, persona
     # pin, or per-chat /engine command: CORVIN_OS_ENGINE env var → claude_code.
-    # ADR-2087 removed the Hermes auto-fallback: a host without a usable claude
+    # ADR-2091 removed the Hermes auto-fallback: a host without a usable claude
     # CLI stays on claude_code and the turn surfaces a clear "claude CLI not
     # found — run setup" error instead of silently switching to local Ollama.
     # This is only a fallback: an existing default_engine in profile is respected.
@@ -7581,7 +7581,7 @@ def _call_claude_streaming_impl(
                 _normalize_legacy_engine_id(_env_engine) or _env_engine
             )
     elif profile and _is_legacy_engine_id(profile.get("default_engine")):
-        # A per-chat / persona / policy pin naming a removed engine (ADR-2087).
+        # A per-chat / persona / policy pin naming a removed engine (ADR-2091).
         profile = dict(profile)
         profile["default_engine"] = _normalize_legacy_engine_id(
             profile.get("default_engine"))
@@ -7638,7 +7638,7 @@ def _call_claude_streaming_impl(
     # Guard: CORVIN_ATO_M5_ENABLED=1, engine not already set by policy/persona,
     # prompt present, ato_classify importable.
     # Priority:  CONFIDENTIAL/SECRET → l34_block refusal (L34 locality gate —
-    #            no bundled local engine since ADR-2087; never falls through
+    #            no bundled local engine since ADR-2091; never falls through
     #            to a cloud engine)
     #            one_shot + short     → delegate_copilot (zero-cost turn)
     # Does NOT override engine pinned by policy gate or persona engine_lock.
@@ -7665,7 +7665,7 @@ def _call_claude_streaming_impl(
             if (_m5_plan.delegation_target == "l34_block"
                     or _m5_dc in ("CONFIDENTIAL", "SECRET")):
                 # L34 HARD BLOCK: CONFIDENTIAL/SECRET data needs a local engine,
-                # and ADR-2087 removed the bundled one (Hermes). Fail-closed —
+                # and ADR-2091 removed the bundled one (Hermes). Fail-closed —
                 # do NOT fall through to a cloud engine. Audit-first.
                 try:
                     _audit_event(
@@ -7917,7 +7917,7 @@ def _call_claude_streaming_impl(
                 "[adapter] ClaudeCodeEngine not available — check claude CLI installation.",
                 "I can't find the Claude Code command line. Please check your installation.",
             )
-        # ADR-2087: there is no local fallback engine any more. A host without a
+        # ADR-2091: there is no local fallback engine any more. A host without a
         # usable claude CLI gets a clear, actionable refusal instead of a spawn
         # error deep inside the engine (the fake-CLI test hook needs no binary).
         if os.environ.get("ADAPTER_FAKE_CLAUDE") != "1" and _claude_cli_missing():
@@ -8184,7 +8184,7 @@ def _append_lern_zugabe(text: str, *, lang: str = "de") -> str:
             encoding="utf-8", errors="replace",
             # Parent cap for the annex ladder (VOICE-F7/F8): summarize.py runs
             # its annex CLI budget inside this 90s cap (the local-Ollama annex
-            # fallback was removed by ADR-2087). Do NOT lower below the child
+            # fallback was removed by ADR-2091). Do NOT lower below the child
             # budget — see summarize.py::_ANNEX_* budgets.
             env=env, timeout=90, check=True,
         )
@@ -9008,7 +9008,7 @@ def build_voice_summary(text: str, max_chars: int = 400,
             encoding="utf-8", errors="replace",
             # Parent cap for the main summary ladder (VOICE-F7/F8): summarize.py
             # runs its CLI backend inside this 150s cap (the local-Ollama
-            # fallback was removed by ADR-2087). Do NOT lower below the child
+            # fallback was removed by ADR-2091). Do NOT lower below the child
             # budget — see summarize.py::
             # _SUMMARY_* budgets. VOICE-F8 raised this from 120s: at 120s the
             # child CLI budget had to be 45s, below its measured ~50s median,
@@ -12635,7 +12635,7 @@ def main() -> int:
     log(f"adapter started, polling {INBOX} every {POLL_INTERVAL}s "
         f"(MAX_PARALLEL={MAX_PARALLEL}, per-chat sequential)")
 
-    # (ADR-2087 removed the local-Ollama voice-summary prewarm and CORVIN_VOICE_PREWARM.)
+    # (ADR-2091 removed the local-Ollama voice-summary prewarm and CORVIN_VOICE_PREWARM.)
 
     # Boot snapshot — useful when grepping /var/log for "why is this run
     # different". Covers logger config, env flags, parallelism budget,
@@ -12759,7 +12759,7 @@ def main() -> int:
 
     # L44 house-rules classifier health check — runs once at boot so operators
     # learn about a broken classifier before users hit it in production.
-    # ADR-2087: the only classifier backend is the cloud CLI helper — the
+    # ADR-2091: the only classifier backend is the cloud CLI helper — the
     # local-Ollama probe (CORVIN_HERMES_URL / CORVIN_HERMES_MODEL) is gone.
     try:
         from house_rules import house_rules_boot_health_check as _hr_boot_check  # type: ignore

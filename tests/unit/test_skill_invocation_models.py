@@ -156,7 +156,7 @@ class TestWorkerEngine:
     def test_all_engines(self):
         """All engines are defined."""
         assert WorkerEngine.CLAUDE_CODE
-        assert not hasattr(WorkerEngine, "HERMES")  # removed, ADR-2087
+        assert not hasattr(WorkerEngine, "HERMES")  # removed, ADR-2091
         assert WorkerEngine.COPILOT
         assert WorkerEngine.OPENCODE
 

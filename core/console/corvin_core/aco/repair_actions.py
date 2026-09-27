@@ -286,7 +286,7 @@ def _save_failcounts(home: Path, counts: dict[str, int]) -> None:
         p = _assert_within_home(home, _failcount_path(home))
         p.parent.mkdir(parents=True, exist_ok=True)
         # prune zeros AND ids of actions that no longer exist (e.g. the removed
-        # ``hermes_health``, ADR-2087) so the file doesn't accrete keys forever.
+        # ``hermes_health``, ADR-2091) so the file doesn't accrete keys forever.
         live = {k: v for k, v in counts.items() if v and k in _REGISTRY}
         p.write_text(json.dumps(live, ensure_ascii=False), encoding="utf-8")
     except Exception:  # noqa: BLE001 — bookkeeping, never enforcement
@@ -311,7 +311,7 @@ def run_local_repairs(ctx: RepairContext, *, dry_run: bool = False) -> list[Repa
     out: list[RepairOutcome] = []
     failcounts = {} if dry_run else _load_failcounts(ctx.corvin_home)
     # A key for an action that no longer exists (e.g. ``hermes_health``,
-    # ADR-2087) is tolerated on load and pruned on this cycle's save.
+    # ADR-2091) is tolerated on load and pruned on this cycle's save.
     dirty = any(k not in _REGISTRY for k in failcounts)
 
     for action in _REGISTRY.values():

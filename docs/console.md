@@ -235,7 +235,7 @@ engine-level audit events and the last stderr tail from each engine subprocess.
 `GET/PUT /v1/console/settings/engine` read and write the tenant-level default
 engine and per-engine model pins without editing JSON files. `PUT` accepts only
 `claude_code` as `default_engine` (anything else → 422). A stored legacy value
-(`hermes`, `ollama`, `claude_code_local`, … — engines removed by ADR-2087) is
+(`hermes`, `ollama`, `claude_code_local`, … — engines removed by ADR-2091) is
 read back as `claude_code`. The setting writes to
 `tenant.corvin.yaml::spec.default_engine` and takes effect on the next turn — no
 adapter restart needed. `GET /v1/console/settings/engine/health` reports the

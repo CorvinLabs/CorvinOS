@@ -5,7 +5,7 @@ with the other engines, golden-snapshot argv composition, event
 normalisation, fake-binary smoke, plus an opt-in live test against the
 real opencode CLI talking to a hosted provider (Ollama Cloud).
 
-The local-Ollama live test was removed with ADR-2087 (no local
+The local-Ollama live test was removed with ADR-2091 (no local
 inference). The cloud live test is gated behind
 CORVIN_OPENCODE_LIVE_CLOUD=1 + OLLAMA_API_KEY + `opencode` on PATH.
 

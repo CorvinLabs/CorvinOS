@@ -77,7 +77,7 @@ class ModelProfile:
 
     # Published rate card, per 1k tokens, kept SEPARATE. None = not on the
     # card; callers must treat that as unknown, never as free. (Local-Ollama
-    # models, the one former 0.0, were removed by ADR-2087.)
+    # models, the one former 0.0, were removed by ADR-2091.)
     input_usd_per_1k: Optional[float]
     output_usd_per_1k: Optional[float]
 
@@ -230,7 +230,7 @@ class MultiModelRouter:
         module does not pretend to know that mapping itself.
 
         ``allow_local`` is accepted for caller compatibility and ignored: no
-        local model exists since ADR-2087 removed local-Ollama inference.
+        local model exists since ADR-2091 removed local-Ollama inference.
 
         Among models that clear the bar, OUTPUT rate decides, because output
         is the larger rate on every current model.

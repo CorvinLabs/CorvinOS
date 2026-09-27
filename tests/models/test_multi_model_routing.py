@@ -77,7 +77,7 @@ class TestProfilesComeFromRealSources:
         assert p.input_usd_per_1k is None
 
     def test_no_local_free_tier_exists(self):
-        """ADR-2087 removed local-Ollama inference: no model is priced as a
+        """ADR-2091 removed local-Ollama inference: no model is priced as a
         free local one, and an ``ollama/…`` id is simply unpriced."""
         assert not hasattr(ModelTier, "LOCAL_FREE")
         p = build_profiles(["ollama/some-model"])["ollama/some-model"]

@@ -353,7 +353,7 @@ class TestPresetConsistency(unittest.TestCase):
 
 
 class TestDefaultEngineHosts(unittest.TestCase):
-    """V-017: copilot must appear in DEFAULT_ENGINE_HOSTS. ADR-2087: the
+    """V-017: copilot must appear in DEFAULT_ENGINE_HOSTS. ADR-2091: the
     local-inference engine ids are gone and resolve to the "unknown" sentinel,
     which a deny policy refuses."""
 

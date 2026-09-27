@@ -150,7 +150,7 @@ class InterruptController:
         if state not in [TaskState.RUNNING, TaskState.PAUSED]:
             return None
 
-        # "hermes" was removed (ADR-2087): a redirect to it is refused.
+        # "hermes" was removed (ADR-2091): a redirect to it is refused.
         if new_engine not in ["claude", "local_llama2"]:
             return None
 

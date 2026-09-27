@@ -2,7 +2,7 @@
 
 **Status:** Phase A (k=3 in LDD loop)  
 **Estimated:** 6 weeks, 1200 LoC, 40+ tests  
-**Phases:** A (RPC API), ~~B (Hermes)~~ removed by ADR-2087, C (Copilot/OpenCode)  
+**Phases:** A (RPC API), ~~B (Hermes)~~ removed by ADR-2091, C (Copilot/OpenCode)  
 **Dependencies:** ADR-0598, ADR-0599, ADR-0600, ADR-0601, ADR-0602  
 
 ---
@@ -217,10 +217,10 @@ class SkillSystemIntegration:
 
 ---
 
-## Phase B: Hermes Engine Integration — REMOVED (ADR-2087)
+## Phase B: Hermes Engine Integration — REMOVED (ADR-2091)
 
 Phase B wired the Hermes daemon (local Ollama) to `SkillInvocationService`.
-ADR-2087 removed Hermes and all local Ollama inference and supersedes ADR-0599,
+ADR-2091 removed Hermes and all local Ollama inference and supersedes ADR-0599,
 so this phase is dropped. Nothing under `core/engine/hermes_*` or
 `operator/hermes_daemon/` is to be built. The multi-engine goals continue in
 Phase C (Copilot / OpenCode) and Phase D.
@@ -302,7 +302,7 @@ from core.engine.skill_invocation_service import SkillInvocationService
 ### Timeline
 
 - **Weeks 1–2 (Phase A):** RPC API, Claude Code wiring
-- **Weeks 3–4 (Phase D):** feedback ingestion + unified audit (Phase B removed, ADR-2087)
+- **Weeks 3–4 (Phase D):** feedback ingestion + unified audit (Phase B removed, ADR-2091)
 - **Weeks 5–6 (Phase C + D):** Copilot/OpenCode + final feedback/audit wiring
 
 ---

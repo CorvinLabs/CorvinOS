@@ -221,7 +221,7 @@ class VibeEngine:
 
                 else:
                     # Step 4b: Error recovery. Deterministic heuristic diagnosis
-                    # (the Hermes-Healing bridge was removed per ADR-2087).
+                    # (the Hermes-Healing bridge was removed per ADR-2091).
                     error = Exception(skill_result.error_trace or "Unknown error")
 
                     diagnosis = diagnose_error(error, context.to_dict())

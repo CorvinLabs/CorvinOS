@@ -6,9 +6,9 @@ Coverage:
   3.  openai_call_to_mcp_call extracts name + arguments.
   4.  openai_call_to_mcp_call handles string-serialised arguments.
   5.  mcp_result_to_openai_message serialises None/str/dict results.
-  6-8. (Ollama NDJSON chunk parser — removed with Hermes, ADR-2087)
+  6-8. (Ollama NDJSON chunk parser — removed with Hermes, ADR-2091)
   9.  AST lint: no `import anthropic` in teb package.
-  10-11. (HermesEngine tool-use loop — removed with Hermes, ADR-2087)
+  10-11. (HermesEngine tool-use loop — removed with Hermes, ADR-2091)
   12. SkillCompiler.compile returns None on empty input.
   13. SkillCompiler.compile passes through non-empty block unchanged.
   14. SkillCompiler.should_inject_via_system_prompt True for all engines.

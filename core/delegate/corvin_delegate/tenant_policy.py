@@ -24,7 +24,7 @@ Design contract:
 * An operator may declare an engine ``"local"`` via
   ``CORVIN_DELEGATE_<ENGINE>_ZONE=local`` (e.g. OpenCode pointed at a
   user-defined provider on the operator's own host); ``"local"`` is
-  universally compatible. No bundled engine is local since ADR-2087
+  universally compatible. No bundled engine is local since ADR-2091
   removed Hermes / local Ollama.
 
 The policy enforcement landing site is ``run_delegate`` in
@@ -209,7 +209,7 @@ _DEFAULT_ENGINE_ZONES: dict[str, str] = {
     # copilot is genuinely cloud (GitHub Copilot API). An engine absent
     # from this table resolves to "unknown", which is_zone_compatible()
     # denies whenever the tenant has a zone constraint (fail-closed).
-    # ADR-2087 removed the former "hermes": "local" entry — a legacy
+    # ADR-2091 removed the former "hermes": "local" entry — a legacy
     # ``hermes`` id is now "unknown" here (never implicitly local).
     "copilot":     "us",
 }
@@ -219,7 +219,7 @@ def resolve_engine_zone(engine_id: str, model: str | None = None) -> str:
     """Map ``(engine_id, model)`` to a compliance zone string.
 
     For OpenCode every model prefix resolves to the operator default
-    (env override, else ``"us"``). ADR-2087 removed the former
+    (env override, else ``"us"``). ADR-2091 removed the former
     ``ollama/...`` / ``local/...`` → ``"local"`` mapping: a model-name
     prefix chosen by the caller must not by itself exempt a call from
     the tenant's residency constraint.

@@ -68,12 +68,12 @@ class TestDefaultRegistry(unittest.TestCase):
         self.assertEqual(compl.network_egress, "local")
 
     def test_removed_local_inference_engines_not_registered(self):
-        # ADR-2087: hermes / opencode_ollama / claude_code_local were removed.
+        # ADR-2091: hermes / opencode_ollama / claude_code_local were removed.
         for eid in ("hermes", "opencode_ollama", "claude_code_local"):
             self.assertNotIn(eid, DEFAULT_ENGINE_COMPLIANCE)
 
     def test_no_bundled_engine_is_zero_egress(self):
-        # ADR-2087: SECRET (network_egress == none) has no bundled engine.
+        # ADR-2091: SECRET (network_egress == none) has no bundled engine.
         self.assertEqual(
             [e for e, c in DEFAULT_ENGINE_COMPLIANCE.items() if c.network_egress == "none"],
             [],
@@ -246,14 +246,14 @@ class TestGuardCoreMatrix(unittest.TestCase):
         # F-A10: CONFIDENTIAL is EU/local by default → US-cloud engines excluded.
         conf = self.guard.list_engines_for(DataClassification.CONFIDENTIAL)
         self.assertIn("opencode_http", conf)
-        self.assertNotIn("hermes", conf)  # removed (ADR-2087)
+        self.assertNotIn("hermes", conf)  # removed (ADR-2091)
         self.assertNotIn("claude_code", conf)
         # SECRET still excludes any engine that egresses (egress != none).
         secret = self.guard.list_engines_for(DataClassification.SECRET)
         self.assertNotIn("claude_code", secret)
         self.assertNotIn("codex_cli", secret)
         self.assertNotIn("opencode_http", secret)  # local but egress=local
-        self.assertEqual(secret, [])  # ADR-2087: no bundled SECRET engine
+        self.assertEqual(secret, [])  # ADR-2091: no bundled SECRET engine
 
 
 class TestValidateOrRaise(unittest.TestCase):
@@ -608,7 +608,7 @@ class TestTenantOverridesCannotWeakenTheFloor(unittest.TestCase):
 
 
 class TestAdr2087LocalEnginesRemoved(unittest.TestCase):
-    """ADR-2087 — with the bundled local-inference engines gone, SECRET and
+    """ADR-2091 — with the bundled local-inference engines gone, SECRET and
     CONFIDENTIAL data on the cloud engine stay BLOCKED and the removed ids are
     refused as ``unknown_engine`` (fail-closed), never silently admitted."""
 

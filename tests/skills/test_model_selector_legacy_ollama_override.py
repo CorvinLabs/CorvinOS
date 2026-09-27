@@ -1,4 +1,4 @@
-"""ADR-2087: a tier override saved with the removed local-Ollama provider
+"""ADR-2091: a tier override saved with the removed local-Ollama provider
 must route on native Anthropic, never to a local model id."""
 from core.skills.os_skills.model_selector import ModelSelector
 

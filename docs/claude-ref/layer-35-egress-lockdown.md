@@ -11,7 +11,7 @@ live here.
 → **Tests:** 
   - `corvin_operator/bridges/shared/test_egress_gate.py`
   - `corvin_operator/license/tests/test_elr_m1.py` (34 comprehensive ELR tests)
-→ **Presets:** `corvin_operator/bundle/config-templates/tenant.corvin.eu-production-http.yaml` (the `-ollama` preset was removed with local Ollama inference, ADR-2087)
+→ **Presets:** `corvin_operator/bundle/config-templates/tenant.corvin.eu-production-http.yaml` (the `-ollama` preset was removed with local Ollama inference, ADR-2091)
 
 ---
 
@@ -144,7 +144,7 @@ Loader rules:
 
 One shipped template under `corvin_operator/bundle/config-templates/`.
 (A second, `tenant.corvin.eu-production-ollama.yaml`, pinned the removed
-`opencode_ollama` engine and was deleted by ADR-2087.)
+`opencode_ollama` engine and was deleted by ADR-2091.)
 
 ### `tenant.corvin.eu-production-http.yaml` (self-hosted)
 

@@ -213,7 +213,7 @@ def _last_ping_path(home: Path) -> Path:
     return home / "aco" / "telemetry" / _LAST_PING_FILENAME
 
 
-# ``hermes`` was dropped with ADR-2087. A stale stored ``hermes`` (state file or
+# ``hermes`` was dropped with ADR-2091. A stale stored ``hermes`` (state file or
 # tenant YAML on an old install) is simply not in this closed enum, so it
 # degrades to "unknown" before the fail-closed ``_assert_ping_safe`` check and
 # the ping keeps flowing.

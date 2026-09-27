@@ -132,7 +132,7 @@ class TestCheckL34PromptClassification(unittest.TestCase):
 
 
 class TestCheckL34NoCCLocalMode(unittest.TestCase):
-    """ADR-2087 removed the ADR-0126 ``cc_local_mode`` remap entirely.
+    """ADR-2091 removed the ADR-0126 ``cc_local_mode`` remap entirely.
 
     claude_code is validated as claude_code — never as the removed local id —
     and a stale caller cannot request the mode: the keyword is gone, so the

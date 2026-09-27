@@ -145,7 +145,7 @@
   <text x="865" y="397" text-anchor="middle" font-size="8" fill="#92400e">needs override</text>
 
   <!-- Legend for ⚠ -->
-  <text x="490" y="445" text-anchor="middle" font-size="9" fill="#92400e">⚠ = allowed only via a tenant engine_compliance declaration · Hermes / local Ollama engines removed (ADR-2087): no bundled engine for SECRET</text>
+  <text x="490" y="445" text-anchor="middle" font-size="9" fill="#92400e">⚠ = allowed only via a tenant engine_compliance declaration · Hermes / local Ollama engines removed (ADR-2091): no bundled engine for SECRET</text>
 
   <!-- Audit + block section -->
   <rect x="60" y="460" width="860" height="50" rx="8" fill="#0f172a"/>
