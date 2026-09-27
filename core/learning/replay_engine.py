@@ -46,9 +46,7 @@ class ReplayEngine:
         # Engine cost/quality profiles
         self.engine_profiles = {
             "haiku": {"quality": 0.92, "cost": 85},
-            "hermes": {"quality": 0.95, "cost": 100},
             "claude": {"quality": 0.98, "cost": 3150},
-            "local": {"quality": 0.85, "cost": 0},
         }
 
     def record_snapshot(self, snapshot: ExecutionSnapshot) -> None:

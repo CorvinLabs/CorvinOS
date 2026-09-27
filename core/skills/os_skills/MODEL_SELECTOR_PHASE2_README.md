@@ -6,13 +6,18 @@
 
 **Scope:** Weeks 3–5, ~800 LoC + 65 Tests
 
+> **Amendment (ADR-2087):** local Ollama inference was removed. No complexity
+> tier routes to a local model any more; the SIMPLE tier's cheapest provider is
+> OpenRouter. Hosted Ollama Cloud remains a remote provider. The local-Ollama
+> examples that used to be in this file were deleted.
+
 ---
 
 ## Overview
 
 Phase 2 of the Model Selection Skill (ADR-0641–0644) implements deterministic task classification, external provider support, and end-to-end routing with audit trail integration.
 
-**Goal:** Tasks automatically route to optimal models (Ollama/OpenRouter/OpenAI/Anthropic) based on complexity.
+**Goal:** Tasks automatically route to optimal models (OpenRouter/OpenAI/Anthropic) based on complexity.
 
 ---
 
@@ -71,13 +76,12 @@ ELSE
 ```
 
 **Provider Mapping:**
-- **SIMPLE** → Ollama (local, free, fast)
+- **SIMPLE** → OpenRouter (cheap, fast)
 - **MEDIUM** → OpenRouter (cost/quality balance)
 - **COMPLEX** → Anthropic (best quality)
 
 **Model Selection (per Provider):**
 - Anthropic: Opus-5 (complex) → Sonnet-5 (medium) → Haiku (simple)
-- Ollama: Mistral-latest (complex) → Mistral-7b (simple)
 - OpenRouter: GPT-4-turbo (complex) → Claude-Opus (medium) → Mistral-7b (simple)
 - OpenAI: GPT-4 (complex) → GPT-4-turbo (medium) → GPT-3.5 (simple)
 
@@ -133,33 +137,28 @@ Updated provider interface and implementations with health checks.
 **Health Check Support (ADR-0643):**
 - **Timeout:** 30 seconds (configurable)
 - **Result:** `HealthCheckResult` with latency, availability, model list
-- **All 3 providers:** OpenAI, Ollama, OpenRouter
+- **Providers:** OpenAI, OpenRouter
 
 **Provider Health Checks:**
 
 ```python
-from core.models.providers import OllamaProvider
+from core.models.providers import OpenRouterProvider
 from core.models.provider_interface import ModelProviderConfig
 
 config = ModelProviderConfig(
-    name="ollama",
-    base_url="http://localhost:11434",
+    name="openrouter",
+    api_key="sk-...",
     timeout_s=30
 )
-provider = OllamaProvider(config)
+provider = OpenRouterProvider(config)
 
 # Async health check
 result = await provider.health_check()
-# HealthCheckResult(
-#   healthy=True,
-#   message="Ollama is healthy",
-#   latency_ms=45.3,
-#   available_models=["mistral:7b", "neural-chat", ...]
-# )
+# HealthCheckResult(healthy=True, latency_ms=..., available_models=[...])
 ```
 
 **Provider Improvements:**
-- Health check for each provider (OpenAI, Ollama, OpenRouter)
+- Health check for each provider (OpenAI, OpenRouter)
 - Latency tracking (ms)
 - Available models enumeration
 - Timeout handling (30s maximum, configurable per config)
@@ -265,7 +264,6 @@ Primary (based on complexity)
 
 3. **`test_providers_health_check.py`** (15 tests)
    - OpenAI health check (success, failure, timeout)
-   - Ollama health check (success, not running, custom URL)
    - OpenRouter health check (success, invalid API key)
    - Timeout constraints (30s ADR-0643)
    - Network error handling
@@ -281,7 +279,7 @@ Primary (based on complexity)
 ### E2E Tests
 
 5. **`test_model_selection_routing_e2e.py`** (25 tests)
-   - Simple task → Ollama routing
+   - Simple task → OpenRouter routing
    - Medium task → OpenRouter routing
    - Complex task → Anthropic routing
    - Fallback chain execution
@@ -332,7 +330,7 @@ pytest tests/ --cov=core/skills/os_skills --cov=core/models --cov-report=html
 ### Provider Selection Strategy
 
 **Cost Optimization (Simple → Complex):**
-1. SIMPLE: Ollama (free, local) → OpenRouter (cheap)
+1. SIMPLE: OpenRouter (cheap)
 2. MEDIUM: OpenRouter (cost/quality) → OpenAI (premium)
 3. COMPLEX: Anthropic (best reasoning) → OpenAI (fallback)
 
@@ -394,7 +392,6 @@ config = ModelSelectorConfig(
     medium_max_dependencies=10,
     
     # Preferences
-    prefer_local_for_simple=True,  # Ollama over OpenRouter
     fallback_chain="openrouter,anthropic,openai",
     
     # Timeouts (ADR-0643)
@@ -415,13 +412,6 @@ openai_config = ModelProviderConfig(
     name="openai",
     api_key="sk-...",
     timeout_s=30,  # ADR-0643
-)
-
-# Ollama
-ollama_config = ModelProviderConfig(
-    name="ollama",
-    base_url="http://localhost:11434",
-    timeout_s=30,
 )
 
 # OpenRouter

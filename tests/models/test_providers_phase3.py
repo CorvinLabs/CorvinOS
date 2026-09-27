@@ -10,7 +10,7 @@ import sys
 sys.path.insert(0, '/home/shumway/projects/CorvinOS')
 
 from core.models.provider_interface import ModelProviderConfig, ModelResponse, HealthCheckResult
-from core.models.providers import ClaudeProvider, GeminiProvider, OllamaProvider
+from core.models.providers import ClaudeProvider, GeminiProvider
 
 
 class TestClaudeProvider:

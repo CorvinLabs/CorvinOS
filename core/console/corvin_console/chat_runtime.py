@@ -70,27 +70,18 @@ What is NOT in v1
   family, consumed by the console `/os-turns` route)
 * mid-stream /btw inject (single-shot per request)
 
-Engine routing (round-6 fix)
-----------------------------
-The console web-chat drives TWO OS engines for the direct (non-delegation)
-path, resolved from ``spec.default_engine``:
+Engine routing
+--------------
+The console web-chat drives ONE OS engine for the direct (non-delegation)
+path: ``claude_code`` → the ``claude -p --output-format stream-json``
+subprocess path. The FOUR fail-closed pre-spawn gates (L44/LIP/L34/L35, via
+``_spawn_gates.check_console_spawn_or_refusal``) run before it.
 
-* ``claude_code`` → the direct ``claude -p --output-format stream-json``
-  subprocess path (the historical path; behaviour is byte-for-byte unchanged).
-* ``hermes`` → the Layer-22 ``WorkerEngine`` path (``HermesEngine`` → local
-  Ollama HTTP, no subprocess, no Anthropic API key). This is the zero-egress /
-  NO-API-KEY path the README promotes. Before this fix the
-  web-chat only drove ``claude_code`` and every Hermes turn hit a
-  "switch to Claude Code" dead-end — the no-API-key onboarding produced a
-  console that could not answer (round-6 HIGH blocker).
-
-The blocking ``HermesEngine.spawn`` urllib generator runs in a worker thread;
-events are pumped into a queue and drained from the asyncio loop via
-``asyncio.to_thread`` so the event loop never blocks (mirrors the bridge
-adapter's ``_call_hermes_streaming_via_engine``). The FOUR fail-closed
-pre-spawn gates (L44/LIP/L34/L35, via ``_spawn_gates.check_console_spawn_or_refusal``)
-run for BOTH engines — for the hermes path the gate classifies against
-``engine_id=hermes`` so L34/L35 see locality=local / egress=none.
+A stored ``spec.default_engine`` naming an engine removed by ADR-2087 (Hermes
+and every local-Ollama engine) is mapped to ``claude_code`` on read through
+``engine_registry.normalize_legacy_engine_id``. When Claude Code is missing or
+not authenticated the turn stays on ``claude_code`` and surfaces an actionable
+error pointing at Setup — there is no automatic engine fallback.
 
 Other engines (opencode / codex / copilot) are still NOT drivable by the
 web-chat and surface an honest up-front mismatch message naming the
@@ -318,20 +309,16 @@ try:
 except Exception:  # noqa: BLE001
     _model_selector = None
 
-# Layer-22 WorkerEngine layer (ADR-0001 / ADR-0066). The console web-chat routes
-# the OS turn through the SAME engine machinery the bridge adapter uses when the
-# tenant picked a non-claude OS engine in Setup. HermesEngine drives local Ollama
-# over HTTP (no subprocess, no Anthropic API key) — the zero-egress path the
-# README promotes. Best-effort import mirroring the other
-# bridge-tree imports: absence degrades to the honest "engine not drivable"
-# message rather than a crash.
-_HermesEngine = None
+# ADR-2087 legacy-engine mapping — ONE shared helper (bridges/shared), never a
+# console-local copy. Absence (vendoring glitch) degrades to identity: a stored
+# legacy id then surfaces the honest "engine not drivable" message.
 try:
     if str(_BRIDGES_SHARED) not in sys.path:
         sys.path.insert(0, str(_BRIDGES_SHARED))
-    from agents.hermes_engine import HermesEngine as _HermesEngine  # type: ignore  # noqa: E402
+    from engine_registry import normalize_legacy_engine_id as _normalize_legacy_engine_id  # type: ignore  # noqa: E402
 except Exception:  # noqa: BLE001
-    _HermesEngine = None
+    def _normalize_legacy_engine_id(engine_id):  # type: ignore[no-redef]
+        return engine_id
 
 import logging  # noqa: E402
 
@@ -412,7 +399,7 @@ _METAPHER_MARKERS = (
 
 # Voice-annotation latency budget. The LERN-ZUGABE / METAPHER suffix spawns
 # `claude -p` (Haiku) once per requested mode. On a COLD / fresh install that
-# call burns its full internal timeout + Hermes fallback (~50s each) — and,
+# call burns its full internal timeout (~50s each) — and,
 # because it used to sit on the critical path BEFORE the turn's `done` event,
 # it froze the composer + mic (`disabled={streaming}`) for 1-2 minutes after
 # EVERY turn. Symptom (verified via live browser E2E): turn 1 is spoken, then
@@ -420,7 +407,7 @@ _METAPHER_MARKERS = (
 # each subprocess and skip the (secondary) metaphor once the budget is spent,
 # so a slow machine degrades to no-annotation-this-turn instead of a frozen UI.
 # A healthy machine (fast Haiku ~3s/call) stays well under budget and is
-# unaffected. See the annotation call sites in the claude / hermes turn paths.
+# unaffected. See the annotation call sites in the claude turn path.
 _ANN_CALL_TIMEOUT_S = 8   # per subprocess.run — hard-killed past this
 _ANN_TOTAL_BUDGET_S = 5   # skip any remaining call once elapsed exceeds this
 
@@ -1353,15 +1340,12 @@ def _install_generated_panels(tenant_id: str, workdir: "Path") -> list[dict]:
 
 # Engine ids the console web-chat can actually drive for an OS turn.
 #   * claude_code → the direct `claude -p --output-format stream-json` subprocess
-#     path (below). This is the historical path; behaviour is byte-for-byte.
-#   * hermes      → the Layer-22 WorkerEngine path (HermesEngine → Ollama HTTP).
-#     This is the zero-egress / NO-API-KEY path the README promotes;
-#     wiring it here is what makes the recommended Hermes onboarding actually
-#     answer in the web chat (round-6 blocker). HermesEngine drives Ollama's
-#     local HTTP streaming API — no subprocess, no Anthropic credential.
+#     path (below).
 # Any OTHER engine_id (opencode / codex_cli / copilot) is genuinely not yet
 # drivable by the console and still gets the honest up-front mismatch message.
-_DIRECT_OS_ENGINES = frozenset({"claude_code", "hermes"})
+# Hermes (local Ollama) was removed by ADR-2087; a stored legacy id is mapped
+# to claude_code on read by _configured_os_engine.
+_DIRECT_OS_ENGINES = frozenset({"claude_code"})
 
 # Human-readable labels for the up-front engine-mismatch message. Mirrors
 # routes/engine.py::_ENGINE_METADATA labels so the chat names the engine the
@@ -1370,7 +1354,6 @@ _ENGINE_LABELS = {
     "claude_code": "Claude Code",
     "codex_cli": "Codex CLI",
     "opencode": "OpenCode",
-    "hermes": "Hermes",
     "copilot": "GitHub Copilot",
 }
 
@@ -1384,63 +1367,21 @@ def _configured_os_engine(tenant_id: str) -> str:
 
     Mirrors the adapter's resolution floor: tenant spec.default_engine →
     "claude_code". Returns the canonical engine_id. Empty / unset → claude_code,
-    matching engine_pref.py and the legacy default-spawn contract.
+    matching engine_pref.py and the legacy default-spawn contract. A value
+    naming an engine removed by ADR-2087 (``hermes``, ``hermes-*``, ``local``,
+    ``ollama``, ``opencode_ollama``, ``claude_code_local``) maps to
+    ``claude_code`` — mapped on read, never rejected.
     """
     val = _tenant_spec(tenant_id).get("default_engine")
     if isinstance(val, str) and val.strip():
-        return val.strip()
+        return _normalize_legacy_engine_id(val.strip()) or "claude_code"
     return "claude_code"
 
 
-def _resolve_os_engine(tenant_id: str) -> tuple[str, str, str | None]:
-    """Resolve ``(configured, effective, reason)`` for the tenant's OS engine.
-
-    ``configured`` is spec.default_engine (→ claude_code); ``effective`` is what
-    the turn will actually run on; ``reason`` names the substitution
-    (``claude-binary-missing`` / ``claude-not-authenticated``) or is ``None``
-    when configured == effective. Pure — no audit side effect — so the
-    WebSocket pre-turn guard can call it without double-emitting.
-
-    When the tenant has claude_code configured (or defaulted) but the claude
-    binary is absent — typical on a fresh Windows install where Claude Code
-    was not installed — we transparently route to Hermes instead of surfacing
-    a raw "claude binary not found" error. The user gets a working response;
-    they can switch to Claude Code later via Settings → Engines.
-    """
-    configured = _configured_os_engine(tenant_id)
-    if configured != "claude_code":
-        return configured, configured, None
-    binary = _claude_binary()
-    # For absolute paths (CORVIN_CLAUDE_BIN set explicitly) check file existence
-    # and executability — shutil.which only searches PATH and skips absolute paths,
-    # so a dangling absolute path would wrongly look "found".
-    if os.path.isabs(binary):
-        claude_missing = not (os.path.isfile(binary) and os.access(binary, os.X_OK))
-    else:
-        claude_missing = shutil.which(binary) is None
-    if claude_missing:
-        # Always fall back to hermes — even if _HermesEngine failed to import
-        # (vendored path issue on wheel installs). The hermes dispatch path will
-        # surface a clearer "Ollama not running" error if needed, which is far
-        # more actionable than "claude binary not found".
-        return configured, "hermes", "claude-binary-missing"
-    # Binary present but NOT authenticated (OAuth session / API key absent): the
-    # wizard installs the claude binary but login is skippable and commonly
-    # deferred, so spawning it would fail every turn with a raw CLI auth error
-    # while a fully-provisioned Hermes sits unused — the "positive first run"
-    # killer. Fall back to Hermes here too, using the SAME credential signal the
-    # rest of the product uses (~/.claude/.credentials.json + ANTHROPIC_API_KEY;
-    # no macOS keychain path is used anywhere, so this introduces no new
-    # false-negative). The user can `claude auth login` and switch back any time.
-    if not _claude_authenticated():
-        return configured, "hermes", "claude-not-authenticated"
-    return configured, configured, None
-
-
-# Positive detail allowlist for the substitution event (same mechanism
-# engine_span.py uses): without it the chain writer's vocabulary floor
-# (security_events F-A4) drops `configured` / `effective` as unknown keys
-# and the record degrades to {reason} + `_dropped_fields`.
+# `os_turn.engine_substituted` (F-E2) recorded the automatic Claude → Hermes
+# swap. ADR-2087 removed that swap, so nothing emits the event any more; its
+# EVENT_SEVERITY entry and this allowlist stay so records already on the chain
+# keep their severity and fields.
 _ENGINE_SUBSTITUTED_EVENT = "os_turn.engine_substituted"
 try:
     from forge import security_events as _fse  # type: ignore  # noqa: E402
@@ -1452,29 +1393,16 @@ except Exception:  # noqa: BLE001 — forge missing: _console_audit itself is un
 
 
 def _effective_os_engine(tenant_id: str, *, audit: bool = True) -> str:
-    """Like _configured_os_engine but with automatic Hermes fallback.
+    """The engine the OS turn runs on — the configured one, always.
 
-    Every substitution (configured != effective) is AUDITED on the tenant's
-    console chain as ``os_turn.engine_substituted {configured, effective,
-    reason}`` (F-E2, 2026-09-07) — the swap used to be silent, so an operator
-    reading the chain saw Hermes turns for a Claude-configured tenant with no
-    record of why. ``audit=False`` is for the pre-turn WebSocket guard
-    (``get_engine_unavailable_message``), which resolves the same answer
-    before the turn that audits it — one event per turn, not two.
+    There is no automatic fallback engine (ADR-2087 removed Hermes): when the
+    claude binary is missing or not authenticated the turn STAYS on
+    ``claude_code`` and ``_engine_unavailable_message`` returns an actionable
+    error pointing at Setup. ``audit`` is accepted for call-site compatibility
+    and has no effect.
     """
-    configured, effective, reason = _resolve_os_engine(tenant_id)
-    if reason is not None and audit:
-        _console_audit.system_event(
-            tenant_id=tenant_id,
-            event=_ENGINE_SUBSTITUTED_EVENT,
-            details={
-                "configured": configured,
-                "effective": effective,
-                "reason": reason,
-            },
-            severity="WARNING",
-        )
-    return effective
+    del audit
+    return _configured_os_engine(tenant_id)
 
 def _claude_settings_env() -> dict:
     """The ``env`` block of Claude Code's own settings.json (honouring
@@ -1508,8 +1436,8 @@ def _claude_authenticated() -> bool:
     Authenticated iff ANY of: ANTHROPIC_API_KEY is set; a 3rd-party platform
     (Amazon Bedrock / Google Vertex / Microsoft Foundry) is configured; or an
     OAuth session exists in ~/.claude/.credentials.json. Fail-OPEN (returns True)
-    on an unexpected read error so a transient glitch never silently reroutes a
-    genuinely-logged-in user off Claude — the reroute only fires on a clearly-
+    on an unexpected read error so a transient glitch never refuses a
+    genuinely-logged-in user — the "log in" error only fires on a clearly-
     absent credential.
     """
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -1517,9 +1445,8 @@ def _claude_authenticated() -> bool:
     # 3rd-party platform (Bedrock/Vertex/Foundry): auth is via the platform's
     # OWN credentials (AWS/GCP/Azure), so there is NO ANTHROPIC_API_KEY and NO
     # ~/.claude/.credentials.json. Checking only those two (the old behaviour)
-    # false-negatived every such install and rerouted it to the "hermes" engine
-    # — which was REMOVED in v2.0 and whose dispatch path now raises NameError
-    # (`last_usage`), the exact live failure this fixes. The setup wizards write
+    # false-negatived every such install and reported it unauthenticated. The
+    # setup wizards write
     # CLAUDE_CODE_USE_* into settings.json's `env` block (not the shell), so
     # check both — mirroring engine_detection.probe_claude_code(), the canonical
     # detector this probe's docstring claims to (but did not) mirror.
@@ -1534,7 +1461,7 @@ def _claude_authenticated() -> bool:
         creds = json.loads(creds_path.read_text(encoding="utf-8"))
         return bool(creds.get("claudeAiOauth") or creds.get("accessToken"))
     except Exception:  # noqa: BLE001
-        return True  # fail-open: don't reroute a possibly-authenticated user
+        return True  # fail-open: don't refuse a possibly-authenticated user
 
 
 def _engine_unavailable_message(engine_id: str) -> str | None:
@@ -1551,17 +1478,8 @@ def _engine_unavailable_message(engine_id: str) -> str | None:
     so instead of a raw "claude binary not found" we name the configured
     engine and point the operator at the Engines page.
     """
-    # 1. Hermes and Local removed in v2.0 (Claude Code only).
-    #    Graceful fallback: old configs with hermes/local silently use claude_code.
-    if engine_id in ("hermes", "local"):
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.warning(
-            f"Engine '{engine_id}' removed in v2.0 (Claude Code only); "
-            f"falling back to claude_code"
-        )
-        engine_id = "claude_code"
-        # Continue with Claude Code path below
+    # 1. Engines removed by ADR-2087 (Hermes / local Ollama) map to claude_code.
+    engine_id = _normalize_legacy_engine_id(engine_id) or "claude_code"
 
     # 2. Genuinely-unsupported OS engine selected in Setup (opencode / codex /
     #    copilot) → the console cannot drive it yet. Name it honestly and point
@@ -1571,14 +1489,14 @@ def _engine_unavailable_message(engine_id: str) -> str | None:
         return (
             f"Die Web-Konsole ist auf die Engine **{label}** eingestellt "
             f"(`spec.default_engine = {engine_id}`), aber der Web-Chat führt "
-            f"OS-Turns derzeit nur über Claude Code und Hermes aus. Wechsle die "
-            f"Engine unter Einstellungen → Engines auf „Claude Code“ oder "
-            f"„Hermes“, oder nutze für {label} die Delegations- bzw. "
+            f"OS-Turns derzeit nur über Claude Code aus. Wechsle die "
+            f"Engine unter Einstellungen → Engines auf „Claude Code“, "
+            f"oder nutze für {label} die Delegations- bzw. "
             f"Agentic-Compute-Pfade.\n\n"
             f"The web console is configured to use the **{label}** engine "
             f"(`spec.default_engine = {engine_id}`), but the web chat currently "
-            f"runs OS turns through Claude Code and Hermes only. Switch the "
-            f"engine to “Claude Code” or “Hermes” on the Settings → Engines "
+            f"runs OS turns through Claude Code only. Switch the "
+            f"engine to “Claude Code” on the Settings → Engines "
             f"page, or use the delegation / Agentic Compute paths for {label}."
         )
     # 3. claude selected but the binary is absent or not executable.
@@ -1596,6 +1514,18 @@ def _engine_unavailable_message(engine_id: str) -> str | None:
             f"The **Claude Code** engine is selected, but the `{binary}` CLI "
             f"was not found. Install the Claude CLI (or set `CORVIN_CLAUDE_BIN`) "
             f"and check the engine setup on the Settings → Engines page."
+        )
+    # 4. claude present but not signed in (no OAuth session, no API key, no
+    #    Bedrock/Vertex/Foundry flag). Spawning would fail every turn with a raw
+    #    CLI auth error; there is no fallback engine (ADR-2087), so say what to do.
+    if not _claude_authenticated():
+        return (
+            f"Die Engine **Claude Code** ist ausgewählt, aber nicht angemeldet. "
+            f"Führe `{binary} auth login` aus (oder hinterlege einen API-Key) "
+            f"über Einrichtung → Engines, dann erneut senden.\n\n"
+            f"The **Claude Code** engine is selected but not signed in. Run "
+            f"`{binary} auth login` (or add an API key) via Setup → Engines, "
+            f"then send again."
         )
     return None
 
@@ -2646,8 +2576,7 @@ _TRIAGE_CODING_RE = re.compile(
 )
 # EXPLICIT parallelism — the user named workers / parallelism / fan-out. This
 # is unambiguous intent and outranks the ACS-X blueprint gate (review F2/F3/F4):
-# a product-noun collision (Apple *Watch*, 4K *Monitor*, *mit Hermes* the parcel
-# carrier) must never hijack an explicit worker request to the direct path.
+# a product-noun collision (Apple *Watch*, 4K *Monitor*) must never hijack an explicit worker request to the direct path.
 # Morphology: `parallel\w*` catches "parallele/parallelen"; `worker[ns]?`
 # catches "Workern" (review F4).
 _EXPLICIT_PARALLEL_RE = re.compile(
@@ -2678,10 +2607,10 @@ _EXPLICIT_WORKER_RE = re.compile(
     re.IGNORECASE,
 )
 # A real worker-engine name, required before a DELEGATE-shaped prompt routes to
-# the direct path (review F2): bare "delegiere" (no engine) and "mit Hermes"
-# the parcel carrier must not silently steer a task off the fan-out.
+# the direct path (review F2): a bare "delegiere" (no engine) must not
+# silently steer a task off the fan-out.
 _NAMED_ENGINE_RE = re.compile(
-    r"\b(hermes|copilot|codex|opencode|claude[\s\-]?code)\b",
+    r"\b(copilot|codex|opencode|claude[\s\-]?code)\b",
     re.IGNORECASE,
 )
 # Fan-out-shaped prompts: explicit parallelism, multi-source research,
@@ -3309,7 +3238,7 @@ def _should_delegate_bundled(prompt: str) -> bool:
       1b. An EXPLICIT worker/fan-out demand ("mehreren Workern", "3 workers",
          "fan-out", "parallele Recherchen") → ACS, checked BEFORE the blueprint
          and coding gates: the user literally named workers, and a product-noun
-         collision (Apple *Watch*, 4K *Monitor*, *mit Hermes*) or an incidental
+         collision (Apple *Watch*, 4K *Monitor*) or an incidental
          coding token ("API") must not hijack that to DIRECT (F2/F3/F4 + D6(a)).
          A BARE parallel adverb ("parallel"/"gleichzeitig") is deliberately NOT
          enough here (D6 refutation): it is too weak to force the quota-burning
@@ -3324,7 +3253,7 @@ def _should_delegate_bundled(prompt: str) -> bool:
          "Any confidence" is the F1 fix: "stündlich"/"täglich" weigh 0.60-
          0.65, below the old 0.70 gate, yet must still not burn quota. The
          DELEGATE primitive routes DIRECT only when a real engine is NAMED
-         (F2: bare "delegiere"/"mit Hermes" must not steer off the fan-out).
+         (F2: a bare "delegiere" must not steer off the fan-out).
          Checked BEFORE the fan-out shape so "recherchiere jede Stunde ..."
          does not mis-route into ACS on its research wording.
       3. Fan-out-shaped (multi-source research, per-item bulk work,
@@ -3356,13 +3285,13 @@ def _should_delegate_bundled(prompt: str) -> bool:
     # the quota-burning fan-out — violating the §6 invariants of
     # delegation-routing.md ("Coding never routes into the ACS fan-out",
     # "LOOP … never route into the ACS fan-out"). DELEGATE deliberately stays
-    # BELOW rule 1b: "mit Hermes" the parcel carrier + explicit workers must
-    # keep fanning out (F2/F3/F4).
+    # BELOW rule 1b: a named engine + explicit workers must keep fanning
+    # out (F2/F3/F4).
     _coding = bool(_TRIAGE_CODING_RE.search(p))
     _bp = _acs_x_blueprint(p)
     # Rule 1b — an EXPLICIT worker/fan-out demand wins over the classifier's
-    # product-noun collisions (Apple *Watch* → LOOP 0.85, 4K *Monitor*, *mit
-    # Hermes*) AND over an incidental coding token: the user literally named
+    # product-noun collisions (Apple *Watch* → LOOP 0.85, 4K *Monitor*) AND
+    # over an incidental coding token: the user literally named
     # workers, so honour it (F2/F3/F4, + D6(a) refutation — an "API" token must
     # not cancel "mit mehreren Workern"). The earlier fix suppressed this on a
     # 0.90 confidence threshold, which let the whole 0.60–0.85 LOOP band
@@ -3442,11 +3371,10 @@ def _tde_available() -> bool:
     2. The `claude` CLI resolves. `_stream_tde_turn`'s very first action is a
        real `claude -p` InitialAnalysis call (analysis_runner → helper_model.
        resolve_claude_bin), which raises `AnalysisUnavailable` when the binary
-       is absent. On a Hermes-only / no-API-key install that would make every
+       is absent. On an install without the CLI that would make every
        auto-delegated turn a guaranteed terminal failure — the TDE path has no
        degrade ladder of its own — so if the CLI is missing we report
-       unavailable and let the ACS branch (which pins a local worker model)
-       handle delegation instead.
+       unavailable and let the ACS branch handle delegation instead.
 
     Import cost is paid once — subsequent calls hit sys.modules."""
     try:
@@ -3763,284 +3691,6 @@ def _sanitize_tool_input(tool_name: str, full_input: dict[str, Any]) -> dict[str
                 pass  # silently skip on any error (e.g. Path() on non-string)
 
     return safe
-
-
-# ── Hermes OS-turn (Layer-22 WorkerEngine path) ─────────────────────────────
-#
-# When the tenant selected Hermes as the OS engine (spec.default_engine=hermes),
-# the console drives the SAME Layer-22 WorkerEngine the bridge adapter uses:
-# HermesEngine streams from local Ollama over HTTP — no subprocess, no Anthropic
-# API key. The blocking urllib generator runs in a worker thread; events are
-# pumped into a queue and drained from the asyncio loop without blocking it
-# (mirrors the adapter's _call_hermes_streaming_via_engine queue pattern).
-#
-# The pre-spawn gates (L44/LIP/L34/L35) run in stream_turn BEFORE this is
-# called, with engine_id=hermes, so this path is reached only for a permitted
-# turn. "Degradation is not silent" (ADR-0159): a turn that yields no usable
-# output surfaces a clear notice, never an empty reply.
-
-_HERMES_IDLE_TIMEOUT_S = 300.0  # wall-clock idle budget; matches adapter floor
-
-
-def _configured_hermes_model(tenant_id: str) -> str | None:
-    """spec.hermes_model from tenant.corvin.yaml, or None for the engine default
-    (CORVIN_HERMES_MODEL env → qwen3:8b). Mirrors routes/engine.py's PUT writer."""
-    val = _tenant_spec(tenant_id).get("hermes_model")
-    if isinstance(val, str) and val.strip():
-        return val.strip()
-    return None
-
-
-def _acs_local_pin_model(os_engine: str, os_model: "str | None",
-                         tenant_id: str) -> "str | None":
-    """The concrete LOCAL model ACS must use for BOTH manager and worker when the
-    OS engine is local (Hermes/Ollama), or None for non-local engines.
-
-    Returning a real local model (never None for hermes) is load-bearing: ACS's
-    _resolve_worker_engine routes by model name, so a hermes model → the Hermes
-    engine. Without a concrete model ACS uses its claude-sonnet default → routes
-    to claude_code → the manager raises "claude CLI not found" on a fresh
-    Hermes/Ollama install → workers_spawned=0 → EMPTY worker-engine graph. Cloud
-    OS engines return None here to preserve their existing worker cost-tier
-    fallback.
-    """
-    if os_engine != "hermes":
-        return None
-    model = os_model or _configured_hermes_model(tenant_id)
-    if model:
-        return model
-    try:
-        from agents.hermes_engine import _resolve_default_model as _rdm  # noqa: PLC0415
-        return _rdm()
-    except Exception:  # noqa: BLE001
-        return "qwen3:8b"
-
-
-async def _stream_hermes_turn(
-    sess: "WebChatSession",
-    prompt: str,
-    tm: Any,
-    task_id: str,
-    *,
-    os_audit: Any,
-    audit_emit: Any,
-    emit_completed: Any,
-    os_turn_id: str,
-) -> AsyncIterator[dict[str, Any]]:
-    """Drive one OS turn through HermesEngine (Ollama HTTP) and yield normalised
-    web-chat events. Same yielded shapes as the claude path:
-        {type: "delta", text}  {type: "result", text, usage}
-        {type: "tool_use", name, input}  {type: "error", message}  {type: "done"}
-    """
-    import queue as _queue  # local import keeps the module's top clean
-
-    model = _configured_hermes_model(sess.tenant_id)
-    engine = _HermesEngine(model=model)  # type: ignore[misc]
-    ev_q: "_queue.Queue" = _queue.Queue()
-
-    system_prompt = _turn_system_prompt(sess, prompt)
-
-    def _stream_thread() -> None:
-        try:
-            for ev in engine.spawn(
-                prompt,
-                system=system_prompt,
-                model=model,
-                working_dir=sess.workdir,
-                timeout=float("inf"),  # the async drain loop owns the idle watchdog
-            ):
-                ev_q.put(("event", ev))
-        except Exception as e:  # noqa: BLE001
-            ev_q.put(("error", str(e)))
-        finally:
-            ev_q.put(("eof", None))
-
-    thread = threading.Thread(
-        target=_stream_thread, daemon=True, name=f"hermes-web-{sess.sid}",
-    )
-    # task.started — no subprocess pid (HTTP, in-thread); the run is INLINE within
-    # the live request, so if the console dies mid-turn it is a genuine orphan and
-    # the boot reaper finalizes it (same rationale as the ACS delegation branch).
-    tm.record_event(task_id, {
-        "event": "task.started", "engine": "hermes", "turn": sess.turn_count,
-    })
-    os_audit("os_turn.started", {"model": engine.model})
-    thread.start()
-
-    accumulated: list[str] = []
-    last_usage: dict[str, Any] | None = None
-    error_text: str | None = None
-    timed_out = False
-    last_event = time.monotonic()
-    _tools_called = 0
-    _tool_seq = 0
-
-    try:
-        while True:
-            try:
-                kind, payload = await asyncio.to_thread(ev_q.get, True, 1.0)
-            except _queue.Empty:
-                if time.monotonic() - last_event > _HERMES_IDLE_TIMEOUT_S:
-                    timed_out = True
-                    try:
-                        engine.cancel()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    break
-                continue
-
-            last_event = time.monotonic()
-            if kind == "event":
-                ev = payload
-                if ev.type == "text_delta" and ev.text:
-                    accumulated.append(ev.text)
-                    tm.record_event(task_id, {"event": "stream_token", "chunk": ev.text})
-                    yield {"type": "delta", "text": ev.text}
-                elif ev.type == "tool_call":
-                    _tools_called += 1
-                    _tool_seq += 1
-                    _tname = ev.text or ""
-                    if not _tname and isinstance(ev.raw, dict):
-                        _tname = ev.raw.get("name", "")
-                    tm.record_event(task_id, {"event": "tool_use", "tool_name": _tname})
-                    # GDPR Art. 5: tool name + seq only, never tool inputs.
-                    os_audit("os_turn.tool_called", {"tool_name": _tname, "seq": _tool_seq})
-                    yield {"type": "tool_use", "name": _tname, "input": {}}
-                elif ev.type == "turn_completed":
-                    if ev.text and not accumulated:
-                        accumulated.append(ev.text)
-                    if ev.usage:
-                        last_usage = ev.usage
-                    break
-                elif ev.type == "error":
-                    error_text = ev.error or "hermes error"
-                    break
-            elif kind == "error":
-                error_text = str(payload)
-                break
-            elif kind == "eof":
-                break
-    except (asyncio.CancelledError, GeneratorExit):
-        try:
-            engine.cancel()
-        except Exception:  # noqa: BLE001
-            pass
-        audit_emit(sess, "web.turn.cancelled")
-        emit_completed(rc=-1)
-        raise
-
-    await asyncio.to_thread(thread.join, 5.0)
-    final_text = "".join(accumulated).strip()
-
-    # "Degradation is not silent" (ADR-0159): an idle-timeout or an Ollama error
-    # with no usable text surfaces a clear notice rather than an empty reply.
-    if not final_text and (error_text or timed_out):
-        if error_text and "ollama" in error_text.lower():
-            notice = (
-                "Hermes/Ollama ist nicht erreichbar. Bitte starte `ollama serve` "
-                "und stelle sicher, dass das Modell geladen ist.\n\n"
-                "Hermes/Ollama is unreachable. Please start `ollama serve` and "
-                "make sure the model is pulled."
-            )
-        elif timed_out:
-            notice = (
-                "Hermes hat innerhalb des Zeitfensters nicht geantwortet "
-                "(Ollama-Idle-Timeout). Bitte erneut versuchen.\n\n"
-                "Hermes did not respond within the time window (Ollama idle "
-                "timeout). Please try again."
-            )
-        else:
-            notice = (
-                f"Hermes-Fehler: {error_text}.\n\n"
-                f"Hermes error: {error_text}."
-            )
-        rc = 1
-        tm.record_event(task_id, {"event": "task.failed", "exit_code": rc})
-        audit_emit(sess, "web.turn.completed", rc=rc, result_chars=len(notice),
-                   usage=None, reason="hermes_no_output")
-        emit_completed(rc)
-        yield {"type": "delta", "text": notice}
-        yield {"type": "result", "text": notice, "usage": None}
-        touch(sess, increment_turn=True)
-        _append_turn(sess, "assistant", [{"kind": "text", "text": notice}])
-        yield {"type": "done"}
-        return
-
-    rc = 0
-    # annotation_pending tells the client "a second, final result event is
-    # coming — render this text but do NOT speak it yet". Without it the
-    # client spoke both events and paid for two full server-side syntheses
-    # per annotated turn (the exact bug this field was introduced to fix for
-    # the claude_code path below — the Hermes path never got the same field
-    # on its own result events, so it silently reopened the double-speak
-    # regression for every tenant on the Hermes engine, found 2026-07-16).
-    _ann_pending = bool(final_text.strip()) and _annotation_enabled()
-
-    # ADR-0365: Record token metrics for this turn
-    if _TOKEN_MEASUREMENT_AVAILABLE and last_usage:
-        try:
-            record_turn_metrics(
-                turn_id=task_id,
-                session_id=sess.sid,
-                tenant_id=sess.tenant_id,
-                input_tokens=last_usage.get("input_tokens", 0),
-                output_tokens=last_usage.get("output_tokens", 0),
-                subsystems={
-                    "memory_lookup": 50,      # Context pipeline memory step
-                    "skill_injection": 100,    # Skill system context
-                    "context_bridge": 25,      # CEL context bridge
-                }
-            )
-        except Exception:  # noqa: BLE001
-            pass  # Token measurement failure should not break the turn
-
-    yield {"type": "result", "text": final_text, "usage": last_usage,
-           "annotation_pending": _ann_pending}
-
-    # Voice annotation suffix (LERN-ZUGABE + METAPHER), mirroring the claude path.
-    # Gated on _ann_pending, not just final_text: _annotation_enabled() here and
-    # _compute_web_annotation_suffix's own gates read the profile seconds apart,
-    # so a mid-turn toggle could produce a suffix the client was never told to
-    # wait for — it would land in the persisted history and the voice_key but
-    # never in the stream, orphaning the turn's archived audio.
-    _ann_suffix = ""
-    if final_text and _ann_pending:
-        _ann_suffix = await _compute_web_annotation_suffix(final_text, sess.tenant_id)
-    # Emit the FINAL result whenever the first one was flagged
-    # annotation_pending — including when the annotation came back empty
-    # (LLM skipped it, budget spent, both backends down). The client is
-    # holding its voice waiting for exactly this event; skipping it on the
-    # empty path would leave the turn permanently unspoken.
-    if _ann_pending:
-        if _ann_suffix:
-            yield {"type": "delta", "text": "\n\n" + _ann_suffix}
-        yield {"type": "result",
-               "text": (final_text + "\n\n" + _ann_suffix) if _ann_suffix else final_text,
-               "usage": last_usage, "annotation_pending": False}
-
-    combined = final_text
-    if _ann_suffix:
-        combined = (final_text + "\n\n" + _ann_suffix).strip()
-
-    audit_emit(sess, "web.turn.completed", rc=rc, result_chars=len(final_text),
-               usage=last_usage)
-    tm.record_event(task_id, {
-        "event": "task.completed", "exit_code": 0,
-        "summary": f"hermes: {len(final_text)} chars output",
-    })
-    emit_completed(rc)
-    touch(sess, increment_turn=True)
-    # ADR-0194: pin the voice_key of what the client will actually SPEAK — the
-    # last result event's text. It is not `combined`: that one is .strip()ed
-    # while the result event is not, so a reply with edge whitespace hashed
-    # differently and the archived audio was orphaned (no player, ever). Same
-    # class as the tool-using-turn divergence on the claude path; this path was
-    # missed the first time round.
-    _spoken = (final_text + "\n\n" + _ann_suffix) if _ann_suffix else final_text
-    _append_turn(sess, "assistant",
-                 [{"kind": "text", "text": combined or ""}],
-                 voice_key_hint=voice_key(_spoken) if _spoken.strip() else None)
-    yield {"type": "done"}
 
 
 # ── L44 + L-integrity + L34 + L35 pre-spawn gates (CRITICAL compliance) ───────
@@ -4748,7 +4398,7 @@ async def _stream_tde_turn(
     except (asyncio.CancelledError, GeneratorExit):
         # Client disconnect / server shutdown mid-TDE: close the audit pair
         # before propagating (os_turn.started must not stay unmatched —
-        # mirrors the Hermes/ACS paths). The InitialAnalysis one-shot is
+        # mirrors the ACS path). The InitialAnalysis one-shot is
         # killed explicitly (round-4 finding, see _analysis_holder above);
         # the per-step delegated/local worker one-shots inside
         # select_engine_and_execute() are still only bounded by their own
@@ -5452,7 +5102,7 @@ async def _stream_turn_impl(
     # `_os_emit_completed` below. It MUST be bound here, before that closure is
     # defined: it is a free variable there, and it used to be first assigned
     # only in the native-claude streaming section far below. Every exit path
-    # that emits earlier — the ACS delegation branch, the Hermes branch, the
+    # that emits earlier — the ACS delegation branch, the
     # TDE hand-off, and every early error return — therefore hit
     # `NameError: free variable 'last_usage' referenced before assignment`
     # AFTER `_os_completed_emitted` was already set True, so those turns wrote
@@ -5462,8 +5112,8 @@ async def _stream_turn_impl(
     # Requested model; overwritten with the subprocess-confirmed model from
     # the stream-json init event once it arrives.
     _os_model_used = _os_model or ""
-    # ADR-0171 — one engine.span per OS turn (role=os), engine-agnostic (claude OR
-    # hermes), dual-emitted on the SAME chain as os_turn.* so the console can build
+    # ADR-0171 — one engine.span per OS turn (role=os), engine-agnostic,
+    # dual-emitted on the SAME chain as os_turn.* so the console can build
     # the OS graph from spans uniformly. Paired by a stable per-turn span_id.
     _os_span_id = f"spn-os-{_os_turn_id}"
     _os_span_started = False
@@ -5602,14 +5252,13 @@ async def _stream_turn_impl(
     # data-classification + L35 egress (round-4 finding #3). One call, audit-first
     # on every deny.
     # Resolve the engine that will ACTUALLY run this turn so the gate classifies
-    # against the right L34/L35 compliance row (hermes = locality=local /
-    # egress=none; claude_code = us_cloud). Delegation fan-out is classified as
-    # "acs"; otherwise the configured OS engine (claude_code | hermes | …).
+    # against the right L34/L35 compliance row (claude_code = us_cloud). Delegation fan-out is
+    # classified as "acs"; otherwise the configured OS engine (claude_code | …).
     # ACS-3: fold the Layer-5 repair throttle into the gate's engine
     # classification. The real delegation decision below (`_del_will_delegate`)
     # includes `not _del_throttled`; if the gate omits it, a throttled turn is
     # classified as ACS (engine=DELEGATION_ENGINE_ID) at the gate but actually
-    # runs on the OS engine (claude_code / hermes), so the pre-spawn L34/L35
+    # runs on the OS engine (claude_code), so the pre-spawn L34/L35
     # gate checks the wrong compliance row. Compute the throttle once here and
     # reuse it for the decision below so gate and runtime agree.
     try:
@@ -6158,7 +5807,7 @@ async def _stream_turn_impl(
             # "empty task" and "acs dir uncreatable" branches flipped to the
             # direct engine ungated). The initial gate (above) was called with
             # engine_id="acs"; after ANY fallback the real engine is _os_engine
-            # (claude_code / hermes / …). Without this second check,
+            # (claude_code / …). Without this second check,
             # CONFIDENTIAL data could bypass residency policy because the gate
             # never evaluated the engine that will actually spawn. Fail-closed:
             # a refusal ends the turn. The gate runs BEFORE the quota notice so
@@ -6223,14 +5872,6 @@ async def _stream_turn_impl(
             }
             if _os_model:  # manager = OS role → adaptive model (ADR-0112)
                 rt_kwargs["manager_model"] = _os_model
-            # When the OS engine is LOCAL (Hermes/Ollama), pin BOTH manager and
-            # worker model to a concrete local model (see _acs_local_pin_model) so
-            # ACS never falls back to cloud-Claude and dies with "claude CLI not
-            # found" → 0 workers → empty worker-engine graph on a fresh local install.
-            _pin_model = _acs_local_pin_model(_os_engine, _os_model, sess.tenant_id)
-            if _pin_model:
-                rt_kwargs["manager_model"] = _pin_model
-                rt_kwargs["worker_model"] = _pin_model
             # Pass session workdir so ACSRuntime writes acs.worker.* events into
             # chat_debug.jsonl — enables ACO Layer 3 to correlate worker errors.
             rt_kwargs["session_debug_log"] = sess.workdir
@@ -6247,7 +5888,7 @@ async def _stream_turn_impl(
             })
             _os_audit("os_turn.started", {"model": _os_model_used})
             # Per-turn agentic-compute badge (frontend takes the LAST engine
-            # event of a turn — fallback paths later re-stamp claude/hermes).
+            # event of a turn — fallback paths later re-stamp claude).
             yield {"type": "engine", "engine": "acs",
                    "label": "ACS (Agentic Compute Fan-out)"}
             yield {"type": "delta",
@@ -6717,11 +6358,10 @@ async def _stream_turn_impl(
             return
 
     # #8 — engine-respect guard.
-    # The console web-chat drives two OS engines: claude_code (the direct
-    # `claude -p` subprocess path below) and hermes (the Layer-22 WorkerEngine
-    # path → local Ollama HTTP). If the tenant selected a different engine in
-    # Setup (opencode / codex / copilot), or the claude binary is missing for a
-    # claude_code tenant, surface a clear chat message naming the configured
+    # The console web-chat drives one OS engine: claude_code (the direct
+    # `claude -p` subprocess path below). If the tenant selected a different
+    # engine in Setup (opencode / codex / copilot), or the claude binary is
+    # missing / not signed in for a claude_code tenant, surface a clear chat message naming the configured
     # engine and pointing to the Engines page — never a raw "claude binary not
     # found". The delegation branch above is engine-independent (ACS workers
     # inherit the user/tenant model, ADR-0112) and is intentionally NOT gated.
@@ -6749,24 +6389,6 @@ async def _stream_turn_impl(
                      execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
         _emit_execution_context_event(_exec_ctx, _os_turn_id, sess)
         yield {"type": "done"}
-        return
-
-    # ── Hermes OS-turn (Layer-22 WorkerEngine path) ──────────────────────────
-    # The pre-spawn gates (L44/LIP/L34/L35) ALREADY ran above with
-    # engine_id=hermes, so this branch is reached only for a permitted turn.
-    # HermesEngine drives local Ollama over HTTP — no subprocess, no Anthropic
-    # API key. This is the zero-egress / NO-API-KEY path the README promotes;
-    # routing it here is what makes the recommended Hermes onboarding actually
-    # answer in the web chat (round-6 blocker).
-    if _os_engine == "hermes":
-        yield {"type": "engine", "engine": "hermes", "label": "Hermes (lokal)"}
-        async for _ev in _stream_hermes_turn(
-            sess, prompt, tm, task_id,
-            os_audit=_os_audit, audit_emit=_audit_emit,
-            emit_completed=_os_emit_completed,
-            os_turn_id=_os_turn_id,
-        ):
-            yield _ev
         return
 
     # Snapshot workdir before subprocess so we can detect new output files.
@@ -6807,8 +6429,8 @@ async def _stream_turn_impl(
         else:
             msg = (
                 f"Claude Code CLI not found ({binary!r}). "
-                "To fix: install it from https://claude.ai/code, then restart the server. "
-                "Or switch to Hermes (local, no API key needed) on Settings → Engines."
+                "To fix: install it from https://claude.ai/code, then restart the server, "
+                "and check the engine setup on Setup → Engines."
             )
         yield {"type": "error", "message": msg}
         yield {"type": "done"}
@@ -6956,8 +6578,8 @@ async def _stream_turn_impl(
         # GeneratorExit (consumer aclose() on a client mid-turn disconnect) is a
         # BaseException sibling of CancelledError and was NOT caught here — so the
         # claude OS path orphaned its engine.span.start / os_turn.started with no
-        # matching end (ADR-0171 pairing invariant; the delegation + hermes paths
-        # already catch both). Emit the paired completion before re-raising.
+        # matching end (ADR-0171 pairing invariant; the delegation path
+        # already catches both). Emit the paired completion before re-raising.
         _audit_emit(sess, "web.turn.cancelled")
         _os_emit_completed(rc=-1)
         raise
@@ -6982,7 +6604,7 @@ async def _stream_turn_impl(
     # adapter.py voice pipeline used by Discord/WhatsApp.  Appended as a
     # delta so the chat bubble grows naturally; a second result event
     # updates latestResultText so TTS speaks the annotated version.
-    # Gated on _ann_pending (same rationale as the Hermes path): a suffix the
+    # Gated on _ann_pending: a suffix the
     # client was never told to wait for would be persisted + voice_key'd but
     # never spoken, orphaning the turn's archived audio on a mid-turn toggle.
     _ann_suffix = ""

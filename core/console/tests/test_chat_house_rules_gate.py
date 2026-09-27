@@ -20,7 +20,7 @@ This suite drives ``chat_runtime.stream_turn`` and proves:
       mandatory-layer invariant: a gate error never fails open.
 
 Deterministic mode: we monkeypatch ``house_rules._house_rules_classifier`` to
-return a fixed verdict so no live LLM (Hermes / cloud Haiku) is spawned — the
+return a fixed verdict so no live LLM (cloud Haiku) is spawned — the
 same technique the classifier unit suite uses (test_adr0157_classifier.py). The
 gate plumbing (policy load, integrity check, audit emit, decision mapping) is
 exercised for real.
@@ -233,7 +233,7 @@ class HouseRulesGateE2E(unittest.TestCase):
     # ── (c) classifier backend unreachable → degrades to Tier-0 floor ────────
     def test_classifier_error_degrades_to_floor_benign_passes(self) -> None:
         # A raising classifier = semantic backend unreachable (fresh install
-        # before Hermes/Claude are ready, or a transient outage). The gate must
+        # before Claude is ready, or a transient outage). The gate must
         # NOT block a benign prompt — it degrades to the always-available
         # deterministic Tier-0 floor, which clears benign traffic. Prohibited
         # content is still blocked by that floor (see test_house_rules.py's

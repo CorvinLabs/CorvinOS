@@ -270,7 +270,7 @@ class TokenMetricsPayload:
     total_tokens: int
 
     # Engine & inference info
-    engine: str                           # "claude-opus-5" | "hermes" | etc
+    engine: str                           # "claude-opus-5" | "claude_code" | etc
     engine_tier: str                      # "cloud" | "local" | "tiered"
     model_id: Optional[str] = None
 

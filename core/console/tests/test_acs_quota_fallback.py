@@ -3,7 +3,7 @@
 Verifies that when the Free-Tier daily ACS quota is exhausted:
   (A) the turn yields a "notice/quota_fallback" event with a user-facing message,
   (B) the turn does NOT hard-error (402) and does NOT return immediately,
-  (C) the direct OS-turn path (claude_code / hermes) is taken instead,
+  (C) the direct OS-turn path (claude_code) is taken instead,
   (D) no ACS workers are spawned.
 
 And conversely, when quota is NOT exhausted:

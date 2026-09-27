@@ -62,7 +62,6 @@ const ENGINE_LABELS: Record<string, string> = {
   claude_code: "Claude Code",
   codex_cli:   "Codex",
   opencode:    "OpenCode",
-  hermes:      "Hermes",
   copilot:     "Copilot",
 };
 
@@ -77,7 +76,6 @@ function EngineChip() {
 
   const engine = q.data?.default_engine ?? "claude_code";
   const label = ENGINE_LABELS[engine] ?? engine;
-  const isLocal = engine === "hermes";
 
   return (
     <Link
@@ -86,18 +84,11 @@ function EngineChip() {
       className={cn(
         "flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors no-underline",
         "hover:bg-muted cursor-pointer",
-        isLocal
-          ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
-          : "border-border bg-muted/30 text-muted-foreground",
+        "border-border bg-muted/30 text-muted-foreground",
       )}
     >
-      {isLocal ? <Cpu className="h-3 w-3" /> : <Cloud className="h-3 w-3" />}
+      <Cloud className="h-3 w-3" />
       <span className="font-medium">{label}</span>
-      {isLocal && (
-        <span className="rounded bg-emerald-500/15 px-1 text-[9px] font-semibold uppercase tracking-wide text-emerald-600">
-          local
-        </span>
-      )}
     </Link>
   );
 }

@@ -71,7 +71,7 @@ Comprehensive test suite for CorvinOS Console (`core/console/corvin_console/web-
 
 5. `tests/integration/engines/engines-page.test.tsx` (27 tests)
    - Engines display, Claude Code engine
-   - Hermes engine, OpenCodeEngine
+   - OpenCodeEngine
    - Engine selection, information display, accessibility
 
 6. `tests/integration/bridges/bridges-page.test.tsx` (31 tests)

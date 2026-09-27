@@ -1,7 +1,7 @@
 """Phase 2b — L16 Audit Chain Integration: execution_context events (ADR-0248).
 
 Every turn emits an audit event with ExecutionContext metadata:
-  - Engine (claude_code, acs, tde, hermes)
+  - Engine (claude_code, acs, tde)
   - Model (source + name)
   - Delegation (mode, acs_run_id, tde_router_decision)
   - Performance (duration_ms, tokens_*, tool_calls_count)
@@ -109,9 +109,9 @@ def test_execution_context_event_optional_fields():
             turn_id="turn_optional_123",
             session_id="sess_optional_abc",
             tenant_id="_default",
-            engine_id="hermes",
-            model_source="ollama",
-            model_name="ollama/mistral",
+            engine_id="tde",
+            model_source="openrouter",
+            model_name="openrouter/mistral",
             delegation_mode="native",
             duration_ms=2000,
             exit_code=0,

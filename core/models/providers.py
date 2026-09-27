@@ -1,6 +1,7 @@
 """
 Model Provider Implementations (ADR-0607, ADR-0377 Phase 3)
-OpenAI, Ollama, OpenRouter, Claude (Anthropic), Gemini (Google)
+OpenAI, OpenRouter, Claude (Anthropic), Gemini (Google)
+(The local Ollama provider was removed by ADR-2087.)
 """
 
 import asyncio
@@ -122,100 +123,6 @@ class OpenAIProvider(ModelProvider):
 
     async def get_default_model(self) -> str:
         return "gpt-4-turbo"
-
-
-class OllamaProvider(ModelProvider):
-    """Ollama (local, free, fast)."""
-
-    async def check_availability(self, model: str) -> bool:
-        """Check if model is pulled in Ollama."""
-        # In real impl: query Ollama /api/tags
-        return True  # Assume available for now
-
-    async def health_check(self) -> HealthCheckResult:
-        """Health check for Ollama local service (ADR-0643)."""
-        base_url = self.config.base_url or "http://localhost:11434"
-        url = f"{base_url}/api/tags"
-
-        try:
-            start = time.time()
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url,
-                    timeout=aiohttp.ClientTimeout(total=self.config.timeout_s),
-                ) as resp:
-                    latency_ms = (time.time() - start) * 1000
-
-                    if resp.status != 200:
-                        return HealthCheckResult(
-                            healthy=False,
-                            message=f"Ollama returned {resp.status}",
-                            latency_ms=latency_ms,
-                        )
-
-                    data = await resp.json()
-                    models = [m.get("name") for m in data.get("models", [])]
-                    return HealthCheckResult(
-                        healthy=True,
-                        message="Ollama is healthy",
-                        latency_ms=latency_ms,
-                        available_models=models,
-                    )
-        except asyncio.TimeoutError:
-            return HealthCheckResult(
-                healthy=False,
-                message=f"Ollama health check timeout (>{self.config.timeout_s}s)",
-                latency_ms=self.config.timeout_s * 1000,
-            )
-        except Exception as e:
-            return HealthCheckResult(
-                healthy=False,
-                message=f"Ollama health check failed (is it running?): {e}",
-                latency_ms=0.0,
-            )
-
-    async def invoke(
-        self,
-        model: str,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 2048,
-    ) -> ModelResponse:
-        """Call Ollama API (local)."""
-        base_url = self.config.base_url or "http://localhost:11434"
-        url = f"{base_url}/api/chat"
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-            },
-        }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=self.config.timeout_s)) as resp:
-                if resp.status != 200:
-                    raise Exception(f"Ollama error: {resp.status}")
-                data = await resp.json()
-
-        try:
-            content = data["message"]["content"]
-        except (KeyError, TypeError) as e:
-            raise Exception(f"Malformed Ollama response: {e}") from e
-        # Ollama doesn't track tokens, estimate conservatively (count actual chars, not split)
-        tokens = max(1, len(content) // 4)
-
-        return ModelResponse(
-            content=content,
-            model=model,
-            usage_tokens=tokens,
-            cost_usd=0.0,  # Free
-        )
-
-    async def get_default_model(self) -> str:
-        return "mistral:7b"
 
 
 class OpenRouterProvider(ModelProvider):

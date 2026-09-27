@@ -1,7 +1,7 @@
-"""E2E tests for engine detection — all 5 registered engines + timeout scenarios.
+"""E2E tests for engine detection — all 4 registered engines + timeout scenarios.
 
 Tests the complete detection pipeline:
-1. Binary discovery (Claude, Hermes, OpenCode, Codex, Copilot)
+1. Binary discovery (Claude, OpenCode, Codex, Copilot) — Hermes removed (ADR-2087)
 2. Authentication detection (subscription, env_var, config_file, none)
 3. Timeout resilience (simulate slow probes)
 4. API integration (route returns correct response)
@@ -23,24 +23,29 @@ if str(_SHARED) not in sys.path:
     sys.path.insert(0, str(_SHARED))
 
 from engine_detection import (
-    detect_all, recommended_engine, probe_claude_code, probe_hermes,
+    detect_all, recommended_engine, probe_claude_code,
     probe_copilot, probe_opencode, probe_codex_cli,
     EngineProbeResult
 )
 
 
-class TestAllFiveEngines(unittest.TestCase):
-    """Verify all 5 registered engines are probed."""
+class TestAllFourEngines(unittest.TestCase):
+    """Verify all 4 registered engines are probed."""
 
-    def test_all_five_registered_engines_detected(self):
-        """detect_all() must probe all 5 engines (even if not installed)."""
+    def test_all_four_registered_engines_detected(self):
+        """detect_all() must probe all 4 engines (even if not installed)."""
         results = detect_all()
         ids = {r.engine_id for r in results if r.engine_id in {
-            "claude_code", "hermes", "opencode", "codex_cli", "copilot"
+            "claude_code", "opencode", "codex_cli", "copilot"
         }}
-        expected = {"claude_code", "hermes", "opencode", "codex_cli", "copilot"}
+        expected = {"claude_code", "opencode", "codex_cli", "copilot"}
         self.assertEqual(ids, expected,
                         f"Missing engines: {expected - ids}")
+
+    def test_hermes_is_no_longer_probed(self):
+        """ADR-2087: no local-Ollama engine is detected or offered."""
+        ids = {r.engine_id for r in detect_all()}
+        self.assertNotIn("hermes", ids)
 
 
 class TestEngineAuthenticationChain(unittest.TestCase):
@@ -70,11 +75,11 @@ class TestEngineAuthenticationChain(unittest.TestCase):
 class TestTimeoutResilience(unittest.TestCase):
     """Test that slow/hanging probes don't block detect_all()."""
 
-    def test_slow_hermes_doesnt_block_others(self):
-        """If Hermes times out, other engines still appear."""
-        def slow_hermes():
+    def test_slow_probe_doesnt_block_others(self):
+        """If one probe times out, other engines still appear."""
+        def slow_opencode():
             time.sleep(2)  # Exceeds _DETECT_TIMEOUT
-            return EngineProbeResult(engine_id="hermes", installed=False,
+            return EngineProbeResult(engine_id="opencode", installed=False,
                                     authenticated=False, credential_source=None, version=None)
 
         def fast_claude():
@@ -86,8 +91,8 @@ class TestTimeoutResilience(unittest.TestCase):
         original_timeout = ed._DETECT_TIMEOUT
 
         try:
-            # Replace with slow hermes + fast claude
-            ed._PROBES = [fast_claude, slow_hermes]
+            # Replace with slow opencode + fast claude
+            ed._PROBES = [fast_claude, slow_opencode]
             ed._DETECT_TIMEOUT = 0.5  # Short timeout
 
             results = detect_all()
@@ -95,7 +100,7 @@ class TestTimeoutResilience(unittest.TestCase):
 
             # Claude should be present (fast)
             self.assertIn("claude_code", ids)
-            # Hermes may be missing (slow timeout)
+            # opencode may be missing (slow timeout)
         finally:
             ed._PROBES = original_probes
             ed._DETECT_TIMEOUT = original_timeout
@@ -104,11 +109,11 @@ class TestTimeoutResilience(unittest.TestCase):
 class TestRecommendedEngineLogic(unittest.TestCase):
     """Test recommendation priority."""
 
-    def test_claude_code_preferred_over_hermes(self):
+    def test_claude_code_preferred_over_opencode(self):
         """When both are authenticated, Claude Code is recommended."""
         results = [
             EngineProbeResult(
-                engine_id="hermes", installed=True, authenticated=True,
+                engine_id="opencode", installed=True, authenticated=True,
                 credential_source="config_file", version=None
             ),
             EngineProbeResult(
@@ -174,9 +179,8 @@ class TestFrontendFiltering(unittest.TestCase):
         for r in visible:
             self.assertTrue(r.installed, f"{r.engine_id} has installed={r.installed}")
 
-        # At least Hermes should be visible (it's always installed somewhere)
         visible_ids = {r.engine_id for r in visible}
-        self.assertIn("hermes", visible_ids)
+        self.assertNotIn("hermes", visible_ids)
 
 
 class TestTimeoutDocumentation(unittest.TestCase):

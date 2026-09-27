@@ -54,7 +54,7 @@ def _seed_onboarding_state(installer: CorvinInstaller, tenant_id: str = "_defaul
     tenant_yaml = global_dir / "tenant.corvin.yaml"
     tenant_yaml.write_text(
         "spec:\n"
-        "  default_engine: hermes\n"
+        "  default_engine: codex_cli\n"
         "  data_residency: eu\n"  # an unrelated setting that must survive
     )
     return {

@@ -445,7 +445,7 @@ def execution_context(
     """Emit execution context for every turn — L16 compliance (ADR-0248).
 
     Captures engine, model, delegation, and performance metadata for every OS
-    turn across all engines (Claude Code, ACS, TDE, Hermes). Used for:
+    turn across all engines (Claude Code, ACS, TDE). Used for:
       - Performance analytics (avg duration per engine/model)
       - Audit trail (who used which engine/model)
       - Cost estimation (tokens × model pricing)
@@ -455,8 +455,8 @@ def execution_context(
         turn_id: Unique turn identifier (uuid or turn_key)
         session_id: Chat session identifier (sid or chat_key)
         tenant_id: Tenant ID for audit correlation
-        engine_id: Engine used (claude_code | acs | tde | hermes)
-        model_source: Model source (claude | ollama | openrouter | hermes)
+        engine_id: Engine used (claude_code | acs | tde)
+        model_source: Model source (claude | openrouter | …)
         model_name: Normalized model name (e.g. "claude-3-5-sonnet")
         delegation_mode: How turn was delegated (native | acs | tde | fallback)
         duration_ms: Wall-clock milliseconds from start to completion

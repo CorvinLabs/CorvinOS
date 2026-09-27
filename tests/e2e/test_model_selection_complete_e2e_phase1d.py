@@ -239,25 +239,25 @@ class TestModelSelectionCompleteE2E:
         and is readable by the optimizer.
 
         Workflow:
-        1. User selects Ollama provider from modal
+        1. User selects a remote provider (e.g. OpenRouter) from modal
         2. Enters server URL + model name
         3. Clicks "Test Connection" → validates reachability
         4. Clicks "Save & Assign to MEDIUM"
         5. Config saved to tenant.corvin.yaml
-        6. Next task of type MEDIUM can use the Ollama model
+        6. Next task of type MEDIUM can use that provider's model
         """
         # In real scenario: console calls setEngineConfig() → backend saves to YAML
         # For this test: verify config schema is correct
 
         config_payload = {
             "task_type": "MEDIUM",
-            "selected_model": "mistral:7b",
-            "provider": "ollama_local",
+            "selected_model": "mistralai/mistral-7b-instruct",
+            "provider": "openrouter",
             "provider_config": {
-                "base_url": "http://localhost:11434",
+                "base_url": "https://openrouter.ai/api/v1",
                 "timeout_sec": 30,
             },
-            "alternatives": ["neural-chat:latest"],
+            "alternatives": ["meta-llama/llama-3-8b-instruct"],
         }
 
         # Verify required fields exist

@@ -31,13 +31,12 @@ import {
   dashboard,
   getLicenseStatus,
   getOsEngineSetting,
-  getOsEngineHealth,
   listDataSources,
   getInstanceIdentity,
 } from "@/lib/api";
 import { Gauge } from "lucide-react";
 import { formatBytes, formatDate } from "@/lib/utils";
-import type { DSIConnection, OsEngineSetting, OsEngineHealth, InstanceIdentityStatus } from "@/lib/api";
+import type { DSIConnection, OsEngineSetting, InstanceIdentityStatus } from "@/lib/api";
 
 // ── Local types ───────────────────────────────────────────────────────────────
 
@@ -102,12 +101,6 @@ const ENGINE_META: Record<
     role: "OS + Worker",
     color: "text-violet-400",
   },
-  hermes: {
-    label: "Hermes (Ollama)",
-    locality: "local",
-    role: "Worker · CONFIDENTIAL",
-    color: "text-emerald-400",
-  },
   opencode: {
     label: "OpenCode",
     locality: "cloud",
@@ -147,12 +140,6 @@ export function DashboardPage() {
     refetchInterval: 60_000,
     retry: false,
   });
-  const engineHealth = useQuery({
-    queryKey: ["engine", "health"],
-    queryFn: ({ signal }) => getOsEngineHealth(signal),
-    refetchInterval: 60_000,
-    retry: false,
-  });
   const dataSources = useQuery({
     queryKey: ["data-sources"],
     queryFn: ({ signal }) => listDataSources(signal),
@@ -183,8 +170,6 @@ export function DashboardPage() {
   const dsCount = dataSources.data?.length ?? 0;
   const activeEngine = engineSettings.data?.default_engine ?? "claude_code";
   const workerEngine = engineSettings.data?.default_worker_engine ?? null;
-  const ollamaOk = engineHealth.data?.ollama_reachable ?? false;
-  const ollamaModels = engineHealth.data?.model_count ?? 0;
   const engineStatus = dash.data?.engine_status ?? {};
   const activeEngineInstalled = engineStatus[activeEngine]?.installed ?? true; // optimistic if no data yet
 
@@ -214,9 +199,7 @@ export function DashboardPage() {
           value={ENGINE_META[activeEngine]?.label ?? activeEngine}
           hint={
             !activeEngineInstalled && !dash.isLoading
-              ? "binary not found — using fallback"
-              : ollamaOk
-              ? `Ollama reachable · ${ollamaModels} model${ollamaModels !== 1 ? "s" : ""}`
+              ? "binary not found — check Setup → Engines"
               : "cloud engine"
           }
           status={!activeEngineInstalled && !dash.isLoading ? "warn" : "ok"}
@@ -307,7 +290,6 @@ export function DashboardPage() {
             {engineSettings.data && (
               <EngineGrid
                 settings={engineSettings.data}
-                health={engineHealth.data}
                 activeOs={activeEngine}
                 activeWorker={workerEngine}
                 detectedStatus={engineStatus}
@@ -627,13 +609,11 @@ function InstanceIdentityCard({ status }: { status: InstanceIdentityStatus }) {
 
 function EngineGrid({
   settings,
-  health,
   activeOs,
   activeWorker,
   detectedStatus,
 }: {
   settings: OsEngineSetting;
-  health: OsEngineHealth | undefined;
   activeOs: string;
   activeWorker: string | null;
   detectedStatus: Record<string, { installed: boolean; has_credential: boolean }>;
@@ -655,9 +635,6 @@ function EngineGrid({
         const isActiveWorker = id === activeWorker;
         const isOsCapable = settings.valid_engines.includes(id);
         const isWorkerCapable = (settings.valid_worker_engines ?? []).includes(id);
-        const isHermes = id === "hermes";
-        const ollamaOk = health?.ollama_reachable ?? false;
-        const ollamaModels = health?.model_count ?? 0;
         const detected = detectedStatus[id];
         // If the backend hasn't returned detection data yet (first load),
         // fall back to "assume capable" so the UI doesn't flicker grey.
@@ -667,8 +644,6 @@ function EngineGrid({
         let statusDot: "ok" | "warn" | "off" = "off";
         if (!isInstalled) {
           statusDot = "off";                          // binary absent → grey
-        } else if (isHermes) {
-          statusDot = ollamaOk ? "ok" : "warn";      // Ollama running check
         } else if (!hasCred) {
           statusDot = "warn";                         // installed but no credential
         } else if (isActiveOs || isActiveWorker || isOsCapable || isWorkerCapable) {
@@ -707,9 +682,7 @@ function EngineGrid({
                 <p className="text-xs text-muted-foreground truncate">
                   {meta.role}
                   {!isInstalled && " · binary not found"}
-                  {isInstalled && !isHermes && !hasCred && " · credential missing"}
-                  {isHermes && ollamaOk && ` · ${ollamaModels} model${ollamaModels !== 1 ? "s" : ""} loaded`}
-                  {isHermes && !ollamaOk && isInstalled && " · Ollama not reachable"}
+                  {isInstalled && !hasCred && " · credential missing"}
                 </p>
               </div>
             </div>

@@ -37,7 +37,6 @@ interface Props {
 const NODE_OPTIONS = [
   { value: 'local',               label: 'local — this machine' },
   { value: 'delegate_claude_code', label: 'delegate_claude_code — fresh Claude' },
-  { value: 'delegate_hermes',     label: 'delegate_hermes — local Ollama' },
   { value: 'delegate_opencode',   label: 'delegate_opencode — OpenCode' },
   { value: 'delegate_codex',      label: 'delegate_codex — Codex CLI' },
 ];

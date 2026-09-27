@@ -37,7 +37,6 @@ def router():
         "claude-sonnet-5": _profile("claude-sonnet-5", ModelTier.BALANCED, 0.002, 0.010),
         "claude-opus-5": _profile("claude-opus-5", ModelTier.BEST_QUALITY, 0.005, 0.025),
         "claude-fable-5": _profile("claude-fable-5", ModelTier.FRONTIER, 0.010, 0.050),
-        "ollama/qwen3:8b": _profile("ollama/qwen3:8b", ModelTier.LOCAL_FREE, 0.0, 0.0, "ollama"),
         "shell": _profile("shell", ModelTier.BALANCED, None, None, "copilot"),
     })
 
@@ -77,10 +76,12 @@ class TestProfilesComeFromRealSources:
         assert p.priced is False
         assert p.input_usd_per_1k is None
 
-    def test_local_model_is_genuinely_zero(self):
-        p = build_profiles(["ollama/qwen3:8b"])["ollama/qwen3:8b"]
-        assert p.tier is ModelTier.LOCAL_FREE
-        assert p.priced and p.input_usd_per_1k == 0.0
+    def test_no_local_free_tier_exists(self):
+        """ADR-2087 removed local-Ollama inference: no model is priced as a
+        free local one, and an ``ollama/…`` id is simply unpriced."""
+        assert not hasattr(ModelTier, "LOCAL_FREE")
+        p = build_profiles(["ollama/some-model"])["ollama/some-model"]
+        assert p.priced is False
 
     def test_tiers_follow_the_vendor_line_up(self):
         assert _tier_for("claude-haiku-4-5") < _tier_for("claude-sonnet-5")
@@ -112,9 +113,10 @@ class TestRanking:
         assert "shell" in r.unpriced
         assert "shell" not in [m for m, _, _ in r.ranked_models]
 
-    def test_local_can_be_excluded(self, router):
-        r = router.rank_models(min_tier=ModelTier.LOCAL_FREE, allow_local=False)
-        assert "ollama/qwen3:8b" not in [m for m, _, _ in r.ranked_models]
+    def test_allow_local_is_accepted_and_ignored(self, router):
+        a = router.rank_models(min_tier=ModelTier.FAST_CHEAP, allow_local=False)
+        b = router.rank_models(min_tier=ModelTier.FAST_CHEAP)
+        assert a.ranked_models == b.ranked_models
 
     def test_no_candidate_recommends_nothing(self, router):
         """It used to fall back to a hardcoded 'claude-3-5-sonnet'."""
@@ -145,14 +147,11 @@ class TestCostEstimate:
         assert out_heavy > in_heavy
 
     def test_unknown_model_returns_none_not_zero(self, router):
-        """0.0 was indistinguishable from a genuinely free local model."""
+        """0.0 was indistinguishable from a free model."""
         assert router.estimate_task_cost("nope", 1000, 1000) is None
 
     def test_unpriced_model_returns_none(self, router):
         assert router.estimate_task_cost("shell", 1000, 1000) is None
-
-    def test_local_model_is_zero(self, router):
-        assert router.estimate_task_cost("ollama/qwen3:8b", 10_000, 10_000) == 0.0
 
 
 class TestAgainstTheRealRegistry:

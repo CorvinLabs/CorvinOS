@@ -42,6 +42,7 @@ if str(_FORGE) not in sys.path:
     sys.path.insert(0, str(_FORGE))
 
 import engine_switch as _es  # noqa: E402
+from engine_registry import normalize_legacy_engine_id as _normalize_engine  # noqa: E402
 from forge import paths as _forge_paths  # noqa: E402
 
 router = APIRouter(prefix="/settings/engine-pref", tags=["console-engine-pref"])
@@ -86,15 +87,17 @@ def _tenant_default_engine(tenant_id: str) -> str | None:
     path = _corvin_home() / "tenants" / tenant_id / "global" / "tenant.corvin.yaml"
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        return (data.get("spec") or {}).get("default_engine") or None
+        raw = (data.get("spec") or {}).get("default_engine") or None
     except Exception:
         return None
+    # ADR-2087: a removed engine (hermes / local Ollama) maps to claude_code.
+    return _normalize_engine(raw) if isinstance(raw, str) else None
 
 
 def _effective_engine(per_chat: dict[str, Any] | None, tenant_default: str | None) -> str:
     """Resolve the effective engine in the same order the adapter uses."""
     if per_chat and per_chat.get("engine"):
-        return per_chat["engine"]
+        return _normalize_engine(per_chat["engine"])
     if tenant_default:
         return tenant_default
     return "claude_code"
@@ -120,8 +123,8 @@ class EnginePrefResponse(BaseModel):
 
 
 class EnginePrefUpdate(BaseModel):
-    engine: str = Field(description="Engine alias (e.g. 'hermes', 'claude_code', 'codex', 'copilot', 'copilot-shell')")
-    model: str | None = Field(None, description="Optional model alias (e.g. 'hermes-fast')")
+    engine: str = Field(description="Engine alias (e.g. 'claude_code', 'codex', 'copilot', 'copilot-shell')")
+    model: str | None = Field(None, description="Optional model alias (e.g. 'sonnet')")
 
 
 # ── Routes ────────────────────────────────────────────────────────────────
@@ -143,7 +146,7 @@ def get_engine_pref(
         source = "system_default"
     return EnginePrefResponse(
         chat_key=chat_key,
-        per_chat_engine=pref.get("engine") if pref else None,
+        per_chat_engine=_normalize_engine(pref.get("engine")) if pref else None,
         per_chat_model=pref.get("model") if pref else None,
         tenant_default=tenant_default,
         effective_engine=effective,

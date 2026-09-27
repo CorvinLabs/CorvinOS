@@ -70,10 +70,10 @@ def test_engine_spans_pairs_os_and_worker_across_chains():
             ("engine.span.end",   {"span_id": "spn-os-1", "role": "os", "engine_id": "claude_code", "model_id": "claude-opus-4-8", "chat_key": sess.chat_key, "status": "ok", "duration_ms": 900}),
         ]:
             SEC.write_event(os_chain, ev, details=det)
-        # Worker span (hermes) — carries run_id, scoped by the run dir.
+        # Worker span (codex_cli) — carries run_id, scoped by the run dir.
         for ev, det in [
-            ("engine.span.start", {"span_id": "spn-w-1", "role": "worker", "engine_id": "hermes", "model_id": "qwen3:8b", "run_id": run_id, "started_at": 2.0}),
-            ("engine.span.end",   {"span_id": "spn-w-1", "role": "worker", "engine_id": "hermes", "model_id": "qwen3:8b", "run_id": run_id, "status": "ok", "duration_ms": 1500, "tokens_used": 222}),
+            ("engine.span.start", {"span_id": "spn-w-1", "role": "worker", "engine_id": "codex_cli", "model_id": "gpt-5-codex", "run_id": run_id, "started_at": 2.0}),
+            ("engine.span.end",   {"span_id": "spn-w-1", "role": "worker", "engine_id": "codex_cli", "model_id": "gpt-5-codex", "run_id": run_id, "status": "ok", "duration_ms": 1500, "tokens_used": 222}),
         ]:
             SEC.write_event(acs_chain, ev, details=det)
 
@@ -85,7 +85,7 @@ def test_engine_spans_pairs_os_and_worker_across_chains():
         assert by_id["spn-os-1"]["role"] == "os" and by_id["spn-os-1"]["completed"] is True
         assert by_id["spn-w-1"]["role"] == "worker" and by_id["spn-w-1"]["tokens_used"] == 222
         # engine-agnostic roll-up: BOTH engines present
-        assert set(body["engines"]) == {"claude_code", "hermes"}
+        assert set(body["engines"]) == {"claude_code", "codex_cli"}
         assert set(body["roles"]) == {"os", "worker"}
 
 

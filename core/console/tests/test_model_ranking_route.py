@@ -129,7 +129,7 @@ class ModelRankingRouteTests(unittest.TestCase):
             self.assertIsNotNone(model_price_per_1k(ns), ns)
         # A namespace that names a genuinely different model stays unpriced —
         # stripping is not guessing.
-        self.assertIsNone(model_price_per_1k("ollama/qwen3:8b"))
+        self.assertIsNone(model_price_per_1k("ollama/gpt-oss:120b"))
         self.assertIsNone(model_price_per_1k("openai/gpt-5"))
 
     def test_ranking_rows_carry_rates_for_the_ids_production_records(self) -> None:

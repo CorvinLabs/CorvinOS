@@ -180,8 +180,8 @@ def test_v1_to_v2_model_preservation():
 def test_v1_to_v2_context_stack():
     """Test v2 context stack initialized with v1 engine."""
     ctx_v1 = ExecutionContextV1(
-        engine_id=EngineId.HERMES,
-        model_name="hermes",
+        engine_id=EngineId.TDE,
+        model_name="claude-haiku-4-5",
         tenant_id="tenant_xyz",
     )
     ctx_v2 = ContextBridge.v1_to_v2(ctx_v1, task_id="task_999", budget_remaining=250.0)
@@ -189,7 +189,7 @@ def test_v1_to_v2_context_stack():
     assert ctx_v2.context_stack.depth == 1
     assert ctx_v2.context_stack.current_scope == "task_999"
     # Verify engine is captured in metadata
-    assert ctx_v2.context_stack.stack[0].metadata.get("engine") == "hermes"
+    assert ctx_v2.context_stack.stack[0].metadata.get("engine") == "tde"
     print("✓ v1 to v2 context stack PASSED")
 
 

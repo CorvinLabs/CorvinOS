@@ -6,7 +6,7 @@ Cost-optimized provider selection + resilience.
 import logging
 from typing import List, Dict, Optional
 from .provider_interface import ModelProvider, ModelProviderConfig, ModelResponse
-from .providers import OpenAIProvider, OllamaProvider, OpenRouterProvider
+from .providers import OpenAIProvider, OpenRouterProvider
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,6 @@ class ModelRouter:
 
         self.providers = {
             "openai": OpenAIProvider(ModelProviderConfig(name="openai", api_key=openai_key)),
-            "ollama": OllamaProvider(ModelProviderConfig(name="ollama", base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"))),
             "openrouter": OpenRouterProvider(ModelProviderConfig(name="openrouter", api_key=openrouter_key)),
         }
         self.cost_tracker = {}  # skill_id → cost
@@ -35,7 +34,7 @@ class ModelRouter:
     async def invoke_with_fallback(
         self,
         skill_id: str,
-        model_preference: str,  # "openai" | "ollama" | "openrouter"
+        model_preference: str,  # "openai" | "openrouter"
         fallback_chain: List[str],  # ["openrouter", "openai"]
         messages: List[Dict[str, str]],
         **kwargs,
@@ -86,9 +85,7 @@ class ModelRouter:
     async def select_provider_by_complexity(self, complexity: str) -> str:
         """Select provider based on Skill complexity."""
         if complexity == "simple":
-            # Use cheap/local first
-            if await self.providers["ollama"].check_availability("mistral:7b"):
-                return "ollama"
+            # Cheapest remote route (local Ollama removed, ADR-2087)
             return "openrouter"
 
         if complexity == "medium":

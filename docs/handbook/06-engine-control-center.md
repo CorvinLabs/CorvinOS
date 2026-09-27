@@ -14,7 +14,7 @@ The Engine Control Center gives you **fine-grained, live control over the active
 
 ![Engine Control Center](assets/engine-control.png)
 
-*The Engine Control Center showing the Primary AI Engine selector (Claude Code active), ECI commands panel, Capability Matrix across all five engines, and Ollama status (3 models reachable).*
+*The Engine Control Center showing the Primary AI Engine selector (Claude Code active), ECI commands panel, and Capability Matrix. (The screenshot predates ADR-2087 and still shows the removed Hermes/Ollama status line.)*
 
 ---
 
@@ -26,12 +26,12 @@ At the top right, green milestone badges indicate which phases of the Engine-Agn
 
 ### Primary AI Engine panel
 
-A radio list with all five engines. The selected engine handles the next conversation turn.
+A radio list with the available engines. The selected engine handles the next conversation turn.
 
 | Engine card element | Meaning |
 |---|---|
 | **Green dot** | Engine is available and responding |
-| **Grey dot** | Engine is not available (binary not found, API key missing, Ollama offline) |
+| **Grey dot** | Engine is not available (binary not found, API key missing) |
 | **`worker only`** tag | This engine cannot be the OS engine; only usable for delegated sub-tasks |
 | **`local`** tag | Engine runs entirely on your machine — no cloud egress |
 | Capability description | One-line summary of what makes this engine unique |
@@ -59,7 +59,7 @@ A cross-engine feature comparison table. Columns = engines, rows = capabilities.
 |---|---|
 | **native** (green) | The engine supports this feature natively |
 | **TEB** (green) | Feature provided via Tool Execution Broker — works, slightly different path |
-| **FCB** (orange diamond) | Feature provided via Function-Call Bridge (for Hermes/Copilot) |
+| **FCB** (orange diamond) | Feature provided via Function-Call Bridge (for Copilot) |
 | **buffer** (orange) | Feature works but with one-turn delay |
 | **×** (red) | Feature not available on this engine |
 
@@ -73,19 +73,15 @@ Key capabilities:
 | **MCP Tools** | Can call Forge tools, SkillForge, Data tools via Model Context Protocol |
 | **Skills** | Reusable skill blocks injected into the system prompt |
 | **Plan Mode** | Supports the Claude Code plan/implement cycle |
-| **Runs locally** | Zero cloud egress — Hermes (Ollama) is the only engine that qualifies |
-
-### Ollama status (bottom of Primary engine panel)
-
-Shows `Ollama reachable — N models` when a local Ollama instance is running. If Ollama is offline, it shows a warning but does not block other engines.
+| **Runs locally** | Zero cloud egress — since the local Hermes engine was removed (ADR-2087) only a self-hosted `opencode_http` server or a tenant-declared engine qualifies |
 
 ---
 
 ## Typical actions
 
-### Switch to Hermes for a confidential task
+### Handle a confidential task
 
-If you're working with data classified as CONFIDENTIAL (stays on your machine), select **Hermes (Ollama)** and click **Save**. All subsequent turns use your local model.
+The local Hermes engine was removed (ADR-2087). Under the default data-classification matrix, CONFIDENTIAL data is admissible only on `opencode_http` (a self-hosted OpenCode server) or on an engine your tenant declares in `engine_compliance`; SECRET data has no bundled admissible engine and is blocked.
 
 ### Check why a capability is unavailable
 

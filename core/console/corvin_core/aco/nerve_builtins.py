@@ -120,13 +120,13 @@ class SessionFiber(NerveFiber):
 # ── Fiber: Engine-Bereitschaft ────────────────────────────────────────────────
 
 class EngineFiber(NerveFiber):
-    """Prüft Engine- und Voice-Bereitschaft (claude_code / hermes / TTS / STT).
+    """Prüft Engine- und Voice-Bereitschaft (claude_code / TTS / STT).
 
     Wraps: engine_healer.run_readiness_check
     """
     fiber_id = "aco.engine"
     fiber_version = "1.0.0"
-    fiber_description = "Engine + Voice Readiness: claude_code/hermes, TTS, STT"
+    fiber_description = "Engine + Voice Readiness: claude_code, TTS, STT"
 
     def scan(self) -> list[NerveSignal]:
         signals: list[NerveSignal] = []
@@ -145,7 +145,7 @@ class EngineFiber(NerveFiber):
                                     f"configured={result.engine_id}, "
                                     f"action={result.engine_action})",
                             data=result.to_audit_details(),
-                            repair_hint="Ollama starten oder claude-binary prüfen",
+                            repair_hint="claude-binary installieren und anmelden (claude auth login)",
                         ))
                     elif result.engine_action not in ("none", ""):
                         signals.append(NerveSignal(

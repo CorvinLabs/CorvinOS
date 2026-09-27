@@ -14,7 +14,7 @@
  * 10. Hot-reload state preservation
  *
  * Auth: Reuses storageState from globalSetup (ADR-0124)
- * Backend: Real bridge.sh adapter with LLM calls (qwen3:8b via Ollama)
+ * Backend: Real bridge.sh adapter with LLM calls (Claude Code)
  * Audit: Verifies metadata-only compliance (no PII in audit.jsonl)
  */
 

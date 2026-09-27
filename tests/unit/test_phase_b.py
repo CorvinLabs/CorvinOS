@@ -2,7 +2,7 @@
 
 import pytest
 from core.models.provider_interface import ModelProviderConfig, ModelResponse
-from core.models.providers import OpenAIProvider, OllamaProvider, OpenRouterProvider
+from core.models.providers import OpenAIProvider, OpenRouterProvider
 from core.models.router import ModelRouter
 from core.ui_layers.ui_adapter import UIRequest, UIResponse
 from core.ui_layers.discord_adapter import DiscordUILayer
@@ -19,13 +19,6 @@ class TestProviders:
         assert provider.name == "openai"
         assert provider.config.api_key == "test-key"
 
-    def test_ollama_config(self):
-        """Ollama provider initializes."""
-        config = ModelProviderConfig(name="ollama", base_url="http://localhost:11434")
-        provider = OllamaProvider(config)
-        assert provider.name == "ollama"
-        assert provider.config.base_url == "http://localhost:11434"
-
     def test_openrouter_config(self):
         """OpenRouter provider initializes."""
         config = ModelProviderConfig(name="openrouter", api_key="test-key")
@@ -39,14 +32,6 @@ class TestProviders:
         provider = OpenAIProvider(config)
         assert await provider.check_availability("gpt-4") is True
         assert await provider.check_availability("gpt-3.5-turbo") is True
-
-    @pytest.mark.asyncio
-    async def test_ollama_check_availability(self):
-        """Ollama availability check."""
-        config = ModelProviderConfig(name="ollama")
-        provider = OllamaProvider(config)
-        # Ollama assumes everything is available locally
-        assert await provider.check_availability("mistral:7b") is True
 
     def test_model_response_immutable(self):
         """ModelResponse is frozen."""
@@ -62,7 +47,7 @@ class TestRouter:
         """Router initializes with all providers."""
         router = ModelRouter()
         assert "openai" in router.providers
-        assert "ollama" in router.providers
+        assert "ollama" not in router.providers  # local Ollama removed (ADR-2087)
         assert "openrouter" in router.providers
 
     def test_router_cost_tracking(self):
@@ -80,7 +65,7 @@ class TestRouter:
         router = ModelRouter()
 
         simple_provider = await router.select_provider_by_complexity("simple")
-        assert simple_provider in ["ollama", "openrouter"]
+        assert simple_provider == "openrouter"
 
         medium_provider = await router.select_provider_by_complexity("medium")
         assert medium_provider == "openrouter"

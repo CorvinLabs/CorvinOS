@@ -132,7 +132,7 @@ const PAGE_CHIPS: Record<string, Record<UiLang, { label: string; prompt: string 
   },
   "/app/models": {
     en: [
-      { label: "Set up Hermes", prompt: "How do I set up Hermes (local Ollama)?" },
+      { label: "Set up Claude Code", prompt: "How do I set up and sign in to Claude Code?" },
       { label: "Switch engine", prompt: "How do I change the default engine?" },
     ],
   },

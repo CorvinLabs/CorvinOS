@@ -34,7 +34,7 @@ class TestSkillInvocationRequest:
                 skill_id="os.delegation_router",
                 skill_version="1.2",
                 input={},
-                engine=WorkerEngine.HERMES,
+                engine=WorkerEngine.COPILOT,
             )
 
     def test_request_missing_engine(self):
@@ -86,11 +86,11 @@ class TestSkillInvocationRequest:
             skill_id="os.delegation_router",
             skill_version="1.2",
             input={"task_shape": "big_data"},
-            engine=WorkerEngine.HERMES,
+            engine=WorkerEngine.COPILOT,
         )
         d = req.to_dict()
         assert d["tenant_id"] == "_default"
-        assert d["engine"] == "hermes"
+        assert d["engine"] == "copilot"
         assert d["input"]["task_shape"] == "big_data"
 
 
@@ -156,11 +156,10 @@ class TestWorkerEngine:
     def test_all_engines(self):
         """All engines are defined."""
         assert WorkerEngine.CLAUDE_CODE
-        assert WorkerEngine.HERMES
+        assert not hasattr(WorkerEngine, "HERMES")  # removed, ADR-2087
         assert WorkerEngine.COPILOT
         assert WorkerEngine.OPENCODE
 
     def test_engine_values(self):
         """Engine values are correct."""
         assert WorkerEngine.CLAUDE_CODE.value == "claude_code"
-        assert WorkerEngine.HERMES.value == "hermes"

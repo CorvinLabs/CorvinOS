@@ -11,20 +11,19 @@ import { api } from "./client";
 export interface EngineModelConfig {
   os_model: string | null;
   worker_model: string | null;
-  // ADR-0181 — model provider id (anthropic/openai/ollama_local/ollama_cloud/openrouter)
+  // ADR-0181 — model provider id (anthropic/openai/ollama_cloud/openrouter)
   provider?: string | null;
 }
 
 /** GET /settings/engine.
  *
  *  Kept in step with `routes/engine.py::EngineSettingResponse` — that model is
- *  the contract, and this interface had drifted past it. Six fields declared
- *  here as REQUIRED (`hermes_model`, `ollama_reachable`, `default_worker_engine`,
- *  `default_worker_model`, `delegation_enabled`, plus `valid_worker_engines`)
- *  are not returned by the route at all: a caller reading any of them got
- *  `undefined` while the compiler promised a value. They are marked optional
- *  below rather than deleted, because an older gateway on the other end of the
- *  same console build may still send them. */
+ *  the contract, and this interface had drifted past it. The worker-engine
+ *  fields below are not returned by the route at all: a caller reading any of
+ *  them got `undefined` while the compiler promised a value. They are marked
+ *  optional rather than deleted, because an older gateway on the other end of
+ *  the same console build may still send them. (The Hermes/local-Ollama fields
+ *  were removed outright with that engine.) */
 export interface OsEngineSetting {
   // Engine-agnostic: any engine_id string from the catalog, or null for system default.
   default_engine: string | null;
@@ -35,18 +34,16 @@ export interface OsEngineSetting {
   compliance_warnings?: string[];
 
   /** ── Not sent by the current backend. Optional, never assume present. ── */
-  hermes_model?: "hermes-fast" | "hermes-balanced" | "hermes-capable" | "hermes-large" | null;
-  ollama_reachable?: boolean;
   default_worker_engine?: string | null;
   default_worker_model?: string | null;
   valid_worker_engines?: string[];
   delegation_enabled?: boolean;
 }
 
+/** GET /settings/engine/health — `routes/engine.py::EngineHealthResponse`. */
 export interface OsEngineHealth {
-  ollama_reachable: boolean;
-  model_count: number;
-  base_url_hash: string;
+  healthy: boolean;
+  message: string;
 }
 
 export async function getOsEngineSetting(signal?: AbortSignal): Promise<OsEngineSetting> {
@@ -57,8 +54,8 @@ export async function getOsEngineSetting(signal?: AbortSignal): Promise<OsEngine
  *
  *  The body shape is `routes/engine.py::EngineSettingUpdate`, which is
  *  `extra="forbid"`: it accepts EXACTLY `default_engine` and `engine_models`.
- *  This signature previously required `hermes_model` and offered
- *  `default_worker_engine` / `default_worker_model`, none of which that model
+ *  This signature previously offered extra engine fields
+ *  (`default_worker_engine` / `default_worker_model`), none of which that model
  *  accepts — so any call built to satisfy the TypeScript signature was
  *  guaranteed to come back 422 `extra_forbidden`. Verified against the live
  *  route 2026-09-15. Widen the Pydantic model first if these need to return. */
@@ -129,7 +126,7 @@ export interface EngineProbeResult {
   /** null means the binary is not installed */
   credential_source: CredentialSource;
   version: string | null;
-  /** non-empty only for hermes — list of pulled Ollama model names */
+  /** models the engine reports, when its probe lists any */
   models: string[];
   /** ADR-0759 — which plan backs an authenticated engine: "pro" | "max" |
    *  "team" | "enterprise" for an OAuth subscription, or the platform id
@@ -144,112 +141,14 @@ export interface EngineDetectionResponse {
   results: EngineProbeResult[];
   /** engine_id of the best ready engine, or null */
   recommended_engine: string | null;
-  /** true when no engine is authenticated — offer Hermes bootstrap */
+  /** true when no engine is authenticated — point the operator at Setup */
   needs_bootstrap: boolean;
   /** set on detection errors (graceful fallback) */
   error?: string;
 }
 
-export interface HermesBootstrapResult {
-  model_selected: string;
-  ram_gb: number;
-  ollama_installed: boolean;
-  model_pulled: boolean;
-  error: string | null;
-  engine_configured?: boolean;
-  hermes_model?: string;
-}
-
-interface HermesBootstrapStatus {
-  state: "idle" | "running" | "done" | "error";
-  phase?: string;
-  result?: HermesBootstrapResult;
-}
-
 export async function detectEngines(signal?: AbortSignal): Promise<EngineDetectionResponse> {
   return api<EngineDetectionResponse>("/settings/engine/detect", { signal });
-}
-
-export async function getHermesBootstrapStatus(): Promise<HermesBootstrapStatus> {
-  return api<HermesBootstrapStatus>("/settings/engine/bootstrap/status", { timeoutMs: 15_000 });
-}
-
-/**
- * Bootstrap Hermes: pulling the model (~5 GB) takes minutes, so the server runs
- * it in a background thread. This starts the job, then polls the status endpoint
- * until it reaches a terminal state — short individual requests, no 30 s-timeout
- * abort on the long pull. `onPhase` (optional) receives live phase strings.
- */
-export async function bootstrapHermes(
-  csrf: string,
-  onPhase?: (phase: string) => void,
-): Promise<HermesBootstrapResult> {
-  // Start (or attach to an in-flight job) — fast, short timeout.
-  await api<HermesBootstrapStatus>("/settings/engine/bootstrap", {
-    method: "POST",
-    csrf,
-    timeoutMs: 20_000,
-  });
-
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  // Poll for up to ~25 min (480 × ~3 s) — generous for a 5 GB pull on a slow link.
-  for (let i = 0; i < 500; i++) {
-    await sleep(3_000);
-    let s: HermesBootstrapStatus;
-    try {
-      s = await getHermesBootstrapStatus();
-    } catch {
-      continue; // transient network blip — keep polling, the pull runs server-side
-    }
-    if (s.phase) onPhase?.(s.phase);
-    if (s.state === "done" || s.state === "error") {
-      return (
-        s.result ?? {
-          model_selected: "",
-          ram_gb: 0,
-          ollama_installed: false,
-          model_pulled: s.state === "done",
-          error: s.state === "error" ? "Bootstrap failed" : null,
-        }
-      );
-    }
-  }
-  return {
-    model_selected: "",
-    ram_gb: 0,
-    ollama_installed: false,
-    model_pulled: false,
-    error: "Bootstrap timed out — the model may still be downloading; click Test in a few minutes.",
-  };
-}
-
-// ── Claude Code Local Backend (ADR-0126) ──────────────────────────────
-
-export interface ClaudeLocalSetting {
-  enabled: boolean;
-  base_url: string;
-  sonnet_model: string;
-  haiku_model: string;
-  opus_model: string;
-  ollama_reachable: boolean;
-  available_models: string[];
-}
-
-export async function getClaudeLocalSetting(signal?: AbortSignal): Promise<ClaudeLocalSetting> {
-  return api<ClaudeLocalSetting>("/settings/engine/claude-local", { signal });
-}
-
-export async function setClaudeLocalSetting(
-  body: {
-    enabled: boolean;
-    base_url: string;
-    sonnet_model: string;
-    haiku_model: string;
-    opus_model: string;
-  },
-  csrf: string,
-): Promise<ClaudeLocalSetting> {
-  return api<ClaudeLocalSetting>("/settings/engine/claude-local", { method: "PUT", body, csrf });
 }
 
 // ── Engine model registry (ADR-0119) ─────────────────────────────────
@@ -290,7 +189,7 @@ export interface ProviderSpec {
   base_url: string;
   model_source: string;   // static | ollama | openrouter
   credential_env: string; // env-var NAME only, never a secret value
-  kind: string;           // local | cloud
+  kind: string;           // cloud (local providers were removed, ADR-2087)
 }
 
 export async function getEngineProviders(

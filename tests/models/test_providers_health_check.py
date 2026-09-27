@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from core.models.provider_interface import HealthCheckResult
 from core.models.providers import (
     OpenAIProvider,
-    OllamaProvider,
     OpenRouterProvider,
 )
 from core.models.provider_interface import ModelProviderConfig
@@ -100,95 +99,6 @@ class TestOpenAIHealthCheck:
             assert result.latency_ms > 0
 
 
-class TestOllamaHealthCheck:
-    """Ollama provider health check tests."""
-
-    @pytest.mark.asyncio
-    async def test_health_check_success(self):
-        """Test successful Ollama health check."""
-        config = ModelProviderConfig(
-            name="ollama",
-            base_url="http://localhost:11434",
-            timeout_s=30,
-        )
-        provider = OllamaProvider(config)
-
-        with patch("aiohttp.ClientSession.get") as mock_get:
-            mock_response = AsyncMock()
-            mock_response.status = 200
-            mock_response.json = AsyncMock(return_value={
-                "models": [
-                    {"name": "mistral:7b"},
-                    {"name": "neural-chat"},
-                ]
-            })
-            mock_get.return_value.__aenter__.return_value = mock_response
-
-            result = await provider.health_check()
-
-            assert result.healthy is True
-            assert "healthy" in result.message.lower()
-            assert "mistral:7b" in result.available_models
-
-    @pytest.mark.asyncio
-    async def test_health_check_not_running(self):
-        """Test health check when Ollama is not running."""
-        config = ModelProviderConfig(
-            name="ollama",
-            base_url="http://localhost:11434",
-            timeout_s=5,
-        )
-        provider = OllamaProvider(config)
-
-        with patch("aiohttp.ClientSession.get") as mock_get:
-            mock_get.side_effect = ConnectionError("Connection refused")
-
-            result = await provider.health_check()
-
-            assert result.healthy is False
-            assert "running" in result.message.lower()
-
-    @pytest.mark.asyncio
-    async def test_health_check_custom_base_url(self):
-        """Test health check with custom Ollama URL."""
-        config = ModelProviderConfig(
-            name="ollama",
-            base_url="http://ollama.custom.local:11434",
-            timeout_s=30,
-        )
-        provider = OllamaProvider(config)
-
-        with patch("aiohttp.ClientSession.get") as mock_get:
-            mock_response = AsyncMock()
-            mock_response.status = 200
-            mock_response.json = AsyncMock(return_value={"models": []})
-            mock_get.return_value.__aenter__.return_value = mock_response
-
-            result = await provider.health_check()
-
-            # Verify custom URL was used
-            call_args = mock_get.call_args
-            assert "ollama.custom.local" in str(call_args)
-
-    @pytest.mark.asyncio
-    async def test_health_check_timeout(self):
-        """Test Ollama health check respects timeout."""
-        config = ModelProviderConfig(
-            name="ollama",
-            base_url="http://localhost:11434",
-            timeout_s=1,
-        )
-        provider = OllamaProvider(config)
-
-        with patch("aiohttp.ClientSession.get") as mock_get:
-            mock_get.side_effect = asyncio.TimeoutError()
-
-            result = await provider.health_check()
-
-            assert result.healthy is False
-            assert "timeout" in result.message.lower()
-
-
 class TestOpenRouterHealthCheck:
     """OpenRouter provider health check tests."""
 
@@ -256,11 +166,11 @@ class TestProviderHealthCheckTimeout:
     async def test_timeout_30_seconds_constraint(self):
         """Test that providers timeout at 30s (ADR-0643)."""
         config = ModelProviderConfig(
-            name="ollama",
-            base_url="http://localhost:11434",
+            name="openrouter",
+            api_key="test-key",
             timeout_s=30,  # Must be exactly 30s
         )
-        provider = OllamaProvider(config)
+        provider = OpenRouterProvider(config)
 
         assert provider.config.timeout_s == 30
 

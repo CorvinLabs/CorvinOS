@@ -4,7 +4,7 @@ Engine Configuration API — Model Selection Dashboard
 Routes:
   GET  /v1/engine/config              — Read current per-task-type config + real classification stats
   PUT  /v1/engine/config              — Update model/provider choice per task type (persisted)
-  POST /v1/engine/external-provider/test — Real Ollama/OpenRouter/OpenAI connectivity test
+  POST /v1/engine/external-provider/test — Real Ollama Cloud/OpenRouter/OpenAI connectivity test
   GET  /v1/engine/health              — Health check
 
 Real data (2026-09-10), replacing the Phase-1 K=1 mock:
@@ -94,7 +94,7 @@ class ModelConfigRequest(BaseModel):
     selected_model: str = Field(..., min_length=1, max_length=128)
     provider: Optional[str] = Field(
         None,
-        description="ADR-0181 provider id (anthropic/openai/ollama_local/ollama_cloud/"
+        description="ADR-0181 provider id (anthropic/openai/ollama_cloud/"
                     "openrouter); null = native Anthropic",
     )
     alternatives: list[str] = Field(default_factory=list)

@@ -240,7 +240,7 @@ class DelegationRoutingE2ETest(_StreamTurnE2EBase):
 
     def test_rule5_named_engine_shape_direct_with_delegate_directive(self) -> None:
         self._assert_direct_with_directive(
-            "Frag Hermes nach einer Zusammenfassung der Logs und erstelle "
+            "Frag Codex nach einer Zusammenfassung der Logs und erstelle "
             "danach einen kurzen Bericht",
             "DELEGATE")
 

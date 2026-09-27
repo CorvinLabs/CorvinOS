@@ -54,8 +54,8 @@ def test_record_rejects_unknown_engine(tmp_path):
 
 def test_record_normalises_case_and_whitespace(tmp_path):
     home = _make_home(tmp_path)
-    hu.record_active_engine(home, "  Hermes  ")
-    assert hu._detect_active_engine(home) == "hermes"
+    hu.record_active_engine(home, "  OpenCode  ")
+    assert hu._detect_active_engine(home) == "opencode"
 
 
 def test_record_is_idempotent_no_rewrite_when_unchanged(tmp_path):
@@ -70,15 +70,15 @@ def test_record_is_idempotent_no_rewrite_when_unchanged(tmp_path):
 def test_record_updates_on_engine_change(tmp_path):
     home = _make_home(tmp_path)
     hu.record_active_engine(home, "claude_code")
-    hu.record_active_engine(home, "hermes")
-    assert hu._detect_active_engine(home) == "hermes"
+    hu.record_active_engine(home, "copilot")
+    assert hu._detect_active_engine(home) == "copilot"
 
 
 # ── resolution precedence ────────────────────────────────────────────────────
 
 def test_env_var_wins_over_state_file(tmp_path, monkeypatch):
     home = _make_home(tmp_path)
-    hu.record_active_engine(home, "hermes")
+    hu.record_active_engine(home, "opencode")
     monkeypatch.setenv("CORVIN_OS_ENGINE", "claude_code")
     assert hu._detect_active_engine(home) == "claude_code"
 
@@ -88,7 +88,7 @@ def test_state_file_wins_over_yaml(tmp_path):
     hu.record_active_engine(home, "opencode")
     cfg = hu._tenant_cfg_path(home)
     cfg.parent.mkdir(parents=True, exist_ok=True)
-    cfg.write_text("spec:\n  default_engine: hermes\n", encoding="utf-8")
+    cfg.write_text("spec:\n  default_engine: codex_cli\n", encoding="utf-8")
     assert hu._detect_active_engine(home) == "opencode"
 
 
@@ -114,3 +114,32 @@ def test_yaml_fallback_matches_all_engine_keys(tmp_path, line):
 def test_no_signal_anywhere_is_unknown(tmp_path):
     home = _make_home(tmp_path)
     assert hu._detect_active_engine(home) == "unknown"
+
+
+# ── ADR-2087: a stale stored ``hermes`` degrades to "unknown" ────────────────
+
+def test_hermes_is_not_recorded_any_more(tmp_path):
+    home = _make_home(tmp_path)
+    hu.record_active_engine(home, "hermes")
+    assert not hu._active_engine_path(home).exists()
+
+
+def test_stale_hermes_state_and_yaml_degrade_to_unknown_and_ping_stays_safe(tmp_path):
+    """An old install still carrying ``hermes`` in the state file AND the
+    tenant YAML must keep pinging: the value falls out of the closed enum as
+    "unknown" BEFORE the fail-closed ``_assert_ping_safe`` backstop."""
+    home = _make_home(tmp_path)
+    p = hu._active_engine_path(home)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("hermes", encoding="utf-8")
+    cfg = hu._tenant_cfg_path(home)
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text("spec:\n  default_engine: hermes\n", encoding="utf-8")
+
+    engine = hu._detect_active_engine(home)
+    assert engine == "unknown"
+    body = {"corvin_version": "1.2.3", "platform": "linux",
+            "python_minor": "3.11", "active_engine": engine}
+    hu._assert_ping_safe(body)  # must not raise
+    with pytest.raises(ValueError):
+        hu._assert_ping_safe({**body, "active_engine": "hermes"})

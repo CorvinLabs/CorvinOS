@@ -94,8 +94,10 @@ UNIT_CORVIN_SUPPLY_CHAIN_CRITICAL_TIMER="corvin-supply-chain-critical.timer"
 UNIT_CORVIN_WEBUI="corvin-webui.service"
 UNIT_WATCHDOG_SVC="corvin-voice-bridge-watchdog.service"
 UNIT_WATCHDOG_TIMER="corvin-voice-bridge-watchdog.timer"
-UNIT_CORVIN_HERMES_HEALTH_SVC="corvin-hermes-health.service"
-UNIT_CORVIN_HERMES_HEALTH_TIMER="corvin-hermes-health.timer"
+# Units this script no longer installs but must still clean up on hosts that
+# have them (ADR-2087 removed the Hermes/local-Ollama health timer). Stopped,
+# disabled and deleted by remove_legacy_units — idempotent, silent if absent.
+LEGACY_UNITS=("corvin-hermes-health.timer" "corvin-hermes-health.service")
 UNIT_CORVIN_BG_MONITOR_SVC="corvin-bg-monitor.service"
 UNIT_CORVIN_BG_MONITOR_TIMER="corvin-bg-monitor.timer"
 ALL_UNITS=("$UNIT_ADAPTER" "$UNIT_WA" "$UNIT_TG" "$UNIT_DC" "$UNIT_SK" "$UNIT_EM" "$UNIT_SG" "$UNIT_TM" \
@@ -106,7 +108,6 @@ ALL_UNITS=("$UNIT_ADAPTER" "$UNIT_WA" "$UNIT_TG" "$UNIT_DC" "$UNIT_SK" "$UNIT_EM
            "$UNIT_CORVIN_ENGINE_CANARY_TIMER" "$UNIT_CORVIN_ENGINE_CANARY_SVC" \
            "$UNIT_CORVIN_SUPPLY_CHAIN_WEEKLY_TIMER" "$UNIT_CORVIN_SUPPLY_CHAIN_WEEKLY_SVC" \
            "$UNIT_CORVIN_SUPPLY_CHAIN_CRITICAL_TIMER" "$UNIT_CORVIN_SUPPLY_CHAIN_CRITICAL_SVC" \
-           "$UNIT_CORVIN_HERMES_HEALTH_TIMER" "$UNIT_CORVIN_HERMES_HEALTH_SVC" \
            "$UNIT_CORVIN_BG_MONITOR_TIMER" "$UNIT_CORVIN_BG_MONITOR_SVC" \
            "$UNIT_CORVIN_WEBUI")
 
@@ -299,8 +300,27 @@ channel_configured() {
   esac
 }
 
+# Stop, disable and delete units from LEGACY_UNITS. Safe to run any number of
+# times: a unit that is not installed is skipped without an error.
+remove_legacy_units() {
+  local u removed=0
+  for u in "${LEGACY_UNITS[@]}"; do
+    if [[ -f "$SYSTEMD_DIR/$u" ]] || systemctl --user list-unit-files "$u" 2>/dev/null | grep -q "^$u"; then
+      systemctl --user disable --now "$u" >/dev/null 2>&1 || true
+      rm -f "$SYSTEMD_DIR/$u"
+      removed=1
+    fi
+  done
+  if (( removed )); then
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    ok "removed legacy units: ${LEGACY_UNITS[*]}"
+  fi
+  return 0
+}
+
 install_units() {
   mkdir -p "$SYSTEMD_DIR"
+  remove_legacy_units
   # Service templates ship with __PLUGIN_ROOT__ / __NODE_BIN__ / __PYTHON_BIN__
   # / __REPO_ROOT__ placeholders so the repo is portable. Replace them at
   # install time with the absolute paths we resolved above. Without this
@@ -324,8 +344,6 @@ install_units() {
               "$BRIDGES_DIR/email/systemd/$UNIT_EM" \
               "$BRIDGES_DIR/signal/systemd/$UNIT_SG" \
               "$BRIDGES_DIR/teams/systemd/$UNIT_TM" \
-              "$BRIDGES_DIR/systemd/$UNIT_CORVIN_HERMES_HEALTH_SVC" \
-              "$BRIDGES_DIR/systemd/$UNIT_CORVIN_HERMES_HEALTH_TIMER" \
               "$PLUGIN_ROOT/scripts/systemd/$UNIT_CORVIN_TIMEOUT_SVC" \
               "$PLUGIN_ROOT/scripts/systemd/$UNIT_CORVIN_TIMEOUT_TIMER" \
               "$PLUGIN_ROOT/scripts/systemd/$UNIT_CORVIN_AUDIT_VERIFY_SVC" \
@@ -428,17 +446,6 @@ cmd_up() {
   else
     warn "corvin supply-chain critical-diff timer could not be enabled"
   fi
-  # Hermes health check & repair (every 5 minutes, ACO L5 + Tier LOCAL fallback).
-  # Ensures Ollama is reachable and the qwen3 model is available; auto-repairs
-  # if necessary (requires CORVIN_ACO_L5_RISKY=1). This guarantees a working
-  # fallback engine for OS turns even if Claude Code becomes unavailable.
-  UNIT_CORVIN_HERMES_HEALTH="corvin-hermes-health.service"
-  UNIT_CORVIN_HERMES_HEALTH_TIMER="corvin-hermes-health.timer"
-  if systemctl --user enable --now "$UNIT_CORVIN_HERMES_HEALTH_TIMER" 2>/dev/null; then
-    ok "corvin hermes-health timer enabled (every 5 minutes)"
-  else
-    warn "corvin hermes-health timer could not be enabled — run 'bash $BRIDGES_DIR/setup-hermes-pib.sh --check' to diagnose"
-  fi
   # WebUI host — uvicorn serving corvin-console under the gateway ASGI
   # app on 127.0.0.1:8765. Runs WITHOUT --reload so the command-centre chat
   # WebSocket stays stable; apply new code with a systemctl restart.
@@ -474,6 +481,7 @@ cmd_down() {
   for u in "${ALL_UNITS[@]}"; do
     systemctl --user disable --now "$u" 2>/dev/null || true
   done
+  remove_legacy_units
   ok "all bridge services stopped"
 }
 
@@ -660,9 +668,8 @@ cmd_fg() {
   # child (adapter, channel daemons, helper `claude -p` spawns, acs_runtime)
   # survives a stripped PATH. bridge.sh / systemd commonly run with a PATH that
   # lacks ~/.local/bin (where Claude Code installs the CLI). Without an explicit
-  # pin the ADR-0159 OS-engine auto-detect would false-negative and silently
-  # downgrade the OS turn to hermes → "hermes connect error: timed out" although
-  # claude is installed. The Python resolver (helper_model.resolve_claude_bin)
+  # pin the ADR-0159 OS-engine auto-detect would false-negative and report
+  # claude as missing although it is installed. The Python resolver (helper_model.resolve_claude_bin)
   # already probes these locations; exporting the pin here closes the
   # environmental root so the guarantee is uniform across all children.
   if [[ -z "${CORVIN_CLAUDE_BIN:-}" ]]; then
@@ -677,7 +684,7 @@ cmd_fg() {
       export CORVIN_CLAUDE_BIN="$_cc_bin"
       ok "resolved CORVIN_CLAUDE_BIN=$_cc_bin"
     else
-      warn "claude CLI not found — OS engine auto-detects (hermes fallback if truly absent)"
+      warn "claude CLI not found — install Claude Code (https://claude.ai/code) or set CORVIN_CLAUDE_BIN"
     fi
   else
     ok "CORVIN_CLAUDE_BIN already set: $CORVIN_CLAUDE_BIN"

@@ -93,7 +93,6 @@ deploy_phase2() {
 
   # Step 2: Deploy providers
   echo "🌐 Enabling external providers (sandbox):"
-  echo "   • Ollama: http://localhost:11434 (local test)"
   echo "   • OpenRouter: configured (sandbox API key)"
   echo "   • OpenAI: configured (sandbox API key)"
   echo ""
@@ -108,7 +107,7 @@ deploy_phase2() {
   echo "🧪 Running smoke tests (${canary_pct}%)..."
   echo "   ✓ Task classification works (SIMPLE/MEDIUM/COMPLEX)"
   echo "   ✓ Provider health checks pass"
-  echo "   ✓ Fallback chain works (Ollama → OpenRouter → Anthropic)"
+  echo "   ✓ Fallback chain works (OpenRouter → Anthropic)"
   echo "   ✓ Cost tracking accurate"
   echo "   ✓ Audit trail logs all selections"
   echo ""

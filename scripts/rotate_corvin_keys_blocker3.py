@@ -16,7 +16,7 @@ PREREQUISITES:
    - Remove Gmail app password: https://myaccount.google.com/apppasswords
    - Delete PyPI token: https://pypi.org/account/settings/
    - Delete Resend key: https://resend.com/settings/api-keys
-   - Regenerate Ollama locally
+   - Regenerate Ollama Cloud key: https://ollama.com/settings/keys
 
 USAGE:
     python3 scripts/rotate_corvin_keys_blocker3.py --confirm
@@ -52,7 +52,7 @@ CREDENTIALS_TO_ROTATE = {
         "CORVIN_STT_OPENAI_KEY": "sk-proj-PLACEHOLDER-STT-{timestamp}",
         "OPENAI_API_KEY": "sk-proj-PLACEHOLDER-CorvinOS-{timestamp}",
         "GMAIL_APP_PASSWORD": "PLACEHOLDER_Gmail_Password_{timestamp}",
-        "OLLAMA_API_KEY": "PLACEHOLDER_Ollama_Key_{timestamp}",
+        "OLLAMA_API_KEY": "PLACEHOLDER_OllamaCloud_Key_{timestamp}",
     },
     "~/.config/corvin-voice/secrets.json": {
         "HETZNER_API_TOKEN": "PLACEHOLDER_Hetzner_Token_{timestamp}",
@@ -276,7 +276,7 @@ class CredentialRotator:
         print("      - Gmail: https://myaccount.google.com/apppasswords")
         print("      - PyPI: https://pypi.org/account/settings/")
         print("      - Resend: https://resend.com/settings/api-keys")
-        print("      - Ollama: (regenerate locally)")
+        print("      - Ollama Cloud: https://ollama.com/settings/keys")
         print()
 
         steps = [

@@ -142,8 +142,8 @@ const KNOWN_KEYS: Array<{ name: string; label: string; hint: string }> = [
   },
   {
     name: "ollama_api_key",
-    label: "Ollama API Key",
-    hint: "Only needed for Ollama Cloud — a local Ollama server needs no key, just Ollama running",
+    label: "Ollama Cloud API Key",
+    hint: "API key for the hosted Ollama Cloud provider",
   },
 ];
 

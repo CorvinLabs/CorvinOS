@@ -1,7 +1,7 @@
 """
 Integration Tests: External Providers (ADR-0607, ADR-0643)
 
-Tests for OpenAI, Ollama, and OpenRouter providers.
+Tests for OpenAI and OpenRouter providers (local Ollama removed, ADR-2087).
 Tests health checks, invocation, and timeout handling.
 """
 
@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, patch
 
 from core.models.providers import (
     OpenAIProvider,
-    OllamaProvider,
     OpenRouterProvider,
 )
 from core.models.provider_interface import ModelProviderConfig, ModelResponse
@@ -88,80 +87,6 @@ class TestOpenAIProvider:
                 )
 
 
-class TestOllamaProvider:
-    """Ollama provider tests."""
-
-    def setup_method(self):
-        self.config = ModelProviderConfig(
-            name="ollama",
-            base_url="http://localhost:11434",
-            timeout_s=30,
-        )
-        self.provider = OllamaProvider(self.config)
-
-    def test_get_default_model(self):
-        """Test default model selection."""
-        assert self.provider.get_default_model() == "mistral:7b"
-
-    def test_provider_name(self):
-        """Test provider name property."""
-        assert self.provider.name == "ollama"
-
-    @pytest.mark.asyncio
-    async def test_check_availability(self):
-        """Test model availability check."""
-        # Ollama always returns True for availability check
-        assert await self.provider.check_availability("mistral:7b")
-        assert await self.provider.check_availability("any-model")
-
-    @pytest.mark.asyncio
-    async def test_invoke_success(self):
-        """Test successful Ollama invocation."""
-        messages = [{"role": "user", "content": "Hello"}]
-
-        with patch("aiohttp.ClientSession.post") as mock_post:
-            mock_response = AsyncMock()
-            mock_response.status = 200
-            mock_response.json = AsyncMock(return_value={
-                "message": {"content": "Hello world"},
-            })
-            mock_post.return_value.__aenter__.return_value = mock_response
-
-            result = await self.provider.invoke(
-                model="mistral:7b",
-                messages=messages,
-            )
-
-            assert result.content == "Hello world"
-            assert result.model == "mistral:7b"
-            assert result.cost_usd == 0.0  # Ollama is free
-
-    @pytest.mark.asyncio
-    async def test_invoke_with_custom_url(self):
-        """Test invocation with custom Ollama URL."""
-        config = ModelProviderConfig(
-            name="ollama",
-            base_url="http://ollama.custom.local:11434",
-        )
-        provider = OllamaProvider(config)
-
-        messages = [{"role": "user", "content": "Test"}]
-
-        with patch("aiohttp.ClientSession.post") as mock_post:
-            mock_response = AsyncMock()
-            mock_response.status = 200
-            mock_response.json = AsyncMock(return_value={
-                "message": {"content": "Response"},
-            })
-            mock_post.return_value.__aenter__.return_value = mock_response
-
-            await provider.invoke(model="mistral:7b", messages=messages)
-
-            # Verify custom URL was used
-            call_args = mock_post.call_args
-            assert "ollama.custom.local" in str(call_args)
-
-
 class TestOpenRouterProvider:
     """OpenRouter provider tests."""
 
@@ -228,17 +153,6 @@ class TestProviderConfigValidation:
 
         assert provider.config.api_key == "test-key"
         assert provider.config.timeout_s == 30
-
-    def test_ollama_config_base_url(self):
-        """Test Ollama configuration with base URL."""
-        config = ModelProviderConfig(
-            name="ollama",
-            base_url="http://custom:11434",
-            timeout_s=30,
-        )
-        provider = OllamaProvider(config)
-
-        assert provider.config.base_url == "http://custom:11434"
 
     def test_default_timeout_value(self):
         """Test default timeout value (ADR-0643)."""

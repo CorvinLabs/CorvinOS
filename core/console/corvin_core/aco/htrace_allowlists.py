@@ -17,7 +17,6 @@ NS_ALLOWLIST: frozenset[str] = frozenset({
     "forge",
     "skill_forge",
     "delegation",
-    "hermes_engine",
     "acs_runtime",
     "nerve",
     "nerve_builtins",
@@ -124,7 +123,6 @@ CONFIG_KEY_ALLOWLIST: frozenset[str] = frozenset({
     "data_residency",
     "tenant_shape",
     "allowed_engines",
-    "hermes_enabled",
     "copilot_enabled",
     "a2a_enabled",
 })

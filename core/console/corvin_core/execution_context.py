@@ -3,13 +3,15 @@
 TURN METADATA VERSION: Tracks turn-specific execution context for audit and rendering.
 
 Phase 1 foundation: capture execution context for every turn across all
-engines (Claude Code, ACS, TDE, Hermes) and model sources (Anthropic, Ollama,
-OpenRouter, Hermes local).
+engines (Claude Code, ACS, TDE) and model sources (Anthropic, OpenRouter).
+Hermes and local Ollama were removed (ADR-2087): their enum values stay so
+records already written keep parsing, but nothing classifies a new turn as
+either.
 
 This module provides:
   - ExecutionContext dataclass: unified schema for all turn metadata
-  - Model detection: identify source (claude, ollama, openrouter, hermes)
-  - Engine detection: identify runtime (claude_code, acs, tde, hermes)
+  - Model detection: identify source (claude, openrouter)
+  - Engine detection: identify runtime (claude_code, acs, tde)
   - Delegation mode detection: native, acs, tde, fallback
   - Token counting and timing utilities
 
@@ -34,9 +36,9 @@ from typing import Any, Optional
 class ModelSource(str, Enum):
     """Canonical model sources."""
     CLAUDE = "claude"           # Anthropic API models (claude-3-5-sonnet, etc.)
-    OLLAMA = "ollama"          # Local Ollama HTTP (e.g. ollama:mistral)
+    OLLAMA = "ollama"          # HISTORICAL (ADR-2087) — parse-only, never detected
     OPENROUTER = "openrouter"  # OpenRouter API routing (e.g. openrouter:mistral)
-    HERMES = "hermes"          # Hermes local fallback engine
+    HERMES = "hermes"          # HISTORICAL (ADR-2087) — parse-only, never detected
     UNKNOWN = "unknown"        # Unrecognized model source
 
 
@@ -45,13 +47,13 @@ class EngineId(str, Enum):
     CLAUDE_CODE = "claude_code"  # Direct claude subprocess (ADR-0037)
     ACS = "acs"                   # ACS delegation (ADR-0114, ADR-0201)
     TDE = "tde"                   # Tiered Delegation Engine (ADR-0222)
-    HERMES = "hermes"             # Layer-22 WorkerEngine (Ollama local)
+    HERMES = "hermes"             # HISTORICAL (ADR-2087) — parse-only, never detected
     UNKNOWN = "unknown"           # Unrecognized engine
 
 
 class DelegationMode(str, Enum):
     """How was this turn delegated."""
-    NATIVE = "native"     # Direct OS engine (claude_code or hermes)
+    NATIVE = "native"     # Direct OS engine (claude_code)
     ACS = "acs"           # Delegated to ACS fan-out
     TDE = "tde"           # Delegated to Tiered Delegation Engine
     FALLBACK = "fallback" # Delegated but fell back to native
@@ -66,9 +68,9 @@ class ExecutionContext:
     All fields are optional (graceful fallbacks on parse errors).
 
     Attributes:
-        engine_id: EngineId — claude_code | acs | tde | hermes
-        model_source: ModelSource — claude | ollama | openrouter | hermes
-        model_name: str (normalized) — e.g. "claude-3-5-sonnet" or "ollama/mistral"
+        engine_id: EngineId — claude_code | acs | tde
+        model_source: ModelSource — claude | openrouter
+        model_name: str (normalized) — e.g. "claude-3-5-sonnet"
 
         # Delegation
         delegation_mode: DelegationMode — native | acs | tde | fallback
@@ -98,7 +100,7 @@ class ExecutionContext:
     # Required runtime context
     engine_id: EngineId = field(default=EngineId.UNKNOWN)
     model_source: ModelSource = field(default=ModelSource.UNKNOWN)
-    model_name: str = field(default="")  # Normalized: "claude-*", "ollama/*", etc.
+    model_name: str = field(default="")  # Normalized: "claude-*", "openrouter/*", etc.
 
     # Delegation path
     delegation_mode: DelegationMode = field(default=DelegationMode.NATIVE)
@@ -189,9 +191,7 @@ class ExecutionContext:
 # ── Model Detection ────────────────────────────────────────────────────────
 
 _CLAUDE_PATTERN = re.compile(r'^claude-', re.IGNORECASE)
-_OLLAMA_PATTERN = re.compile(r'^ollama[:/]', re.IGNORECASE)
 _OPENROUTER_PATTERN = re.compile(r'^openrouter[:/]', re.IGNORECASE)
-_HERMES_PATTERN = re.compile(r'^hermes', re.IGNORECASE)
 
 
 def detect_model_source(model_name: str) -> ModelSource:
@@ -200,14 +200,14 @@ def detect_model_source(model_name: str) -> ModelSource:
     Normalizes naming conventions:
       - "claude-3-5-sonnet" → CLAUDE
       - "claude-3-5-sonnet-20241022" → CLAUDE
-      - "ollama:mistral" → OLLAMA
-      - "ollama/mistral:latest" → OLLAMA
       - "openrouter:meta-llama/llama-2" → OPENROUTER
       - "openrouter/meta-llama/llama-2" → OPENROUTER
-      - "hermes-local-3" → HERMES
+
+    Local-Ollama and Hermes names are no longer classified (ADR-2087) — they
+    return UNKNOWN; the OLLAMA/HERMES enum values remain for historical records.
 
     Returns:
-        ModelSource enum (CLAUDE | OLLAMA | OPENROUTER | HERMES | UNKNOWN)
+        ModelSource enum (CLAUDE | OPENROUTER | UNKNOWN)
     """
     if not model_name or not isinstance(model_name, str):
         return ModelSource.UNKNOWN
@@ -218,12 +218,8 @@ def detect_model_source(model_name: str) -> ModelSource:
 
     if _CLAUDE_PATTERN.match(name):
         return ModelSource.CLAUDE
-    if _OLLAMA_PATTERN.match(name):
-        return ModelSource.OLLAMA
     if _OPENROUTER_PATTERN.match(name):
         return ModelSource.OPENROUTER
-    if _HERMES_PATTERN.match(name):
-        return ModelSource.HERMES
 
     return ModelSource.UNKNOWN
 
@@ -233,8 +229,6 @@ def normalize_model_name(model_name: str, model_source: Optional[ModelSource] = 
 
     Ensures consistent representation:
       - "claude-3-5-sonnet-20241022" → "claude-3-5-sonnet"
-      - "ollama:mistral" → "ollama/mistral"
-      - "ollama:mistral:latest" → "ollama/mistral:latest"
       - "openrouter:meta-llama/llama-2" → "openrouter/meta-llama/llama-2"
 
     Args:
@@ -260,23 +254,6 @@ def normalize_model_name(model_name: str, model_source: Optional[ModelSource] = 
             return match.group(1).lower()
         return name.lower()
 
-    # Ollama: normalize separator to "/" and preserve tags
-    if model_source == ModelSource.OLLAMA:
-        # "ollama:mistral" → "ollama/mistral"
-        # "ollama:mistral:latest" → "ollama/mistral:latest"
-        # "ollama/mistral:latest" → "ollama/mistral:latest" (already normalized)
-        # Only replace ':' if it comes BEFORE any '/' (prefix separator, not tag)
-        if "/" in name:
-            # Already has "/" separator — don't change colons (they're tags)
-            normalized = name
-        elif ":" in name:
-            # Replace the first ':' with '/' (model name separator)
-            prefix, rest = name.split(":", 1)
-            normalized = f"{prefix}/{rest}"
-        else:
-            normalized = name
-        return normalized.lower()
-
     # OpenRouter: normalize separator to "/"
     if model_source == ModelSource.OPENROUTER:
         # "openrouter:meta-llama/llama-2" → "openrouter/meta-llama/llama-2"
@@ -286,10 +263,6 @@ def normalize_model_name(model_name: str, model_source: Optional[ModelSource] = 
         else:
             normalized = name
         return normalized.lower()
-
-    # Hermes: lowercase
-    if model_source == ModelSource.HERMES:
-        return name.lower()
 
     return name
 
@@ -301,7 +274,7 @@ def detect_engine(runtime_state: dict[str, Any]) -> EngineId:
 
     Args:
         runtime_state: Dict with engine/delegation context:
-          - engine_id: "claude_code" | "hermes" | "acs" | "tde"
+          - engine_id: "claude_code" | "acs" | "tde"
           - delegation_mode: "native" | "acs" | "tde"
           - spawn_via: "subprocess" | "worker" | "http"
 
@@ -313,13 +286,11 @@ def detect_engine(runtime_state: dict[str, Any]) -> EngineId:
 
     # Explicit engine_id in state
     engine_id = runtime_state.get("engine_id", "").lower()
-    if engine_id in ("claude_code", "acs", "tde", "hermes"):
+    if engine_id in ("claude_code", "acs", "tde"):
         return EngineId(engine_id)
 
     # Infer from spawn method
     spawn_via = runtime_state.get("spawn_via", "").lower()
-    if spawn_via == "http":
-        return EngineId.HERMES
     if spawn_via == "worker":
         return EngineId.ACS
 
@@ -505,7 +476,7 @@ class ExecutionContextBuilder:
 _BADGE_ENGINE_LABELS = {
     "native": "native", "claude_code": "native",
     "acs": "ACS", "tde": "TDE", "tiered_delegation": "TDE",
-    "hermes": "Hermes",
+    "hermes": "Hermes",  # historical records only (ADR-2087)
 }
 _BADGE_ORCH_LABELS = {
     "delegation_loop": "loop", "dag": "graph", "chat": "chat",

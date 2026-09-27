@@ -44,12 +44,12 @@ def test_write_preserves_other_keys_and_spec(monkeypatch, tmp_path):
     p = _patch_path(monkeypatch, tmp_path)
     p.write_text(yaml.safe_dump({
         "apiVersion": "corvin/v1", "kind": "Tenant",
-        "spec": {"telemetry": {"healing_traces": True}, "engine": {"id": "hermes"}},
+        "spec": {"telemetry": {"healing_traces": True}, "engine": {"id": "claude_code"}},
     }))
     hc._write_flags("_default", {"ping_enabled": False})
     doc = yaml.safe_load(p.read_text())
     assert doc["apiVersion"] == "corvin/v1"            # header preserved
-    assert doc["spec"]["engine"]["id"] == "hermes"     # unrelated key preserved
+    assert doc["spec"]["engine"]["id"] == "claude_code"     # unrelated key preserved
     assert doc["spec"]["telemetry"]["ping_enabled"] is False
     assert doc["spec"]["telemetry"]["healing_traces"] is True
 

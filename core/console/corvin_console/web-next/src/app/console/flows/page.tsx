@@ -251,7 +251,7 @@ steps:
     node: delegate_claude_code
     prompt: "Fetch latest docs and summarise"
   - id: post
-    node: delegate_hermes
+    node: delegate_codex
     depends_on: [fetch]
     checkpoint: human    # pauses here for approval
     prompt: "Post summary to Discord"`}</pre>

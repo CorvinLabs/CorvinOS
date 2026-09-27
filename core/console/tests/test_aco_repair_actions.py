@@ -400,3 +400,22 @@ def test_stale_lock_sweep_skips_currently_held_flock(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# ── ADR-2087: a persisted failcount for the removed hermes_health action ────
+
+def test_stale_hermes_health_failcount_is_tolerated_and_pruned(tmp_path):
+    """HermesHealthRepair was deleted; an install may still carry its
+    ``hermes_health`` key in ``aco/repair_failcount.json``. Loading must not
+    choke on it, the executor must run, and the next save drops the key."""
+    import json
+    assert "hermes_health" not in RA.registered_actions()
+    fc = RA._failcount_path(tmp_path)
+    fc.parent.mkdir(parents=True, exist_ok=True)
+    fc.write_text(json.dumps({"hermes_health": 5}), encoding="utf-8")
+
+    assert RA._load_failcounts(tmp_path) == {"hermes_health": 5}
+    RA.run_local_repairs(_ctx(tmp_path))
+
+    saved = json.loads(fc.read_text(encoding="utf-8")) if fc.exists() else {}
+    assert "hermes_health" not in saved

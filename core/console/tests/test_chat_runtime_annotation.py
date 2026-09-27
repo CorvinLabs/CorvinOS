@@ -95,7 +95,7 @@ def test_chat_render_off_suppresses_suffix_even_with_features_on(monkeypatch):
 
 def test_annotation_subprocess_is_latency_bounded(monkeypatch):
     """Every annotation spawn must carry the tight per-call timeout, NOT the old
-    60s. On a cold engine that 60s (× 2, plus Hermes fallback) sat on the turn's
+    60s. On a cold engine that 60s (× 2) sat on the turn's
     critical path before `done`, freezing the chat composer for 1-2 minutes after
     EVERY turn (verified via live browser E2E). The hard cap keeps a slow machine
     responsive by degrading to no-annotation-this-turn."""

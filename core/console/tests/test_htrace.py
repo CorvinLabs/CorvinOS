@@ -228,7 +228,7 @@ class TestFingerprint:
 class TestConfigProfileHash:
     def test_values_not_included(self):
         h1 = config_profile_hash({"engine": "claude", "model": "opus"})
-        h2 = config_profile_hash({"engine": "hermes", "model": "qwen"})
+        h2 = config_profile_hash({"engine": "codex_cli", "model": "gpt"})
         assert h1 == h2  # same keys, different values → same hash
 
     def test_unknown_keys_excluded(self):

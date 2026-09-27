@@ -84,7 +84,7 @@ class CredentialRotationPhase1:
             "CORVIN_STT_OPENAI_KEY": "OpenAI STT (Whisper) API Key",
             "OPENAI_API_KEY": "OpenAI Primary API Key",
             "GMAIL_APP_PASSWORD": "Gmail App-Specific Password",
-            "OLLAMA_API_KEY": "Ollama API Key",
+            "OLLAMA_API_KEY": "Ollama Cloud API Key",
         },
         "~/.config/corvin-voice/secrets.json": {
             "HETZNER_API_TOKEN": "Hetzner API Token (secrets.json copy)",
@@ -246,11 +246,11 @@ class CredentialRotationPhase1:
             return False, f"test failed: {e}"
 
     def _test_ollama(self, token: str) -> Tuple[bool, str]:
-        """Test Ollama API key."""
+        """Test the Ollama Cloud API key (hosted; local Ollama was removed, ADR-2087)."""
         try:
             result = subprocess.run(
                 ["curl", "-s", "-H", f"Authorization: Bearer {token}",
-                 "http://localhost:11434/api/tags"],
+                 "https://ollama.com/api/tags"],
                 timeout=5,
                 capture_output=True,
                 text=True,

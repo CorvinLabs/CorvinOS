@@ -224,24 +224,6 @@ class TestExecutionContextBuilder:
                 .complete())
         assert ctx4.delegation_mode == DelegationMode.FALLBACK
 
-    def test_builder_hermes_engine(self):
-        """Builder correctly captures Hermes local engine context."""
-        builder = ExecutionContextBuilder(tenant_id="local", turn_number=0)
-
-        context = (builder
-                  .start(engine_id="hermes", model_name="ollama/mistral")
-                  .set_delegation(mode="native")
-                  .set_usage({"in": 200, "out": 80})
-                  .set_exit_code(0)
-                  .complete())
-
-        assert context.engine_id == EngineId.HERMES
-        assert context.model_source == ModelSource.OLLAMA
-        assert context.model_name == "ollama/mistral"
-        assert context.delegation_mode == DelegationMode.NATIVE
-        assert context.tokens_input == 200
-        assert context.tokens_output == 80
-
     def test_builder_graceful_empty_initialization(self):
         """Builder handles empty/missing fields gracefully."""
         builder = ExecutionContextBuilder()  # No tenant_id, turn_number defaults
@@ -364,27 +346,12 @@ class TestExecutionContextModels:
         assert ctx1.model_source == ModelSource.CLAUDE
         assert ctx1.model_name == "claude-3-5-sonnet"  # Normalized
 
-        # Ollama
-        ctx2 = ExecutionContextBuilder().start(
-            engine_id="hermes",
-            model_name="ollama:mistral:latest"
-        ).complete()
-        assert ctx2.model_source == ModelSource.OLLAMA
-        assert ctx2.model_name == "ollama/mistral:latest"  # Normalized
-
         # OpenRouter
         ctx3 = ExecutionContextBuilder().start(
             engine_id="unknown",
             model_name="openrouter:meta-llama/llama-2"
         ).complete()
         assert ctx3.model_source == ModelSource.OPENROUTER
-
-        # Hermes local
-        ctx4 = ExecutionContextBuilder().start(
-            engine_id="hermes",
-            model_name="hermes-2-pro"
-        ).complete()
-        assert ctx4.model_source == ModelSource.HERMES
 
 
 class TestExecutionContextBackwardCompatibility:

@@ -54,28 +54,6 @@ def _onboarding_complete() -> bool:
         return False
 
 
-def _default_engine(tenant_id: str = "_default") -> str:
-    """Resolve the tenant's ``spec.default_engine`` from ``tenant.corvin.yaml``.
-
-    ADR-0007: tenant_id is supplied by the caller from the authenticated
-    SessionRecord (never an env var). Returns ``""`` on any miss so callers can
-    fall back gracefully. Lower-cased for stable comparison."""
-    try:
-        import yaml  # type: ignore[import-not-found]
-        cfg = (
-            _forge_paths.corvin_home()
-            / "tenants" / tenant_id / "global" / "tenant.corvin.yaml"
-        )
-        if not cfg.is_file():
-            return ""
-        doc = yaml.safe_load(cfg.read_text("utf-8")) or {}
-        spec = doc.get("spec") if isinstance(doc, dict) else None
-        eng = (spec or {}).get("default_engine") if isinstance(spec, dict) else None
-        return str(eng).strip().lower() if isinstance(eng, str) else ""
-    except Exception:
-        return ""
-
-
 def _optional_session(
     corvin_console_sid: Annotated[str | None, Cookie()] = None,
 ) -> session_auth.SessionRecord | None:
@@ -95,10 +73,8 @@ _ENGINE_KEYS: list[dict[str, Any]] = [
     {"id": "stt_openai",   "label": "OpenAI Whisper (STT)", "kind": "api_key", "key": "CORVIN_STT_OPENAI_KEY",    "url": "https://platform.openai.com/api-keys"},
     {"id": "tts_openai",   "label": "OpenAI TTS (Sprache)", "kind": "api_key", "key": "CORVIN_TTS_OPENAI_KEY",    "url": "https://platform.openai.com/api-keys"},
     {"id": "gemini",        "label": "Google Gemini",       "kind": "api_key", "key": "GEMINI_API_KEY",           "url": "https://aistudio.google.com/app/apikey"},
-    {"id": "ollama",        "label": "Ollama (local)",      "kind": "url",     "key": "OLLAMA_BASE_URL",          "url": "https://ollama.com/download"},
-    # ADR-0181 — Ollama Cloud is a distinct provider id from local Ollama
-    # (engine_model_registry.yaml's "ollama_cloud" vs "ollama_local"); it needs
-    # a bearer API key, local Ollama needs none.
+    # ADR-0181 — Ollama Cloud is a hosted provider (bearer API key). Local
+    # Ollama inference was removed by ADR-2087.
     {"id": "ollama_cloud",  "label": "Ollama Cloud",        "kind": "api_key", "key": "OLLAMA_API_KEY",           "url": "https://ollama.com/settings/keys"},
     {"id": "openrouter",    "label": "OpenRouter",          "kind": "api_key", "key": "OPENROUTER_API_KEY",       "url": "https://openrouter.ai/keys"},
     # ADR-0071 — GitHub Copilot CLI binary detection (no API key; authenticated via copilot auth login).
@@ -432,7 +408,7 @@ _GLOBAL_COMMANDS: dict[str, list[dict[str, Any]]] = {
             "name": "/engine <name>",
             "description": "Switch AI worker engine",
             "syntax": "/engine <name>",
-            "details": "Options: claude (default), hermes (local Ollama), copilot (GitHub CLI). Example: /engine hermes"
+            "details": "Options: claude (default), copilot (GitHub CLI). Example: /engine copilot"
         },
     ],
     "Help & Diagnostics": [
@@ -637,7 +613,7 @@ def whatsapp_qr_proxy(
 # ── WhatsApp bridge: one-click start (async start → poll) ─────────────────────
 # The WhatsApp daemon (Baileys/Node.js) must be RUNNING to emit the pairing QR,
 # and on a fresh box that means installing Node.js + npm deps first — minutes of
-# work that must not block the request. Mirror the Hermes bootstrap pattern: a
+# work that must not block the request. A
 # daemon thread does the work, the SPA polls the status, and the existing
 # /qr.png probe lights up the QR once Baileys emits it.
 _WA_START_LOCK = threading.Lock()
@@ -810,22 +786,6 @@ def setup_status(
         pass
     if claude_ok:
         engine_connected = True
-
-    # A no-API-key Hermes (local Ollama) user has no anthropic/openai key and may
-    # have no claude CLI, yet a working local engine. Treat the engine as
-    # connected when the configured/default engine is hermes AND Ollama is
-    # reachable — reusing the SAME probe /setup/test-engine uses so the final
-    # screen agrees with the engine Test button. Accurate: do NOT claim connected
-    # if Ollama is down.
-    ollama_reachable = False
-    if not engine_connected and _default_engine(rec.tenant_id) == "hermes":
-        try:
-            from .engine import _probe_ollama  # local import: avoid route-load cycle
-            ollama_reachable = bool(_probe_ollama().get("ollama_reachable"))
-        except Exception:
-            ollama_reachable = False
-        if ollama_reachable:
-            engine_connected = True
 
     bridges_path = _forge_paths.corvin_home() / "bridges"
     configured_bridges: list[str] = []

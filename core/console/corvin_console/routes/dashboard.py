@@ -106,8 +106,6 @@ def _engine_binary_status() -> dict[str, dict[str, bool]]:
     Checks performed (all O(1)):
       claude_code  — shutil.which("claude") AND (ANTHROPIC_API_KEY set OR
                      Claude OAuth credential file present)
-      hermes       — Ollama reachable check is done separately by /health;
-                     here we just verify the binary is on PATH
       opencode     — shutil.which("opencode")
       codex_cli    — shutil.which("codex")
       copilot      — shutil.which("gh") (Copilot uses the GitHub CLI)
@@ -132,7 +130,6 @@ def _engine_binary_status() -> dict[str, dict[str, bool]]:
 
     binary_map = {
         "claude_code": ("claude",),
-        "hermes":      ("ollama",),
         "opencode":    ("opencode",),
         "codex_cli":   ("codex",),
         "copilot":     ("gh",),
@@ -141,8 +138,6 @@ def _engine_binary_status() -> dict[str, dict[str, bool]]:
         installed = any(shutil.which(b) is not None for b in binaries)
         if engine_id == "claude_code":
             has_cred = installed and _claude_cred()
-        elif engine_id == "hermes":
-            has_cred = installed  # model presence checked by /health separately
         else:
             has_cred = installed  # for CLI tools, presence = usable
         results[engine_id] = {"installed": installed, "has_credential": has_cred}

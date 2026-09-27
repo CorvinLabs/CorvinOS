@@ -136,7 +136,7 @@ test.describe("Flow Creator Panel (ADR-0122 M1)", () => {
     // Add Step 1: post
     await page.getByTestId("btn-add-step").click();
     await page.getByTestId("input-step-id-1").fill("post");
-    await page.getByTestId("select-node-1").selectOption("delegate_hermes");
+    await page.getByTestId("select-node-1").selectOption("delegate_codex");
     await page.getByTestId("textarea-prompt-1").fill(
       "Format standup summary as Discord message and post it."
     );
@@ -250,7 +250,7 @@ test.describe("Flow Creator Panel (ADR-0122 M1)", () => {
     await page.getByTestId("textarea-prompt-0").fill("Summarise standup: {flow.input.notes}");
     await page.getByTestId("btn-add-step").click();
     await page.getByTestId("input-step-id-1").fill("post");
-    await page.getByTestId("select-node-1").selectOption("delegate_hermes");
+    await page.getByTestId("select-node-1").selectOption("delegate_codex");
     await page.getByTestId("textarea-prompt-1").fill("Post result to Discord.");
     const dep = page.getByTestId("dep-1-fetch");
     await expect(dep).toBeVisible({ timeout: 3000 });

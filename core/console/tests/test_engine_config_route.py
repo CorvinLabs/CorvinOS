@@ -132,18 +132,30 @@ class EngineConfigRouteTests(unittest.TestCase):
         self.assertIn("openrouter", warnings[0].lower() + str(r.json()))
         self.assertIn("OPENROUTER_API_KEY", warnings[0])
 
-    def test_put_local_provider_raises_no_advisory(self) -> None:
+    def test_put_removed_local_provider_is_rejected(self) -> None:
+        """ADR-2087 removed local-Ollama inference: ``ollama_local`` is no
+        longer a registered provider, so a pin to it is refused like any
+        unknown provider rather than silently accepted."""
         r = self._client().put(
             "/settings/engine",
             json={
                 "default_engine": "claude_code",
                 "engine_models": {
-                    "claude_code": {"os_model": "qwen3:8b", "provider": "ollama_local"},
+                    "claude_code": {"os_model": "some-model", "provider": "ollama_local"},
                 },
             },
         )
+        self.assertEqual(r.status_code, 422, r.text)
+
+    def test_get_maps_stored_legacy_hermes_engine_to_claude_code(self) -> None:
+        """A tenant YAML still carrying ``default_engine: hermes`` reads back as
+        claude_code (mapped on read, never rejected — ADR-2087)."""
+        cfg = Path(self._tmp.name) / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text("spec:\n  default_engine: hermes\n  hermes_model: qwen3:8b\n")
+        r = self._client().get("/settings/engine")
         self.assertEqual(r.status_code, 200, r.text)
-        self.assertEqual(r.json()["compliance_warnings"], [])
+        self.assertEqual(r.json()["default_engine"], "claude_code")
 
     def test_put_extra_field_still_rejected(self) -> None:
         """The Claude-Code-only simplification (243690e8) is NOT reverted —

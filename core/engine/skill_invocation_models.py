@@ -2,7 +2,7 @@
 Skill Invocation RPC API — Request/Response models (ADR-0598).
 
 Immutable dataclasses for Skill invocation contract.
-All engines (Claude Code, Hermes, Copilot, OpenCode) use this contract.
+All engines (Claude Code, Copilot, OpenCode) use this contract.
 """
 
 from dataclasses import dataclass, field
@@ -17,7 +17,6 @@ from types import MappingProxyType
 class WorkerEngine(Enum):
     """Supported orchestration engines."""
     CLAUDE_CODE = "claude_code"
-    HERMES = "hermes"
     COPILOT = "copilot"
     OPENCODE = "opencode"
 

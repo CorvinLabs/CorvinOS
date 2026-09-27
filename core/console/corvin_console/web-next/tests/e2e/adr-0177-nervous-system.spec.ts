@@ -13,7 +13,7 @@
  *  6. ComplianceFiber: EU AI Act / GDPR gates tracked
  *  7. Repair endpoint: dry_run=true returns before-summary without repair
  *  8. Repair endpoint: repair triggers without crashing
- *  9. Engine detection: EngineFiber reflects running engine (Hermes or Cloud Code)
+ *  9. Engine detection: EngineFiber reflects running engine (Claude Code)
  * 10. Audit trail: aco.nerve_scan event written after scan
  * 11. Screenshots captured to ./outputs/ for Discord
  *
@@ -228,7 +228,7 @@ test.describe("ADR-0177 — Nervous System E2E", () => {
     }
   });
 
-  // ── 7. Engine fiber: reflects current engine (Hermes or Cloud Code) ────────
+  // ── 7. Engine fiber: reflects current engine (Claude Code) ─────────────────
 
   test("7. aco.engine fiber: aco.engine registered, no CRITICAL on live gateway", async () => {
     const page = await ctx.newPage();
@@ -425,7 +425,7 @@ test.describe("ADR-0177 — Engine Detection via NerveFiber", () => {
     }
   });
 
-  test("engine: EngineFiber handles Cloud Code and Hermes without crash", async () => {
+  test("engine: EngineFiber handles Claude Code without crash", async () => {
     const page = await ctx2.newPage();
     try {
       // Both engines may be active or absent — the fiber must not crash either way

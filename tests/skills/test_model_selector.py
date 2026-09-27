@@ -26,7 +26,7 @@ class TestModelSelectorClassification:
 
         assert result.complexity == "simple"
         assert result.confidence >= 0.5
-        assert result.recommended_provider == "ollama"  # Prefer local for simple
+        assert result.recommended_provider == "openrouter"  # cheapest remote (ADR-2087)
 
     def test_medium_task_classification(self):
         """Test classification of a medium task."""
@@ -268,13 +268,12 @@ class TestModelSelectorClassification:
 class TestModelSelectorProviderMapping:
     """Test provider selection logic."""
 
-    def test_simple_to_ollama(self):
-        """Test that simple tasks map to Ollama."""
+    def test_simple_to_openrouter(self):
+        """Simple tasks map to OpenRouter (local Ollama removed, ADR-2087)."""
         selector = ModelSelector()
         result = selector.classify("Simple task")
 
-        # With prefer_local_for_simple=True (default)
-        assert result.recommended_provider == "ollama"
+        assert result.recommended_provider == "openrouter"
 
     def test_medium_to_openrouter(self):
         """Test that medium tasks map to OpenRouter."""
@@ -291,7 +290,7 @@ class TestModelSelectorProviderMapping:
         assert result.recommended_provider == "anthropic"
 
     def test_local_preference_config(self):
-        """Test local Ollama preference config."""
+        """Test the legacy local-preference flag no longer yields a local provider."""
         config = ModelSelectorConfig(prefer_local_for_simple=False)
         selector = ModelSelector(config)
 
@@ -304,9 +303,9 @@ class TestModelSelectorProviderMapping:
         """Test that provider selection optimizes cost."""
         selector = ModelSelector()
 
-        # Simple → cheap (Ollama free)
+        # Simple → cheapest remote provider (no local model since ADR-2087)
         simple_result = selector.classify("Translate")
-        assert simple_result.recommended_provider == "ollama"
+        assert simple_result.recommended_provider == "openrouter"
 
         # Medium → balanced (OpenRouter cost-effective)
         medium_result = selector.classify("Write a function " * 10)

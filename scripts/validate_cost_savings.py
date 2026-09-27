@@ -56,11 +56,6 @@ class CostCalculator:
             input_price_per_1m=80,  # $0.80 per 1M input tokens
             output_price_per_1m=400,  # $4 per 1M output tokens
         ),
-        "hermes": EnginePricing(
-            engine="hermes",
-            input_price_per_1m=0,  # Free (local)
-            output_price_per_1m=0,  # Free (local)
-        ),
     }
 
     @classmethod

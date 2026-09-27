@@ -388,8 +388,8 @@ def _resolve_provider(
         prefix = model_id.split("/", 1)[0]
         if prefix in provider_ids:
             return prefix, "id_prefix"
-        # "ollama/…" addresses the ollama_local / ollama_cloud pair; accept it
-        # only when exactly one registered id carries that family name.
+        # "ollama/…" addresses the ollama_cloud provider (a family prefix);
+        # accept it only when exactly one registered id carries that family name.
         family = {pid for pid in provider_ids if pid.split("_", 1)[0] == prefix}
         if len(family) == 1:
             return family.pop(), "id_prefix"

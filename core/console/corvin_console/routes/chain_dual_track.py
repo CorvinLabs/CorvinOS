@@ -231,7 +231,7 @@ def get_chain_dual_track(
           "genesis":       {hash_prefix, network_id, instance_id} | null,
           "delegations":   [{
               "delegation_id":  "uuid4",
-              "engine":         "hermes",
+              "engine":         "codex_cli",
               "os_events":      [{hash_prefix, event_type, severity, ts, details}, ...],
               "worker_events":  [{...}, ...],
               "genesis_match":  true | null,

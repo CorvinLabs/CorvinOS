@@ -1,6 +1,6 @@
 """
 Model Provider Interface (ADR-0607)
-Unified contract for OpenAI, Ollama, OpenRouter.
+Unified contract for OpenAI, OpenRouter (and the Phase-3 cloud providers).
 """
 
 from abc import ABC, abstractmethod
@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any, List
 @dataclass(frozen=True)
 class ModelProviderConfig:
     """Provider configuration (immutable, frozen)."""
-    name: str  # "openai", "ollama", "openrouter"
+    name: str  # "openai", "openrouter", ...
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     timeout_s: int = 30

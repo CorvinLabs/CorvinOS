@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class DiscordUILayer(UILayer):
-    """Discord bot adapter (formerly Hermes)."""
+    """Discord bot adapter."""
 
     def __init__(self):
         super().__init__("discord")

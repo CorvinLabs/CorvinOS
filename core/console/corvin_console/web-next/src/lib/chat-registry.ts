@@ -71,7 +71,7 @@ export interface ChatMessage {
   streaming?: boolean;
   error?: string;
   /** ADR-0214: agentic-compute engine that produced this turn
-   *  ("claude_code" | "hermes" | "acs" | "tiered_delegation"). Live-only
+   *  ("claude_code" | "acs" | "tiered_delegation"). Live-only
    *  (stamped from the `engine` stream event; not persisted in turns.jsonl). */
   engine?: string;
   /** Human-readable engine label for the badge. */

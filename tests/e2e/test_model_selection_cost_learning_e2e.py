@@ -120,7 +120,7 @@ class TestModelSelectionCostLearningE2E:
 
         # Both should succeed
         assert result2.complexity in ["simple", "medium"]
-        assert result2.recommended_provider in ["ollama", "openrouter", "anthropic"]
+        assert result2.recommended_provider in ["openrouter", "anthropic"]
 
     def test_50_task_learning_cycle(self, setup):
         """Simulate 50 tasks with cost feedback loop."""
@@ -402,12 +402,12 @@ class TestModelSelectionCostLearningE2E:
             task_type="code_gen",
         )
 
-        # With low learned threshold, simple task should go to Ollama/OpenRouter
+        # With low learned threshold, simple task should go to OpenRouter (no local model, ADR-2087)
         if result.complexity == "simple":
-            assert result.recommended_provider in ["ollama", "openrouter"]
+            assert result.recommended_provider in ["openrouter"]
         else:
             # If classified as medium+, can use any provider
-            assert result.recommended_provider in ["ollama", "openrouter", "anthropic"]
+            assert result.recommended_provider in ["openrouter", "anthropic"]
 
 
 class TestModelSelectionRealWorldScenario:

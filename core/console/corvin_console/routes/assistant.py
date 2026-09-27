@@ -77,7 +77,7 @@ a comparison or overview.
 | /app/workflows | Workflows | Multi-step background tasks: create, edit, trigger, inspect runs |
 | /app/connectors | Connectors | External data source and API connector configuration |
 | /app/agent-hub | Agent Hub | Connect remote A2A agents for task delegation |
-| /app/engines | Engines | AI engine settings: ClaudeCode, Hermes (local Ollama), Copilot, OpenCode |
+| /app/engines | Engines | AI engine settings: ClaudeCode, Copilot, OpenCode |
 | /app/skills | Skills | Forge skills: create, grade, promote, purge |
 | /app/tools | Tools | Forge tools: create, test, promote |
 | /app/memory | Memory | User recall DB and user model profiles |
@@ -102,8 +102,7 @@ available via MCP. Named "code.<tool_name>".
 - **Skill**: Markdown prompt fragment auto-injected into AI context for \
 specific tasks; grades up through task→session→project→user scopes.
 - **Engine**: the AI model backend. Default: ClaudeCode (Anthropic). \
-Hermes = local Ollama (zero egress, CONFIDENTIAL-capable). Copilot CLI, \
-OpenCode available.
+Copilot CLI, OpenCode available.
 - **Audit log**: tamper-evident hash-chained events at \
 ~/.corvin/tenants/<id>/global/audit.jsonl. Verified by daily timer.
 - **Tenant**: fully isolated environment (data, settings, audit chain). \

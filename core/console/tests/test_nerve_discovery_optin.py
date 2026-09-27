@@ -163,7 +163,7 @@ class TestEntryPointsNeedADeclaration(unittest.TestCase):
             self.assertNotIn("probe.entry_point", ids)
 
     def test_an_empty_spec_is_not_an_opt_in(self):
-        with _tenant_home({"engine": {"id": "hermes"}}), \
+        with _tenant_home({"engine": {"id": "claude_code"}}), \
                 _installed_probe_entry_point() as marker:
             _run_entry_point_discovery()
             self.assertFalse(marker.exists())

@@ -2,7 +2,7 @@
 
 End-to-end test demonstrating the full lifecycle:
 1. stream_turn() initializes TokenCounter
-2. Worker engine (claude / hermes / tde) records token usage
+2. Worker engine (claude / tde) records token usage
 3. stream_turn() finalizes and persists metrics
 
 STATUS: Skeleton outline — demonstrates test structure, not runnable until
@@ -244,11 +244,10 @@ class TestMetricsPersistence:
 
 
 class TestMultiPathCoverage:
-    """Test instrumentation across all three execution paths.
+    """Test instrumentation across both execution paths.
 
     OUTLINE:
     - Claude Code path (direct subprocess)
-    - Hermes path (Layer-22 WorkerEngine)
     - Delegation path (TDE/ACS)
 
     Each path should:
@@ -270,23 +269,6 @@ class TestMultiPathCoverage:
         - Mock subprocess to emit stream-json with usage
         - Verify counter.engine == "claude_code"
         - Verify counter.total_tokens > 0
-        """
-        pass
-
-    @pytest.mark.skipif(not _CHAT_RUNTIME_AVAILABLE, reason="chat_runtime not available")
-    @pytest.mark.asyncio
-    async def test_hermes_path_instrumented(
-        self,
-        mock_session: MockWebChatSession,
-    ):
-        """Test: Hermes path initializes and records tokens.
-
-        IMPLEMENTATION WHEN READY:
-        - Set _os_engine = "hermes"
-        - Mock HermesEngine.spawn() to return usage info
-        - Verify counter.engine == "hermes"
-        - Verify counter.engine_tier == "local"
-        - Verify counter.total_tokens recorded
         """
         pass
 

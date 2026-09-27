@@ -107,7 +107,7 @@ def list_entries(tenant_id: str) -> list[tuple[str, str]]:
     for stat_key in _load_file(tenant_id):
         if not stat_key.startswith("model_stats:"):
             continue
-        # model ids can themselves contain ":" (e.g. an Ollama tag like
+        # model ids can themselves contain ":" (e.g. a provider tag like
         # "mistral:7b") — task_type is always parts[1], tenant_id is always
         # the last segment (never contains ":", ADR-0007), so the model is
         # everything in between, rejoined.

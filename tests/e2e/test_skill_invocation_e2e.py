@@ -60,7 +60,6 @@ async def test_e2e_invoke_skill_all_engines(skill_service):
     """E2E: Same Skill invoked from all engines (Phase C goal)."""
     engines = [
         WorkerEngine.CLAUDE_CODE,
-        WorkerEngine.HERMES,
         WorkerEngine.COPILOT,
         WorkerEngine.OPENCODE,
     ]

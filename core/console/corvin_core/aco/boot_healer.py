@@ -88,7 +88,7 @@ async def _heal_cycle() -> None:
             Checks audit chain, config tampering, license pubkey, compliance gates.
             Alerts operator on CRITICAL findings.
     Step 1: Proactive engine + voice readiness check per tenant.
-            Starts Ollama if offline, installs edge-tts if missing.
+            Reports a missing claude binary, installs edge-tts if missing.
     Step 2: Reactive session scan via filesystem discovery.
             Covers web, discord, voice, cli, and all future bridge channels.
     """

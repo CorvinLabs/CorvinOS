@@ -115,7 +115,7 @@ def test_triage_fanout_words_alone_do_not_delegate(prompt: str) -> None:
     "Analysiere die CSV mit den Verkaufszahlen und erstelle mehrere Charts "
     "und dann eine Zusammenfassung der Statistik",
     # DELEGATE shape — explicit engine wish routes to corvin_delegate.
-    "Frag Hermes nach einer Zusammenfassung der Logs und erstelle danach "
+    "Frag Codex nach einer Zusammenfassung der Logs und erstelle danach "
     "einen Bericht über mehrere Kandidaten",
 ])
 def test_triage_ladder_non_fanout_primitives_stay_direct(prompt: str) -> None:
@@ -183,7 +183,7 @@ def test_triage_precision_stays_direct(prompt: str) -> None:
     # F2/F3/F4 — explicit parallelism outranks every classifier collision.
     "Vergleiche parallel mit mehreren Workern die aktuellen Apple Watch Modelle",
     "Vergleiche parallel mit mehreren Workern die besten 4K Monitor Modelle",
-    "Vergleiche parallel mit mehreren Workern die Versandkosten mit Hermes und DHL",
+    "Vergleiche parallel mit mehreren Workern die Versandkosten mit DPD und DHL",
     "Delegiere die Recherche an mehrere parallele Worker und sammle die Ergebnisse",
     "Analysiere die drei CSV-Dateien parallel mit mehreren Workern und erstelle Charts",
     # F4 — inflected German: "parallele Recherchen" (neither bare form matches).
@@ -200,7 +200,7 @@ def test_triage_bare_delegate_without_engine_is_not_forced_direct() -> None:
     """F2: a bare "delegiere" with no named engine is ambiguous — it must NOT
     be routed direct by rule 2 (only a NAMED engine is unambiguous intent)."""
     # A named engine → direct (rule 2 DELEGATE branch fires).
-    assert cr._should_delegate_bundled("Frag Hermes nach einer kurzen Zusammenfassung") is False
+    assert cr._should_delegate_bundled("Frag Codex nach einer kurzen Zusammenfassung") is False
     # Bare "delegiere" + explicit workers → explicit-parallel wins → ACS.
     assert cr._should_delegate_bundled(
         "Delegiere die Aufgabe an mehrere parallele Worker") is True

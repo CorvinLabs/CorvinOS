@@ -165,7 +165,6 @@ test.describe('Comprehensive: Org + Compute + Audit + LDD + License', () => {
     const body = await r.json();
     expect(Array.isArray(body.valid_engines)).toBe(true);
     expect(Array.isArray(body.valid_worker_engines)).toBe(true);
-    expect(typeof body.ollama_reachable).toBe('boolean');
     console.log(`✅ Engine config: engines=${body.valid_engines.join(',')}`);
   });
 

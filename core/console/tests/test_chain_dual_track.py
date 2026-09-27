@@ -125,9 +125,9 @@ class ChainDualTrackTests(unittest.TestCase):
         now = time.time()
         self._write([
             {"event_type": "delegation.started", "ts": now,
-             "details": {"delegation_id": "d1", "chat_key": self.chat_key, "target_engine": "hermes"}},
+             "details": {"delegation_id": "d1", "chat_key": self.chat_key, "target_engine": "codex_cli"}},
             {"event_type": "A2A.engine_spawned", "ts": now + 0.2,
-             "details": {"task_id": "d1", "engine_id": "hermes", "chat_key": self.chat_key}},
+             "details": {"task_id": "d1", "engine_id": "codex_cli", "chat_key": self.chat_key}},
             {"event_type": "A2A.result_filtered", "ts": now + 0.3,
              "details": {"task_id": "d1", "filter_pass_count": 2, "filter_reject_count": 0}},
             {"event_type": "delegation.ended", "ts": now + 0.5,
@@ -137,7 +137,7 @@ class ChainDualTrackTests(unittest.TestCase):
         self.assertEqual(len(res["delegations"]), 1)
         grp = res["delegations"][0]
         self.assertEqual(grp["delegation_id"], "d1")
-        self.assertEqual(grp["engine"], "hermes")
+        self.assertEqual(grp["engine"], "codex_cli")
         self.assertEqual(len(grp["os_events"]), 2)      # started + ended
         self.assertEqual(len(grp["worker_events"]), 2)  # spawned + filtered
 

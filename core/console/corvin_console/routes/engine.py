@@ -11,7 +11,8 @@ Endpoints
   GET  /settings/engine/capabilities → engine capability profile
 
 Settings are stored in tenant.corvin.yaml::spec.default_engine.
-Graceful degradation: old config with "hermes" → auto-corrects to "claude_code".
+Graceful degradation: a stored engine removed by ADR-2087 (hermes / local
+Ollama) is mapped to "claude_code" via engine_registry.normalize_legacy_engine_id.
 
 MUST NOT import anthropic (CI AST lint enforces).
 """
@@ -171,7 +172,7 @@ class EngineModelConfig(BaseModel):
     worker_model: str | None = Field(None, description="Worker-turn model id; null = default")
     provider: str | None = Field(
         None,
-        description="ADR-0181 model provider id (anthropic/openai/ollama_local/"
+        description="ADR-0181 model provider id (anthropic/openai/"
                     "ollama_cloud/openrouter); null = engine's native provider",
     )
 
@@ -246,15 +247,19 @@ def get_engine_setting(
     """Return the current tenant-level engine settings.
 
     ADR-0007: tenant_id from SessionRecord, never env var.
-    Graceful fallback: old config with "hermes" → auto-corrects to "claude_code".
+    Graceful fallback: a removed legacy engine (hermes / local Ollama) or any
+    other non-console engine reads back as "claude_code".
     """
     data = _load_tenant_yaml(_rec.tenant_id)
     spec = data.get("spec") or {}
 
     # Read configured engine; auto-correct if it's an old legacy value
     default = spec.get("default_engine", "claude_code")
+    if isinstance(default, str):
+        from engine_registry import normalize_legacy_engine_id  # type: ignore[import]  # noqa: PLC0415
+        default = normalize_legacy_engine_id(default)
     if default not in ("claude_code",):
-        _log.info(f"Auto-correcting legacy engine {default!r} → claude_code")
+        _log.info("Engine %r is not drivable by the console → claude_code", default)
         default = "claude_code"
 
     engine_models = _engine_models_as_served(_rec.tenant_id, spec)
@@ -447,7 +452,7 @@ def _validate_pins(rec, eid: str, cfg: "EngineModelConfig", providers: dict) -> 
     spec = providers.get(cfg.provider) if cfg.provider else None
     # Claude-native = no provider, or the registry's own "anthropic" entry
     # (model_source "anthropic"). Everything else — a platform provider
-    # (Bedrock/Vertex/Foundry) or a proxy provider (Ollama/OpenRouter) — offers
+    # (Bedrock/Vertex/Foundry) or a proxy provider (Ollama Cloud/OpenRouter) — offers
     # its own ids and is accepted as declared. (Review 2026-09-18: the first
     # version skipped on ``model_source != "static"`` and let
     # ``provider: "anthropic"`` bypass the check entirely.)
@@ -482,7 +487,7 @@ def _assess_model_compliance(engine_models: "dict[str, EngineModelConfig]", tena
     """ADR-0181 — non-blocking advisories when an engine is pointed at a CLOUD
     provider. Cloud egress happens both when the engine runs a cloud MODEL
     STRING at spawn and via cross-engine PROXY routing (Claude Code ->
-    OpenRouter/Ollama, the built-in translating proxy) — either way the
+    OpenRouter/Ollama Cloud, the built-in translating proxy) — either way the
     pre-spawn L34/L35 gates are the hard enforcement; this is advisory only."""
     warnings: list[str] = []
     try:
@@ -712,7 +717,7 @@ def get_engine_model_registry(
 def get_engine_providers(
     _rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict:
-    """ADR-0181 — model providers (Anthropic, OpenAI, Ollama local/cloud,
+    """ADR-0181 — model providers (Anthropic, OpenAI, Ollama Cloud,
     OpenRouter). ``credential_env`` is the env-var NAME only, never a secret."""
     try:
         from engine_models import providers_as_dict  # type: ignore[import]
@@ -727,7 +732,7 @@ def get_provider_models(
     _rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict:
     """ADR-0181 — live-fetch the models a provider offers right now (Ollama
-    /api/tags, OpenRouter /models). Cloud providers are network egress: the
+    Cloud /api/tags, OpenRouter /models). Cloud providers are network egress: the
     host must pass the L35 gate before we reach out to it."""
     try:
         from engine_models import load_providers  # type: ignore[import]

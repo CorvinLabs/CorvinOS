@@ -22,7 +22,7 @@ export const MOCK_VIBE_DATA = {
       error_count: 0,
     },
     {
-      name: "Hermes",
+      name: "Codex",
       status: "thinking" as const,
       latency_ms: 89,
       error_count: 0,

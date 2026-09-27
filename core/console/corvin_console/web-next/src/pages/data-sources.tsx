@@ -716,7 +716,7 @@ function ConnectForm({ db, csrf, onBack, onSuccess }: ConnectFormProps) {
             </select>
             <p className="text-xs text-muted-foreground mt-0.5">
               {classification === "CONFIDENTIAL" || classification === "SECRET"
-                ? "Only local engines (Hermes) may access this data."
+                ? "Only an engine declared local (a custom engine on this machine) may access this data."
                 : classification === "INTERNAL"
                 ? "EU cloud engines permitted."
                 : "All engines permitted."}

@@ -36,7 +36,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Bekannte sichere Engines (keine externe URL-Umleitung)
-_SAFE_ENGINES = frozenset({"claude_code", "hermes", "claude_code_local"})
+_SAFE_ENGINES = frozenset({"claude_code"})
 
 # Erlaubte externe Hosts für Engine-URLs (nur Anthropic + eigene Infra)
 _ALLOWED_ENGINE_HOSTS = frozenset({

@@ -227,17 +227,19 @@ configured engine, and the current erasure request queue (L36).
 ### Engines
 
 Engine configuration viewer: which WorkerEngine is active (`ClaudeCodeEngine`,
-`CodexCliEngine`, `OpenCodeEngine`, or `HermesEngine`), the adaptive model selector's
+`CodexCliEngine`, `OpenCodeEngine`, or `CopilotCliEngine`), the adaptive model selector's
 current tier (Haiku / Sonnet), and any pending engine restarts. You can view
 engine-level audit events and the last stderr tail from each engine subprocess.
 
 **Engine selector (M2.4):** REST endpoints at
-`GET/PUT /v1/console/settings/engine` let the operator switch the tenant-level
-default engine between Claude Code and Hermes without editing JSON files.
-`GET /v1/console/settings/engine/health` probes Ollama availability. The setting
-writes to `tenant.corvin.yaml::spec.default_engine` and takes effect on the next
-turn — no adapter restart needed. Hermes engine requires Ollama running locally;
-the health endpoint reports reachability and pulled-model count.
+`GET/PUT /v1/console/settings/engine` read and write the tenant-level default
+engine and per-engine model pins without editing JSON files. `PUT` accepts only
+`claude_code` as `default_engine` (anything else → 422). A stored legacy value
+(`hermes`, `ollama`, `claude_code_local`, … — engines removed by ADR-2087) is
+read back as `claude_code`. The setting writes to
+`tenant.corvin.yaml::spec.default_engine` and takes effect on the next turn — no
+adapter restart needed. `GET /v1/console/settings/engine/health` reports the
+Claude Code engine as ready (it no longer probes a local Ollama server).
 
 ### Compute
 

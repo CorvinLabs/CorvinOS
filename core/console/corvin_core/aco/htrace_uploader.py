@@ -213,8 +213,12 @@ def _last_ping_path(home: Path) -> Path:
     return home / "aco" / "telemetry" / _LAST_PING_FILENAME
 
 
+# ``hermes`` was dropped with ADR-2087. A stale stored ``hermes`` (state file or
+# tenant YAML on an old install) is simply not in this closed enum, so it
+# degrades to "unknown" before the fail-closed ``_assert_ping_safe`` check and
+# the ping keeps flowing.
 _ALLOWED_ENGINES = frozenset(
-    {"claude_code", "hermes", "opencode", "codex_cli", "copilot"}
+    {"claude_code", "opencode", "codex_cli", "copilot"}
 )
 
 
@@ -228,7 +232,7 @@ def record_active_engine(home: Path, engine: str) -> None:
     can attribute this install to its REAL engine instead of "unknown".
 
     The bridge adapter is the only component that runs the full engine ladder
-    (CORVIN_OS_ENGINE env → hardened claude-CLI probe → hermes). That result
+    (CORVIN_OS_ENGINE env → hardened claude-CLI probe). That result
     lives only in the bridge process's memory; the ping fires from a SEPARATE
     process (corvin-serve) whose environment never inherits it, so the ping
     previously fell through to "unknown" for almost every install. Writing the

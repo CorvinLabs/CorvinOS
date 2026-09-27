@@ -188,19 +188,19 @@ class EngineApiRouteTests(unittest.TestCase):
         forwards its verdict — not the Phase-1 mock's hardcoded
         is_connected=True regardless of input. Patches fetch_models itself
         (rather than asserting live network state, which the test sandbox
-        doesn't control — e.g. a dev machine's local Ollama may genuinely be
-        reachable) so the assertion is deterministic either way."""
+        doesn't control — e.g. a dev machine may genuinely reach the
+        provider) so the assertion is deterministic either way."""
         import engine_providers
 
         original = engine_providers.fetch_models
         engine_providers.fetch_models = lambda *a, **k: {  # noqa: E731
-            "provider": "ollama_local", "reachable": False, "models": [],
-            "count": 0, "error": "ollama not reachable at localhost:11434",
+            "provider": "ollama_cloud", "reachable": False, "models": [],
+            "count": 0, "error": "ollama_cloud not reachable at ollama.com",
         }
         try:
             r = self._client().post(
                 "/v1/engine/external-provider/test",
-                json={"provider": "ollama_local"},
+                json={"provider": "ollama_cloud"},
             )
         finally:
             engine_providers.fetch_models = original

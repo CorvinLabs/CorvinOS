@@ -56,8 +56,8 @@ RUN_ID        = "acs-demo-full-audit-001"
 TURN_ID       = "turn-demo-002"             # bumped to avoid duplicate with earlier run
 DELEGATION_ID = "a2a-deleg-demo-002"        # bumped to avoid collision
 TASK_ID       = "task-demo-002"
-ORIGIN_ID     = "origin-demo-hermes"
-ENDPOINT_ID   = "endpoint-demo-hermes"
+ORIGIN_ID     = "origin-demo-codex"
+ENDPOINT_ID   = "endpoint-demo-codex"
 INSTANCE_ID   = "inst-demo-corvin-001"
 NETWORK_ID    = "corvin-demo-net"
 
@@ -236,7 +236,7 @@ tenant.write("delegation.started", {
     "turn_id":       TURN_ID,
     "delegation_id": DELEGATION_ID,
     "task_id":       TASK_ID,
-    "target_engine": "delegate_hermes",
+    "target_engine": "delegate_codex",
     "persona":       "orchestrator",
 }, ts=now - 105)
 
@@ -265,8 +265,8 @@ tenant.write("A2A.envelope_received", {
 tenant.write("A2A.engine_spawned", {
     "task_id":       TASK_ID,
     "delegation_id": DELEGATION_ID,
-    "engine_id":     "hermes",
-    "persona":       "hermes-local",
+    "engine_id":     "codex_cli",
+    "persona":       "codex-worker",
     "origin_id":     ORIGIN_ID,
 }, ts=now - 102)
 

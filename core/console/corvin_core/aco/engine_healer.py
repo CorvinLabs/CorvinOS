@@ -1,17 +1,17 @@
 """ACO Engine Healer — proactive readiness check + auto-repair for engines and voice.
 
 Runs at every Boot-Healer cycle BEFORE the session scan.  Checks:
-  1. Chat Engine — is the configured engine (or a fallback) actually usable?
-     Fallback chain: claude_code → hermes.  If hermes is selected but Ollama is
-     not running, we start it (if the binary is present) without pulling models.
+  1. Chat Engine — is the configured engine actually usable?  There is no
+     fallback engine: Hermes / local Ollama were removed (ADR-2087), and a
+     stored legacy engine id reads as ``claude_code``.
   2. TTS — is edge-tts importable?  If not, install it silently.  edge-tts
      requires no API key and no local model — it is the universal TTS fallback.
   3. STT — is pywhispercpp or the openai package available?  Log warning if
      neither is present (pywhispercpp is a base dep on every platform, ADR-0185).
 
 Contract:
-  * NEVER blocks for more than ~45 s (Ollama start timeout).
-  * NEVER pulls Ollama models (would block for 30+ min).
+  * NEVER blocks for long — the engine probe is a 5 s ``claude --version``.
+  * NEVER starts or probes a local inference server.
   * NEVER crashes if a dependency is missing — degrades gracefully.
   * All outcomes written to audit chain as aco.engine_heal events.
 
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class EngineHealResult:
     engine_ok: bool = False
     engine_id: str = ""
-    engine_action: str = ""         # "none" | "started_ollama" | "fell_back_to_hermes"
+    engine_action: str = ""         # "none" | "no_engine_available"
     tts_ok: bool = False
     tts_provider: str = ""          # "openai" | "edge" | "piper" | "none"
     tts_action: str = ""            # "none" | "installed_edge_tts"
@@ -57,7 +57,10 @@ class EngineHealResult:
 # ── Engine checks ─────────────────────────────────────────────────────────────
 
 def _configured_engine(tenant_id: str) -> str:
-    """Read the tenant's configured default_engine from tenant.corvin.yaml."""
+    """Read the tenant's configured default_engine from tenant.corvin.yaml.
+
+    A removed legacy engine (ADR-2087: hermes / local Ollama) maps to
+    ``claude_code`` through the shared ``engine_registry`` helper."""
     try:
         from forge import paths as _fp
         import yaml
@@ -69,9 +72,23 @@ def _configured_engine(tenant_id: str) -> str:
         data = yaml.safe_load(yaml_path.read_text()) or {}
         spec = data.get("spec", {})
         engine = spec.get("default_engine", "")
-        return engine if isinstance(engine, str) and engine.strip() else "claude_code"
+        if not (isinstance(engine, str) and engine.strip()):
+            return "claude_code"
+        return _normalize_legacy(engine.strip())
     except Exception:
         return "claude_code"
+
+
+def _normalize_legacy(engine_id: str) -> str:
+    try:
+        from pathlib import Path
+        _shared = Path(__file__).resolve().parents[4] / "corvin_operator" / "bridges" / "shared"
+        if _shared.is_dir() and str(_shared) not in sys.path:
+            sys.path.insert(0, str(_shared))
+        from engine_registry import normalize_legacy_engine_id
+        return normalize_legacy_engine_id(engine_id) or "claude_code"
+    except Exception:
+        return engine_id
 
 
 def _claude_binary_ok() -> bool:
@@ -95,127 +112,15 @@ def _claude_binary_ok() -> bool:
         return False
 
 
-def _hermes_reachable() -> bool:
-    """Return True if Ollama HTTP API answers on its configured URL."""
-    try:
-        # ADR-0215 F5: the dotted `from corvin_operator.bridges.shared...` import
-        # here could never resolve (stdlib `operator` always shadows the
-        # repo's corvin_operator/ directory) — this silently skipped straight to
-        # the generic HTTP fallback below on every call, never exercising
-        # hermes_bootstrap's actual reachability logic. Fixed via the
-        # repo's working sys.path + bare-import pattern.
-        from pathlib import Path
-        _shared = Path(__file__).resolve().parents[4] / "corvin_operator" / "bridges" / "shared"
-        if _shared.is_dir() and str(_shared) not in sys.path:
-            sys.path.insert(0, str(_shared))
-        from hermes_bootstrap import is_ollama_reachable
-        return is_ollama_reachable()
-    except Exception:
-        pass
-    # Fallback: direct HTTP check
-    try:
-        import urllib.request
-        import os
-        base = (
-            os.environ.get("CORVIN_OLLAMA_BASE_URL")
-            or os.environ.get("OLLAMA_HOST")
-            or "http://localhost:11434"
-        )
-        with urllib.request.urlopen(f"{base}/api/tags", timeout=2):
-            return True
-    except Exception:
-        return False
-
-
-def _hermes_has_model() -> bool:
-    """Return True if at least one model is pulled in Ollama."""
-    try:
-        import urllib.request
-        import json
-        import os
-        base = (
-            os.environ.get("CORVIN_OLLAMA_BASE_URL")
-            or os.environ.get("OLLAMA_HOST")
-            or "http://localhost:11434"
-        )
-        with urllib.request.urlopen(f"{base}/api/tags", timeout=3) as resp:
-            data = json.loads(resp.read())
-            return bool(data.get("models"))
-    except Exception:
-        return False
-
-
-def _try_start_ollama() -> bool:
-    """Start `ollama serve` if the binary is installed but server is offline.
-
-    Returns True if Ollama is reachable after the attempt.
-    """
-    try:
-        # ADR-0215 F5: same fix as _hermes_reachable() above.
-        from pathlib import Path
-        _shared = Path(__file__).resolve().parents[4] / "corvin_operator" / "bridges" / "shared"
-        if _shared.is_dir() and str(_shared) not in sys.path:
-            sys.path.insert(0, str(_shared))
-        from hermes_bootstrap import ensure_ollama_running
-        return ensure_ollama_running(timeout=40.0)
-    except Exception:
-        pass
-    # Fallback: start directly
-    binary = shutil.which("ollama")
-    if not binary:
-        return False
-    try:
-        kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
-        if sys.platform == "win32":
-            # CREATE_NO_WINDOW, not DETACHED_PROCESS: the latter leaves the
-            # child with NO console, so the first thing needing one gets a
-            # brand-new VISIBLE window (2026-08-06 — see
-            # bridge_manager._WIN_DAEMON_FLAGS for the full writeup).
-            kwargs["creationflags"] = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | NEW_GROUP
-        else:
-            kwargs["start_new_session"] = True
-        subprocess.Popen([binary, "serve"], **kwargs)
-        # Wait up to 8 s for it to come up
-        import time
-        for _ in range(8):
-            time.sleep(1)
-            if _hermes_reachable():
-                return True
-        return _hermes_reachable()
-    except Exception:
-        return False
-
-
 def check_engine_readiness(tenant_id: str) -> tuple[bool, str, str]:
-    """Check if the configured engine is ready.  Returns (ok, engine_id, action)."""
+    """Check if the configured engine is ready.  Returns (ok, engine_id, action).
+
+    No automatic engine fallback (ADR-2087): a missing claude binary is
+    reported, never papered over by switching engines."""
     engine = _configured_engine(tenant_id)
-
-    if engine == "hermes":
-        if _hermes_reachable():
-            return True, "hermes", "none"
-        # Try to start Ollama
-        logger.info("[ACO] Hermes configured but Ollama offline — attempting start")
-        started = _try_start_ollama()
-        if started:
-            logger.info("[ACO] Ollama started successfully")
-            return True, "hermes", "started_ollama"
-        # Hermes installed but wouldn't start — fall back to claude_code
-        if _claude_binary_ok():
-            logger.warning("[ACO] Ollama not startable, falling back to claude_code")
-            return True, "claude_code", "fell_back_to_claude"
-        return False, "hermes", "ollama_start_failed"
-
-    # claude_code (default) or any other engine
     if _claude_binary_ok():
         return True, engine, "none"
-
-    # Claude binary missing — try Hermes as fallback
-    logger.warning("[ACO] claude binary missing, trying Hermes as fallback")
-    if _hermes_reachable():
-        return True, "hermes", "fell_back_to_hermes"
-    if shutil.which("ollama") and _try_start_ollama():
-        return True, "hermes", "started_ollama_fallback"
-
+    logger.warning("[ACO] claude binary missing — no usable chat engine")
     return False, engine, "no_engine_available"
 
 

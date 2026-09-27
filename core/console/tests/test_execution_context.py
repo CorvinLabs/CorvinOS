@@ -2,7 +2,7 @@
 
 Tests cover:
   - ExecutionContext dataclass serialization/deserialization
-  - Model source detection (Claude, Ollama, OpenRouter, Hermes)
+  - Model source detection (Claude, OpenRouter)
   - Model name normalization
   - Engine detection
   - Delegation mode detection
@@ -38,23 +38,17 @@ class TestModelSourceDetection:
         assert detect_model_source("Claude-3-5-Opus") == ModelSource.CLAUDE
         assert detect_model_source("CLAUDE-2") == ModelSource.CLAUDE
 
-    def test_detect_ollama_models(self):
-        """Ollama models use: prefix or / separator."""
-        assert detect_model_source("ollama:mistral") == ModelSource.OLLAMA
-        assert detect_model_source("ollama:mistral:latest") == ModelSource.OLLAMA
-        assert detect_model_source("ollama/mistral") == ModelSource.OLLAMA
-        assert detect_model_source("OLLAMA:llama2") == ModelSource.OLLAMA
+    def test_local_ollama_and_hermes_names_are_not_classified(self):
+        """ADR-2087: nothing classifies a NEW turn as local Ollama / Hermes."""
+        for name in ("ollama:mistral", "ollama/mistral", "OLLAMA:llama2",
+                     "hermes-local-3", "Hermes-2-Pro"):
+            assert detect_model_source(name) == ModelSource.UNKNOWN, name
 
     def test_detect_openrouter_models(self):
         """OpenRouter models are identified."""
         assert detect_model_source("openrouter:meta-llama/llama-2") == ModelSource.OPENROUTER
         assert detect_model_source("openrouter/meta-llama/llama-2") == ModelSource.OPENROUTER
         assert detect_model_source("OpenRouter:mistral") == ModelSource.OPENROUTER
-
-    def test_detect_hermes_models(self):
-        """Hermes local models are identified."""
-        assert detect_model_source("hermes-local-3") == ModelSource.HERMES
-        assert detect_model_source("Hermes-2-Pro") == ModelSource.HERMES
 
     def test_detect_unknown_models(self):
         """Unknown or invalid models return UNKNOWN."""
@@ -75,23 +69,11 @@ class TestModelNameNormalization:
         assert normalize_model_name("Claude-3-5-Sonnet-20240229") == "claude-3-5-sonnet"
         assert normalize_model_name("CLAUDE-OPUS-20240229") == "claude-opus"
 
-    def test_normalize_ollama(self):
-        """Ollama names are normalized: : → / (first separator only)."""
-        assert normalize_model_name("ollama:mistral") == "ollama/mistral"
-        assert normalize_model_name("ollama:mistral:latest") == "ollama/mistral:latest"
-        assert normalize_model_name("OLLAMA:LLAMA2") == "ollama/llama2"
-        assert normalize_model_name("ollama/mistral") == "ollama/mistral"
-
     def test_normalize_openrouter(self):
         """OpenRouter names: : → / (first separator only)."""
         assert normalize_model_name("openrouter:meta-llama/llama-2") == "openrouter/meta-llama/llama-2"
         assert normalize_model_name("openrouter/mistral") == "openrouter/mistral"
         assert normalize_model_name("OpenRouter:Mistral-7B") == "openrouter/mistral-7b"
-
-    def test_normalize_hermes(self):
-        """Hermes names are lowercased."""
-        assert normalize_model_name("Hermes-2-Pro") == "hermes-2-pro"
-        assert normalize_model_name("HERMES-local-3") == "hermes-local-3"
 
     def test_normalize_empty(self):
         """Empty model names return empty string."""
@@ -102,7 +84,6 @@ class TestModelNameNormalization:
         """Normalization is faster with explicit source hint."""
         # With source provided, skips detection
         assert normalize_model_name("claude-3-5-sonnet-20241022", ModelSource.CLAUDE) == "claude-3-5-sonnet"
-        assert normalize_model_name("ollama:mistral", ModelSource.OLLAMA) == "ollama/mistral"
 
 
 class TestEngineDetection:
@@ -124,10 +105,17 @@ class TestEngineDetection:
         assert detect_engine({"engine_id": "tde"}) == EngineId.TDE
         assert detect_engine({"delegation_mode": "tde"}) == EngineId.TDE
 
-    def test_detect_hermes_engine(self):
-        """Hermes engine is detected."""
-        assert detect_engine({"engine_id": "hermes"}) == EngineId.HERMES
-        assert detect_engine({"spawn_via": "http"}) == EngineId.HERMES
+    def test_hermes_engine_is_not_detected(self):
+        """ADR-2087: runtime state never classifies as Hermes any more."""
+        assert detect_engine({"engine_id": "hermes"}) == EngineId.UNKNOWN
+        assert detect_engine({"spawn_via": "http"}) == EngineId.UNKNOWN
+
+    def test_historical_hermes_record_still_parses(self):
+        """Records already written keep parsing: the enum values stay."""
+        ctx = ExecutionContext.from_dict(
+            {"engine_id": "hermes", "model_source": "ollama", "model_name": "ollama/mistral"})
+        assert ctx.engine_id == EngineId.HERMES
+        assert ctx.model_source == ModelSource.OLLAMA
 
     def test_detect_unknown_engine(self):
         """Unknown engine returns UNKNOWN."""
@@ -254,8 +242,8 @@ class TestExecutionContextSerialization:
         """Serialization and deserialization are inverse operations."""
         ctx1 = ExecutionContext(
             engine_id=EngineId.TDE,
-            model_source=ModelSource.OLLAMA,
-            model_name="ollama/mistral",
+            model_source=ModelSource.OPENROUTER,
+            model_name="openrouter/mistral",
             delegation_mode=DelegationMode.TDE,
             tde_router_decision="route_local",
             duration_ms=2500,
@@ -348,19 +336,6 @@ class TestExecutionContextBuilder:
         assert ctx.engine_id == EngineId.TDE
         assert ctx.delegation_mode == DelegationMode.TDE
         assert ctx.tde_router_decision == "route_worker"
-
-    def test_builder_hermes_flow(self):
-        """Builder supports Hermes local engine flow."""
-        builder = ExecutionContextBuilder(tenant_id="t3", turn_number=0)
-        ctx = builder.start(engine_id="hermes", model_name="ollama:mistral") \
-                    .set_delegation(mode="native") \
-                    .set_usage({"in": 200, "out": 80}) \
-                    .set_exit_code(0) \
-                    .complete()
-
-        assert ctx.engine_id == EngineId.HERMES
-        assert ctx.model_source == ModelSource.OLLAMA
-        assert ctx.delegation_mode == DelegationMode.NATIVE
 
     def test_builder_error_flow(self):
         """Builder handles error/non-zero exit."""
@@ -460,21 +435,6 @@ class TestExecutionContextIntegration:
         assert ctx.delegation_mode == DelegationMode.FALLBACK
         assert ctx.engine_id == EngineId.CLAUDE_CODE
 
-    def test_hermes_local_turn(self):
-        """Scenario: offline Hermes local engine."""
-        builder = ExecutionContextBuilder(tenant_id="local", turn_number=0)
-        ctx = (builder
-            .start(engine_id="hermes", model_name="ollama/mistral:latest")
-            .set_delegation(mode="native")
-            .set_usage({"in": 180, "out": 60})
-            .set_exit_code(0)
-            .complete())
-
-        assert ctx.engine_id == EngineId.HERMES
-        assert ctx.model_source == ModelSource.OLLAMA
-        assert ctx.model_name == "ollama/mistral:latest"
-
-
 class TestEdgeCases:
     """Test edge cases and robustness."""
 
@@ -486,8 +446,8 @@ class TestEdgeCases:
 
     def test_unicode_model_names(self):
         """Handles unicode in model names gracefully."""
-        # Ollama might have unicode in tags
-        name = normalize_model_name("ollama:mistral:café")
+        # Provider tags might carry unicode
+        name = normalize_model_name("openrouter:mistral:café")
         assert "mistral" in name.lower()
 
     def test_malformed_token_usage(self):

@@ -2,7 +2,7 @@
 """ADR-0118 E2E Fixture — injects synthetic A2A delegation events into audit.jsonl.
 
 Run once to create test data that the DualTrackAuditPanel can visualise.
-The fixture simulates a single OS turn that delegates to a Hermes worker:
+The fixture simulates a single OS turn that delegates to a Codex CLI worker:
 
   OS side                          Worker side
   ─────────────────────────────    ──────────────────────────────────
@@ -50,7 +50,7 @@ def main() -> None:
     chat_key = args.chat_key
     channel = args.channel
     persona = "orchestrator"
-    engine_id = "hermes"
+    engine_id = "codex_cli"
 
     now = time.time()
 
@@ -76,7 +76,7 @@ def main() -> None:
             "delegation_id":     delegation_id,
             "channel":           channel,
             "chat_key":          chat_key,
-            "endpoint_id":       "local-hermes",
+            "endpoint_id":       "local-codex",
             "sender_instance_id": sender_instance_id,
             "ttl_s":             30,
         }, now + 0.10),

@@ -412,7 +412,7 @@ class TaskManager:
             return
         try:
             # The engine that ran the task is stamped on its engine-start event
-            # ("claude", "hermes", "acs-delegation", "tiered_delegation");
+            # ("claude", "acs-delegation", "tiered_delegation");
             # an explicit value on the closing event or in the input wins.
             started_engine = None
             for ev in task.output_events or []:

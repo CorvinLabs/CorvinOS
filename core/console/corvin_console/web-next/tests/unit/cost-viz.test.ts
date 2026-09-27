@@ -57,7 +57,7 @@ describe('canonicalModelId — one model, three spellings', () => {
   });
 
   it('leaves a non-Anthropic namespace alone — it is a different model', () => {
-    expect(canonicalModelId('ollama/qwen3:8b')).toBe('ollama/qwen3:8b');
+    expect(canonicalModelId('openrouter/mistral-7b')).toBe('openrouter/mistral-7b');
     expect(canonicalModelId('openai/gpt-5')).toBe('openai/gpt-5');
   });
 });

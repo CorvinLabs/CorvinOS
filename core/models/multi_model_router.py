@@ -56,7 +56,6 @@ class ModelTier(int, Enum):
     the vendor's line-up and pricing both assert. It does NOT say by how much —
     that would be the invented ``accuracy`` this replaces.
     """
-    LOCAL_FREE = 0      # local compute, no per-token cost
     FAST_CHEAP = 1      # Haiku
     BALANCED = 2        # Sonnet
     BEST_QUALITY = 3    # Opus
@@ -77,8 +76,8 @@ class ModelProfile:
     tier: ModelTier
 
     # Published rate card, per 1k tokens, kept SEPARATE. None = not on the
-    # card; callers must treat that as unknown, never as free. Local models
-    # are the one legitimate 0.0.
+    # card; callers must treat that as unknown, never as free. (Local-Ollama
+    # models, the one former 0.0, were removed by ADR-2087.)
     input_usd_per_1k: Optional[float]
     output_usd_per_1k: Optional[float]
 
@@ -88,10 +87,6 @@ class ModelProfile:
     @property
     def priced(self) -> bool:
         return self.input_usd_per_1k is not None and self.output_usd_per_1k is not None
-
-    @property
-    def is_local(self) -> bool:
-        return self.tier is ModelTier.LOCAL_FREE
 
 
 @dataclass
@@ -146,8 +141,6 @@ def _lookup(table: Dict[str, Any], model_id: str) -> Any:
 
 
 def _tier_for(model_id: str) -> ModelTier:
-    if model_id.startswith("ollama/") or model_id.startswith("ollama:"):
-        return ModelTier.LOCAL_FREE
     tier = _lookup(_TIERS, model_id)
     return tier if isinstance(tier, ModelTier) else ModelTier.BALANCED
 
@@ -167,12 +160,8 @@ def build_profiles(model_ids: List[str]) -> Dict[str, ModelProfile]:
         if not mid:
             continue  # the registry's "engine default" sentinel, not a model
         tier = _tier_for(mid)
-        if tier is ModelTier.LOCAL_FREE:
-            in_rate: Optional[float] = 0.0
-            out_rate: Optional[float] = 0.0
-        else:
-            price = model_price_per_1k(_strip_namespace(mid))
-            in_rate, out_rate = price if price else (None, None)
+        price = model_price_per_1k(_strip_namespace(mid))
+        in_rate, out_rate = price if price else (None, None)
 
         limits = _lookup(_LIMITS, mid)
         max_ctx, max_out = limits if isinstance(limits, tuple) else (0, 0)
@@ -240,15 +229,17 @@ class MultiModelRouter:
         caller that knows a task needs Opus-class reasoning can say so; this
         module does not pretend to know that mapping itself.
 
+        ``allow_local`` is accepted for caller compatibility and ignored: no
+        local model exists since ADR-2087 removed local-Ollama inference.
+
         Among models that clear the bar, OUTPUT rate decides, because output
         is the larger rate on every current model.
         """
+        del allow_local
         candidates: List[ModelProfile] = []
         unpriced: List[str] = []
 
         for profile in self.profiles.values():
-            if profile.is_local and not allow_local:
-                continue
             if profile.tier < min_tier:
                 continue
             if not profile.priced:
@@ -291,8 +282,6 @@ class MultiModelRouter:
         )
 
     def _reason(self, profile: ModelProfile) -> str:
-        if profile.is_local:
-            return f"{profile.tier.name.lower()} - local compute, no per-token cost"
         return (
             f"{profile.tier.name.lower()} - "
             f"${(profile.input_usd_per_1k or 0) * 1000:.2f} in / "
@@ -310,8 +299,7 @@ class MultiModelRouter:
         Takes the token split and applies each rate to its own side. The old
         signature multiplied ``(input + output)`` by one averaged rate, which
         is wrong for every mix except the one the average came from, and
-        returned 0.0 for an unknown model — indistinguishable from a genuinely
-        free local one.
+        returned 0.0 for an unknown model — indistinguishable from a free one.
         """
         profile = self.profiles.get(model_id)
         if profile is None or not profile.priced:

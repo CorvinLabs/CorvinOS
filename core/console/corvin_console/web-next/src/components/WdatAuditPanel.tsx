@@ -162,7 +162,6 @@ function WdatEngineNode({ data, selected }: NodeProps) {
 
   const ENGINE_LABELS: Record<string, string> = {
     claude_code: "CC",
-    hermes:      "HM",
     codex_cli:   "CX",
     opencode:    "OC",
     copilot:     "CP",

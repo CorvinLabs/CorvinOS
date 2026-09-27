@@ -703,8 +703,8 @@ def test_tts_text_is_clamped_even_when_summarize_succeeds(monkeypatch) -> None:
 
     naive_truncate is documented "completeness over length" and ignores
     --max-chars (measured: 20299 chars out for --max-chars 400), and it is the
-    ZERO-CONFIG DEFAULT path — any install with no claude CLI and no
-    Hermes/Ollama degrades on every turn. The route's clamp used to sit only on
+    ZERO-CONFIG DEFAULT path — any install with no claude CLI degrades on
+    every turn. The route's clamp used to sit only on
     the `or` fallback branch, so that sailed straight into say.py.
     """
     huge = "Ein Satz. " * 3000
@@ -926,51 +926,6 @@ def test_a_final_result_is_guaranteed_after_a_pending_one() -> None:
     m = _re.search(r"if _ann_pending:\s*\n\s*yield \{\"type\": \"result\"", src)
     assert m, ("the final result event must be gated on _ann_pending, not on "
                "_ann_suffix — otherwise an empty annotation leaves the turn mute")
-
-
-def _extract_function_source(src: str, func_name: str) -> str:
-    """Slice out one top-level function's source text by name, so a
-    source-pattern assertion can be scoped to a SPECIFIC engine path instead
-    of matching whichever occurrence happens to exist anywhere in the file."""
-    import ast as _ast
-    tree = _ast.parse(src)
-    for node in _ast.walk(tree):
-        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name == func_name:
-            return _ast.get_source_segment(src, node) or ""
-    raise AssertionError(f"function {func_name!r} not found")
-
-
-def test_hermes_path_also_sets_annotation_pending() -> None:
-    """Regression (2026-07-16): the claude_code path sets `annotation_pending`
-    on its result events (test above) — the Hermes/Ollama path
-    (_stream_hermes_turn) did NOT, even though it computes the exact same
-    LERN-ZUGABE/METAPHER annotation suffix via _compute_web_annotation_suffix.
-    Since the field was simply absent (`undefined`), the frontend's
-    `!evt.annotation_pending` gate (chat.tsx) was true for BOTH the
-    pre-annotation and post-annotation result events, so every Hermes-engine
-    turn with an annotation enabled paid for two full server-side TTS
-    syntheses and orphaned the first one's archived audio file — the exact
-    bug class `test_a_final_result_is_guaranteed_after_a_pending_one` above
-    exists to catch, just on a different engine path it didn't cover."""
-    src = Path(cr.__file__).read_text(encoding="utf-8")
-    hermes_src = _extract_function_source(src, "_stream_hermes_turn")
-
-    assert '"annotation_pending": _ann_pending' in hermes_src, (
-        "_stream_hermes_turn's first result event must carry annotation_pending, "
-        "same as the claude_code path — otherwise the client cannot tell to "
-        "wait for a second event and speaks both"
-    )
-    import re as _re
-    m = _re.search(r"if _ann_pending:\s*\n(?:.*\n)*?\s*yield \{\"type\": \"result\"",
-                   hermes_src)
-    assert m, (
-        "_stream_hermes_turn's final result event must be gated on _ann_pending "
-        "(guaranteed even when the annotation comes back empty), same as the "
-        "claude_code path"
-    )
-    assert '"annotation_pending": False' in hermes_src, (
-        "_stream_hermes_turn's final result event must clear annotation_pending"
-    )
 
 
 # ── the paid summarizer is metered on ONE axis, on BOTH endpoints ────────────

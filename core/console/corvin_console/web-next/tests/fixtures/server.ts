@@ -96,7 +96,7 @@ export const handlers = [
     return HttpResponse.json({
       engines: [
         { id: 'claude', name: 'Claude', status: 'online', version: '4.0' },
-        { id: 'hermes', name: 'Hermes', status: 'online', version: '1.0' },
+        { id: 'codex_cli', name: 'Codex', status: 'online', version: '1.0' },
       ],
     });
   }),

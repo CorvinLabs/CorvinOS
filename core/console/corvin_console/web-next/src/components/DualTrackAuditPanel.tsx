@@ -432,7 +432,7 @@ export function DualTrackAuditPanel({ sid }: DualTrackAuditPanelProps) {
             <GitBranch size={28} strokeWidth={1} />
             <p className="text-sm">No delegation events in this session yet.</p>
             <p className="text-xs text-muted-foreground/30">
-              Delegation events appear when the OS spawns a worker engine (e.g. /engine hermes).
+              Delegation events appear when the OS spawns a worker engine (e.g. /delegate).
             </p>
           </div>
         )}

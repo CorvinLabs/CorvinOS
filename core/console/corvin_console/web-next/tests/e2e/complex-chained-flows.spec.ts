@@ -221,7 +221,6 @@ test.describe("Complex chained cross-feature flows", () => {
         default_engine: string | null;
         valid_engines: string[];
         valid_worker_engines: string[];
-        ollama_reachable: boolean;
       };
 
       // Shape checks — the engine endpoint must not be disturbed by the LDD write
@@ -233,10 +232,6 @@ test.describe("Complex chained cross-feature flows", () => {
         body.valid_worker_engines !== undefined && Array.isArray(body.valid_worker_engines),
         "valid_worker_engines must be an array",
       ).toBe(true);
-      expect(
-        typeof body.ollama_reachable,
-        "ollama_reachable must be boolean",
-      ).toBe("boolean");
 
       // default_engine is null or a non-empty string
       if (body.default_engine !== null) {
@@ -468,7 +463,7 @@ test.describe("Complex chained cross-feature flows", () => {
   test.describe("Scenario 3: State-changing mutation → audit tail → PII compliance", () => {
     // Track the timestamp before the mutation so we can identify new events
     let mutationTimestampBefore: number;
-    let engineBeforeMutation: { default_engine: string | null; hermes_model: string | null };
+    let engineBeforeMutation: { default_engine: string | null };
 
     /**
      * Step 3a: Capture current engine state before mutation so the teardown
@@ -481,11 +476,9 @@ test.describe("Complex chained cross-feature flows", () => {
       expect(resp.status()).toBe(200);
       const body = await resp.json() as {
         default_engine: string | null;
-        hermes_model: string | null;
       };
       engineBeforeMutation = {
         default_engine: body.default_engine,
-        hermes_model: body.hermes_model,
       };
       // This test is purely setup — just assert state was captured
       expect(typeof mutationTimestampBefore).toBe("number");
@@ -503,7 +496,6 @@ test.describe("Complex chained cross-feature flows", () => {
         {
           data: {
             default_engine: engineBeforeMutation.default_engine,
-            hermes_model: engineBeforeMutation.hermes_model ?? null,
           },
           headers: { "x-csrf-token": csrfToken },
         },
@@ -680,7 +672,6 @@ test.describe("Complex chained cross-feature flows", () => {
         {
           data: {
             default_engine: engineBeforeMutation.default_engine,
-            hermes_model: engineBeforeMutation.hermes_model ?? null,
           },
           headers: { "x-csrf-token": csrfToken },
         },

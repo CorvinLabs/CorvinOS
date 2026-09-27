@@ -159,7 +159,7 @@ class TaskAffinityRegistry:
 
         Returns recommended engine:
         - Strong task → Haiku (cheap, fast)
-        - Medium task → Hermes (balanced)
+        - Medium task → claude_code (balanced; Hermes was removed, ADR-2087)
         - Weak task → Claude (high quality)
         """
         affinity = self.get_affinity(operator_id, task_type)
@@ -169,6 +169,6 @@ class TaskAffinityRegistry:
         if affinity.success_rate >= 0.75:
             return "haiku"  # Operator is strong, use cheap
         elif affinity.success_rate >= 0.60:
-            return "hermes"  # Medium, balanced approach
+            return "claude_code"  # Medium, balanced approach
         else:
             return "claude"  # Weak, use premium quality

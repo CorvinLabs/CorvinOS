@@ -31,7 +31,7 @@ vi.mock("@/pages/models/components/engine-parts", () => ({
   useAuthLabel: () => "",
   useClaudeModels: () => claudeModels,
   useProviders: () => ({ data: { anthropic: { label: "Anthropic", kind: "cloud", model_source: "anthropic", credential_env: "", base_url: "" },
-                                 ollama_local: { label: "Ollama", kind: "local", model_source: "ollama", credential_env: "", base_url: "" } } }),
+                                 openrouter: { label: "OpenRouter", kind: "cloud", model_source: "openrouter", credential_env: "OPENROUTER_API_KEY", base_url: "" } } }),
 }));
 
 import { RoutingTab } from "@/pages/models/tabs/routing";
@@ -40,7 +40,7 @@ const setting = (os: string | null, worker: string | null, provider: string | nu
   default_engine: "claude_code", valid_engines: ["claude_code"],
   engine_models: {
     claude_code: { os_model: os, worker_model: worker, provider },
-    other_engine: { os_model: "keep-me", worker_model: null, provider: "ollama_local" },
+    other_engine: { os_model: "keep-me", worker_model: null, provider: "openrouter" },
   },
   compliance_warnings: [],
 });
@@ -90,7 +90,7 @@ describe("Routing tab — turn pins", () => {
       default_engine: "claude_code",
       engine_models: {
         claude_code: { os_model: "claude-sonnet-5", worker_model: "claude-haiku-4-5-20251001", provider: null },
-        other_engine: { os_model: "keep-me", worker_model: null, provider: "ollama_local" }, // untouched engine survives the REPLACE
+        other_engine: { os_model: "keep-me", worker_model: null, provider: "openrouter" }, // untouched engine survives the REPLACE
       },
     });
     await screen.findByText("Saved — audited.", {}, { timeout: 4000 });
@@ -184,6 +184,6 @@ describe("Routing tab — turn pins", () => {
     renderTab();
     const source = (await screen.findByLabelText("Model source")) as HTMLSelectElement;
     const labels = Array.from(source.options).map((o) => o.textContent);
-    expect(labels).toEqual(["Claude (native)", "Ollama"]);
+    expect(labels).toEqual(["Claude (native)", "OpenRouter"]);
   });
 });

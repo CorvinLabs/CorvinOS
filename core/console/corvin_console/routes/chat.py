@@ -251,7 +251,7 @@ def get_chat_turns(
     ```
 
     **Query parameters (Phase 2c — ExecutionContext Filtering):**
-    - `engine_id` (str, optional): Filter by engine (claude_code, acs, tde, hermes)
+    - `engine_id` (str, optional): Filter by engine (claude_code, acs, tde)
     - `delegation_mode` (str, optional): Filter by delegation (native, acs, tde, fallback)
     - `model_name` (str, optional): Filter by model name (exact match)
 
@@ -1156,7 +1156,6 @@ def _build_wdat_graph(
 
     ENGINE_COLORS: dict[str, str] = {
         "claude_code": "#60a5fa",   # blue
-        "hermes":      "#a78bfa",   # purple (local Ollama)
         "codex_cli":   "#34d399",   # green
         "opencode":    "#fb923c",   # orange
         "copilot":     "#f472b6",   # pink

@@ -40,7 +40,7 @@ class SkillManifestLoader:
                     "confidence": {"type": "number"},
                 },
             },
-            supported_engines=["claude_code", "hermes", "copilot", "opencode"],
+            supported_engines=["claude_code", "copilot", "opencode"],
             boot_layer="bundled",
         )
 

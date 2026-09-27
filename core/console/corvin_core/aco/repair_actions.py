@@ -259,9 +259,8 @@ def _emit_htrace(ctx: RepairContext, action: "RepairAction", status: str) -> Non
 
 
 # ── SH-5: per-action failure circuit-breaker (persisted under CORVIN_HOME) ─────
-# A permanently-failing action must not re-run (and, for HermesHealthRepair,
-# re-fork) every boot_healer (300 s) / systemd (5 min) cycle forever, spamming the
-# audit + htrace channels. After K consecutive failed cycles we OPEN the circuit
+# A permanently-failing action must not re-run every boot_healer (300 s) /
+# systemd (5 min) cycle forever, spamming the audit + htrace channels. After K consecutive failed cycles we OPEN the circuit
 # for that action: stop attempting it and emit exactly ONE escalation event. A
 # later successful cycle RESETS the counter (circuit closes).
 _ACTION_FAIL_K_MAX = 5
@@ -286,8 +285,9 @@ def _save_failcounts(home: Path, counts: dict[str, int]) -> None:
     try:
         p = _assert_within_home(home, _failcount_path(home))
         p.parent.mkdir(parents=True, exist_ok=True)
-        # prune zeros so the file doesn't accrete keys forever
-        live = {k: v for k, v in counts.items() if v}
+        # prune zeros AND ids of actions that no longer exist (e.g. the removed
+        # ``hermes_health``, ADR-2087) so the file doesn't accrete keys forever.
+        live = {k: v for k, v in counts.items() if v and k in _REGISTRY}
         p.write_text(json.dumps(live, ensure_ascii=False), encoding="utf-8")
     except Exception:  # noqa: BLE001 — bookkeeping, never enforcement
         pass
@@ -310,7 +310,9 @@ def run_local_repairs(ctx: RepairContext, *, dry_run: bool = False) -> list[Repa
     risky_ok = _risky_enabled()
     out: list[RepairOutcome] = []
     failcounts = {} if dry_run else _load_failcounts(ctx.corvin_home)
-    dirty = False
+    # A key for an action that no longer exists (e.g. ``hermes_health``,
+    # ADR-2087) is tolerated on load and pruned on this cycle's save.
+    dirty = any(k not in _REGISTRY for k in failcounts)
 
     for action in _REGISTRY.values():
         if action.risk == RISK_RISKY and not risky_ok:
@@ -609,103 +611,6 @@ class OrphanTmpSweep(RepairAction):
         return n
 
     # undo: an orphan tmp is by definition disposable; no restore needed.
-
-
-@register_repair
-class HermesHealthRepair(RepairAction):
-    """ADR-0178 Tier LOCAL — Automated Hermes/Ollama health restoration.
-
-    Detects when Ollama (the local engine fallback) is unavailable and attempts
-    corrective actions: (1) start the stopped server, (2) re-pull the configured
-    model if missing. Loss-gated: if neither action succeeds in restoring reachability,
-    the entire repair is rolled back (Ollama.start left running but model_pulled stays False).
-
-    This action is risky (network I/O, subprocess fork) and requires
-    CORVIN_ACO_L5_RISKY=1 to run. Never raises — any error is logged and ignored."""
-    action_id = "hermes_health"
-    risk = RISK_RISKY
-    blast_radius = "home"  # starts a process; affects the home's Ollama server
-
-    @staticmethod
-    def _shared_dirs() -> list[Path]:
-        """Candidate directories that hold ``hermes_healing.py``, resolved from the
-        installed PACKAGE location (SH-7). The previous code resolved the shared dir
-        from ``ctx.corvin_home`` — with a pinned ``CORVIN_HOME=<repo>/.corvin`` that
-        walked two levels too high, so the import always failed and this L5 repair
-        was a permanent no-op. Anchor on ``Path(__file__)`` instead, exactly like
-        ``patch_generator.default_llm``:
-          * source tree  → ``<repo>/corvin_operator/bridges/shared``   (parents[4])
-          * wheel install→ ``<corvin_console>/_vendor/corvin_operator/bridges/shared`` (parents[1])
-        """
-        here = Path(__file__).resolve()
-        return [
-            here.parents[4] / "corvin_operator" / "bridges" / "shared",
-            here.parents[1] / "_vendor" / "corvin_operator" / "bridges" / "shared",
-        ]
-
-    def _import_hermes_healing(self, ctx: RepairContext | None = None):
-        """Import and return the ``hermes_healing`` module, or None if unavailable."""
-        import sys as _sys
-        for d in self._shared_dirs():
-            try:
-                if d.is_dir() and str(d) not in _sys.path:
-                    _sys.path.insert(0, str(d))
-            except OSError:
-                continue
-        try:
-            import hermes_healing  # type: ignore  # noqa: PLC0415
-            return hermes_healing
-        except Exception:  # noqa: BLE001
-            return None
-
-    def _hermes_available(self, ctx: RepairContext | None = None):
-        """Return ``get_health_status()`` dict, or None if the module can't load."""
-        mod = self._import_hermes_healing(ctx)
-        if mod is None:
-            return None
-        try:
-            return mod.get_health_status()
-        except Exception:  # noqa: BLE001
-            return None
-
-    def precondition(self, ctx: RepairContext) -> list[Any]:
-        """Return a list of missing components: [] if healthy, ['not_reachable']
-        if Ollama is down, ['model_missing'] if the model is absent."""
-        status = self._hermes_available(ctx)
-        if not isinstance(status, dict):
-            return []  # module unavailable OR already healthy → nothing to repair
-        faults: list[Any] = []
-        if not status.get("reachable"):
-            faults.append("not_reachable")
-        elif not status.get("has_model"):
-            faults.append("model_missing")
-        return faults
-
-    def apply(self, ctx: RepairContext, faults: list[Any]) -> int:
-        if not faults:
-            return 0
-        mod = self._import_hermes_healing(ctx)
-        if mod is None:
-            return 0
-        try:
-            result = mod.repair_hermes(timeout_server=30.0, timeout_pull=600.0)
-        except Exception:  # noqa: BLE001
-            return 0
-        # Loss-gate: verify reachability with a FRESH health check — never trust
-        # repair_hermes's own optimistic report (SH-7 review). If it's still not
-        # reachable, no progress was made → 0 (the executor then rolls back).
-        status = self._hermes_available(ctx)
-        reachable = status.get("reachable") if isinstance(status, dict) \
-            else result.get("reachable")
-        if not reachable:
-            return 0
-        count = (1 if result.get("server_started") else 0) \
-            + (1 if result.get("model_pulled") else 0)
-        return count if count > 0 else 1  # at least 1 to avoid rolling back
-
-    def undo(self, ctx: RepairContext) -> None:
-        """No-op: we want Ollama to stay running once started. The system will
-        benefit from having it available as a fallback engine."""
 
 
 @register_repair

@@ -3,7 +3,7 @@
 Prüft das Nervensystem end-to-end:
   - Kompletter Scan mit allen 6 Built-in Fibers
   - EngineFiber mit Cloud-Code-Engine (aktiv oder gemockt)
-  - EngineFiber mit Hermes-Engine (aktiv oder gemockt)
+  - EngineFiber ohne verfügbare Engine
   - Boot-Healer Step N: scan → repair → audit
   - write_signals_to_audit() erzeugt valide Hash-Chain-Events
   - Tier-2 Plugin-Discovery: lokale .py-Datei → automatisch geladen
@@ -191,39 +191,13 @@ class TestEngineFiberCloudCode(unittest.TestCase):
         self.assertIsInstance(signals, list)
 
 
-# ── Engine-Fiber: Hermes Engine ───────────────────────────────────────────────
+# ── Engine-Fiber: no engine available ────────────────────────────────────────
 
-class TestEngineFiberHermes(unittest.TestCase):
-    """EngineFiber korrekt wenn Hermes (Ollama) als Fallback läuft."""
+class TestEngineFiberNoEngine(unittest.TestCase):
+    """EngineFiber ohne claude-Binary (kein Fallback-Engine mehr, ADR-2087)."""
 
-    def test_engine_fiber_detects_hermes_via_ollama(self):
-        """EngineFiber gibt Info-Signal wenn Ollama (Hermes-Backend) läuft."""
-        from corvin_console.aco.nerve_builtins import EngineFiber
-        import urllib.request
-
-        def fake_urlopen(url, timeout=None):
-            class FakeResp:
-                def read(self): return b'{"status": "running"}'
-                def __enter__(self): return self
-                def __exit__(self, *a): pass
-            return FakeResp()
-
-        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            with mock.patch("shutil.which", return_value=None):  # claude nicht verfügbar
-                signals = EngineFiber().scan()
-
-        self.assertIsInstance(signals, list)
-        # Hermes-Verfügbarkeit soll erkannt werden
-        hermes_signals = [
-            s for s in signals
-            if "hermes" in s.signal_type.lower() or "ollama" in s.signal_type.lower()
-            or "hermes" in s.message.lower() or "ollama" in s.message.lower()
-        ]
-        # Falls Hermes-Erkennung implementiert, soll es auftauchen
-        # (Falls Engine-Fiber Hermes nicht explizit prüft, ist das ein LOW/INFO)
-
-    def test_engine_fiber_handles_both_engines_unavailable(self):
-        """EngineFiber produziert HIGH wenn weder claude noch Hermes verfügbar."""
+    def test_engine_fiber_handles_no_engine_available(self):
+        """EngineFiber läuft durch wenn claude nicht verfügbar ist."""
         from corvin_console.aco.nerve_builtins import EngineFiber
 
         def fake_urlopen(url, timeout=None):

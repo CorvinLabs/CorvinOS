@@ -602,7 +602,7 @@ class TestEngineHealer(unittest.TestCase):
         """to_audit_details must return a dict with required keys."""
         from corvin_console.aco.engine_healer import EngineHealResult
         r = EngineHealResult(
-            engine_ok=True, engine_id="hermes", engine_action="started_ollama",
+            engine_ok=False, engine_id="claude_code", engine_action="no_engine_available",
             tts_ok=True, tts_provider="edge", tts_action="installed_edge_tts",
             stt_ok=False, stt_provider="none", warnings=["STT unavailable"],
         )
@@ -611,14 +611,23 @@ class TestEngineHealer(unittest.TestCase):
                     "tts_ok", "tts_provider", "tts_action",
                     "stt_ok", "stt_provider", "warnings"):
             self.assertIn(key, d)
-        self.assertEqual(d["engine_action"], "started_ollama")
+        self.assertEqual(d["engine_action"], "no_engine_available")
         self.assertEqual(d["tts_action"], "installed_edge_tts")
 
-    def test_hermes_reachable_does_not_raise(self):
-        """_hermes_reachable must return bool, not raise on connection refused."""
-        from corvin_console.aco.engine_healer import _hermes_reachable
-        result = _hermes_reachable()
-        self.assertIsInstance(result, bool)
+    def test_no_hermes_fallback_when_claude_missing(self):
+        """ADR-2087: a missing claude binary is reported, never papered over by
+        falling back to Hermes; a stored legacy engine reads as claude_code."""
+        from unittest import mock
+        from corvin_console.aco import engine_healer as eh
+        with mock.patch.object(eh, "_claude_binary_ok", return_value=False), \
+                mock.patch.object(eh, "_configured_engine", return_value="claude_code"):
+            ok, engine, action = eh.check_engine_readiness("_default")
+        self.assertFalse(ok)
+        self.assertEqual(engine, "claude_code")
+        self.assertEqual(action, "no_engine_available")
+        self.assertFalse(hasattr(eh, "_hermes_reachable"))
+        self.assertFalse(hasattr(eh, "_try_start_ollama"))
+        self.assertEqual(eh._normalize_legacy("hermes"), "claude_code")
 
     def test_heal_cycle_with_engine_healer_does_not_raise(self):
         """_heal_cycle (with engine_healer integrated) must not raise.
@@ -895,7 +904,7 @@ class TestIntegrityMonitor(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp_path = Path(td)
             config = tmp_path / "tenant.corvin.yaml"
-            config.write_text("spec:\n  default_engine: hermes\n")
+            config.write_text("spec:\n  default_engine: claude_code\n")
             with mock.patch(
                 "corvin_console.aco.integrity_monitor._tenant_global_dir",
                 return_value=tmp_path,
@@ -922,14 +931,14 @@ class TestIntegrityMonitor(unittest.TestCase):
                 self.assertEqual(findings[0].check_name, "engine_config_safe")
 
     def test_check_engine_config_safe_allows_localhost(self):
-        """check_engine_config_safe erlaubt localhost-URLs (lokaler Ollama)."""
+        """check_engine_config_safe erlaubt localhost-URLs (lokaler Endpunkt)."""
         from corvin_console.aco.integrity_monitor import check_engine_config_safe
         import unittest.mock as mock
 
         with tempfile.TemporaryDirectory() as td:
             tmp_path = Path(td)
             config = tmp_path / "tenant.corvin.yaml"
-            config.write_text("spec:\n  default_engine: http://localhost:11434\n")
+            config.write_text("spec:\n  default_engine: http://localhost:8080\n")
             with mock.patch(
                 "corvin_console.aco.integrity_monitor._tenant_global_dir",
                 return_value=tmp_path,

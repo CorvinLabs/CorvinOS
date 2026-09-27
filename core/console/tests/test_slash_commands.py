@@ -75,7 +75,7 @@ def test_quota_unlimited_when_no_limit():
 def test_engine_shows_configured_engine():
     assert "claude_code" in _h("/engine")
     # with an arg it explains tenant-wide config, still names the engine
-    out = _h("/engine hermes")
+    out = _h("/engine codex")
     assert "claude_code" in out and "Engines" in out
 
 

@@ -549,30 +549,20 @@ function EmptyState({ onNew, pending }: { onNew: () => void; pending: boolean })
 
 // ── Per-chat engine selector ─────────────────────────────────────────────
 
-const ENGINE_META: Record<string, { label: string; icon: React.ComponentType<{className?: string}>; local: boolean }> = {
-  claude_code:  { label: "Claude Code", icon: Cloud, local: false },
-  codex_cli:    { label: "Codex",       icon: Cloud, local: false },
-  opencode:     { label: "OpenCode",    icon: Cloud, local: false },
-  hermes:       { label: "Hermes",      icon: Cpu,   local: true  },
-  copilot:      { label: "Copilot",     icon: Cloud, local: false },
+const ENGINE_META: Record<string, { label: string; icon: React.ComponentType<{className?: string}> }> = {
+  claude_code:  { label: "Claude Code", icon: Cloud },
+  codex_cli:    { label: "Codex",       icon: Cloud },
+  opencode:     { label: "OpenCode",    icon: Cloud },
+  copilot:      { label: "Copilot",     icon: Cloud },
 };
 
 // ADR-0214 — display labels for the per-turn agentic-compute badge
 // (stamped by the `engine` stream event; see chat-registry.ts).
 const AGENTIC_ENGINE_LABELS: Record<string, string> = {
   claude_code:       "Claude Code (OS-Engine)",
-  hermes:            "Hermes (lokal)",
   acs:               "ACS (Agentic Compute Fan-out)",
   tiered_delegation: "TDE (Tiered Delegation Engine)",
 };
-
-const HERMES_MODEL_OPTIONS = [
-  { value: "",                label: "Hermes — default model" },
-  { value: "hermes-fast",     label: "hermes-fast (7B)" },
-  { value: "hermes-balanced", label: "hermes-balanced (13B)" },
-  { value: "hermes-capable",  label: "hermes-capable (Hermes-3 8B)" },
-  { value: "hermes-large",    label: "hermes-large (70B)" },
-];
 
 // ── Slash commands ────────────────────────────────────────────────────────
 
@@ -599,7 +589,7 @@ const SLASH_COMMANDS = [
   { cmd: "/erase",            args: "user uid=<id>",   desc: "CCC: GDPR Art. 17 erasure request" },
   { cmd: "/audit",            args: "[last <n>]",      desc: "Show recent audit events" },
   // ── Config ──
-  { cmd: "/engine",           args: "<name>",          desc: "Switch engine: claude_code · hermes · codex · opencode · copilot" },
+  { cmd: "/engine",           args: "<name>",          desc: "Switch engine: claude_code · codex · opencode · copilot" },
   { cmd: "/persona",          args: "<name>",          desc: "Pin a persona for this chat" },
   { cmd: "/forget",           args: "",                desc: "Delete your memory (GDPR Art. 17)" },
   { cmd: "/quota",            args: "",                desc: "Check your message quota" },
@@ -690,9 +680,7 @@ const ChatStatusBar = React.memo(function ChatStatusBar({
           title="AI Engine — click to change"
           className={cn(
             "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
-            meta.local
-              ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-400"
-              : "border-border/50 bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground",
+            "border-border/50 bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground",
           )}
         >
           <Icon className="h-3 w-3" />
@@ -777,9 +765,7 @@ function ChatEngineSelector({ chatKey, csrf }: { chatKey: string; csrf: string }
         onClick={() => setOpen((v) => !v)}
         className={cn(
           "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors hover:bg-muted",
-          meta.local
-            ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
-            : "border-border bg-muted/30 text-muted-foreground",
+          "border-border bg-muted/30 text-muted-foreground",
         )}
       >
         <Icon className="h-3 w-3" />
@@ -813,31 +799,13 @@ function ChatEngineSelector({ chatKey, csrf }: { chatKey: string; csrf: string }
                     isActive && "bg-accent/10 font-medium",
                   )}
                 >
-                  <Ico className={cn("h-3.5 w-3.5 shrink-0", m.local ? "text-emerald-500" : "text-muted-foreground")} />
+                  <Ico className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   <span className="flex-1">{m.label}</span>
-                  {m.local && (
-                    <span className="text-[9px] text-emerald-600 font-semibold uppercase tracking-wide">local</span>
-                  )}
                   {isActive && <Check className="h-3 w-3 text-accent" />}
                 </button>
               );
             })}
           </div>
-          {/* Hermes model picker — only when hermes is the active override */}
-          {isOverride && effective === "hermes" && (
-            <div className="border-t border-border px-3 py-2 space-y-1">
-              <p className="text-[10px] text-muted-foreground">Model</p>
-              <select
-                defaultValue={pref?.per_chat_model ?? ""}
-                onChange={(e) => setMut.mutate({ engine: "hermes", model: e.target.value || null })}
-                className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
-              >
-                {HERMES_MODEL_OPTIONS.map(o => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </div>
-          )}
           {/* Clear override */}
           {isOverride && (
             <div className="border-t border-border px-3 py-2">

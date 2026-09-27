@@ -466,7 +466,7 @@ export function VideoProducerPage() {
             <label className="text-sm"><span className="text-xs text-muted-foreground">Output folder</span><Input value={form.output_folder} onChange={(e) => setForm({ ...form, output_folder: e.target.value })} /></label>
             <label className="text-sm"><span className="text-xs text-muted-foreground">Text-to-speech</span>
               <select value={form.tts_engine} onChange={(e) => setForm({ ...form, tts_engine: e.target.value })} className="w-full mt-1 px-3 py-2 rounded-md border border-border bg-background text-sm">
-                <option value="azure">Azure</option><option value="google">Google</option><option value="local">Local (Hermes)</option>
+                <option value="azure">Azure</option><option value="google">Google</option><option value="local">Local</option>
               </select></label>
             <label className="text-sm"><span className="text-xs text-muted-foreground">Max duration (minutes, 0 = unlimited)</span><Input type="number" min={0} value={form.max_duration_minutes} onChange={(e) => setForm({ ...form, max_duration_minutes: Math.max(0, parseInt(e.target.value) || 0) })} /></label>
             <div className="md:col-span-3"><Button variant="outline" size="sm" disabled={save.isPending || !csrf} onClick={() => save.mutate(form)}>{save.isSuccess ? "Saved" : "Save settings"}</Button></div>

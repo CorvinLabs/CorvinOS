@@ -50,12 +50,10 @@ from corvin_console.execution_context import (
 
 # Detection
 assert detect_model_source("claude-3-5-sonnet") == ModelSource.CLAUDE
-assert detect_model_source("ollama:mistral") == ModelSource.OLLAMA
 assert detect_model_source("openrouter:meta-llama/llama-2") == ModelSource.OPENROUTER
 
 # Normalization (canonical form)
 assert normalize_model_name("claude-3-5-sonnet-20241022") == "claude-3-5-sonnet"
-assert normalize_model_name("ollama:mistral:latest") == "ollama/mistral:latest"
 assert normalize_model_name("openrouter:mistral") == "openrouter/mistral"
 ```
 
@@ -68,7 +66,6 @@ from corvin_console.execution_context import detect_engine, EngineId
 
 # From runtime state
 assert detect_engine({"engine_id": "claude_code"}) == EngineId.CLAUDE_CODE
-assert detect_engine({"spawn_via": "http"}) == EngineId.HERMES
 assert detect_engine({"delegation_mode": "acs"}) == EngineId.ACS
 ```
 
@@ -128,15 +125,7 @@ These integrations are planned for Phase 2:
    message.metadata.execution_context = ctx.to_dict()
    ```
 
-2. **_stream_hermes_turn()** — Local Hermes engine:
-   ```python
-   builder.start(engine_id="hermes", model_name=model_name)
-   builder.set_delegation(mode="native")
-   # Track tokens from HermesEngine response
-   ctx = builder.complete()
-   ```
-
-3. **_stream_tde_turn()** — Tiered Delegation:
+2. **_stream_tde_turn()** — Tiered Delegation:
    ```python
    builder.set_delegation(
        mode="tde",
@@ -191,16 +180,16 @@ return {
 
 ### ModelSource
 - `CLAUDE` — Anthropic API models (claude-3-*, etc.)
-- `OLLAMA` — Local Ollama HTTP
+- `OLLAMA` — historical only (local Ollama removed by ADR-2087; parse-only)
 - `OPENROUTER` — OpenRouter API routing
-- `HERMES` — Hermes local fallback
+- `HERMES` — historical only (removed by ADR-2087; parse-only)
 - `UNKNOWN` — Unrecognized
 
 ### EngineId
 - `CLAUDE_CODE` — Direct claude subprocess
 - `ACS` — ACS fan-out workers
 - `TDE` — Tiered Delegation Engine
-- `HERMES` — Layer-22 WorkerEngine
+- `HERMES` — historical only (removed by ADR-2087; parse-only)
 - `UNKNOWN` — Unrecognized
 
 ### DelegationMode
@@ -229,8 +218,8 @@ Full test suite in `core/console/tests/test_execution_context.py`:
 uv run pytest core/console/tests/test_execution_context.py -v
 ```
 
-48 passing tests covering:
-- Model source detection (claude, ollama, openrouter, hermes)
+Passing tests covering:
+- Model source detection (claude, openrouter)
 - Model name normalization
 - Engine detection
 - Delegation mode detection
@@ -243,7 +232,6 @@ uv run pytest core/console/tests/test_execution_context.py -v
 ## Next Steps (Phase 2)
 
 1. Wire ExecutionContext capture in `stream_turn()` for direct Claude Code turns
-2. Extend to `_stream_hermes_turn()` for local engine execution
-3. Track delegation in `_stream_tde_turn()` and ACS branch
-4. Emit execution context in L16 audit chain
-5. Expose in REST API and frontend badge rendering
+2. Track delegation in `_stream_tde_turn()` and ACS branch
+3. Emit execution context in L16 audit chain
+4. Expose in REST API and frontend badge rendering
