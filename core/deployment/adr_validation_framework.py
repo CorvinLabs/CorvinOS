@@ -60,7 +60,8 @@ class WeeklyComplianceReport:
         # Update overall status
         if check.status == ComplianceStatus.FAIL:
             self.overall_status = ComplianceStatus.FAIL
-            if check.adr_id in ["ADR-0206", "ADR-0205"]:  # Critical ADRs
+            # Critical ADRs that block phase progression: canary (0206), learning (0205), edge cases (0369)
+            if check.adr_id in ["ADR-0206", "ADR-0205", "ADR-0369"]:
                 self.blocking_violations.append(f"{check.adr_id}/{check.check_name}")
         elif check.status == ComplianceStatus.WARNING and self.overall_status == ComplianceStatus.PASS:
             self.overall_status = ComplianceStatus.WARNING

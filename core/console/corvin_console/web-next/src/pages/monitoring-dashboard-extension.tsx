@@ -127,7 +127,7 @@ const RolloutMonitoringDashboard: React.FC = () => {
               <div className="flex-1 bg-gray-200 h-2 rounded-full">
                 <div
                   className="h-full bg-blue-500 rounded-full transition-all"
-                  style={{ width: `${Math.min(100, metrics.traffic_percentage * 10)}%` }}
+                  style={{ width: `${Math.min(100, metrics.traffic_percentage)}%` }}
                 />
               </div>
             </div>

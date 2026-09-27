@@ -182,7 +182,7 @@ class RollbackController:
                     RollbackAction.LOCK_PHASE,
                 ],
                 reason=f"Agreement rate {agreement_rate:.1%} < {self.CORRECTNESS_THRESHOLDS['min_agreement_rate']:.1%}",
-                lom="rollback_automation.py::_check_correctness_drop:145",
+                lom="rollback_automation.py::_check_correctness_drop:166",
             )
 
         return None
@@ -223,7 +223,7 @@ class RollbackController:
                 actions_taken=actions,
                 lockdown_until=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
                 reason=f"Latency {actual_latency_ms:.1f}ms exceeds {max_latency_ms:.1f}ms (+{spike_pct:.1%})",
-                lom="rollback_automation.py::_check_latency_spike:180",
+                lom="rollback_automation.py::_check_latency_spike:190",
             )
 
         return None
@@ -253,7 +253,7 @@ class RollbackController:
                 ],
                 lockdown_until=(datetime.now(timezone.utc) + timedelta(hours=6)).isoformat(),
                 reason=f"Confidence regression from {prior_confidence:.2f} to {actual_confidence:.2f} (-{regression_pct:.1%})",
-                lom="rollback_automation.py::_check_confidence_regression:210",
+                lom="rollback_automation.py::_check_confidence_regression:231",
             )
 
         return None
