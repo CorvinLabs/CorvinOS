@@ -259,7 +259,8 @@ class LearningLoopTracker:
         Returns:
             Dict with velocity statistics: mean cycle time, feedback rate, etc.
         """
-        cutoff = datetime.utcnow() - timedelta(hours=window_hours)
+        from datetime import timezone
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
 
         recent_metrics = [
             m for m in self.loop_metrics.values()
