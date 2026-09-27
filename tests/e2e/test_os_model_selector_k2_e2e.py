@@ -67,7 +67,7 @@ class TestOSModelSelectorK2E2E:
             ("task_002", "medium", "haiku", "sonnet", "opus"),  # Mixed
             ("task_003", "complex", "sonnet", "opus"),       # Favor opus
             ("task_004", "simple", "haiku", "sonnet"),       # Simple again
-            ("task_005", "complex", "opus"),                 # Complex again
+            ("task_005", "complex", "sonnet", "opus"),       # Complex again — stratification allows 20% sonnet
         ]
         
         for task_id, complexity, *allowed_models in tasks:
@@ -81,31 +81,38 @@ class TestOSModelSelectorK2E2E:
         """E2E: Stratification matches expected percentages (quality gate)."""
         results = {}
         
+        # n=100 with deterministic SHA256-bucketed task_ids showed sampling
+        # noise beyond the tolerance band (e.g. medium/haiku landed at 4%
+        # instead of ~10%) — not a routing bias, just too few buckets to
+        # approximate the target distribution (verified: n=1000 lands within
+        # ~1pp of every target). n=1000 keeps the same deterministic task_ids
+        # (reproducible) while giving the law of large numbers room to work.
+        SAMPLE_SIZE = 1000
         for complexity in ["simple", "medium", "complex"]:
             decisions = [
-                router.route(f"{complexity}_{i:03d}", complexity)
-                for i in range(100)
+                router.route(f"{complexity}_{i:04d}", complexity)
+                for i in range(SAMPLE_SIZE)
             ]
-            
+
             haiku_count = sum(1 for d in decisions if "haiku" in d.selected_model)
             sonnet_count = sum(1 for d in decisions if "sonnet" in d.selected_model)
             opus_count = sum(1 for d in decisions if "opus" in d.selected_model)
-            
+
             results[complexity] = {
                 "haiku": haiku_count,
                 "sonnet": sonnet_count,
                 "opus": opus_count,
             }
-        
-        # Verify stratification
+
+        # Verify stratification (bounds scaled to SAMPLE_SIZE=1000)
         # simple: 30–40% Haiku
-        assert 25 <= results["simple"]["haiku"] <= 45
+        assert 250 <= results["simple"]["haiku"] <= 450
         # medium: ~10% Haiku, ~50% Sonnet, ~40% Opus
-        assert 5 <= results["medium"]["haiku"] <= 15
-        assert 40 <= results["medium"]["sonnet"] <= 60
+        assert 50 <= results["medium"]["haiku"] <= 150
+        assert 400 <= results["medium"]["sonnet"] <= 600
         # complex: 0% Haiku, 20% Sonnet, 80% Opus
         assert results["complex"]["haiku"] == 0
-        assert 15 <= results["complex"]["sonnet"] <= 25
+        assert 150 <= results["complex"]["sonnet"] <= 250
     
     def test_e2e_no_pii_in_decision(self, router):
         """E2E: No PII even with PII-containing task_id (hash strips it)."""

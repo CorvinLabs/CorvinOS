@@ -52,7 +52,10 @@ class TestVariantBBase:
 
     def test_variant_b_medium_task_classification(self, selector_b):
         """Variant B correctly classifies medium complexity tasks."""
-        task = "Refactor database query: " + "SELECT * FROM users WHERE active=1 " * 10
+        # Classification is token-count based (>500 words = medium); 10
+        # repeats only reaches ~60 words (still "simple") — 100 repeats
+        # crosses the threshold (~600 words).
+        task = "Refactor database query: " + "SELECT * FROM users WHERE active=1 " * 100
         decision = selector_b.classify(task, task_type="code_gen")
 
         assert decision.complexity == "medium"
@@ -60,7 +63,9 @@ class TestVariantBBase:
 
     def test_variant_b_complex_task_classification(self, selector_b):
         """Variant B correctly classifies complex tasks."""
-        task = "Design system architecture for: " + ("multi-tenant microservices " * 50)
+        # >3000 words = complex; 50 repeats only reaches ~105 words — 1600
+        # repeats crosses the threshold (~3200 words).
+        task = "Design system architecture for: " + ("multi-tenant microservices " * 1600)
         decision = selector_b.classify(task, task_type="system_design")
 
         assert decision.complexity == "complex"
@@ -153,7 +158,7 @@ class TestVariantCBudget:
 
         assert decision.fallback_applied
         assert "Quota exhausted" in decision.reasoning
-        assert "quota fallback: true" in decision.reasoning.lower() or "fallback" in decision.reasoning.lower()
+        assert "falling back" in decision.reasoning.lower()
         assert decision.recommended_model == "claude-sonnet-5"
 
     def test_variant_c_low_quota_model_selection(self, selector_c):

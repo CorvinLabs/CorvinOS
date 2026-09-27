@@ -128,15 +128,20 @@ class TestConvergence:
         # Check convergence
         convergence = self.optimizer.check_convergence(target_std_dev=0.05)
         avg_std_dev, converged_count, total_count = self.optimizer.get_convergence_summary()
-        
+
         print(f"\nConvergence Summary after 50 iterations:")
         print(f"  Average std-dev: {avg_std_dev:.4f}")
         print(f"  Converged: {converged_count}/{total_count}")
         print(f"  Per-type convergence: {convergence}")
-        
-        # At least 50% should converge
-        assert converged_count >= total_count // 2, \
-            f"Only {converged_count}/{total_count} converged. std_dev={avg_std_dev}"
+
+        # Only the 3 task types actually fed outcomes above can converge —
+        # get_convergence_summary() reports over ALL registered task types
+        # (8, including 5 that received zero outcomes and stay at their
+        # uninformed prior), so the gate must be scoped to the fed types.
+        fed_converged = sum(1 for t in task_types if convergence.get(t))
+        assert fed_converged >= len(task_types) // 2 + 1, \
+            f"Only {fed_converged}/{len(task_types)} fed task types converged. " \
+            f"std_dev={avg_std_dev}, convergence={convergence}"
     
     def test_std_dev_decreases_over_time(self):
         """Test that std-dev decreases as we collect more observations."""

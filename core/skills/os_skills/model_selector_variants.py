@@ -20,6 +20,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Tuple
 
+from core.paths.tenant import corvin_home
+
 logger = logging.getLogger(__name__)
 
 
@@ -136,8 +138,8 @@ class VariantBSelector:
 
     def _get_config_path(self) -> Path:
         """Get tenant-specific config path."""
-        corvin_home = Path.home() / ".corvin"
-        return corvin_home / "tenants" / self.tenant_id / "global" / "model_selection_overrides.json"
+        home = corvin_home()
+        return home / "tenants" / self.tenant_id / "global" / "model_selection_overrides.json"
 
     def _load_tenant_overrides(self) -> Dict[str, str]:
         """Load operator-set model overrides for this tenant."""
@@ -299,8 +301,8 @@ class VariantCSelector(VariantBSelector):
 
     def _get_quota_store_path(self) -> Path:
         """Get quota tracking file for this tenant."""
-        corvin_home = Path.home() / ".corvin"
-        return corvin_home / "tenants" / self.tenant_id / "global" / "quota_tracking.json"
+        home = corvin_home()
+        return home / "tenants" / self.tenant_id / "global" / "quota_tracking.json"
 
     def _load_or_initialize_quota(self) -> TenantBudgetQuota:
         """Load tenant quota or initialize with defaults."""
@@ -459,8 +461,8 @@ class VariantDSelector(VariantCSelector):
 
     def _get_learning_store_path(self) -> Path:
         """Get learning data store for this tenant."""
-        corvin_home = Path.home() / ".corvin"
-        return corvin_home / "tenants" / self.tenant_id / "global" / "model_learning.json"
+        home = corvin_home()
+        return home / "tenants" / self.tenant_id / "global" / "model_learning.json"
 
     def _load_or_initialize_success_rates(self) -> Dict[str, Dict[str, float]]:
         """Load learned success rates per model + task type."""
