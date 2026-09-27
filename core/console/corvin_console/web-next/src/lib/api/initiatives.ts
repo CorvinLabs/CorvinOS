@@ -22,7 +22,7 @@ export function startInitiativesVerify(
 
 export type TaskType =
   | "initiative" | "chat" | "background" | "acs" | "workflow" | "flow"
-  | "gateway" | "forge" | "compute" | "scheduled" | "skill_creator"
+  | "gateway" | "a2a" | "forge" | "compute" | "scheduled" | "skill_creator"
   | "agent" | "commit";
 
 export type UnifiedStatus =
@@ -45,6 +45,25 @@ export interface UnifiedTask {
   /** Set when a record claims to be active but shows no sign of life. */
   stale_reason: string | null;
   detail: string | null;
+  /** Sub-steps of a run: the Claude Code subagents of a chat turn, or the
+   *  worker turns of a background task. Absent when there are none. */
+  steps?: UnifiedTaskSteps;
+}
+
+export interface UnifiedTaskStep {
+  title: string;
+  agent_type: string | null;
+  status: UnifiedStatus;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_s: number | null;
+}
+
+export interface UnifiedTaskSteps {
+  total: number;
+  running: number;
+  /** The most recent steps (capped server-side). */
+  items: UnifiedTaskStep[];
 }
 
 export interface TaskTypeSummary {

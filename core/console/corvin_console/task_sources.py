@@ -24,9 +24,16 @@ Normalised ``status``:
                no end record, no worker) for longer than STALE_AFTER_S — it is
                NOT shown as running, because nothing says it is.
 
-Privacy: a bridge chat task's instruction is another person's message. Only
-web-chat and CLI tasks (the operator's own console/terminal) get an
-instruction preview; bridge tasks are titled by channel and persona only.
+A2A exchanges (``a2a``, both directions) come from the Agent Hub feed; ``/task``
+and self-delegated background tasks from the completion registry, with their
+worker's turns folded in. A record may carry ``steps`` — the Claude Code
+subagents of a chat turn, or the worker turns of a background task.
+
+Privacy: a bridge chat task's instruction is usually another person's
+message. Only the operator's own turns get an instruction preview — web-chat
+and CLI turns, and bridge turns the adapter stamped ``from_operator`` (sender
+explicitly on that bridge's whitelist). Everyone else's is titled by channel
+and persona only; A2A runs by direction and peer only.
 
 Cost: ~5 k chat-task files are re-read only when their (mtime, size) changed —
 every other poll is a stat per file (``_FILE_CACHE``). The aggregate is cached
@@ -37,6 +44,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -57,6 +65,7 @@ TYPE_LABELS = {
     "workflow": "Workflow",
     "flow": "Flow",
     "gateway": "Gateway run",
+    "a2a": "A2A",
     "forge": "Forge tool",
     "compute": "Compute",
     "scheduled": "Scheduled",
@@ -157,9 +166,132 @@ def _preview(text: Any, n: int = 90) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def _corvin_root() -> Path:
+    from core.paths.tenant import corvin_home  # noqa: PLC0415
+
+    return Path(corvin_home())
+
+
+_CHANNEL_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+
+
+def _operator_uids(channel: str) -> frozenset[str]:
+    """Senders EXPLICITLY on a bridge's whitelist — the operator's own accounts.
+
+    Read from the settings file the bridge daemon itself uses
+    (``<corvin_home>/bridges/<channel>/settings.json``, ADR-0008 §8.3). Only an
+    explicit entry counts: an empty whitelist, or a chat opened to everyone
+    (``audience: all``), makes nobody the operator. Read uncached — the file
+    also holds the bridge token, which must not sit in a module-level cache."""
+    if not _CHANNEL_RE.match(channel or ""):
+        return frozenset()
+    try:
+        data = json.loads((_corvin_root() / "bridges" / channel / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+    wl = data.get("whitelist") if isinstance(data, dict) else None
+    return frozenset(str(x) for x in wl if x) if isinstance(wl, list) else frozenset()
+
+
+# ── subagents inside a turn (Claude Code transcripts) ────────────────────────
+# A worker turn that fans out into Claude Code subagents leaves one transcript
+# per subagent under ``<claude_home>/projects/<encoded workdir>/<session>/
+# subagents/agent-*.jsonl`` (+ ``.meta.json``: agentType, description). They are
+# steps of the turn, not tasks of their own: measured 2026-09-27, all 57
+# subagents since 2026-09-26 started and ended inside their turn's window.
+# Only the first line's timestamp and the file mtime are read — never the
+# prompt or the output.
+
+_SUB_CACHE: dict[str, tuple[int, int, dict | None]] = {}
+_SUB_HEAD_MAX = 2 * 1024 * 1024
+STEP_RUNNING_S = 300
+STEP_ITEMS_MAX = 25
+
+
+def _subagent_entry(path: Path) -> dict | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    key = str(path)
+    with _FILE_CACHE_LOCK:
+        hit = _SUB_CACHE.get(key)
+        if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+            return hit[2]
+    start = None
+    try:
+        with path.open("rb") as fh:
+            for _ in range(5):
+                line = fh.readline(_SUB_HEAD_MAX)
+                if not line:
+                    break
+                try:
+                    start = _ts(json.loads(line).get("timestamp"))
+                except (ValueError, AttributeError):
+                    continue
+                if start is not None:
+                    break
+    except OSError:
+        pass
+    meta = _read_json(path.with_name(path.stem + ".meta.json"))
+    meta = meta if isinstance(meta, dict) else {}
+    entry = None if start is None else {
+        "start": start, "end": st.st_mtime,
+        "agent_type": str(meta.get("agentType") or "")[:40],
+        "description": str(meta.get("description") or "")[:200],
+    }
+    with _FILE_CACHE_LOCK:
+        _SUB_CACHE[key] = (st.st_mtime_ns, st.st_size, entry)
+    return entry
+
+
+def _subagents(workdir: Path) -> list[dict]:
+    from . import host_activity as ha  # noqa: PLC0415
+
+    proj = ha.claude_home() / "projects" / ha._encode_cwd(str(workdir))
+    if not proj.is_dir():
+        return []
+    return [e for e in (_subagent_entry(f) for f in proj.glob("*/subagents/agent-*.jsonl")) if e]
+
+
+def _steps(subs: list[dict], *, owned: bool, turn_running: bool, now: float) -> dict:
+    items = []
+    running = 0
+    for s in sorted(subs, key=lambda s: s["start"]):
+        live = turn_running and now - s["end"] < STEP_RUNNING_S
+        running += live
+        kind = s["agent_type"] or "Sub"
+        items.append({
+            "title": _preview(s["description"]) if owned and s["description"] else f"{kind} subagent",
+            "agent_type": s["agent_type"] or None,
+            "status": "running" if live else "done",
+            "started_at": _iso(s["start"]), "ended_at": None if live else _iso(s["end"]),
+            "duration_s": round(max(0.0, (now if live else s["end"]) - s["start"]), 1),
+        })
+    return {"total": len(items), "running": running, "items": items[-STEP_ITEMS_MAX:]}
+
+
+def _steps_text(steps: dict | None) -> str | None:
+    if not steps or not steps["total"]:
+        return None
+    n = steps["total"]
+    txt = f"{n} subagent{'' if n == 1 else 's'}"
+    return txt + (f" ({steps['running']} running)" if steps["running"] else "")
+
+
+def _join(*parts: str | None) -> str | None:
+    s = " · ".join(p for p in parts if p)
+    return s or None
+
+
 # ── sources ──────────────────────────────────────────────────────────────────
 # Each source: (type, callable(tenant_home, now) -> iterator of records,
 #               callable(tenant_home) -> availability note or None)
+
+# Detached background workers run under ``voice/<bridge>/bgtask__<chat>__<id>``
+# (adapter ``engine_chat_key`` → ``_safe_id``); the trailing id is the
+# completion-registry task id.
+_BG_REF_RE = re.compile(r"__((?:bgt|cn)_[0-9a-f]+)$")
 
 _CHAT_STATUS = {"pending": "queued", "running": "running", "completed": "done",
                 "failed": "failed", "cancelled": "cancelled"}
@@ -191,6 +323,12 @@ def _chat_tasks(home: Path, now: float) -> Iterator[dict]:
             continue
         rel = Path(dirpath).relative_to(root).parts[:-1]
         typ, sub = _chat_channel(rel)
+        workdir = Path(dirpath).parent
+        bg_ref = None
+        if typ == "background":
+            m = _BG_REF_RE.search(rel[-1] if rel else "")
+            bg_ref = m.group(1) if m else None
+        turns = []
         for fn in filenames:
             if not fn.endswith(".json") or fn.endswith(".events.jsonl"):
                 continue
@@ -198,9 +336,28 @@ def _chat_tasks(home: Path, now: float) -> Iterator[dict]:
             d = _read_json(path)
             if not isinstance(d, dict) or "task_id" not in d:
                 continue
+            turns.append((path, d))
+        if not turns:
+            continue
+        subs = _subagents(workdir)
+        # Turns of one chat run one at a time, so a subagent belongs to the
+        # latest turn that had started when it did (and had not yet ended).
+        windows = sorted(((_ts(d.get("created_at")) or 0.0, d["task_id"]) for _, d in turns), reverse=True)
+        by_turn: dict[str, list[dict]] = {}
+        for s in subs:
+            for created, tid in windows:
+                if created - 5 <= s["start"]:
+                    by_turn.setdefault(tid, []).append(s)
+                    break
+        for path, d in turns:
             inp = d.get("input") if isinstance(d.get("input"), dict) else {}
             persona = inp.get("persona") or "assistant"
-            if sub in ("web", "cli"):
+            # A turn's instruction is shown only when it is the operator's own:
+            # a web/CLI turn, or a bridge turn the adapter stamped from_operator
+            # (sender explicitly on that bridge's whitelist). Anyone else's
+            # message stays untitled.
+            owned = sub in ("web", "cli") or inp.get("from_operator") is True
+            if owned:
                 title = _preview(inp.get("instruction")) or f"{sub} turn"
             else:
                 title = f"{sub.capitalize()} {'background task' if typ == 'background' else 'message'} · {persona}"
@@ -211,13 +368,24 @@ def _chat_tasks(home: Path, now: float) -> Iterator[dict]:
             except OSError:
                 pass
             raw = d.get("status")
-            yield _record(
+            ended = _ts(d.get("ended_at"))
+            mine = [s for s in by_turn.get(d["task_id"], []) if ended is None or s["start"] <= ended + 5]
+            steps = _steps(mine, owned=owned, turn_running=raw in ("running", "pending"), now=now) if mine else None
+            if steps:
+                last_alive = max(filter(None, [last_alive] + [s["end"] for s in mine]))
+            rec = _record(
                 id=f"chat:{d['task_id']}", type=typ, subtype=sub, title=title,
                 status=_CHAT_STATUS.get(raw, "running"), raw_status=raw,
                 created=_ts(d.get("created_at")), started=_ts(d.get("started_at")),
-                ended=_ts(d.get("ended_at")), now=now, last_alive=last_alive,
-                detail=(d.get("result_summary") or None) if raw != "running" else f"persona {persona}",
+                ended=ended, now=now, last_alive=last_alive,
+                detail=_join((d.get("result_summary") or None) if raw != "running" else f"persona {persona}",
+                             _steps_text(steps)),
             )
+            if steps:
+                rec["steps"] = steps
+            if bg_ref:
+                rec["_bg_ref"] = bg_ref
+            yield rec
 
 
 def _acs_runs(home: Path, now: float) -> Iterator[dict]:
@@ -490,8 +658,139 @@ def _commits(home: Path, now: float) -> Iterator[dict]:
                       detail=c["short"] + (f" · {', '.join(refs)}" if refs else ""))
 
 
+_BG_STATE = {"pending": "queued", "ready": "done", "delivered": "done"}
+
+
+def _background_registry(home: Path, now: float) -> Iterator[dict]:
+    """``/task`` and self-delegated background tasks, from the moment they are
+    registered (``completion_notify``: ``<corvin_home>/pending_notifications``).
+
+    The registry is host-wide; each record names its tenant. It is the task's
+    own lifecycle (pending → ready → delivered); the detached worker's engine
+    turns are folded into it by :func:`_fold_background`. Delivered records are
+    pruned by completion_notify after a TTL — the worker turn stays listed."""
+    qdir = _corvin_root() / "pending_notifications"
+    if not qdir.is_dir():
+        return
+    for f in qdir.glob("*.json"):
+        d = _read_json(f)
+        if not isinstance(d, dict) or not d.get("id") or str(d.get("tenant_id") or "_default") != home.name:
+            continue
+        state = str(d.get("state") or "")
+        status = _BG_STATE.get(state, "running")
+        if state == "pending" and d.get("producer_pid"):
+            status = "running"
+        if status == "done" and d.get("ok") is False:
+            status = "failed"
+        channel = str(d.get("channel") or "")
+        owned = bool(d.get("sender")) and str(d.get("sender")) in _operator_uids(channel)
+        title = _preview(d.get("label")) if owned and d.get("label") else \
+            f"{channel.capitalize() or 'Background'} background task"
+        yield _record(id=f"background:{d['id']}", type="background", subtype=channel or None,
+                      title=title, status=status, raw_status=state, created=_ts(d.get("created_at")),
+                      ended=_ts(d.get("ready_at")), now=now,
+                      detail={"pending": "waiting for a worker" if status == "queued" else "worker running",
+                              "ready": "result ready, not yet delivered", "delivered": "result delivered"}.get(state))
+
+
+def _fold_background(records: list[dict]) -> list[dict]:
+    """Fold each detached worker's engine turns into its registry record, so a
+    background task is listed once, with its turns as steps."""
+    reg = {r["id"][len("background:"):]: r for r in records if r["id"].startswith("background:")}
+    out = []
+    for r in records:
+        ref = r.pop("_bg_ref", None)
+        parent = reg.get(ref) if ref else None
+        if parent is None:
+            out.append(r)
+            continue
+        steps = parent.setdefault("steps", {"total": 0, "running": 0, "items": []})
+        steps["total"] += 1
+        steps["running"] += r["status"] == "running"
+        steps["items"] = (steps["items"] + [{
+            "title": "Worker turn", "agent_type": None, "status": r["status"],
+            "started_at": r["started_at"] or r["created_at"], "ended_at": r["ended_at"],
+            "duration_s": r["duration_s"]}])[-STEP_ITEMS_MAX:]
+        if parent["status"] in ("queued", "stale") and r["status"] == "running":
+            parent["status"], parent["stale_reason"], parent["detail"] = "running", None, "worker running"
+        parent["detail"] = _join(parent["detail"], _steps_text(r.get("steps")))
+    return out
+
+
+# ── A2A (L38) — both directions, from the Agent Hub feed ─────────────────────
+# ``<tenant>/global/a2a_feed/messages.jsonl``: a ``task`` record per exchange
+# and a ``response`` record once it is answered. Only routing metadata is kept
+# from it — never ``text``/``data``/attachments, which are the peer's content.
+
+_A2A_KEYS = ("direction", "kind", "task_id", "peer_id", "peer_label", "status", "ts", "duration_ms", "error")
+_A2A_CACHE: dict[str, tuple[int, int, list[dict]]] = {}
+_A2A_DONE = {"ok", "success", "done", "completed"}
+_A2A_REFUSED = {"rejected", "filtered", "refused", "denied", "cancelled"}
+_ERR_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+
+
+def _a2a_rows(path: Path) -> list[dict]:
+    try:
+        st = path.stat()
+    except OSError:
+        return []
+    key = str(path)
+    with _FILE_CACHE_LOCK:
+        hit = _A2A_CACHE.get(key)
+        if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+            return hit[2]
+    rows: list[dict] = []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue   # a torn last line while the writer appends
+                if isinstance(d, dict) and d.get("task_id"):
+                    rows.append({k: d.get(k) for k in _A2A_KEYS})
+    except OSError:
+        return []
+    with _FILE_CACHE_LOCK:
+        _A2A_CACHE[key] = (st.st_mtime_ns, st.st_size, rows)
+    return rows
+
+
+def _a2a(home: Path, now: float) -> Iterator[dict]:
+    runs: dict[tuple[str, str], dict[str, dict]] = {}
+    for r in _a2a_rows(home / "global" / "a2a_feed" / "messages.jsonl"):
+        if r["kind"] == "task":
+            side, slot = ("in" if r["direction"] == "in" else "out"), "task"
+        elif r["kind"] == "response":
+            side, slot = ("in" if r["direction"] == "out" else "out"), "resp"
+        else:
+            continue
+        runs.setdefault((side, str(r["task_id"])), {})[slot] = r
+    for (side, tid), run in runs.items():
+        task, resp = run.get("task"), run.get("resp")
+        first = task or resp
+        peer = first.get("peer_label") or first.get("peer_id") or "peer"
+        if resp is None:
+            status = "running"
+        else:
+            rs = str(resp.get("status") or "").lower()
+            status = "done" if rs in _A2A_DONE else "cancelled" if rs in _A2A_REFUSED else "failed"
+        err = str((resp or {}).get("error") or "")
+        dur = (resp or {}).get("duration_ms")
+        yield _record(
+            id=f"a2a:{side}:{tid}", type="a2a", subtype="inbound" if side == "in" else "outbound",
+            title=f"Task {'from' if side == 'in' else 'to'} {_preview(peer, 60)}",
+            status=status, raw_status=(resp or task or {}).get("status"),
+            created=_ts((task or {}).get("ts")), ended=_ts((resp or {}).get("ts")), now=now,
+            detail=_join(f"{'received' if side == 'in' else 'sent'} · task {tid[:12]}",
+                         (err if _ERR_TOKEN_RE.match(err) else "error") if err else None,
+                         f"{dur / 1000:.1f} s" if isinstance(dur, (int, float)) and dur > 0 else None),
+        )
+
+
 _SOURCES: list[tuple[str, Callable[[Path, float], Iterator[dict]]]] = [
-    ("chat", _chat_tasks), ("acs", _acs_runs), ("gateway", _gateway_runs),
+    ("chat", _chat_tasks), ("background", _background_registry), ("a2a", _a2a),
+    ("acs", _acs_runs), ("gateway", _gateway_runs),
     ("forge", _forge_runs), ("compute", _compute), ("workflow", _workflow_runs),
     ("flow", _flow_runs), ("scheduled", _scheduled), ("skill_creator", _skill_creator),
     ("agent", _agent_sessions), ("commit", _commits),
@@ -543,6 +842,7 @@ def collect(tenant_id: str, *, now: float | None = None) -> dict[str, Any]:
         records.extend(_initiatives(tenant_id, now))
     except Exception as exc:  # noqa: BLE001
         errors["initiative"] = f"{type(exc).__name__}: {exc}"[:200]
+    records = _fold_background(records)
     result = {"records": records, "errors": errors, "notes": _source_notes(home),
               "scan_ms": round((time.perf_counter() - t0) * 1000, 1), "now": now}
     if not now_given:

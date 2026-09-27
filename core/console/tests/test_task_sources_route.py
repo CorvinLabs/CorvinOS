@@ -13,8 +13,10 @@ subsystem really writes it. What must hold:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -61,6 +63,89 @@ def _seed(home: Path, now: float) -> None:
        + json.dumps({"type": "mesh_flow.run_completed", "ts": now - 35}) + "\n")
     _w(t / "voice/schedule.json", [{"id": "abc123", "text": SECRET, "cron": "0 9 * * 1", "next_run": now + 3600}])
     _w(t / "global/gateway/runs/run_broken.json", "{not json")   # unreadable record: skipped, not fatal
+
+
+# Types this route test deliberately does not seed, each with the reason.
+COVERAGE_EXEMPT = {
+    "initiative": "work items — covered by the Task-Tracking store tests",
+    "skill_creator": "held in the console process's memory, no store to seed",
+    "agent": "host-level Claude Code sessions — test_host_activity_sources",
+    "commit": "host-level git history — test_host_activity_sources",
+}
+
+OWNER = "owner-uid-1"
+
+
+def _iso(ts: float) -> str:
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+@contextlib.contextmanager
+def _claude_home(tmp: Path):
+    prev = os.environ.get("CLAUDE_CONFIG_DIR")
+    os.environ["CLAUDE_CONFIG_DIR"] = str(tmp / "claude")
+    try:
+        yield tmp / "claude"
+    finally:
+        if prev is None:
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            os.environ["CLAUDE_CONFIG_DIR"] = prev
+
+
+def _subagent(tmp: Path, workdir: Path, sid: str, agent: str, *, start: float, end: float, desc: str) -> None:
+    proj = tmp / "claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(workdir))
+    f = _w(proj / sid / "subagents" / f"agent-{agent}.jsonl",
+           json.dumps({"type": "user", "timestamp": _iso(start), "message": {"content": SECRET}}) + "\n"
+           + json.dumps({"type": "assistant", "timestamp": _iso(end), "message": {"content": SECRET}}) + "\n")
+    _w(proj / sid / "subagents" / f"agent-{agent}.meta.json", {"agentType": "Explore", "description": desc})
+    os.utime(f, (end, end))
+
+
+def _seed_extended(home: Path, now: float, tmp: Path) -> None:
+    """The sources added for complete coverage: A2A, the background registry,
+    subagent steps inside a turn, and the operator-owned bridge turn."""
+    t = home / "tenants" / "_default"
+    _w(home / "bridges/discord/settings.json", {"whitelist": [OWNER]})
+    # an operator turn on a bridge (the adapter stamps from_operator at create time)
+    d2 = t / "sessions/voice/discord/123"
+    _w(d2 / "tasks/d2.json", {"task_id": "d2", "chat_key": "123", "status": "running",
+       "created_at": now - 20, "started_at": now - 19,
+       "input": {"instruction": "deploy the new console", "persona": "assistant", "from_operator": True}})
+    _subagent(tmp, d2, "s1", "a1", start=now - 55, end=now - 35, desc=SECRET)          # inside d1 (third party)
+    _subagent(tmp, d2, "s1", "a2", start=now - 15, end=now - 1, desc="Review the deploy plan")  # inside d2
+    # A2A: inbound done, inbound in flight, outbound failed, inbound refused
+    feed = t / "global/a2a_feed/messages.jsonl"
+    rows = [
+        {"direction": "in", "kind": "task", "task_id": "a1", "peer_id": "origin-tw", "peer_label": "Twin",
+         "status": "received", "text": SECRET, "ts": now - 70},
+        {"direction": "out", "kind": "response", "task_id": "a1", "peer_id": "origin-tw", "status": "ok",
+         "text": SECRET, "ts": now - 65, "duration_ms": 5000},
+        {"direction": "in", "kind": "task", "task_id": "a2", "peer_id": "origin-tw", "status": "received",
+         "text": SECRET, "ts": now - 8},
+        {"direction": "out", "kind": "task", "task_id": "a3", "peer_id": "ep-lab", "peer_label": "Lab",
+         "status": "sent", "text": SECRET, "ts": now - 90},
+        {"direction": "in", "kind": "response", "task_id": "a3", "peer_id": "ep-lab", "status": "error",
+         "error": "timeout", "ts": now - 80},
+        {"direction": "in", "kind": "task", "task_id": "a4", "peer_id": "origin-x", "status": "received",
+         "text": SECRET, "ts": now - 40},
+        {"direction": "out", "kind": "response", "task_id": "a4", "peer_id": "origin-x", "status": "rejected",
+         "ts": now - 39},
+    ]
+    _w(feed, "".join(json.dumps(r) + "\n" for r in rows) + "{torn line\n")
+    # background registry (completion_notify, <corvin_home>/pending_notifications)
+    q = home / "pending_notifications"
+    _w(q / "bgt_aaa.json", {"id": "bgt_aaa", "channel": "discord", "sender": OWNER, "tenant_id": "_default",
+       "label": "rebuild the ADR index", "state": "pending", "ok": None, "created_at": now - 30})
+    _w(q / "bgt_bbb.json", {"id": "bgt_bbb", "channel": "discord", "sender": "stranger", "tenant_id": "_default",
+       "label": SECRET, "state": "delivered", "ok": False, "created_at": now - 500,
+       "ready_at": now - 400, "delivered_at": now - 399})
+    _w(q / "bgt_ccc.json", {"id": "bgt_ccc", "channel": "discord", "sender": OWNER, "tenant_id": "acme",
+       "label": "other tenant", "state": "pending", "created_at": now - 30})
+    # the detached worker's own engine turn for bgt_aaa — folded into the registry record
+    _w(t / "sessions/voice/discord/bgtask__123__bgt_aaa/tasks/wk.json", {"task_id": "wk", "chat_key": "x",
+       "status": "running", "created_at": now - 25, "started_at": now - 24, "input": {"instruction": SECRET}})
 
 
 class TaskSourcesRouteTest(unittest.TestCase):
@@ -116,6 +201,59 @@ class TaskSourcesRouteTest(unittest.TestCase):
             self.assertEqual(len(b["finished"]), 1)
             self.assertEqual(b["finished_total"], 2)
             self.assertEqual(client.get(URL + "?types=bogus").status_code, 400)
+
+    def test_every_type_label_has_a_seeded_record(self):
+        """Positive control: a type that exists in TYPE_LABELS but that no fixture
+        here produces is a type nobody proved the console can show."""
+        from corvin_console import task_sources
+        now = time.time()
+        with _sandbox(self._tmp) as (client, _csrf, home, _), _claude_home(self._tmp):
+            _seed(home, now)
+            _seed_extended(home, now, self._tmp)
+            b = client.get(URL).json()
+            seen = {x["type"] for x in b["active"] + b["finished"]}
+            missing = set(task_sources.TYPE_LABELS) - set(COVERAGE_EXEMPT) - seen
+            self.assertEqual(missing, set(), f"types with no record in the fixture: {sorted(missing)}")
+
+    def test_extended_sources(self):
+        now = time.time()
+        with _sandbox(self._tmp) as (client, _csrf, home, _), _claude_home(self._tmp):
+            _seed(home, now)
+            _seed_extended(home, now, self._tmp)
+            r = client.get(URL)
+            self.assertEqual(r.status_code, 200, r.text)
+            b = r.json()
+            by_id = {x["id"]: x for x in b["active"] + b["finished"]}
+            expect = {
+                "a2a:in:a1": ("a2a", "done"), "a2a:in:a2": ("a2a", "running"),
+                "a2a:out:a3": ("a2a", "failed"), "a2a:in:a4": ("a2a", "cancelled"),
+                "background:bgt_aaa": ("background", "running"),
+                "background:bgt_bbb": ("background", "failed"),
+                "chat:d2": ("chat", "running"),
+            }
+            for rid, (typ, status) in expect.items():
+                self.assertIn(rid, by_id, rid)
+                self.assertEqual((by_id[rid]["type"], by_id[rid]["status"]), (typ, status), rid)
+            self.assertEqual(by_id["a2a:in:a1"]["subtype"], "inbound")
+            self.assertIn("Twin", by_id["a2a:in:a1"]["title"])
+            self.assertIn("timeout", by_id["a2a:out:a3"]["detail"] or "")
+            # the worker's own engine turn is folded into its registry record, not listed twice
+            self.assertNotIn("chat:wk", by_id)
+            self.assertEqual(by_id["background:bgt_aaa"]["steps"]["total"], 1)
+            self.assertNotIn("background:bgt_ccc", by_id)          # another tenant's task
+            # operator titles: own bridge turn and own /task show a preview; strangers stay anonymous
+            self.assertEqual(by_id["chat:d2"]["title"], "deploy the new console")
+            self.assertEqual(by_id["background:bgt_aaa"]["title"], "rebuild the ADR index")
+            self.assertNotIn("deploy", by_id["chat:d1"]["title"])
+            # subagents inside a turn are steps of that turn, matched by the turn's window
+            d1, d2 = by_id["chat:d1"], by_id["chat:d2"]
+            self.assertEqual((d1["steps"]["total"], d2["steps"]["total"]), (1, 1))
+            self.assertEqual(d2["steps"]["items"][0]["title"], "Review the deploy plan")
+            self.assertEqual(d1["steps"]["items"][0]["title"], "Explore subagent")  # third-party turn
+            self.assertIn("1 subagent", d2["detail"])
+            self.assertNotIn(SECRET, r.text)
+            types = {t["type"]: t for t in b["types"]}
+            self.assertEqual(types["a2a"]["label"], "A2A")
 
     def test_tenant_from_session(self):
         with _sandbox(self._tmp, tenants=("_default", "acme")) as (_c, _s, home, clients):

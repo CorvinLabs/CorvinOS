@@ -1542,6 +1542,47 @@ def _load_channel_settings(channel: str) -> dict:
         return {}
 
 
+def _sender_is_operator(channel: str, sender: str | None) -> bool:
+    """True only when *sender* is EXPLICITLY on the channel whitelist of the
+    settings file the bridge DAEMON reads — ``<corvin_home>/bridges/<channel>/
+    settings.json`` (ADR-0008 §8.3), else the legacy in-repo file, the same
+    order as the daemon's own lookup. An empty whitelist or an
+    ``audience: all`` chat makes nobody the operator.
+
+    Stamped on the turn's task record as ``from_operator`` so the console's
+    Tasks view may title the operator's OWN bridge turn with its instruction;
+    everyone else's message stays untitled there (task_sources.py). The uid
+    itself is not written. Never raises."""
+    if not sender or not channel or "/" in channel or ".." in channel:
+        return False
+    _bdir = os.environ.get("ADAPTER_BRIDGES_DIR")
+    if _bdir:
+        candidates = [Path(os.path.expanduser(_bdir)) / channel / "settings.json"]
+    else:
+        candidates = []
+        try:
+            try:
+                from .paths import bridge_settings_path as _bsp  # type: ignore
+            except ImportError:
+                from paths import bridge_settings_path as _bsp  # type: ignore
+            candidates.append(Path(_bsp(channel)))
+        except Exception:  # noqa: BLE001 — unknown channel / no paths module
+            pass
+        candidates.append(ROOT.parent / channel / "settings.json")
+    for p in candidates:
+        if not p.exists():
+            continue
+        try:
+            wl = json.loads(p.read_text(encoding="utf-8")).get("whitelist")
+        except (OSError, ValueError, AttributeError):
+            return False
+        if not isinstance(wl, list):
+            return False
+        allowed = {str(x) for x in wl if x}
+        return str(sender) in allowed or _normalize_jid(str(sender)) in allowed
+    return False
+
+
 def _normalize_jid(s: str) -> str:
     """WhatsApp-JIDs tragen einen per-Device-Suffix (`:11@s.whatsapp.net`).
     Damit der Whitelist-/Debug-Vergleich auf der bare-Phone-Number-JID
@@ -5419,6 +5460,7 @@ def _call_claude_streaming_via_engine(
                 persona=persona,
                 channel=channel,
                 msg_id=msg_id,
+                from_operator=_sender_is_operator(channel, (env or {}).get("CORVIN_ORIGIN_SENDER")),
             )
         except Exception as e:  # noqa: BLE001
             # Task tracking is best-effort; don't fail the turn if it breaks

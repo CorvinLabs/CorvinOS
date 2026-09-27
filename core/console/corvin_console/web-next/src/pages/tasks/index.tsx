@@ -56,7 +56,7 @@ const VIEWS: { id: View; label: string; icon: typeof ListTree }[] = [
 const ITEMS_KEY = ["task-tracking", "items"] as const;
 // React Flow is heavy; load the graph only when the tab is opened.
 const GraphView = lazy(() => import("./graph-view"));
-const RUN_TYPES: TaskType[] = ["chat", "background", "acs", "workflow", "flow", "gateway", "forge", "compute", "scheduled", "skill_creator", "agent", "commit"];
+const RUN_TYPES: TaskType[] = ["chat", "background", "acs", "workflow", "flow", "gateway", "a2a", "forge", "compute", "scheduled", "skill_creator", "agent", "commit"];
 
 function useNow(skewMs: number): number {
   const [now, setNow] = useState(() => Date.now() + skewMs);

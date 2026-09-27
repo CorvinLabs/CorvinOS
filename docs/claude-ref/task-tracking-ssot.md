@@ -95,8 +95,8 @@ The prefix is not `task.` because `task.spawn_*` already names runtime spawns.
 
 ## Runs are linked, not copied
 
-Chat turns, background/ACS/gateway/forge/compute runs stay in their own stores
-(`task_sources.py`). The panel's **Activity** view lists them read-only; "Link"
+Chat turns, background/A2A/ACS/gateway/forge/compute runs stay in their own stores
+(`task_sources.py`; types and privacy rule: console-initiatives.md § All tasks). The panel's **Activity** view lists them read-only; "Link"
 attaches one to a work item (`runs` table). Bridge chat text never enters the
 store.
 

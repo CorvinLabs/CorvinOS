@@ -80,7 +80,8 @@ Each source is read where its subsystem writes it — nothing is copied.
 |---|---|
 | Initiative | `global/initiatives.json` (this board) |
 | Chat | `sessions/<chat>/tasks/<id>.json` — web, CLI, Discord, Telegram turns |
-| Background task | `sessions/voice/<bridge>/bgtask*/tasks/` — background `/task` runs |
+| Background task | `<corvin_home>/pending_notifications/*.json` (completion registry, host-wide, filtered by the record's `tenant_id`) — listed from registration on; the detached worker's own turns under `sessions/voice/<bridge>/bgtask__<chat>__<bgt_id>/tasks/` are folded into it as steps (a worker turn whose registry record was already pruned is listed on its own) |
+| A2A | `global/a2a_feed/messages.jsonl` — one record per exchange, both directions (`a2a:in:<task>` / `a2a:out:<task>`); status from the response record (`ok` → done, `rejected`/`filtered` → cancelled, anything else → failed, none yet → running) |
 | ACS | `global/acs/runs/*/manifest.json` + session run dirs without an index entry |
 | Workflow | `workflows/<wid>/runs/*.meta.json` (marketplace plugin) + `workflow_runs/*.json` (paused AWP) |
 | Flow | `global/flows/runs/*.manifest.jsonl` |
@@ -96,10 +97,27 @@ shows no sign of life (no end record, no heartbeat, no worker) for > 2 h. A
 stale record is counted apart ("Running (11 · 80 stale)") and carries its
 reason; it is never shown as running.
 
-**Privacy:** a bridge chat task's instruction is another person's message —
-bridge tasks are titled by channel and persona only; web/CLI turns (the
-operator's own) show a preview. Scheduled reminders show their schedule, not
-their text.
+**Steps (`steps`).** A chat turn that fans out into Claude Code subagents
+carries them as steps — read from `<claude_home>/projects/<encoded workdir>/
+<session>/subagents/agent-*.jsonl` (first-line timestamp + mtime only) and
+`.meta.json` (`agentType`, `description`), matched to the latest turn of that
+chat that had started when the subagent did (turns of one chat are serial).
+`steps = {total, running, items[≤25]}`; the count is also appended to `detail`
+("3 subagents (1 running)"). A background task carries its worker turns as
+steps the same way.
+
+**Privacy:** a bridge message is titled by channel and persona only — unless
+it is the operator's own: the adapter stamps `input.from_operator` when the
+sender is **explicitly** on the whitelist of the daemon's settings file
+(`<corvin_home>/bridges/<channel>/settings.json`; an empty whitelist or an
+`audience: all` chat makes nobody the operator). Such a turn, like a web/CLI
+turn, shows an instruction preview; the uid itself is never written. The same
+rule titles a background task (registry `sender` against the whitelist) and a
+subagent step (its `description`; otherwise "<agentType> subagent"). A2A runs
+are titled by direction and peer only — never the instruction, response or
+peer-supplied error text (a short error token at most). Scheduled reminders
+show their schedule, not their text. Records written before `from_operator`
+existed stay untitled.
 
 **Cost:** files are re-parsed only when (mtime, size) changed; the aggregate
 is cached 2 s; the route is sync (threadpool) so the scan never blocks the
