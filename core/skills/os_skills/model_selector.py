@@ -1,7 +1,7 @@
 """
 Phase 2–3: Model Selector Skill (ADR-0641, ADR-0642, ADR-0377-Phase-2)
 
-Determines which model (Anthropic/Ollama/OpenRouter/OpenAI) to use for a task.
+Determines which model (Anthropic/OpenRouter/OpenAI) to use for a task.
 Deterministic classification: token count + keywords + reasoning depth.
 
 Phase 2 (ADR-0377): Cost-Variance Feedback Loop
@@ -136,7 +136,7 @@ class ClassificationResult:
         self,
         complexity: str,  # "simple" | "medium" | "complex"
         confidence: float,  # 0.0-1.0
-        recommended_provider: str,  # "anthropic" | "ollama" | "openrouter" | "openai"
+        recommended_provider: str,  # "anthropic" | "openrouter" | "openai"
         recommended_model: str,
         reasoning: str,
         features: ExtractedFeatures,
@@ -183,7 +183,7 @@ class ModelSelector:
     ):
         self.config = config or ModelSelectorConfig()
         # Operator-set persisted choice per complexity tier — {"simple": {"provider":
-        # "ollama_local"|None, "model": "..."}, "medium": {...}, "complex": {...}}.
+        # "openrouter"|None, "model": "..."}, "medium": {...}, "complex": {...}}.
         # Consulted BEFORE the hardcoded _select_provider/_select_model_for_provider
         # rules below, so a saved console preference (core/console/corvin_console/
         # routes/engine_api.py) has a real, observable effect on future
@@ -581,8 +581,8 @@ class ModelSelector:
         # provider/model rule. `complexity in self.overrides` (not truthiness
         # of the override dict) is the presence check: provider=None is a
         # valid, deliberate override meaning "native Anthropic" and must NOT
-        # fall through to _select_provider's own default (e.g. "ollama" for
-        # simple) just because it's falsy.
+        # fall through to _select_provider's own default just because it's
+        # falsy.
         # Keyed on the canonical lowercase form (classifier_overrides() builds
         # it from COMPLEXITY_BY_TASK_TYPE). Looking it up with a non-canonical
         # spelling misses every time and falls through to the hardcoded rule —
@@ -592,7 +592,13 @@ class ModelSelector:
         if canonical in self.overrides:
             override = self.overrides[canonical]
             provider = override.get("provider")
-            model = override.get("model") or self._select_model_for_provider(provider, complexity)
+            model = override.get("model")
+            if provider in ("ollama", "ollama_local"):
+                # Saved before ADR-2087 removed local Ollama: that model cannot
+                # run here, so the tier routes on native Anthropic instead.
+                provider = None
+                model = self._select_model_for_provider("anthropic", complexity)
+            model = model or self._select_model_for_provider(provider, complexity)
         else:
             provider = self._select_provider(complexity)
             model = self._select_model_for_provider(provider, complexity)
@@ -750,12 +756,6 @@ class ModelSelector:
                 return "claude-sonnet-5"
             else:  # SIMPLE
                 return "claude-haiku-4-5"
-
-        elif provider == "ollama":
-            if complexity == COMPLEX:
-                return "mistral:latest"
-            else:
-                return "mistral:7b"
 
         elif provider == "openrouter":
             if complexity == COMPLEX:
