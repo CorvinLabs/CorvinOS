@@ -216,7 +216,7 @@ class StagingManager:
         try:
             if zip_path.exists():
                 zip_path.unlink()
-            zip_deleted = True
+                zip_deleted = True
         except OSError as e:
             raise StagingError(f"Failed to delete ZIP: {e}") from e
 

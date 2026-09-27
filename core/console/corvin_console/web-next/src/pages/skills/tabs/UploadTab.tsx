@@ -40,6 +40,12 @@ export const UploadTab: React.FC = () => {
     const controller = new AbortController();
     let backoffMs = 2000;
     const maxBackoffMs = 30000;
+    let timeoutId: NodeJS.Timeout | null = null;
+
+    const scheduleNextFetch = (delayMs: number): void => {
+      if (controller.signal.aborted) return;
+      timeoutId = setTimeout(fetchUploadsWithBackoff, delayMs);
+    };
 
     const fetchUploadsWithBackoff = async (): Promise<void> => {
       try {
@@ -50,19 +56,20 @@ export const UploadTab: React.FC = () => {
         const data = await response.json();
         setUploads(data.uploads || []);
         backoffMs = 2000; // reset on success
+        scheduleNextFetch(backoffMs);
       } catch (err) {
         if (err instanceof Error && err.name !== 'AbortError') {
           backoffMs = Math.min(backoffMs * 1.5, maxBackoffMs);
           console.warn(`Fetch failed, backing off to ${backoffMs}ms:`, err);
+          scheduleNextFetch(backoffMs);
         }
       }
     };
 
     fetchUploadsWithBackoff();
-    const interval = setInterval(fetchUploadsWithBackoff, backoffMs);
 
     return () => {
-      clearInterval(interval);
+      if (timeoutId !== null) clearTimeout(timeoutId);
       controller.abort();
     };
   }, []);
