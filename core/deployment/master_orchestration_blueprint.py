@@ -4,27 +4,35 @@ Master Orchestration Control Plane for 12-Week Production Rollout
 Extends Phase3Orchestrator with complete 12-week phase management,
 operator approval gates, automatic transitions, and state persistence.
 
-ADRs: 0206 (canary), 0205 (learning), 0186 (heartbeat), 0369 (edge cases)
+ADRs: 0206 (canary), 0205 (learning), 0186 (heartbeat), 0369 (edge cases),
+      0232 (audit tripwire), 0233 (audit integrity), 0537 (LoM binding)
 Compliance: GDPR (Art. 5/6/30/32), EU AI Act (Art. 5/50), audit-first (ADR-0232/0233)
 
 Load-bearing invariants:
 1. State persistence — all transitions serializable for disaster recovery
-2. Operator approval gates — Phase 1→2a and Phase 2a→2b require manual sign-off
+2. Operator approval gates — Phase 1→2a (day 14) and Phase 2a→2b (day 42) require manual sign-off
 3. Automatic phase progression — within-phase escalation (traffic 1%→10%→50%→100%) automatic
 4. Fail-closed semantics — any gate failure locks phase until resolved
-5. Immutable audit trail — every transition hash-chained with LoM binding
+5. Immutable audit trail — every transition hash-chained with LoM binding (ADR-0537)
+6. Tenant isolation — all state queries filtered by tenant_id (GDPR Art. 5/6)
+7. Operator approval metrics — agreement_rate, confidence, latency, feedback_count snapshotted at approval time
+8. Double-approval idempotency — UUID approval_id, no duplicate events
+9. Audit trail persistent to disk — append-only, hash-chained (ADR-0232)
+10. LoM cryptographic binding — sha256 of inspect.getsource for each operator_approve call
 """
 
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 import json
 import hashlib
 import logging
 from pathlib import Path
 import threading
 import time
+import uuid
+import inspect
 
 from .phase3_rollout_orchestrator import (
     RolloutOrchestrator,
@@ -41,8 +49,8 @@ logger = logging.getLogger(__name__)
 
 class OperatorApprovalGate(Enum):
     """Operator approval checkpoints"""
-    PHASE_1_TO_2A = "phase_1_to_2a"  # End of Phase 1: proceed to canary?
-    PHASE_2A_TO_2B = "phase_2a_to_2b"  # 100% traffic for 7 days: proceed to skill-primary?
+    PHASE_1_TO_2A = "phase_1_to_2a"  # Day 14: proceed to canary? (F001)
+    PHASE_2A_TO_2B = "phase_2a_to_2b"  # Day 42: 100% traffic for 7 days: proceed to skill-primary?
 
 
 class AutomaticTransition(Enum):
@@ -73,27 +81,48 @@ class WeeklyGateEvaluation:
     criteria_total: int
     action_taken: str  # e.g., "escalate to 10%", "hold", "trigger_rollback"
     reason: str
+    tenant_id: str = "_default"  # F023: Tenant isolation
 
 
 @dataclass
 class OperatorApprovalRecord:
-    """Operator approval audit record"""
+    """Operator approval audit record (F002, F010, F011, F023)"""
     gate: OperatorApprovalGate
     requested_at: str
+    approval_id: str = field(default_factory=lambda: str(uuid.uuid4()))  # F012: Idempotency
     approved_at: Optional[str] = None
     approved_by: Optional[str] = None
     decision: Optional[str] = None  # "approved", "rejected", "deferred"
     reason: str = ""
     audit_hash: str = ""
+    lom_hash: str = ""  # F010: LoM cryptographic binding
+
+    # F011: Operator Approval Metrics Snapshot
+    agreement_rate_at_approval: Optional[float] = None
+    confidence_at_approval: Optional[float] = None
+    latency_p99_at_approval: Optional[float] = None
+    feedback_count_at_approval: Optional[int] = None
+
+    tenant_id: str = "_default"  # F023: Tenant isolation
+
+    def is_idempotent_duplicate(self, other: 'OperatorApprovalRecord') -> bool:
+        """F012: Check if this is an idempotent duplicate"""
+        return (self.gate == other.gate and
+                self.approval_id == other.approval_id and
+                self.approved_by == other.approved_by)
 
 
 @dataclass
 class MasterOrchestratorState:
-    """Extended state for 12-week master orchestration"""
+    """Extended state for 12-week master orchestration (F002)"""
     base_state: RolloutState
 
-    # Operator gates
+    # F023: Tenant isolation
+    tenant_id: str = "_default"
+
+    # Operator gates (F002, F012)
     operator_approvals: Dict[str, OperatorApprovalRecord] = field(default_factory=dict)
+    processed_approval_ids: Set[str] = field(default_factory=set)  # F012: Track processed approval UUIDs
 
     # Weekly evaluations (indexed by week number)
     weekly_evaluations: Dict[int, WeeklyGateEvaluation] = field(default_factory=dict)
@@ -104,10 +133,15 @@ class MasterOrchestratorState:
     # State serialization
     last_saved_time: str = ""
     last_saved_hash: str = ""
+    state_version: int = 1  # F002: Version for state migration
 
     # Recovery checkpoint (disaster recovery)
     checkpoint_interval_hours: int = 1
     last_checkpoint_time: str = ""
+
+    # F009: Audit trail persistence tracking
+    audit_events_persisted: int = 0
+    last_audit_persist_time: str = ""
 
 
 class MasterRolloutOrchestrator:
@@ -115,39 +149,62 @@ class MasterRolloutOrchestrator:
     Master Control Plane for 12-week production rollout.
 
     Manages complete orchestration lifecycle:
-    - Phase 1 (Shadow): 2 weeks, advisory mode, baseline metrics collection
-    - Phase 2a (Canary): 4 weeks, traffic escalation (1%→10%→50%→100%), weekly gates
-    - Phase 2b (Skill-Primary): 6 weeks, per-skill activation, convergence
+    - Phase 1 (Shadow): 14 days, advisory mode, baseline metrics collection
+    - Phase 2a (Canary): 28 days, traffic escalation (1%→10%→50%→100%), weekly gates
+    - Phase 2b (Skill-Primary): 42 days, per-skill activation, convergence
     - Production: stable, auto-optimization
 
     Extends Phase3Orchestrator with:
-    - Operator approval checkpoints
-    - State persistence & recovery
+    - Operator approval checkpoints (F001, F019)
+    - State persistence & recovery (F002, F009)
     - Weekly evaluation tracking
     - Automatic transition logging
+    - Audit trail persistent to disk (F009)
+    - LoM cryptographic binding (F010)
+    - Operator approval metrics snapshot (F011)
+    - Double-approval idempotency (F012, F014)
+    - Phase 1 14-day minimum enforcement (F015)
+    - Operator approval timeout (F019)
+    - Tenant isolation (F023)
     """
 
     STATE_FILE = Path.home() / ".corvin" / "master_orchestrator_state.json"
+    AUDIT_TRAIL_FILE = Path.home() / ".corvin" / "master_orchestrator_audit.jsonl"  # F009
     CHECKPOINT_DIR = Path.home() / ".corvin" / "orchestrator_checkpoints"
 
-    def __init__(self, base_orchestrator: Optional[RolloutOrchestrator] = None):
+    # F001: Phase gates at day 14 (Phase 1→2a) and day 42 (Phase 2a→2b)
+    PHASE_1_APPROVAL_DAY = 14
+    PHASE_2A_APPROVAL_DAY = 42
+
+    # F019: Operator approval timeout at day 21
+    APPROVAL_TIMEOUT_DAYS = 7
+
+    def __init__(self, base_orchestrator: Optional[RolloutOrchestrator] = None, tenant_id: str = "_default"):
         self.base_orch = base_orchestrator or RolloutOrchestrator()
+        self.tenant_id = tenant_id  # F023
         self.state = self._initialize_master_state()
         self.audit_trail: List[Dict] = []
-        self.lock = threading.RLock()
+        self.lock = threading.RLock()  # F014: Thread-safe audit trail
+        self.audit_trail_lock = threading.RLock()  # F014: Separate lock for audit trail
 
-        # Ensure checkpoint directory exists
+        # F012: Track processed approval IDs to prevent duplicates
+        self.processed_approval_ids: Set[str] = set()
+
+        # Ensure directories exist
         self.CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+        self.AUDIT_TRAIL_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-        # Load persisted state if it exists
+        # F002, F009: Load persisted state and audit trail
         self._load_persisted_state()
+        self._load_persisted_audit_trail()
 
-        logger.info(f"MasterRolloutOrchestrator initialized, phase: {self.state.base_state.phase.value}")
+        logger.info(f"MasterRolloutOrchestrator initialized, phase: {self.state.base_state.phase.value}, tenant: {self.tenant_id}")
 
     def _initialize_master_state(self) -> MasterOrchestratorState:
-        """Initialize master orchestration state"""
+        """Initialize master orchestration state (F023)"""
         return MasterOrchestratorState(
             base_state=self.base_orch.state,
+            tenant_id=self.tenant_id,
             last_saved_time=datetime.now(timezone.utc).isoformat(),
         )
 
@@ -156,12 +213,18 @@ class MasterRolloutOrchestrator:
         Advance rollout by one day (automated, run daily via cron/watchdog).
 
         - Check rollback triggers (fail-closed)
-        - Evaluate phase gates
+        - Evaluate phase gates (F001: day 14 and day 42)
         - Trigger automatic transitions if gates pass
+        - Check approval timeouts (F019)
         - Save state to disk
-        - Emit audit events
+        - Emit audit events (F009: persisted)
         """
         with self.lock:
+            # F023: Tenant isolation check
+            if not self._validate_tenant_isolation():
+                logger.error(f"Tenant isolation validation failed for tenant {self.tenant_id}")
+                return
+
             # Delegate base metrics to Phase3Orchestrator
             self.base_orch.advance_day(current_metrics)
 
@@ -169,26 +232,46 @@ class MasterRolloutOrchestrator:
             self.state.base_state = self.base_orch.state
 
             # Check for phase-specific gates
+            day_num = self.state.base_state.day_number
             week_num = self.state.base_state.week_number
             phase = self.state.base_state.phase
 
+            # F001: Phase 1→2a approval gate at day 14
+            if phase == Phase.PHASE_1_SHADOW and day_num == self.PHASE_1_APPROVAL_DAY:
+                self._request_operator_approval(OperatorApprovalGate.PHASE_1_TO_2A, current_metrics)
+
+            # F015: Phase 1 14-Day Minimum Enforcement
+            if phase == Phase.PHASE_2A_CANARY and day_num < 14:
+                logger.warning(f"Phase 2a requested before day 14, rejecting")
+                return
+
+            # Phase 2a→2b approval gate at day 42
+            if phase == Phase.PHASE_2A_CANARY and day_num == self.PHASE_2A_APPROVAL_DAY:
+                if self.state.base_state.current_traffic_percentage >= 100:
+                    self._request_operator_approval(OperatorApprovalGate.PHASE_2A_TO_2B, current_metrics)
+
             # Evaluate weekly gate if Phase 2a and end of week
-            if phase == Phase.PHASE_2A_CANARY and self.state.base_state.day_number % 7 == 0:
+            if phase == Phase.PHASE_2A_CANARY and day_num % 7 == 0:
                 self._evaluate_weekly_gate(week_num, current_metrics)
+
+            # F019: Check for approval timeout (day 21 for Phase 1→2a)
+            self._check_approval_timeouts()
 
             # Check automatic transitions
             self._check_automatic_transitions()
 
-            # Persist state
+            # Persist state and audit trail
             self._save_state()
+            self._persist_audit_trail()  # F009
 
-            # Emit audit event
+            # Emit audit event (F009: persisted)
             self._audit_log({
                 "event": "day_advanced",
-                "day": self.state.base_state.day_number,
+                "day": day_num,
                 "week": week_num,
                 "phase": phase.value,
                 "traffic_pct": self.state.base_state.current_traffic_percentage,
+                "tenant_id": self.tenant_id,  # F023
             })
 
     def _evaluate_weekly_gate(self, week_num: int, metrics: Dict[str, SkillMetrics]) -> None:
@@ -266,17 +349,25 @@ class MasterRolloutOrchestrator:
                             f"Automatic escalation in week {week}",
                         )
 
-    def _request_operator_approval(self, gate: OperatorApprovalGate) -> None:
+    def _request_operator_approval(self, gate: OperatorApprovalGate, current_metrics: Dict[str, SkillMetrics]) -> None:
         """
-        Request operator approval for phase transition.
+        Request operator approval for phase transition (F001, F011).
 
-        Sets pending_operator_approval flag and records approval request.
+        Sets pending_operator_approval flag and records approval request with metrics snapshot (F011).
         """
         record = OperatorApprovalRecord(
             gate=gate,
             requested_at=datetime.now(timezone.utc).isoformat(),
+            tenant_id=self.tenant_id,  # F023
             decision=None,
         )
+
+        # F011: Capture metrics at approval request time
+        if current_metrics:
+            record.agreement_rate_at_approval = sum(m.agreement_rate for m in current_metrics.values()) / len(current_metrics) if current_metrics else None
+            record.confidence_at_approval = sum(m.confidence for m in current_metrics.values()) / len(current_metrics) if current_metrics else None
+            record.latency_p99_at_approval = sum(m.latency_p99_ms for m in current_metrics.values()) / len(current_metrics) if current_metrics else None
+            record.feedback_count_at_approval = sum(int(m.feedback_count) for m in current_metrics.values()) if current_metrics else None
 
         self.state.operator_approvals[gate.value] = record
         self.state.base_state.pending_operator_approval = True
@@ -285,15 +376,25 @@ class MasterRolloutOrchestrator:
         self._audit_log({
             "event": "operator_approval_requested",
             "gate": gate.value,
+            "approval_id": record.approval_id,  # F012
             "requested_at": record.requested_at,
-            "lom": "master_orchestration.py::_request_operator_approval:175",
+            "tenant_id": self.tenant_id,  # F023
+            "metrics_snapshot": {  # F011
+                "agreement_rate": record.agreement_rate_at_approval,
+                "confidence": record.confidence_at_approval,
+                "latency_p99_ms": record.latency_p99_at_approval,
+                "feedback_count": record.feedback_count_at_approval,
+            },
+            "lom": "master_orchestration_blueprint.py::_request_operator_approval:299",
         })
 
-        logger.warning(f"OPERATOR APPROVAL REQUESTED: {gate.value}")
+        logger.warning(f"OPERATOR APPROVAL REQUESTED: {gate.value} (approval_id: {record.approval_id})")
 
     def operator_approve(self, gate: OperatorApprovalGate, approved_by: str, reason: str = "") -> bool:
         """
         Operator approves phase transition (manual action).
+
+        Implements F010 (LoM cryptographic binding), F012 (idempotency), F014 (thread-safety).
 
         Returns True if approval was recorded successfully.
         """
@@ -303,10 +404,25 @@ class MasterRolloutOrchestrator:
                 return False
 
             record = self.state.operator_approvals[gate.value]
+
+            # F012: Check for idempotent duplicate
+            if record.approval_id in self.processed_approval_ids:
+                logger.warning(f"Idempotent duplicate approval detected: {record.approval_id}")
+                return True  # Already processed
+
+            # F023: Verify tenant isolation
+            if record.tenant_id != self.tenant_id:
+                logger.error(f"Tenant mismatch in operator_approve: {record.tenant_id} vs {self.tenant_id}")
+                return False
+
             record.approved_at = datetime.now(timezone.utc).isoformat()
             record.approved_by = approved_by
             record.decision = "approved"
             record.reason = reason
+
+            # F010: LoM cryptographic binding
+            lom_source = inspect.getsource(self.operator_approve)
+            record.lom_hash = hashlib.sha256(lom_source.encode()).hexdigest()
 
             # Execute phase transition
             if gate == OperatorApprovalGate.PHASE_1_TO_2A:
@@ -314,16 +430,25 @@ class MasterRolloutOrchestrator:
             elif gate == OperatorApprovalGate.PHASE_2A_TO_2B:
                 self._transition_phase_2a_to_2b()
 
-            self._audit_log({
-                "event": "operator_approval_granted",
-                "gate": gate.value,
-                "approved_by": approved_by,
-                "approved_at": record.approved_at,
-                "reason": reason,
-                "lom": "master_orchestration.py::operator_approve:210",
-            })
+            # F014: Thread-safe audit log with lock
+            with self.audit_trail_lock:
+                self._audit_log({
+                    "event": "operator_approval_granted",
+                    "gate": gate.value,
+                    "approval_id": record.approval_id,  # F012
+                    "approved_by": approved_by,
+                    "approved_at": record.approved_at,
+                    "reason": reason,
+                    "lom_hash": record.lom_hash,  # F010
+                    "tenant_id": self.tenant_id,  # F023
+                    "lom": "master_orchestration_blueprint.py::operator_approve:345",
+                })
 
-            logger.info(f"✓ OPERATOR APPROVED: {gate.value} (by {approved_by})")
+            # F012: Mark this approval ID as processed
+            self.processed_approval_ids.add(record.approval_id)
+            self.state.processed_approval_ids.add(record.approval_id)
+
+            logger.info(f"✓ OPERATOR APPROVED: {gate.value} (by {approved_by}, approval_id: {record.approval_id})")
             return True
 
     def operator_reject(self, gate: OperatorApprovalGate, rejected_by: str, reason: str) -> bool:
@@ -409,14 +534,16 @@ class MasterRolloutOrchestrator:
 
     def _save_state(self) -> None:
         """
-        Persist master orchestrator state to disk (fail-closed).
+        Persist master orchestrator state to disk (fail-closed, F002, F023).
 
         Saves JSON snapshot with hash chaining for integrity verification.
         Also creates timestamped checkpoint for disaster recovery.
         """
         try:
-            # Serialize state
+            # F002, F023: Serialize complete state with tenant isolation
             state_dict = {
+                "tenant_id": self.tenant_id,
+                "state_version": self.state.state_version,
                 "base_state": asdict(self.state.base_state),
                 "operator_approvals": {
                     k: asdict(v) for k, v in self.state.operator_approvals.items()
@@ -425,6 +552,9 @@ class MasterRolloutOrchestrator:
                     k: asdict(v) for k, v in self.state.weekly_evaluations.items()
                 },
                 "automatic_transitions": self.state.automatic_transitions,
+                "processed_approval_ids": list(self.state.processed_approval_ids),  # F012
+                "audit_events_persisted": self.state.audit_events_persisted,  # F009
+                "last_audit_persist_time": self.state.last_audit_persist_time,  # F009
                 "last_saved_time": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -450,7 +580,12 @@ class MasterRolloutOrchestrator:
             logger.error(f"Failed to save state: {e}")
 
     def _load_persisted_state(self) -> None:
-        """Load master orchestrator state from disk"""
+        """
+        Load master orchestrator state from disk (F002, F023).
+
+        Reconstructs complete state including RolloutState, operator_approvals,
+        weekly_evaluations, and automatic_transitions.
+        """
         if not self.STATE_FILE.exists():
             logger.info("No persisted state found, using initialized state")
             return
@@ -467,33 +602,199 @@ class MasterRolloutOrchestrator:
             if stored_hash and stored_hash != calculated_hash:
                 logger.warning(f"State hash mismatch, loading anyway (integrity may be compromised)")
 
-            # Reconstruct state
+            # F023: Verify tenant isolation
+            persisted_tenant = state_dict.get("tenant_id", "_default")
+            if persisted_tenant != self.tenant_id:
+                logger.warning(f"Tenant mismatch in persisted state: {persisted_tenant} vs {self.tenant_id}")
+                return
+
+            # F002: Reconstruct complete state
             self.state.last_saved_time = state_dict.get("last_saved_time", "")
             self.state.last_saved_hash = stored_hash
+            self.state.tenant_id = persisted_tenant
 
-            logger.info(f"Loaded persisted state from {self.STATE_FILE}")
+            # Restore operator approvals with tenant isolation
+            if "operator_approvals" in state_dict:
+                for gate_key, approval_dict in state_dict["operator_approvals"].items():
+                    if approval_dict.get("tenant_id") == self.tenant_id:
+                        record = OperatorApprovalRecord(
+                            gate=OperatorApprovalGate(approval_dict["gate"]),
+                            requested_at=approval_dict["requested_at"],
+                            approval_id=approval_dict.get("approval_id", str(uuid.uuid4())),
+                            approved_at=approval_dict.get("approved_at"),
+                            approved_by=approval_dict.get("approved_by"),
+                            decision=approval_dict.get("decision"),
+                            reason=approval_dict.get("reason", ""),
+                            audit_hash=approval_dict.get("audit_hash", ""),
+                            lom_hash=approval_dict.get("lom_hash", ""),
+                            agreement_rate_at_approval=approval_dict.get("agreement_rate_at_approval"),
+                            confidence_at_approval=approval_dict.get("confidence_at_approval"),
+                            latency_p99_at_approval=approval_dict.get("latency_p99_at_approval"),
+                            feedback_count_at_approval=approval_dict.get("feedback_count_at_approval"),
+                            tenant_id=approval_dict.get("tenant_id", "_default"),
+                        )
+                        self.state.operator_approvals[gate_key] = record
+                        self.processed_approval_ids.add(record.approval_id)
+
+            # Restore weekly evaluations
+            if "weekly_evaluations" in state_dict:
+                for week_key, eval_dict in state_dict["weekly_evaluations"].items():
+                    if eval_dict.get("tenant_id") == self.tenant_id:
+                        evaluation = WeeklyGateEvaluation(
+                            week_number=eval_dict["week_number"],
+                            phase=Phase(eval_dict["phase"]),
+                            timestamp=eval_dict["timestamp"],
+                            gate_result=PhaseGateResult(eval_dict["gate_result"]),
+                            metrics=eval_dict.get("metrics", {}),
+                            criteria_passed=eval_dict.get("criteria_passed", 0),
+                            criteria_total=eval_dict.get("criteria_total", 0),
+                            action_taken=eval_dict.get("action_taken", ""),
+                            reason=eval_dict.get("reason", ""),
+                            tenant_id=eval_dict.get("tenant_id", "_default"),
+                        )
+                        self.state.weekly_evaluations[int(week_key)] = evaluation
+
+            # Restore automatic transitions
+            if "automatic_transitions" in state_dict:
+                self.state.automatic_transitions = state_dict["automatic_transitions"]
+
+            logger.info(f"Loaded persisted state from {self.STATE_FILE} (tenant: {self.tenant_id})")
 
         except Exception as e:
             logger.error(f"Failed to load persisted state: {e}")
+
+    def _load_persisted_audit_trail(self) -> None:
+        """
+        Load persisted audit trail from disk (F009).
+
+        Reads append-only audit trail and verifies hash chain integrity.
+        """
+        if not self.AUDIT_TRAIL_FILE.exists():
+            logger.info("No persisted audit trail found, starting fresh")
+            return
+
+        try:
+            with open(self.AUDIT_TRAIL_FILE, "r") as f:
+                for line in f:
+                    event = json.loads(line)
+                    # F023: Only load events for this tenant
+                    if event.get("tenant_id") == self.tenant_id:
+                        self.audit_trail.append(event)
+
+            logger.info(f"Loaded {len(self.audit_trail)} audit events (tenant: {self.tenant_id})")
+
+            # F009: Verify audit chain integrity
+            is_valid, issues = self.verify_audit_chain()
+            if not is_valid:
+                logger.warning(f"Audit chain integrity issues: {issues}")
+
+        except Exception as e:
+            logger.error(f"Failed to load persisted audit trail: {e}")
+
+    def _persist_audit_trail(self) -> None:
+        """
+        Persist audit trail to disk (F009).
+
+        Appends new audit events to disk in append-only format.
+        """
+        if not self.audit_trail:
+            return
+
+        try:
+            # Only persist events not yet saved
+            events_to_persist = self.audit_trail[self.state.audit_events_persisted:]
+
+            with open(self.AUDIT_TRAIL_FILE, "a") as f:
+                for event in events_to_persist:
+                    f.write(json.dumps(event, default=str) + "\n")
+
+            self.state.audit_events_persisted = len(self.audit_trail)
+            self.state.last_audit_persist_time = datetime.now(timezone.utc).isoformat()
+
+        except Exception as e:
+            logger.error(f"Failed to persist audit trail: {e}")
+
+    def _validate_tenant_isolation(self) -> bool:
+        """
+        Validate tenant isolation for all state queries (F023).
+
+        Ensures that all operations are scoped to the correct tenant.
+        """
+        # Verify operator approvals are tenant-scoped
+        for gate_key, record in self.state.operator_approvals.items():
+            if record.tenant_id != self.tenant_id:
+                logger.error(f"Tenant isolation violation in operator_approval: {record.tenant_id} vs {self.tenant_id}")
+                return False
+
+        # Verify weekly evaluations are tenant-scoped
+        for week_key, evaluation in self.state.weekly_evaluations.items():
+            if evaluation.tenant_id != self.tenant_id:
+                logger.error(f"Tenant isolation violation in weekly_evaluation: {evaluation.tenant_id} vs {self.tenant_id}")
+                return False
+
+        return True
+
+    def _check_approval_timeouts(self) -> None:
+        """
+        Check for approval timeouts (F019).
+
+        If an approval has been pending for more than APPROVAL_TIMEOUT_DAYS, escalate to admin.
+        """
+        current_time = datetime.now(timezone.utc)
+
+        for gate_key, record in self.state.operator_approvals.items():
+            if record.decision is not None:
+                continue  # Already decided
+
+            # Check if approval has been pending for more than timeout
+            requested_time = datetime.fromisoformat(record.requested_at.replace("Z", "+00:00"))
+            elapsed = (current_time - requested_time).days
+
+            if elapsed >= self.APPROVAL_TIMEOUT_DAYS:
+                logger.warning(f"Approval timeout for {gate_key} (elapsed: {elapsed} days), escalating to admin")
+                self._escalate_approval_to_admin(record, gate_key)
+
+    def _escalate_approval_to_admin(self, record: OperatorApprovalRecord, gate_key: str) -> None:
+        """
+        Escalate approval to admin if timeout exceeded (F019).
+        """
+        record.reason = f"Auto-escalation after {self.APPROVAL_TIMEOUT_DAYS} day timeout"
+
+        self._audit_log({
+            "event": "approval_escalated_to_admin",
+            "gate": gate_key,
+            "approval_id": record.approval_id,
+            "requested_at": record.requested_at,
+            "escalated_at": datetime.now(timezone.utc).isoformat(),
+            "reason": record.reason,
+            "tenant_id": self.tenant_id,
+            "lom": "master_orchestration_blueprint.py::_escalate_approval_to_admin:598",
+        })
+
+        logger.warning(f"APPROVAL ESCALATED TO ADMIN: {gate_key}")
 
     def _audit_log(self, event: Dict) -> None:
         """
         Log audit event (immutable, hash-chained).
 
-        Every orchestration decision logged for compliance (ADR-0537, ADR-0232).
+        Every orchestration decision logged for compliance (ADR-0537, ADR-0232, F009).
+        Thread-safe append with RLock (F014).
         """
-        event["sequence_number"] = len(self.audit_trail)
-        event["timestamp"] = event.get("timestamp", datetime.now(timezone.utc).isoformat())
+        # F014: Thread-safe audit log
+        with self.audit_trail_lock:
+            event["sequence_number"] = len(self.audit_trail)
+            event["timestamp"] = event.get("timestamp", datetime.now(timezone.utc).isoformat())
+            event["tenant_id"] = event.get("tenant_id", self.tenant_id)  # F023
 
-        if self.audit_trail:
-            event["prior_hash"] = self.audit_trail[-1].get("hash", "")
-        else:
-            event["prior_hash"] = "GENESIS"
+            if self.audit_trail:
+                event["prior_hash"] = self.audit_trail[-1].get("hash", "")
+            else:
+                event["prior_hash"] = "GENESIS"
 
-        event_json = json.dumps(event, sort_keys=True, default=str)
-        event["hash"] = hashlib.sha256(event_json.encode()).hexdigest()
+            event_json = json.dumps(event, sort_keys=True, default=str)
+            event["hash"] = hashlib.sha256(event_json.encode()).hexdigest()
 
-        self.audit_trail.append(event)
+            self.audit_trail.append(event)
 
     def get_status(self) -> Dict:
         """Get current rollout status"""
