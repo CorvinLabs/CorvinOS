@@ -42,6 +42,8 @@ import {
 import { clockSkewMs, formatUtc } from "./format";
 import { LIVE_QUERY, freshness } from "./live";
 import { StatusIcon } from "./parts";
+import { WORK_RUN_TYPES, isActiveRun, runningNow as pickRunningNow, workRuns } from "./run-encodings";
+import { RunsTimeline, RunsTree } from "./run-views";
 import { BoardView, TableView, TimelineView, TreeView } from "./views";
 
 type View = "tree" | "board" | "timeline" | "table" | "graph" | "activity";
@@ -207,18 +209,22 @@ export default function TasksPage() {
     ...LIVE_QUERY,
     placeholderData: (prev) => prev,
   });
-  // "Running now": the operator's live agent sessions, above every view — what is
-  // actually being worked on, even before it produced a commit or an item.
-  const runningQ = useQuery({
-    queryKey: ["task-tracking", "running-now"],
-    queryFn: ({ signal }) => getAllTasks({ types: ["agent"], finishedLimit: 1 }, signal),
+  // Runs next to the work items (ADR-2081 P4): every active run plus those
+  // finished in the last 24 h — chat and bridge turns, background tasks, A2A,
+  // ACS, agent sessions … — and the "Running now" strip above every work view.
+  const workRunsQ = useQuery({
+    queryKey: ["task-tracking", "work-runs"],
+    queryFn: ({ signal }) => getAllTasks({ types: WORK_RUN_TYPES, finishedLimit: 300 }, signal),
+    enabled: view !== "activity",
     ...LIVE_QUERY,
     placeholderData: (prev) => prev,
   });
-  const runningNow = useMemo(
-    () => (runningQ.data?.active ?? []).filter((r) => r.status === "running" || r.status === "paused"),
-    [runningQ.data],
+  const runningNow = useMemo(() => pickRunningNow(workRunsQ.data?.active ?? []), [workRunsQ.data]);
+  const runs = useMemo(
+    () => workRuns(workRunsQ.data?.active ?? [], workRunsQ.data?.finished ?? [], now, filters.q),
+    [workRunsQ.data, now, filters.q],
   );
+  const openLink = useCallback((t: UnifiedTask) => { setLinkRun(t); setLinkTarget(""); setLinkError(null); }, []);
   const link = useMutation({
     mutationFn: (v: { itemId: string; run: UnifiedTask }) => linkTaskRun(v.itemId, v.run.type, v.run.id, csrf),
     onSuccess: (_r, v) => {
@@ -305,7 +311,7 @@ export default function TasksPage() {
           )}
 
           {workViews && runningNow.length > 0 && (
-            <RunningNow runs={runningNow} onOpen={() => { setRunTypes(new Set<TaskType>(["agent"])); setQuery({ view: "activity" }); }} />
+            <RunningNow runs={runningNow} onOpen={() => { setRunTypes(new Set<TaskType>()); setQuery({ view: "activity" }); }} />
           )}
 
           <div className="flex flex-wrap items-center gap-2 border-b pb-2" role="tablist" aria-label="View">
@@ -356,6 +362,14 @@ export default function TasksPage() {
 
           {boardError && <p role="alert" className="text-xs text-destructive">{boardError}</p>}
 
+          {(view === "tree" || view === "timeline" || (items.length === 0 && workViews && view !== "graph")) && runs.length > 0 && (
+            <section className="space-y-2" data-testid="work-runs" aria-label="Runs">
+              <h2 className="text-sm font-semibold">Runs <span className="font-normal text-muted-foreground">
+                — {runs.filter(isActiveRun).length} active, finished in the last 24 h · chat turns, background tasks, A2A, agent sessions …</span></h2>
+              {view === "timeline" ? <RunsTimeline runs={runs} now={now} onLink={openLink} /> : <RunsTree runs={runs} now={now} onLink={openLink} />}
+            </section>
+          )}
+
           {workViews && items.length === 0 && (
             <Card data-testid="tasks-empty">
               <CardContent className="space-y-3 py-8 text-center text-sm">
@@ -381,9 +395,11 @@ export default function TasksPage() {
                 {view === "tree" && <TreeView rows={rows} now={now} selected={selected} onSelect={(id) => setQuery({ item: id })}
                   collapsed={collapsed} onToggle={onToggle} filterActive={filtersActive(filters)} compact={Boolean(selected)} />}
                 {view === "board" && <BoardView items={items} filters={filters} now={now} byId={byId} busy={move.isPending}
-                  onSelect={(id) => setQuery({ item: id })} onMove={(item, status) => move.mutate({ item, status })} />}
+                  onSelect={(id) => setQuery({ item: id })} onMove={(item, status) => move.mutate({ item, status })}
+                  runs={runs} onLinkRun={openLink} />}
                 {view === "timeline" && <TimelineView rows={rows} now={now} selected={selected} onSelect={(id) => setQuery({ item: id })} />}
-                {view === "table" && <TableView items={flat} now={now} selected={selected} onSelect={(id) => setQuery({ item: id })} />}
+                {view === "table" && <TableView items={flat} now={now} selected={selected} onSelect={(id) => setQuery({ item: id })}
+                  runs={runs} onLinkRun={openLink} />}
                 {view === "graph" && (
                   <Suspense fallback={<p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading graph…</p>}>
                     <GraphView items={items} now={now} selectedId={selected} onSelect={(id) => setQuery({ item: id })} />

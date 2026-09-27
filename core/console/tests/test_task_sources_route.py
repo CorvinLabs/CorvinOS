@@ -42,7 +42,8 @@ def _seed(home: Path, now: float) -> None:
     _w(t / "sessions/web:abc/tasks/w1.json", {"task_id": "w1", "chat_key": "web:abc", "status": "running",
        "created_at": now - 5, "started_at": now - 4, "input": {"instruction": "summarise the report", "persona": "assistant"}})
     _w(t / "sessions/voice/discord/123/tasks/d1.json", {"task_id": "d1", "chat_key": "123", "status": "completed",
-       "created_at": now - 60, "started_at": now - 59, "ended_at": now - 30, "input": {"instruction": SECRET, "persona": "assistant"}})
+       "created_at": now - 60, "started_at": now - 59, "ended_at": now - 30, "result_summary": SECRET,
+       "input": {"instruction": SECRET, "persona": "assistant"}})
     _w(t / "sessions/voice/discord/bgtask__x/tasks/b1.json", {"task_id": "b1", "chat_key": "bgtask", "status": "failed",
        "created_at": now - 100, "ended_at": now - 90, "input": {"instruction": SECRET}})
     _w(t / "global/acs/runs/acs-1/manifest.json", {"run_id": "acs-1", "workflow_id": "insights", "status": "success",

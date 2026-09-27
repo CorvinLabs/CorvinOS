@@ -5447,10 +5447,18 @@ def _call_claude_streaming_via_engine(
     # dispatcher call_claude_streaming (ADR-0150 LIC-BRIDGE-ENGINE-CHATTURN-01),
     # covering all four engines — not here, to avoid double-counting.
 
-    # ADR-0080 M1 — Task lifecycle (separate from audit.jsonl for now)
+    # ADR-0080 M1 — Task lifecycle (separate from audit.jsonl for now).
+    # A bridge turn's task is opened and closed by call_claude_streaming
+    # (ADR-2081); this path only reports its attempt's outcome to it. The
+    # direct-create branch is the fallback for callers outside that wrapper.
     task_id = None
     tm = None
-    if _task_manager is not None:
+    _turn = _current_turn_task()
+    if _turn is not None and not _turn.reused_by(workdir):
+        _turn = None
+    if _turn is not None:
+        tm, task_id = _turn.tm, _turn.task_id
+    elif _task_manager is not None:
         try:
             tasks_dir = workdir / "tasks"
             tm = _task_manager.TaskManager(tasks_dir)
@@ -5607,7 +5615,9 @@ def _call_claude_streaming_via_engine(
     if engine.proc is None:
         log(f"engine.proc never appeared for chat={chat_key}")
         # ADR-0080 M1 — record spawn failure
-        if tm is not None and task_id is not None:
+        if _turn is not None:
+            _turn.report(_retry_count, {"event": "task.failed", "exit_code": 1, "reason": "spawn timeout"})
+        elif tm is not None and task_id is not None:
             try:
                 tm.record_event(task_id, {
                     "event": "task.failed",
@@ -5639,8 +5649,10 @@ def _call_claude_streaming_via_engine(
     # M4.1: emit to L16 audit chain with allow-list fields (task_id, engine_id only)
     if tm is not None and task_id is not None:
         try:
+            # Under a turn task the record is already running (since pickup);
+            # the engine start is logged without resetting started_at.
             tm.record_event(task_id, {
-                "event": "task.started",
+                "event": "task.engine_started" if _turn is not None else "task.started",
                 "engine": engine.__class__.__name__,
                 "pid": proc.pid,
             })
@@ -6219,12 +6231,16 @@ def _call_claude_streaming_via_engine(
         if tm is not None and task_id is not None:
             try:
                 if error_text or rc != 0:
-                    tm.record_event(task_id, {
+                    _failed_evt = {
                         "event": "task.failed",
                         "exit_code": rc,
                         "error": error_text[:100] if error_text else "",
                         "timed_out": timed_out,
-                    })
+                    }
+                    if _turn is not None:
+                        _turn.report(_retry_count, _failed_evt)
+                    else:
+                        tm.record_event(task_id, _failed_evt)
                     # M4.1: Emit task.failed to audit chain
                     _audit_event(
                         "task.failed",
@@ -6237,17 +6253,22 @@ def _call_claude_streaming_via_engine(
                         },
                     )
                 else:
-                    tm.record_event(task_id, {
+                    _done_evt = {
                         "event": "task.completed",
                         "exit_code": 0,
                         "output_chars": len(final_text),
-                    })
+                    }
+                    if _turn is not None:
+                        _turn.report(_retry_count, _done_evt)
+                    else:
+                        tm.record_event(task_id, _done_evt)
                     # M4.1: Emit task.completed to audit chain (allow-list only)
                     if tm and task_id:
                         try:
                             task_obj = tm.get_task(task_id)
                             if task_obj:
-                                duration_ms = task_obj.duration_ms or 0
+                                duration_ms = (int((time.monotonic() - _turn.started) * 1000)
+                                               if _turn is not None else task_obj.duration_ms or 0)
                                 _audit_event(
                                     "task.completed",
                                     chat_key=chat_key,
@@ -7339,7 +7360,138 @@ def _call_hermes_streaming_via_engine(
             )
 
 
+# ── Turn task (ADR-0080 M1, ADR-2081 P2) ─────────────────────────────────────
+# Every bridge turn gets its task record the moment it is picked up — before
+# context assembly, which alone took 60–80 s per turn on 2026-09-27 — and for
+# EVERY engine, not only claude_code (the task used to be created deep inside
+# _call_claude_streaming_via_engine, so hermes/opencode/codex turns had none).
+# The record is closed exactly once, by the wrapper, because a retry recurses
+# through call_claude_streaming and the first attempt's `finally` runs AFTER
+# the successful retry: an engine path that closed the task itself turned a
+# recovered turn into "failed". Engine paths report their attempt's outcome
+# (`_TurnTask.report`); the highest retry wins.
+
+_TURN_TASK = threading.local()
+# Replies that mean "no turn happened" — refusals and adapter-side failures.
+_TURN_FAILED_PREFIXES = (
+    "[adapter]", "[budget exceeded", "⚠ Chat-turn quota enforcement unavailable",
+    "⚠ Free-tier daily chat limit reached",
+)
+_TURN_SUMMARY_CHARS = 280
+
+
+class _TurnTask:
+    def __init__(self, tm, task_id: str, tasks_dir: Path, workdir: Path):
+        self.tm, self.task_id, self.tasks_dir, self.workdir = tm, task_id, tasks_dir, workdir
+        self.started = time.monotonic()
+        self._outcome: tuple[int, dict] | None = None
+
+    def report(self, retry_count: int, event: dict) -> None:
+        """An engine attempt's terminal event; the last attempt (highest
+        retry count) wins regardless of the order the `finally`s run in."""
+        if self._outcome is None or retry_count >= self._outcome[0]:
+            self._outcome = (retry_count, event)
+
+    def reused_by(self, workdir: Path) -> bool:
+        return Path(workdir) / "tasks" == self.tasks_dir
+
+
+def _current_turn_task() -> "_TurnTask | None":
+    return getattr(_TURN_TASK, "cur", None)
+
+
+def _open_turn_task(*, prompt: str, channel: str, chat_key: str, profile: dict | None,
+                    msg_id: str | None, sender: str) -> "_TurnTask | None":
+    if _task_manager is None:
+        return None
+    try:
+        workdir = _session_dir(channel, chat_key)
+        tasks_dir = workdir / "tasks"
+        tm = _task_manager.TaskManager(tasks_dir)
+        task_id = tm.create_task(
+            chat_key=chat_key, instruction=prompt,
+            persona=str((profile or {}).get("persona") or "assistant"),
+            channel=channel, msg_id=msg_id,
+            from_operator=_sender_is_operator(channel, sender),
+        )
+        # Running from pickup: context assembly is part of the turn's work.
+        tm.record_event(task_id, {"event": "task.started", "stage": "preparing"})
+        return _TurnTask(tm, task_id, tasks_dir, workdir)
+    except Exception as e:  # noqa: BLE001 — task tracking never breaks a turn
+        log_debug(f"turn task creation failed (non-blocking): {e}")
+        return None
+
+
+def _summary(text: str | None) -> str:
+    s = " ".join(str(text or "").split())
+    return s if len(s) <= _TURN_SUMMARY_CHARS else s[: _TURN_SUMMARY_CHARS - 1] + "…"
+
+
+def _close_turn_task(turn: "_TurnTask | None", answer: "str | None",
+                     exc: "BaseException | None", msg_id: str | None) -> None:
+    if turn is None:
+        return
+    status = "failed"
+    try:
+        if turn._outcome is not None:
+            event = dict(turn._outcome[1])
+        elif exc is not None:
+            event = {"event": "task.failed", "exit_code": 1, "error": type(exc).__name__}
+        elif answer is None or str(answer).startswith(_TURN_FAILED_PREFIXES):
+            event = {"event": "task.failed", "exit_code": 1, "error": _summary(answer)[:100]}
+        else:
+            event = {"event": "task.completed", "exit_code": 0}
+        if event["event"] == "task.completed":
+            event["summary"] = _summary(answer)
+            status = "completed"
+        turn.tm.record_event(turn.task_id, event)
+    except Exception as e:  # noqa: BLE001
+        log_debug(f"turn task close failed: {e}")
+    # The debug log's turn.start has had no turn.done since it was added —
+    # the repair job flushed every turn as an anomaly 5–10 min later.
+    try:
+        _chat_debug_event(turn.workdir, "turn.done", msg_id=str(msg_id or ""),
+                          task_id=turn.task_id[:8], status=status,
+                          duration_ms=int((time.monotonic() - turn.started) * 1000))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def call_claude_streaming(
+    prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
+    mode: str = "unrestricted", add_dir: str | None = None,
+    on_status=None, status_mode: str = "compact",
+    profile: dict | None = None,
+    _retry_count: int = 0,
+    msg_id: str | None = None,
+    sender: str = "",
+) -> str:
+    """One bridge turn: opens its task record, runs the turn
+    (:func:`_call_claude_streaming_impl`), closes the record exactly once.
+    A retry (``_retry_count > 0``) continues the task of the turn it retries."""
+    kwargs = dict(prompt=prompt, channel=channel, chat_key=chat_key, mode=mode, add_dir=add_dir,
+                  on_status=on_status, status_mode=status_mode, profile=profile,
+                  _retry_count=_retry_count, msg_id=msg_id, sender=sender)
+    if _retry_count:
+        return _call_claude_streaming_impl(**kwargs)
+    turn = _open_turn_task(prompt=prompt, channel=channel, chat_key=chat_key,
+                           profile=profile, msg_id=msg_id, sender=sender)
+    prev = _current_turn_task()
+    _TURN_TASK.cur = turn
+    answer: "str | None" = None
+    exc: "BaseException | None" = None
+    try:
+        answer = _call_claude_streaming_impl(**kwargs)
+        return answer
+    except BaseException as e:
+        exc = e
+        raise
+    finally:
+        _TURN_TASK.cur = prev
+        _close_turn_task(turn, answer, exc, msg_id)
+
+
+def _call_claude_streaming_impl(
     prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
     mode: str = "unrestricted", add_dir: str | None = None,
     on_status=None, status_mode: str = "compact",

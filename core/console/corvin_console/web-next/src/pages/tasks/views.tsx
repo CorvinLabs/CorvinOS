@@ -1,6 +1,7 @@
 /** Tree · Board · Timeline · Table views of the Task-Tracking SSOT. Layout only — mappings live in encodings.ts. */
 import { useMemo, useState, type DragEvent, type KeyboardEvent } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Link2, User } from "lucide-react";
+import type { UnifiedTask } from "@/lib/api/initiatives";
 import type { Item, ItemStatus } from "@/lib/api/task-tracking";
 import { cn } from "@/lib/utils";
 import {
@@ -9,6 +10,8 @@ import {
 } from "./encodings";
 import { formatUtc } from "./format";
 import { ApprovalTag, Deadline, EvidenceBadge, KindTag, PriorityChip, ProgressBar, StatusBadge, StatusIcon } from "./parts";
+import { isActiveRun, runBoardColumn } from "./run-encodings";
+import { RunCard, RunsTableBody } from "./run-views";
 
 type Select = (id: string) => void;
 
@@ -90,11 +93,25 @@ export function TreeView({ rows, now, selected, onSelect, collapsed, onToggle, f
 
 // ── Board ───────────────────────────────────────────────────────────────────
 
-export function BoardView({ items, filters, now, byId, onSelect, onMove, busy }: {
+/** Per column: up to this many active runs (on top) and finished runs (below the items). */
+const BOARD_RUNS_PER_COLUMN = 8;
+const hiddenRuns = (rs: UnifiedTask[]) => {
+  const active = rs.filter(isActiveRun).length;
+  return Math.max(0, active - BOARD_RUNS_PER_COLUMN) + Math.max(0, rs.length - active - BOARD_RUNS_PER_COLUMN);
+};
+
+export function BoardView({ items, filters, now, byId, onSelect, onMove, busy, runs = [], onLinkRun }: {
   items: Item[]; filters: Filters; now: number; byId: Map<string, Item>; onSelect: Select;
   onMove: (item: Item, status: ItemStatus) => void; busy: boolean;
+  /** Runs shown as read-only cards in the column matching their status. */
+  runs?: UnifiedTask[]; onLinkRun?: (t: UnifiedTask) => void;
 }) {
   const cols = useMemo(() => boardColumns(items, filters), [items, filters]);
+  const runCols = useMemo(() => {
+    const m = new Map<ItemStatus, UnifiedTask[]>();
+    for (const r of runs) { const c = runBoardColumn(r.status); m.set(c, [...(m.get(c) ?? []), r]); }
+    return m;
+  }, [runs]);
   const [over, setOver] = useState<ItemStatus | null>(null);
   const top = (it: Item): Item | undefined => {
     let cur = it.parent_id ? byId.get(it.parent_id) : undefined;
@@ -117,10 +134,15 @@ export function BoardView({ items, filters, now, byId, onSelect, onMove, busy }:
           onDrop={drop(s)}>
           <header className="flex items-center justify-between border-b px-3 py-2">
             <span className="flex items-center gap-1.5 text-sm font-medium"><StatusIcon status={s} />{STATUS_META[s].label}</span>
-            <span className="text-xs tabular-nums text-muted-foreground">{cols[s].length}</span>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {cols[s].length}{(runCols.get(s)?.length ?? 0) > 0 && ` · ${runCols.get(s)?.length} runs`}
+            </span>
           </header>
           <div className="flex flex-1 flex-col gap-2 p-2">
-            {cols[s].length === 0 && <p className="px-1 py-3 text-center text-xs text-muted-foreground">Nothing here</p>}
+            {cols[s].length === 0 && !runCols.get(s)?.length && <p className="px-1 py-3 text-center text-xs text-muted-foreground">Nothing here</p>}
+            {onLinkRun && (runCols.get(s) ?? []).filter(isActiveRun).slice(0, BOARD_RUNS_PER_COLUMN).map((r) => (
+              <RunCard key={r.id} run={r} now={now} onLink={onLinkRun} />
+            ))}
             {cols[s].map((it) => {
               const root = top(it);
               return (
@@ -145,6 +167,12 @@ export function BoardView({ items, filters, now, byId, onSelect, onMove, busy }:
                 </button>
               );
             })}
+            {onLinkRun && (runCols.get(s) ?? []).filter((r) => !isActiveRun(r)).slice(0, BOARD_RUNS_PER_COLUMN).map((r) => (
+              <RunCard key={r.id} run={r} now={now} onLink={onLinkRun} />
+            ))}
+            {hiddenRuns(runCols.get(s) ?? []) > 0 && (
+              <p className="px-1 text-center text-xs text-muted-foreground">+{hiddenRuns(runCols.get(s) ?? [])} more runs in Activity</p>
+            )}
           </div>
         </section>
       ))}
@@ -253,8 +281,9 @@ export function TimelineView({ rows, now, onSelect, selected }: {
 
 type SortKey = "title" | "kind" | "status" | "priority" | "assignee" | "deadline" | "progress" | "updated_at";
 
-export function TableView({ items, now, onSelect, selected }: {
+export function TableView({ items, now, onSelect, selected, runs = [], onLinkRun }: {
   items: Item[]; now: number; onSelect: Select; selected: string | null;
+  runs?: UnifiedTask[]; onLinkRun?: (t: UnifiedTask) => void;
 }) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "deadline", dir: 1 });
   const sorted = useMemo(() => {
@@ -273,7 +302,7 @@ export function TableView({ items, now, onSelect, selected }: {
       return (x < y ? -1 : x > y ? 1 : 0) * sort.dir;
     });
   }, [items, sort]);
-  if (items.length === 0) return <Empty text="No items match these filters." />;
+  if (items.length === 0 && runs.length === 0) return <Empty text="No items match these filters." />;
   const th = (key: SortKey, label: string, right = false) => (
     <th className={cn("px-3 py-2 font-medium", right && "text-right")}
       aria-sort={sort.key === key ? (sort.dir === 1 ? "ascending" : "descending") : "none"}>
@@ -306,6 +335,7 @@ export function TableView({ items, now, onSelect, selected }: {
             </tr>
           ))}
         </tbody>
+        {onLinkRun && <RunsTableBody runs={runs} now={now} onLink={onLinkRun} />}
       </table>
     </div>
   );

@@ -312,6 +312,22 @@ def _chat_channel(rel_parts: tuple[str, ...]) -> tuple[str, str]:
     return "chat", head.split(":")[0] or "other"
 
 
+def _turn_stage(events: Path) -> str:
+    """'engine running' once the engine process started, else 'preparing
+    context' — a bridge turn is recorded at pickup (ADR-2081), before its
+    context is assembled. Reads the tail of the task's event log only."""
+    try:
+        with events.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 8192))
+            tail = fh.read()
+    except OSError:
+        return "running"
+    if b'"task.engine_started"' in tail or b'"pid"' in tail:
+        return "engine running"
+    return "preparing context" if b'"preparing"' in tail else "running"
+
+
 def _chat_tasks(home: Path, now: float) -> Iterator[dict]:
     root = home / "sessions"
     if not root.is_dir():
@@ -373,13 +389,18 @@ def _chat_tasks(home: Path, now: float) -> Iterator[dict]:
             steps = _steps(mine, owned=owned, turn_running=raw in ("running", "pending"), now=now) if mine else None
             if steps:
                 last_alive = max(filter(None, [last_alive] + [s["end"] for s in mine]))
+            if raw == "running":
+                head = f"{_turn_stage(events)} · persona {persona}"
+            else:
+                # The reply preview is the bot's answer in that chat — shown
+                # under the same rule as the instruction.
+                head = (d.get("result_summary") or None) if owned else None
             rec = _record(
                 id=f"chat:{d['task_id']}", type=typ, subtype=sub, title=title,
                 status=_CHAT_STATUS.get(raw, "running"), raw_status=raw,
                 created=_ts(d.get("created_at")), started=_ts(d.get("started_at")),
                 ended=ended, now=now, last_alive=last_alive,
-                detail=_join((d.get("result_summary") or None) if raw != "running" else f"persona {persona}",
-                             _steps_text(steps)),
+                detail=_join(head, _steps_text(steps)),
             )
             if steps:
                 rec["steps"] = steps

@@ -55,6 +55,38 @@ const ITEMS: Item[] = [
 const SUMMARY = { open: 2, in_progress: 0, blocked: 0, complete: 1, archived: 0, total: 3, overdue: 1,
   approvals_pending: 1, done_7d: 1, initiatives_active: 1 };
 const LIST = { server_time: NOW, items: ITEMS, summary: SUMMARY, import_available: false };
+
+// Runs relative to the real clock: the work views keep active runs and those
+// finished in the last 24 h.
+const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
+function run(id: string, over: Record<string, unknown>) {
+  return { id, type: "chat", type_label: "Chat", subtype: "discord", title: id, status: "done", raw_status: null,
+    created_at: ago(1), started_at: ago(1), ended_at: ago(0.5), sort_ts: 0, duration_s: 60, stale_reason: null,
+    detail: null, ...over };
+}
+const RUNS_BODY = {
+  server_time: NOW, scan_ms: 1, finished_total: 2,
+  types: [
+    { type: "chat", label: "Chat", active: 1, finished: 2, stale: 0, failed: 0, note: null, error: null },
+    { type: "a2a", label: "A2A", active: 1, finished: 0, stale: 0, failed: 0, note: null, error: null },
+    { type: "agent", label: "Agent session", active: 1, finished: 0, stale: 0, failed: 0, note: null, error: null },
+  ],
+  active: [
+    run("chat:t1", { title: "ship the release notes", status: "running", ended_at: null, duration_s: null,
+      detail: "engine running · persona assistant",
+      steps: { total: 2, running: 1, items: [
+        { title: "Explore subagent", agent_type: "Explore", status: "done", started_at: ago(0.9), ended_at: ago(0.8), duration_s: 30 },
+        { title: "Review the deploy plan", agent_type: "Plan", status: "running", started_at: ago(0.2), ended_at: null, duration_s: 12 },
+      ] } }),
+    run("a2a:in:x", { type: "a2a", type_label: "A2A", subtype: "inbound", title: "Task from Twin", status: "running", ended_at: null }),
+    run("agent:2", { type: "agent", type_label: "Agent session", subtype: "CorvinOS", title: "Audit chain recovery", status: "paused", ended_at: null }),
+  ],
+  finished: [
+    run("chat:t0", { title: "fixed the parser", ended_at: ago(3) }),
+    run("chat:old", { title: "last week's turn", ended_at: ago(24 * 7) }),
+  ],
+  totals: { active: 3, running: 2, stale: 0, finished_24h: 1, failed_24h: 0, all: 5 },
+};
 const DETAIL = (it: Item) => ({
   server_time: NOW, item: it, ancestors: [], children: [], depends_on: [], required_by: [], runs: [],
   history: [{ event_id: "e1", event_type: "task_item.created", ts: "2026-09-20T00:00:00Z", actor: "importer",
@@ -160,37 +192,68 @@ describe("Tasks page", () => {
     expect(screen.getByText(/^\d+[dhm] overdue$/)).toBeTruthy();  // clock-relative
   });
 
-  it("shows the live agent sessions above the work views and opens them in Activity", async () => {
-    const rec = (id: string, title: string, status: string) => ({
-      id, type: "agent", type_label: "Agent session", subtype: "CorvinOS", title, status, raw_status: null,
-      created_at: null, started_at: NOW, ended_at: null, sort_ts: 0, duration_s: null, stale_reason: null,
-      detail: status === "running" ? "working" : "waiting for input",
-    });
+  it("shows every live run above the work views and opens Activity unfiltered", async () => {
     const seen: string[] = [];
     server.use(http.get("/v1/console/initiatives/tasks", ({ request }) => {
       seen.push(new URL(request.url).searchParams.get("types") ?? "");
-      return HttpResponse.json({
-        server_time: NOW, scan_ms: 1, finished: [], finished_total: 0,
-        types: [{ type: "agent", label: "Agent session", active: 2, finished: 0, stale: 0, failed: 0, note: null, error: null }],
-        active: [rec("agent:1", "A2A pairing", "running"), rec("agent:2", "Audit chain recovery", "paused")],
-        totals: { active: 2, running: 1, stale: 0, finished_24h: 0, failed_24h: 0, all: 2 },
-      });
+      return HttpResponse.json(RUNS_BODY);
     }));
     renderIt();
     const strip = await screen.findByTestId("running-now");
-    expect(within(strip).getByText(/2 agent sessions · 1 working/)).toBeTruthy();
-    expect(within(strip).getByText(/A2A pairing/)).toBeTruthy();
-    expect(within(strip).getByText(/Audit chain recovery/)).toBeTruthy();
+    expect(within(strip).getByText(/3 live runs · 2 working/)).toBeTruthy();
+    expect(within(strip).getByText(/ship the release notes/)).toBeTruthy();   // a Discord turn
+    expect(within(strip).getByText(/Task from Twin/)).toBeTruthy();            // an A2A exchange
+    expect(within(strip).getByText(/Audit chain recovery/)).toBeTruthy();      // an agent session
+    expect(seen[0]).toContain("chat");
+    expect(seen[0]).toContain("a2a");
+    expect(seen[0]).not.toContain("commit");
     fireEvent.click(within(strip).getByRole("button", { name: "Open activity" }));
     await waitFor(() => expect(screen.getByTestId("view-activity").getAttribute("aria-selected")).toBe("true"));
-    // Activity opens filtered to agent sessions (the strip's own query also asks for "agent",
-    // so the pressed chip — not the request log — is the proof).
-    await waitFor(() => expect(screen.getByTestId("type-chip-agent").getAttribute("aria-pressed")).toBe("true"));
-    expect(seen.length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getByTestId("type-chip-chat").getAttribute("aria-pressed")).toBe("false"));
     expect(screen.queryByTestId("running-now")).toBeNull();  // only above the work views
   });
 
-  it("shows no strip when no agent session is live", async () => {
+  it("lists runs next to the items in the tree, grouped by type and channel, with steps", async () => {
+    server.use(http.get("/v1/console/initiatives/tasks", () => HttpResponse.json(RUNS_BODY)));
+    renderIt();
+    const runs = await screen.findByTestId("runs-tree");
+    expect(within(runs).getByTestId("run-group-chat:discord")).toBeTruthy();
+    expect(within(runs).getByText("ship the release notes")).toBeTruthy();
+    expect(within(runs).getByTestId("run-group-a2a:inbound")).toBeTruthy();
+    // a finished run from yesterday is outside the 24 h window, an old one never shows
+    expect(within(runs).getByText("fixed the parser")).toBeTruthy();
+    expect(within(runs).queryByText("last week's turn")).toBeNull();
+    const steps = within(runs).getAllByTestId("run-steps")[0];
+    expect(within(steps).getByText(/2 steps · 1 running/)).toBeTruthy();
+    expect(within(steps).getByText("Review the deploy plan")).toBeTruthy();
+    // linking still goes through the dialog
+    fireEvent.click(within(runs).getByRole("button", { name: "Link ship the release notes to a task" }));
+    expect(await screen.findByText("Link run to a task")).toBeTruthy();
+  });
+
+  it("puts runs on the board as read-only cards in the column of their status", async () => {
+    server.use(http.get("/v1/console/initiatives/tasks", () => HttpResponse.json(RUNS_BODY)));
+    renderIt("/app/initiatives?view=board");
+    const board = await screen.findByTestId("board-view");
+    const inProgress = within(board).getByRole("region", { name: "In progress" });
+    const card = await within(inProgress).findByTestId("run-card-chat:t1");
+    expect(card.getAttribute("draggable")).toBeNull();
+    const complete = within(board).getByRole("region", { name: "Complete" });
+    expect(within(complete).getByTestId("run-card-chat:t0")).toBeTruthy();
+  });
+
+  it("adds a runs block to the table and a 24 h lane to the timeline", async () => {
+    server.use(http.get("/v1/console/initiatives/tasks", () => HttpResponse.json(RUNS_BODY)));
+    renderIt("/app/initiatives?view=table");
+    const body = await screen.findByTestId("runs-table");
+    expect(within(body).getByText("ship the release notes")).toBeTruthy();
+    cleanup();
+    renderIt("/app/initiatives?view=timeline");
+    const lane = await screen.findByTestId("run-lane");
+    expect(within(lane).getByTestId("run-bar-chat:t1")).toBeTruthy();
+  });
+
+  it("shows no strip when nothing is live", async () => {
     renderIt();
     expect(await screen.findByText("Loop B — Phase 9 fixes")).toBeTruthy();
     expect(screen.queryByTestId("running-now")).toBeNull();

@@ -102,7 +102,9 @@ def _section_source_sweep(adapter) -> None:
         ("_call_codex_streaming_via_engine", adapter._call_codex_streaming_via_engine, 2),
         ("_call_opencode_streaming_via_engine", adapter._call_opencode_streaming_via_engine, 2),
         ("_call_hermes_streaming_via_engine", adapter._call_hermes_streaming_via_engine, 4),
-        ("call_claude_streaming", adapter.call_claude_streaming, 1),
+        # call_claude_streaming is the turn-task wrapper (ADR-2081); the body
+        # carrying the fallback text is _call_claude_streaming_impl.
+        ("_call_claude_streaming_impl", adapter._call_claude_streaming_impl, 1),
     ]
 
     for name, fn, expected in targets:

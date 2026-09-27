@@ -584,6 +584,28 @@ is user-managed state and genuinely lives there.
 
 ---
 
+## Turn task: opened at pickup, closed once (ADR-0080, ADR-2081)
+
+Every bridge turn's task record is opened by the `call_claude_streaming`
+wrapper — before context assembly (60–80 s per turn, measured 2026-09-27) and
+for EVERY engine (claude_code, hermes, opencode, codex; previously only the
+claude_code path created one). It is `running` from pickup
+(`task.started` with `stage: preparing`); the engine path logs
+`task.engine_started` when the process exists. The wrapper closes it exactly
+once: the engine path only *reports* its attempt's terminal event
+(`_TurnTask.report`, highest `_retry_count` wins) because a retry recurses
+through the wrapper and the first attempt's `finally` runs AFTER the
+successful retry — closing there turned recovered turns into `failed`. With
+no report (other engines, refusals), a reply starting with an adapter-failure
+or refusal prefix (`_TURN_FAILED_PREFIXES`) closes it `failed`, an exception
+closes it `failed`, anything else `completed` with `result_summary` (reply
+preview, 280 chars — shown in the console only for the operator's own turns).
+`chat_debug.jsonl` gets a `turn.done` for every turn. The record's
+`input.from_operator` is true only when the sender is explicitly on the
+daemon's channel whitelist (`_sender_is_operator`); the uid is not written.
+
+---
+
 ## Boot: stale-task reaper (ADR-0080)
 
 On adapter boot, before the main loop starts, the adapter finalizes any task

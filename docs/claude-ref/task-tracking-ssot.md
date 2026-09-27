@@ -144,8 +144,9 @@ doing it — was invisible. Two run sources and one writer close that:
   (`service.synced_items(..., actor=)` → `foreign_edit`). After that only new run
   links are added. A deleted item is never re-created or linked. A sync that
   changes nothing writes nothing to the chain.
-- The panel shows a **Running now** strip above the work views (live agent
-  sessions; "Open activity" filters Activity to them).
+- The panel shows a **Running now** strip above the work views: every live run of
+  every type (chat and bridge turns, background tasks, A2A, agent sessions …),
+  running first; "Open activity" opens Activity unfiltered (ADR-2081).
 
 ## The `initiatives.json` cutover
 
@@ -168,6 +169,21 @@ is complete but its evidence does not pass. "Verify evidence" in the panel
 triggers a run.
 
 ## Panel
+
+**Runs next to the items (ADR-2081).** Every work view also shows the runs of
+the install — all active ones plus those finished in the last 24 h, all types
+except commits (`WORK_RUN_TYPES`), matched by the search box — in its own form,
+never mixed into the items (a run has no priority, deadline or rollup, and must
+not be draggable): **Tree** — a "Runs" block ABOVE the item tree, one group per
+type + channel (`Chat · discord`, `A2A · inbound`), groups with active runs
+expanded; **Board** — dashed, non-draggable cards in the column of the same
+meaning (queued → Open, running/paused → In progress, failed/stale → Blocked,
+done/cancelled → Complete), active runs on top, finished below the items, 8 +
+8 per column; **Timeline** — a separate 24 h lane with its own axis and legend
+(minutes-long runs are invisible on the items' axis), every active run plus
+the latest 40 finished; **Table** — a second body under the item rows. Each
+run can be linked to an item; a run's `steps` (subagents / worker turns)
+expand in place. Mappings: `pages/tasks/run-encodings.ts` (unit-tested).
 
 Views: **Tree** (default; hierarchy with rollup bars, collapse, filter keeps the
 path to a hit), **Board** (status columns, work items only, drag to move),

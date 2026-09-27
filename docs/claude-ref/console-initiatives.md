@@ -97,6 +97,11 @@ shows no sign of life (no end record, no heartbeat, no worker) for > 2 h. A
 stale record is counted apart ("Running (11 · 80 stale)") and carries its
 reason; it is never shown as running.
 
+**Running turns** show their stage in `detail` — `preparing context` until
+the engine process starts, then `engine running` (read from the tail of the
+task's event log). A finished turn's `result_summary` (reply preview) is shown
+under the same operator rule as the instruction.
+
 **Steps (`steps`).** A chat turn that fans out into Claude Code subagents
 carries them as steps — read from `<claude_home>/projects/<encoded workdir>/
 <session>/subagents/agent-*.jsonl` (first-line timestamp + mtime only) and
