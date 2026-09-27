@@ -1,0 +1,370 @@
+$schema: http://json-schema.org/draft-07/schema#
+title: OS-Skill Manifest Schema (ADR-0533)
+description: Canonical schema for OS-Skills manifest.yaml files
+type: object
+required:
+  - name
+  - version
+  - goal
+  - description
+  - triggers
+  - input_schema
+  - output_schema
+  - learning_signal
+  - boot_layer
+  - origin
+  - scope
+
+additionalProperties: false
+
+properties:
+  # ============ METADATA ============
+  name:
+    type: string
+    pattern: ^[a-z0-9._-]+$
+    minLength: 3
+    maxLength: 64
+    description: Unique skill identifier (e.g., "os.delegation_router")
+
+  version:
+    type: string
+    pattern: ^\d+\.\d+\.\d+(-[a-z0-9]+)?$
+    description: Semantic version (Major.Minor.Patch, optional pre-release)
+
+  goal:
+    type: string
+    minLength: 10
+    maxLength: 200
+    description: One-line goal of this skill
+
+  description:
+    type: string
+    minLength: 20
+    maxLength: 2000
+    description: Detailed description of what this skill does
+
+  author:
+    type: string
+    minLength: 3
+    maxLength: 100
+    description: Author name or team
+
+  license:
+    type: string
+    enum: [Apache-2.0, MIT, GPL-3.0, proprietary]
+    description: License under which this skill is released
+
+  created_at:
+    type: string
+    format: date-time
+    description: ISO 8601 creation timestamp
+
+  updated_at:
+    type: string
+    format: date-time
+    description: ISO 8601 last update timestamp
+
+  # ============ TRIGGERS ============
+  triggers:
+    type: array
+    minItems: 1
+    maxItems: 10
+    items:
+      type: object
+      required: [name, event_type, phase, condition, async_allowed, timeout_ms]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          pattern: ^[a-z_]+$
+          description: Trigger identifier (e.g., "before_delegation_decision")
+
+        event_type:
+          type: string
+          enum:
+            - decision_point
+            - system_event
+            - user_input
+            - timer
+            - webhook
+          description: Category of trigger
+
+        phase:
+          type: string
+          enum:
+            - pre_routing
+            - routing
+            - post_routing
+            - backpressure
+            - optimization
+            - post_execution
+            - user_feedback
+          description: Phase in the request lifecycle
+
+        condition:
+          type: string
+          description: Condition for triggering (e.g., "every_turn", "on_quota_exhausted")
+
+        async_allowed:
+          type: boolean
+          description: Can this trigger run asynchronously?
+
+        timeout_ms:
+          oneOf:
+            - type: integer
+              minimum: 1
+              maximum: 30000
+            - type: "null"
+          description: Hard timeout in milliseconds (null = fire-and-forget)
+
+  # ============ INPUT SCHEMA ============
+  input_schema:
+    type: object
+    description: JSON Schema for input validation
+    required: [type, properties]
+    properties:
+      type:
+        const: object
+      required:
+        type: array
+        items:
+          type: string
+      properties:
+        type: object
+        additionalProperties:
+          type: object
+      additionalProperties:
+        type: boolean
+        const: false
+
+  # ============ OUTPUT SCHEMA ============
+  output_schema:
+    type: object
+    description: JSON Schema for output validation
+    required: [type, properties]
+    properties:
+      type:
+        const: object
+      required:
+        type: array
+        items:
+          type: string
+      properties:
+        type: object
+        additionalProperties:
+          type: object
+      additionalProperties:
+        type: boolean
+        const: false
+
+  # ============ LEARNING SIGNAL ============
+  learning_signal:
+    type: object
+    required: [metrics, scoring_rule, feedback_sources, sanitization]
+    additionalProperties: false
+    properties:
+      metrics:
+        type: array
+        minItems: 1
+        items:
+          type: string
+          enum:
+            - latency_actual_vs_predicted
+            - cost_per_token
+            - quality_score_outcome
+            - error_rate
+            - throughput
+            - confidence_calibration
+        description: Metrics to track for this skill
+
+      scoring_rule:
+        type: string
+        pattern: ^(mde|rmse|mae|accuracy|f1|auc)\s*[<>=]+\s*[\d.]+(%)?$
+        description: Scoring rule (e.g., "mde < 5%", "accuracy >= 0.95")
+
+      feedback_sources:
+        type: array
+        minItems: 1
+        items:
+          type: object
+          required: [event_type, extract]
+          additionalProperties: false
+          properties:
+            event_type:
+              type: string
+              enum:
+                - turn_completed
+                - user_feedback
+                - audit_event
+                - metric_observed
+              description: Source event type
+
+            extract:
+              type: array
+              minItems: 1
+              items:
+                type: string
+              description: Fields to extract from this event
+
+            required_fields:
+              type: array
+              items:
+                type: string
+              description: Fields that must be present in extracted data
+
+      sanitization:
+        type: object
+        required: [disallow_fields, pii_patterns, fail_closed]
+        additionalProperties: false
+        properties:
+          disallow_fields:
+            type: array
+            items:
+              type: string
+            description: Fields that are never allowed in feedback (e.g., "prompt", "response")
+
+          pii_patterns:
+            type: array
+            items:
+              type: string
+              enum:
+                - email
+                - phone
+                - credit_card
+                - social_security
+                - api_key
+                - password
+            description: PII patterns to reject
+
+          fail_closed:
+            type: boolean
+            const: true
+            description: Drop feedback if any PII detected (must be true)
+
+  # ============ DEPENDENCIES ============
+  depends_on:
+    type: array
+    default: []
+    items:
+      type: object
+      required: [name, version]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          pattern: ^[a-z0-9._-]+$
+          description: Dependency skill name
+
+        version:
+          type: string
+          pattern: ^(>=?|<=?|~|\^)?[\d.]+(-[a-z0-9]+)?$
+          description: Version constraint (semver range)
+
+        required:
+          type: boolean
+          default: true
+          description: If false, skill degrades gracefully if unavailable
+
+        entry_point:
+          type: string
+          pattern: ^[a-z_][a-z0-9_]*$
+          description: Function entry point (optional, for module encapsulation)
+
+  # ============ BOOT LAYER & ORIGIN ============
+  boot_layer:
+    type: string
+    enum: [compliance, core, bundled, installed]
+    description: Load phase (ADR-0243 boot layer model)
+
+  origin:
+    type: string
+    enum: [builtin, vetted, community]
+    description: Provenance classification
+
+  priority:
+    type: integer
+    minimum: 0
+    maximum: 100
+    default: 50
+    description: Execution order (higher = earlier)
+
+  # ============ TENANT SCOPE ============
+  scope:
+    type: string
+    enum: [local_development, staging, production]
+    description: Target environment scope
+
+  tenant_override:
+    type: boolean
+    default: false
+    description: Can individual tenants use different version?
+
+  # ============ CANARY DEPLOYMENT (OPTIONAL) ============
+  canary:
+    type: object
+    default: null
+    additionalProperties: false
+    properties:
+      enabled:
+        type: boolean
+        description: Enable canary deployment for this version
+
+      traffic_percent:
+        type: integer
+        minimum: 1
+        maximum: 99
+        description: Percentage of traffic routed to this version
+
+      duration_days:
+        type: integer
+        minimum: 1
+        maximum: 90
+        description: Canary duration
+
+      success_criteria:
+        type: object
+        additionalProperties: false
+        properties:
+          score_improvement_percent:
+            type: number
+            minimum: 0
+            maximum: 100
+            description: Required score improvement
+
+          error_rate_max_percent:
+            type: number
+            minimum: 0
+            maximum: 100
+            description: Maximum acceptable error rate
+
+      auto_rollback_on_failure:
+        type: boolean
+        default: true
+        description: Automatically rollback on canary failure
+
+  # ============ STATE & PERSISTENCE (RUNTIME) ============
+  state:
+    type: object
+    default: {}
+    additionalProperties: false
+    properties:
+      runs_retention_days:
+        type: integer
+        minimum: 1
+        maximum: 3650
+        default: 90
+        description: How long to retain execution runs
+
+      feedback_log_max_size_mb:
+        type: integer
+        minimum: 10
+        maximum: 10000
+        default: 1000
+        description: Max feedback log size
+
+      grading_stats_epochs:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+        description: Number of grading epochs to track

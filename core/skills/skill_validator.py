@@ -1,107 +1,552 @@
-"""Skill manifest validation (13 checks per ADR-0532)."""
+"""
+Skill Manifest Validator (ADR-0533)
 
-import json
+Validates skill manifest.yaml files against the canonical JSON Schema.
+Implements 13 validation checks before skill installation.
+"""
+
 import re
-from pathlib import Path
-from typing import Dict, Any, List, Tuple
 import yaml
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Any, Optional, Set, Tuple
+import json
+from jsonschema import Draft7Validator, ValidationError, FormatChecker
 
 
-class ValidationReport:
-    def __init__(self, is_valid: bool, blockers: List[str] = None, warnings: List[str] = None):
-        self.is_valid = is_valid
-        self.blockers = blockers or []
-        self.warnings = warnings or []
+# Simple semver parsing (no external dependency required)
+class SemanticVersion:
+    """Simple semantic version parser."""
+
+    def __init__(self, version_str: str):
+        """Parse a semantic version string."""
+        match = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:-([a-z0-9]+))?$', version_str)
+        if not match:
+            raise ValueError(f"Invalid semver: {version_str}")
+
+        self.major = int(match.group(1))
+        self.minor = int(match.group(2))
+        self.patch = int(match.group(3))
+        self.prerelease = match.group(4)
+
+    def __str__(self):
+        s = f"{self.major}.{self.minor}.{self.patch}"
+        if self.prerelease:
+            s += f"-{self.prerelease}"
+        return s
+
+    def __lt__(self, other):
+        if not isinstance(other, SemanticVersion):
+            other = SemanticVersion(str(other))
+        if self.major != other.major:
+            return self.major < other.major
+        if self.minor != other.minor:
+            return self.minor < other.minor
+        if self.patch != other.patch:
+            return self.patch < other.patch
+        # Prerelease versions are less than release versions
+        if self.prerelease and not other.prerelease:
+            return True
+        if not self.prerelease and other.prerelease:
+            return False
+        if self.prerelease and other.prerelease:
+            return self.prerelease < other.prerelease
+        return False
+
+    def __le__(self, other):
+        return self < other or self == other
+
+    def __gt__(self, other):
+        if not isinstance(other, SemanticVersion):
+            other = SemanticVersion(str(other))
+        return other < self
+
+    def __ge__(self, other):
+        return self > other or self == other
+
+    def __eq__(self, other):
+        if not isinstance(other, SemanticVersion):
+            other = SemanticVersion(str(other))
+        return (self.major == other.major and
+                self.minor == other.minor and
+                self.patch == other.patch and
+                self.prerelease == other.prerelease)
 
 
-def validate_skill_manifest(manifest_path: Path) -> ValidationReport:
-    """Run 13 validation checks."""
-    blockers = []
-    warnings = []
+@dataclass
+class SkillValidationReport:
+    """Validation report for a skill manifest."""
+    is_valid: bool
+    skill_id: Optional[str] = None
+    version: Optional[str] = None
+    blockers: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    affected_paths: List[str] = field(default_factory=list)
 
-    # Load manifest
-    try:
-        with open(manifest_path) as f:
-            content = f.read()
-            if content.startswith('---'):
-                content = content.split('---', 2)[2]
-            manifest = yaml.safe_load(content)
-    except Exception as e:
-        return ValidationReport(False, [f"Failed to load manifest: {e}"])
+    def __str__(self):
+        status = "✅ VALID" if self.is_valid else "❌ INVALID"
+        result = f"{status} {self.skill_id}@{self.version}\n"
+        if self.blockers:
+            result += f"\nBlockers ({len(self.blockers)}):\n"
+            for blocker in self.blockers:
+                result += f"  ❌ {blocker}\n"
+        if self.warnings:
+            result += f"\nWarnings ({len(self.warnings)}):\n"
+            for warning in self.warnings:
+                result += f"  ⚠️  {warning}\n"
+        return result
 
-    if not manifest:
-        return ValidationReport(False, ["manifest.yaml is empty"])
 
-    # Check 1: Frontmatter complete
-    required_fields = ['name', 'version', 'goal', 'triggers', 'input_schema', 'output_schema', 'learning_signal']
-    missing = [f for f in required_fields if f not in manifest]
-    if missing:
-        blockers.append(f"Missing required fields: {missing}")
+# Allowed trigger event types and conditions
+ALLOWED_TRIGGER_TYPES = {
+    "decision_point",
+    "system_event",
+    "user_input",
+    "timer",
+    "webhook",
+}
 
-    # Check 2: Version format (semver)
-    version = manifest.get('version', '')
-    if not re.match(r'^\d+\.\d+\.\d+(-[a-z0-9]+)?$', version):
-        blockers.append(f"Invalid version format: {version} (expected semver)")
+ALLOWED_TRIGGER_CONDITIONS = {
+    "every_turn",
+    "on_quota_exhausted",
+    "on_latency_spike",
+    "on_error_rate_high",
+    "on_cost_spike",
+    "on_user_feedback",
+    "on_schedule",
+    "on_webhook",
+}
 
-    # Check 3: input_schema valid JSON Schema
-    try:
-        input_schema = manifest.get('input_schema', {})
-        if not isinstance(input_schema, dict):
-            blockers.append("input_schema must be object")
-        if 'type' not in input_schema or input_schema['type'] != 'object':
-            blockers.append("input_schema must be type: object")
-    except Exception as e:
-        blockers.append(f"input_schema invalid: {e}")
+ALLOWED_TRIGGER_PHASES = {
+    "pre_routing",
+    "routing",
+    "post_routing",
+    "backpressure",
+    "optimization",
+    "post_execution",
+    "user_feedback",
+}
 
-    # Check 4: output_schema valid JSON Schema
-    try:
-        output_schema = manifest.get('output_schema', {})
-        if not isinstance(output_schema, dict):
-            blockers.append("output_schema must be object")
-        if 'type' not in output_schema or output_schema['type'] != 'object':
-            blockers.append("output_schema must be type: object")
-    except Exception as e:
-        blockers.append(f"output_schema invalid: {e}")
+# Scoring rule patterns
+SCORING_RULE_PATTERN = re.compile(
+    r"^(mde|rmse|mae|accuracy|f1|auc)\s*([<>=]+)\s*([\d.]+)(%)?$",
+    re.IGNORECASE
+)
 
-    # Check 5: triggers defined
-    triggers = manifest.get('triggers', [])
-    if not triggers or not isinstance(triggers, list):
-        blockers.append("triggers must be non-empty list")
+# PII patterns to disallow
+REQUIRED_PII_PATTERNS = {
+    "email",
+    "phone",
+    "credit_card",
+    "social_security",
+    "api_key",
+    "password",
+}
 
-    # Check 6: PII patterns in learning_signal (ADR-0534, fail-closed)
-    learning = manifest.get('learning_signal', {})
-    sanitization = learning.get('sanitization', {})
-    disallow_fields = sanitization.get('disallow_fields', [])
-    # Must have BOTH prompt and response (use 'and', not 'or')
-    if 'prompt' not in disallow_fields and 'response' not in disallow_fields:
-        blockers.append("Recommended: add both 'prompt' and 'response' to disallow_fields (ADR-0534, fail-closed PII)")
+# Semver pattern
+SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(-[a-z0-9]+)?$")
 
-    # Check 7: No cycles (DAG check)
-    # For MVP, skip; Phase 3 implements full DAG validation
+# Skill name pattern
+SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9._-]+$")
 
-    # Check 8: Tenant isolation (no cross-tenant refs)
-    # For MVP, skip
 
-    # Check 9: No unknown top-level keys (strict schema)
-    allowed_keys = {
-        'name', 'version', 'goal', 'description', 'author', 'license',
-        'created_at', 'updated_at', 'triggers', 'input_schema', 'output_schema',
-        'learning_signal', 'depends_on', 'boot_layer', 'origin', 'priority',
-        'scope', 'tenant_override', 'canary', 'state', 'compatibility'
-    }
-    unknown = set(manifest.keys()) - allowed_keys
-    if unknown:
-        warnings.append(f"Unknown manifest keys: {unknown}")
+class SkillValidator:
+    """Validates skill manifests against ADR-0533 schema."""
 
-    # Check 10: State file atomicity (just warn)
-    # Verified at runtime
+    def __init__(self, schema_path: Optional[Path] = None):
+        """
+        Initialize validator with JSON Schema.
 
-    # Check 11: Phase gates exist (verified at runtime)
-    # Check 12: Anomaly detection (verified at runtime)
-    # Check 13: Hook wiring (verified at install time)
+        Args:
+            schema_path: Path to manifest_schema.yaml (defaults to bundled schema)
+        """
+        if schema_path is None:
+            schema_path = Path(__file__).parent / "manifest_schema.yaml"
 
-    return ValidationReport(
-        is_valid=len(blockers) == 0,
-        blockers=blockers,
-        warnings=warnings
-    )
+        if not schema_path.exists():
+            raise FileNotFoundError(f"Schema not found: {schema_path}")
+
+        with open(schema_path) as f:
+            self.schema = yaml.safe_load(f)
+
+        # Initialize JSON Schema validator
+        self.validator = Draft7Validator(
+            self.schema,
+            format_checker=FormatChecker()
+        )
+
+    def validate_manifest(
+        self,
+        manifest_path: Path,
+    ) -> SkillValidationReport:
+        """
+        Validate a skill manifest.yaml file.
+
+        Implements 13 validation checks (ADR-0533):
+        1. manifest.yaml is valid YAML
+        2. Frontmatter complete (name, version, goal, triggers, schemas, learning_signal)
+        3. version matches regex ^[0-9]+\\.[0-9]+\\.[0-9]+(\\-[a-z0-9]+)?$
+        4. input_schema is JSON Schema compliant
+        5. output_schema is JSON Schema compliant
+        6. triggers[].event_type in ALLOWED_TRIGGERS
+        7. learning_signal.feedback_sources has required PII patterns
+        8. depends_on: no cycles (DAG check)
+        9. depends_on version constraints are valid semver ranges
+        10. boot_layer in [core, compliance, bundled, installed]
+        11. origin in [builtin, vetted, community]
+        12. score_rule parseable (mde, rmse, mae, etc.)
+        13. No unknown top-level keys
+
+        Args:
+            manifest_path: Path to manifest.yaml
+
+        Returns:
+            SkillValidationReport with validation results
+        """
+        report = SkillValidationReport(is_valid=True)
+
+        # Check 1: manifest.yaml exists and is valid YAML
+        if not manifest_path.exists():
+            report.is_valid = False
+            report.blockers.append(f"Manifest not found: {manifest_path}")
+            return report
+
+        try:
+            with open(manifest_path) as f:
+                manifest = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            report.is_valid = False
+            report.blockers.append(f"Invalid YAML: {e}")
+            return report
+
+        if not isinstance(manifest, dict):
+            report.is_valid = False
+            report.blockers.append("Manifest must be a YAML object")
+            return report
+
+        report.skill_id = manifest.get("name")
+        report.version = manifest.get("version")
+
+        # Check 2: Frontmatter complete
+        required_fields = [
+            "name",
+            "version",
+            "goal",
+            "description",
+            "triggers",
+            "input_schema",
+            "output_schema",
+            "learning_signal",
+            "boot_layer",
+            "origin",
+            "scope",
+        ]
+        for field in required_fields:
+            if field not in manifest:
+                report.is_valid = False
+                report.blockers.append(f"Missing required field: {field}")
+
+        if not report.is_valid:
+            return report  # Stop here if critical fields missing
+
+        # Check 3: Version format (semver)
+        if not SEMVER_PATTERN.match(manifest.get("version", "")):
+            report.is_valid = False
+            report.blockers.append(
+                f"Invalid version format: {manifest.get('version')} "
+                "(must be Major.Minor.Patch, e.g., 1.2.3)"
+            )
+
+        # Check 4: input_schema is JSON Schema compliant
+        if not self._is_valid_json_schema(manifest.get("input_schema", {})):
+            report.is_valid = False
+            report.blockers.append("input_schema is not valid JSON Schema")
+
+        # Check 5: output_schema is JSON Schema compliant
+        if not self._is_valid_json_schema(manifest.get("output_schema", {})):
+            report.is_valid = False
+            report.blockers.append("output_schema is not valid JSON Schema")
+
+        # Check 6: Trigger event types
+        for i, trigger in enumerate(manifest.get("triggers", [])):
+            event_type = trigger.get("event_type")
+            if event_type not in ALLOWED_TRIGGER_TYPES:
+                report.blockers.append(
+                    f"triggers[{i}].event_type '{event_type}' not in "
+                    f"{sorted(ALLOWED_TRIGGER_TYPES)}"
+                )
+                report.is_valid = False
+
+            # Check condition is valid
+            condition = trigger.get("condition", "")
+            if condition not in ALLOWED_TRIGGER_CONDITIONS:
+                report.warnings.append(
+                    f"triggers[{i}].condition '{condition}' is not a recognized condition"
+                )
+
+            # Check phase
+            phase = trigger.get("phase")
+            if phase not in ALLOWED_TRIGGER_PHASES:
+                report.blockers.append(
+                    f"triggers[{i}].phase '{phase}' not in {sorted(ALLOWED_TRIGGER_PHASES)}"
+                )
+                report.is_valid = False
+
+        # Check 7: Learning signal has required PII patterns
+        learning_signal = manifest.get("learning_signal", {})
+        sanitization = learning_signal.get("sanitization", {})
+        pii_patterns = set(sanitization.get("pii_patterns", []))
+
+        missing_pii = REQUIRED_PII_PATTERNS - pii_patterns
+        if missing_pii:
+            report.warnings.append(
+                f"learning_signal.sanitization missing PII patterns: {sorted(missing_pii)}"
+            )
+
+        # Ensure fail_closed is true
+        if not sanitization.get("fail_closed"):
+            report.is_valid = False
+            report.blockers.append(
+                "learning_signal.sanitization.fail_closed must be true (fail-closed)"
+            )
+
+        # Check 8: Dependencies - no cycles (DAG check)
+        deps_graph = self._build_dependency_graph(manifest)
+        cycles = self._find_cycles(deps_graph)
+        if cycles:
+            report.is_valid = False
+            for cycle in cycles:
+                report.blockers.append(f"Dependency cycle detected: {' -> '.join(cycle)}")
+
+        # Check 9: Dependency version constraints are valid semver
+        for dep in manifest.get("depends_on", []):
+            version_constraint = dep.get("version", "")
+            if not self._is_valid_semver_range(version_constraint):
+                report.is_valid = False
+                report.blockers.append(
+                    f"Invalid semver range in depends_on: {dep.get('name')} "
+                    f"version={version_constraint}"
+                )
+
+        # Check 10: boot_layer in allowed values
+        boot_layer = manifest.get("boot_layer")
+        if boot_layer not in ["compliance", "core", "bundled", "installed"]:
+            report.is_valid = False
+            report.blockers.append(
+                f"boot_layer '{boot_layer}' not in "
+                "[compliance, core, bundled, installed]"
+            )
+
+        # Check 11: origin in allowed values
+        origin = manifest.get("origin")
+        if origin not in ["builtin", "vetted", "community"]:
+            report.is_valid = False
+            report.blockers.append(
+                f"origin '{origin}' not in [builtin, vetted, community]"
+            )
+
+        # Check 12: Score rule is parseable
+        score_rule = learning_signal.get("scoring_rule", "")
+        if not SCORING_RULE_PATTERN.match(score_rule):
+            report.is_valid = False
+            report.blockers.append(
+                f"Invalid scoring_rule: '{score_rule}' "
+                "(must match pattern: METRIC OPERATOR VALUE%, e.g., 'mde < 5%')"
+            )
+
+        # Check 13: No unknown top-level keys (schema drift detection)
+        allowed_keys = set(self.schema.get("properties", {}).keys())
+        unknown_keys = set(manifest.keys()) - allowed_keys
+        if unknown_keys:
+            report.warnings.append(
+                f"Unknown top-level keys (schema drift): {sorted(unknown_keys)}"
+            )
+
+        # JSON Schema validation (comprehensive)
+        validation_errors = list(self.validator.iter_errors(manifest))
+        if validation_errors:
+            report.is_valid = False
+            for error in validation_errors:
+                path = ".".join(str(p) for p in error.absolute_path) or "root"
+                report.blockers.append(f"{path}: {error.message}")
+
+        # Set affected paths
+        report.affected_paths = [str(manifest_path)]
+
+        return report
+
+    def validate_manifest_dict(self, manifest: Dict[str, Any]) -> SkillValidationReport:
+        """
+        Validate a manifest as a dictionary (already parsed).
+
+        Args:
+            manifest: Dictionary containing manifest data
+
+        Returns:
+            SkillValidationReport
+        """
+        report = SkillValidationReport(is_valid=True)
+        report.skill_id = manifest.get("name")
+        report.version = manifest.get("version")
+
+        # Comprehensive JSON Schema validation
+        validation_errors = list(self.validator.iter_errors(manifest))
+        if validation_errors:
+            report.is_valid = False
+            for error in validation_errors:
+                path = ".".join(str(p) for p in error.absolute_path) or "root"
+                report.blockers.append(f"{path}: {error.message}")
+            return report
+
+        # Additional semantic checks (not in JSON Schema)
+        # Check for PII patterns
+        learning_signal = manifest.get("learning_signal", {})
+        sanitization = learning_signal.get("sanitization", {})
+        pii_patterns = set(sanitization.get("pii_patterns", []))
+
+        missing_pii = REQUIRED_PII_PATTERNS - pii_patterns
+        if missing_pii:
+            report.warnings.append(
+                f"learning_signal.sanitization missing PII patterns: {sorted(missing_pii)}"
+            )
+
+        # DAG check for dependencies
+        deps_graph = self._build_dependency_graph(manifest)
+        cycles = self._find_cycles(deps_graph)
+        if cycles:
+            report.is_valid = False
+            for cycle in cycles:
+                report.blockers.append(f"Dependency cycle detected: {' -> '.join(cycle)}")
+
+        return report
+
+    @staticmethod
+    def _is_valid_json_schema(schema: Any) -> bool:
+        """Check if something is a valid JSON Schema."""
+        if not isinstance(schema, dict):
+            return False
+        # At minimum, should have 'type' and 'properties'
+        if "type" not in schema:
+            return False
+        return True
+
+    @staticmethod
+    def _is_valid_semver_range(version_spec: str) -> bool:
+        """
+        Validate a semver range (e.g., '>=1.0.0', '~1.2.3', '^1.0.0').
+
+        Args:
+            version_spec: Version specification string
+
+        Returns:
+            True if valid, False otherwise
+        """
+        if not version_spec:
+            return False
+
+        # Strip operator prefix
+        spec = re.sub(r"^(>=?|<=?|~|\^)", "", version_spec).strip()
+
+        # Check if what remains is valid semver
+        try:
+            SemanticVersion(spec)
+            return True
+        except (ValueError, AttributeError):
+            return False
+
+    @staticmethod
+    def _build_dependency_graph(manifest: Dict[str, Any]) -> Dict[str, Set[str]]:
+        """
+        Build a dependency graph from manifest.
+
+        Args:
+            manifest: Skill manifest
+
+        Returns:
+            Dict mapping skill name to set of dependencies
+        """
+        graph = {}
+        skill_name = manifest.get("name", "unknown")
+        graph[skill_name] = set()
+
+        for dep in manifest.get("depends_on", []):
+            graph[skill_name].add(dep.get("name", ""))
+
+        return graph
+
+    @staticmethod
+    def _find_cycles(graph: Dict[str, Set[str]]) -> List[List[str]]:
+        """
+        Find cycles in dependency graph using DFS.
+
+        Args:
+            graph: Dependency graph
+
+        Returns:
+            List of cycles (each cycle is a path)
+        """
+        cycles = []
+        visited = set()
+        rec_stack = set()
+        path = []
+
+        def dfs(node):
+            visited.add(node)
+            rec_stack.add(node)
+            path.append(node)
+
+            for neighbor in graph.get(node, set()):
+                if neighbor not in visited:
+                    dfs(neighbor)
+                elif neighbor in rec_stack:
+                    # Found a cycle
+                    cycle_start = path.index(neighbor)
+                    cycle = path[cycle_start:] + [neighbor]
+                    cycles.append(cycle)
+
+            path.pop()
+            rec_stack.remove(node)
+
+        for node in graph:
+            if node not in visited:
+                dfs(node)
+
+        return cycles
+
+
+# Singleton validator instance
+_validator: Optional[SkillValidator] = None
+
+
+def get_validator() -> SkillValidator:
+    """Get or create the singleton validator instance."""
+    global _validator
+    if _validator is None:
+        _validator = SkillValidator()
+    return _validator
+
+
+def validate_skill_manifest(manifest_path: Path) -> SkillValidationReport:
+    """
+    Convenience function to validate a manifest file.
+
+    Args:
+        manifest_path: Path to manifest.yaml
+
+    Returns:
+        SkillValidationReport
+    """
+    return get_validator().validate_manifest(manifest_path)
+
+
+def validate_skill_manifest_dict(manifest: Dict[str, Any]) -> SkillValidationReport:
+    """
+    Convenience function to validate a manifest dictionary.
+
+    Args:
+        manifest: Dictionary containing manifest data
+
+    Returns:
+        SkillValidationReport
+    """
+    return get_validator().validate_manifest_dict(manifest)
