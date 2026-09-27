@@ -5427,6 +5427,7 @@ def _call_claude_streaming_via_engine(
     # ADR-0133 CLAG M3 — chain integrity gate before OS-turn engine spawn (L22).
     clag_msg = _check_clag_spawn_or_fail(channel=channel, chat_key=chat_key)
     if clag_msg is not None:
+        _turn_refused("chain_integrity")
         return clag_msg
 
     # ADR-0141 Tier 3 — mandatory security-layer presence gate before spawn.
@@ -5445,6 +5446,7 @@ def _call_claude_streaming_via_engine(
         engine_id="claude_code",
     )
     if house_rules_msg is not None:
+        _turn_refused("house_rules")
         return house_rules_msg
 
     # NOTE: chat_turns_per_day is charged ONCE upstream in the engine-agnostic
@@ -6430,6 +6432,7 @@ def _call_codex_streaming_via_engine(
         chat_key=chat_key,
     )
     if _cx_gate_denial is not None:
+        _turn_refused("gate_denied")
         return _cx_gate_denial
 
     # ADR-0115 M1 — turn-level traceability state (EU AI Act Art. 12/13)
@@ -6619,6 +6622,7 @@ def _call_codex_streaming_via_engine(
     final_text = "".join(accumulated).strip()
 
     if error_text and not final_text:
+        _turn_refused("timeout" if timed_out else "engine_error")
         log(f"codex streaming error: {error_text[:200]}")
         _audit_event(
             "codex.stream_timeout" if timed_out else "codex.turn_error",
@@ -6632,6 +6636,7 @@ def _call_codex_streaming_via_engine(
                 "The request was cancelled because Codex took too long to respond.",
             )
         if proc is not None and rc < 0 and abs(rc) in (signal.SIGTERM, signal.SIGKILL):
+            _turn_refused("cancelled", cancelled=True)
             return ""
         return with_voice_override(
             f"Codex CLI call failed: {error_text[:200]}",
@@ -6716,6 +6721,7 @@ def _call_opencode_streaming_via_engine(
         chat_key=chat_key,
     )
     if _oc_gate_denial is not None:
+        _turn_refused("gate_denied")
         return _oc_gate_denial
 
     # ADR-0115 M1 — turn-level traceability state (EU AI Act Art. 12/13)
@@ -6916,6 +6922,7 @@ def _call_opencode_streaming_via_engine(
     final_text = "".join(accumulated).strip()
 
     if error_text and not final_text:
+        _turn_refused("timeout" if timed_out else "engine_error")
         log(f"opencode streaming error: {error_text[:200]}")
         # ADR-0067 M2.2 — error audit event
         _audit_event(
@@ -6930,6 +6937,7 @@ def _call_opencode_streaming_via_engine(
                 "The request was cancelled because OpenCode took too long to respond.",
             )
         if rc < 0 and abs(rc) in (signal.SIGTERM, signal.SIGKILL):
+            _turn_refused("cancelled", cancelled=True)
             return ""
         return with_voice_override(
             f"OpenCode API call failed: {error_text[:200]}",
@@ -7053,6 +7061,7 @@ def _run_pre_dispatch_gates(
         engine_id=str(engine_id), tenant_id=tenant_id,
     )
     if house_rules_msg is not None:
+        _turn_refused("house_rules")
         return house_rules_msg
 
     return None
@@ -7100,11 +7109,13 @@ def _call_hermes_streaming_via_engine(
         chat_key=chat_key,
     )
     if _gate_denial is not None:
+        _turn_refused("gate_denied")
         return _gate_denial
 
     # ADR-0133 CLAG M3 — chain integrity gate before Hermes engine spawn (L22).
     clag_msg = _check_clag_spawn_or_fail(channel=channel, chat_key=chat_key)
     if clag_msg is not None:
+        _turn_refused("chain_integrity")
         return clag_msg
 
     # ADR-0067 M2.2 — turn lifecycle audit event
@@ -7267,6 +7278,7 @@ def _call_hermes_streaming_via_engine(
         # independent of error_text, mirroring ADR-0159's "degradation is not
         # silent" principle.
         if (error_text or timed_out) and not final_text:
+            _turn_refused("timeout" if timed_out else "engine_error")
             if error_text:
                 log(f"hermes streaming error: {error_text[:200]}")
             else:
@@ -7376,11 +7388,11 @@ def _call_hermes_streaming_via_engine(
 # (`_TurnTask.report`); the highest retry wins.
 
 _TURN_TASK = threading.local()
-# Replies that mean "no turn happened" — refusals and adapter-side failures.
-_TURN_FAILED_PREFIXES = (
-    "[adapter]", "[budget exceeded", "⚠ Chat-turn quota enforcement unavailable",
-    "⚠ Free-tier daily chat limit reached",
-)
+# Safety net only: an adapter-internal failure string ("[adapter] engine spawn
+# failed …") that no branch reported. Every refusal/gate/engine-error branch
+# reports its own outcome via _turn_refused — a prefix list cannot know the
+# texts of branches it has never seen.
+_TURN_FAILED_PREFIXES = ("[adapter]",)
 _TURN_SUMMARY_CHARS = 280
 
 
@@ -7402,6 +7414,17 @@ class _TurnTask:
 
 def _current_turn_task() -> "_TurnTask | None":
     return getattr(_TURN_TASK, "cur", None)
+
+
+def _turn_refused(reason: str, retry_count: int = 0, *, cancelled: bool = False) -> None:
+    """Mark the current turn as not answered — a refusal, a gate denial, an
+    engine error — before the branch returns its explanatory text. Without
+    this the wrapper would record that text as a completed reply (and the
+    learning loop would count it a success)."""
+    turn = _current_turn_task()
+    if turn is not None:
+        turn.report(retry_count, {"event": "task.cancelled" if cancelled else "task.failed",
+                                  "exit_code": 1, "reason": reason})
 
 
 def _open_turn_task(*, prompt: str, channel: str, chat_key: str, profile: dict | None,
@@ -7448,6 +7471,8 @@ def _close_turn_task(turn: "_TurnTask | None", answer: "str | None",
         if event["event"] == "task.completed":
             event["summary"] = _summary(answer)
             status = "completed"
+        elif event["event"] == "task.cancelled":
+            status = "cancelled"
         turn.tm.record_event(turn.task_id, event)
     except Exception as e:  # noqa: BLE001
         log_debug(f"turn task close failed: {e}")
@@ -7517,6 +7542,7 @@ def _call_claude_streaming_impl(
     # refusal text directly; the caller writes it as the chat reply.
     allowed, refusal = _budget_preflight(chat_key, prompt)
     if not allowed:
+        _turn_refused("budget", _retry_count)
         return refusal or "[budget exceeded — request refused]"
 
     # Test-Hook (parallel to the Variante in call_claude): erlaubt es, den
@@ -7666,6 +7692,7 @@ def _call_claude_streaming_impl(
                     channel=channel, chat_key=str(chat_key),
                     details={"zone": _policy_zone, "reason": "no_healthy_engine"},
                 )
+                _turn_refused("engine_policy", _retry_count)
                 return (
                     f"[engine-policy] Request rejected: No allowed engine "
                     f"available for zone '{_policy_zone}'. "
@@ -7828,12 +7855,14 @@ def _call_claude_streaming_impl(
             from license.limits import LicenseLimitError as _ct_err2  # type: ignore
             from corvin_operator.forge.forge.paths import corvin_home as _ct_home2  # type: ignore
         except ImportError:
+            _turn_refused("quota_unavailable", _retry_count)
             return "⚠ Chat-turn quota enforcement unavailable — refusing turn (fail-closed)."
         try:
             _ct_inc2(_ct_home2(), channel=channel, chat_key=chat_key,
                      feature="chat_turns_per_day", counter_file="chat_quota.json")
         except Exception as _ct_exc2:  # noqa: BLE001
             if _ct_err2 is not None and isinstance(_ct_exc2, _ct_err2):
+                _turn_refused("quota", _retry_count)
                 return ("⚠ Free-tier daily chat limit reached (chat_turns_per_day). "
                         "Upgrade at corvin-labs.com/pricing.")
             # operational error already swallowed by increment_and_check (fail-open)
@@ -7908,6 +7937,7 @@ def _call_claude_streaming_impl(
                         )
                     except Exception:  # noqa: BLE001
                         pass
+                    _turn_refused("l34_block", _retry_count)
                     return (
                         "[ATO M5 — L34 Compliance Block]\n"
                         f"Data classification '{_m5_dc}' requires local Hermes engine "
@@ -7940,6 +7970,7 @@ def _call_claude_streaming_impl(
                         tenant_id=_tid_for_persona,
                     )
                     if _cop_gate_denial is not None:
+                        _turn_refused("gate_denied", _retry_count)
                         return _cop_gate_denial
                     _cop_model = (profile or {}).get("model") if profile else None
                     try:  # audit-first: write BEFORE the engine runs
@@ -8033,6 +8064,7 @@ def _call_claude_streaming_impl(
                     tenant_id=_tid_for_persona,
                 )
                 if _m7_hr is not None:
+                    _turn_refused("house_rules", _retry_count)
                     return _m7_hr
                 try:
                     _audit_event(
@@ -8153,6 +8185,7 @@ def _call_claude_streaming_impl(
         # ADR-0002 Phase 2.5 — legacy direct-spawn path deleted (14-day soak complete).
         # Engine layer is now the sole code path; CORVIN_USE_ENGINE_LAYER env var removed.
         if _ClaudeCodeEngine is None:
+            _turn_refused("engine_unavailable", _retry_count)
             return with_voice_override(
                 "[adapter] ClaudeCodeEngine not available — check claude CLI installation.",
                 "I can't find the Claude Code command line. Please check your installation.",

@@ -45,6 +45,12 @@ class QuotaExceededError(Exception):
     pass
 
 
+# Events that carry the engine process (``pid``) and its name (``engine``).
+# ``task.engine_started`` is how a task that was already running before its
+# engine existed (a bridge turn, ADR-2081) records the process.
+ENGINE_START_EVENTS = ("task.started", "task.engine_started")
+
+
 class TaskStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
@@ -405,12 +411,12 @@ class TaskManager:
         except Exception:  # noqa: BLE001 — stripped install without core.learning
             return
         try:
-            # The engine that ran the task is stamped on its ``task.started``
-            # event ("claude", "hermes", "acs-delegation", "tiered_delegation");
+            # The engine that ran the task is stamped on its engine-start event
+            # ("claude", "hermes", "acs-delegation", "tiered_delegation");
             # an explicit value on the closing event or in the input wins.
             started_engine = None
             for ev in task.output_events or []:
-                if ev.get("event") == "task.started" and ev.get("engine"):
+                if ev.get("event") in ENGINE_START_EVENTS and ev.get("engine"):
                     started_engine = str(ev["engine"])
             emit_task_outcome(
                 tenant_id=task.input.get("tenant_id"),
@@ -637,8 +643,12 @@ class TaskManager:
         return True
 
     def _last_started_pid(self, task_id: str) -> int | None:
-        """Return the pid from the task's most recent ``task.started`` event,
-        or None if none was recorded."""
+        """Return the pid from the task's most recent engine-start event
+        (``task.started`` or ``task.engine_started``), or None if none was
+        recorded. A bridge turn is ``task.started`` at pickup, before any
+        process exists, and logs its engine pid on ``task.engine_started``
+        (ADR-2081) — reading only the former left the boot reaper blind to a
+        live engine and reaped it as orphaned."""
         events_path = self._events_path(task_id)
         if not events_path.exists():
             return None
@@ -647,13 +657,13 @@ class TaskManager:
             with events_path.open("r", encoding="utf-8") as fh:
                 for line in fh:
                     s = line.strip()
-                    if not s or "task.started" not in s:
+                    if not s or not any(e in s for e in ENGINE_START_EVENTS):
                         continue
                     try:
                         ev = json.loads(s)
                     except json.JSONDecodeError:
                         continue
-                    if ev.get("event") == "task.started" and isinstance(ev.get("pid"), int):
+                    if ev.get("event") in ENGINE_START_EVENTS and isinstance(ev.get("pid"), int):
                         pid = ev["pid"]
         except OSError:
             return None

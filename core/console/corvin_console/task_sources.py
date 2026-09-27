@@ -178,16 +178,22 @@ _CHANNEL_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 def _operator_uids(channel: str) -> frozenset[str]:
     """Senders EXPLICITLY on a bridge's whitelist — the operator's own accounts.
 
-    Read from the settings file the bridge daemon itself uses
-    (``<corvin_home>/bridges/<channel>/settings.json``, ADR-0008 §8.3). Only an
-    explicit entry counts: an empty whitelist, or a chat opened to everyone
-    (``audience: all``), makes nobody the operator. Read uncached — the file
-    also holds the bridge token, which must not sit in a module-level cache."""
+    Read from the settings file the bridge daemon itself uses, resolved by
+    ``paths.resolve_bridge_settings_file`` (forge mirror — the one resolver;
+    ADR-0008 §8.3). Only an explicit entry counts: an empty whitelist, or a
+    chat opened to everyone (``audience: all``), makes nobody the operator.
+    Not cached across calls — the file also holds the bridge token, which must
+    not sit in a module-level cache; callers memoise per scan."""
     if not _CHANNEL_RE.match(channel or ""):
         return frozenset()
     try:
-        data = json.loads((_corvin_root() / "bridges" / channel / "settings.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        from forge import paths as _forge_paths  # noqa: PLC0415
+
+        settings = _forge_paths.resolve_bridge_settings_file(channel)
+        if settings is None:
+            return frozenset()
+        data = json.loads(settings.read_text(encoding="utf-8"))
+    except (ImportError, AttributeError, OSError, ValueError):
         return frozenset()
     wl = data.get("whitelist") if isinstance(data, dict) else None
     return frozenset(str(x) for x in wl if x) if isinstance(wl, list) else frozenset()
@@ -693,6 +699,7 @@ def _background_registry(home: Path, now: float) -> Iterator[dict]:
     qdir = _corvin_root() / "pending_notifications"
     if not qdir.is_dir():
         return
+    operators: dict[str, frozenset[str]] = {}   # one settings read per channel per scan
     for f in qdir.glob("*.json"):
         d = _read_json(f)
         if not isinstance(d, dict) or not d.get("id") or str(d.get("tenant_id") or "_default") != home.name:
@@ -704,7 +711,9 @@ def _background_registry(home: Path, now: float) -> Iterator[dict]:
         if status == "done" and d.get("ok") is False:
             status = "failed"
         channel = str(d.get("channel") or "")
-        owned = bool(d.get("sender")) and str(d.get("sender")) in _operator_uids(channel)
+        if channel not in operators:
+            operators[channel] = _operator_uids(channel)
+        owned = bool(d.get("sender")) and str(d.get("sender")) in operators[channel]
         title = _preview(d.get("label")) if owned and d.get("label") else \
             f"{channel.capitalize() or 'Background'} background task"
         yield _record(id=f"background:{d['id']}", type="background", subtype=channel or None,

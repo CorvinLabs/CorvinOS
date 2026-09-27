@@ -227,6 +227,31 @@ def test_chat_settings_patch_refuses_503_when_lock_is_wedged(tmp_path):
             assert settings_path.read_text(encoding="utf-8") == before
 
 
+def test_chat_settings_write_never_exposes_the_token_file(tmp_path):
+    """The file this route writes is the daemon's settings file — it holds the
+    bridge token. It must be 0o600 from its first byte, not chmod-ed after the
+    replace (at umask 022 that left it 0o644 for the window, or for good when
+    the chmod failed)."""
+    seen: list[int] = []
+    real_replace = os.replace
+
+    def spy(src, dst, *a, **kw):
+        if str(dst).endswith("settings.json"):   # other writers in the request path too
+            seen.append(os.stat(src).st_mode & 0o777)
+        return real_replace(src, dst, *a, **kw)
+
+    old_umask = os.umask(0o022)
+    try:
+        with _console(tmp_path) as client:
+            with _channel(tmp_path) as settings_path, patch("os.replace", spy):
+                res = client.patch("/v1/console/chat-settings/discord/555", json={"persona": "coder"})
+                assert res.status_code == 200, res.text
+                assert seen == [0o600], seen
+                assert settings_path.stat().st_mode & 0o777 == 0o600
+    finally:
+        os.umask(old_umask)
+
+
 def test_chat_settings_patch_succeeds_once_the_lock_is_free(tmp_path):
     with _console(tmp_path) as client:
         with _channel(tmp_path) as settings_path:

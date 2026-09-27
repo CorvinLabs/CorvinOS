@@ -28,7 +28,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -212,17 +211,19 @@ def _save_channel(channel: str, data: dict[str, Any]) -> None:
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
             tmp = p.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-            shutil.move(str(tmp), str(p))
+            # The file holds the bridge token (it is the daemon's settings
+            # file). Create the temp file 0o600 from its first byte and chmod
+            # BEFORE the replace: writing at the umask and chmod-ing after the
+            # move left the token world-readable for that window — and for
+            # good when the chmod failed.
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
-                st_mode = p.stat().st_mode & 0o777
-                if st_mode != 0o600:
-                    try:
-                        p.chmod(0o600)
-                    except OSError:
-                        pass
-            except OSError:
-                pass
+                os.fchmod(fd, 0o600)
+                os.write(fd, json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"))
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(tmp, p)
         finally:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
 

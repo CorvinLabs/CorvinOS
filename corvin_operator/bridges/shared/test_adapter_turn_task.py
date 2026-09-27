@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -158,7 +159,56 @@ def test_task_list_shows_stage_of_running_turn() -> None:
     _run(body)
 
 
+def test_engine_pid_keeps_a_live_turn_from_the_reaper() -> None:
+    """A bridge turn is task.started at pickup (no process yet) and logs its
+    engine pid on task.engine_started. The boot reaper must see that pid: a
+    live engine is not an orphan, a dead one is."""
+    def body(tmp: Path) -> None:
+        adapter = _setup(tmp, hang_first=True)
+        tm_mod = adapter._task_manager
+        # a real, live `claude` process (the fake binary hangs on its first call);
+        # the reaper also checks /proc/<pid>/cmdline for "claude" against pid reuse
+        engine = subprocess.Popen([str(tmp / "fake-bin" / "claude")], stdout=subprocess.DEVNULL,
+                                  env={**os.environ})
+        try:
+            alive_dir, dead_dir = tmp / "alive" / "tasks", tmp / "dead" / "tasks"
+            live = tm_mod.TaskManager(alive_dir)
+            tid = live.create_task(chat_key="c", instruction="x", check_quota=False)
+            live.record_event(tid, {"event": "task.started", "stage": "preparing"})
+            live.record_event(tid, {"event": "task.engine_started", "engine": "ClaudeCodeEngine", "pid": engine.pid})
+            assert live._last_started_pid(tid) == engine.pid
+            assert live.reap_stale_running() == [], "a live engine was reaped as orphaned"
+        finally:
+            engine.terminate()
+            engine.wait(timeout=10)
+        dead = tm_mod.TaskManager(dead_dir)
+        did = dead.create_task(chat_key="c", instruction="x", check_quota=False)
+        dead.record_event(did, {"event": "task.started", "stage": "preparing"})
+        dead.record_event(did, {"event": "task.engine_started", "engine": "ClaudeCodeEngine", "pid": 2 ** 22 + 7})
+        assert dead.reap_stale_running() == [did]
+        print("PASS: the reaper reads the engine pid from task.engine_started")
+    _run(body)
+
+
+def test_refusal_is_not_a_completed_turn() -> None:
+    """A refused turn (here: the budget gate) returns explanatory text; the
+    record must say failed, not completed with the refusal as its reply."""
+    def body(tmp: Path) -> None:
+        adapter = _setup(tmp, hang_first=False)
+        adapter._budget_preflight = lambda chat_key, prompt: (False, "⛔ Token budget for this chat is exhausted")
+        ans = adapter.call_claude_streaming("ship it", channel="discord", chat_key="tt5", msg_id="m-5")
+        assert ans.startswith("⛔"), ans
+        [rec] = _records(adapter._session_dir("discord", "tt5"))
+        assert rec["status"] == "failed", rec
+        assert not rec.get("result_summary"), rec
+        assert not (tmp / "calls").exists(), "the engine ran despite the refusal"
+        print("PASS: a budget refusal is recorded failed, not completed")
+    _run(body)
+
+
 if __name__ == "__main__":
     test_opened_at_pickup_and_closed_once()
     test_recovered_retry_ends_completed()
     test_task_list_shows_stage_of_running_turn()
+    test_engine_pid_keeps_a_live_turn_from_the_reaper()
+    test_refusal_is_not_a_completed_turn()

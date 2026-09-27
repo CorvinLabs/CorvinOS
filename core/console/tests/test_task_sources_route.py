@@ -182,7 +182,11 @@ class TaskSourcesRouteTest(unittest.TestCase):
             self.assertIn("no sign of life", by_id["forge:f-old"]["stale_reason"])
             # finished never contains an active/stale record and vice versa
             self.assertTrue(all(x["status"] in ("done", "failed", "cancelled") for x in b["finished"]))
-            self.assertEqual(b["finished"][0]["id"], "chat:d1")  # newest end first
+            # newest end first — among the seeded sources; host-level `commit` and
+            # `agent` read this checkout's real git log and Claude Code sessions,
+            # so a commit made seconds ago legitimately sorts above the fixtures
+            seeded = [x for x in b["finished"] if x["type"] not in ("commit", "agent")]
+            self.assertEqual(seeded[0]["id"], "chat:d1")
             types = {t["type"]: t for t in b["types"]}
             self.assertEqual(types["forge"]["stale"], 1)
             self.assertEqual(types["chat"]["active"], 1)
