@@ -278,7 +278,7 @@ class RollbackController:
                 ],
                 lockdown_until=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
                 reason="Audit chain hash verification failed - CRITICAL security incident",
-                lom="rollback_automation.py::_check_audit_chain_break:240",
+                lom="rollback_automation.py::_check_audit_chain_break:261",
             )
 
         return None
@@ -303,7 +303,7 @@ class RollbackController:
                 ],
                 lockdown_until=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
                 reason="Cross-tenant data leakage detected - CRITICAL compliance violation",
-                lom="rollback_automation.py::_check_tenant_isolation_violation:265",
+                lom="rollback_automation.py::_check_tenant_isolation_violation:286",
             )
 
         return None
@@ -328,7 +328,7 @@ class RollbackController:
                 ],
                 lockdown_until=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
                 reason="Security gate failure - requires security team review",
-                lom="rollback_automation.py::_check_security_failure:290",
+                lom="rollback_automation.py::_check_security_failure:311",
             )
 
         return None
@@ -352,7 +352,7 @@ class RollbackController:
                 actions_taken=[RollbackAction.HOLD_TRAFFIC, RollbackAction.LOCK_PHASE],
                 lockdown_until=(datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
                 reason=f"A/B test regression: CI [{ci_lower:.3f}, {ci_upper:.3f}] crosses zero",
-                lom="rollback_automation.py::_check_loss_signal_critical:315",
+                lom="rollback_automation.py::_check_loss_signal_critical:336",
             )
 
         return None
