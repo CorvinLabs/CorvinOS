@@ -353,11 +353,38 @@ class TestPresetConsistency(unittest.TestCase):
 
 
 class TestDefaultEngineHosts(unittest.TestCase):
-    """V-017: hermes and copilot must appear in DEFAULT_ENGINE_HOSTS."""
+    """V-017: copilot must appear in DEFAULT_ENGINE_HOSTS. ADR-2087: the
+    local-inference engine ids are gone and resolve to the "unknown" sentinel,
+    which a deny policy refuses."""
 
-    def test_hermes_maps_to_localhost(self):
-        self.assertIn("hermes", DEFAULT_ENGINE_HOSTS)
-        self.assertEqual(DEFAULT_ENGINE_HOSTS["hermes"], "localhost")
+    def test_removed_local_engines_not_mapped(self):
+        for eid in ("hermes", "opencode_ollama", "claude_code_local"):
+            self.assertNotIn(eid, DEFAULT_ENGINE_HOSTS)
+
+    def test_unmapped_engine_refused_by_deny_policy(self):
+        from egress_gate import check_engine_egress
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            cfg = home / "tenants" / "_default" / "global"
+            cfg.mkdir(parents=True)
+            (cfg / "tenant.corvin.yaml").write_text(
+                "spec:\n  egress:\n    enabled: true\n    default_action: deny\n"
+                "    allowed_hosts:\n      - localhost\n", encoding="utf-8")
+            for eid in ("hermes", "opencode_ollama", "claude_code_local"):
+                msg = check_engine_egress(eid, "_default", corvin_home=home)
+                self.assertIsNotNone(msg, eid)
+                self.assertIn("unknown", msg)
+            # Control: a mapped local engine passes the same policy.
+            self.assertIsNone(check_engine_egress("opencode_http", "_default",
+                                                  corvin_home=home))
+
+    def test_unknown_sentinel_denied_by_gate(self):
+        gate = EgressGate(policy=EgressPolicy(enabled=True, default_action="deny",
+                                              allowed_hosts=("localhost",)))
+        d = gate.validate(DEFAULT_ENGINE_HOSTS.get("hermes", "unknown"), engine_id="hermes")
+        self.assertFalse(d.allowed)
+        self.assertEqual(d.matched_rule, "default_deny")
 
     def test_copilot_maps_to_github(self):
         self.assertIn("copilot", DEFAULT_ENGINE_HOSTS)

@@ -17,22 +17,21 @@ from .state_contract import (
     SerializableTaskContext, SerializableTaskProgress, CheckpointState,
     InMemoryStateStore, serialize_for_spawn, deserialize_from_spawn
 )
-from .hermes_bridge import HermesBridge
+from .recovery_heuristics import diagnose_error, map_to_recovery_strategy
 from .event_broadcaster import EventBroadcaster, StatusLevel
 from .status_snapshot import StatusSnapshot, StatusPublisher, TaskState, get_publisher
 
 logger = logging.getLogger(__name__)
 
 class VibeEngine:
-    """Autonomous task executor (Phase 3: checkpoint/resume/Hermes/Event Bus)."""
+    """Autonomous task executor (Phase 3: checkpoint/resume/Event Bus)."""
 
-    def __init__(self, state_store=None, hermes_client=None, event_bus=None, publisher: Optional[StatusPublisher] = None):
+    def __init__(self, state_store=None, event_bus=None, publisher: Optional[StatusPublisher] = None):
         self.memory = MemoryPalace()
         self.skills = SkillsEngine()
         self.brain = Brain(self.memory, self.skills)
         self.context_enricher = ContextEnricher(self.memory, self.skills)
         self.state_store = state_store or InMemoryStateStore()
-        self.hermes = HermesBridge(hermes_client)
         self.broadcaster = EventBroadcaster(event_bus)
         self.publisher = publisher or get_publisher()
         self.status_listeners: List[Callable] = []  # Legacy support
@@ -221,18 +220,18 @@ class VibeEngine:
                     )
 
                 else:
-                    # Step 4b: Error recovery (Phase 3d: Hermes-Healing)
+                    # Step 4b: Error recovery. Deterministic heuristic diagnosis
+                    # (the Hermes-Healing bridge was removed per ADR-2087).
                     error = Exception(skill_result.error_trace or "Unknown error")
 
-                    # Try Hermes diagnosis first, fall back to heuristics
-                    hermes_response = await self.hermes.diagnose(error, context.to_dict())
+                    diagnosis = diagnose_error(error, context.to_dict())
                     recovery = await self.brain.recover(task, error, context.to_dict())
 
-                    # Update recovery strategy if Hermes provided better diagnosis
-                    if hermes_response and hermes_response.confidence > 0.6:
-                        recovery.strategy = self.hermes.map_to_recovery_strategy(hermes_response)
-                        recovery.reason = hermes_response.reason
-                        logger.info(f"Using Hermes diagnosis: {recovery.strategy} ({hermes_response.confidence:.1%})")
+                    # Use the heuristic when it is confident enough
+                    if diagnosis and diagnosis.confidence > 0.6:
+                        recovery.strategy = map_to_recovery_strategy(diagnosis)
+                        recovery.reason = diagnosis.reason
+                        logger.info(f"Using heuristic diagnosis: {recovery.strategy} ({diagnosis.confidence:.1%})")
 
                     await self._broadcast_status(
                         "warning",

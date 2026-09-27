@@ -34,7 +34,7 @@ from .state_contract import (
     SerializableTaskContext, SerializableTaskProgress, CheckpointState,
     StateStore, InMemoryStateStore, serialize_for_spawn, deserialize_from_spawn
 )
-from .hermes_bridge import HermesBridge, HermesResponse, HermesRequest
+from .recovery_heuristics import RecoveryDiagnosis, diagnose_error, map_to_recovery_strategy
 from .event_broadcaster import EventBroadcaster, StatusLevel, ConsoleNotifier, DiscordNotifier
 
 __all__ = [

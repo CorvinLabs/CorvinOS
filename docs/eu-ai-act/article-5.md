@@ -177,7 +177,7 @@ CorvinOS does not perform explicit emotion detection. However:
    prosodic features, sentiment, or emotional valence. The output is plain text.
    The model (Whisper-based) is a speech recognition model, not an emotion classifier.
 
-2. **LLM responses:** The underlying LLM (Claude, Hermes, etc.) may infer emotional
+2. **LLM responses:** The underlying LLM (Claude, or whichever engine the operator configured) may infer emotional
    context from message text as part of natural language understanding. This is general
    NLU, not an emotion classification system deployed for workplace monitoring purposes.
 

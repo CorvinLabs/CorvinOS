@@ -81,9 +81,9 @@ Processing covers:
 - **Wahrscheinlichkeit:** Hoch ohne EU_PRODUCTION-Preset.
 - **Schadenshöhe:** Hoch (Bußgelder bis 4 % Jahresumsatz).
 - **Gegenmaßnahmen:**
-  - **L34** matrix `[local]` only für CONFIDENTIAL / SECRET (strukturell).
+  - **L34** Default-Matrix: CONFIDENTIAL nur `local`/`eu_cloud`, SECRET nur `local` + `network_egress: none` (strukturell). Seit ADR-2087 ist keine lokale Inferenz mehr gebündelt: CONFIDENTIAL erreicht nur `opencode_http` oder eine vom Tenant deklarierte Engine; SECRET hat keine gebündelte Engine und wird blockiert, sofern der Tenant keine eigene Engine deklariert.
   - **L35** egress lockdown mit `forbid_engines` + `egress.forbidden_hosts`.
-  - **EU_PRODUCTION-Preset** (`tenant.corvin.eu-production-ollama.yaml`).
+  - **EU_PRODUCTION-Preset** (`tenant.corvin.eu-production-http.yaml`).
   - **Operator-Perimeter-Firewall** (iptables / Cloud-SG).
 - **Restrisiko:** Niedrig (drei strukturelle Verteidigungsschichten).
 
@@ -187,7 +187,7 @@ CRITICAL `audit.integrity_violation` aus.
 |---|---|---|
 | Keine in EU_PRODUCTION-Mode | — | L35 verhindert Outbound |
 | Optional: Mistral (Frankreich) | EU | Kein Drittland; DPA mit Mistral SAS |
-| Optional: Eigene Ollama-Instanz | On-Prem | Kein Drittland |
+| Optional: Selbst gehosteter OpenCode-HTTP-Server / vom Tenant deklarierte Engine | On-Prem | Kein Drittland |
 
 **Im EU_PRODUCTION-Modus findet keine Datenübermittlung in Drittländer
 statt.** Verifiziert via L35 `egress.blocked` Audit-Events bei

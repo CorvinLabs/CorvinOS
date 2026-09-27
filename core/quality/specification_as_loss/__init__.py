@@ -15,7 +15,6 @@ from .quality_orchestrator import (
 )
 from .llm_bridge import (
     LLMBridge,
-    OllamaRedirectHandler,
     QualityOrchestratorWithLLM,
 )
 
@@ -29,6 +28,5 @@ __all__ = [
     "SpecConvergenceOptimizer",
     "QUALITY_PROFILES",
     "LLMBridge",
-    "OllamaRedirectHandler",
     "QualityOrchestratorWithLLM",
 ]

@@ -51,7 +51,7 @@ class TestCheckL34GuardNone(unittest.TestCase):
 
     def test_no_guard_returns_none(self):
         with patch.object(spawn_gates, "_load_l34_guard", return_value=None):
-            result = spawn_gates.check_l34("hermes", "_default", classification="internal")
+            result = spawn_gates.check_l34("codex_cli", "_default", classification="internal")
         self.assertIsNone(result)
 
     def test_empty_engine_id_returns_none(self):
@@ -67,7 +67,7 @@ class TestCheckL34ExplicitClassification(unittest.TestCase):
         guard = _mock_guard(_allowed_decision())
         with patch.object(spawn_gates, "_load_l34_guard", return_value=guard):
             result = spawn_gates.check_l34(
-                "hermes", "_default", classification="internal",
+                "codex_cli", "_default", classification="internal",
                 channel="discord", chat_key="c1",
             )
         self.assertIsNone(result)
@@ -86,7 +86,7 @@ class TestCheckL34ExplicitClassification(unittest.TestCase):
     def test_classification_string_passed_to_validate(self):
         guard = _mock_guard(_allowed_decision())
         with patch.object(spawn_gates, "_load_l34_guard", return_value=guard):
-            spawn_gates.check_l34("hermes", "_default", classification="public")
+            spawn_gates.check_l34("codex_cli", "_default", classification="public")
         call_kwargs = guard.validate.call_args.kwargs
         self.assertEqual(call_kwargs["classification"], "public")
 
@@ -97,7 +97,7 @@ class TestCheckL34ExplicitClassification(unittest.TestCase):
         guard = MagicMock()
         guard.validate.side_effect = RuntimeError("unexpected")
         with patch.object(spawn_gates, "_load_l34_guard", return_value=guard):
-            result = spawn_gates.check_l34("hermes", "_default", classification="internal")
+            result = spawn_gates.check_l34("codex_cli", "_default", classification="internal")
         self.assertIsNotNone(result)
         self.assertIn("Spawn rejected", result)
         self.assertIn("fail-closed", result.lower())
@@ -113,7 +113,7 @@ class TestCheckL34PromptClassification(unittest.TestCase):
         with patch.object(spawn_gates, "_load_l34_guard", return_value=guard):
             with patch("data_classification.classify_task", return_value=cls_val):
                 result = spawn_gates.check_l34(
-                    "hermes", "_default",
+                    "codex_cli", "_default",
                     prompt="summarize this internal doc", persona="assistant",
                 )
         self.assertIsNone(result)
@@ -126,43 +126,58 @@ class TestCheckL34PromptClassification(unittest.TestCase):
         guard = _mock_guard(_allowed_decision())
         with patch.object(spawn_gates, "_load_l34_guard", return_value=guard):
             with patch("data_classification.classify_task", side_effect=ImportError("no module")):
-                result = spawn_gates.check_l34("hermes", "_default", prompt="something")
+                result = spawn_gates.check_l34("codex_cli", "_default", prompt="something")
         self.assertIsNotNone(result)
         self.assertIn("Spawn rejected", result)
 
 
-class TestCheckL34CCLocalMode(unittest.TestCase):
-    """cc_local_mode=True remaps claude_code → claude_code_local."""
+class TestCheckL34NoCCLocalMode(unittest.TestCase):
+    """ADR-2087 removed the ADR-0126 ``cc_local_mode`` remap entirely.
 
-    def test_remaps_engine_id(self):
+    claude_code is validated as claude_code — never as the removed local id —
+    and a stale caller cannot request the mode: the keyword is gone, so the
+    call raises (the console/adapter wrappers turn that into a refusal).
+    """
+
+    def test_cc_local_mode_keyword_is_rejected(self):
+        guard = _mock_guard(_allowed_decision())
+        with patch.object(spawn_gates, "_load_l34_guard", return_value=guard):
+            with self.assertRaises(TypeError):
+                spawn_gates.check_l34(
+                    "claude_code", "_default",
+                    classification="internal", cc_local_mode=True,
+                )
+        guard.validate.assert_not_called()
+
+    def test_claude_code_validated_as_itself(self):
         guard = _mock_guard(_allowed_decision())
         with patch.object(spawn_gates, "_load_l34_guard", return_value=guard):
             spawn_gates.check_l34(
-                "claude_code", "_default",
-                classification="internal", cc_local_mode=True,
-            )
-        call_kwargs = guard.validate.call_args.kwargs
-        self.assertEqual(call_kwargs["engine_id"], "claude_code_local")
-
-    def test_no_remap_without_flag(self):
-        guard = _mock_guard(_allowed_decision())
-        with patch.object(spawn_gates, "_load_l34_guard", return_value=guard):
-            spawn_gates.check_l34(
-                "claude_code", "_default",
-                classification="internal", cc_local_mode=False,
+                "claude_code", "_default", classification="internal",
             )
         call_kwargs = guard.validate.call_args.kwargs
         self.assertEqual(call_kwargs["engine_id"], "claude_code")
 
-    def test_non_cc_engine_not_remapped(self):
-        guard = _mock_guard(_allowed_decision())
-        with patch.object(spawn_gates, "_load_l34_guard", return_value=guard):
-            spawn_gates.check_l34(
-                "hermes", "_default",
-                classification="internal", cc_local_mode=True,
-            )
-        call_kwargs = guard.validate.call_args.kwargs
-        self.assertEqual(call_kwargs["engine_id"], "hermes")
+    def test_stale_env_does_not_relax_the_console_gate(self):
+        # A leftover CORVIN_CC_LOCAL_MODE=1 must not change which engine L34
+        # judges: the console wrapper passes claude_code through unchanged, so
+        # a claude_code denial (e.g. SECRET data) still denies.
+        import os
+        console_dir = _SHARED.parents[2] / "core" / "console"
+        if str(console_dir) not in sys.path:
+            sys.path.insert(0, str(console_dir))
+        from corvin_console import _spawn_gates as console_gates  # type: ignore
+        guard = _mock_guard(_denied_decision("secret_egress"))
+        with patch.dict(os.environ, {"CORVIN_CC_LOCAL_MODE": "1"}):
+            with patch.object(spawn_gates, "_load_l34_guard", return_value=guard):
+                result = console_gates._check_l34_l35_or_fail(
+                    engine_id="claude_code", tenant_id="_default",
+                    prompt=None, persona=None, channel="web", chat_key="c",
+                    classification="secret",
+                )
+        self.assertIsNotNone(result)
+        self.assertIn("data-flow", result)
+        self.assertEqual(guard.validate.call_args.kwargs["engine_id"], "claude_code")
 
 
 # ── check_l35 ────────────────────────────────────────────────────────────────
@@ -176,16 +191,16 @@ class TestCheckL35(unittest.TestCase):
 
     def test_no_gate_returns_none(self):
         with patch.object(spawn_gates, "_load_l35_gate", return_value=None):
-            result = spawn_gates.check_l35("hermes", "_default")
+            result = spawn_gates.check_l35("codex_cli", "_default")
         self.assertIsNone(result)
 
     def test_allowed_returns_none(self):
         gate = MagicMock()
         gate.validate.return_value = _allowed_decision()
         with patch.object(spawn_gates, "_load_l35_gate", return_value=gate):
-            with patch("egress_gate.DEFAULT_ENGINE_HOSTS", {"hermes": "localhost"}):
+            with patch("egress_gate.DEFAULT_ENGINE_HOSTS", {"codex_cli": "api.openai.com"}):
                 result = spawn_gates.check_l35(
-                    "hermes", "_default",
+                    "codex_cli", "_default",
                     channel="discord", chat_key="c1",
                 )
         self.assertIsNone(result)
@@ -209,7 +224,7 @@ class TestCheckL35(unittest.TestCase):
         gate.validate.side_effect = RuntimeError("boom")
         with patch.object(spawn_gates, "_load_l35_gate", return_value=gate):
             with patch("egress_gate.DEFAULT_ENGINE_HOSTS", {}):
-                result = spawn_gates.check_l35("hermes", "_default")
+                result = spawn_gates.check_l35("codex_cli", "_default")
         self.assertIsNotNone(result)
         self.assertIn("egress", result.lower())
 
@@ -217,9 +232,9 @@ class TestCheckL35(unittest.TestCase):
         gate = MagicMock()
         gate.validate.return_value = _allowed_decision()
         with patch.object(spawn_gates, "_load_l35_gate", return_value=gate):
-            with patch("egress_gate.DEFAULT_ENGINE_HOSTS", {"hermes": "localhost"}):
+            with patch("egress_gate.DEFAULT_ENGINE_HOSTS", {"codex_cli": "api.openai.com"}):
                 spawn_gates.check_l35(
-                    "hermes", "_default", persona="orchestrator",
+                    "codex_cli", "_default", persona="orchestrator",
                     channel="discord", chat_key="c2",
                 )
         call_kwargs = gate.validate.call_args.kwargs

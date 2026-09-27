@@ -58,12 +58,13 @@ def _make_gate(cfg: dict[str, Any]) -> EgressGate:
     return gate
 
 
-# EU_PRODUCTION-style config (mirrors the shipped ollama preset).
-EU_PRODUCTION_OLLAMA_CFG: dict[str, Any] = {
+# EU_PRODUCTION-style config with a local engine (the Ollama preset was removed
+# per ADR-2087; opencode_http is the remaining bundled local engine id).
+EU_PRODUCTION_LOCAL_CFG: dict[str, Any] = {
     "spec": {
         "data_residency": {
             "zone": "EU",
-            "allowed_engines": ["opencode_ollama"],
+            "allowed_engines": ["opencode_http"],
             "forbid_engines": ["claude_code", "codex_cli", "opencode"],
         },
         "data_classification": {
@@ -75,10 +76,10 @@ EU_PRODUCTION_OLLAMA_CFG: dict[str, Any] = {
             },
             "engine_compliance": [
                 {
-                    "engine_id": "opencode_ollama",
+                    "engine_id": "opencode_http",
                     "locality": "local",
                     "network_egress": "local",
-                    "notes": "qwen3:8b via Ollama on localhost:11434",
+                    "notes": "self-hosted OpenCode HTTP on localhost",
                 },
             ],
         },
@@ -135,8 +136,7 @@ EU_PRODUCTION_HTTP_CFG: dict[str, Any] = {
 class TestDefaultEngineHosts(unittest.TestCase):
 
     def test_known_engines_present(self):
-        for eid in ("claude_code", "codex_cli", "opencode",
-                    "opencode_ollama", "opencode_http"):
+        for eid in ("claude_code", "codex_cli", "opencode", "opencode_http"):
             self.assertIn(eid, DEFAULT_ENGINE_HOSTS,
                           f"{eid} missing from DEFAULT_ENGINE_HOSTS")
 
@@ -145,8 +145,12 @@ class TestDefaultEngineHosts(unittest.TestCase):
         self.assertEqual(DEFAULT_ENGINE_HOSTS["codex_cli"], "api.openai.com")
 
     def test_local_engines_map_to_localhost(self):
-        self.assertEqual(DEFAULT_ENGINE_HOSTS["opencode_ollama"], "localhost")
         self.assertEqual(DEFAULT_ENGINE_HOSTS["opencode_http"], "localhost")
+
+    def test_removed_local_engines_unmapped(self):
+        # ADR-2087: no host mapping → "unknown" at every L35 call site.
+        for eid in ("hermes", "opencode_ollama", "claude_code_local"):
+            self.assertNotIn(eid, DEFAULT_ENGINE_HOSTS)
 
     def test_unpinned_opencode_uses_unknown_sentinel(self):
         # "unknown" must not silently pass a deny-default policy.
@@ -160,12 +164,12 @@ class TestDefaultEngineHosts(unittest.TestCase):
 class TestEUProductionL34(unittest.TestCase):
 
     def setUp(self):
-        self.guard = _make_guard(EU_PRODUCTION_OLLAMA_CFG)
+        self.guard = _make_guard(EU_PRODUCTION_LOCAL_CFG)
 
-    def test_ollama_allowed_for_internal(self):
+    def test_local_engine_allowed_for_internal(self):
         d = self.guard.validate(
             classification=DataClassification.INTERNAL,
-            engine_id="opencode_ollama",
+            engine_id="opencode_http",
             channel="discord",
             chat_key="test:1",
         )
@@ -188,11 +192,11 @@ class TestEUProductionL34(unittest.TestCase):
         )
         self.assertFalse(d.allowed)
 
-    def test_secret_blocked_for_ollama(self):
-        # opencode_ollama has network_egress=local (not "none") — SECRET requires "none".
+    def test_secret_blocked_for_local_egress_engine(self):
+        # opencode_http has network_egress=local (not "none") — SECRET requires "none".
         d = self.guard.validate(
             classification=DataClassification.SECRET,
-            engine_id="opencode_ollama",
+            engine_id="opencode_http",
         )
         self.assertFalse(d.allowed)
         self.assertEqual(d.matched_rule, "secret_egress")
@@ -205,10 +209,10 @@ class TestEUProductionL34(unittest.TestCase):
 class TestEUProductionL35(unittest.TestCase):
 
     def setUp(self):
-        self.gate = _make_gate(EU_PRODUCTION_OLLAMA_CFG)
+        self.gate = _make_gate(EU_PRODUCTION_LOCAL_CFG)
 
     def test_localhost_allowed(self):
-        d = self.gate.validate("localhost", engine_id="opencode_ollama")
+        d = self.gate.validate("localhost", engine_id="opencode_http")
         self.assertTrue(d.allowed)
         self.assertEqual(d.matched_rule, "allowed_explicit")
 
@@ -242,7 +246,7 @@ class TestEUProductionL35(unittest.TestCase):
         self.assertEqual(details["host"], "api.anthropic.com")
 
     def test_audit_emitted_on_allow(self):
-        self.gate.validate("localhost", engine_id="opencode_ollama",
+        self.gate.validate("localhost", engine_id="opencode_http",
                            channel="discord", chat_key="test:3")
         events = self.gate._events  # type: ignore[attr-defined]
         self.assertEqual(len(events), 1)
@@ -290,13 +294,20 @@ class TestCombinedGate(unittest.TestCase):
 
         return True, None
 
-    def test_ollama_passes_both_gates(self):
+    def test_local_engine_passes_both_gates(self):
         allowed, reason = self._run_gates(
-            "opencode_ollama",
+            "opencode_http",
             "refactor this function",
-            EU_PRODUCTION_OLLAMA_CFG,
+            EU_PRODUCTION_LOCAL_CFG,
         )
         self.assertTrue(allowed, reason)
+
+    def test_removed_hermes_id_refused(self):
+        # ADR-2087: "hermes" is neither in the L34 registry nor the L35 host map.
+        allowed, reason = self._run_gates("hermes", "refactor this function",
+                                          EU_PRODUCTION_LOCAL_CFG)
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "L34:unknown_engine")
 
     def test_claude_code_blocked_by_l34_first(self):
         # claude_code has us_cloud locality → L34 matrix blocks it before
@@ -304,7 +315,7 @@ class TestCombinedGate(unittest.TestCase):
         allowed, reason = self._run_gates(
             "claude_code",
             "what is 2+2",  # PUBLIC-ish but matrix override blocks all
-            EU_PRODUCTION_OLLAMA_CFG,
+            EU_PRODUCTION_LOCAL_CFG,
         )
         self.assertFalse(allowed)
         self.assertTrue(reason.startswith("L34:"), reason)
@@ -351,12 +362,12 @@ class TestCombinedGate(unittest.TestCase):
         self.assertTrue(allowed, reason)
 
     def test_secret_task_blocked_even_for_local_engine(self):
-        # opencode_ollama can handle INTERNAL but not SECRET (egress=local,
+        # opencode_http can handle INTERNAL but not SECRET (egress=local,
         # not "none") — L34 catches this.
         allowed, reason = self._run_gates(
-            "opencode_ollama",
+            "opencode_http",
             "password = hunter2",  # triggers SECRET classifier
-            EU_PRODUCTION_OLLAMA_CFG,
+            EU_PRODUCTION_LOCAL_CFG,
         )
         self.assertFalse(allowed)
         self.assertIn("L34", reason)

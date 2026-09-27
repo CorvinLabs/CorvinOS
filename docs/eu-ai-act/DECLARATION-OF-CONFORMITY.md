@@ -98,7 +98,7 @@ Formal risk classification with reclassification conditions is in
 
 ### 4c. Known limitations and residual risks
 
-1. **GPAI provider dependency:** Claude, Hermes, OpenAI, Copilot are third-party models. CorvinOS cannot inspect model internals. Art. 26(4) compliance (upstream policy check per engine) is an operator responsibility documented in `gpai-deployer-obligations.md`.
+1. **GPAI provider dependency:** Claude, OpenAI, Copilot (and any operator-defined engine) are third-party models. CorvinOS cannot inspect model internals. Art. 26(4) compliance (upstream policy check per engine) is an operator responsibility documented in `gpai-deployer-obligations.md`.
 
 2. **Workplace voice deployment:** If CorvinOS is deployed in a workplace with voice input, the operator must independently assess whether the deployment constitutes emotion recognition under Art. 5(1)(f). CorvinOS does not perform emotion classification; the assessment obligation is the operator's.
 

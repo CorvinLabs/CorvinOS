@@ -28,7 +28,7 @@ The declaration gate enforces that this distinction is acknowledged before going
 ### How it works
 
 At every boot (`bridge.sh doctor`), the self-test calls `check_operator_declaration()`.
-For `eu_production` and `eu_production_ollama` profiles, this checks that the tenant YAML
+For the `eu_production` profile (and the legacy `eu_production_ollama` value, still treated as EU production), this checks that the tenant YAML
 contains a complete `spec.operator_declaration` block.
 
 Missing or incomplete declaration → CRITICAL self-test failure → container unhealthy.
@@ -37,7 +37,7 @@ Missing or incomplete declaration → CRITICAL self-test failure → container u
 
 ```yaml
 spec:
-  deployment_profile: eu_production   # or eu_production_ollama
+  deployment_profile: eu_production
 
   operator_declaration:
     version: "1.0"
@@ -198,7 +198,7 @@ The DPIA template is at: `docs/compliance/DPIA-TEMPLATE.md`
     [ ] declared_by: <DPO name>
     [ ] permitted_use: <use-case description>
 [ ] spec.compliance_manifest.min_version: "1.0.0" set
-[ ] spec.egress.enabled: true with eu_production_ollama or eu_production_http preset
+[ ] spec.egress.enabled: true with the eu_production_http preset
 [ ] spec.audit.encryption_at_rest.enabled: true with valid recipient key
 [ ] spec.audit.retention_years: 7 (or operator-required value)
 [ ] corvin-incident-scan.timer installed and enabled

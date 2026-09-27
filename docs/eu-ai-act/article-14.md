@@ -36,7 +36,7 @@ authorized for the tenant's declared `data_residency`.
 spec:
   data_residency: eu          # "eu" | "us" | "local"
   allowed_engines:
-    - opencode_ollama          # local Ollama instance
+    - opencode_http            # self-hosted OpenCode HTTP server on the tenant LAN
     - claude_code              # only if data_residency permits
   forbid_engines:
     - codex_cli                # explicitly forbidden
@@ -61,20 +61,25 @@ whose jurisdiction or network properties don't match.
 
 ### Classification levels
 
-Data-residency restriction is **opt-in**. The shipped default matrix is
-permissive (PUBLIC/INTERNAL/CONFIDENTIAL allow any locality incl. `us_cloud`)
-so the system runs frictionless on its configured cloud engine; `SECRET` is the
-only tier locked down by default. Operators who must keep personal or
-business-sensitive data in the EU **tighten the matrix** (per-tier override, or
-the `tenant.corvin.eu-production-ollama.yaml` preset). The columns below show
-the **recommended residency configuration** under that opt-in.
+Enforcement starts the moment a `tenant.corvin.yaml` exists (no tenant config
+on disk → no L34 enforcement). A tenant config without its own `matrix` gets the
+**restrictive default matrix** (`DEFAULT_MATRIX` in `data_classification.py`):
+residency is the default, and WIDENING it (e.g. `CONFIDENTIAL: [local, eu_cloud,
+us_cloud]`) is the operator's explicit, audited choice in `tenant.corvin.yaml`.
 
-| Level | Meaning | Default (shipped) | Recommended residency config (opt-in) |
-|---|---|---|---|
-| `PUBLIC` (0) | No sensitivity | Any engine | Any engine |
-| `INTERNAL` (1) | Business-sensitive; should stay in EU | Any locality | `local` or `eu_cloud` locality |
-| `CONFIDENTIAL` (2) | Personally identifiable; should stay on-premises | Any locality | `local` locality only |
-| `SECRET` (3) | Regulated data; air-gapped processing | `local` + `network_egress: none` | `local` + `network_egress: none` |
+| Level | Meaning | Default matrix (shipped) |
+|---|---|---|
+| `PUBLIC` (0) | No sensitivity | Any locality |
+| `INTERNAL` (1) | Business-sensitive | Any locality |
+| `CONFIDENTIAL` (2) | Personal data (name / e-mail / phone) | `local` or `eu_cloud` |
+| `SECRET` (3) | Literal credentials / regulated data | `local` + `network_egress: none` |
+
+**No bundled local-inference engine (ADR-2087).** Hermes and every local-Ollama
+engine were removed. Of the bundled engines only `opencode_http` (self-hosted
+OpenCode HTTP on the tenant LAN, `local`/`local`) is admissible for CONFIDENTIAL,
+and **no bundled engine is admissible for SECRET** (none has `network_egress:
+none`) — SECRET turns are blocked unless the tenant declares its own engine via
+`engine_compliance` (see *Tenant override* below).
 
 ### Engine locality + egress classification
 
@@ -84,7 +89,6 @@ Corvin ships with pre-classified compliance metadata for each engine:
 |---|---|---|---|
 | `claude_code` | `us_cloud` | `external` | api.anthropic.com — US jurisdiction |
 | `codex_cli` | `us_cloud` | `external` | api.openai.com — US jurisdiction |
-| `opencode_ollama` | `local` | `local` | Ollama on localhost — fully local |
 | `opencode_http` | `local` | `local` | Self-hosted HTTP on LAN |
 | `opencode` | `unknown` | `external` | Provider-dependent; operator must override |
 
@@ -149,7 +153,7 @@ spec:
     allowed_hosts:
       - localhost
       - 127.0.0.1
-      - ollama.internal
+      - opencode.internal          # e.g. the tenant's self-hosted OpenCode HTTP server
     forbidden_hosts:
       - api.anthropic.com          # EU production: US cloud blocked
       - api.openai.com
@@ -163,12 +167,16 @@ spec:
 
 ### EU production presets
 
-Corvin ships two ready-made configurations in `corvin_operator/bundle/config-templates/`:
+Corvin ships one ready-made configuration in `corvin_operator/bundle/config-templates/`:
 
 | Preset | Default action | Description |
 |---|---|---|
-| `eu_production_ollama` | `deny` | Only local Ollama; all US cloud blocked |
 | `eu_production_http` | `deny` | Self-hosted HTTP + local; all US cloud blocked |
+
+The former `eu_production_ollama` preset was removed with local Ollama inference
+(ADR-2087). A tenant whose `deployment_profile` still reads `eu_production_ollama`
+keeps the strict EU-production checks (self-test and operator declaration treat
+it as `eu_production`).
 
 ### What happens on an egress block
 

@@ -6,6 +6,8 @@
 
 ---
 
+> **Amendment (2026-09-27, ADR-2087):** Hermes and all local Ollama inference were removed. `hermes_bridge.py` and `test_phase3d_hermes_events.py` no longer exist; the deterministic fallback heuristic now lives in `recovery_heuristics.py` (tests: `tests/test_recovery_heuristics.py`) and is the only diagnosis path — no model call, no network. The Hermes references below are historical.
+
 ## Executive Summary
 
 **Phase 3-n delivered full CorvinOS integration** for Vibe Engineering Platform v1.0.  

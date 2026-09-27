@@ -41,7 +41,7 @@ Tenant configuration::
         allowed_hosts:
           - localhost
           - 127.0.0.1
-          - ollama.lan
+          - models.lan
         forbidden_hosts:
           - api.anthropic.com
           - api.openai.com
@@ -108,14 +108,13 @@ class EgressPolicy:
 # active egress policy.  "unknown" is a deliberate sentinel: policies
 # with ``default_action=deny`` will refuse it; ``default_action=allow``
 # will pass it through — so the sentinel never silently grants access.
+# ADR-2087: hermes / opencode_ollama / claude_code_local (local-inference
+# engines) were removed; those ids now resolve to "unknown" like any unmapped id.
 DEFAULT_ENGINE_HOSTS: dict[str, str] = {
     "claude_code":       "api.anthropic.com",
     "codex_cli":         "api.openai.com",
     "opencode":          "unknown",          # provider not pinned at config time
-    "opencode_ollama":   "localhost",        # local Ollama socket
     "opencode_http":     "localhost",        # self-hosted OpenCode HTTP on LAN
-    "hermes":            "localhost",        # Ollama HTTP loopback — zero egress
-    "claude_code_local": "localhost",        # Local ClaudeCode variant (L34: locality=local, egress=none)
     "copilot":           "github.com",       # GitHub Copilot CLI (not wired in adapter, defensive)
     "acs_worker":        "api.anthropic.com",  # ACS background worker — mirrors claude_code egress
     "acs":               "api.anthropic.com",  # delegation fan-out alias (DELEGATION_ENGINE_ID) — L35 sibling of the dd2b569 L34 fix; without it delegated web-chat turns resolve host "unknown" → default_deny
@@ -787,8 +786,8 @@ def check_engine_egress(engine_id: str, tenant_id: str, *,
     host = DEFAULT_ENGINE_HOSTS.get(engine_id, "unknown")
     # ADR-0181 M3 — a per-tenant provider assignment redirects the engine's egress
     # to the provider (or its proxy) host; validate THAT host, not the engine
-    # default. Else e.g. hermes→ollama_cloud would be checked against "localhost"
-    # and slip past a deny policy.
+    # default. Else e.g. opencode_http→a cloud provider would be checked against
+    # "localhost" and slip past a deny policy.
     try:
         from engine_models import resolve_engine_egress_host  # type: ignore
         _phost = resolve_engine_egress_host(tenant_id, engine_id)

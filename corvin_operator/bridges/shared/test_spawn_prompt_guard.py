@@ -191,8 +191,8 @@ def test_acs_classify_llm_fallback_guards_the_raw_message(recorder):
 def test_house_rules_cloud_classifier_guards_the_raw_message(recorder, monkeypatch):
     rec = recorder(json.dumps({"result": json.dumps(
         {"violated_rule_id": "", "confidence": 0.9, "reason": "recorded"})}))
-    # cloud_only: no Ollama in the test environment, and the cloud spawn is
-    # the branch under test.
+    # cloud_only (the computed order for a tenant without an egress deny):
+    # the cloud spawn is the branch under test.
     monkeypatch.setenv("CORVIN_HOUSE_RULES_CLASSIFIER_ORDER", "cloud_only")
 
     import house_rules

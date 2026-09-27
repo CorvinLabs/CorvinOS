@@ -112,7 +112,6 @@ def check_l34(
     channel: str = "",
     chat_key: str = "",
     corvin_home: "Path | None" = None,
-    cc_local_mode: bool = False,
 ) -> "str | None":
     """ADR-0042 / L34 pre-spawn data-classification gate.
 
@@ -127,8 +126,11 @@ def check_l34(
     * ``prompt`` + ``persona`` — heuristic classification via
       ``classify_task()``, used by the OS-turn adapter path.
 
-    ``cc_local_mode=True`` remaps ``claude_code`` → ``claude_code_local``
-    for ADR-0126 Ollama-redirect deployments.
+    The engine is validated under the id it actually runs as. The former
+    ``cc_local_mode`` remap (``claude_code`` → ``claude_code_local``, the
+    ADR-0126 Ollama redirect) was removed with ADR-2087: a stale caller that
+    still passes it gets a ``TypeError`` (refused by the caller's fail-closed
+    wrapper), never a silently different locality.
 
     The ``DataFlowGuard.validate()`` call emits the ``data_flow.approved``
     or ``data_flow.blocked`` L16 audit event before this function returns.
@@ -138,8 +140,6 @@ def check_l34(
         return None
 
     validate_id = engine_id
-    if cc_local_mode and engine_id == "claude_code":
-        validate_id = "claude_code_local"
 
     tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
     guard = _load_l34_guard(tenant, corvin_home)
@@ -296,7 +296,7 @@ def check_l44(
     ``egress_gate`` module or a tampered/unparseable policy REFUSES the turn —
     an acceptable-use guarantee must never fail-open. (The ADR-0141 Tier-3
     capability gate asserts house-rules presence independently.) A classifier
-    BACKEND failure (Ollama down / cloud unreachable) is the one deliberate
+    BACKEND failure (cloud classifier unreachable) is the one deliberate
     exception (commit 254a5a6, maintainer decision): it degrades to the
     deterministic Tier-0 regex floor — prohibited-class patterns still block,
     benign requests still work — so a fresh zero-config install without a
@@ -306,6 +306,11 @@ def check_l44(
     warned,escalated,denied}`` L16 event synchronously (via the injected
     per-tenant forge writer) BEFORE this returns, so the deny/escalate event
     lands on the chain before the refusal string.
+
+    A ``floor_only`` tenant (ADR-2087 — egress denies the cloud classifier
+    host) spawns no classifier at all: a deny-pattern match denies, every
+    other task escalates (operator-approval wording), audited
+    ``house_rules.floor_only`` + ``house_rules.{denied,escalated}``.
 
     Metadata-only: the emitted event carries rule_id / action / reason-code /
     confidence — NEVER the task text (GDPR/PII floor).
@@ -480,8 +485,9 @@ def check_l44_floor(
     built with ``classifier=None``, so ``HouseRulesGate.classify`` returns the
     Tier-0 verdict INSTANTLY (regex over the prohibited-class patterns; military
     / offensive-cyber / disinformation still MATCH and BLOCK, a task matching no
-    rule reaches the policy default). No cloud spawn, no Hermes, so it can never
-    hang.
+    rule reaches the policy default). No classifier spawn, so it can never
+    hang. (This is the classifier-TIMEOUT fallback; it is not the ADR-2087
+    ``floor_only`` order, whose unmatched tasks escalate — see check_l44.)
 
     This is the exact degradation ``check_l44`` already documents for a
     classifier BACKEND failure, exposed as a callable so a caller that puts its

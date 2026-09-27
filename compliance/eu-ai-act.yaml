@@ -190,7 +190,7 @@ rules:
         file: "corvin_operator/bridges/shared/operator_declaration.py"
         test: "corvin_operator/bridges/shared/test_operator_declaration.py"
     invariants:
-      - "eu_production and eu_production_ollama profiles require operator_declaration in tenant.corvin.yaml"
+      - "eu_production (and the legacy eu_production_ollama value; its local-Ollama preset was removed per ADR-2087) profiles require operator_declaration in tenant.corvin.yaml"
       - "dpia_completed must be true for eu_production boot to proceed"
       - "dpia_date must be present"
       - "declared_by (DPO name) is NEVER written to the audit chain"

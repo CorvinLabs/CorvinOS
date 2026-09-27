@@ -47,7 +47,7 @@ def _gate_with_ratchet(*, wrong_tile: bool = False) -> EgressGate:
     tile_k = ratchet.derive_tile(_LABEL)
 
     cap = EgressPaidPresetCapability(
-        allowed_hosts=["ollama.lan"],
+        allowed_hosts=["inference.lan"],
         forbidden_hosts=["api.anthropic.com"],
         default_action="deny",
         expires_at_epoch_k=99,
@@ -81,7 +81,7 @@ def test_ratchet_blocks_forbidden_host_over_permissive_static():
 
 def test_ratchet_allows_listed_host():
     gate = _gate_with_ratchet()
-    d = gate.validate("ollama.lan")
+    d = gate.validate("inference.lan")
     assert d.allowed is True
 
 
@@ -120,7 +120,7 @@ def test_static_forbidden_wins_over_ratchet_allow():
     ratchet = EntangledRatchet(root, head)
     tile_k = ratchet.derive_tile(_LABEL)
     cap = EgressPaidPresetCapability(
-        allowed_hosts=["ollama.lan"],          # ratchet would ALLOW this host
+        allowed_hosts=["inference.lan"],          # ratchet would ALLOW this host
         forbidden_hosts=[],
         default_action="deny",
         expires_at_epoch_k=99,
@@ -131,11 +131,11 @@ def test_static_forbidden_wins_over_ratchet_allow():
         _LABEL: {"wrapped_bytes_b64": b64, "version": 1}}}}})
     # …but the operator statically forbids the very same host.
     static = EgressPolicy(enabled=True, allowed_hosts=[],
-                          forbidden_hosts=["ollama.lan"], default_action="allow")
+                          forbidden_hosts=["inference.lan"], default_action="allow")
     gate = EgressGate(policy=static, ratchet=ratchet, capability_label=_LABEL)
     gate.set_capability_registry(registry)
 
-    d = gate.validate("ollama.lan")
+    d = gate.validate("inference.lan")
     assert d.allowed is False, "static forbidden_hosts must win over ratchet allow"
     assert d.matched_rule == "forbidden_explicit"
 

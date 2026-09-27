@@ -107,7 +107,7 @@ class Brain:
         """Decide recovery strategy from error."""
         error_msg = str(error).lower()
 
-        # Simple heuristics (MVP; v1.1: Hermes-Healing integration)
+        # Simple heuristics (MVP)
         if "timeout" in error_msg or "network" in error_msg:
             return Recovery(
                 strategy="retry",

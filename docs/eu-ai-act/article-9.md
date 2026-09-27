@@ -10,7 +10,7 @@
 | Criterion | Status |
 |---|---|
 | High-risk (Annex III) | **No** — CorvinOS is a conversational AI agent framework, not a system used in safety-critical applications listed in Annex III (biometric ID, critical infrastructure, education, employment, essential services, law enforcement, migration, justice). |
-| GPAI with systemic risk | **No** — CorvinOS does not train or deploy foundation models; it orchestrates third-party engines (Claude, Hermes/Ollama, Copilot). |
+| GPAI with systemic risk | **No** — CorvinOS does not train or deploy foundation models; it orchestrates third-party engines (Claude, OpenAI Codex, Copilot). |
 | Classification | **Limited-Risk AI System** (transparency obligations only: Art. 50, 52) |
 
 Full risk classification rationale: [`docs/compliance/RISK-CLASSIFICATION.md`](../compliance/RISK-CLASSIFICATION.md).
@@ -38,7 +38,7 @@ Even as a Limited-Risk system, CorvinOS implements structural risk controls that
 
 ### 2b. Residual Risk Acceptance
 
-- **Engine trust hierarchy:** third-party engines (Hermes/Ollama, Copilot) run under trust-tier `low` with pre-spawn L34/L35 gate checks. Residual risk: model output quality; mitigated by output cap (64 KB) and faithfulness judge.
+- **Engine trust hierarchy:** third-party engines (Codex, Copilot, OpenCode, operator-defined engines) run under trust-tier `low` with pre-spawn L34/L35 gate checks. Residual risk: model output quality; mitigated by output cap (64 KB) and faithfulness judge.
 - **GPAI provider dependency:** Claude, Codex, OpenAI are upstream providers; CorvinOS cannot control their model internals. Residual risk: managed via `allowed_engines` + zone gate.
 
 ### 2c. Testing and Evaluation

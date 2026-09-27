@@ -126,7 +126,7 @@ class EngineCompliance:
     ``network_egress`` answers "what does the engine talk to over the
     network during a spawn?":
       * ``none``     — no outbound calls at all (fully air-gapped)
-      * ``local``    — only local sockets (e.g. local Ollama on 11434)
+      * ``local``    — only local / LAN sockets (e.g. a self-hosted endpoint)
       * ``external`` — public internet (an HTTPS endpoint)
     """
     engine_id: str
@@ -142,7 +142,6 @@ class EngineCompliance:
 #   * codex_cli   → api.openai.com (US)
 #   * opencode    → DEPENDS on provider, so we mark it unknown by
 #                   default. Operators pin via tenant config:
-#                   --provider ollama  → locality=local, egress=local
 #                   --provider anthropic → locality=us_cloud, egress=external
 DEFAULT_ENGINE_COMPLIANCE: dict[str, EngineCompliance] = {
     "claude_code": EngineCompliance(
@@ -163,17 +162,6 @@ DEFAULT_ENGINE_COMPLIANCE: dict[str, EngineCompliance] = {
         network_egress="external",
         notes="Locality depends on --provider; override per-tenant.",
     ),
-    # ADR-0066/0067 — HermesEngine (local Ollama HTTP, zero egress).
-    # Qualifies for CONFIDENTIAL and SECRET tasks without a compliance-zone
-    # exception — the only bundled engine that satisfies both locality=local
-    # AND network_egress=none by design (POST localhost:11434 only).
-    "hermes": EngineCompliance(
-        engine_id="hermes",
-        locality="local",
-        network_egress="none",
-        notes="Ollama HTTP localhost:11434 only — zero network egress. "
-              "L34 CONFIDENTIAL-capable without compliance-zone exception.",
-    ),
     # ADR-0071 — CopilotCliEngine (github/copilot-cli, github.com by default).
     # github.com is US-jurisdiction cloud; operators with GitHub Enterprise Cloud
     # EU data residency can override to eu_cloud; GHES on-premise → local.
@@ -189,14 +177,15 @@ DEFAULT_ENGINE_COMPLIANCE: dict[str, EngineCompliance] = {
     # Workers call api.anthropic.com via ``claude -p`` subprocess — same
     # locality and egress profile as claude_code.  Operators with an EU-only
     # deployment MUST NOT use ACS for CONFIDENTIAL/SECRET tasks unless they
-    # override acs_worker to locality=local (e.g. via HermesEngine workers).
+    # override acs_worker via engine_compliance for an engine they host.
     "acs_worker": EngineCompliance(
         engine_id="acs_worker",
         locality="us_cloud",
         network_egress="external",
         notes="ACS manager+worker via claude -p → api.anthropic.com. "
               "Max classification: INTERNAL. "
-              "For CONFIDENTIAL, override workers to use delegate_hermes.",
+              "No bundled engine is admissible for CONFIDENTIAL/SECRET here; a tenant "
+              "may declare its own engine via engine_compliance.",
     ),
     # "acs" is the engine_id used by chat_runtime.py when a turn is routed
     # through the delegation fan-out (ACS orchestrator layer). Same compliance
@@ -209,13 +198,6 @@ DEFAULT_ENGINE_COMPLIANCE: dict[str, EngineCompliance] = {
               "Used by chat_runtime to classify delegated web-chat turns. "
               "Max classification: INTERNAL without operator override.",
     ),
-    # Conventional override aliases that EU presets pin to:
-    "opencode_ollama": EngineCompliance(
-        engine_id="opencode_ollama",
-        locality="local",
-        network_egress="local",
-        notes="opencode CLI pinned to --provider ollama (local socket).",
-    ),
     "opencode_http": EngineCompliance(
         engine_id="opencode_http",
         locality="local",
@@ -225,7 +207,12 @@ DEFAULT_ENGINE_COMPLIANCE: dict[str, EngineCompliance] = {
     # ADR-0098 — AnthropicBatchEngine (ABP, fire-and-forget batch inference).
     # Calls api.anthropic.com — US jurisdiction, external egress.
     # Max classification: INTERNAL (PUBLIC or INTERNAL data only).
-    # For CONFIDENTIAL/SECRET jobs, use delegate_hermes (locality=local).
+    # No bundled engine takes CONFIDENTIAL/SECRET jobs from here (ADR-2087).
+    # ADR-2087: the local-inference engines ``hermes``, ``opencode_ollama`` and
+    # ``claude_code_local`` were removed. Their ids are no longer in this
+    # registry, so ``validate`` refuses them as ``unknown_engine``. No bundled
+    # engine has network_egress='none', so SECRET has no bundled admissible
+    # engine; a tenant may declare its own engine via engine_compliance.
     "anthropic_batch": EngineCompliance(
         engine_id="anthropic_batch",
         locality="us_cloud",
@@ -234,18 +221,6 @@ DEFAULT_ENGINE_COMPLIANCE: dict[str, EngineCompliance] = {
               "50% cost reduction vs real-time; 1-24 h result latency. "
               "Max classification: INTERNAL. "
               "Enabled via corvin-batch MCP Plugin Manager manifest.",
-    ),
-    # ADR-0126 — Claude Code Local Backend (Ollama redirect).
-    # When enabled, Claude Code sends inference requests to a local Ollama server
-    # (ANTHROPIC_BASE_URL redirect) instead of api.anthropic.com.
-    # Locality/egress identical to Hermes — CONFIDENTIAL-capable.
-    "claude_code_local": EngineCompliance(
-        engine_id="claude_code_local",
-        locality="local",
-        network_egress="none",
-        notes="Claude Code redirected to local Ollama (ADR-0126). "
-              "Zero external egress — CONFIDENTIAL-capable without compliance-zone exception. "
-              "Activated via CORVIN_CC_LOCAL_MODE=1 + tenant.corvin.yaml::spec.claude_code_local.enabled.",
     ),
 }
 
@@ -395,10 +370,10 @@ class DataFlowGuard:
                   CONFIDENTIAL: [local]
                   SECRET:       [local]
                 engine_compliance:
-                  - engine_id: opencode_ollama
+                  - engine_id: my_onprem_engine
                     locality: local
                     network_egress: local
-                    notes: "qwen3:8b via Ollama"
+                    notes: "self-hosted model on the tenant LAN"
 
         Missing fields keep the module defaults. Malformed entries
         raise ``ValueError`` — operator should see the configuration
@@ -479,8 +454,9 @@ class DataFlowGuard:
                         raise ValueError(
                             "data_classification.matrix[SECRET] may only allow "
                             f"'local' — refusing {sorted(forbidden)}. SECRET is the "
-                            "residual floor; route the data to a local engine "
-                            "(hermes, opencode_ollama) or classify it CONFIDENTIAL."
+                            "residual floor; no bundled engine is admissible for "
+                            "it — declare your own zero-egress engine under "
+                            "engine_compliance, or classify the data CONFIDENTIAL."
                         )
                 matrix[cls_key] = frozenset(allowed_localities)  # type: ignore[arg-type]
 
@@ -518,7 +494,8 @@ class DataFlowGuard:
                     raise ValueError(
                         "ADR-0072: claude_code locality cannot be overridden to 'local' — "
                         "it always egresses to api.anthropic.com (us_cloud). "
-                        "Use hermes or opencode_ollama for local-only requirements."
+                        "No bundled engine is admissible for local-only data; declare "
+                        "your own engine under engine_compliance."
                     )
                 # R2-A5: the pin above covered ONE of the two fields the SECRET
                 # rule reads. ``validate`` admits SECRET only when
@@ -531,7 +508,8 @@ class DataFlowGuard:
                     raise ValueError(
                         f"ADR-0072: claude_code network_egress cannot be overridden to "
                         f"{egress!r} — it always egresses to api.anthropic.com. "
-                        "Use hermes or opencode_ollama for zero-egress requirements."
+                        "No bundled engine is admissible for zero-egress data; declare "
+                        "your own engine under engine_compliance."
                     )
                 engine_compliance[eid] = EngineCompliance(
                     engine_id=eid,

@@ -35,7 +35,7 @@ class EgressPaidPresetCapability:
       "capability_id": "egress-paid-preset",
       "version": 1,
       "expires_at_epoch_k": <k>,  # ratchet epoch when this expires
-      "allowed_hosts": ["localhost", "ollama.lan", ...],
+      "allowed_hosts": ["localhost", "models.lan", ...],
       "forbidden_hosts": ["api.anthropic.com", ...],
       "default_action": "deny"
     }

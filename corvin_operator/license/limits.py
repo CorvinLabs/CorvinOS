@@ -79,7 +79,7 @@ FREE_TIER: dict[str, Any] = {
 
     # Chat / design-assistant interactive turns. UNLIMITED on every tier
     # (operator decision 2026-06-23): the conversational assistant must always be
-    # fully usable, even on the free tier with the local Hermes fallback. What IS
+    # fully usable, even on the free tier. What IS
     # gated is the heavier machinery — compute workloads, workflows/pipelines,
     # A2A peers, custom layers — via their own axes below, NOT the chat axis.
     "chat_turns_per_day":     None,   # unlimited — chat is always free

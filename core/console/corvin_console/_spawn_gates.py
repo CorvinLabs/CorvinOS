@@ -52,7 +52,6 @@ engine_id — NEVER the prompt text), matching the bridge adapter's PII floor.
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -166,7 +165,8 @@ def _check_l34_l35_or_fail(
     fail-open per ADR-0158) and a refusal string on an explicit policy DENY.
     ``DataFlowGuard.validate`` / ``EgressGate.validate`` emit ``data_flow.blocked``
     / ``egress.blocked`` to the L16 chain BEFORE the refusal is returned
-    (audit-first). ``cc_local_mode`` mirrors the adapter's ADR-0126 remap.
+    (audit-first). The ADR-0126 ``CORVIN_CC_LOCAL_MODE`` remap is gone
+    (ADR-2087): claude_code is always validated as claude_code.
 
     ``classification`` (e.g. ``"PUBLIC"``): when provided, bypasses the heuristic
     ``classify_task()`` and uses this level directly.  Use for spawn sites where
@@ -177,12 +177,10 @@ def _check_l34_l35_or_fail(
     fail-closed orchestration wrapper.
     """
     from spawn_gates import check_l34 as _sg_l34, check_l35 as _sg_l35  # type: ignore
-    cc_local = os.environ.get("CORVIN_CC_LOCAL_MODE") == "1"
     l34 = _sg_l34(
         engine_id, tenant_id,
         classification=classification, prompt=prompt,
         persona=persona, channel=channel, chat_key=chat_key,
-        cc_local_mode=cc_local,
     )
     if l34 is not None:
         return l34

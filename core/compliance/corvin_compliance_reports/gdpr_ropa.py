@@ -424,7 +424,7 @@ def generate(
     ))
     story.append(Paragraph(
         "Layer 29 OS-turn delegation spawns a separate WorkerEngine "
-        "(Claude, Codex, OpenCode, Hermes, or Copilot) to process a "
+        "(Claude, Codex, OpenCode, or Copilot) to process a "
         "sub-task. Each spawn is a distinct processing activity under "
         "Art. 30: the delegating engine passes only a task description "
         "(no user-context PII) and receives only structured output. "

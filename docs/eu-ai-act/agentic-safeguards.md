@@ -34,7 +34,7 @@ and identifies where structural controls enforce the regulatory obligations.
 
 | Feature | Layers | Description |
 |---|---|---|
-| Orchestrator / worker delegation | L22, L29 | `delegate_claude_code`, `delegate_hermes`, `delegate_opencode`, `delegate_codex`, `delegate_copilot` — ClaudeCode spawns workers for subtasks |
+| Orchestrator / worker delegation | L22, L29 | `delegate_claude_code`, `delegate_opencode`, `delegate_codex`, `delegate_copilot` — ClaudeCode spawns workers for subtasks |
 | Multi-model routing | L5, L22 | `auto_routing` selects a persona/model based on user message; `orchestrator-haiku` persona switches engine dynamically |
 | Forge MCP tools | L6 | Runtime tool generation; tools call external APIs, read/write filesystem, run Python |
 | SkillForge auto-promotion | L7 | Skills auto-promoted from `task` → `session` → `project` → `user` scope via grading |
@@ -266,13 +266,20 @@ to the audit chain.
 
 | Engine | Locality | Network egress |
 |---|---|---|
-| `claude_code` | eu_cloud | allowed |
-| `hermes` | local | none |
-| `codex` | us_cloud | allowed |
-| `opencode` | us_cloud | allowed |
-| `copilot` | us_cloud | allowed |
+| `claude_code` | us_cloud | external |
+| `codex_cli` | us_cloud | external |
+| `opencode` | unknown (provider-dependent) | external |
+| `opencode_http` | local | local |
+| `copilot` | us_cloud | external |
+| `acs` / `acs_worker` | us_cloud | external |
+| `anthropic_batch` | us_cloud | external |
 
-CONFIDENTIAL data can only reach `hermes` (local, egress-none) by default.
+Under the default matrix CONFIDENTIAL data may reach only `local` or `eu_cloud`
+engines — of the bundled engines that is `opencode_http` alone. SECRET requires
+`local` + `network_egress: none`, which **no bundled engine** has, so SECRET
+spawns are blocked unless the tenant declares its own engine via
+`engine_compliance`. Hermes and the local-Ollama engines were removed
+(ADR-2087); their ids are refused as `unknown_engine`.
 Any widening of this matrix requires an ADR.
 
 **GDPR data minimisation (Art. 5(1)(c)):** Workers receive only the task prompt

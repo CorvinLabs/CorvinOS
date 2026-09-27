@@ -62,10 +62,22 @@ class TestDefaultRegistry(unittest.TestCase):
         self.assertEqual(compl.locality, "us_cloud")
         self.assertEqual(compl.network_egress, "external")
 
-    def test_opencode_ollama_is_local(self):
-        compl = DEFAULT_ENGINE_COMPLIANCE["opencode_ollama"]
+    def test_opencode_http_is_local(self):
+        compl = DEFAULT_ENGINE_COMPLIANCE["opencode_http"]
         self.assertEqual(compl.locality, "local")
         self.assertEqual(compl.network_egress, "local")
+
+    def test_removed_local_inference_engines_not_registered(self):
+        # ADR-2087: hermes / opencode_ollama / claude_code_local were removed.
+        for eid in ("hermes", "opencode_ollama", "claude_code_local"):
+            self.assertNotIn(eid, DEFAULT_ENGINE_COMPLIANCE)
+
+    def test_no_bundled_engine_is_zero_egress(self):
+        # ADR-2087: SECRET (network_egress == none) has no bundled engine.
+        self.assertEqual(
+            [e for e, c in DEFAULT_ENGINE_COMPLIANCE.items() if c.network_egress == "none"],
+            [],
+        )
 
     def test_opencode_default_is_unknown(self):
         # Provider-dependent — must not be silently classified as local.
@@ -174,12 +186,12 @@ class TestGuardCoreMatrix(unittest.TestCase):
         self.assertEqual(self.events[-1][0], "data_flow.blocked")
         d2 = self.guard.validate(
             classification=DataClassification.CONFIDENTIAL,
-            engine_id="hermes",
+            engine_id="opencode_http",
         )
         self.assertTrue(d2.allowed)
 
     def test_unknown_classification_is_denied(self):
-        d = self.guard.validate(classification="nonsense", engine_id="hermes")
+        d = self.guard.validate(classification="nonsense", engine_id="opencode_http")
         self.assertFalse(d.allowed)
         self.assertEqual(d.matched_rule, "unknown_classification")
         self.assertEqual(self.events[-1][0], "data_flow.blocked")
@@ -199,11 +211,11 @@ class TestGuardCoreMatrix(unittest.TestCase):
         self.assertEqual(self.events[-1][1], "CRITICAL")
 
     def test_secret_requires_egress_none(self):
-        # opencode_ollama is locality=local BUT egress=local → must be
+        # opencode_http is locality=local BUT egress=local → must be
         # denied for SECRET because the rule is egress==none.
         d = self.guard.validate(
             classification=DataClassification.SECRET,
-            engine_id="opencode_ollama",
+            engine_id="opencode_http",
         )
         self.assertFalse(d.allowed)
         self.assertEqual(d.matched_rule, "secret_egress")
@@ -233,14 +245,15 @@ class TestGuardCoreMatrix(unittest.TestCase):
     def test_list_engines_for(self):
         # F-A10: CONFIDENTIAL is EU/local by default → US-cloud engines excluded.
         conf = self.guard.list_engines_for(DataClassification.CONFIDENTIAL)
-        self.assertIn("opencode_ollama", conf)
-        self.assertIn("hermes", conf)
+        self.assertIn("opencode_http", conf)
+        self.assertNotIn("hermes", conf)  # removed (ADR-2087)
         self.assertNotIn("claude_code", conf)
         # SECRET still excludes any engine that egresses (egress != none).
         secret = self.guard.list_engines_for(DataClassification.SECRET)
         self.assertNotIn("claude_code", secret)
         self.assertNotIn("codex_cli", secret)
-        self.assertNotIn("opencode_ollama", secret)  # local but egress=local
+        self.assertNotIn("opencode_http", secret)  # local but egress=local
+        self.assertEqual(secret, [])  # ADR-2087: no bundled SECRET engine
 
 
 class TestValidateOrRaise(unittest.TestCase):
@@ -316,7 +329,7 @@ class TestTenantConfigOverride(unittest.TestCase):
         guard = DataFlowGuard.from_tenant_config(cfg)
         d = guard.validate(
             classification=DataClassification.INTERNAL,
-            engine_id="opencode_ollama",
+            engine_id="opencode_http",
         )
         self.assertTrue(d.allowed)
         # eu_cloud was in the default INTERNAL row; tightened away.
@@ -338,7 +351,7 @@ class TestTenantConfigOverride(unittest.TestCase):
                             "engine_id": "opencode",
                             "locality": "local",
                             "network_egress": "local",
-                            "notes": "pinned to --provider ollama",
+                            "notes": "pinned to a self-hosted provider",
                         },
                     ],
                 },
@@ -485,9 +498,9 @@ class TestLoadGuardForTenant(unittest.TestCase):
         d = guard.validate(classification=DataClassification.INTERNAL,
                            engine_id="claude_code")
         self.assertFalse(d.allowed)
-        # hermes is local → allowed.
+        # opencode_http is local → allowed.
         d2 = guard.validate(classification=DataClassification.INTERNAL,
-                            engine_id="hermes")
+                            engine_id="opencode_http")
         self.assertTrue(d2.allowed)
 
     def test_config_reads_real_matrix_not_default(self):
@@ -503,10 +516,6 @@ class TestLoadGuardForTenant(unittest.TestCase):
         d = guard.validate(classification=DataClassification.INTERNAL,
                            engine_id="claude_code")
         self.assertTrue(d.allowed)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestTenantOverridesCannotWeakenTheFloor(unittest.TestCase):
@@ -596,3 +605,64 @@ class TestTenantOverridesCannotWeakenTheFloor(unittest.TestCase):
         d = guard.validate(classification=DataClassification.SECRET,
                            engine_id="claude_code")
         self.assertFalse(d.allowed, d)
+
+
+class TestAdr2087LocalEnginesRemoved(unittest.TestCase):
+    """ADR-2087 — with the bundled local-inference engines gone, SECRET and
+    CONFIDENTIAL data on the cloud engine stay BLOCKED and the removed ids are
+    refused as ``unknown_engine`` (fail-closed), never silently admitted."""
+
+    def setUp(self):
+        self.events = []
+        self.guard = DataFlowGuard(
+            audit_writer=lambda et, sev, d: self.events.append((et, sev, d)))
+
+    def test_secret_on_claude_code_blocked(self):
+        d = self.guard.validate(classification=DataClassification.SECRET,
+                                engine_id="claude_code")
+        self.assertFalse(d.allowed)
+        self.assertEqual(d.matched_rule, "secret_egress")
+        self.assertEqual(self.events[-1][0], "data_flow.blocked")
+
+    def test_confidential_on_claude_code_blocked(self):
+        d = self.guard.validate(classification=DataClassification.CONFIDENTIAL,
+                                engine_id="claude_code")
+        self.assertFalse(d.allowed)
+        self.assertEqual(d.matched_rule, "matrix")
+
+    def test_removed_ids_are_unknown_engine_for_every_class(self):
+        for eid in ("hermes", "opencode_ollama", "claude_code_local"):
+            for cls in DataClassification:
+                d = self.guard.validate(classification=cls, engine_id=eid)
+                self.assertFalse(d.allowed, (eid, cls))
+                self.assertEqual(d.matched_rule, "unknown_engine", (eid, cls))
+
+    def test_tenant_declared_engine_still_admissible(self):
+        guard = DataFlowGuard.from_tenant_config({"spec": {"data_classification": {
+            "engine_compliance": [{"engine_id": "my_airgap", "locality": "local",
+                                   "network_egress": "none"}],
+        }}})
+        self.assertTrue(guard.validate(classification=DataClassification.SECRET,
+                                       engine_id="my_airgap").allowed)
+        self.assertTrue(guard.validate(classification=DataClassification.CONFIDENTIAL,
+                                       engine_id="my_airgap").allowed)
+
+    def test_hints_no_longer_suggest_removed_engines(self):
+        with self.assertRaises(ValueError) as cm:
+            DataFlowGuard.from_tenant_config({"spec": {"data_classification": {
+                "engine_compliance": [{"engine_id": "claude_code", "locality": "local"}],
+            }}})
+        msg = str(cm.exception)
+        self.assertNotIn("hermes", msg)
+        self.assertNotIn("ollama", msg)
+        self.assertIn("engine_compliance", msg)
+        with self.assertRaises(ValueError) as cm2:
+            DataFlowGuard.from_tenant_config({"spec": {"data_classification": {
+                "matrix": {"SECRET": ["local", "eu_cloud"]},
+            }}})
+        self.assertNotIn("hermes", str(cm2.exception))
+        self.assertIn("engine_compliance", str(cm2.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()

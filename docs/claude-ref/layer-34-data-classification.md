@@ -182,6 +182,26 @@ rarely in normal use, and stops those credentials from egressing — a security
 *floor*, not a residency policy. See ADR-0042 (and the opt-in amendment) for the
 rationale.
 
+**Which bundled engine can take CONFIDENTIAL / SECRET (ADR-2087).** The local
+inference engines `hermes`, `opencode_ollama` and `claude_code_local` were
+removed from `DEFAULT_ENGINE_COMPLIANCE`; `validate` now refuses those ids as
+`unknown_engine`. Consequences under the default matrix:
+
+* `SECRET` has **no** bundled admissible engine — none has
+  `network_egress == "none"` (`opencode_http` is `local`/`local`), so every
+  bundled engine is refused (`secret_egress` or `matrix`).
+* `CONFIDENTIAL` is admissible only on `opencode_http` (self-hosted, `local`)
+  or on an engine the tenant declares itself under `engine_compliance` with a
+  `local` / `eu_cloud` locality. `claude_code`, `codex_cli`, `copilot`, `acs`,
+  `acs_worker` and `anthropic_batch` are `us_cloud` and are blocked
+  (`matrix`); `opencode` is `unknown` and is blocked until classified.
+
+The ATO M5 route that used to send CONFIDENTIAL/SECRET work to Hermes
+(`delegate_hermes`) is gone, but the explicit refusal stays:
+`ato_classify.classify` returns `delegation_target = "l34_block"`
+(`DELEGATION_L34_BLOCK`) for those classes on a `claude_code` OS turn — the
+task is refused, it never falls through to `claude_code`.
+
 ## Tenant configuration
 
 The sub-key in `tenant.corvin.yaml`:
@@ -198,7 +218,7 @@ spec:
       - engine_id: opencode
         locality: local
         network_egress: local
-        notes: "tenant pins opencode to --provider ollama"
+        notes: "tenant pins opencode to a self-hosted provider on its LAN"
       - engine_id: mistral_eu
         locality: eu_cloud
         network_egress: external
@@ -229,7 +249,7 @@ Two event types, both emitted via the L16 hash chain:
   "severity": "INFO",
   "details": {
     "classification": "INTERNAL",
-    "engine_id": "opencode_ollama",
+    "engine_id": "opencode_http",
     "matched_rule": "matrix",
     "reason": "matrix allow",
     "persona": "coder",
@@ -286,11 +306,11 @@ test asserts the set.
 
 Rationale: residency restriction applies when the user *declares* their data
 is sensitive. Defaulting to a restrictive class blocked tasks that use only
-public data sources. Combined with the permissive default matrix above, a
-`CONFIDENTIAL` (PII) task still runs on a cloud engine unless the operator has
-tightened the matrix.
+public data sources. Under the default matrix above a `CONFIDENTIAL` (PII)
+task is refused on every US-cloud engine unless the operator has widened the
+`CONFIDENTIAL` row or declared an admissible local / EU engine.
 
-False-positive direction: routes a benign task to the local engine.
+False-positive direction: refuses a benign task on a cloud engine.
 False-negative direction: a missed SECRET reaches an external engine.
 Operators can install a stricter classifier in the adapter — the guard treats
 the classification argument as opaque.
@@ -321,9 +341,12 @@ ships + tests in isolation from the adapter wiring.
   `details` — the allow-list rejects smuggled keys at emission time.
 * Don't ship a `claude_code` override flipping it to `local` — the
   locality mapping is load-bearing for the threat model (V-020 / ADR-0072).
-* Don't change the default matrix (permissive PUBLIC/INTERNAL/CONFIDENTIAL,
-  SECRET-local-only) without an ADR amendment — the opt-in residency posture
-  is a deliberate compliance decision (see ADR-0042 amendment).
+* Don't change the default matrix (permissive PUBLIC/INTERNAL, CONFIDENTIAL
+  local/EU-only, SECRET-local-only) without an ADR amendment — residency-by-
+  default is a deliberate compliance decision (F-A10, ADR-0042 amendment).
+* Don't re-add a bundled engine to `DEFAULT_ENGINE_COMPLIANCE` as `local` to
+  "unblock" CONFIDENTIAL/SECRET — a tenant declares its own engine under
+  `engine_compliance` (ADR-2087).
 * Don't fail-open the gate on error: unknown engine / unparseable config must
   still enforce the DEFAULT matrix (which keeps the SECRET floor), never
   allow-all.
@@ -345,10 +368,10 @@ python3 corvin_operator/bridges/shared/test_data_classification.py
 41 tests covering:
 
 * Enum ordering and parsing
-* Default registry shape (claude=us_cloud, opencode_ollama=local,
-  opencode=unknown)
-* Matrix core (PUBLIC/INTERNAL/CONFIDENTIAL allow us_cloud by default —
-  residency is opt-in; SECRET stays local + requires egress=none)
+* Default registry shape (claude=us_cloud, opencode_http=local,
+  opencode=unknown; the ADR-2087-removed ids are absent)
+* Matrix core (PUBLIC/INTERNAL allow us_cloud; CONFIDENTIAL is local/eu_cloud
+  only; SECRET stays local + requires egress=none)
 * Opt-in tightening (operator matrix override blocks us_cloud per tier)
 * Malformed-config fallback still enforces the SECRET floor (not allow-all)
 * Unknown engine fail-closed

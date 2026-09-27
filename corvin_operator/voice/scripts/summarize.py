@@ -80,35 +80,27 @@ except Exception:  # noqa: BLE001
     _i18n = None
 
 
-# ── Voice-summary timeout budgets (VOICE-F7 / VOICE-F8) ──────────────────────
+# ── Voice-summary timeout budgets (VOICE-F7 / VOICE-F8 / ADR-2087) ─────────
 # adapter.py spawns THIS script under a HARD subprocess cap. Inside that cap the
-# CLI backend and the Hermes fallback run SEQUENTIALLY, so their waits must SUM
-# to comfortably LESS than the parent cap (with margin for process spawn +
-# extraction) — otherwise the parent kills the child mid-Hermes and the Hermes
-# fallback added in 41c174e is unreachable in exactly the hang case it exists
-# for. Contract (parent caps mirrored in adapter.py build_voice_summary /
-# _append_lern_zugabe / _append_metapher):
-#   main summary : parent cap 150s  →  CLI 90s + Hermes 45s = 135s  (15s margin)
-#   annex (each) : parent cap  90s  →  CLI 40s + Hermes 35s =  75s  (15s margin)
+# only LLM backend is the `claude` CLI, followed by the in-process structural
+# fallback (the local Hermes/Ollama stage was removed per ADR-2087). The CLI
+# wait must stay comfortably LESS than the parent cap (with margin for process
+# spawn + extraction). Contract (parent caps mirrored in adapter.py
+# build_voice_summary / _append_lern_zugabe / _append_metapher):
+#   main summary : parent cap 150s  →  CLI 90s
+#   annex (each) : parent cap  90s  →  CLI 40s
 #
-# VOICE-F8 (2026-07-25) — why these numbers and not "cap / number of backends".
-# VOICE-F7 fixed the overflow by SHRINKING the child budgets (CLI 90→45). That
-# made the CLI backend unreachable instead: measured `claude -p` latency for a
+# VOICE-F8 (2026-07-25) — why these numbers. VOICE-F7 shrank the CLI budget to
+# 45s, which made the CLI backend unreachable: measured `claude -p` latency for a
 # real summary call (10.5 KB system prompt, haiku) is 23s / 27s / 75s / >180s
 # across five runs — median ≈ 50s, i.e. the 45s budget lost MOST of the time.
-# Field evidence: 23 of 23 summaries in ~27h fell through to the degraded
-# near-verbatim path, which is exactly what the voice summary must never do.
-# The budgets below are derived BOTTOM-UP from that measurement (CLI needs a
-# budget above its median, Hermes/Ollama answers warm in ~30s) and the parent
-# cap was raised to fit them — not the other way round. When touching these,
-# re-measure first; a budget under the measured median silently disables the
-# backend without failing any test.
+# The CLI budget is derived BOTTOM-UP from that measurement. When touching
+# these, re-measure first; a budget under the measured median silently
+# disables the backend without failing any test.
 # Guard: test_summarize.py::test_voice_summary_timeout_budgets_fit_parent_caps
 #        + ::test_cli_budget_covers_measured_latency.
 _SUMMARY_CLI_TIMEOUT_S = 90      # ≥ measured p50 (~50s) with headroom
-_SUMMARY_HERMES_TIMEOUT_S = 45   # warm Ollama answers in ~30s
 _ANNEX_CLI_TIMEOUT_S = 40        # annex prompts are shorter than the main one
-_ANNEX_HERMES_TIMEOUT_S = 35
 # The adapter-side parent caps this ladder must fit inside (SSOT for the test).
 _PARENT_CAP_MAIN_S = 150
 _PARENT_CAP_ANNEX_S = 90
@@ -1436,7 +1428,7 @@ def _claude_authenticated() -> bool:
     voice summarizer gets the same fast-fail as the main chat engine. Without
     this, a fresh install with the `claude` CLI on PATH but not yet logged in
     (via `claude auth login`) burns the full 90s CLI timeout on EVERY summarize
-    call before falling through to Hermes — on the short-text fast path this
+    call before falling through to structural — on the short-text fast path this
     also silently kills the LERN-ZUGABE/METAPHER annex (its own failure mode
     is "return text verbatim"), so the very first replies read back near-raw
     instead of humanized. Authenticated iff ANY of: ANTHROPIC_API_KEY is set; a
@@ -1451,8 +1443,7 @@ def _claude_authenticated() -> bool:
     # OWN credentials (AWS/GCP/Azure) — there is NO ANTHROPIC_API_KEY and NO
     # ~/.claude/.credentials.json. Checking only those two false-negatived every
     # such install, so the `claude` summary backend was skipped and every voice
-    # summary fell through to the (often unreachable) Hermes/Ollama path and
-    # spoke near-raw text. The wizards write CLAUDE_CODE_USE_* into
+    # summary fell through to the structural fallback and spoke near-raw text. The wizards write CLAUDE_CODE_USE_* into
     # settings.json's `env` block, so check both (mirrors chat_runtime.py).
     # Guard: tests/test_claude_auth_probe_parity.py.
     _settings_env = _claude_settings_env()
@@ -1469,6 +1460,50 @@ def _claude_authenticated() -> bool:
     except Exception:  # noqa: BLE001
         return True  # fail-open: don't reroute a possibly-authenticated user
 
+
+
+_TRUTHY = ("1", "true", "yes", "on")
+_CLOUD_SUMMARY_HOST = "api.anthropic.com"
+
+
+def _summary_cloud_permitted() -> bool:
+    """May the `claude` CLI backend (→ api.anthropic.com) see this text?
+
+    ADR-2087: the local Hermes/Ollama backend is gone, and the CLI backend has
+    no egress check of its own. A local-only tenant therefore gets the
+    structural fallback directly and the CLI is never spawned:
+      * ``CORVIN_TTS_LOCAL_ONLY`` truthy → False.
+      * the tenant's L35 egress policy does not admit ``api.anthropic.com``
+        → False (same probe as the L44 classifier's ``floor_only`` order).
+      * no tenant config → True. A config that EXISTS but cannot be read or
+        evaluated → False (fail-closed: a degraded summary is the cheap side).
+    """
+    if (os.environ.get("CORVIN_TTS_LOCAL_ONLY") or "").strip().lower() in _TRUTHY:
+        return False
+    try:
+        tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+        env = os.environ.get("CORVIN_HOME")
+        home = Path(os.path.expanduser(env)) if env else (Path.home() / ".corvin")
+        cfg = home / "tenants" / tid / "global" / "tenant.corvin.yaml"
+        if not cfg.is_file():
+            return True
+    except Exception:  # noqa: BLE001
+        return True
+    try:
+        _shared = str(Path(__file__).resolve().parent.parent.parent / "bridges" / "shared")
+        if _shared not in sys.path:
+            sys.path.insert(0, _shared)
+        import yaml  # type: ignore
+        from egress_gate import EgressGate  # type: ignore
+        doc = yaml.safe_load(cfg.read_text("utf-8")) or {}
+        # audit_writer=None: a read-only probe, no egress audit record.
+        gate = EgressGate.from_tenant_config(doc if isinstance(doc, dict) else {},
+                                             audit_writer=None)
+        return bool(gate.validate(_CLOUD_SUMMARY_HOST).allowed)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[summarize] egress probe failed ({type(exc).__name__}) — "
+              "cloud summary backend skipped (fail-closed)", file=sys.stderr)
+        return False
 
 
 def _run_claude_print(payload: str, system_prompt: str, model: str, timeout_s: float) -> str | None:
@@ -1488,7 +1523,7 @@ def _run_claude_print(payload: str, system_prompt: str, model: str, timeout_s: f
     # be expanded by `claude -p` into a slash command (stdin transport
     # included). Always put the shared non-slash sentinel line at byte 0 —
     # fail-closed: no guard, no spawn (the caller's OSError path degrades to
-    # the Hermes / no-LLM ladder instead of shipping an unguarded payload).
+    # the no-LLM structural fallback instead of shipping an unguarded payload).
     try:
         from agents.claude_code import guard_prompt_head  # type: ignore  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
@@ -1547,8 +1582,8 @@ def _summarize_via_cli(text: str, task: str, lang: str, target_chars: int, model
         return _run_claude_print(payload, system_prompt, model, _SUMMARY_CLI_TIMEOUT_S)
     # OSError: the spawn itself can fail (E2BIG when the payload pushes argv
     # past the ~128KiB kernel limit, ENOENT on a broken shim, ...). Without it
-    # the exception crashed main() with rc=1 and SKIPPED the Hermes fallback
-    # entirely instead of degrading gracefully (found 2026-07-17).
+    # the exception crashed main() with rc=1 and SKIPPED the structural
+    # fallback entirely instead of degrading gracefully (found 2026-07-17).
     # Log CONTENT-FREE: CalledProcessError's str() embeds the full argv —
     # i.e. the user's text — so only exception type + returncode + errno
     # may go to stderr (PII invariant; errno keeps E2BIG distinguishable
@@ -1557,138 +1592,6 @@ def _summarize_via_cli(text: str, task: str, lang: str, target_chars: int, model
         print(f"[summarize] CLI call failed: "
               f"{type(exc).__name__} rc={getattr(exc, 'returncode', '')} "
               f"errno={getattr(exc, 'errno', '')}",
-              file=sys.stderr)
-        return None
-
-
-def _resolve_hermes_model_for_summary() -> str:
-    """Model tag for the Hermes summarize backend — the SAME resolution the
-    running Hermes engine uses (CORVIN_HERMES_MODEL → installed qwen3 tag →
-    built-in default), so no extra Ollama model is needed."""
-    try:
-        from agents.hermes_engine import _resolve_default_model  # type: ignore
-        return _resolve_default_model()
-    except Exception:  # noqa: BLE001
-        return os.environ.get("CORVIN_HERMES_MODEL", "").strip() or "qwen3:8b"
-
-
-def _hermes_base_url() -> str:
-    """Ollama/Hermes base URL, honouring the same env keys the summary uses."""
-    for env_key in ("CORVIN_OLLAMA_BASE_URL", "OLLAMA_HOST", "CORVIN_HERMES_URL"):
-        v = os.environ.get(env_key, "").strip()
-        if v:
-            v = v.rstrip("/")
-            return v if v.startswith("http") else f"http://{v}"
-    return "http://localhost:11434"
-
-
-def prewarm_summary_model(timeout_s: float = 120.0) -> bool:
-    """Load the summary model into Ollama so the FIRST voice note is not a cold
-    start (a cold qwen3:8b load is ~20-30 s and blows the 60 s summary timeout,
-    which is what drops the turn to the bounded no-LLM fallback on a fresh boot).
-
-    Fire-and-forget by design: the bridge calls this in a daemon thread at boot.
-    Fail-soft — if Ollama is not running (a Claude-CLI-only or cloud install),
-    this simply returns False and nothing downstream is worse off than before.
-    The house-rules classifier keeps the SAME model resident afterwards, so this
-    only has to cover the boot / long-idle gap, not steady state."""
-    import json as _json
-    import urllib.request as _ur
-    try:
-        model = _resolve_hermes_model_for_summary()
-        payload = _json.dumps({
-            "model": model,
-            "prompt": "ok",
-            "stream": False,
-            "think": False,
-            "options": {"num_predict": 1},
-            # -1 would pin RAM forever; 30m matches house_rules + the summary
-            # call, so all three keep the one resident instance warm together.
-            "keep_alive": os.environ.get("CORVIN_VOICE_KEEP_ALIVE", "").strip() or "30m",
-        }).encode()
-        req = _ur.Request(f"{_hermes_base_url()}/api/generate", data=payload,
-                          headers={"Content-Type": "application/json"}, method="POST")
-        with _ur.urlopen(req, timeout=timeout_s) as resp:
-            resp.read()
-        return True
-    except Exception:  # noqa: BLE001 — Ollama absent / unreachable → no-op
-        return False
-
-
-def _summarize_via_hermes(text: str, task: str, lang: str, target_chars: int, model: str, persona: str = "", audience: str = "", output_language: str = "", speech_type: str = "") -> str | None:
-    """Backend 2: the local Hermes engine (Ollama). This is the DEFAULT zero-config
-    engine, so without it a Hermes-only install had no LLM summarizer at all and
-    every long voice reply fell through to naive_truncate — spoken answers cut off
-    mid-thought on exactly the shipped default. Uses the same system prompt as the
-    CLI backend; POSTs to Ollama /api/generate (non-streaming) with a bounded
-    timeout. Returns None (→ structural fallback) on any error / when Ollama is
-    unreachable, so this never makes things worse than before."""
-    import json as _json
-    import urllib.request as _ur
-
-    base_url = ""
-    for env_key in ("CORVIN_OLLAMA_BASE_URL", "OLLAMA_HOST", "CORVIN_HERMES_URL"):
-        v = os.environ.get(env_key, "").strip()
-        if v:
-            base_url = v.rstrip("/")
-            break
-    if not base_url:
-        base_url = "http://localhost:11434"
-
-    has_task = bool(task.strip())
-    system_prompt = _system_for(lang, target_chars, has_task, persona, audience, output_language, speech_type)
-    user_input = _build_input(text, task, lang) if has_task else text
-    hermes_model = _resolve_hermes_model_for_summary()
-
-    payload = _json.dumps({
-        "model": hermes_model,
-        "system": system_prompt,
-        "prompt": user_input,
-        "stream": False,
-        # Disable qwen3-style reasoning: a thinking model would spend the entire
-        # latency budget emitting <think>…</think> tokens BEFORE the summary and
-        # blow the timeout — on a fresh install (cold Ollama) this made the
-        # summary silently fall back to the verbatim (un-summarized) text. We
-        # already strip any <think> below; NOT generating it is what keeps the
-        # call inside budget. Ignored by non-thinking models. (Verified: qwen3:8b
-        # dropped from >60s timeout to ~10s and produced a real summary.)
-        "think": False,
-        # Voice summaries must be concise + deterministic — low temperature keeps
-        # the model from padding the spoken reply.
-        "options": {"temperature": 0.2},
-        # Keep the model resident for 30 minutes after this call. The installer's
-        # own one-off prewarm (install.sh / install.ps1) already sets this, but
-        # that window lapses long before most users' FIRST real chat (bridge
-        # setup, Discord/WhatsApp linking, etc. all happen first) — without it
-        # here too, that first call hits a cold model load (~22s on a fresh box)
-        # on top of real generation time, which can blow
-        # _SUMMARY_HERMES_TIMEOUT_S and silently degrade to naive_truncate
-        # (found investigating why fresh installs read the raw answer
-        # word-for-word instead of a real summary, 2026-07-14).
-        "keep_alive": "30m",
-    }).encode("utf-8")
-    try:
-        req = _ur.Request(
-            f"{base_url}/api/generate", data=payload,
-            headers={"Content-Type": "application/json"}, method="POST",
-        )
-        # CPU Hermes is slow; this budget keeps the spoken-reply latency bounded
-        # while still allowing a real summary on modest hardware. On timeout →
-        # None → structural fallback (never blocks the voice pipeline forever).
-        # Sized so CLI + Hermes fit inside the adapter's parent cap (VOICE-F7).
-        with _ur.urlopen(req, timeout=_SUMMARY_HERMES_TIMEOUT_S) as resp:
-            if not (200 <= resp.getcode() < 300):
-                return None
-            data = _json.loads(resp.read().decode("utf-8"))
-        out = str(data.get("response", "")).strip()
-        # qwen3 emits <think>…</think> reasoning before the answer — strip it so
-        # the internal monologue is never spoken aloud.
-        out = re.sub(r"(?is)<think>.*?</think>", "", out).strip()
-        return out or None
-    except Exception as exc:  # noqa: BLE001
-        # CONTENT-FREE: an HTTPError/URLError str() can embed the request
-        # context; only the exception type may go to stderr (found 2026-07-17).
-        print(f"[summarize] Hermes call failed: {type(exc).__name__}",
               file=sys.stderr)
         return None
 
@@ -1780,61 +1683,6 @@ _APPENDIX_SYSTEM_EN = (
 )
 
 
-def _ollama_generate(system_prompt: str, user_input: str, timeout: int = _ANNEX_HERMES_TIMEOUT_S) -> str | None:
-    """Shared low-level Hermes (Ollama /api/generate) call for the appendix
-    and metapher backends — same base-url resolution and <think> stripping
-    as _summarize_via_hermes, factored out so both annex generators can fall
-    back to the zero-config default engine instead of having no fallback at
-    all (their previous CLI-only shape meant a Hermes-only install, with no
-    Claude CLI login ever, could never produce a LERN-ZUGABE/METAPHER
-    annex). Returns None on any error (→ caller's existing silent-fail path,
-    never worse than before)."""
-    import json as _json
-    import urllib.request as _ur
-
-    base_url = ""
-    for env_key in ("CORVIN_OLLAMA_BASE_URL", "OLLAMA_HOST", "CORVIN_HERMES_URL"):
-        v = os.environ.get(env_key, "").strip()
-        if v:
-            base_url = v.rstrip("/")
-            break
-    if not base_url:
-        base_url = "http://localhost:11434"
-
-    payload = _json.dumps({
-        "model": _resolve_hermes_model_for_summary(),
-        "system": system_prompt,
-        "prompt": user_input,
-        "stream": False,
-        # Disable qwen3-style reasoning so the annex (LERN-ZUGABE / METAPHER) is
-        # emitted DIRECTLY instead of after a <think> block that eats the whole
-        # 30s timeout — on a fresh install (cold Ollama) the annex silently
-        # vanished (marker never produced in time → verbatim fallback). Ignored
-        # by non-thinking models. (Verified: qwen3:8b dropped >30s→~10s and
-        # produced the "Und zur Einordnung," marker.)
-        "think": False,
-        "options": {"temperature": 0.4},
-        # Same rationale as _summarize_via_hermes's keep_alive above — without
-        # it, this call is just as exposed to a cold-load timeout on a fresh
-        # install as the main summary call is.
-        "keep_alive": "30m",
-    }).encode("utf-8")
-    try:
-        req = _ur.Request(
-            f"{base_url}/api/generate", data=payload,
-            headers={"Content-Type": "application/json"}, method="POST",
-        )
-        with _ur.urlopen(req, timeout=timeout) as resp:
-            if not (200 <= resp.getcode() < 300):
-                return None
-            data = _json.loads(resp.read().decode("utf-8"))
-        out = str(data.get("response", "")).strip()
-        out = re.sub(r"(?is)<think>.*?</think>", "", out).strip()
-        return out or None
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def _appendix_via_cli(text: str, lang: str, model: str) -> str | None:
     """Run claude -p with the appendix-only system prompt."""
     if not shutil.which("claude") or not _claude_authenticated():
@@ -1849,15 +1697,6 @@ def _appendix_via_cli(text: str, lang: str, model: str) -> str | None:
               f"errno={getattr(exc, 'errno', '')}",
               file=sys.stderr)
         return None
-
-
-def _appendix_via_hermes(text: str, lang: str) -> str | None:
-    """Backend 2 for the LERN-ZUGABE annex — local Hermes (Ollama), tried
-    when the CLI is unavailable/unauthenticated. See _ollama_generate."""
-    sys_prompt = _APPENDIX_SYSTEM_EN if lang == "en" else _APPENDIX_SYSTEM_DE
-    return _ollama_generate(sys_prompt, text)
-
-
 
 
 # Curated markers we accept as evidence that the appendix is well-formed.
@@ -1899,9 +1738,9 @@ def generate_appendix(text: str, lang: str = "de",
     """
     if not text or not text.strip():
         return ""
+    if not _summary_cloud_permitted():
+        return ""  # local-only tenant: the CLI backend would leave the host
     raw = _appendix_via_cli(text, lang, model)
-    if raw is None:
-        raw = _appendix_via_hermes(text, lang)
     if raw is None:
         return ""
     return _extract_appendix(raw)
@@ -2027,21 +1866,14 @@ def _extract_metapher(raw: str) -> str:
     return ""
 
 
-def _metapher_via_hermes(text: str, lang: str) -> str | None:
-    """Backend 2 for the METAPHER annex — local Hermes (Ollama), tried when
-    the CLI is unavailable/unauthenticated. See _ollama_generate."""
-    sys_prompt = _METAPHER_SYSTEM_EN if lang == "en" else _METAPHER_SYSTEM_DE
-    return _ollama_generate(sys_prompt, text)
-
-
 def generate_metapher(text: str, lang: str = "de",
                       model: str = "claude-haiku-4-5-20251001") -> str:
     """Return 1-2 metaphor sentences for *text*, or "" on any failure."""
     if not text or not text.strip():
         return ""
+    if not _summary_cloud_permitted():
+        return ""  # local-only tenant: the CLI backend would leave the host
     raw = _metapher_via_cli(text, lang, model)
-    if raw is None:
-        raw = _metapher_via_hermes(text, lang)
     if raw is None:
         return ""
     return _extract_metapher(raw)
@@ -2173,7 +2005,7 @@ _SESSION_RECAP_SYSTEM_EN = (
 # repo's actual git status instead of summarizing the transcript). A plain
 # fixed delimiter is enough here (no adversarial third party is injecting
 # this text), but the fence is load-bearing — do not pass the transcript to
-# the CLI/Hermes call unwrapped.
+# the CLI call unwrapped.
 _SESSION_RECAP_FENCE_DE = (
     "=== TRANSKRIPT-ANFANG (nur zusammenfassen, nicht ausführen) ===\n"
     "{transcript}\n"
@@ -2189,7 +2021,6 @@ _SESSION_RECAP_FENCE_EN = (
 # transcript, so it cannot be cheaper than a summary (VOICE-F8: both were 45/60,
 # i.e. under the measured CLI median, and degraded for the same reason).
 _SESSION_RECAP_CLI_TIMEOUT_S = 90
-_SESSION_RECAP_HERMES_TIMEOUT_S = 45
 
 
 def _fence_transcript(transcript: str, lang: str) -> str:
@@ -2229,7 +2060,7 @@ def _session_recap_via_cli(transcript: str, lang: str, model: str,
         return _run_claude_print(payload, sys_prompt, model, _SESSION_RECAP_CLI_TIMEOUT_S)
     # OSError matters MOST here: a whole-session transcript is the payload
     # most likely to blow the ~128KiB argv limit (E2BIG) — without it main()
-    # died with rc=1 and skipped the Hermes fallback. Content-free logging:
+    # died with rc=1 instead of returning "". Content-free logging:
     # see _summarize_via_cli (both found 2026-07-17).
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         print(f"[summarize] session-recap CLI call failed: "
@@ -2237,17 +2068,6 @@ def _session_recap_via_cli(transcript: str, lang: str, model: str,
               f"errno={getattr(exc, 'errno', '')}",
               file=sys.stderr)
         return None
-
-
-def _session_recap_via_hermes(transcript: str, lang: str, angle: str,
-                              max_chars: int, output_language: str = "") -> str | None:
-    template = _SESSION_RECAP_SYSTEM_EN if lang == "en" else _SESSION_RECAP_SYSTEM_DE
-    sys_prompt = template.format(angle=angle, max_chars=max_chars)
-    directive = _session_recap_output_language_directive(output_language)
-    if directive:
-        sys_prompt = directive + "\n\n" + sys_prompt + "\n\n" + directive
-    payload = _fence_transcript(transcript, lang)
-    return _ollama_generate(sys_prompt, payload, timeout=_SESSION_RECAP_HERMES_TIMEOUT_S)
 
 
 def generate_session_recap(transcript: str, lang: str = "de", max_chars: int = 700,
@@ -2275,9 +2095,9 @@ def generate_session_recap(transcript: str, lang: str = "de", max_chars: int = 7
     if not angle:
         angle = ("Beginne mit dem aktuellen Stand." if lang == "de"
                  else "Start with the current state.")
+    if not _summary_cloud_permitted():
+        return ""  # local-only tenant: the CLI backend would leave the host
     raw = _session_recap_via_cli(transcript, lang, model, angle, max_chars, output_language)
-    if raw is None:
-        raw = _session_recap_via_hermes(transcript, lang, angle, max_chars, output_language)
     return (raw or "").strip()
 
 
@@ -2336,31 +2156,23 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
     # No length-based bypass survives; the only fast exit is genuinely empty
     # input, handled by the caller.
 
-    # Backend 1: CLI — preferred for users with Claude Max who don't want
-    # to manage a separate API key.
-    if _backend in ("auto", "cli"):
+    # Backend 1: CLI — the only LLM backend (ADR-2087 removed the local
+    # Hermes/Ollama stage). It spawns `claude -p` → api.anthropic.com and has
+    # no egress check of its own, so a local-only tenant (CORVIN_TTS_LOCAL_ONLY
+    # or an egress policy that denies the cloud) goes straight to structural.
+    if _backend in ("auto", "cli") and _summary_cloud_permitted():
         out = _summarize_via_cli(text, task, lang, target, model, persona, audience, output_language, speech_type)
         if out:
             candidate = out
 
-    # Backend 2: Hermes (local Ollama) — the DEFAULT zero-config engine. Without
-    # this a Hermes-only install (no claude CLI / API key) had no LLM summarizer
-    # and every long voice reply was naive_truncate'd mid-sentence. Tried after the
-    # CLI so Claude-Max users are unaffected; before structural so the shipped
-    # default gets a real summary.
-    if candidate is None and _backend in ("auto", "hermes"):
-        out = _summarize_via_hermes(text, task, lang, target, model, persona, audience, output_language, speech_type)
-        if out:
-            candidate = out
-
-    # Backend 3: structural compression. Never drops list items. When a task
+    # Backend 2: structural compression. Never drops list items. When a task
     # is given, prefix it manually since the structural fallback can't
     # rephrase prose. The audience block has no effect here — it's an LLM-
     # only steering signal; structural compression keeps every list item
     # verbatim and has no LLM to obey style instructions.
     if candidate is None:
-        # Both LLM backends were unavailable (or "auto" wasn't pinned to one
-        # that succeeded) — this is a DEGRADED result: for ordinary prose,
+        # The LLM backend was unavailable or not permitted (or the backend
+        # was pinned to one that is not run) — this is a DEGRADED result: for ordinary prose,
         # naive_truncate is near-verbatim (whitespace-collapsed original,
         # "completeness over length"), not the real learnings/metaphor-
         # capable summary. Print a distinguishable stderr sentinel so a
@@ -2369,7 +2181,7 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
         # looking identical from the outside (both exit 0, both non-empty
         # stdout) — found investigating why fresh installs read the raw
         # answer word-for-word instead of a real summary, 2026-07-14.
-        print("[summarize] degraded: both LLM backends unavailable — "
+        print("[summarize] degraded: LLM backend unavailable — "
               "using bounded structural fallback (never full verbatim)",
               file=sys.stderr)
         # naive_truncate keeps list structure (intro + items + outro), then we
@@ -2530,16 +2342,13 @@ def main() -> int:
             "differently, not just re-synthesized audio of the same words."
         ),
     )
-    ap.add_argument(
-        "--prewarm", action="store_true",
-        help=("Load the summary model into Ollama and exit (no stdin needed). "
-              "The bridge fires this at boot so the first voice note is warm."),
-    )
+    # Accepted as a no-op so an older caller does not fail on argparse; the
+    # local-model prewarm it triggered was removed per ADR-2087.
+    ap.add_argument("--prewarm", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     if args.prewarm:
-        ok = prewarm_summary_model()
-        print("prewarmed" if ok else "prewarm-skipped (no Hermes backend)")
+        print("prewarm-skipped (no local summary model; removed per ADR-2087)")
         return 0
 
     text = sys.stdin.read()

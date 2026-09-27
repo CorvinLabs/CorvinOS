@@ -166,7 +166,6 @@ def test_g009_engine_manifests() -> None:
 
     engines = {
         "claude_code": "high",
-        "hermes": "low",
         "opencode": "low",
         "codex_cli": "medium",
         "copilot": "medium",
@@ -202,10 +201,16 @@ def test_g009_engine_manifests() -> None:
         except Exception as e:
             t(f"{eid}: evaluate_trust(min_tier=low)", False, detail=str(e))
 
-    # Hermes must fail at min_tier=high
-    v = evaluate_trust("hermes", min_tier="high")
-    t("hermes fails at min_tier=high (tier is low)", not v.passed,
+    # A low-tier engine must fail at min_tier=high
+    v = evaluate_trust("opencode", min_tier="high")
+    t("opencode fails at min_tier=high (tier is low)", not v.passed,
       detail=f"reason={v.reason}")
+
+    # ADR-2087: the removed hermes engine has no manifest and is refused
+    # (fail-closed on manifest-missing), even at the lowest tier.
+    vh = evaluate_trust("hermes", min_tier="low")
+    t("removed hermes engine is refused (manifest-missing)", not vh.passed,
+      detail=f"reason={vh.reason}")
 
     # claude_code must pass at min_tier=high
     v2 = evaluate_trust("claude_code", min_tier="high")

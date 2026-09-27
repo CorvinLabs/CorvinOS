@@ -33,8 +33,7 @@ spec:
     forbid_engines:
       - claude_code
       - codex_cli
-      - opencode
-      - opencode_ollama     # this preset picks the HTTP variant exclusively
+      - opencode            # this preset picks the HTTP variant exclusively
 
   # ── Data classification matrix (Layer 34 / ADR-0042) ────────────────────────
   data_classification:

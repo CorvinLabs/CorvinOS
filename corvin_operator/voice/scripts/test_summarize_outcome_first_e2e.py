@@ -6,7 +6,7 @@ entry the bridge spawns — main() → summarize() → classify_speech_type. Pro
 a grep-style source assertion + by actually running the CLI.
 
 Phase 2 (functional): drive the REAL subprocess boundary (not a direct import).
-Without a live `claude` CLI / Ollama the run deterministically exercises the
+Without a live `claude` CLI the run deterministically exercises the
 ADR-0597 degrade ladder — that proves option-safety end-to-end through the CLI.
 The LLM-prompt-shape assertions (ADR-0596 outcome-first bundling) need a live
 backend and are skipped-with-reason when none is authenticated (infeasibility
@@ -111,7 +111,7 @@ def test_report_output_is_bounded_and_nonempty() -> None:
 
 @pytest.mark.skipif(not _has_live_backend(),
                     reason="ADR-0596 outcome-first bundling needs a live LLM "
-                           "backend (claude CLI / Ollama); degrade path cannot "
+                           "backend (claude CLI); degrade path cannot "
                            "exhibit prompt-driven bundling — infeasible in CI.")
 def test_report_leads_with_outcome_when_llm_present() -> None:
     out, _ = _run_cli(REPORT, max_chars=400, backend="auto")

@@ -67,7 +67,8 @@ der die Funktionsfähigkeit belegt.
 ### 1.6 Engine-Identity-Gate (compliance-zone)
 
 - [ ] `spec.data_residency.allowed_engines` enthält **nur** EU-safe
-  Engine-IDs (z.B. `opencode_ollama`)
+  Engine-IDs (z.B. `opencode_http` oder eine per `engine_compliance`
+  deklarierte eigene Engine; `opencode_ollama` wurde mit ADR-2087 entfernt)
 - [ ] `spec.data_residency.forbid_engines` explizit listed `claude_code`,
   `codex_cli`, generic `opencode`
 

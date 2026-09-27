@@ -11,7 +11,7 @@ live here.
 → **Tests:** 
   - `corvin_operator/bridges/shared/test_egress_gate.py`
   - `corvin_operator/license/tests/test_elr_m1.py` (34 comprehensive ELR tests)
-→ **Presets:** `corvin_operator/bundle/config-templates/tenant.corvin.eu-production-{ollama,http}.yaml`
+→ **Presets:** `corvin_operator/bundle/config-templates/tenant.corvin.eu-production-http.yaml` (the `-ollama` preset was removed with local Ollama inference, ADR-2087)
 
 ---
 
@@ -121,7 +121,7 @@ spec:
     allowed_hosts:
       - localhost
       - 127.0.0.1
-      - ollama.lan
+      - llm.lan
     forbidden_hosts:
       - api.anthropic.com
       - api.openai.com
@@ -140,33 +140,31 @@ Loader rules:
 
 ---
 
-## EU_PRODUCTION presets
+## EU_PRODUCTION preset
 
-Two shipped templates, both under
-`corvin_operator/bundle/config-templates/`:
-
-### `tenant.corvin.eu-production-ollama.yaml` (recommended default)
-
-* `allowed_engines: [opencode_ollama]`
-* `forbid_engines: [claude_code, codex_cli, opencode]`
-* `data_classification.matrix.*: [local]` (every classification row)
-* `egress.{enabled: true, default_action: deny, allowed_hosts:
-  [localhost, 127.0.0.1]}`
-* `egress.forbidden_hosts: [api.anthropic.com, api.openai.com,
-  api.mistral.ai, generativelanguage.googleapis.com]`
-* Forward-declared `spec.audit.{retention_years: 7,
-  encryption_at_rest, rotation}` for L37 (M3).
+One shipped template under `corvin_operator/bundle/config-templates/`.
+(A second, `tenant.corvin.eu-production-ollama.yaml`, pinned the removed
+`opencode_ollama` engine and was deleted by ADR-2087.)
 
 ### `tenant.corvin.eu-production-http.yaml` (self-hosted)
 
-Same as above, but:
-
 * `allowed_engines: [opencode_http]`
-* `forbid_engines` also includes `opencode_ollama`.
-* `egress.allowed_hosts` adds `opencode-llm` (the docker-compose
-  service name).
+* `forbid_engines: [claude_code, codex_cli, opencode, opencode_ollama]`
+  (the last entry is a leftover id that no longer exists in the engine
+  registry; harmless)
+* `data_classification.matrix.*: [local]` (every classification row) plus an
+  `engine_compliance` entry pinning `opencode_http` to `locality: local`,
+  `network_egress: local`
+* `egress.{enabled: true, default_action: deny, allowed_hosts:
+  [localhost, 127.0.0.1, opencode-llm]}` (`opencode-llm` is the
+  docker-compose service name)
+* `egress.forbidden_hosts: [api.anthropic.com, api.openai.com,
+  api.mistral.ai, generativelanguage.googleapis.com]`
 
-Operator picks one and installs it as
+Because this preset denies `api.anthropic.com`, the L44 house-rules gate runs
+in `floor_only` mode for the tenant (no classifier; see Layer 44).
+
+Operator installs it as
 `<corvin_home>/tenants/_default/global/tenant.corvin.yaml`. Hot-reload
 applies on mtime change.
 
@@ -183,7 +181,7 @@ Three event types on the L16 hash chain:
   "severity": "INFO",
   "details": {
     "host": "localhost",
-    "engine_id": "opencode_ollama",
+    "engine_id": "opencode_http",
     "matched_rule": "allowed_explicit",
     "reason": "host on allowed_hosts list",
     "persona": "coder",

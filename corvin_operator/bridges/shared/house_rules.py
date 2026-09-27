@@ -32,10 +32,14 @@ Hybrid, three tiers:
   Decision — deny / escalate / warn / allow. Policy/integrity error → fail-closed
             (deny). Classifier UNCERTAINTY (backend ran, low confidence / anomalous
             output) → escalate, never silent allow. Classifier BACKEND UNAVAILABLE
-            (raised — e.g. a fresh install before Hermes/Claude are ready) → degrade
+            (raised — e.g. a fresh install before the claude CLI is logged in) → degrade
             to the deterministic Tier-0 floor: prohibited-class patterns still BLOCK,
             benign passes. Fail-TO-FLOOR, not fail-open (the policy default ALLOW is
             reached only when NO rule pattern matches). See ``classify``.
+  floor_only (ADR-2087) — a tenant whose egress policy does not admit the cloud
+            classifier host gets NO classifier at all (no subprocess, no
+            network): a deny-pattern match denies, EVERY other task escalates
+            (never the policy default), audited ``house_rules.floor_only``.
 
 STATUS: ACTIVE — gate is live at two call sites in adapter.py:
   1. ClaudeCode OS-turn path (``_check_house_rules_or_fail`` before spawn)
@@ -190,6 +194,9 @@ _AUDIT_ALLOWED: frozenset[str] = frozenset({
     "rule_id", "action", "persona", "channel", "chat_key",
     "engine_id", "reason", "confidence", "matched_pattern_count",
 })
+# ADR-2087 — ``house_rules.floor_only`` carries the decision metadata plus the
+# tenant id. Content-free: never task text, never a free-text reason.
+_FLOOR_ONLY_AUDIT_ALLOWED: frozenset[str] = _AUDIT_ALLOWED | {"tenant_id"}
 
 
 # The audit writer (forge.security_events) is DEFAULT-DENY for unknown detail
@@ -210,6 +217,7 @@ try:
     for _evt in ("house_rules.denied", "house_rules.escalated",
                  "house_rules.warned", "house_rules.allowed"):
         _register_allowlist(_evt, _AUDIT_ALLOWED | {"error_type", "audit_ref", "tenant_id"})
+    _register_allowlist("house_rules.floor_only", _FLOOR_ONLY_AUDIT_ALLOWED | {"audit_ref"})
 except Exception:  # noqa: BLE001 — forge absent: the writer is injected by the caller anyway
     pass
 
@@ -264,13 +272,18 @@ _REASON_CLASSIFIER_LOWCONF = "classifier_violation_low_confidence"
 _REASON_CLASSIFIER_CLEARED = "classifier_cleared"
 _REASON_CLEAR_LOWCONF = "clear_low_confidence"   # any low-conf clear → escalate
 _REASON_CLASSIFIER_ERROR = "classifier_error"
-# Semantic backend unreachable (fresh install before Hermes is provisioned, or a
+# Semantic backend unreachable (fresh install before the claude CLI is ready, or a
 # transient outage) → we degrade to the deterministic Tier-0 floor instead of
 # escalating every task. Distinct reason so the audit chain records that the
 # semantic check did not run and the messenger/console pick the neutral wording.
 _REASON_CLASSIFIER_ERROR_DEGRADED = "classifier_error_tier0_degraded"
 _REASON_TIER0_MATCH = "tier0_match_no_classifier"
 _REASON_NO_MATCH = "no_rule_matched"
+# ADR-2087 floor_only (the tenant's egress denies the cloud classifier host, so
+# no classifier runs by design). Distinct from the degraded code above, which
+# keeps meaning "a classifier that should have run did not".
+_REASON_FLOOR_ONLY_MATCH = "floor_only_rule_match"
+_REASON_FLOOR_ONLY_NO_MATCH = "floor_only_no_rule_matched"
 
 
 # ── repo policy file location + integrity ────────────────────────────────────
@@ -428,7 +441,7 @@ class HouseRulesGate:
         tier0_hits = sum(1 for r in self.policy.rules if _matches(r, task_text))
 
         # Tier-0 deterministic floor: strictest matched rule action, else the
-        # policy default. Needs NO backend (no Hermes, no cloud) and never raises
+        # policy default. Needs NO backend (no classifier, no network) and never raises
         # — the always-available acceptable-use decision. The prohibited-class
         # patterns still MATCH and BLOCK here; only a task that matches NO rule
         # reaches the policy default.
@@ -450,10 +463,28 @@ class HouseRulesGate:
         # Tier-1 semantic classification over the WHOLE ruleset (one pass).
         try:
             rid, confidence, _detail = self.classifier(task_text, self.policy.rules, auth)
+        except HouseRulesFloorOnly as _fo:
+            # ADR-2087 floor_only: the tenant's egress policy does not admit the
+            # cloud classifier host, so NO classifier ran (by design, not by
+            # failure). The deterministic floor decides; a deny match stays
+            # deny, EVERYTHING else escalates — a task no rule denies has not
+            # been classified, so it must not reach the policy default (allow).
+            # Deliberately NOT the classifier_error_tier0_degraded path and not
+            # tracked as a classifier degradation.
+            floor = _tier0_floor()
+            if floor.reason == _REASON_TIER0_MATCH:
+                action = _stricter(floor.action, "escalate")
+                dec = HouseRulesDecision(action, floor.rule_id,
+                                         _REASON_FLOOR_ONLY_MATCH, floor.confidence)
+            else:
+                dec = HouseRulesDecision("escalate", "", _REASON_FLOOR_ONLY_NO_MATCH, 1.0)
+            self._emit_floor_only(dec, getattr(_fo, "tenant_id", ""), persona,
+                                  channel, chat_key, engine_id, tier0_hits)
+            return self._decide(dec, persona, channel, chat_key, engine_id, tier0_hits)
         except Exception:  # noqa: BLE001 — semantic BACKEND unreachable → degrade to floor
-            # The semantic classifier's backend (Hermes local / cloud Haiku) could
-            # not run AT ALL — e.g. a fresh install in the seconds before Hermes /
-            # Claude auth are ready, or a transient outage. The OLD behaviour
+            # The semantic classifier's backend (cloud Haiku) could
+            # not run AT ALL — e.g. a fresh install in the seconds before the
+            # Claude auth is ready, or a transient outage. The OLD behaviour
             # escalated EVERY task (even a benign "hallo") to human review, locking
             # first-run users out of the box (the reported bad-UX bug) for zero real
             # safety gain. Instead we degrade to the always-available deterministic
@@ -564,6 +595,37 @@ class HouseRulesGate:
         })
         return d
 
+    def _emit_floor_only(self, d: HouseRulesDecision, tenant_id: str, persona: str,
+                         channel: str, chat_key: str, engine_id: str, hits: int) -> None:
+        """ADR-2087 — record that this decision was taken on the floor ONLY.
+
+        Written through the gate's own audit writer, BEFORE ``_decide`` writes
+        the ``house_rules.{denied,escalated}`` decision record and before the
+        verdict is returned (audit-first). Metadata only — never task text.
+
+        ``tenant_id`` is deliberately NOT written: the record lands on the
+        tenant's own chain, and the forge writer refuses (AuditTenantMismatch)
+        any record whose explicit tenant_id differs from the process tenant —
+        which a multi-tenant console always is — so an explicit id would drop
+        the event. Same shape as the house_rules.{denied,escalated} records."""
+        del tenant_id
+        if self.audit_writer is None:
+            return
+        details = {
+            "rule_id": d.rule_id, "action": d.action,
+            "reason": d.reason, "persona": persona, "channel": channel,
+            "chat_key": chat_key, "engine_id": engine_id,
+            "matched_pattern_count": hits,
+        }
+        details = {k: v for k, v in details.items() if v not in ("", None)}
+        for k in details:
+            if k not in _FLOOR_ONLY_AUDIT_ALLOWED:
+                raise ValueError(f"house_rules.floor_only detail {k!r} not allowed")
+        try:
+            self.audit_writer("house_rules.floor_only", "INFO", details)
+        except Exception:  # noqa: BLE001 — same contract as _emit: never blocks the verdict
+            pass
+
     def _emit(self, event_type: str, severity: str, details: dict[str, Any]) -> None:
         if self.audit_writer is None:
             return
@@ -620,7 +682,7 @@ except Exception:  # noqa: BLE001 — registry absent in minimal/test contexts
 # ── ADR-0157 / ADR-0158 M3 — Resilient Classifier (canonical home) ──────────
 #
 # Moved from adapter.py so HouseRulesGate.from_repo() can default to the
-# full Hermes→cloud chain without importing adapter (circular-import risk).
+# cloud classifier chain without importing adapter (circular-import risk).
 # adapter.py re-exports all names below for backward compatibility.
 
 _HOUSE_RULES_ADJ_TIMEOUT_S = 20.0     # cloud Haiku spawn timeout
@@ -639,37 +701,8 @@ _HOUSE_RULES_RETRY_BACKOFF_MAX_S = 4.0  # M1/D: cap on a single sleep
 # or escalate).  Cache key is sha256(tenant_id+order+chunk+rules+auth) so a
 # rule-change, a per-user auth change, a different tenant, OR a different
 # classifier order/model produces a new key and bypasses stale/foreign entries.
-# Known-good local classifier models (the qwen3 family the project ships +
-# pulls). A tenant may configure spec.hermes_model freely for CHAT, but that
-# model is now ALSO the L44 safety classifier — warn (once) if it is below the
-# vetted set so an operator who pins a tiny/unsuitable chat model is told the
-# safety check may be unreliable (security-audit 2026-06-25 #13).
-_HOUSE_RULES_KNOWN_GOOD_CLASSIFIER_MODELS = frozenset({
-    "qwen3:8b", "qwen3:1.7b", "qwen3:14b", "qwen3:4b", "qwen3:32b",
-    # Additional models verified to produce valid classifier JSON:
-    "qwen2.5:3b", "qwen2.5:7b", "qwen2.5:14b",
-    "gemma3:4b", "gemma3:12b", "mistral:7b", "llama3.2:3b", "llama3:8b",
-})
-_hr_warned_classifier_models: "set[str]" = set()
-# Cache: once we auto-discover a working Ollama model (because the configured one
-# is missing), remember it so we don't query /api/tags on every request.
-_hr_autodiscovered_model: "str | None" = None
 _HOUSE_RULES_CACHE_TTL_S = 300        # M2: 5-minute TTL for cached CLEAR verdicts
 _HOUSE_RULES_CACHE_MAX = 512          # M2: max cache size (LRU-like eviction)
-# ADR-0157 M3 — Hermes/Ollama local primary classifier.
-# Timeout must clear a real classification on a local model — NOT "shorter than
-# cloud". A local 8B model (qwen3:8b) needs ~8 s warm and more on a cold start
-# (model load into VRAM). The old 10 s budget was below the cold-start time, so
-# the local-primary path timed out and silently fell through to cloud Haiku —
-# which, during an Anthropic 500, escalated EVERY task (the brick). Overridable
-# via CORVIN_HOUSE_RULES_HERMES_TIMEOUT_S for fast (1.7b) or slow (cloud-Ollama)
-# local backends.
-try:
-    _HOUSE_RULES_HERMES_TIMEOUT_S = float(
-        os.environ.get("CORVIN_HOUSE_RULES_HERMES_TIMEOUT_S", "") or 30
-    )
-except (TypeError, ValueError):
-    _HOUSE_RULES_HERMES_TIMEOUT_S = 30.0
 # ADR-0157 M4 — degradation clustering.
 _HOUSE_RULES_DEGRADE_WINDOW_S = 600   # M4: 10-min window for error counting
 _HOUSE_RULES_DEGRADE_THRESHOLD = 5    # M4: emit WARNING after N errors in window
@@ -710,11 +743,11 @@ def _resolve_helper_claude_bin() -> str:
 
 
 def _house_rules_make_prompt(norm: str, rules_block: str, auth_str: str, *, strict_json: bool = False) -> str:
-    """Shared prompt template for both cloud (Haiku) and local (Hermes) classifiers.
+    """Prompt template for the cloud (Haiku) classifier.
 
     ``strict_json`` adds a blunt reinforcement line, used only on a classifier
     retry after a ``no_json``/``bad_json`` cause — the cloud CLI path has no
-    ``format:"json"`` API guarantee (unlike Ollama's local path), so a fast
+    ``format:"json"`` API guarantee, so a fast
     model occasionally wraps its verdict in prose or markdown fences instead
     of emitting the bare JSON object asked for. Re-stating the instruction
     more forcefully on retry fixes most of these without burning the fixed
@@ -816,8 +849,7 @@ def _house_rules_parse_verdict(raw: str) -> "tuple[str, float, str]":
 def _house_rules_normalize_chunk(chunk: str) -> str:
     """NFKC-normalise and escape the untrusted chunk before prompt injection.
 
-    Shared by both the cloud (Haiku) and local (Hermes) classifier paths so
-    that the normalization logic cannot diverge between providers (F-07)."""
+    Used by the cloud (Haiku) classifier path (F-07)."""
     import unicodedata as _ud
     norm = _ud.normalize("NFKC", chunk or "")
     return re.sub(r"</\s*user_task\s*>", "<\\/user_task>", norm, flags=re.IGNORECASE)
@@ -966,213 +998,46 @@ def _house_rules_classify_chunk(chunk: str, rules_block: str, auth_str: str) -> 
     raise last if last is not None else _HouseRulesClassifierError("unknown")
 
 
-def _house_rules_discover_ollama_model(hermes_url: str) -> "str | None":
-    """Query Ollama /api/tags to find the best available classifier model.
-
-    Called when the configured model returns 404 on a fresh install. Returns the
-    first known-good model available, then any model, or None if Ollama is empty.
-    Result is cached in _hr_autodiscovered_model to avoid repeated /api/tags calls."""
-    global _hr_autodiscovered_model  # noqa: PLW0603
-    if _hr_autodiscovered_model:
-        return _hr_autodiscovered_model
-    import json as _json
-    import urllib.request as _ur
-    import urllib.error as _ue
-    try:
-        with _ur.urlopen(f"{hermes_url}/api/tags", timeout=5.0) as resp:
-            data = _json.loads(resp.read().decode())
-    except Exception:  # noqa: BLE001
-        return None
-    available = [m.get("name", "") for m in data.get("models", []) if m.get("name")]
-    if not available:
-        return None
-    # Prefer vetted classifier models; fall back to any available model.
-    for m in available:
-        if m in _HOUSE_RULES_KNOWN_GOOD_CLASSIFIER_MODELS:
-            _hr_autodiscovered_model = m
-            return m
-    # No vetted model — use the first available (with quality warning already in caller).
-    _hr_autodiscovered_model = available[0]
-    return available[0]
-
-
-def _house_rules_classify_hermes(chunk: str, rules_block: str, auth_str: str,
-                                 tenant_id: "str | None" = None) -> "tuple[str, float, str]":
-    """ADR-0157 M3/Pillar-A — local Ollama/Hermes primary classifier.
-
-    Calls Ollama ``/api/generate`` with ``format:"json"`` which forces the model
-    to emit valid JSON.  Any failure raises ``_HouseRulesClassifierError`` so
-    the provider-chain caller falls through to cloud Haiku."""
-    import json as _json
-    import urllib.request as _ur
-    import urllib.error as _ue
-
-    norm = _house_rules_normalize_chunk(chunk)
-    prompt = _house_rules_make_prompt(norm, rules_block, auth_str)
-
-    hermes_url = os.environ.get("CORVIN_HERMES_URL", "http://localhost:11434")
-    # Classify with the model the RUNNING Hermes engine actually uses — the
-    # tenant's CONFIGURED spec.hermes_model — so the check requires NO separate
-    # Ollama model. Resolution: configured spec.hermes_model (the running engine's
-    # model) → CORVIN_HERMES_MODEL env → engine's built-in default. A box
-    # bootstrapped with hermes-fast (qwen3:1.7b) pulled ONLY that model; a
-    # classifier hardcoded to qwen3:8b hit Ollama 404 → classifier_error →
-    # fail-closed block of every request even though Hermes WAS ready. Using the
-    # configured model makes "the engine that's running does the check" literal.
-    #
-    # CORVIN_HOUSE_RULES_MODEL (highest priority) pins the L44 classifier to a
-    # DEDICATED model independent of the chat engine. NOTE: nothing in the
-    # shipped installers sets this today — qwen3:1.7b was evaluated for the
-    # role and rejected (0/5 valid classifier JSON, commit 9a29643); the
-    # installers pre-warm the auto-picked installed qwen3 tag instead. The
-    # override exists for operators pinning an explicit classifier model.
-    # Unset → the configured chat model.
-    hermes_model = os.environ.get("CORVIN_HOUSE_RULES_MODEL", "").strip() \
-        or _house_rules_tenant_hermes_model(tenant_id)
-    if not hermes_model:
-        try:
-            from agents.hermes_engine import _resolve_default_model as _hermes_model  # type: ignore
-            hermes_model = _hermes_model()
-        except Exception:  # noqa: BLE001 — engine module absent → canonical built-in default
-            hermes_model = os.environ.get("CORVIN_HERMES_MODEL", "").strip() or "qwen3:8b"
-    # Floor warning (once per model): the configured chat model is now also the
-    # safety classifier — flag an unvetted one so the operator knows the L44
-    # verdict quality may be degraded (it still runs fail-closed either way).
-    if hermes_model not in _HOUSE_RULES_KNOWN_GOOD_CLASSIFIER_MODELS \
-            and hermes_model not in _hr_warned_classifier_models:
-        _hr_warned_classifier_models.add(hermes_model)
-        _hr_log.warning(
-            "[house-rules] L44 classifier model %r is not in the vetted set %s — "
-            "safety-check quality may be reduced; pin CORVIN_HERMES_MODEL to a "
-            "vetted model if this is unintended.",
-            hermes_model, sorted(_HOUSE_RULES_KNOWN_GOOD_CLASSIFIER_MODELS),
-        )
-    payload = _json.dumps({
-        "model": hermes_model,
-        "prompt": prompt,
-        "stream": False,
-        "format": "json",
-        # Disable qwen3-style reasoning: a thinking model would emit a long
-        # <think> monologue BEFORE the classification JSON and blow the 30s
-        # timeout on a COLD fresh-install model — every retry then times out
-        # (~90s total), and this L44 gate sits IN FRONT of image generation, so
-        # the whole imagegen call hit its 240s hang-backstop before a picture was
-        # ever requested (reported 2026-07-14, fresh Windows install). Direct JSON
-        # with think=False keeps the safety check fast; format:"json" already
-        # forces a clean verdict, so reasoning adds latency, not accuracy. Ignored
-        # by non-thinking models; the gate stays fail-closed on any parse failure.
-        "think": False,
-        # Keep the classifier model RESIDENT between messages so the next
-        # safety-check is not a cold model load (fresh-install cold-start was
-        # ~22 s on 8b). "30m" balances warmth against idle RAM on a small box;
-        # override via CORVIN_HOUSE_RULES_KEEP_ALIVE (e.g. "-1" = never unload).
-        "keep_alive": os.environ.get("CORVIN_HOUSE_RULES_KEEP_ALIVE", "").strip() or "30m",
-    }).encode()
-    req = _ur.Request(
-        f"{hermes_url}/api/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with _ur.urlopen(req, timeout=_HOUSE_RULES_HERMES_TIMEOUT_S) as resp:
-            raw = resp.read().decode()
-    except _ue.HTTPError as e:
-        # A REACHABLE Ollama that rejects the request (e.g. 404 "model '<x>' not
-        # found") is a CONFIGURATION fault. Before falling through to cloud Haiku,
-        # try to auto-discover a model that IS available in this Ollama instance.
-        # This prevents fresh-install failures where the configured model hasn't
-        # been pulled yet but another usable model exists (e.g. the engine model).
-        _err_code = getattr(e, "code", "?")
-        _body = ""
-        try:
-            _body = e.read().decode(errors="replace")[:160]
-        except Exception:  # noqa: BLE001
-            pass
-        if _err_code == 404:
-            fallback = _house_rules_discover_ollama_model(hermes_url)
-            if fallback and fallback != hermes_model:
-                _hr_log.warning(
-                    "[house-rules] local classifier model %r not found in Ollama — "
-                    "auto-discovered %r as fallback. Set CORVIN_HERMES_MODEL=%s to "
-                    "suppress this warning. %s",
-                    hermes_model, fallback, fallback, _body,
-                )
-                # Retry with the discovered model by re-entering; prevent infinite loop
-                # via the global cache (_hr_autodiscovered_model already set in discover).
-                payload2 = _json.dumps({
-                    "model": fallback,
-                    "prompt": prompt,
-                    "stream": False,
-                    "format": "json",
-                    "think": False,  # see the primary payload — no reasoning latency
-                }).encode()
-                req2 = _ur.Request(
-                    f"{hermes_url}/api/generate",
-                    data=payload2,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                try:
-                    with _ur.urlopen(req2, timeout=_HOUSE_RULES_HERMES_TIMEOUT_S) as resp2:
-                        raw = resp2.read().decode()
-                except Exception as e2:  # noqa: BLE001
-                    raise _HouseRulesClassifierError(
-                        "local_misconfigured", f"hermes auto-fallback failed: {e2}"
-                    ) from e2
-                # Fall through to JSON parsing below with `raw` from fallback model
-            else:
-                _hr_log.warning(
-                    "[house-rules] local classifier model %r not found in Ollama and "
-                    "no usable model auto-discovered — falling back to cloud Haiku. "
-                    "Run: ollama pull %s  (or set CORVIN_HERMES_MODEL to an installed model). %s",
-                    hermes_model, hermes_model, _body,
-                )
-                raise _HouseRulesClassifierError(
-                    "local_misconfigured", f"hermes http {_err_code} — no model available"
-                ) from e
-        else:
-            _hr_log.warning(
-                "[house-rules] local classifier REJECTED request (HTTP %s, model=%r) — "
-                "falling back to cloud Haiku. %s",
-                _err_code, hermes_model, _body,
-            )
-            raise _HouseRulesClassifierError(
-                "local_misconfigured", f"hermes http {_err_code}"
-            ) from e
-    except (_ue.URLError, OSError) as e:
-        raise _HouseRulesClassifierError("timeout", f"hermes: {e}") from e
-    except Exception as e:  # noqa: BLE001
-        raise _HouseRulesClassifierError("spawn_error", f"hermes: {e}") from e
-
-    try:
-        outer = _json.loads(raw)
-        text_response = str(outer.get("response", "")).strip()
-    except (ValueError, KeyError, AttributeError) as e:
-        raise _HouseRulesClassifierError("bad_json", f"hermes wrapper: {e}") from e
-
-    return _house_rules_parse_verdict(text_response)
-
-
-# ── ADR-0161 — context-aware classifier ordering ────────────────────────────
-# The cloud classifier (`claude -p`) talks to this host. Used only to ask the
-# tenant's L35 egress policy whether the cloud path is reachable — this is an
-# ORDERING hint, not the enforcement gate (L35 still enforces at the real spawn).
+# ── ADR-0161 / ADR-2087 — classifier order: cloud_only or floor_only ─────────
+# The cloud classifier (`claude -p`) talks to this host. The cloud classifier is
+# a subprocess the L35 spawn gate does NOT see, so this probe of the tenant's
+# egress policy is what keeps an egress-denied tenant's task text off the wire.
 _HOUSE_RULES_CLOUD_HOST = "api.anthropic.com"
 
-_HOUSE_RULES_VALID_ORDERS = ("local_first", "cloud_first", "local_only", "cloud_only")
+# ADR-2087: the only two orders left (the local classifier and its orders
+# were removed per ADR-2087).
+#   cloud_only  — cloud Haiku → fail-closed (classifier error → gate degrades
+#                 to the Tier-0 floor, exactly as before).
+#   floor_only  — NO classifier, NO network: the deterministic Tier-0 floor
+#                 decides and a task that matches no deny rule ESCALATES
+#                 (never the policy default ``allow``). See HouseRulesGate.classify.
+_HOUSE_RULES_ORDER_CLOUD_ONLY = "cloud_only"
+_HOUSE_RULES_ORDER_FLOOR_ONLY = "floor_only"
+_HOUSE_RULES_VALID_ORDERS = (_HOUSE_RULES_ORDER_CLOUD_ONLY, _HOUSE_RULES_ORDER_FLOOR_ONLY)
+
+
+class HouseRulesFloorOnly(Exception):
+    """Raised by the classifier instead of spawning anything when the tenant's
+    resolved order is ``floor_only`` (ADR-2087).
+
+    It is NOT a classifier failure: ``HouseRulesGate.classify`` catches it
+    BEFORE its generic backend-unavailable handler, so it never takes the
+    ``classifier_error_tier0_degraded`` path (whose no-match outcome is the
+    policy default ``allow``). Carries only the tenant id — never task text."""
+
+    def __init__(self, tenant_id: str = "") -> None:
+        super().__init__("house-rules classifier order is floor_only")
+        self.tenant_id = tenant_id or ""
 
 
 def _house_rules_cloud_egress_allowed(tenant_id: "str | None" = None) -> bool:
     """True when the tenant's L35 egress policy permits the cloud classifier host.
 
-    Fail-SAFE for *ordering* (NOT for enforcement): returns False — i.e. treat
-    the cloud as unreachable, classify local-only — ONLY when a tenant policy
-    explicitly denies ``api.anthropic.com``. Absent/unreadable policy or any
-    error → True (cloud reachable), preserving the legacy assumption. The real
-    L35 gate still enforces at the engine spawn; this only decides which
-    classifier to TRY first so an egress-denied tenant never leaks task text to
-    the cloud via a fallback (the latent residency bug this closes)."""
+    Returns False — i.e. the tenant runs ``floor_only`` and no task text is
+    sent to the cloud classifier — when a tenant policy denies
+    ``api.anthropic.com``. Absent/unreadable policy or any error → True (cloud
+    reachable), preserving the legacy assumption (see the KNOWN_BUG tests in
+    test_adr0157_classifier.py for the read-error case)."""
     try:
         tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
         env = os.environ.get("CORVIN_HOME")
@@ -1186,103 +1051,27 @@ def _house_rules_cloud_egress_allowed(tenant_id: "str | None" = None) -> bool:
         # audit_writer=None → the probe emits NO egress audit event (read-only hint).
         gate = EgressGate.from_tenant_config(doc, audit_writer=None)
         return bool(gate.validate(_HOUSE_RULES_CLOUD_HOST).allowed)
-    except Exception:  # noqa: BLE001 — ordering hint must never raise
+    except Exception:  # noqa: BLE001 — the probe must never raise
         return True
 
 
-def _house_rules_tenant_default_engine(tenant_id: "str | None" = None) -> str:
-    """Read the tenant's ``spec.default_engine`` from ``tenant.corvin.yaml``.
-
-    Resolved the same way the rest of the codebase reads tenant spec
-    (``engine_models._load_tenant_spec`` pattern). Returns ``""`` when no
-    config / unreadable / unset. Used as an ORDERING hint only — never an
-    enforcement gate. Any error → ``""`` so the resolver falls back to the
-    egress-policy heuristic (legacy behaviour)."""
-    try:
-        tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
-        env = os.environ.get("CORVIN_HOME")
-        home = Path(os.path.expanduser(env)) if env else (Path.home() / ".corvin")
-        cfg = home / "tenants" / tid / "global" / "tenant.corvin.yaml"
-        if not cfg.is_file():
-            return ""
-        import yaml  # type: ignore
-        doc = yaml.safe_load(cfg.read_text("utf-8")) or {}
-        spec = doc.get("spec") if isinstance(doc, dict) else None
-        eng = (spec or {}).get("default_engine") if isinstance(spec, dict) else None
-        return str(eng).strip().lower() if isinstance(eng, str) else ""
-    except Exception:  # noqa: BLE001 — ordering hint must never raise
-        return ""
-
-
-def _house_rules_tenant_hermes_model(tenant_id: "str | None" = None) -> str:
-    """Read the tenant's CONFIGURED Hermes model (``spec.hermes_model``) and map
-    any alias (hermes-fast/balanced/…) to its Ollama tag.
-
-    The local classifier MUST classify with the SAME model the running Hermes
-    engine uses — not a separate hardcoded default. A box bootstrapped with
-    ``hermes-fast`` (qwen3:1.7b) pulled ONLY that model; a classifier hardcoded to
-    qwen3:8b then hit Ollama 404 → classifier_error → fail-closed block of every
-    request even though Hermes WAS configured and ready. Returns ``""`` when
-    unset/unreadable (caller falls back to env → built-in default)."""
-    try:
-        tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
-        env = os.environ.get("CORVIN_HOME")
-        home = Path(os.path.expanduser(env)) if env else (Path.home() / ".corvin")
-        cfg = home / "tenants" / tid / "global" / "tenant.corvin.yaml"
-        if not cfg.is_file():
-            return ""
-        import yaml  # type: ignore
-        doc = yaml.safe_load(cfg.read_text("utf-8")) or {}
-        spec = doc.get("spec") if isinstance(doc, dict) else None
-        model = (spec or {}).get("hermes_model") if isinstance(spec, dict) else None
-        if not isinstance(model, str) or not model.strip():
-            return ""
-        model = model.strip()
-        try:
-            from agents.hermes_engine import HERMES_MODEL_ALIASES as _aliases  # type: ignore
-            return _aliases.get(model, model)
-        except Exception:  # noqa: BLE001
-            return model
-    except Exception:  # noqa: BLE001 — model hint must never raise
-        return ""
-
-
 def _house_rules_resolve_order(tenant_id: "str | None" = None) -> str:
-    """Resolve the classifier provider order (ADR-0161 / engine-aware).
+    """Resolve the classifier order for a tenant (ADR-2087).
 
-    Precedence:
-      1. ``CORVIN_HOUSE_RULES_DISABLE_HERMES=1`` → ``cloud_only`` (back-compat).
-      2. ``CORVIN_HOUSE_RULES_CLASSIFIER_ORDER`` ∈ {auto, local_first,
-         cloud_first, local_only, cloud_only}.
-      3. default ``auto``.
+    Computed order: ``floor_only`` when the tenant's egress policy does not
+    admit ``api.anthropic.com``, else ``cloud_only``.
 
-    ``auto`` resolution is ENGINE-AWARE so a local-intent tenant never leaks
-    task text to ``api.anthropic.com`` and never burns the transient-retry
-    budget on an unauthenticated cloud CLI:
-
-      * When the tenant's ``spec.default_engine`` is ``hermes`` (fully-local
-        Ollama intent), prefer the local classifier:
-          - ``local_only`` when egress to the cloud host is also denied
-            (residency: a local failure must NEVER fall through to cloud), else
-          - ``local_first`` (local primary, cloud only as a last-resort
-            fallback).
-      * Otherwise (claude_code / cloud-engine tenant) keep the legacy
-        egress-keyed heuristic: ``cloud_first`` when egress permits the cloud
-        host, else ``local_only`` (egress denied / EU_PRODUCTION)."""
-    if os.environ.get("CORVIN_HOUSE_RULES_DISABLE_HERMES") == "1":
-        return "cloud_only"
-    order = (os.environ.get("CORVIN_HOUSE_RULES_CLASSIFIER_ORDER", "") or "auto").strip().lower()
-    if order in _HOUSE_RULES_VALID_ORDERS:
-        return order
-    # auto (also the fallback for any unrecognised value)
-    cloud_ok = _house_rules_cloud_egress_allowed(tenant_id)
-    default_engine = _house_rules_tenant_default_engine(tenant_id)
-    if default_engine == "hermes":
-        # Local-intent tenant: classify on-host first. Egress-denied → local_only
-        # (never fall through to cloud); otherwise local_first (cloud fallback).
-        return "local_first" if cloud_ok else "local_only"
-    # claude_code / cloud-engine tenant — legacy egress-keyed behaviour.
-    return "cloud_first" if cloud_ok else "local_only"
+    ``CORVIN_HOUSE_RULES_CLASSIFIER_ORDER`` may only make the order STRICTER:
+    ``floor_only`` forces the floor for every tenant. Any other value —
+    ``cloud_only``, ``auto``, the removed ``local_first`` / ``local_only`` /
+    ``cloud_first``, or garbage — resolves to the computed order, so it can
+    never re-open the cloud path for an egress-denied tenant."""
+    env_order = (os.environ.get("CORVIN_HOUSE_RULES_CLASSIFIER_ORDER", "") or "").strip().lower()
+    if env_order == _HOUSE_RULES_ORDER_FLOOR_ONLY:
+        return _HOUSE_RULES_ORDER_FLOOR_ONLY
+    if not _house_rules_cloud_egress_allowed(tenant_id):
+        return _HOUSE_RULES_ORDER_FLOOR_ONLY
+    return _HOUSE_RULES_ORDER_CLOUD_ONLY
 
 
 def _house_rules_classify_with_chain(
@@ -1294,65 +1083,24 @@ def _house_rules_classify_with_chain(
     order: "str | None" = None,
     tenant_id: "str | None" = None,
 ) -> "tuple[str, float, str]":
-    """ADR-0157 M3 / ADR-0161 — context-aware provider chain → fail-closed.
+    """Classify one chunk under the resolved order (ADR-2087).
 
-    ``order`` (resolved once per task by the caller, or here if None) selects:
-      * ``cloud_first`` — cloud Haiku → local Hermes → fail-closed (fast path).
-      * ``local_first`` — local Hermes → cloud Haiku → fail-closed (privacy).
-      * ``local_only``  — local Hermes → fail-closed (egress-denied/EU: a local
-        failure NEVER falls through to cloud — data residency).
-      * ``cloud_only``  — cloud Haiku → fail-closed (DISABLE_HERMES back-compat).
+      * ``cloud_only`` — cloud Haiku; a failure propagates so the gate handles
+        it (degrade to the Tier-0 floor, audited ``classifier_error_tier0_degraded``).
+      * ``floor_only`` — raises :class:`HouseRulesFloorOnly` WITHOUT spawning
+        anything; the gate decides on the deterministic floor.
 
-    ``audit_write`` is optional; when provided a ``house_rules.provider_fallback``
-    event is emitted whenever the primary provider falls through to the secondary."""
-    if order is None:
+    Any unrecognised ``order`` is re-resolved for the tenant (never loosened).
+    ``audit_write`` is accepted for signature compatibility; with a single
+    provider there is no fallback event to emit any more."""
+    del audit_write  # single provider — no house_rules.provider_fallback anymore
+    # An explicit order may only make things stricter: a caller passing
+    # cloud_only for an egress-denied tenant still gets floor_only.
+    if order != _HOUSE_RULES_ORDER_FLOOR_ONLY:
         order = _house_rules_resolve_order(tenant_id)
-
-    def _local() -> "tuple[str, float, str]":
-        return _house_rules_classify_hermes(chunk, rules_block, auth_str, tenant_id=tenant_id)
-
-    def _cloud() -> "tuple[str, float, str]":
-        return _house_rules_classify_chunk(chunk, rules_block, auth_str)
-
-    # Single-provider orders — a failure propagates and the gate fails CLOSED.
-    if order == "cloud_only":
-        return _cloud()
-    if order == "local_only":
-        return _local()
-
-    if order == "cloud_first":
-        primary, secondary, p_name, s_name = _cloud, _local, "cloud_haiku", "hermes"
-    else:  # local_first (and any unexpected value defends to privacy-first)
-        primary, secondary, p_name, s_name = _local, _cloud, "hermes", "cloud_haiku"
-
-    try:
-        result = primary()
-        _hr_log.info("[house-rules] classified via %s (order=%s)", p_name, order)
-        return result
-    except Exception as e:  # noqa: BLE001 — ANY primary failure must still try the secondary.
-        # Catching only _HouseRulesClassifierError here left a hole: a bug in a
-        # parsing/shape-assumption path could raise something else (AttributeError,
-        # KeyError, ...) that skipped the fallback entirely, blocking the user on
-        # a two-provider gate where the OTHER provider was never even tried. The
-        # provider chain's whole reason to exist is resilience against exactly
-        # this kind of single-provider fault — it must not depend on the fault
-        # being anticipated ahead of time. The final, non-transient failure (if
-        # the secondary also fails) still fail-closes at the caller as before.
-        cause = getattr(e, "cause", None) or type(e).__name__
-        _hr_log.info(
-            "[house-rules] %s unavailable (cause=%s) — falling back to %s",
-            p_name, cause, s_name,
-        )
-        if audit_write is not None:
-            try:
-                audit_write("house_rules.provider_fallback", {
-                    "provider": p_name,
-                    "cause": cause,
-                    "fallback_to": s_name,
-                })
-            except Exception:  # noqa: BLE001 — observability never raises
-                pass
-    return secondary()
+    if order == _HOUSE_RULES_ORDER_FLOOR_ONLY:
+        raise HouseRulesFloorOnly(tenant_id or "")
+    return _house_rules_classify_chunk(chunk, rules_block, auth_str)
 
 
 def _house_rules_track_degradation(audit_write: "object | None" = None) -> None:
@@ -1389,7 +1137,8 @@ def _house_rules_classifier(
     """L44 (ADR-0143 M2 / ADR-0157) Tier-1 semantic classifier.
 
     Builds the chunk list then calls ``_house_rules_classify_with_chain`` per
-    chunk (ADR-0157 M3: Hermes local → cloud Haiku → fail-closed).
+    chunk (ADR-2087: cloud Haiku → fail-closed; ``floor_only`` tenants raise
+    :class:`HouseRulesFloorOnly` before anything is spawned).
     ADR-0157 M2: CLEAR verdicts are cached (hash-keyed, 5-min TTL); DENY /
     ESCALATE are never cached.
 
@@ -1425,6 +1174,10 @@ def _house_rules_classifier(
     # ADR-0161: resolve the provider order ONCE per task (not per chunk) so the
     # egress probe / yaml read happens at most once even for multi-chunk tasks.
     order = _house_rules_resolve_order(tenant_id)
+    if order == _HOUSE_RULES_ORDER_FLOOR_ONLY:
+        # ADR-2087: no classifier subprocess, no network, no cache — the gate
+        # decides on the deterministic floor (HouseRulesGate.classify).
+        raise HouseRulesFloorOnly(tenant_id or "")
     min_clear_conf = 1.0
     for chunk in chunks:
         now = time.monotonic()  # F-08: per-chunk timestamp so TTL is accurate
@@ -1446,7 +1199,8 @@ def _house_rules_classifier(
                 _house_rules_verdict_cache.pop(cache_key, None)
 
         rid, conf, detail = _house_rules_classify_with_chain(
-            chunk, rules_block, auth_str, audit_write=audit_write, order=order
+            chunk, rules_block, auth_str, audit_write=audit_write, order=order,
+            tenant_id=tenant_id,
         )
 
         if not rid:
@@ -1470,55 +1224,33 @@ def _house_rules_classifier(
 def house_rules_boot_health_check(log_fn: "object | None" = None) -> None:
     """Boot-time L44 classifier health check — call from any startup path.
 
-    Probes Ollama for available models and logs actionable WARNINGs when the
-    configured classifier model is missing. Never raises; never blocks boot.
-    This is the structural guard against fresh-install silent fail-closed blocks.
+    ADR-2087: the only classifier backend is the cloud ``claude -p`` helper, so
+    this checks that its CLI resolves. No network, no inference; never raises,
+    never blocks boot. A tenant whose egress denies the cloud runs
+    ``floor_only`` and needs no CLI at all. Without the CLI, a ``cloud_only``
+    tenant's classifier errors and the gate degrades to the Tier-0 floor
+    (audited ``classifier_error_tier0_degraded``).
 
     ``log_fn`` is a callable(str) for log output; defaults to logging.warning."""
     import logging as _logging
-    import urllib.request as _ur2
-    import urllib.error as _ue2
-    import json as _json2
+    import shutil as _shutil
 
     _log = log_fn if callable(log_fn) else _logging.getLogger("corvin.house_rules").warning
-    hermes_url = os.environ.get("CORVIN_HERMES_URL", "http://localhost:11434")
-    configured_model = os.environ.get("CORVIN_HERMES_MODEL", "").strip() or "qwen3:8b"
-
     try:
-        with _ur2.urlopen(f"{hermes_url}/api/tags", timeout=3.0) as _resp:
-            _tags = _json2.loads(_resp.read())
-        available = [m.get("name", "") for m in _tags.get("models", []) if m.get("name")]
-    except (_ue2.URLError, OSError) as e:
-        _log(
-            f"[house-rules] boot-check: Ollama not reachable at {hermes_url} ({e}). "
-            f"L44 will fall back to cloud Haiku. If cloud is also unavailable, "
-            f"every request will be fail-closed blocked. Is Ollama running?"
-        )
-        return
+        cli = _resolve_helper_claude_bin()
+        found = bool(cli) and (os.path.isfile(cli) or _shutil.which(cli) is not None)
     except Exception as e:  # noqa: BLE001
-        _log(f"[house-rules] boot-check: Ollama probe failed ({e})")
+        _log(f"[house-rules] boot-check: classifier CLI probe failed ({type(e).__name__})")
         return
-
-    if not available:
+    if not found:
         _log(
-            f"[house-rules] boot-check: Ollama is running but has NO models pulled. "
-            f"The L44 classifier will fail-closed and block every request. "
-            f"Fix: ollama pull {configured_model}"
+            "[house-rules] boot-check: claude CLI not found — the L44 cloud "
+            "classifier cannot run; requests fall back to the deterministic "
+            "Tier-0 floor (prohibited patterns still block). Install/login the "
+            "claude CLI or set CORVIN_CLAUDE_BIN."
         )
         return
-
-    if configured_model not in available:
-        best = next((m for m in available if m in _HOUSE_RULES_KNOWN_GOOD_CLASSIFIER_MODELS), available[0])
-        _log(
-            f"[house-rules] boot-check: configured classifier model {configured_model!r} "
-            f"not found in Ollama (available: {available}). "
-            f"Auto-discover will use {best!r} as fallback — no user impact, but "
-            f"set CORVIN_HERMES_MODEL={best} in service.env to suppress this warning."
-        )
-    else:
-        _log(
-            f"[house-rules] boot-check: classifier model {configured_model!r} ready in Ollama ✓"
-        )
+    _log(f"[house-rules] boot-check: cloud classifier CLI resolved ({cli}) ✓")
 
 
 # ── operator CLI: read-only show / status ────────────────────────────────────

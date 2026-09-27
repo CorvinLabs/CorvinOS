@@ -4,7 +4,8 @@ Covers all 4 Milestones:
   M1/B  Parser hardening (_house_rules_parse_verdict, JSON-wrapper extraction)
   M1/D  Exponential backoff retry (spawn_missing aborts; transient causes retry)
   M2    Clear-verdict cache (only CLEAR cached; DENY/ESCALATE never cached; TTL)
-  M3    Provider-chain: Hermes → cloud Haiku → fail-closed
+  M3    Provider-chain: cloud Haiku → fail-closed (local classifier removed,
+        ADR-2087; floor_only is covered in test_house_rules_floor_only.py)
   M4    Degradation clustering (emit WARNING after threshold errors in window)
 
 Security invariant (verified on every test path): fail-closed is NEVER
@@ -121,8 +122,8 @@ class TestParseVerdict:
         rid, conf, detail = adp._house_rules_parse_verdict(raw)
         assert conf == pytest.approx(0.0)
 
-    def test_ollama_error_response_raises_bad_json(self, adp):
-        """Ollama error JSON ({"error": "..."}) must NOT be accepted as a CLEAR verdict.
+    def test_error_envelope_raises_bad_json(self, adp):
+        """An error JSON ({"error": "..."}) must NOT be accepted as a CLEAR verdict.
 
         Without the key-presence check, {"error": "model not found"} would be parsed as
         violated_rule_id="" / confidence=0.0 — a CLEAR verdict that suppresses the cloud
@@ -280,207 +281,105 @@ class TestRetryBackoff:
 
 
 # ---------------------------------------------------------------------------
-# M3 — Provider chain: Hermes → Cloud Haiku → fail-closed
+# ADR-2087 — Provider chain: cloud Haiku → fail-closed (local classifier removed)
 # ---------------------------------------------------------------------------
 
 class TestProviderChain:
-    """_house_rules_classify_with_chain: M3 Hermes-first, cloud fallback."""
+    """_house_rules_classify_with_chain: cloud_only / floor_only (ADR-2087)."""
 
-    def test_hermes_called_first(self, adp, monkeypatch, hr):
-        """order=local_first calls Hermes before cloud Haiku (ADR-0161)."""
-        hermes_called = []
-
-        def _hermes_ok(*a, **kw):
-            hermes_called.append(True)
-            return "", 0.95, "safe"
-
+    def test_cloud_only_calls_cloud(self, adp, monkeypatch, hr):
         cloud_called = []
 
         def _cloud_ok(*a, **kw):
             cloud_called.append(True)
             return "", 0.9, "safe"
 
-        monkeypatch.setattr(hr, "_house_rules_classify_hermes", _hermes_ok)
         monkeypatch.setattr(hr, "_house_rules_classify_chunk", _cloud_ok)
-        monkeypatch.delenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", raising=False)
-
         rid, conf, _ = adp._house_rules_classify_with_chain(
-            "test", "(no rules)", "none", order="local_first")
-        assert hermes_called and not cloud_called  # Hermes succeeded → cloud not needed
-        assert rid == "" and conf == pytest.approx(0.95)
+            "test", "(no rules)", "none", order="cloud_only")
+        assert cloud_called and rid == "" and conf == pytest.approx(0.9)
 
-    def test_cloud_fallback_on_hermes_failure(self, adp, monkeypatch, hr):
-        """Hermes failure → falls back to cloud Haiku (not fail-closed yet)."""
-        def _hermes_fail(*a, **kw):
-            raise adp._HouseRulesClassifierError("timeout", "hermes down")
-
-        cloud_called = []
-
-        def _cloud_ok(*a, **kw):
-            cloud_called.append(True)
-            return "", 0.85, "safe"
-
-        monkeypatch.setattr(hr, "_house_rules_classify_hermes", _hermes_fail)
-        monkeypatch.setattr(hr, "_house_rules_classify_chunk", _cloud_ok)
-        monkeypatch.delenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", raising=False)
-
-        rid, conf, _ = adp._house_rules_classify_with_chain(
-            "test", "(no rules)", "none", order="local_first")
-        assert cloud_called
-        assert rid == ""
-
-    def test_disable_hermes_env_skips_hermes(self, adp, monkeypatch, hr):
-        """CORVIN_HOUSE_RULES_DISABLE_HERMES=1 skips Hermes entirely."""
-        hermes_called = []
-
-        def _hermes(*a, **kw):
-            hermes_called.append(True)
-            return "", 0.95, "safe"
-
-        cloud_called = []
-
-        def _cloud(*a, **kw):
-            cloud_called.append(True)
-            return "", 0.9, "safe"
-
-        monkeypatch.setattr(hr, "_house_rules_classify_hermes", _hermes)
-        monkeypatch.setattr(hr, "_house_rules_classify_chunk", _cloud)
-        monkeypatch.setenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", "1")
-
-        adp._house_rules_classify_with_chain("test", "(no rules)", "none")
-        assert not hermes_called  # skipped
-        assert cloud_called
-
-    def test_both_fail_raises(self, adp, monkeypatch, hr):
-        """Hermes + cloud Haiku both fail → exception propagates (fail-closed)."""
-        monkeypatch.setattr(hr, "_house_rules_classify_hermes",
-                            mock.MagicMock(side_effect=adp._HouseRulesClassifierError("timeout")))
+    def test_cloud_failure_propagates(self, adp, monkeypatch, hr):
+        """No secondary provider any more: a cloud failure propagates so the
+        gate takes its degrade-to-floor path (never a silent allow here)."""
         monkeypatch.setattr(hr, "_house_rules_classify_chunk",
                             mock.MagicMock(side_effect=adp._HouseRulesClassifierError("timeout")))
-        monkeypatch.delenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", raising=False)
-
         with pytest.raises(adp._HouseRulesClassifierError):
-            adp._house_rules_classify_with_chain("test", "(no rules)", "none")
+            adp._house_rules_classify_with_chain("test", "(no rules)", "none", order="cloud_only")
 
-    def test_unexpected_exception_type_still_falls_back(self, adp, monkeypatch, hr):
-        """A primary-provider failure that ISN'T _HouseRulesClassifierError (e.g. a
-        parsing/shape bug raising AttributeError/KeyError/whatever) must still
-        trigger the fallback to the secondary provider — the whole point of the
-        two-provider chain is resilience against a single provider's fault,
-        which must not depend on that fault being an anticipated exception type.
-        Catching only _HouseRulesClassifierError left a hole where an
-        unanticipated bug in ONE provider's response parsing silently skipped a
-        perfectly healthy OTHER provider and blocked the user — the real-world
-        incident this test guards against."""
-        def _hermes_unexpected_bug(*a, **kw):
-            raise AttributeError("'list' object has no attribute 'get'")
-
-        cloud_called = []
-
-        def _cloud_ok(*a, **kw):
-            cloud_called.append(True)
-            return "", 0.9, "safe"
-
-        monkeypatch.setattr(hr, "_house_rules_classify_hermes", _hermes_unexpected_bug)
-        monkeypatch.setattr(hr, "_house_rules_classify_chunk", _cloud_ok)
-        monkeypatch.delenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", raising=False)
-
-        rid, conf, _ = adp._house_rules_classify_with_chain(
-            "test", "(no rules)", "none", order="local_first")
-        assert cloud_called
-        assert rid == ""
-        assert conf == pytest.approx(0.9)
-
-    def test_both_fail_with_unexpected_exception_still_raises(self, adp, monkeypatch, hr):
-        """Even with the broadened catch, if BOTH providers fail (any exception
-        type) the gate still fails closed — the fallback broadening only gives
-        the secondary a fair chance, it never turns into a silent allow."""
-        monkeypatch.setattr(hr, "_house_rules_classify_hermes",
+    def test_unexpected_exception_type_propagates(self, adp, monkeypatch, hr):
+        monkeypatch.setattr(hr, "_house_rules_classify_chunk",
                             mock.MagicMock(side_effect=AttributeError("boom")))
-        monkeypatch.setattr(hr, "_house_rules_classify_chunk",
-                            mock.MagicMock(side_effect=KeyError("boom")))
-        monkeypatch.delenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", raising=False)
+        with pytest.raises(AttributeError):
+            adp._house_rules_classify_with_chain("test", "(no rules)", "none", order="cloud_only")
 
-        # Whichever provider is secondary (order-dependent), its exception type
-        # propagates raw here — the gate's own outer `except Exception` (in
-        # HouseRulesGate.classify) is what normalises this to classifier_error
-        # fail-closed; this test only asserts the chain never swallows both
-        # failures into a silent success.
-        with pytest.raises((adp._HouseRulesClassifierError, KeyError, AttributeError)):
-            adp._house_rules_classify_with_chain("test", "(no rules)", "none")
-
-
-# ---------------------------------------------------------------------------
-# ADR-0161 — context-aware classifier ordering
-# ---------------------------------------------------------------------------
-
-class TestClassifierOrdering:
-    """_house_rules_resolve_order + order-driven provider chain (ADR-0161)."""
-
-    def _wire(self, adp, monkeypatch, hr):
-        """Wire counting stubs; return (hermes_calls, cloud_calls) lists."""
-        h, c = [], []
-        monkeypatch.setattr(hr, "_house_rules_classify_hermes",
-                            lambda *a, **kw: (h.append(1), ("", 0.95, "local"))[1])
-        monkeypatch.setattr(hr, "_house_rules_classify_chunk",
-                            lambda *a, **kw: (c.append(1), ("", 0.9, "cloud"))[1])
-        monkeypatch.delenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", raising=False)
-        monkeypatch.delenv("CORVIN_HOUSE_RULES_CLASSIFIER_ORDER", raising=False)
-        return h, c
-
-    def test_order_cloud_first_tries_cloud_before_local(self, adp, monkeypatch, hr):
-        h, c = self._wire(adp, monkeypatch, hr)
-        rid, conf, _ = adp._house_rules_classify_with_chain(
-            "t", "(no rules)", "none", order="cloud_first")
-        assert c and not h and conf == pytest.approx(0.9)
-
-    def test_order_local_only_never_calls_cloud_even_on_failure(self, adp, monkeypatch, hr):
-        """local_only must NEVER fall through to cloud — data-residency invariant.
-        A local failure raises (fail-closed), cloud is never reached."""
+    def test_floor_only_spawns_nothing(self, adp, monkeypatch, hr):
         c = []
         monkeypatch.setattr(hr, "_house_rules_classify_chunk",
                             lambda *a, **kw: (c.append(1), ("", 0.9, "cloud"))[1])
-        monkeypatch.setattr(hr, "_house_rules_classify_hermes",
-                            mock.MagicMock(side_effect=adp._HouseRulesClassifierError("timeout")))
-        with pytest.raises(adp._HouseRulesClassifierError):
-            adp._house_rules_classify_with_chain("t", "(no rules)", "none", order="local_only")
-        assert not c  # cloud NEVER called under local_only
+        with pytest.raises(hr.HouseRulesFloorOnly):
+            adp._house_rules_classify_with_chain("t", "(no rules)", "none", order="floor_only")
+        assert not c
 
-    def test_env_order_override_is_honored(self, adp, monkeypatch, hr):
-        h, c = self._wire(adp, monkeypatch, hr)
-        monkeypatch.setenv("CORVIN_HOUSE_RULES_CLASSIFIER_ORDER", "local_first")
-        assert adp._house_rules_resolve_order() == "local_first"
+    def test_local_classifier_is_gone(self, hr):
+        for name in ("_house_rules_classify_hermes", "_house_rules_discover_ollama_model",
+                     "_house_rules_tenant_hermes_model", "_HOUSE_RULES_HERMES_TIMEOUT_S",
+                     "_HOUSE_RULES_KNOWN_GOOD_CLASSIFIER_MODELS"):
+            assert not hasattr(hr, name), name
 
-    def test_disable_hermes_maps_to_cloud_only(self, adp, monkeypatch, hr):
-        monkeypatch.setenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", "1")
+
+# ---------------------------------------------------------------------------
+# ADR-0161 / ADR-2087 — classifier ordering (cloud_only | floor_only)
+# ---------------------------------------------------------------------------
+
+class TestClassifierOrdering:
+    """_house_rules_resolve_order (ADR-2087). Full floor_only behaviour is in
+    test_house_rules_floor_only.py."""
+
+    def _wire(self, adp, monkeypatch, hr):
+        c = []
+        monkeypatch.setattr(hr, "_house_rules_classify_chunk",
+                            lambda *a, **kw: (c.append(1), ("", 0.9, "cloud"))[1])
+        monkeypatch.delenv("CORVIN_HOUSE_RULES_CLASSIFIER_ORDER", raising=False)
+        return c
+
+    def _write_spec(self, tmp_path, tid, body):
+        d = tmp_path / "tenants" / tid / "global"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "tenant.corvin.yaml").write_text(body, encoding="utf-8")
+
+    _DENY = ("spec:\n  egress:\n    enabled: true\n    default_action: deny\n"
+             "    forbidden_hosts:\n      - api.anthropic.com\n")
+
+    def test_no_egress_policy_is_cloud_only(self, adp, monkeypatch, hr):
+        self._wire(adp, monkeypatch, hr)
         assert adp._house_rules_resolve_order() == "cloud_only"
 
-    def test_auto_no_egress_policy_is_cloud_first(self, adp, monkeypatch, hr):
-        """auto + no tenant egress policy (normal cloud install) → cloud_first (fast)."""
+    def test_egress_deny_anthropic_is_floor_only(self, adp, monkeypatch, hr, tmp_path):
         self._wire(adp, monkeypatch, hr)
-        assert adp._house_rules_resolve_order() == "cloud_first"
-
-    def test_auto_egress_deny_anthropic_is_local_only(self, adp, monkeypatch, hr, tmp_path):
-        """auto + tenant egress that denies api.anthropic.com → local_only.
-        The cloud classifier host is unreachable per policy, so the gate must
-        classify on-host and NEVER fall through to cloud (closes the residency bug)."""
-        self._wire(adp, monkeypatch, hr)
-        # CORVIN_HOME is tmp_path (adp fixture). Write a tenant egress policy that
-        # denies the cloud classifier host.
-        import os as _os
-        tcfg = tmp_path / "tenants" / "_default" / "global"
-        tcfg.mkdir(parents=True, exist_ok=True)
-        (tcfg / "tenant.corvin.yaml").write_text(
-            "spec:\n"
-            "  egress:\n"
-            "    enabled: true\n"
-            "    default_action: deny\n"
-            "    forbidden_hosts:\n"
-            "      - api.anthropic.com\n",
-            encoding="utf-8",
-        )
+        self._write_spec(tmp_path, "_default", self._DENY)
         assert adp._house_rules_cloud_egress_allowed("_default") is False
-        assert adp._house_rules_resolve_order("_default") == "local_only"
+        assert adp._house_rules_resolve_order("_default") == "floor_only"
+
+    def test_legacy_env_orders_resolve_to_computed(self, adp, monkeypatch, hr):
+        self._wire(adp, monkeypatch, hr)
+        for legacy in ("local_first", "local_only", "cloud_first", "auto", "garbage"):
+            monkeypatch.setenv("CORVIN_HOUSE_RULES_CLASSIFIER_ORDER", legacy)
+            assert adp._house_rules_resolve_order() == "cloud_only", legacy
+
+    def test_removed_disable_hermes_env_is_ignored(self, adp, monkeypatch, hr, tmp_path):
+        """CORVIN_HOUSE_RULES_DISABLE_HERMES used to force cloud_only; it must not
+        re-open the cloud for an egress-denied tenant."""
+        self._wire(adp, monkeypatch, hr)
+        self._write_spec(tmp_path, "_default", self._DENY)
+        monkeypatch.setenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", "1")
+        assert adp._house_rules_resolve_order("_default") == "floor_only"
+
+    def test_legacy_hermes_default_engine_is_cloud_only(self, adp, monkeypatch, hr, tmp_path):
+        """A stored spec.default_engine: hermes no longer changes the order."""
+        self._wire(adp, monkeypatch, hr)
+        self._write_spec(tmp_path, "_default", "spec:\n  default_engine: hermes\n")
+        assert adp._house_rules_resolve_order("_default") == "cloud_only"
 
     def test_egress_config_read_exception_fails_open_to_cloud_KNOWN_BUG(
         self, adp, monkeypatch, hr, tmp_path
@@ -488,119 +387,40 @@ class TestClassifierOrdering:
         """KNOWN BUG (documented, not yet fixed): ``_house_rules_cloud_egress_allowed``
         wraps the ENTIRE tenant.corvin.yaml read+parse+EgressGate-eval in a bare
         ``except Exception: return True``. For a tenant with an explicit residency
-        deny (``forbidden_hosts: [api.anthropic.com]``), a *transient* read/parse
-        failure (mid-write race, disk hiccup, corrupted YAML) silently flips the
-        resolved order from ``local_only`` to ``cloud_first`` -- i.e. the classifier
-        will then transmit the user's raw task text via ``claude -p`` to
-        ``api.anthropic.com`` despite the tenant's still-intended deny policy. The
-        cloud classifier subprocess call has no L35 gate of its own (only the
-        primary engine spawn is gated), so this ordering IS the enforcement for
-        that call site.
-
-        This test locks in and documents the CURRENT (undesired) behavior so any
-        change to it is a conscious decision, not an accidental regression in
-        either direction. Fixing it requires care: the same except-block also
-        covers legitimate no-policy-at-all scenarios elsewhere in this class, so a
-        fail-closed default here needs a human design decision (see review
-        finding), not a blind flip."""
+        deny, a *transient* read/parse failure flips the resolved order from
+        ``floor_only`` to ``cloud_only`` -- i.e. the classifier then transmits the
+        raw task text via ``claude -p`` to ``api.anthropic.com``. The cloud
+        classifier subprocess has no L35 gate of its own, so this ordering IS the
+        enforcement for that call site. Locked in so any change is a conscious
+        decision; a fail-closed default needs a human design decision."""
         self._wire(adp, monkeypatch, hr)
-        tcfg = tmp_path / "tenants" / "_default" / "global"
-        tcfg.mkdir(parents=True, exist_ok=True)
-        (tcfg / "tenant.corvin.yaml").write_text(
-            "spec:\n"
-            "  egress:\n"
-            "    enabled: true\n"
-            "    default_action: deny\n"
-            "    forbidden_hosts:\n"
-            "      - api.anthropic.com\n",
-            encoding="utf-8",
-        )
-        # Sanity: a healthy read of the same deny-policy config correctly
-        # resolves to local_only (this is the already-covered happy path).
-        assert adp._house_rules_cloud_egress_allowed("_default") is False
-        assert adp._house_rules_resolve_order("_default") == "local_only"
-
-        # Now simulate a transient read/parse failure on the SAME on-disk
-        # deny-policy config (corrupted mid-write, disk hiccup, bad edit).
+        self._write_spec(tmp_path, "_default", self._DENY)
+        assert adp._house_rules_resolve_order("_default") == "floor_only"
         import yaml as _yaml
 
         def _raise(*_a, **_kw):
             raise ValueError("simulated corrupt/partial yaml read")
 
         monkeypatch.setattr(_yaml, "safe_load", _raise)
-
-        # BUG: the bare `except Exception: return True` treats a read failure
-        # identically to "no policy configured at all" -- the residency-deny
-        # intent on disk is silently discarded and cloud is reopened.
         assert adp._house_rules_cloud_egress_allowed("_default") is True
-        assert adp._house_rules_resolve_order("_default") == "cloud_first"
+        assert adp._house_rules_resolve_order("_default") == "cloud_only"
 
     def test_egress_config_corrupted_yaml_on_disk_fails_open_to_cloud_KNOWN_BUG(
         self, adp, monkeypatch, hr, tmp_path
     ):
-        """Same bug as above, reproduced with a genuinely malformed YAML file on
-        disk (no monkeypatching of ``yaml.safe_load`` itself) -- i.e. the
-        realistic "someone's manual edit left invalid indentation" / "mid-write
-        torn file" scenario, not just a synthetic exception injection."""
-        self._wire(adp, monkeypatch, hr)
-        tcfg = tmp_path / "tenants" / "_default" / "global"
-        tcfg.mkdir(parents=True, exist_ok=True)
-        # Deliberately broken YAML (bad indentation / tab mix) that still
-        # clearly *intends* a deny policy but fails to parse.
-        (tcfg / "tenant.corvin.yaml").write_text(
-            "spec:\n"
-            "  egress:\n"
-            "  enabled: true\n"
-            "      default_action: deny\n"
-            "    forbidden_hosts: [api.anthropic.com\n",
-            encoding="utf-8",
-        )
-        # Confirm the file really is unparsable (guards against the test
-        # accidentally exercising the happy path if YAML tolerates the typo).
-        import yaml as _yaml
-        with pytest.raises(_yaml.YAMLError):
-            _yaml.safe_load((tcfg / "tenant.corvin.yaml").read_text("utf-8"))
-
-        # BUG: corrupted-on-disk deny policy still resolves as if no policy
-        # existed at all -- cloud reopens despite the residency intent.
-        assert adp._house_rules_cloud_egress_allowed("_default") is True
-        assert adp._house_rules_resolve_order("_default") == "cloud_first"
-
-    def test_unknown_order_value_defaults_to_auto(self, adp, monkeypatch, hr):
-        self._wire(adp, monkeypatch, hr)
-        monkeypatch.setenv("CORVIN_HOUSE_RULES_CLASSIFIER_ORDER", "garbage")
-        # falls back to auto → cloud_first (no egress policy in tmp home)
-        assert adp._house_rules_resolve_order() == "cloud_first"
-
-    def _write_spec(self, tmp_path, tid, body):
-        d = tmp_path / "tenants" / tid / "global"
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "tenant.corvin.yaml").write_text(body, encoding="utf-8")
-
-    def test_auto_hermes_engine_egress_open_is_local_first(self, adp, monkeypatch, hr, tmp_path):
-        """Engine-aware auto: a hermes-default tenant with egress open resolves to
-        local_first — local primary, cloud only as last-resort fallback. Closes the
-        residency bug where a hermes tenant tried CLOUD Haiku first every turn."""
-        self._wire(adp, monkeypatch, hr)
-        self._write_spec(tmp_path, "_default", "spec:\n  default_engine: hermes\n")
-        assert adp._house_rules_resolve_order("_default") == "local_first"
-
-    def test_auto_hermes_engine_egress_deny_is_local_only(self, adp, monkeypatch, hr, tmp_path):
-        """Hermes-default + egress denies api.anthropic.com → local_only (residency)."""
+        """Same bug with a genuinely malformed YAML file on disk."""
         self._wire(adp, monkeypatch, hr)
         self._write_spec(
             tmp_path, "_default",
-            "spec:\n  default_engine: hermes\n  egress:\n    enabled: true\n"
-            "    default_action: deny\n    forbidden_hosts:\n      - api.anthropic.com\n",
+            "spec:\n  egress:\n  enabled: true\n      default_action: deny\n"
+            "    forbidden_hosts: [api.anthropic.com\n",
         )
-        assert adp._house_rules_resolve_order("_default") == "local_only"
-
-    def test_auto_claude_code_engine_unchanged_cloud_first(self, adp, monkeypatch, hr, tmp_path):
-        """A claude_code-default tenant with a working egress path is UNCHANGED —
-        still cloud_first (legacy behaviour preserved)."""
-        self._wire(adp, monkeypatch, hr)
-        self._write_spec(tmp_path, "_default", "spec:\n  default_engine: claude_code\n")
-        assert adp._house_rules_resolve_order("_default") == "cloud_first"
+        import yaml as _yaml
+        with pytest.raises(_yaml.YAMLError):
+            _yaml.safe_load((tmp_path / "tenants" / "_default" / "global"
+                             / "tenant.corvin.yaml").read_text("utf-8"))
+        assert adp._house_rules_cloud_egress_allowed("_default") is True
+        assert adp._house_rules_resolve_order("_default") == "cloud_only"
 
 
 class TestAuthMissingCause:
@@ -633,149 +453,6 @@ class TestAuthMissingCause:
             adp._house_rules_classify_chunk("t", "(no rules)", "none")
         assert exc.value.cause == "auth_missing"
         assert len(attempts) == 1  # NOT retried — non-transient like spawn_missing
-
-
-class TestHermesClassifier:
-    """_house_rules_classify_hermes: direct Ollama HTTP call."""
-
-    def test_connection_refused_raises_timeout(self, adp, monkeypatch):
-        """Connection refused (Ollama not running) → HouseRulesClassifierError(timeout)."""
-        import urllib.error
-        monkeypatch.setenv("CORVIN_HERMES_URL", "http://localhost:11434")
-
-        def _fail_urlopen(*a, **kw):
-            raise urllib.error.URLError("Connection refused")
-
-        with mock.patch("urllib.request.urlopen", side_effect=_fail_urlopen):
-            with pytest.raises(adp._HouseRulesClassifierError) as exc:
-                adp._house_rules_classify_hermes("test", "(no rules)", "none")
-        assert exc.value.cause == "timeout"
-
-    def test_valid_ollama_response_parsed(self, adp, monkeypatch):
-        """Valid Ollama JSON response → parsed correctly."""
-        inner = '{"violated_rule_id": "", "confidence": 0.92, "reason": "benign"}'
-        # Ollama wraps in {"model": ..., "response": "..., "done": true}
-        ollama_response = json.dumps({"model": "hermes3:8b", "response": inner, "done": True})
-
-        mock_resp = mock.MagicMock()
-        mock_resp.__enter__ = mock.MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = mock.MagicMock(return_value=False)
-        mock_resp.read = mock.MagicMock(return_value=ollama_response.encode())
-
-        with mock.patch("urllib.request.urlopen", return_value=mock_resp):
-            rid, conf, detail = adp._house_rules_classify_hermes("write a poem", "(no rules)", "none")
-        assert rid == "" and conf == pytest.approx(0.92)
-
-    def test_default_model_is_canonical_and_pulled(self, adp, monkeypatch):
-        """Regression (cloud-outage brick): the local classifier must default to the
-        SAME model the canonical HermesEngine uses — never the old un-pulled
-        'hermes3:8b'. A drifted default silently kills the local path and degrades
-        the gate to cloud-only, so any Anthropic 500 escalates EVERY task.
-        """
-        monkeypatch.delenv("CORVIN_HERMES_MODEL", raising=False)
-        from agents.hermes_engine import _resolve_default_model as _canonical  # type: ignore
-        expected = _canonical()
-        assert expected != "hermes3:8b"  # the drifted, un-pulled default is gone
-
-        captured = {}
-
-        def _capture_urlopen(req, *a, **kw):
-            captured["body"] = json.loads(req.data.decode())
-            mock_resp = mock.MagicMock()
-            mock_resp.__enter__ = mock.MagicMock(return_value=mock_resp)
-            mock_resp.__exit__ = mock.MagicMock(return_value=False)
-            inner = '{"violated_rule_id": "", "confidence": 0.95, "reason": "ok"}'
-            mock_resp.read = mock.MagicMock(
-                return_value=json.dumps({"response": inner}).encode())
-            return mock_resp
-
-        with mock.patch("urllib.request.urlopen", side_effect=_capture_urlopen):
-            adp._house_rules_classify_hermes("write a poem", "(no rules)", "none")
-        # The model actually sent to Ollama is the canonical, installed one.
-        assert captured["body"]["model"] == expected
-
-    def test_env_override_model_is_honored(self, adp, monkeypatch):
-        """An explicit CORVIN_HERMES_MODEL override reaches the Ollama payload."""
-        monkeypatch.setenv("CORVIN_HERMES_MODEL", "qwen3:1.7b")
-        captured = {}
-
-        def _capture_urlopen(req, *a, **kw):
-            captured["body"] = json.loads(req.data.decode())
-            mock_resp = mock.MagicMock()
-            mock_resp.__enter__ = mock.MagicMock(return_value=mock_resp)
-            mock_resp.__exit__ = mock.MagicMock(return_value=False)
-            inner = '{"violated_rule_id": "", "confidence": 0.9, "reason": "ok"}'
-            mock_resp.read = mock.MagicMock(
-                return_value=json.dumps({"response": inner}).encode())
-            return mock_resp
-
-        with mock.patch("urllib.request.urlopen", side_effect=_capture_urlopen):
-            adp._house_rules_classify_hermes("hi", "(no rules)", "none")
-        assert captured["body"]["model"] == "qwen3:1.7b"
-
-    def test_http_error_model_not_found_raises_misconfigured(self, adp, monkeypatch):
-        """A reachable Ollama returning HTTP 404 'model not found' is a CONFIG fault,
-        not a transient blip → cause='local_misconfigured' (loud), then the chain
-        falls through to cloud Haiku. This is the exact failure that bricked the gate.
-        """
-        import io
-        import urllib.error
-        monkeypatch.delenv("CORVIN_HERMES_MODEL", raising=False)
-
-        def _raise_404(*a, **kw):
-            raise urllib.error.HTTPError(
-                "http://localhost:11434/api/generate", 404, "Not Found", {},
-                io.BytesIO(b'{"error":"model \'x\' not found"}'))
-
-        with mock.patch("urllib.request.urlopen", side_effect=_raise_404):
-            with pytest.raises(adp._HouseRulesClassifierError) as exc:
-                adp._house_rules_classify_hermes("test", "(no rules)", "none")
-        assert exc.value.cause == "local_misconfigured"
-
-    def test_chain_recovers_via_cloud_when_local_model_missing(self, adp, monkeypatch, hr):
-        """End-to-end of the brick scenario at the chain level: local model missing
-        (404) BUT cloud Haiku healthy → chain returns the cloud verdict, gate is NOT
-        bricked. (When cloud is ALSO down, the chain still raises → fail-closed.)
-        """
-        import io
-        import urllib.error
-        monkeypatch.delenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", raising=False)
-
-        def _raise_404(*a, **kw):
-            raise urllib.error.HTTPError(
-                "http://localhost:11434/api/generate", 404, "Not Found", {},
-                io.BytesIO(b'{"error":"model not found"}'))
-
-        cloud_called = []
-
-        def _cloud_ok(*a, **kw):
-            cloud_called.append(True)
-            return "", 0.95, "safe"
-
-        with mock.patch("urllib.request.urlopen", side_effect=_raise_404):
-            monkeypatch.setattr(hr, "_house_rules_classify_chunk", _cloud_ok)
-            rid, conf, _ = adp._house_rules_classify_with_chain("test", "(no rules)", "none")
-        assert cloud_called and rid == "" and conf == pytest.approx(0.95)
-
-    def test_non_dict_ollama_response_raises_bad_json(self, adp, monkeypatch):
-        """Ollama returning a JSON array (misconfigured endpoint) must raise bad_json.
-
-        A JSON array causes outer.get() to raise AttributeError, which was previously
-        not caught by except (ValueError, KeyError) — bypassing the cloud Haiku fallback.
-        The fix adds AttributeError to the except clause so it becomes a bad_json error
-        that the chain handles as a normal Hermes failure.
-        """
-        ollama_list_response = json.dumps([])  # array, not dict
-
-        mock_resp = mock.MagicMock()
-        mock_resp.__enter__ = mock.MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = mock.MagicMock(return_value=False)
-        mock_resp.read = mock.MagicMock(return_value=ollama_list_response.encode())
-
-        with mock.patch("urllib.request.urlopen", return_value=mock_resp):
-            with pytest.raises(adp._HouseRulesClassifierError) as exc:
-                adp._house_rules_classify_hermes("test", "(no rules)", "none")
-        assert exc.value.cause == "bad_json"
 
 
 # ---------------------------------------------------------------------------
@@ -919,19 +596,12 @@ class TestFailClosedInvariant:
     """Verify that exhausting all providers propagates exception (never allows)."""
 
     def test_full_chain_exhaustion_raises(self, adp, monkeypatch, hr):
-        """All providers fail → _HouseRulesClassifierError raised, never a silent allow."""
-        def _hermes_fail(*a, **kw):
-            raise adp._HouseRulesClassifierError("timeout", "hermes")
+        """Cloud fails → _HouseRulesClassifierError raised, never a silent allow."""
         def _cloud_fail(*a, **kw):
             raise adp._HouseRulesClassifierError("timeout", "cloud")
 
-        monkeypatch.setattr(hr, "_house_rules_classify_hermes", _hermes_fail)
-        # Patch _house_rules_classify_chunk (the retry wrapper) so the chain
-        # fails on the first cloud attempt without burning through retry slots.
-        # No time.sleep mock needed — _chunk is replaced wholesale, retry loop
-        # is never entered.
         monkeypatch.setattr(hr, "_house_rules_classify_chunk", _cloud_fail)
-        monkeypatch.delenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", raising=False)
+        monkeypatch.delenv("CORVIN_HOUSE_RULES_CLASSIFIER_ORDER", raising=False)
 
         with pytest.raises(adp._HouseRulesClassifierError):
             adp._house_rules_classify_with_chain("build ransomware", "(no rules)", "none")
@@ -971,7 +641,8 @@ class TestFailClosedInvariant:
 # ---------------------------------------------------------------------------
 
 class TestProductionAuditWiringF03:
-    """F-03: provider_fallback + classifier_degraded reach a 3-arg writer."""
+    """F-03: classifier_degraded reaches a 3-arg writer (provider_fallback is
+    no longer emitted — single provider since ADR-2087)."""
 
     def _install_recording_writer(self, monkeypatch):
         """Patch egress_gate.make_forge_audit_writer to return a 3-arg recorder.
@@ -991,46 +662,6 @@ class TestProductionAuditWiringF03:
         monkeypatch.setattr(egress_gate, "make_forge_audit_writer", _fake_make_writer)
         return recorded
 
-    def test_provider_fallback_event_written_via_3arg_writer(
-        self, adp, monkeypatch, hr, tmp_path
-    ):
-        """Hermes fails, cloud succeeds → house_rules.provider_fallback must land
-        on the 3-arg production writer (with severity INFO from EVENT_SEVERITY)."""
-        recorded = self._install_recording_writer(monkeypatch)
-
-        # local_first: Hermes primary fails (transient), cloud secondary clears.
-        def _hermes_fail(*a, **kw):
-            raise hr._HouseRulesClassifierError("timeout", "hermes down")
-
-        def _cloud_ok(*a, **kw):
-            return "", 0.95, "safe"  # clean → gate allows (default_action=allow)
-
-        monkeypatch.setattr(hr, "_house_rules_classify_hermes", _hermes_fail)
-        monkeypatch.setattr(hr, "_house_rules_classify_chunk", _cloud_ok)
-        monkeypatch.setenv("CORVIN_HOUSE_RULES_CLASSIFIER_ORDER", "local_first")
-        monkeypatch.delenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", raising=False)
-
-        result = adp._check_house_rules_or_fail(
-            prompt="please summarize this document",
-            persona="assistant", channel="discord", chat_key="c1",
-        )
-        # Clean verdict → gate allows → returns None (not a refusal string).
-        assert result is None
-
-        fallback = [r for r in recorded if r[0] == "house_rules.provider_fallback"]
-        assert fallback, (
-            "house_rules.provider_fallback was NOT written — the 3-arg "
-            "production writer was called with the wrong arity (F-03 regression)"
-        )
-        et, sev, details = fallback[0]
-        # Severity resolved from EVENT_SEVERITY (provider_fallback = INFO).
-        assert sev == "INFO"
-        # Metadata-only allow-list: provider/cause/fallback_to, NO task text.
-        assert details.get("provider") == "hermes"
-        assert details.get("fallback_to") == "cloud_haiku"
-        assert "cause" in details
-        assert not any("summarize" in str(v) for v in details.values())
-
     def test_classifier_degraded_event_written_via_3arg_writer(
         self, adp, monkeypatch, hr, tmp_path
     ):
@@ -1044,9 +675,8 @@ class TestProductionAuditWiringF03:
         def _fail(*a, **kw):
             raise hr._HouseRulesClassifierError("timeout", "down")
 
-        monkeypatch.setattr(hr, "_house_rules_classify_hermes", _fail)
         monkeypatch.setattr(hr, "_house_rules_classify_chunk", _fail)
-        monkeypatch.delenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", raising=False)
+        monkeypatch.delenv("CORVIN_HOUSE_RULES_CLASSIFIER_ORDER", raising=False)
         # No retry sleeps: _classify_chunk is replaced wholesale, retry loop
         # is never entered; speed up just in case.
         monkeypatch.setattr(hr.time, "sleep", lambda *_a, **_k: None)

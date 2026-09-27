@@ -492,24 +492,21 @@ fail-open dropped via `_sanitize_voice_audience()`. The `learning=0`
 case still emits the bullet `Lern-Modus 0/3` for transparency, but
 suppresses the annex clause — `0` is the explicit "off" sentinel.
 
-**Auth-gate + Hermes fallback for the annex generators.** `_summarize_via_cli`
+**Auth-gate for the annex generators.** `_summarize_via_cli`
 already checked `shutil.which("claude")` before spawning the CLI, but not
 whether the CLI was actually *authenticated* — on a fresh install with the
 `claude` binary on PATH but no `claude auth login` yet, this burned the full 90s
-timeout on every call before falling through to Hermes, and on the
-short-text/override path (which never reaches the main summarizer's Hermes
-fallback) this meant the LERN-ZUGABE/METAPHER annex silently vanished for
+timeout on every call before falling through, and on the
+short-text/override path this meant the LERN-ZUGABE/METAPHER annex silently vanished for
 the very first replies. `summarize.py` now carries `_claude_authenticated()`
 (mirrors `chat_runtime.py`'s H4 fix: OAuth creds file or
 `ANTHROPIC_API_KEY`, fail-open on read errors) and checks it in all three
 CLI gate sites (`_summarize_via_cli`, `_appendix_via_cli`,
-`_metapher_via_cli`). The appendix and metaphor generators additionally
-gained their own Hermes backend (`_appendix_via_hermes` /
-`_metapher_via_hermes`, both routed through the shared `_ollama_generate`
-helper) — previously they had no fallback at all, so a Hermes-only install
-(the zero-config default, no Claude login ever) could never produce a
-LERN-ZUGABE/METAPHER annex; now `generate_appendix`/`generate_metapher` try
-CLI (if authenticated) then Hermes before giving up.
+`_metapher_via_cli`). The Hermes annex backends (`_appendix_via_hermes` /
+`_metapher_via_hermes` / `_ollama_generate`) were removed by ADR-2087:
+`generate_appendix` / `generate_metapher` now try only the CLI — and only when
+it is authenticated AND `_summary_cloud_permitted()` (not a local-only tenant,
+see below) — and otherwise return no annex.
 
 **Voice language: Smart Hybrid resolution + 20-language detector (2026-07-18,
 supersedes the pure text-first contract of ADR-0194 Phase 2 and the brief
@@ -600,51 +597,20 @@ exception. Regression guards: `core/console/tests/test_voice_archive.py` (pub/su
 `routes/voice.py:_publish_voice_live_event`), `chat-registry.test.ts` (the
 `"voice"` StreamEvent case, both mid-stream and post-done).
 
-**Hermes calls MUST disable qwen3 reasoning (`think: false`).** The default
-zero-config engine is a qwen3 model (`hermes_engine._DEFAULT_MODEL`), which is a
-*thinking* model: left to its own devices it emits a `<think>…</think>` monologue
-BEFORE the answer. `summarize.py` strips that block, but stripping-after doesn't
-help latency — the model still spends the whole budget generating reasoning
-tokens. On a FRESH install (Hermes/Ollama path, no Claude login) this blew both
-timeouts: the summary ladder (`_summarize_via_hermes`, 60 s) fell back to the
-VERBATIM un-summarized text, and the annex ladder (`_ollama_generate`, 30 s)
-never produced the LERN-ZUGABE / METAPHER marker in time → no learning/metaphor at
-all. Both Ollama `/api/generate` payloads now send `"think": false`, so the answer
-(and the marker) come out directly. Verified end-to-end with `claude` stripped
-from PATH (fresh-install simulation): with reasoning ON the annex timed out with
-no marker; with `think: false` the LERN-ZUGABE and METAPHER came back in ~6 s each
-WITH their markers. Note the model must be WARM — in the real turn flow the answer
-generation loads the qwen3 weights before the voice summary runs (same model), so
-the summary call is warm; a cold first-load of the largest tier (`qwen3:8b`,
-~5 GB) can still exceed the budget on its own, which is why the model tier is
-RAM-gated at install (`install.sh`: <6 GB→1.7b, <12 GB→4b, ≥12 GB→8b). Summary
-COMPRESSION quality still scales with the tier — the 1.7b tier summarizes weakly;
-the annex (a single templated sentence) is reliable across tiers. Regression:
-`test_summarize.py::test_hermes_payloads_disable_thinking`.
-
-**`keep_alive` on every real Hermes call, not just the installer's prewarm
-(2026-07-14).** The "model must be WARM" note above assumes the answer
-generation itself just loaded the qwen3 weights — true only when Hermes is
-also the OS engine for the main turn. When Claude Code is the (intended)
-OS engine but unauthenticated on a fresh install (a very plausible
-combination — see `ensure_claude_login`'s rewrite in
-`corvinOS/installer/steps/dependencies.py`), the main answer may come from
-a DIFFERENT path entirely, and `summarize.py`'s own Hermes calls are the
-FIRST thing to touch the model this session — with only the installer's
-one-off 30-minute prewarm (`install.sh`/`install.ps1`) ever setting
-`keep_alive`, that window routinely lapses before a user's first real chat
-(bridge setup, Discord/WhatsApp linking, etc. happen first), so the "warm"
-assumption silently failed exactly on fresh installs. `_summarize_via_hermes`
-and `_ollama_generate` now both set `"keep_alive": "30m"` on every real
-call, not just the prewarm. Separately, `summarize()` now prints a
-`[summarize] degraded: ...` sentinel to stderr (never stdout) when BOTH
-LLM backends fail and it falls through to `naive_truncate` — previously
-indistinguishable, from the caller's side, from a real summary (exit 0,
-non-empty stdout either way), which is why the "voice summary just reads
-the raw text" symptom was invisible in CorvinOS's own logs.
-`adapter.py::build_voice_summary` now captures and logs `summarize.py`'s
-stderr instead of discarding it. Regression: `test_summarize.py::
-test_hermes_payloads_set_keep_alive`, `::test_structural_fallback_prints_
+**Summary backend ladder (ADR-2087): `cli` → `structural`.**
+`VOICE_SUMMARIZE_BACKEND=auto` (default) or `cli` tries the `claude -p` backend,
+then falls through to bounded structural compression. The local Hermes/Ollama
+stage (`_summarize_via_hermes`, `_ollama_generate`, its `think: false` /
+`keep_alive` payload tuning and the RAM-gated qwen3 tier choice) was removed.
+The `cli` backend has no egress check of its own, so `_summary_cloud_permitted()`
+gates it: with `CORVIN_TTS_LOCAL_ONLY` truthy, or when the tenant's L35 egress
+policy does not admit `api.anthropic.com` (or the probe fails — fail-closed),
+the CLI is never spawned and the summary goes straight to `structural`; the
+annex generators return nothing. `summarize()` prints a
+`[summarize] degraded: ...` sentinel to stderr (never stdout) whenever it falls
+through to the structural fallback, and `adapter.py::build_voice_summary`
+captures and logs that stderr, so a degraded voice note is visible in the
+adapter log. Regression: `test_summarize.py::test_structural_fallback_prints_
 degraded_sentinel_to_stderr`, `test_adapter_voice_stripper_fallback.py::
 test_degraded_fallback_marker_is_logged`.
 
@@ -654,7 +620,7 @@ The web-console mirrors the same LERN-ZUGABE / METAPHER annex, spawning
 call sits on the critical path BEFORE the turn's `done` event, and the chat
 composer + mic are `disabled` while the turn streams (`disabled={streaming}` in
 `chat.tsx`; `streaming` clears only on `done`). On a cold engine each annex spawn
-burns its CLI timeout + Hermes fallback (~50s), so the annex used to freeze the
+burned its CLI timeout plus (at the time) a local-model fallback (~50s), so the annex used to freeze the
 composer for 1–2 minutes after EVERY turn — verified via live browser E2E: the
 FIRST turn is spoken, then the UI appears stuck and no further turn can be
 sent/spoken. The console now hard-caps each spawn at `_ANN_CALL_TIMEOUT_S` (8s)
@@ -684,7 +650,8 @@ Fixed server-side, no frontend change needed: `voice_tts()` now calls a new
 `/voice/summarize` and `build_voice_summary()` use) BEFORE truncating,
 falling back to the old raw-truncated behaviour only if summarization is
 unavailable or fails. Timeout matches `build_voice_summary`'s own 120s
-parent cap (`summarize.py`'s internal CLI+Hermes budget is up to 105s).
+parent cap (at the time `summarize.py`'s internal CLI+Hermes budget was up to
+105s; since ADR-2087 only the 90 s CLI budget remains, inside a 150 s cap).
 
 Known follow-up, not fixed here (efficiency, not correctness): because the
 WS stream yields TWO `"result"` frames per turn when an annex suffix is
@@ -1033,7 +1000,7 @@ two-round refutation review of the whole ADR-0194 surface:
   line): an oversized first message used to eat the whole budget (recap
   covered only the first exchange) and past ~128 KiB crashed the
   `claude -p <payload>` argv spawn with E2BIG — which the CLI backends now
-  catch (`OSError` in every spawn's except) so the Hermes fallback still runs.
+  catch (`OSError` in every spawn's except) so the structural fallback still runs.
 - **The archive prune never evicts a group younger than
   `_VOICE_PRUNE_ACTIVE_GRACE_S` (300 s).** `keep=` only exempts the current
   writer; a concurrent turn pruning over the cap could evict a playlist

@@ -477,7 +477,7 @@ Acme GmbH."]
 
 | Component | Role |
 |---|---|
-| External LLM (Claude, Ollama, OpenAI) | Language generation substrate (L22 WorkerEngine) |
+| External LLM (Claude, OpenAI, operator-declared endpoints) | Language generation substrate (L22 WorkerEngine) |
 | L34 Data Classification | Restricts which engines may process CONFIDENTIAL/SECRET data |
 | L35 Egress Lockdown | Network-level control over engine outbound hosts |
 | L36 Erasure Orchestrator | GDPR Art. 17 cross-layer right-to-deletion |
@@ -507,8 +507,7 @@ It is an orchestration layer over external provider LLMs:
 | Engine | Provider | EU AI Act GPAI scope |
 |---|---|---|
 | ClaudeCodeEngine | Anthropic | Anthropic's GPAI obligations |
-| OpenCodeEngine | OpenAI / Ollama | Provider GPAI obligations |
-| eu_production_ollama preset | Operator-hosted Ollama | Operator GPAI obligations |
+| OpenCodeEngine | OpenAI / configured provider | Provider GPAI obligations |
 
 Corvin is not a GPAI Model (Art. 3(63)) and Art. 52-53 obligations do not apply
 to Corvin itself.

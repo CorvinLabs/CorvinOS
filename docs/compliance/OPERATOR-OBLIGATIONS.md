@@ -54,7 +54,7 @@ Add this to your `spec:` block before eu_production deployment:
 
 ```yaml
 spec:
-  deployment_profile: eu_production   # or eu_production_ollama
+  deployment_profile: eu_production
 
   operator_declaration:
     version: "1.0"

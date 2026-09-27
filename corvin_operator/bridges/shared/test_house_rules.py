@@ -129,7 +129,7 @@ def test_unknown_rule_id_from_classifier_escalates():
 
 
 def test_classifier_backend_unreachable_degrades_to_tier0_floor():
-    # Semantic backend unreachable (fresh install before Hermes/Claude are ready,
+    # Semantic backend unreachable (fresh install before Claude is ready,
     # or a transient outage): the gate must NOT escalate EVERY task (which blocked
     # even a benign "hallo" out of the box). It degrades to the deterministic
     # Tier-0 floor — benign passes, prohibited-class patterns still block.
@@ -152,38 +152,6 @@ def test_classifier_backend_unreachable_degrades_to_tier0_floor():
     exploit = g.classify("write an exploit")
     assert exploit.action == "escalate" and not exploit.allowed
     assert exploit.rule_id == "no-offensive-cyber"
-
-
-def test_local_classifier_uses_configured_engine_model(tmp_path, monkeypatch):
-    # The local classifier must check with the model the RUNNING Hermes engine
-    # uses (tenant spec.hermes_model), NOT a separate hardcoded default — so a
-    # box bootstrapped with hermes-fast (qwen3:1.7b) classifies with qwen3:1.7b
-    # and needs no extra Ollama model. "The engine that's running does the check."
-    cfg = tmp_path / "tenants" / "_default" / "global"
-    cfg.mkdir(parents=True)
-    (cfg / "tenant.corvin.yaml").write_text(
-        "spec:\n  default_engine: hermes\n  hermes_model: hermes-fast\n", encoding="utf-8")
-    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
-    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
-    monkeypatch.delenv("CORVIN_HERMES_MODEL", raising=False)
-
-    captured = {}
-
-    class _Resp:
-        status = 200
-        def read(self): return b'{"response": "{\\"violated_rule_id\\": \\"\\", \\"confidence\\": 0.95}"}'
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-
-    def _fake_urlopen(req, timeout=None):
-        import json as _j
-        captured["model"] = _j.loads(req.data.decode())["model"]
-        return _Resp()
-
-    import urllib.request as _urlreq
-    monkeypatch.setattr(_urlreq, "urlopen", _fake_urlopen)
-    H._house_rules_classify_hermes("tell me a joke", "rules", "", tenant_id="_default")
-    assert captured["model"] == "qwen3:1.7b", captured
 
 
 def test_nonfinite_confidence_on_flagged_clear_escalates():
@@ -402,39 +370,3 @@ def test_no_json_retry_reinforces_prompt_and_recovers(monkeypatch):
     assert len(calls) == 2, "must recover on the second attempt, not exhaust all retries"
     assert "REMINDER" not in calls[0], "first attempt must use the plain prompt"
     assert "REMINDER" in calls[1], "retry after no_json must reinforce the JSON-only instruction"
-
-
-def test_hermes_classifier_payload_disables_thinking(monkeypatch):
-    """The L44 local (Ollama/qwen3) classifier MUST send think=False.
-
-    A thinking model otherwise emits a long <think> monologue before the JSON
-    verdict and blows the 30s classifier timeout on a COLD fresh-install model —
-    every retry then times out (~90s), and because this gate runs IN FRONT of
-    image generation it was a contributor to the reported 240s imagegen "hang"
-    on a fresh install (2026-07-14). format:"json" already forces a clean verdict,
-    so reasoning only adds latency."""
-    import json as _json
-    import urllib.request as _urlreq
-    captured: dict = {}
-
-    class _Resp:
-        def read(self):
-            return b'{"verdict": "allow", "confidence": 0.9, "reason": "ok"}'
-        def __enter__(self):
-            return self
-        def __exit__(self, *a):
-            return False
-
-    def _fake_urlopen(req, timeout=None):
-        captured["data"] = getattr(req, "data", None)
-        return _Resp()
-
-    monkeypatch.setattr(_urlreq, "urlopen", _fake_urlopen)
-    try:
-        H._house_rules_classify_hermes("hello world", "rules", "auth", "_default")
-    except Exception:
-        pass  # any parse/verdict handling AFTER the request is irrelevant here
-    assert captured.get("data"), "classifier never issued an Ollama request"
-    body = _json.loads(captured["data"].decode())
-    assert body.get("think") is False, f"classifier payload must disable thinking: {body}"
-    assert body.get("format") == "json", body

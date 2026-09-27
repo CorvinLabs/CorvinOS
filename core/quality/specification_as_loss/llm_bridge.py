@@ -1,7 +1,8 @@
 """LLM Bridge Integration for Quality Orchestrator (ADR-0731 Phase 2 Session 1).
 
-Connects QualityOrchestrator to LLM providers (Claude, Ollama, etc.).
-Handles 404 redirects (bridge-404 Ollama redirect resolution).
+Connects QualityOrchestrator to an LLM provider (Claude) with a static
+fallback. The local-Ollama provider and its redirect handler were removed
+per ADR-2087.
 """
 from __future__ import annotations
 
@@ -9,72 +10,19 @@ import json
 import logging
 import os
 from typing import Optional, Dict, Any
-from urllib.parse import urljoin
-import socket
 
 _log = logging.getLogger(__name__)
 
 
-class OllamaRedirectHandler:
-    """Handles Ollama 404 redirects (bridge-404 resolution, ADR-0731 Session 1).
-
-    Problem: Ollama model endpoint returns 404 if model not found locally.
-    Solution: Redirect to model pull endpoint + automatic retry.
-    """
-
-    def __init__(self, base_url: str = "http://localhost:11434"):
-        self.base_url = base_url.rstrip("/")
-        self.model_cache = {}
-
-    def resolve_model(self, model_name: str) -> bool:
-        """Check if model is available; pull if not (handles 404).
-
-        Args:
-            model_name: Ollama model name (e.g., "llama2:latest")
-
-        Returns:
-            True if model is available (or successfully pulled)
-            False if unable to resolve
-        """
-        if model_name in self.model_cache:
-            return self.model_cache[model_name]
-
-        # Try to check if model exists (via tags endpoint)
-        tags_url = urljoin(self.base_url, "/api/tags")
-        try:
-            # Simulate HTTP GET (in real implementation: requests.get)
-            # This would check if model is in local Ollama instance
-            _log.info(f"Checking if {model_name} is available at {tags_url}")
-
-            # If 404: model not found locally
-            # Solution: redirect to pull endpoint (non-blocking)
-            pull_url = urljoin(self.base_url, "/api/pull")
-            _log.info(f"Model {model_name} not found; redirecting to pull endpoint: {pull_url}")
-
-            # Queue model pull (async, non-blocking)
-            # In real impl: POST {pull_url} with {"name": model_name}
-            self.model_cache[model_name] = True  # Assume pull succeeds
-            return True
-
-        except Exception as e:
-            _log.warning(f"Unable to resolve model {model_name}: {e}")
-            return False
-
-    def get_generation_url(self, model_name: str) -> str:
-        """Get generation endpoint URL (post-404-resolution)."""
-        return urljoin(self.base_url, f"/api/generate")
-
-
 class LLMBridge:
-    """LLM Bridge for QualityOrchestrator (connects to Claude, Ollama, or fallback).
+    """LLM Bridge for QualityOrchestrator (Claude, else static fallback).
 
-    Strategy: Claude first (if available), fallback to Ollama, fallback to static.
+    Strategy: Claude first (if available), fallback to static.
     """
 
     def __init__(self, provider: str = "auto"):
         self.provider = provider
-        self.ollama_handler = OllamaRedirectHandler()
-        self.model_name = os.environ.get("CORVIN_LLM_MODEL", "llama2:latest")
+        self.model_name = os.environ.get("CORVIN_LLM_MODEL", "")
         self.api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
     def generate(
@@ -101,11 +49,6 @@ class LLMBridge:
         # Try providers in order
         if self.provider in ("auto", "claude") and self.api_key:
             result = self._generate_claude(prompt, params)
-            if result:
-                return result
-
-        if self.provider in ("auto", "ollama"):
-            result = self._generate_ollama(prompt, params)
             if result:
                 return result
 
@@ -147,32 +90,6 @@ Response: (focus on quality + correctness)"""
 
         except Exception as e:
             _log.warning(f"Claude generation failed: {e}")
-            return None
-
-    def _generate_ollama(self, prompt: str, params: Dict) -> Optional[str]:
-        """Generate via Ollama (handles 404 redirects)."""
-        try:
-            model_name = params.get("model", self.model_name)
-
-            # Resolve model (handles 404 redirect)
-            if not self.ollama_handler.resolve_model(model_name):
-                _log.warning(f"Unable to resolve Ollama model {model_name}")
-                return None
-
-            # Get generation URL (post-resolution)
-            gen_url = self.ollama_handler.get_generation_url(model_name)
-
-            _log.info(f"Generating via Ollama: {model_name} at {gen_url}")
-
-            # In real implementation: POST to gen_url with prompt
-            # response = requests.post(gen_url, json={"model": model_name, "prompt": prompt, ...})
-            # return response.json().get("response", "")
-
-            # For now: placeholder
-            return f"[Ollama generation: {model_name}]\nGenerated output (placeholder)"
-
-        except Exception as e:
-            _log.warning(f"Ollama generation failed: {e}")
             return None
 
     def _generate_fallback(self, task: Dict) -> str:

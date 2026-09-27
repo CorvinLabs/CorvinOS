@@ -21,6 +21,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import summarize  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _isolated_tenant(monkeypatch, tmp_path):
+    """summarize._summary_cloud_permitted() reads the tenant's egress policy
+    (ADR-2087). Isolate from the host's real ~/.corvin so a locked-down dev
+    box does not silently turn every CLI test into a structural one."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin_home"))
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    monkeypatch.delenv("CORVIN_TTS_LOCAL_ONLY", raising=False)
+
+
 # ---------------------------------------------------------------------------
 # Prompt templates: faithfulness rule must be load-bearing in every variant.
 # ---------------------------------------------------------------------------
@@ -406,22 +416,16 @@ def test_naive_truncate_dash_bullets_recognised() -> None:
         assert must in out, f"lost: {must!r}"
 
 
-def test_hermes_backend_tried_when_cli_unavailable() -> None:
-    """M3 regression: on a Hermes-only install (no claude CLI) summarize() must
-    try the Hermes backend BEFORE falling through to structural truncation, so a
-    long voice reply gets a real summary instead of being cut mid-sentence."""
+def test_no_local_backend_after_cli_unavailable() -> None:
+    """ADR-2087: the local Hermes/Ollama backend is gone — when the CLI is
+    unavailable summarize() goes straight to the structural fallback."""
     from unittest.mock import patch
+    assert not hasattr(summarize, "_summarize_via_hermes")
     long_text = "This is a genuinely long spoken answer that must be summarised. " * 30
-    with (
-        patch.object(summarize, "_summarize_via_cli", return_value=None) as cli,
-        patch.object(summarize, "_summarize_via_hermes",
-                     return_value="A concise Hermes summary.") as herm,
-    ):
+    with patch.object(summarize, "_summarize_via_cli", return_value=None) as cli:
         out = summarize.summarize(long_text, "en", 200, "claude-haiku-4-5")
     cli.assert_called_once()
-    herm.assert_called_once()
-    assert out == "A concise Hermes summary."
-
+    assert out and len(out) <= 200 + 5
 
 def test_short_reply_with_persona_still_gets_llm_styling(monkeypatch) -> None:
     """A short reply with a persona configured still gets the LLM pass — no
@@ -432,11 +436,9 @@ def test_short_reply_with_persona_still_gets_llm_styling(monkeypatch) -> None:
     short_text = "Erledigt, alles gut."
     with (
         patch.object(summarize, "_summarize_via_cli", return_value="Arr, all done, matey!") as cli,
-        patch.object(summarize, "_summarize_via_hermes") as herm,
     ):
         out = summarize.summarize(short_text, "de", 400, "claude-haiku-4-5", persona="pirate")
     cli.assert_called_once()
-    herm.assert_not_called()
     assert out == "Arr, all done, matey!"
 
 
@@ -446,7 +448,6 @@ def test_short_reply_with_audience_still_gets_llm_styling(monkeypatch) -> None:
     short_text = "HTTP 429."
     with (
         patch.object(summarize, "_summarize_via_cli", return_value="Rate limited, try again soon.") as cli,
-        patch.object(summarize, "_summarize_via_hermes") as herm,
     ):
         out = summarize.summarize(
             short_text, "en", 400, "claude-haiku-4-5", audience="child, low jargon-tolerance",
@@ -469,7 +470,6 @@ def test_short_circuit_falls_through_to_llm_when_task_prefix_overruns_budget(mon
     task = "a fairly long question that pushes the prefixed text over budget"
     with (
         patch.object(summarize, "_summarize_via_cli", return_value="a properly shortened summary") as cli,
-        patch.object(summarize, "_summarize_via_hermes") as herm,
     ):
         out = summarize.summarize(body, "en", max_chars, "claude-haiku-4-5", task=task)
     cli.assert_called_once()
@@ -488,18 +488,15 @@ def test_short_reply_with_non_de_en_output_language_still_goes_through_llm(monke
     short_text = "Der Bug ist behoben."
     with (
         patch.object(summarize, "_summarize_via_cli", return_value="Le bug est corrigé.") as cli,
-        patch.object(summarize, "_summarize_via_hermes") as herm,
     ):
         out = summarize.summarize(short_text, "de", 400, "claude-haiku-4-5",
                                   output_language="fr")
     cli.assert_called_once()
-    herm.assert_not_called()
     assert out == "Le bug est corrigé."
     # Region variants of a non-de/en locale must take the LLM path too —
     # the primary-subtag gate relaxes de/en only.
     with (
         patch.object(summarize, "_summarize_via_cli", return_value="Le bug est corrigé.") as cli,
-        patch.object(summarize, "_summarize_via_hermes") as herm,
     ):
         out = summarize.summarize(short_text, "de", 400, "claude-haiku-4-5",
                                   output_language="fr-FR")
@@ -524,12 +521,11 @@ def test_system_prompt_emits_no_language_directive_for_de_en_region_variants() -
         summarize._system_for("de", 800, has_task=False)
 
 
-def test_summarize_via_cli_oserror_falls_back_to_hermes(monkeypatch) -> None:
+def test_summarize_via_cli_oserror_falls_back_to_structural(monkeypatch) -> None:
     """Regression (found 2026-07-17): the CLI spawn path caught only
     CalledProcessError/TimeoutExpired — an OSError (e.g. E2BIG when the
-    payload blows the ~128KiB argv limit) crashed main() with rc=1 and
-    SKIPPED the Hermes fallback entirely."""
-    from unittest.mock import patch
+    payload blows the ~128KiB argv limit) crashed main() with rc=1. It must
+    degrade to the structural fallback instead."""
     monkeypatch.setenv("VOICE_SUMMARIZE_BACKEND", "auto")
     monkeypatch.setattr(summarize.shutil, "which", lambda _: "/usr/bin/claude")
     monkeypatch.setattr(summarize, "_claude_authenticated", lambda: True)
@@ -539,17 +535,13 @@ def test_summarize_via_cli_oserror_falls_back_to_hermes(monkeypatch) -> None:
 
     monkeypatch.setattr(summarize.subprocess, "run", _spawn_boom)
     long_text = "This is a genuinely long spoken answer that must be summarised. " * 30
-    with patch.object(summarize, "_summarize_via_hermes",
-                      return_value="A concise Hermes summary.") as herm:
-        out = summarize.summarize(long_text, "en", 200, "claude-haiku-4-5")
-    herm.assert_called_once()
-    assert out == "A concise Hermes summary."
+    out = summarize.summarize(long_text, "en", 200, "claude-haiku-4-5")
+    assert out and len(out) < len(long_text)
 
-
-def test_session_recap_cli_oserror_falls_back_to_hermes(monkeypatch) -> None:
+def test_session_recap_cli_oserror_returns_empty(monkeypatch) -> None:
     """Same OSError gap on the session-recap CLI path — the transcript is
-    the payload MOST likely to hit E2BIG (whole-session argv)."""
-    from unittest.mock import patch
+    the payload MOST likely to hit E2BIG (whole-session argv). No local
+    fallback exists any more (ADR-2087): the recap is "" (→ console 204)."""
     monkeypatch.setattr(summarize.shutil, "which", lambda _: "/usr/bin/claude")
     monkeypatch.setattr(summarize, "_claude_authenticated", lambda: True)
 
@@ -557,12 +549,8 @@ def test_session_recap_cli_oserror_falls_back_to_hermes(monkeypatch) -> None:
         raise OSError(7, "Argument list too long")
 
     monkeypatch.setattr(summarize.subprocess, "run", _spawn_boom)
-    with patch.object(summarize, "_session_recap_via_hermes",
-                      return_value="A spoken recap.") as herm:
-        out = summarize.generate_session_recap("User: hi\nAssistant: hello", "en")
-    herm.assert_called_once()
-    assert out == "A spoken recap."
-
+    out = summarize.generate_session_recap("User: hi\nAssistant: hello", "en")
+    assert out == ""
 
 def test_cli_failure_stderr_is_content_free(monkeypatch, capsys) -> None:
     """PII invariant (found 2026-07-17): CalledProcessError's str() embeds
@@ -609,125 +597,12 @@ def test_structural_fallback_prints_degraded_sentinel_to_stderr(monkeypatch, cap
     long_text = "Dies ist ein langer Text. " * 50
     with (
         patch.object(summarize, "_summarize_via_cli", return_value=None),
-        patch.object(summarize, "_summarize_via_hermes", return_value=None),
     ):
         out = summarize.summarize(long_text, "de", 200, "claude-haiku-4-5")
     captured = capsys.readouterr()
     assert "[summarize] degraded:" in captured.err
     assert "[summarize] degraded:" not in out, "sentinel must never leak into the spoken text"
     assert out  # still produces SOME output (the structural fallback itself)
-
-
-def test_hermes_backend_strips_think_block() -> None:
-    """qwen3 emits <think>…</think> reasoning — it must never be spoken."""
-    from unittest.mock import patch
-
-    class _Resp:
-        def getcode(self):
-            return 200
-
-        def read(self):
-            return b'{"response": "<think>plan the reply</think>Final spoken answer."}'
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    with patch("urllib.request.urlopen", return_value=_Resp()):
-        out = summarize._summarize_via_hermes("some long text", "", "en", 200, "m")
-    assert out == "Final spoken answer."
-    assert "<think>" not in (out or "")
-
-
-def test_hermes_payloads_disable_thinking() -> None:
-    """Both Hermes calls (summary + annex) MUST set think=False.
-
-    qwen3-style reasoning models otherwise spend the whole latency budget
-    emitting <think>…</think> BEFORE the answer, blowing the 60s/30s timeout —
-    on a fresh install (cold Ollama) this made the summary fall back to the
-    verbatim un-summarized text AND dropped the LERN-ZUGABE / METAPHER annex
-    entirely (marker never produced in time). Verified end-to-end: qwen3:8b
-    dropped from >60s/>30s timeouts to ~10s with a real summary + marker.
-    """
-    from unittest.mock import patch
-    import json as _j
-
-    captured: dict = {}
-
-    class _Resp:
-        def getcode(self):
-            return 200
-
-        def read(self):
-            return b'{"response": "Und zur Einordnung, ok."}'
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    def _fake_urlopen(req, *a, **k):
-        captured["data"] = req.data
-        return _Resp()
-
-    with patch("urllib.request.urlopen", _fake_urlopen):
-        summarize._summarize_via_hermes("some long text to summarize", "", "de", 200, "m")
-    body = _j.loads(captured["data"].decode("utf-8"))
-    assert body.get("think") is False, f"summary payload must disable thinking: {body}"
-
-    captured.clear()
-    with patch("urllib.request.urlopen", _fake_urlopen):
-        summarize._ollama_generate("system prompt", "user input")
-    body2 = _j.loads(captured["data"].decode("utf-8"))
-    assert body2.get("think") is False, f"annex payload must disable thinking: {body2}"
-
-
-def test_hermes_payloads_set_keep_alive() -> None:
-    """Both real Hermes calls (summary + annex) must set keep_alive.
-
-    Regression (2026-07-14): only the installer's one-off prewarm set
-    keep_alive — the actual runtime calls never did, so a model that had
-    gone cold between install time and the user's first real chat (a very
-    common gap: bridge setup, Discord/WhatsApp linking, etc. all happen
-    first) paid a ~22s cold-load on top of real generation time, which
-    could blow _SUMMARY_HERMES_TIMEOUT_S and silently degrade the voice
-    summary to a near-verbatim passthrough of the raw answer.
-    """
-    from unittest.mock import patch
-    import json as _j
-
-    captured: dict = {}
-
-    class _Resp:
-        def getcode(self):
-            return 200
-
-        def read(self):
-            return b'{"response": "ok"}'
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    def _fake_urlopen(req, *a, **k):
-        captured["data"] = req.data
-        return _Resp()
-
-    with patch("urllib.request.urlopen", _fake_urlopen):
-        summarize._summarize_via_hermes("some long text to summarize", "", "de", 200, "m")
-    body = _j.loads(captured["data"].decode("utf-8"))
-    assert body.get("keep_alive"), f"summary payload must set keep_alive: {body}"
-
-    captured.clear()
-    with patch("urllib.request.urlopen", _fake_urlopen):
-        summarize._ollama_generate("system prompt", "user input")
-    body2 = _j.loads(captured["data"].decode("utf-8"))
-    assert body2.get("keep_alive"), f"annex payload must set keep_alive: {body2}"
 
 
 def test_claude_authenticated_true_with_api_key(monkeypatch) -> None:
@@ -801,39 +676,23 @@ def test_summarize_via_cli_skips_when_unauthenticated(monkeypatch) -> None:
     assert out is None
 
 
-def test_appendix_falls_back_to_hermes_when_cli_unavailable() -> None:
-    """The LERN-ZUGABE annex generator previously had no fallback at all — a
-    Hermes-only install (no Claude login, ever) could never produce an annex.
-    generate_appendix must now try Hermes when the CLI backend returns None."""
+def test_appendix_returns_empty_when_cli_unavailable() -> None:
+    """ADR-2087: no local annex backend — CLI unavailable → "" (verbatim input
+    is spoken without an annex; silence is not a failure mode)."""
     from unittest.mock import patch
-    with (
-        patch.object(summarize, "_appendix_via_cli", return_value=None) as cli,
-        patch.object(summarize, "_appendix_via_hermes",
-                     return_value="Und zur Einordnung, das ist ein Beispiel.") as herm,
-    ):
+    assert not hasattr(summarize, "_appendix_via_hermes")
+    with patch.object(summarize, "_appendix_via_cli", return_value=None) as cli:
         out = summarize.generate_appendix("some source text", lang="de")
     cli.assert_called_once()
-    herm.assert_called_once()
-    assert out == "Und zur Einordnung, das ist ein Beispiel."
+    assert out == ""
 
-
-def test_metapher_falls_back_to_hermes_when_cli_unavailable() -> None:
-    # generate_metapher runs the backend's answer through _extract_metapher,
-    # which only accepts a CURRENT marker — so the fake Hermes reply is built
-    # from summarize's own list. A hard-coded opener made this test assert the
-    # fallback was broken as soon as the prompt was reworded (381d330a /
-    # ADR-0780), when in fact only the fixture had gone stale.
-    reply = f"{summarize._METAPHER_MARKERS[0]} das ist wie ein Beispiel."
+def test_metapher_returns_empty_when_cli_unavailable() -> None:
     from unittest.mock import patch
-    with (
-        patch.object(summarize, "_metapher_via_cli", return_value=None) as cli,
-        patch.object(summarize, "_metapher_via_hermes", return_value=reply) as herm,
-    ):
+    assert not hasattr(summarize, "_metapher_via_hermes")
+    with patch.object(summarize, "_metapher_via_cli", return_value=None) as cli:
         out = summarize.generate_metapher("some source text", lang="de")
     cli.assert_called_once()
-    herm.assert_called_once()
-    assert out == reply
-
+    assert out == ""
 
 # ---------------------------------------------------------------------------
 # VOICE-F7: child timeout budgets must fit inside the adapter's parent caps.
@@ -841,29 +700,13 @@ def test_metapher_falls_back_to_hermes_when_cli_unavailable() -> None:
 
 
 def test_voice_summary_timeout_budgets_fit_parent_caps() -> None:
-    """The CLI backend and the Hermes fallback run SEQUENTIALLY inside the
-    adapter's subprocess cap. If CLI + Hermes >= the parent cap, the adapter
-    kills the child mid-Hermes and the 41c174e Hermes fallback is unreachable
-    in the hang case it exists for. Require a >=10s margin for spawn+extract.
-
-    Old (broken) budgets:
-      main : CLI 90 + Hermes 60 = 150 > 120  → Hermes killed at 120
-      annex: CLI 45 + Hermes 45 =  90 >  60  → Hermes killed at 60
-    """
-    main_sum = summarize._SUMMARY_CLI_TIMEOUT_S + summarize._SUMMARY_HERMES_TIMEOUT_S
-    assert main_sum + 10 <= summarize._PARENT_CAP_MAIN_S, (
-        f"main ladder {main_sum}s + margin overflows the "
-        f"{summarize._PARENT_CAP_MAIN_S}s parent cap"
-    )
-    annex_sum = summarize._ANNEX_CLI_TIMEOUT_S + summarize._ANNEX_HERMES_TIMEOUT_S
-    assert annex_sum + 10 <= summarize._PARENT_CAP_ANNEX_S, (
-        f"annex ladder {annex_sum}s + margin overflows the "
-        f"{summarize._PARENT_CAP_ANNEX_S}s parent cap"
-    )
-    # Hermes must get a FULL turn even when the CLI burns its entire budget.
-    assert summarize._SUMMARY_CLI_TIMEOUT_S + summarize._SUMMARY_HERMES_TIMEOUT_S <= summarize._PARENT_CAP_MAIN_S
-    assert summarize._ANNEX_CLI_TIMEOUT_S + summarize._ANNEX_HERMES_TIMEOUT_S <= summarize._PARENT_CAP_ANNEX_S
-
+    """The CLI backend runs inside the adapter's subprocess cap. Require a
+    >=10s margin for spawn + extract (ADR-2087: no second LLM stage)."""
+    assert summarize._SUMMARY_CLI_TIMEOUT_S + 10 <= summarize._PARENT_CAP_MAIN_S
+    assert summarize._ANNEX_CLI_TIMEOUT_S + 10 <= summarize._PARENT_CAP_ANNEX_S
+    for gone in ("_SUMMARY_HERMES_TIMEOUT_S", "_ANNEX_HERMES_TIMEOUT_S",
+                 "_SESSION_RECAP_HERMES_TIMEOUT_S"):
+        assert not hasattr(summarize, gone), gone
 
 def test_cli_budget_covers_measured_latency() -> None:
     """VOICE-F8 — the budget must fit the BACKEND, not just the parent cap.
@@ -889,11 +732,6 @@ def test_cli_budget_covers_measured_latency() -> None:
     assert summarize._SESSION_RECAP_CLI_TIMEOUT_S >= summarize._SUMMARY_CLI_TIMEOUT_S, (
         "session-recap CLI budget must not be tighter than the summary budget"
     )
-    # Hermes is the OUTAGE fallback: it only needs to cover a warm local
-    # generate (~30s measured), but must not be so tight it never completes.
-    assert summarize._SUMMARY_HERMES_TIMEOUT_S >= 40, (
-        "Hermes budget below 40s cannot complete a warm local generate"
-    )
 
 
 def test_console_route_parent_cap_matches_the_ladder() -> None:
@@ -913,42 +751,28 @@ def test_console_route_parent_cap_matches_the_ladder() -> None:
     assert m, "could not read _TTS_SUMMARIZE_TIMEOUT_S default from routes/voice.py"
     assert int(m.group(1)) >= summarize._PARENT_CAP_MAIN_S, (
         f"console cap {m.group(1)}s is below the {summarize._PARENT_CAP_MAIN_S}s "
-        "ladder — the console would kill the child before Hermes gets a turn"
+        "ladder — the console would kill the child mid-CLI"
     )
 
 
 def test_session_recap_timeout_budgets_fit_the_console_route_parent_cap() -> None:
     """routes/voice.py's session-summary endpoint wraps this ladder in a 150s
-    subprocess.run timeout (_TTS_SUMMARIZE_TIMEOUT_S, same constant the
-    per-turn summarizer already fits inside) — same reasoning as
-    test_voice_summary_timeout_budgets_fit_parent_caps above: CLI + Hermes
-    must sum to comfortably under that cap or Hermes is unreachable in
-    exactly the hang case it exists for."""
-    recap_sum = summarize._SESSION_RECAP_CLI_TIMEOUT_S + summarize._SESSION_RECAP_HERMES_TIMEOUT_S
-    assert recap_sum + 10 <= summarize._PARENT_CAP_MAIN_S, (
-        f"session-recap ladder {recap_sum}s + margin overflows the "
-        f"{summarize._PARENT_CAP_MAIN_S}s parent cap"
-    )
-
+    subprocess.run timeout (_TTS_SUMMARIZE_TIMEOUT_S). The CLI budget must fit
+    comfortably under that cap."""
+    assert summarize._SESSION_RECAP_CLI_TIMEOUT_S + 10 <= summarize._PARENT_CAP_MAIN_S
 
 # ---------------------------------------------------------------------------
 # Session-recap mode: whole-session recap, deliberately non-deterministic.
 # ---------------------------------------------------------------------------
 
 
-def test_session_recap_falls_back_to_hermes_when_cli_unavailable() -> None:
+def test_session_recap_empty_when_cli_unavailable() -> None:
     from unittest.mock import patch
-    with (
-        patch.object(summarize, "_session_recap_via_cli", return_value=None) as cli,
-        patch.object(summarize, "_session_recap_via_hermes",
-                     return_value="Kurzer Recap-Text.") as herm,
-    ):
+    with patch.object(summarize, "_session_recap_via_cli", return_value=None) as cli:
         out = summarize.generate_session_recap("User: X\n\nAssistant: Y", lang="de",
                                                 angle="Beginne mit dem Ziel.")
     cli.assert_called_once()
-    herm.assert_called_once()
-    assert out == "Kurzer Recap-Text."
-
+    assert out == ""
 
 def test_session_recap_returns_empty_string_when_both_backends_fail() -> None:
     """Unlike summarize()'s naive_truncate fallback, a raw User:/Assistant:
@@ -957,10 +781,7 @@ def test_session_recap_returns_empty_string_when_both_backends_fail() -> None:
     console route then degrades to its usual 204, never a truncated
     transcript played as if it were a recap)."""
     from unittest.mock import patch
-    with (
-        patch.object(summarize, "_session_recap_via_cli", return_value=None),
-        patch.object(summarize, "_session_recap_via_hermes", return_value=None),
-    ):
+    with patch.object(summarize, "_session_recap_via_cli", return_value=None):
         out = summarize.generate_session_recap("User: X\n\nAssistant: Y", lang="de")
     assert out == ""
 
@@ -969,11 +790,9 @@ def test_session_recap_empty_transcript_short_circuits_without_any_backend_call(
     from unittest.mock import patch
     with (
         patch.object(summarize, "_session_recap_via_cli") as cli,
-        patch.object(summarize, "_session_recap_via_hermes") as herm,
     ):
         out = summarize.generate_session_recap("   ", lang="de")
     cli.assert_not_called()
-    herm.assert_not_called()
     assert out == ""
 
 
@@ -1048,13 +867,14 @@ def test_session_recap_fences_the_transcript_before_sending_to_the_backend() -> 
     assert "TRANSKRIPT-ANFANG" in fenced and "TRANSKRIPT-ENDE" in fenced
 
     from unittest.mock import patch
-    with patch.object(summarize, "_session_recap_via_hermes", return_value=None) as herm, \
-         patch.object(summarize, "shutil") as _shutil:
-        _shutil.which.return_value = None  # force the CLI branch to bail early
+    with patch.object(summarize, "_run_claude_print", return_value="recap") as run, \
+         patch.object(summarize, "shutil") as _shutil, \
+         patch.object(summarize, "_claude_authenticated", return_value=True):
+        _shutil.which.return_value = "/usr/bin/claude"
         summarize.generate_session_recap(transcript, lang="de", angle="test angle")
-    # Hermes is the reachable backend in this test double; confirm IT received
-    # the fenced payload, not the raw transcript.
-    herm.assert_called_once()
+    # The CLI backend received the FENCED payload, not the raw transcript.
+    run.assert_called_once()
+    assert run.call_args[0][0] == fenced
 
 
 def test_session_recap_system_prompt_tells_the_model_not_to_act_on_the_transcript() -> None:
@@ -1286,38 +1106,98 @@ def test_cap_to_budget_returns_at_least_one_unit_when_first_sentence_overruns() 
     assert out.endswith("…")
 
 
-def test_prewarm_is_fail_soft_when_no_backend() -> None:
-    """Prewarm must never raise — a Claude-CLI-only / cloud install has no
-    Ollama, and the bridge fires this at boot in a daemon thread."""
-    import os as _os
-    saved = _os.environ.get("OLLAMA_HOST")
-    _os.environ["OLLAMA_HOST"] = "http://127.0.0.1:1"  # nothing listens here
-    try:
-        assert summarize.prewarm_summary_model(timeout_s=2.0) is False
-    finally:
-        if saved is None:
-            _os.environ.pop("OLLAMA_HOST", None)
-        else:
-            _os.environ["OLLAMA_HOST"] = saved
+def test_prewarm_is_gone() -> None:
+    """ADR-2087: the local-model prewarm is removed; --prewarm is a no-op."""
+    assert not hasattr(summarize, "prewarm_summary_model")
+
+# ---------------------------------------------------------------------------
+# ADR-2087 — local-only tenants never reach the cloud CLI backend.
+# ---------------------------------------------------------------------------
+
+_DENY_CLOUD = (
+    "spec:\n  egress:\n    enabled: true\n    default_action: deny\n"
+    "    allowed_hosts:\n      - localhost\n"
+)
 
 
-def test_hermes_base_url_adds_scheme_for_bare_hostport() -> None:
-    import os as _os
-    saved = _os.environ.get("OLLAMA_HOST")
-    _os.environ["OLLAMA_HOST"] = "127.0.0.1:11434"
-    try:
-        assert summarize._hermes_base_url() == "http://127.0.0.1:11434"
-    finally:
-        if saved is None:
-            _os.environ.pop("OLLAMA_HOST", None)
-        else:
-            _os.environ["OLLAMA_HOST"] = saved
+def _write_tenant_cfg(tmp_path, body: str) -> None:
+    d = tmp_path / "corvin_home" / "tenants" / "_default" / "global"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "tenant.corvin.yaml").write_text(body, encoding="utf-8")
+
+
+def _cli_ready(monkeypatch):
+    """Make the CLI backend look installed + authenticated and record spawns."""
+    spawned: list = []
+
+    def _run(*a, **kw):
+        spawned.append(a[:1])
+        raise AssertionError("claude CLI must not be spawned for a local-only tenant")
+
+    monkeypatch.setattr(summarize.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(summarize, "_claude_authenticated", lambda: True)
+    monkeypatch.setattr(summarize.subprocess, "run", _run)
+    monkeypatch.setattr(summarize.subprocess, "Popen", _run)
+    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
+    return spawned
+
+
+@pytest.mark.parametrize("flag", ["1", "true", "yes", "on", "TRUE"])
+def test_tts_local_only_skips_cli_and_uses_structural(monkeypatch, capsys, flag) -> None:
+    spawned = _cli_ready(monkeypatch)
+    monkeypatch.setenv("CORVIN_TTS_LOCAL_ONLY", flag)
+    long_text = "Dies ist ein langer Text über die Architektur. " * 40
+    out = summarize.summarize(long_text, "de", 200, "claude-haiku-4-5")
+    assert spawned == []
+    assert out and len(out) < len(long_text)
+    assert "[summarize] degraded:" in capsys.readouterr().err
+
+
+def test_egress_denied_tenant_skips_cli_and_uses_structural(monkeypatch, tmp_path) -> None:
+    spawned = _cli_ready(monkeypatch)
+    _write_tenant_cfg(tmp_path, _DENY_CLOUD)
+    assert summarize._summary_cloud_permitted() is False
+    out = summarize.summarize("Ein kurzer Satz. " * 60, "de", 200, "claude-haiku-4-5")
+    assert spawned == [] and out
+
+
+def test_local_only_annexes_and_recap_never_spawn_cli(monkeypatch, tmp_path) -> None:
+    spawned = _cli_ready(monkeypatch)
+    _write_tenant_cfg(tmp_path, _DENY_CLOUD)
+    assert summarize.generate_appendix("some source text", lang="de") == ""
+    assert summarize.generate_metapher("some source text", lang="de") == ""
+    assert summarize.generate_session_recap("User: a\n\nAssistant: b", lang="de") == ""
+    assert spawned == []
+
+
+def test_egress_allowed_tenant_uses_cli(monkeypatch, tmp_path) -> None:
+    from unittest.mock import patch
+    _write_tenant_cfg(tmp_path, "spec:\n  egress:\n    enabled: true\n    default_action: allow\n")
+    assert summarize._summary_cloud_permitted() is True
+    with patch.object(summarize, "_summarize_via_cli", return_value="Kurz.") as cli:
+        out = summarize.summarize("Text. " * 50, "de", 200, "claude-haiku-4-5")
+    cli.assert_called_once()
+    assert out == "Kurz."
+
+
+def test_no_tenant_config_permits_cloud() -> None:
+    assert summarize._summary_cloud_permitted() is True
+
+
+def test_unreadable_tenant_config_fails_closed(monkeypatch, tmp_path) -> None:
+    _write_tenant_cfg(tmp_path, "spec:\n  egress:\n  enabled: true\n      bad: [\n")
+    assert summarize._summary_cloud_permitted() is False
+
+
+def test_prewarm_flag_is_a_noop(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(sys, "argv", ["summarize.py", "--prewarm"])
+    assert summarize.main() == 0
+    assert "prewarm-skipped" in capsys.readouterr().out
 
 
 def main() -> int:
     tests = [
-        test_prewarm_is_fail_soft_when_no_backend,
-        test_hermes_base_url_adds_scheme_for_bare_hostport,
+        test_prewarm_is_gone,
         test_language_directive_now_pinned_for_de,
         test_language_directive_now_pinned_for_en,
         test_cap_to_budget_bounds_long_prose,

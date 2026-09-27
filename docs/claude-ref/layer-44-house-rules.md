@@ -96,12 +96,13 @@ This adds the LIP integrity pin on top of the committed-anchor check.
   (`claude -p --max-turns 1 --tools ""`, helper-model site `house_rules_adjudicator`,
   20 s timeout). It runs on EVERY non-empty task (NOT only on a Tier-0 hit — see
   Classification) and classifies the whole task against the full ruleset. On
-  timeout/parse-failure it raises → the chain falls through to the next provider.
+  timeout/parse-failure it raises → the gate degrades to the Tier-0 floor (below).
+  It runs only under the `cloud_only` order; a `floor_only` tenant never spawns it
+  (see "Classifier order" below).
   - **Backend-unavailable → degrade to the Tier-0 floor (2026-07-11, load-bearing):**
     when the semantic classifier callable RAISES because *no* backend can run at all
-    (Hermes AND cloud both unavailable — the dominant case is a **fresh install** in
-    the seconds/minutes before Hermes is provisioned or `claude` is logged in, or a
-    transient outage), `classify()` no longer escalates EVERY task. It **degrades to
+    (cloud Haiku unavailable — the dominant case is a **fresh install** in the
+    seconds/minutes before `claude` is logged in, or a transient outage), `classify()` no longer escalates EVERY task. It **degrades to
     the always-available deterministic Tier-0 floor**: the prohibited-class patterns
     (`no-military` / `no-offensive-cyber` / `no-disinformation`) still MATCH and BLOCK,
     but a task matching NO rule passes. This is **fail-TO-FLOOR, NOT fail-open** — the
@@ -119,8 +120,8 @@ This adds the LIP integrity pin on top of the committed-anchor check.
     backend-unavailable degradation above only fires when the classifier callable
     itself RAISES. A caller that wraps `check_l44` in its OWN wall-clock bound — the
     imagegen MCP server bounds it at `_L44_TIMEOUT_S = 100s` — hits its timeout FIRST
-    when the cloud classifier is merely slow (FREE tier / `claude` not logged in /
-    no local Ollama: worst case ~63s cloud + ~30s Hermes), so `classify()` never
+    when the cloud classifier is merely slow (FREE tier / `claude` not logged in),
+    so `classify()` never
     reaches its own degradation and the caller used to hard-refuse EVERY image, even a
     benign "queen bee". `spawn_gates.check_l44_floor()` exposes the identical Tier-0
     floor as a standalone, classifier-free, never-hangs call (`HouseRulesGate` built
@@ -130,15 +131,6 @@ This adds the LIP integrity pin on top of the committed-anchor check.
     `test_spawn_gates.py::test_floor_*` + `test_imagegen_zero_config.py::
     test_l44_hang_is_bounded_fast_and_degrades_to_the_floor` /
     `test_l44_timeout_still_blocks_a_prohibited_prompt_via_the_floor`.
-  - **Fresh-install readiness (shrinks the floor window, 2026-07-12):** the
-    installer (`install.sh` / `install.ps1`) now **pre-warms** the Hermes classifier
-    model (one throwaway `/api/generate` with `keep_alive: 30m`) right after pulling
-    it, so the classifier's *first real* check is not a ~22 s cold model load. The
-    classifier payload also sends `keep_alive` (`CORVIN_HOUSE_RULES_KEEP_ALIVE`,
-    default `30m`). A dedicated classifier-model override exists
-    (`CORVIN_HOUSE_RULES_MODEL`) but is intentionally NOT set to a tiny model:
-    `qwen3:1.7b` is fast yet failed the classifier JSON schema in testing (0/5
-    valid), so the reliable warm chat model (`qwen3:8b` ≈ 3 s warm) is used.
   - **Binary resolution (load-bearing):** the classifier subprocess resolves the
     claude CLI via `adapter._resolve_helper_claude_bin()`
     (`CORVIN_CLAUDE_BIN` → PATH → engine known-location fallbacks), NOT the bare
@@ -152,11 +144,12 @@ This adds the LIP integrity pin on top of the committed-anchor check.
     transiently (CLI timeout, a 429 rate-limit, an empty/garbled reply). Because the
     gate is fail-closed, every blip used to escalate a benign request (live: 6 of 9
     Discord escalations were transient `classifier_error`, not real content).
-    `_house_rules_classify_chunk()` now retries the spawn **once**
-    (`_HOUSE_RULES_RETRIES = 1`, `_HOUSE_RULES_RETRY_BACKOFF_S = 1.5 s`) before
-    giving up; if it still fails the gate escalates **exactly as before** — the
-    retry narrows false positives without ever weakening the gate. A `spawn_missing`
-    (CLI absent) cause is NOT retried (pointless). The internal
+    `_house_rules_classify_chunk()` now retries the spawn up to **twice**
+    (`_HOUSE_RULES_RETRIES = 2`, exponential backoff from
+    `_HOUSE_RULES_RETRY_BACKOFF_S = 1.0 s`, capped at 4 s) before giving up; if it
+    still fails, the error propagates and the gate degrades to the Tier-0 floor
+    (above). A `spawn_missing` (CLI absent) or `auth_missing` cause is NOT retried
+    (pointless). The internal
     `_HouseRulesClassifierError(cause=…)` tags the failure
     (`timeout`/`empty_output`/`no_json`/`bad_json`/`spawn_error`/`spawn_missing`)
     and `_house_rules_classify_chunk()` logs the precise cause to the **adapter log**
@@ -197,48 +190,53 @@ This adds the LIP integrity pin on top of the committed-anchor check.
 - `escalate` currently blocks with an "operator approval required" message; the
   approval routing through the L21 proposal channel is ADR-0143 M3.
 
-### Local provider chain + cloud-outage resilience (ADR-0157 M3)
+### Classifier order — `cloud_only` / `floor_only` (ADR-0161, ADR-2087)
 
-The Tier-1 classifier is a **two-provider chain**, not a single cloud call:
-local Ollama/Hermes **and** cloud Haiku, ordered per ADR-0161, then fail-closed
-(`_house_rules_classify_with_chain`). Having a working local provider lets the
-gate keep classifying when the Anthropic API is unreachable (e.g. a 500 outage)
-— without it, a cloud outage escalates EVERY task (`classifier_error`) and the
-bridge becomes a wall: every message returns "couldn't be safety-checked, send
-it again", and the chat is only steerable via slash-commands (which are
-dispatched **before** the spawn gate).
+The Tier-1 classifier used to be a two-provider chain (local Hermes/Ollama +
+cloud Haiku, orders `cloud_first` / `local_first` / `local_only`). ADR-2087
+removed all local Ollama inference, so exactly **two orders** remain, resolved
+once per task by `_house_rules_resolve_order(tenant_id)`:
 
-**Provider order (ADR-0161, `_house_rules_resolve_order`)** — resolved ONCE per
-task, env override → `auto`:
-
-| order | sequence | when (`auto`) |
+| order | what runs | when |
 |---|---|---|
-| `cloud_first` | cloud → local → fail-closed | `default_engine` ≠ hermes **and** egress permits `api.anthropic.com` (normal cloud install — fast ~2 s, local rescues a cloud outage) |
-| `local_first` | local → cloud → fail-closed | `default_engine` **= hermes** + egress permits `api.anthropic.com` (local-intent tenant: classify on-host first, cloud only as last-resort fallback) — also any explicit override |
-| `local_only`  | local → fail-closed (NEVER cloud) | egress **denies** `api.anthropic.com` (EU_PRODUCTION / CONFIDENTIAL — task text must stay on-host) — for **either** engine |
-| `cloud_only`  | cloud → fail-closed | `CORVIN_HOUSE_RULES_DISABLE_HERMES=1` (back-compat) |
+| `cloud_only` | cloud Haiku (`claude -p`); a backend failure degrades to the Tier-0 floor (`classifier_error_tier0_degraded`, unchanged) | the tenant's L35 egress policy admits `api.anthropic.com` (normal install; also no/unreadable tenant config) |
+| `floor_only` | **no classifier, no subprocess, no network** — the deterministic Tier-0 floor decides | the tenant's egress policy does **not** admit `api.anthropic.com` (e.g. the EU_PRODUCTION preset), or `CORVIN_HOUSE_RULES_CLASSIFIER_ORDER=floor_only` |
 
-`auto` is **engine-aware**. It reads the tenant's `spec.default_engine`
-(`tenant.corvin.yaml`, the same source `engine_models` uses) **and** the L35
-egress policy (`EgressGate.from_tenant_config`, audit-silent probe) to choose the
-primary provider:
+The egress probe (`_house_rules_cloud_egress_allowed`) builds an audit-silent
+`EgressGate` from `tenant.corvin.yaml`; any read error counts as "cloud
+reachable". It exists because the cloud classifier is a `claude -p` subprocess
+the L35 spawn gate does not see — without it an egress-denied tenant's task text
+would leave the host.
 
-- **Hermes tenant** (`default_engine: hermes` — fully-local Ollama intent) →
-  `local_first` (or `local_only` when egress is also denied). This stops a
-  local-intent tenant from leaking task text to `api.anthropic.com` every turn,
-  and — when the `claude` CLI is installed-but-unauthenticated — stops it burning
-  the transient-retry budget on the cloud path each turn (see `auth_missing`).
-- **Cloud/claude_code tenant** (or no `default_engine`) → the legacy
-  egress-keyed behaviour: `cloud_first` when egress permits the cloud host, else
-  `local_only`.
+**`floor_only` semantics (`HouseRulesGate.classify`).** The classifier raises
+`HouseRulesFloorOnly` instead of spawning anything; the gate catches it BEFORE
+its generic backend-unavailable handler:
 
-This **closes a latent residency bug**: the old resolver keyed ONLY on egress and
-defaulted to `cloud_first`, so a Hermes tenant still tried cloud Haiku FIRST every
-turn. `local_only` still forbids any local→cloud fallthrough in an egress-denied
-tenant. Override the resolved order with `CORVIN_HOUSE_RULES_CLASSIFIER_ORDER` ∈
-`auto|cloud_first|local_first|local_only|cloud_only`. The
-`house_rules.provider_fallback` audit event records `provider` / `cause` /
-`fallback_to` whenever the primary falls through to the secondary.
+- a Tier-0 pattern match keeps the stricter of its action and `escalate` — a
+  `deny` rule stays **deny** (reason `floor_only_rule_match`);
+- **every other task escalates** (reason `floor_only_no_rule_matched`) — it is
+  never given the policy default `allow`, because nothing classified it;
+- each decision is audited as `house_rules.floor_only` (INFO, metadata only,
+  written before the `house_rules.{denied,escalated}` record), distinct from
+  `classifier_error_tier0_degraded`, which keeps meaning "a classifier that
+  should have run did not". A `floor_only` decision does not feed the M4
+  degradation window.
+
+Consequence: an egress-denied tenant with no custom engine gets every task
+escalated unless a deny rule already blocks it. That is intended (fail-closed
+for the strictest posture); such a tenant needs a user-defined engine on an
+admitted endpoint for any real work (L34/L35 already refuse the bundled cloud
+engines).
+
+**Env override is one-way.** `CORVIN_HOUSE_RULES_CLASSIFIER_ORDER` can only
+force `floor_only`. Any other value — `cloud_only`, `auto`, the removed
+`local_first` / `local_only` / `cloud_first`, or garbage — resolves to the
+computed order, so it can never re-open the cloud path for an egress-denied
+tenant. An explicit `order=` passed by a caller is likewise re-resolved unless it
+is `floor_only`. Removed by ADR-2087: `CORVIN_HOUSE_RULES_DISABLE_HERMES`,
+`CORVIN_HOUSE_RULES_HERMES_TIMEOUT_S`, `CORVIN_HOUSE_RULES_KEEP_ALIVE`,
+`CORVIN_HOUSE_RULES_MODEL`. `house_rules.provider_fallback` is no longer emitted
+(its `EVENT_SEVERITY` entry stays so historical records keep their severity).
 
 **`auth_missing` cause (non-transient).** When the cloud `claude -p` classifier
 returns the installed-but-unauthenticated envelope (`is_error: true` with
@@ -246,54 +244,13 @@ returns the installed-but-unauthenticated envelope (`is_error: true` with
 `invalid api key` marker on stdout/stderr), `_house_rules_classify_chunk_once`
 raises the distinct cause `auth_missing`. Like `spawn_missing`, the retry wrapper
 treats it as non-transient and breaks immediately — it does **not** burn the
-~3-attempt transient budget + backoff on a fault retries cannot fix. The gate
-still fails CLOSED (the cause propagates; the secondary provider / escalate runs).
+transient budget + backoff on a fault retries cannot fix. The error propagates
+and the gate degrades to the Tier-0 floor.
 
-Two load-bearing properties of the local path (both were broken — fixed):
-
-- **Model = the model the RUNNING engine uses (the tenant's configured one),
-  never a private default.** The check is performed by the engine that is
-  actually configured/running on the host — "the engine that runs does the
-  check". The local classifier resolves its Ollama model as: the tenant's
-  CONFIGURED `spec.hermes_model` (alias→tag via `HERMES_MODEL_ALIASES`, read by
-  `_house_rules_tenant_hermes_model`) → `CORVIN_HERMES_MODEL` env →
-  `agents.hermes_engine._resolve_default_model()` built-in. This means a box
-  bootstrapped with `hermes-fast` (`qwen3:1.7b`) classifies with `qwen3:1.7b` and
-  needs **no separate Ollama model** — the classifier never asks for a model the
-  configured engine did not pull. (It previously resolved only the built-in
-  default `qwen3:8b`; a small-RAM box that pulled only `qwen3:1.7b` then hit
-  Ollama 404 → `classifier_error` → fail-closed block of every request even
-  though Hermes was configured and ready.) The check stays **fail-closed**: if
-  the configured engine genuinely cannot classify (e.g. no engine set up yet),
-  the turn is escalated/blocked, never allowed. A reachable Ollama that
-  **rejects** a request (HTTP 4xx, e.g. `model 'x' not found`) raises the
-  distinct cause `local_misconfigured` and logs loudly (config fault ≠ transient
-  blip), then still falls through to cloud per the resolved order.
-- **Timeout sized for a local model.** `_HOUSE_RULES_HERMES_TIMEOUT_S` defaults
-  to **30 s** (env `CORVIN_HOUSE_RULES_HERMES_TIMEOUT_S`). A local 8B model needs
-  ~8 s warm and more on a cold start (VRAM load); the old 10 s budget sat below
-  the cold-start time, so the local-primary call timed out and fell through to
-  cloud — re-bricking on any cloud 500. The "local is faster than cloud" premise
-  was wrong: a local 8B model is **slower** than cloud Haiku.
-
-**Residual fail-closed (by design, not a bug):** when BOTH the local model and
-cloud Haiku are down, the gate still escalates (`classifier_error`) and blocks —
-this is the mandated L44 fail-closed property (ADR-0143) and is NOT removable
-without fail-opening the gate. The fix removes the *common* brick (cloud-only
-outage) by repairing the local fallback; it cannot promise zero blocks when no
-classifier backend is reachable at all.
-
-**Latency note:** under the default `auto`, a normal cloud install (no
-`default_engine` or `claude_code`) resolves to `cloud_first`, so the fast cloud
-Haiku (~1–2 s) is the primary and the local model (qwen3:8b, ~8 s warm) is only
-paid when the cloud is actually failing — no per-task local latency in healthy
-operation. A Hermes-default tenant resolves to `local_first` and pays the local
-classify time on every uncached task (it deliberately keeps task text on-host;
-cloud is only the last-resort fallback). An egress-denied/EU tenant
-resolves to `local_only` and pays the local classify time on every uncached task
-(amortised by the 5-min clear-verdict cache) — that is the cost of keeping task
-text on-host, which is mandatory there. A local 8B model is **slower** than
-cloud Haiku, so never expect local-first to be the low-latency option.
+**Cloud outage.** Under `cloud_only`, an unreachable Anthropic API degrades to
+the Tier-0 floor (prohibited classes still blocked, benign tasks pass, audited
+`classifier_error_tier0_degraded` + the M4 `house_rules.classifier_degraded`
+WARNING). There is no second classifier to fall back to.
 
 ## Decision ladder
 
@@ -365,8 +322,8 @@ NOT mean allow — that was the original M2 bug, review R-1).
 
 `proactive._house_rules_allows()` (F-A19, 2026-09-07) builds the gate with the
 same Tier-1 semantic classifier the inbound bridge path wires
-(`house_rules._house_rules_classifier`, Hermes local → cloud Haiku →
-fail-closed) and the tenant overlay. Before, proactive text was checked by the
+(`house_rules._house_rules_classifier`, `cloud_only` / `floor_only` per
+tenant, ADR-2087) and the tenant overlay. Before, proactive text was checked by the
 Tier-0 regex floor only. Still fail-closed: a gate that cannot run denies.
 
 ## Tenant overlay

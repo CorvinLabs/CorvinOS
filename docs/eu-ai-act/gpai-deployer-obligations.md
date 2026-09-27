@@ -25,8 +25,8 @@ The EU AI Act distinguishes three roles in the GPAI supply chain:
 3. **CorvinOS operators** (organisations deploying CorvinOS) are deployers under Art. 26
 
 CorvinOS is **not itself a GPAI model provider** — it does not train or release a
-foundation model. However, because CorvinOS integrates GPAI models (Claude, Hermes/Ollama,
-OpenAI Codex, GitHub Copilot) as backends, its operators fall under the deployer
+foundation model. However, because CorvinOS integrates GPAI models (Claude,
+OpenAI Codex, GitHub Copilot, and any operator-defined engine) as backends, its operators fall under the deployer
 obligations cascade in Art. 26.
 
 ---
@@ -119,7 +119,6 @@ the incident dashboard and can revoke consent or access if required.
 | GPAI model | Provider | Usage policy reference |
 |---|---|---|
 | Claude | Anthropic | Anthropic Usage Policy (current version) |
-| Hermes / Llama-based | Meta / HuggingFace | Llama Community License |
 | Codex / GPT-4 | OpenAI | OpenAI Usage Policies |
 | GitHub Copilot | GitHub / Microsoft | GitHub Copilot Terms |
 
