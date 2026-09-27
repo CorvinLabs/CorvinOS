@@ -359,7 +359,11 @@ class MasterRolloutOrchestrator:
 
     def _transition_phase_1_to_2a(self) -> None:
         """Execute Phase 1 → Phase 2a transition"""
-        self.base_orch.operator_approve("PHASE_2A_START")
+        self.base_orch.operator_approve(
+            OperatorApprovalGate.PHASE_2A_START,
+            approved_by="system",
+            reason="Automated phase transition"
+        )
 
         # Enable dual-write for all skills
         for skill_id in self.state.base_state.skill_states:

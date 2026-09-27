@@ -280,8 +280,8 @@ class TestPluginUploadE2E:
     ) -> None:
         """Upload in primary tenant → verify it's not accessible via non-tenant headers.
 
-        In a single-tenant test environment, we verify tenant_id is properly
-        scoped by attempting to access with modified tenant context.
+        Tests that tenant_id is properly scoped by attempting to access with
+        modified tenant context. Works whether or not X-Corvin-Tenant header exists.
         """
         # Upload in primary tenant
         zip_data = create_valid_skill_zip()
@@ -304,21 +304,25 @@ class TestPluginUploadE2E:
         upload_ids = [u["upload_id"] for u in response.json()["uploads"]]
         assert upload_id in upload_ids, f"Upload {upload_id} not found in tenant"
 
-        # Attempt to access with modified tenant context (simulates cross-tenant)
-        # If tenant_id is properly isolated, this either fails or returns empty
+        # Attempt to access with tampered headers (always present X-Corvin-Tenant header)
         tampered_headers = dict(admin_session)
-        if "X-Corvin-Tenant" in tampered_headers:
-            tampered_headers["X-Corvin-Tenant"] = "evil_tenant"
+        # Always add/override X-Corvin-Tenant to test cross-tenant isolation
+        # Use a value unlikely to match the actual tenant
+        tampered_headers["X-Corvin-Tenant"] = "isolated_evil_tenant_xyz"
 
-            response = client.get(
-                "/v1/skills/uploads",
-                headers=tampered_headers,
+        response = client.get(
+            "/v1/skills/uploads",
+            headers=tampered_headers,
+        )
+        # Should either 403 (forbidden) or return empty list (no uploads in evil tenant)
+        assert response.status_code in [200, 403], f"Unexpected status: {response.status_code}"
+
+        if response.status_code == 200:
+            evil_upload_ids = [u["upload_id"] for u in response.json()["uploads"]]
+            assert upload_id not in evil_upload_ids, (
+                f"CROSS-TENANT LEAK: Upload {upload_id} from primary tenant "
+                f"is visible in evil_tenant context"
             )
-            # Should either 403 (forbidden) or return empty list (no uploads in evil_tenant)
-            assert response.status_code in [200, 403]
-            if response.status_code == 200:
-                evil_upload_ids = [u["upload_id"] for u in response.json()["uploads"]]
-                assert upload_id not in evil_upload_ids, "Cross-tenant leak: upload visible in evil_tenant"
 
     def test_upload_with_path_traversal_rejected(
         self,
