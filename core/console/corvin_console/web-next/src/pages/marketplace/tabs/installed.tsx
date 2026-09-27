@@ -111,9 +111,15 @@ function Row({ p, csrf, lifecycleEnabled, health }: {
             {editing ? "Close settings" : "Settings"}
           </Button>
           {!confirmUninstall ? (
-            <Button size="sm" variant="outline" disabled={!canMutate || p.enabled}
+            <Button size="sm" variant="outline" disabled={!canMutate}
                     title={p.enabled ? "Disable the plugin first" : undefined}
-                    onClick={() => setConfirmUninstall(true)}>Uninstall</Button>
+                    onClick={() => {
+                      if (p.enabled) {
+                        setMsg("Not uninstalled — disable the plugin first, then uninstall.");
+                        return;
+                      }
+                      setConfirmUninstall(true);
+                    }}>Uninstall</Button>
           ) : (
             <>
               <Button size="sm" variant="destructive" disabled={!canMutate} onClick={() => { setConfirmUninstall(false); uninstall.mutate(); }}>

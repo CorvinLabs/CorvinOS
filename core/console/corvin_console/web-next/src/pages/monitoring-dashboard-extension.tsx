@@ -567,7 +567,7 @@ const IncidentsPanel: React.FC<{ incidents: Incident[] }> = ({ incidents }) => {
                   <div className="text-xs text-gray-500 mt-1">{incident.incident_id}</div>
                 </div>
                 <Badge
-                  variant={incident.severity === 'critical' ? 'destructive' : 'secondary'}
+                  variant={incident.severity === 'critical' ? 'danger' : 'secondary'}
                   className="ml-2"
                 >
                   {incident.severity.toUpperCase()}
