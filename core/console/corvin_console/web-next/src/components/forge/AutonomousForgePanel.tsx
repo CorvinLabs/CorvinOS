@@ -62,7 +62,13 @@ export const AutonomousForgePanel: React.FC = () => {
     'skill-forge.autonomous.selected',
     null,
   );
-  const [busy, setBusy] = useState(false);
+  // Persisted: the loading spinner (busy = true during a forge run) must
+  // survive tab switches — without it, a user who navigates away and back
+  // loses visibility that the generation is in flight (ADR-2096).
+  const [busy, setBusy] = usePersistentState(
+    'skill-forge.autonomous.busy',
+    false,
+  );
   const [message, setMessage] = usePersistentState<{ kind: 'ok' | 'error'; text: string } | null>(
     'skill-forge.autonomous.message',
     null,
