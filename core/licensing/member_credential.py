@@ -12,8 +12,9 @@ License: Apache-2.0
 import json
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any
 from enum import Enum
@@ -138,10 +139,17 @@ class MemberCredential:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
-        """Auto-generate credential_id if not set."""
+        """Auto-generate credential_id if not set.
+
+        Second-resolution timestamps collide when a member is issued more
+        than one credential within the same second (renewal races, tests) —
+        the id doubles as the on-disk filename, so a collision silently
+        overwrote the earlier credential. A short random suffix keeps ids
+        stable in length while making them collision-resistant.
+        """
         if not self.credential_id:
             ts = int(datetime.fromisoformat(self.issued_at).timestamp())
-            self.credential_id = f"{self.member_id}:{ts}"
+            self.credential_id = f"{self.member_id}:{ts}:{uuid.uuid4().hex[:8]}"
 
     def is_valid(self, check_expiry: bool = True) -> bool:
         """Check if credential is valid.
@@ -158,7 +166,7 @@ class MemberCredential:
         if check_expiry:
             try:
                 expires = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
-                if datetime.utcnow() > expires:
+                if datetime.now(timezone.utc) > expires:
                     logger.warning(f"Credential {self.credential_id} has expired")
                     return False
             except Exception as e:
@@ -171,7 +179,7 @@ class MemberCredential:
         """Check if credential has expired."""
         try:
             expires = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
-            return datetime.utcnow() > expires
+            return datetime.now(timezone.utc) > expires
         except:
             return False
 
@@ -191,7 +199,7 @@ class MemberCredential:
         """Get remaining time-to-live in seconds."""
         try:
             expires = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
-            remaining = (expires - datetime.utcnow()).total_seconds()
+            remaining = (expires - datetime.now(timezone.utc)).total_seconds()
             return max(0, int(remaining))
         except:
             return 0
@@ -260,7 +268,7 @@ class SignedTask:
         """Check if signed task has expired."""
         try:
             signed = datetime.fromisoformat(self.signed_at.replace("Z", "+00:00"))
-            age_seconds = (datetime.utcnow() - signed).total_seconds()
+            age_seconds = (datetime.now(timezone.utc) - signed).total_seconds()
             return age_seconds > self.ttl_seconds
         except:
             return True

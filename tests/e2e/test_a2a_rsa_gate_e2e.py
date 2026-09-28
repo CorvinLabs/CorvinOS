@@ -450,7 +450,7 @@ class TestCase7ProtocolVersionCompatibility(TestA2AFixture):
         result = self.verifier.verify_signed_task(task)
 
         # Verifier should run checks (may fail on signature since we're using test key)
-        assert result.task_id == "task_001"
+        assert result.task_id == task.task_id
         assert result.checks_passed or result.checks_failed
 
     def test_4a_protocol_with_version(self):

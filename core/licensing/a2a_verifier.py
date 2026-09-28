@@ -45,6 +45,7 @@ class RevocationList:
         self.crl_file = self.corvin_home / "licensing" / "crl.json"
         self.crl_file.parent.mkdir(parents=True, exist_ok=True)
         self.revoked: Dict[str, Dict[str, Any]] = {}
+        self._loaded_mtime: Optional[float] = None
         self._load()
 
     def _load(self) -> None:
@@ -54,9 +55,25 @@ class RevocationList:
                 with open(self.crl_file) as f:
                     data = json.load(f)
                 self.revoked = data.get("revoked", {})
+                self._loaded_mtime = self.crl_file.stat().st_mtime
                 logger.info(f"Loaded CRL with {len(self.revoked)} entries")
             except Exception as e:
                 logger.error(f"Failed to load CRL: {e}")
+
+    def _refresh_if_stale(self) -> None:
+        """Reload from disk when another process/instance wrote a newer CRL.
+
+        A revocation made through one ``RevocationList`` instance (e.g. the
+        authority server's) must be visible to every other instance (e.g. a
+        verifier's) without waiting for it to be reconstructed — a revoked
+        credential must stop verifying immediately, not after a restart.
+        """
+        try:
+            mtime = self.crl_file.stat().st_mtime if self.crl_file.exists() else None
+        except OSError:
+            return
+        if mtime is not None and mtime != self._loaded_mtime:
+            self._load()
 
     def _save(self) -> None:
         """Save revocation list to disk."""
@@ -75,19 +92,26 @@ class RevocationList:
 
     def revoke(self, credential_id: str, reason: str = "") -> None:
         """Revoke a credential."""
+        self._refresh_if_stale()
         self.revoked[credential_id] = {
             "revoked_at": datetime.utcnow().isoformat(),
             "reason": reason,
         }
         self._save()
+        try:
+            self._loaded_mtime = self.crl_file.stat().st_mtime
+        except OSError:
+            pass
         logger.info(f"Revoked credential {credential_id}")
 
     def is_revoked(self, credential_id: str) -> bool:
         """Check if credential is revoked."""
+        self._refresh_if_stale()
         return credential_id in self.revoked
 
     def get_revocation_reason(self, credential_id: str) -> Optional[str]:
         """Get the revocation reason."""
+        self._refresh_if_stale()
         entry = self.revoked.get(credential_id)
         return entry.get("reason") if entry else None
 

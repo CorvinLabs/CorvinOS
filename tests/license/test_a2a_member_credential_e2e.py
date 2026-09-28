@@ -11,8 +11,9 @@ Tests the A2A network as a member-only capability:
 
 Covers ADR-0702 chokepoints R, R′, S, P, L.
 """
-import pytest
 from __future__ import annotations
+
+import pytest
 
 import base64
 import hashlib
