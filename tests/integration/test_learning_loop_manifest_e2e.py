@@ -200,10 +200,16 @@ class TestLearningLoopK2PluginWiring:
             _bootstrap_learning_loops_from_plugins
         )
 
-        loops = _bootstrap_learning_loops_from_plugins()
+        loops = _bootstrap_learning_loops_from_plugins(include_test_fixtures=True)
 
-        # Should find at least the test fixture
+        # Should find at least the test fixture — from any CWD (the scan is
+        # repo-relative, not CWD-relative).
         assert len(loops) >= 2, f"Expected ≥2 loops, got {len(loops)}"
+
+        # Without the opt-in, fixture manifests never appear as real loops.
+        prod = _bootstrap_learning_loops_from_plugins()
+        fixture_ids = {l.loop_id for l in loops} - {l.loop_id for l in prod}
+        assert fixture_ids, "fixture loops must only appear with include_test_fixtures"
 
         # Health is either MEASURED from the audit chain or reported
         # "not_measured" with null values — never a fabricated score

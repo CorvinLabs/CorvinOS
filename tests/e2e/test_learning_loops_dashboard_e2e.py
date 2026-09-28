@@ -7,6 +7,8 @@ import pytest
 import json
 from pathlib import Path
 
+_REPO = Path(__file__).resolve().parents[2]
+
 
 class TestLearningLoopsDashboardE2E:
     """E2E validation: React dashboard consumes learning loops API."""
@@ -14,7 +16,7 @@ class TestLearningLoopsDashboardE2E:
     def test_dashboard_component_renders(self):
         """Dashboard component definition exists and exports."""
         # Verify file exists
-        path = Path("core/console/corvin_console/web-next/src/pages/learning-loops-dashboard.tsx")
+        path = (_REPO / "core/console/corvin_console/web-next/src/pages/learning-loops-dashboard.tsx")
         assert path.exists(), f"Component not found: {path}"
 
         # Read and verify key exports
@@ -26,7 +28,7 @@ class TestLearningLoopsDashboardE2E:
 
     def test_dashboard_uses_correct_api_endpoint(self):
         """Dashboard calls the right endpoint (ADR-0906)."""
-        path = Path("core/console/corvin_console/web-next/src/pages/learning-loops-dashboard.tsx")
+        path = (_REPO / "core/console/corvin_console/web-next/src/pages/learning-loops-dashboard.tsx")
         content = path.read_text()
 
         # Verify endpoint
@@ -35,7 +37,7 @@ class TestLearningLoopsDashboardE2E:
 
     def test_dashboard_handles_learning_loop_data(self):
         """Dashboard renders learning loop fields correctly."""
-        path = Path("core/console/corvin_console/web-next/src/pages/learning-loops-dashboard.tsx")
+        path = (_REPO / "core/console/corvin_console/web-next/src/pages/learning-loops-dashboard.tsx")
         content = path.read_text()
 
         # Verify loop data fields are displayed
@@ -53,7 +55,7 @@ class TestLearningLoopsDashboardE2E:
 
     def test_dashboard_shows_status_indicators(self):
         """Status badges render with correct colors/emojis."""
-        path = Path("core/console/corvin_console/web-next/src/pages/learning-loops-dashboard.tsx")
+        path = (_REPO / "core/console/corvin_console/web-next/src/pages/learning-loops-dashboard.tsx")
         content = path.read_text()
 
         # Verify status cases
@@ -68,7 +70,7 @@ class TestLearningLoopsDashboardE2E:
 
     def test_dashboard_error_handling(self):
         """Dashboard handles fetch errors gracefully."""
-        path = Path("core/console/corvin_console/web-next/src/pages/learning-loops-dashboard.tsx")
+        path = (_REPO / "core/console/corvin_console/web-next/src/pages/learning-loops-dashboard.tsx")
         content = path.read_text()
 
         # Verify error state
@@ -78,7 +80,7 @@ class TestLearningLoopsDashboardE2E:
 
     def test_dashboard_refresh_button(self):
         """Refresh button re-fetches data."""
-        path = Path("core/console/corvin_console/web-next/src/pages/learning-loops-dashboard.tsx")
+        path = (_REPO / "core/console/corvin_console/web-next/src/pages/learning-loops-dashboard.tsx")
         content = path.read_text()
 
         # Verify refresh logic
@@ -108,7 +110,7 @@ class TestLearningLoopsConsoleSpeechIntegration:
         mounts that Flask blueprint. The real path is
         ``/v1/console/learning-loops/list`` (routes/learning_analytics.py).
         """
-        hook = Path("core/console/corvin_console/web-next/src/hooks/use-learning-loops.ts").read_text()
+        hook = (_REPO / "core/console/corvin_console/web-next/src/hooks/use-learning-loops.ts").read_text()
         assert '"/v1/console/learning-loops/list"' in hook
 
         from fastapi import FastAPI

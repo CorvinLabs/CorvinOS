@@ -119,7 +119,9 @@ def _get_registered_loops() -> List[LearningLoop]:
     return _registered_loops
 
 
-def _bootstrap_learning_loops_from_plugins() -> List[LearningLoop]:
+def _bootstrap_learning_loops_from_plugins(
+    root: "Path | None" = None, *, include_test_fixtures: bool = False,
+) -> List[LearningLoop]:
     """
     k=2 Real Wiring: Scan all plugins/ directories for plugin.json manifests.
     Parse learning_loops and enrich with health data.
@@ -131,15 +133,20 @@ def _bootstrap_learning_loops_from_plugins() -> List[LearningLoop]:
     """
     loops = []
 
-    # Search patterns for plugin.json files
+    # Resolve against the repo this module lives in, never the CWD: the
+    # services run with WorkingDirectory=bridges/shared, where these globs
+    # matched nothing. Test fixtures are only scanned on request, so a
+    # fixture manifest can never be shown as a real loop.
+    base = root if root is not None else Path(__file__).resolve().parents[4]
     search_patterns = [
         "core/plugins/buildin/*/plugin.json",
         "core/skills/*/plugin.json",
-        "tests/fixtures/*plugin.json",
     ]
+    if include_test_fixtures:
+        search_patterns.append("tests/fixtures/*plugin.json")
 
     for pattern in search_patterns:
-        for manifest_path in Path(".").glob(pattern):
+        for manifest_path in base.glob(pattern):
             try:
                 with open(manifest_path, "r") as f:
                     manifest = json.load(f)

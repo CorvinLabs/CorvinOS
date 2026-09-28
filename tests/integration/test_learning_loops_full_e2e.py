@@ -15,6 +15,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture
+def session_headers() -> dict:
+    """The ``client`` fixture (tests/fixtures_console.py) already overrides the
+    console session dependency, so requests need no extra auth headers."""
+    return {}
+
+
 @pytest.mark.asyncio
 async def test_panel_loads_without_console_crash(client: TestClient, session_headers: dict):
     """Panel renders without crashing the console."""
@@ -247,7 +254,7 @@ async def test_cache_invalidation(client: TestClient, session_headers: dict):
     """Repeated requests within TTL return same data."""
     import time
     resp1 = client.get("/v1/console/learning-loops/list", headers=session_headers)
-    if resp.status_code != 200:
+    if resp1.status_code != 200:
         pytest.skip("Learning subsystem unavailable")
 
     data1 = resp1.json()

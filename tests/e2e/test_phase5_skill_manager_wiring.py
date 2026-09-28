@@ -11,6 +11,8 @@ Validates:
 import pytest
 from pathlib import Path
 
+_REPO = Path(__file__).resolve().parents[2]
+
 class TestPhase5SkillManagerWiring:
     """E2E: Skill Manager API routes wired + component integrated."""
     
@@ -22,7 +24,7 @@ class TestPhase5SkillManagerWiring:
     
     def test_router_in_app(self):
         """Verify skill_manager router included in main app."""
-        app_path = Path("core/console/corvin_console/app.py")
+        app_path = (_REPO / "core/console/corvin_console/app.py")
         content = app_path.read_text()
         
         # Check import
@@ -34,7 +36,7 @@ class TestPhase5SkillManagerWiring:
     
     def test_react_component_exists(self):
         """Verify SkillManager React component."""
-        component_path = Path("core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
+        component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
         assert component_path.exists(), "React component missing"
         
         content = component_path.read_text()
@@ -47,7 +49,7 @@ class TestPhase5SkillManagerWiring:
     
     def test_component_calls_correct_endpoint(self):
         """Verify React component uses correct API URL."""
-        component_path = Path("core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
+        component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
         content = component_path.read_text()
         
         # Check endpoint URL
@@ -103,7 +105,7 @@ class TestPhase5SkillManagerWiring:
         assert sm.get_installer is not None
         
         # 3. React component imports (type check only, no runtime)
-        component_path = Path("core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
+        component_path = (_REPO / "core/console/corvin_console/web-next/src/pages/admin/skill-manager.tsx")
         assert component_path.exists()
         
         # 4. Wiring verified: all three layers integrated

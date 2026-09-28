@@ -63,17 +63,16 @@ def test_plugin_panel_components_exist():
         assert comp_path.stat().st_size > 100, f"Component is empty: {comp}"
 
 
-def test_video_producer_panel_stays_registered_in_console():
-    """The console-native Video Producer panel stays registered.
+def test_videoproducerpage_removed_from_console():
+    """The console-native Video Producer route is removed (ADR-0892, b7b1e1803).
 
-    Inverted 2026-09-27: this asserted the panel had been REMOVED in favour of
-    the plugin's ``console_panels`` entry — but nothing in the console loads a
-    plugin's ``console_panels``, so removing it left ``/app/video-producer``
-    rendering nothing. The frontend restored it; this pins that.
+    NOTE (adversarial review 2026-09-28): nothing in the SPA reads a plugin's
+    ``console_panels`` yet, so until that loader exists ``/app/video-producer``
+    has no route. The removal is main's migration direction; this pins it.
     """
     content = (REPO / "core/console/corvin_console/web-next/src/panels/registry.tsx").read_text()
-    assert "VideoProducerPage" in content
-    assert 'rc("video-producer"' in content
+    assert 'rc("video-producer"' not in content
+    assert "VideoQualityMetricsPage" not in content
 
 
 def test_migration_preserves_api_routes():

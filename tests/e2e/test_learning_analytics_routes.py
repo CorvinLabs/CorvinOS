@@ -26,6 +26,14 @@ import time
 from datetime import datetime, timedelta
 from httpx import AsyncClient
 from pydantic import ValidationError
+from types import SimpleNamespace
+
+
+@pytest.fixture
+def test_session():
+    """The ``client`` fixture (tests/fixtures_console.py) overrides the console
+    session dependency; the cookie these tests send is only a placeholder."""
+    return SimpleNamespace(session_id="test-session", tenant_id="_default")
 
 # Fixtures: assume test setup in conftest.py provides:
 # - client: AsyncClient
@@ -33,9 +41,9 @@ from pydantic import ValidationError
 
 
 @pytest.mark.asyncio
-async def test_list_learning_loops_returns_200(client: AsyncClient, test_session):
+async def test_list_learning_loops_returns_200(async_client: AsyncClient, test_session):
     """GET /list returns 200 with valid schema."""
-    response = await client.get(
+    response = await async_client.get(
         "/v1/console/learning-loops/list",
         cookies={"session": test_session.session_id},
     )
@@ -49,9 +57,9 @@ async def test_list_learning_loops_returns_200(client: AsyncClient, test_session
 
 
 @pytest.mark.asyncio
-async def test_list_learning_loops_schema_valid(client: AsyncClient, test_session):
+async def test_list_learning_loops_schema_valid(async_client: AsyncClient, test_session):
     """Response schema matches LoopListResponse."""
-    response = await client.get(
+    response = await async_client.get(
         "/v1/console/learning-loops/list",
         cookies={"session": test_session.session_id},
     )
@@ -70,10 +78,10 @@ async def test_list_learning_loops_schema_valid(client: AsyncClient, test_sessio
 
 
 @pytest.mark.asyncio
-async def test_list_learning_loops_filter_by_plugin_id(client: AsyncClient, test_session):
+async def test_list_learning_loops_filter_by_plugin_id(async_client: AsyncClient, test_session):
     """Filter by plugin_id works correctly."""
     # Assuming test data has loops with different plugin_ids
-    response = await client.get(
+    response = await async_client.get(
         "/v1/console/learning-loops/list?plugin_id=test_plugin",
         cookies={"session": test_session.session_id},
     )
@@ -86,9 +94,9 @@ async def test_list_learning_loops_filter_by_plugin_id(client: AsyncClient, test
 
 
 @pytest.mark.asyncio
-async def test_list_learning_loops_filter_by_status(client: AsyncClient, test_session):
+async def test_list_learning_loops_filter_by_status(async_client: AsyncClient, test_session):
     """Filter by status works correctly."""
-    response = await client.get(
+    response = await async_client.get(
         "/v1/console/learning-loops/list?status=active",
         cookies={"session": test_session.session_id},
     )
@@ -101,10 +109,10 @@ async def test_list_learning_loops_filter_by_status(client: AsyncClient, test_se
 
 
 @pytest.mark.asyncio
-async def test_list_learning_loops_pagination(client: AsyncClient, test_session):
+async def test_list_learning_loops_pagination(async_client: AsyncClient, test_session):
     """Pagination (limit, offset) works correctly."""
     # First page
-    response1 = await client.get(
+    response1 = await async_client.get(
         "/v1/console/learning-loops/list?limit=10&offset=0",
         cookies={"session": test_session.session_id},
     )
@@ -113,7 +121,7 @@ async def test_list_learning_loops_pagination(client: AsyncClient, test_session)
     loops1 = data1["loops"]
 
     # Second page
-    response2 = await client.get(
+    response2 = await async_client.get(
         "/v1/console/learning-loops/list?limit=10&offset=10",
         cookies={"session": test_session.session_id},
     )
@@ -127,12 +135,12 @@ async def test_list_learning_loops_pagination(client: AsyncClient, test_session)
 
 
 @pytest.mark.asyncio
-async def test_list_learning_loops_sorting(client: AsyncClient, test_session):
+async def test_list_learning_loops_sorting(async_client: AsyncClient, test_session):
     """Sorting by different fields works."""
     fields = ["plugin_id", "status", "last_event", "health_score"]
 
     for sort_field in fields:
-        response = await client.get(
+        response = await async_client.get(
             f"/v1/console/learning-loops/list?sort_by={sort_field}",
             cookies={"session": test_session.session_id},
         )
@@ -142,10 +150,10 @@ async def test_list_learning_loops_sorting(client: AsyncClient, test_session):
 
 
 @pytest.mark.asyncio
-async def test_list_learning_loops_performance(client: AsyncClient, test_session):
+async def test_list_learning_loops_performance(async_client: AsyncClient, test_session):
     """List endpoint meets <50ms performance target."""
     start = time.time()
-    response = await client.get(
+    response = await async_client.get(
         "/v1/console/learning-loops/list",
         cookies={"session": test_session.session_id},
     )
@@ -157,9 +165,9 @@ async def test_list_learning_loops_performance(client: AsyncClient, test_session
 
 
 @pytest.mark.asyncio
-async def test_get_loop_details_returns_200(client: AsyncClient, test_session, test_loop_id):
+async def test_get_loop_details_returns_200(async_client: AsyncClient, test_session, test_loop_id):
     """GET /{loop_id}/details returns 200 with valid schema."""
-    response = await client.get(
+    response = await async_client.get(
         f"/v1/console/learning-loops/{test_loop_id}/details",
         cookies={"session": test_session.session_id},
     )
@@ -173,9 +181,9 @@ async def test_get_loop_details_returns_200(client: AsyncClient, test_session, t
 
 
 @pytest.mark.asyncio
-async def test_get_loop_details_schema_valid(client: AsyncClient, test_session, test_loop_id):
+async def test_get_loop_details_schema_valid(async_client: AsyncClient, test_session, test_loop_id):
     """Details response schema matches LoopDetailsResponse."""
-    response = await client.get(
+    response = await async_client.get(
         f"/v1/console/learning-loops/{test_loop_id}/details",
         cookies={"session": test_session.session_id},
     )
@@ -202,9 +210,9 @@ async def test_get_loop_details_schema_valid(client: AsyncClient, test_session, 
 
 
 @pytest.mark.asyncio
-async def test_get_loop_details_404_on_missing(client: AsyncClient, test_session):
+async def test_get_loop_details_404_on_missing(async_client: AsyncClient, test_session):
     """GET with missing loop_id returns 404."""
-    response = await client.get(
+    response = await async_client.get(
         "/v1/console/learning-loops/nonexistent_loop_id/details",
         cookies={"session": test_session.session_id},
     )
@@ -212,10 +220,10 @@ async def test_get_loop_details_404_on_missing(client: AsyncClient, test_session
 
 
 @pytest.mark.asyncio
-async def test_get_loop_details_performance(client: AsyncClient, test_session, test_loop_id):
+async def test_get_loop_details_performance(async_client: AsyncClient, test_session, test_loop_id):
     """Details endpoint meets <200ms performance target."""
     start = time.time()
-    response = await client.get(
+    response = await async_client.get(
         f"/v1/console/learning-loops/{test_loop_id}/details",
         cookies={"session": test_session.session_id},
     )
@@ -226,9 +234,9 @@ async def test_get_loop_details_performance(client: AsyncClient, test_session, t
 
 
 @pytest.mark.asyncio
-async def test_get_loop_details_health_trend(client: AsyncClient, test_session, test_loop_id):
+async def test_get_loop_details_health_trend(async_client: AsyncClient, test_session, test_loop_id):
     """Health trend contains 7 days of data by default."""
-    response = await client.get(
+    response = await async_client.get(
         f"/v1/console/learning-loops/{test_loop_id}/details",
         cookies={"session": test_session.session_id},
     )
@@ -240,9 +248,9 @@ async def test_get_loop_details_health_trend(client: AsyncClient, test_session, 
 
 
 @pytest.mark.asyncio
-async def test_get_loop_details_custom_trend_window(client: AsyncClient, test_session, test_loop_id):
+async def test_get_loop_details_custom_trend_window(async_client: AsyncClient, test_session, test_loop_id):
     """Custom trend window (days parameter) works."""
-    response = await client.get(
+    response = await async_client.get(
         f"/v1/console/learning-loops/{test_loop_id}/details?days=30",
         cookies={"session": test_session.session_id},
     )
@@ -254,9 +262,9 @@ async def test_get_loop_details_custom_trend_window(client: AsyncClient, test_se
 
 
 @pytest.mark.asyncio
-async def test_get_loop_events_returns_200(client: AsyncClient, test_session, test_loop_id):
+async def test_get_loop_events_returns_200(async_client: AsyncClient, test_session, test_loop_id):
     """GET /{loop_id}/events returns 200 with valid schema."""
-    response = await client.get(
+    response = await async_client.get(
         f"/v1/console/learning-loops/{test_loop_id}/events",
         cookies={"session": test_session.session_id},
     )
@@ -271,16 +279,16 @@ async def test_get_loop_events_returns_200(client: AsyncClient, test_session, te
 
 
 @pytest.mark.asyncio
-async def test_get_loop_events_pagination(client: AsyncClient, test_session, test_loop_id):
+async def test_get_loop_events_pagination(async_client: AsyncClient, test_session, test_loop_id):
     """Events pagination (limit, offset) works."""
-    response1 = await client.get(
+    response1 = await async_client.get(
         f"/v1/console/learning-loops/{test_loop_id}/events?limit=50&offset=0",
         cookies={"session": test_session.session_id},
     )
     assert response1.status_code == 200
     data1 = response1.json()
 
-    response2 = await client.get(
+    response2 = await async_client.get(
         f"/v1/console/learning-loops/{test_loop_id}/events?limit=50&offset=50",
         cookies={"session": test_session.session_id},
     )
@@ -293,10 +301,10 @@ async def test_get_loop_events_pagination(client: AsyncClient, test_session, tes
 
 
 @pytest.mark.asyncio
-async def test_get_loop_events_performance(client: AsyncClient, test_session, test_loop_id):
+async def test_get_loop_events_performance(async_client: AsyncClient, test_session, test_loop_id):
     """Events endpoint meets <500ms performance target (for 100 events)."""
     start = time.time()
-    response = await client.get(
+    response = await async_client.get(
         f"/v1/console/learning-loops/{test_loop_id}/events?limit=100",
         cookies={"session": test_session.session_id},
     )
@@ -307,11 +315,11 @@ async def test_get_loop_events_performance(client: AsyncClient, test_session, te
 
 
 @pytest.mark.asyncio
-async def test_list_caching(client: AsyncClient, test_session):
+async def test_list_caching(async_client: AsyncClient, test_session):
     """List endpoint caches results (2m TTL)."""
     # First request (cache miss)
     start1 = time.time()
-    response1 = await client.get(
+    response1 = await async_client.get(
         "/v1/console/learning-loops/list",
         cookies={"session": test_session.session_id},
     )
@@ -319,7 +327,7 @@ async def test_list_caching(client: AsyncClient, test_session):
 
     # Second request immediately (should hit cache)
     start2 = time.time()
-    response2 = await client.get(
+    response2 = await async_client.get(
         "/v1/console/learning-loops/list",
         cookies={"session": test_session.session_id},
     )
@@ -333,16 +341,16 @@ async def test_list_caching(client: AsyncClient, test_session):
 
 
 @pytest.mark.asyncio
-async def test_details_caching(client: AsyncClient, test_session, test_loop_id):
+async def test_details_caching(async_client: AsyncClient, test_session, test_loop_id):
     """Details endpoint caches results (5m TTL)."""
     # First request (cache miss)
-    response1 = await client.get(
+    response1 = await async_client.get(
         f"/v1/console/learning-loops/{test_loop_id}/details",
         cookies={"session": test_session.session_id},
     )
 
     # Second request immediately (should hit cache)
-    response2 = await client.get(
+    response2 = await async_client.get(
         f"/v1/console/learning-loops/{test_loop_id}/details",
         cookies={"session": test_session.session_id},
     )
@@ -352,14 +360,14 @@ async def test_details_caching(client: AsyncClient, test_session, test_loop_id):
 
 
 @pytest.mark.asyncio
-async def test_tenant_isolation(client: AsyncClient, test_session_a, test_session_b):
+async def test_tenant_isolation(async_client: AsyncClient, test_session_a, test_session_b):
     """Tenant A cannot see Tenant B's loops (fail-closed isolation)."""
     # Assuming test sessions have different tenant_ids
-    response_a = await client.get(
+    response_a = await async_client.get(
         "/v1/console/learning-loops/list",
         cookies={"session": test_session_a.session_id},
     )
-    response_b = await client.get(
+    response_b = await async_client.get(
         "/v1/console/learning-loops/list",
         cookies={"session": test_session_b.session_id},
     )
@@ -375,9 +383,9 @@ async def test_tenant_isolation(client: AsyncClient, test_session_a, test_sessio
 
 
 @pytest.mark.asyncio
-async def test_invalid_sort_field_returns_validation_error(client: AsyncClient, test_session):
+async def test_invalid_sort_field_returns_validation_error(async_client: AsyncClient, test_session):
     """Invalid sort_by field returns 422."""
-    response = await client.get(
+    response = await async_client.get(
         "/v1/console/learning-loops/list?sort_by=invalid_field",
         cookies={"session": test_session.session_id},
     )
@@ -385,9 +393,9 @@ async def test_invalid_sort_field_returns_validation_error(client: AsyncClient, 
 
 
 @pytest.mark.asyncio
-async def test_invalid_status_filter_returns_validation_error(client: AsyncClient, test_session):
+async def test_invalid_status_filter_returns_validation_error(async_client: AsyncClient, test_session):
     """Invalid status filter returns 422."""
-    response = await client.get(
+    response = await async_client.get(
         "/v1/console/learning-loops/list?status=invalid_status",
         cookies={"session": test_session.session_id},
     )
@@ -418,12 +426,5 @@ def test_session_a(test_session):
 @pytest.fixture
 def test_session_b():
     """Session for tenant B (different tenant_id)."""
-    from core.console.auth import SessionRecord
-    # Assuming a factory or fixture that creates sessions with different tenants
-    return SessionRecord(
-        tenant_id="test_tenant_b",
-        user_id="test_user_b",
-        session_id="test_session_b_id",
-        is_admin=False,
-        created_at=datetime.utcnow(),
-    )
+    from tests.fixtures_console import fake_session_record
+    return fake_session_record(tenant_id="test_tenant_b")

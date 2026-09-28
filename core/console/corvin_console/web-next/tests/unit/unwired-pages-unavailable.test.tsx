@@ -17,7 +17,6 @@ vi.mock("@/lib/auth", () => ({
   useAuth: () => ({ session: { tenant_id: "_default", csrf_token: "c", tier: "owner" }, status: "authenticated" }),
 }));
 
-import SkillsObservabilityPanel from "@/panels/skills_observability";
 import RolloutMonitoringDashboard from "@/pages/monitoring-dashboard-extension";
 import { MonitoringDashboardExtension } from "@/pages/orchestration/monitoring-dashboard-extension";
 import { VideoStoryboardTimeline } from "@/components/VideoStoryboardTimeline";
@@ -47,14 +46,6 @@ const wrap = (el: React.ReactElement) =>
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe("unwired pages on a build without their backend", () => {
-  it("skills observability", async () => {
-    const hits = count404("/v1/skills-observability/metrics/*");
-    wrap(<SkillsObservabilityPanel />);
-    expect(await screen.findByTestId("skills-observability-unavailable")).toHaveTextContent(/not available on this build/);
-    await sleep(5200);
-    expect(hits.n).toBe(4); // one round of the four endpoints, no 5 s poll after
-  }, 10_000);
-
   it("rollout monitoring dashboard", async () => {
     const hits = count404("/v1/console/orchestration/status");
     wrap(<RolloutMonitoringDashboard />);

@@ -215,7 +215,12 @@ describe("Installed", () => {
     renderAt("/app/marketplace?tab=installed");
     const otel = await screen.findByTestId("installed-row-otel");
     const uninstallOtel = Array.from(otel.querySelectorAll("button")).find((b) => b.textContent === "Uninstall") as HTMLButtonElement;
-    expect(uninstallOtel).toBeDisabled();
+    // 183818016: the button stays clickable and explains itself instead of
+    // being silently disabled — but it must still send nothing.
+    expect(uninstallOtel).not.toBeDisabled();
+    fireEvent.click(uninstallOtel);
+    await screen.findByText(/Not uninstalled — disable the plugin first/);
+    expect(seen).toHaveLength(0);
     fireEvent.click(Array.from(otel.querySelectorAll("button")).find((b) => b.textContent === "Disable") as HTMLButtonElement);
     await screen.findByText("Disabled — audited.");
     expect(seen[0]).toMatchObject({ method: "POST", path: "/v1/console/plugins/otel/disable", csrf: "csrf-test" });
