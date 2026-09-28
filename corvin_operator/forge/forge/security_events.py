@@ -140,6 +140,11 @@ def _unlock_chain(fh) -> None:
 
 
 EVENT_SEVERITY: dict[str, str] = {
+    # ADR-2092 — L5 routing loop (delegation_policy.route_and_record + monitoring/)
+    "routing.phase2_decision":   "INFO",
+    "routing.phase2_refused":    "INFO",
+    "routing.rollback_triggered": "WARNING",
+    "routing.rollback_reset":    "INFO",
     # registry lifecycle (past-tense canonical names, emitted by registry.py)
     "tool.created":              "INFO",
     "tool.deleted":              "INFO",
@@ -2956,6 +2961,19 @@ def _audit_value_pii(v: str) -> bool:
 
 
 _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
+    # ADR-2092 — L5 routing loop. Engines/surfaces/reasons are closed enums,
+    # counts and rates are numbers, turn_id is an opaque random id. NEVER text.
+    "routing.phase2_decision": frozenset({
+        "tenant_id", "turn_id", "surface", "bundled_engine", "used_engine",
+        "skill_confidence", "threshold",
+    }),
+    "routing.phase2_refused": frozenset({
+        "tenant_id", "surface", "phase_requested", "reason",
+    }),
+    "routing.rollback_triggered": frozenset({
+        "tenant_id", "skill_n", "bundled_n", "skill_success_rate", "bundled_success_rate",
+    }),
+    "routing.rollback_reset": frozenset({"tenant_id"}),
     # ADR-0171 M1 — universal engine-span audit (engine-agnostic, every path).
     # Canonical here so the allowlist is load-bearing regardless of import order;
     # engine_span._register_allowlists() unions the same set (idempotent).

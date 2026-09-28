@@ -12,6 +12,7 @@
 
 import { useSyncExternalStore } from "react";
 import { emitCCCEvent } from "./ccc-bus";
+import { persistMessages, loadPersistedMessages, clearPersistedMessages } from "./chat-message-persistence";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -273,9 +274,19 @@ const eventListeners = new Map<string, Set<(evt: StreamEvent) => void>>();
 
 function getOrCreate(sid: string): SessionEntry {
   if (!sessions.has(sid)) {
+    // Root cause (analysis 2026-09-28): this Map is module-level, which keeps
+    // messages alive across a chat SWITCH (route unmount/remount) within one
+    // page load — but a full page (re)load re-evaluates this module from
+    // scratch, so the Map starts empty again. That reload happens more often
+    // than it looks: the console's own auto-reload-on-new-build watcher
+    // (`console_auto_reload`, see CLAUDE.md "Console Frontend") reloads an
+    // open tab whenever a new build lands, which during active development
+    // silently wiped every in-flight chat's last output. Rehydrate from the
+    // sessionStorage mirror written below so a reload restores exactly what
+    // the tab last saw, not an empty chat.
     sessions.set(sid, {
       ws: null,
-      messages: [],
+      messages: loadPersistedMessages(sid) ?? [],
       streaming: false,
       error: null,
       latestResultText: null,
@@ -290,6 +301,21 @@ function getOrCreate(sid: string): SessionEntry {
     });
   }
   return sessions.get(sid)!;
+}
+
+// Debounced sessionStorage flush for message persistence — mirrors the
+// `_dbgFlushTimers` pattern below: batching avoids a synchronous
+// JSON.stringify + sessionStorage.setItem on every streamed token.
+const _persistFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function _schedulePersist(sid: string): void {
+  const existing = _persistFlushTimers.get(sid);
+  if (existing) clearTimeout(existing);
+  _persistFlushTimers.set(sid, setTimeout(() => {
+    _persistFlushTimers.delete(sid);
+    const entry = sessions.get(sid);
+    if (entry) persistMessages(sid, entry.messages);
+  }, 400));
 }
 
 function makeSnapshot(entry: SessionEntry): SessionState {
@@ -308,6 +334,7 @@ function notifyState(sid: string) {
   if (entry) {
     // Replace snapshot with a new object so Object.is detects the change.
     snapshots.set(sid, makeSnapshot(entry));
+    _schedulePersist(sid);
   }
   stateListeners.get(sid)?.forEach((fn) => fn());
 }
@@ -831,6 +858,16 @@ export function closeSession(sid: string): void {
     clearInterval(entry.heartbeatInterval);
     entry.heartbeatInterval = null;
   }
+  // Cancel any pending debounced persist and drop the sessionStorage mirror —
+  // otherwise a deleted chat's last messages would resurrect on the next sid
+  // reuse (session ids are not reused in practice, but a stale multi-MB
+  // sessionStorage entry left behind on every delete is its own leak).
+  const persistTimer = _persistFlushTimers.get(sid);
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    _persistFlushTimers.delete(sid);
+  }
+  clearPersistedMessages(sid);
   // Remove listeners BEFORE closing the WS so that the close event's
   // notifyState call (which fires synchronously in some environments) does
   // not reach already-deregistered subscribers.
@@ -885,6 +922,8 @@ export function __resetForTests(): void {
     if (e.reconnectTimer) clearTimeout(e.reconnectTimer);
     if (e.heartbeatInterval) clearInterval(e.heartbeatInterval);
   });
+  _persistFlushTimers.forEach((t) => clearTimeout(t));
+  _persistFlushTimers.clear();
   sessions.clear();
   snapshots.clear();
   stateListeners.clear();

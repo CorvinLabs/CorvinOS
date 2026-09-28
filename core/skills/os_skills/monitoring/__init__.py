@@ -1,28 +1,8 @@
-"""L5 Routing Monitoring — Phase 2a (Dual-Write + Correctness + Rollback).
+"""L5 routing monitoring (ADR-2092).
 
-This module implements the monitoring infrastructure for Phase 2a (exit shadow mode):
-- Correctness tracking (real vs shadow decisions)
-- Rollback detection (auto-fallback if correctness drops)
-- Dual-write coordination (route real requests, log shadow decisions)
+- ``routing_ledger`` — the one persisted record of decisions and outcomes
+- ``correctness_tracker`` — observable-outcome success comparison
+- ``rollback_detector`` — persisted, tenant-scoped trip
+- ``readiness`` — evidence gate before Phase 2 may route
+- ``dual_write`` — the phase gate and the ADR-0251 D2 clamp
 """
-from core.skills.os_skills.monitoring.correctness_tracker import (
-    CorrectnessMetrics,
-    CorrectnessTracker,
-    RoutingDecision,
-    RoutingOutcome,
-)
-from core.skills.os_skills.monitoring.rollback_detector import (
-    RollbackDetector,
-    RollbackEvent,
-    RollbackState,
-)
-
-__all__ = [
-    "CorrectnessTracker",
-    "CorrectnessMetrics",
-    "RoutingDecision",
-    "RoutingOutcome",
-    "RollbackDetector",
-    "RollbackEvent",
-    "RollbackState",
-]

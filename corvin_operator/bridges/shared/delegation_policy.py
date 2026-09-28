@@ -123,145 +123,277 @@ def permitted_engines(*, mode: str, bundled: str) -> frozenset[str]:
     return frozenset({bundled, WORKER_ENGINE_DEFAULT})
 
 
-#: Whether the Phase 2 auto-rollback guard is actually live. Phase 2
-#: (``phase2_dual_write`` / ``phase2_real``) SERVES the Skill's engine instead
-#: of the bundled rule's, and ADR-0532 only admits that behind an auto-rollback
-#: that fires when the Skill's routing degrades. That guard is not wired:
-#: ``dual_write.record_routing_outcome`` — the only feed of the correctness
-#: window the rollback detector reads — has no production caller, and it
-#: cannot honestly be given one, because it needs a per-request
-#: ``ground_truth`` ("which engine WOULD have been right"), a counterfactual no
-#: outcome sink observes (``TaskManager`` / ``core/learning/outcome_sink.py``
-#: only know whether the engine that actually ran succeeded). With no samples
-#: the detector never fires, so Phase 2 would change served routing with no
-#: brake — against ADR-0613 ("the shadow path must not alter routing") and the
-#: operator's own ``worker_engine`` selection (the Skill is not even given
-#: ``mode``). Until a real guard exists, a Phase 2 request is REFUSED: logged,
-#: audited once per process, and the turn stays in shadow mode.
-_PHASE2_ROLLBACK_GUARD_WIRED = False
+# ── ACP L5: Skill advice, Phase 2 gate, routing ledger (ADR-0532, ADR-2092) ──
+#
+# Every OS turn on every surface passes through ``route_and_record`` exactly once:
+# the bundled rule's engine is computed first (the unit-tested matrix above), the
+# ``os.delegation_router`` Skill advises (confirm or de-escalate to native), the
+# Phase 2 gate decides whether that advice may be served at all, and one
+# content-free decision record lands in the tenant routing ledger. The turn's
+# outcome is joined to it later by ``record_turn_outcome``. Shadow is the default;
+# Phase 2 runs only when ``monitoring.dual_write.effective_phase`` clears it.
 
-_PHASE2_MODES = ("phase2_dual_write", "phase2_real")
-_phase2_refusals_audited: set[tuple[str, str]] = set()
+ROUTING_SURFACES: tuple[str, ...] = ("bridge", "console")
+_ROUTER_LOM = "corvin_operator/bridges/shared/delegation_policy.py:_consult_router"
+_DEFAULT_ACCEPT_THRESHOLD = 0.75
 
 
-def _get_phase_mode(tenant_id: str = "_default") -> str:
-    """Which ACP L5 phase is in effect (ADR-0532), from ``CORVIN_ACP_PHASE``.
-
-    Returns ``'phase1_shadow'`` (the default, and the ONLY mode that can be in
-    effect today) or — only while :data:`_PHASE2_ROLLBACK_GUARD_WIRED` is true —
-    ``'phase2_dual_write'`` / ``'phase2_real'``. An unknown value degrades to
-    shadow. A Phase 2 request while the rollback guard is not wired is refused
-    (see :data:`_PHASE2_ROLLBACK_GUARD_WIRED`): the env var alone must never be
-    able to let a Skill change served routing.
-    """
-    import os
-
-    mode = os.environ.get("CORVIN_ACP_PHASE", "phase1_shadow").lower().strip()
-    if mode in _PHASE2_MODES:
-        if _PHASE2_ROLLBACK_GUARD_WIRED:
-            return mode
-        _refuse_phase2(mode, tenant_id)
-        return "phase1_shadow"
-    return "phase1_shadow"
-
-
-def _refuse_phase2(mode: str, tenant_id: str) -> None:
-    """Log + audit (once per process per tenant/mode) a refused Phase 2 request."""
-    key = (tenant_id, mode)
-    if key in _phase2_refusals_audited:
-        return
-    _phase2_refusals_audited.add(key)
-    import logging as _log  # noqa: PLC0415
-
-    _log.getLogger(__name__).warning(
-        "CORVIN_ACP_PHASE=%s refused: the Phase 2 auto-rollback guard is not "
-        "wired; L5 routing stays in shadow mode (bundled engine served)",
-        mode,
-    )
+def _audit(event_type: str, details: dict, *, tenant_id: str) -> bool:
+    """Write a routing audit record; True only when the core chain committed."""
     try:
-        from forge.security_events import register_event_allowlist  # noqa: PLC0415
+        from audit import audit_event  # noqa: PLC0415
 
-        register_event_allowlist(
-            "l5_routing_phase_refused",
-            frozenset({"requested_phase", "effective_phase", "reason_code", "tenant_id"}),
-        )
-    except Exception:  # noqa: BLE001 — bridge-only install; audit below is best-effort
-        pass
-    _audit_refusal(
-        "l5_routing_phase_refused",
-        {
-            "requested_phase": mode,
-            "effective_phase": "phase1_shadow",
-            "reason_code": "rollback_guard_not_wired",
-            "tenant_id": tenant_id,
-        },
-        tenant_id=tenant_id,
-    )
+        return bool(audit_event(event_type, details=details, tenant_id=tenant_id))
+    except Exception:  # noqa: BLE001 — no writer in this deployment
+        return False
 
 
-def _acp_shadow_route(
-    *,
-    mode: str | None,
-    engine: str,
-    force_delegate: bool,
-    is_big_data: bool,
-    tenant_id: str,
-) -> None:
-    """L5 ACP wiring in SHADOW (advisory) mode — ADR-0532 Phase 1 call site.
-
-    Until 2026-09-06 ``os.delegation_router`` had zero production callers: the
-    Skill was booted, audited and "E2E-tested", and no real routing decision
-    ever reached it, so the ADR-0314 learning loop had no source signal
-    (adversarial review F1). This is the one shared decision function every
-    surface routes through, so it is the honest place to attach the Skill.
-
-    Shadow means: the bundled rule's answer (``engine``) STANDS. The Skill is
-    executed with the same signals, its decision lands in the hash-chained
-    audit trail (``skill_executed``) and the learning store, carrying both the
-    bundled engine and its own advice so agreement can be measured — and it
-    changes nothing on the wire. Promoting the advice to an actual override
-    goes through the ``engine.engine_selection`` extension point and its
-    permitted-engines bound, never through this function.
-
-    Never raises and never delays the turn beyond the Skill's own timeout: a
-    stripped install without ``core.skills``, an un-booted registry, or a Skill
-    failure all degrade to "no shadow record" and the caller's routing is
-    untouched.
-    """
+def _router_registry():
+    """The booted Skill registry when it carries the router, else None."""
     try:
         from core.skills import skill_registry_phase1 as _reg  # noqa: PLC0415
     except Exception:  # noqa: BLE001 — bridge-only deployment without core.skills
-        return
+        return None
+    registry = getattr(_reg, "_global_registry", None)
+    if registry is None:
+        return None
     try:
-        registry = getattr(_reg, "_global_registry", None)
-        if registry is None or registry.get("os.delegation_router") is None:
-            return  # not booted in this process → nothing to attribute to
-        complexity = 8 if is_big_data else (7 if force_delegate else 4)
-        task_type = "delegate" if force_delegate else ("big_data" if is_big_data else "chat")
-        registry.execute(
+        return registry if registry.get("os.delegation_router") is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _len_bucket(n: int) -> str:
+    if n < 80:
+        return "xs"
+    if n < 400:
+        return "s"
+    if n < 2000:
+        return "m"
+    if n < 8000:
+        return "l"
+    return "xl"
+
+
+def routing_features(prompt: str, *, tenant_id: str = "_default") -> dict:
+    """Content-free features of ``prompt`` for the router (ADR-2092 G2).
+
+    Only closed-vocabulary enums and booleans leave this function — never text.
+    The complexity tier comes from the ADR-0952 classifier, and only when it is
+    already warm in this process: importing it here would put a ~1 s import on
+    the turn path (the 2026-09-13 incident shape), so a cold classifier yields
+    ``"unknown"`` instead.
+    """
+    text = prompt if isinstance(prompt, str) else ""
+    features: dict = {
+        "len_bucket": _len_bucket(len(text)),
+        "has_table": _table_row_count(text) >= 3,
+        "has_code": "```" in text,
+        "complexity": "unknown",
+    }
+    try:
+        import sys as _sys  # noqa: PLC0415
+
+        mod = _sys.modules.get("core.skills.os_skills.model_selector")
+        selector = getattr(mod, "ModelSelector", None)
+        if selector is not None and text.strip():
+            verdict = str(getattr(selector().classify(text, tenant_id), "complexity", "") or "")
+            if verdict.lower() in ("simple", "medium", "complex"):
+                features["complexity"] = verdict.lower()
+    except Exception:  # noqa: BLE001 — a failed classification is "unknown", never a turn failure
+        pass
+    return features
+
+
+def _consult_router(registry, *, tenant_id: str, bundled: str, force_delegate: bool,
+                    is_big_data: bool, mode: str, features: dict,
+                    shadow: bool) -> tuple[str | None, float | None, float]:
+    """Execute the Skill once; ``(engine, confidence, acceptance_threshold)``."""
+    try:
+        result = registry.execute(
             "os.delegation_router",
             {
-                "complexity": complexity,
-                "task_type": task_type,
-                # The Skill's own rules 1/2 key on these flags. Omitting them
-                # made it answer "native" for every /delegate and big-data turn
-                # the bundled rule sent to ACS — a disagreement the learning
-                # signal recorded although both rules agree.
+                "tenant_id": tenant_id,
+                "bundled_engine": bundled,
                 "force_delegate": force_delegate,
                 "is_big_data": is_big_data,
-                "user_context": {"mode": mode or "n/a"},
-                "tenant_id": tenant_id,
-                "shadow": True,
-                "bundled_engine": engine,
+                "mode": mode,
+                "features": dict(features),
+                "shadow": shadow,
             },
-            timeout_ms=1000,
-            lom="corvin_operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
+            timeout_ms=500,
+            lom=_ROUTER_LOM,
             tenant_id=tenant_id,
         )
-    except Exception as exc:  # noqa: BLE001 — advisory only; routing already decided
-        import logging as _log  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — advice is optional; the rule already decided
+        return None, None, _DEFAULT_ACCEPT_THRESHOLD
+    output = getattr(result, "output", None)
+    if getattr(result, "status", None) != "success" or not isinstance(output, dict):
+        return None, None, _DEFAULT_ACCEPT_THRESHOLD
+    engine = output.get("engine")
+    conf = output.get("confidence")
+    threshold = output.get("confidence_threshold", _DEFAULT_ACCEPT_THRESHOLD)
+    if engine not in WORKER_ENGINE_MODES:
+        engine = None
+    if isinstance(conf, bool) or not isinstance(conf, (int, float)):
+        conf = None
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+        threshold = _DEFAULT_ACCEPT_THRESHOLD
+    return engine, conf, float(threshold)
 
-        _log.getLogger(__name__).debug("ACP shadow route skipped: %s", type(exc).__name__)
+
+def route_and_record(
+    *,
+    tenant_id: str,
+    bundled: str,
+    force_delegate: bool,
+    is_big_data: bool,
+    mode: str,
+    surface: str,
+    turn_id: str | None = None,
+    features: dict | None = None,
+    sink: dict | None = None,
+    record: bool = True,
+    post_hoc: bool = False,
+) -> str:
+    """Serve the bundled engine or — in a cleared Phase 2 — the Skill's de-escalation.
+
+    Never raises and never escalates. ``sink`` (a caller-owned dict) receives the
+    ``turn_id``, the served engine and its source so the caller can report the
+    outcome with :func:`record_turn_outcome`.
+
+    ``record=False`` is a pure query for callers that must mirror the turn's
+    decision without being it (the console's engine guard): same answer, no
+    ledger row, no audit, and in shadow no Skill execution at all.
+
+    ``post_hoc=True`` records a turn whose engine ALREADY ran (a path that never
+    reached the rule). It is pinned to shadow: the Skill's advice is recorded,
+    never served, and no ``routing.phase2_decision`` is written for a route
+    change that did not happen.
+    """
+    try:
+        from core.skills.os_skills.monitoring import dual_write, routing_ledger  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — stripped install: the rule is the route
+        return bundled
+    surface = surface if surface in ROUTING_SURFACES else "console"
+    mode = mode if mode in WORKER_ENGINE_MODES else WORKER_ENGINE_DEFAULT
+    if not (isinstance(turn_id, str) and turn_id.isalnum() and 0 < len(turn_id) <= 64):
+        turn_id = routing_ledger.new_turn_id()
+    feats = dict(features or {})
+    feats.update(force_delegate=bool(force_delegate), is_big_data=bool(is_big_data), mode=mode)
+    # ADR-2092 G2: the ADR-0297 gate runs before the Skill sees the input, not only
+    # before the ledger — callers pass an open dict.
+    feats = routing_ledger.clean_features(feats)
+
+    def _audit_fn(event_type: str, details: dict) -> bool:
+        return _audit(event_type, details, tenant_id=tenant_id)
+
+    registry = _router_registry()
+    try:
+        phase = dual_write.effective_phase(
+            tenant_id=tenant_id, surface=surface,
+            skill_available=registry is not None,
+            audit=_audit_fn if record else None,
+        )
+    except Exception:  # noqa: BLE001 — a gate that cannot decide keeps shadow
+        phase = "shadow"
+    if post_hoc:
+        phase = "shadow"
+    if not record and phase == "shadow":
+        return bundled
+
+    skill_engine: str | None = None
+    skill_conf: float | None = None
+    threshold = _DEFAULT_ACCEPT_THRESHOLD
+    if registry is not None:
+        skill_engine, skill_conf, threshold = _consult_router(
+            registry, tenant_id=tenant_id, bundled=bundled,
+            force_delegate=force_delegate, is_big_data=is_big_data,
+            mode=mode, features=feats, shadow=(phase == "shadow"),
+        )
+
+    used, source, clamped = bundled, "bundled", False
+    if phase == "dual_write":
+        used, source, clamped = dual_write.clamp(
+            bundled=bundled, skill_engine=skill_engine, skill_conf=skill_conf,
+            force_delegate=force_delegate, threshold=threshold,
+        )
+        if source == "skill" and record:
+            committed = _audit_fn("routing.phase2_decision", {
+                "tenant_id": tenant_id,
+                "turn_id": turn_id,
+                "surface": surface,
+                "bundled_engine": bundled,
+                "used_engine": used,
+                "skill_confidence": round(float(skill_conf or 0.0), 4),
+                "threshold": round(float(threshold), 4),
+            })
+            if not committed:
+                # Audit-first: an unrecorded route change is not served.
+                used, source = bundled, "bundled"
+
+    if not record:
+        return used
+    try:
+        routing_ledger.record_decision(
+            tenant_id=tenant_id, turn_id=turn_id, surface=surface, phase=phase,
+            bundled=bundled, used=used, source=source, skill=skill_engine,
+            skill_conf=skill_conf, clamped=clamped, features=feats,
+        )
+    except Exception:  # noqa: BLE001 — the ledger never costs the turn
+        pass
+    if sink is not None:
+        sink["turn_id"] = turn_id
+        sink["routed_engine"] = used
+        sink["route_source"] = source
+        sink["route_surface"] = surface
+    return used
+
+
+def record_turn_outcome(
+    *,
+    tenant_id: str,
+    turn_id: str | None,
+    surface: str,
+    used: str,
+    ok: bool,
+    latency_ms: float,
+    source: str = "bundled",
+) -> None:
+    """Join the finished turn to its decision; judge rollback on Skill-served turns."""
+    if not turn_id:
+        return
+    try:
+        from core.skills.os_skills.monitoring import (  # noqa: PLC0415
+            rollback_detector,
+            routing_ledger,
+        )
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        routing_ledger.record_outcome(
+            tenant_id=tenant_id, turn_id=turn_id,
+            surface=surface if surface in ROUTING_SURFACES else "console",
+            used=used if used in WORKER_ENGINE_MODES else WORKER_ENGINE_DEFAULT,
+            ok=ok, latency_ms=latency_ms,
+        )
+        if source == "skill":
+            # The judge scans the ledger; off the caller's thread, because the
+            # console reports outcomes from inside its event loop.
+            import threading as _threading  # noqa: PLC0415
+
+            def _judge() -> None:
+                try:
+                    rollback_detector.evaluate(
+                        tenant_id,
+                        audit=lambda et, d: _audit(et, d, tenant_id=tenant_id),
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
+            _threading.Thread(target=_judge, daemon=True, name="l5-rollback-judge").start()
+    except Exception:  # noqa: BLE001 — outcome recording never costs the turn
+        pass
 
 
 def resolve_worker_engine(
@@ -273,24 +405,13 @@ def resolve_worker_engine(
     quota_ok: bool,
     tenant_id: str = "_default",
     request_id: str | None = None,
+    turn_id: str | None = None,
+    surface: str = "console",
+    features: dict | None = None,
+    sink: dict | None = None,
 ) -> str:
-    """:func:`_resolve_worker_engine` plus the ACP L5 routing (shadow or production mode).
-
-    Phase 1 (shadow mode): the bundled routing rule's answer stands; the Skill is
-    executed in advisory mode, decision logged but not used.
-
-    Phase 2 (dual-write mode, ADR-0532.2): the Skill's real decision is used for
-    routing, compared against the bundled rule, and both are tracked for correctness
-    monitoring and auto-rollback on degradation.
-
-    The phase is determined by CORVIN_ACP_PHASE env var (default: phase1_shadow),
-    and Phase 2 is refused while its rollback guard is not wired — see
-    :data:`_PHASE2_ROLLBACK_GUARD_WIRED`.
-    """
-    phase = _get_phase_mode(tenant_id)
-
-    # Compute bundled engine (pure rule + extension point hook)
-    bundled_engine = _resolve_worker_engine(
+    """The bundled rule (plus the ADR-0251 hook), then :func:`route_and_record`."""
+    bundled = _resolve_worker_engine(
         mode=mode,
         force_delegate=force_delegate,
         is_big_data=is_big_data,
@@ -298,89 +419,14 @@ def resolve_worker_engine(
         quota_ok=quota_ok,
         tenant_id=tenant_id,
     )
-
-    # Compute complexity from signals (heuristic for Skill input)
-    # High complexity: force_delegate, high tde_available, or big_data
-    if force_delegate or is_big_data:
-        complexity = 8
-    elif not tde_available or not quota_ok:
-        complexity = 5
-    else:
-        complexity = 3  # low complexity default
-
-    task_type = "delegate" if force_delegate else ("big_data" if is_big_data else "chat")
-
-    if phase == "phase2_dual_write":
-        # Phase 2a: real Skill decision, dual-write monitoring, auto-rollback
-        try:
-            from core.skills.os_skills.monitoring.dual_write import (
-                resolve_worker_engine_dual_write,
-            )  # noqa: PLC0415
-
-            return resolve_worker_engine_dual_write(
-                request_id=request_id or f"req_{int(__import__('time').time() * 1e6)}",
-                bundled_engine=bundled_engine,
-                bundled_confidence=1.0,
-                skill_decision=None,  # will be fetched by dual_write module
-                task_type=task_type,
-                complexity=complexity,
-                force_delegate=force_delegate,
-                is_big_data=is_big_data,
-                tenant_id=tenant_id,
-            )
-        except Exception:  # noqa: BLE001 — dual-write import failed, fall back to shadow
-            _acp_shadow_route(
-                mode=mode,
-                engine=bundled_engine,
-                force_delegate=force_delegate,
-                is_big_data=is_big_data,
-                tenant_id=tenant_id,
-            )
-            return bundled_engine
-
-    if phase == "phase2_real":
-        # Phase 2b: Skill-primary routing (no fallback to bundled).
-        # Requires rollback recovery to be built-in; currently not recommended
-        # for production without full rollback recovery mechanism (ADR-0532 Phase 2b).
-        try:
-            from core.skills.os_skills.monitoring.dual_write import (
-                resolve_worker_engine_dual_write,
-            )  # noqa: PLC0415
-
-            # In phase2_real, always use Skill decision (no confidence threshold gating)
-            engine = resolve_worker_engine_dual_write(
-                request_id=request_id or f"req_{int(__import__('time').time() * 1e6)}",
-                bundled_engine=bundled_engine,
-                bundled_confidence=1.0,
-                skill_decision=None,
-                task_type=task_type,
-                complexity=complexity,
-                force_delegate=force_delegate,
-                is_big_data=is_big_data,
-                tenant_id=tenant_id,
-            )
-            # Phase 2b: could override confidence threshold to 0.0 (always use Skill)
-            # This would require setting learned_config.confidence_threshold = 0.0
-            return engine
-        except Exception:  # noqa: BLE001 — phase2_real unavailable, degrade to phase1_shadow
-            _acp_shadow_route(
-                mode=mode,
-                engine=bundled_engine,
-                force_delegate=force_delegate,
-                is_big_data=is_big_data,
-                tenant_id=tenant_id,
-            )
-            return bundled_engine
-
-    # Phase 1 (default): shadow mode
-    _acp_shadow_route(
-        mode=mode,
-        engine=bundled_engine,
-        force_delegate=force_delegate,
-        is_big_data=is_big_data,
-        tenant_id=tenant_id,
+    feats = dict(features or {})
+    feats.update(tde_available=bool(tde_available), quota_ok=bool(quota_ok))
+    return route_and_record(
+        tenant_id=tenant_id, bundled=bundled, force_delegate=force_delegate,
+        is_big_data=is_big_data, mode=mode, surface=surface,
+        turn_id=turn_id or request_id, features=feats, sink=sink,
+        record=sink is not None or bool(turn_id or request_id),
     )
-    return bundled_engine
 
 
 def _resolve_worker_engine(
@@ -464,26 +510,28 @@ def resolve_delegation_route(
     *,
     tenant_id: str = "_default",
     request: dict | None = None,
+    turn_id: str | None = None,
+    surface: str | None = None,
+    features: dict | None = None,
+    sink: dict | None = None,
 ) -> bool:
-    """:func:`_resolve_delegation_route` plus the ACP L5 shadow record for
-    turns that STAY native.
+    """:func:`_resolve_delegation_route`, plus the routing record for turns that
+    STAY native.
 
-    Every turn passes through this triage; only delegation-worthy turns go on
-    to :func:`resolve_worker_engine` (which carries its own shadow record). A
-    turn the classifier keeps in-process never reaches an engine decision, so
-    without this branch the learning store would only ever see the minority of
-    turns that are shaped for the ACS fan-out (live E2E, 2026-09-06). Exactly
-    one shadow record per turn results: here when the answer is "native",
-    there when an engine is actually chosen.
+    Every turn passes through this triage; only delegation-worthy turns go on to
+    :func:`resolve_worker_engine`, which records its own decision. A turn kept
+    in-process never reaches an engine decision, so it is recorded here — exactly
+    one decision per turn either way. Only a call that carries the turn (``sink``
+    or ``turn_id``) records; a surface that consults the triage more than once
+    per turn passes the turn on exactly one of those calls.
     """
     verdict = _resolve_delegation_route(bundled_delegate, tenant_id=tenant_id, request=request)
-    if not verdict:
-        _acp_shadow_route(
-            mode=None,
-            engine=WORKER_ENGINE_DEFAULT,
-            force_delegate=False,
-            is_big_data=False,
-            tenant_id=tenant_id,
+    if not verdict and (sink is not None or turn_id is not None):
+        surf = surface or str((request or {}).get("surface") or "console")
+        route_and_record(
+            tenant_id=tenant_id, bundled=WORKER_ENGINE_DEFAULT, force_delegate=False,
+            is_big_data=False, mode=str((features or {}).get("mode") or WORKER_ENGINE_DEFAULT),
+            surface=surf, turn_id=turn_id, features=features, sink=sink,
         )
     return verdict
 

@@ -1,5 +1,17 @@
 # Phase 2 Dual-Write Implementation Guide
 
+> **SUPERSEDED 2026-09-28 by ADR-2092.** Measured on the live install, the Phase 2a
+> described below never ran: the dual-write path called `registry.execute()` and then
+> tested `"decision" in result` on a `SkillExecutionResult` object (always the 0.0-
+> confidence fallback), its audit writer `core.security.audit_logger` does not exist
+> (every record silently dropped), `record_routing_outcome()` had no production caller
+> and its `ground_truth` is counterfactual, so the rollback detector could never trip.
+> The replacement — routing ledger, observable-outcome judge, readiness gate, native-only
+> clamp, audit-first serving — is documented in `docs/claude-ref/learning-loop.md` and
+> ADR-2092. The functions named below (`resolve_worker_engine_dual_write`,
+> `record_routing_outcome`, `initialize_dual_write`) no longer exist.
+
+
 **Status:** Code present, NOT ACTIVATABLE — every Phase 2 mode is refused (see "Current status" below)  
 **Version:** 1.0.0  
 **Last Updated:** 2026-09-27  

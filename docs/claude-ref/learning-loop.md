@@ -12,14 +12,23 @@ source of truth for what runs now.
 ## The loop
 
 ```
-real turn ──► delegation_policy.resolve_delegation_route()   (every turn, every surface)
-                 │  stays native ─► _acp_shadow_route(engine=native)
-                 └─ delegation-worthy ─► resolve_worker_engine() ─► _acp_shadow_route(engine=<chosen>)
-                        bundled decision STANDS; os.delegation_router runs in SHADOW (advisory)
-                        • skill_executed  → core audit chain ("skill.executed")
-                        • SKILL_EXECUTED  → learning EventStore (audit-first, "learning.skill_executed")
-                          output: {engine, confidence, bundled_engine, shadow: true,
-                                   confidence_threshold, learned_config_version}
+real turn ──► delegation_policy.route_and_record()   (EXACTLY once per OS turn, bridge AND console)
+                 │  reached via resolve_delegation_route (turn stays native) or
+                 │  resolve_worker_engine (delegation-worthy), or directly for a turn
+                 │  the triage never saw (bridge flags off / bare /delegate; console
+                 │  delegation off / throttled / /use-engine claude_code)
+                 ├─ bundled rule decides; os.delegation_router ADVISES (confirm | de-escalate to native)
+                 ├─ Phase gate (monitoring/dual_write.effective_phase): shadow unless
+                 │  CORVIN_ACP_PHASE=phase2_dual_write AND Skill booted AND no rollback AND
+                 │  readiness ready for the surface; phase2_real is always refused
+                 ├─ dual_write only: clamp (native-only de-escalation, never over /delegate);
+                 │  a Skill-changed route is served only if "routing.phase2_decision" COMMITTED
+                 └─ one content-free row in <tenant>/learning/routing/routing_ledger.jsonl
+                        • skill.executed → core audit chain, decision {engine, bundled_engine, shadow, confidence}
+
+turn ends ──► delegation_policy.record_turn_outcome()   (bridge process_one / console _os_emit_completed)
+                 • outcome row joined by turn_id: engine that SERVED + ok + latency
+                 • a Skill-served turn runs the rollback judge (≥100 samples/side, >2 % drop ⇒ trip)
 
 task ends ──► TaskManager.record_event(task.completed | task.failed)
                  └─► core.learning.outcome_sink.emit_task_outcome()
@@ -38,15 +47,17 @@ operator ──► POST /v1/console/learning/feedback   {task_id, outcome_qualit
                                    + console audit "skill_config_updated:hypothesis_accepted"
 
 next turn ──► DelegationRouterSkill.execute() reads load_skill_config(tenant)
-                 confidence < learned confidence_threshold ⇒ advice escalated one engine tier
-                 (default 0.70 ⇒ a tenant that never gave feedback routes exactly as before)
+                 a LEARNED confidence_threshold (only once a version exists) is the acceptance
+                 bar for de-escalation advice in Phase 2; default 0.75. The Skill never
+                 escalates — the one-tier escalation it used to apply was removed (ADR-2092).
 ```
 
 ## Components
 
 | Piece | File | Contract |
 |---|---|---|
-| L5 shadow call sites | `corvin_operator/bridges/shared/delegation_policy.py::_acp_shadow_route`, called from `resolve_delegation_route` (turn stays native — the majority of turns) and `resolve_worker_engine` (delegation-worthy turn — engine chosen) | exactly ONE record per turn; runs AFTER the bundled rule + extension-point hook; never changes the answer; degrades to "no record" on any failure; skips un-booted processes without creating a phantom registry |
+| L5 routing call site | `corvin_operator/bridges/shared/delegation_policy.py::route_and_record` (Skill via `_consult_router`), reached from `resolve_delegation_route` / `resolve_worker_engine` when the caller passes the turn (`sink`/`turn_id`) — a call without it is a pure query (`record=False`: same answer, no row, no audit, no Skill run in shadow) | exactly ONE decision per turn per surface; runs AFTER the bundled rule + extension-point hook; degrades to the bundled engine on any failure; skips un-booted processes. The bridge boots the registry itself since 2026-09-28 (`adapter._boot_acp_skills`, ADR-2092 G0) — before that every bridge turn was skipped |
+| L5 routing ledger + gates | `core/skills/os_skills/monitoring/` — `routing_ledger` (decision/outcome rows, closed vocabulary, ADR-0297 `has_sensitive` gate on every string), `correctness_tracker` (observable success, skill- vs bundled-routed), `rollback_detector` (persisted trip, audited reset), `readiness` (≥500 decisions, join ≥0.95, per-complexity proxy evidence), `dual_write` (phase gate + clamp) | see ADR-2092; Phase 2 activation is refused and audited once per process per reason (`routing.phase2_refused`) until every gate holds |
 | Outcome sink | `core/learning/outcome_sink.py` | `emit_task_outcome()` / `recent_outcomes()`; content-free; fail-soft; tenant from task metadata only |
 | Task chokepoint | `core/console/corvin_core/task_manager.py::TaskManager.record_event` | emits on `task.completed` / `task.failed`; `create_task(tenant_id=…)` at both console creation sites |
 | Audit-first store | `core/learning/event_store.py::EventStore.write_event` | core chain record (`learning.<event_type>`, content-free) FIRST via `event_persistence.core_audit_event`; no chain commit ⇒ no disk record (RuntimeError); disk record carries `audit_ref` |
@@ -255,7 +266,7 @@ by `POST /features/toggle`, so an operator decision is never stale.
 
 | Mechanism | Where | Rule |
 |---|---|---|
-| LoM required AND resolvable | `SkillsRegistry.execute(..., lom=)` | `lom="<file>:<function>"` (or `<file>:<function>:L<line>`) is mandatory; missing OR unresolvable → audited `skill.executed` with `status=error`, the Skill does NOT run. `lom_hash` = SHA-256 of the named function's source segment (`ast`), so it survives line drift; for the `:L<line>` form the FUNCTION is resolved first and the line must fall inside it (decorators included) — before 2026-09-07 that form hashed the line without ever looking the function up, so a fabricated name still "bound", and a blank line produced the constant `sha256("")` (R3-B1). A blank line, a non-`.py` target, anything outside the repo root and anything under `.corvin/`, `.claude/`, `.venv/`, `site-packages/`, `node_modules/` or `.git/` are all refused — the exclusion set names every root the RUNNING SYSTEM can rewrite, and `.claude/` was missing from it until 2026-09-07 (round-4 review, F8) while `.claude/worktrees/` held 17 full `.py`-bearing copies of the repo inside the repo root, so a LoM naming one bound and produced a normal-looking source hash for source that is not the shipped source, and a source file > 2 MB is not parsed. Resolution is memoised on `(lom, path, mtime, size)` — `execute()` resolves twice per call and re-parsing cost up to 80 ms each time. Production call sites: `capabilities.py:_read_flags_uncached`, `slash_commands.py:_plugin_builder_enabled`, `vibe_engineering.py:get_pipeline`, `bootstrap.py:start_health_monitoring`, `delegation_policy.py:_acp_shadow_route`, `console/app.py:headless_enabled`. A call site that forgets `lom=` is REFUSED and the refusal is SILENT at the call site — it just reads as "the feature is off" — which is how `headless_api_mode` shipped dead. `tests/integration/test_phase1_k2_k5_call_sites.py::TestEveryProductionCallSitePassesALoM` is an AST fence over `core/`, `operator/` and `ops/` that fails on the next one. |
+| LoM required AND resolvable | `SkillsRegistry.execute(..., lom=)` | `lom="<file>:<function>"` (or `<file>:<function>:L<line>`) is mandatory; missing OR unresolvable → audited `skill.executed` with `status=error`, the Skill does NOT run. `lom_hash` = SHA-256 of the named function's source segment (`ast`), so it survives line drift; for the `:L<line>` form the FUNCTION is resolved first and the line must fall inside it (decorators included) — before 2026-09-07 that form hashed the line without ever looking the function up, so a fabricated name still "bound", and a blank line produced the constant `sha256("")` (R3-B1). A blank line, a non-`.py` target, anything outside the repo root and anything under `.corvin/`, `.claude/`, `.venv/`, `site-packages/`, `node_modules/` or `.git/` are all refused — the exclusion set names every root the RUNNING SYSTEM can rewrite, and `.claude/` was missing from it until 2026-09-07 (round-4 review, F8) while `.claude/worktrees/` held 17 full `.py`-bearing copies of the repo inside the repo root, so a LoM naming one bound and produced a normal-looking source hash for source that is not the shipped source, and a source file > 2 MB is not parsed. Resolution is memoised on `(lom, path, mtime, size)` — `execute()` resolves twice per call and re-parsing cost up to 80 ms each time. Production call sites: `capabilities.py:_read_flags_uncached`, `slash_commands.py:_plugin_builder_enabled`, `vibe_engineering.py:get_pipeline`, `bootstrap.py:start_health_monitoring`, `delegation_policy.py:_consult_router`, `console/app.py:headless_enabled`. A call site that forgets `lom=` is REFUSED and the refusal is SILENT at the call site — it just reads as "the feature is off" — which is how `headless_api_mode` shipped dead. `tests/integration/test_phase1_k2_k5_call_sites.py::TestEveryProductionCallSitePassesALoM` is an AST fence over `core/`, `operator/` and `ops/` that fails on the next one. |
 | Decision in the chain | `SkillExecutionResult.to_audit_event` → `decision_summary()` | the core writer drops any `output` key; the chain now carries an allowlisted `decision` (engine, enabled, mode, confidence, shadow/bundled_engine, `flag_count`/`flags_on`/`flags_hash`) — never free text. Field sets are registered as positive allowlists (`SKILL_AUDIT_ALLOWLISTS`). |
 | Compliance tier | `SkillMetadata.tier` (`compliance` / `core` / `installed`) | `os.capabilities` is `compliance`: `unregister()` / `disable_skill()` raise `SkillDisableRefused`, the 3-failure auto-disable is refused — every refusal is audited as `skill.disable.refused`. |
 | Lost-update guard | `SkillAdapter._locked()` | `fcntl.flock` on `<config>.lock` + RELOAD inside the lock around `run_optimizer_epoch` / `rollback`; two concurrent feedback requests advance the epoch by two, never one. |
@@ -265,9 +276,10 @@ by `POST /features/toggle`, so an operator decision is never stale.
 
 ## Invariants (must NOT be weakened)
 
-* The bundled routing answer is never altered by the shadow path. Promoting the
-  Skill's advice to a real override goes through the `engine.engine_selection`
-  extension point and its `permitted_engines` bound — never through `_acp_shadow_route`.
+* The bundled routing answer is never altered in shadow. In a CLEARED Phase 2 the
+  Skill may only de-escalate to `native` (the ADR-0251 D2 bound hooks already obey),
+  never over an explicit `/delegate`, and only after `routing.phase2_decision`
+  committed to the chain (ADR-2092 G3/G4).
 * The core chain admits only the PROCESS tenant (ADR-0007). A learning event
   for another tenant is refused by the writer, detected by the read-back, and
   **not written to disk** — counted in `EventEmitter.write_failures`. Tests

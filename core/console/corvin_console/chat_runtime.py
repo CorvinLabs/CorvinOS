@@ -3181,7 +3181,7 @@ _ACS_X_IMPORT_WARNED = False
 _NON_FANOUT_PRIMITIVES = frozenset({"LOOP", "GOAL", "COMPUTE", "DELEGATE"})
 
 
-def _should_delegate(prompt: str, *, tenant_id: str) -> bool:
+def _should_delegate(prompt: str, *, tenant_id: str, sink: dict | None = None) -> bool:
     """The triage heuristic, then the ADR-0251 route-selection hook.
 
     ``tenant_id`` is keyword-REQUIRED rather than defaulted. The hook bus is
@@ -3200,10 +3200,15 @@ def _should_delegate(prompt: str, *, tenant_id: str) -> bool:
     try:
         if str(_BRIDGES_SHARED) not in sys.path:
             sys.path.insert(0, str(_BRIDGES_SHARED))
-        from delegation_policy import resolve_delegation_route  # noqa: PLC0415
+        from delegation_policy import resolve_delegation_route, routing_features  # noqa: PLC0415
 
+        # ``sink`` marks the ONE call per turn that is the routing decision
+        # (ADR-2092 G0); the other triage reads of the same turn pass none.
         return resolve_delegation_route(
-            bundled, tenant_id=tenant_id, request={"surface": "console"}
+            bundled, tenant_id=tenant_id, request={"surface": "console"},
+            surface="console", sink=sink,
+            turn_id=(sink or {}).get("turn_id"),
+            features=routing_features(prompt, tenant_id=tenant_id) if sink is not None else None,
         )
     except Exception:  # noqa: BLE001
         # Triage must never cost the turn; the bundled verdict is the
@@ -3450,6 +3455,7 @@ def _worker_engine_target(
     mode: str,
     force_delegate: bool,
     tenant_id: str = "_default",
+    sink: dict | None = None,
 ) -> str:
     """Which engine runs this turn: "native" | "acs" | "tde".
 
@@ -3473,6 +3479,7 @@ def _worker_engine_target(
     if str(_BRIDGES_SHARED) not in sys.path:
         sys.path.insert(0, str(_BRIDGES_SHARED))
     from delegation_policy import resolve_worker_engine as _shared_target  # noqa: PLC0415
+    from delegation_policy import routing_features as _routing_features  # noqa: PLC0415
     is_big_data = _is_big_data_task(prompt)
     if mode == "tde" and not (force_delegate or is_big_data):
         tde_available, quota_ok = _tde_available(), _tde_quota_peek_ok()
@@ -3485,7 +3492,53 @@ def _worker_engine_target(
         tde_available=tde_available,
         quota_ok=quota_ok,
         tenant_id=tenant_id,
+        surface="console",
+        sink=sink,
+        turn_id=(sink or {}).get("turn_id"),
+        features=_routing_features(prompt, tenant_id=tenant_id) if sink is not None else None,
     )
+
+
+def _new_route_meta() -> dict:
+    import uuid  # noqa: PLC0415
+
+    return {"turn_id": uuid.uuid4().hex[:20]}
+
+
+def _record_console_route(tenant_id: str, meta: dict, prompt: str) -> None:
+    """Routing record for a console turn the triage never reached (delegation off,
+    throttled, or ``/use-engine claude_code``): it runs native (ADR-2092 G0)."""
+    try:
+        if str(_BRIDGES_SHARED) not in sys.path:
+            sys.path.insert(0, str(_BRIDGES_SHARED))
+        from delegation_policy import route_and_record, routing_features  # noqa: PLC0415
+
+        route_and_record(
+            tenant_id=tenant_id, bundled="native", force_delegate=False,
+            is_big_data=False, mode="native", surface="console",
+            turn_id=meta.get("turn_id"),
+            features=routing_features(prompt, tenant_id=tenant_id), sink=meta,
+            post_hoc=True,
+        )
+    except Exception:  # noqa: BLE001 — the routing record never costs the turn
+        pass
+
+
+def _report_console_route_outcome(tenant_id: str, meta: dict, *, served: str,
+                                  ok: bool, started: float) -> None:
+    if "routed_engine" not in meta or meta.get("outcome_reported"):
+        return
+    meta["outcome_reported"] = True
+    try:
+        from delegation_policy import record_turn_outcome  # noqa: PLC0415
+
+        record_turn_outcome(
+            tenant_id=tenant_id, turn_id=meta.get("turn_id"), surface="console",
+            used=served, ok=ok, latency_ms=(time.monotonic() - started) * 1000.0,
+            source=str(meta.get("route_source") or "bundled"),
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _build_delegation_spec(task: str, budget: dict) -> dict:
@@ -5228,6 +5281,35 @@ async def _stream_turn_impl(
                 )
             except Exception:  # noqa: BLE001
                 pass
+        # ADR-2092 G1 — join the finished turn to its routing decision. The
+        # engine that SERVED is native unless the delegation actually ran (a
+        # quota fallback serves natively) or a branch named it explicitly
+        # (forced TDE). A turn in which no engine ran (gate refusal, TDE
+        # switched off, empty directive) reports no outcome: it is neither a
+        # native success nor a native failure. The NameError guards are
+        # defensive — every current caller runs after the routing gate.
+        try:
+            _rm = _route_meta
+        except NameError:
+            _rm = None
+        if _rm is not None and not _rm.get("no_engine"):
+            try:
+                _fb = bool(_quota_fallback)
+            except NameError:
+                _fb = False
+            try:
+                _wd = bool(_del_will_delegate)
+            except NameError:
+                _wd = False
+            try:
+                _wt = _worker_target
+            except NameError:
+                _wt = "native"
+            _report_console_route_outcome(
+                sess.tenant_id, _rm,
+                served=(_rm.get("served") or (_wt if (_wd and not _fb) else "native")),
+                ok=(rc == 0), started=_route_t0,
+            )
 
     # Persist the user-side of this turn immediately so a tab refresh
     # mid-turn still shows what the user said.
@@ -5276,6 +5358,8 @@ async def _stream_turn_impl(
     # would let a mid-turn tenant.corvin.yaml mtime flip diverge the gate's
     # compliance row from the engine that actually spawns (round-4 review).
     _del_enabled = _delegation_enabled(sess.tenant_id)
+    _route_meta = _new_route_meta()
+    _route_t0 = time.monotonic()
     # Worker-engine selection (Settings → Engine). Read ONCE here for the same
     # reason `_del_enabled` is: the gate's compliance row and the engine that
     # actually spawns must not diverge across the `await _ccc_dispatch` below.
@@ -5284,7 +5368,7 @@ async def _stream_turn_impl(
                      and not _del_throttled
                      and not _force_direct
                      and (_force_delegate or _should_delegate(
-                         prompt, tenant_id=sess.tenant_id)))
+                         prompt, tenant_id=sess.tenant_id, sink=_route_meta)))
     # The pre-filter only says "delegation-worthy"; the operator's mode decides
     # WHERE it runs, and `native` means the turn stays in-process. Resolve it
     # here so the pre-spawn gate below is classified against the engine that
@@ -5292,9 +5376,11 @@ async def _stream_turn_impl(
     _worker_target = (
         _worker_engine_target(prompt, mode=_worker_mode,
                               force_delegate=_force_delegate,
-                              tenant_id=sess.tenant_id)
+                              tenant_id=sess.tenant_id, sink=_route_meta)
         if _pre_delegate else "native"
     )
+    if "routed_engine" not in _route_meta:
+        _record_console_route(sess.tenant_id, _route_meta, prompt)
     _will_delegate = _pre_delegate and _worker_target != "native"
     # _os_engine already resolved above (before turn.start debug event)
     _gate_refusal = _spawn_gates.check_console_spawn_or_refusal(
@@ -5313,6 +5399,7 @@ async def _stream_turn_impl(
         _audit_emit(sess, "web.turn.completed", rc=1,
                     result_chars=len(_gate_refusal), usage=None,
                     reason="pre_spawn_gate_blocked")
+        _route_meta["no_engine"] = True
         _os_emit_completed(rc=1)
         yield {"type": "delta", "text": _gate_refusal}
         yield {"type": "result", "text": _gate_refusal, "usage": None}
@@ -5403,6 +5490,7 @@ async def _stream_turn_impl(
         _audit_emit(sess, "web.turn.completed", rc=1,
                     result_chars=len(_ue_msg), usage=None,
                     reason="use_engine_unknown")
+        _route_meta["no_engine"] = True
         _os_emit_completed(1)
         yield {"type": "delta", "text": _ue_msg}
         yield {"type": "result", "text": _ue_msg, "usage": None}
@@ -5429,6 +5517,7 @@ async def _stream_turn_impl(
             _audit_emit(sess, "web.turn.completed", rc=1,
                         result_chars=len(_dbg_hint), usage=None,
                         reason="debug_engine_empty_task")
+            _route_meta["no_engine"] = True
             _os_emit_completed(1)
             yield {"type": "delta", "text": _dbg_hint}
             yield {"type": "result", "text": _dbg_hint, "usage": None}
@@ -5494,6 +5583,7 @@ async def _stream_turn_impl(
         _audit_emit(sess, "web.turn.completed", rc=0,
                     result_chars=len(_dbg_msg), usage=None,
                     reason="debug_engine")
+        _route_meta["no_engine"] = True
         _os_emit_completed(0)
         yield {"type": "delta", "text": _dbg_msg}
         yield {"type": "result", "text": _dbg_msg, "usage": None}
@@ -5523,6 +5613,7 @@ async def _stream_turn_impl(
         _audit_emit(sess, "web.turn.completed", rc=1,
                     result_chars=len(_tde_off), usage=None,
                     reason="tde_disabled")
+        _route_meta["no_engine"] = True
         _os_emit_completed(1)
         yield {"type": "delta", "text": _tde_off}
         yield {"type": "result", "text": _tde_off, "usage": None}
@@ -5547,6 +5638,7 @@ async def _stream_turn_impl(
             _audit_emit(sess, "web.turn.completed", rc=1,
                         result_chars=len(_tde_hint), usage=None,
                         reason="tde_empty_task")
+            _route_meta["no_engine"] = True
             _os_emit_completed(1)
             yield {"type": "delta", "text": _tde_hint}
             yield {"type": "result", "text": _tde_hint, "usage": None}
@@ -5554,6 +5646,7 @@ async def _stream_turn_impl(
             _append_turn(sess, "assistant", [{"kind": "text", "text": _tde_hint}])
             yield {"type": "done"}
             return
+        _route_meta["served"] = "tde"
         async for _ev in _stream_tde_turn(
             sess, _task_text, tm, task_id,
             os_audit=_os_audit, audit_emit=_audit_emit,
@@ -5580,6 +5673,7 @@ async def _stream_turn_impl(
         _audit_emit(sess, "web.turn.completed", rc=1,
                     result_chars=len(_cc_hint), usage=None,
                     reason="claude_code_empty_task")
+        _route_meta["no_engine"] = True
         _os_emit_completed(1)
         yield {"type": "delta", "text": _cc_hint}
         yield {"type": "result", "text": _cc_hint, "usage": None}
@@ -5735,6 +5829,7 @@ async def _stream_turn_impl(
                 _audit_emit(sess, "web.turn.completed", rc=1,
                             result_chars=len(_cq_msg), usage=None,
                             reason="compute_quota_unavailable")
+                _route_meta["no_engine"] = True
                 _os_emit_completed(rc=1)
                 yield {"type": "error", "code": 402, "message": _cq_msg}
                 yield {"type": "result", "text": _cq_msg, "usage": None}
@@ -5826,6 +5921,7 @@ async def _stream_turn_impl(
                 _audit_emit(sess, "web.turn.completed", rc=1,
                             result_chars=len(_fb_gate), usage=None,
                             reason="pre_spawn_gate_blocked")
+                _route_meta["no_engine"] = True
                 _os_emit_completed(rc=1)
                 yield {"type": "delta", "text": _fb_gate}
                 yield {"type": "result", "text": _fb_gate, "usage": None}
@@ -6374,6 +6470,7 @@ async def _stream_turn_impl(
         })
         _audit_emit(sess, "web.turn.completed", rc=1, result_chars=len(_engine_msg),
                     usage=None, reason="engine_not_drivable")
+        _route_meta["no_engine"] = True
         _os_emit_completed(rc=1)
         yield {"type": "delta", "text": _engine_msg}
         yield {"type": "result", "text": _engine_msg, "usage": None}

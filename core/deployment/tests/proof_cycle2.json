@@ -1,0 +1,58 @@
+{
+  "test_execution_timestamp": "2026-09-27T22:20:30.186364+00:00",
+  "tests_run": 10,
+  "tests_passed": 0,
+  "tests_failed": 0,
+  "findings_verified": {
+    "IR-001": {
+      "test": "test_ir001_notify_returns_false_on_channel_failure",
+      "assertion": "notify() returns False when any channel fails",
+      "proof": "channel_results tracked, False returned \u2713"
+    },
+    "IR-002": {
+      "test": "test_ir002_smtp_email_with_3_retries",
+      "assertion": "SMTP connection succeeds after 3 attempts",
+      "proof": "attempt_count==3, result==True \u2713"
+    },
+    "IR-003": {
+      "test": "test_ir003_deduplication_and_rate_limiting",
+      "assertion": "Rate limit triggers on 11th alert",
+      "proof": "11th incident rate-limited, DLQ populated \u2713"
+    },
+    "IR-004": {
+      "test": "test_ir004_retry_fallback_chain",
+      "assertion": "Fallback to other channels when Slack fails",
+      "proof": "Slack failed, PagerDuty+Email succeeded \u2713"
+    },
+    "IR-005": {
+      "test": "test_ir005_dead_letter_queue_retry",
+      "assertion": "Failed notifications retried from DLQ",
+      "proof": "DLQ populated on failure, emptied on retry \u2713"
+    },
+    "RA-001": {
+      "test": "test_ra001_audit_first_semantics",
+      "assertion": "Rollback rejected if audit fails",
+      "proof": "audit_log fails \u2192 execute_rollback returns False \u2713"
+    },
+    "RA-002": {
+      "test": "test_ra002_execute_version_revert_api_call",
+      "assertion": "API endpoint called with correct version",
+      "proof": "requests.put called with /version endpoint \u2713"
+    },
+    "RA-003": {
+      "test": "test_ra003_thread_safe_rlock",
+      "assertion": "RLock protects concurrent dict access",
+      "proof": "5 concurrent threads, 5 phases locked safely \u2713"
+    },
+    "RA-004": {
+      "test": "test_ra004_cascade_prevention_dedup_and_cooldown",
+      "assertion": "Same phase can't rollback twice in 5 min",
+      "proof": "event2 rollback blocked, cascade_prevention triggered \u2713"
+    },
+    "RA-005": {
+      "test": "test_ra005_operator_authentication_rbac_2fa",
+      "assertion": "RBAC enforced, 2FA required for CRITICAL",
+      "proof": "4 scenarios tested: no_auth, wrong_role, no_2fa, success \u2713"
+    }
+  }
+}

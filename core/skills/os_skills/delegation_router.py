@@ -1,273 +1,146 @@
-"""L5 Delegation Router Skill — Route tasks to native/ACS/TDE engine.
+"""L5 Delegation Router Skill — advice on the worker-engine route (ADR-0532, ADR-2092).
 
-Skill ID: os.delegation_router
-Version: 1.0.0
-Tier: core
-Origin: builtin
+Skill ID: os.delegation_router · Version 2.0.0 · Tier core · Origin builtin
 
-Architecture (ADR-0532):
-- Executes at every delegation decision (before_delegation_decision trigger)
-- Input: task shape (big_data vs other), context size, tenant_id, force_delegate flag
-- Output: decision (native | acs | tde), confidence, reasoning
-- Shadow mode (Phase 1): advisory only; bundled engine stands
-- Dual-write mode (Phase 2): real decision used for routing
-- Learning loop: feedback signals (latency, cost, quality) → confidence updates
+The bundled rule in ``corvin_operator/bridges/shared/delegation_policy.py`` decides the
+route. This Skill ADVISES, and its advice has exactly two admissible shapes:
 
-Compliance:
-- GDPR Art. 30: All decisions logged to audit chain
-- GDPR Art. 32: Immutable audit trail + PII scrubbing
-- EU AI Act Art. 50: LoM binding in every execution (ADR-0537)
-- ADR-0232/0233: Boot tripwire verification before execution
-- Tenant isolation: All I/O filtered by tenant_id
+* confirm the bundled engine, or
+* de-escalate to ``native`` when the delegation looks unnecessary.
 
-Design Pattern:
-1. Pure heuristic rules (complexity, task type, force_delegate)
-2. Learned config override (confidence thresholds from feedback loop)
-3. Audit logging: decision + bundled engine (for learning agreement tracking)
-4. Graceful degradation: never escalates to unavailable engines
+It never advises an escalation or an engine the operator did not select — the same
+bound ADR-0251 D2 puts on plugin hooks. In shadow mode the advice is only recorded; in
+Phase 2 the call site clamps it again (``monitoring.dual_write.clamp``) before serving.
+
+Input (all optional except ``tenant_id``)::
+
+    {
+      "tenant_id": str,
+      "bundled_engine": "native" | "acs" | "tde",
+      "force_delegate": bool, "is_big_data": bool,
+      "mode": "native" | "acs" | "tde",
+      "features": {complexity, len_bucket, has_table, has_code, ...},  # closed vocab
+      "complexity": int 1-10 (legacy callers; mapped onto the feature tier),
+      "shadow": bool,
+    }
+
+Output::
+
+    {"engine": str, "decision": str, "confidence": float, "reasoning": str,
+     "bundled_engine": str?, "shadow": bool?, "confidence_threshold": float?,
+     "learned_config_version": str?}
+
+``engine`` and ``decision`` carry the same value: ``engine`` is what the Skill audit
+projection (``skill_registry_phase1.decision_summary``) keeps and what L10's context
+adapter reads; ``decision`` is kept for existing readers.
 """
 
 from __future__ import annotations
 
 import logging
-import time
-from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from ..skill_registry_phase1 import Skill, SkillMetadata, SkillOrigin, SkillTier
 
 logger = logging.getLogger(__name__)
 
+_ENGINES = ("native", "acs", "tde")
 
-@dataclass(frozen=True)
-class RoutingDecision:
-    """Immutable routing decision with audit metadata."""
-    decision: str  # "native" | "acs" | "tde"
-    confidence: float  # 0.0–1.0
-    reasoning: str  # why this decision
-    bundled_engine: Optional[str] = None  # (shadow mode) bundled engine for comparison
-    shadow: bool = False  # whether this is advisory-only (Phase 1)
-    learned_config_version: Optional[str] = None  # version of learned config applied
-    confidence_threshold: Optional[float] = None  # learned threshold that may have escalated
+
+def _tier_from_legacy(complexity: Any) -> str:
+    if isinstance(complexity, bool) or not isinstance(complexity, (int, float)):
+        return "unknown"
+    if complexity >= 8:
+        return "complex"
+    if complexity >= 5:
+        return "medium"
+    return "simple"
+
+
+def advise(*, bundled: str, force_delegate: bool, is_big_data: bool, mode: str,
+           features: Dict[str, Any]) -> tuple[str, float, str]:
+    """Pure advice: ``(engine, confidence, reasoning_code)``. No I/O, no state."""
+    if bundled not in _ENGINES:
+        bundled = "native"
+    if bundled == "native":
+        return "native", 0.95, "bundled_native_confirmed"
+    if force_delegate:
+        return bundled, 0.99, "explicit_delegate_confirmed"
+    tier = features.get("complexity", "unknown")
+    short = features.get("len_bucket") in ("xs", "s")
+    tabular = bool(features.get("has_table"))
+    if is_big_data and tier == "simple" and short and not tabular:
+        return "native", 0.80, "big_data_signal_on_short_simple_request"
+    if not is_big_data and mode in ("acs", "tde") and tier == "simple" and short:
+        return "native", 0.80, "delegating_mode_on_short_simple_request"
+    return bundled, 0.90, "delegation_confirmed"
 
 
 class DelegationRouterSkill(Skill):
-    """Route tasks to appropriate engine based on complexity and shape.
+    """Advise confirm-or-de-escalate on the bundled worker-engine route."""
 
-    This Skill replaces hardcoded delegation logic with a learnable decision.
-
-    **Input Schema (validated by manifest):**
-    ```
-    {
-        "complexity": int (1–10, optional, default 5)
-        "task_type": str (optional: "chat" | "code" | "analysis" | "data_processing")
-        "force_delegate": bool (explicit /delegate command, optional)
-        "is_big_data": bool (big-data-shaped work, optional)
-        "user_context": dict (optional user/task metadata)
-        "tenant_id": str (required, for learned config lookup)
-        "shadow": bool (advisory mode for Phase 1, optional)
-        "bundled_engine": str (the engine the hardcoded rule chose, optional)
-    }
-    ```
-
-    **Output Schema (validated by manifest):**
-    ```
-    {
-        "decision": "native" | "acs" | "tde"
-        "confidence": float (0.0–1.0)
-        "reasoning": str (why this decision was made)
-        "learned_config_version": str (optional, if learned config was applied)
-        "confidence_threshold": float (optional, if learned threshold gated escalation)
-        "bundled_engine": str (optional, in shadow mode)
-        "shadow": bool (optional, whether this is advisory-only)
-    }
-    ```
-
-    **Audit Trail:**
-    Every execution emits a `skill.executed` event with:
-    - skill_id: "os.delegation_router"
-    - status: "success" | "timeout" | "error"
-    - decision: {"decision": "acs", "confidence": 0.85, ...} (content-free projection)
-    - lom: "core/skills/os_skills/delegation_router.py:DelegationRouterSkill.execute"
-    - lom_hash: SHA256(source code at LoM) — immutable binding
-
-    **Learning Loop Integration (ADR-0314):**
-    - Feedback sources: turn_completed (latency, cost, quality), user_feedback (thumbs, eval)
-    - Metrics: latency_actual vs predicted, cost_per_token, quality_outcome
-    - Scoring rule: mean_decision_error < 5% (for escalation/deescalation)
-    - Learned config (confidence_threshold) read from SkillAdapter on every execution
-    - If confidence < learned_threshold → escalate engine tier (haiku→sonnet→opus)
-    """
-
-    def __init__(self):
-        metadata = SkillMetadata(
+    def __init__(self) -> None:
+        super().__init__(SkillMetadata(
             id="os.delegation_router",
             name="Delegation Router",
-            description="Route tasks to native/ACS/TDE engine based on complexity and learned thresholds",
-            version="1.0.0",
+            description="Advise whether a delegated route can be served natively (L5)",
+            version="2.0.0",
             origin=SkillOrigin.BUILTIN,
             tier=SkillTier.CORE,
             owner="corvin-os-team",
             tags=["routing", "delegation", "os-core", "l5"],
-        )
-        super().__init__(metadata)
-        self._heuristic_rules = _HeuristicRules()
-        self._escalation_map = {
-            "native": "acs",
-            "acs": "tde",
-            "tde": None,  # no further escalation
-        }
+        ))
 
     def execute(self, input: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute routing decision.
-
-        All paths are instrumented for audit + learning feedback.
-
-        Args:
-            input: Routing decision input (see schema above)
-
-        Returns:
-            Routing decision dict (see schema above)
-
-        Raises:
-            Never — all exceptions are caught and logged; returns fallback decision.
-        """
-        start_time = time.time()
-
-        # Extract + validate input
         tenant_id = input.get("tenant_id", "_default")
-        force_delegate = input.get("force_delegate", False)
-        is_big_data = input.get("is_big_data", False)
-        complexity = input.get("complexity", 5)
-        task_type = input.get("task_type", "general")
-        user_context = input.get("user_context", {})
-        shadow_mode = input.get("shadow", False)
-        bundled_engine = input.get("bundled_engine")
+        bundled = input.get("bundled_engine") or "native"
+        force_delegate = bool(input.get("force_delegate", False))
+        is_big_data = bool(input.get("is_big_data", False))
+        mode = input.get("mode") if input.get("mode") in _ENGINES else "native"
+        features = dict(input.get("features") or {})
+        if "complexity" not in features:
+            features["complexity"] = _tier_from_legacy(input.get("complexity"))
+        if not input.get("bundled_engine") and (force_delegate or is_big_data):
+            bundled = "acs"
 
         try:
-            # Step 1: Apply heuristic rules
-            decision, confidence, reasoning = self._heuristic_rules.decide(
-                complexity=complexity,
-                task_type=task_type,
-                force_delegate=force_delegate,
-                is_big_data=is_big_data,
+            engine, confidence, reasoning = advise(
+                bundled=bundled, force_delegate=force_delegate,
+                is_big_data=is_big_data, mode=mode, features=features,
             )
+        except Exception as exc:  # noqa: BLE001 — advice failure confirms the rule
+            logger.warning("DelegationRouter advice failed (%s)", type(exc).__name__)
+            engine, confidence, reasoning = bundled, 0.5, f"advice_error:{type(exc).__name__}"
 
-            # Step 2: Load learned config + apply confidence threshold
-            learned_config = None
-            learned_version = None
-            threshold = None
-
-            if isinstance(tenant_id, str) and tenant_id:
-                try:
-                    from .skill_adapter import load_skill_config  # noqa: PLC0415
-                    learned_config, learned_version = load_skill_config(
-                        "os.delegation_router", tenant_id
-                    )
-                    threshold = learned_config.confidence_threshold
-                except Exception as exc:  # noqa: BLE001
-                    # Config read failure is not a routing failure — continue with heuristic
-                    logger.debug(
-                        "DelegationRouter: learned config unavailable (%s)",
-                        type(exc).__name__,
-                    )
-
-            # Step 3: Escalate if confidence is below learned threshold
-            if threshold is not None and confidence < threshold and decision in self._escalation_map:
-                next_decision = self._escalation_map[decision]
-                if next_decision is not None:
-                    decision = next_decision
-                    reasoning = (
-                        f"{reasoning}; escalated: confidence {confidence:.2f} < "
-                        f"learned threshold {threshold:.2f}"
-                    )
-
-            # Step 4: Assemble output (PII-free, audit-ready)
-            result = {
-                "decision": decision,
-                "confidence": confidence,
-                "reasoning": reasoning,
-            }
-
-            if threshold is not None:
-                result["confidence_threshold"] = threshold
-                result["learned_config_version"] = learned_version
-
-            if shadow_mode:
-                # Advisory execution: record bundled engine for learning agreement tracking
-                result["shadow"] = True
-                result["bundled_engine"] = bundled_engine
-
-            execution_time_ms = int((time.time() - start_time) * 1000)
-            logger.info(
-                "DelegationRouter: complexity=%d, task_type=%s, force_delegate=%s, is_big_data=%s → %s (%.0fms, confidence=%.2f)",
-                complexity, task_type, force_delegate, is_big_data, decision, execution_time_ms, confidence,
-            )
-
-            return result
-
-        except Exception as exc:  # noqa: BLE001
-            # Graceful failure: return conservative heuristic (native)
-            logger.exception("DelegationRouter execution failed, falling back to native")
-            execution_time_ms = int((time.time() - start_time) * 1000)
-            return {
-                "decision": "native",
-                "confidence": 0.5,  # low confidence on fallback
-                "reasoning": f"Router failure ({type(exc).__name__}), conservative fallback to native",
-                "error": type(exc).__name__,
-            }
+        result: Dict[str, Any] = {
+            "engine": engine,
+            "decision": engine,
+            "confidence": confidence,
+            "reasoning": reasoning,
+        }
+        threshold = _learned_threshold(tenant_id)
+        if threshold is not None:
+            result["confidence_threshold"] = threshold[0]
+            result["learned_config_version"] = threshold[1]
+        if input.get("shadow"):
+            result["shadow"] = True
+            result["bundled_engine"] = bundled
+        return result
 
 
-class _HeuristicRules:
-    """Pure heuristic routing rules (no I/O, no state, no side effects).
+def _learned_threshold(tenant_id: Any) -> Optional[tuple[float, Optional[str]]]:
+    """The learned acceptance threshold for de-escalation advice, if one was learned."""
+    if not isinstance(tenant_id, str) or not tenant_id:
+        return None
+    try:
+        from .skill_adapter import load_skill_config  # noqa: PLC0415
 
-    These rules form the baseline decision tree. They are independent of
-    learned config (which is applied as an override in DelegationRouterSkill.execute).
-
-    Rules:
-    1. Explicit /delegate → acs (user command wins)
-    2. Big-data shaped work → acs (fan-out wins on volume)
-    3. High complexity (8+) → opus (most capable)
-    4. Medium complexity (5–7) → sonnet (balanced)
-    5. Low complexity (<5) → haiku (efficient)
-    6. Code tasks get boost → try sonnet first
-    """
-
-    # Hardcoded engine rankings (never expose to user, immutable)
-    _ENGINES = ["haiku", "sonnet", "opus"]
-    _ENGINE_CONFIDENCE = {
-        "haiku": 0.90,
-        "sonnet": 0.85,
-        "opus": 0.95,
-    }
-
-    def decide(
-        self,
-        *,
-        complexity: int,
-        task_type: str,
-        force_delegate: bool,
-        is_big_data: bool,
-    ) -> tuple[str, float, str]:
-        """Pure heuristic decision (no I/O, no state).
-
-        Returns:
-            (decision, confidence, reasoning) tuple
-        """
-        # Rule 1: Explicit /delegate command wins
-        if force_delegate:
-            return "acs", 0.99, "Explicit /delegate command overrides all heuristics"
-
-        # Rule 2: Big-data shaped work → acs
-        if is_big_data:
-            return "acs", 0.92, "Big-data shaped work routed to ACS for fan-out efficiency"
-
-        # Rule 3–5: Complexity → native (with potential escalation via learned thresholds)
-        if complexity >= 8:
-            return "native", 0.95, "High complexity task flagged for potential TDE escalation"
-        elif complexity >= 5:
-            return "native", 0.85, "Medium-high complexity routed natively; learned config may escalate"
-        else:
-            return "native", 0.90, "Low-medium complexity routed natively (efficient)"
-
-        # Note: Rule 6 (code task boost) is deferred to learned config phase in execute()
+        config, version = load_skill_config("os.delegation_router", tenant_id)
+    except Exception:  # noqa: BLE001 — no learned config is the normal state
+        return None
+    if version is None:
+        return None
+    value = getattr(config, "confidence_threshold", None)
+    if isinstance(value, (int, float)) and 0.0 <= value <= 1.0:
+        return float(value), version
+    return None

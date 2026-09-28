@@ -3,11 +3,12 @@
 What is PRODUCTION-WIRED (verified 2026-09-16, Phase 2 Blocker 2 FIX):
 
 - Boot: ``initialize_integration`` is called from ``core.skills.boot.boot_skills``
-  (← ``corvin_plugins.bootstrap.boot_platform``) and populates the global registry.
-- L5 (Auto-routing): ``os.delegation_router`` runs in SHADOW mode from the one
-  shared routing function, ``corvin_operator/bridges/shared/delegation_policy.py::
-  _acp_shadow_route`` — the bundled engine stands, the Skill's advice is audited
-  and learned from. ``route_task_l5`` below is the direct (non-shadow) entry
+  (← ``corvin_plugins.bootstrap.boot_platform`` in the gateway/console, and
+  ``adapter._boot_acp_skills`` in the bridge) and populates the global registry.
+- L5 (Auto-routing): ``os.delegation_router`` advises from the one shared routing
+  function, ``corvin_operator/bridges/shared/delegation_policy.py::route_and_record``
+  — shadow by default; a gated Phase 2 may serve its native-only de-escalation
+  (ADR-2092). ``route_task_l5`` below is the direct (non-shadow) entry
   point; it has no production caller today and is exercised by tests only.
 - L10 (Context): ``adapt_context_l10`` / ``os.context_adapter`` runs in SHADOW mode
   from the CEL ``l10_adapter`` stage

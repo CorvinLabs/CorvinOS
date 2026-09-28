@@ -385,6 +385,56 @@ See ADR-0761 for full validation methodology.
 4. **One window per metric.** Don't show same metric over two different time periods on one panel.
 5. **Charts are Corvin's, not foreign widgets.** Use console's palette, not third-party defaults.
 
+## UI State Persistence Across Tab/Panel Switches (ADR-2096)
+
+**Root cause (analysis 2026-09-28):** every panel is a `react-router`
+`<Route>` (ADR-0353 registry, ADR-0561 manifest routing). Switching panels
+unmounts the previous route's component tree — any plain `React.useState`
+in it is gone by design the moment the route changes. `chat.tsx` hit this
+once for chat messages and solved it ad hoc (`chat-registry.ts`'s
+module-level `Map`); that pattern was never generalized, so every other
+panel with in-flight progress/drafts/last-output still lost it on every tab
+switch. Separately, `chat-message-persistence.ts` (written to survive a
+page reload) had zero callers anywhere — dead code — so even Chat's own
+messages did not survive an actual reload (which the console's own
+`console_auto_reload` build-freshness watcher triggers on every new
+deploy, see "Console Frontend — Prove the NEW Build Is What Loads" above).
+
+**Pick the right lifetime for new panel state:**
+
+| State should… | Use |
+|---|---|
+| reset when the user navigates away (in-flight request lock, transient tooltip) | `React.useState` |
+| survive a tab/panel switch AND a page reload within this browser session (progress, draft, last output, selection) | `usePersistentState` (`src/lib/persistent-state.ts`) |
+| survive across browser restarts (an operator preference/toggle) | `usePersistedBool`/`usePersistedString` (`src/lib/preferences.ts`, localStorage) |
+
+`usePersistentState(key, initial)` is a drop-in `React.useState` replacement
+(functional-updater form included) backed by an in-memory mirror +
+`sessionStorage`. `key` must be globally stable and include the entity id
+for per-entity state (a shared key across two skill runs or two chats would
+leak one's state into the other's render). Fails open on storage errors
+(quota, private-mode) — never throws into the render tree.
+
+**Applied so far:** `AutonomousForgePanel.tsx` (Skill Forge V2 — `selected`,
+`message`, `forkRun`; `busy`/`forkTarget`/`instruction` deliberately stay
+plain `useState`) and `chat-registry.ts` (wired the previously-dead
+`chat-message-persistence.ts` in, so message history now survives a real
+reload, not just an SPA-internal chat switch). **Not yet migrated:**
+`SkillForgePanel.tsx`, `OSSkillsTab.tsx`, `SkillsTab.tsx`,
+`TemplateSkillForm.tsx`, the Skill Manager tabs, and Chat's own
+component-local UI state (`input` draft, `lastTts`, `cccActions`,
+`auditOpen`) — see ADR-2096's Scope section before claiming any of those
+are fixed.
+
+**When adding a migration:** write the RED case first — assert the bug
+against the pre-fix code (e.g. via a temporary revert) before confirming
+GREEN, per this repo's reproduction-gate rule. See
+`tests/unit/autonomous-forge-panel-state-persistence.test.tsx` for the
+pattern (click into progress → `unmount()` → mount a fresh instance →
+assert the state is still there).
+
+→ ADR: See Corvin-ADR repo for ADR-2096 (console-panel-state-persistence)
+
 ## Testing Console Updates
 
 ### Unit Tests

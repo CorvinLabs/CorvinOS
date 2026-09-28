@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2, Play, RefreshCw, Sparkles } from 'lucide-react';
+import { usePersistentState } from '@/lib/persistent-state';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -48,12 +49,30 @@ function errorText(err: unknown): string {
  */
 export const AutonomousForgePanel: React.FC = () => {
   const qc = useQueryClient();
-  const [selected, setSelected] = useState<string | null>(null);
+  // Persisted (sessionStorage-backed, see lib/persistent-state.ts) so a tab
+  // switch away from this panel and back — or the console's own
+  // build-freshness auto-reload firing mid-generation — does not wipe an
+  // in-flight forge run: `selected`/`message` are this panel's own choice of
+  // what to show, and `forkRun` is the ONLY client-side record of which
+  // run_id is in flight (the backend's getForgeStatus() only reports
+  // forks_in_flight by skill_id, not run_id — see analysis 2026-09-28), so
+  // losing it stranded the "Follow an operator fork run" effect below with
+  // nothing to resume polling.
+  const [selected, setSelected] = usePersistentState<string | null>(
+    'skill-forge.autonomous.selected',
+    null,
+  );
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const [message, setMessage] = usePersistentState<{ kind: 'ok' | 'error'; text: string } | null>(
+    'skill-forge.autonomous.message',
+    null,
+  );
   const [forkTarget, setForkTarget] = useState<string | null>(null);
   const [instruction, setInstruction] = useState('');
-  const [forkRun, setForkRun] = useState<ForkRun | null>(null);
+  const [forkRun, setForkRun] = usePersistentState<ForkRun | null>(
+    'skill-forge.autonomous.forkRun',
+    null,
+  );
 
   const status = useQuery({
     queryKey: [...KEY, 'status'],
@@ -100,6 +119,10 @@ export const AutonomousForgePanel: React.FC = () => {
       }
     }, 2000);
     return () => clearInterval(t);
+    // setForkRun/setMessage/setSelected are usePersistentState setters —
+    // stable across renders (useCallback keyed only on the constant storage
+    // key), same contract as React.useState's own setter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [forkRun, qc]);
 
   const act = async (fn: () => Promise<unknown>, ok: string) => {

@@ -375,8 +375,12 @@ def audit_event(
     severity: str | None = None,
     tenant_id: str = "",
     **extra: Any,
-) -> None:
+) -> bool:
     """Append a voice bridge audit event to the chain. Silent on failure.
+
+    Returns whether the core chain write committed. Callers that must not act
+    on an unrecorded decision (audit-first) branch on it; everyone else may
+    keep ignoring it.
 
     severity, when provided by the caller, overrides the
     _VOICE_EVENT_SEVERITY registry entry; otherwise the registry default
@@ -396,12 +400,12 @@ def audit_event(
     a reason CODE (not ``str(exc)``) to keep paths/PII out of the chain.
     """
     if _se is None:
-        return  # forge not installed → audit silently disabled
+        return False  # forge not installed → audit silently disabled
     path = audit_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
-        return
+        return False
     # Reserved keys that must come from positional args, never from details.
     # Strip them from caller-supplied details to prevent silent overwrites or
     # tenant_id injection when the positional arg is falsy.
@@ -493,6 +497,7 @@ def audit_event(
             )
         except Exception:  # noqa: BLE001 - a sink can never affect this call site
             pass
+    return core_write_committed
 
 
 def verify_audit(path: Path | None = None) -> tuple[bool, list[dict]]:

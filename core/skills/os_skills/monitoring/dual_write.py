@@ -1,579 +1,105 @@
-"""Dual-Write Integration for L5 Routing — Phase 2a.
+"""L5 Phase 2 (dual-write) — gated, bounded, audit-first (ADR-2092 G3/G4).
 
-Implements the dual-write mechanism described in ADR-0532 Phase 2 synthesis:
-1. Fetch real Skill decision via os.delegation_router Skill
-2. Route using real Skill decision (confidence threshold applied)
-3. Compare with shadow decision (bundled rule) for agreement tracking
-4. Track correctness in rolling window
-5. Trigger auto-fallback if correctness drops > 2%
-6. Return either real decision or bundled fallback based on rollback state
+Two pure-ish functions the routing call site composes:
 
-This module bridges between delegation_policy.py (entry point) and the monitoring
-infrastructure (correctness tracker + rollback detector).
+* :func:`effective_phase` — what the operator asked for (``CORVIN_ACP_PHASE``) versus
+  what may run. ``phase2_dual_write`` is honoured only when the Skill actually executes
+  in this process, the tenant has no tripped rollback, and the ledger-based readiness
+  check passes for the surface. ``phase2_real`` is refused outright (no recovery path
+  is defined for it). Anything refused runs as shadow, and the refusal is audited once
+  per process per reason — never once per turn.
+* :func:`clamp` — the ADR-0251 D2 bound applied to the Skill: its advice may confirm
+  the bundled engine or de-escalate to ``native``; it may never escalate, never pick an
+  engine the operator did not select, and never override an explicit ``/delegate``.
 
-Call site: corvin_operator/bridges/shared/delegation_policy.py::resolve_worker_engine()
-Integration: Phase 2a exit from shadow mode
-
-NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
-``delegation_policy`` refuses ``CORVIN_ACP_PHASE=phase2_*`` while
-``_PHASE2_ROLLBACK_GUARD_WIRED`` is false, because ``record_routing_outcome``
-(the rollback detector's only input) has no caller and needs a per-request
-counterfactual ``ground_truth`` no outcome sink observes.
-
-Architecture (ADR-0532 Phase 2):
-- Phase 1 (shadow): Skill called, advisory only, bundled stands
-- Phase 2a (dual-write): Real Skill decision used; agreement tracked for auto-rollback
-- Phase 2b (real): Skill decision is the primary route (requires rollback recovery built-in)
-
-Confidence threshold decision tree:
-1. Load learned config for os.delegation_router (if available)
-2. Fetch Skill decision (complexity, task_type, force_delegate, is_big_data)
-3. If skill_confidence >= threshold (default 0.75, learned override available):
-   - Use Skill decision (real routing)
-4. Else:
-   - Fall back to bundled decision (fail-closed)
-5. Record both decisions for agreement tracking + learning feedback
+Serving a Skill-changed route is audit-first: the caller records
+``routing.phase2_decision`` and serves the Skill's engine only if that record committed.
 """
 from __future__ import annotations
 
-import logging
-import time
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
+import os
+import threading
+from typing import Callable, Optional
 
-from core.skills.os_skills.monitoring.correctness_tracker import (
-    CorrectnessTracker,
-    RoutingDecision,
-    RoutingOutcome,
-)
-from core.skills.os_skills.monitoring.rollback_detector import RollbackDetector
+from core.skills.os_skills.monitoring import readiness, rollback_detector
 
-if TYPE_CHECKING:
-    pass
+PHASE_ENV = "CORVIN_ACP_PHASE"
+REQUESTABLE = ("phase1_shadow", "phase2_dual_write", "phase2_real")
+DEFAULT_THRESHOLD = 0.75
 
-_log = logging.getLogger(__name__)
+AuditFn = Callable[[str, dict], bool]
+_refusals_seen: set[tuple[str, str, str]] = set()
+_refusals_lock = threading.Lock()
 
-# Global tracker + detector (singleton per process)
-_tracker: CorrectnessTracker | None = None
-_detector: RollbackDetector | None = None
 
+def requested_phase() -> str:
+    raw = os.environ.get(PHASE_ENV, "phase1_shadow").strip().lower()
+    return raw if raw in REQUESTABLE else "phase1_shadow"
 
-def initialize_dual_write(
-    storage_dir: Path | None = None,
-) -> None:
-    """Initialize dual-write monitoring (call at boot).
 
-    Args:
-        storage_dir: Directory to persist metrics to (defaults to ~/.corvin/metrics/)
-    """
-    global _tracker, _detector
-
-    if storage_dir is None:
-        from core.paths import corvin_home
-
-        storage_dir = Path(corvin_home()) / "metrics"
-
-    tracker_path = storage_dir / "correctness.jsonl"
-    rollback_path = storage_dir / "rollback.log"
-
-    _tracker = CorrectnessTracker(storage_path=tracker_path)
-    _detector = RollbackDetector(correctness_tracker=_tracker, storage_path=rollback_path)
-
-    _log.info("Dual-write monitoring initialized: storage_dir=%s", storage_dir)
-
-
-def get_tracker() -> CorrectnessTracker:
-    """Get the global correctness tracker (initializes if needed)."""
-    global _tracker
-    if _tracker is None:
-        initialize_dual_write()
-    return _tracker
-
-
-def get_detector() -> RollbackDetector:
-    """Get the global rollback detector (initializes if needed)."""
-    global _detector
-    if _detector is None:
-        initialize_dual_write()
-    return _detector
-
-
-def resolve_worker_engine_dual_write(
-    *,
-    request_id: str,
-    bundled_engine: str,
-    bundled_confidence: float = 1.0,
-    skill_decision: dict | None = None,  # result from os.delegation_router Skill
-    task_type: str = "chat",
-    complexity: int = 5,
-    force_delegate: bool = False,
-    is_big_data: bool = False,
-    tenant_id: str = "_default",
-) -> str:
-    """Route using dual-write (real Skill decision + correctness tracking).
-
-    This is the Phase 2a entry point called by delegation_policy.resolve_worker_engine()
-    when Phase 2 is enabled (shadow mode exited).
-
-    Phase 2a (dual-write) behavior:
-    1. Fetch Skill decision if not provided
-    2. Apply confidence threshold (learned or default)
-    3. Compare bundled vs. Skill decision
-    4. Return real decision if confidence >= threshold; else bundled (fail-closed)
-    5. Record both decisions for agreement tracking + learning feedback
-    6. Check auto-rollback trigger
-
-    Args:
-        request_id: Unique request identifier
-        bundled_engine: Result from bundled routing rule (fallback)
-        bundled_confidence: Confidence of bundled decision (always 1.0)
-        skill_decision: Pre-computed decision from os.delegation_router Skill (optional).
-            If None, will be fetched via Skill registry.
-            Expected keys: 'decision', 'confidence', 'reasoning'
-        task_type: Type of task ('chat', 'big_data', 'delegate')
-        complexity: Task complexity (1-10) for Skill input
-        force_delegate: Whether user explicitly requested delegation
-        is_big_data: Whether task is big-data shaped
-        tenant_id: Tenant for audit trail + learned config lookup
-
-    Returns:
-        The routing decision: either skill's engine or fallback to bundled (fail-closed)
-    """
-    tracker = get_tracker()
-    detector = get_detector()
-
-    # Check rollback state FIRST: if triggered, always use bundled routing
-    if detector.update():
-        _log.info("Rollback active: using bundled routing (request_id=%s)", request_id)
-        _emit_rollback_decision_audit(request_id, bundled_engine, task_type, tenant_id)
-        return bundled_engine
-
-    # Step 1: Fetch Skill decision if not provided
-    if skill_decision is None:
-        skill_decision = _fetch_skill_decision(
-            complexity=complexity,
-            task_type=task_type,
-            force_delegate=force_delegate,
-            is_big_data=is_big_data,
-            tenant_id=tenant_id,
-        )
-
-    # Step 2: Extract Skill output
-    skill_engine = skill_decision.get("decision", bundled_engine)  # key is "decision" not "engine"
-    skill_confidence = skill_decision.get("confidence", 0.0)
-    skill_reasoning = skill_decision.get("reasoning", "")
-
-    # Step 3: Load learned config to get confidence threshold override (ADR-0314)
-    confidence_threshold = _load_confidence_threshold(tenant_id)
-
-    # Step 4: Decide which engine to use based on confidence threshold
-    # Confidence >= threshold → use Skill (real routing)
-    # Confidence < threshold → use bundled (fail-closed)
-    if skill_confidence >= confidence_threshold:
-        routing_engine = skill_engine
-        decision_source = "skill"
-        decision_reason = f"Skill confidence {skill_confidence:.2f} >= threshold {confidence_threshold:.2f}"
-    else:
-        routing_engine = bundled_engine
-        decision_source = "bundled"
-        decision_reason = f"Skill confidence {skill_confidence:.2f} < threshold {confidence_threshold:.2f}, using fallback"
-
-    # Step 5: Record both decisions for dual-write audit trail
-    real_decision = RoutingDecision(
-        request_id=request_id,
-        timestamp=time.time(),
-        engine=routing_engine,
-        decision_source=decision_source,
-        confidence=skill_confidence,
-        task_type=task_type,
-        tenant_id=tenant_id,
-    )
-
-    shadow_decision = RoutingDecision(
-        request_id=request_id,
-        timestamp=time.time(),
-        engine=bundled_engine,
-        decision_source="bundled",
-        confidence=bundled_confidence,
-        task_type=task_type,
-        tenant_id=tenant_id,
-    )
-
-    # Log both to audit trail (ADR-0722 decision attribution)
-    _emit_dual_routing_audit(real_decision, shadow_decision, decision_reason, skill_engine=skill_engine)
-
-    # Step 6: Emit decision metric (agreement rate + confidence distribution)
-    _emit_decision_metrics(
-        request_id=request_id,
-        skill_engine=skill_engine,
-        bundled_engine=bundled_engine,
-        used_engine=routing_engine,
-        skill_confidence=skill_confidence,
-        threshold=confidence_threshold,
-        task_type=task_type,
-        tenant_id=tenant_id,
-    )
-
-    _log.debug(
-        "Dual-write routing: skill=%s(%.2f, %s) vs bundled=%s → using %s (request_id=%s)",
-        skill_engine,
-        skill_confidence,
-        skill_reasoning[:30] if skill_reasoning else "",
-        bundled_engine,
-        routing_engine,
-        request_id,
-    )
-
-    return routing_engine
-
-
-def record_routing_outcome(
-    *,
-    request_id: str,
-    real_engine: str,
-    shadow_engine: str,
-    success: bool,
-    ground_truth: str,
-    latency_ms: float,
-    error_msg: str | None = None,
-) -> None:
-    """Record post-execution outcome for correctness tracking.
-
-    This is called after the request finishes, when we know which engine was correct.
-
-    Args:
-        request_id: Unique request identifier (must match the original routing decision)
-        real_engine: Engine used by the real (Skill-driven) routing
-        shadow_engine: Engine used by the shadow (bundled) routing
-        success: Whether the request succeeded
-        ground_truth: Which engine WAS the correct choice ('native', 'acs', 'tde')
-        latency_ms: Request latency in milliseconds
-        error_msg: Error message if request failed
-    """
-    tracker = get_tracker()
-
-    outcome = RoutingOutcome(
-        request_id=request_id,
-        real_decision=RoutingDecision(
-            request_id=request_id,
-            timestamp=time.time(),
-            engine=real_engine,
-            decision_source="skill",
-            confidence=0.0,  # unknown at record time
-            task_type="chat",  # unknown at record time
-            tenant_id="_default",
-        ),
-        shadow_decision=RoutingDecision(
-            request_id=request_id,
-            timestamp=time.time(),
-            engine=shadow_engine,
-            decision_source="bundled",
-            confidence=1.0,
-            task_type="chat",
-            tenant_id="_default",
-        ),
-        success=success,
-        ground_truth=ground_truth,
-        latency_ms=latency_ms,
-        error_msg=error_msg,
-    )
-
-    tracker.record_outcome(outcome)
-    _log.debug(
-        "Outcome recorded: real=%s ground=%s success=%s (request_id=%s)",
-        real_engine,
-        ground_truth,
-        success,
-        request_id,
-    )
-
-
-def _fetch_skill_decision(
-    *,
-    complexity: int,
-    task_type: str,
-    force_delegate: bool,
-    is_big_data: bool,
-    tenant_id: str,
-) -> dict[str, Any]:
-    """Fetch real decision from os.delegation_router Skill.
-
-    This is the entry point to the Skill system for Phase 2a dual-write.
-    If the Skill is unavailable or times out, returns a conservative fallback.
-
-    Args:
-        complexity: Task complexity (1-10)
-        task_type: Task type ('chat', 'big_data', 'delegate')
-        force_delegate: User explicitly requested delegation
-        is_big_data: Task is big-data shaped
-        tenant_id: Tenant ID for learned config lookup
-
-    Returns:
-        Dict with keys: 'decision' (engine name), 'confidence' (0-1), 'reasoning'
-        On error, returns fallback (native, 0.0 confidence)
-    """
-    try:
-        from core.skills import skill_registry_phase1 as _reg  # noqa: PLC0415
-
-        registry = getattr(_reg, "_global_registry", None)
-        if registry is None:
-            _log.debug("Skill registry not booted, using fallback")
-            return {
-                "decision": "native",
-                "confidence": 0.0,
-                "reasoning": "Skill registry unavailable",
-            }
-
-        # Execute the Skill (timeout 500ms for Phase 2a dual-write)
-        result = registry.execute(
-            "os.delegation_router",
-            {
-                "complexity": complexity,
-                "task_type": task_type,
-                "force_delegate": force_delegate,
-                "is_big_data": is_big_data,
-                "tenant_id": tenant_id,
-                "shadow": False,  # Not shadow mode in Phase 2a
-            },
-            timeout_ms=500,  # Fail-fast: 500ms budget for Skill execution
-            lom="core/skills/os_skills/monitoring/dual_write.py:_fetch_skill_decision",
-            tenant_id=tenant_id,
-        )
-
-        # registry.execute() returns a SkillExecutionResult, not the Skill's
-        # dict: the decision is its ``output``, and only on status "success".
-        # Testing ``"decision" in result`` on the wrapper raised TypeError, so
-        # every Phase 2a turn fell back to confidence 0.0 and the Skill was
-        # never consulted.
-        output = getattr(result, "output", None) if getattr(result, "status", None) == "success" else None
-        if isinstance(output, dict) and "decision" in output and "confidence" in output:
-            return output
-
-        _log.warning("Skill result missing required fields: %s", result)
-        return {
-            "decision": "native",
-            "confidence": 0.0,
-            "reasoning": "Skill output validation failed",
-        }
-
-    except TimeoutError:
-        _log.warning("Skill execution timed out (500ms budget)")
-        return {
-            "decision": "native",
-            "confidence": 0.0,
-            "reasoning": "Skill execution timeout",
-        }
-    except Exception as exc:  # noqa: BLE001
-        _log.exception("Failed to fetch Skill decision: %s", type(exc).__name__)
-        return {
-            "decision": "native",
-            "confidence": 0.0,
-            "reasoning": f"Skill execution error: {type(exc).__name__}",
-        }
-
-
-def _load_confidence_threshold(tenant_id: str) -> float:
-    """Load confidence threshold for Skill decision from learned config.
-
-    If learned config is available (ADR-0314 feedback loop), returns the
-    learned threshold. Otherwise returns the default (0.75).
-
-    The confidence threshold determines when to trust the Skill decision:
-    - skill_confidence >= threshold → use Skill (real routing)
-    - skill_confidence < threshold → use bundled (fail-closed)
-
-    Default value (0.75) means: if the Skill is at least 75% confident,
-    use it; otherwise fall back to the bundled rule (which has 100% confidence
-    because it's deterministic).
-
-    Args:
-        tenant_id: Tenant ID for config lookup
-
-    Returns:
-        Confidence threshold (0.0-1.0), default 0.75
-    """
-    # Default threshold: 0.75 (Skill needs 75% confidence to be trusted)
-    DEFAULT_THRESHOLD = 0.75
-
-    try:
-        # Try to load learned config (ADR-0314 integration)
-        from core.skills.os_skills.skill_adapter import (  # noqa: PLC0415
-            load_skill_config,
-        )
-
-        learned_config, learned_version = load_skill_config("os.delegation_router", tenant_id)
-        # load_skill_config() returns the SkillConfig() defaults (0.70) with
-        # version None when nothing was learned; only a learned version may
-        # override this gate's own default.
-        if learned_version is not None and hasattr(learned_config, "confidence_threshold"):
-            threshold = learned_config.confidence_threshold
-            if 0.0 <= threshold <= 1.0:
-                _log.debug(
-                    "Loaded learned confidence threshold: %.2f (tenant=%s)",
-                    threshold,
-                    tenant_id,
-                )
-                return threshold
-
-    except Exception as exc:  # noqa: BLE001
-        _log.debug("Failed to load learned config: %s", type(exc).__name__)
-
-    return DEFAULT_THRESHOLD
-
-
-#: Positive field allowlists for the Phase 2a routing events. The core writer
-#: is default-deny on keys; an event with no registered set loses its fields.
-_DUAL_WRITE_AUDIT_ALLOWLISTS: dict[str, frozenset] = {
-    "l5_routing_dual_write": frozenset({
-        "request_id", "decision_source", "used_engine", "skill_engine",
-        "bundled_engine", "skill_confidence", "threshold", "task_type",
-        "agreement", "tenant_id",
-    }),
-    "l5_routing_rollback_active": frozenset({
-        "request_id", "used_engine", "task_type", "reason_code", "tenant_id",
-    }),
-    "l5_rollback_triggered": frozenset({
-        "reason_code", "correctness", "baseline_correctness", "total_count", "tenant_id",
-    }),
-    "l5_routing_metrics": frozenset({
-        "request_id", "agreement", "threshold_met", "skill_confidence",
-        "threshold", "task_type", "used_engine", "tenant_id",
-    }),
-}
-
-
-def _audit(event_type: str, details: dict, tenant_id: str) -> None:
-    """Append one Phase 2a routing event to the tenant's hash-chained audit log.
-
-    These events used to import ``core.security.audit_logger`` — a module that
-    does not exist — and swallow the ImportError at debug level, so every
-    Phase 2a routing decision (including turns where the Skill's answer
-    replaced the bundled engine) went unaudited. Same writer as the Skill
-    registry's ``CoreAuditBackend``: ``audit.audit_event`` resolves the tenant
-    chain via ``tenant_audit_chain()``.
-    """
-    try:
-        from audit import audit_event  # type: ignore[import-not-found]  # noqa: PLC0415
-    except ImportError:
-        _log.error("core audit writer unavailable — %s NOT chained", event_type)
+def _refuse_once(audit: Optional[AuditFn], tenant_id: str, surface: str,
+                 requested: str, reason: str) -> None:
+    # A pure query (no audit writer) never consumes the once-per-process slot,
+    # and an uncommitted record is retried on the next turn.
+    if audit is None:
         return
-    try:
-        from forge.security_events import register_event_allowlist  # type: ignore[import-not-found]  # noqa: PLC0415
+    key = (tenant_id, surface, reason)
+    with _refusals_lock:
+        if key in _refusals_seen:
+            return
+        _refusals_seen.add(key)
+    committed = audit("routing.phase2_refused", {
+        "tenant_id": tenant_id, "surface": surface,
+        "phase_requested": requested, "reason": reason,
+    })
+    if not committed:
+        with _refusals_lock:
+            _refusals_seen.discard(key)
 
-        register_event_allowlist(event_type, _DUAL_WRITE_AUDIT_ALLOWLISTS[event_type])
-    except ImportError:
-        pass
-    try:
-        audit_event(event_type, details=details, tenant_id=tenant_id)
-    except Exception as exc:  # noqa: BLE001 — routing already decided; never raise
-        _log.error("audit emit failed for %s (%s)", event_type, type(exc).__name__)
+
+def effective_phase(*, tenant_id: str, surface: str, skill_available: bool,
+                    audit: Optional[AuditFn] = None) -> str:
+    """``"dual_write"`` or ``"shadow"`` — never anything the gates did not clear."""
+    requested = requested_phase()
+    if requested == "phase1_shadow":
+        return "shadow"
+    if requested == "phase2_real":
+        _refuse_once(audit, tenant_id, surface, requested, "phase2_real_unsupported")
+        return "shadow"
+    if not skill_available:
+        _refuse_once(audit, tenant_id, surface, requested, "skill_not_booted")
+        return "shadow"
+    if rollback_detector.rollback_active(tenant_id):
+        _refuse_once(audit, tenant_id, surface, requested, "rollback_active")
+        return "shadow"
+    verdict = readiness.cached_evaluate(tenant_id, surface)
+    if not verdict.ready:
+        _refuse_once(audit, tenant_id, surface, requested, verdict.reason)
+        return "shadow"
+    return "dual_write"
 
 
-def _emit_dual_routing_audit(
-    real_decision: RoutingDecision,
-    shadow_decision: RoutingDecision,
-    decision_reason: str = "",
-    skill_engine: str | None = None,
-) -> None:
-    """Emit dual-write decision to audit trail (ADR-0722 decision attribution).
+def clamp(*, bundled: str, skill_engine: Optional[str], skill_conf: Optional[float],
+          force_delegate: bool, threshold: float = DEFAULT_THRESHOLD) -> tuple[str, str, bool]:
+    """Return ``(engine, source, clamped)``.
 
-    Logs both the real (Skill-driven) and shadow (bundled) decisions for
-    agreement tracking and learning feedback integration.
+    ``source`` is ``"skill"`` only when the Skill's advice CHANGED the route; a
+    confirmation or any refusal leaves the bundled engine with source ``"bundled"``.
+    ``clamped`` is True when advice that differed from the bundled engine was refused.
     """
-    # ``decision_reason`` is free text and stays out of the chain; the
-    # source + confidence (+ threshold on the metrics event) carry the same fact.
-    _audit(
-        "l5_routing_dual_write",
-        {
-            "request_id": real_decision.request_id,
-            "decision_source": real_decision.decision_source,
-            "used_engine": real_decision.engine,
-            "skill_engine": skill_engine if skill_engine is not None else real_decision.engine,
-            "bundled_engine": shadow_decision.engine,
-            "skill_confidence": real_decision.confidence,
-            "task_type": real_decision.task_type,
-            "agreement": real_decision.engine == shadow_decision.engine,
-            "tenant_id": real_decision.tenant_id,
-        },
-        real_decision.tenant_id,
-    )
+    differs = skill_engine is not None and skill_engine != bundled
+    if not differs:
+        return bundled, "bundled", False
+    if force_delegate:
+        return bundled, "bundled", True
+    if skill_conf is None or skill_conf < threshold:
+        return bundled, "bundled", False
+    if skill_engine != "native":
+        return bundled, "bundled", True
+    return "native", "skill", False
 
 
-def _emit_rollback_decision_audit(
-    request_id: str, bundled_engine: str, task_type: str, tenant_id: str
-) -> None:
-    """Emit audit event when routing uses bundled rule due to active rollback."""
-    _audit(
-        "l5_routing_rollback_active",
-        {
-            "request_id": request_id,
-            "used_engine": bundled_engine,
-            "task_type": task_type,
-            "reason_code": "rollback_active",
-            "tenant_id": tenant_id,
-        },
-        tenant_id,
-    )
-
-
-def _emit_decision_metrics(
-    *,
-    request_id: str,
-    skill_engine: str,
-    bundled_engine: str,
-    used_engine: str,
-    skill_confidence: float,
-    threshold: float,
-    task_type: str,
-    tenant_id: str,
-) -> None:
-    """Emit decision metrics for observability (agreement rate, confidence distribution).
-
-    These metrics feed into the console dashboard for Phase 2a monitoring.
-    """
-    agreement = 1.0 if skill_engine == bundled_engine else 0.0
-    threshold_met = 1.0 if skill_confidence >= threshold else 0.0
-    _audit(
-        "l5_routing_metrics",
-        {
-            "request_id": request_id,
-            "agreement": agreement,  # 1.0 if skill == bundled, else 0.0
-            "threshold_met": threshold_met,  # 1.0 if confidence >= threshold
-            "skill_confidence": skill_confidence,
-            "threshold": threshold,
-            "task_type": task_type,
-            "used_engine": used_engine,
-            "tenant_id": tenant_id,
-        },
-        tenant_id,
-    )
-
-
-def get_monitoring_dashboard() -> dict:
-    """Get current monitoring dashboard metrics."""
-    tracker = get_tracker()
-    detector = get_detector()
-    metrics = tracker.current_metrics()
-
-    return {
-        "is_rolled_back": detector.is_rolled_back,
-        "rollback_events": [
-            {
-                "timestamp": e.timestamp,
-                "reason": e.reason,
-                "metrics": e.metrics_at_trigger,
-            }
-            for e in detector.rollback_events
-        ],
-        "correctness_metrics": {
-            "window_size": metrics.window_size,
-            "correct_count": metrics.correct_count,
-            "total_count": metrics.total_count,
-            "correctness": metrics.correctness,
-            "shadow_correctness": metrics.shadow_correctness,
-            "skill_confidence_mean": metrics.skill_confidence_mean,
-            "correctness_drop_percent": (
-                (metrics.shadow_correctness - metrics.correctness) * 100
-            ),
-        },
-    }
+def reset_for_tests() -> None:
+    with _refusals_lock:
+        _refusals_seen.clear()
+    readiness.clear_cache()

@@ -544,11 +544,19 @@ except Exception:  # noqa: BLE001
     _espan = None  # type: ignore[assignment]
 
 
+#: Last OS engine-span status per chat ("ok" | "error"), read by process_one to
+#: report the routed turn's outcome (ADR-2092 G1). Turns are per-chat sequential,
+#: so the chat key identifies the turn in flight.
+_LAST_OS_TURN_STATUS: dict[str, str] = {}
+
+
 def _emit_os_engine_span(kind, *, turn_id, chat_key, engine_id,
                          model_id="", status="ok", duration_ms=0):
     """Dual-emit an engine.span.start/end alongside the bridge's os_turn.* events
     (role=os). Best-effort + metadata-only; pairs in the same finally as
     os_turn.completed so a span is never orphaned (even on cancellation)."""
+    if kind != "start":
+        _LAST_OS_TURN_STATUS[chat_key] = "ok" if status == "ok" else "error"
     if _espan is None:
         return
     try:
@@ -8456,6 +8464,7 @@ def _worker_engine_target(
     mode: str,
     force_delegate: bool,
     tenant_id: str = "_default",
+    meta: dict | None = None,
 ) -> str:
     """Which engine runs this bridge turn: "native" | "acs" | "tde" (ADR-0255).
 
@@ -8475,7 +8484,11 @@ def _worker_engine_target(
     the historical frozen behavior: ``mode == "tde"`` degrades to ``"native"``.
     Any probe failure also degrades — the freeze is the safe default.
     """
-    from delegation_policy import is_big_data_task, resolve_worker_engine  # noqa: PLC0415
+    from delegation_policy import (  # noqa: PLC0415
+        is_big_data_task,
+        resolve_worker_engine,
+        routing_features,
+    )
 
     _is_bd = is_big_data_task(prompt)
     tde_available = False
@@ -8506,6 +8519,10 @@ def _worker_engine_target(
         tde_available=tde_available,
         quota_ok=quota_ok,
         tenant_id=tenant_id,
+        turn_id=(meta or {}).get("turn_id"),
+        surface="bridge",
+        features=routing_features(prompt, tenant_id=tenant_id),
+        sink=meta,
     )
 
 
@@ -8677,6 +8694,69 @@ def _spawn_bridge_measurement(ctx: dict) -> None:
                      name="tde-bridge-measure").start()
 
 
+def _new_route_turn_id() -> str:
+    import uuid  # noqa: PLC0415
+
+    return uuid.uuid4().hex[:20]
+
+
+def _record_unrouted_turn(tenant_id: str, meta: dict, prompt: str, *, delegated: bool) -> None:
+    """Record the routing decision for a turn that never reached the shared rule.
+
+    The flags-off big-data carve-out and a bare ``/delegate`` return before the
+    triage; ADR-2092 G0 still wants exactly one decision per OS turn. Recorded
+    after the fact, so it states what ran: the carve-out's ACS answer or native.
+    """
+    try:
+        from delegation_policy import route_and_record, routing_features  # noqa: PLC0415
+
+        engine = "acs" if delegated else "native"
+        if delegated and not meta.get("engine"):
+            meta["engine"] = "acs"
+        route_and_record(
+            tenant_id=tenant_id, bundled=engine, force_delegate=False,
+            is_big_data=delegated, mode="native", surface="bridge",
+            turn_id=meta.get("turn_id"),
+            features=routing_features(prompt, tenant_id=tenant_id), sink=meta,
+            post_hoc=True,
+        )
+    except Exception as e:  # noqa: BLE001 — never costs the turn
+        log(f"route record skipped ({type(e).__name__})")
+
+
+def _report_route_outcome(tenant_id: str, meta: dict, answer, chat_key: str,
+                          started: float) -> None:
+    """Join the finished turn to its routing decision (ADR-2092 G1).
+
+    Success is what the served engine reported: a delegated engine succeeded when
+    it produced the answer; a native turn by its OS engine span status. Without a
+    span status (a turn refused before any engine ran) the answer's presence is
+    the only signal there is.
+    """
+    status = _LAST_OS_TURN_STATUS.pop(chat_key, None)
+    if "routed_engine" not in meta or meta.get("outcome_reported"):
+        return
+    meta["outcome_reported"] = True
+    delegated = bool(meta.get("engine"))
+    if delegated:
+        ok = bool(answer)
+    elif status is not None:
+        ok = status == "ok"
+    else:
+        ok = bool(answer)
+    try:
+        from delegation_policy import record_turn_outcome  # noqa: PLC0415
+
+        record_turn_outcome(
+            tenant_id=tenant_id, turn_id=meta.get("turn_id"), surface="bridge",
+            used=str(meta.get("engine") or "native"), ok=ok,
+            latency_ms=(time.monotonic() - started) * 1000.0,
+            source=str(meta.get("route_source") or "bundled"),
+        )
+    except Exception as e:  # noqa: BLE001
+        log(f"route outcome skipped ({type(e).__name__})")
+
+
 def _maybe_delegate_worker(
     prompt: str,
     *,
@@ -8748,6 +8828,17 @@ def _maybe_delegate_worker(
         except Exception as e:  # noqa: BLE001
             log(f"worker delegation: triage heuristic unavailable ({e!r}) — direct turn")
             delegation_worthy = False
+        # Same ADR-0251 route hook the console consults, plus the ADR-2092 routing
+        # record for a turn that stays native (the majority of bridge turns).
+        try:
+            from delegation_policy import resolve_delegation_route, routing_features  # noqa: PLC0415
+            delegation_worthy = resolve_delegation_route(
+                delegation_worthy, tenant_id=tid, request={"surface": "bridge"},
+                turn_id=(meta or {}).get("turn_id"), surface="bridge",
+                features=routing_features(prompt, tenant_id=tid), sink=meta,
+            )
+        except Exception as e:  # noqa: BLE001 — routing record never costs the turn
+            log(f"worker delegation: route record skipped ({type(e).__name__})")
         if not delegation_worthy:
             return None, prompt
 
@@ -8758,6 +8849,7 @@ def _maybe_delegate_worker(
 
     target = _worker_engine_target(
         prompt, mode=mode, force_delegate=force_delegate, tenant_id=tid,
+        meta=meta,
     )
     if target == "tde":
         # bridge_tde_execution on + mode=tde + TDE probed available
@@ -8778,6 +8870,8 @@ def _maybe_delegate_worker(
         if not parity_on:
             # ACS parity needs its OWN flag; bridge_tde_execution alone only
             # unlocks TDE, never a silent ACS fan-out the operator didn't ask for.
+            if meta is not None and "routed_engine" in meta:
+                meta["routed_engine"] = "native"
             return None, prompt
         answer = _run_acs_delegation(
             prompt, channel=channel, chat_key=chat_key, persona=persona, tenant_id=tid,
@@ -11764,13 +11858,18 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         # everything else — including any failure — so the normal gated
         # dispatcher below stays the default path. May also return a
         # `/delegate`-stripped prompt even on the degrade path.
-        _deleg_meta: dict = {}
+        _route_tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+        _deleg_meta: dict = {"turn_id": _new_route_turn_id()}
+        _route_t0 = time.monotonic()
+        _LAST_OS_TURN_STATUS.pop(chat_key, None)
         answer, prompt = _maybe_delegate_worker(
             prompt, channel=channel, chat_key=chat_key,
             persona=str((profile or {}).get("persona")
                         or (profile or {}).get("name") or ""),
             meta=_deleg_meta,
         )
+        if "routed_engine" not in _deleg_meta:
+            _record_unrouted_turn(_route_tid, _deleg_meta, prompt, delegated=answer is not None)
         if answer is not None:
             pass
         elif progress_on:
@@ -11802,6 +11901,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 sender=sender,
                 **media_kwargs,
             )
+        _report_route_outcome(_route_tid, _deleg_meta, answer, chat_key, _route_t0)
         # Delegation-transparency badge (flag `delegation_badge`, ships-dark):
         # append a compact "how was this task delegated" text-suffix so a bridge
         # user can always see which engine + orchestration mode ran their task.
@@ -11824,6 +11924,12 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 log(f"delegation badge skipped ({e!r})")
     finally:
         hb_stop.set()
+        # A turn that raised before reporting is a failed turn, not a missing one.
+        try:
+            if not _deleg_meta.get("outcome_reported"):
+                _report_route_outcome(_route_tid, _deleg_meta, None, chat_key, _route_t0)
+        except NameError:
+            pass
 
     # HTML error-page guard: if the engine returned a raw HTTP error page
     # (Cloudflare 50x, nginx, caddy, etc.) instead of a real answer, replace
@@ -12731,6 +12837,31 @@ def _background_delivery_tick() -> None:
         log(f"mid_turn_heartbeat tick failed: {e}")
 
 
+def _boot_acp_skills() -> list[str]:
+    """Boot the ACP Skills registry in the bridge process (ADR-2092 G0).
+
+    The bridge serves nearly every OS turn, and until 2026-09-28 it never booted
+    the registry — so the L5 router and the L10 context adapter were skipped on
+    every bridge turn and the routing loop collected nothing. Same public entry
+    and the same core chain writer the gateway uses. Fail-soft: a failed boot
+    leaves the bridge serving turns with the bundled rule only, logged loudly.
+    """
+    tenant_id = os.environ.get("CORVIN_TENANT_ID") or "_default"
+    try:
+        from core.skills.boot import boot_skills  # noqa: PLC0415
+        from audit import audit_event  # type: ignore  # noqa: PLC0415
+
+        def _emit(event_type: str, details: dict) -> None:
+            audit_event(event_type, details=details, tenant_id=tenant_id)
+
+        registered = boot_skills(tenant_id=tenant_id, audit_emit=_emit)
+        log(f"acp-skills: {len(registered)} skills booted for tenant {tenant_id}")
+        return registered
+    except Exception as e:  # noqa: BLE001
+        log(f"acp-skills: BOOT FAILED ({type(e).__name__}: {e}) — L5/L10 run without Skills")
+        return []
+
+
 def main() -> int:
     global _executor, _sidechannel_executor
     # parents=True: with ADAPTER_INBOX/OUTBOX/PROCESSED pinned to a fresh
@@ -12821,6 +12952,8 @@ def main() -> int:
             log(f"layer-integrity: {len(_cap_state)} core capabilities registered")
     except Exception as e:  # noqa: BLE001
         log(f"layer-integrity: capability bootstrap skipped ({e})")
+
+    _boot_acp_skills()
 
     # Roadmap F13 — boot-time path-gate self-test. Sends a curated set of
     # must-deny vectors through path_gate.check() and emits a CRITICAL

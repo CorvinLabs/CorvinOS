@@ -127,12 +127,11 @@ class TestL5EntryPointContract:
         )
         assert high_result["skill_executed"] is True
 
-        # Both answers use the Skill's engine vocabulary; complexity alone
-        # never delegates (only /delegate and big-data do), so both stay native
-        # but carry the complexity-specific reasoning.
-        assert low_result["decision"] == "native"
-        assert high_result["decision"] == "native"
-        assert low_result["reasoning"] != high_result["reasoning"]
+        # The router answers a WORKER ENGINE (native/acs/tde); the model tier is
+        # ADR-0952's resolver, not this Skill's. With no bundled delegation it
+        # can only confirm native — it never escalates (ADR-2092).
+        assert low_result["engine"] == "native"
+        assert high_result["engine"] == "native"
 
     def test_l5_fallback_on_skill_timeout(self):
         """PROOF: Fallback routing works when Skill times out."""
@@ -338,7 +337,7 @@ class TestL5ProductionCallSite:
         registry, backend = self._boot_registry()
         backend.events.clear()
 
-        engine = delegation_policy.resolve_worker_engine(
+        kwargs = dict(
             mode="delegate",
             force_delegate=True,
             is_big_data=False,
@@ -346,13 +345,20 @@ class TestL5ProductionCallSite:
             quota_ok=True,
             tenant_id="_default",
         )
+        # A call WITHOUT the turn is a pure query since ADR-2092: same answer,
+        # no Skill run in shadow, no ledger row (the console asks more than once
+        # per turn and must record exactly once).
+        assert delegation_policy.resolve_worker_engine(**kwargs)
+        assert not [e for e in backend.events if e.get("skill_id") == "os.delegation_router"]
+
+        engine = delegation_policy.resolve_worker_engine(**kwargs, sink={})
 
         assert isinstance(engine, str) and engine, "routing must still answer"
         routed = [e for e in backend.events if e.get("skill_id") == "os.delegation_router"]
         assert routed, (
             "resolve_worker_engine did not reach os.delegation_router — the L5 "
-            "shadow call site in delegation_policy._acp_shadow_route is broken "
-            "or gone (ADR-0613; adversarial review F1/F6)"
+            "call site delegation_policy.route_and_record is broken or gone "
+            "(ADR-0613, ADR-2092)"
         )
         assert routed[-1]["status"] == "success", routed[-1]
         # ADR-0537: the production call site names its own LoM, not a test's.
