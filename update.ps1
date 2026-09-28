@@ -355,9 +355,35 @@ function Stop-Console {
         $null = Invoke-Native -Exe "taskkill.exe" -Arguments @("/PID", "$id", "/T", "/F")
         Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
     }
+    # Catch-all: whatever of THIS user's still listens on the console port (a
+    # console started from a terminal, an old install layout the pattern above
+    # does not know) is an old instance too -- and it would keep the new one
+    # from binding. Another user's listener is never touched.
+    $portKills = 0
+    for ($i = 0; $i -lt 3; $i++) {
+        $held = $false
+        foreach ($lp in @(Get-PortListenerPids -TargetPort $Port)) {
+            if ($lp -le 4 -or $SelfPids -contains $lp) { continue }
+            $cp = Get-CimInstance Win32_Process -Filter "ProcessId=$lp" -ErrorAction SilentlyContinue
+            if (-not $cp -or -not (Test-ProcessIsMine $cp)) { continue }
+            $held = $true
+            $portKills++
+            $null = Invoke-Native -Exe "taskkill.exe" -Arguments @("/PID", "$lp", "/T", "/F")
+            Stop-Process -Id $lp -Force -ErrorAction SilentlyContinue
+            # The launcher (corvinos-serve.exe) waits on its python child; take it too.
+            $parent = [int]$cp.ParentProcessId
+            $pp = if ($parent -gt 4 -and $SelfPids -notcontains $parent) { Get-CimInstance Win32_Process -Filter "ProcessId=$parent" -ErrorAction SilentlyContinue } else { $null }
+            if ($pp -and ([string]$pp.Name -like 'corvin*') -and (Test-ProcessIsMine $pp)) {
+                $null = Invoke-Native -Exe "taskkill.exe" -Arguments @("/PID", "$parent", "/T", "/F")
+            }
+        }
+        if (-not $held) { break }
+        Start-Sleep -Seconds 1
+    }
     for ($i = 0; $i -lt 20 -and (Get-PortState -TargetPort $Port) -eq "mine"; $i++) { Start-Sleep -Milliseconds 500 }
+    if ((Get-PortState -TargetPort $Port) -eq "mine") { Write-Warn "port $Port is still held by one of your processes -- the new console may not bind" }
     $script:Stopped = $true
-    Write-Ok "console stopped ($($pids.Count) process(es))"
+    Write-Ok "console stopped ($($pids.Count + $portKills) process(es))"
 }
 
 # -----------------------------------------------------------------------------
@@ -766,20 +792,81 @@ if (Test-Path -LiteralPath $ToolPy) {
     else { Write-Warn "offline voice model not ready -- the console retries it; online voices still work" }
 }
 
+# A task whose action points at a file that no longer exists (an older
+# installer's wrapper .vbs, a moved uv bin dir) "starts" fine and launches
+# nothing. Point it at the current corvinos-serve, as install.ps1 registers it.
+function Expand-EnvPath {
+    param([string]$Path)
+    $out = $Path
+    foreach ($m in @([regex]::Matches($Path, '%([^%]+)%'))) {
+        $v = (Get-Item -LiteralPath "env:$($m.Groups[1].Value)" -ErrorAction SilentlyContinue).Value
+        if ($v) { $out = $out.Replace($m.Value, $v) }
+    }
+    return $out
+}function Test-TaskActionValid {
+    param($Task)
+    foreach ($a in @($Task.Actions)) {
+        $exe = ([string]$a.Execute).Trim('"')
+        if (-not $exe) { return $false }
+        if ((Split-Path -Leaf $exe) -match '^(w|c)script(\.exe)?$') {
+            if ([string]$a.Arguments -match '"([^"]+\.(vbs|js|wsf))"|(\S+\.(vbs|js|wsf))') {
+                $target = if ($Matches[1]) { $Matches[1] } else { $Matches[3] }
+                if (-not (Test-Path -LiteralPath (Expand-EnvPath $target))) { return $false }
+            }
+        } elseif ($exe -match '[\\/]' -and -not (Test-Path -LiteralPath (Expand-EnvPath $exe))) {
+            return $false
+        }
+    }
+    return $true
+}
+function Repair-ConsoleTask {
+    param($Task)
+    if (-not $Task -or (Test-TaskActionValid $Task)) { return }
+    $serve = Get-Command corvinos-serve -ErrorAction SilentlyContinue
+    if (-not $serve) { return }
+    try {
+        $action = New-ScheduledTaskAction -Execute $serve.Source -Argument "--no-browser --port $Port"
+        $null = Set-ScheduledTask -TaskName $Task.TaskName -TaskPath $Task.TaskPath -Action $action -ErrorAction Stop
+        Write-Ok "repaired autostart task $($Task.TaskName) (its launcher was missing)"
+    } catch {
+        Write-LogFile "could not repair task $($Task.TaskName): $($_.Exception.Message)"
+    }
+}
+
+function Start-ConsoleDirect {
+    $serve = Get-Command corvinos-serve -ErrorAction SilentlyContinue
+    if (-not $serve) { Write-Warn "corvinos-serve not found -- cannot start the console"; return }
+    Start-Process -FilePath $serve.Source -ArgumentList @("--no-browser", "--port", "$Port") -WindowStyle Hidden `
+        -RedirectStandardOutput (Join-Path $LogDir "console-stdout.log") -RedirectStandardError (Join-Path $LogDir "console-stderr.log")
+    Write-LogFile "started corvinos-serve directly"
+}
+
 function Start-ConsoleAgain {
     $started = $false
+    foreach ($t in @($script:RestartTasks) + @($ConsoleTask)) {
+        if (-not $t -or -not ($t.TaskName -like 'CorvinOS-AutoRestart*' -or $t.TaskName -eq 'CorvinOS-Console')) { continue }
+        Repair-ConsoleTask $t
+    }
     foreach ($t in $script:RestartTasks) {
         try { Start-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -ErrorAction Stop; $started = $started -or ($t.TaskName -like 'CorvinOS-AutoRestart*' -or $t.TaskName -eq 'CorvinOS-Console') } catch { }
     }
     if (-not $started -and $ConsoleTask) {
         try { Start-ScheduledTask -TaskName $ConsoleTask.TaskName -TaskPath $ConsoleTask.TaskPath -ErrorAction Stop; $started = $true } catch { }
     }
-    if (-not $started) {
-        $serve = Get-Command corvinos-serve -ErrorAction SilentlyContinue
-        if (-not $serve) { Write-Warn "corvinos-serve not found -- cannot start the console"; return }
-        Start-Process -FilePath $serve.Source -ArgumentList @("--no-browser", "--port", "$Port") -WindowStyle Hidden `
-            -RedirectStandardOutput (Join-Path $LogDir "console-stdout.log") -RedirectStandardError (Join-Path $LogDir "console-stderr.log")
+    if ($started) {
+        # Starting a task proves nothing (a broken action, a policy, a launcher
+        # that exits at once). Trust it only once a console process exists.
+        $alive = $false
+        for ($i = 0; $i -lt 15 -and -not $alive; $i++) {
+            Start-Sleep -Seconds 1
+            $alive = (@(Get-CorvinProcesses).Count -gt 0) -or ((Get-PortState -TargetPort $Port) -eq "mine")
+        }
+        if (-not $alive) {
+            Write-Warn "the autostart task launched no console -- starting it directly"
+            $started = $false
+        }
     }
+    if (-not $started) { Start-ConsoleDirect }
     $script:Stopped = $false
 }
 
