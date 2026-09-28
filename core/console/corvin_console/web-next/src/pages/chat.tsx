@@ -481,19 +481,45 @@ function SessionListItem({
                   aria-label="Chat is streaming a response"
                 />
               )}
-              {!streamState && taskStatus.status === "running" && (
-                <span
-                  className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse shrink-0"
-                  title="Task running"
-                  aria-label="Task running in this chat"
-                />
-              )}
-              {!streamState && taskStatus.status === "pending" && (
-                <span
-                  className="h-2 w-2 rounded-full bg-accent animate-pulse shrink-0"
-                  title="Task pending"
-                  aria-label="Task pending in this chat"
-                />
+              {!streamState && taskStatus.activeTask && (
+                <div className="flex flex-col gap-1 min-w-0 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`h-2 w-2 rounded-full shrink-0 ${
+                        taskStatus.status === "running"
+                          ? "bg-emerald-500 animate-pulse"
+                          : "bg-accent animate-pulse"
+                      }`}
+                    />
+                    <span className="truncate text-muted-foreground">
+                      {taskStatus.activeTask.instruction?.substring(0, 40) ||
+                        "Task"}
+                    </span>
+                  </div>
+                  {taskStatus.activeTask.progress_pct > 0 && (
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 bg-secondary rounded-full h-1">
+                        <div
+                          className="bg-emerald-500 h-1 rounded-full transition-all duration-300"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              taskStatus.activeTask.progress_pct || 0
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                      <span className="text-muted-foreground min-w-[30px] text-right">
+                        {taskStatus.activeTask.progress_pct}%
+                      </span>
+                    </div>
+                  )}
+                  <span className="text-muted-foreground text-xs">
+                    {taskStatus.status === "running"
+                      ? `Running · ${Math.floor(taskStatus.elapsedSeconds / 60)}m ${taskStatus.elapsedSeconds % 60}s`
+                      : "Pending"}
+                  </span>
+                </div>
               )}
             </div>
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
