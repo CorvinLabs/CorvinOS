@@ -108,6 +108,15 @@ class TestManualSkillsThroughRegistry(unittest.TestCase):
                             json={"name": "assistant.review.checklist", "body": BODY})
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(r.json()["scope"], "user")
+            # Registration-chain gap fix (2026-09-28): a manually authored
+            # skill used to sit at n_grades == 0 forever — invisible to
+            # skill_inject.py's injection gate (`n_grades < 1` -> skip) with
+            # no organic path to a first grade. The route now seeds a
+            # bootstrap grade (capped, non-organic) right after create, same
+            # as the console Skill-Creator path (registry_bridge.py) and the
+            # MCP skill_create tool (mcp_server.py) already did/do.
+            self.assertTrue(r.json()["bootstrap_graded"])
+            self.assertTrue(r.json()["injectable"])
 
             reg = MultiSkillRegistry(tenant_id=tid)
             spec = reg.get_in_scope("assistant.review.checklist", "user")
@@ -118,25 +127,30 @@ class TestManualSkillsThroughRegistry(unittest.TestCase):
             self.assertTrue((home / "tenants" / tid / "skill-forge" / "skills"
                              / "assistant.review.checklist" / "SKILL.md").exists())
             self.assertFalse((home / "tenants" / tid / "global" / "skill-forge").exists())
+            # The bootstrap seed must actually clear skill_inject's gate:
+            # n_grades >= 1 AND mean_score > 0 (a 0.0-scored grade would
+            # satisfy the count but still be filtered by the `<= 0` half).
+            self.assertEqual(spec.n_grades, 1)
+            self.assertGreater(spec.mean_score, 0.0)
 
             listed = client.get("/v1/console/skills/manual").json()
             self.assertEqual(listed["count"], 1, listed)
             self.assertEqual(listed["skills"][0]["name"], "assistant.review.checklist")
             self.assertEqual(listed["skills"][0]["origin"], "manual")
-            self.assertEqual(listed["skills"][0]["grade_count"], 0)
+            self.assertEqual(listed["skills"][0]["grade_count"], 1)
 
             # duplicate → 409
             self.assertEqual(client.post("/v1/console/skills/manual",
                                          json={"name": "assistant.review.checklist", "body": BODY}).status_code, 409)
 
-            # a grade given through the registry survives a console PUT
+            # an ADDITIONAL grade given through the registry survives a console PUT
             reg.grade("assistant.review.checklist", "run-1", 0.8)
             r = client.put("/v1/console/skills/manual/assistant.review.checklist", json={"body": BODY_V2})
             self.assertEqual(r.status_code, 200, r.text)
             spec2 = reg.get_in_scope("assistant.review.checklist", "user")
-            self.assertEqual(spec2.n_grades, 1)
+            self.assertEqual(spec2.n_grades, 2)  # bootstrap seed + the explicit grade above
             self.assertIn("Sixth step", reg.get_body("assistant.review.checklist"))
-            self.assertEqual(client.get("/v1/console/skills/manual").json()["skills"][0]["grade_count"], 1)
+            self.assertEqual(client.get("/v1/console/skills/manual").json()["skills"][0]["grade_count"], 2)
 
             r = client.delete("/v1/console/skills/manual/assistant.review.checklist")
             self.assertEqual(r.status_code, 200, r.text)

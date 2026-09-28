@@ -395,8 +395,17 @@ def test_coder_cannot_grade_purge_or_promote_foreign_skill():
             r = _call(coder, "skill_get", {"name": "assistant.victim"})
             assert r.get("isError") is False
             spec = r["structuredContent"]["data"]["spec"]
-            assert spec["grades"] == [{**spec["grades"][0]}] and spec["grades"][0]["score"] == 0.9
-            assert len(spec["grades"]) == 1, "the zero-grade must not have landed"
+            # skill_create now auto-seeds a bootstrap grade (registration-chain
+            # gap fix, 2026-09-28 — see CONCEPT-0001's fifth-pass amendment):
+            # grades[0] is that capped 0.3 self-seed, grades[1] is the owner's
+            # real "good-1"/0.9 grade from setup above. The substantive
+            # assertion is unchanged: the coder's denied zero-grade attempt
+            # must not have landed as a THIRD entry.
+            assert len(spec["grades"]) == 2, "the zero-grade must not have landed"
+            assert spec["grades"][0]["run_id"] == "skill-forge-mcp-bootstrap"
+            assert spec["grades"][0]["score"] == 0.3
+            assert spec["grades"][1]["run_id"] == "good-1"
+            assert spec["grades"][1]["score"] == 0.9
         finally:
             coder.close()
 

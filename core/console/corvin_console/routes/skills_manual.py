@@ -53,6 +53,14 @@ MANUAL_CREATED_BY = "console-manual"
 CONSOLE_PERSONA = "assistant"
 MANUAL_SCOPE = "user"
 MANUAL_TYPE = "domain"
+#: Cap for a self-awarded grade, mirroring skill_inject's _AUTO_GRADE_CAP_MAX
+#: and skill_creator/registry_bridge.py's BOOTSTRAP_GRADE. A bootstrap seed
+#: must never look like earned usage.
+BOOTSTRAP_GRADE = 0.3
+BOOTSTRAP_NOTES = (
+    "manual bootstrap seed by console skill authoring — NOT earned usage; "
+    "required so the injection gate (n_grades >= 1) can see the skill at all"
+)
 
 
 # ── Registry access ───────────────────────────────────────────────────────────
@@ -304,6 +312,26 @@ def create_manual_skill(
         rec, body.name, body.body, overwrite=False, action="skill.manual_created",
     )
 
+    # Bootstrap-grade seed (see mcp_server.py::_call_skill_create for the
+    # sibling fix and rationale): a skill just created here has n_grades == 0
+    # and skill_inject.py's injection gate skips anything below that — a
+    # console-authored skill would sit registered-but-invisible until an
+    # operator separately found and used the (unrelated) grading UI. Failure
+    # here must not fail the create response — the skill still exists — but
+    # it does stay non-injectable, which the response now says explicitly.
+    graded = False
+    try:
+        spec = _registry(rec.tenant_id).grade(
+            spec.name, run_id="console-manual-bootstrap",
+            score=BOOTSTRAP_GRADE, notes=BOOTSTRAP_NOTES, organic=False,
+        )
+        graded = True
+    except Exception:  # noqa: BLE001 — best-effort seed, never fails the create
+        logger.warning(
+            "bootstrap grade for manually created skill %r failed — skill "
+            "will not be injected until graded", spec.name,
+        )
+
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
@@ -311,7 +339,10 @@ def create_manual_skill(
         target_kind="manual_skill",
         target_id=body.name,
     )
-    return {"ok": True, "name": spec.name, "scope": MANUAL_SCOPE, "sha256": spec.sha256}
+    return {
+        "ok": True, "name": spec.name, "scope": MANUAL_SCOPE, "sha256": spec.sha256,
+        "bootstrap_graded": graded, "injectable": graded,
+    }
 
 
 @router.put("/skills/manual/{name}")

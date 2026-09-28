@@ -48,6 +48,15 @@ PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "claude-skill-forge"
 SERVER_VERSION = "0.1.0"
 
+# Cap for a self-awarded grade, mirroring skill_inject's _AUTO_GRADE_CAP_MAX
+# and registry_bridge.py's BOOTSTRAP_GRADE (the console Skill-Creator path).
+# A bootstrap seed must never look like earned usage.
+BOOTSTRAP_GRADE = 0.3
+BOOTSTRAP_NOTES = (
+    "manual bootstrap seed by skill_create (MCP) — NOT earned usage; "
+    "required so the injection gate (n_grades >= 1) can see the skill at all"
+)
+
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
@@ -423,11 +432,36 @@ class SkillForgeMCPServer:
                          "caller_persona": self.caller_persona,
                          "sha": spec.sha256},
             )
+        # Bootstrap-grade seed (CONCEPT-0001 amendment): a skill just minted
+        # via this MCP tool has n_grades == 0, and skill_inject.py's
+        # injection gate (`n_grades < 1 or mean_score <= 0` -> skip) has no
+        # organic path to a first grade for a skill nobody has used yet — it
+        # would sit registered-but-invisible forever unless a caller
+        # remembers a separate skill_grade follow-up call. Mirrors what
+        # registry_bridge.py's promote_to_registry() already does for the
+        # console Skill-Creator path. Fail-closed logging only: a failed
+        # grade must not fail the registration itself, but the skill stays
+        # non-injectable until graded, and the response says so.
+        graded = False
+        try:
+            graded_spec = self.multi.grade(
+                spec.name, run_id="skill-forge-mcp-bootstrap",
+                score=BOOTSTRAP_GRADE, notes=BOOTSTRAP_NOTES, organic=False,
+            )
+            spec = graded_spec
+            graded = True
+        except Exception as exc:  # noqa: BLE001
+            self._emit_audit_event(
+                "skill.bootstrap_grade_failed", tool=spec.name,
+                details={"scope": spec.scope, "error": str(exc)},
+            )
         self._tool_envelope(msgid, ok=True, data={
             "ok": True, "sha": spec.sha256, "scope": spec.scope,
             "name": spec.name,
             "path": str((self.multi._root_for(spec.scope)
                          / "skills" / spec.name).resolve()),
+            "bootstrap_graded": graded,
+            "injectable": graded,
         })
         self._notify("notifications/tools/list_changed")
         # UAH: register chat-initiated skill creation in the activity feed.
