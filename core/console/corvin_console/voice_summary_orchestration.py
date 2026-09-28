@@ -5,6 +5,13 @@ using deterministic templates (fast path) + LLM fallback (natural language).
 
 Module: Stream 2, Voice Summary Generation
 Author: Claude Haiku 4.5
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). Nothing
+imports this module outside tests; ADR-2027 (Discord orchestration live feed)
+is PROPOSED and ``orchestration_aggregator`` has no production caller either.
+Before wiring it: the LLM fallback calls the Anthropic SDK directly, bypassing
+the L34 flow guard and the priced engine span, and the outbox is not
+tenant-scoped although the event is.
 """
 from __future__ import annotations
 
@@ -61,14 +68,17 @@ class OrchestrationCompleteEvent:
 
 
 # Templates for deterministic summary generation (no LLM call)
+# The task count is filled in from the event. Both templates used to say
+# "Drei" (three) literally while the fast path accepts 2–5 tasks, so a
+# two-task batch was announced as three (adversarial review 2026-09-28).
 _TEMPLATE_SUCCESS = (
-    "Drei Hintergrund-Tasks erfolgreich abgeschlossen. "
+    "{task_count} Hintergrund-Tasks erfolgreich abgeschlossen. "
     "{task_summaries} "
     "Alle Systeme bereit für nächste Operation."
 )
 
 _TEMPLATE_MIXED_FAILURE = (
-    "Drei Hintergrund-Tasks mit Problemen abgeschlossen. "
+    "{task_count} Hintergrund-Tasks mit Problemen abgeschlossen. "
     "{task_summaries} "
     "Bitte wiederholen Sie den fehlgeschlagenen Task."
 )
@@ -189,7 +199,7 @@ def _generate_deterministic_summary(event: OrchestrationCompleteEvent) -> Option
     else:
         template = _TEMPLATE_MIXED_FAILURE
 
-    return template.format(task_summaries=task_summaries)
+    return template.format(task_count=len(event.tasks), task_summaries=task_summaries)
 
 
 async def _call_llm_fallback(event: OrchestrationCompleteEvent) -> Optional[str]:

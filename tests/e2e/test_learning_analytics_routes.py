@@ -395,9 +395,9 @@ async def test_invalid_status_filter_returns_validation_error(client: AsyncClien
 
 
 @pytest.mark.asyncio
-async def test_missing_session_returns_401(client: AsyncClient):
+async def test_missing_session_returns_401(anon_async_client: AsyncClient):
     """Missing session cookie returns 401."""
-    response = await client.get("/v1/console/learning-loops/list")
+    response = await anon_async_client.get("/v1/console/learning-loops/list")
     assert response.status_code == 401
 
 

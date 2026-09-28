@@ -1,7 +1,7 @@
 # Autonomous Video Processor — End-to-End Implementation
 
 **Date:** 2026-09-19  
-**Status:** ✅ COMPLETE AND PRODUCTION-READY  
+**Status:** NOT WIRED — no production caller as of 2026-09-27 (adversarial review); only tests construct `AutonomousVideoProcessor`.  
 **Version:** 1.0  
 
 ---
@@ -120,19 +120,21 @@ result = await converter.convert_to_mp4(
    - H.264 preferred (wider compatibility)
    - VP9 fallback (if H.264 unavailable)
 
-2. **Bitrate Calculation**
+2. **Bitrate Calculation** (`auto_format_converter.optimal_bitrate_kbps`)
    ```
-   bitrate = pixels * fps * complexity_factor
-   
-   Complexity factors:
-   - SD (≤480p): 0.3
-   - HD (≤720p): 0.5
-   - FHD (≤1080p): 0.7
-   - 4K (≤2160p): 1.0
-   - 8K+: 1.2
-   
-   Result capped: 500 kbps ≤ bitrate ≤ 20,000 kbps
+   bitrate_kbps = pixels * fps * bpp / 1000
+
+   Bits per pixel per frame (H.264):
+   - SD (≤480p): 0.10   → ~0.9 Mbps at 480p30
+   - HD (≤720p): 0.09   → ~2.5 Mbps at 720p30
+   - FHD (≤1080p): 0.08 → ~5 Mbps at 1080p30
+   - 4K (≤2160p): 0.07  → ~17 Mbps at 2160p30
+   - 8K+: 0.06
+
+   Result clamped: 500 kbps ≤ bitrate ≤ 80,000 kbps
    ```
+   (Until 2026-09-27 the factors were 0.3–1.0 with a 20 Mbps cap, so
+   1080p30 and 4K30 both got the same capped 20 Mbps.)
 
 3. **FFmpeg Command Generation**
    - Auto-selects `libx264` encoder
@@ -335,24 +337,30 @@ asyncio.run(process_batch("/input/videos", "/output/videos"))
 
 ### Audit Trail (ADR-0232)
 
-Every operation is logged with hash-chaining:
+Every stage writes one record to the tenant audit chain
+(`tenant_audit_chain(tenant_id)`, through `core.deployment.audit_sink` →
+`forge.security_events.write_event`) as event type `video.autonomous_stage`.
+Details are content-free — never a file path or an error text:
 
 ```json
 {
-  "event_type": "phase_1_format_detection_complete",
-  "tenant_id": "marketing",
-  "timestamp": "2026-09-19T14:30:45.123Z",
-  "data": {
-    "file_path": "/input/video.webm",
-    "format_name": "webm",
-    "duration_sec": 120.0,
-    "resolution": "1920x1080",
-    "video_codec": "vp9"
+  "event_type": "video.autonomous_stage",
+  "details": {
+    "stage": "phase_1_format_detection_complete",
+    "tenant_id": "marketing",
+    "video_codec": "vp9",
+    "width": 1920,
+    "height": 1080,
+    "error_count": 0
   },
-  "hash": "sha256(...)",
-  "prev_hash": "sha256(...)"
+  "hash": "...",
+  "prev_hash": "..."
 }
 ```
+
+A record that does not commit raises `AuditWriteFailed` (fail-closed).
+`processor.audit_events` / `VideoResult.audit_events` mirror the committed
+records (stage, hash, prev_hash).
 
 Events logged:
 - `processor_initialized` — Processor startup
@@ -366,7 +374,8 @@ Events logged:
 
 ### Learning Events (ADR-0314)
 
-Per-video feedback for optimizer:
+Recorded **in memory only** (`processor.learning_events`) — nothing emits
+them to the ADR-0314 event store yet. Shape:
 
 ```json
 {

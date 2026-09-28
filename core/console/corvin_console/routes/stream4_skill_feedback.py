@@ -55,7 +55,17 @@ class SkillFeedbackRequest(BaseModel):
         ...,
         description="One of: os.workflow_optimizer, os.security_orchestrator, os.flow_guard"
     )
-    subject_id: str = Field(..., description="task_id, threat_id, or flow_id")
+    # Bounded + charset-restricted: subject_id is echoed into the log line and
+    # the response. 8436dcb1e dropped the iteration-3 constraint, which let a
+    # newline forge log records again (tests/learning/
+    # test_adversarial_review_iteration3_fixes.py::TestInputValidation001).
+    subject_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9_-]+$",
+        description="task_id, threat_id, or flow_id (alphanumeric + underscore/hyphen only)",
+    )
     rating: int = Field(..., ge=-2, le=2, description="-2 (bad) to +2 (excellent)")
     category: str = Field(..., description="accuracy, speed, safety, or other")
     reasoning: Optional[str] = Field(None, max_length=500, description="Free-text reason (scrubbed for PII)")

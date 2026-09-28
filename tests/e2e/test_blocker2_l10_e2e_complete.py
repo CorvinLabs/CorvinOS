@@ -135,12 +135,35 @@ class TestBlocker2L10CompleteE2E:
             logger.info(f"L10 stage call raised (expected if skills not initialized): {e}")
             pass
 
-    def test_7_full_pipeline_execution_includes_l10(self):
-        """GATE 7: Full pipeline execution with L10 stage (E2E proof).
+    def test_7_full_pipeline_execution_includes_l10(self, tmp_path, monkeypatch):
+        """GATE 7: Full pipeline execution includes L10 in trace.
 
         This is the PRIMARY E2E WIRING PROOF: a task flows through the entire
         CEL pipeline, and the trace confirms L10 adapter was invoked.
+
+        The stage runs the Skill ONLY on a registry ``boot_skills`` booted with
+        an audit backend (otherwise it reports ``skipped: skills_not_booted``,
+        by design) — so this boots exactly like the host does, into a TEMP
+        tenant chain, and requires a real execution (``ok``).
         """
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+        from forge.paths import tenant_audit_chain
+
+        chain = tenant_audit_chain("_default")
+        chain.parent.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("VOICE_AUDIT_PATH", str(chain))
+
+        from core.skills import os_skills_integration as integ_mod
+        from core.skills import skill_registry_phase1 as reg_mod
+        from core.skills.boot import boot_skills
+        from corvin_plugins.bootstrap import _default_audit_emit
+
+        prev = (reg_mod._global_registry, integ_mod._integration_instance)
+        monkeypatch.setattr(reg_mod, "_global_registry", prev[0])
+        monkeypatch.setattr(integ_mod, "_integration_instance", prev[1])
+        boot_skills(tenant_id="_default", audit_emit=_default_audit_emit("_default"),
+                    wire_learning=False)
+
         from corvin_operator.context_engineering import pipeline
 
         # Build context using ACTIVE_PIPELINE (which includes L10)
@@ -169,10 +192,16 @@ class TestBlocker2L10CompleteE2E:
         # Verify L10 execution status
         l10_trace = stage_trace[0]
         assert "status" in l10_trace, "L10 trace must have status"
-        # Status can be "ok", "degraded", "failed", "not_run" — all indicate it ran
-        assert l10_trace.get("status") in ("ok", "degraded", "failed", "not_run"), (
-            f"L10 adapter has unexpected status: {l10_trace.get('status')}"
-        )
+        # Booted → the Skill really executed (shadow: the brief is unchanged).
+        assert l10_trace.get("status") == "ok", l10_trace
+        assert l10_trace.get("reason") == "shadow", l10_trace
+
+        import json
+        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        assert any(r.get("event_type") == "skill.executed"
+                   and r.get("details", {}).get("skill_id") == "os.context_adapter"
+                   for r in recs), [r.get("event_type") for r in recs]
+        assert any(r.get("event_type") == "context.adapted" for r in recs)
 
         logger.info(f"L10 trace in pipeline: {l10_trace}")
 

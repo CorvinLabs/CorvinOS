@@ -27,7 +27,6 @@ import os
 import pytest
 
 from core.console.corvin_console import auth as session_auth
-from core.console.corvin_console import deps as console_deps
 
 
 def fake_session_record(tenant_id: str = "_default") -> "session_auth.SessionRecord":
@@ -79,30 +78,54 @@ def app():
     test_app = FastAPI()
     test_app.include_router(console_module.router, prefix="/v1/console")
 
-    # Override dependencies at the FastAPI level
-    test_app.dependency_overrides[console_deps.require_session] = lambda: fake_rec
-    test_app.dependency_overrides[console_deps.require_csrf] = lambda: fake_rec
-    test_app.dependency_overrides[console_deps.require_session_csrf_on_mutation] = lambda: fake_rec
+    # The console package is importable under TWO names on the test
+    # PYTHONPATH — ``corvin_console`` (what the routes' ``from ..deps import``
+    # resolves to, since the app is imported that way) and
+    # ``core.console.corvin_console``. They are distinct module objects, so
+    # overriding only ``core.console.corvin_console.deps.require_session`` left
+    # every route's real dependency in place and every request answered
+    # ``401 no session``. Override and patch every loaded identity.
+    import importlib
+    import sys
 
-    # ALSO patch the functions themselves in the deps module, because
-    # require_session_csrf_on_mutation calls require_session/require_csrf directly
-    import core.console.corvin_console.deps as deps_module
-    original_require_session = deps_module.require_session
-    original_require_csrf = deps_module.require_csrf
-    original_require_session_csrf_on_mutation = deps_module.require_session_csrf_on_mutation
+    deps_modules = []
+    for name in ("corvin_console.deps", "core.console.corvin_console.deps"):
+        try:
+            mod = sys.modules.get(name) or importlib.import_module(name)
+        except ImportError:
+            continue
+        if mod not in deps_modules:
+            deps_modules.append(mod)
 
-    deps_module.require_session = lambda corvin_console_sid=None: fake_rec
-    deps_module.require_csrf = lambda corvin_console_sid=None, x_csrf_token=None: fake_rec
-    deps_module.require_session_csrf_on_mutation = lambda request, corvin_console_sid=None, x_csrf_token=None: fake_rec
+    originals = []
+    for mod in deps_modules:
+        # Override dependencies at the FastAPI level
+        test_app.dependency_overrides[mod.require_session] = lambda: fake_rec
+        test_app.dependency_overrides[mod.require_csrf] = lambda: fake_rec
+        test_app.dependency_overrides[mod.require_session_csrf_on_mutation] = lambda: fake_rec
+        # ALSO patch the functions themselves, because
+        # require_session_csrf_on_mutation calls require_session/require_csrf directly
+        originals.append((
+            mod,
+            mod.require_session,
+            mod.require_csrf,
+            mod.require_session_csrf_on_mutation,
+        ))
+        mod.require_session = lambda corvin_console_sid=None: fake_rec
+        mod.require_csrf = lambda corvin_console_sid=None, x_csrf_token=None: fake_rec
+        mod.require_session_csrf_on_mutation = (
+            lambda request, corvin_console_sid=None, x_csrf_token=None: fake_rec
+        )
 
     try:
         yield test_app
     finally:
         test_app.dependency_overrides.clear()
         # Restore original functions
-        deps_module.require_session = original_require_session
-        deps_module.require_csrf = original_require_csrf
-        deps_module.require_session_csrf_on_mutation = original_require_session_csrf_on_mutation
+        for mod, rs, rc, rm in originals:
+            mod.require_session = rs
+            mod.require_csrf = rc
+            mod.require_session_csrf_on_mutation = rm
 
 
 @pytest.fixture
@@ -121,6 +144,40 @@ async def async_client(app):
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://console.test") as c:
+        yield c
+
+
+@pytest.fixture
+def anon_app():
+    """The same ``/v1/console`` mount with NO auth override — for 401 tests.
+
+    Tests that assert an unauthenticated caller is refused must not use
+    ``client``/``async_client``: those carry a session. Until 2026-09-28 the
+    override silently missed (wrong module identity), so such tests passed on
+    the authenticated fixture by accident.
+    """
+    from fastapi import FastAPI
+
+    from corvin_console import app as console_module
+
+    bare = FastAPI()
+    bare.include_router(console_module.router, prefix="/v1/console")
+    return bare
+
+
+@pytest.fixture
+def anon_client(anon_app):
+    from fastapi.testclient import TestClient
+
+    with TestClient(anon_app) as c:
+        yield c
+
+
+@pytest.fixture
+async def anon_async_client(anon_app):
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(transport=ASGITransport(app=anon_app), base_url="http://console.test") as c:
         yield c
 
 

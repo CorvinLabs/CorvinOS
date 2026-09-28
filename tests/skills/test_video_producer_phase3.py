@@ -503,6 +503,38 @@ class TestPhase3E2E:
             assert assemble_result["duration_seconds"] > 0
 
     @pytest.mark.asyncio
+    async def test_missing_ffmpeg_fails_instead_of_faking_an_mp4(self):
+        """No ffmpeg binary → the encode FAILS; it used to write a fake 1 MB
+        'MP4' (ftypisom + zeros) and report success."""
+        import shutil as _shutil
+        from unittest.mock import patch as _patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            slides_dir = project_dir / "slides"
+            audio_dir = project_dir / "audio"
+            slides_dir.mkdir()
+            audio_dir.mkdir()
+            write_real_png(slides_dir / "s01.png")
+            write_real_audio(audio_dir / "s01.mp3", duration=1.0)
+            storyboard = Storyboard(
+                metadata={"scene_count": 1},
+                scenes=[Scene(id="s01", kind="card", narration="x",
+                              source_asset="slide_0", captions=False,
+                              duration_seconds=2.0)],
+            )
+            assembler = VideoAssembler(project_dir)
+            real_which = _shutil.which
+            with _patch("shutil.which",
+                        side_effect=lambda n, *a, **k: None if n == "ffmpeg" else real_which(n, *a, **k)):
+                result = await assembler.assemble_video(
+                    storyboard=storyboard, slides_dir=slides_dir, audio_dir=audio_dir,
+                )
+            assert result["status"] != "success"
+            assert "ffmpeg binary not found" in result["error"]
+            assert not list((project_dir).rglob("*.mp4"))
+
+    @pytest.mark.asyncio
     async def test_e2e_with_timing_issues(self):
         """E2E: Workflow with timing validation warnings."""
         with tempfile.TemporaryDirectory() as tmpdir:

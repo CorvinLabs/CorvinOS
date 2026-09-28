@@ -1,229 +1,92 @@
-"""
-Phase 2 Session 2: Vibe Dashboard React Wiring E2E Tests (2026-09-26)
+"""Vibe Dashboard wiring — the tabs it renders and the endpoints they read.
 
-Tests for licensing audit, monitoring, and model selection tabs.
-Verifies React components wire to live API endpoints.
-ADR-0728: Live Data Wiring
+Rewritten 2026-09-28 (adversarial review round 7). The previous suite
+accepted ``200/401/404`` for every endpoint (so a missing route passed),
+guarded every schema check behind ``if status == 200`` against an
+unauthenticated app (so no schema was ever checked), and asserted that the
+``LicensingAuditTab`` / ``ModelSelectionTab`` components exist — both were
+retired on purpose (ADR-0908: the audit view lives in the Compliance panel,
+the models view in /app/models). A ``TestLearningLoopIntegrationTab`` probed
+``/v1/console/v1/learning/events``, a route that does not exist, and passed on
+the 404.
+
+What this file proves now:
+  * the endpoints the dashboard's tabs fetch answer 200 with their schema
+    through the real ``/v1/console`` mount (authenticated fixture);
+  * the same endpoints refuse an unauthenticated caller;
+  * the dashboard source renders exactly the current tab set, the retired
+    tab components are gone, and ``?tab=models`` redirects to the Models panel.
+
+ADR-0728: Live Data Wiring · ADR-0908: retired tabs
 """
+
+from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
-from starlette.testclient import TestClient
-from corvin_console.app import create_app
+
+REPO = Path(__file__).resolve().parents[2]
+VIBE = REPO / "core/console/corvin_console/web-next/src/pages/vibe-engineering"
+
+# Endpoints the dashboard's tabs (and the panels its retired tabs moved to) read.
+ENDPOINTS = {
+    "/v1/console/v1/monitoring/metrics?range=1h": {"metrics", "available", "sources", "timestamp"},
+    "/v1/console/v1/licensing/audit-events?limit=10": {"events", "total", "available", "tenant_id"},
+    "/v1/console/v1/models/available": {"models", "total", "available", "timestamp"},
+}
 
 
-@pytest.fixture
-def client():
-    """Test client for console endpoints."""
-    app = create_app()
-    return TestClient(app)
+class TestDashboardEndpoints:
+    @pytest.mark.parametrize("url,keys", list(ENDPOINTS.items()))
+    def test_endpoint_answers_with_schema(self, client, url, keys):
+        response = client.get(url)
+        assert response.status_code == 200, response.text[:300]
+        data = response.json()
+        assert keys <= set(data), f"{url} missing {keys - set(data)}"
 
+    @pytest.mark.parametrize("url", list(ENDPOINTS))
+    def test_endpoint_refuses_unauthenticated_caller(self, anon_client, url):
+        assert anon_client.get(url).status_code == 401
 
-class TestVibeDashboardWiring:
-    """Test suite for Vibe Dashboard live data wiring."""
-
-    def test_licensing_audit_tab_loads(self, client):
-        """Test that licensing audit tab is accessible."""
-        response = client.get("/console/")
-        assert response.status_code == 200
-        # Verify SPA loads (should be text/html)
-        assert "text/html" in response.headers.get("content-type", "")
-
-    def test_monitoring_metrics_endpoint_accessible(self, client):
-        """Test monitoring metrics endpoint is accessible."""
-        response = client.get("/v1/console/v1/monitoring/metrics")
-        # Should be 200/401 (available) or 404 (not yet wired)
-        assert response.status_code in [200, 401, 404], f"Unexpected status {response.status_code}"
-
-    def test_licensing_audit_events_endpoint_accessible(self, client):
-        """Test licensing audit endpoint is accessible."""
-        response = client.get("/v1/console/v1/licensing/audit-events")
-        # Should be 200/401 (available) or 404 (not yet wired)
-        assert response.status_code in [200, 401, 404], f"Unexpected status {response.status_code}"
-
-    def test_models_available_endpoint_accessible(self, client):
-        """Test models available endpoint is accessible."""
-        response = client.get("/v1/console/v1/models/available")
-        # Should be 200/401 (available) or 404 (not yet wired)
-        assert response.status_code in [200, 401, 404], f"Unexpected status {response.status_code}"
-
-    def test_audit_endpoint_json_response(self, client):
-        """Test audit endpoint returns JSON (if authorized)."""
-        response = client.get("/v1/console/v1/licensing/audit-events?limit=10")
-        if response.status_code == 200:
-            data = response.json()
-            assert "events" in data or "total" in data or isinstance(data, (dict, list))
-
-    def test_models_endpoint_json_response(self, client):
-        """Test models endpoint returns JSON (if authorized)."""
-        response = client.get("/v1/console/v1/models/available")
-        if response.status_code == 200:
-            data = response.json()
-            assert "models" in data or isinstance(data, (dict, list))
-
-    def test_monitoring_endpoint_json_response(self, client):
-        """Test monitoring endpoint returns JSON (if authorized)."""
-        response = client.get("/v1/console/v1/monitoring/metrics")
-        if response.status_code == 200:
-            data = response.json()
-            assert "metrics" in data or isinstance(data, (dict, list))
-
-    def test_vibe_dashboard_console_spa_loads(self, client):
-        """Test that console SPA loads without errors."""
-        response = client.get("/console/")
-        assert response.status_code == 200
-        assert "text/html" in response.headers.get("content-type", "")
-
-    def test_audit_endpoint_pagination_parameters(self, client):
-        """Test audit endpoint accepts pagination parameters."""
-        response = client.get("/v1/console/v1/licensing/audit-events?limit=50&offset=0")
-        # Should be 200/401 or 404 if endpoint not yet registered
-        assert response.status_code in [200, 401, 404]
-
-    def test_audit_endpoint_filter_parameters(self, client):
-        """Test audit endpoint accepts filter parameters."""
-        response = client.get("/v1/console/v1/licensing/audit-events?event_type=denied")
-        # Should be 200/401 or 404 if endpoint not yet registered
-        assert response.status_code in [200, 401, 404]
-
-
-class TestLicensingAuditTab:
-    """Focused tests for licensing audit tab component."""
-
-    def test_audit_tab_renders_in_dashboard(self, client):
-        """Verify audit tab is available in dashboard navigation."""
-        response = client.get("/console/")
-        assert response.status_code == 200
-        # Component should be in bundle (we verify routing in integration)
-
-    def test_audit_endpoint_error_handling(self, client):
-        """Test audit endpoint error handling."""
-        response = client.get("/v1/console/v1/licensing/audit-events?invalid_param=true")
-        # Should either handle gracefully or return proper error
-        assert response.status_code != 500  # No internal server error
-
-
-class TestModelSelectionTab:
-    """Focused tests for model selection tab component."""
-
-    def test_models_tab_renders_in_dashboard(self, client):
-        """Verify models tab is available in dashboard navigation."""
-        response = client.get("/console/")
+    def test_audit_filter_parameters_do_not_500(self, client):
+        response = client.get("/v1/console/v1/licensing/audit-events?limit=50&status=denied")
         assert response.status_code == 200
 
-    def test_models_endpoint_returns_model_data(self, client):
-        """Test that models endpoint returns model information."""
-        response = client.get("/v1/console/v1/models/available")
-        if response.status_code == 200:
-            data = response.json()
-            # Verify structure if data is present
-            if "models" in data and len(data["models"]) > 0:
-                model = data["models"][0]
-                # Should have model identifier
-                assert "model_id" in model or "name" in model
+    def test_audit_events_carry_no_raw_email(self, client):
+        data = client.get("/v1/console/v1/licensing/audit-events?limit=50").json()
+        for event in data["events"]:
+            for key in ("user_id", "user_id_redacted"):
+                value = event.get(key) or ""
+                assert not ("@" in value and "." in value.split("@")[-1]), event
 
 
-class TestMonitoringMetricsTab:
-    """Focused tests for monitoring/metrics tab component."""
+class TestDashboardSource:
+    def _source(self) -> str:
+        return (VIBE / "VibeDashboard.tsx").read_text(encoding="utf-8")
 
-    def test_metrics_endpoint_returns_health_data(self, client):
-        """Test that metrics endpoint returns health information."""
-        response = client.get("/v1/console/v1/monitoring/metrics?range=1h")
-        if response.status_code == 200:
-            data = response.json()
-            # Verify structure if data is present
-            assert "metrics" in data or "status" in data or isinstance(data, dict)
+    def test_current_tabs_are_imported_and_rendered(self):
+        src = self._source()
+        for component, tab in (
+            ("MaturityDashboard", "maturity"),
+            ("LearningLoopsTab", "loops"),
+            ("MonitoringTab", "metrics"),
+        ):
+            assert f"import {{ {component} }}" in src, component
+            assert f"activeTab === '{tab}' && <{component} />" in src, tab
 
-    def test_metrics_endpoint_accepts_range_parameter(self, client):
-        """Test metrics endpoint accepts time range parameter."""
-        response = client.get("/v1/console/v1/monitoring/metrics?range=24h")
-        assert response.status_code in [200, 401, 404]
+    def test_retired_tabs_stay_retired(self):
+        assert not (VIBE / "tabs/LicensingAuditTab.tsx").exists()
+        assert not (VIBE / "tabs/ModelSelectionTab.tsx").exists()
+        src = self._source()
+        assert "LicensingAuditTab" not in src
+        assert "ModelSelectionTab" not in src
 
+    def test_models_tab_redirects_to_models_panel(self):
+        src = self._source()
+        assert "raw === 'models'" in src
+        assert '<Navigate to="/app/models?tab=catalog" replace />' in src
 
-class TestDashboardTabNavigation:
-    """Tests for tab navigation and URL routing."""
-
-    def test_dashboard_loads_with_default_tab(self, client):
-        """Test dashboard loads with default tab (maturity)."""
-        response = client.get("/console/?path=/app/vibe-engineering")
-        assert response.status_code == 200
-
-    def test_dashboard_preserves_tab_in_url(self, client):
-        """Test dashboard supports tab=X URL parameter."""
-        response = client.get("/console/?path=/app/vibe-engineering%3Ftab=licensing")
-        assert response.status_code == 200
-
-
-class TestPIIFiltering:
-    """Tests for PII safety in audit events."""
-
-    def test_audit_events_user_id_redacted(self, client):
-        """Test that user IDs are redacted in audit events."""
-        response = client.get("/v1/console/v1/licensing/audit-events?limit=5")
-        if response.status_code == 200:
-            data = response.json()
-            if "events" in data and len(data["events"]) > 0:
-                event = data["events"][0]
-                # Should have user_id_redacted, not raw email/user
-                user_field = event.get("user_id_redacted") or event.get("user_id")
-                if user_field:
-                    # Redacted format should not contain @ or common PII patterns
-                    assert not ("@" in user_field and "." in user_field.split("@")[-1])
-
-    def test_audit_endpoint_no_pii_leak_in_error_messages(self, client):
-        """Test that error messages don't leak PII."""
-        response = client.get("/v1/console/v1/licensing/audit-events")
-        # Audit endpoints should handle errors without leaking PII (or not exist yet)
-        assert response.status_code in [200, 401, 400, 403, 404]
-
-
-class TestReactComponentIntegration:
-    """Integration tests for React component bundling."""
-
-    def test_licensing_audit_component_exists(self):
-        """Test that LicensingAuditTab component file exists."""
-        import os
-        path = "core/console/corvin_console/web-next/src/pages/vibe-engineering/tabs/LicensingAuditTab.tsx"
-        assert os.path.exists(path), f"LicensingAuditTab.tsx not found at {path}"
-
-    def test_model_selection_component_exists(self):
-        """Test that ModelSelectionTab component file exists."""
-        import os
-        path = "core/console/corvin_console/web-next/src/pages/vibe-engineering/tabs/ModelSelectionTab.tsx"
-        assert os.path.exists(path), f"ModelSelectionTab.tsx not found at {path}"
-
-    def test_vibe_dashboard_imports_new_tabs(self):
-        """Test that VibeDashboard imports the new tab components."""
-        import os
-        path = "core/console/corvin_console/web-next/src/pages/vibe-engineering/VibeDashboard.tsx"
-        with open(path, "r") as f:
-            content = f.read()
-            assert "LicensingAuditTab" in content, "LicensingAuditTab not imported in VibeDashboard"
-            assert "ModelSelectionTab" in content, "ModelSelectionTab not imported in VibeDashboard"
-            assert "activeTab === 'licensing'" in content or "activeTab === 'audit'" in content
-            assert "activeTab === 'models'" in content
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
-
-
-class TestLearningLoopIntegrationTab:
-    """Tests for learning loop integration tab."""
-
-    def test_learning_integration_tab_loads(self, client):
-        """Test that learning integration tab loads."""
-        response = client.get("/console/")
-        assert response.status_code == 200
-
-    def test_learning_events_endpoint_accessible(self, client):
-        """Test learning events endpoint accessibility."""
-        response = client.get("/v1/console/v1/learning/events?limit=20")
-        assert response.status_code in [200, 401, 404]
-
-    def test_learning_metrics_computed(self, client):
-        """Test that learning metrics are computable from events."""
-        response = client.get("/v1/console/v1/learning/events?limit=5")
-        if response.status_code == 200:
-            data = response.json()
-            # Should have events array to compute metrics
-            assert "events" in data or isinstance(data, dict)
+    def test_monitoring_tab_reads_the_tested_endpoint(self):
+        tab = (VIBE / "tabs/MonitoringTab.tsx").read_text(encoding="utf-8")
+        assert "/v1/console/v1/monitoring/metrics?range=1h" in tab

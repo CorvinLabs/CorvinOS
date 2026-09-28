@@ -4,6 +4,10 @@ Implements:
 1. Signature validation (Layer 1: RSA signature)
 2. Integrity checking (Layer 2: manifest hash)
 3. Origin verification (Layer 3: marketplace origin)
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+``ForgeSkillValidator`` is constructed only by tests; ``core/skills/boot.py``
+documents that the ADR-0667 boot-time run never happened.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from core.skills.signature.validator import (
     SkillManifestValidator,
     SignatureValidationError,
     ManifestTamperedError,
+    make_audit_event,
 )
 from core.skills.license_binding import LicenseBindingValidator, LicenseRequiredError, UserLicense
 from core.skill_forge.marketplace_origin import MarketplaceOriginValidator
@@ -96,7 +101,7 @@ class ForgeSkillValidator:
                 details={
                     "skill_id": skill_id,
                     "reason": "signature_error",
-                    "error": str(e),
+                    "error_type": type(e).__name__,
                     "layer": 1,
                 },
                 severity="warning",
@@ -107,9 +112,15 @@ class ForgeSkillValidator:
 
         # Layer 2: Integrity check
         try:
-            stored_hash = self._load_manifest_hash(skill_id, manifest.version)
+            stored_hash = self._load_manifest_hash(skill_id, manifest.version, tenant_id)
             if stored_hash is None:
-                logger.warning(f"No stored hash for {skill_id}; skipping integrity (first-time load)")
+                # Fail-closed: the hash is written when a manifest is
+                # published. No stored hash means no integrity evidence —
+                # this used to log a warning and load the skill anyway.
+                raise ManifestTamperedError(
+                    f"No stored manifest hash for {skill_id}:{manifest.version}; "
+                    "integrity cannot be verified"
+                )
             else:
                 self.sig_validator.validate_manifest_integrity(manifest, stored_hash, tenant_id)
                 self._log_audit(
@@ -127,7 +138,7 @@ class ForgeSkillValidator:
                 details={
                     "skill_id": skill_id,
                     "reason": "integrity_check_failed",
-                    "error": str(e),
+                    "error_type": type(e).__name__,
                     "layer": 2,
                 },
                 severity="error",
@@ -190,19 +201,26 @@ class ForgeSkillValidator:
 
         return manifest
 
-    def _load_manifest_hash(self, skill_id: str, version: str) -> Optional[str]:
+    def _load_manifest_hash(self, skill_id: str, version: str,
+                            tenant_id: str = "_default") -> Optional[str]:
         """Load stored hash of a published manifest from registry.
 
         Args:
             skill_id: Skill ID
             version: Skill version (semver)
+            tenant_id: Tenant whose registry holds the hash
 
         Returns:
             Stored SHA256 hash (hex string) if found, None otherwise
         """
         try:
-            # Hash stored in marketplace registry during publish
-            hash_dir = Path.home() / ".corvin" / "tenants" / "_default" / "global" / "skill_registry_hashes"
+            from core.paths.tenant import tenant_home
+
+            # Hash stored in the tenant's marketplace registry during publish.
+            # Resolved through tenant_home() (honours CORVIN_HOME and the
+            # caller's tenant) — it used to be hard-wired to
+            # ~/.corvin/tenants/_default regardless of either.
+            hash_dir = tenant_home(tenant_id) / "global" / "skill_registry_hashes"
             hash_file = hash_dir / f"{skill_id}_{version}.sha256"
             if hash_file.exists():
                 return hash_file.read_text().strip()
@@ -222,15 +240,8 @@ class ForgeSkillValidator:
         if not self.audit_chain:
             return
 
-        event = AuditEvent(
-            event_id=str(id(self)),
-            event_type=event_type,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            timestamp="",
-            details=details,
-            severity=severity or "info",
-        )
+        event = make_audit_event(event_type, details, severity=severity,
+                                 user_id=user_id, tenant_id=tenant_id)
 
         try:
             self.audit_chain.write_event(event)

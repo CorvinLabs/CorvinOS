@@ -49,6 +49,38 @@ class ConversionResult:
     errors: List[str]
 
 
+#: H.264 bits per pixel per frame, by resolution tier (upper pixel bound).
+_BPP_TIERS = (
+    (854 * 480, 0.10),     # SD (480p)
+    (1280 * 720, 0.09),    # HD (720p)
+    (1920 * 1080, 0.08),   # FHD (1080p)
+    (3840 * 2160, 0.07),   # 4K
+)
+_BPP_8K = 0.06
+_MIN_KBPS, _MAX_KBPS = 500, 80_000
+
+
+def optimal_bitrate_kbps(resolution: str, fps: float) -> int:
+    """Target H.264 video bitrate in kbps: ``pixels * fps * bpp / 1000``.
+
+    ``bpp`` (bits per pixel per frame) falls from 0.10 at SD to 0.06 at 8K,
+    giving ~0.9 Mbps at 480p30, ~5 Mbps at 1080p30 and ~17 Mbps at 2160p30,
+    clamped to [500, 80 000] kbps.
+
+    The old factor (0.3–1.0 bpp) was 5-10x too high and ran into its 20 Mbps
+    cap already at 1080p30, so 1080p, 1440p and 4K all got the SAME bitrate.
+    """
+    try:
+        width, height = map(int, str(resolution).split("x"))
+    except (ValueError, AttributeError):
+        logger.warning(f"Invalid resolution: {resolution}, using default")
+        width, height = 1920, 1080
+    pixels = max(0, width) * max(0, height)
+    bpp = next((b for bound, b in _BPP_TIERS if pixels <= bound), _BPP_8K)
+    bitrate = int(pixels * max(float(fps), 0.0) * bpp / 1000)
+    return max(_MIN_KBPS, min(_MAX_KBPS, bitrate))
+
+
 class AutoFormatConverter:
     """
     Autonomous format conversion. Auto-detect optimal codec & bitrate.
@@ -221,41 +253,9 @@ class AutoFormatConverter:
         )
 
     def _calculate_optimal_bitrate(self, resolution: str, fps: float) -> int:
-        """Auto-calculate bitrate based on resolution & framerate.
-
-        Formula: pixels * fps * complexity_factor (kbps)
-
-        Returns bitrate in kbps, capped between 500 and 20000.
-        """
-        try:
-            width, height = map(int, resolution.split("x"))
-        except (ValueError, AttributeError):
-            logger.warning(f"Invalid resolution: {resolution}, using default")
-            width, height = 1920, 1080
-
-        pixels = width * height
-
-        # Complexity factor based on resolution tier
-        if pixels <= 854 * 480:  # SD (480p)
-            complexity = 0.3
-        elif pixels <= 1280 * 720:  # HD (720p)
-            complexity = 0.5
-        elif pixels <= 1920 * 1080:  # FHD (1080p)
-            complexity = 0.7
-        elif pixels <= 3840 * 2160:  # 4K
-            complexity = 1.0
-        else:  # 8K+
-            complexity = 1.2
-
-        # Bitrate = pixels * fps * complexity / 1000
-        bitrate = int(pixels * fps * complexity / 1000)
-
-        # Cap between 500 kbps and 20 mbps
-        bitrate = max(500, min(20000, bitrate))
-        logger.info(
-            f"Auto-selected bitrate: {bitrate} kbps "
-            f"(resolution={resolution}, fps={fps}, complexity={complexity})"
-        )
+        """Auto-calculate bitrate in kbps — see :func:`optimal_bitrate_kbps`."""
+        bitrate = optimal_bitrate_kbps(resolution, fps)
+        logger.info(f"Auto-selected bitrate: {bitrate} kbps (resolution={resolution}, fps={fps})")
         return bitrate
 
     def _generate_ffmpeg_command(

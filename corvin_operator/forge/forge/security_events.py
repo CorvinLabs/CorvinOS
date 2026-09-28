@@ -1145,8 +1145,6 @@ EVENT_SEVERITY: dict[str, str] = {
     "remediation.remediation_cancelled":  "INFO",
     "skill_validation_not_performed":  "WARNING",
     # Checkpoint manager (core/vibe_engineering/checkpoint_manager.py)
-    "checkpoint_acquired":              "INFO",
-    "checkpoint_released":              "INFO",
     "checkpoint_written":               "INFO",
     "checkpoint_integrity_failed":      "CRITICAL",
     # Adversarial review round 2 (2026-09-27): events a module registered only
@@ -4035,8 +4033,6 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "remediation.lifecycle": frozenset({"audit_ref", "decided_by", "decision", "drift_id", "drift_type", "error_code", "event", "has_reason", "instance_id", "plan_id", "remediation_type", "request_id", "state", "status", "status_detail", "tenant_id"}),
     "remediation.remediation_cancelled": frozenset({"audit_ref", "decided_by", "decision", "drift_id", "drift_type", "error_code", "event", "has_reason", "instance_id", "plan_id", "remediation_type", "request_id", "state", "status", "status_detail", "tenant_id"}),
     "skill_validation_not_performed": frozenset({"phase", "reason_code", "skill_count", "tenant_id"}),
-    "checkpoint_acquired": frozenset({"checkpoint_file", "checkpoint_id", "event_id", "operation", "reason", "task_id", "tenant_id"}),
-    "checkpoint_released": frozenset({"checkpoint_file", "checkpoint_id", "event_id", "operation", "reason", "task_id", "tenant_id"}),
     "checkpoint_written": frozenset({"checkpoint_file", "checkpoint_id", "event_id", "operation", "reason", "task_id", "tenant_id"}),
     "checkpoint_integrity_failed": frozenset({"checkpoint_file", "checkpoint_id", "event_id", "operation", "reason", "task_id", "tenant_id"}),
     "learning.plugin_executed": frozenset({

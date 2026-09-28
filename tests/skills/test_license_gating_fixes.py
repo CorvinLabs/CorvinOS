@@ -78,23 +78,29 @@ class TestLayerTwoIntegrityCheck:
 
     def test_load_manifest_hash_from_storage(self, tmp_path):
         """Test loading hash from registry storage."""
-        # Mock the hash directory
-        hash_dir = tmp_path / "skill_registry_hashes"
-        hash_dir.mkdir(parents=True)
+        # The registry lives under the TENANT home, resolved through
+        # CORVIN_HOME (it used to be hard-wired to ~/.corvin/tenants/_default).
+        with patch.dict("os.environ", {"CORVIN_HOME": str(tmp_path)}):
+            for tenant, expected_hash in (("_default", "abc123def456"), ("acme", "fedcba654321")):
+                hash_dir = tmp_path / "tenants" / tenant / "global" / "skill_registry_hashes"
+                hash_dir.mkdir(parents=True)
+                (hash_dir / "test.skill_1.0.0.sha256").write_text(expected_hash)
 
-        # Write a test hash
-        hash_file = hash_dir / "test.skill_1.0.0.sha256"
-        expected_hash = "abc123def456"
-        hash_file.write_text(expected_hash)
+            validator = ForgeSkillValidator()
+            assert validator._load_manifest_hash("test.skill", "1.0.0") == "abc123def456"
+            assert validator._load_manifest_hash("test.skill", "1.0.0", "acme") == "fedcba654321"
+            assert validator._load_manifest_hash("test.other", "1.0.0", "acme") is None
 
-        # Create a ForgeSkillValidator and mock the path
+    def test_missing_stored_hash_refuses_the_load(self):
+        """No stored hash → no integrity evidence → refuse (was: warn and load)."""
         validator = ForgeSkillValidator()
-
-        # Patch Path.home() to use tmp_path
-        with patch('pathlib.Path.home', return_value=tmp_path):
-            loaded_hash = validator._load_manifest_hash("test.skill", "1.0.0")
-
-        assert loaded_hash == expected_hash
+        validator.sig_validator = Mock()
+        validator.sig_validator.validate_signature = Mock(return_value=True)
+        validator._load_manifest_hash = Mock(return_value=None)
+        manifest = SkillManifestV2(skill_id="test.skill", version="1.0.0", boot_layer="bundled")
+        user = UserLicense(user_id="u", license_tier="enterprise")
+        with pytest.raises(ManifestTamperedError):
+            validator.validate_and_load(manifest, "sig", user)
 
     def test_forge_validator_uses_integrity_check(self):
         """ForgeSkillValidator should call integrity check (Layer 2)."""
@@ -127,15 +133,12 @@ class TestLayerTwoIntegrityCheck:
 class TestOperatorPublicKeyHardcoded:
     """BUG 3: Verify operator public key is hardcoded."""
 
-    def test_get_operator_public_key_returns_key(self):
-        """get_operator_public_key should return valid RSA key."""
+    def test_get_operator_public_key_refuses_when_not_provisioned(self):
+        """No key is embedded in this build → fail closed, never a made-up key."""
         validator = SkillManifestValidator()
 
-        key = validator.get_operator_public_key()
-
-        # Verify it's an RSA public key
-        assert isinstance(key, rsa.RSAPublicKey)
-        assert key.key_size == 2048
+        with pytest.raises(RuntimeError, match="No operator public key"):
+            validator.get_operator_public_key()
 
     def test_hardcoded_key_cannot_be_overridden_via_env(self):
         """Operator key should not be overridable via environment."""
@@ -150,17 +153,16 @@ class TestOperatorPublicKeyHardcoded:
         key = validator_with_mock.get_operator_public_key()
         assert key is mock_key
 
-    def test_hardcoded_key_pem_format_valid(self):
-        """Hardcoded key should be valid PEM format."""
+    def test_default_key_refuses_every_signature(self):
+        """The embedded PEM is empty (the old one did not parse); every check refuses."""
         from core.skills.signature.validator import OPERATOR_PUBLIC_KEY_PEM
+        from core.skills.manifest_validator import SkillManifest
 
-        # Should be loadable as RSA public key
-        key = serialization.load_pem_public_key(
-            OPERATOR_PUBLIC_KEY_PEM.encode("utf-8"),
-            backend=default_backend()
-        )
-
-        assert isinstance(key, rsa.RSAPublicKey)
+        assert OPERATOR_PUBLIC_KEY_PEM == ""
+        manifest = SkillManifest(skill_id="t.s", version="1.0.0", boot_layer="bundled",
+                                 parameters=[], dependencies=[], entry_point="t:T.execute")
+        with pytest.raises(SignatureValidationError):
+            SkillManifestValidator().validate_signature(manifest, base64.b64encode(b"x" * 256).decode())
 
 
 class TestLicenseBindingSignatureVerification:
@@ -310,16 +312,19 @@ class TestBootSkillsValidation:
     def test_boot_skills_calls_validation(self, mock_init_integration, mock_validate):
         """boot_skills() should call _validate_builtin_skills()."""
         # Setup mocks
-        mock_validate.return_value = True
+        from core.skills.os_skills_phase1 import BUILTIN_SKILL_IDS
+
+        mock_validate.return_value = False
         mock_registry = Mock()
-        mock_registry.list_skills = Mock(return_value=[])
+        # boot_skills refuses a registry missing a builtin — list them all.
+        mock_registry.list_skills = Mock(return_value=[Mock(id=sid) for sid in BUILTIN_SKILL_IDS])
         mock_integration = Mock()
         mock_integration.registry = mock_registry
         mock_init_integration.return_value = mock_integration
 
         with patch('core.skills.boot.get_registry', return_value=mock_registry):
             # Call boot_skills
-            boot_skills(tenant_id="_default")
+            boot_skills(tenant_id="_default", audit_emit=lambda *_: None, wire_learning=False)
 
         # Verify _validate_builtin_skills was called
         mock_validate.assert_called_once()

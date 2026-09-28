@@ -260,9 +260,9 @@ async def test_cache_invalidation(client: TestClient, session_headers: dict):
 
 
 @pytest.mark.asyncio
-async def test_error_handling_missing_session(client: TestClient):
+async def test_error_handling_missing_session(anon_client: TestClient):
     """Request without session is rejected."""
-    resp = client.get("/v1/console/learning-loops/list")
+    resp = anon_client.get("/v1/console/learning-loops/list")
     assert resp.status_code in (401, 403, 302)  # Unauthorized or redirect
 
 

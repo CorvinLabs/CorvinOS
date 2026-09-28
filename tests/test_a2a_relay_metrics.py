@@ -240,44 +240,63 @@ class TestRelayMetricsCollector:
         assert True
 
 
-@pytest.mark.parametrize("outcome,latency_ms", [
-    ("delivered", 10),
-    ("delivered", 50),
-    ("delivered", 95),
-    ("queued", 5),
-    ("dropped", 1),
+def _bucket(metrics_text: bytes, series: str, le: str, tenant_id: str) -> float:
+    """Value of one cumulative histogram bucket in the exposition text."""
+    needle = f'{series}_bucket{{le="{le}",tenant_id="{tenant_id}"}} '.encode()
+    for line in metrics_text.splitlines():
+        if line.startswith(needle):
+            return float(line[len(needle):])
+    raise AssertionError(f"bucket {series} le={le} not exported")
+
+
+# prometheus_client renders bucket bounds as floats (le="100.0"), never
+# le="100". The previous assertion looked for the integer form and failed on
+# every run, which is how it went unnoticed that it asserted nothing about
+# where an observation lands.
+@pytest.mark.parametrize("outcome,latency_ms,first_le_hit,last_le_miss", [
+    ("delivered", 10, "10.0", "5.0"),
+    ("delivered", 50, "50.0", "25.0"),
+    ("delivered", 95, "100.0", "50.0"),
+    ("queued", 5, "5.0", "1.0"),
+    ("dropped", 1, "1.0", None),
 ])
-def test_relay_metrics_delivery_latency_percentiles(outcome: str, latency_ms: float):
-    """Verify latency histogram buckets are correct for SLO targets."""
+def test_relay_metrics_delivery_latency_percentiles(
+    outcome: str, latency_ms: float, first_le_hit: str, last_le_miss: str | None,
+):
+    """Delivery latency lands in the right cumulative bucket (SLO p99 < 100 ms)."""
     collector = RelayMetricsCollector(namespace="test_percentiles")
     tenant_id = "tenant_default"
 
-    # Record samples across the latency range
     for _ in range(10):
         collector.record_delivery(tenant_id, outcome, latency_ms=latency_ms)
 
-    metrics_text = collector.generate_metrics_text()
-    # SLO target: p99 < 100ms, so bucket at 100 should be present
-    assert b"le=\"100\"" in metrics_text or b"le=\"250\"" in metrics_text
+    text = collector.generate_metrics_text()
+    series = "test_percentiles_relay_message_latency_ms"
+    assert _bucket(text, series, first_le_hit, tenant_id) == 10.0
+    assert _bucket(text, series, "100.0", tenant_id) == 10.0  # inside the SLO
+    if last_le_miss is not None:
+        assert _bucket(text, series, last_le_miss, tenant_id) == 0.0
+    assert f'outcome="{outcome}",tenant_id="{tenant_id}"}} 10.0'.encode() in text
 
 
 def test_relay_metrics_slo_targets():
-    """Verify SLO targets are embedded in metric definitions."""
+    """Every latency histogram exports a 100 ms bucket (the SLO boundary).
+
+    A labelled histogram exports no series until a child exists, so each one
+    gets one observation first — without it the exposition is empty and the
+    old version of this test failed for a reason unrelated to the SLO.
+    """
     collector = RelayMetricsCollector(namespace="test_slo")
+    tenant_id = "tenant_default"
+    collector.record_discovery_attempt(tenant_id, "success", latency_ms=120)
+    collector.record_handshake(tenant_id, "success", latency_ms=20)
+    collector.record_delivery(tenant_id, "delivered", latency_ms=80)
 
-    # SLO targets from task requirements:
-    # - discovery_latency p99 < 100ms (histogram buckets)
-    # - relay_query_latency p99 < 100ms (histogram buckets)
-    # - discovery_pairing_success_rate > 95%
-    # - a2a_handshake_success_rate > baseline
-    # - relay_cache_hit_rate measurement
-
-    # Verify histogram buckets include 100ms bucket
-    metrics_text = collector.generate_metrics_text()
-    # Both discovery and handshake latency histograms should have 100ms bucket
-    assert b"discovery_latency_ms_bucket" in metrics_text
-    assert b"a2a_handshake_latency_ms_bucket" in metrics_text
-    assert b"relay_message_latency_ms_bucket" in metrics_text
+    text = collector.generate_metrics_text()
+    assert _bucket(text, "test_slo_discovery_latency_ms", "100.0", tenant_id) == 0.0
+    assert _bucket(text, "test_slo_discovery_latency_ms", "250.0", tenant_id) == 1.0
+    assert _bucket(text, "test_slo_a2a_handshake_latency_ms", "100.0", tenant_id) == 1.0
+    assert _bucket(text, "test_slo_relay_message_latency_ms", "100.0", tenant_id) == 1.0
 
 
 # NOTE: HTTP server integration tests would go in a separate suite that starts

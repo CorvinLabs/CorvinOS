@@ -5,6 +5,16 @@ Implements:
 2. Manifest integrity checking (hash comparison)
 3. Operator public key management
 4. Audit logging for all validation operations
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) — the
+only importer is ``core.skill_forge.validators.forge_gateway`` (itself
+unreachable) and the builtin boot path records
+``skill_validation_not_performed`` instead (``core/skills/boot.py``).
+
+No operator public key is provisioned: ``OPERATOR_PUBLIC_KEY_PEM`` is empty
+until a build embeds the real one, and :meth:`get_operator_public_key` then
+raises (fail-closed) — so every default-key signature check refuses. The PEM
+that used to sit here was not a key at all (it failed to parse).
 """
 
 from __future__ import annotations
@@ -13,8 +23,9 @@ import base64
 import hashlib
 import json
 import logging
-from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import Optional
+from uuid import uuid4
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -27,24 +38,62 @@ from core.skills.manifest_validator import SkillManifest
 logger = logging.getLogger(__name__)
 
 
-# Hardcoded operator public key (generated at build time, embedded in Forge binary)
-# This is the ONLY trusted key for manifest verification. Cannot be overridden via env var or config.
-# Generated: 2026-09-11 (RSA-2048, build-time embedded)
-# To regenerate at build time:
+# Operator public key, embedded at BUILD time (never via env var or config).
+# NOT PROVISIONED: empty until a build embeds the real key. Until 2026-09-27 a
+# made-up PEM sat here that did not even parse. To embed one at build time:
 #   from core.skills.signature.key_manager import OperatorKeyManager
-#   mgr = OperatorKeyManager()
-#   privkey, pubkey = mgr.generate_operator_keypair()
-#   print(pubkey.public_key_pem().decode("utf-8"))
-#   # Copy output here
-OPERATOR_PUBLIC_KEY_PEM = """-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2x7N8k4rJ9pK3QwV5zX
-A1bQ6cM8pN2V4S9Z3dR6eL0K7w/zZ4X9U2V7jQ3P5sR8Y1L2qN9w6K3V8T9X2mV
-O2K4U7R8w5J2V8P4X3iT9L4P5Y3S8Z6K0bN5V7P3mQ8c9L5T9S7R2gM8b+nZ9d3
-L4qS3U8R6c1J3a+oZ2e5M3kR2T7P5Z1I2V8N4d6L1iQ2S6O4Y0H3U7M3c5K0hQ1
-R5N3X9G2T6L2b4J0gP0Q4M2X8F1S5K1a3I9fO0P3L1W7E0R4J0Z2H8eN0O2K0V6
-D0Q3I0Z1G7dM0N1J0U5C0P2H0Y0F6cL0M0I0T4B0O1G0X0E5bK0L0H0S3A0N0F0
-W0D4aJ0K0G0R2Z0M0E0V0C3Z0AQIDAQAB
------END PUBLIC KEY-----"""
+#   ... generate_operator_keypair() ... public_key_pem().decode("utf-8")
+OPERATOR_PUBLIC_KEY_PEM = ""
+
+
+#: Content-free detail fields of every record this module family writes
+#: (validator, license_binding, forge_gateway). Registered with the forge
+#: writer so the default-deny vocabulary does not silently drop them.
+_AUDIT_FIELDS = frozenset({
+    "skill_id", "version", "skill_version", "reason", "manifest_hash", "hash",
+    "current_hash", "stored_hash", "required_tier", "user_tier", "layer",
+    "error_type", "event_id", "tenant_id", "origin", "layers_passed",
+})
+_AUDIT_EVENTS = (
+    "signature_validation_failed", "signature_validation_passed",
+    "signature_validation_error", "manifest_integrity_validated",
+    "manifest_integrity_violation", "manifest_integrity_validation_error",
+    "license_denied", "license_granted", "license_validation_error",
+    "license_binding_signature_valid", "license_binding_signature_invalid",
+    "license_binding_verification_error", "manifest_integrity_verified",
+    "skill_load_failed", "skill_load_allowed",
+)
+
+
+def register_audit_events() -> None:
+    """Register the allowlists above with the forge writer (idempotent)."""
+    try:
+        from core.compliance.audit_chain_writer import _forge
+
+        se, _ = _forge()
+        for et in _AUDIT_EVENTS:
+            se.register_event_allowlist(et, _AUDIT_FIELDS)
+    except Exception as exc:  # noqa: BLE001 — the write itself then fails closed
+        logger.warning("skill validation audit events not registered (%s)", type(exc).__name__)
+
+
+def make_audit_event(event_type: str, details: dict, *, severity: Optional[str],
+                     user_id: Optional[str], tenant_id: str):
+    """One well-formed :class:`AuditEvent` (unique id, real UTC timestamp).
+
+    Replaces ``timestamp=str(json.dumps(asdict({})))`` — ``asdict`` of a dict
+    raises TypeError, so EVERY audited validation with a configured chain
+    crashed instead of returning its verdict.
+    """
+    return AuditEvent(
+        event_id=str(uuid4()),
+        event_type=event_type,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        details=details,
+        severity=severity or "info",
+    )
 
 
 class SignatureValidationError(Exception):
@@ -106,6 +155,10 @@ class SkillManifestValidator:
             manifest_json = json.dumps(manifest_dict, sort_keys=True, separators=(",", ":"))
             manifest_bytes = manifest_json.encode("utf-8")
 
+            # Resolve the key FIRST: without a key nothing can verify, and that
+            # must refuse (raise) rather than read as an ordinary mismatch.
+            public_key = self.operator_public_key or self.get_operator_public_key()
+
             # Decode signature from base64
             try:
                 signature_bytes = base64.b64decode(signature_b64)
@@ -115,15 +168,12 @@ class SkillManifestValidator:
                     details={
                         "skill_id": manifest.skill_id,
                         "reason": "invalid_base64",
-                        "error": str(e)
+                        "error_type": type(e).__name__,
                     },
                     severity="warning",
                     tenant_id=tenant_id
                 )
                 return False
-
-            # Get public key
-            public_key = self.operator_public_key or self.get_operator_public_key()
 
             # Verify signature using RSA-PSS
             try:
@@ -165,7 +215,7 @@ class SkillManifestValidator:
             logger.error(f"Signature validation error for {manifest.skill_id}: {e}")
             self._log_audit(
                 event_type="signature_validation_error",
-                details={"skill_id": manifest.skill_id, "error": str(e)},
+                details={"skill_id": manifest.skill_id, "error_type": type(e).__name__},
                 severity="error",
                 tenant_id=tenant_id
             )
@@ -230,7 +280,7 @@ class SkillManifestValidator:
             logger.error(f"Integrity validation error for {manifest.skill_id}: {e}")
             self._log_audit(
                 event_type="manifest_integrity_validation_error",
-                details={"skill_id": manifest.skill_id, "error": str(e)},
+                details={"skill_id": manifest.skill_id, "error_type": type(e).__name__},
                 severity="error",
                 tenant_id=tenant_id
             )
@@ -252,6 +302,12 @@ class SkillManifestValidator:
         if self.operator_public_key:
             return self.operator_public_key
 
+        if not OPERATOR_PUBLIC_KEY_PEM.strip():
+            # Fail-closed: no key → no manifest verifies.
+            raise RuntimeError(
+                "No operator public key is provisioned in this build "
+                "(OPERATOR_PUBLIC_KEY_PEM is empty); manifest signatures cannot be verified."
+            )
         try:
             # Load hardcoded key from PEM string embedded in this module
             public_key = serialization.load_pem_public_key(
@@ -284,17 +340,13 @@ class SkillManifestValidator:
         if not self.audit_chain:
             return
 
-        event = AuditEvent(
-            event_id=str(id(self)),  # Unique event ID
-            event_type=event_type,
-            tenant_id=tenant_id,
-            user_id=None,
-            timestamp=str(json.dumps(asdict({}))),  # Will be set by audit chain
-            details=details,
-            severity=severity or "info"
-        )
+        event = make_audit_event(event_type, details, severity=severity,
+                                 user_id=None, tenant_id=tenant_id)
 
         try:
             self.audit_chain.write_event(event)
         except Exception as e:
             logger.warning(f"Failed to log audit event {event_type}: {e}")
+
+
+register_audit_events()

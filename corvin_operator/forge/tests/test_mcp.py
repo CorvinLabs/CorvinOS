@@ -26,6 +26,9 @@ sys.path.insert(0, str(ROOT))
 PASS = 0
 FAIL = 0
 CURRENT_SECTION = ""
+#: Labels of every failed check, so a pytest run can turn a failed ``t()``
+#: into a real test failure (the standalone driver only counts them).
+FAILED_LABELS: list[str] = []
 
 
 def section(name: str) -> None:
@@ -43,6 +46,7 @@ def t(label: str, ok: bool, *, detail: str = "") -> None:
         PASS += 1
     else:
         FAIL += 1
+        FAILED_LABELS.append(f"{CURRENT_SECTION}: {label}{suffix}")
 
 
 # ---------- MCP client harness ---------------------------------------------
@@ -227,6 +231,7 @@ def with_client(*, permission_mode: str = "yes"):
     def deco(fn):
         @functools.wraps(fn)
         def wrapped():
+            failed_before = len(FAILED_LABELS)
             with tempfile.TemporaryDirectory() as td:
                 client = MCPClient(Path(td), permission_mode=permission_mode)
                 try:
@@ -237,6 +242,15 @@ def with_client(*, permission_mode: str = "yes"):
                         t("server stderr clean", False, detail=err.splitlines()[-1])
                     else:
                         t("server stderr clean", True)
+            new_failures = FAILED_LABELS[failed_before:]
+            # Under pytest a failed ``t()`` must fail the test, not just be
+            # counted: the standalone driver's exit code is not seen there.
+            if new_failures and os.environ.get("PYTEST_CURRENT_TEST"):
+                raise AssertionError("; ".join(new_failures))
+        # ``functools.wraps`` sets ``__wrapped__``, through which pytest reads
+        # the ORIGINAL ``(client, root)`` signature and reports "fixture
+        # 'client' not found". The wrapper takes no arguments — expose that.
+        del wrapped.__wrapped__
         return wrapped
     return deco
 

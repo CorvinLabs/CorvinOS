@@ -61,10 +61,15 @@ class TestPhase2bOptimizer:
             trend = optimizer.record_confidence_score("skill-1", score, timestamp=ts)
 
         assert trend.current_confidence == 0.80
-        assert trend.rolling_avg_7day > 0.65
+        # All seven samples are in the window — including the first one, which
+        # the optimizer used to drop (that is what made this avg read 0.675).
+        assert trend.n_samples == 7
+        assert trend.rolling_avg_7day == pytest.approx(0.65)
         assert trend.trend_direction == "climbing"
         assert trend.plateau_days == 0
-        assert trend.phase_2b_eligible  # 0.80 > 0.75
+        # Eligibility is judged on the 7-day rolling average, not on the latest
+        # spike: 0.65 <= 0.75, so the skill is not yet Phase-2b eligible.
+        assert not trend.phase_2b_eligible
 
     def test_convergence_plateau(self, optimizer):
         """Test detecting convergence plateau (confidence stable > 0.90 for 7 days)."""

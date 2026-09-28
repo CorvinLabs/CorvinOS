@@ -7,9 +7,19 @@ This module implements automated learning optimization for Phase 2b:
 4. Auto-adjust confidence thresholds based on learning velocity
 5. Track learning velocity: time from feedback signal to parameter adjustment
 
-Fail-closed: any optimization error is logged, never propagates to caller.
-Tenant-scoped: all operations filtered by tenant_id (GDPR Art. 32).
-Audit-first: all events logged via EventStore (ADR-0314).
+Errors: validation errors raise; optimization errors are logged and return None.
+Tenant-scoped: one optimizer per tenant (GDPR Art. 32).
+Audit: NONE in this module. It writes only its own per-skill sample files under
+``<tenant_home>/global/learning/phase2b_trends/``; it emits no audit record
+(the docstring used to claim "all events logged via EventStore" — no such call
+existed). Audited logging of these observations is ``phase2b_integration``'s job.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review).
+
+Window semantics: every statistic is computed over the samples whose timestamp
+lies in ``(t - window, t]`` where ``t`` is the timestamp of the observation
+being recorded (not the wall clock), so back-filled or replayed observations
+produce the same trend as live ones.
 
 Phase 2b Threshold: skill_primary switch when confidence > 0.75 (replaces fallback routing).
 """
@@ -40,7 +50,7 @@ class ConfidenceTrend:
     rolling_max_7day: float  # Maximum over last 7 days
     variance_7day: float  # Variance over 7-day window
     n_samples: int  # Number of samples in window
-    plateau_days: int  # Days at plateau (no improvement > 1%)
+    plateau_days: int  # Distinct days in the trailing run with no improvement > 1 pt (0 if < 2 samples)
     trend_direction: str  # "climbing" | "plateau" | "diverging"
     last_update: datetime
     phase_2b_eligible: bool = False  # True if confident enough for Phase 2b
@@ -56,7 +66,8 @@ class ParameterDelta:
     new_value: float
     reason: str  # "convergence_detected" | "feedback_signal" | "velocity_improvement"
     confidence_boost: Optional[float] = None  # Expected confidence gain
-    timestamp: datetime = field(default_factory=datetime.now)
+    # tz-aware: compared against tz-aware feedback timestamps in _record_adjustment
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass
@@ -171,41 +182,27 @@ class Phase2bOptimizer:
             raise ValueError(f"confidence must be ∈ [0.0, 1.0], got {confidence}")
 
         timestamp = timestamp or datetime.now(timezone.utc)
+        if timestamp.tzinfo is None:
+            # Naive timestamps are UTC by contract; mixing naive and aware
+            # datetimes would raise on the first window comparison.
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
 
         with self._lock:
             try:
-                # Initialize trend if first observation
                 if skill_id not in self._trends:
-                    self._trends[skill_id] = ConfidenceTrend(
-                        skill_id=skill_id,
-                        current_confidence=confidence,
-                        rolling_avg_7day=confidence,
-                        rolling_min_7day=confidence,
-                        rolling_max_7day=confidence,
-                        variance_7day=0.0,
-                        n_samples=1,
-                        plateau_days=0,
-                        trend_direction="climbing",
-                        last_update=timestamp,
-                        phase_2b_eligible=confidence > self.PHASE_2B_CONFIDENCE_THRESHOLD,
-                    )
                     self._confidence_thresholds[skill_id] = self.PHASE_2B_CONFIDENCE_THRESHOLD
-                    return self._trends[skill_id]
 
-                # Load historical data (for rolling avg/min/max/variance)
-                historical = self._load_historical_confidence(skill_id, days=self.observation_window_days)
-                historical.append(confidence)
-
-                # Keep only last N days
-                cutoff = timestamp - timedelta(days=self.observation_window_days)
-                recent = [c for c in historical if c is not None]
-                if len(recent) < 2:
-                    recent = [confidence]
+                # Samples inside (timestamp - window, timestamp], oldest first,
+                # including the observation being recorded now.
+                window = self._load_window(skill_id, timestamp)
+                window.append((timestamp, confidence))
+                window.sort(key=lambda item: item[0])
+                recent = [c for _, c in window]
 
                 # Compute 7-day statistics
-                rolling_avg = statistics.mean(recent) if recent else confidence
-                rolling_min = min(recent) if recent else confidence
-                rolling_max = max(recent) if recent else confidence
+                rolling_avg = statistics.mean(recent)
+                rolling_min = min(recent)
+                rolling_max = max(recent)
                 variance = (
                     statistics.variance(recent)
                     if len(recent) >= 2
@@ -216,9 +213,10 @@ class Phase2bOptimizer:
                 trend_direction = self._detect_trend_direction(recent)
 
                 # Detect plateau
-                plateau_days = self._detect_plateau(recent, confidence)
+                plateau_days = self._detect_plateau(window)
 
-                # Check Phase 2b eligibility
+                # Check Phase 2b eligibility. A single observation has no
+                # rolling average beyond itself, so this is the same rule.
                 phase_2b_eligible = rolling_avg > self.PHASE_2B_CONFIDENCE_THRESHOLD
 
                 # Update trend
@@ -238,7 +236,8 @@ class Phase2bOptimizer:
 
                 self._trends[skill_id] = updated_trend
 
-                # Persist to disk
+                # Persist to disk (the first observation too — it used to be
+                # returned before this point and never entered the history).
                 self._save_trend(updated_trend)
 
                 logger.debug(
@@ -267,6 +266,7 @@ class Phase2bOptimizer:
             converged = (
                 trend.rolling_avg_7day >= self.convergence_threshold
                 and trend.plateau_days >= self.CONVERGENCE_PLATEAU_DAYS
+                and trend.trend_direction != "diverging"
             )
 
             if converged:
@@ -508,15 +508,15 @@ class Phase2bOptimizer:
 
     # Private helpers
 
-    def _load_historical_confidence(self, skill_id: str, days: int = 7) -> List[float]:
-        """Load historical confidence scores from disk.
+    def _load_window(self, skill_id: str, timestamp: datetime) -> List[tuple]:
+        """Load persisted samples inside ``(timestamp - window, timestamp]``.
 
         Args:
             skill_id: Skill to load
-            days: How many days back to load
+            timestamp: Timestamp of the observation being recorded
 
         Returns:
-            List of confidence values (may be sparse)
+            List of ``(timestamp, confidence)`` tuples (unsorted, may be empty)
         """
         try:
             trend_file = self._trends_dir / f"{skill_id}_trend.json"
@@ -526,20 +526,16 @@ class Phase2bOptimizer:
             with open(trend_file, "r") as f:
                 data = json.load(f)
 
-            # Extract historical samples
-            samples = data.get("samples", [])
-            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-
-            historical = []
-            for sample in samples:
+            cutoff = timestamp - timedelta(days=self.observation_window_days)
+            window = []
+            for sample in data.get("samples", []):
                 ts = datetime.fromisoformat(sample["timestamp"].replace("Z", "+00:00"))
-                if ts >= cutoff:
-                    historical.append(sample["confidence"])
-
-            return historical
+                if cutoff < ts <= timestamp:
+                    window.append((ts, float(sample["confidence"])))
+            return window
 
         except Exception as e:
-            logger.error(f"load_historical_confidence_error: {skill_id}: {e}")
+            logger.error(f"load_window_error: {skill_id}: {e}")
             return []
 
     def _save_trend(self, trend: ConfidenceTrend) -> None:
@@ -605,28 +601,49 @@ class Phase2bOptimizer:
         else:
             return "plateau"
 
-    def _detect_plateau(self, recent_samples: List[float], current: float) -> int:
-        """Count how many days/samples confidence has been at plateau.
+    def _detect_plateau(self, window: List[tuple]) -> int:
+        """Count the days of the trailing plateau run.
+
+        The run is the longest trailing sequence of samples in which no sample
+        improves on the best value seen earlier in the run by more than
+        IMPROVEMENT_THRESHOLD (absolute confidence points). A decline does not
+        end a plateau — "no improvement" is the definition — which is what lets
+        ``detect_divergence`` see a decline *after* a plateau.
+
+        The previous implementation compared the current sample with itself as
+        the first look-back step, so every observation reported at least one
+        plateau day, including a strictly climbing series.
 
         Args:
-            recent_samples: Recent confidence values
-            current: Current confidence
+            window: ``(timestamp, confidence)`` samples, oldest first,
+                ending with the current observation
 
         Returns:
-            Number of consecutive days at plateau
+            Number of distinct UTC days covered by the run, or 0 when the run
+            is a single sample (no plateau has been observed yet).
         """
-        if len(recent_samples) < 2:
+        if len(window) < 2:
             return 0
 
-        plateau_count = 0
-        for sample in reversed(recent_samples[-7:]):  # Look back 7 days max
-            improvement = (current - sample) / (sample + 0.001)
-            if abs(improvement) < self.IMPROVEMENT_THRESHOLD:
-                plateau_count += 1
-            else:
+        eps = 1e-9  # float noise: 0.93 - 0.92 == 0.010000000000000009
+        values = [c for _, c in window]
+        run_start = len(values) - 1
+        for start in range(len(values) - 1):
+            best = values[start]
+            holds = True
+            for value in values[start + 1:]:
+                if value > best + self.IMPROVEMENT_THRESHOLD + eps:
+                    holds = False
+                    break
+                best = max(best, value)
+            if holds:
+                run_start = start
                 break
 
-        return plateau_count
+        run = window[run_start:]
+        if len(run) < 2:
+            return 0
+        return len({ts.astimezone(timezone.utc).date() for ts, _ in run})
 
     def _record_adjustment(self, skill_id: str, delta: ParameterDelta) -> None:
         """Record adjustment timestamp for velocity tracking.

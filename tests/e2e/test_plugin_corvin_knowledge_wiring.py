@@ -111,6 +111,18 @@ def temp_repo():
         # Commit everything
         subprocess.run(["git", "add", "."], cwd=str(repo_path), capture_output=True)
         subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(repo_path), capture_output=True)
+        subprocess.run(["git", "branch", "-M", "main"], cwd=str(repo_path), capture_output=True)
+
+        # A real (local, bare) ``origin`` so ``mesh sync`` exercises a real
+        # fetch + merge offline. Without it ``git fetch origin`` fails and the
+        # plugin correctly reports ``error`` — the sync tests used to assert
+        # ``success`` against a repo that had no remote at all.
+        origin = Path(tmpdir) / "origin.git"
+        subprocess.run(["git", "init", "--bare", str(origin)], capture_output=True, check=True)
+        subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=str(repo_path),
+                       capture_output=True, check=True)
+        subprocess.run(["git", "push", "-u", "origin", "main"], cwd=str(repo_path),
+                       capture_output=True, check=True)
 
         yield repo_path
 
@@ -249,8 +261,33 @@ class TestMeshSync:
         plugin = CorvinKnowledgePlugin(plugin_config)
         result = plugin.handle_sync(pull=True, push=False)
 
-        assert result["status"] == "success"
+        assert result["status"] == "success", result
         assert result["graph_version"] is not None
+
+    def test_sync_pulls_a_new_remote_commit(self, temp_repo, plugin_config, tmp_path):
+        """A commit pushed to origin by someone else is merged by mesh sync."""
+        other = tmp_path / "other"
+        origin = temp_repo.parent / "origin.git"
+        subprocess.run(["git", "clone", "-b", "main", str(origin), str(other)], capture_output=True, check=True)
+        for k, v in (("user.email", "o@example.invalid"), ("user.name", "Other")):
+            subprocess.run(["git", "config", k, v], cwd=str(other), capture_output=True, check=True)
+        (other / "NEW.md").write_text("pushed elsewhere\n")
+        subprocess.run(["git", "add", "NEW.md"], cwd=str(other), capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "remote change"], cwd=str(other), capture_output=True, check=True)
+        subprocess.run(["git", "push", "origin", "main"], cwd=str(other), capture_output=True, check=True)
+
+        result = CorvinKnowledgePlugin(plugin_config).handle_sync(pull=True, push=False)
+
+        assert result["status"] == "success", result
+        assert (temp_repo / "NEW.md").read_text() == "pushed elsewhere\n"
+
+    def test_sync_without_remote_reports_error(self, temp_repo, plugin_config):
+        """No reachable origin → an honest ``error``, never ``success``."""
+        subprocess.run(["git", "remote", "remove", "origin"], cwd=str(temp_repo),
+                       capture_output=True, check=True)
+        result = CorvinKnowledgePlugin(plugin_config).handle_sync(pull=True, push=False)
+        assert result["status"] == "error"
+        assert any("fetch failed" in e.lower() for e in result["errors"])
 
     @pytest.mark.asyncio
     async def test_sync_via_runtime_entry_point(self, plugin_config):

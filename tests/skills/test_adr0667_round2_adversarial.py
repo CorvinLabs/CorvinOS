@@ -177,13 +177,18 @@ class TestVector2RSAKeyForgery:
         assert validator.validate_signature(sample_manifest, attacker_sig) is False
         print("✅ Attack Vector 2: BLOCKED (Layer 1 — hardcoded key)")
 
-    def test_operator_key_hardcoded_immutable(self):
-        """Verify operator public key is hardcoded in module (Fix #3)."""
-        # The OPERATOR_PUBLIC_KEY_PEM constant is hardcoded at module level
-        assert OPERATOR_PUBLIC_KEY_PEM is not None
-        assert "BEGIN PUBLIC KEY" in OPERATOR_PUBLIC_KEY_PEM
-        assert "END PUBLIC KEY" in OPERATOR_PUBLIC_KEY_PEM
-        print("✅ Fix #3: Operator public key is HARDCODED in validator.py")
+    def test_operator_key_hardcoded_immutable(self, sample_manifest, monkeypatch):
+        """No operator key is provisioned, and nothing outside the build can add one.
+
+        This asserted that a PEM *string* was present; the string was a
+        made-up key that did not parse (2026-09-27 adversarial review). With
+        no key embedded, the default validator must refuse every signature —
+        and an env var must not be able to supply one.
+        """
+        assert OPERATOR_PUBLIC_KEY_PEM == ""
+        monkeypatch.setenv("CORVIN_OPERATOR_PUBLIC_KEY", "-----BEGIN PUBLIC KEY-----x")
+        with pytest.raises(SignatureValidationError):
+            SkillManifestValidator().validate_signature(sample_manifest, "AAAA")
 
 
 class TestVector3SkillClone:
@@ -423,6 +428,9 @@ class TestAuditLogging:
         # Validation fails
         result = validator.validate_signature(sample_manifest, invalid_sig)
         assert result is False
+        ev = mock_audit_chain.write_event.call_args.args[0]
+        assert ev.event_type == "signature_validation_failed"
+        assert ev.timestamp and ev.details["reason"] == "invalid_base64"
         print("✅ Audit: Signature failure logged")
 
     def test_manifest_tampering_logged(self, sample_manifest, mock_audit_chain):
@@ -434,6 +442,9 @@ class TestAuditLogging:
         with pytest.raises(ManifestTamperedError):
             validator.validate_manifest_integrity(sample_manifest, wrong_hash)
 
+        ev = mock_audit_chain.write_event.call_args.args[0]
+        assert ev.event_type == "manifest_integrity_violation"
+        assert ev.details["stored_hash"] == wrong_hash
         print("✅ Audit: Manifest tampering logged")
 
     def test_license_denial_logged(self, free_user, mock_audit_chain):
@@ -457,7 +468,37 @@ class TestAuditLogging:
         with pytest.raises(LicenseRequiredError):
             validator.validate_binding(manifest, free_user)
 
+        ev = mock_audit_chain.write_event.call_args.args[0]
+        assert ev.event_type == "license_denied"
+        assert ev.details["required_tier"] == "paid" and ev.details["user_tier"] == "free"
         print("✅ Audit: License denial logged")
+
+    def test_license_denial_reaches_a_real_chain(self, free_user, tmp_path):
+        """Through the REAL forge writer: the record commits, the chain verifies
+        and the content-free fields survive the default-deny floor (they are
+        registered). With a configured chain this raised TypeError before
+        (``asdict({})``) instead of LicenseRequiredError."""
+        from core.compliance.audit_chain_writer import AuditChainWriter, _forge
+
+        chain = tmp_path / "audit.jsonl"
+        binding = LicenseBindingMetadata(required_tier="paid", binding_hash="abc",
+                                         operator_signature="sig",
+                                         timestamp="2026-01-01T00:00:00Z")
+        manifest = SkillManifestV2(skill_id="test.paid", version="1.0.0",
+                                   boot_layer="bundled", license_binding=binding)
+        validator = LicenseBindingValidator(audit_chain=AuditChainWriter(chain))
+        with pytest.raises(LicenseRequiredError):
+            validator.validate_binding(manifest, free_user, tenant_id="_default")
+
+        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        denied = [r for r in recs if r["event_type"] == "license_denied"]
+        assert len(denied) == 1
+        d = denied[0]["details"]
+        assert d["required_tier"] == "paid" and d["user_tier"] == "free"
+        assert d["skill_id"] == "test.paid"
+        se, _ = _forge()
+        ok, problems = se.verify_chain(chain)
+        assert ok, problems
 
 
 class TestFailClosedDesign:

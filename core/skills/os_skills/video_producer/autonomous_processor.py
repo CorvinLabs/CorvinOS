@@ -20,25 +20,59 @@ Compliance:
 - ADR-0314: Learning events + per-scene feedback
 - ADR-0007: Tenant isolation
 - ADR-0720: Fail-closed hardening
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+``AutonomousVideoProcessor`` is constructed only by tests.
+
+Audit: every stage record goes to the tenant audit chain as
+``video.autonomous_stage`` through ``core.deployment.audit_sink``
+(``forge.security_events.write_event`` on ``tenant_audit_chain``), content-free
+(stage, codecs, counts, error class — never a file path or an error text).
+``audit_events`` on the processor/result mirrors the committed chain records.
+It used to be an in-memory list with a per-record sha256 that chained nothing.
+``learning_events`` is an in-memory list only — nothing emits it to ADR-0314.
+
+ffprobe/ffmpeg are driven as CLI subprocesses (JSON from ``ffprobe``); the
+module used to ``import ffmpeg`` (the optional ``video`` extra) at import
+time and was unimportable without it. A missing binary fails the stage.
 """
 
-import asyncio
-import hashlib
 import json
 import logging
-import os
 import subprocess
-import tempfile
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-import ffmpeg
+from core.deployment import audit_sink
 
 
 logger = logging.getLogger(__name__)
+
+#: Content-free detail fields of ``video.autonomous_stage``. Anything else a
+#: stage passes (file paths, error texts) is NOT written.
+_AUDIT_FIELDS = (
+    "stage", "pipeline_type", "needs_blender", "needs_audio", "success",
+    "is_valid", "video_codec", "audio_codec", "input_codec", "output_codec",
+    "bitrate_kbps", "width", "height", "error_type", "error_count",
+)
+audit_sink.register_events({"video.autonomous_stage": _AUDIT_FIELDS})
+
+_PROBE_TIMEOUT_S = 60
+
+
+def _ffprobe(path: str) -> Dict[str, Any]:
+    """``ffprobe -show_format -show_streams`` as JSON (raises on failure)."""
+    proc = subprocess.run(
+        ["ffprobe", "-v", "error", "-print_format", "json",
+         "-show_format", "-show_streams", str(path)],
+        capture_output=True, text=True, timeout=_PROBE_TIMEOUT_S, check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffprobe exited {proc.returncode}")
+    return json.loads(proc.stdout or "{}")
 
 
 @dataclass
@@ -268,7 +302,7 @@ class AutonomousVideoProcessor:
 
         except Exception as e:
             logger.error(f"Fatal error in process_video: {e}", exc_info=True)
-            self._emit_audit_event("processor_error", {"error": str(e)})
+            self._emit_audit_event("processor_error", {"error_type": type(e).__name__})
             return VideoResult(
                 success=False,
                 input_file=input_file,
@@ -287,7 +321,7 @@ class AutonomousVideoProcessor:
         Returns InputMetadata with properties or is_valid=False if invalid.
         """
         try:
-            probe = ffmpeg.probe(input_file)
+            probe = _ffprobe(input_file)
             video_stream = next(
                 (s for s in probe["streams"] if s["codec_type"] == "video"),
                 None,
@@ -398,16 +432,14 @@ class AutonomousVideoProcessor:
         output = output_file or str(self.output_dir / f"video_{uuid4()}.mp4")
         try:
             # Preserve input quality; just mux into MP4
-            stream = ffmpeg.input(input_file)
-            stream = ffmpeg.output(
-                stream,
-                output,
-                vcodec="copy",  # Copy video stream as-is
-                acodec="aac",   # Re-encode audio to AAC if needed
-                audio_bitrate="256k",
-                y=None,  # Overwrite output
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-i", input_file,
+                 "-c:v", "copy",          # Copy video stream as-is
+                 "-c:a", "aac",           # Re-encode audio to AAC if needed
+                 "-b:a", "256k",
+                 "-y", output],           # Overwrite output
+                check=True, capture_output=True,
             )
-            ffmpeg.run(stream, quiet=True)
 
             self._emit_audit_event("simple_processing_complete", {
                 "output_file": output,
@@ -422,7 +454,7 @@ class AutonomousVideoProcessor:
             )
         except Exception as e:
             logger.error(f"Simple processing failed: {e}")
-            self._emit_audit_event("simple_processing_error", {"error": str(e)})
+            self._emit_audit_event("simple_processing_error", {"error_type": type(e).__name__})
             return ProcessResult(
                 success=False,
                 input_file=input_file,
@@ -482,7 +514,7 @@ class AutonomousVideoProcessor:
             )
         except Exception as e:
             logger.error(f"Enhanced processing failed: {e}")
-            self._emit_audit_event("enhanced_processing_error", {"error": str(e)})
+            self._emit_audit_event("enhanced_processing_error", {"error_type": type(e).__name__})
             return ProcessResult(
                 success=False,
                 input_file=input_file,
@@ -505,7 +537,7 @@ class AutonomousVideoProcessor:
                     errors=[f"Output file not found: {output_file}"],
                 )
 
-            probe = ffmpeg.probe(output_file)
+            probe = _ffprobe(output_file)
             video_stream = next(
                 (s for s in probe["streams"] if s["codec_type"] == "video"),
                 None,
@@ -553,24 +585,9 @@ class AutonomousVideoProcessor:
 
         Returns bitrate in kbps.
         """
-        # Parse resolution
-        width, height = map(int, resolution.split("x"))
-        pixels = width * height
+        from .auto_format_converter import optimal_bitrate_kbps
 
-        # Bitrate formula: pixels * fps * complexity_factor
-        # Complexity factor based on resolution tier
-        if pixels <= 854 * 480:  # SD
-            complexity = 0.3
-        elif pixels <= 1280 * 720:  # HD
-            complexity = 0.5
-        elif pixels <= 1920 * 1080:  # FHD
-            complexity = 0.7
-        else:  # 4K
-            complexity = 1.0
-
-        bitrate = int(pixels * fps * complexity / 1000)
-        # Cap between 500 kbps and 20 mbps
-        return max(500, min(20000, bitrate))
+        return optimal_bitrate_kbps(resolution, fps)
 
     def _generate_ffmpeg_command(
         self,
@@ -593,21 +610,29 @@ class AutonomousVideoProcessor:
         return cmd
 
     def _emit_audit_event(self, event_type: str, data: Dict) -> None:
-        """Emit audit event (hash-chained, ADR-0232)."""
-        event = {
+        """Write one content-free stage record to the tenant audit chain.
+
+        Raises ``audit_sink.AuditWriteFailed`` when it does not commit
+        (``process_video`` then reports failure — fail-closed).
+        """
+        details: Dict[str, Any] = {"stage": event_type}
+        for key in _AUDIT_FIELDS:
+            if key in data and key != "stage":
+                details[key] = data[key]
+        if "errors" in data:
+            details["error_count"] = len(data.get("errors") or [])
+        record = audit_sink.emit("video.autonomous_stage", details,
+                                 tenant_id=self.tenant_id)
+        self.audit_events.append({
             "event_type": event_type,
             "tenant_id": self.tenant_id,
-            "timestamp": datetime.utcnow().isoformat(),
-            "data": data,
-        }
-        # Simple hash-chaining (real implementation would use crypto)
-        event["hash"] = hashlib.sha256(
-            json.dumps(event, sort_keys=True, default=str).encode()
-        ).hexdigest()
-        self.audit_events.append(event)
+            "timestamp": record.get("ts") or datetime.utcnow().isoformat(),
+            "hash": record.get("hash"),
+            "prev_hash": record.get("prev_hash"),
+        })
 
     def _emit_learning_event(self, event_type: str, data: Dict) -> None:
-        """Emit learning event (ADR-0314)."""
+        """Record a learning event IN MEMORY (not emitted to ADR-0314)."""
         event = {
             "event_type": event_type,
             "tenant_id": self.tenant_id,

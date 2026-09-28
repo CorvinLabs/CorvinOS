@@ -16,6 +16,6 @@ _BASE = "/v1/console/skills/os.delegation_router"
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["learning", "feedback/history?limit=20", "optimization/proposals"])
-async def test_skill_learning_routes_require_a_session(async_client: AsyncClient, path: str):
-    response = await async_client.get(f"{_BASE}/{path}")
+async def test_skill_learning_routes_require_a_session(anon_async_client: AsyncClient, path: str):
+    response = await anon_async_client.get(f"{_BASE}/{path}")
     assert response.status_code == 401

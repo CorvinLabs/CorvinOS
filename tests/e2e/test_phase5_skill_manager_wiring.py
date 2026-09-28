@@ -110,3 +110,30 @@ class TestPhase5SkillManagerWiring:
         assert "SkillInstaller" in component_path.read_text() or \
                "skills-manager" in component_path.read_text()
 
+
+
+class TestSkillManagerOverHttp:
+    """The routes answered through the real ``/v1/console`` mount.
+
+    Added 2026-09-28 (adversarial review round 7): everything above reads
+    source text or inspects signatures; none of it sent a request, so a route
+    that 404s on the live mount would have stayed green.
+    """
+
+    def test_installed_lists_the_tenant_registry(self, client):
+        response = client.get("/v1/console/skills-manager/skills/installed")
+        assert response.status_code == 200, response.text[:300]
+        data = response.json()
+        assert data["total"] == len(data["skills"])
+
+    def test_health_answers(self, client):
+        response = client.get("/v1/console/skills-manager/skills/health")
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+
+    @pytest.mark.parametrize("method,url", [
+        ("get", "/v1/console/skills-manager/skills/installed"),
+        ("post", "/v1/console/skills-manager/skills/install"),
+    ])
+    def test_unauthenticated_caller_is_refused(self, anon_client, method, url):
+        assert getattr(anon_client, method)(url).status_code == 401

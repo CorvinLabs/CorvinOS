@@ -249,17 +249,30 @@ class VoiceSynthesizer:
         path.write_bytes(audio_data)
 
     async def _measure_audio_duration(self, audio_path: Path) -> float:
-        """Measure REAL audio duration (ms) via ffprobe -- never estimated
-        from file size, which assumed a raw-PCM format this file never was."""
-        import ffmpeg
+        """Measure REAL audio duration (ms) via the ``ffprobe`` binary -- never
+        estimated from file size, which assumed a raw-PCM format this file
+        never was.
 
+        Raises when the file cannot be probed: the scene then counts as
+        failed. It used to ``import ffmpeg`` (the optional ``video`` extra)
+        OUTSIDE its try -- failing every scene on a default install -- and
+        otherwise returned 0.0, which was then reported as a "high"
+        confidence measurement.
+        """
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
         try:
-            probe = ffmpeg.probe(str(audio_path))
-            duration_s = float(probe.get("format", {}).get("duration", 0.0))
-            return duration_s * 1000
-        except Exception as e:
-            logger.warning(f"Failed to probe audio duration for {audio_path}: {e}")
-            return 0.0
+            duration_s = float(stdout.decode().strip())
+        except ValueError:
+            duration_s = 0.0
+        if proc.returncode != 0 or duration_s <= 0:
+            raise RuntimeError(f"ffprobe could not measure {audio_path.name}")
+        return duration_s * 1000
 
     async def _emit_scene_rendered_event(
         self,

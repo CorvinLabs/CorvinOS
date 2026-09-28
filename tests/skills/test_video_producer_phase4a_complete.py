@@ -21,6 +21,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import pytest
 
 from core.skills.workers.youtube_uploader import YouTubeUploader
+
+
+class _FakeYouTubeAPI:
+    """Test double for the EXTERNAL YouTube Data API boundary.
+
+    The uploader (the unit under test) runs for real; only the Google API
+    client is replaced. Using ``oauth_token="test_token"`` instead needs the
+    optional ``youtube`` extra (google-auth) and then makes the background
+    task call the real googleapis.com with a bogus token.
+    """
+
+    def __init__(self):
+        self.uploads: list[dict] = []
+        self.captions: list[tuple] = []
+
+    async def is_authenticated(self) -> bool:
+        return True
+
+    async def upload_video(self, **kwargs):
+        self.uploads.append(kwargs)
+        return {"status": "uploaded", "video_id": "vid123",
+                "url": "https://youtube.com/watch?v=vid123"}
+
+    async def upload_captions(self, video_id, srt_path, language="en"):
+        self.captions.append((video_id, srt_path))
+        return True
+
+
+def _authed_uploader(workdir):
+    uploader = YouTubeUploader(workdir)
+    uploader.youtube_api = _FakeYouTubeAPI()
+    return uploader
+
+
+async def _drain(uploader) -> None:
+    """Wait for every background upload task the uploader started."""
+    await asyncio.gather(*list(uploader._background_tasks.values()))
 from core.skills.os_skills.video_producer.types import Scene, Storyboard
 
 
@@ -40,7 +77,7 @@ class TestYouTubeUploaderPhase4a:
     async def test_enqueue_upload_precondition_missing_file(self):
         """Test precondition: video file must exist."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            uploader = YouTubeUploader(tmpdir, oauth_token="test_token")
+            uploader = _authed_uploader(tmpdir)
 
             metadata = {"title": "Test"}
 
@@ -64,7 +101,7 @@ class TestYouTubeUploaderPhase4a:
             video_path.write_bytes(b"MP4" + b"\x00" * 1000000)
 
             # Mock the file size check
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             with patch.object(Path, "stat") as mock_stat:
                 mock_stat.return_value.st_size = 300 * 1024**3  # 300GB
@@ -84,7 +121,7 @@ class TestYouTubeUploaderPhase4a:
             video_path = project_dir / "output.mp4"
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)  # 1MB video
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             metadata = {
                 "title": "Test Video",
@@ -107,7 +144,7 @@ class TestYouTubeUploaderPhase4a:
             video_path = project_dir / "output.mp4"
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             metadata = {"title": "Test Video"}
 
@@ -127,7 +164,7 @@ class TestYouTubeUploaderPhase4a:
             video_path = project_dir / "output.mp4"
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             metadata = {
                 "title": "Test Video",
@@ -156,7 +193,7 @@ class TestYouTubeUploaderPhase4a:
             video_path = project_dir / "output.mp4"
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             metadata = {"title": "Test Video"}
             result = await uploader.enqueue_upload(video_path, metadata)
@@ -173,7 +210,7 @@ class TestYouTubeUploaderPhase4a:
         """Test retrieving upload status persisted to disk."""
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             # Manually create a record on disk
             task_id = "test_task_123"
@@ -286,7 +323,7 @@ class TestYouTubeUploaderPhase4a:
             video_path = project_dir / "output.mp4"
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
             uploader.youtube_api.upload_video = AsyncMock(
                 return_value={"status": "uploaded", "video_id": "test123",
                               "url": "https://youtube.com/watch?v=test123"}
@@ -312,7 +349,7 @@ class TestYouTubeUploaderPhase4a:
             video_path = project_dir / "output.mp4"
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
             uploader.youtube_api.upload_video = AsyncMock(
                 return_value={"status": "uploaded", "video_id": "test123",
                               "url": "https://youtube.com/watch?v=test123"}
@@ -343,7 +380,7 @@ class TestYouTubeUploaderPhase4a:
             video_path = project_dir / "output.mp4"
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
             uploader.youtube_api.upload_video = AsyncMock(
                 return_value={"status": "uploaded", "video_id": "test123",
                               "url": "https://youtube.com/watch?v=test123"}
@@ -354,7 +391,7 @@ class TestYouTubeUploaderPhase4a:
             task_id = result["task_id"]
 
             # Wait for completion
-            await asyncio.sleep(5)
+            await _drain(uploader)
 
             # Load from disk
             record_path = uploader.upload_dir / f"{task_id}.json"
@@ -381,7 +418,7 @@ class TestYouTubeUploaderPhase4aE2E:
             video_path.write_bytes(b"MP4..." + b"\x00" * 2_000_000)  # 2MB video
 
             # Create uploader and enqueue
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             metadata = {
                 "title": "CorvinOS Generated Video",
@@ -405,7 +442,7 @@ class TestYouTubeUploaderPhase4aE2E:
             video_path = project_dir / "output.mp4"
             video_path.write_bytes(b"MP4..." + b"\x00" * 2_000_000)
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             # Simulate low-quality video
             low_quality_metadata = {
@@ -431,7 +468,7 @@ class TestYouTubeUploaderPhase4aE2E:
             video_path = project_dir / "output.mp4"
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             metadata = {"title": "Test Video"}
 

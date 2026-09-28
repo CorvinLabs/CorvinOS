@@ -174,17 +174,20 @@ class VideoAssembler:
             except Exception:
                 pass
 
-        timings: dict[str, float] = {}
-        try:
-            import ffmpeg
-        except ImportError:
-            return timings
+        # Probed with the ``ffprobe`` BINARY. This used to ``import ffmpeg``
+        # (the optional ``video`` extra) and return {} when it was missing --
+        # on a default install the timing check was silently dead again.
+        import subprocess
 
+        timings: dict[str, float] = {}
         for audio_path in audio_dir.glob("*.mp3"):
             try:
-                probe = ffmpeg.probe(str(audio_path))
-                duration_s = float(probe.get("format", {}).get("duration", 0.0))
-                timings[audio_path.stem] = duration_s * 1000
+                proc = subprocess.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
+                    capture_output=True, text=True, timeout=60, check=True,
+                )
+                timings[audio_path.stem] = float(proc.stdout.strip()) * 1000
             except Exception as e:
                 logger.warning(f"Failed to probe audio duration for {audio_path}: {e}")
 
@@ -228,12 +231,10 @@ class VideoAssembler:
         import subprocess
         import shutil
 
-        # Check if ffmpeg is available
+        # Fail closed without ffmpeg. This used to write a fake 1 MB "MP4"
+        # (b'ftypisom' + zeros) and return as if encoding had succeeded.
         if not shutil.which("ffmpeg"):
-            # Fallback: generate stub MP4 for testing
-            mp4_stub = b'ftypisom' + (b'\x00' * 1_000_000)  # Minimal MP4 header
-            output_path.write_bytes(mp4_stub)
-            return
+            raise RuntimeError("ffmpeg binary not found on PATH; cannot encode video")
 
         # Build ffmpeg command. -map is required: with a filter_complex whose
         # outputs are explicitly labelled ([outv]/[outa]), ffmpeg does not

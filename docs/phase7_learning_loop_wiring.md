@@ -1,6 +1,6 @@
 # Phase 7: Learning Loop Architecture Wiring
 
-> **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** "Architecture Wiring Complete" is false: `core/skills/skill_config_store.py` does not exist, and `test_phase7_k1_learning_loop_wiring.py` is 1/3 (threshold unchanged by feedback; genesis-hash mismatch).
+> **Verified 2026-09-27 (adversarial review) — status claims in this document are NOT accurate.** "Architecture Wiring Complete" is false: `core/skills/skill_config_store.py` does not exist, and `test_phase7_k1_learning_loop_wiring.py` was deleted in review round 7: it imported no product code (every orchestrator, optimizer, audit trail and config store in it was a mock defined in the test file itself), so it proved nothing about any wiring.
 >
 > **Status note (2026-09-27, adversarial review):** the audit sink named below, `core/compliance/audit_trail.py`, and `core/skills/video_producer/orchestrator.py` (`VideoOrchestrator`) have no production caller. `audit_trail.py` no longer ships a second hash chain (the one tenant chain is `tenant_audit_chain()`); `execute_frame` dispatches to Phase 6b workers that are not implemented and fail closed instead of reporting every frame `completed`.
 
@@ -266,7 +266,7 @@ def execute_with_learning(self, skill_id, input_data):
 
 ## k=1 Test Skeleton: Proof of Learning Loop
 
-**Test File:** `tests/e2e/test_phase7_k1_learning_loop_wiring.py`
+**Test File:** `tests/e2e/test_phase7_k1_learning_loop_wiring.py` (deleted 2026-09-28 — mocks only, see note at top)
 
 **Test Case 1: Identical routing without feedback**
 

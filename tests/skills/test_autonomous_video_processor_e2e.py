@@ -17,112 +17,139 @@ Compliance:
 - ADR-0007: Tenant isolation
 """
 
-import asyncio
-import tempfile
+import json
+import shutil
+import subprocess
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+_HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+needs_ffmpeg = pytest.mark.skipif(
+    not _HAVE_FFMPEG, reason="external dependency: ffmpeg/ffprobe binaries not on PATH"
+)
+
+
+def _make_video(path: Path, *, vcodec: str = "libx264", audio: bool = True) -> Path:
+    """Synthesize a real 1-second clip with the ffmpeg binary."""
+    cmd = ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25"]
+    if audio:
+        cmd += ["-f", "lavfi", "-i", "sine=frequency=440", "-c:a", "aac"]
+    cmd += ["-t", "1", "-c:v", vcodec, "-y", str(path)]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=60)
+    return path
+
+
+def _chain_stages(tenant_id: str) -> list[dict]:
+    from core.deployment import audit_sink
+
+    _, fp = audit_sink._forge()
+    chain = fp.tenant_audit_chain(tenant_id)
+    if not chain.exists():
+        return []
+    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    return [r for r in recs if r.get("event_type") == "video.autonomous_stage"]
+
+
+@pytest.fixture(autouse=True)
+def _process_tenant(monkeypatch):
+    # The forge writer refuses a record for a tenant other than the process
+    # tenant (ADR-0007 chokepoint), exactly as in production.
+    monkeypatch.setenv("CORVIN_TENANT_ID", "test_tenant")
 
 
 @pytest.mark.asyncio
 class TestAutonomousVideoProcessorE2E:
-    """End-to-end autonomous video processing."""
+    """End-to-end autonomous video processing — real ffmpeg, real audit chain."""
 
-    async def test_e2e_simple_video_process(self):
-        """Test simple pipeline: transparent MP4 conversion."""
+    @needs_ffmpeg
+    async def test_e2e_simple_video_process(self, tmp_path):
+        """Simple pipeline (H.264 + AAC in): remux to MP4, validated by ffprobe."""
         from core.skills.os_skills.video_producer.autonomous_processor import (
             AutonomousVideoProcessor,
         )
 
-        processor = AutonomousVideoProcessor(tenant_id="test_tenant")
+        processor = AutonomousVideoProcessor(tenant_id="test_tenant", output_dir=str(tmp_path / "out"))
+        src = _make_video(tmp_path / "input.mp4")
 
-        # Create a fake input video (just needs to exist)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            input_file = Path(tmpdir) / "input.mp4"
-            input_file.touch()
+        result = await processor.process_video(str(src))
 
-            # Mock ffprobe to return valid metadata
-            with patch("ffmpeg.probe") as mock_probe:
-                mock_probe.return_value = {
-                    "format": {
-                        "duration": "60.0",
-                        "bit_rate": "5000000",
-                        "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
-                    },
-                    "streams": [
-                        {
-                            "codec_type": "video",
-                            "codec_name": "h264",
-                            "width": 1920,
-                            "height": 1080,
-                            "r_frame_rate": "30/1",
-                        },
-                        {
-                            "codec_type": "audio",
-                            "codec_name": "aac",
-                        },
-                    ],
-                }
+        assert result.success, result.process_stages
+        assert result.input_file == str(src)
+        assert Path(result.output_file).is_file()
+        assert result.validation.video_codec == "h264"
+        assert result.validation.audio_codec == "aac"
+        assert 0.5 < result.validation.duration_sec < 2.0
+        assert result.tenant_id == "test_tenant"
+        stages = [e["event_type"] for e in result.audit_events]
+        assert "simple_processing_complete" in stages and stages[-1] == "processor_complete"
 
-                # Mock ffmpeg.output and ffmpeg.run for simple processing
-                with patch("ffmpeg.input") as mock_input, \
-                     patch("ffmpeg.output") as mock_output, \
-                     patch("ffmpeg.run") as mock_run:
-
-                    mock_input.return_value = MagicMock()
-                    mock_output.return_value = MagicMock()
-
-                    result = await processor.process_video(str(input_file))
-
-                    # Verify results
-                    assert result.success or not result.success  # Mocked, may vary
-                    assert result.input_file == str(input_file)
-                    assert len(result.audit_events) > 0
-                    assert result.tenant_id == "test_tenant"
-
-    async def test_e2e_format_detection_rejects_invalid_input(self):
-        """Test format detection rejects invalid input (fail-closed)."""
+    @needs_ffmpeg
+    async def test_e2e_enhanced_video_process_transcodes(self, tmp_path):
+        """VP9 without audio → enhanced pipeline → H.264 output (no audio track)."""
         from core.skills.os_skills.video_producer.autonomous_processor import (
             AutonomousVideoProcessor,
         )
 
-        processor = AutonomousVideoProcessor(tenant_id="test_tenant")
+        processor = AutonomousVideoProcessor(tenant_id="test_tenant", output_dir=str(tmp_path / "out"))
+        src = _make_video(tmp_path / "input.webm", vcodec="libvpx-vp9", audio=False)
 
-        # Non-existent file
-        result = await processor.process_video("/tmp/nonexistent_file_12345.mp4")
+        result = await processor.process_video(str(src))
+
+        assert result.process_stages["processing"].success
+        assert result.validation.video_codec == "h264"
+        # No audio track came in and none was synthesised: validation says so.
+        assert not result.success
+        assert "No audio stream in output" in result.validation.errors
+
+    async def test_e2e_format_detection_rejects_invalid_input(self, tmp_path):
+        """Format detection rejects invalid input (fail-closed)."""
+        from core.skills.os_skills.video_producer.autonomous_processor import (
+            AutonomousVideoProcessor,
+        )
+
+        processor = AutonomousVideoProcessor(tenant_id="test_tenant", output_dir=str(tmp_path))
+
+        result = await processor.process_video(str(tmp_path / "nonexistent_file_12345.mp4"))
 
         assert not result.success
+        assert result.output_file is None
         assert len(result.audit_events) > 0
 
-    async def test_e2e_audit_trail_hash_chained(self):
-        """Test audit trail events are hash-chained."""
+    async def test_e2e_audit_trail_hash_chained(self, tmp_path):
+        """Stage records are on the REAL tenant chain, linked and content-free."""
+        from core.deployment import audit_sink
         from core.skills.os_skills.video_producer.autonomous_processor import (
             AutonomousVideoProcessor,
         )
 
-        processor = AutonomousVideoProcessor(tenant_id="test_tenant")
+        before = len(_chain_stages("test_tenant"))
+        processor = AutonomousVideoProcessor(tenant_id="test_tenant", output_dir=str(tmp_path))
+        processor._emit_audit_event("test_event_1", {"input_file": "/home/alice/secret.mp4",
+                                                     "video_codec": "h264"})
+        processor._emit_audit_event("test_event_2", {"error": "boom at /home/alice"})
 
-        # Emit test events
-        processor._emit_audit_event("test_event_1", {"data": "value1"})
-        processor._emit_audit_event("test_event_2", {"data": "value2"})
+        recs = _chain_stages("test_tenant")[before:]
+        assert [r["details"]["stage"] for r in recs] == [
+            "processor_initialized", "test_event_1", "test_event_2"]
+        assert recs[1]["details"]["video_codec"] == "h264"
+        assert "alice" not in json.dumps(recs)
+        # The in-memory mirror names the committed records.
+        assert [e["hash"] for e in processor.audit_events] == [r["hash"] for r in recs]
+        for prev, cur in zip(recs, recs[1:]):
+            assert cur["prev_hash"] == prev["hash"]
+        se, fp = audit_sink._forge()
+        ok, problems = se.verify_chain(fp.tenant_audit_chain("test_tenant"))
+        assert ok, problems
 
-        # Verify hash-chain
-        assert len(processor.audit_events) >= 2
-        for event in processor.audit_events:
-            assert "hash" in event
-            assert "event_type" in event
-            assert event["tenant_id"] == "test_tenant"
-
-    async def test_e2e_learning_events_emitted(self):
-        """Test learning events are emitted (ADR-0314)."""
+    async def test_e2e_learning_events_emitted(self, tmp_path):
+        """Learning events are recorded in memory (not emitted to ADR-0314)."""
         from core.skills.os_skills.video_producer.autonomous_processor import (
             AutonomousVideoProcessor,
         )
 
-        processor = AutonomousVideoProcessor(tenant_id="test_tenant")
+        processor = AutonomousVideoProcessor(tenant_id="test_tenant", output_dir=str(tmp_path))
 
-        # Emit test learning event
         processor._emit_learning_event("video_processed", {
             "codec": "h264",
             "success": True,
@@ -133,30 +160,60 @@ class TestAutonomousVideoProcessorE2E:
         assert event["event_type"] == "video_processed"
         assert event["tenant_id"] == "test_tenant"
 
-    async def test_e2e_tenant_isolation(self):
-        """Test tenant isolation in audit/learning events."""
+    async def test_e2e_tenant_isolation(self, tmp_path, monkeypatch):
+        """Each processor writes only into its own tenant's chain."""
+        from core.deployment import audit_sink
         from core.skills.os_skills.video_producer.autonomous_processor import (
             AutonomousVideoProcessor,
         )
 
-        processor_t1 = AutonomousVideoProcessor(tenant_id="tenant_1")
-        processor_t2 = AutonomousVideoProcessor(tenant_id="tenant_2")
+        b1, b2 = len(_chain_stages("tenant_1")), len(_chain_stages("tenant_2"))
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_1")
+        processor_t1 = AutonomousVideoProcessor(tenant_id="tenant_1", output_dir=str(tmp_path))
+        processor_t1._emit_audit_event("test", {"video_codec": "h264"})
+        # A tenant_2 processor inside a tenant_1 process is refused, not
+        # written into anybody's chain.
+        with pytest.raises(audit_sink.AuditWriteFailed):
+            AutonomousVideoProcessor(tenant_id="tenant_2", output_dir=str(tmp_path))
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_2")
+        processor_t2 = AutonomousVideoProcessor(tenant_id="tenant_2", output_dir=str(tmp_path))
+        processor_t2._emit_audit_event("test", {"video_codec": "vp9"})
 
-        processor_t1._emit_audit_event("test", {"data": "t1"})
-        processor_t2._emit_audit_event("test", {"data": "t2"})
-
-        # Verify tenant isolation
+        t1, t2 = _chain_stages("tenant_1")[b1:], _chain_stages("tenant_2")[b2:]
+        assert len(t1) == len(t2) == 2
+        assert all(r["details"]["tenant_id"] == "tenant_1" for r in t1)
+        assert all(r["details"]["tenant_id"] == "tenant_2" for r in t2)
+        assert t1[-1]["details"]["video_codec"] == "h264"
+        assert t2[-1]["details"]["video_codec"] == "vp9"
         assert all(e["tenant_id"] == "tenant_1" for e in processor_t1.audit_events)
         assert all(e["tenant_id"] == "tenant_2" for e in processor_t2.audit_events)
 
-    async def test_e2e_pipeline_detection_simple_vs_enhanced(self):
+    async def test_e2e_audit_failure_fails_the_run(self, tmp_path):
+        """Fail-closed: a stage record that does not commit aborts the run.
+
+        The error record itself cannot be written either, so the audit
+        failure propagates instead of a silently unaudited result.
+        """
+        from unittest.mock import patch
+
+        from core.deployment import audit_sink
+        from core.skills.os_skills.video_producer.autonomous_processor import (
+            AutonomousVideoProcessor,
+        )
+
+        processor = AutonomousVideoProcessor(tenant_id="test_tenant", output_dir=str(tmp_path))
+        with patch.object(audit_sink, "emit", side_effect=audit_sink.AuditWriteFailed("x")):
+            with pytest.raises(audit_sink.AuditWriteFailed):
+                await processor.process_video(str(tmp_path / "x.mp4"))
+
+    async def test_e2e_pipeline_detection_simple_vs_enhanced(self, tmp_path):
         """Test pipeline auto-detection (simple vs. enhanced)."""
         from core.skills.os_skills.video_producer.autonomous_processor import (
             AutonomousVideoProcessor,
             InputMetadata,
         )
 
-        processor = AutonomousVideoProcessor(tenant_id="test_tenant")
+        processor = AutonomousVideoProcessor(tenant_id="test_tenant", output_dir=str(tmp_path))
 
         # Simple case: H.264 + AAC
         metadata_simple = InputMetadata(
@@ -199,48 +256,52 @@ class TestAutonomousVideoProcessorE2E:
         pipeline = await processor._determine_pipeline(metadata_enhanced)
         assert pipeline.pipeline_type == "enhanced"
 
-    async def test_bitrate_calculation_various_resolutions(self):
-        """Test bitrate auto-calculation for various resolutions."""
+    async def test_bitrate_calculation_various_resolutions(self, tmp_path):
+        """Bitrate grows with resolution (it used to hit the cap at 1080p)."""
         from core.skills.os_skills.video_producer.autonomous_processor import (
             AutonomousVideoProcessor,
         )
 
-        processor = AutonomousVideoProcessor()
+        processor = AutonomousVideoProcessor(tenant_id="test_tenant", output_dir=str(tmp_path))
 
-        # Test various resolutions
         cases = [
-            ("640x480", 30, 300),  # SD → ~300 kbps
-            ("1280x720", 30, 600),  # HD → ~600 kbps
-            ("1920x1080", 30, 1200),  # FHD → ~1200 kbps
-            ("3840x2160", 30, 2500),  # 4K → ~2500 kbps
+            ("640x480", 30, 500, 2_500),
+            ("1280x720", 30, 1_500, 4_000),
+            ("1920x1080", 30, 3_000, 8_000),
+            ("3840x2160", 30, 12_000, 45_000),
         ]
-
-        for resolution, fps, expected_min_kbps in cases:
+        rates = []
+        for resolution, fps, lo, hi in cases:
             bitrate = processor._calculate_optimal_bitrate(resolution, fps)
-            assert bitrate >= expected_min_kbps * 0.8  # Allow ±20% variance
-            assert bitrate <= 20000  # Cap check
+            assert lo <= bitrate <= hi, (resolution, bitrate)
+            rates.append(bitrate)
+        assert rates == sorted(rates) and len(set(rates)) == len(rates)
 
-    async def test_output_validation_checks_codec_and_duration(self):
-        """Test output validation checks codec and duration."""
+    @needs_ffmpeg
+    async def test_output_validation_checks_codec_and_duration(self, tmp_path):
+        """Validation reads the real file: missing → invalid; real clip → valid."""
         from core.skills.os_skills.video_producer.autonomous_processor import (
             AutonomousVideoProcessor,
         )
 
-        processor = AutonomousVideoProcessor()
+        processor = AutonomousVideoProcessor(tenant_id="test_tenant", output_dir=str(tmp_path))
 
-        # Test with non-existent file
-        validation = await processor._validate_output("/tmp/nonexistent.mp4")
+        validation = await processor._validate_output(str(tmp_path / "nonexistent.mp4"))
         assert not validation.is_valid
         assert len(validation.errors) > 0
 
-    async def test_ffmpeg_command_generation(self):
+        ok = await processor._validate_output(str(_make_video(tmp_path / "v.mp4")))
+        assert ok.is_valid, ok.errors
+        assert ok.video_codec == "h264" and ok.audio_codec == "aac"
+
+    async def test_ffmpeg_command_generation(self, tmp_path):
         """Test ffmpeg command auto-generation."""
         from core.skills.os_skills.video_producer.autonomous_processor import (
             AutonomousVideoProcessor,
             ConversionParams,
         )
 
-        processor = AutonomousVideoProcessor()
+        processor = AutonomousVideoProcessor(tenant_id="test_tenant", output_dir=str(tmp_path))
 
         params = ConversionParams(
             video_codec="h264",
@@ -276,17 +337,18 @@ class TestAutoFormatConverter:
 
         converter = AutoFormatConverter()
 
-        # Test SD
+        # Target H.264 rates: ~0.9 Mbps at 480p30, ~5 Mbps at 1080p30,
+        # ~17 Mbps at 2160p30 — and strictly increasing with resolution
+        # (the old formula capped 1080p and 4K at the same 20 Mbps).
         bitrate_sd = converter._calculate_optimal_bitrate("640x480", 30)
-        assert 200 < bitrate_sd < 500
+        assert 500 <= bitrate_sd < 2500
 
-        # Test FHD
         bitrate_fhd = converter._calculate_optimal_bitrate("1920x1080", 30)
-        assert 800 < bitrate_fhd < 2000
+        assert 3000 < bitrate_fhd < 8000
 
-        # Test 4K
         bitrate_4k = converter._calculate_optimal_bitrate("3840x2160", 30)
-        assert 2000 < bitrate_4k < 5000
+        assert 12000 < bitrate_4k < 45000
+        assert bitrate_sd < bitrate_fhd < bitrate_4k
 
     async def test_codec_selection_h264_preferred(self):
         """Test H.264 is preferred codec."""

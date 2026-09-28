@@ -102,8 +102,9 @@ class ADRGateValidator:
                 artifact_type="ADR"
             ))
 
-        # If paths is empty, warn
-        if not artifact.get("paths"):
+        # If paths is present but empty, warn. (A MISSING paths field is
+        # already an error above; warning on it too reported one defect twice.)
+        if "paths" in artifact and not artifact["paths"]:
             findings.append(GateFinding(
                 category="empty_field",
                 severity="warning",

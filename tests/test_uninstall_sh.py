@@ -72,12 +72,24 @@ def sandbox(tmp_path: Path):
     for name in ("systemctl", "launchctl", "docker", "claude"):
         _shim(fake, name, f'echo "{name} $*" >> "{calls}"; exit 0')
     _shim(fake, "ps", "exit 0")  # empty process table
+    # The root-level branch (/etc/systemd/system/corvin-*.service) acts when
+    # `id -u` is 0 or `sudo -n` works. `sudo` resets PATH to secure_path, so
+    # under sudo the systemctl/rm shims above would NOT apply and a test run
+    # could disable and delete the host's real system units. Pin both: never
+    # root, sudo always refuses (and is logged, so a call is visible).
+    _shim(fake, "sudo", f'echo "sudo $*" >> "{calls}"; exit 1')
+    _shim(fake, "id", 'if [ "$1" = "-u" ]; then echo 4242; else exec /usr/bin/id "$@"; fi')
     _shim(fake, "uv", f'echo "uv $*" >> "{calls}"\n'
                       f'[ "$1 $2" = "tool dir" ] && echo "{tool_dir}" && exit 0\n'
                       f'[ "$1 $2" = "tool uninstall" ] && rm -rf "{env_dir}"\nexit 0')
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
     env = {
         "HOME": str(home), "PATH": f"{fake}:/usr/bin:/bin",
         "CORVIN_CONSOLE_PORT": "59999", "LANG": "C",
+        # The script deletes $TMPDIR/corvinos-{install,update}.log; without
+        # this it removed the host's real /tmp logs.
+        "TMPDIR": str(tmpdir),
     }
     return {"home": home, "env": env, "calls": calls, "dev": dev,
             "managed": managed, "env_dir": env_dir, "bindir": bindir, "units": units}
@@ -205,13 +217,17 @@ def _docker_shim(sandbox, *, cp_ok: bool):
     state.mkdir(exist_ok=True)
     (state / "containers").write_text("c0ffee\n")
     calls = sandbox["calls"]
+    # Built outside the f-string: a backslash inside an f-string expression
+    # is a SyntaxError before Python 3.12, which made this whole file fail to
+    # collect.
+    cp_body = 'mkdir -p "$3"; echo chain > "$3/audit.jsonl"; exit 0' if cp_ok else "exit 1"
     _shim(fake, "docker", f'''echo "docker $*" >> "{calls}"
 S="{state}"
 case "$1" in
   info) exit 0 ;;
   ps) cat "$S/containers" 2>/dev/null; exit 0 ;;
   inspect) echo "/corvin-console"; exit 0 ;;
-  cp) {"mkdir -p \"$3\"; echo chain > \"$3/audit.jsonl\"; exit 0" if cp_ok else "exit 1"} ;;
+  cp) {cp_body} ;;
   rm) : > "$S/containers"; exit 0 ;;
   volume) [ "$2" = ls ] && echo corvin-data; exit 0 ;;
 esac

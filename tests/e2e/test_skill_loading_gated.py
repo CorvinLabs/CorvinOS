@@ -22,6 +22,28 @@ from core.skills.license_binding import LicenseRequiredError
 from core.skills.signature.validator import SignatureValidationError
 
 
+def _publish_hash(manifest) -> None:
+    """Record the manifest's hash the way a marketplace publish would.
+
+    ``ForgeSkillValidator`` refuses a manifest with no stored hash (Layer 2
+    fails closed since 2026-09-27; it used to skip the check and load).
+    """
+    import hashlib
+    import json
+
+    from core.paths.tenant import tenant_home
+
+    body = json.dumps(manifest.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    d = tenant_home("_default") / "global" / "skill_registry_hashes"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{manifest.skill_id}_{manifest.version}.sha256").write_text(hashlib.sha256(body).hexdigest())
+
+
+@pytest.fixture(autouse=True)
+def _isolated_hash_registry(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin_home"))
+
+
 @pytest.fixture
 def signer():
     return SkillManifestSigner()
@@ -55,6 +77,7 @@ def free_skill(keypair):
     )
 
     signature = signer.sign_manifest(manifest, private_key)
+    _publish_hash(manifest)
     return manifest, signature, public_key
 
 
@@ -78,6 +101,7 @@ def paid_skill(keypair):
     )
 
     signature = signer.sign_manifest(manifest, private_key)
+    _publish_hash(manifest)
     return manifest, signature, public_key
 
 
@@ -139,6 +163,20 @@ class TestBlocked:
             validator.validate_and_load(manifest, signature, free_user)
 
 
+class TestUnpublishedManifest:
+    def test_unpublished_manifest_is_refused(self, keypair, free_user):
+        """A validly signed manifest with no stored hash does not load."""
+        from core.skills.signature.validator import ManifestTamperedError
+
+        public_key, private_key = keypair
+        manifest = SkillManifestV2(skill_id="routing.unpublished", version="1.0.0",
+                                   boot_layer="bundled")
+        signature = SkillManifestSigner().sign_manifest(manifest, private_key)
+        with pytest.raises(ManifestTamperedError, match="No stored manifest hash"):
+            ForgeSkillValidator(operator_public_key=public_key).validate_and_load(
+                manifest, signature, free_user)
+
+
 class TestEdgeCases:
     """Edge cases and boundary conditions."""
 
@@ -163,8 +201,9 @@ class TestEdgeCases:
         signer = SkillManifestSigner()
         public_key, private_key = keypair
 
+        # Operator-verified id so Layer 3 (origin) passes; "test.*" was refused there.
         manifest = SkillManifestV2(
-            skill_id="test.empty_tier",
+            skill_id="routing.cost_optimizer",
             version="1.0.0",
             boot_layer="bundled",
             license_binding=LicenseBindingMetadata(
@@ -176,10 +215,11 @@ class TestEdgeCases:
         )
 
         signature = signer.sign_manifest(manifest, private_key)
+        _publish_hash(manifest)
         validator = ForgeSkillValidator(operator_public_key=public_key)
 
         result = validator.validate_and_load(manifest, signature, free_user)
-        assert result.skill_id == "test.empty_tier"
+        assert result.skill_id == "routing.cost_optimizer"
 
 
 if __name__ == "__main__":

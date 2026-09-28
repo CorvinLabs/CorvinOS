@@ -5,6 +5,16 @@ Bridges DataHub Creator project view with Learning Loop infrastructure:
 - Aggregates skill execution + feedback + confidence scores
 - Detects convergence (when optimizer stabilizes)
 - Generates recommendations based on metrics
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). No code
+path injects an ``event_store`` (``ProjectSkill.event_store`` is always None and
+the console route carries a "TODO: inject event_store"), so ``aggregate_metrics``
+always returns an empty ``ProjectMetrics``. The interface it expects —
+``await event_store.query_by_skill(...)`` / ``await event_store.write_event(...)``
+— is not the Track B store's: ``core.learning.event_store.EventStore`` offers a
+SYNCHRONOUS ``query_events(tenant_id, event_type, skill_id, ...)`` and a
+synchronous ``write_event``. Injecting the real store as-is would raise.
+Fenced by ``test_track_b_store_does_not_offer_the_expected_interface``.
 """
 
 from typing import Dict, List, Optional, Any
@@ -41,7 +51,12 @@ class MetricsAggregator:
         """Fetch all learning events for this project's skills and aggregate."""
         if not self.event_store:
             logger.warning("MetricsAggregator: event_store not initialized")
-            return ProjectMetrics(project_id=self.project.project_id)
+            # ``timestamp`` is a required field: this branch — the only one
+            # production reaches (no store is ever injected) — raised TypeError.
+            return ProjectMetrics(
+                project_id=self.project.project_id,
+                timestamp=datetime.utcnow().isoformat() + "Z",
+            )
 
         # Query learning store for events related to this project's skills
         events = await self._fetch_project_events()

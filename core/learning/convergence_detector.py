@@ -194,25 +194,38 @@ class ConvergenceDetector:
         with self._lock:
             try:
                 current_phase = self._phases.get(skill_id, ConvergencePhase.EXPLORATION)
-                new_phase = self._compute_phase(
-                    current_phase,
-                    current_confidence,
-                    n_samples,
-                    trend_direction,
-                    plateau_days,
-                )
 
-                # Record transition if phase changed
-                if new_phase != current_phase:
+                # Settle the state machine for THIS observation. _compute_phase
+                # takes one edge per call, so a skill whose first observation
+                # already shows n=50 samples on a 7-day 0.92 plateau used to be
+                # reported as PLATEAU and needed the same observation fed twice
+                # more to reach CONVERGED. Each hop is recorded as its own
+                # transition; a revisited phase stops the walk (the edges
+                # EXPLORATION<->PLATEAU can cycle on contradictory input).
+                new_phase = current_phase
+                visited = {current_phase}
+                while True:
+                    step = self._compute_phase(
+                        new_phase,
+                        current_confidence,
+                        n_samples,
+                        trend_direction,
+                        plateau_days,
+                    )
+                    if step == new_phase or step in visited:
+                        break
                     self._record_transition(
                         skill_id,
-                        current_phase,
                         new_phase,
+                        step,
                         current_confidence,
                         n_samples,
                         timestamp,
                     )
+                    visited.add(step)
+                    new_phase = step
 
+                if new_phase != current_phase:
                     # Update schedule
                     self._schedule_optimization(skill_id, new_phase, timestamp)
 
@@ -263,16 +276,21 @@ class ConvergenceDetector:
 
         with self._lock:
             try:
-                # Need a recorded plateau to detect divergence
+                # Need a recorded plateau to detect divergence. (This used to
+                # also require ``observed_as_true``, which only
+                # check_plateau_resumed sets — i.e. only a plateau already
+                # proven FALSE could ever diverge, so no real plateau did.)
                 boundary = self._false_positive_boundaries.get(skill_id)
-                if not boundary or not boundary.observed_as_true:
+                if not boundary:
                     return None
 
                 plateau_conf = boundary.plateau_confidence
                 decline_percent = (current_confidence - plateau_conf) / (plateau_conf + 0.001)
 
-                # Only trigger if actually diverging
-                if decline_percent >= -self.DIVERGENCE_WARN_THRESHOLD:
+                # Only trigger if the decline is beyond the warn threshold.
+                # (Was ``>= -THRESHOLD``: with THRESHOLD = -0.05 that let every
+                # decline smaller than +5% through, so a -0.5% wobble alerted.)
+                if decline_percent > self.DIVERGENCE_WARN_THRESHOLD:
                     return None
 
                 # Determine severity

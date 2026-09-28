@@ -33,10 +33,8 @@ def mock_event_store():
     store = AsyncMock()
 
     # Mock query results
-    async def mock_query(*args, **kwargs):
-        return []  # Empty by default
-
-    store.query_by_skill = mock_query
+    # AsyncMock (not a bare coroutine function) so calls can be asserted.
+    store.query_by_skill = AsyncMock(return_value=[])  # Empty by default
     store.write_event = AsyncMock()
 
     return store
@@ -194,11 +192,36 @@ class TestDataHubCreatorRoutesWired:
 
 
 class TestMetricsAggregationWiring:
-    """Prove that metrics aggregation is wired to Track B."""
+    """MetricsAggregator against an injected store.
+
+    These are UNIT tests of the aggregator's contract with a mocked store — they
+    do NOT prove Track B wiring, which does not exist (see the fence below and
+    the NOT WIRED note in metrics_aggregator.py).
+    """
+
+    def test_track_b_store_does_not_offer_the_expected_interface(self):
+        """Fence: update metrics_aggregator.py + this test when the wiring lands."""
+        import inspect
+
+        from core.learning.event_store import EventStore
+
+        assert not hasattr(EventStore, "query_by_skill")
+        assert not inspect.iscoroutinefunction(EventStore.write_event)
+
+    @pytest.mark.asyncio
+    async def test_aggregator_without_store_returns_empty_metrics(self):
+        """The production state (no store injected): empty, never invented."""
+        from core.datahub_creator.models import ProjectModel
+        from core.datahub_creator.metrics_aggregator import MetricsAggregator
+
+        project = ProjectModel(name="No Store", selected_skills=["skill1"])
+        metrics = await MetricsAggregator(project).aggregate_metrics()
+        assert metrics.project_id == project.project_id
+        assert metrics.skill_snapshots == []
 
     @pytest.mark.asyncio
     async def test_metrics_aggregator_queries_event_store(self, mock_event_store):
-        """Prove that MetricsAggregator queries Track B's event store."""
+        """MetricsAggregator queries the injected store, tenant-scoped."""
         from core.datahub_creator.models import ProjectModel
         from core.datahub_creator.metrics_aggregator import MetricsAggregator
 
@@ -212,8 +235,11 @@ class TestMetricsAggregationWiring:
         # Aggregate metrics
         metrics = await aggregator.aggregate_metrics()
 
-        # Should have called event_store.query_by_skill
-        mock_event_store.query_by_skill.assert_called()
+        # Should have queried the store once per selected skill, tenant-scoped
+        mock_event_store.query_by_skill.assert_awaited_once()
+        kwargs = mock_event_store.query_by_skill.await_args.kwargs
+        assert kwargs["skill_id"] == "skill1"
+        assert kwargs["tenant_id"] == "test_tenant"
 
         # Metrics should be returned (even if empty)
         assert metrics is not None

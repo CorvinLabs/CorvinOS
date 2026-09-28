@@ -102,7 +102,7 @@ class TestIsAllSuccess:
 
     def test_all_success(self):
         event = OrchestrationCompleteEvent(
-            event_type="orchestration.completed",
+            tenant_id="tenant_test", event_type="orchestration.completed",
             tasks=[
                 TaskResult(task_name="Task 1", status="success", duration_seconds=10.0),
                 TaskResult(task_name="Task 2", status="success", duration_seconds=20.0),
@@ -112,7 +112,7 @@ class TestIsAllSuccess:
 
     def test_mixed_success_and_failure(self):
         event = OrchestrationCompleteEvent(
-            event_type="orchestration.mixed_failure",
+            tenant_id="tenant_test", event_type="orchestration.mixed_failure",
             tasks=[
                 TaskResult(task_name="Task 1", status="success", duration_seconds=10.0),
                 TaskResult(task_name="Task 2", status="failed", duration_seconds=20.0),
@@ -122,7 +122,7 @@ class TestIsAllSuccess:
 
     def test_all_failed(self):
         event = OrchestrationCompleteEvent(
-            event_type="orchestration.mixed_failure",
+            tenant_id="tenant_test", event_type="orchestration.mixed_failure",
             tasks=[
                 TaskResult(task_name="Task 1", status="failed", duration_seconds=10.0),
                 TaskResult(task_name="Task 2", status="failed", duration_seconds=20.0),
@@ -137,7 +137,7 @@ class TestGenerateDeterministicSummary:
     def test_success_case_three_tasks(self):
         """Test success template with exactly three tasks."""
         event = OrchestrationCompleteEvent(
-            event_type="orchestration.completed",
+            tenant_id="tenant_test", event_type="orchestration.completed",
             tasks=[
                 TaskResult(
                     task_name="Video Producer",
@@ -168,7 +168,7 @@ class TestGenerateDeterministicSummary:
     def test_mixed_failure_case(self):
         """Test mixed failure template."""
         event = OrchestrationCompleteEvent(
-            event_type="orchestration.mixed_failure",
+            tenant_id="tenant_test", event_type="orchestration.mixed_failure",
             tasks=[
                 TaskResult(
                     task_name="Video Producer",
@@ -195,10 +195,45 @@ class TestGenerateDeterministicSummary:
         assert "database timeout" in summary
         assert "Bitte wiederholen" in summary
 
+    def test_task_count_matches_event(self):
+        """The spoken count is the real task count, not a literal "Drei".
+
+        Regression (adversarial review 2026-09-28): both templates hard-coded
+        "Drei Hintergrund-Tasks" while the fast path accepts 2-5 tasks.
+        """
+        two = OrchestrationCompleteEvent(
+            tenant_id="tenant_test", event_type="orchestration.completed",
+            tasks=[
+                TaskResult(task_name="A", status="success", duration_seconds=1.0),
+                TaskResult(task_name="B", status="success", duration_seconds=2.0),
+            ],
+        )
+        summary = _generate_deterministic_summary(two)
+        assert summary.startswith("2 Hintergrund-Tasks erfolgreich")
+        assert "Drei" not in summary
+
+        five_mixed = OrchestrationCompleteEvent(
+            tenant_id="tenant_test", event_type="orchestration.mixed_failure",
+            tasks=[
+                TaskResult(task_name=f"T{i}", status="success" if i else "failed",
+                           duration_seconds=1.0)
+                for i in range(5)
+            ],
+        )
+        assert _generate_deterministic_summary(five_mixed).startswith(
+            "5 Hintergrund-Tasks mit Problemen"
+        )
+
+    def test_event_without_tenant_is_refused(self):
+        with pytest.raises(TypeError):
+            OrchestrationCompleteEvent(event_type="orchestration.completed")
+        with pytest.raises(ValueError, match="tenant_id"):
+            OrchestrationCompleteEvent(tenant_id="", event_type="orchestration.completed")
+
     def test_too_few_tasks(self):
         """Test that single task doesn't match template."""
         event = OrchestrationCompleteEvent(
-            event_type="orchestration.completed",
+            tenant_id="tenant_test", event_type="orchestration.completed",
             tasks=[
                 TaskResult(task_name="Task 1", status="success", duration_seconds=10.0),
             ],
@@ -209,7 +244,7 @@ class TestGenerateDeterministicSummary:
     def test_too_many_tasks(self):
         """Test that >5 tasks don't match template (too complex)."""
         event = OrchestrationCompleteEvent(
-            event_type="orchestration.completed",
+            tenant_id="tenant_test", event_type="orchestration.completed",
             tasks=[
                 TaskResult(task_name=f"Task {i}", status="success", duration_seconds=10.0)
                 for i in range(6)
@@ -221,7 +256,7 @@ class TestGenerateDeterministicSummary:
     def test_unknown_task_status(self):
         """Test that unknown status doesn't match template."""
         event = OrchestrationCompleteEvent(
-            event_type="orchestration.completed",
+            tenant_id="tenant_test", event_type="orchestration.completed",
             tasks=[
                 TaskResult(task_name="Task 1", status="pending", duration_seconds=10.0),
                 TaskResult(task_name="Task 2", status="success", duration_seconds=20.0),
@@ -393,7 +428,7 @@ class TestCallLLMFallback:
     async def test_llm_fallback_success(self):
         """Test successful LLM fallback."""
         event = OrchestrationCompleteEvent(
-            event_type="orchestration.completed",
+            tenant_id="tenant_test", event_type="orchestration.completed",
             tasks=[
                 TaskResult(task_name="Task 1", status="success", duration_seconds=10.0),
                 TaskResult(task_name="Task 2", status="failed", duration_seconds=20.0, error_message="error"),
@@ -417,7 +452,7 @@ class TestCallLLMFallback:
     async def test_llm_fallback_timeout(self):
         """Test LLM fallback timeout."""
         event = OrchestrationCompleteEvent(
-            event_type="orchestration.completed",
+            tenant_id="tenant_test", event_type="orchestration.completed",
             tasks=[
                 TaskResult(task_name="Task 1", status="success", duration_seconds=10.0),
             ],
@@ -442,7 +477,7 @@ class TestCallLLMFallback:
     async def test_llm_fallback_error(self):
         """Test LLM fallback error handling."""
         event = OrchestrationCompleteEvent(
-            event_type="orchestration.completed",
+            tenant_id="tenant_test", event_type="orchestration.completed",
             tasks=[
                 TaskResult(task_name="Task 1", status="success", duration_seconds=10.0),
             ],
@@ -461,7 +496,7 @@ class TestCallLLMFallback:
     async def test_llm_fallback_empty_response(self):
         """Test LLM fallback with empty response."""
         event = OrchestrationCompleteEvent(
-            event_type="orchestration.completed",
+            tenant_id="tenant_test", event_type="orchestration.completed",
             tasks=[
                 TaskResult(task_name="Task 1", status="success", duration_seconds=10.0),
             ],
@@ -485,7 +520,7 @@ class TestSynthesizeOrchestrationSummary:
         """Test full pipeline with deterministic template match."""
         with mock.patch.dict(os.environ, {"CORVIN_HOME": str(tmp_path)}):
             event = OrchestrationCompleteEvent(
-                event_type="orchestration.completed",
+                tenant_id="tenant_test", event_type="orchestration.completed",
                 tasks=[
                     TaskResult(task_name="Video Producer", status="success", duration_seconds=323.0),
                     TaskResult(task_name="Knowledge Graph", status="success", duration_seconds=134.0),
@@ -518,7 +553,7 @@ class TestSynthesizeOrchestrationSummary:
         with mock.patch.dict(os.environ, {"CORVIN_HOME": str(tmp_path)}):
             # Event too complex for deterministic template (6 tasks)
             event = OrchestrationCompleteEvent(
-                event_type="orchestration.completed",
+                tenant_id="tenant_test", event_type="orchestration.completed",
                 tasks=[
                     TaskResult(task_name=f"Task {i}", status="success", duration_seconds=10.0)
                     for i in range(6)
@@ -554,7 +589,7 @@ class TestSynthesizeOrchestrationSummary:
     @pytest.mark.asyncio
     async def test_full_pipeline_empty_event(self):
         """Test full pipeline with empty event."""
-        event = OrchestrationCompleteEvent(event_type="orchestration.completed", tasks=[])
+        event = OrchestrationCompleteEvent(tenant_id="tenant_test", event_type="orchestration.completed", tasks=[])
 
         result = await synthesize_orchestration_summary(event)
 
@@ -566,7 +601,7 @@ class TestSynthesizeOrchestrationSummary:
         with mock.patch.dict(os.environ, {"CORVIN_HOME": str(tmp_path)}):
             # Event too complex for deterministic template
             event = OrchestrationCompleteEvent(
-                event_type="orchestration.completed",
+                tenant_id="tenant_test", event_type="orchestration.completed",
                 tasks=[
                     TaskResult(task_name=f"Task {i}", status="success", duration_seconds=10.0)
                     for i in range(6)

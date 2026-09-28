@@ -284,3 +284,82 @@ class TestPhase2bOptimizerVelocity:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestPhase2bOptimizerRegressions:
+    """Regressions found by the 2026-09-27 adversarial review."""
+
+    @pytest.fixture
+    def optimizer(self, tmp_path):
+        return Phase2bOptimizer("test-tenant", tmp_path)
+
+    def test_first_observation_is_persisted(self, optimizer):
+        base = datetime.now(timezone.utc)
+        optimizer.record_confidence_score("s", 0.40, timestamp=base)
+        trend = optimizer.record_confidence_score("s", 0.60, timestamp=base + timedelta(days=1))
+        # The first sample used to be returned before _save_trend and was lost.
+        assert trend.n_samples == 2
+        assert trend.rolling_avg_7day == pytest.approx(0.50)
+
+    def test_window_is_relative_to_observation_not_wall_clock(self, optimizer):
+        base = datetime.now(timezone.utc)
+        for i in range(20):
+            optimizer.record_confidence_score("s", 0.50 + i * 0.01, timestamp=base + timedelta(days=i))
+        trend = optimizer.get_confidence_trend("s")
+        # (t-7d, t] holds exactly 7 daily samples, not all 20.
+        assert trend.n_samples == 7
+        assert trend.rolling_min_7day == pytest.approx(0.63)
+
+    def test_climbing_series_has_no_plateau_day(self, optimizer):
+        base = datetime.now(timezone.utc)
+        for i, c in enumerate([0.50, 0.60, 0.70]):
+            trend = optimizer.record_confidence_score("s", c, timestamp=base + timedelta(days=i))
+        # The current sample used to be compared with itself → plateau_days >= 1.
+        assert trend.plateau_days == 0
+
+    def test_naive_timestamp_is_treated_as_utc(self, optimizer):
+        now = datetime.now(timezone.utc)
+        optimizer.record_confidence_score("s", 0.5, timestamp=now)
+        trend = optimizer.record_confidence_score(
+            "s", 0.6, timestamp=(now + timedelta(days=1)).replace(tzinfo=None)
+        )
+        assert trend.n_samples == 2
+
+    def test_velocity_is_recorded_after_adjustment(self, optimizer):
+        now = datetime.now(timezone.utc)
+        optimizer.record_feedback("s", 0.9, timestamp=now - timedelta(minutes=5))
+        optimizer.record_confidence_score("s", 0.85, timestamp=now)
+        assert optimizer.trigger_optimization("s", "feedback_signal", 0.8) is not None
+        # ParameterDelta.timestamp was naive; the aware-minus-naive TypeError
+        # was swallowed and no cycle time was ever recorded.
+        velocity = optimizer.get_learning_velocity("s")
+        assert velocity is not None and velocity >= 5 * 60 * 1000
+
+
+class TestConvergenceDetectorRegressions:
+    @pytest.fixture
+    def detector(self, tmp_path):
+        from core.learning.convergence_detector import ConvergenceDetector
+        return ConvergenceDetector("test-tenant", tmp_path)
+
+    def test_small_decline_is_not_divergence(self, detector):
+        detector.record_plateau_boundary("s", 0.92)
+        # -0.5 % used to raise a "warning" (sign error in the threshold check).
+        assert detector.detect_divergence("s", 0.915) is None
+
+    def test_real_plateau_can_diverge(self, detector):
+        detector.record_plateau_boundary("s", 0.92)
+        # Used to require observed_as_true, set only for FALSE plateaus.
+        alert = detector.detect_divergence("s", 0.80)
+        assert alert is not None and alert.severity == "critical"
+
+    def test_single_observation_settles_phase(self, detector):
+        from core.learning.convergence_detector import ConvergencePhase
+        phase = detector.update_phase("s", 0.92, 50, "plateau", 7)
+        assert phase == ConvergencePhase.CONVERGED
+        hops = [(t.from_phase, t.to_phase) for t in detector.get_phase_history("s")]
+        assert hops == [
+            (ConvergencePhase.EXPLORATION, ConvergencePhase.PLATEAU),
+            (ConvergencePhase.PLATEAU, ConvergencePhase.EXPLOITATION),
+            (ConvergencePhase.EXPLOITATION, ConvergencePhase.CONVERGED),
+        ]

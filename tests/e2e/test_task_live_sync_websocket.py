@@ -1,7 +1,13 @@
-"""E2E Test: Task Live Synchronization via WebSocket.
+"""Task live sync: TaskWorkerPool ↔ TaskPubSub fan-out.
 
-Verifies that task updates from TaskWorkerPool propagate to WebSocket subscribers
-in <100ms (real-time) instead of falling back to polling (2s+ latency).
+Scope (corrected 2026-09-28, adversarial review): these tests prove the
+in-memory TaskPubSub fan-out and that a TaskWorkerPool carries the injected
+factory. They do NOT prove worker→browser delivery, and that path does not
+exist today: the standalone worker (``python -m corvin_console.task_worker_pool``,
+a separate systemd service) publishes into its OWN in-process TaskPubSub, while
+the console WebSocket handler subscribes to the console process's
+``get_pubsub()``. A placeholder test that skipped with "TODO: Dashboard API
+WebSocket integration" was removed — a skip is not a test.
 
 Context: ADR-0168 M3 (CCC PubSub), ADR-0081 M2.0 (Task Engine), Wave 1-4 compatible.
 Wave 1-4 Compatibility Check: ✅ Uses only existing public APIs (TaskPubSub, TaskWorkerPool).
@@ -17,7 +23,6 @@ from typing import Any
 from corvin_console.task_worker_pool import TaskWorkerPool
 from corvin_console.task_pubsub import TaskPubSub
 from corvin_console.task_queue import TaskQueue, TaskStatus
-from corvin_operator.forge import paths as _forge_paths
 
 
 class TestTaskLiveSyncWebSocket:
@@ -225,25 +230,6 @@ class TestTaskLiveSyncWebSocket:
             latency_ms = (received_time - publish_time) * 1000
             # WebSocket should be <100ms; polling would be 2000ms+
             assert latency_ms < 100, f"Latency {latency_ms:.1f}ms exceeds 100ms real-time threshold"
-
-
-class TestTaskSyncIntegration:
-    """Integration test: Full chain from task update to WebSocket subscriber."""
-
-    @pytest.mark.asyncio
-    async def test_dashboard_api_uses_live_events_not_polling(
-        self,
-    ) -> None:
-        """Verify the dashboard API endpoint uses WebSocket subscriber for live updates.
-
-        File: /v1/console/initiatives/tasks (GET)
-        Before: polls task_sources.query() (2s cache)
-        After: should subscribe to WebSocket for live updates
-
-        Note: This is a future improvement; currently falls back to polling.
-        This test documents the target architecture.
-        """
-        pytest.skip("TODO: Dashboard API WebSocket integration (Phase 6c)")
 
 
 if __name__ == "__main__":

@@ -10,7 +10,15 @@ Components:
 6. RegenerationScheduler — batching + threshold-based queuing
 7. DaemonIntegration — event loop, subprocess lifecycle
 
-All events audit-logged + hash-chained (ADR-0665).
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
+nothing constructs ``DataHubLearningDaemon`` or runs its loop.
+
+Every daemon DECISION (weight update, regeneration queued, convergence) is
+written audit-first to the tenant audit chain as ``learning.daemon_decision``
+through ``core.deployment.audit_sink`` (``forge.security_events.write_event``
+on ``tenant_audit_chain(tenant_id)``). ``DataHubLearningDaemon.audit_trail``
+is only an in-memory mirror of those records for the dashboard — it is NOT
+the audit trail. A decision whose chain write does not commit is undone.
 """
 
 import asyncio
@@ -26,6 +34,15 @@ if TYPE_CHECKING:
     from core.learning.feedback_wal import FeedbackWALEntry
 
 logger = logging.getLogger(__name__)
+
+from core.deployment import audit_sink  # noqa: E402
+
+#: Content-free fields only: ids, enums, a number and a hash prefix.
+audit_sink.register_events({
+    "learning.daemon_decision": (
+        "learning_event_type", "skill_id", "confidence", "decision_hash",
+    ),
+})
 
 
 # ============================================================================
@@ -559,18 +576,24 @@ class DataHubLearningDaemon:
             attribution = {src: signal / len(sources) for src in sources}
             update = await self.weight_learner.update_weights(attribution)
 
-            await self._emit_learning_event(
-                "weight_updated",
-                input_events=[event],
-                decision={
-                    "skill_id": skill_id,
-                    "signal": signal,
-                    "attribution": attribution,
-                },
-                before_state=update["before"],
-                after_state=update["after"],
-                confidence=feedback_event.timestamp and 0.8 or 0.5,
-            )
+            try:
+                await self._emit_learning_event(
+                    "weight_updated",
+                    input_events=[event],
+                    decision={
+                        "skill_id": skill_id,
+                        "signal": signal,
+                        "attribution": attribution,
+                    },
+                    before_state=update["before"],
+                    after_state=update["after"],
+                    confidence=feedback_event.timestamp and 0.8 or 0.5,
+                )
+            except audit_sink.AuditWriteFailed:
+                # Audit-first: an unaudited weight change must not stand.
+                self.weight_learner.weights = dict(update["before"])
+                self.weight_learner.weight_history.pop()
+                raise
 
         # Check convergence
         if self.weight_learner.check_convergence():
@@ -615,6 +638,20 @@ class DataHubLearningDaemon:
         ).hexdigest()
         event_dict["hash"] = event_hash
         event_dict["prev_hash"] = self.audit_chain_hash
+
+        # The tenant audit chain is the record; write it FIRST. Raises
+        # ``audit_sink.AuditWriteFailed`` when the write does not commit, and
+        # then nothing reaches the in-memory mirror below.
+        audit_sink.emit(
+            "learning.daemon_decision",
+            {
+                "learning_event_type": event_type,
+                "skill_id": str(decision.get("skill_id") or ""),
+                "confidence": float(confidence),
+                "decision_hash": event_hash[:16],
+            },
+            tenant_id=self.tenant_id,
+        )
 
         self.audit_trail.append(event_dict)
         self.audit_chain_hash = event_hash

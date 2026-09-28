@@ -5,6 +5,10 @@ Implements:
 2. Binding signature verification
 3. User license tier checking
 4. Audit logging for all validation operations
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) — the
+only importer that validates is ``core.skill_forge.validators.forge_gateway``
+(itself unreachable); other modules import only the ``UserLicense`` type.
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import Optional
 
 from cryptography.hazmat.primitives import hashes
@@ -20,7 +24,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.exceptions import InvalidSignature
 
 from core.skills.manifest_v2 import SkillManifestV2, LicenseBindingMetadata
-from core.skills.signature.validator import ManifestTamperedError
+from core.skills.signature.validator import ManifestTamperedError, make_audit_event
 from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
 
 logger = logging.getLogger(__name__)
@@ -133,7 +137,7 @@ class LicenseBindingValidator:
             logger.error(f"License validation error for {manifest.skill_id}: {e}")
             self._log_audit(
                 event_type="license_validation_error",
-                details={"skill_id": manifest.skill_id, "error": str(e)},
+                details={"skill_id": manifest.skill_id, "error_type": type(e).__name__},
                 severity="error",
                 user_id=user_license.user_id,
                 tenant_id=tenant_id,
@@ -203,7 +207,7 @@ class LicenseBindingValidator:
                 event_type="license_binding_signature_invalid",
                 details={
                     "skill_id": manifest.skill_id,
-                    "reason": "RSA signature verification failed"
+                    "reason": "signature_mismatch",
                 },
                 severity="warning",
                 tenant_id=tenant_id
@@ -216,7 +220,7 @@ class LicenseBindingValidator:
             # Other crypto errors → fail-closed
             self._log_audit(
                 event_type="license_binding_verification_error",
-                details={"skill_id": manifest.skill_id, "error": str(e)},
+                details={"skill_id": manifest.skill_id, "error_type": type(e).__name__},
                 severity="error",
                 tenant_id=tenant_id
             )
@@ -244,15 +248,8 @@ class LicenseBindingValidator:
         if not self.audit_chain:
             return
 
-        event = AuditEvent(
-            event_id=str(id(self)),  # Unique event ID
-            event_type=event_type,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            timestamp=str(json.dumps(asdict({}))),  # Will be set by audit chain
-            details=details,
-            severity=severity or "info",
-        )
+        event = make_audit_event(event_type, details, severity=severity,
+                                 user_id=user_id, tenant_id=tenant_id)
 
         try:
             self.audit_chain.write_event(event)

@@ -170,11 +170,21 @@ class TestSkillMarketplaceIndex:
         query = SkillSearchQuery(text="routing")
         results1 = marketplace.search(query)
 
-        # Modify registry (should not affect cached results)
-        marketplace._registry["os.routing_optimizer"].install_count = 9999
+        # Modify registry (should not affect cached results). SkillMetadata is
+        # frozen, so the entry is replaced rather than mutated.
+        import dataclasses
+
+        reg = marketplace._registry
+        reg["os.routing_optimizer"] = dataclasses.replace(
+            reg["os.routing_optimizer"], install_count=9999
+        )
 
         results2 = marketplace.search(query)
         assert results1 == results2  # Cached, no change
+        assert all(r.metadata.install_count != 9999 for r in results2)
+
+        marketplace.invalidate_cache()
+        assert any(r.metadata.install_count == 9999 for r in marketplace.search(query))
 
     def test_cache_invalidation(self, marketplace):
         """Test manual cache invalidation."""

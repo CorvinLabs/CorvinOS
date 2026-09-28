@@ -219,36 +219,38 @@ class TestSkillExecutorOtelTracing:
         with patch("core.skills.executor.get_tracer") as mock_get_tracer:
             mock_get_tracer.return_value = mock_tracer
 
-            # Mock the isolated context to avoid setup complexity
             async def test_skill(context):
+                context["seen"] = True  # mutates the isolated COPY only
                 return {"result": "isolated_ok"}
 
             test_skill.id = "isolated_skill"
             test_skill.version = "1.0.0"
 
-            # Patch IsolatedTaskContext to simplify test
-            with patch("core.skills.executor.IsolatedTaskContext") as mock_ctx:
-                mock_isolated = MagicMock()
-                mock_isolated._context_copy = {"key": "value"}
-                mock_isolated.get_context_hash.return_value = "hash123"
-                mock_isolated.assert_isolation_intact.return_value = None
-                mock_ctx.create_isolated.return_value = mock_isolated
+            # The REAL IsolatedTaskContext: a MagicMock stand-in cannot even
+            # configure ``assert_isolation_intact`` (Python refuses mock
+            # attributes named ``assert*``), and mocking the isolation layer
+            # in its own tracing test proves nothing about it.
+            original = {"original": "data"}
+            result = await executor.execute_isolated(
+                tenant_id="tenant_456",
+                skill_id="isolated_skill",
+                skill=test_skill,
+                context=original,
+                task_id="task_789"
+            )
 
-                result = await executor.execute_isolated(
-                    tenant_id="tenant_456",
-                    skill_id="isolated_skill",
-                    skill=test_skill,
-                    context={"original": "data"},
-                    task_id="task_789"
-                )
+            assert result.status == "success"
+            assert result.output == {"result": "isolated_ok"}
+            assert original == {"original": "data"}  # caller's context untouched
 
-                # Verify isolated span
-                span = mock_tracer.get_span("skill.isolated_skill.execute_isolated")
-                assert span is not None
-                assert span.attributes.get("skill_id") == "isolated_skill"
-                assert span.attributes.get("tenant_id") == "tenant_456"
-                assert span.attributes.get("task_id") == "task_789"
-                assert "latency_ms" in span.attributes
+            # Verify isolated span
+            span = mock_tracer.get_span("skill.isolated_skill.execute_isolated")
+            assert span is not None
+            assert span.attributes.get("skill_id") == "isolated_skill"
+            assert span.attributes.get("tenant_id") == "tenant_456"
+            assert span.attributes.get("task_id") == "task_789"
+            assert span.attributes.get("status") == "success"
+            assert "latency_ms" in span.attributes
 
 
 @pytest.mark.asyncio

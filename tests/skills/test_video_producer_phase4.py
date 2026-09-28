@@ -20,6 +20,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import pytest
 
 from core.skills.workers.youtube_uploader import YouTubeUploader, YouTubeAPI
+
+
+class _FakeYouTubeAPI:
+    """Test double for the EXTERNAL YouTube Data API boundary.
+
+    The uploader (the unit under test) runs for real; only the Google API
+    client is replaced. Using ``oauth_token="test_token"`` instead needs the
+    optional ``youtube`` extra (google-auth) and then makes the background
+    task call the real googleapis.com with a bogus token.
+    """
+
+    def __init__(self):
+        self.uploads: list[dict] = []
+        self.captions: list[tuple] = []
+
+    async def is_authenticated(self) -> bool:
+        return True
+
+    async def upload_video(self, **kwargs):
+        self.uploads.append(kwargs)
+        return {"status": "uploaded", "video_id": "vid123",
+                "url": "https://youtube.com/watch?v=vid123"}
+
+    async def upload_captions(self, video_id, srt_path, language="en"):
+        self.captions.append((video_id, srt_path))
+        return True
+
+
+def _authed_uploader(workdir):
+    uploader = YouTubeUploader(workdir)
+    uploader.youtube_api = _FakeYouTubeAPI()
+    return uploader
+
+
+async def _drain(uploader) -> None:
+    """Wait for every background upload task the uploader started."""
+    await asyncio.gather(*list(uploader._background_tasks.values()))
 from core.skills.os_skills.video_producer.types import Scene, Storyboard
 
 
@@ -42,7 +79,7 @@ class TestYouTubeUploader:
             video_path = project_dir / "output.mp4"
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)  # 1MB video
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             metadata = {
                 "title": "Test Video",
@@ -60,7 +97,7 @@ class TestYouTubeUploader:
     async def test_enqueue_upload_missing_file(self):
         """Test upload enqueuing with missing video file."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            uploader = YouTubeUploader(tmpdir, oauth_token="test_token")
+            uploader = _authed_uploader(tmpdir)
 
             metadata = {"title": "Test"}
 
@@ -97,7 +134,7 @@ class TestYouTubeUploader:
             video_path = project_dir / "output.mp4"
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
             # Real credentials are needed to reach enqueue_upload's
             # is_authenticated() precondition, but the actual network call
             # is a test double -- this test is about the queue/status
@@ -119,11 +156,12 @@ class TestYouTubeUploader:
             assert status["progress_percent"] == 0
 
             # Wait for background task to complete
-            await asyncio.sleep(3)
+            await _drain(uploader)
 
             # Check final status
             status = await uploader.get_upload_status(task_id)
-            assert status["status"] in ["completed", "uploading"]  # May still be uploading
+            assert status["status"] == "completed"
+            assert status["youtube_video_id"] == "test123"
 
     @pytest.mark.asyncio
     async def test_upload_record_persisted(self):
@@ -133,7 +171,7 @@ class TestYouTubeUploader:
             video_path = project_dir / "output.mp4"
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             metadata = {"title": "Test"}
 
@@ -160,7 +198,7 @@ class TestYouTubeUploader:
             # Create 10MB video
             video_path.write_bytes(b"MP4..." + b"\x00" * (10_000_000 - 5))
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             metadata = {"title": "Test"}
 
@@ -180,7 +218,7 @@ class TestYouTubeUploader:
             video_path.exists.return_value = True
             video_path.stat.return_value = MagicMock(st_size=300 * (1024**3))  # 300GB
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             metadata = {"title": "Test"}
 
@@ -195,6 +233,10 @@ class TestYouTubeAPI:
     def test_api_init(self):
         """Test YouTubeAPI initialization -- an injected token constructs a
         real (if short-lived) google.oauth2.credentials.Credentials object."""
+        pytest.importorskip(
+            "google.oauth2.credentials",
+            reason="external dependency: optional 'youtube' extra (google-auth) not installed",
+        )
         api = YouTubeAPI(oauth_token="test_token")
         assert api._credentials is not None
         assert api._credentials.token == "test_token"
@@ -202,6 +244,10 @@ class TestYouTubeAPI:
     @pytest.mark.asyncio
     async def test_authentication_check(self):
         """Test authentication status check."""
+        pytest.importorskip(
+            "google.oauth2.credentials",
+            reason="external dependency: optional 'youtube' extra (google-auth) not installed",
+        )
         api = YouTubeAPI(oauth_token="test_token")
 
         is_auth = await api.is_authenticated()
@@ -210,6 +256,26 @@ class TestYouTubeAPI:
         api_no_auth = YouTubeAPI()
         is_auth = await api_no_auth.is_authenticated()
         assert is_auth is False
+
+    @pytest.mark.asyncio
+    async def test_injected_token_without_google_libs_is_not_authenticated(self, monkeypatch):
+        """Without the 'youtube' extra an injected token is NOT a credential:
+        not authenticated, and the reason names the missing extra."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def no_google(name, *args, **kwargs):
+            if name.startswith("google"):
+                raise ImportError(name)
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", no_google)
+        api = YouTubeAPI(oauth_token="test_token")
+        assert await api.is_authenticated() is False
+        result = await api.upload_video(video_path="/x.mp4", title="t", description="d", tags=[])
+        assert result["status"] == "not_configured" and result["video_id"] is None
+        assert "youtube" in result["reason"]
 
     @pytest.mark.asyncio
     async def test_upload_video_not_configured(self):
@@ -268,7 +334,7 @@ class TestPhase4E2E:
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
             # Initialize uploader with auth
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             # Enqueue upload (non-blocking)
             metadata = {
@@ -307,7 +373,7 @@ An agentic operating system
 """
             srt_path.write_text(srt_content)
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             metadata = {
                 "title": "CorvinOS Demo",
@@ -324,13 +390,18 @@ An agentic operating system
             assert result["status"] == "queued"
             assert result["task_id"] is not None
 
+            await _drain(uploader)
+            status = await uploader.get_upload_status(result["task_id"])
+            assert status["status"] == "completed"
+            assert uploader.youtube_api.captions == [("vid123", str(srt_path))]
+
     @pytest.mark.asyncio
     async def test_parallel_uploads(self):
         """Test multiple concurrent uploads."""
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             # Create multiple videos
             video_paths = []
@@ -368,7 +439,7 @@ An agentic operating system
             video_path = project_dir / "output.mp4"
             video_path.write_bytes(b"MP4..." + b"\x00" * 1_000_000)
 
-            uploader = YouTubeUploader(project_dir, oauth_token="test_token")
+            uploader = _authed_uploader(project_dir)
 
             # Track emitted events -- EventEmitter.emit() is synchronous and
             # takes one real LearningEvent (ADR-0314), not an (event_type, data)
@@ -386,12 +457,12 @@ An agentic operating system
             result = await uploader.enqueue_upload(video_path, metadata)
 
             # Wait for upload to complete
-            await asyncio.sleep(3)
+            await _drain(uploader)
 
             # Verify events were emitted
             assert len(events) > 0
             statuses = [e.signal.get("status") for e in events]
-            assert "enqueued" in statuses
+            assert statuses == ["enqueued", "progress", "completed"]
 
 
 class TestPhase4Learning:

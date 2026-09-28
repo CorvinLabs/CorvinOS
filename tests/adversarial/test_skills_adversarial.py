@@ -347,8 +347,10 @@ class TestIteration2Hardening:
         saturated = reg.execute("test.hang", {}, timeout_ms=10, lom=lom)
         assert saturated.status == "error" and "saturated" in saturated.error_message
         release.set()
-        # audited, not silent
-        assert any("saturated" in (e.get("error_message") or "") for e in self.audit.events)
+        # audited, not silent — by its stable class: the free-text
+        # error_message is deliberately NOT carried into the audit projection.
+        assert any(e.get("error_class") == "skill_saturated" for e in self.audit.events)
+        assert not any("error_message" in e for e in self.audit.events)
 
     def test_pii_scrub_covers_camel_case_keys_jwt_and_bearer(self):
         from core.skills.skill_registry_phase1 import SkillsRegistry

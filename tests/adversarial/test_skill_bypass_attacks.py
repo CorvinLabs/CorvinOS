@@ -24,6 +24,28 @@ from core.skill_forge.marketplace_origin import MarketplaceOriginValidator
 from core.skills.signature.validator import SignatureValidationError
 
 
+def _publish_hash(manifest) -> None:
+    """Record the manifest's hash the way a marketplace publish would.
+
+    ``ForgeSkillValidator`` refuses a manifest with no stored hash (Layer 2
+    fails closed since 2026-09-27; it used to skip the check and load).
+    """
+    import hashlib
+    import json
+
+    from core.paths.tenant import tenant_home
+
+    body = json.dumps(manifest.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    d = tenant_home("_default") / "global" / "skill_registry_hashes"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{manifest.skill_id}_{manifest.version}.sha256").write_text(hashlib.sha256(body).hexdigest())
+
+
+@pytest.fixture(autouse=True)
+def _isolated_hash_registry(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin_home"))
+
+
 @pytest.fixture
 def signer():
     return SkillManifestSigner()
@@ -166,8 +188,10 @@ class TestLicenseSpoofingAttacks:
         public_key, private_key = keypair
 
         # Attacker creates manifest claiming paid tier
+        # An operator-verified id, so Layer 3 (origin) passes and the
+        # license layer is what decides (a "test.*" id was refused at Layer 3).
         manifest = SkillManifestV2(
-            skill_id="test.spoofed",
+            skill_id="routing.adaptive",
             version="1.0.0",
             boot_layer="bundled",
             license_binding=LicenseBindingMetadata(
@@ -180,6 +204,7 @@ class TestLicenseSpoofingAttacks:
 
         # Sign with legitimate operator key (simulating attack)
         signature = signer.sign_manifest(manifest, private_key)
+        _publish_hash(manifest)
 
         validator = ForgeSkillValidator(operator_public_key=public_key)
 
@@ -232,6 +257,7 @@ class TestAuditTamperingAttacks:
             ),
         )
         signature = signer.sign_manifest(paid_manifest, private_key)
+        _publish_hash(paid_manifest)
 
         # With audit chain, denials are logged
         # (audit chain verification is separate concern, tested in audit tests)

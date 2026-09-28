@@ -12,8 +12,8 @@ class TestForgeE2E:
     async def test_datahub_to_creator_flow(self):
         """E2E: Ingest data → Generate skill → Emit events."""
         # Mock imports (will be replaced with real ones)
-        from data_hub.skill import DataHubSkill, DataHubRequest
-        from skill_tool_creator.skill import SkillToolCreatorSkill, CreatorRequest
+        from core.skills.os_skills.data_hub.skill import DataHubSkill, DataHubRequest
+        from core.skills.os_skills.skill_tool_creator.skill import SkillToolCreatorSkill, CreatorRequest
 
         # Phase 1: DataHub ingests
         datahub = DataHubSkill()
@@ -49,54 +49,111 @@ class TestForgeE2E:
 
     @pytest.mark.asyncio
     async def test_learning_daemon_convergence(self):
-        """E2E: Daemon receives feedback → updates weights → converges."""
-        from background.learning_daemon import DataHubLearningDaemon, DaemonEvent
+        """E2E: Daemon receives feedback → updates weights → converges.
+
+        Convergence is judged over ``convergence_window`` (50) samples: ten
+        events must NOT be reported as converged (the old test asserted they
+        were), a long run of stable feedback must be.
+        """
+        from core.background.learning_daemon import DataHubLearningDaemon, DaemonEvent
 
         daemon = DataHubLearningDaemon()
+        window = daemon.weight_learner.convergence_window
 
-        # Simulate feedback events
-        for i in range(10):
-            event = DaemonEvent(
+        def feedback(i: int) -> DaemonEvent:
+            return DaemonEvent(
                 event_type="user_feedback",
                 timestamp=datetime.utcnow().isoformat(),
                 payload={
                     "skill_id": f"skill-test-{i}",
-                    "signal": 0.8 + (i * 0.01),  # improving feedback
+                    "signal": 0.5,
                     "data_sources": ["memory:tier2", "rag:embeddings"],
                 },
             )
-            await daemon.on_event(event)
 
-        # Check convergence
+        for i in range(10):
+            await daemon.on_event(feedback(i))
+        assert not daemon.weight_learner.check_convergence()
+
+        for i in range(10, window + 10):
+            await daemon.on_event(feedback(i))
         assert daemon.weight_learner.check_convergence()
-        assert sum(daemon.weight_learner.weights.values()) > 0.9  # weights should sum ~1
+        assert all(0.0 <= w <= 1.0 for w in daemon.weight_learner.weights.values())
+        assert daemon.weight_learner.weights["memory:tier2"] > 0.50  # positive feedback raised it
 
     @pytest.mark.asyncio
     async def test_audit_trail_immutability(self):
-        """E2E: Audit trail is immutable and hash-chained."""
-        from background.learning_daemon import DataHubLearningDaemon, DaemonEvent
+        """E2E: every daemon decision is on the REAL tenant audit chain.
 
+        ``skill_executed`` events are observations, not decisions — they add
+        nothing. Each weight update writes one ``learning.daemon_decision``
+        record to ``tenant_audit_chain`` (verified), mirrored in memory.
+        """
+        import json
+
+        from core.background.learning_daemon import DataHubLearningDaemon, DaemonEvent
+        from core.deployment import audit_sink
+
+        se, fp = audit_sink._forge()
+        chain = fp.tenant_audit_chain("_default")
+
+        def decisions() -> list[dict]:
+            if not chain.exists():
+                return []
+            recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+            return [r for r in recs if r.get("event_type") == "learning.daemon_decision"]
+
+        before = len(decisions())
         daemon = DataHubLearningDaemon()
-
-        # Emit events
         for i in range(3):
-            event = DaemonEvent(
+            await daemon.on_event(DaemonEvent(
                 event_type="skill_executed",
                 timestamp=datetime.utcnow().isoformat(),
-                payload={
-                    "skill_id": f"skill-{i}",
-                    "success": True,
-                },
-            )
-            await daemon.on_event(event)
+                payload={"skill_id": f"skill-{i}", "success": True},
+            ))
+        assert daemon.audit_trail == []
+        assert len(decisions()) == before
 
-        # Audit trail should grow
-        assert len(daemon.audit_trail) >= 3
+        for i in range(3):
+            await daemon.on_event(DaemonEvent(
+                event_type="user_feedback",
+                timestamp=datetime.utcnow().isoformat(),
+                payload={"skill_id": f"skill-{i}", "signal": 0.4,
+                         "data_sources": ["files"]},
+            ))
+        recs = decisions()[before:]
+        assert [r["details"]["skill_id"] for r in recs] == ["skill-0", "skill-1", "skill-2"]
+        assert all(r["details"]["learning_event_type"] == "weight_updated" for r in recs)
+        ok, problems = se.verify_chain(chain)
+        assert ok, problems
 
-        # Each entry should have timestamp
-        for entry in daemon.audit_trail:
-            assert "timestamp" in entry
-            assert "type" in entry
+        # In-memory mirror: linked, and each entry names its chain record.
+        assert len(daemon.audit_trail) == 3
+        for prev, cur in zip(daemon.audit_trail, daemon.audit_trail[1:]):
+            assert cur["prev_hash"] == prev["hash"]
+        assert [e["hash"][:16] for e in daemon.audit_trail] == [
+            r["details"]["decision_hash"] for r in recs
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unaudited_weight_update_is_undone(self):
+        """Audit-first: a decision whose chain write fails does not stand."""
+        from unittest.mock import patch
+
+        from core.background.learning_daemon import DataHubLearningDaemon, DaemonEvent
+        from core.deployment import audit_sink
+
+        daemon = DataHubLearningDaemon()
+        weights_before = dict(daemon.weight_learner.weights)
+        with patch.object(audit_sink, "emit", side_effect=audit_sink.AuditWriteFailed("x")):
+            await daemon.on_event(DaemonEvent(
+                event_type="user_feedback",
+                timestamp=datetime.utcnow().isoformat(),
+                payload={"skill_id": "s", "signal": 1.0, "data_sources": ["files"]},
+            ))
+        assert daemon.weight_learner.weights == weights_before
+        assert len(daemon.weight_learner.weight_history) == 1
+        assert daemon.audit_trail == []
 
     @pytest.mark.asyncio
     async def test_dashboard_compliance_export(self):
@@ -120,7 +177,7 @@ class TestForgeQuality:
 
     def test_all_phases_have_loss_components(self):
         """Every phase emits a loss component for LDD."""
-        from skill_tool_creator.phases import PhaseExecutor
+        from core.skills.os_skills.skill_tool_creator.phases import PhaseExecutor
 
         # Verify phase definitions
         executor = PhaseExecutor()
@@ -143,7 +200,7 @@ class TestForgeQuality:
 
     def test_loss_vector_dimensions(self):
         """6D loss vector is complete."""
-        from skill_tool_creator.skill import SkillToolCreatorSkill
+        from core.skills.os_skills.skill_tool_creator.skill import SkillToolCreatorSkill
 
         creator = SkillToolCreatorSkill()
 
@@ -165,7 +222,7 @@ class TestForgeQuality:
 
     def test_security_scanning_active(self):
         """Security scanner detects patterns."""
-        from data_hub.security.scanner import SecurityScanner
+        from core.skills.os_skills.data_hub.security.scanner import SecurityScanner
 
         scanner = SecurityScanner()
 

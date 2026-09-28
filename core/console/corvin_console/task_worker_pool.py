@@ -843,8 +843,14 @@ async def main():
     def make_taskmanager(tasks_dir):
         return TaskManager(tasks_dir)
 
-    # ✅ NEW (2026-09-26): Injiziere TaskPubSub für Live WebSocket-Push
-    # ADR-0168 M3, ADR-0081 M2.0 — enables real-time task progress to all WebSocket subscribers
+    # TaskPubSub is IN-MEMORY and this ``main()`` runs as its own process
+    # (ops/systemd/corvin-task-worker.service). The console's WebSocket
+    # handler (routes/tasks_impl.progress_handler) subscribes to the console
+    # process's ``get_pubsub()``, so nothing ever subscribes to this instance:
+    # events published here reach no browser. Live push across the
+    # worker→console process boundary needs a cross-process transport, which
+    # does not exist yet (adversarial review 2026-09-28). The dashboard still
+    # gets task state by polling the TaskQueue.
     from .task_pubsub import TaskPubSub
     pubsub = TaskPubSub()
 
