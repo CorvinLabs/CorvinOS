@@ -38,7 +38,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Annotated, Any, AsyncIterator
+from typing import Annotated, Any, AsyncIterator, Literal
 
 from fastapi import APIRouter, Cookie, Depends, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status as http_status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -813,14 +813,33 @@ def list_session_tasks(
     status: str | None = Query(None),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    view: Literal["full", "summary"] = Query(default="full"),
 ) -> dict[str, Any]:
-    """List all tasks for a chat session with optional filtering and pagination."""
+    """List all tasks for a chat session with optional filtering and pagination.
+
+    ``view=summary`` is the cheap shape a status indicator polls: the ``limit``
+    newest tasks from their metadata snapshots only, a capped
+    ``instruction_preview`` instead of the full input, and the server clock
+    (``now``, epoch seconds) so the client never mixes two clocks.
+    """
     sess = chat_runtime.get_session(rec.tenant_id, sid)
     if sess is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "session not found")
 
     tasks_dir = sess.workdir / "tasks"
     tm = tm_module.TaskManager(tasks_dir)
+
+    if view == "summary":
+        summaries = tm.list_task_summaries(sess.chat_key, limit=limit)
+        if status:
+            summaries = [t for t in summaries if t["status"] == status]
+        return {
+            "sid": sid,
+            "chat_key": sess.chat_key,
+            "now": time.time(),
+            "count": len(summaries),
+            "tasks": summaries,
+        }
     all_tasks = tm.list_tasks(sess.chat_key)
 
     # Filter by status if provided

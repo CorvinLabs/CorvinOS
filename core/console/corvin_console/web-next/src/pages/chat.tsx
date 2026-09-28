@@ -67,7 +67,8 @@ import {
   usePersistedBool,
 } from "@/lib/preferences";
 import { useTasksWithLiveUpdates } from "@/hooks/use-tasks-with-live-updates";
-import { useChatTaskStatus } from "@/hooks/use-chat-task-status";
+import { useChatTaskStatus, type ChatTaskStatus } from "@/hooks/use-chat-task-status";
+import { PHASE_TEXT, sessionTasksKey, statusLine, taskLabel } from "@/lib/chat-task-status";
 import { TaskPanel } from "@/components/task-panel";
 import { QuotaWarningBanner } from "@/components/quota-warning-banner";
 import { exportTaskAsJSON, Task, deleteTask } from "@/lib/task-db";
@@ -355,6 +356,45 @@ export function ChatPage() {
   );
 }
 
+const INDICATOR_TONE: Record<string, { dot: string; bar: string; text: string }> = {
+  running: { dot: "bg-emerald-500 animate-pulse", bar: "bg-emerald-500", text: "text-muted-foreground" },
+  pending: { dot: "bg-accent animate-pulse", bar: "bg-accent", text: "text-muted-foreground" },
+  completed: { dot: "bg-emerald-500", bar: "bg-emerald-500", text: "text-emerald-600 dark:text-emerald-400" },
+  failed: { dot: "bg-destructive", bar: "bg-destructive", text: "text-destructive" },
+  cancelled: { dot: "bg-muted-foreground", bar: "bg-muted-foreground", text: "text-muted-foreground" },
+};
+
+// The task log carries no percentage, so an in-flight task gets an
+// indeterminate bar (no aria-valuenow) rather than an invented number.
+function ChatTaskIndicator({ status }: { status: ChatTaskStatus }) {
+  const task = status.task!;
+  const tone = INDICATOR_TONE[status.phase];
+  const inFlight = status.phase === "running" || status.phase === "pending";
+  const line = statusLine(status, status.nowS);
+  const label = taskLabel(task);
+  const phaseText = status.phase === "idle" ? "" : PHASE_TEXT[status.phase];
+  // A task that has logged nothing for a while may be hung: stop the pulse.
+  const dot = status.stale ? "bg-amber-500" : tone.dot;
+  return (
+    <div className="mt-1 flex min-w-0 flex-col gap-1 text-[11px]" title={`${label}\n${line}`}>
+      {/* Announces phase changes only — never the per-second clock. */}
+      <span className="sr-only" aria-live="polite">
+        {`Task ${phaseText.toLowerCase()}`}
+      </span>
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} aria-hidden />
+        <span className="truncate text-muted-foreground">{label}</span>
+      </div>
+      {inFlight && (
+        <div className="h-1 w-full overflow-hidden rounded-full bg-secondary" role="progressbar" aria-label="Task in progress">
+          <div className={`h-full w-full rounded-full opacity-70 animate-pulse ${tone.bar}`} />
+        </div>
+      )}
+      <span className={`tabular-nums ${tone.text}`}>{line}</span>
+    </div>
+  );
+}
+
 function SessionListItem({
   s,
   active,
@@ -377,12 +417,19 @@ function SessionListItem({
   const inputRef = React.useRef<HTMLInputElement>(null);
 
   // Check for running tasks in this chat
-  const taskStatus = useChatTaskStatus(s.chat_key || "");
+  const taskStatus = useChatTaskStatus(s.sid);
 
   // Subscribe to live streaming state — updates whenever any ChatPane
   // starts or stops streaming, even while this item is not the active chat.
   const streamStates = useStreamStates();
   const streamState = streamStates.get(s.sid); // "streaming" | "interrupted" | undefined
+
+  // A turn starting or ending is a task starting or ending: refresh now
+  // instead of waiting out the idle poll, or a short turn never shows as running.
+  const qc = useQueryClient();
+  React.useEffect(() => {
+    void qc.invalidateQueries({ queryKey: sessionTasksKey(s.sid) });
+  }, [qc, s.sid, streamState]);
 
   React.useEffect(() => {
     if (editing) {
@@ -464,10 +511,11 @@ function SessionListItem({
         </div>
       ) : (
         <>
+          <div className="min-w-0 flex-1">
           <button
             onClick={onPick}
             onDoubleClick={() => setEditing(true)}
-            className="min-w-0 flex-1 text-left focus:outline-none"
+            className="w-full min-w-0 text-left focus:outline-none"
             title="Click to open · double-click to rename"
           >
             <div className="flex items-center gap-2 truncate">
@@ -481,46 +529,6 @@ function SessionListItem({
                   aria-label="Chat is streaming a response"
                 />
               )}
-              {!streamState && taskStatus.activeTask && (
-                <div className="flex flex-col gap-1 min-w-0 text-xs">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`h-2 w-2 rounded-full shrink-0 ${
-                        taskStatus.status === "running"
-                          ? "bg-emerald-500 animate-pulse"
-                          : "bg-accent animate-pulse"
-                      }`}
-                    />
-                    <span className="truncate text-muted-foreground">
-                      {taskStatus.activeTask.instruction?.substring(0, 40) ||
-                        "Task"}
-                    </span>
-                  </div>
-                  {taskStatus.activeTask.progress_pct > 0 && (
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 bg-secondary rounded-full h-1">
-                        <div
-                          className="bg-emerald-500 h-1 rounded-full transition-all duration-300"
-                          style={{
-                            width: `${Math.min(
-                              100,
-                              taskStatus.activeTask.progress_pct || 0
-                            )}%`,
-                          }}
-                        />
-                      </div>
-                      <span className="text-muted-foreground min-w-[30px] text-right">
-                        {taskStatus.activeTask.progress_pct}%
-                      </span>
-                    </div>
-                  )}
-                  <span className="text-muted-foreground text-xs">
-                    {taskStatus.status === "running"
-                      ? `Running · ${Math.floor(taskStatus.elapsedSeconds / 60)}m ${taskStatus.elapsedSeconds % 60}s`
-                      : "Pending"}
-                  </span>
-                </div>
-              )}
             </div>
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
               <span>{s.turn_count} turn{s.turn_count === 1 ? "" : "s"}</span>
@@ -528,6 +536,17 @@ function SessionListItem({
               <span>{formatDate(s.last_active_at)}</span>
             </div>
           </button>
+          {/* Outside the <button>: a button's children are presentational, so
+              the progressbar role would be dropped and the ticking time would
+              rename the button every second. */}
+          {taskStatus.task &&
+            (taskStatus.phase === "running" ||
+              taskStatus.phase === "pending" ||
+              // A finished turn in the open chat is already visible as its reply.
+              (!active && taskStatus.phase !== "idle")) && (
+              <ChatTaskIndicator status={taskStatus} />
+            )}
+          </div>
           <button
             className="opacity-0 transition-opacity hover:text-accent group-hover:opacity-100"
             onClick={() => setEditing(true)}

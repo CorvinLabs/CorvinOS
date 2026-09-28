@@ -1,124 +1,60 @@
 /**
- * Hook to monitor task status in a chat.
- * Returns both aggregate status and detailed info on the active task
- * (name, progress, elapsed time) for richer sidebar notifications.
- * Monitors IndexedDB for task status changes.
+ * Task indicator for one chat in the sidebar. Reads the server's TaskManager
+ * log for the session (view=summary) — the browser's IndexedDB task cache is
+ * only filled for tasks it already knows about, so it cannot see a newly
+ * started task.
  */
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ApiError } from "@/lib/api/client";
+import {
+  fetchSessionTasks,
+  pickIndicator,
+  sessionTasksKey,
+  type TaskIndicator,
+} from "@/lib/chat-task-status";
 
-import { useEffect, useRef, useState } from "react";
-import { getTasksByChatKey, Task } from "@/lib/task-db";
+// Fast while a task is in flight, slow at rest: N sidebar rows poll N times.
+const POLL_ACTIVE_MS = 3_000;
+const POLL_IDLE_MS = 20_000;
 
-export interface ChatTaskStatus {
-  hasRunningTasks: boolean;
-  taskCount: number;
-  status: "idle" | "running" | "pending";
-  activeTask: Task | null;  // The currently running or most recent pending task
-  elapsedSeconds: number;   // How long the active task has been running
+export interface ChatTaskStatus extends TaskIndicator {
+  /** Server-clock epoch seconds, ticking once per second while a task is in flight. */
+  nowS: number;
 }
 
-// Adaptive polling: fast (2 s) when a task is active, slow (10 s) when idle.
-// With N sidebar items, naive 2 s polling fires N reads/s regardless of whether
-// any task is actually running. Adaptive mode reduces that to N/10 reads/s at rest.
-const POLL_ACTIVE_MS = 2_000;
-const POLL_IDLE_MS = 10_000;
-
-export function useChatTaskStatus(chatKey: string): ChatTaskStatus {
-  const [status, setStatus] = useState<ChatTaskStatus>({
-    hasRunningTasks: false,
-    taskCount: 0,
-    status: "idle",
-    activeTask: null,
-    elapsedSeconds: 0,
+export function useChatTaskStatus(sid: string): ChatTaskStatus {
+  const query = useQuery({
+    queryKey: sessionTasksKey(sid),
+    queryFn: async () => {
+      const res = await fetchSessionTasks(sid);
+      // Server minus browser clock, taken at response time.
+      return { ...res, offsetS: res.now - Date.now() / 1000 };
+    },
+    enabled: !!sid,
+    retry: false,
+    refetchInterval: (q) => {
+      // A deleted session answers 404 forever; stop asking.
+      if (q.state.error instanceof ApiError && q.state.error.status === 404) return false;
+      const d = q.state.data;
+      if (!d) return POLL_IDLE_MS;
+      const ind = pickIndicator(d.tasks, Date.now() / 1000 + d.offsetS);
+      return ind.phase === "idle" || ind.stale ? POLL_IDLE_MS : POLL_ACTIVE_MS;
+    },
   });
 
-  // Track the current status in a ref so the interval callback can read it
-  // without being recreated on every status change.
-  const statusRef = useRef(status);
-  statusRef.current = status;
-
-  // Separate interval for elapsed time (updates every second when task is running)
-  // This avoids triggering full task checks just for time display.
-  useEffect(() => {
-    if (!status.activeTask || status.status === "idle") return;
-
-    const interval = setInterval(() => {
-      const startTime = status.activeTask?.started_at || status.activeTask?.created_at;
-      if (startTime) {
-        const elapsed = Math.floor((Date.now() - startTime) / 1000);
-        setStatus(prev => ({ ...prev, elapsedSeconds: elapsed }));
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [status.activeTask, status.status]);
+  const offsetS = query.data?.offsetS ?? 0;
+  const [clientNowS, setClientNowS] = useState(() => Date.now() / 1000);
+  const nowS = clientNowS + offsetS;
+  const indicator = pickIndicator(query.data?.tasks ?? [], nowS);
+  const inFlight = indicator.phase === "running" || indicator.phase === "pending";
 
   useEffect(() => {
-    if (!chatKey) {
-      setStatus({ hasRunningTasks: false, taskCount: 0, status: "idle", activeTask: null, elapsedSeconds: 0 });
-      return;
-    }
+    setClientNowS(Date.now() / 1000);
+    if (!inFlight) return;
+    const t = setInterval(() => setClientNowS(Date.now() / 1000), 1_000);
+    return () => clearInterval(t);
+  }, [inFlight, query.dataUpdatedAt]);
 
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    let cancelled = false;
-
-    const checkTasks = async () => {
-      try {
-        const tasks = await getTasksByChatKey(chatKey);
-        if (cancelled) return;
-
-        const runningTasks = tasks.filter((t) => t.status === "running");
-        const pendingTasks = tasks.filter((t) => t.status === "pending");
-
-        // Pick the active task: running task first, else most recent pending, else null.
-        // Sort by creation time descending to get the most recent.
-        const sortedTasks = [...tasks].sort((a, b) => b.created_at - a.created_at);
-        const activeTask = runningTasks[0] || pendingTasks[0] || null;
-
-        const startTime = activeTask?.started_at || activeTask?.created_at || 0;
-        const elapsedSeconds = startTime ? Math.floor((Date.now() - startTime) / 1000) : 0;
-
-        const newStatus: ChatTaskStatus = {
-          hasRunningTasks: runningTasks.length > 0,
-          taskCount: tasks.length,
-          status:
-            runningTasks.length > 0
-              ? "running"
-              : pendingTasks.length > 0
-              ? "pending"
-              : "idle",
-          activeTask,
-          elapsedSeconds,
-        };
-
-        // Only call setStatus when something actually changed to avoid spurious re-renders.
-        const prev = statusRef.current;
-        if (
-          prev.hasRunningTasks !== newStatus.hasRunningTasks ||
-          prev.taskCount !== newStatus.taskCount ||
-          prev.status !== newStatus.status ||
-          prev.activeTask?.task_id !== newStatus.activeTask?.task_id
-        ) {
-          setStatus(newStatus);
-        }
-
-        // Reschedule: fast poll while tasks are active, slow poll otherwise.
-        const delay = newStatus.hasRunningTasks || newStatus.status === "pending"
-          ? POLL_ACTIVE_MS
-          : POLL_IDLE_MS;
-        if (!cancelled) timeoutId = setTimeout(checkTasks, delay);
-      } catch (err) {
-        console.warn(`[ChatTaskStatus] Failed to load tasks for ${chatKey}:`, err);
-        if (!cancelled) timeoutId = setTimeout(checkTasks, POLL_IDLE_MS);
-      }
-    };
-
-    // Initial check immediately, then adaptive reschedule.
-    checkTasks();
-    return () => {
-      cancelled = true;
-      if (timeoutId !== null) clearTimeout(timeoutId);
-    };
-  }, [chatKey]);
-
-  return status;
+  return { ...indicator, nowS };
 }

@@ -59,6 +59,18 @@
   today since `install.ps1` always has an attached console, but would have
   shown a window the day an unattended installer invocation is added).
 
+### Fixed — Chat sidebar task indicator shows real task state
+- The per-chat indicator in the chat session list now reads the session's
+  server task log (`GET /v1/console/chat/sessions/{sid}/tasks`) instead of the
+  browser's IndexedDB task cache, which is only filled for tasks the page
+  already knew about and therefore never saw a newly started task.
+- It shows the task (its instruction, truncated), its phase (Queued / Running /
+  Done / Failed / Cancelled), the elapsed time, and how many more tasks are in
+  flight. A finished task stays visible for two minutes on chats other than
+  the open one. Server timestamps are epoch seconds and are read as such.
+- The task log carries no completion percentage, so an in-flight task gets an
+  indeterminate progress bar rather than an invented number.
+
 ### Tasks panel on the Task-Tracking SSOT (ADR-2056)
 - `core/task_tracking/` is now a working store: per-tenant SQLite, audit-first
   `task_item.*` events in the core chain, hierarchy + dependency rules,

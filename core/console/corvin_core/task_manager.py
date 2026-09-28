@@ -602,6 +602,59 @@ class TaskManager:
         tasks.sort(key=lambda t: t.created_at, reverse=True)
         return tasks
 
+    def list_task_summaries(
+        self,
+        chat_key: str,
+        limit: int = 20,
+        preview_chars: int = 120,
+    ) -> list[dict[str, Any]]:
+        """Newest-first task summaries for a status indicator.
+
+        Reads only the metadata snapshots of the ``limit`` most recently
+        modified tasks (the snapshot is rewritten on every state change, so it
+        is authoritative for status) — never the event logs, and never the
+        full instruction: ``instruction_preview`` is capped at ``preview_chars``.
+        ``last_event_at`` is the event log's mtime (epoch seconds).
+        """
+        metas = [
+            p for p in self.tasks_dir.glob("*.json")
+            if not p.name.endswith(".tmp")
+        ]
+        try:
+            metas.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        except OSError:
+            pass
+        out: list[dict[str, Any]] = []
+        for meta_file in metas:
+            if len(out) >= limit:
+                break
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if meta.get("chat_key") != chat_key:
+                continue
+            task_id = meta_file.stem
+            instruction = str((meta.get("input") or {}).get("instruction") or "")
+            try:
+                last_event_at: float | None = self._events_path(task_id).stat().st_mtime
+            except OSError:
+                last_event_at = None
+            out.append({
+                "task_id": task_id,
+                "chat_key": chat_key,
+                "status": meta.get("status"),
+                "created_at": meta.get("created_at"),
+                "started_at": meta.get("started_at"),
+                "ended_at": meta.get("ended_at"),
+                "exit_code": meta.get("exit_code"),
+                "duration_ms": meta.get("duration_ms"),
+                "instruction_preview": instruction[:preview_chars],
+                "last_event_at": last_event_at,
+            })
+        out.sort(key=lambda t: t.get("created_at") or 0, reverse=True)
+        return out
+
     def cleanup_tasks(self, chat_key: str) -> int:
         """Delete all task files for a chat (M4 session reset cleanup).
 

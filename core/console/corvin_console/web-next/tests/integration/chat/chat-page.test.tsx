@@ -75,7 +75,7 @@ vi.mock('@/hooks/use-tasks-with-live-updates', () => ({
 }));
 
 vi.mock('@/hooks/use-chat-task-status', () => ({
-  useChatTaskStatus: () => ({ hasRunningTasks: false, taskCount: 0, status: 'idle' }),
+  useChatTaskStatus: () => ({ phase: 'idle', task: null, activeCount: 0, nowS: 0 }),
 }));
 
 vi.mock('@/lib/task-db', () => ({
