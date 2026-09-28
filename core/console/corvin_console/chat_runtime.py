@@ -639,6 +639,22 @@ def voice_dir(tenant_id: str, sid: str) -> Path:
     return _workdir(tenant_id, sid) / _VOICE_SUBDIR
 
 
+#: Subdirectory for the chat's whole-session voice SUMMARY (one audio +
+#: metadata file, always overwritten on regeneration) — deliberately
+#: separate from _VOICE_SUBDIR: per-turn audio there is pruned oldest-first
+#: by prune_voice_archive(), which globs and groups files by voice_key(text)
+#: hash. This file has no such key (a recap is reworded on every
+#: regeneration) and a fixed name, so sharing the directory would risk the
+#: pruner either never recognising it (never evicted, harmless) or — if that
+#: logic ever changes to a plain oldest-first sweep — silently deleting it.
+_VOICE_SUMMARY_SUBDIR = "voice-summary"
+
+
+def session_summary_dir(tenant_id: str, sid: str) -> Path:
+    """Session-scoped directory holding this chat's whole-session voice summary."""
+    return _workdir(tenant_id, sid) / _VOICE_SUMMARY_SUBDIR
+
+
 # ── ADR-0194 Phase 3 — full read-aloud segmentation ──────────────────────────
 # The automatic voice is a SUMMARY by construction (/voice/tts runs the reply
 # through summarize.py, ≤400 chars). Phase 3 adds the other rendering: speak the
@@ -3951,6 +3967,84 @@ def _spawn_shadow_measurement(ctx: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Automatic, persisted whole-session voice summary
+# ---------------------------------------------------------------------------
+#
+# routes/voice.py's generate_and_persist_session_summary() is the pipeline;
+# this is the trigger. It fires after every successfully completed turn, off
+# the turn's critical path, so a chat's voice summary stays current whether
+# or not a browser tab is open to watch it happen — the whole point being
+# that a user can come back later (a different chat, a different login) and
+# still find one waiting. should_auto_generate_session_summary() bounds the
+# spend: most turns skip regeneration entirely.
+
+#: Strong refs to in-flight summary tasks — see _MEASUREMENT_TASKS above for
+#: why a bare create_task() result is not enough on its own.
+_SESSION_SUMMARY_TASKS: "set[asyncio.Task[Any]]" = set()
+
+#: How many chats may regenerate their summary at once. Each one is a
+#: transcript-summarise `claude -p` spawn plus a `say.py` TTS spawn — the
+#: same paid spend class as _MEASUREMENT_TASKS, so it gets the same small cap.
+_SESSION_SUMMARY_MAX_CONCURRENT = 2
+
+#: (tenant_id, sid) pairs with a regeneration currently in flight. Turns on
+#: the SAME chat can complete faster than one regeneration takes; without
+#: this a burst of quick replies would queue up redundant concurrent runs
+#: for a chat that only needs its LATEST state summarised once.
+_SESSION_SUMMARY_INFLIGHT: "set[tuple[str, str]]" = set()
+
+
+async def _run_session_summary_auto(tenant_id: str, sid: str) -> None:
+    from .routes import voice as _voice  # noqa: PLC0415 — avoid import cycle at module load
+    await asyncio.to_thread(
+        _voice.generate_and_persist_session_summary, tenant_id, sid, trigger="auto")
+
+
+def _spawn_session_summary_auto(sess: "WebChatSession") -> None:
+    """Fire a detached, best-effort voice-summary regeneration for *sess*.
+
+    Never awaited by the turn — a slow or failed regeneration must not add
+    latency to, or break, the chat turn that triggered it.
+    """
+    key = (sess.tenant_id, sess.sid)
+    if key in _SESSION_SUMMARY_INFLIGHT:
+        return
+    if len(_SESSION_SUMMARY_TASKS) >= _SESSION_SUMMARY_MAX_CONCURRENT:
+        return
+    from .routes import voice as _voice  # noqa: PLC0415
+    try:
+        if not _voice.should_auto_generate_session_summary(
+                sess.tenant_id, sess.sid, sess.turn_count):
+            return
+    except Exception:  # noqa: BLE001 — the gate itself must never break a turn
+        _log.warning("session-summary auto-generation gate failed for %s:%s",
+                     sess.tenant_id, sess.sid, exc_info=True)
+        return
+
+    coro = _run_session_summary_auto(sess.tenant_id, sess.sid)
+    try:
+        task = asyncio.create_task(coro)
+    except RuntimeError:
+        coro.close()
+        _log.warning("session summary auto-generation not started: no running event loop")
+        return
+    _SESSION_SUMMARY_TASKS.add(task)
+    _SESSION_SUMMARY_INFLIGHT.add(key)
+
+    def _done(t: "asyncio.Task[Any]") -> None:
+        _SESSION_SUMMARY_TASKS.discard(t)
+        _SESSION_SUMMARY_INFLIGHT.discard(key)
+        if t.cancelled():
+            return
+        exc = t.exception()  # retrieve, else asyncio logs "never retrieved"
+        if exc is not None:
+            _log.warning("session summary auto-generation failed for %s:%s: %r",
+                         sess.tenant_id, sess.sid, exc)
+
+    task.add_done_callback(_done)
+
+
+# ---------------------------------------------------------------------------
 # ADR-0222 k=3 — native-arm-only DECISION collection (ship-dark, zero-cost)
 # ---------------------------------------------------------------------------
 #
@@ -6873,6 +6967,15 @@ async def _stream_turn_impl(
             "tenant_id": sess.tenant_id,
             "user_model": _os_model_used,
         })
+
+    # Automatic, persisted whole-session voice summary (see
+    # _spawn_session_summary_auto above): independent of whether any client
+    # is connected right now, and of the per-turn TTS toggle (a distinct
+    # feature — this is a durable recap, not the live "speak this reply"
+    # playback). Detached + best-effort; sess.turn_count already reflects
+    # this turn (touch() above ran first).
+    if rc == 0:
+        _spawn_session_summary_auto(sess)
 
     # ADR-0222 k=3: native-arm-only DECISION collection (ship-dark, zero-cost).
     # We reached this native completion, so the arm that ACTUALLY ran is native.

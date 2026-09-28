@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Added — automatic, persisted whole-session voice summary; chat header decluttered
+- Every chat now gets a spoken recap generated automatically in the background
+  as the conversation progresses, independent of whether any browser tab is
+  open (`chat_runtime._spawn_session_summary_auto`, fired after each
+  successfully completed turn; `routes/voice.py::generate_and_persist_session_summary`
+  runs the actual transcript-summarise + TTS pipeline off the turn's critical
+  path). Regeneration is skipped unless the chat has gained at least 3 turns
+  since its last summary, so a fast back-and-forth doesn't pay for a fresh
+  paid LLM+TTS spawn pair on every reply.
+- The result is persisted to a fixed, per-chat file pair (`voice-summary/
+  session-summary.<ext>` + `.meta.json` inside the chat's own session
+  directory) — always overwritten on regeneration, never a growing archive —
+  so it survives the browser tab, and the login session, that was open when
+  it was generated. Deleting the chat deletes its summary with it; no
+  separate pruning or erasure path was needed.
+- New **Voice Summaries** panel (sidebar, under Messaging) lists every chat
+  in the tenant that has a summary, newest first, with the recap text and a
+  native `<audio>` player — reachable after logging back in with a fresh
+  session, in a different tab, or from a different chat than the one that
+  generated it. Backed by `GET /v1/console/voice/summaries`; playback reuses
+  the existing generic `/chat/sessions/{sid}/workdir/{filepath}` file route,
+  no bespoke audio endpoint was added.
+- This is distinct from the existing on-demand session-recap button (still
+  ephemeral, click-only, unarchived — regenerating it does not touch the
+  automatic summary) and from the live per-turn "speak this reply" playback
+  (still gated on the voice-output toggle).
+- Removed the header's **Audit** and per-chat **Engine** override buttons
+  from the chat UI. The Audit Trail panel itself is unchanged and still
+  reachable from a message's "View graph →" link; the read-only engine
+  label in the status bar footer is unaffected — only the two header
+  controls were removed.
+
 ### BREAKING — Hermes and all local Ollama inference removed (ADR-2091)
 - The Hermes worker engine and every path that ran inference on a local Ollama
   server are gone: `hermes`, `claude_code_local` (Claude Code → Ollama redirect),

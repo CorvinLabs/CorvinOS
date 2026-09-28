@@ -957,6 +957,12 @@ def test_both_paid_endpoints_are_on_the_voice_axis() -> None:
     Haiku claude -p spawn class and joined this set when it was added — same
     reasoning: an unmetered third endpoint would again be a way around the
     gate the other two are held to.
+
+    generate_and_persist_session_summary (the AUTOMATIC, persisted variant of
+    the same recap pipeline, triggered off the turn's critical path rather
+    than a button click) is the same spawn class again and is gated the same
+    way — a background trigger is exactly the kind of path that bypasses a
+    button-only gate if nobody remembers to wire it up.
     """
     import ast
     src = Path(voice_routes.__file__).read_text(encoding="utf-8")
@@ -984,7 +990,10 @@ def test_both_paid_endpoints_are_on_the_voice_axis() -> None:
     # LLM-spawn phase runs outside the TTS slot since 2026-07-17) — the gate
     # sits there so it fires before any paid spawn, and the composed
     # _voice_session_summary_sync inherits it.
-    assert gated == {"_voice_tts_sync", "voice_summarize", "_voice_session_summary_text"}, gated
+    assert gated == {
+        "_voice_tts_sync", "voice_summarize", "_voice_session_summary_text",
+        "generate_and_persist_session_summary",
+    }, gated
 
 
 # ── concurrency bound on the synthesis routes ────────────────────────────────

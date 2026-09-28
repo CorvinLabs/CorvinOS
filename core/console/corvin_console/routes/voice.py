@@ -20,6 +20,7 @@ for TTS — only ``len(text)`` is logged.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import random
 import subprocess
@@ -2066,6 +2067,240 @@ def _voice_session_summary_tts(
         "X-Corvin-Lang": lang,
         "X-Corvin-TTS-Format": mime,
     })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Automatic, persisted session voice summary
+#
+# The route above regenerates a session recap on every button click and
+# deliberately never archives it (see its docstring) — there is no stable
+# key to file a reworded-every-time recap under, and nothing needed one to
+# survive past the response. This section is the opposite half: an
+# AUTOMATIC background regeneration, keyed by (tenant_id, sid) alone — one
+# fixed file pair per chat, always overwritten — that exists so a user can
+# come back later (another tab, another login) and still hear the chat's
+# recap without having been present to click anything.
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Skip auto-regeneration unless the chat gained at least this many turns
+#: since its last summary — a fast back-and-forth chat would otherwise pay
+#: for a fresh transcript-summarise + TTS subprocess pair on every reply.
+_AUTO_SUMMARY_MIN_TURN_DELTA = 3
+
+_SESSION_SUMMARY_META_NAME = "session-summary.meta.json"
+
+
+def _session_summary_paths(tenant_id: str, sid: str) -> "tuple[Path, Path]":
+    """(directory, meta-file path) for the chat's persisted voice summary."""
+    from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
+    d = _cr.session_summary_dir(tenant_id, sid)
+    return d, d / _SESSION_SUMMARY_META_NAME
+
+
+def should_auto_generate_session_summary(tenant_id: str, sid: str, turn_count: int) -> bool:
+    """True when this chat has no summary yet, or has gained enough new
+    turns since the last one to justify the paid regeneration."""
+    _dir, meta_path = _session_summary_paths(tenant_id, sid)
+    if not meta_path.exists():
+        return turn_count > 0
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return True
+    last = meta.get("turn_count_at_generation")
+    if not isinstance(last, int):
+        return True
+    return (turn_count - last) >= _AUTO_SUMMARY_MIN_TURN_DELTA
+
+
+def generate_and_persist_session_summary(
+    tenant_id: str, sid: str, *, lang: str = "de", trigger: str = "auto",
+) -> bool:
+    """Generate a fresh whole-session recap and persist it durably.
+
+    Runs the SAME two-phase pipeline as the on-demand route above
+    (transcript -> summarize.py -> say.py), but instead of streaming the
+    audio back to one caller, writes it to a fixed (tenant_id, sid)-keyed
+    file pair that survives the request — and the login session — that
+    triggered it. Always overwrites: one summary per chat, never a growing
+    archive, so deleting the chat already deletes this with it (no separate
+    pruning/erasure scheme needed).
+
+    Best-effort by design: this is meant to run off a turn's critical path
+    (see chat_runtime._spawn_session_summary_auto), so any failure is logged
+    and returns False — it must never surface as a chat-facing error.
+    """
+    from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
+
+    sess = _cr.get_session(tenant_id, sid)
+    if sess is None:
+        return False
+
+    try:
+        # Same voice-axis metering as the on-demand route — see its call for
+        # the ADR-0194 LIC-VOICETTS-SPAWN-01 rationale. "system" mirrors the
+        # sid_fingerprint="system" convention used by other server-triggered
+        # (not request-triggered) audit events (voice_provision.py, a2a_pair.py).
+        from ._compute_license_gate import enforce_voice_summaries  # noqa: PLC0415
+        enforce_voice_summaries(tenant_id, "system", audit_action="voice.session_summary")
+    except HTTPException:
+        return False
+
+    transcript = _build_session_transcript(tenant_id, sid)
+    if not transcript:
+        return False
+
+    summarize_path = _VOICE_SCRIPTS / "summarize.py"
+    if not summarize_path.exists():
+        return False
+
+    resolved_lang = lang if lang in ("de", "en") else "de"
+    angle = random.choice(
+        _SESSION_RECAP_ANGLES_DE if resolved_lang == "de" else _SESSION_RECAP_ANGLES_EN)
+    cmd = [sys.executable, str(summarize_path),
+           "--session-recap-mode",
+           "--lang", resolved_lang,
+           "--max-chars", str(_SESSION_RECAP_MAX_CHARS),
+           "--angle", angle]
+    if lang and lang not in ("de", "en"):
+        cmd += ["--output-language", lang]
+    try:
+        proc = subprocess.run(
+            cmd, input=transcript, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=_TTS_SUMMARIZE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        console_audit.action_failed(
+            tenant_id=tenant_id, sid_fingerprint="system",
+            action="voice.session_summary", target_kind="voice", target_id=sid,
+            reason="timeout",
+        )
+        return False
+    if proc.returncode != 0 or not proc.stdout.strip():
+        console_audit.action_failed(
+            tenant_id=tenant_id, sid_fingerprint="system",
+            action="voice.session_summary", target_kind="voice", target_id=sid,
+            reason=("summarize-exit-nonzero" if proc.returncode != 0
+                    else "summarize-empty-output"),
+        )
+        return False
+    recap_text = proc.stdout.strip()[:_TTS_PROVIDER_CHAR_LIMIT]
+
+    with tempfile.NamedTemporaryFile(prefix="corvin_tts_", suffix=".opus", delete=False) as fh:
+        out_path = Path(fh.name)
+    try:
+        cmd2 = _say_cmd(out_path, recap_text, resolved_lang)
+        proc2 = subprocess.run(cmd2, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", env=_say_env(),
+                               timeout=_tts_timeout_for(recap_text))
+        if proc2.returncode != 0:
+            return False
+        size = out_path.stat().st_size if out_path.exists() else 0
+        if size == 0 or not proc2.stdout.strip():
+            return False
+        data = out_path.read_bytes()
+    except subprocess.TimeoutExpired:
+        console_audit.action_failed(
+            tenant_id=tenant_id, sid_fingerprint="system",
+            action="voice.session_summary", target_kind="voice", target_id=sid,
+            reason="tts-timeout",
+        )
+        return False
+    finally:
+        _cleanup_tts_tmp(out_path)
+
+    mime = _detect_audio_mime(data)
+    ext = _AUDIO_EXT_BY_MIME.get(mime, ".ogg")
+    vdir, meta_path = _session_summary_paths(tenant_id, sid)
+    try:
+        vdir.mkdir(parents=True, exist_ok=True)
+        # Clear any stale file(s) from a previous regeneration under a
+        # DIFFERENT extension — the TTS provider (and therefore the sniffed
+        # format) can change between runs, and a fixed name alone would
+        # leave an orphaned audio file the new meta never points at.
+        for stale in vdir.glob("session-summary.*"):
+            if stale.name != _SESSION_SUMMARY_META_NAME:
+                stale.unlink(missing_ok=True)
+        audio_name = f"session-summary{ext}"
+        # uuid4 tmp name, same reasoning as _persist_turn_voice: a unique
+        # name PER WRITE (not per process) so two concurrent regenerations
+        # (e.g. auto-trigger racing a future manual "regenerate now") cannot
+        # tear each other's file via replace() on a shared tmp path.
+        audio_tmp = vdir / f"{audio_name}.{uuid.uuid4().hex}.tmp"
+        audio_tmp.write_bytes(data)
+        audio_tmp.replace(vdir / audio_name)  # atomic — never serve a torn file
+
+        meta = {
+            "sid": sid,
+            "tenant_id": tenant_id,
+            "created_at": time.time(),
+            "lang": lang,
+            "text": recap_text,
+            "mime": mime,
+            "audio_file": audio_name,
+            "turn_count_at_generation": sess.turn_count,
+        }
+        meta_tmp = meta_path.with_name(f"{meta_path.name}.{uuid.uuid4().hex}.tmp")
+        meta_tmp.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+        meta_tmp.replace(meta_path)
+    except OSError:
+        _log.warning("session summary persist failed for %s:%s", tenant_id, sid, exc_info=True)
+        return False
+
+    console_audit.action_performed(
+        tenant_id=tenant_id, sid_fingerprint="system",
+        action="voice.session_summary", target_kind="voice", target_id=sid,
+        trigger=trigger,
+    )
+    return True
+
+
+def list_session_summaries(tenant_id: str) -> "list[dict[str, Any]]":
+    """Every chat in this tenant with a persisted voice summary, newest
+    first — the feed for a cross-chat "Voice Summaries" library. Reachable
+    for as long as the chat itself exists, independent of which login
+    session was active when the summary was generated (ADR-0007: identity
+    here is tenant_id, this install's single-tenant local-login has no
+    separate durable user_id — see auth.SessionRecord)."""
+    from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
+
+    out: list[dict[str, Any]] = []
+    for sess in _cr.list_sessions(tenant_id):
+        _dir, meta_path = _session_summary_paths(tenant_id, sess.sid)
+        if not meta_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        audio_file = meta.get("audio_file")
+        if not audio_file:
+            continue
+        out.append({
+            "sid": sess.sid,
+            "title": sess.title or "Untitled chat",
+            "created_at": meta.get("created_at"),
+            "lang": meta.get("lang"),
+            "text": meta.get("text", ""),
+            "audio_url": (
+                f"/v1/console/chat/sessions/{sess.sid}/workdir/"
+                f"{_cr._VOICE_SUMMARY_SUBDIR}/{audio_file}"
+            ),
+        })
+    out.sort(key=lambda e: e["created_at"] or 0, reverse=True)
+    return out
+
+
+@router.get("/voice/summaries")
+def list_voice_summaries(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Every chat in this tenant with a persisted, automatically-generated
+    voice summary — playable via the returned ``audio_url`` (the existing
+    generic ``/chat/sessions/{sid}/workdir/...`` file route), independent of
+    which chat tab is open or which login session generated it."""
+    items = list_session_summaries(rec.tenant_id)
+    return {"tenant_id": rec.tenant_id, "count": len(items), "summaries": items}
 
 
 class VoiceSegmentRequest(BaseModel):

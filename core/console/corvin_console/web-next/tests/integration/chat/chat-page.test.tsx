@@ -224,6 +224,22 @@ describe('ChatPage voice wiring (real components, ADR-0185-adjacent regression c
     // Voice is off now — the Replay affordance is gated on voiceOut too.
     expect(screen.queryByLabelText('Replay last response')).not.toBeInTheDocument();
   });
+
+  it('no longer renders the header Audit or Engine buttons', async () => {
+    renderRealChatPage(SID);
+    await waitFor(() => expect(subscribeEventsMock).toHaveBeenCalledWith(SID, expect.any(Function)));
+
+    // The Audit button used to toggle the Audit Trail panel; the panel
+    // itself is still reachable (a message's TDE "View graph →" link opens
+    // it), only the standalone header toggle was removed.
+    expect(screen.queryByTitle('Audit Trail')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Audit$/ })).not.toBeInTheDocument();
+    // The per-chat engine override dropdown (ChatEngineSelector) is gone;
+    // the read-only engine label in the status bar footer is unaffected —
+    // that is a *different* element and is asserted absent nowhere here.
+    expect(screen.queryByText('Engine for this chat')).not.toBeInTheDocument();
+    expect(screen.queryByText('override')).not.toBeInTheDocument();
+  });
 });
 
 describe('ChatPage TDE inline badge (real components, ADR-0214/0216)', () => {

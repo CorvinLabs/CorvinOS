@@ -15,7 +15,7 @@ import type { ConsolePanel } from "./types";
 import PanelHost from "./PanelHost";
 import {
   DashboardPage, SettingsPage,
-  ComputePage, BridgesPage, DiscoveryPage, VoicePage, ForgePage,
+  ComputePage, BridgesPage, DiscoveryPage, VoicePage, VoiceSummariesPage, ForgePage,
   LddPage, CompliancePage, FilesPage, MemoryPage,
   AgentHubPage, SkillManagerPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
@@ -44,6 +44,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   BridgesPage,
   DiscoveryPage,
   VoicePage,
+  VoiceSummariesPage,
   ForgePage,
   LddPage,
   CompliancePage,
@@ -111,6 +112,7 @@ export const PANELS: ConsolePanel[] = [
   rc("bridges", "Bridges", BridgesPage, { nav: { label: "Channels", icon: "Network", group: "messaging" } }),
   rc("discovery", "Discovery", DiscoveryPage, { nav: { label: "Discovery", icon: "Globe2", group: "network" } }),
   rc("voice", "Voice", VoicePage, { nav: { label: "Voice", icon: "AudioLines", group: "messaging" } }),
+  rc("voice-summaries", "Voice Summaries", VoiceSummariesPage, { nav: { label: "Voice Summaries", icon: "Headphones", group: "messaging" } }),
   rc("forge", "Forge", ForgePage, { nav: { label: "Forge", icon: "Hammer", group: "build" } }),
   // "skills" is no longer a panel (2026-09-20). /v1/console/skills and
   // /v1/console/forge/skills return the SAME 643 records (verified against

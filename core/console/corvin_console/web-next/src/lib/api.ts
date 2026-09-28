@@ -34,6 +34,7 @@ export * from "./api/workflows";
 export * from "./api/compute";
 export * from "./api/connectors";
 export * from "./api/engines";
+export * from "./api/voice-summaries";
 export * from "./api/settings";
 export * from "./api/a2a";
 export * from "./api/hubs";

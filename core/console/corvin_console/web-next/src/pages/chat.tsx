@@ -2,7 +2,6 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
-  ChevronDown,
   Cloud,
   Cpu,
   Download,
@@ -19,7 +18,6 @@ import {
   Plus,
   RotateCcw,
   Send,
-  ShieldCheck,
   Sparkles,
   Square,
   Trash2,
@@ -45,8 +43,6 @@ import {
   deleteChatSession,
   getChatTurns,
   getPerChatEngine,
-  setPerChatEngine,
-  clearPerChatEngine,
   getProfile,
   listChatSessions,
   transcribeAudio,
@@ -760,113 +756,6 @@ const ChatStatusBar = React.memo(function ChatStatusBar({
   );
 });
 
-function ChatEngineSelector({ chatKey, csrf }: { chatKey: string; csrf: string }) {
-  const qc = useQueryClient();
-  const [open, setOpen] = React.useState(false);
-  const ref = React.useRef<HTMLDivElement>(null);
-
-  const q = useQuery({
-    queryKey: ["chat-engine-pref", chatKey],
-    queryFn: ({ signal }) => getPerChatEngine(chatKey, signal),
-    staleTime: 30_000,
-  });
-
-  const setMut = useMutation({
-    mutationFn: ({ engine, model }: { engine: string; model: string | null }) =>
-      setPerChatEngine(chatKey, engine, model, csrf),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["chat-engine-pref", chatKey] });
-      setOpen(false);
-    },
-  });
-
-  const clearMut = useMutation({
-    mutationFn: () => clearPerChatEngine(chatKey, csrf),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["chat-engine-pref", chatKey] });
-      setOpen(false);
-    },
-  });
-
-  // Close on outside click
-  React.useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  const pref = q.data;
-  const effective = pref?.effective_engine ?? "claude_code";
-  const meta = ENGINE_META[effective] ?? ENGINE_META["claude_code"];
-  const Icon = meta.icon;
-  const isOverride = pref?.source === "per_chat";
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className={cn(
-          "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors hover:bg-muted",
-          "border-border bg-muted/30 text-muted-foreground",
-        )}
-      >
-        <Icon className="h-3 w-3" />
-        <span className="font-medium">{meta.label}</span>
-        {isOverride && (
-          <span className="rounded bg-accent/15 px-1 text-[9px] font-semibold uppercase tracking-wide text-accent">
-            override
-          </span>
-        )}
-        <ChevronDown className="h-3 w-3 opacity-60" />
-      </button>
-
-      {open && (
-        <div className="absolute right-0 top-full z-50 mt-1.5 w-64 rounded-lg border border-border bg-popover shadow-lg">
-          <div className="border-b border-border px-3 py-2">
-            <p className="text-xs font-medium text-foreground">Engine for this chat</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5">
-              {isOverride ? "Per-chat override active" : `Using ${pref?.source === "tenant_default" ? "tenant default" : "system default"}`}
-            </p>
-          </div>
-          <div className="p-1.5 space-y-0.5">
-            {Object.entries(ENGINE_META).map(([id, m]) => {
-              const Ico = m.icon;
-              const isActive = effective === id && isOverride;
-              return (
-                <button
-                  key={id}
-                  onClick={() => setMut.mutate({ engine: id, model: null })}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs transition-colors hover:bg-muted text-left",
-                    isActive && "bg-accent/10 font-medium",
-                  )}
-                >
-                  <Ico className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span className="flex-1">{m.label}</span>
-                  {isActive && <Check className="h-3 w-3 text-accent" />}
-                </button>
-              );
-            })}
-          </div>
-          {/* Clear override */}
-          {isOverride && (
-            <div className="border-t border-border px-3 py-2">
-              <button
-                onClick={() => clearMut.mutate()}
-                className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2"
-              >
-                Remove override — use tenant default
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 
 function ChatPane({
@@ -1710,16 +1599,6 @@ function ChatPane({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant={auditOpen ? "accent" : "ghost"}
-            size="sm"
-            onClick={() => setAuditOpen((v) => !v)}
-            title="Audit Trail"
-          >
-            <ShieldCheck className="h-4 w-4" />
-            Audit
-          </Button>
-          <ChatEngineSelector chatKey={chatKey} csrf={csrf} />
           {voiceOut && voiceState !== "idle" && (
             <VoicePlaybackChip
               state={voiceState}

@@ -988,6 +988,66 @@ it's pressed**.
   test_voice_session_summary.py` (10 cases) + `corvin_operator/voice/scripts/
   test_summarize.py` (7 new session-recap cases).
 
+**Automatic, persisted variant — a SEPARATE code path (2026-09-28).** The
+"Not archived" bullet above is still true for the button: it stays ephemeral,
+click-only, unarchived. What changed is that the SAME two-phase pipeline
+(transcript → `summarize.py --session-recap-mode` → `say.py`) now ALSO runs
+automatically, off a turn's critical path, and IS archived — because the
+requirement flipped from "no stable key, so don't bother" to "must survive
+past the request, so give it one." The key that makes this safe is
+`(tenant_id, sid)`, not a hash of the reworded text: one fixed file pair per
+chat, in a directory of its own (`chat_runtime.session_summary_dir()` =
+`<workdir>/voice-summary/`, deliberately NOT inside `voice_dir()`/
+`_VOICE_SUBDIR` — that directory is pruned oldest-first by
+`prune_voice_archive()`, keyed by `voice_key(text)` groups, and has no
+concept of a single fixed-name file to protect), always overwritten on
+regeneration. No pruning/erasure scheme was needed: deleting the chat already
+deletes this with it, exactly the concern the original "Not archived" bullet
+was raised to avoid — resolved by NOT sharing that concern's storage, not by
+building the second scheme it warned against.
+
+- **Trigger:** `chat_runtime._spawn_session_summary_auto()`, called from
+  `_stream_turn_impl` right after every `rc == 0` turn (same call site as the
+  ADR-0222 shadow-measurement spawn, same strong-ref task-set pattern so a
+  bare `asyncio.create_task()` result can't be silently GC'd). Detached,
+  best-effort, capped at `_SESSION_SUMMARY_MAX_CONCURRENT = 2` in flight and
+  one regeneration per `(tenant_id, sid)` at a time
+  (`_SESSION_SUMMARY_INFLIGHT`).
+- **Gate:** `routes/voice.py::should_auto_generate_session_summary()` skips
+  regeneration unless the chat has gained at least
+  `_AUTO_SUMMARY_MIN_TURN_DELTA = 3` turns since its last summary's
+  `turn_count_at_generation` — a fast back-and-forth would otherwise pay for
+  a fresh paid `claude -p` + TTS spawn pair on every single reply.
+- **Pipeline:** `generate_and_persist_session_summary()` — same
+  `enforce_voice_summaries` metering as the button (now with a THIRD member
+  in the AST-checked closed set, see `test_both_paid_endpoints_are_on_the_
+  voice_axis`), same transcript fencing, same fail-soft "log and return
+  False" contract, but writes the audio + a `session-summary.meta.json`
+  sidecar (`created_at`, `lang`, `text`, `mime`, `audio_file`,
+  `turn_count_at_generation`) via the same uuid4-tmp-then-`replace()` atomic
+  pattern `_persist_turn_voice` uses. A stale file from a PRIOR regeneration
+  under a different extension (the TTS provider — and therefore the sniffed
+  format — can change between runs) is removed before the new one is
+  written, so exactly one audio file survives at a time.
+- **Cross-chat listing:** `routes/voice.py::list_session_summaries()` walks
+  `chat_runtime.list_sessions(tenant_id)` and returns every chat with a
+  `session-summary.meta.json`, newest first — the feed behind
+  `GET /v1/console/voice/summaries` and the **Voice Summaries** console panel
+  (`src/pages/voice-summaries.tsx`). No new audio-serving endpoint: playback
+  goes through the existing generic
+  `GET /chat/sessions/{sid}/workdir/{filepath:path}` route, since the audio
+  already lives inside the chat's own session workdir.
+- **Identity across logout.** This tenant's single-tenant local-login has no
+  durable per-user id (`auth.SessionRecord` carries `sid_fingerprint`, not a
+  `user_id` — see the ADR-0007 section above), so "listen after logout"
+  means "reachable by `tenant_id`" — a fresh login session resolves the same
+  `_default` tenant and therefore the same summaries, not a separate
+  per-user library.
+- Regression guard: `core/console/tests/
+  test_voice_session_summary_auto.py` (real session store, real files, real
+  HTTP through the workdir file route — only the two subprocess spawns are
+  mocked, same boundary the button's own tests use).
+
 **Adversarial hardening pass (2026-07-17)** — invariants added after a
 two-round refutation review of the whole ADR-0194 surface:
 

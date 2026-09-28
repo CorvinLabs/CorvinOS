@@ -39,6 +39,10 @@ export const VoicePage = React.lazy(() =>
   import("@/pages/voice").then((m) => ({ default: m.VoicePage }))
 );
 
+export const VoiceSummariesPage = React.lazy(() =>
+  import("@/pages/voice-summaries").then((m) => ({ default: m.VoiceSummariesPage }))
+);
+
 export const ForgePage = React.lazy(() =>
   import("@/pages/forge").then((m) => ({ default: m.ForgePage }))
 );
