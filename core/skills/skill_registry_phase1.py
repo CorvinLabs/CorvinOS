@@ -33,6 +33,7 @@ import hashlib
 import json
 import logging
 import re
+import sys
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -180,6 +181,11 @@ class SkillExecutionResult:
         lom: Line of moral responsibility (source code location)
         lom_hash: SHA256 of source code at LoM
         tenant_id: Tenant scope for audit isolation
+        error_class: Stable, content-free failure code (exception class name
+            or a curated code) — the ONLY failure detail that enters the chain.
+            ``error_message`` stays on the returned result for the caller and
+            is never written to the audit trail: ``str(exc)`` is arbitrary
+            text a Skill (or its input) controls.
     """
     skill_id: str
     status: str  # "success", "failure", "timeout", "error"
@@ -190,6 +196,7 @@ class SkillExecutionResult:
     lom: Optional[str] = None  # Line of moral responsibility
     lom_hash: Optional[str] = None  # SHA256 of source
     tenant_id: str = "_default"
+    error_class: Optional[str] = None
 
     def to_audit_event(self) -> Dict[str, Any]:
         """Convert to audit trail event format.
@@ -209,7 +216,7 @@ class SkillExecutionResult:
             "status": self.status,
             "decision": decision_summary(self.output),
             "execution_time_ms": self.execution_time_ms,
-            "error_message": self.error_message,
+            "error_class": self.error_class,
             "timestamp": self.timestamp,
             "lom": self.lom,
             "lom_hash": self.lom_hash,
@@ -340,7 +347,7 @@ SKILL_AUDIT_ALLOWLISTS: Dict[str, frozenset] = {
     # and ``core/skills/skill_manager.py`` via ``skill_audit.emit_skill_audit``)
     # — the union of their metadata fields, registered once here.
     "skill.executed": frozenset({
-        "skill_id", "status", "decision", "execution_time_ms", "error_message",
+        "skill_id", "status", "decision", "execution_time_ms",
         "timestamp", "lom", "lom_hash", "tenant_id",
         "skill_version", "latency_ms", "run_id", "timeout_ms", "exc_type",
         "phase_completed", "error_class",
@@ -355,7 +362,28 @@ SKILL_AUDIT_ALLOWLISTS: Dict[str, frozenset] = {
 
 
 def _register_skill_audit_allowlists() -> bool:
-    """Fold the Skill event field sets into the core writer (idempotent)."""
+    """Fold the Skill event field sets into the core writer (idempotent).
+
+    Runs at module import. A bare ``from forge.security_events import …`` with
+    ``corvin_operator/`` (but not ``corvin_operator/forge/``) on sys.path binds
+    ``forge`` in ``sys.modules`` as an empty NAMESPACE package — and that
+    binding outlived the ImportError: the core writer's own
+    ``from forge import security_events`` then failed for the whole process,
+    so every Skill event was dropped ("forge not importable — audit writes are
+    no-ops"). Probe with ``find_spec`` first and only import a REAL package.
+    """
+    import importlib.util as _ilu  # noqa: PLC0415
+
+    bound = sys.modules.get("forge")
+    if bound is None:
+        try:
+            spec = _ilu.find_spec("forge")
+        except (ImportError, ValueError):
+            spec = None
+        if spec is None or spec.origin is None:  # absent, or namespace-only
+            return False
+    elif getattr(bound, "__file__", None) is None:  # already a namespace binding
+        return False
     try:
         from forge.security_events import register_event_allowlist  # type: ignore[import-not-found]
     except ImportError:
@@ -956,6 +984,7 @@ class SkillsRegistry:
             return self._finish_error(
                 skill_id, f"Tenant isolation violation: {effective_tenant_id!r} not authorized",
                 effective_tenant_id or "", lom, start_time, track=False,
+                error_class="tenant_isolation_violation",
             )
 
         # LoM is REQUIRED (ADR-0537, EU AI Act Art. 50): a decision nobody is
@@ -968,6 +997,7 @@ class SkillsRegistry:
                 "LoM missing: pass lom='<file>:<function>' naming the line of moral "
                 "responsibility for this Skill execution (ADR-0537)",
                 effective_tenant_id, None, start_time, track=False,
+                error_class="lom_missing",
             )
 
         # The LoM must BIND to source (ADR-0537): an unresolvable file:function
@@ -979,12 +1009,14 @@ class SkillsRegistry:
                 f"LoM unresolvable: {lom!r} does not name an existing "
                 "<repo-relative file>:<function> (ADR-0537)",
                 effective_tenant_id, None, start_time, track=False,
+                error_class="lom_unresolvable",
             )
 
         # Check if Skill exists
         if skill_id not in self._skills:
             return self._finish_error(
                 skill_id, f"Skill not found: {skill_id}", effective_tenant_id, lom, start_time, track=False,
+                error_class="skill_not_found",
             )
 
         # FIX #12: Check if Skill is auto-disabled for THIS tenant
@@ -992,6 +1024,7 @@ class SkillsRegistry:
             return self._finish_error(
                 skill_id, f"Skill auto-disabled after {self.AUTO_DISABLE_THRESHOLD}+ failures: {skill_id}",
                 effective_tenant_id, lom, start_time, track=False,
+                error_class="skill_auto_disabled",
             )
 
         skill = self._skills[skill_id]
@@ -1008,6 +1041,7 @@ class SkillsRegistry:
                 f"Skill saturated: {self.MAX_IN_FLIGHT_PER_SKILL} executions still in flight "
                 f"(timed-out workers not yet returned): {skill_id}",
                 effective_tenant_id, lom, start_time, track=True,
+                error_class="skill_saturated",
             )
 
         # FIX #10: Scrub PII from input before Skill execution (GDPR Art. 32)
@@ -1038,6 +1072,7 @@ class SkillsRegistry:
                 skill_id=skill_id,
                 status="timeout",
                 error_message=f"Skill execution timeout after {timeout_ms}ms",
+                error_class="timeout",
                 execution_time_ms=execution_time_ms,
                 timestamp=end_time.isoformat(),
                 tenant_id=effective_tenant_id,
@@ -1050,6 +1085,7 @@ class SkillsRegistry:
                 skill_id=skill_id,
                 status="error",
                 error_message=str(holder.exc) or type(holder.exc).__name__,
+                error_class=type(holder.exc).__name__,
                 execution_time_ms=execution_time_ms,
                 timestamp=end_time.isoformat(),
                 tenant_id=effective_tenant_id,
@@ -1084,12 +1120,14 @@ class SkillsRegistry:
         start_time: datetime,
         *,
         track: bool,
+        error_class: str,
     ) -> SkillExecutionResult:
         end_time = datetime.now(timezone.utc)
         result = SkillExecutionResult(
             skill_id=skill_id,
             status="error",
             error_message=message,
+            error_class=error_class,
             execution_time_ms=(end_time - start_time).total_seconds() * 1000,
             timestamp=end_time.isoformat(),
             tenant_id=tenant_id,
@@ -1235,7 +1273,9 @@ class SkillsRegistry:
             status=result.status,
             output=self._scrub_pii_from_output(result.output) if result.output is not None else None,
             execution_time_ms=result.execution_time_ms,
-            error_message=self._scrub_string(result.error_message) if result.error_message else None,
+            # error_message is NOT carried into the audit projection (see
+            # SkillExecutionResult.error_class); only the stable class is.
+            error_class=result.error_class,
             timestamp=result.timestamp,
             lom=result.lom,
             lom_hash=result.lom_hash,

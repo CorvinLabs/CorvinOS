@@ -434,28 +434,23 @@ def test_trigger_detector_blocks_on_corrupted_chain(
     from datetime import datetime, timedelta
     import time
 
-    # Create audit directory
+    # The detector verifies with the CORE writer's verify_chain (round 4), so
+    # the chain is written by the core writer — the private
+    # AuditChainValidator format never occurs on a real install.
+    forge_dir = Path(__file__).resolve().parents[2] / "corvin_operator" / "forge"
+    if str(forge_dir) not in sys.path:
+        sys.path.insert(0, str(forge_dir))
+    from forge import security_events as se
+
     audit_path = temp_audit_dir / "audit.jsonl"
-
-    # Create a valid 3-event chain with skill_executed events
-    # Use recent timestamps so they're within the lookback window
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
     now_ts = datetime.utcnow().timestamp()
-    events = []
-    prev_hash = ""
+    se.register_event_allowlist(
+        "skill_executed", frozenset({"skill_id", "version", "tenant_id", "outcome_feedback"}))
     for i in range(3):
-        event = _make_event(
-            event_type="skill_executed",
-            prev_hash=prev_hash,
-            ts=now_ts - (100 - i * 10),  # Recent timestamps within 24h window
-            skill_id="os.delegation_router",
-            version="1.2.3",
-            outcome_feedback={"correct": True if i < 2 else False},
-        )
-        events.append(event)
-        prev_hash = event["hash"]
-
-    # Write the chain
-    _write_chain(audit_path, events)
+        se.write_event(audit_path, "skill_executed", ts=now_ts - (100 - i * 10), details={
+            "skill_id": "os.delegation_router", "version": "1.2.3", "tenant_id": "_default",
+            "outcome_feedback": {"correct": i < 2}})
 
     # Verify: detector can read valid chain
     detector = SkillLossTriggerDetector()
@@ -464,9 +459,12 @@ def test_trigger_detector_blocks_on_corrupted_chain(
         # Chain is valid, and confidence is 2/3 ≈ 0.667 < 0.70, so trigger should fire
         assert len(triggers) > 0, f"Expected at least 1 trigger, got {len(triggers)}"
 
-    # Corrupt the chain: change hash of event 1
-    events[1]["hash"] = "corruptedcorrupted"
-    _write_chain(audit_path, events)
+    # Corrupt the chain: change the hash of event 1
+    lines = audit_path.read_text("utf-8").splitlines()
+    rec = json.loads(lines[1])
+    rec["hash"] = "corruptedcorrupted"
+    lines[1] = json.dumps(rec)
+    audit_path.write_text("\n".join(lines) + "\n", "utf-8")
 
     # Verify: detector blocks on corrupted chain
     detector2 = SkillLossTriggerDetector()

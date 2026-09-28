@@ -66,7 +66,7 @@ def _use_os_trust_store() -> None:
     """Anchor this process's outbound-TLS verification to the OPERATING-SYSTEM
     trust store instead of Python's bundled ``certifi`` CA list.
 
-    A TLS-inspecting corporate proxy (e.g. ALLIANZDE, 2026-09-15 live finding)
+    A TLS-inspecting corporate proxy (e.g. [CORPORATE-PROXY], 2026-09-15 live finding)
     re-signs every outbound HTTPS connection with an internal root CA that lives
     in the Windows/macOS/Linux OS trust store but NOT in ``certifi/cacert.pem``.
     Every certifi-based client in the console process then fails with

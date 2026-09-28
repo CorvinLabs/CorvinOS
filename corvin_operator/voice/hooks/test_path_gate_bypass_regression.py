@@ -17,27 +17,35 @@ def _chk(cmd: str) -> bool:
     return allow
 
 
-# A protected path on any install (the voice secret vault).
-_VAULT = "~/.config/corvin-voice/secrets.json"
+# A protected path on any install: the voice secret vault, resolved the way
+# the gate resolves it (``XDG_CONFIG_HOME`` / ``CORVIN_SECRET_VAULT`` aware).
+# A literal ``~/.config/...`` stopped naming the vault once the test sandbox
+# sets XDG_CONFIG_HOME, and the deny assertions failed on an unprotected path.
+def _vault() -> str:
+    return str(pg._vault_path())
+
+
+def _vault_dir() -> str:
+    return str(pg._vault_path().parent)
 
 
 def test_bypass_D_newline_separator_denied():
     # Newline is a real bash separator; the second line must be inspected.
-    assert _chk(f"echo ok\nrm -f {_VAULT}") is False
-    assert _chk(f"echo ok\rrm -f {_VAULT}") is False
+    assert _chk(f"echo ok\nrm -f {_vault()}") is False
+    assert _chk(f"echo ok\rrm -f {_vault()}") is False
 
 
 def test_bypass_C_quoted_redirect_denied():
-    assert _chk(f'echo poison > "{_VAULT}"') is False
-    assert _chk(f"echo poison > '{_VAULT}'") is False
+    assert _chk(f'echo poison > "{_vault()}"') is False
+    assert _chk(f"echo poison > '{_vault()}'") is False
 
 
 def test_bypass_A_cd_relative_write_denied():
     # cd into a protected tree, then a relative write via a non-destructive
     # builtin (`:`/printf/tee) + redirect.
-    assert _chk("cd ~/.config/corvin-voice && : > secrets.json") is False
-    assert _chk("cd ~/.config/corvin-voice && printf x > secrets.json") is False
-    assert _chk("cd ~/.config/corvin-voice && echo x | tee secrets.json") is False
+    assert _chk(f"cd {_vault_dir()} && : > secrets.json") is False
+    assert _chk(f"cd {_vault_dir()} && printf x > secrets.json") is False
+    assert _chk(f"cd {_vault_dir()} && echo x | tee secrets.json") is False
     # Compute the corvin home at call time — other tests mutate CORVIN_HOME, and
     # the gate resolves it live, so a module-load snapshot would drift.
     home = str(pg._corvin_home())
@@ -45,8 +53,8 @@ def test_bypass_A_cd_relative_write_denied():
 
 
 def test_bypass_B_inline_interpreter_denied():
-    assert _chk(f'python3 -c "open(\\"{_VAULT}\\", mode=\\"w\\").write(1)"') is False
-    assert _chk(f'perl -e "open(F,\\">{_VAULT}\\")"') is False
+    assert _chk(f'python3 -c "open(\\"{_vault()}\\", mode=\\"w\\").write(1)"') is False
+    assert _chk(f'perl -e "open(F,\\">{_vault()}\\")"') is False
 
 
 def test_benign_not_overblocked():

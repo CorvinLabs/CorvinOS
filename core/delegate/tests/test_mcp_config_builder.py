@@ -104,6 +104,54 @@ class BuildMcpSpecsTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+class SpawnPythonpathTests(unittest.TestCase):
+    """Round-4 regressions: the spawned MCP servers import from THIS checkout.
+
+    Before: forge's PYTHONPATH was only ``corvin_operator/forge`` (so
+    ``corvin_operator.license`` resolved through an editable install of another
+    checkout) and skill-forge's named ``operator/…`` directories that no
+    longer exist.
+    """
+
+    _REPO = _PLUGIN_DIR.parents[1]
+
+    def _specs(self):
+        return {s.name: s for s in mcb.build_mcp_specs(
+            persona="coder", forge_enabled=True, skill_forge_enabled=True,
+            repo_root=self._REPO)}
+
+    def test_repo_root_first_and_every_entry_exists(self):
+        for name, spec in self._specs().items():
+            entries = spec.env["PYTHONPATH"].split(os.pathsep)
+            self.assertEqual(Path(entries[0]), self._REPO, name)
+            for e in entries:
+                self.assertTrue(Path(e).is_dir(), f"{name}: {e} missing")
+
+    def _import_origin(self, spec, module: str) -> str:
+        import subprocess
+
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        env.update(spec.env)
+        with tempfile.TemporaryDirectory() as cwd:
+            r = subprocess.run(
+                [sys.executable, "-c",
+                 f"import {module} as m; print(m.__file__)"],
+                env=env, cwd=cwd, capture_output=True, text=True, timeout=120,
+            )
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        return r.stdout.strip().splitlines()[-1]
+
+    def test_skill_forge_server_imports_from_this_checkout(self):
+        origin = self._import_origin(self._specs()[mcb.SERVER_SKILL_FORGE],
+                                     "skill_forge.mcp_server")
+        self.assertTrue(Path(origin).resolve().is_relative_to(self._REPO), origin)
+
+    def test_forge_license_gate_imports_from_this_checkout(self):
+        origin = self._import_origin(self._specs()[mcb.SERVER_FORGE],
+                                     "corvin_operator.license.capability_api")
+        self.assertTrue(Path(origin).resolve().is_relative_to(self._REPO), origin)
+
+
 class ResolveCapabilityTests(unittest.TestCase):
 
     def test_env_floor_false_wins(self):

@@ -118,21 +118,26 @@ def test_matrix_shape_matches_limits_py():
     assert all(limits.CAPABILITIES[c]["class"] == "B" for c in BASELINE)
 
 
-def test_non_positive_requested_is_not_validated_KNOWN_GAP():
-    """KNOWN GAP: ``requested`` is not range-checked; a negative or zero quantity is
-    ALLOWED on a finite free allowance. Harmless today (require_capability consumes
-    nothing), but a future caller that debits ``requested`` would be crediting."""
-    assert _decide("compute.run", -1).decision is ca.Decision.ALLOW
-    assert _decide("compute.run", 0).decision is ca.Decision.ALLOW
+@pytest.mark.parametrize("requested", [0, -1, -10**9, True, 1.5, "1", None])
+def test_non_positive_or_non_int_requested_is_rejected(requested):
+    """Was KNOWN GAP: a zero/negative quantity passed ``limit >= requested`` and
+    was ALLOWED on every finite tier (a caller that debits ``requested`` would
+    have been crediting). Now a ValueError, on every tier."""
+    for tier in ("free", "member"):
+        with mock.patch.object(ca, "active_tier", lambda t=tier: t):
+            with pytest.raises(ValueError, match="positive integer"):
+                _decide("compute.run", requested)
 
 
-def test_invalid_tenant_returns_enforcement_unavailable_instead_of_raising():
-    """The contract callers must handle: a non-ALLOW decision can come back as a
-    RETURN value. G2 and the console G3 dependency treat it as a deny; G1 and G5
-    do not (see test_adr0701_gates_g1_g4_g5.py)."""
-    decision = ca.require_capability("forge.create", tenant_id="../x", entry_point="t")
-    assert decision.decision is ca.Decision.ENFORCEMENT_UNAVAILABLE
-    assert decision.reason == "invalid_tenant" and decision.allowed == 0
+def test_invalid_tenant_raises_license_denied():
+    """Was: a non-ALLOW decision came back as a RETURN value for an invalid
+    tenant, which G1 and G5 ignored. Every non-allow outcome now raises."""
+    with pytest.raises(ca.LicenseDenied) as exc:
+        ca.require_capability("forge.create", tenant_id="../x", entry_point="t")
+    assert exc.value.reason == "invalid_tenant"
+    with mock.patch.object(ca, "active_tier", lambda: "member"):
+        with pytest.raises(ca.LicenseDenied):
+            ca.require_capability("chat.turns", tenant_id="", entry_point="t")
 
 
 # ── Daily quota counter (class L, per tenant, per UTC day) ──────────────────

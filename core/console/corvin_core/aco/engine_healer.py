@@ -50,7 +50,9 @@ class EngineHealResult:
             "tts_action": self.tts_action,
             "stt_ok": self.stt_ok,
             "stt_provider": self.stt_provider,
-            "warnings": self.warnings,
+            # Count only: warning strings are free text (probe/exception
+            # messages) and never enter the audit chain.
+            "warning_count": len(self.warnings),
         }
 
 

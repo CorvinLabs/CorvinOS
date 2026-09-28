@@ -1,8 +1,8 @@
 """Audit emitter — metadata only, never the prompt or output text.
 
 Three event types — ``delegate.invoked`` / ``delegate.completed`` /
-``delegate.failed`` — land in the unified hash chain at
-``<corvin_home>/global/forge/audit.jsonl`` via
+``delegate.failed`` — land in the tenant's hash chain at
+``forge.paths.tenant_audit_chain(current tenant)`` via
 ``forge.security_events.write_event``. The chain is the same one
 forge, skill-forge, dialectic, voice-transcribe, memory etc. write
 to — one ``voice-audit verify`` covers all of them.
@@ -14,7 +14,6 @@ L24 (data snapshots), L25 (compute), L28 (memory).
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -93,38 +92,73 @@ class DelegateAuditFieldNotAllowed(Exception):
     """Raised when a details payload carries a key outside the allow-list."""
 
 
-def _resolve_audit_path() -> Path | None:
-    """Best-effort resolution of the unified chain path.
+class DelegateAuditUnavailable(RuntimeError):
+    """Raised when the forge chain writer cannot be resolved.
 
-    Order:
-      1. $CORVIN_HOME env override — checked first so tests can inject a
-         temp dir without patching forge.paths (which is Phase-7 locked).
-      2. forge.paths.corvin_home() → <home>/global/forge/audit.jsonl
-      3. None — caller treats as "audit disabled"
+    A delegate record that cannot reach the chain is a compliance gap, not a
+    no-op: the caller (``delegation._emit_audit_*``) logs it at ERROR instead of
+    dropping it silently.
     """
-    # Check env override first — lets integration tests use a temp dir.
-    env = os.environ.get("CORVIN_HOME")
-    if env:
-        return Path(env) / "global" / "forge" / "audit.jsonl"
 
-    # Fall back to the canonical path resolver.
-    try:
-        _ensure_forge_on_path()
-        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore
-        return Path(corvin_home()) / "global" / "forge" / "audit.jsonl"
-    except Exception:  # noqa: BLE001
-        pass
 
-    return None
+# ``core/delegate/corvin_delegate/audit.py`` → parents[3] is the repo root; the
+# forge package lives at ``<repo>/corvin_operator/forge/forge``. (parents[2] was
+# ``core/`` — ``core/forge`` does not exist, so the path insert never happened.)
+_FORGE_DIR = Path(__file__).resolve().parents[3] / "corvin_operator" / "forge"
 
 
 def _ensure_forge_on_path() -> None:
-    plugin_root = Path(__file__).resolve().parents[2]
-    forge_pkg = plugin_root / "forge"
-    if forge_pkg.is_dir():
-        p = str(forge_pkg)
+    if _FORGE_DIR.is_dir():
+        p = str(_FORGE_DIR)
         if p not in sys.path:
             sys.path.insert(0, p)
+
+
+def _forge_modules() -> tuple[Any, Any]:
+    """Return ``(forge.security_events, forge.paths)`` or raise loudly.
+
+    ``forge`` can already be bound in ``sys.modules`` as a NAMESPACE package
+    (``corvin_operator/`` on sys.path, where ``corvin_operator/forge/`` has no
+    ``__init__.py``). A namespace ``__path__`` never picks up a regular package,
+    so ``forge.security_events`` can never resolve through it; the empty
+    binding is dropped and the real package imported. If the writer still does
+    not resolve, raise instead of returning ``None`` — the earlier "audit
+    disabled" return dropped every delegate record without a trace.
+    """
+    _ensure_forge_on_path()
+    import importlib
+
+    bound = sys.modules.get("forge")
+    if bound is not None and getattr(bound, "__file__", None) is None:
+        # Namespace mis-binding: its __path__ recomputation only picks up
+        # namespace PORTIONS, never the regular package, so the submodules
+        # below can never resolve through it. Drop the empty binding (it holds
+        # no code) so the import resolves the real package.
+        if (_FORGE_DIR / "forge" / "__init__.py").is_file():
+            del sys.modules["forge"]
+    try:
+        sec = importlib.import_module("forge.security_events")
+        fpaths = importlib.import_module("forge.paths")
+    except Exception as exc:  # noqa: BLE001
+        raise DelegateAuditUnavailable(
+            f"forge chain writer not importable: {type(exc).__name__}"
+        ) from exc
+    if not hasattr(sec, "write_event") or not hasattr(fpaths, "tenant_audit_chain"):
+        raise DelegateAuditUnavailable(
+            "forge bound to a module without write_event/tenant_audit_chain"
+        )
+    return sec, fpaths
+
+
+def _resolve_audit_path() -> Path:
+    """THE tenant chain: ``forge.paths.tenant_audit_chain(current tenant)``.
+
+    Honours ``CORVIN_HOME`` and ``CORVIN_TENANT_ID`` through forge.paths — never
+    a hand-composed ``<home>/global/forge/audit.jsonl`` (the legacy host-wide
+    chain the boot tripwire reports as a split).
+    """
+    _sec, fpaths = _forge_modules()
+    return Path(fpaths.tenant_audit_chain(None))
 
 
 def _validate_details(event_type: str, details: dict[str, Any]) -> dict[str, Any]:
@@ -174,35 +208,38 @@ def _register_chain_allowlist(event_type: str) -> None:
     allowed = _ALLOWED_FIELDS.get(event_type)
     if allowed is None:
         return
-    try:
-        from forge.security_events import register_event_allowlist  # type: ignore
-    except Exception:  # noqa: BLE001 — pre-F-A4 forge: floor absent, nothing to do
+    sec, _fpaths = _forge_modules()
+    register_event_allowlist = getattr(sec, "register_event_allowlist", None)
+    if register_event_allowlist is None:  # pre-F-A4 forge: floor absent
         return
     register_event_allowlist(event_type, frozenset(allowed))
     _CHAIN_ALLOWLIST_REGISTERED.add(event_type)
 
 
 def _write(event_type: str, **fields: Any) -> None:
-    """Common emit path. Best-effort — failures swallow silently."""
-    audit_path = _resolve_audit_path()
-    if audit_path is None:
-        return
-    try:
-        _ensure_forge_on_path()
-        from forge.security_events import write_event  # type: ignore
-    except Exception:  # noqa: BLE001
-        return
+    """Common emit path.
+
+    Field validation runs FIRST (a forbidden field is a caller bug and raises
+    ``DelegateAuditFieldNotAllowed``). An unresolvable writer or a failed write
+    raises ``DelegateAuditUnavailable`` — the delegation wrappers log it and let
+    the delegation continue (audit is observability for this layer), but the
+    loss is never silent.
+    """
     safe_details = _validate_details(event_type, fields)
+    sec, _fpaths = _forge_modules()
+    audit_path = _resolve_audit_path()
     _register_chain_allowlist(event_type)
     try:
-        write_event(
+        sec.write_event(
             audit_path,
             event_type,
             tool="corvin-delegate",
             details=safe_details,
         )
-    except Exception:  # noqa: BLE001 — never let audit failure break delegation
-        pass
+    except Exception as exc:  # noqa: BLE001
+        raise DelegateAuditUnavailable(
+            f"{event_type} not written: {type(exc).__name__}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +507,7 @@ def emit_mcp_wired(
 
 __all__ = [
     "DelegateAuditFieldNotAllowed",
+    "DelegateAuditUnavailable",
     "emit_completed",
     "emit_engine_policy_denied",
     "emit_failed",

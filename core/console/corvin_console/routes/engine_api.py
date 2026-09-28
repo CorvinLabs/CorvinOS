@@ -751,7 +751,11 @@ async def update_engine_config(
     cfg_mod = _model_config_module()
     merged = cfg_mod.load_config(tenant_id)
     merged.update(to_save)
-    cfg_mod.save_config(tenant_id, merged)
+    # Persist only tiers the operator actually saved (now or before): a saved
+    # tier is a PIN, an unsaved one follows the newest model of its family.
+    # Writing load_config()'s default fill-ins back would pin every tier.
+    keep = cfg_mod.saved_task_types(tenant_id) | set(to_save)
+    cfg_mod.save_config(tenant_id, {t: merged[t] for t in keep})
 
     try:
         from .. import audit as console_audit  # noqa: PLC0415

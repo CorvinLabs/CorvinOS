@@ -37,3 +37,30 @@ def _isolate_audit_chain_from_live_install():
             _os.environ.pop(k, None)
         else:
             _os.environ[k] = v
+
+
+# ── ADR-0701 G1: forge.create is a member-tier capability (fail-closed) ─────
+# ``Registry.create`` / ``promote`` run the REAL licence gate. The registry
+# mechanics tested here presuppose a licensed install, so by default the tier
+# RESOLVER reports ``member`` (the gate, limits matrix and audit run
+# unmodified). Tests of the gate's own verdicts opt out with
+# ``@pytest.mark.licence_tier("free")``. Subprocesses do not inherit this.
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "licence_tier(name): tier the licensing API resolves for this test "
+        "(default 'member')",
+    )
+
+
+@_pytest.fixture(autouse=True)
+def _forge_licence_tier(request, monkeypatch):
+    marker = request.node.get_closest_marker("licence_tier")
+    tier = marker.args[0] if marker else "member"
+    try:
+        from corvin_operator.license import capability_api
+    except ImportError:  # licensing absent → the gate refuses (fail-closed)
+        yield
+        return
+    monkeypatch.setattr(capability_api, "active_tier", lambda **_k: tier)
+    yield

@@ -22,15 +22,55 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
-# ADR-0701 G1: License gate for forge.create
-try:
-    from corvin_operator.license.capability_api import require_capability, LicenseDenied
-except ImportError:
-    # Fallback for testing without license module
-    def require_capability(*args, **kwargs):
-        pass
-    class LicenseDenied(Exception):
-        pass
+
+def _require_forge_create(entry_point: str) -> None:
+    """ADR-0701 G1 licence gate for ``forge.create`` — FAIL-CLOSED.
+
+    Raises ``PermissionError("forge.create denied: …")`` unless the licensing
+    API answers ``Decision.ALLOW`` for the process's tenant.
+
+    Two defects this replaces (adversarial review 2026-09-27):
+    * the gate was bound by a module-level import inside an import cycle
+      (capability_api → forge.forge.paths → this package's ``__init__`` →
+      registry → capability_api, half-initialised). Importing capability_api
+      first bound a no-op ``require_capability`` for the life of the process.
+      The import is now lazy, and an ImportError DENIES;
+    * it passed ``tenant_id=""``, which the API rejected as an invalid tenant
+      and RETURNED as a non-allow verdict that nothing inspected — so the free
+      tier forged freely. The registry has no session; the tenant is the
+      process's (``current_tenant()``: ``CORVIN_TENANT_ID`` → ``_default``,
+      validated).
+    """
+    try:
+        try:
+            import corvin_operator  # noqa: F401
+        except ImportError:
+            # ``forge.py`` run as a script / the stdio MCP server put only
+            # ``corvin_operator/forge`` on sys.path; the repo root is 3 up.
+            import sys as _sys
+            _sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+        from corvin_operator.license.capability_api import (
+            Decision, LicenseDenied, require_capability,
+        )
+        from corvin_operator.forge.forge.tenants import current_tenant
+    except ImportError as exc:
+        raise PermissionError(
+            "forge.create denied: licensing module unavailable (fail-closed)"
+        ) from exc
+    try:
+        tenant_id = current_tenant()
+        decision = require_capability(
+            "forge.create", requested=1, tenant_id=tenant_id,
+            entry_point=entry_point,
+        )
+    except LicenseDenied as e:
+        raise PermissionError(f"forge.create denied: {e}") from e
+    except Exception as e:  # noqa: BLE001 — enforcement failure = deny
+        raise PermissionError(
+            f"forge.create denied: licence enforcement unavailable ({e})"
+        ) from e
+    if getattr(decision, "decision", None) is not Decision.ALLOW:
+        raise PermissionError("forge.create denied: no allow verdict")
 
 
 @dataclass
@@ -141,10 +181,7 @@ class Registry:
         meta: dict[str, Any] | None = None,
     ) -> ToolSpec:
         # ADR-0701 G1: License gate — forge.create is member-only
-        try:
-            require_capability("forge.create", requested=1, tenant_id="", entry_point="forge_mcp")
-        except LicenseDenied as e:
-            raise PermissionError(f"forge.create denied: {e}") from e
+        _require_forge_create("forge:registry.create")
 
         # Allow alphanumerics plus _ and . (the dot enables AWP-style
         # namespacing like "csv.count" / "stats.median"). Reject path
@@ -275,10 +312,7 @@ class Registry:
         the implementation alongside. Idempotent.
         """
         # ADR-0701 G1: License gate — forge.create is member-only
-        try:
-            require_capability("forge.create", requested=1, tenant_id="", entry_point="forge_mcp")
-        except LicenseDenied as e:
-            raise PermissionError(f"forge.create denied: {e}") from e
+        _require_forge_create("forge:registry.promote")
 
         with self._locked():
             spec = self.get(name)
@@ -385,7 +419,12 @@ class Registry:
             event_type,
             tool=spec.name,
             details=details,
-            hash_chain=self.hash_chain,
+            # Always chained. ``self.hash_chain`` mirrors the legacy
+            # ``policy.audit.hash_chain`` knob, but write_event (F-A1) refuses
+            # every unchained record except the gap marker — passing the knob
+            # through made each create/delete/promote RAISE after the manifest
+            # was already written whenever a policy set it false.
+            hash_chain=True,
         )
 
 

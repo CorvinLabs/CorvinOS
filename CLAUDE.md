@@ -185,7 +185,7 @@ carried 9 disallowed `.md` files plus ~40 stray `.txt`/`.json`/script files — 
 
 ### Enforcement Mechanism (Automated)
 
-1. **Git Pre-Commit Hook** (NOT BUILT — the installed hook checks ADR presence, not root files): Rejects commits adding new `.md` files to root
+1. **Git Pre-Commit Hook** (NOT BUILT — measured 2026-09-27: no active `.git/hooks/pre-commit` at all, only `pre-commit.backup`/`.bak`; `core.hooksPath` unset): Rejects commits adding new `.md` files to root
    ```bash
    # Hook will validate: only 8 allowed files exist in root after commit
    # Violation → commit rejected with message pointing to this rule
@@ -510,7 +510,8 @@ without operator review · add in-process MCP server without operator review.
    ADR-XXXX documents the design (see Corvin-ADR repo)."
    ```
 
-3. **Pre-commit hook validates** (layer 1):
+3. **Pre-commit hook validates** (layer 1 — NOT INSTALLED, measured 2026-09-27: no active
+   `.git/hooks/pre-commit`; the CI gate `adr-sync-check.yml` is the only automated layer):
    - Detects `core/` changes
    - Checks for ADR file in `/home/shumway/projects/Corvin-ADR/decisions/`
    - Rejects if missing (unless exception flag set)
@@ -776,6 +777,16 @@ marketplace.
 bash corvin_operator/bridges/run-all-tests.sh
 ```
 
+**Tests never touch the live install.** Every test process runs with sandboxed
+`CORVIN_HOME`, `XDG_CONFIG_HOME`, `CORVIN_AUDIT_ANCHOR_KEY` (an ABSOLUTE path — a relative
+one is refused by the audit writer and fails `verify_chain`) and `FORGE_ROOT`; otherwise
+records land in the live hash-chained audit log (it happened 2026-09-27). The repo-root
+`conftest.py` enforces the first three for every pytest run and trips on live-chain
+appends; it does NOT set `FORGE_ROOT` — set it yourself. Plain-script (non-pytest) suites
+must run via `run-all-tests.sh`, which sets all four. A worktree sharing the main `.venv`
+imports the LIVE checkout through the editable `.pth` unless `PYTHONPATH` puts the worktree
+first.
+
 **Every feature change** — code, config, behavior, API, protocol, CLI, error message —
 **must update docs AND diagrams in the same commit**. No deferred updates. No exceptions.
 
@@ -882,7 +893,9 @@ returns immediately and every tier below it is unreachable — which is correct,
 and is why an install pinned to one model shows one model on all three
 complexity tiers. That is not a licence limit; say so.
 
-**Every model any tier can choose MUST be in `_MODEL_RANK`.** An absent id ranks
+**Every model any tier can choose MUST be ranked by `model_selector._rank()`** —
+listed in `_MODEL_RANK`, or parseable by `model_lineage` (family rank, since
+2026-09-27, so `claude-opus-5-5` ranks with Opus). An unranked id ranks
 0 — below Haiku — so the cache guard reads an escalation to it as a downgrade
 and `apply_floor` can never reach it. `claude-opus-5` was missing, and that
 alone made the top tier unreachable.
@@ -1450,7 +1463,7 @@ review, F6). Update this column in the same commit that adds or removes a call s
 
 | Layer | Today | Tomorrow (Skills 2.0) | Status (2026-09-26) | ADR | Timeline |
 |---|---|---|---|---|---|
-| **L5: Routing** | Hardcoded persona → engine mapping | `os.delegation_router` Skill (LLM-classified by task type) | **WIRED, shadow mode** — `delegation_policy.py::_acp_shadow_route`; the bundled engine still stands (ADR-0613) | ADR-0532 Phase 1 | Weeks 2–4 |
+| **L5: Routing** | Hardcoded persona → engine mapping | `os.delegation_router` Skill (LLM-classified by task type) | **WIRED, shadow mode** — `delegation_policy.py::_acp_shadow_route`; the bundled engine still stands (ADR-0613). `CORVIN_ACP_PHASE=phase2_*` is REFUSED (degrades to shadow, audited `l5_routing_phase_refused`) while `_PHASE2_ROLLBACK_GUARD_WIRED` is false — verified 2026-09-27 | ADR-0532 Phase 1 | Weeks 2–4 |
 | **L10: Context** | Snapshot → prompt injection | `os.context_adapter` Skill (learns user/task patterns) | **WIRED, shadow mode** (2026-09-26) — CEL stage `l10_adapter` (`corvin_operator/context_engineering/stages/l10_adapter.py`, in DEFAULT + ACTIVE pipeline) calls `adapt_context_l10` per turn via `pipeline.build_context` when `vibe_engineering` is on. Audited (`skill.executed` + `context.adapted`), never changes the served brief. Runs ONLY where `boot_skills` booted an audited registry for the turn tenant (gateway/console); the bridge adapter never boots Skills, so there it is `skipped: skills_not_booted`. E2E: `tests/e2e/test_os_skills_l5_l10_wiring.py::TestL10ProductionCallSite` | ADR-0532 Phase 1 | Weeks 2–4 |
 | **L22: Workflow** | Stateless request/response | `os.workflow_optimizer` Skill (learns execution chains) | not built | ADR-0532 Phase 2 | Weeks 6–10 |
 | **L16: Security** | Config-driven gates | `os.security_orchestrator` Skill (learns attack patterns) | not built | ADR-0532 Phase 3 | Weeks 11–18 |
@@ -1708,11 +1721,15 @@ corvin audit trace skill os.delegation_router --task=<task_id>
 
 ## Audit Chain Completeness — 100% Coverage (ADR-2040–2044, Load-Bearing)
 
-**Status:** 🟡 **PARTIAL (verified 2026-09-26)** — the rule below is load-bearing; the
-completeness it claims is NOT achieved. Measured: 467 `EVENT_SEVERITY` entries, 268
-`_EVENT_ALLOWLIST` entries; 231 events are in `EVENT_SEVERITY` without an allowlist entry
-(32 the reverse), so `scripts/verify_audit_event_completeness.py` FAILS. ADR-2040 stays
-PROPOSED. The per-subsystem percentages in the table below are self-reported, not measured.
+**Status:** 🟡 **PARTIAL (measured 2026-09-27 with `scripts/verify_audit_event_completeness.py`,
+which PASSES)** — the rule below is load-bearing; the completeness it claims is NOT achieved.
+778 `EVENT_SEVERITY` entries, 701 `_EVENT_ALLOWLIST` entries, 0 allowlisted without a
+severity. 77 severity entries have no allowlist: 0 emitted without one (the gate), 13 left on
+the vocabulary floor by design (listed with reasons in the script), 64 with no emitter in the
+repo. Separately, a literal scan finds ~198 event names passed to a writer with NO
+`EVENT_SEVERITY` entry at all (defaulted to INFO, details floored) — informational, not
+gated (`--list-unregistered`). ADR-2040 stays PROPOSED. The per-subsystem percentages in
+the table below are self-reported, not measured.
 
 **RULE: ALL Subsystems MUST Audit 100% of Actions. Zero silent operations.**
 
@@ -1726,28 +1743,27 @@ PROPOSED. The per-subsystem percentages in the table below are self-reported, no
 | **Plugins (L4)** | Lifecycle | 4 | ✅ Complete | ADR-2043 | 100% |
 | **Skills 2.0 (ACP)** | Routing/Learning | 6+ | 🟡 Partial | ADR-2044 | 80% |
 
-**Total Events (measured 2026-09-26):** 467 in EVENT_SEVERITY, 268 in _EVENT_ALLOWLIST — not in sync
+**Total Events (measured 2026-09-27):** 778 in EVENT_SEVERITY, 701 in _EVENT_ALLOWLIST (gap explained above)
 
 ### Audit Event Registration (MANDATORY)
 
 **Every new subsystem function MUST register events in TWO places:**
 
-1. **EVENT_SEVERITY** (`corvin_operator/forge/forge/security_events.py:806–831`)
+1. **EVENT_SEVERITY** (`corvin_operator/forge/forge/security_events.py`, `EVENT_SEVERITY: dict[str, str]`)
    ```python
-   "subsystem.action_name": EventSeverityLevel.INFO,  # or WARNING, CRITICAL
+   "subsystem.action_name": "INFO",  # or "WARNING", "ERROR", "CRITICAL"
    ```
 
-2. **_EVENT_ALLOWLIST** (`corvin_operator/forge/forge/security_events.py:2719–2778`)
+2. **_EVENT_ALLOWLIST** (same file, `_EVENT_ALLOWLIST: dict[str, frozenset[str]]`)
    ```python
-   "subsystem.action_name": {
-       "severity": "INFO",
-       "mandatory_fields": ["field1", "field2"],
-       "allow_list": ["field1", "field2", "tenant_id", "timestamp"],
-       # Never: secrets, PII, user input
-   }
+   "subsystem.action_name": frozenset({"field1", "field2", "tenant_id"}),
+   # Never: secrets, PII, user input. Free-text keys (reason/error/...) are
+   # PII-scanned on every event regardless.
    ```
 
-**Failure to register → audit event silently dropped → compliance gap.**
+**Failure to register → the record is still written, but at default severity INFO and with
+its details cut to the generic vocabulary floor (unknown keys dropped, named in
+`_dropped_fields`) → compliance gap.**
 
 ### Phase 1 Critical Events (Registered; 3/8 Wired — verified 2026-09-26)
 
@@ -1787,9 +1803,9 @@ emits `plugin_disabled`, and nothing imports that module).
 - `plugin.execution_timeout` — **WIRED**: `registry.py` `on_load` (`LOAD_DEADLINE_S`) and `health_check` (`HEALTH_CHECK_DEADLINE_S`) deadline overruns. Proof: `core/plugins/tests/test_plugin_execution_timeout_audit.py`
 - `plugin.initialization_failed` — **NOT WIRED** (`corvin_plugins.audit.emit_initialization_failed` has no caller; load failures are recorded as `plugin.load_failed`)
 
-### Pre-Commit Hook (NOT BUILT — verified 2026-09-26)
+### Pre-Commit Hook (NOT BUILT — verified 2026-09-27)
 
-The installed `.git/hooks/pre-commit` does not check audit events. The rejection rules
+No `.git/hooks/pre-commit` is active on this host (only `pre-commit.backup`/`.bak`). The rejection rules
 below are the intended design, not current behaviour:
 - Add new subsystem changes WITHOUT audit.emit() calls
 - Reference unregistered events in EVENT_SEVERITY
@@ -1797,15 +1813,18 @@ below are the intended design, not current behaviour:
 
 ### CI/CD Gate (ENFORCEMENT)
 
-**Workflow:** `.github/workflows/audit-completeness.yml` — exists; as of 2026-09-26 it
-would FAIL (EVENT_SEVERITY ↔ _EVENT_ALLOWLIST out of sync, see above)
+**Workflow:** `.github/workflows/audit-completeness.yml` — runs the verifier script and
+`tests/security/test_audit_phase2_events.py` + `test_audit_registry_round4.py` +
+`test_anchor_key_relative_path.py` (all pass locally in a bare pytest-only venv, 2026-09-27).
 
 Fails if:
-- EVENT_SEVERITY registry incomplete
-- _EVENT_ALLOWLIST has PII-risk fields (grep for secrets, emails, tokens)
-- Audit tests failing (50+ tests, all must pass)
+- an emitted event has a severity but no allowlist (and is not floor-by-design)
+- an allowlisted event has no severity
+- one of those audit tests fails
+(Denylisted field names in a shipped allowlist fail at import:
+`_assert_shipped_allowlists_clean`.)
 
-### Testing Requirements (measured 2026-09-26: `test_phase1_audit_events.py` 13 passed / 1 error; the other two files below do not exist)
+### Testing Requirements (measured 2026-09-27: `test_phase1_audit_events.py` 15 passed, `test_audit_phase2_events.py` 15 passed; the last two files below do not exist)
 
 **Unit Tests:** Event emission + field validation
 **Functional Tests:** Audit chain integrity verification
@@ -1838,14 +1857,14 @@ pytest tests/adversarial/test_audit_integrity.py -v
 | **GDPR Art. 32** | Security (hash-chained, fail-closed) | ✅ | ADR-0233 |
 | **EU AI Act 50** | Transparency (action attribution) | ✅ | ADR-2040–2044 |
 
-### Verified Status (2026-09-26 — replaces the 2026-09-24 "go-live" list, which was not true)
+### Verified Status (2026-09-27 — replaces the 2026-09-26 list)
 
 ⚠️ Phase 1: 3 of 8 events wired (acs + 2× erasure); 5 registered only  
 ⚠️ Phase 2: 4 of 8 wired (see Phase 2 list)  
-❌ Registry sync: 231 EVENT_SEVERITY events lack an allowlist entry  
-❌ Pre-commit audit hook: not built  
-⚠️ CI gate: exists, would fail  
-⚠️ Tests: `test_phase1_audit_events.py` 13 passed / 1 error; `test_audit_chain_100_e2e.py`, `test_audit_integrity.py` missing
+⚠️ Registry sync: verifier PASSES; 64 registered events have no emitter, ~198 emitted names have no severity (informational)  
+❌ Pre-commit audit hook: not built (no pre-commit hook active at all)  
+✅ CI gate: exists, passes locally  
+⚠️ Tests: `test_phase1_audit_events.py` 15 passed, `test_audit_phase2_events.py` 15 passed (rewritten against the real emitters); `test_audit_chain_100_e2e.py`, `test_audit_integrity.py` missing
 
 **Result:** 🟡 **NOT complete. ADR-2040 is PROPOSED.** Don't cite "100% audit completeness".
 

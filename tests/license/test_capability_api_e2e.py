@@ -61,15 +61,16 @@ class TestRequireCapability:
             assert e.reason == "unknown_capability"
 
     def test_invalid_tenant_id(self):
-        """Invalid tenant_id is rejected."""
-        # Stub: even invalid tenant_id should resolve to ENFORCEMENT_UNAVAILABLE
-        result = require_capability(
-            "compute.run",
-            requested=1,
-            tenant_id="!!!invalid!!!",
-            entry_point="test_capability_api_e2e.py:65",
-        )
-        assert result.decision in (Decision.ENFORCEMENT_UNAVAILABLE, Decision.ALLOW)
+        """Invalid tenant_id is a DENY (raised), never a returned verdict — a
+        returned non-allow was ignored by the G1/G5 callers (2026-09-27)."""
+        with pytest.raises(LicenseDenied) as exc:
+            require_capability(
+                "compute.run",
+                requested=1,
+                tenant_id="!!!invalid!!!",
+                entry_point="test_capability_api_e2e.py:65",
+            )
+        assert exc.value.reason == "invalid_tenant"
 
     def test_requested_exceeds_allowed(self):
         """Requesting more than allowed is denied."""

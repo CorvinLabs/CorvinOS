@@ -11,8 +11,10 @@ Audit Trail Contract:
   - Fail-closed: invalid audit trail → exception, not silent skip
 """
 
+import importlib
 import json
 import logging
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -25,9 +27,45 @@ from .path_traversal_validator import (
     PathTraversalError,
 )
 
-from .audit_chain_validator import AuditChainValidator
-
 logger = logging.getLogger(__name__)
+
+#: ``corvin_operator/skill-forge/autonomous/`` → ``corvin_operator/forge``.
+_FORGE_DIR = Path(__file__).resolve().parents[2] / "forge"
+
+#: Skill events the detector reads. Two real emitters name the same event two
+#: ways (``SkillsRegistry`` writes ``skill.executed``; ``os_skills.audit_integration``
+#: writes ``skill_executed`` / ``skill_feedback``).
+_SKILL_EVENT_TYPES = frozenset({
+    "skill.executed", "skill_executed", "skill.feedback", "skill_feedback",
+})
+
+
+def _core_security_events():
+    """``forge.security_events`` — THE chain writer/verifier, or raise.
+
+    The detector used to verify with its own ``AuditChainValidator`` hash
+    scheme, which never matches ``write_event``'s: every REAL tenant chain was
+    refused (fail-closed RuntimeError), so the loss loop could never fire.
+    """
+    if _FORGE_DIR.is_dir() and str(_FORGE_DIR) not in sys.path:
+        sys.path.insert(0, str(_FORGE_DIR))
+    bound = sys.modules.get("forge")
+    if bound is not None and getattr(bound, "__file__", None) is None \
+            and (_FORGE_DIR / "forge" / "__init__.py").is_file():
+        del sys.modules["forge"]  # empty namespace binding — see corvin_delegate.audit
+    try:
+        return importlib.import_module("forge.security_events")
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            f"Audit chain verifier unavailable ({type(exc).__name__}); "
+            "Skill generation blocked (fail-closed)."
+        ) from exc
+
+
+def _details(event: dict) -> dict:
+    """The core writer nests every payload field under ``details``."""
+    d = event.get("details")
+    return d if isinstance(d, dict) else {}
 
 
 @dataclass(frozen=True)
@@ -70,12 +108,8 @@ class SkillLossTriggerDetector:
     DEFAULT_LOOKBACK_HOURS = 24
 
     def __init__(self):
-        """Initialize the trigger detector with an audit chain validator.
-
-        The validator is instantiated once per detector to avoid redundant
-        validation on each detect_loss_signals call.
-        """
-        self._validator = AuditChainValidator()
+        """Initialize the trigger detector (stateless; verification uses the
+        core writer's own ``verify_chain``)."""
 
     def detect_loss_signals(
         self,
@@ -109,17 +143,23 @@ class SkillLossTriggerDetector:
         # Validate audit chain integrity (fail-closed)
         audit_path = tenant_audit_chain(tenant_id)
         if audit_path.exists():
-            result = self._validator.validate_chain(audit_path)
-            if not result.is_valid:
+            # Path safety FIRST: verifying a symlinked chain would already be a
+            # read of the other tenant's file.
+            audit_path = self._safe_audit_path(audit_path, tenant_id)
+            try:
+                ok, problems = _core_security_events().verify_chain(audit_path)
+            except RuntimeError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — unreadable/unparseable → refuse
+                ok, problems = False, [{"issue": type(exc).__name__}]
+            if not ok:
+                first = problems[0] if problems else {}
                 raise RuntimeError(
                     f"Audit chain integrity check failed for tenant {tenant_id}: "
-                    f"{result.error} (line {result.error_line_num}). "
+                    f"{first.get('issue', 'invalid')} (line {first.get('line', 0)}). "
                     f"Skill generation blocked (fail-closed)."
                 )
-            logger.info(
-                f"Audit chain validated: {result.event_count} events verified, "
-                f"last hash={result.last_verified_hash}"
-            )
+            logger.info("Audit chain verified for tenant %s", tenant_id)
 
         # Default lookback
         if lookback_hours is None:
@@ -135,8 +175,9 @@ class SkillLossTriggerDetector:
         # Group by (skill_id, version)
         skill_groups: dict[tuple[str, str], list[dict]] = {}
         for event in all_events:
-            skill_id = event.get("skill_id", "unknown")
-            version = event.get("version", "unknown")
+            d = _details(event)
+            skill_id = d.get("skill_id") or "unknown"
+            version = d.get("skill_version") or d.get("version") or "unknown"
             key = (skill_id, version)
             if key not in skill_groups:
                 skill_groups[key] = []
@@ -145,6 +186,15 @@ class SkillLossTriggerDetector:
         # Calculate confidence per skill
         triggers: List[LossTrigger] = []
         for (skill_id, version), events in skill_groups.items():
+            if not any(isinstance(_details(e).get("outcome_feedback"), dict)
+                       for e in events):
+                # No outcome feedback at all → confidence is NOT MEASURED. It
+                # used to read as 0.0 and trigger, which on a real chain (every
+                # ``skill.executed`` record, none carrying feedback) would
+                # request a regeneration of every Skill that ever ran.
+                logger.debug("No outcome feedback for %s v%s — not measured",
+                             skill_id, version)
+                continue
             confidence = self._calculate_confidence(events)
 
             # Emit trigger if below threshold
@@ -201,25 +251,7 @@ class SkillLossTriggerDetector:
             )
             return []
 
-        # ─────────────────────────────────────────────────────────────────────
-        # SECURITY: Validate path before opening (prevent symlink escape)
-        # ─────────────────────────────────────────────────────────────────────
-        try:
-            expected_audit_dir = audit_path.parent
-            validated_path = assert_path_safe(
-                audit_path,
-                expected_audit_dir,
-                context=f"audit_chain for tenant {tenant_id}",
-            )
-            audit_path = validated_path
-        except PathTraversalError as e:
-            logger.error(
-                f"SECURITY: Path validation failed for tenant {tenant_id}: {e}. "
-                "Returning empty event list (fail-closed)."
-            )
-            raise RuntimeError(
-                f"Audit chain path validation failed for tenant {tenant_id}: {e}"
-            ) from e
+        audit_path = self._safe_audit_path(audit_path, tenant_id)
 
         events = []
         since_ts = since.timestamp()
@@ -246,11 +278,12 @@ class SkillLossTriggerDetector:
 
                     # Filter by event type (only skill-related)
                     event_type = event.get("event_type", "")
-                    if event_type not in ("skill_executed", "skill_feedback"):
+                    if event_type not in _SKILL_EVENT_TYPES:
                         continue
 
-                    # Must have tenant_id field
-                    if event.get("tenant_id") != tenant_id:
+                    # Must carry this tenant's id (under ``details``, where
+                    # the core writer puts it) — fail-closed on absence.
+                    if _details(event).get("tenant_id") != tenant_id:
                         continue
 
                     events.append(event)
@@ -268,11 +301,30 @@ class SkillLossTriggerDetector:
         )
         return events
 
+    @staticmethod
+    def _safe_audit_path(audit_path: Path, tenant_id: str) -> Path:
+        """SECURITY: validate the chain path before opening it (no symlink
+        escape into another tenant's directory). Fail-closed."""
+        try:
+            return assert_path_safe(
+                audit_path,
+                audit_path.parent,
+                context=f"audit_chain for tenant {tenant_id}",
+            )
+        except PathTraversalError as e:
+            logger.error(
+                f"SECURITY: Path validation failed for tenant {tenant_id}: {e}. "
+                "Refusing to read (fail-closed)."
+            )
+            raise RuntimeError(
+                f"Audit chain path validation failed for tenant {tenant_id}: {e}"
+            ) from e
+
     def _calculate_confidence(self, events: List[dict]) -> float:
         """Calculate Skill confidence from outcome feedback.
 
         Counts: correct_outcomes / total_outcomes
-        Requires: 'outcome_feedback' field in event with 'correct' boolean
+        Requires: ``details.outcome_feedback`` with a ``correct`` boolean
 
         Args:
             events: List of skill audit events
@@ -290,7 +342,7 @@ class SkillLossTriggerDetector:
         feedback_count = 0
 
         for event in events:
-            feedback = event.get("outcome_feedback")
+            feedback = _details(event).get("outcome_feedback")
             if feedback is None:
                 continue
 

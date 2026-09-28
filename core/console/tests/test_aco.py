@@ -609,8 +609,10 @@ class TestEngineHealer(unittest.TestCase):
         d = r.to_audit_details()
         for key in ("engine_ok", "engine_id", "engine_action",
                     "tts_ok", "tts_provider", "tts_action",
-                    "stt_ok", "stt_provider", "warnings"):
+                    "stt_ok", "stt_provider", "warning_count"):
             self.assertIn(key, d)
+        self.assertIsInstance(d["warning_count"], int)
+        self.assertNotIn("warnings", d)  # free text never reaches the chain
         self.assertEqual(d["engine_action"], "no_engine_available")
         self.assertEqual(d["tts_action"], "installed_edge_tts")
 

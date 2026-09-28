@@ -309,6 +309,9 @@ def _unsafe(key: str, value: "str | None") -> bool:
     """True when *value* for *key* would let a test touch real operator state."""
     if value is None or not value.strip():
         return True
+    if key == "CORVIN_AUDIT_ANCHOR_KEY" and not _os.path.isabs(
+            _os.path.expanduser(_os.path.expandvars(value.strip()))):
+        return True  # relative: the key would be created in the CWD (repo root)
     p = _norm(value.strip())
     if _is_protected(p):
         return True

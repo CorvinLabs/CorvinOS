@@ -1420,6 +1420,34 @@ def _deny_msg(tool: str, target: str, *, command: str | None = None) -> str:
     return base
 
 
+_SHARED_PATHS = None
+
+
+def _tenant_audit_chain(tenant_id: str | None = None) -> Path:
+    """THE tenant chain — ``bridges/shared/paths.py::tenant_audit_chain``.
+
+    Loaded BY FILE PATH from this checkout (voice/hooks → corvin_operator →
+    bridges/shared), the same rule ``data_classification._sibling_paths``
+    follows: a bare ``import paths`` binds whatever ``paths`` is first on
+    sys.path and a dotted name can land in another checkout. The hook used to
+    compose ``<home>/global/forge/audit.jsonl`` (the legacy host-wide chain)
+    and ``<home>/tenants/<tid>/global/audit.jsonl`` by hand — neither is the
+    chain the boot tripwire, ``audit_query`` or any compliance report reads.
+    """
+    global _SHARED_PATHS
+    if _SHARED_PATHS is None:
+        import importlib.util as _ilu  # noqa: PLC0415
+
+        spec = _ilu.spec_from_file_location(
+            "_paths_path_gate",
+            Path(__file__).resolve().parents[2] / "bridges" / "shared" / "paths.py",
+        )
+        mod = _ilu.module_from_spec(spec)  # type: ignore[arg-type]
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        _SHARED_PATHS = mod
+    return Path(_SHARED_PATHS.tenant_audit_chain(tenant_id))
+
+
 def _emit_audit(payload: dict, reason: str) -> None:
     """Best-effort — write a path_gate.denied event into the unified
     forge audit chain. Silent on failure: audit is observability, not a
@@ -1432,9 +1460,10 @@ def _emit_audit(payload: dict, reason: str) -> None:
             if str(forge_pkg_parent) not in sys.path:
                 sys.path.insert(0, str(forge_pkg_parent))
         from forge.security_events import write_event  # type: ignore
-    except Exception:
+        audit_path = _tenant_audit_chain()
+    except Exception as _exc:  # noqa: BLE001 — deny still holds via exit 2; never silent
+        sys.stderr.write(f"path_gate: audit unavailable, denial not recorded: {_exc}\n")
         return
-    audit_path = _corvin_home() / "global" / "forge" / "audit.jsonl"
     tool = payload.get("tool_name", "")
     inp = payload.get("tool_input") or {}
     target = (
@@ -1476,9 +1505,10 @@ def _emit_code_exec_audit(
             if str(forge_pkg_parent) not in sys.path:
                 sys.path.insert(0, str(forge_pkg_parent))
         from forge.security_events import write_event  # type: ignore
-    except Exception:
+        audit_path = _tenant_audit_chain()
+    except Exception as _exc:  # noqa: BLE001
+        sys.stderr.write(f"path_gate: code-exec audit unavailable: {_exc}\n")
         return
-    audit_path = _corvin_home() / "global" / "forge" / "audit.jsonl"
     event_type = "code.exec_blocked" if outcome == "blocked" else "code.exec_attempt"
     details: dict = {
         "language": "python",
@@ -1490,8 +1520,8 @@ def _emit_code_exec_audit(
         details["blocked_reason"] = blocked_reason[:200]
     try:
         write_event(audit_path, event_type, details=details)
-    except Exception:
-        pass
+    except Exception as _exc:  # noqa: BLE001
+        sys.stderr.write(f"path_gate: code-exec audit write failed: {_exc}\n")
 
 
 def _emit_tool_trace(payload: dict, decision: str) -> None:
@@ -1499,7 +1529,7 @@ def _emit_tool_trace(payload: dict, decision: str) -> None:
     audit chain when this hook is running inside an ACS worker subprocess.
 
     Only fires when CORVIN_ACS_WORKER_ID is set in the environment.
-    Writes to tenants/<tid>/global/audit.jsonl (same chain wdat_report reads).
+    Writes to the tenant chain (``tenant_audit_chain``), same as acs_runtime.
     Metadata only: tool_name, worker_id, run_id, decision. No input params.
     """
     worker_id = os.environ.get("CORVIN_ACS_WORKER_ID", "").strip()
@@ -1517,18 +1547,15 @@ def _emit_tool_trace(payload: dict, decision: str) -> None:
         from forge.security_events import write_event  # type: ignore
     except Exception:
         return
-    # Use simple env-var resolution (no ancestor walk) so that the audit path
-    # matches acs_runtime._write_audit() — both must write to the same chain.
-    # _corvin_home() walks ancestors and returns repo/.corvin on dev machines,
-    # while acs_runtime uses CORVIN_HOME → ~/.corvin (no walk). Using the walk
-    # here would route forge.tool_executed to a different file than acs.* events.
-    _ch_env = os.environ.get("CORVIN_HOME")
-    _base = (
-        Path(os.path.expanduser(os.path.expandvars(_ch_env)))
-        if _ch_env
-        else Path.home() / ".corvin"
-    )
-    wdat_audit = _base / "tenants" / tenant_id / "global" / "audit.jsonl"
+    # THE tenant chain, via the same shared resolver ``acs_runtime._audit_path``
+    # uses — so forge.tool_executed and the acs.* records share one file. The
+    # old hand-composed ``tenants/<tid>/global/audit.jsonl`` was the parallel
+    # chain acs_runtime already left (ADR-0650).
+    try:
+        wdat_audit = _tenant_audit_chain(tenant_id)
+    except Exception as _exc:  # noqa: BLE001
+        sys.stderr.write(f"path_gate: tool-trace audit unavailable: {_exc}\n")
+        return
     try:
         wdat_audit.parent.mkdir(parents=True, exist_ok=True)
         write_event(
@@ -1542,8 +1569,8 @@ def _emit_tool_trace(payload: dict, decision: str) -> None:
                 "decision":  decision,
             },
         )
-    except Exception:
-        pass
+    except Exception as _exc:  # noqa: BLE001
+        sys.stderr.write(f"path_gate: tool-trace audit write failed: {_exc}\n")
 
 
 def _emit_dialectic(payload: dict, reason: str) -> None:
@@ -1820,7 +1847,7 @@ def path_gate_self_test() -> tuple[bool, list[str]]:
             if str(forge_pkg_parent) not in sys.path:
                 sys.path.insert(0, str(forge_pkg_parent))
         from forge.security_events import write_event  # type: ignore
-        audit_target = _corvin_home() / "global" / "forge" / "audit.jsonl"
+        audit_target = _tenant_audit_chain()
         audit_target.parent.mkdir(parents=True, exist_ok=True)
         write_event(
             audit_target, "path_gate.self_test_failed",

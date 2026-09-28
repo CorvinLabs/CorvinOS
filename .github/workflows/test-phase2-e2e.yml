@@ -38,11 +38,15 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          # There is no requirements.txt in this repo (there never was one:
+          # this step failed on every run since the workflow landed). The
+          # dependencies live in pyproject.toml — same install as coverage.yml.
+          cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -e ".[dev]" hatchling limits python-multipart
           pip install pytest pytest-asyncio pytest-cov
 
       - name: Run Phase 2 E2E Tests

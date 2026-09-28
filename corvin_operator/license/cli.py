@@ -290,20 +290,27 @@ def main(argv: Optional[list[str]] = None) -> int:
 # ── Audit Helpers ──────────────────────────────────────────────────
 
 def _audit_features_url_override(url: str) -> None:
-    """Emit license.features_url_override audit event (fail-closed)."""
-    try:
-        from forge.audit import tenant_audit_chain
+    """Emit license.features_url_override on the _default tenant chain.
 
-        chain = tenant_audit_chain("_default")
-        if chain:
-            event = {
-                "event_type": "license.features_url_override",
+    Written through the core chain writer (``security_events.write_event`` on
+    ``tenant_audit_chain``). It imported ``forge.audit`` — a module that does
+    not exist — so the override was never recorded (adversarial review
+    2026-09-27). A failure is logged, not raised: the CLI still honours the
+    operator's explicit flag.
+    """
+    try:
+        from .capability_api import _chain_writer
+
+        write_event, tenant_audit_chain = _chain_writer()
+        write_event(
+            tenant_audit_chain("_default"),
+            "license.features_url_override",
+            details={
                 "url": url,
-                "lom": "corvin_operator/license/cli.py::_audit_features_url_override",
-                "timestamp": int(time.time()),
-            }
-            chain.write_event(event)
-    except Exception as e:
+                "lom": "corvin_operator/license/cli.py:_audit_features_url_override",
+            },
+        )
+    except Exception as e:  # noqa: BLE001
         _log.warning("Failed to audit features_url_override: %s", e)
 
 

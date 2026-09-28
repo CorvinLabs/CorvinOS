@@ -34,9 +34,9 @@ class TestPanelAuditAllowlist:
         # L16 compliance: must not include HTML, content, or code
         forbidden = {"html", "body", "code", "content", "script"}
         assert not (allowed & forbidden), "panel_created contains content fields"
-        # Must include: panel_id, title, nav_group, icon, tenant_id, sid_fingerprint, created_by
+        # Must include: panel_id, title_len, nav_group, icon, tenant_id, sid_fingerprint, created_by
         assert "panel_id" in allowed
-        assert "title" in allowed
+        assert "title_len" in allowed and "title" not in allowed  # length only
         assert "tenant_id" in allowed
 
     def test_panel_deleted_fields_metadata_only(self):
@@ -69,7 +69,8 @@ class TestPanelAuditEmission:
         assert args[1] == "console.panel_created"
         details = kwargs["details"]
         assert details["panel_id"] == "recent-sessions"
-        assert details["title"] == "Recent Sessions"
+        assert details["title_len"] == len("Recent Sessions")
+        assert "title" not in details  # free text never reaches the chain
         assert details["nav_group"] == "build"
         assert details["icon"] == "Sparkles"
         assert details["created_by"] == "ai"
@@ -126,7 +127,7 @@ class TestPanelAuditFieldValidation:
                     tenant_id="test",
                     details={
                         "panel_id": "test",
-                        "title": "Test",
+                        "title_len": 4,
                         "nav_group": "test",
                         "icon": "Test",
                         "tenant_id": "test",
@@ -145,7 +146,7 @@ class TestPanelAuditFieldValidation:
                 tenant_id="test",
                 details={
                     "panel_id": "test",
-                    "title": "Test",
+                    "title_len": 4,
                     "nav_group": "test",
                     "icon": "Test",
                     "tenant_id": "test",
@@ -171,7 +172,7 @@ class TestPanelAuditIntegration:
                     tenant_id="test",
                     details={
                         "panel_id": "test",
-                        "title": "Test",
+                        "title_len": 4,
                         "nav_group": "test",
                         "icon": "Test",
                         "tenant_id": "test",

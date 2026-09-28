@@ -86,22 +86,25 @@ assert_path_safe = _path_traversal_validator.assert_path_safe
 assert_skill_parameters_safe = _path_traversal_validator.assert_skill_parameters_safe
 
 
-def _hash_chain_events(raw_events: list) -> list:
-    """Attach valid hash/prev_hash fields to a list of raw audit events,
-    using the exact algorithm AuditChainValidator verifies against (Fix #1).
-    Without this, any audit.jsonl fixture written by this file's tests is
-    rejected by the hash-chain check before the symlink check under test
-    ever runs."""
-    prev_hash = ""
-    chained = []
-    for event in raw_events:
-        event_hash = _audit_chain_validator.AuditChainValidator._compute_event_hash(
-            event, prev_hash
-        )
-        chained_event = {**event, "prev_hash": prev_hash, "hash": event_hash}
-        chained.append(chained_event)
-        prev_hash = event_hash
-    return chained
+def _write_real_chain(path: Path, raw_events: list) -> None:
+    """Write fixture events through the CORE writer (round 4: the detector
+    verifies with ``forge.security_events.verify_chain``; the private
+    AuditChainValidator format never occurs on a real install). Payload fields
+    go under ``details``; the record's tenant is the process tenant, as the
+    writer requires."""
+    forge_dir = _REPO / "corvin_operator" / "forge"
+    if str(forge_dir) not in sys.path:
+        sys.path.insert(0, str(forge_dir))
+    from forge import security_events as se
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for ev in raw_events:
+        body = {k: v for k, v in ev.items() if k not in ("event_type", "ts")}
+        se.register_event_allowlist(ev["event_type"], frozenset(body))
+        with mock.patch.dict(os.environ, {"CORVIN_TENANT_ID": body["tenant_id"]}):
+            se.write_event(path, ev["event_type"], details=body, ts=ev["ts"])
+
+
 SkillLossTriggerDetector = _trigger_detector_module.SkillLossTriggerDetector
 
 
@@ -412,13 +415,12 @@ def test_trigger_detector_symlink_escape_e2e():
         tenant1_dir.mkdir(parents=True)
         tenant2_dir.mkdir(parents=True)
 
-        # Create audit file in tenant2 with valid, hash-chained events — the
-        # hash-chain check (Fix #1) runs before the path/symlink check (Fix
-        # #3) inside detect_loss_signals, so an event without valid hash
-        # fields would be rejected for the wrong reason before the symlink
-        # escape this test targets is ever evaluated.
+        # Create audit file in tenant2 with valid, core-chained events. The
+        # path/symlink check now runs BEFORE chain verification (verifying a
+        # symlinked chain is already a cross-tenant read), but a valid chain
+        # keeps the refusal attributable to the symlink alone.
         audit_t2 = tenant2_dir / "audit.jsonl"
-        chained = _hash_chain_events([
+        _write_real_chain(audit_t2, [
             {
                 "event_type": "skill_executed",
                 "skill_id": "os.test",
@@ -428,7 +430,6 @@ def test_trigger_detector_symlink_escape_e2e():
                 "outcome_feedback": {"correct": True},
             }
         ])
-        audit_t2.write_text("\n".join(json.dumps(e) for e in chained) + "\n")
 
         # Create malicious symlink in tenant1 pointing to tenant2
         audit_t1_symlink = tenant1_dir / "audit.jsonl"
@@ -475,8 +476,7 @@ def test_trigger_detector_valid_audit_e2e():
             }
             events.append(event)
 
-        chained = _hash_chain_events(events)
-        audit_file.write_text("\n".join(json.dumps(e) for e in chained) + "\n")
+        _write_real_chain(audit_file, events)
 
         # Mock tenant_audit_chain
         with mock.patch("corvin_operator.skill_forge.autonomous.trigger_detector.tenant_audit_chain") as mock_chain:

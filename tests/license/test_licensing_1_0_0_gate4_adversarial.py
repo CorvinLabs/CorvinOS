@@ -50,9 +50,9 @@ def test_forged_capability_names_are_denied(capability):
 @pytest.mark.parametrize("tenant", ["", "../_default", "_default/../x", "a" * 500, "*"])
 def test_forged_tenant_never_yields_allow(tenant):
     with member_tier():
-        decision = _decide("forge.create", tenant_id=tenant)
-    assert decision.decision is not ca.Decision.ALLOW
-    assert decision.decision is ca.Decision.ENFORCEMENT_UNAVAILABLE
+        with pytest.raises(ca.LicenseDenied) as exc:
+            _decide("forge.create", tenant_id=tenant)
+    assert exc.value.reason == "invalid_tenant"
 
 
 def test_free_forge_limit_is_zero_not_negative():

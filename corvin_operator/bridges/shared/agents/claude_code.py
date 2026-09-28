@@ -200,10 +200,27 @@ def _lineage():
 
 
 def _current_model(model: str) -> str:
-    """*model*, or its successor when it is retired. Never raises."""
+    """*model*, or its successor when it is retired — always WITHOUT a
+    ``provider/`` prefix when the remainder is a Claude lineage id. Never raises.
+
+    A provider prefix is never valid ``--model`` input (the API answers 404
+    ``model_not_found`` before a token is billed). The OS pin tiers strip it
+    via ``model_selector.normalise_pin``, but callers that hand a model
+    straight to ``spawn()`` (``delegate_task(model=...)``) did not, and
+    ``model_lineage.current`` deliberately KEEPS the prefix on the successor.
+    This is the one choke point every Claude Code spawn passes. Only a prefix
+    without ``:`` is dropped, so a Bedrock inference-profile ARN
+    (``arn:aws:bedrock:…:inference-profile/…``) passes through untouched."""
     ml = _lineage()
+    if ml is None:
+        return model
     try:
-        return (ml.current(model) or model) if ml else model
+        out = ml.current(model) or model
+        if "/" in out:
+            prefix, bare = out.rsplit("/", 1)
+            if ":" not in prefix and ml.parse(bare) is not None:
+                out = bare
+        return out
     except Exception:  # noqa: BLE001
         return model
 

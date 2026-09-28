@@ -69,7 +69,10 @@ class TestLomRequired:
         recs = [c for c in _chain() if c["event_type"] == "skill.executed"]
         assert len(recs) == 3
         assert all(c["details"]["status"] == "error" for c in recs)
-        assert all("LoM missing" in c["details"]["error_message"] for c in recs)
+        # Only the stable class enters the chain — never free-text error_message
+        # (``str(exc)`` is arbitrary Skill/input-controlled text).
+        assert all(c["details"]["error_class"] == "lom_missing" for c in recs)
+        assert all("error_message" not in c["details"] for c in recs)
         # a refused execution does not count as a Skill failure
         assert registry.is_enabled("os.capabilities")
 
@@ -116,10 +119,13 @@ class TestDecisionReachesTheChain:
             lom=LOM,
         )
         rec = [c for c in _chain() if c["event_type"] == "skill.executed"][-1]["details"]
+        # The router names its advice ``decision`` (manifest output_schema,
+        # 2026-09-27); ``engine`` is no longer an output key.
+        assert r.status == "success", r.error_message
         assert rec["decision"] == {
-            "engine": r.output["engine"], "bundled_engine": "native", "shadow": True,
+            "decision": r.output["decision"], "bundled_engine": "native", "shadow": True,
             "confidence": r.output["confidence"], "confidence_threshold": 0.7,
-        } or rec["decision"]["engine"] == r.output["engine"]
+        }
         assert "reasoning" not in rec["decision"]
         assert "a@b.de" not in json.dumps(rec)
 
@@ -167,7 +173,10 @@ class TestComplianceTier:
         assert not reg.is_enabled("test.boom.core")
         # the fourth call still REACHED the compliance Skill (error from the Skill, not "auto-disabled")
         r = reg.execute("test.boom.compliance", {}, lom=LOM)
-        assert r.error_message == "boom"
+        assert r.error_message == "boom"  # the caller still gets the message …
+        last = [c for c in _chain() if c["event_type"] == "skill.executed"][-1]["details"]
+        assert last["error_class"] == "RuntimeError"  # … the chain only the class
+        assert "error_message" not in last
         types = [c["event_type"] for c in _chain()]
         assert types.count("skill.disable.refused") == 1
         assert types.count("skill.auto.disabled") == 1

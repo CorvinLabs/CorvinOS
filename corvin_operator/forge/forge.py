@@ -42,7 +42,11 @@ def _default_root() -> Path:
     if env:
         return Path(env).expanduser()
     from forge.scope import detect_scope, scope_root
-    from corvin_operator.forge.forge.paths import _resolve_tenant_id
+    # Same package as every other import in this file (``forge.*``, bound
+    # from this checkout). ``corvin_operator.forge.forge.paths`` resolves via
+    # whatever ``corvin_operator`` the interpreter finds first — an editable
+    # install of a DIFFERENT checkout picked another tree's paths module.
+    from forge.paths import _resolve_tenant_id
     tenant_id = _resolve_tenant_id(os.environ.get("CORVIN_TENANT_ID"))
     return scope_root(detect_scope(), tenant_id=tenant_id)
 
@@ -404,7 +408,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.fn(args)
+    try:
+        return args.fn(args)
+    except PermissionError as e:
+        # ADR-0701 G1: a licence refusal is exit 3, not a traceback.
+        if str(e).startswith("forge.create denied"):
+            print(f"license_required: {e}", file=sys.stderr)
+            return 3
+        raise
 
 
 if __name__ == "__main__":

@@ -6,18 +6,19 @@ reason)`` since). These tests run the real ``capability_api.require_capability``
 free tier = scratch CORVIN_HOME with no licence key, member tier = the licence
 resolver (``capability_api.active_tier``) reporting ``member``.
 
-G1 (``corvin_operator/forge/forge/registry.py``) is FAIL-OPEN today, for two
-independent reasons, both pinned below so a fix has to touch these tests:
+G1 (``corvin_operator/forge/forge/registry.py``) was FAIL-OPEN until
+2026-09-27, for two independent reasons, both now pinned as fixed below:
 
-1. It calls ``require_capability(..., tenant_id="")``. An empty tenant fails
-   ``validate_tenant_id`` and ``require_capability`` RETURNS an
-   ``ENFORCEMENT_UNAVAILABLE`` decision instead of raising; G1 only catches
-   ``LicenseDenied``, so the create proceeds on the free tier.
-2. Its module-level ``from corvin_operator.license.capability_api import …`` is
-   inside an import cycle (capability_api → forge.forge.paths → forge.forge
-   package ``__init__`` → registry → capability_api, half-initialised). When
-   capability_api is imported first, the ImportError fallback binds a no-op
-   ``require_capability`` for the life of the process.
+1. It called ``require_capability(..., tenant_id="")``. An empty tenant failed
+   ``validate_tenant_id`` and ``require_capability`` RETURNED an
+   ``ENFORCEMENT_UNAVAILABLE`` decision instead of raising; G1 only caught
+   ``LicenseDenied``, so the create proceeded on the free tier. G1 now resolves
+   the process tenant (``current_tenant()``) and ``require_capability`` raises
+   ``LicenseDenied(reason="invalid_tenant")`` for an invalid one.
+2. Its module-level ``from corvin_operator.license.capability_api import …`` sat
+   inside an import cycle; importing capability_api first bound a no-op
+   ``require_capability`` for the life of the process. The import is now lazy
+   (call time) and an ImportError denies.
 """
 from __future__ import annotations
 
@@ -46,50 +47,63 @@ def _registry(tmp_path):
 
 def test_g1_translates_a_denial_into_permission_error_and_writes_nothing(tmp_path):
     """The G1 contract: LicenseDenied → PermissionError, before anything is written."""
-    from corvin_operator.forge.forge import registry as registry_mod
-
-    # registry_mod.LicenseDenied, not capability_api's: when the import cycle
-    # (reason 2) hit, registry holds its own fallback class and its ``except``
-    # only matches that one. Both accept this argument shape.
-    denied = registry_mod.LicenseDenied("forge.create", capability_api.Tier.FREE,
-                                        "not_available_in_tier")
     reg = _registry(tmp_path)
-    with mock.patch.object(registry_mod, "require_capability", side_effect=denied):
-        with pytest.raises(PermissionError, match="forge.create denied"):
-            reg.create("g1_tool", "d", {"type": "object"}, IMPL)
-        with pytest.raises(PermissionError, match="forge.create denied"):
-            reg.promote("g1_tool")
-    assert reg.get("g1_tool") is None
+    with member_tier():
+        reg.create("g1_tool", "d", {"type": "object"}, IMPL)
+    # free tier (no licence) from here on
+    with pytest.raises(PermissionError, match="forge.create denied"):
+        reg.create("g1_other", "d", {"type": "object"}, IMPL)
+    with pytest.raises(PermissionError, match="forge.create denied"):
+        reg.promote("g1_tool")
+    assert reg.get("g1_other") is None
+    assert not (tmp_path / "forge_root" / "skills" / "g1_tool").exists()
 
 
-def test_g1_create_on_free_tier_is_fail_open_KNOWN_BUG(tmp_path):
-    """KNOWN BUG (reason 1 in the module docstring): with no licence at all,
-    ``Registry.create`` still forges the tool. Flip to ``pytest.raises(PermissionError)``
-    once G1 passes a real tenant and treats a non-ALLOW verdict as a denial."""
+def test_g1_create_on_free_tier_is_refused(tmp_path):
+    """Was KNOWN BUG (reason 1): with no licence at all ``Registry.create`` forged."""
     assert capability_api.active_tier() == "free"
-    spec = _registry(tmp_path).create("free_tool", "d", {"type": "object"}, IMPL)
-    assert spec.name == "free_tool"
+    with pytest.raises(PermissionError, match="not_available_in_tier"):
+        _registry(tmp_path).create("free_tool", "d", {"type": "object"}, IMPL)
 
 
-def test_g1_binding_depends_on_import_order_KNOWN_BUG():
-    """KNOWN BUG (reason 2): importing capability_api before the forge package
-    leaves G1 bound to the no-op fallback. Run in a fresh interpreter so this
-    process's import history cannot mask either order."""
+def test_g1_invalid_process_tenant_is_refused(tmp_path, monkeypatch):
+    """An invalid ``CORVIN_TENANT_ID`` must deny, even for a member."""
+    monkeypatch.setenv("CORVIN_TENANT_ID", "../escape")
+    with member_tier():
+        with pytest.raises(PermissionError, match="forge.create denied"):
+            _registry(tmp_path).create("t", "d", {"type": "object"}, IMPL)
+
+
+def test_g1_binding_no_longer_depends_on_import_order(tmp_path):
+    """Was KNOWN BUG (reason 2): capability_api imported before the forge
+    package left G1 bound to a no-op. Fresh interpreter, both orders, the free
+    tier is refused either way."""
     probe = (
-        "import corvin_operator.license.capability_api as ca\n"
-        "from corvin_operator.forge.forge import registry as r\n"
-        "print(r.require_capability is ca.require_capability)\n"
+        "import sys, pathlib\n{first}\n{second}\n"
+        "from corvin_operator.forge.forge.registry import Registry\n"
+        "try:\n"
+        "    Registry(pathlib.Path(sys.argv[1])).create('t', 'd', {{'type': 'object'}}, 'x=1')\n"
+        "    print('ALLOWED')\n"
+        "except PermissionError:\n"
+        "    print('DENIED')\n"
     )
-    reverse = (
-        "from corvin_operator.forge.forge import registry as r\n"
-        "import corvin_operator.license.capability_api as ca\n"
-        "print(r.require_capability is ca.require_capability)\n"
-    )
-    run = lambda src: subprocess.run(  # noqa: E731
-        [sys.executable, "-c", src], cwd=REPO, capture_output=True, text=True, timeout=120,
-    ).stdout.strip().splitlines()[-1]
-    assert run(reverse) == "True"     # forge first → real gate bound
-    assert run(probe) == "False"      # capability_api first → no-op bound
+    ca = "import corvin_operator.license.capability_api"
+    rg = "from corvin_operator.forge.forge import registry"
+    for i, (first, second) in enumerate(((ca, rg), (rg, ca))):
+        out = subprocess.run(
+            [sys.executable, "-c", probe.format(first=first, second=second),
+             str(tmp_path / f"r{i}")],
+            cwd=REPO, capture_output=True, text=True, timeout=120,
+        )
+        assert out.stdout.strip().splitlines()[-1] == "DENIED", out.stderr[-2000:]
+
+
+def test_g1_licensing_import_failure_denies(tmp_path):
+    reg = _registry(tmp_path)
+    with mock.patch.object(capability_api, "active_tier", lambda: "member"), \
+            mock.patch.dict(sys.modules, {"corvin_operator.license.capability_api": None}):
+        with pytest.raises(PermissionError, match="unavailable"):
+            reg.create("t", "d", {"type": "object"}, IMPL)
 
 
 # ── G4: /plugin-builder (console slash command and messenger bridges) ───────
@@ -131,12 +145,12 @@ def test_g5_member_passes():
         assert check_forge_capability("_default", entry_point="test") is None
 
 
-def test_g5_invalid_tenant_is_fail_open_KNOWN_BUG():
-    """KNOWN BUG: an invalid tenant yields ENFORCEMENT_UNAVAILABLE (returned, not
-    raised) and check_forge_capability only re-raises LicenseDenied — so it
-    returns as if allowed. Same root cause as G1 reason 1."""
+def test_g5_invalid_tenant_is_refused():
+    """Was KNOWN BUG: an invalid tenant came back as a RETURNED
+    ENFORCEMENT_UNAVAILABLE verdict that check_forge_capability ignored."""
     from core.orchestration.quota_gate import check_forge_capability
 
-    assert check_forge_capability("", entry_point="test") is None
-    decision = capability_api.require_capability("forge.create", tenant_id="", entry_point="test")
-    assert decision.decision is capability_api.Decision.ENFORCEMENT_UNAVAILABLE
+    with member_tier():
+        with pytest.raises(capability_api.LicenseDenied) as exc:
+            check_forge_capability("", entry_point="test")
+    assert exc.value.reason == "invalid_tenant"

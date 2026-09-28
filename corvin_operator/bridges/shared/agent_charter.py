@@ -13,6 +13,7 @@ MUST NOT import anthropic.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sys
@@ -22,15 +23,39 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+_log = logging.getLogger("corvin.agent_charter")
+
 _THIS_DIR = Path(__file__).resolve().parent
-_REPO = _THIS_DIR.parents[1]
+# corvin_operator/bridges/shared → parents[2] is the repo root. (parents[1] was
+# ``corvin_operator/``, so the insert named ``corvin_operator/corvin_operator/
+# forge`` — nonexistent — and wherever ``forge`` was not already importable,
+# ``_HAS_AUDIT`` went False and every charter event was dropped silently.)
+_REPO = _THIS_DIR.parents[2]
 _FORGE_PATH = _REPO / "corvin_operator" / "forge"
 if str(_FORGE_PATH) not in sys.path:
     sys.path.insert(0, str(_FORGE_PATH))
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
-from paths import tenant_home as _tenant_home  # noqa: E402
+
+def _load_sibling_paths():
+    """The ``paths`` mirror next to THIS file, loaded by file path.
+
+    Same rule as ``data_classification._sibling_paths``: a bare ``import paths``
+    binds whichever ``paths`` module is first on sys.path, and a dotted name can
+    resolve into a different checkout through the venv's editable install.
+    """
+    import importlib.util as _ilu  # noqa: PLC0415
+
+    spec = _ilu.spec_from_file_location("_paths_agent_charter", _THIS_DIR / "paths.py")
+    mod = _ilu.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
+_PATHS = _load_sibling_paths()
+_tenant_home = _PATHS.tenant_home
+_tenant_audit_chain = _PATHS.tenant_audit_chain
 
 try:
     from forge import security_events as _security_events  # noqa: E402
@@ -359,18 +384,17 @@ def delete_charter_file(tenant_id: str | None, agent_id: str) -> bool:
 
 def _emit(tenant_id: str | None, event: str, severity: str = "INFO", **details: Any) -> None:
     if not _HAS_AUDIT:
+        _log.error("agent charter audit record lost (%s): forge not importable", event)
         return
     try:
-        th = _tenant_home(tenant_id)
-        audit_path = th / "global" / "forge" / "audit.jsonl"
         _security_events.write_event(
-            audit_path,        # positional: path
-            event,             # positional: event_type
+            _tenant_audit_chain(tenant_id),  # THE tenant chain — never by hand
+            event,
             severity=severity,
             details=dict(details),
         )
-    except Exception:
-        pass  # audit emit is best-effort; never blocks business logic
+    except Exception as exc:  # noqa: BLE001 — never blocks business logic, never silent
+        _log.error("agent charter audit record lost (%s): %s", event, exc)
 
 
 def emit_charter_created(tenant_id: str | None, charter: AgentCharter,

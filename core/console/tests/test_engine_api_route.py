@@ -71,6 +71,9 @@ class EngineApiRouteTests(unittest.TestCase):
         app.include_router(EA.router)
         app.dependency_overrides[console_deps.require_session] = lambda: _fake_record()
         app.dependency_overrides[console_deps.require_csrf] = lambda: None
+        # Router-level guard (c4b8486e0): session on every route + CSRF on writes.
+        app.dependency_overrides[console_deps.require_session_csrf_on_mutation] = (
+            lambda: _fake_record())
         return TestClient(app)
 
     def test_get_default_is_honest_zero_state(self) -> None:
@@ -107,6 +110,23 @@ class EngineApiRouteTests(unittest.TestCase):
         self.assertEqual(r2.json()["models"]["MEDIUM"]["selected_model"], "z-ai/glm-4.6")
         # Untouched tiers keep their defaults — a partial PUT is a merge, not a replace.
         self.assertEqual(r2.json()["models"]["SIMPLE"]["provider"], None)
+
+    def test_partial_put_pins_only_the_saved_tier(self) -> None:
+        """Saving one tier must not turn the default fill-ins of the other
+        tiers into pins (a saved tier stops following the newest model)."""
+        from core.models import model_selection_config as cfg_mod
+
+        client = self._client()
+        for tier in ("MEDIUM", "COMPLEX"):
+            r = client.put(
+                "/v1/engine/config",
+                json={"models": {tier: {
+                    "task_type": tier, "selected_model": "z-ai/glm-4.6",
+                    "provider": "openrouter", "alternatives": [],
+                }}},
+            )
+            self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(cfg_mod.saved_task_types("_default"), {"MEDIUM", "COMPLEX"})
 
     def test_put_rejects_unknown_anthropic_model(self) -> None:
         r = self._client().put(

@@ -14,7 +14,7 @@ so it fails the handshake to ``speech.platform.bing.com`` with
 out (OpenAI needs a key, Piper needs a downloaded model), and say.py exits 0 with
 empty stdout. The console turns that into a 204, and a 204 is the DESIGNED silent
 degradation for turn voice — so the chat simply never speaks, with no error
-anywhere. Measured live 2026-09-20 on ALLIANZDE.
+anywhere. Measured live 2026-09-20 on [CORPORATE-PROXY].
 
 Note that ``SSL_CERT_FILE`` / ``REQUESTS_CA_BUNDLE`` cannot fix this: an explicit
 ``cafile=`` argument overrides both. Injection is the only lever that reaches a

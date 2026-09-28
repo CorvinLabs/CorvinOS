@@ -343,7 +343,7 @@ class AuditContractTests(unittest.TestCase):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def _events(self) -> list[dict]:
-        path = Path(self._tmp, "global", "forge", "audit.jsonl")
+        path = Path(self._tmp, "tenants", os.environ.get("CORVIN_TENANT_ID") or "_default", "global", "forge", "audit.jsonl")
         if not path.exists():
             return []
         return [json.loads(ln) for ln in

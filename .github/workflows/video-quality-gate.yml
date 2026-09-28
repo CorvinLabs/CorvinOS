@@ -7,7 +7,8 @@ on:
       - '**.mkv'
       - '**.webm'
       - '**.mov'
-      - 'outputs/video_quality_validator.py'
+      - 'core/skills/video_quality_validator.py'
+      - '.github/workflows/video-quality-gate.yml'
   push:
     paths:
       - '**.mp4'
@@ -55,7 +56,11 @@ jobs:
       - name: Validate videos
         if: steps.find-videos.outputs.count > 0
         run: |
-          VALIDATOR_SCRIPT="outputs/video_quality_validator.py"
+          # outputs/video_quality_validator.py never existed in this repo; the
+          # validator ships at core/skills/. Its CLI prints the report and always
+          # exits 0, so the verdict is taken from the report's ``is_valid``
+          # (fail-closed: an unparseable report is a failure).
+          VALIDATOR_SCRIPT="core/skills/video_quality_validator.py"
 
           if [ ! -f "$VALIDATOR_SCRIPT" ]; then
             echo "❌ Validator script not found at $VALIDATOR_SCRIPT"
@@ -75,7 +80,7 @@ jobs:
             echo "📹 Validating: $video"
             echo "=================================================="
 
-            if python3 "$VALIDATOR_SCRIPT" "$video"; then
+            if python3 "$VALIDATOR_SCRIPT" "$video" | python3 -c 'import json,sys; r=json.load(sys.stdin); print(json.dumps(r, indent=2)); sys.exit(0 if r.get("is_valid") is True else 1)'; then
               echo "✅ PASS: $video"
               PASSED_COUNT=$((PASSED_COUNT + 1))
             else
@@ -107,13 +112,13 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `❌ **Video Quality Gate Failed**\n\nOne or more videos failed validation:\n\n- No audio track\n- Low bitrate (<500 kbps)\n- File size too small\n- Other quality issues\n\n**Action Required:**\n1. Run: \`python3 outputs/video_quality_validator.py <video.mp4>\`\n2. Fix the issues (add audio, increase bitrate, etc.)\n3. Regenerate and re-upload\n4. Re-push to trigger validation again\n\nSee [VIDEO_PRODUCTION_GUIDE.md](https://github.com/${{ github.repository }}/blob/main/outputs/VIDEO_PRODUCTION_GUIDE.md) for details.`
+              body: `❌ **Video Quality Gate Failed**\n\nOne or more videos failed validation:\n\n- No audio track\n- Low bitrate (<500 kbps)\n- File size too small\n- Other quality issues\n\n**Action Required:**\n1. Run: \`python3 core/skills/video_quality_validator.py <video.mp4>\`\n2. Fix the issues (add audio, increase bitrate, etc.)\n3. Regenerate and re-upload\n4. Re-push to trigger validation again`
             })
 
       - name: Upload validation report
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: video-validation-report
           path: |
-            outputs/video_quality_validator.py
+            core/skills/video_quality_validator.py

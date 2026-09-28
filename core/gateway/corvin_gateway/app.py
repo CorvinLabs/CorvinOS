@@ -61,7 +61,7 @@ def _use_os_trust_store() -> None:
     WHY THIS HOST NEEDS ITS OWN. ``uvicorn corvin_gateway.app:app`` is what
     ``corvin-service`` runs, and what ``corvinOS/installer/core.py`` registers as
     the persistent WebUI service on EVERY fresh install (pip and source-tree
-    alike). Measured 2026-09-22 on ALLIANZDE: with only certifi on the path, both
+    alike). Measured 2026-09-22 on [CORPORATE-PROXY]: with only certifi on the path, both
     ``api.anthropic.com`` and ``api.openai.com`` fail with ``CERTIFICATE_VERIFY_FAILED:
     unable to get local issuer certificate``; with the OS store injected they answer
     404 and 403 respectively — i.e. verification succeeds and the request is

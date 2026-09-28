@@ -16,7 +16,7 @@ setup wizards write ``CLAUDE_CODE_USE_*`` into settings.json's ``env`` block
 rather than exporting it into the shell. A probe that checks only the API key and
 the OAuth file therefore returns False on a perfectly working install.
 
-Consequence when a copy drifts (measured live 2026-09-20, ALLIANZDE): the voice
+Consequence when a copy drifts (measured live 2026-09-20, [CORPORATE-PROXY]): the voice
 summarizer skipped the `claude` backend WITHOUT EVER SPAWNING IT, fell through to
 an unreachable Ollama, and every spoken summary degraded to a near-verbatim echo
 of the answer. The dialectic judge degraded to thesis-only. Console chat was

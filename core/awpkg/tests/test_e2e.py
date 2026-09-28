@@ -688,19 +688,66 @@ class TestAuditChain:
                 install(pkg, scope="user", corvin_home=home)
 
             events = [json.loads(l) for l in audit_path.read_text().splitlines() if l.strip()]
+            assert [e["event_type"] for e in events].count("package.installed") == 3
+            # Verified by THE core verifier — the same one the boot tripwire
+            # runs. (This test used to recompute a private hash formula that
+            # only the removed standalone fallback writer produced; records
+            # from the core writer carry a keyed ``mac`` and it never matched.)
+            _forge = Path(__file__).parents[3] / "corvin_operator" / "forge"
+            if str(_forge) not in sys.path:
+                sys.path.insert(0, str(_forge))
+            from forge.security_events import verify_chain
+            ok, problems = verify_chain(audit_path)
+            assert ok, problems
             prev = ""
             for evt in events:
-                declared_prev = evt.get("prev_hash", "")
-                assert declared_prev == prev, "chain broken"
-                evt_copy = {k: v for k, v in evt.items() if k != "hash"}
-                canonical = json.dumps(evt_copy, sort_keys=True, separators=(",", ":"))
-                expected_hash = hashlib.sha256(
-                    (prev + "\n" + canonical).encode()
-                ).hexdigest()[:16]
-                assert evt["hash"] == expected_hash
+                assert evt.get("prev_hash", "") == prev, "chain broken"
                 prev = evt["hash"]
         finally:
             os.environ.pop("VOICE_AUDIT_PATH", None)
+
+
+def test_awpkg_record_after_a_keyed_record_keeps_the_chain_valid(tmp_path):
+    """Round-4 regression. ``_try_forge_write`` looked for forge at
+    ``<repo>/forge`` (nonexistent), so a process where ``forge`` was not
+    already importable — e.g. bound as an empty namespace package — fell back
+    to a standalone writer whose records carry no keyed ``mac``. One such
+    record after a keyed one made ``verify_chain`` fail (``mac_missing``): the
+    boot tripwire refuses a chain like that."""
+    import subprocess
+
+    repo = Path(__file__).parents[3]
+    env = dict(os.environ)
+    env["CORVIN_HOME"] = str(tmp_path / "home")
+    env.pop("VOICE_AUDIT_PATH", None)
+    env.pop("FORGE_AUDIT_PATH", None)
+    env["CORVIN_AUDIT_ANCHOR_KEY"] = str(tmp_path / "anchor.key")
+    forge_dir = str(repo / "corvin_operator" / "forge")
+    core_write = (
+        f"import sys; sys.path.insert(0, {forge_dir!r})\n"
+        "from forge import security_events as se\n"
+        "from core.paths import tenant_audit_chain\n"
+        "se.write_event(tenant_audit_chain('_default'), 'package.inspect', details={'id': 'p0'})\n"
+    )
+    # corvin_operator/ on the path → `forge` binds as a namespace package.
+    awpkg_write = (
+        "import forge\n"
+        "from core.awpkg.awpkg import audit as a\n"
+        "a.emit('package.installed', id='p1')\n"
+    )
+    verify = (
+        f"import sys; sys.path.insert(0, {forge_dir!r})\n"
+        "from forge import security_events as se\n"
+        "from core.paths import tenant_audit_chain\n"
+        "ok, problems = se.verify_chain(tenant_audit_chain('_default'))\n"
+        "print(ok, problems)\n"
+        "sys.exit(0 if ok else 1)\n"
+    )
+    pp = os.pathsep.join([str(repo), str(repo / "corvin_operator")])
+    for code in (core_write, awpkg_write, verify):
+        r = subprocess.run([sys.executable, "-c", code], env={**env, "PYTHONPATH": pp},
+                           cwd=tmp_path, capture_output=True, text=True, timeout=120)
+        assert r.returncode == 0, (r.stdout[-1000:], r.stderr[-2000:])
 
 
 # ---------------------------------------------------------------------------

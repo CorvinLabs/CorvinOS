@@ -45,6 +45,12 @@ def _sandbox_corvin_home(tmp_path, monkeypatch):
     import core.orchestration.quota_gate as _qg
 
     monkeypatch.setattr(_qg, "increment_and_check", lambda *a, **k: None)
+    # ADR-0701 G5: forge.create is member-only and fail-closed, so the free
+    # sandbox is refused before any forging. Pin the tier RESOLVER to member;
+    # the gate itself runs unmodified (its verdicts are tested in tests/license).
+    from corvin_operator.license import capability_api as _ca
+
+    monkeypatch.setattr(_ca, "active_tier", lambda **_k: "member")
     yield home
 
 

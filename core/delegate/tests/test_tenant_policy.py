@@ -292,7 +292,7 @@ class PolicyEnforcementTests(unittest.TestCase):
             json.dumps(body), encoding="utf-8")
 
     def _chain_events(self) -> list[dict]:
-        path = Path(self._tmp, "global", "forge", "audit.jsonl")
+        path = Path(self._tmp, "tenants", os.environ.get("CORVIN_TENANT_ID") or "_default", "global", "forge", "audit.jsonl")
         if not path.exists():
             return []
         out = []
@@ -469,7 +469,7 @@ class PolicyAuditMetadataTests(unittest.TestCase):
             persona="orchestrator",
             audit=True,
         )
-        path = Path(self._tmp, "global", "forge", "audit.jsonl")
+        path = Path(self._tmp, "tenants", os.environ.get("CORVIN_TENANT_ID") or "_default", "global", "forge", "audit.jsonl")
         events = [json.loads(ln) for ln in
                   path.read_text(encoding="utf-8").splitlines()
                   if ln.strip()]

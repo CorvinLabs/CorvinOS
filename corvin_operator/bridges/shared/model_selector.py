@@ -718,7 +718,15 @@ def resolve_registry_id(model: str, engine_id: str) -> str | None:
     except Exception:  # noqa: BLE001
         return None
 
-    dated = sorted(m for m in known if m and m.startswith(model + "-"))
+    # Only an 8-digit SNAPSHOT DATE extends a family id. A bare
+    # ``startswith(model + "-")`` also matched a newer MINOR version once the
+    # lineage scheme arrived (``claude-opus-5`` → ``claude-opus-5-5``), so a
+    # pin to an available-but-unlisted model was silently upgraded — exactly
+    # what model_lineage forbids (absence from the curated YAML is not
+    # retirement; a pin moves only on retirement evidence).
+    dated = sorted(m for m in known
+                   if m and m.startswith(model + "-")
+                   and _re.fullmatch(r"\d{8}", m[len(model) + 1:]))
     return dated[0] if len(dated) == 1 else None
 
 

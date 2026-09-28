@@ -108,10 +108,6 @@ class LicenseDenied(Exception):
 
 # ── Core API ───────────────────────────────────────────────────────
 
-# In-process enforcement state (fail-closed on any error)
-_ENFORCEMENT_AVAILABLE = True
-_ENFORCEMENT_ERROR: str | None = None
-
 def require_capability(
     capability: str,
     requested: int = 1,
@@ -123,34 +119,50 @@ def require_capability(
 
     Args:
         capability: e.g. "compute.run", "forge.create", "a2a.send"
-        requested: quantity (default 1)
+        requested: quantity — a positive ``int`` (``ValueError`` otherwise)
         tenant_id: validated via validate_tenant_id()
         entry_point: lom source (file:line or module path)
 
     Returns:
-        CapabilityDecision with decision, tier, allowed, reason
+        CapabilityDecision whose ``decision`` is ALWAYS ``Decision.ALLOW``.
+        ``allowed`` is the tier LIMIT (``None`` = unlimited), not a verdict —
+        callers must test ``decision.decision``, never ``decision.allowed``.
 
     Raises:
-        LicenseDenied: if decision == DENY (for console HTTP 402)
+        LicenseDenied: on every non-allow outcome — a tier/quota denial, an
+            unknown capability, an invalid tenant (``reason="invalid_tenant"``)
+            and an enforcement failure that leaves only the free allowance,
+            where that allowance does not cover the request.
+        ValueError: ``requested`` is not a positive integer.
 
     Audit:
-        Emits license.capability_decision via tenant_audit_chain()
+        Emits ``license.capability_decision`` on the tenant's chain
+        (``tenant_audit_chain``) before the verdict takes effect; a write that
+        does not commit is logged (see the comment at the call).
+
+    Adversarial review 2026-09-27: an invalid tenant used to be RETURNED as
+    ``ENFORCEMENT_UNAVAILABLE`` — every caller that only caught
+    ``LicenseDenied`` (G1, G5) then went ahead as if allowed; ``requested <= 0``
+    passed the ``limit >= requested`` test on every finite tier; and the audit
+    writer imported a module that does not exist, so no decision was ever
+    recorded.
     """
-    # Validate tenant_id
+    # A quantity is a positive integer. 0 / negative values satisfied
+    # ``limit >= requested`` on every finite tier (bool is an int subclass).
+    if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
+        raise ValueError(
+            f"requested must be a positive integer, got {requested!r}"
+        )
+
+    # Validate tenant_id — an unresolvable tenant is a DENY, never a verdict
+    # the caller has to remember to inspect.
     try:
         validate_tenant_id(tenant_id)
     except Exception as e:
         _log.error("Invalid tenant_id %r: %s", tenant_id, e)
-        tier = Tier.FREE
-        decision = CapabilityDecision(
-            decision=Decision.ENFORCEMENT_UNAVAILABLE,
-            tier=tier,
-            capability=capability,
-            requested=requested,
-            allowed=0,
-            reason="invalid_tenant",
-        )
-        return decision
+        raise LicenseDenied(
+            capability=capability, tier=Tier.FREE, reason="invalid_tenant",
+        ) from None
 
     # Get capability limits for this tier
     try:
@@ -159,74 +171,60 @@ def require_capability(
     except Exception as e:
         _log.warning("Failed to resolve tier: %s; assuming free", e)
         tier = Tier.FREE
-        _ENFORCEMENT_AVAILABLE = False
-        _ENFORCEMENT_ERROR = str(e)
 
-    # Look up capability in CAPABILITIES matrix (ADR-0700 §2.1)
-    if capability not in CAPABILITIES:
-        _log.warning("Unknown capability: %s", capability)
-        reason = "unknown_capability"
-        decision_enum = Decision.DENY
-        allowed = 0
-    else:
-        cap_spec = CAPABILITIES[capability]
-        # Resolve limit from tier-specific entry
-        tier_limits = cap_spec.get(tier.value, {})
-        allowed = tier_limits.get("limit", 0)
+    decision_enum, allowed, reason = _evaluate(capability, requested, tier)
 
-        # Determine decision based on limit
-        if allowed is None:
-            # None = unlimited
-            decision_enum = Decision.ALLOW
-            reason = None
-        elif isinstance(allowed, int):
-            if allowed == 0:
-                decision_enum = Decision.DENY
-                reason = "not_available_in_tier"
-            elif allowed >= requested:
-                decision_enum = Decision.ALLOW
-                reason = None
-            else:
-                decision_enum = Decision.DENY
-                reason = "quota_exceeded"
-        else:
-            # Fallback for malformed data
-            decision_enum = Decision.DENY
-            reason = "enforcement_unavailable"
-            allowed = 0
+    # Recorded before it takes effect. A write that does not commit is logged
+    # and does NOT change the verdict: ``write_event`` refuses a record whose
+    # tenant differs from the PROCESS tenant (AuditTenantMismatch), so in a
+    # console serving several tenants, making the grant depend on the write
+    # would lock every member tenant but the process's own out of member
+    # capabilities. The chain's health is the ADR-0232 boot tripwire's job.
+    _audit_capability_decision(
+        tenant_id=tenant_id,
+        capability=capability,
+        tier=tier.value,
+        decision=decision_enum.value,
+        reason=reason,
+        requested=requested,
+        allowed=allowed,
+        entry_point=entry_point,
+    )
 
-    result = CapabilityDecision(
+    # Raise LicenseDenied if denied
+    if decision_enum == Decision.DENY:
+        raise LicenseDenied(
+            capability=capability,
+            tier=tier,
+            reason=reason or "denied",
+        )
+
+    return CapabilityDecision(
         decision=decision_enum,
         tier=tier,
         capability=capability,
         requested=requested,
         allowed=allowed,
-        reason=reason if decision_enum == Decision.DENY else None,
+        reason=None,
     )
 
-    # Audit via tenant_audit_chain
-    try:
-        _audit_capability_decision(
-            tenant_id=tenant_id,
-            capability=capability,
-            tier=tier.value,
-            decision=decision_enum.value,
-            requested=requested,
-            allowed=allowed,
-            entry_point=entry_point,
-        )
-    except Exception as e:
-        _log.warning("Failed to audit capability_decision: %s", e)
 
-    # Raise LicenseDenied if denied
-    if result.decision == Decision.DENY:
-        raise LicenseDenied(
-            capability=capability,
-            tier=tier,
-            reason=result.reason or "denied",
-        )
-
-    return result
+def _evaluate(capability: str, requested: int, tier: Tier):
+    """Pure lookup in the CAPABILITIES matrix → (Decision, limit, reason)."""
+    if capability not in CAPABILITIES:
+        _log.warning("Unknown capability: %s", capability)
+        return Decision.DENY, 0, "unknown_capability"
+    tier_limits = CAPABILITIES[capability].get(tier.value, {})
+    allowed = tier_limits.get("limit", 0)
+    if allowed is None:
+        return Decision.ALLOW, None, None          # None = unlimited
+    if isinstance(allowed, bool) or not isinstance(allowed, int):
+        return Decision.DENY, 0, "enforcement_unavailable"   # malformed matrix
+    if allowed == 0:
+        return Decision.DENY, 0, "not_available_in_tier"
+    if allowed >= requested:
+        return Decision.ALLOW, allowed, None
+    return Decision.DENY, allowed, "quota_exceeded"
 
 
 def active_credential(*, tenant_id: str) -> Optional[Credential]:
@@ -273,33 +271,54 @@ def permit_token() -> Optional[str]:
     return None
 
 
+def _chain_writer():
+    """Return ``(write_event, tenant_audit_chain)`` — THE core chain writer.
+
+    Imported as the bare ``security_events`` / ``paths`` modules (with the
+    forge package dir on ``sys.path``), exactly like ``validator.py`` does, so
+    the process-wide instance that carries the chain-DNA seed does the write.
+    """
+    import sys as _sys
+    _forge_inner = Path(__file__).resolve().parents[1] / "forge" / "forge"
+    if str(_forge_inner) not in _sys.path:
+        _sys.path.insert(0, str(_forge_inner))
+    from security_events import write_event  # type: ignore[import]
+    from paths import tenant_audit_chain  # type: ignore[import]
+    return write_event, tenant_audit_chain
+
+
 def _audit_capability_decision(
     tenant_id: str,
     capability: str,
     tier: str,
     decision: str,
     requested: int,
-    allowed: int,
+    allowed: int | None,
     entry_point: str,
-) -> None:
-    """Emit license.capability_decision audit event (fail-closed)."""
-    try:
-        from forge.audit import tenant_audit_chain
-        from security_events import current_instance_id
+    reason: str | None = None,
+) -> bool:
+    """Write ``license.capability_decision`` to the tenant chain; True iff committed.
 
-        chain = tenant_audit_chain(tenant_id)
-        if chain:
-            event = {
-                "event_type": "license.capability_decision",
+    Never raises — the caller decides what an unrecorded decision means.
+    """
+    try:
+        write_event, tenant_audit_chain = _chain_writer()
+        write_event(
+            tenant_audit_chain(tenant_id),
+            "license.capability_decision",
+            details={
                 "tenant_id": tenant_id,
                 "capability": capability,
                 "tier": tier,
                 "decision": decision,
+                "reason": reason,
                 "requested": requested,
                 "allowed": allowed,
-                "lom": entry_point,
-                "timestamp": int(time.time()),
-            }
-            chain.write_event(event)
-    except Exception as e:
+                "entry_point": entry_point,
+                "lom": "corvin_operator/license/capability_api.py:require_capability",
+            },
+        )
+        return True
+    except Exception as e:  # noqa: BLE001 — reported to the caller as False
         _log.warning("Failed to write capability_decision audit: %s", e)
+        return False

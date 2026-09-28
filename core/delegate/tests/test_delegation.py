@@ -431,6 +431,119 @@ class AuditPayloadTests(unittest.TestCase):
             _validate_details("delegate.something_else", {})
 
 
+def _tenant_chain() -> Path:
+    """THE chain for the active tenant under the test's CORVIN_HOME."""
+    from forge.paths import tenant_audit_chain  # type: ignore
+
+    return Path(tenant_audit_chain(None))
+
+
+class DelegateAuditChainRoutingTests(unittest.TestCase):
+    """Round-4 regressions: delegate records reach THE tenant chain.
+
+    Before: ``_resolve_audit_path`` composed ``<CORVIN_HOME>/global/forge/
+    audit.jsonl`` (the legacy host-wide chain), ``_ensure_forge_on_path`` looked
+    at ``core/forge`` (nonexistent) and a namespace-bound ``forge`` made every
+    record vanish without a trace.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._saved = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_TENANT_ID")}
+        os.environ["CORVIN_HOME"] = self._tmp.name
+        os.environ["CORVIN_TENANT_ID"] = "acme"
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self._tmp.cleanup()
+
+    def test_record_lands_in_tenant_chain_not_legacy(self):
+        from corvin_delegate.audit import emit_invoked
+
+        emit_invoked(engine="codex_cli", persona="p", prompt_chars=3)
+        home = Path(self._tmp.name)
+        canonical = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
+        self.assertTrue(canonical.is_file())
+        self.assertIn("delegate.invoked", canonical.read_text("utf-8"))
+        self.assertFalse((home / "global" / "forge" / "audit.jsonl").exists())
+
+    def test_forge_dir_points_at_real_package(self):
+        from corvin_delegate import audit as _a
+
+        self.assertTrue((_a._FORGE_DIR / "forge" / "security_events.py").is_file())
+
+    def test_namespace_bound_forge_still_writes(self):
+        import subprocess
+
+        repo = _PLUGIN_DIR.parents[1]
+        code = (
+            "import forge, os\n"
+            "assert getattr(forge, '__file__', None) is None, 'expected namespace'\n"
+            "from corvin_delegate.audit import emit_invoked\n"
+            "emit_invoked(engine='codex_cli', persona='p', prompt_chars=1)\n"
+        )
+        env = dict(os.environ)
+        # corvin_operator/ on the path WITHOUT corvin_operator/forge: `forge`
+        # binds as a namespace package — the shape that dropped records.
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(repo), str(repo / "corvin_operator"), str(_PLUGIN_DIR)]
+        )
+        r = subprocess.run(
+            [sys.executable, "-c", code], env=env, cwd=self._tmp.name,
+            capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        chain = Path(self._tmp.name) / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
+        self.assertTrue(chain.is_file(), r.stderr[-2000:])
+        self.assertIn("delegate.invoked", chain.read_text("utf-8"))
+
+    def test_acs_delegation_run_audits_to_tenant_chain(self):
+        """``_write_wdat_run_for_delegation`` wrote ``tenants/<t>/global/
+        audit.jsonl`` (a legacy non-canonical chain) by hand."""
+        from corvin_delegate import delegation as _d
+
+        home = Path(self._tmp.name)
+        sess = home / "sess"
+        sess.mkdir()
+        saved = os.environ.get("CORVIN_SESSION_DIR")
+        os.environ["CORVIN_SESSION_DIR"] = str(sess)
+        try:
+            _d._write_wdat_run_for_delegation(
+                engine="codex_cli", model="m", duration_ms=5,
+                start_wall=time.time(), prompt="p", usage={},
+            )
+        finally:
+            if saved is None:
+                os.environ.pop("CORVIN_SESSION_DIR", None)
+            else:
+                os.environ["CORVIN_SESSION_DIR"] = saved
+        chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
+        self.assertTrue(chain.is_file())
+        self.assertIn("acs.manager_decided", chain.read_text("utf-8"))
+        self.assertFalse((home / "tenants" / "acme" / "global" / "audit.jsonl").exists())
+
+    def test_unresolvable_writer_is_loud(self):
+        from corvin_delegate import audit as _a
+        from corvin_delegate import delegation as _d
+
+        saved = sys.modules.get("forge.security_events")
+        sys.modules["forge.security_events"] = None  # type: ignore[assignment]
+        try:
+            with self.assertRaises(_a.DelegateAuditUnavailable):
+                _a.emit_invoked(engine="codex_cli")
+            with self.assertLogs("corvin_delegate", level="ERROR"):
+                _d._emit_audit_invoked(engine="codex_cli")
+        finally:
+            if saved is None:
+                sys.modules.pop("forge.security_events", None)
+            else:
+                sys.modules["forge.security_events"] = saved
+
+
 class AuditChainTests(unittest.TestCase):
     """End-to-end: a delegate call writes 2 audit events into the chain."""
 
@@ -458,7 +571,7 @@ class AuditChainTests(unittest.TestCase):
             os.environ["CORVIN_HOME"] = self._saved_corvin_home
 
     def _chain_lines(self) -> list[str]:
-        ap = Path(self.tmpdir) / "global" / "forge" / "audit.jsonl"
+        ap = _tenant_chain()
         if not ap.exists():
             return []
         return [
@@ -1299,7 +1412,7 @@ class Layer30AuditTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def _read_chain(self):
-        path = self._home / "global" / "forge" / "audit.jsonl"
+        path = _tenant_chain()
         if not path.is_file():
             return []
         import json

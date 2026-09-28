@@ -78,12 +78,12 @@ def test_licensing_module_unavailable_fails_closed(home):
 
 
 def test_invalid_tenant_fails_closed(home, monkeypatch):
-    """An invalid tenant yields ENFORCEMENT_UNAVAILABLE (a returned decision, not
-    an exception). G2 reads the verdict, so this refuses — even for a member."""
+    """An invalid tenant is a LicenseDenied(reason="invalid_tenant"); G2 turns it
+    into a refusal — even for a member."""
     monkeypatch.setenv("CORVIN_TENANT_ID", "../escape")
     reg = _reg(home)
     with member_tier():
-        with pytest.raises(ValueError, match="license_required: forge.create enforcement_unavailable"):
+        with pytest.raises(ValueError, match="license_required: .*invalid_tenant"):
             _create(reg)
     assert reg.get("g2_skill") is None
 

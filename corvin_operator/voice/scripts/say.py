@@ -61,7 +61,7 @@ def _use_os_trust_store() -> None:
     certificate` — swallowed content-free by `_try_edge` as
     `edge-tts failed: ClientConnectorCertificateError`, so the console just
     returns a silent 204 and no voice summary is ever spoken (2026-09-15 live
-    finding on ALLIANZDE). `truststore` reads the OS store (which HAS the
+    finding on [CORPORATE-PROXY]). `truststore` reads the OS store (which HAS the
     corporate root), so verification still happens — it is NOT disabled — it is
     merely anchored where the corporate CA actually is. Piper is local and
     unaffected.

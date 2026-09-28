@@ -37,6 +37,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -47,6 +48,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
+
+_log = logging.getLogger("corvin_delegate")
 
 # The WorkerEngine layer lives in corvin_operator/bridges/shared/agents/. We
 # resolve it lazily so this package stays importable even when that tree
@@ -1142,8 +1145,6 @@ def run_delegate(
 # WDAT run directory writer — makes delegation runs visible in the Audit graph
 # ---------------------------------------------------------------------------
 
-_FORGE_PATH_FOR_WDAT = str(Path(__file__).resolve().parents[3] / "corvin_operator" / "forge")
-
 
 def _write_wdat_run_for_delegation(
     *,
@@ -1178,17 +1179,17 @@ def _write_wdat_run_for_delegation(
         return
 
     tenant_id = (os.environ.get("CORVIN_TENANT_ID") or "_default").strip() or "_default"
-    corvin_home_str = os.environ.get("CORVIN_HOME", "").strip()
-    if corvin_home_str:
-        corvin_home = Path(corvin_home_str)
-    else:
-        try:
-            if _FORGE_PATH_FOR_WDAT not in sys.path:
-                sys.path.insert(0, _FORGE_PATH_FOR_WDAT)
-            from corvin_operator.forge.forge.paths import corvin_home as _ch_fn  # type: ignore
-            corvin_home = Path(str(_ch_fn()))
-        except Exception:  # noqa: BLE001
-            return
+    # THE tenant chain via forge.paths (honours CORVIN_HOME, validates the
+    # tenant id), resolved by the SAME resolver the delegate.* records use —
+    # it repairs a namespace-bound ``forge`` and never binds a second copy
+    # from another checkout (``corvin_operator.forge.forge.paths``).
+    try:
+        from .audit import _forge_modules
+        _sec, _fpaths = _forge_modules()
+        audit_path = Path(_fpaths.tenant_audit_chain(tenant_id))
+    except Exception as exc:  # noqa: BLE001
+        _log.error("ACS delegation audit skipped: chain unresolved: %s", exc)
+        return
 
     run_id = f"acs-dlg-{int(start_wall)}-{secrets.token_hex(3)}"
     worker_id = "w0"
@@ -1239,13 +1240,8 @@ def _write_wdat_run_for_delegation(
     except OSError:
         pass  # best-effort; run still shows as active in the panel
 
-    # 3. Audit events → per-tenant L16 chain
-    audit_path = corvin_home / "tenants" / tenant_id / "global" / "audit.jsonl"
+    # 3. Audit events → the tenant chain (writer resolved above)
     try:
-        if _FORGE_PATH_FOR_WDAT not in sys.path:
-            sys.path.insert(0, _FORGE_PATH_FOR_WDAT)
-        from forge import security_events as _sec  # type: ignore
-
         _sec.write_event(audit_path, "acs.manager_decided", details={
             "run_id":        run_id,
             "iteration":     0,
@@ -1310,10 +1306,10 @@ def _write_wdat_run_for_delegation(
                                  engine_id=engine, model_id=model_id or "",
                                  run_id=run_id, status="ok",
                                  duration_ms=duration_ms, tokens_used=tokens_used))
-        except Exception:  # noqa: BLE001
-            pass
-    except Exception:  # noqa: BLE001 — audit is observability, never enforcement
-        pass
+        except Exception as exc:  # noqa: BLE001
+            _log.error("ACS delegation engine span not written: %s", exc)
+    except Exception as exc:  # noqa: BLE001 — audit is observability, never enforcement
+        _log.error("ACS delegation audit record lost: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -1325,72 +1321,72 @@ def _emit_audit_invoked(**fields: Any) -> None:
     try:
         from .audit import emit_invoked
         emit_invoked(**fields)
-    except Exception:  # noqa: BLE001 — audit is observability, never enforcement
-        pass
+    except Exception as exc:  # noqa: BLE001 — audit never blocks delegation, but a lost record is never silent
+        _log.error("delegate audit record lost (%s): %s", 'emit_invoked', exc)
 
 
 def _emit_audit_completed(**fields: Any) -> None:
     try:
         from .audit import emit_completed
         emit_completed(**fields)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — audit never blocks delegation, but a lost record is never silent
+        _log.error("delegate audit record lost (%s): %s", 'emit_completed', exc)
 
 
 def _emit_audit_failed(**fields: Any) -> None:
     try:
         from .audit import emit_failed
         emit_failed(**fields)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — audit never blocks delegation, but a lost record is never silent
+        _log.error("delegate audit record lost (%s): %s", 'emit_failed', exc)
 
 
 def _emit_audit_output_judged(**fields: Any) -> None:
     try:
         from .audit import emit_output_judged
         emit_output_judged(**fields)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — audit never blocks delegation, but a lost record is never silent
+        _log.error("delegate audit record lost (%s): %s", 'emit_output_judged', exc)
 
 
 def _emit_audit_engine_policy_denied(**fields: Any) -> None:
     try:
         from .audit import emit_engine_policy_denied
         emit_engine_policy_denied(**fields)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — audit never blocks delegation, but a lost record is never silent
+        _log.error("delegate audit record lost (%s): %s", 'emit_engine_policy_denied', exc)
 
 
 def _emit_audit_zone_policy_denied(**fields: Any) -> None:
     try:
         from .audit import emit_zone_policy_denied
         emit_zone_policy_denied(**fields)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — audit never blocks delegation, but a lost record is never silent
+        _log.error("delegate audit record lost (%s): %s", 'emit_zone_policy_denied', exc)
 
 
 def _emit_audit_sandboxed(**fields: Any) -> None:
     try:
         from .audit import emit_sandboxed
         emit_sandboxed(**fields)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — audit never blocks delegation, but a lost record is never silent
+        _log.error("delegate audit record lost (%s): %s", 'emit_sandboxed', exc)
 
 
 def _emit_audit_sandbox_unavailable(**fields: Any) -> None:
     try:
         from .audit import emit_sandbox_unavailable
         emit_sandbox_unavailable(**fields)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — audit never blocks delegation, but a lost record is never silent
+        _log.error("delegate audit record lost (%s): %s", 'emit_sandbox_unavailable', exc)
 
 
 def _emit_audit_prompt_classified(**fields: Any) -> None:
     try:
         from .audit import emit_prompt_classified
         emit_prompt_classified(**fields)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — audit never blocks delegation, but a lost record is never silent
+        _log.error("delegate audit record lost (%s): %s", 'emit_prompt_classified', exc)
 
 
 # ---------------------------------------------------------------------------
@@ -1725,8 +1721,8 @@ def _emit_audit_skill_injected(**fields: Any) -> None:
     try:
         from .audit import emit_skill_injected
         emit_skill_injected(**fields)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — audit never blocks delegation, but a lost record is never silent
+        _log.error("delegate audit record lost (%s): %s", 'emit_skill_injected', exc)
 
 
 # ---------------------------------------------------------------------------
@@ -1799,5 +1795,5 @@ def _emit_audit_mcp_wired(**fields: Any) -> None:
     try:
         from .audit import emit_mcp_wired
         emit_mcp_wired(**fields)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — audit never blocks delegation, but a lost record is never silent
+        _log.error("delegate audit record lost (%s): %s", 'emit_mcp_wired', exc)

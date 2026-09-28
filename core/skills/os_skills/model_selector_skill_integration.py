@@ -1,6 +1,9 @@
 """
 Model Selector Skill Integration — Wires Variants B, C, D into Autonomous OS L5 Routing
 
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review) — the only
+importer is ``scripts/validate_model_selector_variants.py``.
+
 This module provides:
 1. SkillInterface wrapper for ModelSelector variants
 2. Integration with L5 (auto-routing) + L10 (context engineering)
@@ -93,7 +96,7 @@ class ModelSelectorSkill:
     id: "os.model_selector"
     version: "2.0.0"
     tier: "core"
-    boot_layer: "core"  # Immutable, always on
+    boot_layer: "bundled"  # NOT core/compliance: nothing above bundled is instantiated (CLAUDE.md boot-layer rules)
     variant: "variant_c"  # Configurable: b, c, or d
     dependencies: []
     required_checks: ["l44_acceptable_use", "l16_consent"]

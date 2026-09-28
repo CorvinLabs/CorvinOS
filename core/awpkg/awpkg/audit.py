@@ -1,24 +1,13 @@
 """Audit-chain integration for AWPKG.
 
-Wraps forge.security_events.write_event() when available; falls back to a
-standalone append when the forge plugin is not on sys.path.  Either way the
-output format is identical so verify_chain can read a mixed log.
+Writes through forge.security_events.write_event() — the one chain writer.
+No standalone fallback: its records lacked the keyed MAC, so a mixed log
+failed verify_chain (see ``_core_write_event``).
 """
 from __future__ import annotations
 
-try:
-    import fcntl
-except ImportError:  # Windows — POSIX advisory locks unavailable; degrade to no-op
-    import types as _types
-    fcntl = _types.SimpleNamespace(  # type: ignore[assignment]
-        LOCK_SH=1, LOCK_EX=2, LOCK_NB=4, LOCK_UN=8,
-        flock=lambda *a, **k: None, lockf=lambda *a, **k: None,
-    )
-import hashlib
-import json
 import os
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -63,82 +52,40 @@ def _audit_path(tenant_id: str = "_default") -> Path:
     return Path.home().joinpath(".corvin", *_tail)
 
 
-def _try_forge_write(event_type: str, *, tenant_id: str = "_default", **details: Any) -> bool:
+#: ``core/awpkg/awpkg/audit.py`` → parents[3] is the repo root; the core writer
+#: lives at ``<repo>/corvin_operator/forge/forge``. (This pointed at
+#: ``<repo>/forge`` — nonexistent — so wherever ``forge`` was not already
+#: importable every record went through a private standalone writer.)
+_FORGE_DIR = Path(__file__).resolve().parents[3] / "corvin_operator" / "forge"
+
+
+class AwpkgAuditUnavailable(RuntimeError):
+    """The core chain writer could not record an awpkg event."""
+
+
+def _core_write_event():
+    """``forge.security_events.write_event`` of this checkout, or raise.
+
+    There is deliberately NO standalone fallback any more: it wrote records
+    without the keyed ``mac`` (ADR-0137 M2) into THE tenant chain, and one such
+    record after a keyed one makes ``verify_chain`` fail (``mac_missing``) —
+    i.e. the ADR-0232 boot tripwire refuses to boot. A second chain format is
+    not a fallback, it is chain corruption.
+    """
+    if _FORGE_DIR.is_dir() and str(_FORGE_DIR) not in sys.path:
+        sys.path.insert(0, str(_FORGE_DIR))
+    bound = sys.modules.get("forge")
+    if bound is not None and getattr(bound, "__file__", None) is None \
+            and (_FORGE_DIR / "forge" / "__init__.py").is_file():
+        # Empty namespace binding (``corvin_operator/`` on sys.path): it can
+        # never resolve ``forge.security_events``; drop it.
+        del sys.modules["forge"]
     try:
-        forge_root = Path(__file__).resolve().parents[3] / "forge" / "forge"
-        if forge_root not in [Path(p) for p in sys.path]:
-            sys.path.insert(0, str(forge_root.parent))
         from forge.security_events import write_event  # type: ignore[import]
-        write_event(_audit_path(tenant_id), event_type, details=details)
-        return True
-    except Exception:
-        return False
-
-
-def _standalone_write(event_type: str, *, tenant_id: str = "_default", **details: Any) -> None:
-    path = _audit_path(tenant_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _SEVERITIES = {
-        "package.installed": "INFO",
-        "package.removed": "INFO",
-        "package.install_denied": "WARNING",
-        "package.inspect": "INFO",
-    }
-    severity = _SEVERITIES.get(event_type, "INFO")
-    with open(path, "a+b") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            prev_hash = ""
-            try:
-                # FND-18: read the TRUE last chain record. The old 4 KB-tail read
-                # missed the last line whenever the final record exceeded 4 KB →
-                # a wrong/empty prev_hash → a broken chain link. Walk all lines
-                # (the awpkg fallback chain is small) and keep the last valid hash.
-                fh.seek(0)
-                for line in fh.read().decode("utf-8", errors="replace").splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        prev_hash = json.loads(line).get("hash", prev_hash)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            # ADR-0129 — apply the metadata-only floor even on the forge-
-            # absent fallback path, so this writer can't bypass it. If forge
-            # is genuinely unimportable, inline a minimal denylist (fail-safe).
-            _det = details
-            try:
-                from forge.security_events import filter_audit_details as _fad  # type: ignore
-                _det, _ = _fad(details, event_type=event_type)
-            except Exception:  # noqa: BLE001 — forge truly absent: minimal floor
-                _bad = ("prompt", "output", "text", "secret", "password",
-                        "token", "credential", "email", "body", "content")
-                _det = {k: v for k, v in (details or {}).items()
-                        if str(k).lower() not in _bad}
-            record: dict[str, Any] = {
-                "ts": time.time(),
-                "event_type": str(event_type)[:128],
-                "severity": severity,
-                "run_id": "",
-                "tool": "",
-                "details": _det,
-                "prev_hash": prev_hash,
-            }
-            canonical = json.dumps(record, sort_keys=True, separators=(",", ":"))
-            record["hash"] = hashlib.sha256(
-                (prev_hash + "\n" + canonical).encode()
-            ).hexdigest()[:16]
-            fh.seek(0, 2)
-            fh.write((json.dumps(record, separators=(",", ":")) + "\n").encode("utf-8"))
-            # FND-18: durability parity with the forge writer — fsync so a crash
-            # after write() but before flush doesn't lose the event the unified
-            # chain assumes is present.
-            fh.flush()
-            os.fsync(fh.fileno())
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+    except Exception as exc:  # noqa: BLE001
+        raise AwpkgAuditUnavailable(
+            f"core audit writer not importable: {type(exc).__name__}") from exc
+    return write_event
 
 
 def emit(event_type: str, *, tenant_id: str = "_default", **details: Any) -> None:
@@ -151,6 +98,8 @@ def emit(event_type: str, *, tenant_id: str = "_default", **details: Any) -> Non
 
     Raises:
         ValueError: If tenant_id is invalid
+        AwpkgAuditUnavailable: If the core writer cannot be resolved — the
+            caller's action is not recorded, so it must not proceed silently.
     """
-    if not _try_forge_write(event_type, tenant_id=tenant_id, **details):
-        _standalone_write(event_type, tenant_id=tenant_id, **details)
+    write_event = _core_write_event()
+    write_event(_audit_path(tenant_id), event_type, details=details)

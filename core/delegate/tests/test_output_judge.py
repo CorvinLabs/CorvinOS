@@ -418,7 +418,7 @@ class AuditContractTests(unittest.TestCase):
 
     def _chain_lines(self) -> list[dict]:
         import json
-        path = Path(self._tmp) / "global" / "forge" / "audit.jsonl"
+        path = Path(self._tmp) / "tenants" / (os.environ.get("CORVIN_TENANT_ID") or "_default") / "global" / "forge" / "audit.jsonl"
         if not path.exists():
             return []
         return [

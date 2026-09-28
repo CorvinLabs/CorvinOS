@@ -84,6 +84,11 @@ class McpServerSpec:
     env: dict[str, str] = field(default_factory=dict)
 
 
+def _pythonpath(*entries: Path) -> str:
+    """``os.pathsep``-joined PYTHONPATH (``:`` is wrong on Windows)."""
+    return os.pathsep.join(str(e) for e in entries)
+
+
 def _forge_spec(persona: str, repo_root: Path) -> McpServerSpec:
     """Spec for the forge MCP server. Mirrors the cowork resolver."""
     return McpServerSpec(
@@ -104,9 +109,14 @@ def _forge_spec(persona: str, repo_root: Path) -> McpServerSpec:
             # delegate-MCP env; we forward to the forge-MCP env so
             # `tool.created` events carry the right persona.
             "CORVIN_CALLER_PERSONA": persona,
-            # PYTHONPATH so the spawned forge.py can import its own
-            # package modules.
-            "PYTHONPATH": str(repo_root / "corvin_operator" / "forge"),
+            # PYTHONPATH: repo root FIRST, then the forge package dir. forge
+            # imports ``corvin_operator.license`` (and ``corvin_operator.forge
+            # .forge.*`` through it); with only ``corvin_operator/forge`` on the
+            # path those resolved through whatever editable install the
+            # interpreter carries — a DIFFERENT checkout's license gate and a
+            # second copy of forge.
+            "PYTHONPATH": _pythonpath(
+                repo_root, repo_root / "corvin_operator" / "forge"),
         },
     )
 
@@ -120,9 +130,13 @@ def _skill_forge_spec(persona: str, repo_root: Path) -> McpServerSpec:
         env={
             "SKILL_FORGE_PERSONA": persona,
             "CORVIN_CALLER_PERSONA": persona,
-            "PYTHONPATH": (
-                f"{repo_root / 'operator' / 'skill-forge'}"
-                f":{repo_root / 'operator' / 'forge'}"
+            # ``operator/`` was renamed ``corvin_operator/``: the old entries
+            # named directories that do not exist, so ``-m skill_forge.
+            # mcp_server`` could not import from this checkout at all.
+            "PYTHONPATH": _pythonpath(
+                repo_root,
+                repo_root / "corvin_operator" / "skill-forge",
+                repo_root / "corvin_operator" / "forge",
             ),
         },
     )

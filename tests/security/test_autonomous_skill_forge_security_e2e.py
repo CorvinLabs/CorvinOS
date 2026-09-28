@@ -97,23 +97,6 @@ _trigger_detector_module = _load_module(
 )
 SkillLossTriggerDetector = _trigger_detector_module.SkillLossTriggerDetector
 LossTrigger = _trigger_detector_module.LossTrigger
-_audit_chain_validator_module = sys.modules[
-    "corvin_operator.skill_forge.autonomous.audit_chain_validator"
-]
-AuditChainValidator = _audit_chain_validator_module.AuditChainValidator
-
-
-def _hash_chain_events(raw_events: list) -> list:
-    """Attach valid hash/prev_hash fields to raw audit events using the
-    exact algorithm AuditChainValidator (Fix #1) verifies against."""
-    prev_hash = ""
-    chained = []
-    for event in raw_events:
-        event_hash = AuditChainValidator._compute_event_hash(event, prev_hash)
-        chained_event = {**event, "prev_hash": prev_hash, "hash": event_hash}
-        chained.append(chained_event)
-        prev_hash = event_hash
-    return chained
 
 
 # ============================================================================
@@ -218,51 +201,49 @@ async def test_01_audit_trail_tampering_injectable_loss_signals(temp_corvin_home
     audit_path = temp_corvin_home / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
     audit_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Write a legitimate event, then append a freshly forged one — both
-    # correctly hash-chained. This is the same residual Fix #1 documents in
-    # tests/security/test_adversarial_review_phase_7_9.py::
-    # test_loss_signal_injection_via_forged_audit_events: hash-chaining
-    # proves an append-only file wasn't retroactively edited, not who wrote
-    # a given append. An attacker with audit.jsonl write access can compute
-    # a valid next hash for a forged event exactly as legitimately as the
-    # real writer.
-    legit_event = {
-        "tenant_id": tenant_id,
-        "event_type": "skill_executed",
-        "skill_id": "os.delegation_router",
-        "version": "1.0.0",
-        "ts": time.time(),
-        "outcome_feedback": {"correct": True},
-    }
-    # ATTACK: Inject malicious event claiming skill failed (confidence → 0)
-    malicious_event = {
-        "tenant_id": tenant_id,
-        "event_type": "skill_executed",
-        "skill_id": "os.delegation_router",
-        "version": "1.0.0",
-        "ts": time.time() + 1,
-        "outcome_feedback": {"correct": False},  # Fake failure
-    }
-    with open(audit_path, "a") as f:
-        for event in _hash_chain_events([legit_event, malicious_event]):
-            f.write(json.dumps(event) + "\n")
+    # Round 4: the detector verifies with the CORE writer's ``verify_chain``,
+    # whose records carry a keyed MAC (ADR-0137 M2, anchor key). The legit
+    # record is written by the core writer; the forged one is appended by an
+    # attacker process that can run the writer code but does NOT hold the
+    # anchor key (its own key file) — its record hash-chains correctly and
+    # still fails the MAC, so the detector refuses the chain (fail-closed).
+    # Residual that remains: an attacker holding the anchor key itself.
+    import subprocess
+    import sys as _sys
+
+    forge_dir = _REPO / "corvin_operator" / "forge"
+    if str(forge_dir) not in _sys.path:
+        _sys.path.insert(0, str(forge_dir))
+    from forge import security_events as se
+
+    fields = frozenset({"skill_id", "version", "tenant_id", "outcome_feedback"})
+    se.register_event_allowlist("skill_executed", fields)
+    se.write_event(audit_path, "skill_executed", details={
+        "skill_id": "os.delegation_router", "version": "1.0.0", "tenant_id": tenant_id,
+        "outcome_feedback": {"correct": True}})
+    # ATTACK: forged "failure" appended by a key-less process.
+    forge_code = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(forge_dir)!r})\n"
+        "from pathlib import Path\n"
+        "from forge import security_events as se\n"
+        f"se.register_event_allowlist('skill_executed', frozenset({sorted(fields)!r}))\n"
+        f"se.write_event(Path({str(audit_path)!r}), 'skill_executed', details={{"
+        f"'skill_id': 'os.delegation_router', 'version': '1.0.0', 'tenant_id': {tenant_id!r}, "
+        "'outcome_feedback': {'correct': False}})\n"
+    )
+    env = dict(os.environ, CORVIN_AUDIT_ANCHOR_KEY=str(audit_path.parent / "attacker.key"))
+    r = subprocess.run([_sys.executable, "-c", forge_code], env=env,
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr[-2000:]
 
     detector = SkillLossTriggerDetector()
     with patch(
         "corvin_operator.skill_forge.autonomous.trigger_detector.tenant_audit_chain",
         return_value=audit_path,
     ):
-        triggers = detector.detect_loss_signals(tenant_id, lookback_hours=24)
-
-    # RESIDUAL (documented, not closed by Fix #1 — see comment above):
-    # a correctly-chained forged append is indistinguishable from a real
-    # one, so the detector still emits a trigger from it.
-    assert len(triggers) > 0, "Expected residual: forged-but-chained event still accepted"
-    assert triggers[0].confidence < 0.7, "Injected event lowered confidence"
-
-    print(f"[RESIDUAL] Audit tampering: freshly forged, validly-chained event accepted")
-    print(f"[IMPACT] Confidence lowered to {triggers[0].confidence:.2f} (threshold=0.70)")
-    print(f"[NOTE] Closing this needs per-writer signing, out of scope for the 6 CRITICAL fixes")
+        with pytest.raises(RuntimeError, match="integrity check failed"):
+            detector.detect_loss_signals(tenant_id, lookback_hours=24)
 
 
 # ============================================================================

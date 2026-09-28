@@ -211,3 +211,44 @@ def test_the_cli_error_retires_the_model_and_the_next_spawn_uses_the_successor(h
     second = list(ClaudeCodeEngine(binary=str(shim)).spawn("hi", model=RETIRED, streaming=True))
     assert any(e.type == "turn_completed" for e in second)
     assert _models_launched(log) == [RETIRED, SUCCESSOR]
+
+
+# ── adversarial review 2026-09-27 (round 4) ──────────────────────────
+
+
+def test_a_pin_absent_from_the_registry_is_not_upgraded_to_a_minor_version(home, monkeypatch):
+    """The dated-snapshot rule matched ANY ``<pin>-…`` registry id, so once
+    the curated YAML stopped listing ``claude-opus-5`` (not retired — no CLI
+    evidence) a pin to it resolved to ``claude-opus-5-5``: a silent upgrade of
+    the operator's explicit choice. Only an 8-digit date extends an id."""
+    import dataclasses
+    real = EM.load_registry()["claude_code"]
+    strip = [m for m in real.os_models if m.id != RETIRED]
+    strip_w = [m for m in real.worker_models if m.id != RETIRED]
+    spec = dataclasses.replace(real, os_models=strip, worker_models=strip_w)
+    monkeypatch.setattr(EM, "load_registry", lambda force_reload=False: {"claude_code": spec})
+    assert not ML.is_retired(RETIRED)
+    assert MS.resolve_registry_id(RETIRED, "claude_code") is None
+    assert _resolve("x", {"model": RETIRED}) == RETIRED
+    # the snapshot rule it exists for still works
+    assert MS.resolve_registry_id("claude-haiku-4-5", "claude_code") == "claude-haiku-4-5-20251001"
+
+
+def test_a_provider_qualified_model_never_reaches_the_cli(home, fake_cli):
+    """``delegate_task(model="anthropic/…")`` hands the id straight to
+    ``spawn()``; ``model_lineage.current`` keeps the prefix on a successor.
+    Both reached ``--model`` verbatim (404 model_not_found)."""
+    shim, log = fake_cli
+    list(ClaudeCodeEngine(binary=str(shim)).spawn("hi", model=f"anthropic/{SUCCESSOR}",
+                                                   streaming=True))
+    assert ML.mark_retired(RETIRED)
+    list(ClaudeCodeEngine(binary=str(shim)).spawn("hi", model=f"anthropic/{RETIRED}",
+                                                   streaming=True))
+    assert _models_launched(log) == [SUCCESSOR, SUCCESSOR]
+
+
+def test_a_bedrock_arn_is_passed_through_untouched():
+    from agents.claude_code import _current_model
+    arn = "arn:aws:bedrock:eu-central-1:123456789012:inference-profile/eu.anthropic.claude-opus-5"
+    assert _current_model(arn) == arn
+    assert _current_model("ollama/qwen3:8b") == "ollama/qwen3:8b"

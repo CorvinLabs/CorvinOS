@@ -106,10 +106,13 @@ def _atomic_write(path: Path, payload: dict) -> None:
 def _check_local_a2a_peer_quota() -> str | None:
     """Return an error message if the local a2a_peers_max limit is exceeded.
 
-    Counts existing origin JSON files in _origins_dir().  Tries to read the
-    limit from the active license; falls back to the free-tier default (0
-    peers allowed) when the validator cannot be imported.  Returns None when
-    adding one more peer is within the limit.
+    Counts existing origin JSON files in _origins_dir().  Reads the limit
+    from the active license.  When the validator cannot be imported or
+    resolve the limit, the pairing is REFUSED (fail-closed) — there is no
+    server-side backstop for ``--offline-pair``, so "the server enforces it"
+    was never true for that path (adversarial review 2026-09-27: this branch
+    returned None, i.e. unlimited peers, on any validator error).  Returns
+    None when adding one more peer is within the limit.
     """
     try:
         _lic_dir = _HERE.parents[2] / "license"
@@ -119,9 +122,11 @@ def _check_local_a2a_peer_quota() -> str | None:
         if not _v.is_loaded():
             _v.load_license_from_env()
         max_peers = _v.get_limit("a2a_peers_max")
-    except Exception:
-        # Validator unavailable — fail-open (server enforces authoritatively).
-        return None
+    except Exception as exc:  # noqa: BLE001 — fail-closed
+        return (
+            "a2a_peers_max: licence validator unavailable "
+            f"({type(exc).__name__}) — pairing refused (fail-closed)"
+        )
 
     if max_peers is None:
         return None  # no constraint

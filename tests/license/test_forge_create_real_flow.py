@@ -2,17 +2,15 @@
 
 Driven over HTTP through the real console router (see ``_license_console_sandbox``).
 
-What the product does today, and what ADR-0701 says it should do
------------------------------------------------------------------
+G3 on this route
+----------------
 ADR-0701's G3 row lists ``POST/PUT /skills/manual`` among the routes that carry
-``require_forge_capability`` and answer **HTTP 402** ``license_required``. They do
-not: ``routes/skills_manual.py`` has no licence dependency. A free-tier write is
-still refused — one layer down, by the G2 gate inside
-``SkillRegistry.create`` (``skill_forge/registry.py::_require_forge_create_licence``)
-— but that gate raises ``ValueError("license_required: …")``, which the route maps
-to **HTTP 400**. So the refusal is real (nothing is written) and the status code
-is wrong. The tests below pin the 400 and say why; when the route gains
-``Depends(require_forge_capability)`` they must change to ``assert_402_forge``.
+``require_forge_capability`` and answer **HTTP 402** ``license_required``. Until
+2026-09-27 they did not: the free-tier write was refused one layer down by the
+G2 gate inside ``SkillRegistry.create`` (``ValueError("license_required: …")``),
+which the route mapped to **HTTP 400**. The route now carries the G3 dependency,
+and a G2 refusal that still reaches the route (the tier changed between the two
+checks) is mapped to 402 as well.
 """
 from __future__ import annotations
 
@@ -22,7 +20,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _license_console_sandbox import console, member_tier  # noqa: E402
+from _license_console_sandbox import assert_402_forge, console, member_tier  # noqa: E402
 
 URL = "/v1/console/skills/manual"
 NAME = "assistant.real_flow"          # inside the console persona's namespace
@@ -40,11 +38,7 @@ def _skill_dir(con) -> Path:
 
 
 def _assert_licence_refusal(resp) -> None:
-    # 400, not 402 — see the module docstring (G3 dependency missing on this route).
-    assert resp.status_code == 400, (resp.status_code, resp.text)
-    detail = resp.json()["detail"]
-    assert detail.startswith("license_required:"), detail
-    assert "forge.create" in detail and "tier=free" in detail
+    assert_402_forge(resp)
 
 
 def test_free_tier_create_is_refused_and_nothing_is_written(con):
@@ -98,3 +92,20 @@ def test_post_without_csrf_is_403(con):
 def test_post_without_session_is_401(con):
     resp = con.anonymous().post(URL, json={"name": NAME, "body": BODY}, headers=con.h)
     assert resp.status_code == 401, resp.text
+
+
+def test_g2_refusal_behind_a_passed_g3_is_still_402(con):
+    """If G3 passed but the G2 registry gate refuses (tier changed in between),
+    the route answers 402 license_required — never a 400."""
+    from corvin_console.routes.license_gates import require_forge_capability
+    from corvin_console.deps import require_session
+
+    app = con.client.app
+    app.dependency_overrides[require_forge_capability] = require_session
+    try:
+        resp = con.client.post(URL, json={"name": NAME, "body": BODY}, headers=con.h)
+    finally:
+        app.dependency_overrides.pop(require_forge_capability, None)
+    assert resp.status_code == 402, (resp.status_code, resp.text)
+    assert resp.json()["detail"]["error"] == "license_required"
+    assert not _skill_dir(con).exists()

@@ -38,6 +38,7 @@ import importlib
 import os
 import re
 import sys
+import warnings
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -58,12 +59,12 @@ FLOOR_BY_DESIGN: dict[str, str] = {
     "tool.user_removed": "emitter passes the operator-chosen tool `name`",
     "forge.bwrap_unavailable": "emitter passes only free-text `error`",
     "secret.vault_malformed": "emitter passes only free-text `error`",
-    "tool.tamper_detected": "emitter passes only free-text `error`",
     "tool.created": "forge registry keys (sha, persona, caller_persona) are all on the floor already; "
                     "the event is the generic chain probe of ~16 test files",
     "tool.deleted": "same emitter and reason as tool.created",
     "tool.promoted": "same emitter and reason as tool.created",
     "worker.event_relayed": "a worker relays arbitrary registered events; no fixed field set",
+    "license.features_url_override": "emitter passes the operator-supplied `url` (may carry userinfo)",
 }
 
 _SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build",
@@ -180,6 +181,37 @@ def find_emitters(names: set[str]) -> dict[str, list[str]]:
     return found
 
 
+#: Writer callees whose first/second positional argument is an event name.
+_WRITER_CALLEES = {"write_event", "_write_event", "_log_security_event", "log_security_event",
+                   "audit_event", "_audit", "_emit", "emit_event"}
+_EVENT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$")
+
+
+def find_unregistered_emissions(severity: set[str]) -> dict[str, list[str]]:
+    """Heuristic: literal event names passed to a known writer callee that have
+    NO ``EVENT_SEVERITY`` entry (the writer defaults them to INFO and floors
+    their details). Informational — a literal scan cannot tell a
+    ``security_events`` writer from a same-named helper of another sink, so
+    it reports, it does not gate."""
+    found: dict[str, list[str]] = {}
+    for path in _py_sources():
+        try:
+            tree = ast.parse(path.read_text("utf-8", errors="ignore"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or _call_name(node) not in _WRITER_CALLEES:
+                continue
+            for arg in node.args[:2]:
+                v = arg.value if isinstance(arg, ast.Constant) else None
+                if (isinstance(v, str) and _EVENT_NAME_RE.match(v) and v not in severity
+                        and not v.endswith((".jsonl", ".json", ".py"))):
+                    rel = str(path.relative_to(REPO_ROOT))
+                    if rel not in found.setdefault(v, []):
+                        found[v].append(rel)
+    return found
+
+
 def runtime_registrations(se) -> tuple[dict[str, set[str]], list[str]]:
     """Import every runtime registrar; return (event → fields, import failures)."""
     recorded: dict[str, set[str]] = {}
@@ -221,7 +253,11 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--runtime", action="store_true",
                     help="also import runtime registrars and report static/runtime disagreement")
+    ap.add_argument("--list-unregistered", action="store_true",
+                    help="list every literal event name emitted without an EVENT_SEVERITY entry")
     args = ap.parse_args(argv)
+    # ast.parse of repo sources re-emits their invalid-escape SyntaxWarnings.
+    warnings.simplefilter("ignore", SyntaxWarning)
 
     try:
         se = load_registry()
@@ -259,6 +295,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  no emitter: {e}")
     for e in stale_design:
         print(f"  NOTE FLOOR_BY_DESIGN entry is stale (now allowlisted or unregistered): {e}")
+
+    unregistered = find_unregistered_emissions(set(severity))
+    print(f"\n  emitted with no EVENT_SEVERITY entry (heuristic, informational): {len(unregistered)}"
+          + ("" if args.list_unregistered else "  (--list-unregistered to show)"))
+    if args.list_unregistered:
+        for e in sorted(unregistered):
+            print(f"    {e}  ({', '.join(unregistered[e][:2])})")
 
     if args.runtime:
         recorded, failures = runtime_registrations(se)

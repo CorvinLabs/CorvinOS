@@ -87,14 +87,32 @@ def _workspace_env(root: Path) -> dict[str, str]:
     return env
 
 
+#: ADR-0701 G1: ``forge_tool`` / ``forge_promote`` are member-only and the
+#: gate runs for real in the server subprocess. The registry/runner behaviour
+#: these tests drive presupposes a licensed install, so the child's tier
+#: RESOLVER is pinned (the gate, matrix and audit run unmodified) — the same
+#: seam the in-process fixture in conftest.py uses. ``licence_tier="free"``
+#: exercises the refusal.
+_LAUNCH_WITH_TIER = (
+    "import runpy, sys\n"
+    "import corvin_operator.license.capability_api as _ca\n"
+    "_ca.active_tier = lambda **_k: {tier!r}\n"
+    "sys.argv = sys.argv[1:]\n"
+    "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+)
+
+
 class MCPClient:
     """Drives a forge.py mcp subprocess over stdio JSON-RPC."""
 
-    def __init__(self, root: Path, *, permission_mode: str = "yes") -> None:
+    def __init__(self, root: Path, *, permission_mode: str = "yes",
+                 licence_tier: str = "member") -> None:
         self.root = root
         self.proc = subprocess.Popen(
             [
                 sys.executable,
+                "-c",
+                _LAUNCH_WITH_TIER.format(tier=licence_tier),
                 str(ROOT / "forge.py"),
                 "--root",
                 str(root),

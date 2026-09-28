@@ -44,21 +44,32 @@ def create_mock_audit_file(
     tenant_id: str,
     events: list[dict],
 ) -> None:
-    """Write mock audit events to a JSON-lines file."""
-    # Chain the fixture in the detector's own format (the detector refuses an
-    # unchained file, fail-closed). NOTE: that format is NOT the core chain's
-    # — see test_real_core_chain_is_refused below.
-    from corvin_operator.skill_forge.autonomous.audit_chain_validator import (
-        AuditChainValidator,
-    )
+    """Write audit events through the REAL core writer.
+
+    Each fixture event becomes one ``forge.security_events.write_event`` record
+    (payload fields under ``details``, ``ts`` preserved), exactly the shape the
+    detector reads on a live install. The event's field set is registered the
+    way a real producer registers it (``register_event_allowlist``) — the core
+    floor is default-deny for unregistered fields.
+    """
+    se = _core_se()
     audit_path.parent.mkdir(parents=True, exist_ok=True)
-    prev = ""
-    with open(audit_path, "w") as f:
-        for event in events:
-            body = {k: v for k, v in event.items() if k not in ("hash", "prev_hash")}
-            h = AuditChainValidator._compute_event_hash(body, prev)
-            f.write(json.dumps({**body, "prev_hash": prev, "hash": h}) + "\n")
-            prev = h
+    if audit_path.exists():
+        audit_path.unlink()
+    for event in events:
+        body = {k: v for k, v in event.items()
+                if k not in ("hash", "prev_hash", "ts", "event_type")}
+        se.register_event_allowlist(event["event_type"], frozenset(body))
+        se.write_event(audit_path, event["event_type"], details=body, ts=event["ts"])
+
+
+def _core_se():
+    import sys as _sys
+    forge_dir = _skill_forge_ns.SKILL_FORGE_DIR.parent / "forge"
+    if str(forge_dir) not in _sys.path:
+        _sys.path.insert(0, str(forge_dir))
+    from forge import security_events as se
+    return se
 
 
 def create_skill_event(
@@ -238,13 +249,25 @@ def test_tenant_isolation():
             )
             events_other.append(event)
 
-        # Write both to the same file (simulating a shared audit log)
+        # One chain per tenant: the core writer REFUSES a record whose
+        # tenant_id is not the process tenant (AuditTenantMismatch), so a
+        # "shared log with two tenants" cannot be produced by the real writer.
+        import os as _os
         audit_path = temp_audit_dir / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
-        all_events = events_default + events_other
-        create_mock_audit_file(audit_path, "_default", all_events)
+        other_path = temp_audit_dir / "tenants" / "other_tenant" / "global" / "forge" / "audit.jsonl"
+        create_mock_audit_file(audit_path, "_default", events_default)
+        saved_tid = _os.environ.get("CORVIN_TENANT_ID")
+        _os.environ["CORVIN_TENANT_ID"] = "other_tenant"
+        try:
+            create_mock_audit_file(other_path, "other_tenant", events_other)
+        finally:
+            if saved_tid is None:
+                _os.environ.pop("CORVIN_TENANT_ID", None)
+            else:
+                _os.environ["CORVIN_TENANT_ID"] = saved_tid
 
         with patch.object(trigger_detector_module, "tenant_audit_chain") as mock_chain:
-            mock_chain.return_value = audit_path
+            mock_chain.side_effect = {"_default": audit_path, "other_tenant": other_path}.__getitem__
             with patch.object(trigger_detector_module, "validate_tenant_id") as mock_validate:
                 mock_validate.return_value = None
 
@@ -522,28 +545,36 @@ def test_empty_audit_file():
         check("empty_audit_file", ok)
 
 
-def test_real_core_chain_is_refused(tmp_path, monkeypatch):
-    """KNOWN DEFECT (cross-area, adversarial review 2026-09-27): the detector
-    validates with its own AuditChainValidator hash, which does not match
-    ``forge.security_events.write_event`` — so it refuses every REAL tenant
-    audit chain (fail-closed RuntimeError) and the cron loss loop can never
-    fire on a real install. It also reads ``skill_id``/``tenant_id``/
-    ``outcome_feedback`` at the top level of a record, where the core writer
-    puts none of them (they live under ``details``). This test pins the
-    current, fail-closed behaviour; it must be rewritten in the commit that
-    fixes the detector."""
-    import sys as _sys
-    forge_dir = _skill_forge_ns.SKILL_FORGE_DIR.parent / "forge"
-    if str(forge_dir) not in _sys.path:
-        _sys.path.insert(0, str(forge_dir))
-    from forge import security_events as se
-
+def test_real_core_chain_is_accepted_and_tampering_refused(tmp_path, monkeypatch):
+    """Round-4 fix: the detector verifies with the core writer's own
+    ``verify_chain`` and reads ``details`` — so a REAL tenant chain is accepted
+    (it used to be refused by a private hash scheme, pinned by the former
+    ``test_real_core_chain_is_refused``), and a tampered one is still refused."""
+    se = _core_se()
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
     from core.paths import tenant_audit_chain
     chain = tenant_audit_chain("_default")
+    now = datetime.utcnow().timestamp()
+    # A real registry record (no feedback) — must be accepted, not measured.
     se.write_event(chain, "skill.executed", severity="INFO",
                    details={"skill_id": "s", "tenant_id": "_default", "status": "error"})
+    # A producer-registered feedback record: 1 of 4 correct → 0.25.
+    se.register_event_allowlist(
+        "skill.feedback", frozenset({"skill_id", "skill_version", "tenant_id", "outcome_feedback"}))
+    for i in range(4):
+        se.write_event(chain, "skill.feedback", ts=now - 60 * (4 - i), details={
+            "skill_id": "os.x", "skill_version": "1.0.0", "tenant_id": "_default",
+            "outcome_feedback": {"correct": i == 0}})
     assert se.verify_chain(chain)[0]
+
+    triggers = SkillLossTriggerDetector().detect_loss_signals("_default")
+    assert [(t.skill_id, t.version) for t in triggers] == [("os.x", "1.0.0")]
+    assert abs(triggers[0].confidence - 0.25) < 1e-9
+    assert triggers[0].event_count == 4  # "s" had no feedback → no trigger
+
+    # Tamper one record in place → the chain no longer verifies → refused.
+    lines = chain.read_text("utf-8").splitlines()
+    lines[1] = lines[1].replace('"correct": true', '"correct": false')
+    chain.write_text("\n".join(lines) + "\n", "utf-8")
     with pytest.raises(RuntimeError, match="integrity check failed"):
         SkillLossTriggerDetector().detect_loss_signals("_default")
-

@@ -110,8 +110,11 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
         "turn_number",  # optional: turn index in session
     }),
     # Phase 4 — Console Plugin Integration (ADR-0366 + ADR-0299)
+    # ``title`` is operator/AI-typed free text → only its length enters the
+    # chain (round-4 review: a name or e-mail typed as a panel title was
+    # copied verbatim into the permanent GDPR Art. 30 trail).
     "console.panel_created": frozenset({
-        "panel_id", "title", "nav_group", "icon",
+        "panel_id", "title_len", "nav_group", "icon",
         "tenant_id", "sid_fingerprint",
         "created_by",  # "ai" | fingerprint of operator
     }),
@@ -181,7 +184,8 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
         "tenant_id",
         "engine_ok", "engine_id", "engine_action",
         "tts_ok", "tts_provider", "tts_action",
-        "stt_ok", "stt_provider", "warnings",
+        # ``warnings`` is free text (exception/probe messages) → count only.
+        "stt_ok", "stt_provider", "warning_count",
     }),
 }
 
@@ -529,7 +533,8 @@ def panel_created(
         tenant_id=tenant_id,
         details={
             "panel_id": panel_id,
-            "title": title,
+            # Length only — the title is free text (see the allowlist).
+            "title_len": len(title or ""),
             "nav_group": nav_group,
             "icon": icon,
             "tenant_id": tenant_id,

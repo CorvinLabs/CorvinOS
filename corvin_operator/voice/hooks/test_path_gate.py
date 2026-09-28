@@ -34,6 +34,12 @@ PASS = 0
 FAIL = 0
 
 
+def _tenant_chain(home) -> Path:
+    """THE tenant chain under *home* (path_gate writes there since round 4)."""
+    tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+    return Path(home) / "tenants" / tid / "global" / "forge" / "audit.jsonl"
+
+
 def t(label: str, ok: bool, *, detail: str = "") -> None:
     global PASS, FAIL
     suffix = f" — {detail}" if detail else ""
@@ -887,7 +893,7 @@ def main() -> int:
     # Fresh CORVIN_HOME for the subprocess case so the audit path is
     # isolated from the in-process check tests above.
     audit_home = tempfile.mkdtemp(prefix="path-gate-audit-")
-    audit_jsonl = Path(audit_home) / "global" / "forge" / "audit.jsonl"
+    audit_jsonl = _tenant_chain(audit_home)
     deny_payload = {
         "tool_name": "Write",
         "tool_input": {"file_path": f"{audit_home}/sessions/x/forge/tools/x.py",
@@ -961,7 +967,7 @@ def main() -> int:
       proc2.returncode == 0,
       detail=f"got {proc2.returncode}; stderr={proc2.stderr[:80]!r}")
     t("subprocess does NOT write audit on allow",
-      not (Path(audit_home2) / "global" / "forge" / "audit.jsonl").exists())
+      not _tenant_chain(audit_home2).exists())
 
     # ------------------------------------------------------------------
     # FIXED (2026-09-07 hardening): check() is fail-closed. A payload that
@@ -974,7 +980,7 @@ def main() -> int:
     # assertions pin that contract; the previous BUG-PIN pinned the crash.
     # ------------------------------------------------------------------
     crash_home = tempfile.mkdtemp(prefix="path-gate-crash-")
-    crash_audit_jsonl = Path(crash_home) / "global" / "forge" / "audit.jsonl"
+    crash_audit_jsonl = _tenant_chain(crash_home)
     # NUL byte in file_path makes Path.resolve() (inside _abs(), called from
     # is_protected_path <- check) raise ValueError, uncaught anywhere on the
     # path from main() down to _abs().
@@ -1025,7 +1031,7 @@ def main() -> int:
           detail=f"ok={ok} fails={fails!r}")
 
         # No audit event written when self-test passes.
-        audit_jsonl_self = Path(self_home) / "global" / "forge" / "audit.jsonl"
+        audit_jsonl_self = _tenant_chain(self_home)
         t("self_test: clean install does NOT write self_test_failed event",
           not audit_jsonl_self.exists()
           or "path_gate.self_test_failed" not in audit_jsonl_self.read_text())

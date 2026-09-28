@@ -8,7 +8,10 @@ on:
       - 'corvin_operator/bridges/shared/a2a_audit.py'
       - 'core/plugins/corvin_plugins/audit.py'
       - 'tests/security/test_audit_phase2_events.py'
+      - 'tests/security/test_audit_registry_round4.py'
+      - 'tests/security/test_anchor_key_relative_path.py'
       - 'scripts/verify_audit_event_completeness.py'
+      - '.github/workflows/audit-completeness.yml'
   push:
     branches:
       - main
@@ -18,7 +21,10 @@ on:
       - 'corvin_operator/bridges/shared/a2a_audit.py'
       - 'core/plugins/corvin_plugins/audit.py'
       - 'tests/security/test_audit_phase2_events.py'
+      - 'tests/security/test_audit_registry_round4.py'
+      - 'tests/security/test_anchor_key_relative_path.py'
       - 'scripts/verify_audit_event_completeness.py'
+      - '.github/workflows/audit-completeness.yml'
 
 jobs:
   audit-completeness:
@@ -50,9 +56,21 @@ jobs:
               body: '❌ Audit Completeness Check Failed\n\nThe EVENT_SEVERITY and _EVENT_ALLOWLIST registries are out of sync.\n\nRun `python3 scripts/verify_audit_event_completeness.py` locally to debug.',
             })
 
+      - name: Install pytest
+        if: success()
+        run: python3 -m pip install pytest
+
+      # These tests need only the stdlib + pytest. tests/conftest.py loads the
+      # console fixture plugin (FastAPI + the whole console package), which this
+      # job does not install, so it is blocked by name; the repo-root conftest
+      # still runs and sandboxes CORVIN_HOME / XDG_CONFIG_HOME / the anchor key.
       - name: Run audit tests
         if: success()
-        run: python3 -m pytest tests/security/test_audit_phase2_events.py -v
+        run: >-
+          python3 -m pytest -v -p no:tests.fixtures_console
+          tests/security/test_audit_phase2_events.py
+          tests/security/test_audit_registry_round4.py
+          tests/security/test_anchor_key_relative_path.py
 
   audit-coverage:
     name: Audit Event Coverage Report
@@ -68,26 +86,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Count registered events
-        run: |
-          python3 << 'EOF'
-          import re
-          from pathlib import Path
-
-          security_events_file = Path("corvin_operator/forge/forge/security_events.py")
-          with open(security_events_file) as f:
-              content = f.read()
-
-          # Count EVENT_SEVERITY entries
-          severity_match = re.search(r"EVENT_SEVERITY:\s*dict\[str,\s*str\]\s*=\s*\{(.*?)\n\}", content, re.DOTALL)
-          if severity_match:
-              events = re.findall(r'"([^"]+)":\s*"(INFO|WARNING|ERROR|CRITICAL)"', severity_match.group(1))
-              print(f"✅ Total events in EVENT_SEVERITY: {len(events)}")
-
-          # Count _EVENT_ALLOWLIST entries
-          allowlist_match = re.search(r"_EVENT_ALLOWLIST:\s*dict\[str,\s*frozenset\[str\]\]\s*=\s*\{(.*?)\n\}", content, re.DOTALL)
-          if allowlist_match:
-              events = re.findall(r'"([^"]+)":\s*frozenset', allowlist_match.group(1))
-              print(f"✅ Total events in _EVENT_ALLOWLIST: {len(events)}")
-              print(f"✅ Coverage: 100% (all events have allow-lists)")
-          EOF
+      # The measured numbers, from the same script the gate runs (it imports
+      # the registries as the writer sees them). This step used to regex the
+      # source and print a hard-coded "Coverage: 100%".
+      - name: Registry report
+        run: python3 scripts/verify_audit_event_completeness.py --list-unregistered

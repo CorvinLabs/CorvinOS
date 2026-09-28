@@ -4,29 +4,27 @@ The previous version of this file (and of the gate3/gate4 files) sent ``requests
 to a live service on ``localhost:8765``. Tests never talk to a running install;
 this drives the real console router in a scratch CORVIN_HOME instead.
 
-Where the endpoint actually lives
----------------------------------
-``routes/licensing_verify.py`` declares ``APIRouter(prefix="/v1/licensing")`` and
-``corvin_console/app.py`` includes it in the console router — which both hosts
-mount under ``/v1/console``. The reachable URL is therefore
-``/v1/console/v1/licensing/verify``; ``/v1/licensing/verify`` (the URL the old
-tests used) is not served by either host.
+Where the endpoint lives
+------------------------
+``routes/licensing_verify.py`` is included in the console router, which both
+hosts mount under ``/v1/console``: the URL is ``/v1/console/licensing/verify``.
+Until 2026-09-27 the router carried its own ``/v1/licensing`` prefix and was
+reachable only at the doubled ``/v1/console/v1/licensing/verify``.
 
-What it answers today (KNOWN BUG, pinned)
------------------------------------------
-``verify_capability`` passes ``tenant_id=tenant_id`` where no ``tenant_id`` is in
-scope (it never takes the session: ``session = None  # Placeholder``). The
-NameError is swallowed by its fail-closed ``except Exception`` and EVERY request
-— baseline capabilities, member tier, anything — answers
-``allowed: false, reason: "enforcement_unavailable", tier: "free"``. It fails
-closed, so nothing is over-granted, but the endpoint carries no information.
-The capability semantics it was meant to expose are tested directly against
-``require_capability`` in test_licensing_1_0_0_gate3_red_green.py.
+What it answers
+---------------
+Until 2026-09-27 ``verify_capability`` passed an undefined ``tenant_id`` (it
+never took the session); the NameError was swallowed by the fail-closed
+``except`` and EVERY request answered ``allowed: false, reason:
+"enforcement_unavailable"``. It now resolves the tenant from the session and
+answers the real decision; the body's ``tier`` is still never honoured.
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+
+from unittest import mock
 
 import pytest
 
@@ -35,7 +33,7 @@ from _license_console_sandbox import console, member_tier  # noqa: E402
 
 import corvin_operator.license.capability_api as capability_api  # noqa: E402
 
-VERIFY = "/v1/console/v1/licensing/verify"
+VERIFY = "/v1/console/licensing/verify"
 
 
 @pytest.fixture
@@ -44,10 +42,10 @@ def con(tmp_path):
         yield c
 
 
-def test_endpoint_is_only_reachable_under_the_doubled_prefix(con):
+def test_endpoint_is_served_under_the_console_prefix_only(con):
     body = {"capability": "chat.turns"}
     assert con.client.post("/v1/licensing/verify", json=body, headers=con.h).status_code == 404
-    assert con.client.post("/v1/console/licensing/verify", json=body, headers=con.h).status_code == 404
+    assert con.client.post("/v1/console/v1/licensing/verify", json=body, headers=con.h).status_code == 404
     assert con.client.post(VERIFY, json=body, headers=con.h).status_code == 200
 
 
@@ -66,26 +64,36 @@ def test_missing_capability_field_is_422(con):
     assert resp.status_code == 422, resp.text
 
 
-def test_every_answer_is_enforcement_unavailable_KNOWN_BUG(con):
-    """KNOWN BUG (module docstring): undefined ``tenant_id`` → fail-closed deny for
-    everything. When fixed, chat.turns must answer allowed=true on both tiers and
-    forge.create allowed=true only for the member."""
-    def ask(capability):
-        resp = con.client.post(VERIFY, json={"capability": capability}, headers=con.h)
-        assert resp.status_code == 200, resp.text
-        return resp.json()
+def _ask(con, capability, **extra):
+    resp = con.client.post(VERIFY, json={"capability": capability, **extra}, headers=con.h)
+    assert resp.status_code == 200, resp.text
+    return resp.json()
 
-    for capability in ("chat.turns", "compute.run", "forge.create", "a2a.network",
-                       "no.such.capability"):
-        free = ask(capability)
-        with member_tier():
-            member = ask(capability)
-        for data in (free, member):
-            assert data == {
-                "allowed": False, "capability": capability, "requested": 1,
-                "tier": "free", "quota_remaining": None,
-                "reason": "enforcement_unavailable", "upgrade_url": None,
-            }
+
+def test_answers_the_real_decision_per_tier(con):
+    """Was KNOWN BUG: every answer was enforcement_unavailable."""
+    assert _ask(con, "chat.turns") == {
+        "allowed": True, "capability": "chat.turns", "requested": 1, "tier": "free",
+        "quota_remaining": None, "reason": None, "upgrade_url": None,
+    }
+    free_forge = _ask(con, "forge.create")
+    assert free_forge["allowed"] is False and free_forge["tier"] == "free"
+    assert free_forge["reason"] == "not_available_in_tier"
+    assert _ask(con, "compute.run")["allowed"] is True           # free allowance 10
+    assert _ask(con, "compute.run", requested=11)["reason"] == "quota_exceeded"
+    assert _ask(con, "no.such.capability")["reason"] == "unknown_capability"
+    with member_tier():
+        for capability in ("forge.create", "a2a.network", "compute.run"):
+            data = _ask(con, capability, requested=10**9)
+            assert data["allowed"] is True and data["tier"] == "member", data
+            assert data["quota_remaining"] is None                # unlimited
+
+
+@pytest.mark.parametrize("requested", [0, -1])
+def test_non_positive_requested_is_422(con, requested):
+    resp = con.client.post(VERIFY, json={"capability": "compute.run", "requested": requested},
+                           headers=con.h)
+    assert resp.status_code == 422, resp.text
 
 
 def test_body_tier_field_cannot_elevate(con):
@@ -96,18 +104,37 @@ def test_body_tier_field_cannot_elevate(con):
     assert resp.json()["allowed"] is False and resp.json()["tier"] == "free"
 
 
-def test_capability_decisions_never_reach_the_audit_chain_KNOWN_BUG(con):
-    """KNOWN BUG: ``_audit_capability_decision`` imports ``forge.audit`` (no such
-    module) and treats ``tenant_audit_chain()`` (which returns a Path) as a writer,
-    then swallows the error. ``license.capability_decision`` is also absent from
-    EVENT_SEVERITY / _EVENT_ALLOWLIST. Denials — here a real 402 from G3 — leave no
-    decision record; only the route's own events land in the chain."""
+def test_capability_decisions_reach_the_tenant_audit_chain(con):
+    """Was KNOWN BUG: ``_audit_capability_decision`` imported ``forge.audit`` (no
+    such module) and swallowed the error — no decision was ever recorded. A G3
+    denial (402), a direct deny and a verify-endpoint allow are all on the chain."""
     resp = con.client.post("/v1/console/panels",
                            json={"id": "x", "title": "x", "html": "<p/>"}, headers=con.h)
     assert resp.status_code == 402
     with pytest.raises(capability_api.LicenseDenied):
         capability_api.require_capability("forge.create", tenant_id="_default",
                                           entry_point="test")
-    chain = con.audit_chain()
-    text = chain.read_text() if chain.exists() else ""
-    assert "license.capability_decision" not in text
+    _ask(con, "chat.turns")
+    decisions = [e for e in con.audit_events()
+                 if e.get("event_type") == "license.capability_decision"]
+    got = [(d["details"]["capability"], d["details"]["decision"], d["details"]["entry_point"])
+           for d in decisions]
+    assert got == [
+        ("forge.create", "deny", "console:routes:forge"),
+        ("forge.create", "deny", "test"),
+        ("chat.turns", "allow", "http:licensing_verify"),
+    ]
+    for d in decisions:
+        assert d["details"]["tenant_id"] == "_default" and d["details"]["tier"] == "free"
+        assert d.get("hash") and d["details"].get("lom_bound") is True
+
+
+def test_an_unrecorded_decision_does_not_change_the_verdict(con):
+    """A chain write that does not commit is logged, not turned into a deny:
+    write_event refuses records for a tenant other than the process tenant, so a
+    write-dependent grant would lock member tenants out (see require_capability)."""
+    with member_tier(), mock.patch.object(capability_api, "_audit_capability_decision",
+                                          return_value=False) as audit:
+        assert _ask(con, "forge.create")["allowed"] is True
+        assert _ask(con, "no.such.capability")["allowed"] is False
+    assert audit.call_count == 2

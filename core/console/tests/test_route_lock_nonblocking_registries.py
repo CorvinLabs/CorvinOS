@@ -111,15 +111,15 @@ def _console(tmp_path: Path):
         rec = _auth.create_session(tenant_id=TENANT, token_fingerprint="lock-test-fp")
         csrf = _auth.derive_csrf_token(rec.csrf_secret, rec.sid)
 
-        # These tests are about LOCKS, not licensing: the SkillForge registry's
-        # forge.create gate (ADR-0701) denies the free tier, which a test host
-        # is, so grant the capability for the sandbox's duration.
+        # These tests are about LOCKS, not licensing: forge.create (ADR-0701 —
+        # the G3 route dependency and the G2 registry gate) denies the free
+        # tier, which a test host is. Pin the tier RESOLVER to member so every
+        # gate runs unmodified and grants — patching ``require_capability``
+        # itself misses the G3 dependency, which bound the name at import.
         from unittest.mock import patch as _patch
         from corvin_operator.license import capability_api as _cap
 
-        _allow = _patch.object(_cap, "require_capability", lambda capability, requested=1, **_k: _cap.CapabilityDecision(
-            decision=_cap.Decision.ALLOW, tier=_cap.Tier.MEMBER, capability=capability,
-            requested=requested, allowed=requested))
+        _allow = _patch.object(_cap, "active_tier", lambda **_k: "member")
         _allow.start()
         _cleanups.append(_allow.stop)
 

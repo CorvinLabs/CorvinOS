@@ -328,7 +328,7 @@ class SandboxIntegrationTests(unittest.TestCase):
         )
         import json
         events = []
-        path = Path(self._tmp, "global", "forge", "audit.jsonl")
+        path = Path(self._tmp, "tenants", os.environ.get("CORVIN_TENANT_ID") or "_default", "global", "forge", "audit.jsonl")
         if path.exists():
             for line in path.read_text(encoding="utf-8").splitlines():
                 if line.strip():
@@ -353,7 +353,7 @@ class SandboxIntegrationTests(unittest.TestCase):
         )
         import json
         events = []
-        path = Path(self._tmp, "global", "forge", "audit.jsonl")
+        path = Path(self._tmp, "tenants", os.environ.get("CORVIN_TENANT_ID") or "_default", "global", "forge", "audit.jsonl")
         if path.exists():
             for line in path.read_text(encoding="utf-8").splitlines():
                 if line.strip():

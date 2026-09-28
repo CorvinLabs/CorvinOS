@@ -404,6 +404,19 @@ ARTIFACT_PIN_SCHEMA: dict[str, Any] = {
 }
 
 
+def _is_license_denied(exc: BaseException) -> bool:
+    """True iff ``exc`` is capability_api's ``LicenseDenied`` (a tier verdict).
+
+    Resolved lazily so an unimportable licensing module can never make this
+    check itself raise; anything else is an enforcement failure (fail-closed).
+    """
+    try:
+        from corvin_operator.license.capability_api import LicenseDenied
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(exc, LicenseDenied)
+
+
 class MCPServer:
     def __init__(
         self,
@@ -1693,29 +1706,42 @@ class MCPServer:
 
     def _call_forge_tool(self, msgid: Any, args: dict) -> None:
         # ADR-0701: License gate (G1) — require_capability("forge.create")
-        from corvin_operator.license.capability_api import (
-            require_capability, LicenseDenied
-        )
         tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
         try:
+            # Imported INSIDE the try: an ImportError is an enforcement
+            # failure and must reach the fail-closed branch below, not escape
+            # the tool call as an unhandled exception.
+            from corvin_operator.license.capability_api import (
+                Decision, require_capability,
+            )
             decision = require_capability(
                 "forge.create",
                 requested=1,
                 tenant_id=tenant_id,
                 entry_point="mcp:forge_tool"
             )
-            if not decision.allowed:
+            # The verdict is ``decision.decision``. ``decision.allowed`` is the
+            # tier LIMIT — ``None`` (unlimited) for the member tier — so the
+            # old ``if not decision.allowed`` refused every paying member
+            # (adversarial review 2026-09-27).
+            if decision.decision is not Decision.ALLOW:
                 self._tool_error(
                     msgid,
                     f"license_required: Forge is a member-only feature (upgrade at https://corvin-labs.com/upgrade)"
                 )
                 return
-        except (ImportError, LicenseDenied, Exception) as e:
-            # Fail-closed: deny on any enforcement error
+        except Exception as e:  # noqa: BLE001 — fail-closed on every path
+            if _is_license_denied(e):
+                self._tool_error(
+                    msgid,
+                    f"license_required: forge.create denied ({getattr(e, 'reason', 'denied')}) "
+                    "— Forge is a member-only feature (upgrade at https://corvin-labs.com/upgrade)"
+                )
+                return
             self._log_security_event(
                 "license.enforcement_unavailable",
                 tool="forge_tool",
-                details={"reason": str(e)},
+                details={"reason": type(e).__name__},
             )
             self._tool_error(msgid, f"license_enforcement_unavailable: {e}")
             return
@@ -1843,25 +1869,33 @@ class MCPServer:
 
     def _call_forge_promote(self, msgid: Any, args: dict) -> None:
         # ADR-0701: License gate (G1) — require_capability("forge.create")
-        from corvin_operator.license.capability_api import (
-            require_capability, LicenseDenied
-        )
         tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
         try:
+            from corvin_operator.license.capability_api import (
+                Decision, require_capability,
+            )
             decision = require_capability(
                 "forge.create",
                 requested=1,
                 tenant_id=tenant_id,
                 entry_point="mcp:forge_promote"
             )
-            if not decision.allowed:
+            # Verdict, not limit — see _call_forge_tool.
+            if decision.decision is not Decision.ALLOW:
                 self._tool_error(msgid, "license_required: Forge is a member-only feature")
                 return
-        except (ImportError, LicenseDenied, Exception) as e:
+        except Exception as e:  # noqa: BLE001 — fail-closed on every path
+            if _is_license_denied(e):
+                self._tool_error(
+                    msgid,
+                    f"license_required: forge.create denied ({getattr(e, 'reason', 'denied')}) "
+                    "— Forge is a member-only feature"
+                )
+                return
             self._log_security_event(
                 "license.enforcement_unavailable",
                 tool="forge_promote",
-                details={"reason": str(e)},
+                details={"reason": type(e).__name__},
             )
             self._tool_error(msgid, f"license_enforcement_unavailable: {e}")
             return

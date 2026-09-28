@@ -66,12 +66,22 @@ def _sandbox(tmp_path: Path):
 
         rec = _auth.create_session(tenant_id=tenant_id, token_fingerprint="test-fp")
         csrf = _auth.derive_csrf_token(rec.csrf_secret, rec.sid)
+        # Manual authoring is forge.create (ADR-0701 G3 route dependency + G2
+        # registry gate), member-only. These tests are about the registry
+        # contract, so the tier RESOLVER reports member; the gates run as is.
+        from unittest.mock import patch as _patch
+        from corvin_operator.license import capability_api as _cap
+        _tier = _patch.object(_cap, "active_tier", lambda **_k: "member")
+        _tier.start()
         app = FastAPI()
         app.include_router(router, prefix="/v1/console")
         client = TestClient(app, raise_server_exceptions=True)
         client.cookies.set("corvin_console_sid", rec.sid)
         client.headers.update({"X-CSRF-Token": csrf})
-        yield client, home, tenant_id
+        try:
+            yield client, home, tenant_id
+        finally:
+            _tier.stop()
     finally:
         for k, v in prev.items():
             if v is None:

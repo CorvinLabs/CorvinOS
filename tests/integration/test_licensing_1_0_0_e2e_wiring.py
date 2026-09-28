@@ -328,17 +328,23 @@ class TestQuotaCounterIntegration:
 
         ADR-0703 §2.2: daily pools reset at UTC 00:00:00.
         """
-        # This is a behavioral test; the actual reset happens in quota_counter.py
-        # We verify the contract: after midnight, counters start at 0
+        # Real behaviour, not datetime arithmetic: count on day D, then read the
+        # same feature/tenant with the clock on D+1 — the counter is keyed per
+        # UTC date, so it starts at 0. (The previous body only exercised
+        # ``datetime.replace`` and crashed on ``date.replace(hour=...)``.)
+        import tempfile
+        from pathlib import Path
+        from corvin_operator.license import quota_counter
 
-        # Mock: simulate a quota counter at 23:59:59, then at 00:00:00
-        now = datetime.utcnow()
-        almost_midnight = now.replace(hour=23, minute=59, second=59)
-        past_midnight = (now.date() + timedelta(days=1)).replace(hour=0, minute=0, second=0)
-
-        # Verify the boundary logic (conceptual check)
-        assert almost_midnight.date() != past_midnight.date(), \
-            "Quota reset boundary must be at calendar day boundary"
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            with patch.object(quota_counter, "_today_utc", return_value="2026-01-01"), \
+                    patch.object(quota_counter, "get_limit", return_value=5):
+                quota_counter.increment_and_check(home, "compute_units_per_day", "_default")
+                quota_counter.increment_and_check(home, "compute_units_per_day", "_default")
+                assert quota_counter.get_today_count(home, "compute_units_per_day", "_default") == 2
+            with patch.object(quota_counter, "_today_utc", return_value="2026-01-02"):
+                assert quota_counter.get_today_count(home, "compute_units_per_day", "_default") == 0
 
 
 class TestCapabilityMatrixConsistency:
@@ -402,17 +408,15 @@ class TestWiringEdgeCases:
             pytest.skip("operator.license module not available")
 
         with patch("corvin_operator.license.capability_api.active_tier", return_value="member"):
-            # Should not raise
-            try:
-                result = require_capability(
+            # A quantity must be a positive integer; 0 used to pass
+            # ``limit >= requested`` and be ALLOWED on every finite tier.
+            with pytest.raises(ValueError, match="positive integer"):
+                require_capability(
                     capability="compute.run",
                     requested=0,  # Edge case: zero
                     tenant_id="_default",
                     entry_point="test:0"
                 )
-            except Exception as e:
-                # Either allow it or explicitly reject it; don't crash
-                pytest.skip(f"Edge case handling: {e}")
 
 
 @pytest.mark.high_risk

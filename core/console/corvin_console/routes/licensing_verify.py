@@ -1,6 +1,10 @@
 """Licensing Verification Endpoint (ADR-0700/0703)
 
-POST /v1/licensing/verify — Capability verification for E2E testing and client-side checks.
+POST /v1/console/licensing/verify — Capability verification for E2E testing and
+client-side checks. (The router is included in the console router, which both
+hosts mount under ``/v1/console``; until 2026-09-27 it carried its own
+``/v1/licensing`` prefix and was therefore only reachable at the doubled
+``/v1/console/v1/licensing/verify``.)
 
 This endpoint is **NOT** the enforcement gate; enforcement happens at each chokepoint
 via require_capability(). This endpoint is for:
@@ -19,18 +23,27 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from fastapi import Depends
-from ..deps import require_session_csrf_on_mutation
+from ..auth import SessionRecord
+from ..deps import require_session, require_session_csrf_on_mutation
 
+# The canonical package path — the one license_gates.py and every G-gate use.
+# The bare ``license.capability_api`` is a SECOND module instance (own
+# LicenseDenied class, own tier resolver) and is not importable at all on the
+# shipped hosts, whose PYTHONPATH does not carry ``corvin_operator/``.
 try:
-    from license.capability_api import require_capability, LicenseDenied, Decision
+    from corvin_operator.license.capability_api import (
+        require_capability, LicenseDenied, Decision,
+    )
 except ImportError:
-    LicenseDenied = Exception
+    class LicenseDenied(Exception):  # type: ignore[no-redef]
+        """Placeholder so the ``except`` clause below stays valid."""
+
     def require_capability(*a, **k):
         raise RuntimeError("Licensing API unavailable")
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/v1/licensing", tags=["licensing"])
+router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/licensing", tags=["licensing"])
 
 
 # ============================================================================
@@ -62,7 +75,7 @@ class VerifyResponse(BaseModel):
 @router.post("/verify", response_model=VerifyResponse)
 async def verify_capability(
     req: VerifyRequest,
-    session = None,  # Placeholder for require_session
+    rec: SessionRecord = Depends(require_session),
 ) -> VerifyResponse:
     """Verify if a capability is available for the current tier.
 
@@ -74,7 +87,7 @@ async def verify_capability(
     Request body:
         capability: str — e.g. "compute.run", "forge.create", "a2a.network"
         requested: int — quantity (default: 1)
-        tier: str — optional; override tier for testing (for authenticated users only)
+        tier: str — IGNORED; the tier always comes from the installed licence
 
     Response:
         {
@@ -88,19 +101,24 @@ async def verify_capability(
         }
     
     Status codes:
-        200 OK — decision made (allowed or denied)
-        402 Payment Required — same as 200; included for HTTP spec compliance
-        400 Bad Request — invalid request
-        500 Server Error — enforcement unavailable (fail-closed: deny)
+        200 OK — decision made (allowed or denied; a denial is ``allowed: false``)
+        401 / 403 — no session / missing CSRF token
+        422 Unprocessable — malformed body or ``requested < 1``
+        Enforcement failure answers 200 with ``reason: enforcement_unavailable``
+        (fail-closed: deny).
     """
+    if req.requested < 1:
+        raise HTTPException(status_code=422, detail="requested must be a positive integer")
     try:
-        # TODO: If tier is provided, use mock credential for testing.
-        # Otherwise, resolve from active credential.
+        # The tier ALWAYS comes from the licence; ``req.tier`` is ignored.
+        # The tenant comes from the authenticated session — until 2026-09-27
+        # this read an undefined ``tenant_id`` and the swallowed NameError
+        # answered "enforcement_unavailable" for every request.
         decision = require_capability(
             capability=req.capability,
             requested=req.requested,
-            tenant_id=tenant_id,
-            entry_point=f"verify_endpoint:{__name__}:68"
+            tenant_id=rec.tenant_id,
+            entry_point="http:licensing_verify",
         )
         
         response = VerifyResponse(
@@ -124,7 +142,7 @@ async def verify_capability(
             allowed=False,
             capability=req.capability,
             requested=req.requested,
-            tier=getattr(e, 'tier', 'unknown'),
+            tier=getattr(getattr(e, "tier", None), "value", "free"),
             reason=e.reason,
             upgrade_url=e.upgrade_url
         )

@@ -40,17 +40,6 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-# ADR-0701 G5: License gate for forge quota
-try:
-    from corvin_operator.license.capability_api import require_capability, LicenseDenied
-except ImportError:
-    # Fallback for testing without license module
-    def require_capability(*args, **kwargs):
-        pass
-    class LicenseDenied(Exception):
-        pass
-
-
 def _ensure_operator_on_path() -> None:
     """Make ``corvin_operator/`` importable as bare top-level packages. Idempotent."""
     # Wheel install: the operator subtrees are vendored under
@@ -114,15 +103,33 @@ def check_forge_capability(
     tenant_id: str,
     entry_point: str = "orchestration",
 ) -> None:
-    """ADR-0701 G5: License gate for forge-related quotas.
+    """ADR-0701 G5: License gate for forge-related quotas — FAIL-CLOSED.
 
     Enforces forge.create capability (member-only) before allowing forge operations.
-    Raises LicenseDenied if capability is not available.
+
+    Raises:
+        LicenseDenied: the tier does not grant ``forge.create`` (incl. an
+            invalid tenant, ``reason="invalid_tenant"``).
+        PermissionError: the licensing module cannot be imported, or it
+            returned anything but an ALLOW verdict.
+
+    Adversarial review 2026-09-27: an ImportError used to bind a no-op gate,
+    and an invalid tenant came back as a RETURNED non-allow verdict that this
+    function ignored — both admitted the free tier.
     """
     try:
-        require_capability("forge.create", requested=1, tenant_id=tenant_id, entry_point=entry_point)
-    except LicenseDenied as e:
-        raise e
+        from corvin_operator.license.capability_api import (
+            Decision, require_capability,
+        )
+    except ImportError as exc:
+        raise PermissionError(
+            "forge.create denied: licensing module unavailable (fail-closed)"
+        ) from exc
+    decision = require_capability(
+        "forge.create", requested=1, tenant_id=tenant_id, entry_point=entry_point,
+    )
+    if getattr(decision, "decision", None) is not Decision.ALLOW:
+        raise PermissionError("forge.create denied: no allow verdict")
 
 
 def get_today_count(

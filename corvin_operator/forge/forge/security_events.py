@@ -1248,6 +1248,27 @@ EVENT_SEVERITY: dict[str, str] = {
     "snapshot_restore_failed": "WARNING",
     "decision.dialectical": "INFO",
     "dialectic.rate_limited": "WARNING",
+    # Adversarial review round 4 (2026-09-27): events the Forge MCP server and
+    # the license capability API emit that were in neither registry — they
+    # defaulted to INFO and fell to the vocabulary floor with no per-event
+    # contract. corvin_operator/forge/forge/mcp_server.py (compute / fabric /
+    # datasource license gates, compute permit, forge license gate, TEB).
+    "compute.license.checked":        "INFO",
+    "compute.license.denied":         "WARNING",
+    "compute.license.fabric_checked": "INFO",
+    "compute.license.fabric_denied":  "WARNING",
+    "compute.license.gate_error":     "WARNING",
+    "compute.permit.server_error":    "WARNING",
+    "compute.permit.fail_closed":     "WARNING",
+    "datasource.connected":           "INFO",
+    "datasource.license_denied":      "WARNING",
+    "license.enforcement_unavailable": "WARNING",
+    "license.capability_decision":    "INFO",
+    "teb.path_gate.denied":           "WARNING",
+    # corvin_operator/voice/hooks/path_gate.py::run_self_test (boot canary)
+    "path_gate.self_test_failed":     "CRITICAL",
+    # corvin_operator/license/cli.py::_audit_features_url_override
+    "license.features_url_override":  "WARNING",
     # Adversarial review round 2 (2026-09-27): events that had a positive
     # allowlist but no severity (the writer defaulted them to INFO).
     "a2a.manifest_cache_sig_invalid": "WARNING",
@@ -1430,6 +1451,23 @@ def _anchor_key_path() -> Path:
             else Path(os.path.expanduser("~/.config/corvin-voice/audit_anchor.key")))
 
 
+def _anchor_key_env_relative() -> str | None:
+    """The ``CORVIN_AUDIT_ANCHOR_KEY`` value when it is a RELATIVE path, else None.
+
+    A relative value resolves against whatever directory the process happens
+    to run in: a test run from the repo root minted a 32-byte anchor key (plus
+    ``chain_ids/``, ``chain_tails/``, ``mac_active_chains/`` and the MAC
+    sentinel) in the repository itself, and two processes with different cwds
+    would MAC one chain with two different keys. It is refused exactly like an
+    insecure-mode key: no key is created or read, no out-of-tree marker is
+    written, a CRITICAL log names the fix, and ``verify_chain`` reports
+    ``anchor_key_relative_path`` so the boot tripwire fails closed."""
+    env = os.environ.get("CORVIN_AUDIT_ANCHOR_KEY", "").strip()
+    if env and not Path(env).expanduser().is_absolute():
+        return env
+    return None
+
+
 def _anchor_key() -> bytes | None:
     """ADR-0137 M2: load/create the audit-chain MAC key, stored OUTSIDE the
     audit directory (``~/.config/corvin-voice/audit_anchor.key``, mode 0600, or
@@ -1442,6 +1480,22 @@ def _anchor_key() -> bytes | None:
     if _ANCHOR_KEY_LOADED:
         return _ANCHOR_KEY
     key: bytes | None = None
+    rel = _anchor_key_env_relative()
+    if rel is not None:
+        reason = "relative_path"
+        if _ANCHOR_KEY_REFUSED != reason:
+            try:
+                import logging as _lg
+                _lg.getLogger("corvin.audit").critical(
+                    "audit anchor key refused: CORVIN_AUDIT_ANCHOR_KEY=%r is a "
+                    "relative path (it would resolve against the working "
+                    "directory) — set an absolute path", rel,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        _ANCHOR_KEY_REFUSED = reason
+        _ANCHOR_KEY = None
+        return None
     try:
         kp = _anchor_key_path()
         if not kp.exists():
@@ -1526,6 +1580,9 @@ def _skip_out_of_tree_markers(chain_path: Path) -> bool:
     267k files / 1.1 GB. Markers are still written when the anchor key itself
     is in a tmp dir (a test that redirected CORVIN_AUDIT_ANCHOR_KEY), because
     then nothing real is littered and the strip detector stays testable."""
+    if _anchor_key_env_relative() is not None:
+        # The marker directory would be the process's cwd — never write there.
+        return True
     return _is_tmp_path(chain_path) and not _is_tmp_path(_anchor_key_path().parent)
 
 
@@ -4241,6 +4298,37 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # corvin_operator/bridges/shared/dialectic.py (registered at import)
     "decision.dialectical": frozenset({"audit_ref", "channel_id", "choice", "corrected", "decision_id", "heat", "mode", "persona", "reason", "site", "synthesis_len", "synthesis_sha256", "tenant_id", "why_len", "why_sha256"}),
     "dialectic.rate_limited": frozenset({"active_mode", "audit_ref", "cap", "channel_id", "persona", "site", "tenant_id", "window_s"}),
+    # Adversarial review round 4 (2026-09-27) — see the EVENT_SEVERITY block of
+    # the same date. Fields are exactly what the emitters pass: the compute
+    # gate's ``ComputeAccess.as_audit_dict()`` (booleans, closed mode/tier
+    # enums, a fixed reason string, a count); free-text ``error``/``reason``
+    # stay PII-scanned on every event type (_AUDIT_FREETEXT_KEYS).
+    **{
+        _et: frozenset({"allowed", "mode", "tier", "reason", "fabric_allowed", "trial_remaining"})
+        for _et in ("compute.license.checked", "compute.license.denied",
+                    "compute.license.fabric_checked", "compute.license.fabric_denied")
+    },
+    "compute.license.gate_error": frozenset({"error", "surface"}),
+    "compute.permit.server_error": frozenset({"error"}),
+    "compute.permit.fail_closed": frozenset({"reason"}),
+    # adapter is a closed adapter id; name is the manifest's connection name
+    # (already allowlisted on datasource.registered).
+    "datasource.connected": frozenset({"adapter", "name"}),
+    "datasource.license_denied": frozenset({"adapter"}),
+    "license.enforcement_unavailable": frozenset({"reason"}),
+    # corvin_operator/license/capability_api.py::_emit_capability_audit
+    "license.capability_decision": frozenset({
+        "capability", "tier", "decision", "reason", "requested", "allowed",
+        "entry_point", "lom", "tenant_id",
+    }),
+    # reason is the TEB path-gate verdict: a protected leaf name or directory
+    # segment from a fixed list, plus the tool name and argument KEY — never
+    # the argument value (the denied path itself).
+    "teb.path_gate.denied": frozenset({"reason", "engine_id"}),
+    # The runner's TamperError text: tool name + two 16-hex sha prefixes.
+    "tool.tamper_detected": frozenset({"error"}),
+    # Fixed self-test vector LABELS (never the probed payloads) + a count.
+    "path_gate.self_test_failed": frozenset({"failure_count", "first_failures"}),
 }
 
 #: Adversarial review round 2 (2026-09-27): fields that a module registers at
@@ -5778,7 +5866,13 @@ def verify_chain(path: Path, *, initial_prev: str = "",
 
     # F-A14: a present-but-refused anchor key is a broken anchor, not an
     # absent one — surface it so the boot tripwire fails closed.
-    if _ANCHOR_KEY_REFUSED and _anchor_key_path().exists():
+    _rel_key = _anchor_key_env_relative()
+    if _rel_key is not None:
+        _anchor_key()  # emits the CRITICAL log once and records the refusal
+        problems.append({"issue": "anchor_key_relative_path",
+                         "detail": "CORVIN_AUDIT_ANCHOR_KEY is a relative path "
+                                   f"({_rel_key!r}); set an absolute path"})
+    elif _ANCHOR_KEY_REFUSED and _anchor_key_path().exists():
         problems.append({"issue": "anchor_key_insecure_mode",
                          "detail": f"anchor key refused ({_ANCHOR_KEY_REFUSED}); "
                                    f"chmod 600 {_anchor_key_path()}"})
@@ -5812,8 +5906,8 @@ def verify_chain_incremental(path: Path, *,
       or a different ``CORVIN_AUDIT_VERIFY_NO_KEY_OK`` all force a full walk.
     * The memoised problems are the prefix's LINE-NUMBERED ones. Current-state
       problems (``tail_truncated``, ``chain_replaced``, ``records_prepended``,
-      ``unanchored_genesis``, ``mac_stripped_chain``, ``anchor_key_insecure_mode``)
-      are never memoised: :func:`verify_chain` recomputes them after every walk,
+      ``unanchored_genesis``, ``mac_stripped_chain``, ``anchor_key_insecure_mode``,
+      ``anchor_key_relative_path``) are never memoised: :func:`verify_chain` recomputes them after every walk,
       resumed or not, from the out-of-tree anchors.
     """
     p = Path(path)

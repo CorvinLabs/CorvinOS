@@ -255,7 +255,7 @@ unchanged need not be re-walked:
 | Holds | prefix byte length + line count, **SHA-256 of the prefix bytes**, the walk's loop-carried state (chain position, MAC-epoch flags, tail window) and the prefix's LINE-NUMBERED problems |
 | Admitted only if | the prefix bytes are re-hashed **in the same call** and match `digest`, the witness MAC verifies under the current anchor key, the recorded path/`initial_prev`/`CORVIN_AUDIT_VERIFY_NO_KEY_OK` match, and the file is at least as long as the prefix |
 | Otherwise | **full walk** — missing, unreadable, malformed, wrong version, bad MAC, rotated/absent/refused key, shorter file, any digest mismatch |
-| Never memoised | current-state problems (`tail_truncated`, `chain_replaced`, `records_prepended`, `unanchored_genesis`, `mac_stripped_chain`, `anchor_key_insecure_mode`) — recomputed from the out-of-tree anchors after every walk |
+| Never memoised | current-state problems (`tail_truncated`, `chain_replaced`, `records_prepended`, `unanchored_genesis`, `mac_stripped_chain`, `anchor_key_insecure_mode`, `anchor_key_relative_path`) — recomputed from the out-of-tree anchors after every walk |
 | Used by | `tripwire._verify_chain` (the boot path) only, via `audit.verify_audit_incremental()` |
 | NOT used by | `security_events.verify_chain()` — `voice-audit verify`, `verify --all` and the daily `corvin-audit-verify.service` stay unconditional full walks |
 
