@@ -802,7 +802,7 @@ class TestIncidentDetection:
         """Audit chain break detected"""
         detector = IncidentDetector()
         incidents = detector.detect_incidents(
-            {"audit_chain_verified": False},
+            {"audit_chain_verified": False, "tenant_isolation_verified": True},
         )
 
         # Only the measured signal raises an incident: an absent confidence
@@ -810,9 +810,21 @@ class TestIncidentDetection:
         assert [i.incident_type for i in incidents] == [IncidentType.AUDIT_CHAIN_BREAK]
         assert incidents[0].severity == IncidentSeverity.CRITICAL
 
-    def test_unmeasured_metrics_raise_no_incident(self):
+    def test_unmeasured_metrics_raise_only_verification_incidents(self):
+        """An absent PERFORMANCE metric is not an incident; an absent
+        VERIFICATION (audit chain / tenant isolation) is "not verified" and
+        must raise — it used to default to True and raise nothing."""
         detector = IncidentDetector()
-        assert detector.detect_incidents({}) == []
+        incidents = detector.detect_incidents({})
+        assert sorted(i.incident_type.value for i in incidents) == sorted([
+            IncidentType.AUDIT_CHAIN_BREAK.value, IncidentType.TENANT_ISOLATION_VIOLATION.value,
+        ])
+        assert all(i.severity == IncidentSeverity.CRITICAL for i in incidents)
+        assert all(i.details["measured"] is False for i in incidents)
+        assert all("not measured" in i.message for i in incidents)
+        assert detector.detect_incidents(
+            {"audit_chain_verified": True, "tenant_isolation_verified": True}
+        ) == []
 
 
 if __name__ == "__main__":

@@ -189,7 +189,11 @@ class TestBootstrapScaffold(unittest.TestCase):
 
     def test_bootstrap_with_different_plugin_types(self) -> None:
         """Test bootstrap with different plugin types."""
-        for plugin_type in ["data_connector", "provider", "skill", "mcp_server"]:
+        # The scaffold config's accepted set (``PluginScaffoldConfig.validate``);
+        # the old list used names ("provider", "skill", "mcp_server") that the
+        # validator has refused since the enhanced scaffolder landed.
+        for plugin_type in ["data_connector", "provider_plugin", "skill_plugin",
+                            "integration"]:
             with self.subTest(plugin_type=plugin_type):
                 temp_dir = tempfile.TemporaryDirectory()
                 try:
@@ -203,6 +207,13 @@ class TestBootstrapScaffold(unittest.TestCase):
                     self.assertGreater(len(files), 0)
                 finally:
                     temp_dir.cleanup()
+
+    def test_bootstrap_refuses_an_unknown_plugin_type(self) -> None:
+        """An unknown type is refused, never scaffolded under a guessed layout."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                bootstrap_scaffold(output_dir=tmp, plugin_id="test.mcp",
+                                   plugin_name="Test mcp", plugin_type="mcp_server")
 
 
 if __name__ == "__main__":

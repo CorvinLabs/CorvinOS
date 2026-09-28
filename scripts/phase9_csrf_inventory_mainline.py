@@ -10,7 +10,13 @@ from pathlib import Path
 from collections import defaultdict
 
 # Configuration
-REPO_ROOT = Path("/home/shumway/projects/CorvinOS")
+REPO_ROOT = Path(__file__).resolve().parents[1]  # this checkout, never a hard-wired live tree
+
+
+def _set_repo_root(path: Path) -> None:
+    global REPO_ROOT
+    REPO_ROOT = Path(path).resolve()
+
 MUTATION_METHODS = ["post", "put", "delete", "patch"]
 CSRF_PATTERNS = [
     r"@require_csrf",
@@ -102,7 +108,9 @@ def scan_all_files():
 
     for py_file in REPO_ROOT.rglob("*.py"):
         # Skip excluded paths
-        if should_skip(py_file):
+        # Relative to the scanned root: an absolute path made a checkout that
+        # itself lives under ``.claude/worktrees/`` scan nothing (fail-open).
+        if should_skip("/" + py_file.relative_to(REPO_ROOT).as_posix()):
             continue
 
         total_scanned += 1
@@ -121,6 +129,15 @@ def scan_all_files():
     return vulnerable, protected, skipped, total_scanned
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[1] if __doc__ else None)
+    parser.add_argument("--repo-root", type=Path, default=REPO_ROOT,
+                        help="checkout to scan (default: the checkout this script lives in)")
+    parser.add_argument("--output", type=Path, default=None,
+                        help="write the TODO list to this file (default: write nothing; "
+                             "the repo root is never written)")
+    args = parser.parse_args()
+    _set_repo_root(args.repo_root)
     print("\n🔍 PHASE 1: CSRF Protection Inventory (MAINLINE ONLY)\n")
     print(f"Scanning repository: {REPO_ROOT}")
     print("(Excluding .claude/worktrees and other non-mainline paths)")
@@ -141,8 +158,12 @@ def main():
     print(f"  Total mutation endpoints: {total_protected + total_skipped + total_vulnerable}")
 
     # Generate TODO list
-    output_file = REPO_ROOT / "TODO_CSRF_ENDPOINTS.txt"
-    with open(output_file, 'w') as f:
+    # The TODO list used to be written to <live repo root>/TODO_CSRF_ENDPOINTS.txt
+    # (a stray root file). It is written only where the operator asks.
+    output_file = args.output
+    if output_file is None:
+        print("\n(no --output given: TODO list not written)")
+    with (open(output_file, 'w') if output_file is not None else open(os.devnull, 'w')) as f:
         f.write("CSRF PROTECTION TODO LIST (MAINLINE)\n")
         f.write("=" * 80 + "\n")
         f.write(f"Generated: {__import__('datetime').datetime.now().isoformat()}\n")
@@ -163,7 +184,8 @@ def main():
 
             f.write("\n")
 
-    print(f"\n✅ Inventory saved to: {output_file}")
+    if output_file is not None:
+        print(f"\n✅ Inventory saved to: {output_file}")
 
     # Print summary by directory
     print("\n📁 BREAKDOWN BY DIRECTORY:\n")
@@ -195,7 +217,7 @@ def main():
 
     print("=" * 80)
     print("\n✅ Phase 1 Complete!\n")
-    print(f"Next: Review TODO_CSRF_ENDPOINTS.txt and run Phase 2 (bulk fix script)\n")
+    print("Note: the phase9 bulk fixers are defused (they import a module that does not exist).\n")
 
 if __name__ == "__main__":
     main()

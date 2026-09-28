@@ -57,8 +57,10 @@ def _grant(home: Path, sid: str) -> None:
     from core.compliance import consent_store
     from corvin_console import auth as _auth
 
+    from core.compliance.consent import consent_subject
+
     consent_store.get_consent_store("_default", corvin_home=home).grant_consent(
-        user_id=_auth.load_session(sid).sid_fingerprint,
+        user_id=consent_subject(_auth.load_session(sid)),
         scope="control_plane_override_operations")
 
 

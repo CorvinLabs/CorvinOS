@@ -358,9 +358,18 @@ def test_command_cancel_does_not_clobber_a_session_started_during_its_own_window
         new_session_holder = {}
 
         real_get = session_store.get
+        # Signalled once command() has READ the session, so the concurrent
+        # start lands inside the get()-to-clear() window deterministically.
+        # A fixed 10 ms head start assumed command() reaches get() within
+        # 10 ms; the licence gate (a real, audited require_capability) runs
+        # first, and when it took longer the new session was started BEFORE
+        # the read — a cancel that legitimately cancels it — and the test
+        # failed intermittently.
+        got = threading.Event()
 
         def widened_get(*a, **kw):
             result = real_get(*a, **kw)
+            got.set()
             time.sleep(0.05)  # widen command()'s internal get()-to-clear() gap
             return result
 
@@ -370,7 +379,7 @@ def test_command_cancel_does_not_clobber_a_session_started_during_its_own_window
             turn.command("cancel", tenant_id=tenant_id, session_key=key)
 
         def concurrent_new_start():
-            time.sleep(0.01)  # land inside the widened window above
+            assert got.wait(10), "command() never read the session"
             new_session_holder["session"] = session_store.start(tenant_id, key)
 
         t1 = threading.Thread(target=run_cancel)

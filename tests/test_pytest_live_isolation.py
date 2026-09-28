@@ -145,3 +145,92 @@ def test_env_leak_to_live_is_rearmed_and_reported(tmp_path):
     assert r.returncode == 0, out
     assert "test_leaks PASSED" in out and "test_next_is_rearmed PASSED" in out
     assert "test_nested.py::test_leaks: left ['CORVIN_HOME'] unset/live (re-armed)" in out
+
+
+def test_foreign_records_in_a_new_tenant_chain_stop_the_session(tmp_path):
+    """A scrubbed writer that lands in a tenant chain that did not exist before
+    the test. The fake live home HAS an instance id, and until 2026-09-28 a new
+    chain in such a home was never inspected at all."""
+    live, _writer, _chain = _fake_live_checkout(tmp_path)
+    new_chain = live / ".corvin" / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
+    body = f'''
+        import json
+        from pathlib import Path
+        def test_a_writes_new_tenant_chain():
+            p = Path({str(new_chain)!r})
+            p.parent.mkdir(parents=True)
+            p.write_text(json.dumps({{"event_type": "x", "instance_id": "test-process"}}) + "\\n")
+        def test_b_never_runs():
+            pass
+    '''
+    r = _nested_session(tmp_path, body, live)
+    out = r.stdout + r.stderr
+    assert r.returncode == 3, out
+    assert "LIVE AUDIT CHAIN TOUCHED during test_nested.py::test_a_writes_new_tenant_chain" in out
+    assert "CREATED with 1 foreign record(s)" in out
+    assert "test_b_never_runs PASSED" not in out
+
+
+def test_append_between_two_tests_is_caught_on_the_next_test(tmp_path):
+    """The teardown snapshot of one test is reused as the baseline of the next
+    (one snapshot per test). A write that a test's leftover thread makes after
+    that test's teardown must still be caught, on the test it lands in."""
+    live, _writer, chain = _fake_live_checkout(tmp_path)
+    body = f'''
+        import json, threading, time
+        def _late_write():
+            time.sleep(0.5)
+            with open({str(chain)!r}, "a") as fh:
+                fh.write(json.dumps({{"event_type": "late", "instance_id": "test-process"}}) + "\\n")
+        def test_a_leaves_a_thread():
+            threading.Thread(target=_late_write).start()
+        def test_b_is_running_when_it_lands():
+            time.sleep(1.5)
+        def test_c_never_runs():
+            pass
+    '''
+    r = _nested_session(tmp_path, body, live)
+    out = r.stdout + r.stderr
+    assert r.returncode == 3, out
+    assert "1 foreign record(s)" in out
+    assert "test_c_never_runs PASSED" not in out
+
+
+def test_non_restored_resolver_rebinding_stops_the_session(tmp_path):
+    """The resolver check is cached per session, keyed on the env AND every
+    global of the resolver modules — a test that rebinds ``corvin_home`` to the
+    live home without restoring it must still stop the next test."""
+    live, _writer, _chain = _fake_live_checkout(tmp_path)
+    body = f'''
+        from pathlib import Path
+        def test_a_rebinds_resolver():
+            from corvin_operator.forge.forge import paths
+            paths.corvin_home = lambda: Path({str(live / ".corvin")!r})   # no restore
+        def test_b_never_runs():
+            pass
+    '''
+    r = _nested_session(tmp_path, body, live)
+    out = r.stdout + r.stderr
+    assert r.returncode == 3, out
+    assert "test_a_rebinds_resolver PASSED" in out
+    assert "path resolver points at a PROTECTED live install" in out
+    assert "forge.paths.corvin_home() -> " + str(live / ".corvin") in out
+    assert "test_b_never_runs PASSED" not in out
+
+
+def test_outbox_is_redirected_per_test_without_tmp_path(tmp_path):
+    body = '''
+        import os
+        seen = []
+        def test_a():
+            seen.append(os.environ["ADAPTER_OUTBOX"])
+        def test_b():
+            seen.append(os.environ["ADAPTER_OUTBOX"])
+            assert seen[0] != seen[1]
+            sandbox = os.environ["CORVIN_PYTEST_SESSION_SANDBOX"]
+            assert all(p.startswith(sandbox) for p in seen)
+    '''
+    live, _w, _c = _fake_live_checkout(tmp_path)
+    r = _nested_session(tmp_path, body, live)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out

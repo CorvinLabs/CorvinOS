@@ -57,44 +57,41 @@ from core.skills.feedback_stability import (
 # `corvin_operator.skill_forge` — load it via importlib (same pattern as
 # tests/skill_forge/test_trigger_detector.py).
 _REPO = Path(__file__).resolve().parents[2]
-_AUTONOMOUS_DIR = _REPO / "corvin_operator" / "skill-forge" / "autonomous"
+_SKILL_FORGE_DIR = _REPO / "corvin_operator" / "skill-forge"
+_AUTONOMOUS_DIR = _SKILL_FORGE_DIR / "autonomous"
 
 
-def _ensure_namespace_package(dotted_name: str, path: Path):
-    existing = sys.modules.get(dotted_name)
-    if existing is not None:
-        return existing
-    module = types.ModuleType(dotted_name)
-    module.__path__ = [str(path)]
-    sys.modules[dotted_name] = module
-    return module
+def _import_real(dotted_name: str):
+    """Import a REAL module under ``corvin_operator.skill_forge``.
+
+    Only the dashed-directory alias ``corvin_operator.skill_forge`` is a
+    stand-in (a ``__path__``-only module, exactly what
+    ``corvin_operator/skill-forge/tests/_skill_forge_ns.py`` and the console's
+    ``autonomous_forge_routes`` register). Everything below it is imported for
+    real, so ``autonomous/__init__.py`` runs. This file used to install a BARE
+    ``corvin_operator.skill_forge.autonomous`` module (no ``__init__`` run, no
+    exports) into ``sys.modules`` at collection time; it outlived this file and
+    broke every later importer in the session (``test_cron_trigger_poller``
+    collection, ``autonomous_forge_routes``' ``SkillValidator``) — adversarial
+    review round 5.
+    """
+    alias = "corvin_operator.skill_forge"
+    if alias not in sys.modules:
+        import corvin_operator  # noqa: F401 — the real parent package
+
+        module = types.ModuleType(alias)
+        module.__path__ = [str(_SKILL_FORGE_DIR)]
+        sys.modules[alias] = module
+    pkg = "corvin_operator.skill_forge.autonomous"
+    stale = sys.modules.get(pkg)
+    if stale is not None and getattr(stale, "__file__", None) is None:
+        # An empty stand-in some older loader installed: never reuse it.
+        del sys.modules[pkg]
+    return importlib.import_module(dotted_name)
 
 
-def _load_module(dotted_name: str, file_path: Path):
-    existing = sys.modules.get(dotted_name)
-    if existing is not None:
-        return existing
-    spec = importlib.util.spec_from_file_location(dotted_name, file_path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[dotted_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_ensure_namespace_package("corvin_operator.skill_forge", _AUTONOMOUS_DIR.parent)
-_ensure_namespace_package("corvin_operator.skill_forge.autonomous", _AUTONOMOUS_DIR)
-_load_module(
-    "corvin_operator.skill_forge.autonomous.audit_chain_validator",
-    _AUTONOMOUS_DIR / "audit_chain_validator.py",
-)
-_load_module(
-    "corvin_operator.skill_forge.autonomous.path_traversal_validator",
-    _AUTONOMOUS_DIR / "path_traversal_validator.py",
-)
-_trigger_detector_module = _load_module(
-    "corvin_operator.skill_forge.autonomous.trigger_detector",
-    _AUTONOMOUS_DIR / "trigger_detector.py",
-)
+_trigger_detector_module = _import_real(
+    "corvin_operator.skill_forge.autonomous.trigger_detector")
 SkillLossTriggerDetector = _trigger_detector_module.SkillLossTriggerDetector
 LossTrigger = _trigger_detector_module.LossTrigger
 

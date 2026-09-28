@@ -104,10 +104,10 @@ class TestCorvinPluginTestCase(unittest.TestCase):
             self.test_case.plugin_home.exists(),
             "Plugin home should be created",
         )
-        self.assertTrue(
-            (self.test_case.plugin_home / "audit.jsonl").exists(),
-            "Audit file should exist",
-        )
+        # No ``audit.jsonl`` is expected here: CorvinPluginTestCase records
+        # audit events in memory (``audit_events``), and a per-plugin chain
+        # file would be a hand-composed audit path (one chain per tenant).
+        self.assertEqual(self.test_case.audit_events, [])
 
     def test_register_and_retrieve_plugin(self) -> None:
         """Test plugin registration."""

@@ -94,47 +94,29 @@ class TestG4E2E:
     """E2E: plugin_builder gate on /plugin-builder command"""
 
     def test_g4_command_denies_free_tier(self):
-        """E2E: /plugin-builder command denies free tier."""
-        from core.plugins.plugin_builder.turn import command, LicenseDenied
-        from corvin_operator.license.capability_api import Tier
-
-        with patch('core.plugins.plugin_builder.turn.require_capability') as mock_req:
-            # LicenseDenied(capability, tier, reason) — the single-arg form
-            # raised TypeError inside the test itself.
-            mock_req.side_effect = LicenseDenied(
-                "forge.create", Tier.FREE, "forge.create not available"
-            )
-
-            result = command(
-                "",
-                tenant_id="_default",
-                session_key="test_session"
-            )
-
-            # Should return error message, not raise
-            assert isinstance(result, str)
-            assert len(result) > 0
-
-    def test_g4_command_allows_member_tier(self):
-        """E2E: /plugin-builder command allows member tier."""
+        """E2E: /plugin-builder command denies free tier through the real gate."""
         from core.plugins.plugin_builder.turn import command
 
-        with patch('core.plugins.plugin_builder.turn.require_capability') as mock_req:
-            mock_req.return_value = None  # Allowed
+        with patch("corvin_operator.license.capability_api.active_tier",
+                   lambda **k: "free"):
+            result = command("", tenant_id="_default", session_key="test_session")
 
-            # Mock session_store to return no existing session
-            with patch('core.plugins.plugin_builder.turn.session_store.get') as mock_get:
+        # A refusal message, never an exception, naming the paid seat.
+        assert isinstance(result, str)
+        assert "member seat" in result
+
+    def test_g4_command_allows_member_tier(self):
+        """E2E: /plugin-builder command allows member tier through the real gate."""
+        from core.plugins.plugin_builder.turn import command
+
+        with patch("corvin_operator.license.capability_api.active_tier",
+                   lambda **k: "member"):
+            with patch("core.plugins.plugin_builder.turn.session_store.get") as mock_get:
                 mock_get.return_value = None
+                result = command("status", tenant_id="_default", session_key="test_session")
 
-                # Call with "status" which doesn't need to start interview
-                result = command(
-                    "status",
-                    tenant_id="_default",
-                    session_key="test_session"
-                )
-
-                # Should return status message
-                assert "no interview" in result.lower() or "active" in result.lower()
+        assert "member seat" not in result
+        assert "no interview" in result.lower() or "active" in result.lower()
 
 
 class TestG5E2E:

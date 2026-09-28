@@ -622,6 +622,10 @@ class MasterRolloutOrchestrator:
                 "processed_approval_ids": list(self.state.processed_approval_ids),  # F012
                 "audit_events_persisted": self.state.audit_events_persisted,  # F009
                 "last_audit_persist_time": self.state.last_audit_persist_time,  # F009
+                # Measured Phase 1 samples live on the base orchestrator, not in
+                # RolloutState; without them a restart loses the 7-day latency
+                # window (σ reads "not measured" for a week). Part of the hash.
+                "daily_latency_p99": list(getattr(self.base_orch, "_daily_latency_p99", [])),
                 "last_saved_time": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -705,6 +709,16 @@ class MasterRolloutOrchestrator:
                 self.state.base_state.rollback_count = base_state_dict.get("rollback_count", 0)
                 self.state.base_state.pending_operator_approval = base_state_dict.get("pending_operator_approval", False)
                 self.state.base_state.approval_required_for = base_state_dict.get("approval_required_for")
+                # Measured values. Not restoring them made the first advance_day
+                # after a restart in PHASE_2A_CANARY roll back with
+                # BASELINE_NOT_MEASURED although the baseline had been measured.
+                baseline = base_state_dict.get("baseline_latency_p99_ms")
+                self.state.base_state.baseline_latency_p99_ms = None if baseline is None else float(baseline)
+                prior_conf = base_state_dict.get("prior_mean_confidence")
+                self.state.base_state.prior_mean_confidence = None if prior_conf is None else float(prior_conf)
+                self.state.base_state.unmeasured_checks = [
+                    str(c) for c in base_state_dict.get("unmeasured_checks") or []
+                ]
 
                 # Restore skill_states (convert string values back to SkillMode enums)
                 if "skill_states" in base_state_dict:
@@ -780,6 +794,11 @@ class MasterRolloutOrchestrator:
             # Restore automatic transitions
             if "automatic_transitions" in state_dict:
                 self.state.automatic_transitions = state_dict["automatic_transitions"]
+
+            # Restore the measured daily p99 samples (baseline + 7-day σ window)
+            self.base_orch._daily_latency_p99 = [
+                float(x) for x in state_dict.get("daily_latency_p99") or []
+            ]
 
             logger.info(f"Loaded persisted state from {self.STATE_FILE} (tenant: {self.tenant_id})")
 

@@ -58,12 +58,6 @@ const NAV_EXEMPT = new Set<string>([
   "agents",
   "flows",
   "people",
-  // Deliberately NOT in the sidebar (2026-09-27 review of dbfd8426f, whose
-  // message claimed a nav entry it never added). Its backend,
-  // routes/skill_manager.py, carries no session/CSRF guard and installs into a
-  // hard-coded ~/.corvin, and Forge's Skills tab plus the Marketplace Skills
-  // tab are already the skills surfaces. Link it once that backend is guarded.
-  "skill-manager",
   // ADR-2029 control-plane panels (ff1a0e6e2), mounted in PANELS but never in
   // NAV_GROUPS. Deliberately kept out of the sidebar (2026-09-27 review) —
   // none of them controls anything real yet:

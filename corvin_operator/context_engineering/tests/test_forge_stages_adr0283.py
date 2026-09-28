@@ -177,5 +177,99 @@ class ForgeStagesTests(unittest.TestCase):
         self.assertEqual(tel.status, "ok")
 
 
+class FreeTierSkips(unittest.TestCase):
+    """ADR-0701: on the free tier both forge stages skip for the turn.
+
+    Real registries, real licensing API, real audit chain under a temp
+    CORVIN_HOME — only the tier is pinned to ``free`` (the conftest pins
+    ``member`` for every other CEL test). Before the fix the ToolForge create
+    failed into its best-effort ``except``, SkillForge still bound the
+    unpersisted skill body, and no ``forge.stage_skipped_unlicensed`` record
+    existed anywhere."""
+
+    def setUp(self):
+        import os
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self._prev = os.environ.get("CORVIN_HOME")
+        os.environ["CORVIN_HOME"] = self._tmp.name
+        _load()
+        self.stages = sys.modules["context_engineering.stages"]
+        self.tf = sys.modules["context_engineering.stages.toolforge"]
+        self.sf = sys.modules["context_engineering.stages.skillforge"]
+        base = sys.modules["context_engineering.stages.base"]
+        self.Bundle, self.Ctx = base.ContextBundle, base.StageCtx
+        import corvin_operator.license.capability_api as ca
+        self._tier = patch.object(ca, "active_tier", lambda **_k: "free")
+        self._tier.start()
+
+    def tearDown(self):
+        import os
+        self._tier.stop()
+        if self._prev is None:
+            os.environ.pop("CORVIN_HOME", None)
+        else:
+            os.environ["CORVIN_HOME"] = self._prev
+        self._tmp.cleanup()
+
+    def _chain_records(self, event_type):
+        import json
+        from forge.paths import tenant_audit_chain
+        path = tenant_audit_chain("_default")
+        if not path.exists():
+            return []
+        out = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            rec = json.loads(line)
+            if rec.get("event_type", rec.get("event")) == event_type:
+                out.append(rec)
+        return out
+
+    def test_free_tier_forges_and_binds_nothing_and_says_so(self):
+        from forge.paths import tenant_home
+        b = self.Bundle(task="t")
+        b.scratch["needs"] = {
+            "tools": [{"name": "csv_parse", "description": "parse csv",
+                       "input_schema": {"type": "object"}}],
+            "skills": [{"name": "csv-aggregation", "body": "## csv\nAggregate."}],
+        }
+        ctx = self.Ctx(tenant_id="_default")
+        b, t_tel = self.tf.ToolForgeStage().run(b, ctx)
+        b, s_tel = self.sf.SkillForgeStage().run(b, ctx)
+
+        self.assertEqual((t_tel.status, t_tel.reason), ("skipped", "unlicensed"))
+        self.assertEqual((s_tel.status, s_tel.reason), ("skipped", "unlicensed"))
+        self.assertEqual(b.tools_to_bind, [])
+        self.assertEqual(b.skills_to_bind, [])
+        self.assertNotIn("_forged_tools", b.scratch)
+        self.assertNotIn("_forged_skills", b.scratch)
+        th = Path(tenant_home("_default"))
+        self.assertEqual(list((th / "forge" / "tools").glob("cel_*"))
+                         if (th / "forge" / "tools").is_dir() else [], [])
+        self.assertEqual(list((th / "skill-forge" / "skills").glob("cel_*"))
+                         if (th / "skill-forge" / "skills").is_dir() else [], [])
+
+        recs = self._chain_records("forge.stage_skipped_unlicensed")
+        self.assertEqual(sorted(r["details"]["stage"] for r in recs),
+                         ["skillforge", "toolforge"], recs)
+        for r in recs:
+            self.assertEqual(r["details"]["tenant_id"], "_default")
+            self.assertIn("lom", r["details"])
+            # The LoM names real source (ADR-0537): write_event binds it.
+            self.assertTrue(r["details"].get("lom_hash"), r["details"])
+
+    def test_member_tier_still_forges(self):
+        import corvin_operator.license.capability_api as ca
+        with patch.object(ca, "active_tier", lambda **_k: "member"):
+            b = self.Bundle(task="t")
+            b.scratch["needs"] = {"tools": [{"name": "csv_parse",
+                                             "description": "parse csv"}]}
+            b, tel = self.tf.ToolForgeStage().run(b, self.Ctx(tenant_id="_default"))
+        self.assertEqual(tel.status, "ok")
+        self.assertEqual([r.name for r in b.tools_to_bind],
+                         ["mcp__forge__cel_csv_parse"])
+        self.assertEqual(self._chain_records("forge.stage_skipped_unlicensed"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

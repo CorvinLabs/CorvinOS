@@ -25,8 +25,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Add bridges/shared to path
-sys.path.insert(0, str(Path.home() / "projects/CorvinOS/corvin_operator/bridges/shared"))
+# Add bridges/shared to path — resolved from THIS checkout, never a hard-wired
+# ~/projects/CorvinOS (that imported the live tree from any other worktree).
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "bridges" / "shared"))
 
 
 class E2ETestRunner:
@@ -61,7 +63,8 @@ class E2ETestRunner:
 
             self.openai_client = OpenAI(api_key=api_key, timeout=30.0, max_retries=0)
             logger.info(f"✅ OpenAI client initialized")
-            logger.info(f"   API Key: {api_key[:40]}...")
+            # Never log key material (it used to print 40 characters of it).
+            logger.info("   API key present: %s", bool(api_key))
             return True
 
         except ImportError:

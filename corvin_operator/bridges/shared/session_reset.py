@@ -735,8 +735,13 @@ def _dialectic_session_reset(*, channel: str, chat_id: str,
     consequence = 0.1 + min(0.7, n_skills * 0.15 + n_tools * 0.04)
     uncertainty = 0.1 + (0.3 if reason == "timeout" else 0.0)
     scope_n = 1 + min(2, n_skills // 2)
+    # mode="fast": the Decision is IGNORED (the reset runs regardless), so this
+    # site only needs the audited record. The bundle default for the site is
+    # `cli` — a synchronous `claude -p` judge (up to 15 s) inside every reset,
+    # including the corvin-session-timeout timer — whose answer nobody reads.
     _dialectic.decide(
         site="session_reset",
+        mode="fast",
         thesis={"action": "reset", "channel": channel,
                 "chat_id": str(chat_id), "reason": reason,
                 "n_skills": n_skills, "n_tools": n_tools},

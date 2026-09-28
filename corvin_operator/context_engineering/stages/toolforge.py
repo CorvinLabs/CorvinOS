@@ -99,6 +99,55 @@ def ast_allowlist_ok(impl: str) -> "tuple[bool, str]":
     return True, ""
 
 
+#: ADR-0701 — the one event a forge stage records when the licence refuses it.
+SKIPPED_UNLICENSED_EVENT = "forge.stage_skipped_unlicensed"
+
+
+def forge_create_licensed(tenant_id: str, *, entry_point: str) -> bool:
+    """ADR-0701 licence check for a forge stage, on the TURN tenant — fail-closed.
+
+    True only when the licensing API answers ``Decision.ALLOW`` for
+    ``forge.create``. A denial, an unimportable licensing module and any
+    enforcement error all read as False. The registries gate ``create`` too,
+    but on the PROCESS tenant and by raising into the stage's best-effort
+    ``except`` — which hid the refusal (no audit, no reason in the trace) and,
+    in SkillForge, still bound the unpersisted skill body to the worker."""
+    try:
+        from corvin_operator.license.capability_api import (  # noqa: PLC0415
+            Decision, require_capability,
+        )
+    except ImportError:
+        return False
+    try:
+        decision = require_capability(
+            "forge.create", 1, tenant_id=tenant_id, entry_point=entry_point)
+    except Exception:  # noqa: BLE001 — LicenseDenied or enforcement failure = deny
+        return False
+    return getattr(decision, "decision", None) is Decision.ALLOW
+
+
+def emit_stage_skipped_unlicensed(stage_id: str, tenant_id: str, lom: str) -> bool:
+    """Record ``forge.stage_skipped_unlicensed`` on the turn tenant's chain.
+
+    Degrade-not-block (ADR-0276): the turn proceeds either way, so a write that
+    does not commit is logged, never raised."""
+    try:
+        from forge.paths import tenant_audit_chain  # noqa: PLC0415
+        from forge.security_events import write_event  # noqa: PLC0415
+        write_event(
+            tenant_audit_chain(tenant_id), SKIPPED_UNLICENSED_EVENT,
+            tool="context_engineering",
+            details={"stage": stage_id, "tenant_id": tenant_id, "lom": lom},
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        import logging  # noqa: PLC0415
+        logging.getLogger(__name__).error(
+            "%s: %s AUDIT-WRITE FAILED (tenant %s): %s", stage_id,
+            SKIPPED_UNLICENSED_EVENT, tenant_id, type(exc).__name__)
+        return False
+
+
 def _forge_create(tenant_id: str, name: str, description: str,
                   input_schema: dict, impl: str) -> None:
     """Register a tool in the tenant's Forge registry, in-process. Best-effort."""
@@ -149,6 +198,7 @@ class ToolForgeStage:
         needs = (bundle.scratch.get("needs") or {}).get("tools") or []
         bound: list = []
         skipped_shape = skipped_builtin = 0
+        licensed = None   # resolved once, at the first forgeable request
         for t in needs[:MAX_BINDINGS]:
             # A bare string is NOT a forgeable tool (ADR-0283 amendment, 2026-08-18).
             # Accepting one is how `cel_Pythoncsvmoduleoderpandas` and `cel_pydantic`
@@ -174,6 +224,21 @@ class ToolForgeStage:
             # Namespace CEL-forged tools so a task-derived name can never clobber a
             # manually-forged session tool via overwrite=True (review R3 finding A4).
             safe = "cel_" + safe
+            # ADR-0701: forging is a member capability. On a refusal the stage
+            # skips for the turn — nothing forged, nothing bound, not even a
+            # pre-existing artifact — and says so in the chain and the trace.
+            if licensed is None:
+                licensed = forge_create_licensed(
+                    ctx.tenant_id,
+                    entry_point="context_engineering.stages.toolforge")
+            if not licensed:
+                emit_stage_skipped_unlicensed(
+                    self.id, ctx.tenant_id,
+                    "corvin_operator/context_engineering/stages/toolforge.py"
+                    ":ToolForgeStage.run")
+                return bundle, StageTelemetry(
+                    stage=self.id, status="skipped", reason="unlicensed",
+                    confidence_tier="low", sources=[])
             # SAME-TURN forging ALWAYS uses the deterministic template (review R2
             # finding #1): an LLM-authored impl is never executed same-turn, because
             # the AST pre-filter is provably incomplete against Python introspection

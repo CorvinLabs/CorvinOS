@@ -105,6 +105,11 @@ interface NavItem {
    *  Gating lives here in the authed shell, where the manifest loads reliably. */
   requiredCapability?: string;
   requiredFlag?: string;
+  /** Session tiers that see this entry. Undefined = every session. Mirrors a
+   *  backend tier check (e.g. routes/skill_manager.py's owner/admin gate) so the
+   *  sidebar does not advertise a page whose actions would all answer 403; the
+   *  backend check remains the real gate. Unknown tier = hidden. */
+  requiredTier?: readonly string[];
 }
 
 interface NavGroup {
@@ -226,6 +231,12 @@ const NAV_GROUPS: NavGroup[] = [
       // page's only backend was an unmounted Flask blueprint answering 404, so
       // its fields moved into Forge's Creator as the "From template" composer.
       { to: "/app/forge",      label: "Forge",           icon: Hammer },
+      // Installs signed skill ZIP packages into <corvin_home>/skills_installed —
+      // a different store from Forge's SkillForge skills, and the only UI for it.
+      // routes/skill_manager.py requires a session for the list and
+      // owner/admin + CSRF for install/uninstall, so the entry is shown to
+      // those tiers only.
+      { to: "/app/skill-manager", label: "Skill Packages", icon: Package, requiredTier: ["owner", "admin"] },
     ],
   },
   {
@@ -399,10 +410,18 @@ function LicenseTierFooter() {
  *  gate always shows (core nav). With no manifest yet (still loading), gated items
  *  hide — the authed shell resolves the manifest fast, and hiding an opt-in feature
  *  briefly beats flashing one that is off. Empty groups are dropped. */
-function gateNavGroups(groups: NavGroup[], manifest: CapabilityManifest | undefined): NavGroup[] {
+export function gateNavGroups(
+  groups: NavGroup[],
+  manifest: CapabilityManifest | undefined,
+  tier?: string | null,
+): NavGroup[] {
   const caps = manifest ? new Set(manifest.capabilities) : null;
   const flags = manifest?.flags ?? {};
   const visible = (it: NavItem): boolean => {
+    // Tier gate first, and it does NOT share the missing-manifest fail-safe
+    // below: the session is known in the authed shell, and a tier we cannot
+    // read is not one of the tiers the entry requires.
+    if (it.requiredTier && !(tier && it.requiredTier.includes(tier))) return false;
     if (!it.requiredCapability && !it.requiredFlag) return true;
     // FAIL-SAFE: no manifest yet (loading / query not ready) → show the item.
     // Hiding on a missing manifest risks a feature never appearing if the query is
@@ -499,7 +518,7 @@ export function AppLayout() {
   const { data: consoleManifest } = useConsoleManifest();
   const { data: aiPanels } = useAiPanels();
   const navGroups = React.useMemo(() => {
-    const gated = mergeManifestNav(gateNavGroups(NAV_GROUPS, capabilityManifest), consoleManifest);
+    const gated = mergeManifestNav(gateNavGroups(NAV_GROUPS, capabilityManifest, session?.tier), consoleManifest);
     // ADR-0366: the operator's AI-generated panels get their own nav group.
     if (aiPanels && aiPanels.length) {
       const linked = new Set(gated.flatMap((g) => g.items.map((it) => it.to)));
@@ -509,7 +528,7 @@ export function AppLayout() {
       if (items.length) gated.push({ id: "ai-panels", label: "Your panels", items });
     }
     return gated;
-  }, [capabilityManifest, consoleManifest, aiPanels]);
+  }, [capabilityManifest, consoleManifest, aiPanels, session?.tier]);
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   useSettingsStream();
   // Closes the third cache layer: an open tab keeps running the bundle it booted

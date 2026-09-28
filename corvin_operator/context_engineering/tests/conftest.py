@@ -8,6 +8,40 @@ from tempfile import TemporaryDirectory
 from ..memory_lookup import MemoryLookup
 
 
+@pytest.fixture(autouse=True)
+def _member_tier_for_forging(monkeypatch):
+    """Pin the licence tier to ``member`` for CEL tests (ADR-0701).
+
+    The forge stages and both registries refuse ``forge.create`` on the free
+    tier, fail-closed — which is correct, and is the tier a test environment
+    without a licence resolves to. Tests that exercise forging therefore run
+    as a member; the free-tier refusal is proven by tests that re-pin
+    ``free`` explicitly (``test_forge_stages_adr0283.py::FreeTierSkips``)."""
+    try:
+        import corvin_operator.license.capability_api as _ca
+    except ImportError:
+        yield
+        return
+    monkeypatch.setattr(_ca, "active_tier", lambda **_k: "member")
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _fresh_corvin_home(tmp_path, monkeypatch):
+    """One CORVIN_HOME per test.
+
+    The CE licence pools (``ce_llm_quota.json``, ``context_engineering_quota.json``)
+    are DAILY counters under CORVIN_HOME. Shared across a test file they are
+    exhausted by the sixth synthesising test on the free tier (5/day), and
+    every later test silently loses its synthesis — an order-dependent failure
+    of ``test_full_pipeline_e2e.py``, not a product defect. A test that sets
+    its own CORVIN_HOME still does; this only removes the shared default."""
+    home = tmp_path / "corvin_home"
+    home.mkdir()
+    monkeypatch.setenv("CORVIN_HOME", str(home))
+    yield
+
+
 @pytest.fixture
 def temp_memory_dir():
     """Create temporary memory directory with sample files."""

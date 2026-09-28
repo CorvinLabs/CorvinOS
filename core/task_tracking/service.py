@@ -90,8 +90,34 @@ class AuditUnavailable(RuntimeError):
 
 # ── Chain writer ─────────────────────────────────────────────────────────────
 
+def _security_events():
+    """The ONE forge writer, imported as the top-level ``forge`` package.
+
+    Resolved here rather than assumed on ``sys.path``: outside a host that
+    already put ``corvin_operator/forge`` there (the gateway/console do), every
+    chain write raised ``No module named 'forge'`` → ``AuditUnavailable`` →
+    every mutation refused. Same resolution as
+    ``core/compliance/audit_chain_writer.py::_forge``.
+    """
+    import sys  # noqa: PLC0415
+    try:
+        from forge import security_events  # noqa: PLC0415  # type: ignore[import-not-found]
+    except ImportError:
+        forge_root = Path(__file__).resolve().parents[2] / "corvin_operator" / "forge"
+        if (forge_root / "forge").is_dir() and str(forge_root) not in sys.path:
+            sys.path.insert(0, str(forge_root))
+        # With ``corvin_operator`` on sys.path, ``import forge`` may have cached
+        # the outer ``corvin_operator/forge/`` directory as an empty namespace
+        # package; drop it so the retry finds the real package.
+        cached = sys.modules.get("forge")
+        if cached is not None and getattr(cached, "__file__", None) is None:
+            del sys.modules["forge"]
+        from forge import security_events  # noqa: PLC0415  # type: ignore[import-not-found]
+    return security_events
+
+
 def _default_chain_writer(tenant_id: str, event_type: str, details: dict[str, Any]) -> Optional[str]:
-    from forge import security_events  # noqa: PLC0415
+    security_events = _security_events()
 
     from core.paths import tenant_audit_chain  # noqa: PLC0415
 

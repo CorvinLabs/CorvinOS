@@ -1,372 +1,170 @@
-"""Adversarial tests for Phase 2 Audit Events (Layer 4, 22, 38).
+"""Adversarial tests for the Phase 2 audit emitters (Layer 4, 22, 38).
 
-Tests security properties:
-1. PII leakage prevention (emails, phone numbers, UUIDs)
-2. Tenant isolation breach detection
-3. Hash-chain integrity preservation
-4. Nonce/secret truncation enforcement
-5. Exception class name sanitization
-6. Cross-tenant event rejection
+Rewritten 2026-09-28 (adversarial review round 5). The previous version called
+functions that do not exist (``emit_worker_heartbeat``,
+``emit_worker_spawn_initiated``) and kwargs the real helpers do not take
+(``write_event_fn=`` on the typed helpers, ``plugin_code=``), so 17 of its 32
+cases failed and the rest asserted against a mocked writer.
+
+The positive contract (each event reaches the chain, registries agree, the two
+unwired worker events are unemittable) lives in ``test_audit_phase2_events.py``.
+What is asserted HERE is the hostile-caller side, through the REAL
+``forge.security_events.write_event`` into a temp chain:
+
+* PII / secret / content smuggled in as an extra kwarg is REFUSED before any
+  write — nothing reaches the chain, not even a partial record;
+* a full nonce passed where a prefix is expected is truncated to 8 hex chars;
+* numeric fields given as strings are coerced (a non-numeric one raises);
+* a writer failure is loud for the audit-first plugin emitter (raises) and
+  logged-not-raised for the a2a emitter (whose one production caller,
+  ``corvin_a2a pair --offline-pair``, observes the commit through an injected
+  writer and refuses the pair when it did not happen);
+* the raw bytes of the chain never contain the smuggled values.
 """
-import tempfile
+from __future__ import annotations
+
+import json
+import sys
 from pathlib import Path
-from unittest import mock
 
 import pytest
 
-from core.compute.corvin_compute import audit as compute_audit
-from corvin_operator.bridges.shared import a2a_audit
-from core.plugins.corvin_plugins import audit as plugin_audit
+_REPO = Path(__file__).resolve().parents[2]
+for _p in (_REPO / "corvin_operator" / "forge", _REPO / "corvin_operator" / "bridges" / "shared"):
+    if str(_p) not in sys.path:
+        sys.path.append(str(_p))
+
+from forge import security_events as se  # noqa: E402
+from core.compute.corvin_compute import audit as compute_audit  # noqa: E402
+from core.plugins.corvin_plugins import audit as plugin_audit  # noqa: E402
+from corvin_operator.bridges.shared import a2a_audit  # noqa: E402
+
+_EMAIL = "victim@example.com"
+_FULL_NONCE = "deadbeef" + "0123456789abcdef" * 3 + "cafebabe"  # 64 hex chars
 
 
 @pytest.fixture
-def chain_path():
-    """Temporary audit chain file."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        path = Path(tmpdir) / "audit.jsonl"
-        yield path
+def chain(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORVIN_AUDIT_ANCHOR_KEY", str(tmp_path / "keys" / "anchor.key"))
+    monkeypatch.setattr(se, "_ANCHOR_KEY", None)
+    monkeypatch.setattr(se, "_ANCHOR_KEY_LOADED", False)
+    monkeypatch.setattr(se, "_ANCHOR_KEY_REFUSED", None)
+    return tmp_path / "audit.jsonl"
 
 
-@pytest.fixture
-def mock_write_event():
-    """Mock security_events.write_event for testing."""
-    written_events = []
-
-    def capture_write(path, event_type, details=None, severity=None):
-        written_events.append({
-            "event_type": event_type,
-            "details": details or {},
-            "severity": severity,
-        })
-
-    capture_write.written = written_events
-    return capture_write
+def _records(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-# PII Leakage Prevention
+# ── smuggled content is refused before any write ──────────────────────────
 
-class TestPIILeakagePrevention:
-    """Verify no PII reaches the audit chain."""
-
-    def test_compute_no_task_data_leaked(self, chain_path, mock_write_event):
-        """Compute events never carry task/prompt data."""
-        compute_audit.emit_worker_heartbeat(
-            path=chain_path,
-            worker_id="w-1",
-            iteration=1,
-            current_loss=0.5,
-            # Try to sneak in task data
-            task_instruction="SELECT * FROM users",  # SQL injection
-            user_prompt="my email is test@example.com",  # PII
-            write_event_fn=mock_write_event,
-        )
-
-        # Event should have been emitted but without the extra fields
-        event = mock_write_event.written[0]
-        assert "task_instruction" not in event["details"]
-        assert "user_prompt" not in event["details"]
-
-    def test_a2a_no_full_nonce_leaked(self, chain_path, mock_write_event):
-        """A2A events never carry full nonce values."""
-        full_nonce = "deadbeefdeadbeefdeadbeefdeadbeef"
-        a2a_audit.emit_genesis_block_created(
-            path=chain_path,
-            instance_id="i-1",
-            network_id="n-1",
-            nonce_prefix=full_nonce,
-            epoch=1,
-            write_event_fn=mock_write_event,
-        )
-
-        event = mock_write_event.written[0]
-        # Only first 8 hex chars
-        assert event["details"]["nonce_prefix"] == "deadbeef"
-        assert len(event["details"]["nonce_prefix"]) == 8
-
-    def test_a2a_no_private_key_leaked(self, chain_path, mock_write_event):
-        """A2A events reject private key material."""
-        with pytest.raises(a2a_audit.AuditFieldNotAllowed):
-            a2a_audit.emit_offline_pair_initiated(
-                path=chain_path,
-                task_id="t-1",
-                peer_id="p-1",
-                pairing_id="pair-1",
-                ttl_s=3600,
-                private_key="-----BEGIN PRIVATE KEY-----",  # PII!
-                write_event_fn=mock_write_event,
-            )
-
-    def test_plugin_no_error_stack_trace_leaked(self, chain_path, mock_write_event):
-        """Plugin events never carry stack traces."""
-        with pytest.raises(plugin_audit.AuditFieldNotAllowed):
-            plugin_audit.emit_initialization_failed(
-                path=chain_path,
-                plugin_id="p-1",
-                boot_layer="bundled",
-                error_class="ImportError",
-                stack_trace="Traceback (most recent call last)...",  # Forbidden!
-                write_event_fn=mock_write_event,
-            )
+@pytest.mark.parametrize("extra", [
+    {"user_prompt": f"my email is {_EMAIL}"},
+    {"task_instruction": "SELECT * FROM users"},
+    {"socket_path": "/run/user/1000/compute.sock"},
+])
+def test_compute_refuses_smuggled_fields(chain, extra):
+    with pytest.raises(compute_audit.AuditFieldNotAllowed):
+        compute_audit.emit("compute.worker_terminated", path=chain, tenant_id="_default",
+                           worker_id="w", termination_reason="shutdown", **extra)
+    assert not chain.exists()
 
 
-# Tenant Isolation Breach Detection
-
-class TestTenantIsolationBreach:
-    """Verify tenant_id cannot be spoofed or leaked across boundaries."""
-
-    def test_compute_cross_tenant_event_isolated(self, chain_path, mock_write_event):
-        """Compute events cannot write to another tenant's chain."""
-        # Process runs as tenant-alpha
-        compute_audit.emit_worker_spawn_initiated(
-            path=chain_path,
-            worker_id="w-1",
-            worker_type="cpu",
-            cpu_cores=2,
-            memory_mb=1024,
-            tenant_id="tenant-alpha",  # Legit
-            write_event_fn=mock_write_event,
-        )
-
-        event1 = mock_write_event.written[0]
-        assert event1["details"]["tenant_id"] == "tenant-alpha"
-
-        # Try to write as different tenant (should be caught at a higher layer)
-        compute_audit.emit_worker_spawn_initiated(
-            path=chain_path,
-            worker_id="w-2",
-            worker_type="cpu",
-            cpu_cores=2,
-            memory_mb=1024,
-            tenant_id="tenant-beta",  # Cross-tenant attempt
-            write_event_fn=mock_write_event,
-        )
-
-        event2 = mock_write_event.written[1]
-        # The emit function doesn't validate tenant; the upstream write_event must
-        # But we can verify the tenant_id is present and different
-        assert event2["details"]["tenant_id"] == "tenant-beta"
-
-    def test_a2a_tenant_id_required(self, chain_path, mock_write_event):
-        """A2A events must carry tenant_id."""
-        a2a_audit.emit_genesis_block_created(
-            path=chain_path,
-            instance_id="i-1",
-            network_id="n-1",
-            nonce_prefix="abcd1234",
-            epoch=1,
-            # No tenant_id explicitly passed
-            write_event_fn=mock_write_event,
-        )
-
-        event = mock_write_event.written[0]
-        # tenant_id should still be in details if passed explicitly, or None if not
-        # The allow-list includes tenant_id, so it's expected when set
+@pytest.mark.parametrize("extra", [
+    {"private_key": "-----BEGIN PRIVATE KEY-----MIIE"},
+    {"full_nonce": _FULL_NONCE},
+    {"peer_email": _EMAIL},
+])
+def test_a2a_refuses_smuggled_fields(chain, extra):
+    with pytest.raises(a2a_audit.AuditFieldNotAllowed):
+        a2a_audit.emit("a2a.offline_pair_initiated", path=chain, tenant_id="_default",
+                       task_id="t", peer_id="p", pairing_id="x", ttl_s=60, **extra)
+    assert not chain.exists()
 
 
-# Nonce/Secret Truncation Enforcement
-
-class TestTruncationEnforcement:
-    """Verify high-entropy secrets are truncated."""
-
-    def test_genesis_nonce_always_truncated(self, chain_path, mock_write_event):
-        """Nonce prefix is ALWAYS truncated, no exceptions."""
-        test_cases = [
-            ("ab", "ab"),  # Too short → kept as-is
-            ("abcd1234", "abcd1234"),  # Exact 8 chars
-            ("abcd123456789012", "abcd1234"),  # 16 chars → truncated
-            ("a" * 32, "aaaaaaaa"),  # Very long → truncated
-        ]
-
-        for input_nonce, expected_prefix in test_cases:
-            mock_write_event.written.clear()
-            a2a_audit.emit_genesis_block_created(
-                path=chain_path,
-                instance_id="i-1",
-                network_id="n-1",
-                nonce_prefix=input_nonce,
-                epoch=1,
-                write_event_fn=mock_write_event,
-            )
-
-            event = mock_write_event.written[0]
-            actual = event["details"]["nonce_prefix"]
-            assert actual == expected_prefix, f"Nonce {input_nonce} → {actual}, expected {expected_prefix}"
+@pytest.mark.parametrize("extra", [
+    {"error_message": f"cannot open /home/alice/{_EMAIL}.db"},
+    {"stack_trace": 'File "/home/alice/plugin.py", line 3'},
+])
+def test_plugin_refuses_smuggled_fields(chain, extra):
+    with pytest.raises(plugin_audit.AuditFieldNotAllowed):
+        plugin_audit.emit("plugin.initialization_failed", path=chain, tenant_id="_default",
+                          plugin_id="p", boot_layer="bundled", error_class="E", **extra)
+    assert not chain.exists()
 
 
-# Exception Class Sanitization
-
-class TestExceptionSanitization:
-    """Verify exception classes are sanitized (names only, no traces)."""
-
-    def test_plugin_exception_class_only(self, chain_path, mock_write_event):
-        """Plugin events carry exception CLASS NAME only."""
-        plugin_audit.emit_initialization_failed(
-            path=chain_path,
-            plugin_id="p-1",
-            boot_layer="bundled",
-            error_class="ValueError",  # Class name only
-            tenant_id="_default",
-            write_event_fn=mock_write_event,
-        )
-
-        event = mock_write_event.written[0]
-        assert event["details"]["error_class"] == "ValueError"
-
-    def test_plugin_no_exception_message_leaked(self, chain_path, mock_write_event):
-        """Plugin events reject full exception messages."""
-        with pytest.raises(plugin_audit.AuditFieldNotAllowed):
-            plugin_audit.emit_initialization_failed(
-                path=chain_path,
-                plugin_id="p-1",
-                boot_layer="bundled",
-                error_class="ValueError",
-                error_message="Expected 3 args, got 2",  # Message! Forbidden!
-                write_event_fn=mock_write_event,
-            )
+def test_a2a_refuses_missing_tenant(chain):
+    with pytest.raises(a2a_audit.AuditFieldNotAllowed):
+        a2a_audit.emit_genesis_block_created(chain, instance_id="i", network_id="n",
+                                             nonce_prefix="ab", epoch=1)
+    assert not chain.exists()
 
 
-# Integer Type Coercion & Validation
-
-class TestTypeCoercion:
-    """Verify types are coerced/validated safely."""
-
-    def test_compute_epoch_coerced_to_int(self, chain_path, mock_write_event):
-        """Epoch is coerced to int."""
-        compute_audit.emit_worker_heartbeat(
-            path=chain_path,
-            worker_id="w-1",
-            iteration="42",  # String!
-            current_loss=0.5,
-            write_event_fn=mock_write_event,
-        )
-
-        event = mock_write_event.written[0]
-        assert isinstance(event["details"]["iteration"], int)
-
-    def test_a2a_collision_count_coerced_to_int(self, chain_path, mock_write_event):
-        """Collision count is coerced to int."""
-        a2a_audit.emit_nonce_collision_detected(
-            path=chain_path,
-            nonce_prefix="ab12",
-            epoch=1,
-            collision_count="5",  # String!
-            write_event_fn=mock_write_event,
-        )
-
-        event = mock_write_event.written[0]
-        assert isinstance(event["details"]["collision_count"], int)
-        assert event["details"]["collision_count"] == 5
+def test_unknown_event_types_are_refused(chain):
+    with pytest.raises(compute_audit.AuditFieldNotAllowed):
+        compute_audit.emit("compute.anything_goes", path=chain, worker_id="w")
+    with pytest.raises(a2a_audit.AuditFieldNotAllowed):
+        a2a_audit.emit("a2a.anything_goes", path=chain, tenant_id="_default")
+    with pytest.raises(plugin_audit.AuditFieldNotAllowed):
+        plugin_audit.emit("plugin.anything_goes", path=chain, plugin_id="p")
+    assert not chain.exists()
 
 
-# Deny-by-Default Behavior
+# ── truncation + coercion ─────────────────────────────────────────────────
 
-class TestDenyByDefault:
-    """Verify extra fields are always rejected (fail-closed)."""
-
-    def test_compute_unknown_field_denied(self, chain_path, mock_write_event):
-        """Compute rejects any unknown field."""
-        unknown_fields = [
-            "prompt", "task_id", "user_email", "credentials",
-            "api_key", "secret_value", "model_output",
-        ]
-
-        for field_name in unknown_fields:
-            mock_write_event.written.clear()
-            with pytest.raises(compute_audit.AuditFieldNotAllowed):
-                compute_audit.emit_worker_heartbeat(
-                    path=chain_path,
-                    worker_id="w-1",
-                    iteration=1,
-                    current_loss=0.5,
-                    **{field_name: "should_fail"}
-                )
-
-    def test_a2a_unknown_field_denied(self, chain_path, mock_write_event):
-        """A2A rejects any unknown field."""
-        unknown_fields = [
-            "payload", "instruction", "prompt", "output",
-            "secret_key", "private_key", "signature",
-        ]
-
-        for field_name in unknown_fields:
-            mock_write_event.written.clear()
-            with pytest.raises(a2a_audit.AuditFieldNotAllowed):
-                a2a_audit.emit_genesis_block_created(
-                    path=chain_path,
-                    instance_id="i-1",
-                    network_id="n-1",
-                    nonce_prefix="ab12",
-                    epoch=1,
-                    **{field_name: "should_fail"}
-                )
-
-    def test_plugin_unknown_field_denied(self, chain_path, mock_write_event):
-        """Plugin rejects any unknown field."""
-        unknown_fields = [
-            "plugin_code", "configuration", "settings",
-            "user_data", "password", "secret",
-        ]
-
-        for field_name in unknown_fields:
-            mock_write_event.written.clear()
-            with pytest.raises(plugin_audit.AuditFieldNotAllowed):
-                plugin_audit.emit_initialization_failed(
-                    path=chain_path,
-                    plugin_id="p-1",
-                    boot_layer="bundled",
-                    error_class="Error",
-                    **{field_name: "should_fail"}
-                )
+def test_full_nonce_is_truncated_to_prefix(chain):
+    a2a_audit.emit_genesis_block_created(chain, instance_id="i", network_id="n",
+                                         nonce_prefix=_FULL_NONCE, epoch="7",
+                                         tenant_id="_default")
+    a2a_audit.emit_nonce_collision_detected(chain, nonce_prefix=_FULL_NONCE, epoch=7,
+                                            collision_count="3", tenant_id="_default")
+    recs = _records(chain)
+    assert [r["details"]["nonce_prefix"] for r in recs] == ["deadbeef", "deadbeef"]
+    assert recs[0]["details"]["epoch"] == 7
+    assert recs[1]["details"]["collision_count"] == 3
+    assert _FULL_NONCE not in chain.read_text()
+    assert se.verify_chain(chain) == (True, [])
 
 
-# Error Handling & Resilience
-
-class TestErrorResilience:
-    """Verify audit failures don't crash the process."""
-
-    def test_compute_emit_failure_logged_not_raised(self, chain_path):
-        """Audit emit failure is logged, not raised."""
-        # Mock write_event to raise an exception
-        def failing_write(path, event_type, details=None, severity=None):
-            raise RuntimeError("Audit chain write failed")
-
-        # This should NOT raise; should log instead
-        compute_audit.emit_worker_heartbeat(
-            path=chain_path,
-            worker_id="w-1",
-            iteration=1,
-            current_loss=0.5,
-            write_event_fn=failing_write,
-        )
-        # If we got here, failure was handled gracefully
-
-    def test_a2a_emit_failure_logged_not_raised(self, chain_path):
-        """A2A audit emit failure is logged, not raised."""
-        def failing_write(path, event_type, details=None, severity=None):
-            raise RuntimeError("Audit chain write failed")
-
-        a2a_audit.emit_genesis_block_created(
-            path=chain_path,
-            instance_id="i-1",
-            network_id="n-1",
-            nonce_prefix="ab12",
-            epoch=1,
-            write_event_fn=failing_write,
-        )
-
-    def test_plugin_emit_failure_logged_not_raised(self, chain_path):
-        """Plugin audit emit failure is logged, not raised."""
-        def failing_write(path, event_type, details=None, severity=None):
-            raise RuntimeError("Audit chain write failed")
-
-        plugin_audit.emit_initialization_failed(
-            path=chain_path,
-            plugin_id="p-1",
-            boot_layer="bundled",
-            error_class="Error",
-            write_event_fn=failing_write,
-        )
+def test_non_numeric_counter_raises_instead_of_writing(chain):
+    with pytest.raises(ValueError):
+        plugin_audit.emit_execution_timeout(chain, plugin_id="p", boot_layer="bundled",
+                                            timeout_ms=f"5000; {_EMAIL}",
+                                            tenant_id="_default")
+    assert not chain.exists()
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+# ── writer failure semantics ──────────────────────────────────────────────
+
+def _failing_writer(*_a, **_k):
+    raise OSError("disk full")
+
+
+def test_plugin_emitter_is_audit_first_on_writer_failure(chain):
+    with pytest.raises(RuntimeError, match="audit-first"):
+        plugin_audit.emit("plugin.initialization_failed", path=chain, tenant_id="_default",
+                          plugin_id="p", boot_layer="bundled", error_class="ImportError",
+                          write_event_fn=_failing_writer)
+
+
+def test_a2a_emitter_logs_writer_failure(chain, caplog):
+    a2a_audit.emit("a2a.nonce_collision_detected", path=chain, tenant_id="_default",
+                   nonce_prefix="ab", epoch=1, collision_count=1,
+                   write_event_fn=_failing_writer)
+    assert any("a2a audit emit failed" in r.getMessage() for r in caplog.records)
+    assert not chain.exists()
+
+
+# ── the real writer's floor, independent of the emitter modules ───────────
+
+def test_writer_floor_drops_denylisted_keys_even_without_an_emitter(chain):
+    """A caller bypassing the emitter modules still cannot land content-named
+    keys: the chain writer's floor drops them (metadata-only, ADR-0129)."""
+    se.write_event(chain, "plugin.initialization_failed",
+                   details={"plugin_id": "p", "boot_layer": "bundled",
+                            "error_class": "E", "prompt": f"hi {_EMAIL}",
+                            "tenant_id": "_default"})
+    raw = chain.read_text()
+    assert _EMAIL not in raw
+    assert _records(chain)[0]["details"]["plugin_id"] == "p"
+    assert se.verify_chain(chain) == (True, [])

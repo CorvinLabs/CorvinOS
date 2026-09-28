@@ -84,6 +84,14 @@ try:
     _FORGE_TOP = _HERE.parent.parent / "forge"
     if _FORGE_TOP.is_dir() and str(_FORGE_TOP) not in _sys.path:
         _sys.path.insert(0, str(_FORGE_TOP))
+    _bound_forge = _sys.modules.get("forge")
+    if _bound_forge is not None and getattr(_bound_forge, "__file__", None) is None \
+            and (_FORGE_TOP / "forge" / "__init__.py").is_file():
+        # Empty NAMESPACE binding (``corvin_operator/`` on sys.path): it can
+        # never resolve ``forge.security_events``, so every decision record
+        # was silently dropped. It holds no code — drop it (same step as
+        # bridges/shared/audit.py and core/delegate/corvin_delegate/audit.py).
+        del _sys.modules["forge"]
     from forge.security_events import write_event as _audit_writer  # type: ignore # noqa: E402
     from forge.security_events import register_event_allowlist as _register_allowlist  # type: ignore # noqa: E402
     # Positive, content-free allow-list for the decision record. The synthesis
@@ -100,8 +108,14 @@ try:
         "site", "active_mode", "cap", "window_s",
         "persona", "channel_id", "audit_ref", "tenant_id",
     })
-except Exception:  # noqa: BLE001
+except Exception as _aw_exc:  # noqa: BLE001
     _audit_writer = None
+    import logging as _aw_log
+    _aw_log.getLogger("corvin.dialectic").error(
+        "forge chain writer not importable (%s) — decision.dialectical / "
+        "dialectic.rate_limited / human_oversight.override records are dropped",
+        type(_aw_exc).__name__,
+    )
 
 # Optional Layer-14 LDD-toggle library — when the dialectical_reasoning
 # layer is off (globally or per-chat), every dialectic site degrades to
@@ -762,16 +776,54 @@ def _fast_path_gate(thesis, antithesis, ctx):
 # ── Audit ──────────────────────────────────────────────────────────────────
 
 def _audit_chain_path() -> Path | None:
-    """Resolve the unified audit chain path. Returns None when forge.paths
-    is unimportable — caller treats that as "no audit available, skip"."""
+    """THE chain the dialectic records go to.
+
+    Same precedence as the bridge audit writer (``audit.audit_path()``):
+    ``VOICE_AUDIT_PATH`` (file) > ``FORGE_ROOT/audit.jsonl`` (dir) > the
+    canonical ``tenant_audit_chain()`` of the SIBLING ``paths`` module (loaded
+    by file path — see :func:`_sibling_paths`).
+
+    Used to be composed by hand as ``corvin_home()/global/forge/audit.jsonl``:
+    the legacy host-wide chain, which the boot tripwire, ``audit_query`` and
+    every compliance report do not read — so every ``decision.dialectical``
+    record landed outside the audit trail. Returns None only when the sibling
+    ``paths`` module cannot be loaded (caller skips the write).
+    """
+    redirect = os.environ.get("VOICE_AUDIT_PATH", "").strip()
+    if redirect:
+        return Path(redirect).expanduser()
+    forge_root = os.environ.get("FORGE_ROOT", "").strip()
+    if forge_root:
+        return Path(forge_root).expanduser() / "audit.jsonl"
     try:
-        from corvin_operator.forge.forge.paths import corvin_home  # type: ignore  # noqa: PLC0415
-        return Path(corvin_home()) / "global" / "forge" / "audit.jsonl"
+        return Path(_sibling_paths().tenant_audit_chain(None))
     except Exception:  # noqa: BLE001
-        env = os.environ.get("CORVIN_HOME") or os.environ.get("CORVIN_HOME")
-        if env:
-            return Path(env) / "global" / "forge" / "audit.jsonl"
         return None
+
+
+_SIBLING_PATHS: Any = None
+
+
+def _sibling_paths():
+    """The ``paths`` module next to THIS file, loaded by file path.
+
+    Never ``corvin_operator.forge.forge.paths`` (it can resolve into a
+    different checkout via the live venv's editable ``.pth``) and never a bare
+    ``import paths`` (it can resolve to ``corvin_operator/forge/paths.py``,
+    which has no ``tenant_audit_chain``). Same loader as
+    ``data_classification._sibling_paths``.
+    """
+    global _SIBLING_PATHS
+    if _SIBLING_PATHS is None:
+        import importlib.util as _ilu  # noqa: PLC0415
+
+        spec = _ilu.spec_from_file_location(
+            "_paths_dialectic", Path(__file__).resolve().parent / "paths.py",
+        )
+        mod = _ilu.module_from_spec(spec)  # type: ignore[arg-type]
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        _SIBLING_PATHS = mod
+    return _SIBLING_PATHS
 
 
 def _emit_oversight_override(

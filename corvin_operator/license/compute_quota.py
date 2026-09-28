@@ -149,8 +149,8 @@ def _emit_quota_exceeded(
 ) -> None:
     """Best-effort audit event; never raises."""
     try:
-        _repo = Path(__file__).resolve().parents[2]
-        _shared = _repo / "bridges" / "shared"
+        # corvin_operator/license/compute_quota.py -> corvin_operator/bridges/shared
+        _shared = Path(__file__).resolve().parents[1] / "bridges" / "shared"
         if str(_shared) not in sys.path:
             sys.path.insert(0, str(_shared))
         from audit import audit_event  # type: ignore
@@ -163,8 +163,10 @@ def _emit_quota_exceeded(
             limit_value=limit,
             tier=tier,
         )
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 — never block the quota decision
+        import logging  # noqa: PLC0415
+        logging.getLogger(__name__).error(
+            "compute.quota_exceeded audit not written: %s", type(exc).__name__)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

@@ -16,6 +16,7 @@ decides when to engage compute.
 """
 from __future__ import annotations
 
+import logging
 import hashlib
 import json
 import os
@@ -130,6 +131,75 @@ except ImportError:
     _YAML_OK = False
 
 router = APIRouter()
+
+
+_PRICING_URL = "https://corvin-labs.com/pricing"
+
+
+def require_compute_run(
+    tenant_id: str,
+    sid_fingerprint: str,
+    *,
+    audit_action: str,
+    channel: str,
+    entry_point: str,
+) -> None:
+    """ADR-0703 ``compute.run`` gate for every console compute surface.
+
+    Two steps, both fail-closed, in this order:
+      1. the capability verdict from the CANONICAL
+         ``corvin_operator.license.capability_api`` — the module every other
+         console gate and ``tenant_audit_chain`` audit uses. The bare
+         ``license.capability_api`` import this replaces is a SECOND module
+         object with its own tier resolver; and where it imported, the route
+         skipped step 2, so ``compute.run`` was allowed without charging the
+         daily counter;
+      2. the daily ``compute_units_per_day`` charge (``enforce_compute_quota``) —
+         ``require_capability`` checks a limit, it never counts.
+    Denial → 402 (``license_limit``); an unimportable licensing module or an
+    enforcement error → 503. Never a pass-through.
+    """
+    try:
+        from corvin_operator.license.capability_api import (  # noqa: PLC0415
+            Decision, LicenseDenied, require_capability,
+        )
+    except ImportError:
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "license_enforcement_unavailable",
+                    "capability": "compute.run"},
+        ) from None
+    try:
+        decision = require_capability(
+            "compute.run", requested=1, tenant_id=tenant_id,
+            entry_point=entry_point,
+        )
+    except LicenseDenied as e:
+        raise HTTPException(
+            status_code=http_status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "error": "license_limit",
+                "feature": "compute",
+                "reason": getattr(e, "reason", None) or "denied",
+                "upgrade_url": getattr(e, "upgrade_url", None) or _PRICING_URL,
+            },
+        ) from None
+    except Exception:  # noqa: BLE001 — enforcement failure = deny
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "license_enforcement_unavailable",
+                    "capability": "compute.run"},
+        ) from None
+    if getattr(decision, "decision", None) is not Decision.ALLOW:
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "license_enforcement_unavailable",
+                    "capability": "compute.run"},
+        )
+    from ._compute_license_gate import enforce_compute_quota  # noqa: PLC0415
+    enforce_compute_quota(
+        tenant_id, sid_fingerprint, audit_action=audit_action, channel=channel,
+    )
 
 # ── Tenant YAML helpers ───────────────────────────────────────────────────
 
@@ -794,9 +864,20 @@ def compute_license_status(
         }
 
     except ImportError:
+        # No Enterprise plugin (corvin_license, removed in 853ee7c54): the
+        # tier comes from the corvin_operator/license license.key, exactly as
+        # in the LicenseFileMissing branch — never a hard-coded "free".
+        _op_tier = _lic_active_tier() if _lic_active_tier is not None else "free"
+        if _op_tier != "free":
+            return {
+                "mode": "licensed", "tier": _op_tier, "fabric_allowed": False,
+                "reason": None, "upgrade_url": UPGRADE_URL,
+                "runs_today": _used_today_quota, "daily_limit": _daily_limit,
+                "quota": None, "license_meta": None,
+            }
         return {
             "mode": "trial", "tier": "free", "fabric_allowed": False,
-            "reason": "corvin-license plugin not installed",
+            "reason": None,
             "upgrade_url": UPGRADE_URL,
             "runs_today": _used_today_quota,
             "daily_limit": _daily_limit,
@@ -804,9 +885,11 @@ def compute_license_status(
             "license_meta": None,
         }
     except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "compute license status failed: %s", type(exc).__name__)
         return {
             "mode": "unknown", "tier": "unknown", "fabric_allowed": False,
-            "reason": str(exc), "upgrade_url": UPGRADE_URL,
+            "reason": "license_status_unavailable", "upgrade_url": UPGRADE_URL,
             "runs_today": _used_today_quota, "daily_limit": _daily_limit,
             "quota": None, "license_meta": None,
         }
@@ -1021,19 +1104,6 @@ def submit_run(
         )
         raise HTTPException(http_status.HTTP_401_UNAUTHORIZED, "re-auth failed")
 
-    # ADR-0094 / ADR-0147 R3-CON-RUNS-DRIFT-01: enforce compute_units_per_day via
-    # the SHARED fail-closed helper, identical to POST /compute/acs/runs and
-    # /compute/jobs. The old inline guard `if _COMPUTE_QUOTA_OK and _cq_increment
-    # is not None:` SKIPPED enforcement entirely when the license module was
-    # absent/shadowed (_COMPUTE_QUOTA_OK=False) — unmetered compute on the PRIMARY
-    # route while the other two correctly 402'd. Routing all three through one
-    # helper is the only way the gates cannot drift again.
-    from ._compute_license_gate import enforce_compute_quota  # noqa: PLC0415
-
-    enforce_compute_quota(
-        rec.tenant_id, rec.sid_fingerprint, audit_action="compute.run_submit",
-    )
-
     sock_path = _socket_path(rec.tenant_id)
     if not sock_path.exists():
         raise HTTPException(
@@ -1042,30 +1112,16 @@ def submit_run(
             "(systemctl --user start corvin-compute@<tenant>)",
         )
 
-    # Phase 1.2: require_capability via ADR-0703 unified gate
-    try:
-        from license.capability_api import require_capability, LicenseDenied
-        try:
-            require_capability(
-                "compute.run", requested=1, tenant_id=rec.tenant_id,
-                entry_point=__file__+":1033"
-            )
-        except LicenseDenied as e:
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "error": "license_limit",
-                    "feature": "compute",
-                    "reason": e.reason,
-                    "upgrade_url": e.upgrade_url or "https://corvin-labs.com/pricing",
-                },
-            )
-    except ImportError:
-        # Fallback to legacy gate if license module unavailable
-        from ._compute_license_gate import enforce_compute_quota  # noqa: PLC0415
-        enforce_compute_quota(
-            rec.tenant_id, rec.sid_fingerprint, audit_action="compute.run_submit",
-        )
+    # ADR-0094 / ADR-0147 R3-CON-RUNS-DRIFT-01 / ADR-0703: the compute.run
+    # capability verdict, then compute_units_per_day charged through the SHARED
+    # fail-closed helper (enforce_compute_quota) — exactly once. Charged after
+    # the worker-socket check, so "worker not running" burns no unit; a worker
+    # rejection below refunds it.
+    require_compute_run(
+        rec.tenant_id, rec.sid_fingerprint,
+        audit_action="compute.run_submit", channel="console",
+        entry_point="corvin_console.routes.compute:submit_run",
+    )
 
     # corvin_compute lives at core/compute/corvin_compute — not on the
     # console's PYTHONPATH by default (see compute_license_status above for

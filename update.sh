@@ -458,7 +458,7 @@ if [ -n "$PREV_REV" ] && [ -d "$SRC/.git" ] && [ "$KIND" = checkout ]; then
     if [ "$(_git rev-parse HEAD 2>/dev/null)" != "$PREV_REV" ]; then
         _git reset -q --keep "$PREV_REV" >>"$LOG" 2>&1 || {
             echo "  local changes overlap the update — code left at $(_git rev-parse --short HEAD 2>/dev/null)" >>"$LOG"
-            RB=0
+            RB=0; KEEP_REFUSED=1
         }
     fi
 elif [ -n "$PREV_REV" ] && [ -d "$SRC/.git" ]; then
@@ -474,6 +474,19 @@ else
     # as "rolled back" — say so instead.
     echo "  no previous source revision to restore (first managed install)" >>"$LOG"
     RB=0
+fi
+if [ "${KEEP_REFUSED:-0}" = 1 ]; then
+    # The code is still the NEW revision. Restoring the old frontend or
+    # "reinstalling the previous version" now would pair the old bundle with
+    # the new code and reinstall the NEW code under that label — leave the
+    # tree, the frontend and the services exactly as the update left them.
+    _new="$(_git rev-parse --short HEAD 2>/dev/null)"
+    _old="$(printf '%.9s' "$PREV_REV")"
+    echo "  $(_r 'Not rolled back:') your uncommitted changes overlap files the update changed." >&2
+    echo "  The code is still the updated revision $_new, with your changes intact." >&2
+    echo "  To go back to $_old:  git -C \"$SRC\" stash  &&  git -C \"$SRC\" reset --keep $_old" >&2
+    echo "                     then  sh update.sh --rebuild-only   (and git stash pop)   ·   Log: $LOG" >&2
+    exit 2
 fi
 if [ -d "$WEB/dist.prev" ]; then rm -rf "$WEB/dist"; mv "$WEB/dist.prev" "$WEB/dist" || RB=0; fi
 _quiet "reinstalling the previous version" _uv_install_healing || RB=0

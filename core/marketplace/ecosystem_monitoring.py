@@ -253,17 +253,16 @@ class EcosystemMonitor:
         """
         validate_tenant_id(tenant_id)
 
-        if tenant_id not in self.metrics:
-            self.metrics[tenant_id] = {}
-
-        # Get or create metrics
-        if skill_id not in self.metrics[tenant_id]:
-            self.metrics[tenant_id][skill_id] = SkillHealthMetrics(
-                skill_id=skill_id,
-                tenant_id=tenant_id,
-            )
-
-        metrics = self.metrics[tenant_id][skill_id]
+        # Audit-first: build the candidate record WITHOUT touching state, raise
+        # (and audit) any alert it triggers, and only then commit. The metrics
+        # used to be mutated before the alert's chain write, so an
+        # ``AuditWriteFailed`` (e.g. a tenant that is not the process tenant)
+        # left an UNHEALTHY skill with no alert and no record, and a retry
+        # counted the execution twice.
+        metrics = self.metrics.get(tenant_id, {}).get(skill_id) or SkillHealthMetrics(
+            skill_id=skill_id,
+            tenant_id=tenant_id,
+        )
 
         total = metrics.total_executions + 1
         successful = metrics.successful_executions + (1 if success else 0)
@@ -275,7 +274,8 @@ class EcosystemMonitor:
         # Real percentiles over a bounded window. p99 used to be
         # ``max(prev_p99, latency * 0.95)`` — a number that is neither a
         # percentile nor ever able to go down.
-        window = self._latencies.setdefault((tenant_id, skill_id), deque(maxlen=_LATENCY_WINDOW))
+        old_window = self._latencies.get((tenant_id, skill_id))
+        window = deque(old_window or (), maxlen=_LATENCY_WINDOW)
         window.append(float(latency_ms))
         ordered = sorted(window)
 
@@ -283,7 +283,7 @@ class EcosystemMonitor:
         # construct a fresh record from execution fields only, silently
         # resetting ratings, feedback, installs and confidence on EVERY
         # execution.
-        self.metrics[tenant_id][skill_id] = dataclasses.replace(
+        candidate = dataclasses.replace(
             metrics,
             total_executions=total,
             successful_executions=successful,
@@ -298,8 +298,11 @@ class EcosystemMonitor:
             snapshot_at=datetime.now(timezone.utc),
         )
 
-        # Check for alerts
-        self._check_health_alerts(tenant_id, skill_id)
+        # Raises AuditWriteFailed before any state below is committed.
+        self._raise_health_alerts(candidate)
+
+        self.metrics.setdefault(tenant_id, {})[skill_id] = candidate
+        self._latencies[(tenant_id, skill_id)] = window
 
     def record_skill_rating(
         self,
@@ -387,16 +390,24 @@ class EcosystemMonitor:
         return HealthStatus.HEALTHY
 
     def _check_health_alerts(self, tenant_id: str, skill_id: str) -> None:
-        """Check for health issues and create alerts."""
+        """Check the stored metrics of one skill for health issues."""
         validate_tenant_id(tenant_id)
 
-        if tenant_id not in self.alerts:
-            self.alerts[tenant_id] = []
-
         if tenant_id not in self.metrics or skill_id not in self.metrics[tenant_id]:
+            self.alerts.setdefault(tenant_id, [])
             return
 
-        metrics = self.metrics[tenant_id][skill_id]
+        self._raise_health_alerts(self.metrics[tenant_id][skill_id])
+
+    def _raise_health_alerts(self, metrics: SkillHealthMetrics) -> None:
+        """Raise (audit-first) every alert ``metrics`` warrants.
+
+        ``AuditWriteFailed`` propagates; an alert already committed earlier in
+        the same call stays in the list, because its chain record exists.
+        """
+        tenant_id = metrics.tenant_id
+        skill_id = metrics.skill_id
+        validate_tenant_id(tenant_id)
 
         # High error rate alert
         if metrics.error_rate > self.error_rate_threshold:

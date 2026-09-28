@@ -13,7 +13,10 @@
  *   }, []);
  *
  * Features:
- * - Auto-reconnect with exponential backoff (1s, 2s, 4s, max 30s)
+ * - Auto-reconnect with exponential backoff (1s, 2s, 4s, max 30s). The backoff
+ *   resets only after a message arrives — an open that is closed straight away
+ *   proves nothing. Close codes 4401 (no session) and 4501 (not implemented)
+ *   are final: the hook reports them in `error` and stops reconnecting.
  * - Per-channel subscriptions
  * - Heartbeat (ping/pong every 30s)
  * - Error recovery (graceful degradation)
@@ -35,6 +38,12 @@ import type {
 const RECONNECT_INTERVALS = [1000, 2000, 4000, 8000, 16000, 30000]; // ms
 const HEARTBEAT_INTERVAL = 30000; // ms
 const CONNECT_TIMEOUT = 5000; // ms
+// Close codes the server uses for a final refusal (routes/learning_stream.py):
+// retrying cannot change the answer, so these end the reconnect loop.
+const TERMINAL_CLOSE_CODES: Record<number, string> = {
+  4401: "no console session",
+  4501: "stream not available on this build",
+};
 
 interface UseSkillWebSocketOptions {
   onConnect?: OnConnectCallback;
@@ -120,13 +129,13 @@ export function useSkillWebSocket(options: UseSkillWebSocketOptions = {}) {
 
     ws.onopen = () => {
       if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
-      attemptsRef.current = 0;
+      // Do NOT reset the backoff here: the server accepts and then closes
+      // (4501) — resetting on open turned that into a reconnect every second.
       setState((prev) => ({
         ...prev,
         isConnected: true,
         isReconnecting: false,
         error: null,
-        connectionAttempts: 0,
       }));
 
       if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
@@ -149,7 +158,9 @@ export function useSkillWebSocket(options: UseSkillWebSocketOptions = {}) {
     ws.onmessage = (event) => {
       try {
         const msg: WebSocketEvent = JSON.parse(event.data);
-        setState((prev) => ({ ...prev, lastUpdate: msg }));
+        // A delivered message is what proves the stream works.
+        attemptsRef.current = 0;
+        setState((prev) => ({ ...prev, lastUpdate: msg, connectionAttempts: 0 }));
         if ("stream_id" in msg) {
           subscriptionsRef.current.get(msg.stream_id)?.callbacks.forEach((cb) => cb(msg));
         }
@@ -162,12 +173,23 @@ export function useSkillWebSocket(options: UseSkillWebSocketOptions = {}) {
       setState((prev) => ({ ...prev, error: "WebSocket connection error" }));
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event: CloseEvent) => {
       if (wsRef.current !== ws) return; // a superseded socket
       wsRef.current = null;
       if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
       if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
       if (!mountedRef.current) return;
+      const terminal = TERMINAL_CLOSE_CODES[event?.code];
+      if (terminal) {
+        setState((prev) => ({
+          ...prev,
+          isConnected: false,
+          isReconnecting: false,
+          error: `Live updates unavailable (${event.code}: ${terminal})`,
+        }));
+        optsRef.current.onDisconnect?.();
+        return;
+      }
       setState((prev) => ({ ...prev, isConnected: false }));
       optsRef.current.onDisconnect?.();
       scheduleReconnect();

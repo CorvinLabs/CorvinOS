@@ -10,6 +10,7 @@ from __future__ import annotations
 from .base import StageTelemetry
 from .binding import SkillRef, MAX_BINDINGS
 from .registry import register_stage
+from .toolforge import emit_stage_skipped_unlicensed, forge_create_licensed
 
 
 # NB (review R7): this used `MultiRegistry`, a class that does not exist — the real
@@ -83,6 +84,7 @@ class SkillForgeStage:
         needs = (bundle.scratch.get("needs") or {}).get("skills") or []
         bound: list = []
         skipped_shape = 0
+        licensed = None   # resolved once, at the first forgeable request
         for s in needs[:MAX_BINDINGS]:
             # A skill without a BODY is an empty injection: `render_skill_bindings`
             # would emit a heading with nothing under it, and the artifact on disk
@@ -121,6 +123,21 @@ class SkillForgeStage:
                 continue   # a name of only separators would collapse every skill
                            # onto the bare prefix `cel_` (review R7)
             safe = "cel_" + safe
+            # ADR-0701: on a licence refusal skip for the turn and record it.
+            # The create below used to fail into `except: pass` and the skill
+            # body was STILL bound to the worker, unpersisted and unaudited.
+            if licensed is None:
+                licensed = forge_create_licensed(
+                    ctx.tenant_id,
+                    entry_point="context_engineering.stages.skillforge")
+            if not licensed:
+                emit_stage_skipped_unlicensed(
+                    self.id, ctx.tenant_id,
+                    "corvin_operator/context_engineering/stages/skillforge.py"
+                    ":SkillForgeStage.run")
+                return bundle, StageTelemetry(
+                    stage=self.id, status="skipped", reason="unlicensed",
+                    confidence_tier="low", sources=[])
             body = str(s.get("body"))
             # PRE-EXISTING skills are bound, never re-created and never rolled back
             # (found 2026-08-18): `_skill_create` writes with overwrite=True, and the

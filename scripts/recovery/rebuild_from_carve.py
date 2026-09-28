@@ -106,7 +106,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--carve", default="/dev/shm/corvin-carve/raw.jsonl", type=Path)
     ap.add_argument("--apply", action="store_true")
-    ap.add_argument("--instance-id", default="", help="this instance's id (default: <home>/instance_id)")
+    ap.add_argument("--instance-id", default="", help="this instance's id (default: read from $CORVIN_INSTANCE_ID_PATH, else "
+                         "<corvin_home>/global/instance_id.json; legacy fallback <corvin_home>/instance_id)")
     args = ap.parse_args(argv)
 
     key = se._anchor_key()

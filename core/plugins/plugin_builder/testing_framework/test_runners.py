@@ -122,9 +122,12 @@ class PluginTestRunner:
             issues.append("No tests/ directory with test_*.py files found")
 
         # Check for build configuration
+        # ``(plugin_dir / name).is_file()``, not ``any(plugin_dir.glob(name) …)``:
+        # a glob GENERATOR is always truthy, so the old check reported a build
+        # config for every directory and never raised this issue.
         has_build_config = any(
-            self.plugin_dir.glob(pattern)
-            for pattern in ["setup.py", "pyproject.toml", "setup.cfg"]
+            (self.plugin_dir / name).is_file()
+            for name in ("setup.py", "pyproject.toml", "setup.cfg")
         )
         if not has_build_config:
             issues.append("No setup.py or pyproject.toml found")

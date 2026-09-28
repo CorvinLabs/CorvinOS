@@ -39,12 +39,22 @@ def test_repository_passes_the_gate_in_a_bare_interpreter(tmp_path):
 
 
 def test_counts_are_the_imported_dicts():
-    mod = _load()
-    se = mod.load_registry()
+    # Count in a FRESH interpreter: in this process other tests may already
+    # have added runtime allowlists (register_event_allowlist), which the
+    # static count the script reports rightly does not include.
+    probe = (
+        "import importlib.util,sys;"
+        f"spec=importlib.util.spec_from_file_location('v', {str(SCRIPT)!r});"
+        "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
+        "se=m.load_registry();print(len(se.EVENT_SEVERITY), len(se._EVENT_ALLOWLIST))"
+    )
+    counts = subprocess.run([sys.executable, "-c", probe], cwd=REPO,
+                            capture_output=True, text=True, timeout=120).stdout.split()
+    n_sev, n_allow = counts[-2], counts[-1]
     out = subprocess.run([sys.executable, str(SCRIPT)], cwd=REPO,
                          capture_output=True, text=True, timeout=120).stdout
-    assert f"EVENT_SEVERITY entries : {len(se.EVENT_SEVERITY)}" in out
-    assert f"_EVENT_ALLOWLIST entries: {len(se._EVENT_ALLOWLIST)}" in out
+    assert f"EVENT_SEVERITY entries : {n_sev}" in out
+    assert f"_EVENT_ALLOWLIST entries: {n_allow}" in out
 
 
 def test_emitter_scan_finds_a_real_emitter():

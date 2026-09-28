@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from ..build_system.builder import BuildConfig
 from ..build_system import (
     PackageBuilder,
     PackageMetadata,
@@ -59,6 +60,9 @@ class TestPackageBuilder(unittest.TestCase):
             version="0.1.0",
             description="Test plugin",
         )
+        # PackageBuilder takes (plugin_dir, config, metadata); these tests
+        # passed the metadata as ``config`` and died on ``config.skill_id``.
+        self.config = BuildConfig(tenant_id="_default", skill_id="plugin-test")
 
     def tearDown(self) -> None:
         """Clean up test resources."""
@@ -66,7 +70,7 @@ class TestPackageBuilder(unittest.TestCase):
 
     def test_builder_creation(self) -> None:
         """Test creating a package builder."""
-        builder = PackageBuilder(self.plugin_dir, self.metadata)
+        builder = PackageBuilder(self.plugin_dir, self.config, self.metadata)
 
         self.assertEqual(builder.metadata.name, "test-plugin")
         self.assertTrue(
@@ -75,7 +79,7 @@ class TestPackageBuilder(unittest.TestCase):
 
     def test_generate_setup_py(self) -> None:
         """Test setup.py generation."""
-        builder = PackageBuilder(self.plugin_dir, self.metadata)
+        builder = PackageBuilder(self.plugin_dir, self.config, self.metadata)
         setup_py = builder.generate_setup_py()
 
         self.assertIn("test-plugin", setup_py)
@@ -85,7 +89,7 @@ class TestPackageBuilder(unittest.TestCase):
 
     def test_generate_pyproject_toml(self) -> None:
         """Test pyproject.toml generation."""
-        builder = PackageBuilder(self.plugin_dir, self.metadata)
+        builder = PackageBuilder(self.plugin_dir, self.config, self.metadata)
         pyproject = builder.generate_pyproject_toml()
 
         self.assertIn("test-plugin", pyproject)
@@ -95,7 +99,7 @@ class TestPackageBuilder(unittest.TestCase):
 
     def test_write_build_files(self) -> None:
         """Test writing build files."""
-        builder = PackageBuilder(self.plugin_dir, self.metadata)
+        builder = PackageBuilder(self.plugin_dir, self.config, self.metadata)
         files = builder.write_build_files()
 
         self.assertEqual(len(files), 2)  # setup.py and pyproject.toml

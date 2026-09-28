@@ -22,13 +22,13 @@ class FakeSocket {
   readyState = FakeSocket.CONNECTING;
   sent: string[] = [];
   onopen: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((e: { code: number; reason: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   onmessage: ((e: { data: string }) => void) | null = null;
   close = vi.fn(() => {
     if (this.readyState === FakeSocket.CLOSED) return;
     this.readyState = FakeSocket.CLOSED;
-    this.onclose?.();
+    this.onclose?.({ code: 1005, reason: "" });
   });
 
   constructor(public url: string) {
@@ -42,9 +42,9 @@ class FakeSocket {
     this.readyState = FakeSocket.OPEN;
     this.onopen?.();
   }
-  drop() {
+  drop(code = 1006, reason = "") {
     this.readyState = FakeSocket.CLOSED;
-    this.onclose?.();
+    this.onclose?.({ code, reason });
   }
   emit(event: WebSocketEvent) {
     this.onmessage?.({ data: JSON.stringify(event) });
@@ -67,6 +67,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // A test that fails mid-way never reaches its own useRealTimers(); without
+  // this the faked clock leaks into the next test.
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -153,6 +156,73 @@ describe("useSkillWebSocket", () => {
     // scheduled a reconnect: a new socket appeared here.
     expect(FakeSocket.instances).toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
+  // routes/learning_stream.py accepts, then closes 4401 (no session) or 4501
+  // (not_implemented). Both are final answers: reconnecting only repeats them.
+  // Before the fix the hook reopened the socket every second forever — onopen
+  // reset the backoff, so it never even backed off.
+  it.each([
+    [4401, "no session"],
+    [4501, "not_implemented"],
+  ])("stops reconnecting on close code %i", (code, reason) => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useSkillWebSocket());
+    act(() => latest().open());
+    act(() => latest().drop(code, reason));
+    act(() => {
+      vi.advanceTimersByTime(120_000);
+    });
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(result.current.isConnected).toBe(false);
+    expect(result.current.isReconnecting).toBe(false);
+    expect(result.current.error).toContain(String(code));
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it("keeps backing off when a socket opens and drops without delivering a message", () => {
+    vi.useFakeTimers();
+    renderHook(() => useSkillWebSocket());
+    // open → drop cycles: an open alone is not proof of a working stream, so
+    // the delay must grow 1s, 2s, 4s instead of resetting to 1s each time.
+    for (const delay of [1000, 2000, 4000]) {
+      const n = FakeSocket.instances.length;
+      act(() => latest().open());
+      act(() => latest().drop());
+      act(() => {
+        vi.advanceTimersByTime(delay - 1);
+      });
+      expect(FakeSocket.instances).toHaveLength(n);
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(FakeSocket.instances).toHaveLength(n + 1);
+    }
+    vi.useRealTimers();
+  });
+
+  it("resets the backoff once a message has been received", () => {
+    vi.useFakeTimers();
+    renderHook(() => useSkillWebSocket());
+    // Two failed cycles push the next delay to 4s …
+    for (const delay of [1000, 2000]) {
+      act(() => latest().open());
+      act(() => latest().drop());
+      act(() => {
+        vi.advanceTimersByTime(delay);
+      });
+    }
+    // … a delivered message proves the stream works, so the next drop is 1s.
+    act(() => latest().open());
+    act(() => latest().emit(confidence("flow-guard", 0.5)));
+    act(() => latest().drop());
+    const n = FakeSocket.instances.length;
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(FakeSocket.instances).toHaveLength(n + 1);
     vi.useRealTimers();
   });
 

@@ -149,7 +149,16 @@ def _check_license_plugin() -> None:
 
 def _compute_license_status() -> LicenseStatus:
     """Compute current license status from disk."""
-    _check_license_plugin()
+    # The Enterprise on-prem plugin (corvin_license) is optional — it was
+    # removed from this repo in 853ee7c54. Without it there is no license.jwt
+    # to read, which is the same situation as "plugin present, file absent":
+    # the tier comes from the corvin_operator/license license.key. Raising 503
+    # here made the Dashboard's /license/status fail for every subscriber.
+    if _verifier is None:
+        _op_tier = _lic_active_tier()
+        if _op_tier != "free":
+            return LicenseStatus(tier=_op_tier, mode="active", customer_fp=None)
+        return LicenseStatus(tier="free", mode="free", customer_fp=None)
 
     try:
         lic_file = _verifier.license_file_path()

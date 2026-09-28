@@ -32,15 +32,41 @@ from .generators import (
 )
 from .interview import InterviewPhase, InterviewSession, classify_checkpoint_decision
 
-# ADR-0701 G4: License gate for forge.create
-try:
-    from corvin_operator.license.capability_api import require_capability, LicenseDenied
-except ImportError:
-    # Fallback for testing without license module
-    def require_capability(*args, **kwargs):
-        pass
-    class LicenseDenied(Exception):
-        pass
+
+def _forge_create_denial(tenant_id: str) -> "str | None":
+    """ADR-0701 G4 licence gate for ``forge.create`` — FAIL-CLOSED.
+
+    Returns ``None`` when the licensing API answers ``Decision.ALLOW``, else
+    the operator-facing refusal. Imported lazily: a module-level import with a
+    no-op ``require_capability`` fallback on ``ImportError`` used to make every
+    process that could not load the licensing module a free pass to the
+    builder (adversarial review 2026-09-28). An unimportable module, a denial
+    and any enforcement error all deny.
+    """
+    try:
+        from corvin_operator.license.capability_api import (  # noqa: PLC0415
+            Decision, LicenseDenied, require_capability,
+        )
+    except ImportError:
+        log.error("plugin_builder: licensing module unavailable — "
+                  "forge.create denied (fail-closed)")
+        return ("Plugin-Builder is unavailable: the licensing module could "
+                "not be loaded, so forge.create is refused.")
+    try:
+        decision = require_capability(
+            "forge.create", requested=1, tenant_id=tenant_id,
+            entry_point="plugin_builder",
+        )
+    except LicenseDenied as e:
+        return f"Plugin-Builder requires a member seat: {e}"
+    except Exception as e:  # noqa: BLE001 — enforcement failure = deny
+        log.error("plugin_builder: licence enforcement failed (%s) — denied",
+                  type(e).__name__)
+        return ("Plugin-Builder is unavailable: licence enforcement failed, "
+                "so forge.create is refused.")
+    if getattr(decision, "decision", None) is not Decision.ALLOW:
+        return "Plugin-Builder requires a member seat: forge.create not allowed."
+    return None
 
 log = logging.getLogger("corvin.plugin_builder.turn")
 
@@ -386,11 +412,10 @@ def command(
     ADR-0253's original design never let mid-interview state depend on a flag
     re-read).
     """
-    # ADR-0701 G4: License gate — forge.create is member-only
-    try:
-        require_capability("forge.create", requested=1, tenant_id=tenant_id, entry_point="plugin_builder")
-    except LicenseDenied as e:
-        return f"Plugin-Builder requires a member seat: {e}"
+    # ADR-0701 G4: License gate — forge.create is member-only, fail-closed
+    denial = _forge_create_denial(tenant_id)
+    if denial is not None:
+        return denial
 
     sub = arg.strip().lower()
     if sub in ("cancel", "stop"):

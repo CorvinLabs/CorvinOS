@@ -5879,18 +5879,41 @@ def _call_claude_streaming_via_engine(
             thread.join(timeout=5)
             rc = proc.wait()
         except Exception as e:  # noqa: BLE001
-            log(f"engine streaming loop error: {e}")
+            # An exception HERE is an adapter defect, not a provider error, and
+            # the engine may already have run tools. The turn FAILS — it is
+            # never re-run. The previous fallback (`return call_claude(...)`)
+            # re-sent the whole prompt through the legacy blocking path with
+            # --continue in this same session workdir while the cancelled CLI
+            # was still exiting (two CLIs on one session), re-executed tool
+            # side effects, and emitted no engine span (unpriced, ADR-0759).
+            # The instrumented retries below are not used either: they key on
+            # provider error text, and a retry would hit the same defect.
+            log(f"engine streaming loop error: {e!r} — turn failed, not retried")
             try:
                 engine.cancel()
             except Exception:  # noqa: BLE001
                 pass
-            # This function has no `sender` parameter — the turn's sender
-            # travels in the engine env (as for the retries below). A bare
-            # `sender` here raised NameError: the fallback never answered.
-            return call_claude(
-                prompt, channel=channel, chat_key=chat_key,
-                mode=mode, add_dir=add_dir, profile=profile,
-                sender=(env or {}).get("CORVIN_ORIGIN_SENDER", ""),
+            # Reap the process before replying, so nothing of this turn is
+            # still running on the session when the next turn starts.
+            try:
+                rc = proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                    rc = proc.wait(timeout=5)
+                except Exception:  # noqa: BLE001
+                    rc = -int(signal.SIGKILL)
+            except Exception:  # noqa: BLE001
+                rc = proc.returncode if proc.returncode is not None else 1
+            thread.join(timeout=5)
+            # The finally below records task.failed and closes the span as
+            # "error" — both key on a non-empty error_text / non-zero rc.
+            rc = rc or 1
+            error_text = f"adapter streaming loop error ({type(e).__name__})"
+            return with_voice_override(
+                f"Claude API call failed: internal adapter error "
+                f"({type(e).__name__}) — the turn was stopped and not retried.",
+                "The call to Claude Code failed.",
             )
 
         if not has_session:
@@ -12620,6 +12643,94 @@ def _start_telemetry_threads() -> None:
         log(f"telemetry: heartbeat thread initialization failed (best-effort): {_hb_e}")
 
 
+def _background_delivery_tick() -> None:
+    """One pass of the main loop's background-delivery tick (every
+    SCHED_INTERVAL): completion notifications, supervisor healing, progress
+    updates, mid-turn heartbeats. Each step is isolated — one failing step
+    logs and never stops the others or the loop."""
+    try:
+        try:
+            from . import completion_notify as _cn  # type: ignore
+        except ImportError:
+            import completion_notify as _cn  # type: ignore[no-redef]
+        # ADR-0189: records registered with want_voice=True (e.g. a
+        # paused browser-agent task needing login/approval) get a
+        # spoken voice note attached here, using the SAME synthesis
+        # pipeline a normal end-of-turn reply uses. Failure degrades
+        # to text-only inside deliver_ready — never blocks delivery.
+        def _synth_voice(text: str) -> str | None:
+            p = synthesize_voice_note(text, lang="de")
+            return str(p) if p else None
+        # Ship-dark (bridge_orphan_task_reaper): convert an
+        # ABANDONED pending record — a worker SIGKILLed before it
+        # claimed, which completion_notify's own reap skips — into a
+        # loud failure BEFORE the delivery pass, so the abort notice
+        # reaches the user in THIS tick. No-op when the flag is off.
+        try:
+            _reaped = _cn.reap_orphan_pending(
+                enabled=_bg_flag("bridge_orphan_task_reaper"))
+            if _reaped:
+                log(f"completion_notify: reaped {_reaped} "
+                    f"abandoned task(s) as failed")
+        except Exception as _re:  # noqa: BLE001 — never break the tick
+            log(f"orphan reaper tick failed: {_re}")
+        sent = _cn.deliver_ready(OUTBOX, synthesize_voice=_synth_voice)
+        if sent:
+            log(f"completion_notify: delivered {sent} notification(s)")
+    except Exception as e:
+        log(f"completion_notify tick failed: {e}")
+    # ADR-2027's orchestration aggregator is NOT called here. Its wiring was
+    # written against an API the module does not have (`deliver_ready` never
+    # existed, `on_task_complete` needs a batch_id, the records are dicts) and
+    # its audit write is a stub — every tick logged a failure while marking
+    # completion records `_aggregated`. Re-wire it only together with a real
+    # delivery function and a real audit write (ADR-2027, PROPOSED).
+    # Same tick, same reasoning, for a run that is still going:
+    # heal whatever stopped, then flush its intermediate updates.
+    # Healing first so a budget-exhausted verdict or a resume
+    # notice reaches the user in THIS tick, not the next one.
+    # Both are idempotent with bg_monitor's timer (per-record
+    # O_EXCL locks), so running in both places cannot
+    # double-deliver or double-launch.
+    try:
+        try:
+            from . import task_supervisor as _sup  # type: ignore
+        except ImportError:
+            import task_supervisor as _sup  # type: ignore[no-redef]
+        healed = _sup.supervise()
+        if healed:
+            log(f"task_supervisor: resumed {healed} stopped run(s)")
+    except Exception as e:
+        log(f"task_supervisor tick failed: {e}")
+    try:
+        try:
+            from . import task_progress as _tp  # type: ignore
+        except ImportError:
+            import task_progress as _tp  # type: ignore[no-redef]
+        prog = _tp.deliver_progress(OUTBOX)
+        if prog:
+            log(f"task_progress: delivered {prog} update(s)")
+    except Exception as e:
+        log(f"task_progress tick failed: {e}")
+    try:  # ADR-0551 C1-B — mid-turn background heartbeat
+        # Gate on the flag: toggled OFF, no residual marker
+        # should keep pinging from an earlier flag-on turn.
+        try:
+            from . import mid_turn_heartbeat as _mth2  # type: ignore
+        except ImportError:
+            import mid_turn_heartbeat as _mth2  # type: ignore[no-redef]
+        if _bg_flag("bridge_mid_turn_task_notify"):
+            hb = _mth2.deliver_due(_mth2.default_state_dir(), OUTBOX)
+            if hb:
+                log(f"mid_turn_heartbeat: delivered {hb} heartbeat(s)")
+        else:
+            # Flag OFF: still GC residual markers (deliver_due, which
+            # normally expires them, is gated) — emit nothing.
+            _mth2.sweep(_mth2.default_state_dir())
+    except Exception as e:
+        log(f"mid_turn_heartbeat tick failed: {e}")
+
+
 def main() -> int:
     global _executor, _sidechannel_executor
     # parents=True: with ADAPTER_INBOX/OUTBOX/PROCESSED pinned to a fresh
@@ -12640,6 +12751,18 @@ def main() -> int:
         f"(MAX_PARALLEL={MAX_PARALLEL}, per-chat sequential)")
 
     # (ADR-2091 removed the local-Ollama voice-summary prewarm and CORVIN_VOICE_PREWARM.)
+
+    # The shadow model classifier (model_selector_shadow.shadow_classify_task,
+    # called on every turn BEFORE the engine spawn) imports
+    # core.skills.os_skills.model_selector lazily — ~1.3 s of sklearn/scipy on
+    # the first turn after boot. Pay it here, off the request path.
+    def _prewarm_model_classifier() -> None:
+        try:
+            import core.skills.os_skills.model_selector  # type: ignore  # noqa: F401, PLC0415
+        except Exception:  # noqa: BLE001 — bridge-only install; the turn path degrades the same way
+            pass
+    threading.Thread(target=_prewarm_model_classifier, name="classifier-prewarm",
+                     daemon=True).start()
 
     # Boot snapshot — useful when grepping /var/log for "why is this run
     # different". Covers logger config, env flags, parallelism budget,
@@ -13110,110 +13233,7 @@ def main() -> int:
                 # claude -p process has exited. Idempotent with the bg_monitor
                 # timer's own delivery (per-record O_EXCL lock).
                 if time.monotonic() - last_cn_poll > SCHED_INTERVAL:
-                    try:
-                        try:
-                            from . import completion_notify as _cn  # type: ignore
-                        except ImportError:
-                            import completion_notify as _cn  # type: ignore[no-redef]
-                        # ADR-0189: records registered with want_voice=True (e.g. a
-                        # paused browser-agent task needing login/approval) get a
-                        # spoken voice note attached here, using the SAME synthesis
-                        # pipeline a normal end-of-turn reply uses. Failure degrades
-                        # to text-only inside deliver_ready — never blocks delivery.
-                        def _synth_voice(text: str) -> str | None:
-                            p = synthesize_voice_note(text, lang="de")
-                            return str(p) if p else None
-                        # Ship-dark (bridge_orphan_task_reaper): convert an
-                        # ABANDONED pending record — a worker SIGKILLed before it
-                        # claimed, which completion_notify's own reap skips — into a
-                        # loud failure BEFORE the delivery pass, so the abort notice
-                        # reaches the user in THIS tick. No-op when the flag is off.
-                        try:
-                            _reaped = _cn.reap_orphan_pending(
-                                enabled=_bg_flag("bridge_orphan_task_reaper"))
-                            if _reaped:
-                                log(f"completion_notify: reaped {_reaped} "
-                                    f"abandoned task(s) as failed")
-                        except Exception as _re:  # noqa: BLE001 — never break the tick
-                            log(f"orphan reaper tick failed: {_re}")
-                        sent = _cn.deliver_ready(OUTBOX, synthesize_voice=_synth_voice)
-                        if sent:
-                            log(f"completion_notify: delivered {sent} notification(s)")
-                    except Exception as e:
-                        log(f"completion_notify tick failed: {e}")
-                    # ADR-XXXX: orchestration aggregator — batch-level completion
-                    # events for multiple background tasks. Implicit time-window grouping
-                    # ensures N tasks spawned within 5 min belong to same batch.
-                    # Runs AFTER completion_notify to consume recently-delivered tasks.
-                    try:
-                        try:
-                            from . import orchestration_aggregator as _oa  # type: ignore
-                        except ImportError:
-                            import orchestration_aggregator as _oa  # type: ignore[no-redef]
-                        # Sync completed tasks from completion_notify into aggregator
-                        for task in _cn.get_recently_completed(clear=True):
-                            _oa.on_task_complete(
-                                task_id=task.task_id,
-                                success=task.status == "delivered" and not task.error,
-                                error=task.error,
-                                duration_secs=task.duration_secs,
-                                task_metadata={
-                                    "channel_id": task.chat_id,
-                                    "task_type": getattr(task, "task_type", "unknown"),
-                                    "start_time": task.created_at,
-                                }
-                            )
-                        # Emit orchestration events when batches complete
-                        delivered = _oa.deliver_ready(OUTBOX)
-                        if delivered:
-                            log(f"orchestration_aggregator: delivered {delivered} "
-                                f"orchestration event(s)")
-                    except Exception as e:
-                        log(f"orchestration_aggregator tick failed: {e}")
-                    # Same tick, same reasoning, for a run that is still going:
-                    # heal whatever stopped, then flush its intermediate updates.
-                    # Healing first so a budget-exhausted verdict or a resume
-                    # notice reaches the user in THIS tick, not the next one.
-                    # Both are idempotent with bg_monitor's timer (per-record
-                    # O_EXCL locks), so running in both places cannot
-                    # double-deliver or double-launch.
-                    try:
-                        try:
-                            from . import task_supervisor as _sup  # type: ignore
-                        except ImportError:
-                            import task_supervisor as _sup  # type: ignore[no-redef]
-                        healed = _sup.supervise()
-                        if healed:
-                            log(f"task_supervisor: resumed {healed} stopped run(s)")
-                    except Exception as e:
-                        log(f"task_supervisor tick failed: {e}")
-                    try:
-                        try:
-                            from . import task_progress as _tp  # type: ignore
-                        except ImportError:
-                            import task_progress as _tp  # type: ignore[no-redef]
-                        prog = _tp.deliver_progress(OUTBOX)
-                        if prog:
-                            log(f"task_progress: delivered {prog} update(s)")
-                    except Exception as e:
-                        log(f"task_progress tick failed: {e}")
-                    try:  # ADR-0551 C1-B — mid-turn background heartbeat
-                        # Gate on the flag: toggled OFF, no residual marker
-                        # should keep pinging from an earlier flag-on turn.
-                        try:
-                            from . import mid_turn_heartbeat as _mth2  # type: ignore
-                        except ImportError:
-                            import mid_turn_heartbeat as _mth2  # type: ignore[no-redef]
-                        if _bg_flag("bridge_mid_turn_task_notify"):
-                            hb = _mth2.deliver_due(_mth2.default_state_dir(), OUTBOX)
-                            if hb:
-                                log(f"mid_turn_heartbeat: delivered {hb} heartbeat(s)")
-                        else:
-                            # Flag OFF: still GC residual markers (deliver_due, which
-                            # normally expires them, is gated) — emit nothing.
-                            _mth2.sweep(_mth2.default_state_dir())
-                    except Exception as e:
-                        log(f"mid_turn_heartbeat tick failed: {e}")
+                    _background_delivery_tick()
                     last_cn_poll = time.monotonic()
                 if time.monotonic() - last_cleanup > CLEANUP_INTERVAL:
                     _cleanup_in_flight()

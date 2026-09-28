@@ -2,12 +2,20 @@
 """
 Phase 2: CSRF Protection Bulk Fixer (from TODO list)
 Parses TODO_CSRF_ENDPOINTS.txt and fixes all vulnerable endpoints
+DEFUSED (adversarial review 2026-09-28): this fixer inserts
+``from core.security.csrf import require_csrf`` and a bare ``@require_csrf``
+decorator. ``core.security.csrf`` does not exist in this repo (the console's
+CSRF check is the FastAPI dependency ``corvin_console.deps.require_csrf``, used
+via ``Depends``), so every file it edits stops importing — as happened to
+``corvin_operator/agent/main.py`` and ``corvin_operator/bridges/shared/rag_rest_api.py``.
+It also wrote into a hard-wired live tree. ``main()`` now refuses (exit 2).
 """
 
 import re
+import sys
 from pathlib import Path
 
-REPO_ROOT = Path("/home/shumway/projects/CorvinOS")
+REPO_ROOT = Path(__file__).resolve().parents[1]  # this checkout, never a hard-wired live tree
 TODO_FILE = REPO_ROOT / "TODO_CSRF_ENDPOINTS.txt"
 
 def parse_todo_file():
@@ -111,6 +119,13 @@ def fix_file(file_path, line_numbers):
     return True, "No endpoints to fix"
 
 def main():
+    sys.stderr.write(
+        "defused: this CSRF bulk fixer inserts an import of core.security.csrf, "
+        "which does not exist — every edited module would stop importing. "
+        "Use the FastAPI dependency corvin_console.deps.require_csrf "
+        "(Depends) per route instead. Nothing was changed.\n"
+    )
+    sys.exit(2)
     print("\n🔧 PHASE 2: CSRF Protection Bulk Fixer (from TODO list)\n")
     print(f"Repo root: {REPO_ROOT}")
     print(f"TODO file: {TODO_FILE}")

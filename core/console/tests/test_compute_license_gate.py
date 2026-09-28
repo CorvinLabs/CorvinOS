@@ -114,14 +114,17 @@ def test_all_compute_entrypoints_call_the_shared_gate():
         "submit_acs_workflow_run (R3-CON-RUNS-DRIFT-01 / CON-ACS-01)"
     )
     assert "enforce_compute_quota" in jobs, "submit_compute_job must call the shared gate (CON-JOBS-01)"
-    assert "enforce_compute_quota" in flows, "trigger_flow_run must call the shared gate (FLOW-COMPUTE-01)"
+    # flows / workflows charge through compute.require_compute_run, which is
+    # the capability verdict + enforce_compute_quota (ADR-0703).
+    assert "require_compute_run(" in flows, "trigger_flow_run must call the shared gate (FLOW-COMPUTE-01)"
+    assert "require_compute_run(" in compute, "submit_run must call the shared gate (ADR-0703)"
     # The old fail-open inline guard must be gone from submit_run.
     assert "pass  # Operational errors: fail-open" not in compute, (
         "submit_run's fail-open inline quota guard must be removed (R3-CON-RUNS-DRIFT-01)"
     )
     # ADR-0149: the workflow-run surface must charge the daily quota too.
     workflows = (routes / "workflows.py").read_text(encoding="utf-8")
-    assert "enforce_compute_quota" in workflows, (
+    assert "require_compute_run(" in workflows, (
         "start_run (POST /workflows/{wid}/runs) must charge compute_units_per_day "
         "in addition to workflows_concurrent (LIC-WFRUN-01)"
     )
@@ -222,13 +225,10 @@ def test_compute_license_status_reflects_member_tier_without_enterprise_key(monk
     system (license.key). Previously this endpoint always reported "Trial · free"
     for such a customer even though compute_units_per_day was already correctly
     unlimited from that same corvin_operator/license system on the line above."""
-    import corvin_license.verifier as _clv
+    # The Enterprise plugin (corvin_license) was removed in 853ee7c54, so the
+    # "no enterprise license" branch is now simply the plugin being absent.
     from corvin_console.routes import compute as C
 
-    def _raise_missing():
-        raise _clv.LicenseFileMissing("no enterprise license installed")
-
-    monkeypatch.setattr(_clv, "load_license_from_disk", _raise_missing)
     monkeypatch.setattr(C, "_lic_active_tier", lambda: "member")
     monkeypatch.setattr(C, "_lic_get_limit", lambda *_a, **_kw: None)  # unlimited
     monkeypatch.setattr(C, "_cq_today", lambda *_a, **_kw: 3)
@@ -253,13 +253,19 @@ def test_license_status_reflects_member_tier_without_enterprise_key(monkeypatch,
     "the license gets lost sometimes"."""
     from corvin_console.routes import license as L
 
-    missing_path = tmp_path / "no-such-license.jwt"
-    monkeypatch.setattr(L._verifier, "license_file_path", lambda: missing_path)
     monkeypatch.setattr(L, "_lic_active_tier", lambda: "member")
+    if L._verifier is not None:  # Enterprise plugin installed, no license.jwt
+        missing_path = tmp_path / "no-such-license.jwt"
+        monkeypatch.setattr(L._verifier, "license_file_path", lambda: missing_path)
 
     result = L._compute_license_status()
     assert result.tier == "member"
     assert result.mode == "active"
+
+    # Without the Enterprise plugin a free install reports free, never 503.
+    monkeypatch.setattr(L, "_verifier", None)
+    monkeypatch.setattr(L, "_lic_active_tier", lambda: "free")
+    assert L._compute_license_status().tier == "free"
 
 
 def test_pipeline_detail_derives_stage_state_from_pipeline_summary(tmp_path):

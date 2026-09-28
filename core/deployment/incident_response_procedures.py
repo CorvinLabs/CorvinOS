@@ -357,7 +357,10 @@ class IncidentDetector:
         """Detect audit chain break (CRITICAL)"""
         incidents = []
 
-        audit_chain_ok = metrics.get("audit_chain_verified", True)
+        # Missing = NOT verified (fail-closed). The old default ``True`` read
+        # an unmeasured check as a pass and raised no incident at all.
+        measured = "audit_chain_verified" in metrics
+        audit_chain_ok = bool(metrics.get("audit_chain_verified", False))
 
         if not audit_chain_ok:
             incident = Incident(
@@ -365,9 +368,11 @@ class IncidentDetector:
                 incident_type=IncidentType.AUDIT_CHAIN_BREAK,
                 severity=IncidentSeverity.CRITICAL,
                 detected_at=datetime.now(timezone.utc).isoformat(),
-                message="CRITICAL: Audit chain verification failed",
+                message=("CRITICAL: Audit chain verification failed" if measured
+                         else "CRITICAL: Audit chain not verified (not measured)"),
                 details={
                     "audit_chain_verified": False,
+                    "measured": measured,
                 },
                 metric_name="audit_chain_verified",
                 actual_value=0.0,
@@ -382,7 +387,10 @@ class IncidentDetector:
         """Detect tenant isolation violation (CRITICAL)"""
         incidents = []
 
-        tenant_isolation_ok = metrics.get("tenant_isolation_verified", True)
+        # Missing = NOT verified (fail-closed). The old default ``True`` read
+        # an unmeasured check as a pass and raised no incident at all.
+        measured = "tenant_isolation_verified" in metrics
+        tenant_isolation_ok = bool(metrics.get("tenant_isolation_verified", False))
 
         if not tenant_isolation_ok:
             incident = Incident(
@@ -390,9 +398,11 @@ class IncidentDetector:
                 incident_type=IncidentType.TENANT_ISOLATION_VIOLATION,
                 severity=IncidentSeverity.CRITICAL,
                 detected_at=datetime.now(timezone.utc).isoformat(),
-                message="CRITICAL: Tenant isolation violation detected",
+                message=("CRITICAL: Tenant isolation violation detected" if measured
+                         else "CRITICAL: Tenant isolation not verified (not measured)"),
                 details={
                     "tenant_isolation_verified": False,
+                    "measured": measured,
                 },
                 metric_name="tenant_isolation_verified",
                 actual_value=0.0,

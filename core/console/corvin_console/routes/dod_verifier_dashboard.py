@@ -96,7 +96,7 @@ def get_verifier(tenant_id: str) -> DoD_VerifierSkillWrapper:
                 """
                 try:
                     # Extract event details for audit emission
-                    emit_skill_executed_event(
+                    ok = emit_skill_executed_event(
                         skill_id="os.definition_of_done_verifier",
                         tenant_id=self.tenant_id,
                         input_data=getattr(event, "input", None),
@@ -105,6 +105,9 @@ def get_verifier(tenant_id: str) -> DoD_VerifierSkillWrapper:
                         line_of_moral_responsibility=f"{__file__}:get_verifier",
                         error=None
                     )
+                    if not ok:
+                        logger.error("DoD audit event was not written to the chain")
+                        return False
                     logger.debug(f"[AUDIT WIRED] dod_verifier event emitted to chain: {event.skill_id}")
                     return True
                 except Exception as e:
@@ -184,7 +187,7 @@ async def run_dod_verification(
 
         # Emit audit event to real chain (GDPR Art. 30 — immutable record)
         try:
-            emit_skill_executed_event(
+            _audited = emit_skill_executed_event(
                 skill_id="os.definition_of_done_verifier",
                 tenant_id=tenant_id,
                 input_data={"task_id": result.task_id, "task_type": input_data.task_type},
@@ -193,6 +196,8 @@ async def run_dod_verification(
                 line_of_moral_responsibility=f"{__file__}:run_dod_verification:145",
                 error=None
             )
+            if not _audited:
+                logger.error("DoD verification audit event was not written to the chain")
         except Exception as e:
             logger.warning(f"Failed to emit DoD audit event: {e}")
 

@@ -32,6 +32,14 @@ from corvin_console import deps as console_deps  # noqa: E402
 from corvin_console.routes import engine_api as EA  # noqa: E402
 
 
+#: A short, keyword-free, non-work prompt → SIMPLE (deterministic). NOT "list
+#: the files here": since 38964ed36 a work request (``file``, ``fix``, ``add``…)
+#: is at least MEDIUM however short (``model_selector._WORK_INTENT_RE``), which
+#: is intended routing policy — the old sample silently became a MEDIUM prompt
+#: and both tests below compared a MEDIUM result against SIMPLE expectations.
+_SIMPLE_PROMPT = "what time is it"
+
+
 def _fake_record(tenant_id: str = "_default") -> session_auth.SessionRecord:
     now = 1_000_000.0
     values: dict[str, object] = {}
@@ -154,7 +162,8 @@ class EngineApiRouteTests(unittest.TestCase):
         import model_selector_shadow as mss
 
         # A short, keyword-free prompt classifies as "simple" (deterministic).
-        mss.shadow_classify_task("list the files here", "_default")
+        # (The count assertion below holds for any complexity.)
+        mss.shadow_classify_task(_SIMPLE_PROMPT, "_default")
         mss.shadow_classify_task("summarize this text", "_default")
 
         r = self._client().get("/v1/engine/config")
@@ -162,6 +171,15 @@ class EngineApiRouteTests(unittest.TestCase):
         self.assertEqual(body["total_samples"], 2)
         self.assertEqual(body["learning_status"], "learning")
         self.assertIsNotNone(body["last_learning_update"])
+
+    def test_simple_prompt_positive_control(self) -> None:
+        """The fixture prompt the SIMPLE-tier tests rely on really is SIMPLE —
+        without this, a classifier policy change turns them into comparisons
+        of the wrong tier (what happened with "list the files here")."""
+        from core.skills.os_skills.model_selector import ModelSelector
+
+        self.assertEqual(ModelSelector().classify(_SIMPLE_PROMPT, "_default").complexity,
+                         "simple")
 
     def test_learned_confidence_is_real_bayesian_not_constant(self) -> None:
         """confidence_score/run_count per task type come from
@@ -171,7 +189,7 @@ class EngineApiRouteTests(unittest.TestCase):
         import model_selector_shadow as mss
 
         for _ in range(6):
-            mss.shadow_classify_task("list the files here", "_default", chat_key="c1")
+            mss.shadow_classify_task(_SIMPLE_PROMPT, "_default", chat_key="c1")
             mss.report_turn_outcome("c1", success=True)
 
         r = self._client().get("/v1/engine/config")
@@ -198,7 +216,7 @@ class EngineApiRouteTests(unittest.TestCase):
             }}},
         )
         overrides = classifier_overrides("_default")
-        result = ModelSelector(overrides=overrides).classify("list the files here", "_default")
+        result = ModelSelector(overrides=overrides).classify(_SIMPLE_PROMPT, "_default")
         self.assertEqual(result.complexity, "simple")
         self.assertEqual(result.recommended_model, "claude-opus-5")
         self.assertIsNone(result.recommended_provider)

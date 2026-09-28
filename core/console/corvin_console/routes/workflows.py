@@ -3512,11 +3512,15 @@ def start_run(
     # client before any node spawns. dry_run spawns no claude → exempt. The two
     # gates are orthogonal: concurrency (above) and daily volume (here).
     if not body.dry_run:
-        from license.capability_api import require_capability, LicenseDenied  # noqa: PLC0415
-
-        enforce_compute_quota(
+        # compute.run capability verdict (canonical licensing module), then the
+        # daily charge. The bare ``license.capability_api`` import that stood
+        # here was unused — and where it did not import, it turned every
+        # non-dry run into a 500.
+        from .compute import require_compute_run  # noqa: PLC0415
+        require_compute_run(
             rec.tenant_id, rec.sid_fingerprint,
             audit_action="workflow.run_started", channel="workflows",
+            entry_point="corvin_console.routes.workflows:start_run",
         )
 
     # ── Fix 2: Consent gate (DSGVO Art. 6) ──────────────────────────────

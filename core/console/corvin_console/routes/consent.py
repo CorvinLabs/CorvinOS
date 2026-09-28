@@ -13,9 +13,15 @@ Invariants (load-bearing):
 * Deny-by-default is untouched: a scope is active only after an explicit,
   human, CSRF-protected request by the same session. There is no auto-admit,
   no "grant all", no scope outside ``GRANTABLE_CONSENT_SCOPES``.
-* A session grants for ITSELF only — the subject is always the caller's own
-  ``sid_fingerprint`` (``consent_subject``); no route parameter names a
-  subject. The raw session id is never stored, returned or audited.
+* A caller grants for ITSELF only — the subject is always derived from the
+  caller's own session record (``consent_subject``); no route parameter
+  names a subject. For a local-login session that is the install's one
+  operator (``local-operator:<tenant>``), so a consent given in one login is
+  visible in, and WITHDRAWABLE from, every other login of that operator
+  (GDPR Art. 7(3)); a logout does not end it — the TTL cap or a withdrawal
+  does. A session with a credential identity stays per-session. The raw
+  session id is never stored, returned or audited; the audit records carry
+  the subject AND the acting session's ``sid_fingerprint``.
 * Human-only: the internal corvin-browser tool record is refused, so the
   model cannot grant itself consent.
 * TTL-capped: ``ttl_days`` is clamped by the store to ``MAX_TTL_DAYS``.
@@ -24,7 +30,20 @@ Invariants (load-bearing):
   the record does not commit, nothing is granted (503).
 * Revocation is never blocked by the audit writer (withdrawal must always
   work — GDPR Art. 7(3)); ``console.consent_revoked`` is written after the
-  store change and a failed write is reported as ``audited: false``.
+  store change and a failed write is reported as ``audited: false``. A
+  local operator's withdrawal also ends any row left under a legacy
+  per-session subject (grants made before 2026-09-28), so no consent row
+  survives that its owner can no longer reach.
+
+Known limitation — ONE tenant per process: both audit records are tagged
+with the session's ``tenant_id`` and ``forge.security_events.write_event``
+refuses a record whose ``tenant_id`` is not the PROCESS tenant
+(``CORVIN_TENANT_ID`` → ``_default``; ``AuditTenantMismatch``). A grant for
+any other tenant therefore answers 503 and grants nothing (fail-closed), and
+a withdrawal takes effect but reports ``audited: false``. Local-login always
+mints ``_default`` sessions, so a console process started with a different
+``CORVIN_TENANT_ID`` cannot grant consent at all. This surface is NOT
+multi-tenant.
 """
 from __future__ import annotations
 
@@ -43,6 +62,7 @@ from core.compliance.consent import (
     GRANTABLE_CONSENT_SCOPES,
     ConsentError,
     consent_subject,
+    is_local_operator_subject,
 )
 
 _log = logging.getLogger(__name__)
@@ -56,8 +76,8 @@ EVENT_REVOKED = "console.consent_revoked"
 #: EVENT_SEVERITY entries for ``security_events.py`` (owner please add):
 #:   "console.consent_granted": "INFO", "console.consent_revoked": "INFO"
 CONSENT_EVENT_ALLOWLIST = frozenset({
-    "tenant_id", "sid_fingerprint", "consent_scope", "ttl_s", "expires_at",
-    "surface",
+    "tenant_id", "sid_fingerprint", "consent_subject", "consent_scope", "ttl_s",
+    "expires_at", "surface", "legacy_subjects_revoked",
 })
 
 
@@ -137,6 +157,25 @@ async def list_consent(
     return {"subject": subject, "scopes": scopes}
 
 
+def _sweep_legacy_subjects(store, subject: str, scope: str) -> int:
+    """Revoke rows of ``scope`` held under a legacy per-session subject.
+
+    Only for the local operator: on a local-login install every session is
+    that one operator's, and before 2026-09-28 each grant was keyed on the
+    granting session's fingerprint — rows nothing consults any more but that
+    would otherwise stay un-withdrawn until their TTL ran out. Revoking is
+    the safe direction; nothing here can grant.
+    """
+    if not is_local_operator_subject(subject):
+        return 0
+    n = 0
+    for other in store.unrevoked_subjects(scope):
+        if other != subject and not is_local_operator_subject(other):
+            if store.revoke_consent(user_id=other, scope=scope) is not None:
+                n += 1
+    return n
+
+
 @router.post("/consent/{scope}")
 async def grant_consent(
     scope: str,
@@ -155,7 +194,8 @@ async def grant_consent(
     ttl_days = min(float(ttl_days), float(MAX_TTL_DAYS))
 
     ref = _audit(EVENT_GRANTED, rec.tenant_id, {
-        "sid_fingerprint": subject, "consent_scope": scope,
+        "consent_subject": subject, "sid_fingerprint": rec.sid_fingerprint,
+        "consent_scope": scope,
         "ttl_s": int(ttl_days * 86400), "surface": "console",
     })
     if not ref:
@@ -181,14 +221,19 @@ async def revoke_consent(
     from core.compliance.consent_store import ConsentStoreError
 
     try:
-        revoked = _store(rec.tenant_id).revoke_consent(user_id=subject, scope=scope)
+        store = _store(rec.tenant_id)
+        revoked = store.revoke_consent(user_id=subject, scope=scope)
+        legacy = _sweep_legacy_subjects(store, subject, scope)
     except ConsentStoreError:
         raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
                             detail="consent store unavailable") from None
+    was_active = revoked is not None or legacy > 0
     ref = None
-    if revoked is not None:
+    if was_active:
         ref = _audit(EVENT_REVOKED, rec.tenant_id, {
-            "sid_fingerprint": subject, "consent_scope": scope, "surface": "console",
+            "consent_subject": subject, "sid_fingerprint": rec.sid_fingerprint,
+            "consent_scope": scope, "surface": "console",
+            "legacy_subjects_revoked": legacy or None,
         })
-    return {"scope": scope, "active": False, "was_active": revoked is not None,
-            "audited": bool(ref) if revoked is not None else None}
+    return {"scope": scope, "active": False, "was_active": was_active,
+            "audited": bool(ref) if was_active else None}

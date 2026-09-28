@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { getCurrentCsrf } from '@/lib/csrf-fetch';
+import { errorMessage } from '@/pages/skills/endpoints';
 
 interface SkillInfo {
   skill_id: string;
@@ -81,27 +82,37 @@ export function SkillManager() {
         }
       });
 
+      // No `throw` in here: this listener runs long after the surrounding
+      // try/catch returned, so a throw was an unhandled rejection that left
+      // `uploading` true forever. A 403 (not owner/admin, missing CSRF) or a
+      // 400 (bad ZIP, refused package) is an ordinary answer — show the
+      // backend's `detail` and re-enable the form.
       xhr.addEventListener('load', async () => {
-        if (xhr.status === 200) {
-          const data = JSON.parse(xhr.responseText);
-          setUpload(prev => ({
-            ...prev,
-            uploading: false,
-            progress: 100,
-            success: data.message || 'Skill installed successfully!',
-            file: null,
-            skillId: '',
-            version: '',
-          }));
-          setError(null);
-          // Auto-refresh after success
-          setTimeout(() => {
-            fetchSkills();
-            setUpload(prev => ({ ...prev, success: null }));
-          }, 2000);
-        } else {
-          throw new Error('Upload failed');
+        if (xhr.status < 200 || xhr.status >= 300) {
+          const msg = await errorMessage(
+            new Response(xhr.responseText || null, { status: xhr.status }),
+          );
+          setError(msg === `HTTP ${xhr.status}` ? `Upload failed: ${msg}` : msg);
+          setUpload(prev => ({ ...prev, uploading: false, progress: 0 }));
+          return;
         }
+        let data: { message?: string } = {};
+        try { data = JSON.parse(xhr.responseText); } catch { /* empty body */ }
+        setUpload(prev => ({
+          ...prev,
+          uploading: false,
+          progress: 100,
+          success: data.message || 'Skill installed successfully!',
+          file: null,
+          skillId: '',
+          version: '',
+        }));
+        setError(null);
+        // Auto-refresh after success
+        setTimeout(() => {
+          fetchSkills();
+          setUpload(prev => ({ ...prev, success: null }));
+        }, 2000);
       });
 
       xhr.addEventListener('error', () => {
@@ -241,7 +252,12 @@ export function SkillManager() {
                             `/v1/console/skills-manager/skills/uninstall/${encodeURIComponent(skill.skill_id)}/${encodeURIComponent(skill.version)}`,
                             { method: 'DELETE' }
                           )
-                            .then(r => r.json())
+                            .then(async r => {
+                              // A refusal carries `detail`, not `message` —
+                              // reading data.message showed an empty error.
+                              if (!r.ok) throw new Error(await errorMessage(r));
+                              return r.json();
+                            })
                             .then(data => {
                               if (data.success) {
                                 setUpload(prev => ({ ...prev, success: data.message }));
@@ -250,10 +266,11 @@ export function SkillManager() {
                                   setUpload(prev => ({ ...prev, success: null }));
                                 }, 1500);
                               } else {
-                                setError(data.message);
+                                setError(data.message || 'Uninstall failed');
                               }
                             })
-                            .catch(() => setError('Uninstall failed'));
+                            .catch((err: unknown) =>
+                              setError(err instanceof Error && err.message ? err.message : 'Uninstall failed'));
                         }
                       }}
                       className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700"

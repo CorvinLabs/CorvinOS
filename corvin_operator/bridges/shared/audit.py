@@ -207,21 +207,38 @@ def audit_path() -> Path:
 DEFAULT_AUDIT_PATH = _forge_workspace_root() / "audit.jsonl"
 
 
-# Optional forge dependency — silent fallback when absent.
+# Optional forge dependency — a missing/broken writer is LOGGED at ERROR and
+# reported by writer_available()/verify_audit(); it is never silent.
 _se = None
 try:
     _voice_plugin_root = Path(__file__).resolve().parents[2]  # operator/bridges/shared/audit.py → operator/
     _forge_root = _voice_plugin_root / "forge"
     if _forge_root.is_dir() and (_forge_root / "forge").is_dir():
-        sys.path.insert(0, str(_forge_root))
+        if str(_forge_root) not in sys.path:
+            sys.path.insert(0, str(_forge_root))
+        _bound = sys.modules.get("forge")
+        if _bound is not None and getattr(_bound, "__file__", None) is None \
+                and (_forge_root / "forge" / "__init__.py").is_file():
+            # Empty NAMESPACE binding (``corvin_operator/`` was on sys.path
+            # when something first imported ``forge``; ``corvin_operator/forge/``
+            # has no ``__init__.py``). A namespace ``__path__`` never picks up
+            # the regular package, so ``forge.security_events`` can never
+            # resolve through it and every bridge write became a no-op. The
+            # binding holds no code — drop it so the real package imports.
+            # Same step as core/delegate/corvin_delegate/audit.py.
+            del sys.modules["forge"]
         from forge import security_events as _se  # type: ignore
-except Exception:
+    else:
+        raise ImportError(f"forge package not found under {_forge_root}")
+except Exception as _se_exc:  # noqa: BLE001
     _se = None
     import logging as _audit_log
-    _audit_log.getLogger("corvin.audit").warning(
-        "forge not importable — audit writes are no-ops; writer_available() is "
+    # ERROR, not WARNING: every bridge audit write is dropped from here on.
+    _audit_log.getLogger("corvin.audit").error(
+        "forge not importable (%s) — audit writes are no-ops; writer_available() is "
         "False and verify_audit() reports writer_unavailable, so a compliance "
-        "boot tripwire (ADR-0232) REFUSES to boot on this layout"
+        "boot tripwire (ADR-0232) REFUSES to boot on this layout",
+        type(_se_exc).__name__,
     )
 
 

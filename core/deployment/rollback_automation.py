@@ -8,6 +8,12 @@ serves, so a revert fails (honestly) on this build. Audit records go to the
 tenant chain through ``core.deployment.audit_sink`` (fail-closed); operator
 "authentication" is a caller-supplied dict, not a verified identity, and a
 CRITICAL unlock is refused unless a real 2FA verifier is injected.
+A skill-scoped action (REVERT_VERSION / DISABLE_SKILL) without a ``skill_id``
+is refused BEFORE ``deployment.rollback_executed`` is written; every refused
+or failed rollback writes ``deployment.rollback_execution_failed`` and sets
+``RollbackEvent.executed = False``. A metric that is not measured
+(agreement_rate, latency_p99_ms, confidence, prior_confidence) holds
+escalation; it is never read as healthy.
 
 Implements automated rollback with 8 independent triggers:
 1. Correctness >2% drop → disable current phase skill, revert to previous version
@@ -39,6 +45,7 @@ import logging
 import json
 import hashlib
 import threading
+import uuid
 from dataclasses import asdict
 
 from . import audit_sink
@@ -52,7 +59,7 @@ audit_sink.register_events({
         "rollback_event_id", "trigger", "phase", "skill_id", "actions_taken",
         "lockdown_until", "operator_ref",
     },
-    "deployment.rollback_execution_failed": {"rollback_event_id", "error_type"},
+    "deployment.rollback_execution_failed": {"rollback_event_id", "error_type", "trigger", "phase", "skill_id"},
     "deployment.phase_unlocked": {"phase", "operator_ref", "is_critical_unlock"},
 })
 
@@ -104,6 +111,10 @@ class RollbackEvent:
     lom: str = ""  # Line of Moral Responsibility
     operator_id: Optional[str] = None  # For manual rollbacks
     reason: str = ""
+    # None = not attempted yet; True = every action ran; False = refused or an
+    # action failed. A caller must read this (or execute_rollback's return),
+    # never assume a returned event means the rollback happened.
+    executed: Optional[bool] = None
 
     def __post_init__(self):
         if self.actions_taken is None:
@@ -186,49 +197,63 @@ class RollbackController:
         """
         Check all 8 rollback triggers against current metrics.
 
-        Returns first RollbackEvent if any trigger fires, otherwise None.
+        Returns first RollbackEvent if any trigger fires, otherwise None. The
+        returned event always carries the caller's ``phase`` and ``skill_id``:
+        a REVERT_VERSION / DISABLE_SKILL action without a skill cannot run, and
+        a LOCK_PHASE on ``"unknown"`` locks nothing the caller checks.
         """
+        event = self._first_trigger(metrics, phase, baseline_latency_ms)
+        if event is not None:
+            event.phase = phase
+            event.skill_id = skill_id
+        return event
 
-        # Trigger 1: Correctness drop >2%
-        correctness_event = self._check_correctness_drop(metrics, phase)
-        if correctness_event:
-            return correctness_event
-
-        # Trigger 2: Latency spike >20%
-        latency_event = self._check_latency_spike(metrics, baseline_latency_ms, phase)
-        if latency_event:
-            return latency_event
-
-        # Trigger 3: Confidence regression >10%
-        confidence_event = self._check_confidence_regression(metrics)
-        if confidence_event:
-            return confidence_event
-
-        # Trigger 4: Audit chain break (CRITICAL)
-        audit_event = self._check_audit_chain_break(metrics)
-        if audit_event:
-            return audit_event
-
-        # Trigger 5: Tenant isolation violation (CRITICAL)
-        tenant_event = self._check_tenant_isolation_violation(metrics)
-        if tenant_event:
-            return tenant_event
-
-        # Trigger 6: Security check failure (CRITICAL)
-        security_event = self._check_security_failure(metrics)
-        if security_event:
-            return security_event
-
-        # Trigger 7: Loss signal CRITICAL (A/B regression, latency, confidence)
-        loss_event = self._check_loss_signal_critical(metrics)
-        if loss_event:
-            return loss_event
-
-        return None
+    def _first_trigger(
+        self,
+        metrics: Dict[str, float],
+        phase: str,
+        baseline_latency_ms: float,
+    ) -> Optional[RollbackEvent]:
+        # Every trigger is evaluated; a real breach outranks a "not measured"
+        # hold, so a missing agreement_rate can never mask an audit-chain break.
+        checks = (
+            lambda: self._check_correctness_drop(metrics, phase),               # 1
+            lambda: self._check_latency_spike(metrics, baseline_latency_ms, phase),  # 2
+            lambda: self._check_confidence_regression(metrics),                 # 3
+            lambda: self._check_audit_chain_break(metrics),                     # 4 CRITICAL
+            lambda: self._check_tenant_isolation_violation(metrics),            # 5 CRITICAL
+            lambda: self._check_security_failure(metrics),                      # 6 CRITICAL
+            lambda: self._check_loss_signal_critical(metrics),                  # 7
+        )
+        not_measured: Optional[RollbackEvent] = None
+        for check in checks:
+            event = check()
+            if event is None:
+                continue
+            if event.lom.endswith(":not_measured"):
+                not_measured = not_measured or event
+                continue
+            return event
+        return not_measured
 
     def _check_correctness_drop(self, metrics: Dict[str, float], phase: str) -> Optional[RollbackEvent]:
         """Trigger 1: Correctness drop >2%"""
-        agreement_rate = metrics.get("agreement_rate", 1.0)
+        agreement_rate = metrics.get("agreement_rate")
+        if agreement_rate is None:
+            # Not measured is not "100% agreement" (it used to default to 1.0
+            # and read as healthy). Hold escalation until it is measured.
+            return RollbackEvent(
+                event_id=self._next_event_id(),
+                trigger=RollbackTrigger.CORRECTNESS_DROP,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                phase=phase,
+                metric_name="agreement_rate",
+                actual_value=None,
+                threshold=self.CORRECTNESS_THRESHOLDS["min_agreement_rate"],
+                actions_taken=[RollbackAction.HOLD_TRAFFIC, RollbackAction.LOCK_PHASE],
+                reason="Agreement rate not measured - escalation held",
+                lom="rollback_automation.py::_check_correctness_drop:not_measured",
+            )
 
         if agreement_rate < self.CORRECTNESS_THRESHOLDS["min_agreement_rate"]:
             return RollbackEvent(
@@ -257,8 +282,22 @@ class RollbackController:
         phase: str,
     ) -> Optional[RollbackEvent]:
         """Trigger 2: Latency spike >20%"""
-        actual_latency_ms = metrics.get("latency_p99_ms", 0.0)
+        actual_latency_ms = metrics.get("latency_p99_ms")
         max_latency_ms = baseline_ms * (1 + self.LATENCY_THRESHOLDS["max_spike_pct"])
+        if actual_latency_ms is None:
+            # Not measured is not "0 ms" (the old default read as healthy).
+            return RollbackEvent(
+                event_id=self._next_event_id(),
+                trigger=RollbackTrigger.LATENCY_SPIKE,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                phase=phase,
+                metric_name="latency_p99_ms",
+                actual_value=None,
+                threshold=max_latency_ms,
+                actions_taken=[RollbackAction.HOLD_TRAFFIC, RollbackAction.LOCK_PHASE],
+                reason="Latency p99 not measured - escalation held",
+                lom="rollback_automation.py::_check_latency_spike:not_measured",
+            )
 
         if actual_latency_ms > max_latency_ms:
             spike_pct = (actual_latency_ms - baseline_ms) / baseline_ms
@@ -293,8 +332,24 @@ class RollbackController:
 
     def _check_confidence_regression(self, metrics: Dict[str, float]) -> Optional[RollbackEvent]:
         """Trigger 3: Confidence regression >10%"""
-        actual_confidence = metrics.get("confidence", 0.5)
-        prior_confidence = metrics.get("prior_confidence", actual_confidence)
+        actual_confidence = metrics.get("confidence")
+        prior_confidence = metrics.get("prior_confidence")
+        if actual_confidence is None or prior_confidence is None:
+            # Not measured is not "no regression" (it used to default to 0.5
+            # vs itself, i.e. 0% regression). Hold escalation until measured.
+            missing = "confidence" if actual_confidence is None else "prior_confidence"
+            return RollbackEvent(
+                event_id=self._next_event_id(),
+                trigger=RollbackTrigger.CONFIDENCE_REGRESSION,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                phase=metrics.get("phase", "unknown"),
+                metric_name=missing,
+                actual_value=None,
+                threshold=self.CONFIDENCE_THRESHOLDS["max_regression_pct"],
+                actions_taken=[RollbackAction.HOLD_TRAFFIC, RollbackAction.LOCK_PHASE],
+                reason=f"{missing} not measured - escalation held",
+                lom="rollback_automation.py::_check_confidence_regression:not_measured",
+            )
 
         if prior_confidence > 0:
             regression_pct = (prior_confidence - actual_confidence) / prior_confidence
@@ -423,6 +478,19 @@ class RollbackController:
 
         return None
 
+    # Protective actions run first; the revert (the only step that can fail
+    # half-way through an external call) runs last, so a failed revert leaves
+    # the phase locked and traffic held instead of a disabled skill with no lock.
+    _ACTION_ORDER = {
+        RollbackAction.LOCK_PHASE: 0,
+        RollbackAction.HOLD_TRAFFIC: 1,
+        RollbackAction.DISABLE_SKILL: 2,
+        RollbackAction.ESCALATE_TO_PAGERDUTY: 3,
+        RollbackAction.INITIATE_RETRAINING: 4,
+        RollbackAction.REVERT_VERSION: 5,
+    }
+    _SKILL_SCOPED_ACTIONS = (RollbackAction.REVERT_VERSION, RollbackAction.DISABLE_SKILL)
+
     def execute_rollback(
         self,
         event: RollbackEvent,
@@ -433,31 +501,72 @@ class RollbackController:
         Execute rollback for triggered event.
 
         RA-001: Audit-BEFORE semantics:
-        1. Write audit event FIRST (fail-closed if audit fails)
-        2. THEN execute rollback actions
-        3. If audit fails, entire rollback is rejected
+        1. Refuse up-front what cannot run (a skill-scoped action with no
+           skill_id) — before anything is written, so the chain never says
+           ``rollback_executed`` for a rollback that had no subject.
+        2. Write audit event FIRST (fail-closed if audit fails)
+        3. THEN execute rollback actions, protective ones before the revert
+        4. Any action that fails writes ``deployment.rollback_execution_failed``
+           (same ``rollback_event_id``) and returns False.
 
         RA-004: Cascade prevention (check dedup window + cooldown)
+
+        The whole sequence holds ``self.lock`` so two concurrent calls cannot
+        both pass the cascade check.
         """
         with self.lock:
-            # RA-004: Check cascade prevention
-            now = datetime.now(timezone.utc).timestamp()
+            return self._execute_rollback_locked(event, version_to_revert, operator_id)
 
-            # Deduplication: same phase not rolled back twice within 5 min
-            if event.phase == self.last_rollback_phase:
-                if now - self.last_rollback_time < self.ROLLBACK_DEDUP_WINDOW_SECONDS:
-                    logger.warning(
-                        f"Rollback cascade prevented: {event.phase} already rolled back within {self.ROLLBACK_DEDUP_WINDOW_SECONDS}s"
-                    )
-                    return False
+    def _audit_failure(self, event: RollbackEvent, error_type: str) -> None:
+        """Record a refused/failed rollback on the chain (best effort — the
+        rollback already did not happen, so a failed write changes nothing)."""
+        event.executed = False
+        try:
+            if not self._audit_log({
+                "event": "rollback_execution_failed",
+                "rollback_event_id": event.event_id,
+                "error_type": error_type,
+                "trigger": event.trigger.value,
+                "phase": event.phase or "",
+                "skill_id": event.skill_id or "",
+            }):
+                logger.critical(f"Failed to audit rollback failure for {event.event_id}")
+        except Exception as audit_e:  # noqa: BLE001
+            logger.critical(f"Failed to log rollback failure: {type(audit_e).__name__}")
 
-            # Cooldown: at least 10 min between consecutive rollbacks
-            if now - self.last_rollback_time < self.ROLLBACK_COOLDOWN_SECONDS:
-                if event.phase != self.last_rollback_phase:
-                    logger.warning(
-                        f"Rollback cooldown: waiting {self.ROLLBACK_COOLDOWN_SECONDS}s before next rollback"
-                    )
-                    return False
+    def _execute_rollback_locked(
+        self,
+        event: RollbackEvent,
+        version_to_revert: Optional[str],
+        operator_id: Optional[str],
+    ) -> bool:
+        now = datetime.now(timezone.utc).timestamp()
+
+        # RA-004: Deduplication: same phase not rolled back twice within 5 min
+        if event.phase == self.last_rollback_phase:
+            if now - self.last_rollback_time < self.ROLLBACK_DEDUP_WINDOW_SECONDS:
+                logger.warning(
+                    f"Rollback cascade prevented: {event.phase} already rolled back within {self.ROLLBACK_DEDUP_WINDOW_SECONDS}s"
+                )
+                return False
+
+        # RA-004: Cooldown: at least 10 min between consecutive rollbacks
+        if now - self.last_rollback_time < self.ROLLBACK_COOLDOWN_SECONDS:
+            if event.phase != self.last_rollback_phase:
+                logger.warning(
+                    f"Rollback cooldown: waiting {self.ROLLBACK_COOLDOWN_SECONDS}s before next rollback"
+                )
+                return False
+
+        # Refuse BEFORE the audit record: a skill-scoped action without a skill
+        # cannot run, and "rollback_executed" must never be written for it.
+        if not event.skill_id and any(a in self._SKILL_SCOPED_ACTIONS for a in event.actions_taken):
+            logger.error(
+                f"ROLLBACK REFUSED: {event.event_id} needs a skill_id for "
+                f"{[a.value for a in event.actions_taken if a in self._SKILL_SCOPED_ACTIONS]}"
+            )
+            self._audit_failure(event, "missing_skill_id")
+            return False
 
         try:
             logger.error(f"EXECUTING ROLLBACK: {event.trigger.value} — {event.reason}")
@@ -478,77 +587,84 @@ class RollbackController:
             # Fail-closed: if audit fails, reject entire rollback
             if not audit_result:
                 logger.critical(f"ROLLBACK REJECTED: Audit log write failed for {event.event_id}")
+                event.executed = False
                 return False
 
-            # RA-001: THEN execute rollback actions
-            with self.lock:
-                for action in event.actions_taken:
-                    if action == RollbackAction.DISABLE_SKILL:
-                        if event.skill_id:
-                            lock_until = event.lockdown_until or (
-                                datetime.now(timezone.utc) + timedelta(hours=1)
-                            ).isoformat()
-                            self.locked_skills[event.skill_id] = lock_until
-                            logger.warning(f"Skill {event.skill_id} disabled, using fallback engine")
+            # RA-001: THEN execute rollback actions (protective first, revert last)
+            ok = True
+            for action in sorted(event.actions_taken, key=lambda a: self._ACTION_ORDER[a]):
+                if action == RollbackAction.LOCK_PHASE:
+                    phase_name = event.phase or "unknown"
+                    # "" = locked until an operator unlocks it (no expiry).
+                    self.locked_phases[phase_name] = event.lockdown_until or ""
+                    logger.error(f"Phase {phase_name} LOCKED until {event.lockdown_until}")
 
-                    elif action == RollbackAction.REVERT_VERSION:
-                        # RA-002: Actually revert the version
-                        if self._execute_version_revert(event.skill_id, version_to_revert):
-                            logger.info(
-                                f"Version reverted: {event.skill_id} → {version_to_revert or 'previous stable'}"
-                            )
-                        else:
-                            logger.error(f"Failed to revert version for {event.skill_id}")
-                            return False
+                elif action == RollbackAction.HOLD_TRAFFIC:
+                    logger.warning("Traffic escalation HALTED")
 
-                    elif action == RollbackAction.LOCK_PHASE:
-                        phase_name = event.phase or "unknown"
-                        # "" = locked until an operator unlocks it (no expiry).
-                        self.locked_phases[phase_name] = event.lockdown_until or ""
-                        logger.error(f"Phase {phase_name} LOCKED until {event.lockdown_until}")
+                elif action == RollbackAction.DISABLE_SKILL:
+                    lock_until = event.lockdown_until or (
+                        datetime.now(timezone.utc) + timedelta(hours=1)
+                    ).isoformat()
+                    self.locked_skills[event.skill_id] = lock_until
+                    logger.warning(f"Skill {event.skill_id} disabled, using fallback engine")
 
-                    elif action == RollbackAction.HOLD_TRAFFIC:
-                        logger.warning("Traffic escalation HALTED")
+                elif action == RollbackAction.ESCALATE_TO_PAGERDUTY:
+                    logger.critical(f"ESCALATING TO PAGERDUTY: {event.reason}")
 
-                    elif action == RollbackAction.ESCALATE_TO_PAGERDUTY:
-                        logger.critical(f"ESCALATING TO PAGERDUTY: {event.reason}")
+                elif action == RollbackAction.INITIATE_RETRAINING:
+                    logger.info("Initiating skill retraining loop")
 
-                    elif action == RollbackAction.INITIATE_RETRAINING:
-                        logger.info("Initiating skill retraining loop")
+                elif action == RollbackAction.REVERT_VERSION:
+                    # RA-002: Actually revert the version
+                    if self._execute_version_revert(event.skill_id, version_to_revert):
+                        logger.info(
+                            f"Version reverted: {event.skill_id} → {version_to_revert or 'previous stable'}"
+                        )
+                    else:
+                        logger.error(f"Failed to revert version for {event.skill_id}")
+                        ok = False
 
-                # Record rollback event
-                self.rollback_events.append(event)
+            # History records every attempt that reached the chain, with its
+            # outcome; the protective locks above stay in force either way.
+            event.executed = ok
+            self.rollback_events.append(event)
+            if not ok:
+                self._audit_failure(event, "version_revert_failed")
+                return False
 
-                # RA-004: Update cascade prevention tracking
-                self.last_rollback_time = now
-                self.last_rollback_phase = event.phase
-
+            # RA-004: Update cascade prevention tracking (successful rollbacks only,
+            # so a failed revert can be retried)
+            self.last_rollback_time = now
+            self.last_rollback_phase = event.phase
             return True
 
         except Exception as e:
-            logger.error(f"Failed to execute rollback: {e}")
-            # Log the failure to audit trail
-            try:
-                self._audit_log({
-                    "event": "rollback_execution_failed",
-                    "error_type": type(e).__name__,
-                    "rollback_event_id": event.event_id,
-                })
-            except Exception as audit_e:
-                logger.critical(f"Failed to log rollback failure: {audit_e}")
+            logger.error(f"Failed to execute rollback: {type(e).__name__}")
+            self._audit_failure(event, type(e).__name__)
             return False
 
-    def manual_rollback(self, operator_id: str, reason: str, phase: str) -> RollbackEvent:
+    def manual_rollback(
+        self,
+        operator_id: str,
+        reason: str,
+        phase: str,
+        skill_id: Optional[str] = None,
+        version_to_revert: Optional[str] = None,
+    ) -> RollbackEvent:
         """
         Operator manually initiates rollback.
 
-        Trigger 8: Manual operator decision.
+        Trigger 8: Manual operator decision. Without ``skill_id`` there is
+        nothing to revert: the rollback is refused (``event.executed`` is
+        False and a ``rollback_execution_failed`` record is written).
         """
         event = RollbackEvent(
             event_id=self._next_event_id(),
             trigger=RollbackTrigger.MANUAL_OPERATOR_ROLLBACK,
             timestamp=datetime.now(timezone.utc).isoformat(),
             phase=phase,
+            skill_id=skill_id,
             operator_id=operator_id,
             reason=reason,
             actions_taken=[
@@ -559,8 +675,9 @@ class RollbackController:
             lom="rollback_automation.py::manual_rollback:420",
         )
 
-        if not self.execute_rollback(event, operator_id=operator_id):
+        if not self.execute_rollback(event, version_to_revert=version_to_revert, operator_id=operator_id):
             # The caller gets the event either way; say loudly that it did NOT run.
+            event.executed = False
             logger.error(f"Manual rollback {event.event_id} was NOT executed")
         return event
 
@@ -782,9 +899,11 @@ class RollbackController:
 
     def _next_event_id(self) -> str:
         """Generate next rollback event ID"""
+        # A per-instance counter + 1 s timestamp collided across controllers
+        # (two instances in the same second both minted RB-<ts>-0001).
         self.event_counter += 1
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-        return f"RB-{timestamp}-{self.event_counter:04d}"
+        return f"RB-{timestamp}-{uuid.uuid4().hex[:12]}"
 
     def _audit_log(self, event: Dict) -> bool:
         """Commit one record to the tenant audit chain (RA-001).

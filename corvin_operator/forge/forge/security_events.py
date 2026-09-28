@@ -188,6 +188,7 @@ EVENT_SEVERITY: dict[str, str] = {
     "audit.chain_loss_acknowledged": "CRITICAL",
     # Layer 34 — Data classification + flow guard (ADR-0042)
     "data_flow.approved":        "INFO",
+    "orchestration.batch_completed": "INFO",
     "data_flow.blocked":         "CRITICAL",
     # Layer 35 — Network egress lockdown (ADR-0043)
     # ADR-0167 M1 — Entangled License Ratchet integration
@@ -1190,6 +1191,12 @@ EVENT_SEVERITY: dict[str, str] = {
     "skill.auto.disabled": "INFO",
     "skill.disable.refused": "WARNING",
     "skill.executed": "INFO",
+    # core/skills/os_skills/audit_integration.py (console DoD-verifier route and
+    # SkillExecutionAuditor) — its import of a nonexistent
+    # core.compliance.audit_backend dropped every one of these until round 5.
+    "skill_executed": "INFO",
+    "skill_feedback": "INFO",
+    "skill_config_updated": "INFO",
     "skill.manually.disabled": "INFO",
     "skill.manually.enabled": "INFO",
     "workflow_config_updated": "INFO",
@@ -1264,6 +1271,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "datasource.license_denied":      "WARNING",
     "license.enforcement_unavailable": "WARNING",
     "license.capability_decision":    "INFO",
+    # context_engineering/stages/{toolforge,skillforge}.py — ADR-0701 licence
+    # refusal of a forge stage on the TURN tenant (degrade-not-block).
+    "forge.stage_skipped_unlicensed": "INFO",
     "teb.path_gate.denied":           "WARNING",
     # corvin_operator/voice/hooks/path_gate.py::run_self_test (boot canary)
     "path_gate.self_test_failed":     "CRITICAL",
@@ -3614,8 +3624,13 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "compute.resource_deadlock": frozenset({
         "run_id", "tenant_id", "job_id", "component", "timeout_ms", "wait_duration_ms",
     }),
+    # + the field set corvin_operator/license/compute_quota.py actually emits
+    # (feature = a quota key such as ``compute_units_per_day``, tier = free /
+    # member, two integers). Missing until round 5, so the writer floor
+    # dropped every field of the bridge's quota denial.
     "compute.quota_exceeded": frozenset({
         "tenant_id", "resource_type", "requested", "limit", "current_usage",
+        "feature", "requested_value", "limit_value", "tier",
     }),
     # Layer 25 — ACS L34 Flow Guard. Metadata only: acs_id, classification
     # labels, gate_enforcement flag, bypassed boolean. NEVER: input data,
@@ -4107,6 +4122,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "data.strict_anonymisation_applied": frozenset({"columns", "data_handle", "dropped_keys"}),
     "data.unregistered": frozenset({"data_handle", "found"}),
     "data_flow.approved": frozenset({"channel", "chat_key", "classification", "engine_id", "matched_rule", "persona", "reason"}),
+    "orchestration.batch_completed": frozenset({"batch_id", "task_count", "success_count", "failed_count", "incomplete_count", "outcome", "tenant_id"}),
     "data_flow.blocked": frozenset({"channel", "chat_key", "classification", "engine_id", "matched_rule", "persona", "reason"}),
     "delegate.completed": frozenset({"duration_ms", "engine", "output_chars", "persona"}),
     "delegate.engine_policy_denied": frozenset({"engine", "persona", "reason", "tenant_id"}),
@@ -4315,8 +4331,30 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # (already allowlisted on datasource.registered).
     "datasource.connected": frozenset({"adapter", "name"}),
     "datasource.license_denied": frozenset({"adapter"}),
-    "license.enforcement_unavailable": frozenset({"reason"}),
-    # corvin_operator/license/capability_api.py::_emit_capability_audit
+    # reason is the enforcement failure's exception CLASS name (mcp_server
+    # forge_tool / forge_promote), never its message; capability is a key of
+    # the closed CAPABILITIES matrix.
+    "license.enforcement_unavailable": frozenset({"capability", "reason"}),
+    # stage is a closed CEL stage id; lom a code location.
+    "forge.stage_skipped_unlicensed": frozenset({"stage", "tenant_id", "lom"}),
+    # core/skills/os_skills/audit_integration.py — metadata only: input/output
+    # are SHA-256 digests, error_type an exception class name, feedback_type /
+    # param_name / reason_code closed identifier codes, and signal / old_value /
+    # new_value appear verbatim only as a number or bool (else as *_sha256).
+    "skill_executed": frozenset({
+        "skill_id", "tenant_id", "input_hash", "output_hash", "latency_ms",
+        "lom", "error_type", "status",
+    }),
+    "skill_feedback": frozenset({
+        "skill_id", "tenant_id", "feedback_type", "signal", "signal_sha256", "lom",
+    }),
+    "skill_config_updated": frozenset({
+        "skill_id", "tenant_id", "param_name", "old_value", "old_value_sha256",
+        "new_value", "new_value_sha256", "reason_code", "lom",
+    }),
+    # corvin_operator/license/capability_api.py::_audit_capability_decision —
+    # reason is a closed code from _evaluate() (unknown_capability /
+    # enforcement_unavailable / not_available_in_tier / quota_exceeded) or None.
     "license.capability_decision": frozenset({
         "capability", "tier", "decision", "reason", "requested", "allowed",
         "entry_point", "lom", "tenant_id",
@@ -4370,6 +4408,10 @@ _AUDIT_PSEUDONYM_KEYS: frozenset[str] = frozenset({
     "subject_id", "requester",
     # remediation approval gate: the operator who decided (2026-09-27)
     "decided_by",
+    # Round 5: actor keys on allowlisted events. Now that the value scan runs
+    # for allowlisted keys too, an e-mail-shaped actor would otherwise be
+    # DROPPED — losing attribution (GDPR Art. 30) — rather than pseudonymised.
+    "created_by", "deleted_by", "operator_ref",
 })
 
 # ADR-0152 — count-map fields: a registered (event_type, field) whose value is a
@@ -4641,8 +4683,20 @@ def filter_audit_details(details: dict | None, *, event_type: str = "",
         # adapter already redacted collide into one pseudonym namespace. The
         # affected key names — never the values — are listed under
         # ``_pii_fingerprinted``.
+        #
+        # Round 5 (2026-09-28): the scan used to run only for events WITHOUT a
+        # positive allowlist (``default_deny``) or for a free-text key. Every
+        # allowlist registered in rounds 2–4 therefore switched the scan OFF for
+        # its fields: ``package.installed name="Invoice bot for
+        # jane.doe@acme.example"`` was dropped before and chained verbatim
+        # after. An allowlist decides WHICH keys may appear; it never vouches
+        # for their VALUES. So every non-reserved, non-pseudonym key is
+        # value-scanned regardless of the event's allowlist. (Reserved and
+        # pseudonym keys are fingerprinted below instead of dropped.)
         sv, drop = _audit_scrub(
-            v, pii_scan=(default_deny and not reserved) or ks in _AUDIT_FREETEXT_KEYS
+            v,
+            pii_scan=ks in _AUDIT_FREETEXT_KEYS
+            or not (reserved or ks in _AUDIT_PSEUDONYM_KEYS),
         )
         if drop:
             dropped.append(str(k))

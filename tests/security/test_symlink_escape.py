@@ -22,61 +22,52 @@ from unittest import mock
 import pytest
 
 # `corvin_operator/skill-forge/` has a dash, which is not a valid Python
-# package segment, so it can't be reached via a plain `import`. Load it via
-# importlib (same pattern as tests/skill_forge/test_trigger_detector.py) and
-# register it under its dotted name in sys.modules so both `from X import Y`
-# below AND `mock.patch("corvin_operator.skill_forge.autonomous.trigger_detector...")`
-# (a string-path patch target) resolve correctly.
-#
-# trigger_detector.py does `from .audit_chain_validator import ...` (a
-# relative import), which requires its parent to be a real package with
-# __path__ — so the two missing parent levels (corvin_operator.skill_forge
-# and .autonomous; corvin_operator itself is a real package already) are
-# registered as namespace packages pointing at the dashed directory before
-# any submodule is loaded.
+# package segment, so it can't be reached via a plain `import`. Only the alias
+# `corvin_operator.skill_forge` is registered (see `_import_real`); the modules
+# below it are imported for real so both `from X import Y` below AND
+# `mock.patch("corvin_operator.skill_forge.autonomous.trigger_detector...")`
+# (a string-path patch target) resolve to the same module production uses.
 _REPO = Path(__file__).resolve().parents[2]
 _SKILL_FORGE_DIR = _REPO / "corvin_operator" / "skill-forge"
 _AUTONOMOUS_DIR = _SKILL_FORGE_DIR / "autonomous"
 sys.path.insert(0, str(_REPO))
 
 
-def _ensure_namespace_package(dotted_name: str, path: Path):
-    existing = sys.modules.get(dotted_name)
-    if existing is not None:
-        return existing
-    module = types.ModuleType(dotted_name)
-    module.__path__ = [str(path)]
-    sys.modules[dotted_name] = module
-    return module
+def _import_real(dotted_name: str):
+    """Import a REAL module under ``corvin_operator.skill_forge``.
+
+    Only the dashed-directory alias ``corvin_operator.skill_forge`` is a
+    stand-in (a ``__path__``-only module, exactly what
+    ``corvin_operator/skill-forge/tests/_skill_forge_ns.py`` and the console's
+    ``autonomous_forge_routes`` register). Everything below it is imported for
+    real, so ``autonomous/__init__.py`` runs. This file used to install a BARE
+    ``corvin_operator.skill_forge.autonomous`` module (no ``__init__`` run, no
+    exports) into ``sys.modules`` at collection time; it outlived this file and
+    broke every later importer in the session (``test_cron_trigger_poller``
+    collection, ``autonomous_forge_routes``' ``SkillValidator``) — adversarial
+    review round 5.
+    """
+    alias = "corvin_operator.skill_forge"
+    if alias not in sys.modules:
+        import corvin_operator  # noqa: F401 — the real parent package
+
+        module = types.ModuleType(alias)
+        module.__path__ = [str(_SKILL_FORGE_DIR)]
+        sys.modules[alias] = module
+    pkg = "corvin_operator.skill_forge.autonomous"
+    stale = sys.modules.get(pkg)
+    if stale is not None and getattr(stale, "__file__", None) is None:
+        # An empty stand-in some older loader installed: never reuse it.
+        del sys.modules[pkg]
+    return importlib.import_module(dotted_name)
 
 
-_ensure_namespace_package("corvin_operator.skill_forge", _SKILL_FORGE_DIR)
-_ensure_namespace_package("corvin_operator.skill_forge.autonomous", _AUTONOMOUS_DIR)
-
-
-def _load_module(dotted_name: str, file_path: Path):
-    existing = sys.modules.get(dotted_name)
-    if existing is not None:
-        return existing
-    spec = importlib.util.spec_from_file_location(dotted_name, file_path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[dotted_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_audit_chain_validator = _load_module(
-    "corvin_operator.skill_forge.autonomous.audit_chain_validator",
-    _AUTONOMOUS_DIR / "audit_chain_validator.py",
-)
-_path_traversal_validator = _load_module(
-    "corvin_operator.skill_forge.autonomous.path_traversal_validator",
-    _AUTONOMOUS_DIR / "path_traversal_validator.py",
-)
-_trigger_detector_module = _load_module(
-    "corvin_operator.skill_forge.autonomous.trigger_detector",
-    _AUTONOMOUS_DIR / "trigger_detector.py",
-)
+_audit_chain_validator = _import_real(
+    "corvin_operator.skill_forge.autonomous.audit_chain_validator")
+_path_traversal_validator = _import_real(
+    "corvin_operator.skill_forge.autonomous.path_traversal_validator")
+_trigger_detector_module = _import_real(
+    "corvin_operator.skill_forge.autonomous.trigger_detector")
 
 PathTraversalError = _path_traversal_validator.PathTraversalError
 validate_path_within_scope = _path_traversal_validator.validate_path_within_scope

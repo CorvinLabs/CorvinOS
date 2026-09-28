@@ -9,6 +9,8 @@ Run individually per day:
     etc.
 """
 
+import os
+import tempfile
 import json
 import time
 import pytest
@@ -51,6 +53,13 @@ SAMPLE_TASKS = [
     "Create benchmarks for CEL enrichment latency across task types",
 ]
 
+
+
+# Measurement output goes OUTSIDE the repo: these tests used to write
+# corvin_operator/day{N}_metrics.json into the checkout on every run.
+_METRICS_DIR = Path(os.environ.get("CORVIN_CEL_METRICS_DIR")
+                    or Path(tempfile.gettempdir()) / "corvin-cel-metrics")
+_METRICS_DIR.mkdir(parents=True, exist_ok=True)
 
 class TestCELMeasurementDay9:
     """Day 9 measurement (first day of 4-day loop)."""
@@ -126,7 +135,7 @@ class TestCELMeasurementDay9:
             "measurements": measurements,
         }
 
-        output_file = Path(__file__).parent.parent.parent / f"day{day}_metrics.json"
+        output_file = _METRICS_DIR / f"day{day}_metrics.json"
         with open(output_file, "w") as f:
             json.dump(report, f, indent=2)
 
@@ -188,7 +197,7 @@ class TestCELMeasurementCumulative:
 
     def test_cumulative_measurements_available(self):
         """Verify measurement data from previous days."""
-        project_root = Path(__file__).parent.parent.parent
+        project_root = _METRICS_DIR
 
         # Check which days have metrics
         days_measured = []

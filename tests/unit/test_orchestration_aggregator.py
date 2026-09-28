@@ -412,3 +412,44 @@ class TestIntegration:
         assert event is not None
         # task_2 is incomplete but not in failed_tasks (only explicit failures)
         assert event.success_count == 1
+
+
+class TestAuditFailClosed:
+    """Adversarial review 2026-09-28: the audit write was a stub returning True."""
+
+    def test_emit_writes_the_tenant_chain(self, temp_corvin_home):
+        from paths import tenant_audit_chain  # bridges/shared/paths.py
+        batch_id = register_task(time.time(), "t1")
+        on_task_complete(batch_id, "t1", success=False, error="secret stack trace")
+        assert emit_orchestration_event(batch_id) is not None
+        chain = tenant_audit_chain()
+        assert str(chain).startswith(str(temp_corvin_home)), chain
+        [rec] = [json.loads(l) for l in chain.read_text().splitlines()
+                 if '"orchestration.batch_completed"' in l]
+        d = rec["details"]
+        assert d["batch_id"] == batch_id and d["failed_count"] == 1, d
+        assert "secret stack trace" not in json.dumps(rec)  # counts only, no error text
+        assert rec.get("hash"), rec
+
+    def test_no_writer_means_no_emit(self, temp_corvin_home, monkeypatch):
+        import builtins
+        real_import = builtins.__import__
+
+        def _no_forge(name, *a, **kw):
+            if name.startswith("forge.security_events"):
+                raise ImportError("forge unavailable")
+            return real_import(name, *a, **kw)
+        monkeypatch.setattr(builtins, "__import__", _no_forge)
+        batch_id = register_task(time.time(), "t1")
+        on_task_complete(batch_id, "t1", success=True)
+        assert emit_orchestration_event(batch_id) is None
+        assert _read(_batch_path(batch_id))["state"] == "pending"
+
+    def test_incomplete_batch_is_not_success(self, temp_corvin_home):
+        start = time.time()
+        batch_id = register_task(start, "t1")
+        register_task(start, "t2")
+        on_task_complete(batch_id, "t1", success=True)
+        ev = emit_orchestration_event(batch_id, now=start + ORCHESTRATION_WINDOW_SECS + 1)
+        assert ev.event_type == "ORCHESTRATION_COMPLETE_MIXED", ev
+        assert ev.stats_aggregated["incomplete_count"] == 1

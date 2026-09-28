@@ -457,7 +457,7 @@ Evidence: Score diverged by X% on re-run
 
 ## Testing
 
-### Tests that exist (verified 2026-09-27: 80 passed)
+### Tests that exist (re-run 2026-09-28: 80 passed — reachability 15, audit_trail 10, phase1 12, phase2 26, phase3_adversarial 17)
 ```bash
 pytest tests/skills/test_dod_reachability.py -v
 pytest tests/skills/test_dod_audit_trail.py -v

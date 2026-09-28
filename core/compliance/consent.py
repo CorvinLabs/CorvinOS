@@ -32,21 +32,62 @@ CONSENT_SCOPES = {
 GRANTABLE_CONSENT_SCOPES = frozenset(k for k in CONSENT_SCOPES if k != "default")
 
 
+#: Subject prefix for the install's one local operator (see ``consent_subject``).
+LOCAL_OPERATOR_PREFIX = "local-operator:"
+
+
 def consent_subject(rec: Any) -> str:
     """The consent store's subject id for a console session record.
 
-    It is the session's ``sid_fingerprint`` (sha256 prefix) — the identity the
-    rest of the console attributes actions to. NEVER ``rec.sid``: that is the
-    ``corvin_console_sid`` cookie, a bearer credential; persisting it in the
-    consent database (and logging it) put a live session token at rest.
+    Consent belongs to a PERSON, not to one login (GDPR Art. 7(3): withdrawal
+    must be as easy as giving it, from wherever the person is). The subject is:
+
+    * ``local-operator:<tenant_id>`` for a session WITHOUT a credential
+      identity (``token_fingerprint == ""``, tier ``owner``). Only
+      ``/auth/local-login`` mints such sessions: loopback-only and
+      credential-less, the TCP peer on localhost IS the authorisation and
+      there is exactly one operator per install. Every login of that operator
+      — and the corvin-browser tool record acting for them — therefore shares
+      one consent, which any of their sessions can list and withdraw. A
+      logout or an expired session does not end it; its lifetime is the
+      TTL-capped grant (``consent_store.MAX_TTL_DAYS``) or an explicit
+      withdrawal.
+    * the session's ``sid_fingerprint`` for a session that DOES carry a
+      credential identity (a future multi-user login kind, or a legacy token
+      session). Per-session is the conservative choice there: one person's
+      consent is never shared with, or grantable by, another principal.
+      Such a login kind must map its own stable principal here before it
+      ships (see ADR-2093).
+
+    NEVER ``rec.sid``: that is the ``corvin_console_sid`` cookie, a bearer
+    credential; persisting it in the consent database (and logging it) put a
+    live session token at rest.
 
     Raises:
-        ConsentError: the record carries no fingerprint (fail-closed).
+        ConsentError: no valid tenant, a non-owner tier, or no fingerprint
+            for a credential session (fail-closed).
     """
+    tenant_id = getattr(rec, "tenant_id", None)
+    if not isinstance(tenant_id, str) or not tenant_id:
+        raise ConsentError("session record has no tenant_id")
+    try:
+        from corvin_operator.forge.forge.tenants import validate_tenant_id
+        validate_tenant_id(tenant_id)
+    except Exception as exc:  # noqa: BLE001 — unverifiable tenant denies
+        raise ConsentError(f"invalid tenant_id: {type(exc).__name__}") from None
+    if getattr(rec, "tier", None) != "owner":
+        raise ConsentError("only owner sessions carry consent")
+    token_fp = getattr(rec, "token_fingerprint", "")
+    if token_fp == "" or token_fp is None:
+        return f"{LOCAL_OPERATOR_PREFIX}{tenant_id}"
     fp = getattr(rec, "sid_fingerprint", None)
     if not isinstance(fp, str) or not fp:
         raise ConsentError("session record has no sid_fingerprint")
     return fp
+
+
+def is_local_operator_subject(subject: str) -> bool:
+    return isinstance(subject, str) and subject.startswith(LOCAL_OPERATOR_PREFIX)
 
 
 class ConsentError(Exception):
@@ -185,5 +226,6 @@ def consent_required(consent_scope: str = "default") -> Callable:
 # Export for convenience
 __all__ = [
     "consent_required", "consent_subject", "ConsentError",
+    "LOCAL_OPERATOR_PREFIX", "is_local_operator_subject",
     "CONSENT_SCOPES", "GRANTABLE_CONSENT_SCOPES",
 ]

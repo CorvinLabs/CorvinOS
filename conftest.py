@@ -110,8 +110,11 @@ def _protected_state(
         return None
 
 
+_OUTBOX_SEQ = [0]
+
+
 @pytest.fixture(autouse=True)
-def _isolated_bridge_outbox(monkeypatch, tmp_path):
+def _isolated_bridge_outbox(monkeypatch):
     """Never let a test queue a real message for a real messenger.
 
     Fourth incarnation of the class this file guards: the workflow
@@ -125,8 +128,16 @@ def _isolated_bridge_outbox(monkeypatch, tmp_path):
 
     Redirect the outbox to tmp for every test. A test that needs a specific
     path still wins: its own monkeypatch.setenv runs after this fixture.
+
+    The path is unique per test and NOT created (writers mkdir it, exactly as
+    they did for the former ``tmp_path / "outbox"``). It lives under the session
+    sandbox instead of ``tmp_path``: requesting ``tmp_path`` here made pytest
+    create a numbered directory for EVERY test (~1.4 ms each), including the
+    thousands that never touch an outbox.
     """
-    monkeypatch.setenv("ADAPTER_OUTBOX", str(tmp_path / "outbox"))
+    _OUTBOX_SEQ[0] += 1
+    monkeypatch.setenv("ADAPTER_OUTBOX", str(
+        _SESSION_SANDBOX / "outbox" / f"{_os.getpid()}-{_OUTBOX_SEQ[0]}" / "outbox"))
 
 
 @pytest.fixture(autouse=True)
@@ -235,6 +246,7 @@ def _gateway_loopback_test_client(request, monkeypatch):
 import json as _json
 import os as _os
 import shutil as _shutil
+import stat as _stat
 import sys as _sys
 import tempfile as _tempfile
 
@@ -295,14 +307,23 @@ def _is_tmp_path(p: Path) -> bool:
 _PROTECTED_HOMES = _discover_protected_homes()
 
 
+# String forms for the per-test hot path: ``Path.is_relative_to`` / ``resolve``
+# cost ~15 us per call and the guard makes hundreds per test.
+_PROTECTED_HOME_STRS = tuple(str(h) for h in _PROTECTED_HOMES)
+
+
+def _under_str(p: str, root: str) -> bool:
+    return p == root or p.startswith(root.rstrip(_os.sep) + _os.sep)
+
+
 def _is_protected(p: "str | Path") -> bool:
-    n = _norm(p)
+    n = str(_norm(p))
     cands = {n}
     try:
-        cands.add(n.resolve())
+        cands.add(_os.path.realpath(n))  # same result as Path.resolve(), cheaper
     except Exception:  # noqa: BLE001
         pass
-    return any(_under(c, h) for c in cands for h in _PROTECTED_HOMES)
+    return any(_under_str(c, h) for c in cands for h in _PROTECTED_HOME_STRS)
 
 
 def _unsafe(key: str, value: "str | None") -> bool:
@@ -388,33 +409,87 @@ def _resolver_targets() -> "list[tuple[str, Path]]":
     return out
 
 
+# Resolver results are a pure function of the env and of the resolver modules'
+# globals (none of the three keeps a cache). The per-test check therefore only
+# re-runs the resolvers when one of those changed: a different CORVIN_HOME /
+# CORVIN_TENANT_ID / HOME, a module re-imported into sys.modules, or ANY global
+# of a resolver module rebound (``paths.corvin_home = lambda: live`` left behind
+# by a test) — the key holds the identity of every module global, and the cache
+# pins those objects so an id cannot be recycled while it is cached. The
+# resolved paths are still judged on every call (``_is_protected`` follows
+# symlinks, and a symlink can be swapped without any of the above changing).
+_RESOLVER_MODULES = (
+    "corvin_operator.forge.forge.paths", "core.paths.tenant", "_corvin_isolation_bridges_paths")
+_RESOLVER_ENV = ("CORVIN_HOME", "CORVIN_TENANT_ID", "HOME")
+_resolver_cache: "dict[str, object]" = {"key": None, "pin": None, "targets": []}
+
+
+def _resolver_state() -> "tuple[tuple, tuple]":
+    ids, pin = [], []
+    for name in _RESOLVER_MODULES:
+        mod = _sys.modules.get(name)
+        vals = tuple(vars(mod).values()) if mod is not None else ()
+        ids.append((name, id(mod), tuple(map(id, vals))))
+        pin.append((mod, vals))
+    return (tuple(_os.environ.get(k) for k in _RESOLVER_ENV), tuple(ids)), tuple(pin)
+
+
+def _cached_resolver_targets() -> "list[tuple[str, Path]]":
+    key, _pin = _resolver_state()
+    if key != _resolver_cache["key"]:
+        targets = _resolver_targets()
+        # _resolver_targets() may import a module for the first time: take the
+        # key AFTER it, so the next call compares against what was resolved.
+        key, pin = _resolver_state()
+        _resolver_cache.update(key=key, pin=pin, targets=targets)
+    return list(_resolver_cache["targets"])  # type: ignore[arg-type]
+
+
 def _resolution_violations() -> "list[str]":
-    return [f"{label}() -> {p}" for label, p in _resolver_targets() if _is_protected(p)]
+    return [f"{label}() -> {p}" for label, p in _cached_resolver_targets() if _is_protected(p)]
 
 
 # ── read-only stat snapshot of every protected audit chain ──
-def _protected_chains() -> "list[Path]":
-    found: "list[Path]" = []
-    for home in _PROTECTED_HOMES:
-        cands = [home / "forge" / "audit.jsonl", home / "global" / "forge" / "audit.jsonl"]
-        tenants = home / "tenants"
+# The candidate list per home is fixed except for ``tenants/*``; that listing is
+# cached and re-read only when the ``tenants`` directory's (inode, mtime)
+# changes — which creating or removing a tenant directory always does — so a
+# snapshot is a handful of ``stat`` calls, not a directory walk.
+_tenant_listing: "dict[Path, tuple[object, list[Path]]]" = {}
+
+
+def _tenant_chains(home: Path) -> "list[Path]":
+    tenants = home / "tenants"
+    try:
+        st = tenants.stat()
+        sig: object = (st.st_ino, st.st_mtime_ns)
+    except OSError:
+        sig = None
+    cached = _tenant_listing.get(home)
+    if cached is not None and cached[0] == sig:
+        return cached[1]
+    chains: "list[Path]" = []
+    if sig is not None:
         try:
-            if tenants.is_dir():
-                cands += [t / "global" / "forge" / "audit.jsonl" for t in tenants.iterdir()]
+            chains = [t / "global" / "forge" / "audit.jsonl" for t in tenants.iterdir()]
         except OSError:
-            pass
-        found += [c for c in cands if c.is_file()]
-    return found
+            sig = None  # listing failed: do not cache it
+    if sig is not None:
+        _tenant_listing[home] = (sig, chains)
+    return chains
 
 
 def _chain_snapshot() -> "dict[Path, tuple[int, int, int]]":
     snap = {}
-    for c in _protected_chains():
-        try:
-            st = c.stat()
+    for home in _PROTECTED_HOMES:
+        for c in (home / "forge" / "audit.jsonl", home / "global" / "forge" / "audit.jsonl",
+                  *_tenant_chains(home)):
+            try:
+                st = _os.stat(c)
+            except OSError:
+                continue
+            if not _stat.S_ISREG(st.st_mode):
+                continue
             snap[c] = (st.st_ino, st.st_size, st.st_mtime_ns)
-        except OSError:
-            continue
     return snap
 
 
@@ -477,6 +552,21 @@ def _chain_violations(before: dict, after: dict) -> "list[str]":
         own = _own_instance_id(chain)
         if own is None:
             out.append(f"{chain}: CREATED during the test")
+            continue
+        # A NEW chain in a home that has an instance id (e.g. a fresh tenant):
+        # its records are judged like any append. Until 2026-09-28 this branch
+        # skipped them, so a scrubbed writer landing in a new tenant's chain of
+        # the live install went unnoticed.
+        recs = _appended_records(chain, 0, after[chain][1])
+        foreign = [r for r in recs if r.get("instance_id") not in (own, None)]
+        if foreign:
+            kinds = sorted({str(r.get("event_type")) for r in foreign})
+            iids = sorted({str(r.get("instance_id", "?"))[:8] for r in foreign})
+            out.append(f"{chain}: CREATED with {len(foreign)} foreign record(s) "
+                       f"(instance {iids}, events {kinds[:6]})")
+        elif recs:
+            _UNATTRIBUTED_GROWTH.append(
+                f"{chain}: created, {len(recs)} record(s) with the install's own instance id")
     return out
 
 
@@ -500,9 +590,19 @@ def pytest_unconfigure(config):
         _shutil.rmtree(_SESSION_SANDBOX, ignore_errors=True)
 
 
+# One snapshot per test: the teardown snapshot of test N is the "before" of
+# test N+1. Nothing of a test runs between the two (the teardown snapshot is
+# taken after every finaliser, incl. module/session-scoped ones), and a write
+# that lands in that window — a background thread test N left running — is now
+# attributed to N+1 instead of falling into a gap no snapshot covered.
+_last_snapshot: "dict[str, object]" = {"snap": None}
+
+
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_setup(item):
-    item._corvin_chain_before = _chain_snapshot()
+    snap = _last_snapshot["snap"]
+    item._corvin_chain_before = snap if snap is not None else _chain_snapshot()
+    _last_snapshot["snap"] = None
     return (yield)
 
 
@@ -518,7 +618,9 @@ def pytest_runtest_teardown(item, nextitem):
             _os.environ[k] = _SESSION_ENV[k]
         before = getattr(item, "_corvin_chain_before", None)
         if before is not None:
-            bad = _chain_violations(before, _chain_snapshot())
+            after = _chain_snapshot()
+            _last_snapshot["snap"] = after
+            bad = _chain_violations(before, after)
             if bad:
                 pytest.exit(
                     f"LIVE AUDIT CHAIN TOUCHED during {item.nodeid} (or a background "

@@ -327,6 +327,8 @@ class TestRollbackAutomationFixes:
             trigger=RollbackTrigger.LATENCY_SPIKE,
             timestamp=datetime.now(timezone.utc).isoformat(),
             phase="PHASE_2B_SKILL_PRIMARY",
+            # REVERT_VERSION needs a subject; without one it is refused up-front.
+            skill_id="os.delegation_router",
             metric_name="latency_p99_ms",
             actual_value=250.0,
             threshold=200.0,

@@ -40,7 +40,8 @@ _ENV = ("PATH", "ADAPTER_INBOX", "ADAPTER_OUTBOX", "CORVIN_HOME", "VOICE_AUDIT_P
         "ADAPTER_HEARTBEAT_INTERVAL")
 
 
-def _fake_claude(tmp: Path, *, hang_first: bool, overflow_first: bool = False) -> Path:
+def _fake_claude(tmp: Path, *, hang_first: bool, overflow_first: bool = False,
+                 tool_first: bool = False) -> Path:
     """A `claude` that records the task records it finds at spawn time, then
     answers — or, on its first call when *hang_first*, hangs until killed."""
     bin_dir = tmp / "fake-bin"
@@ -67,6 +68,18 @@ def _fake_claude(tmp: Path, *, hang_first: bool, overflow_first: bool = False) -
                                           "result": "autocompact thrashing: prompt is too long"}}) + "\\n")
             sys.stdout.flush()
             sys.exit(1)
+        if {tool_first!r} and n == 0:
+            # a tool call, then keep working until killed; record the exit
+            def _bye(*a):
+                open("{tmp}/exited", "w").write("1")
+                sys.exit(143)
+            signal.signal(signal.SIGTERM, _bye)
+            sys.stdout.write(json.dumps({{"type": "assistant", "message": {{"content": [
+                {{"type": "tool_use", "id": "t1", "name": "Bash", "input": {{"command": "true"}}}}]}}}}) + "\\n")
+            sys.stdout.flush()
+            time.sleep(1.0)
+            while True:
+                time.sleep(60)
         if {hang_first!r} and n == 0:
             signal.signal(signal.SIGTERM, lambda *a: sys.exit(143))
             while True:
@@ -79,8 +92,10 @@ def _fake_claude(tmp: Path, *, hang_first: bool, overflow_first: bool = False) -
     return bin_dir
 
 
-def _setup(tmp: Path, *, hang_first: bool, overflow_first: bool = False, profiles: dict | None = None):
-    bin_dir = _fake_claude(tmp, hang_first=hang_first, overflow_first=overflow_first)
+def _setup(tmp: Path, *, hang_first: bool, overflow_first: bool = False, profiles: dict | None = None,
+           tool_first: bool = False):
+    bin_dir = _fake_claude(tmp, hang_first=hang_first, overflow_first=overflow_first,
+                           tool_first=tool_first)
     os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
     os.environ["ADAPTER_INBOX"] = str(tmp / "inbox")
     os.environ["ADAPTER_OUTBOX"] = str(tmp / "outbox")
@@ -399,6 +414,45 @@ def test_round4_rules() -> None:
     _run(body)
 
 
+def test_stream_loop_error_fails_turn_without_rerun() -> None:
+    """An exception inside the engine streaming loop (here: after a tool call)
+    must not re-run the prompt through the legacy blocking path — that spawned
+    a second CLI with --continue on the same session while the first was still
+    exiting, re-executed tool side effects, and emitted no engine span. The
+    turn fails: one spawn, the process reaped before the reply, a failure
+    reply, the record failed, the span closed with status error."""
+    def body(tmp: Path) -> None:
+        adapter = _setup(tmp, hang_first=False, tool_first=True)
+        os.environ["ADAPTER_STREAM_IDLE_TIMEOUT"] = "30"
+        real_audit = adapter._audit_event
+
+        def _audit(event_type, *a, **kw):
+            if event_type == "os_turn.tool_called":
+                raise RuntimeError("boom inside the stream loop")
+            return real_audit(event_type, *a, **kw)
+        adapter._audit_event = _audit
+        spans = []
+        real_span = adapter._emit_os_engine_span
+
+        def _span(phase, **kw):
+            spans.append((phase, kw.get("status")))
+            return real_span(phase, **kw)
+        adapter._emit_os_engine_span = _span
+        legacy = []
+        adapter.call_claude = lambda *a, **kw: legacy.append(1) or "legacy answer"
+        ans = adapter.call_claude_streaming("ship it", channel="discord", chat_key="tt12",
+                                            msg_id="m-12", sender=OPERATOR)
+        assert not legacy, "the legacy blocking path re-ran the prompt"
+        assert int((tmp / "calls").read_text()) == 1, "a second CLI was spawned"
+        assert (tmp / "exited").exists(), "the reply went out while the engine process was still alive"
+        assert ans.startswith("Claude API call failed"), ans
+        [rec] = _records(adapter._session_dir("discord", "tt12"))
+        assert rec["status"] == "failed", rec
+        assert ("end", "error") in spans, spans
+        print("PASS: a stream-loop error fails the turn once, no re-run, span closed as error")
+    _run(body)
+
+
 if __name__ == "__main__":
     test_opened_at_pickup_and_closed_once()
     test_recovered_retry_ends_completed()
@@ -411,3 +465,4 @@ if __name__ == "__main__":
     test_cancel_is_cancelled_not_failed()
     test_round3_rules()
     test_round4_rules()
+    test_stream_loop_error_fails_turn_without_rerun()

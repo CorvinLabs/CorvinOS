@@ -488,6 +488,10 @@ def test_late_popen_after_spawn_timeout_orphans_subprocess() -> None:
         from agents import StreamEvent  # type: ignore
 
         spawned: dict[str, subprocess.Popen] = {}
+        # The deadline starts when the spawn thread starts, not at the call:
+        # pre-spawn work (gates, the first-turn classifier import ~1.3 s in a
+        # fresh process) is not part of the proc-wait deadline under test.
+        spawn_started: dict[str, float | None] = {"t": None}
 
         class _FakeSlowPopenEngine:
             """Stands in for ClaudeCodeEngine: spawn() stalls for 6s (past
@@ -511,6 +515,7 @@ def test_late_popen_after_spawn_timeout_orphans_subprocess() -> None:
                         pass
 
             def spawn(self, prompt, **kwargs):
+                spawn_started["t"] = time.time()
                 time.sleep(6.0)  # simulate a slow fork/mkstemp/disk stall
                 proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
                 self._proc = proc
@@ -549,7 +554,8 @@ def test_late_popen_after_spawn_timeout_orphans_subprocess() -> None:
         assert "timed out before producing a process" in result, \
             f"unexpected result: {result!r}"
         assert deadline_hit["t"] is not None, "adapter never logged the spawn deadline"
-        waited = deadline_hit["t"] - t0
+        assert spawn_started["t"] is not None, "the fake engine was never spawned"
+        waited = deadline_hit["t"] - spawn_started["t"]
         assert waited < 5.5, \
             f"caller should give up at the ~5s deadline, waited {waited:.1f}s"
         bookkeeping = elapsed - waited

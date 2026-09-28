@@ -470,14 +470,21 @@ AdversarialDetector.sanitize_feedback(feedback)
 Every OS-Skill must prove it is **called end-to-end** (not just unit-tested):
 
 ```bash
-# 1. Run the skill in production
-pytest tests/e2e/test_os_skills_l5_l10_wiring.py tests/skills/test_delegation_router_wiring_e2e.py -v
+# 1. Run the skill through its real entry points (bridge adapter.process_one and
+#    console stream_turn; both land with ADR-2092 and replace the retired
+#    tests/skills/test_delegation_router_wiring_e2e.py)
+pytest tests/e2e/test_os_skills_l5_l10_wiring.py \
+       tests/e2e/test_l5_routing_loop_bridge_e2e.py \
+       core/console/tests/test_l5_routing_loop_console_e2e.py -v
 
-# 2. Verify skill was called (check audit trail)
-grep "skill_executed.*delegation_router" ~/.corvin/audit.jsonl | tail -1
+# 2. Verify skill was called — the ONE per-tenant chain is
+#    <corvin_home>/tenants/<tid>/global/forge/audit.jsonl (tenant_audit_chain()),
+#    not ~/.corvin/audit.jsonl
+CHAIN="$CORVIN_HOME/tenants/_default/global/forge/audit.jsonl"
+grep "skill_executed.*delegation_router" "$CHAIN" | tail -1
 
 # 3. Verify feedback loop works
-grep "skill_feedback\|skill_config_updated" ~/.corvin/audit.jsonl \
+grep "skill_feedback\|skill_config_updated" "$CHAIN" \
   | grep "delegation_router" | tail -3
 
 # 4. Commit (only if audit trail shows execution)

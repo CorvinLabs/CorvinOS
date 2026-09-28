@@ -3,14 +3,22 @@
 Phase 2: CSRF Protection Bulk Fixer (MAINLINE ONLY)
 Automatically adds @require_csrf decorator to all vulnerable endpoints in mainline code
 Excludes .claude/worktrees/, venv, tests, and external libraries
+DEFUSED (adversarial review 2026-09-28): this fixer inserts
+``from core.security.csrf import require_csrf`` and a bare ``@require_csrf``
+decorator. ``core.security.csrf`` does not exist in this repo (the console's
+CSRF check is the FastAPI dependency ``corvin_console.deps.require_csrf``, used
+via ``Depends``), so every file it edits stops importing — as happened to
+``corvin_operator/agent/main.py`` and ``corvin_operator/bridges/shared/rag_rest_api.py``.
+It also wrote into a hard-wired live tree. ``main()`` now refuses (exit 2).
 """
 
 import re
+import sys
 import os
 from pathlib import Path
 from collections import defaultdict
 
-REPO_ROOT = Path("/home/shumway/projects/CorvinOS")
+REPO_ROOT = Path(__file__).resolve().parents[1]  # this checkout, never a hard-wired live tree
 
 # Paths to exclude (must exclude worktrees and venv)
 EXCLUDE_DIRS = {
@@ -161,6 +169,13 @@ def find_vulnerable_files():
     return vulnerable_files, scanned
 
 def main():
+    sys.stderr.write(
+        "defused: this CSRF bulk fixer inserts an import of core.security.csrf, "
+        "which does not exist — every edited module would stop importing. "
+        "Use the FastAPI dependency corvin_console.deps.require_csrf "
+        "(Depends) per route instead. Nothing was changed.\n"
+    )
+    sys.exit(2)
     print("\n🔧 PHASE 2: CSRF Protection Bulk Fixer (MAINLINE ONLY)\n")
     print(f"Scanning repository: {REPO_ROOT}")
     print("(Excluding .claude/worktrees, venv, and other non-mainline paths)")

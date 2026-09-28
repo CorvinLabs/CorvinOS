@@ -370,12 +370,16 @@ class Phase2bActivationGate:
         days_since_last_rollback: int,
         audit_violations_in_window: Optional[int] = None,
         latency_sigma_ms: Optional[float] = None,
+        unmeasured_checks: Optional[List[str]] = None,
     ) -> Tuple[bool, List[str]]:
         """
         Evaluate whether a skill can be activated to primary mode.
 
         ``audit_violations_in_window`` and ``latency_sigma_ms`` must be MEASURED
         values; ``None`` means not measured and blocks activation (fail-closed).
+        ``unmeasured_checks`` are the rollback checks that could not run on the
+        last evaluation (e.g. ``tenant_isolation``); any entry blocks activation
+        — an unmeasured isolation check is not a passed one.
 
         Returns (can_activate: bool, reasons: List[str])
         """
@@ -420,6 +424,11 @@ class Phase2bActivationGate:
             reasons.append(f"✓ Latency stable (σ={latency_sigma_ms:.1f}ms <10ms)")
         else:
             reasons.append(f"✗ Latency unstable (σ={latency_sigma_ms:.1f}ms ≥10ms)")
+            can_activate = False
+
+        # Criterion 5: every rollback check was actually measured.
+        if unmeasured_checks:
+            reasons.append(f"✗ Unmeasured checks: {', '.join(sorted(set(unmeasured_checks)))} ({NOT_MEASURED})")
             can_activate = False
 
         return can_activate, reasons
@@ -812,6 +821,7 @@ class RolloutOrchestrator:
                 days_since_rollback,
                 audit_violations_in_window=getattr(self, "_audit_violations_in_window", None),
                 latency_sigma_ms=latency_sigma,
+                unmeasured_checks=list(self.state.unmeasured_checks),
             )
 
             if can_activate and self.state.skill_states.get(skill_id) != SkillMode.PRIMARY:

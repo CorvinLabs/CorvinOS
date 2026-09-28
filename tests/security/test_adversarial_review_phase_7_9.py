@@ -113,22 +113,32 @@ AuditChainValidator = _audit_chain_validator_module.AuditChainValidator
 logger = logging.getLogger(__name__)
 
 
-def _hash_chain_events(raw_events: list) -> list:
-    """Attach valid hash/prev_hash fields to raw audit events using the
-    exact algorithm AuditChainValidator (Fix #1) verifies against. Written
-    when this file's tests were adversarial vulnerability demonstrations
-    predating Fix #1 — without this, every event here is rejected for
-    missing hash fields before the scenario each test actually targets
-    (forged content, tampering, symlink escape, division-by-zero) is ever
-    reached."""
-    prev_hash = ""
-    chained = []
-    for event in raw_events:
-        event_hash = AuditChainValidator._compute_event_hash(event, prev_hash)
-        chained_event = {**event, "prev_hash": prev_hash, "hash": event_hash}
-        chained.append(chained_event)
-        prev_hash = event_hash
-    return chained
+def _write_real_chain(path: Path, raw_events: list) -> None:
+    """Write fixture events through the CORE writer
+    (``forge.security_events.write_event``).
+
+    Round 4 (2026-09-27) switched the detector from the private
+    ``AuditChainValidator`` hash scheme to ``forge.security_events.verify_chain``
+    — the format every real tenant chain has. Records hand-chained with the old
+    scheme are refused as ``tampered (line 1)`` before the scenario a test
+    targets is reached, which is why three tests here failed (adversarial
+    review round 5). Payload fields go under ``details``; content-named keys
+    the writer's floor forbids (``input``/``output``/``secret_data``…) are left
+    out — the floor would drop them anyway; the record's tenant is the process
+    tenant, as the writer requires."""
+    forge_dir = _REPO / "corvin_operator" / "forge"
+    if str(forge_dir) not in sys.path:
+        sys.path.insert(0, str(forge_dir))
+    from forge import security_events as se
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for ev in raw_events:
+        body = {k: v for k, v in ev.items()
+                if k not in ("event_type", "ts") and not se._audit_key_forbidden(k.lower())}
+        se.register_event_allowlist(ev["event_type"], frozenset(body))
+        with patch.dict(os.environ, {"CORVIN_TENANT_ID": body["tenant_id"]}):
+            se.write_event(path, ev["event_type"], details=body, ts=ev["ts"])
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -197,9 +207,7 @@ def test_loss_signal_injection_via_forged_audit_events(tmp_corvin_home, audit_pa
         }
         for i in range(100)
     ]
-    with open(audit_path, "a") as f:
-        for event in _hash_chain_events(fake_events):
-            f.write(json.dumps(event) + "\n")
+    _write_real_chain(audit_path, fake_events)
 
     detector = SkillLossTriggerDetector()
     with patch(
@@ -213,10 +221,11 @@ def test_loss_signal_injection_via_forged_audit_events(tmp_corvin_home, audit_pa
     # Fix #1 closes retroactive tampering (test_loss_trigger_without_hash_
     # chain_verification, below); closing THIS residual — an attacker with
     # audit.jsonl write access forging brand-new, self-consistent events —
-    # needs per-writer signing (e.g. an HMAC keyed to the writing process),
-    # which is out of scope for the 6 CRITICAL fixes and not claimed as
-    # closed. This assertion documents that residual, it does not newly
-    # discover it.
+    # needs per-writer signing. The core chain now carries a keyed MAC
+    # (ADR-0137 M2), so a forger WITHOUT the anchor key is refused; these
+    # records are written through the real writer, i.e. by a forger that holds
+    # the writer's key — the residual no chain format can close. This
+    # assertion documents that residual, it does not newly discover it.
     assert len(triggers) > 0, (
         "Expected residual: correctly hash-chained forged events are still "
         "accepted — hash-chaining proves order, not authorship"
@@ -250,9 +259,7 @@ def test_loss_trigger_without_hash_chain_verification(tmp_corvin_home, audit_pat
         "version": "1.0.0",
         "outcome_feedback": {"correct": True},
     }
-    with open(audit_path, "a") as f:
-        for event in _hash_chain_events([legit_event]):
-            f.write(json.dumps(event) + "\n")
+    _write_real_chain(audit_path, [legit_event])
 
     # Attacker retroactively modifies the already-written, already-hashed
     # event (changes correct: True → False) without recomputing its hash —
@@ -262,7 +269,8 @@ def test_loss_trigger_without_hash_chain_verification(tmp_corvin_home, audit_pat
     with open(audit_path, "r") as f:
         lines = f.readlines()
 
-    modified_line = lines[0].replace('"correct": true', '"correct": false')
+    modified_line = re.sub(r'"correct":\s*true', '"correct": false', lines[0])
+    assert modified_line != lines[0], "tamper did not change the record"
     with open(audit_path, "w") as f:
         f.write(modified_line)
 
@@ -274,7 +282,8 @@ def test_loss_trigger_without_hash_chain_verification(tmp_corvin_home, audit_pat
         "corvin_operator.skill_forge.autonomous.trigger_detector.tenant_audit_chain",
         return_value=audit_path,
     ):
-        with pytest.raises(RuntimeError, match="(?i)hash"):
+        # verify_chain reports the broken link as "tampered (line N)".
+        with pytest.raises(RuntimeError, match="(?i)integrity check failed.*tampered"):
             detector.detect_loss_signals("_default", lookback_hours=1)
 
 
@@ -426,9 +435,7 @@ def test_cross_tenant_audit_leakage_via_symlink(tmp_corvin_home):
         for _ in range(50)  # Multiple events to establish pattern
     ]
 
-    with open(audit_b, "a") as f:
-        for event in _hash_chain_events(sensitive_events):
-            f.write(json.dumps(event) + "\n")
+    _write_real_chain(audit_b, sensitive_events)
 
     # ATTACK: Create symlink from tenant A to tenant B
     if audit_a.exists():
@@ -540,9 +547,7 @@ def test_confidence_calculation_division_by_zero(tmp_corvin_home, audit_path):
         }
         for i in range(10)
     ]
-    with open(audit_path, "a") as f:
-        for event in _hash_chain_events(malformed_events):
-            f.write(json.dumps(event) + "\n")
+    _write_real_chain(audit_path, malformed_events)
 
     detector = SkillLossTriggerDetector()
     with patch(

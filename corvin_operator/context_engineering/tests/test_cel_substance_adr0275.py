@@ -47,7 +47,8 @@ class CelSubstanceTests(unittest.TestCase):
         # "CorvinOS" that never resolved
         self.assertNotEqual(p.parent.name, "CorvinOS")
         self.assertIn("-", p.parent.name)
-        self.assertTrue(p.parent.name.endswith("CorvinOS"))
+        # the checkout directory name (a worktree is not named "CorvinOS")
+        self.assertTrue(p.parent.name.endswith(_REPO.name))
 
     def test_memory_lookup_finds_files(self):
         from context_engineering.memory_lookup import MemoryLookup

@@ -18,8 +18,11 @@
 > Defused later on 2026-09-27 (adversarial review): an unmeasured loop is now reported
 > `status: "not_measured"` with null health. The mounted loops surface is
 > `routes/learning_analytics.py` (`/v1/console/learning-loops/*`).
-> `tests/integration/test_learning_loop_manifest_e2e.py`: 4 failed / 12 passed
-> (`NameError: datetime`, `'str' object has no attribute 'value'`, missing `last_event_ts`).
+> `tests/integration/test_learning_loop_manifest_e2e.py`: 16 passed (re-run 2026-09-28;
+> it was 4 failed / 12 passed on 2026-09-27 until the `NameError: datetime`,
+> `'str' object has no attribute 'value'` and missing `last_event_ts` defects were fixed).
+> Green tests do not make the route live: `routes/learning_loops.py` is still a Flask
+> blueprint the FastAPI console never mounts.
 > The table below records what the iterations *set out* to ship, not what is live.
 
 
@@ -32,8 +35,8 @@
 
 **Metrics:**
 - 1,000+ LoC (6 new files, comprehensive tests)
-- `test_learning_loop_manifest_e2e.py`: 4 failed / 12 passed (2026-09-27)
-- Gates NOT passed
+- `test_learning_loop_manifest_e2e.py`: 16 passed (re-run 2026-09-28; 4 failed / 12 passed on 2026-09-27)
+- Gates NOT passed: the Console API route is still unmounted
 - Full architecture: manifest → discovery → audit → KG → Console API
 
 **Critical Gap:** Plugins do NOT yet emit events (ADR-0314). Audit chain is queried, but it's empty for learning loops. Health scores are computed from synthetic/fixture data, not real events.

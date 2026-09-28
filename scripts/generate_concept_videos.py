@@ -30,7 +30,8 @@ FRAMES = 150
 WIDTH = 1920
 HEIGHT = 1080
 FPS = 25
-OUTPUT_DIR = Path("/home/shumway/projects/CorvinOS/outputs")
+# Resolved from this checkout (was a hard-wired path into the live tree).
+OUTPUT_DIR = Path(__file__).resolve().parents[1] / "outputs"
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 @dataclass

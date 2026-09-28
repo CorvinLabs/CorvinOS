@@ -866,12 +866,22 @@ class TestComplete12WeekRollout:
             orch.advance_day(metrics_good)
         assert not any(mode == SkillMode.PRIMARY for mode in orch.get_state().skill_states.values())
 
-        # Phase 2b with a MEASURED count of zero: skills activate as confidence
-        # reaches their thresholds (7-day latency sigma is computed from input).
-        for day in range(71, 85):
+        # Audit violations measured but tenant isolation NOT measured: the
+        # unmeasured isolation check blocks activation (it used to be ignored).
+        for day in range(71, 78):
             for skill_id, m in metrics_good.items():
                 m.confidence = min(0.95, m.confidence + 0.01)
             orch.advance_day(metrics_good, audit_violations_in_window=0)
+        assert "tenant_isolation" in orch.get_state().unmeasured_checks
+        assert not any(mode == SkillMode.PRIMARY for mode in orch.get_state().skill_states.values())
+
+        # Both MEASURED as zero: skills activate as confidence reaches their
+        # thresholds (7-day latency sigma is computed from input).
+        for day in range(78, 85):
+            for skill_id, m in metrics_good.items():
+                m.confidence = min(0.95, m.confidence + 0.01)
+            orch.advance_day(metrics_good, audit_violations_in_window=0,
+                             tenant_isolation_violations=0)
 
         state = orch.get_state()
         assert any(mode == SkillMode.PRIMARY for mode in state.skill_states.values())

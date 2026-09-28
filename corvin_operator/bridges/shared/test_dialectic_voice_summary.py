@@ -13,7 +13,7 @@ Covers:
 
 The CLI subprocess is mocked via unittest.mock so the test never spawns a
 real `claude -p` call. Audit chain hits the unified hash chain at
-<corvin_home>/global/forge/audit.jsonl, which the test reads back to
+<corvin_home>/tenants/_default/global/forge/audit.jsonl, which the test reads back to
 verify the `decision.dialectical` event lands with the right site +
 verdict.
 """
@@ -62,7 +62,8 @@ def _fresh_summarize():
 
 
 def _audit_path(tmp: Path) -> Path:
-    return tmp / "corvin" / "global" / "forge" / "audit.jsonl"
+    # THE tenant chain (tenant_audit_chain), not the legacy global/forge one.
+    return tmp / "corvin" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
 
 
 def _read_audit_events(p: Path) -> list[dict]:

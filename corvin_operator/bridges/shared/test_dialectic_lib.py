@@ -419,7 +419,9 @@ def case_rate_limit_per_site():
 
     # The audit chain must contain dialectic.rate_limited events for the
     # 3 throttled calls.
-    audit_path = Path(_TD) / "global" / "forge" / "audit.jsonl"
+    # THE tenant chain (tenant_audit_chain), never the legacy host-wide
+    # <home>/global/forge/audit.jsonl the boot tripwire does not read.
+    audit_path = Path(_TD) / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
     if audit_path.exists():
         events = []
         for line in audit_path.read_text().splitlines():
@@ -506,3 +508,22 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def test_audit_chain_path_is_the_tenant_chain(monkeypatch, tmp_path):
+    """Regression (adversarial review round 5): ``_audit_chain_path`` composed
+    ``corvin_home()/global/forge/audit.jsonl`` by hand — the legacy host-wide
+    chain nothing verifies — so every ``decision.dialectical`` record was
+    outside the audit trail. It must be ``tenant_audit_chain()``."""
+    import dialectic  # type: ignore
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.delenv("FORGE_ROOT", raising=False)
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+    monkeypatch.setenv("CORVIN_TENANT_ID", "acme")
+    assert dialectic._audit_chain_path() == (
+        tmp_path / "tenants" / "acme" / "global" / "forge" / "audit.jsonl")
+    monkeypatch.delenv("CORVIN_TENANT_ID")
+    assert dialectic._audit_chain_path() == (
+        tmp_path / "tenants" / "_default" / "global" / "forge" / "audit.jsonl")
+    monkeypatch.setenv("FORGE_ROOT", str(tmp_path / "f"))
+    assert dialectic._audit_chain_path() == tmp_path / "f" / "audit.jsonl"

@@ -207,8 +207,11 @@ class TestConsentAuditPiiGuard(unittest.TestCase):
             os.environ["CORVIN_HOME"] = sb
             # Point the voice-side audit path at our sandbox too so the
             # importlib reload picks up the correct default.
+            # consent writes THE tenant chain (consent._audit_path), not the
+            # legacy host-wide <home>/global/forge/audit.jsonl.
             unified = (
-                Path(sb) / "global" / "forge" / "audit.jsonl"
+                Path(sb) / "tenants" / (os.environ.get("CORVIN_TENANT_ID") or "_default")
+                / "global" / "forge" / "audit.jsonl"
             )
             os.environ["VOICE_AUDIT_PATH"] = str(unified)
             importlib.reload(_voice_audit)

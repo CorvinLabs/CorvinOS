@@ -13,10 +13,12 @@ Queries filtered by tenant_id (cross-tenant access returns 403).
 Database: SQLite (<corvin_home>/tenants/<tenant>/consent_store.db)
 Schema: [user_id, scope, tenant_id, granted_at, expires_at, revoked_at]
 
-``user_id`` is a pseudonymous subject id — for the console, the session's
-``sid_fingerprint`` (see ``core.compliance.consent.consent_subject``). It must
-NEVER be a raw session id: the ``corvin_console_sid`` cookie is a bearer
-credential and this file is not a secret store.
+``user_id`` is a pseudonymous subject id — for the console, the stable
+``local-operator:<tenant>`` principal of a local-login session, or the
+session's ``sid_fingerprint`` for a session with a credential identity (see
+``core.compliance.consent.consent_subject``). It must NEVER be a raw session
+id: the ``corvin_console_sid`` cookie is a bearer credential and this file is
+not a secret store.
 
 Every grant is TTL-capped at :data:`MAX_TTL_DAYS`; deny-by-default is kept on
 every read path (missing, revoked, expired, unreadable → no consent).
@@ -342,6 +344,25 @@ class ConsentStore:
             raise ConsentStoreError(f"DB error on revoke_consent: {e}")
         finally:
             conn.close()
+
+    def unrevoked_subjects(self, scope: str) -> List[str]:
+        """Every subject with an unrevoked row for ``scope`` in this tenant
+        (expired rows included — revoking them is harmless and leaves no
+        row that still reads as un-withdrawn). Used to sweep legacy
+        per-session subjects on withdrawal (``routes/consent.py``)."""
+        if not scope:
+            return []
+        conn = self._get_connection()
+        try:
+            rows = conn.execute("""
+                SELECT DISTINCT user_id FROM consent_records
+                WHERE scope = ? AND tenant_id = ? AND revoked_at IS NULL
+            """, (scope, self.tenant_id)).fetchall()
+        except sqlite3.Error as e:
+            raise ConsentStoreError(f"DB error on unrevoked_subjects: {e}")
+        finally:
+            conn.close()
+        return [u for (u,) in rows]
 
     def list_active_consents(self, user_id: str) -> List[ConsentRecord]:
         """

@@ -15,6 +15,9 @@ Contracts these tests are written against (drift fixed 2026-09-03):
   scratch directory and clear the ``VOICE_AUDIT_PATH`` / ``FORGE_AUDIT_PATH``
   overrides that the repo-root conftest installs, so the tenant-scoped path
   logic is what gets exercised.
+* Every tenant's audit records go to THE tenant chain,
+  ``<home>/tenants/<tid>/global/forge/audit.jsonl`` (``tenant_audit_chain``) —
+  not the pre-2026-09-07 ``<home>/tenants/<tid>/audit.jsonl``.
 * ``EventStore(tenant_id)`` is bound to ONE tenant; ``write_event(event,
   tenant_id)`` / ``read_events(tenant_id=...)`` reject any other tenant.
 * ``EventEmitter(event_store)`` takes a store, not a path + tenant.
@@ -43,7 +46,14 @@ def scratch_home(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setenv("CORVIN_HOME", str(home / ".corvin"))
     monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
     monkeypatch.delenv("FORGE_AUDIT_PATH", raising=False)
+    monkeypatch.delenv("FORGE_ROOT", raising=False)
+    monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
     return home / ".corvin"
+
+
+def _chain(home: Path, tenant: str) -> Path:
+    """THE tenant chain layout (``tenant_audit_chain``) under ``home``."""
+    return home / "tenants" / tenant / "global" / "forge" / "audit.jsonl"
 
 
 def _events(path: Path) -> list[dict]:
@@ -57,13 +67,20 @@ class TestAuditPathTenantAwareness:
         from core.awpkg.awpkg.audit import _audit_path
 
         path = _audit_path()
-        assert path == scratch_home / "tenants" / "_default" / "audit.jsonl"
+        assert path == _chain(scratch_home, "_default")
 
     def test_audit_path_custom_tenant(self, scratch_home: Path) -> None:
         from core.awpkg.awpkg.audit import _audit_path
 
         path = _audit_path("tenant_acme")
-        assert path == scratch_home / "tenants" / "tenant_acme" / "audit.jsonl"
+        assert path == _chain(scratch_home, "tenant_acme")
+
+    def test_expected_layout_is_tenant_audit_chain(self, scratch_home: Path) -> None:
+        """The layout these tests assert is the canonical resolver's, not a copy."""
+        from core.paths import tenant_audit_chain
+
+        for tid in ("_default", "tenant_acme"):
+            assert Path(tenant_audit_chain(tid)) == _chain(scratch_home, tid)
 
     def test_audit_path_isolation(self, scratch_home: Path) -> None:
         from core.awpkg.awpkg.audit import _audit_path
@@ -92,8 +109,8 @@ class TestAuditEmissionWithTenantId:
         emit("test.event_a", tenant_id="tenant_a", data="test_a")
         emit("test.event_b", tenant_id="tenant_b", data="test_b")
 
-        file_a = scratch_home / "tenants" / "tenant_a" / "audit.jsonl"
-        file_b = scratch_home / "tenants" / "tenant_b" / "audit.jsonl"
+        file_a = _chain(scratch_home, "tenant_a")
+        file_b = _chain(scratch_home, "tenant_b")
         assert file_a.exists(), f"Tenant A audit file not found: {file_a}"
         assert file_b.exists(), f"Tenant B audit file not found: {file_b}"
 
@@ -106,7 +123,7 @@ class TestAuditEmissionWithTenantId:
         from core.awpkg.awpkg.audit import emit
 
         emit("test.default", package="test")
-        default_file = scratch_home / "tenants" / "_default" / "audit.jsonl"
+        default_file = _chain(scratch_home, "_default")
         assert default_file.exists()
         events = _events(default_file)
         assert len(events) == 1 and events[0]["event_type"] == "test.default"
@@ -118,8 +135,8 @@ class TestAuditEmissionWithTenantId:
             emit(f"test.event_{i}", tenant_id="tenant_x", seq=i)
             emit(f"test.event_{i}", tenant_id="tenant_y", seq=i)
 
-        events_x = _events(scratch_home / "tenants" / "tenant_x" / "audit.jsonl")
-        events_y = _events(scratch_home / "tenants" / "tenant_y" / "audit.jsonl")
+        events_x = _events(_chain(scratch_home, "tenant_x"))
+        events_y = _events(_chain(scratch_home, "tenant_y"))
         assert len(events_x) == 5 and len(events_y) == 5
         assert all(e["event_type"].startswith("test.event_") for e in events_x + events_y)
 
@@ -220,8 +237,8 @@ class TestAuditChainHashingPerTenant:
             emit("test.event", tenant_id="tenant_x", seq=i)
             emit("test.event", tenant_id="tenant_y", seq=i)
 
-        events_x = _events(scratch_home / "tenants" / "tenant_x" / "audit.jsonl")
-        events_y = _events(scratch_home / "tenants" / "tenant_y" / "audit.jsonl")
+        events_x = _events(_chain(scratch_home, "tenant_x"))
+        events_y = _events(_chain(scratch_home, "tenant_y"))
         assert len(events_x) == 3 and len(events_y) == 3
 
         chain_x = [e["hash"] for e in events_x]

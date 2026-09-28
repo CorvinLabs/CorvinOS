@@ -13,6 +13,9 @@ Eight cases:
      audit event_type is session.timeout.
   8. Engine-E2E (opt-in SKILL_FORGE_ENGINE_E2E=1) — see docstring at
      case_engine_e2e for the full flow.
+  9. Reset clears the session token budget.
+ 10. Free tier: skill + tool creation refused (ADR-0701); the seeding
+     helpers for cases 1-8 run with the licence tier pinned to ``member``.
 
 Run: python3 operator/bridges/shared/test_session_reset.py
 """
@@ -74,14 +77,33 @@ def _child_env(home: Path, slot: Path) -> dict:
     return env
 
 
-def _run_helper(home: Path, slot: Path, code: str, *args: str) -> str:
-    """Run a child process with CORVIN_HOME redirected. Returns stdout."""
+def _tier_pin(tier: str) -> str:
+    """Child-process prelude pinning the licence tier (ADR-0701).
+
+    Both registries refuse ``forge.create`` on the free tier, fail-closed — the
+    tier an unlicensed sandbox resolves to. The helpers that SEED skills/tools
+    for a reset therefore run as ``member``; case 10 pins ``free`` and proves
+    the refusal. The pin replaces the module global ``require_capability``
+    reads, so it binds whichever registry asks."""
+    return (
+        "import corvin_operator.license.capability_api as _ca\n"
+        f"_ca.active_tier = lambda **_k: {tier!r}\n"
+    )
+
+
+def _run_helper(home: Path, slot: Path, code: str, *args: str,
+                tier: str | None = None) -> str:
+    """Run a child process with CORVIN_HOME redirected. Returns stdout.
+
+    ``tier`` pins the licence tier in the child (only for helpers that forge)."""
     env = _child_env(home, slot)
     full = (
         "import sys, os\n"
+        f"sys.path.insert(0, {str(REPO)!r})\n"
         f"sys.path.insert(0, {str(FORGE_PKG)!r})\n"
         f"sys.path.insert(0, {str(SKILL_FORGE_PKG)!r})\n"
         f"sys.path.insert(0, {str(ROOT)!r})\n"
+        + (_tier_pin(tier) if tier else "")
         + code
     )
     r = subprocess.run(
@@ -93,7 +115,7 @@ def _run_helper(home: Path, slot: Path, code: str, *args: str) -> str:
 
 def _create_skill(home: Path, slot: Path, *, channel_id: str,
                   name: str, body: str, description: str,
-                  grade: float | None) -> None:
+                  grade: float | None, tier: str = "member") -> None:
     code = (
         "import sys, os, json\n"
         "from skill_forge.multi_registry import MultiSkillRegistry\n"
@@ -109,11 +131,11 @@ def _create_skill(home: Path, slot: Path, *, channel_id: str,
     )
     payload = {"name": name, "body": body, "description": description,
                "grade": grade}
-    _run_helper(home, slot, code, channel_id, json.dumps(payload))
+    _run_helper(home, slot, code, channel_id, json.dumps(payload), tier=tier)
 
 
 def _create_forge_tool(home: Path, slot: Path, *, channel_id: str,
-                       name: str) -> None:
+                       name: str, tier: str = "member") -> None:
     code = (
         "import sys, os\n"
         "from forge.scope import scope_root\n"
@@ -126,7 +148,7 @@ def _create_forge_tool(home: Path, slot: Path, *, channel_id: str,
         "           input_schema={'type':'object'},\n"
         "           impl='print(\"hi\")', runtime='python', scope='session')\n"
     )
-    _run_helper(home, slot, code, channel_id, name)
+    _run_helper(home, slot, code, channel_id, name, tier=tier)
 
 
 def _call_reset(home: Path, slot: Path, *, channel: str,
@@ -196,7 +218,10 @@ def _seed_voice_state(home: Path, channel: str, chat_id: str) -> Path:
 
 
 def _audit_path(home: Path) -> Path:
-    return home / "global" / "forge" / "audit.jsonl"
+    """The tenant's ONE chain (``tenant_audit_chain('_default')``). The legacy
+    ``<home>/global/forge/audit.jsonl`` is not written any more — asserting on it
+    failed case 5, and made case 6 verify a file that does not exist."""
+    return home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
 
 
 def _verify_chain(home: Path) -> tuple[bool, list]:
@@ -350,6 +375,8 @@ def case_06_chain_valid() -> None:
                       body=f"# demo.{chat}\n\nMARKER-{chat}.\n",
                       description=f"case 6 {chat}", grade=0.6)
         _call_reset(home, slot, channel="discord", chat_id=chat)
+    # Positive control: verifying a file that does not exist proves nothing.
+    eq(_audit_path(home).exists(), True, "chain file exists before verify")
     chain_ok, problems = _verify_chain(home)
     eq(chain_ok, True, f"chain valid (problems={problems[:2]})")
     shutil.rmtree(sandbox, ignore_errors=True)
@@ -547,6 +574,47 @@ def case_09_budget_reset() -> None:
     shutil.rmtree(sandbox, ignore_errors=True)
 
 
+# ── case 10: the free tier cannot seed what a reset would purge ────────────
+
+
+def case_10_free_tier_refused() -> None:
+    """ADR-0701 G1/G2: without the member pin both creates are refused and
+    nothing reaches disk — the seeding helpers above pin ``member`` on purpose,
+    this case keeps the refusal itself proven."""
+    print("\n=== case 10: free tier is refused skill + tool creation ===")
+    sandbox = _make_sandbox("10")
+    home = sandbox / "home"
+    slot = sandbox / "slot"
+    cid = _forge_chan("discord", "chatFree")
+    try:
+        _create_skill(home, slot, channel_id=cid, name="demo.free",
+                      body="# demo.free\n\nx\n", description="free skill",
+                      grade=None, tier="free")
+        bad("free tier: skill creation was NOT refused")
+    except subprocess.CalledProcessError as e:
+        if "license_required" in (e.stderr or ""):
+            ok("free tier: skill creation refused (license_required)")
+        else:
+            bad(f"free tier: skill creation failed for another reason: "
+                f"{(e.stderr or '')[-300:]}")
+    try:
+        _create_forge_tool(home, slot, channel_id=cid, name="free_tool",
+                           tier="free")
+        bad("free tier: forge tool creation was NOT refused")
+    except subprocess.CalledProcessError as e:
+        if "forge.create denied" in (e.stderr or ""):
+            ok("free tier: forge tool creation refused (forge.create denied)")
+        else:
+            bad(f"free tier: tool creation failed for another reason: "
+                f"{(e.stderr or '')[-300:]}")
+    leaked = [p for p in _sessions_root(home).rglob("*")
+              if p.is_file() and ("free_tool" in p.name or "demo_free" in p.name
+                                  or "demo.free" in p.name)] \
+        if _sessions_root(home).exists() else []
+    eq(leaked, [], "free tier: nothing written to the session scope")
+    shutil.rmtree(sandbox, ignore_errors=True)
+
+
 # ── main ───────────────────────────────────────────────────────────────────
 
 
@@ -560,6 +628,7 @@ def main() -> int:
     case_07_timeout_sweep()
     case_08_engine_e2e()
     case_09_budget_reset()
+    case_10_free_tier_refused()
     print(f"\n{PASS} pass, {FAIL} fail")
     return 0 if FAIL == 0 else 1
 

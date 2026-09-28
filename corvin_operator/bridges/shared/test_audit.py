@@ -376,3 +376,39 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def test_writer_loads_when_forge_prebound_as_namespace_package(tmp_path):
+    """Regression (adversarial review round 5): when ``forge`` is already bound
+    in ``sys.modules`` as the empty NAMESPACE package (``corvin_operator/`` on
+    sys.path, whose ``forge/`` has no ``__init__.py``), ``from forge import
+    security_events`` failed and every bridge audit write became a silent
+    no-op. The module must drop the empty binding and load the real writer."""
+    shared = REPO_ROOT / "corvin_operator" / "bridges" / "shared"
+    forge_top = str(REPO_ROOT / "corvin_operator" / "forge")
+    code = (
+        "import sys\n"
+        f"sys.path = [p for p in sys.path if p.rstrip('/') != {forge_top!r}]\n"
+        f"sys.path.insert(0, {str(REPO_ROOT / 'corvin_operator')!r})\n"
+        "import forge\n"
+        "assert getattr(forge, '__file__', None) is None, forge\n"
+        f"sys.path.insert(0, {str(shared)!r})\n"
+        "import audit\n"
+        "print('WRITER', audit.writer_available())\n"
+        "print('FILE', audit._se.__file__ if audit._se else None)\n"
+    )
+    env = {**os.environ, "CORVIN_HOME": str(tmp_path / "h"), "HOME": str(tmp_path)}
+    env.pop("FORGE_ROOT", None)
+    env.pop("VOICE_AUDIT_PATH", None)
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                       env=env, cwd=str(tmp_path), timeout=60)
+    assert r.returncode == 0, r.stderr[-2000:]
+    assert "WRITER True" in r.stdout, r.stdout + r.stderr[-2000:]
+    assert "corvin_operator/forge/forge/security_events.py" in r.stdout, r.stdout
+
+
+def test_broken_writer_import_is_logged_at_error_level():
+    """A failed writer import drops every bridge record: it must be loud."""
+    src = (Path(__file__).resolve().parent / "audit.py").read_text()
+    block = src[src.index("# Optional forge dependency"):src.index("def writer_available")]
+    assert ".error(" in block and ".warning(" not in block, block

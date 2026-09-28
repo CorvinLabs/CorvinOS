@@ -2,8 +2,13 @@
 
 Every remediation record goes through ``forge.security_events.write_event``
 on ``forge.paths.tenant_audit_chain(tenant)`` — the one hash-chained writer,
-on the chain of the tenant the record is ABOUT (never the process's context
-tenant: a console serves several). The writer module is the one the core
+on the chain of the tenant the record is ABOUT. LIMIT (adversarial review
+round 5, 2026-09-28): ``write_event`` refuses a record whose ``tenant_id``
+differs from the PROCESS tenant (``CORVIN_TENANT_ID``, ``AuditTenantMismatch``),
+so a remediation for any other tenant is NOT recorded — and, because this
+module raises on an unwritten record, is refused. Multi-tenant remediation
+from one console process is therefore not supported today; the only live
+login (local, process tenant) is unaffected. The writer module is the one the core
 audit bridge loaded (``core.learning.event_persistence._resolve_core_audit``),
 so there is exactly one ``forge`` in the process. There is no second chain, no
 in-memory "audit trail" and no fall-through: :func:`remediation_audit` RAISES

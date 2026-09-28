@@ -82,8 +82,10 @@ def _console(tmp_path: Path):
         from core.compliance import consent_store as _consent_store
 
         _consent_store._stores.clear()
+        from core.compliance.consent import consent_subject
+
         _consent_store.get_consent_store(TENANT).grant_consent(
-            user_id=rec.sid, scope="learning_feedback")
+            user_id=consent_subject(rec), scope="learning_feedback")
 
         app = FastAPI()
         app.include_router(router, prefix="/v1/console")

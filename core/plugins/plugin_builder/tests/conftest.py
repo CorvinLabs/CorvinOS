@@ -27,3 +27,17 @@ def _shipped_defaults_not_the_operators_flags(monkeypatch, tmp_path):
     home = tmp_path / "corvin_home"
     home.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("CORVIN_HOME", str(home))
+
+
+@pytest.fixture(autouse=True)
+def _member_tier_for_plugin_builder(monkeypatch):
+    """``/plugin-builder`` is a member capability (ADR-0701 G4, fail-closed).
+
+    An unlicensed test environment resolves to the free tier, where every
+    ``command()`` now returns the member-seat refusal. Tests that drive the
+    builder therefore run as ``member``; the refusal itself is proven by
+    ``test_turn_licence_gate.py``, which re-pins ``free`` explicitly. The pin
+    replaces the tier resolver the real ``require_capability`` reads — the
+    gate, its audit record and its verdict stay real."""
+    import corvin_operator.license.capability_api as _ca
+    monkeypatch.setattr(_ca, "active_tier", lambda **_k: "member")

@@ -40,6 +40,23 @@ def t(label: str, ok: bool, *, detail: str = "") -> None:
         FAIL += 1
 
 
+def _HERMETIC(base: Path) -> dict[str, str]:
+    """No real voice summary (build_voice_summary pipes the reply through
+    summarize.py, which runs the real `claude` CLI for up to 150 s per call —
+    this file hung >300 s on it) and no writes into a live CORVIN_HOME."""
+    return {"ADAPTER_DISABLE_VOICE": "1", "CORVIN_HOME": str(base / "home")}
+
+
+def _restore_env(saved: dict) -> None:
+    # Restore, not pop: popping a caller's sandbox CORVIN_HOME would point
+    # every later test in this process at the live install.
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
 def _fresh_adapter(env_overrides: dict[str, str]):
     """Reload adapter with given env overrides so its module-level Path
     constants pick up the sandbox dirs. Mirrors test_adapter_cancel."""
@@ -74,8 +91,10 @@ def test_message_received_event_emitted():
         # Isolate from a live operator's bridges/<channel>/settings.json —
         # its whitelist otherwise SPG-drops this test's senders as private.
         "ADAPTER_BRIDGES_DIR": str(base / "bridges"),
+        **_HERMETIC(base),
     }
     try:
+        saved = {k: os.environ.get(k) for k in env_overrides}
         adapter = _fresh_adapter(env_overrides)
         env = {
             "id": "msg-test-recv-1",
@@ -112,8 +131,7 @@ def test_message_received_event_emitted():
         t("msg_id propagated",
           det.get("msg_id") == "msg-test-recv-1")
     finally:
-        for k in env_overrides:
-            os.environ.pop(k, None)
+        _restore_env(saved)
 
 
 def test_cancel_envelope_emits_bridge_cancel():
@@ -129,9 +147,11 @@ def test_cancel_envelope_emits_bridge_cancel():
         "ADAPTER_PROCESSED": str(processed),
         "VOICE_AUDIT_PATH":  str(audit_path),
         "ADAPTER_ROUTING_MODE": "off",
-            "ADAPTER_BRIDGES_DIR": str(base / "bridges"),
+        "ADAPTER_BRIDGES_DIR": str(base / "bridges"),
+        **_HERMETIC(base),
     }
     try:
+        saved = {k: os.environ.get(k) for k in env_overrides}
         adapter = _fresh_adapter(env_overrides)
         # Sandbox channel → no on-disk settings → fail-open inbox revalidation.
         env = {
@@ -164,8 +184,7 @@ def test_cancel_envelope_emits_bridge_cancel():
         t("chat_key = fingerprint (raw not leaked)",
           det.get("chat_key") == _ck_fp and det.get("chat_key") != "chat-cancel-1")
     finally:
-        for k in env_overrides:
-            os.environ.pop(k, None)
+        _restore_env(saved)
 
 
 def test_chain_is_continuous_across_two_messages():
@@ -182,9 +201,11 @@ def test_chain_is_continuous_across_two_messages():
         "ADAPTER_FAKE_CLAUDE": "1",
         "ADAPTER_ROUTING_MODE": "off",
         "VOICE_AUDIT_PATH":  str(audit_path),
-            "ADAPTER_BRIDGES_DIR": str(base / "bridges"),
+        "ADAPTER_BRIDGES_DIR": str(base / "bridges"),
+        **_HERMETIC(base),
     }
     try:
+        saved = {k: os.environ.get(k) for k in env_overrides}
         adapter = _fresh_adapter(env_overrides)
         for i in (1, 2):
             env = {
@@ -228,8 +249,7 @@ def test_chain_is_continuous_across_two_messages():
           proc.returncode == 0,
           detail=f"stderr={proc.stderr!r}")
     finally:
-        for k in env_overrides:
-            os.environ.pop(k, None)
+        _restore_env(saved)
 
 
 def main() -> int:

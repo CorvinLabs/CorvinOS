@@ -23,6 +23,10 @@ An implicitly windowed batch aggregator:
 Records live in ``CORVIN_HOME/orchestration/batches/<batch_id>.json``, mirroring the
 pending_notifications layout. The audit trail (hash-chained) is written BEFORE the event
 is considered complete, enforcing audit-first semantics.
+
+NOT WIRED: no production caller as of 2026-09-27 (adversarial review). The adapter's
+tick called ``deliver_ready`` (never defined here) and ``on_task_complete`` with a
+signature this module does not have; that call was removed (ADR-2027, PROPOSED).
 """
 from __future__ import annotations
 
@@ -121,29 +125,45 @@ def _read(path: Path) -> dict | None:
         return None
 
 
+_AUDIT_EVENT = "orchestration.batch_completed"
+# Content-free: ids and counts only — never task error text.
+_AUDIT_FIELDS = frozenset({"batch_id", "task_count", "success_count",
+                           "failed_count", "incomplete_count", "outcome"})
+
+
 def _emit_audit_event(event: OrchestrationCompleteEvent) -> bool:
-    """Write the event to the audit trail (hash-chained).
+    """Write the event to THE tenant audit chain (hash-chained), FAIL-CLOSED.
 
-    This must happen BEFORE the batch record is marked emitted, enforcing
-    audit-first semantics. Returns True on success; False if audit write fails.
-    (In that case, the batch stays pending and retries next emit cycle.)
-
-    CRITICAL: This is a stub. The real implementation hooks into the audit
-    backend (core/security/audit_writer.py or equivalent) to write a
-    hash-chained record before returning. For now, we assume the audit
-    write succeeds; production should fail-closed on audit unavailability.
+    Must succeed BEFORE the batch is marked emitted (audit-first). Returns
+    False — the batch stays pending and retries next cycle — when the forge
+    writer or the chain path is unavailable or the write raises. (This used
+    to be a stub that returned True without writing anything.)
     """
     try:
-        # TODO: Import from core.security and call the audit backend:
-        # from core.security.audit_writer import write_event
-        # write_event({
-        #     "event_type": "orchestration_complete",
-        #     "batch_id": event.batch_id,
-        #     "task_count": event.task_count,
-        #     "success_count": event.success_count,
-        #     "failed_tasks": event.failed_tasks,
-        # }, tenant_id=current_tenant_id())
-        # For now, we succeed silently (audit integration is a downstream task).
+        from forge.security_events import (  # type: ignore
+            register_event_allowlist, write_event,
+        )
+        from paths import tenant_audit_chain  # type: ignore  # bridges/shared/paths.py
+    except Exception as e:  # noqa: BLE001
+        print(f"orchestration_aggregator: audit writer unavailable ({e}) — "
+              f"batch {event.batch_id} not emitted", file=sys.stderr)
+        return False
+    try:
+        register_event_allowlist(_AUDIT_EVENT, _AUDIT_FIELDS)
+        path = tenant_audit_chain()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_event(
+            path, _AUDIT_EVENT,
+            details={
+                "batch_id": event.batch_id,
+                "task_count": event.task_count,
+                "success_count": event.success_count,
+                "failed_count": len(event.failed_tasks),
+                "incomplete_count": int(event.stats_aggregated.get("incomplete_count", 0)),
+                "outcome": event.event_type,
+            },
+            hash_chain=True,
+        )
         return True
     except Exception as e:  # noqa: BLE001
         print(
@@ -173,7 +193,16 @@ def register_task(
     Returns:
         batch_id: Stable batch identifier (timestamp-based).
     """
+    # Join the pending batch whose window covers this start time; the
+    # batch_id used to be derived from the start time alone, so two tasks
+    # 10 s apart never shared a batch despite the docstring.
     batch_id = f"batch_{int(batch_window_start)}"
+    for _rec in get_active_batches():
+        if (_rec.get("state") == _STATE_PENDING
+                and float(_rec.get("window_start", 0)) <= batch_window_start
+                < float(_rec.get("window_end", 0))):
+            batch_id = _rec["batch_id"]
+            break
     path = _batch_path(batch_id)
     rec = _read(path)
 
@@ -285,11 +314,13 @@ def emit_orchestration_event(
 
     # Build the event
     success_count = sum(1 for t in tasks.values() if t.get("success"))
+    # A task still running when the window expired is INCOMPLETE, not failed.
     failed_tasks = [
-        {"task_id": tid, "error": t.get("error", "Unknown error")}
+        {"task_id": tid, "error": t.get("error") or "Unknown error"}
         for tid, t in tasks.items()
-        if not t.get("success")
+        if t.get("state") == "completed" and not t.get("success")
     ]
+    incomplete_count = sum(1 for t in tasks.values() if t.get("state") != "completed")
     total_duration = (
         max((t.get("completed_at") or 0 for t in tasks.values()), default=0)
         - rec.get("created_at", now)
@@ -300,6 +331,7 @@ def emit_orchestration_event(
         "completed_at_times": [
             t.get("completed_at") for t in tasks.values() if t.get("completed_at")
         ],
+        "incomplete_count": incomplete_count,
     }
 
     event = OrchestrationCompleteEvent(
@@ -310,8 +342,10 @@ def emit_orchestration_event(
         total_duration_secs=total_duration,
         stats_aggregated=stats_aggregated,
         event_type=(
+            # SUCCESS only when every task finished successfully — a batch
+            # with tasks still running is not a success.
             "ORCHESTRATION_COMPLETE_SUCCESS"
-            if not failed_tasks
+            if success_count == len(tasks)
             else "ORCHESTRATION_COMPLETE_MIXED"
         ),
         timestamp=now,

@@ -66,8 +66,9 @@ export PYTHONPATH="$_REPO_ROOT:$_REPO_ROOT/core/console:$_REPO_ROOT/core/gateway
 # Protected-chain tripwire. Snapshot size + tail of every hash-chained audit
 # file of the live installs this run could reach — this checkout's .corvin and
 # the account's ~/.corvin — and fail the run if any record written while it ran
-# carries an instance_id other than that install's own (read from the tail of
-# its canonical tenant chain before the run). A live service appending with its
+# carries an instance_id other than that install's own (read from its
+# global/instance_id.json, as the root conftest does; the tail of its canonical
+# tenant chain only when that file is missing). A live service appending with its
 # own instance_id is fine; a test process appending is exactly the incident.
 # Also protected: the checkout owning the python3 venv (its editable .pth is
 # how a worktree run reached the live checkout's chain) and any extra homes in
@@ -102,12 +103,25 @@ def tail_id(path):
         pass
     return None
 
+def own_id(home):
+    try:
+        with open(os.path.join(home, "global", "instance_id.json")) as fh:
+            iid = json.load(fh).get("instance_id")
+        return iid if isinstance(iid, str) and iid else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
 if mode == "before":
     out = {}
     for home in dict.fromkeys(os.path.realpath(h) for h in homes if h):
         if not os.path.isdir(home):
             continue
-        live = tail_id(os.path.join(home, "tenants", "_default", "global", "forge", "audit.jsonl"))
+        # The install's own id is the one it persisted (as the root conftest
+        # reads it). The chain tail is only a fallback: a foreign writer that
+        # appended last (an earlier leaking run) would otherwise BECOME "live",
+        # whitelisting further leaks and flagging the real service.
+        live = own_id(home) or tail_id(
+            os.path.join(home, "tenants", "_default", "global", "forge", "audit.jsonl"))
         out[home] = {"live": live,
                      "sizes": {p: os.path.getsize(p) for p in chains(home)}}
     json.dump(out, open(snap, "w"))

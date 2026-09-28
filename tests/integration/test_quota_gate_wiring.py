@@ -61,6 +61,15 @@ class TestQuotaGateWiring:
         import asyncio
         from core.orchestration.brain import TaskBrain
 
+        # TaskBrain boots the ADR-0232 tripwire, which refuses ANY env redirect
+        # of the audit chain that is not the resolver's own chain under
+        # CORVIN_HOME (no pytest exemption). The sandbox CORVIN_HOME already
+        # isolates the chain, so drop the redirects instead of depending on
+        # where FORGE_ROOT / VOICE_AUDIT_PATH happen to point.
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin-home"))
+        monkeypatch.delenv("FORGE_ROOT", raising=False)
+        monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+
         mock_increment = MagicMock(return_value=1)
         monkeypatch.setattr(
             "core.orchestration.quota_gate.increment_and_check", mock_increment

@@ -34,6 +34,7 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from .build_system import PackageBuilder, PackageMetadata, BuildResult
+from .build_system.builder import BuildConfig
 from .scaffolding import (
     EnhancedScaffolder,
     LifecycleHookTemplate,
@@ -41,18 +42,28 @@ from .scaffolding import (
 )
 from .testing_framework import PluginTestRunner, TestResult, validate_plugin_structure
 
+# Package-qualified, never the bare ``forge`` name (adversarial review
+# 2026-09-28). ``plugin_builder/__init__`` imports this module, and with only
+# ``corvin_operator/`` (not ``corvin_operator/forge/``) on sys.path a bare
+# ``from forge.tenants import …`` bound ``forge`` to an EMPTY namespace package
+# (``corvin_operator/forge/`` has no ``__init__.py``) before failing into the
+# fallback. That binding stayed in ``sys.modules`` and broke every later
+# ``from forge import paths`` in the process — e.g. ``corvin_core.feature_flags``,
+# which is why ``tests/test_slash_command.py`` could not even be collected. The
+# old fallback also "validated" a tenant id by truthiness alone, so
+# ``../other`` passed; without the real validator this module now refuses.
 try:
-    from forge.tenants import current_tenant, validate_tenant_id
+    from corvin_operator.forge.forge.tenants import current_tenant, validate_tenant_id
 except ImportError:
-    # Fallback for test environments
     def current_tenant():
         import os
         return os.getenv("CORVIN_TENANT_ID", "_default")
 
     def validate_tenant_id(tid):
-        if not tid or not isinstance(tid, str):
-            raise ValueError(f"Invalid tenant_id: {tid}")
-        return tid
+        raise ValueError(
+            f"tenant validation unavailable (forge.tenants not importable); "
+            f"refusing tenant_id {tid!r} (fail-closed)"
+        )
 
 try:
     from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
@@ -422,9 +433,16 @@ class PluginDeveloper:
                 author=plan.author,
             )
 
-            scaffold_dir = output_dir / plan.plugin_id.replace(".", "_").replace(
-                "-", "_"
-            )
+            # The directory the generator ACTUALLY wrote (it appends
+            # ``_scaffold``). A reconstructed ``<id>`` path named a directory
+            # that never existed, so this step reported "N files" for an empty
+            # path and every later step (test, build) ran against nothing.
+            plugin_file = (files_created or {}).get("plugin")
+            if plugin_file is None or not Path(plugin_file).is_file():
+                result.errors.append(
+                    "Scaffold generation failed: no plugin.py was written")
+                return False
+            scaffold_dir = Path(plugin_file).parent
             result.scaffold_dir = scaffold_dir
 
             result.warnings.append(
@@ -524,7 +542,14 @@ class PluginDeveloper:
                 author=plan.author,
             )
 
-            builder = PackageBuilder(result.scaffold_dir, metadata)
+            # PackageBuilder takes (plugin_dir, config, metadata). Passing the
+            # metadata as ``config`` raised AttributeError ('skill_id') on
+            # every build.
+            config = BuildConfig(
+                tenant_id=plan.tenant_id,
+                skill_id=f"plugin-{plan.plugin_id}",
+            )
+            builder = PackageBuilder(result.scaffold_dir, config, metadata)
             build_result = builder.build()
             result.build_result = build_result
 

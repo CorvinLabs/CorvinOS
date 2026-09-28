@@ -121,14 +121,20 @@ def test_pii_scan_applies_recursively_under_known_key():
     assert cleaned["extra"]["count"] == 2
 
 
-def test_pii_scan_not_applied_to_allowlisted_events():
-    # A registered allowlist is a maintainer-vetted field set; its values are
-    # not second-guessed by the shape scan (only the denylist + size floor).
+def test_pii_scan_still_applies_to_allowlisted_events():
+    # Round 5 (2026-09-28) reversed the old contract ("a registered allowlist's
+    # values are not second-guessed by the shape scan"): ~250 allowlists
+    # registered in rounds 2–4 had thereby switched the e-mail/phone value scan
+    # OFF for their fields. An allowlist decides WHICH keys may appear; the
+    # value scan still drops a PII-shaped value.
     from forge.security_events import register_event_allowlist
     register_event_allowlist("vetted.evt", {"host"})
     cleaned, dropped = filter_audit_details({"host": "smtp@mail.example.com"},
                                             event_type="vetted.evt")
-    assert cleaned["host"] == "smtp@mail.example.com" and dropped == []
+    assert "host" not in cleaned and dropped == ["host"]
+    cleaned, dropped = filter_audit_details({"host": "mail.example.com"},
+                                            event_type="vetted.evt")
+    assert cleaned["host"] == "mail.example.com" and dropped == []
 
 
 # ── unit: oversize value dropped ──────────────────────────────────────────
