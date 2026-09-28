@@ -262,20 +262,52 @@ LOCK_TIMEOUT_SECONDS = 2.0
 LOCK_RETRY_INTERVAL_SECONDS = 0.02
 
 
-def _require_forge_create_licence() -> None:
-    """ADR-0701 G2 licence gate for skill authoring — FAIL-CLOSED.
+#: Free-tier daily skill-authoring quota key (``license/limits.py``). Member
+#: tiers resolve it to ``None`` (unlimited). ADR-2095.
+SKILL_QUOTA_FEATURE = "skill_forge_per_day"
 
-    Raises ``ValueError("license_required: ...")`` unless the licensing API
-    answers ``Decision.ALLOW`` for ``forge.create``.
 
-    Two defects this replaces (adversarial review 2026-09-27):
-    * an ``ImportError`` of the licensing module fell through to ALLOW, so a
-      process that could not load the gate could author skills freely;
-    * the check read ``decision.allowed`` — the tier LIMIT, which is ``None``
-      for the unlimited ``member`` tier — as a boolean, so every paying
-      member was refused (via a ``LicenseDenied`` constructed with the wrong
-      arity, i.e. a ``TypeError``).
-    The verdict is ``decision.decision``; the limit is not a verdict.
+class SkillQuotaExceeded(ValueError):
+    """The free tier's daily skill-authoring quota is used up (ADR-2095).
+
+    A ``ValueError`` subclass so every caller that already surfaced the old
+    ``license_required`` refusal keeps working; ``limit``/``used``/``tenant``
+    let a console answer "limit reached" instead of a generic failure.
+    """
+
+    def __init__(self, *, tenant_id: str, limit: Any, used: int):
+        self.tenant_id = tenant_id
+        self.limit = limit
+        self.used = used
+        super().__init__(
+            f"license_limit: daily skill forge limit reached ({used}/{limit}) "
+            f"on the free tier — resets at 00:00 UTC"
+        )
+
+
+def _tenant_and_home(root: Path) -> tuple[str, Path]:
+    """Tenant + corvin home for a registry ROOT (``<home>/tenants/<tid>/skill-forge``).
+
+    Derived from the root, not the environment: the console writes into the
+    AUTHENTICATED tenant's root, and that is the tenant whose quota a write
+    must charge. A root outside the tenant layout falls back to the process
+    tenant and ``CORVIN_HOME``.
+    """
+    root = Path(root)
+    if root.parent.parent.name == "tenants":
+        return root.parent.name, root.parent.parent.parent
+    home = Path(os.environ.get("CORVIN_HOME") or Path.home() / ".corvin")
+    return os.environ.get("CORVIN_TENANT_ID", "_default"), home
+
+
+def skill_authoring_tier(tenant_id: str) -> str:
+    """``"member"`` (unlimited), ``"free"`` (daily quota) — or raise.
+
+    ADR-2095 amends ADR-0701 for SKILLS: skill authoring is no longer
+    member-only; the free tier gets ``skill_forge_per_day`` writes per UTC
+    day. ``forge.create`` stays the member test (Tool Forge keeps it as a hard
+    gate). Fail-closed: an unloadable licensing module or an enforcement
+    failure refuses.
     """
     try:
         from corvin_operator.license.capability_api import (
@@ -286,23 +318,53 @@ def _require_forge_create_licence() -> None:
             "license_required: licensing module unavailable — skill "
             "authoring is refused (fail-closed)"
         ) from exc
-    # The registry has no session context; the tenant is the process's.
-    tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
     try:
         decision = require_capability(
-            "forge.create",
-            requested=1,
-            tenant_id=tenant_id,
+            "forge.create", requested=1, tenant_id=tenant_id,
             entry_point="skill-forge:create",
         )
-    except LicenseDenied as exc:
-        raise ValueError(f"license_required: {exc}") from exc
-    if decision is None or decision.decision is not Decision.ALLOW:
-        verdict = getattr(getattr(decision, "decision", None), "value", "none")
-        reason = getattr(decision, "reason", None) or "not_allowed"
-        raise ValueError(
-            f"license_required: forge.create {verdict} ({reason})"
-        )
+    except LicenseDenied:
+        return "free"
+    if decision is not None and decision.decision is Decision.ALLOW:
+        return "member"
+    verdict = getattr(getattr(decision, "decision", None), "value", "none")
+    reason = getattr(decision, "reason", None) or "not_allowed"
+    raise ValueError(f"license_required: forge.create {verdict} ({reason})")
+
+
+def skill_quota_status(tenant_id: str, corvin_home: Path) -> dict[str, Any]:
+    """What the console shows: tier, today's limit, used, remaining.
+
+    ``limit``/``remaining`` are ``None`` on an unlimited tier.
+    """
+    tier = skill_authoring_tier(tenant_id)
+    if tier == "member":
+        return {"tier": tier, "limit": None, "used": 0, "remaining": None}
+    from corvin_operator.license import quota_counter as qc  # noqa: PLC0415
+    limit = qc.get_limit(SKILL_QUOTA_FEATURE)
+    used = qc.get_today_count(Path(corvin_home), SKILL_QUOTA_FEATURE, tenant_id)
+    if limit is None:
+        return {"tier": tier, "limit": None, "used": used, "remaining": None}
+    return {"tier": tier, "limit": int(limit), "used": used,
+            "remaining": max(0, int(limit) - used)}
+
+
+def charge_skill_quota(tenant_id: str, corvin_home: Path) -> None:
+    """Consume one free-tier skill-authoring credit (no-op for members).
+
+    Raises :class:`SkillQuotaExceeded` when today's quota is used up.
+    """
+    if skill_authoring_tier(tenant_id) == "member":
+        return
+    from corvin_operator.license import quota_counter as qc  # noqa: PLC0415
+    from corvin_operator.license.limits import LicenseLimitError  # noqa: PLC0415
+    try:
+        qc.increment_and_check(Path(corvin_home), SKILL_QUOTA_FEATURE, tenant_id)
+    except LicenseLimitError as exc:
+        raise SkillQuotaExceeded(
+            tenant_id=tenant_id, limit=exc.limit,
+            used=qc.get_today_count(Path(corvin_home), SKILL_QUOTA_FEATURE, tenant_id),
+        ) from exc
 
 
 class SkillRegistryLockBusy(TimeoutError):
@@ -777,7 +839,14 @@ class SkillRegistry:
         overwrite: bool = False,
         created_by: str = "",
         meta: dict[str, Any] | None = None,
+        quota_exempt: bool = False,
     ) -> SkillSpec:
+        """Write a skill.
+
+        ``quota_exempt`` is for writes that are not new authoring: a skill
+        canary's approval (its generation was charged at fork) and rollback
+        (restores a body that already existed). ADR-2095.
+        """
         # Name validation — same shape as forge.registry.create
         if not name or len(name) > 128:
             raise ValueError(f"skill name must be 1..128 chars: {name!r}")
@@ -795,8 +864,11 @@ class SkillRegistry:
 
         self._namespace_gate(name, operation="update" if overwrite else "create")
 
-        # ADR-0701: License gate (G2) — require_capability("forge.create")
-        _require_forge_create_licence()
+        # ADR-0701 G2 as amended by ADR-2095: members author freely, the free
+        # tier within its daily quota. Decided here (before the linter), the
+        # credit is consumed only once the write is certain (below).
+        tenant_id, corvin_home = _tenant_and_home(self.root)
+        tier = skill_authoring_tier(tenant_id)
 
         # Linter — fail-closed: violations block the write
         result = lint(body_md)
@@ -809,6 +881,8 @@ class SkillRegistry:
                 raise FileExistsError(
                     f"skill {name!r} already exists (use overwrite=True)"
                 )
+            if tier == "free" and not quota_exempt:
+                charge_skill_quota(tenant_id, corvin_home)
 
             skill_dir = self.root / self.SKILLS_DIR / name
             skill_dir.mkdir(parents=True, exist_ok=True)

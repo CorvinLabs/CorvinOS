@@ -77,6 +77,7 @@ import {
 import {
   deleteGeneratedSkill,
   getGeneratedSkill,
+  getSkillQuota,
   getSkillRunStatus,
   listGeneratedSkills,
   startSkillGeneration,
@@ -134,6 +135,14 @@ export const SkillForgePanel: React.FC = () => {
     queryFn: ({ signal }) => listGeneratedSkills(signal),
   });
 
+  // Free tier: 5 skill credits per UTC day (member: unlimited → nulls).
+  const quota = useQuery({
+    queryKey: ["skill-creator", "quota"],
+    queryFn: ({ signal }) => getSkillQuota(signal),
+    refetchInterval: 60_000,
+  });
+  const quotaExhausted = quota.data?.remaining === 0;
+
   const run = useQuery<SkillRunStatus>({
     queryKey: ["skill-creator", "run", runId],
     queryFn: ({ signal }) => getSkillRunStatus(runId!, signal),
@@ -159,6 +168,7 @@ export const SkillForgePanel: React.FC = () => {
   useEffect(() => {
     if (run.data?.status === "success") {
       void qc.invalidateQueries({ queryKey: ["skill-creator", "skills"] });
+      void qc.invalidateQueries({ queryKey: ["skill-creator", "quota"] });
       void qc.invalidateQueries({ queryKey: ["skill-creator", "skill"] });
       void qc.invalidateQueries({ queryKey: ["skills"] });
     }
@@ -173,7 +183,10 @@ export const SkillForgePanel: React.FC = () => {
       setUserRequest("");
       setError(null);
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => {
+      setError(e.message);
+      void qc.invalidateQueries({ queryKey: ["skill-creator", "quota"] });
+    },
   });
 
   const remove = useMutation({
@@ -358,7 +371,7 @@ export const SkillForgePanel: React.FC = () => {
           />
           <Button
             onClick={submit}
-            disabled={isRunning || generate.isPending || !userRequest.trim()}
+            disabled={isRunning || generate.isPending || !userRequest.trim() || quotaExhausted}
             className="w-full"
             data-testid="submit-generation"
           >
@@ -376,6 +389,34 @@ export const SkillForgePanel: React.FC = () => {
           <p className="text-[10px] text-muted-foreground">
             A run takes several minutes and is charged to your Claude subscription.
           </p>
+          {quota.data?.tier === "free" && quota.data.limit !== null && (
+            quotaExhausted ? (
+              <div
+                role="status"
+                data-testid="skill-quota-exhausted"
+                className="flex items-start gap-2 rounded-md border border-accent/50 bg-accent/10 p-3 text-xs"
+              >
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
+                <span>
+                  <strong>Daily limit reached.</strong> The free tier includes{" "}
+                  {quota.data.limit} new skills per day — you have used all{" "}
+                  {quota.data.used}. More are available from{" "}
+                  {new Date(quota.data.resets_at).toLocaleString("en-US", {
+                    hour: "2-digit", minute: "2-digit", month: "short", day: "numeric",
+                  })}
+                  , or upgrade to Member for unlimited skills.
+                </span>
+              </div>
+            ) : (
+              <p className="text-[11px] text-muted-foreground" data-testid="skill-quota">
+                Free tier:{" "}
+                <span className="font-medium tabular-nums text-foreground">
+                  {quota.data.remaining} of {quota.data.limit}
+                </span>{" "}
+                new skills left today.
+              </p>
+            )
+          )}
         </div>
 
         {/* ── Error ─────────────────────────────────────────────────────── */}

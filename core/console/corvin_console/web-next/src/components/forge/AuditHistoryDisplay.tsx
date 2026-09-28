@@ -1,234 +1,80 @@
 import React, { useState } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { ChevronDown, ChevronRight, CheckCircle, AlertCircle, Clock } from 'lucide-react';
-
-export interface ForkAttempt {
-  id: string;
-  timestamp: string;
-  skill_id: string;
-  version: string;
-  validation_passed: boolean;
-  canary_verdict: 'approved' | 'deferred' | 'rolled_back' | null;
-  operator_decision?: string;
-  operator_id?: string;
-  audit_hash?: string;
-  hash_verified?: boolean;
-  events?: AuditEvent[];
-}
-
-export interface AuditEvent {
-  timestamp: string;
-  event_type: string;
-  details: string;
-  hash: string;
-}
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import type { CanaryView } from '@/lib/api/autonomous-forge';
+import { STATUS_LABEL, formatScore } from './autonomous-forge-encoding';
 
 interface AuditHistoryDisplayProps {
-  attempts: ForkAttempt[];
-  loading?: boolean;
+  attempts: CanaryView[];
 }
 
-/**
- * AuditHistoryDisplay: Timeline of fork attempts with expandable details
- */
-export const AuditHistoryDisplay: React.FC<AuditHistoryDisplayProps> = ({
-  attempts,
-  loading = false,
-}) => {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+const EVENT_LABEL: Record<string, string> = {
+  started: 'Canary started',
+  traffic: 'Traffic changed',
+  paused: 'Paused',
+  canary: 'Resumed',
+  ready: 'Ready for approval',
+  approved: 'Approved',
+  deferred: 'Deferred',
+  rolled_back: 'Rolled back',
+};
 
-  const formatDate = (timestamp: string) => {
-    const date = new Date(timestamp);
-    return date.toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  };
+const when = (ts: number) => new Date(ts * 1000).toLocaleString('en-US');
 
-  const getVerdictBadge = (verdict: string | null) => {
-    if (!verdict) return null;
-    switch (verdict) {
-      case 'approved':
-        return <Badge className="bg-green-600">Approved</Badge>;
-      case 'deferred':
-        return <Badge className="bg-blue-600">Deferred</Badge>;
-      case 'rolled_back':
-        return <Badge variant="warn" className="text-xs">Rolled Back</Badge>;
-      default:
-        return <Badge variant="secondary" className="text-xs">{verdict}</Badge>;
-    }
-  };
-
-  if (loading) {
-    return (
-      <Card>
-        <CardContent className="py-6 text-center text-muted-foreground">
-          Loading audit history...
-        </CardContent>
-      </Card>
-    );
-  }
-
-  if (attempts.length === 0) {
-    return (
-      <Card>
-        <CardContent className="py-6 text-center text-muted-foreground">
-          No fork attempts yet
-        </CardContent>
-      </Card>
-    );
-  }
-
+/** Every canary with its lifecycle, each step linked to its audit-chain record. */
+export const AuditHistoryDisplay: React.FC<AuditHistoryDisplayProps> = ({ attempts }) => {
+  const [open, setOpen] = useState<string | null>(null);
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Audit History (Last 10 Attempts)</CardTitle>
+        <CardTitle className="text-base">History</CardTitle>
       </CardHeader>
-
       <CardContent>
-        <div className="space-y-3">
-          {attempts.map((attempt, index) => (
-            <div key={attempt.id} className="border rounded-lg">
-              {/* Timeline entry header */}
-              <div
-                className="flex items-center justify-between p-3 cursor-pointer hover:bg-secondary/50 transition-colors"
-                onClick={() =>
-                  setExpandedId(expandedId === attempt.id ? null : attempt.id)
-                }
-              >
-                <div className="flex items-start gap-3 flex-1">
-                  <div className="pt-1">
-                    {expandedId === attempt.id ? (
-                      <ChevronDown className="w-4 h-4" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4" />
-                    )}
+        {attempts.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No canary has run yet.</p>
+        ) : (
+          <ul className="divide-y">
+            {attempts.map((a) => (
+              <li key={a.canary_id} className="py-2">
+                <button
+                  className="flex w-full items-center gap-2 text-left text-sm"
+                  onClick={() => setOpen(open === a.canary_id ? null : a.canary_id)}
+                  aria-expanded={open === a.canary_id}
+                >
+                  {open === a.canary_id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                  <span className="font-mono">{a.skill_id}</span>
+                  <Badge variant="outline">{STATUS_LABEL[a.status]}</Badge>
+                  <span className="ml-auto text-xs text-muted-foreground">{when(a.created_at)}</span>
+                </button>
+                {open === a.canary_id && (
+                  <div className="mt-2 ml-6 space-y-2 text-xs">
+                    <p className="text-muted-foreground">
+                      {a.source === 'autopilot' ? 'Autopilot' : 'Operator'} · review quality {formatScore(a.quality)} ·
+                      candidate {formatScore(a.stats.candidate.outcome_mean)} over {a.stats.candidate.outcome_n} ratings ·
+                      live {formatScore(a.stats.live.outcome_mean)} over {a.stats.live.outcome_n}
+                    </p>
+                    <ol className="space-y-1">
+                      {(a.events ?? []).map((e, i) => (
+                        <li key={i} className="flex flex-wrap gap-x-3">
+                          <span className="tabular-nums text-muted-foreground">{when(e.ts)}</span>
+                          <span>
+                            {EVENT_LABEL[e.type] ?? e.type}
+                            {e.type === 'traffic' ? ` → ${String(e.traffic_percent)}%` : ''}
+                            {e.actor ? ` (${String(e.actor)})` : ''}
+                          </span>
+                          <span className="font-mono text-muted-foreground" title="Audit-chain record hash">
+                            {e.hash ? e.hash.slice(0, 12) : 'no chain record'}
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
                   </div>
-
-                  {/* Timeline dot and connector */}
-                  <div className="relative">
-                    <div className="flex items-center justify-center">
-                      {attempt.validation_passed ? (
-                        <CheckCircle className="w-5 h-5 text-green-500" />
-                      ) : (
-                        <AlertCircle className="w-5 h-5 text-red-500" />
-                      )}
-                    </div>
-                    {index < attempts.length - 1 && (
-                      <div className="absolute top-5 left-2 w-0.5 h-6 bg-border" />
-                    )}
-                  </div>
-
-                  {/* Details */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-semibold text-sm">
-                        {attempt.skill_id}
-                      </span>
-                      <code className="text-xs bg-secondary px-2 py-1 rounded">
-                        v{attempt.version}
-                      </code>
-                      {attempt.validation_passed ? (
-                        <Badge variant="ok" className="text-[10px]">
-                          Validated
-                        </Badge>
-                      ) : (
-                        <Badge variant="warn" className="text-[10px]">
-                          Failed
-                        </Badge>
-                      )}
-                    </div>
-
-                    <div className="text-xs text-muted-foreground flex items-center gap-2">
-                      <Clock className="w-3 h-3" />
-                      {formatDate(attempt.timestamp)}
-                    </div>
-                  </div>
-
-                  {/* Operator decision badge */}
-                  {attempt.canary_verdict && (
-                    <div className="ml-auto">{getVerdictBadge(attempt.canary_verdict)}</div>
-                  )}
-                </div>
-              </div>
-
-              {/* Expanded details */}
-              {expandedId === attempt.id && (
-                <div className="border-t px-3 py-3 bg-secondary/20 space-y-2 text-sm">
-                  {/* Operator decision info */}
-                  {attempt.operator_id && (
-                    <>
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">Operator Decision</span>
-                        <span className="font-semibold">
-                          {attempt.operator_decision || 'No reason given'}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">Operator ID</span>
-                        <code className="text-xs bg-background px-2 py-1 rounded">
-                          {attempt.operator_id}
-                        </code>
-                      </div>
-                    </>
-                  )}
-
-                  {/* Hash chain verification */}
-                  {attempt.audit_hash && (
-                    <div className="pt-2 border-t">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-muted-foreground">Hash Chain Status</span>
-                        <span
-                          className={`text-xs font-semibold ${
-                            attempt.hash_verified
-                              ? 'text-green-600 dark:text-green-400'
-                              : 'text-yellow-600 dark:text-yellow-400'
-                          }`}
-                        >
-                          {attempt.hash_verified ? '✓ Verified' : '? Unverified'}
-                        </span>
-                      </div>
-                      <code className="text-xs bg-background px-2 py-1 rounded block break-all text-muted-foreground">
-                        {attempt.audit_hash}
-                      </code>
-                    </div>
-                  )}
-
-                  {/* Detailed events */}
-                  {attempt.events && attempt.events.length > 0 && (
-                    <div className="pt-2 border-t">
-                      <div className="font-semibold mb-2 text-xs">Events</div>
-                      <div className="space-y-1">
-                        {attempt.events.map((event, i) => (
-                          <div
-                            key={i}
-                            className="text-xs bg-background p-2 rounded border"
-                          >
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="font-mono text-muted-foreground">
-                                {formatDate(event.timestamp)}
-                              </span>
-                              <Badge variant="outline" className="text-[10px]">
-                                {event.event_type}
-                              </Badge>
-                            </div>
-                            <div className="text-muted-foreground">
-                              {event.details}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </CardContent>
     </Card>
   );

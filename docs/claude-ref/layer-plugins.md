@@ -708,6 +708,62 @@ backdated entries while keeping fresh ones intact. Wired into
 
 ---
 
+### Skill canary + Autonomous Skill Forge (ADR-2094)
+
+A registered skill can carry ONE active canary: a candidate body served to a
+share of chats while the live body keeps serving the rest. Console:
+**Forge → Autonomous** (`/app/forge?tab=autonomous-forge`), backend
+`routes/autonomous_forge_routes.py` under `/v1/console/autonomous-forge/`.
+
+| Piece | Where | What it does |
+|---|---|---|
+| Canary state | `corvin_operator/skill-forge/skill_forge/canary.py` | `<registry root>/canary/<skill>/` — `state.json`, `candidate.md`, `live_at_start.md`, `previous.md` (after approval), `served.json` (chat → variant, keyed by `sha256(channel_id)[:16]`, never the id) |
+| Serving split | `skill_inject.collect_active_skills` → `SkillCanary.variant_for` | sticky per chat: `sha256(canary_id:channel_id) % 100 < traffic_percent` → candidate. No `channel_id` → live. `paused` → live for everyone |
+| Grading | `skill_inject._grade_with_canary` (auto-grade + outcome grade) | a grade goes to the variant that chat was SERVED (ledger lookup, so a traffic change between turn and follow-up cannot misattribute it). Candidate grades never enter the registry; live grades go to the registry as before plus a `live` tally |
+| Candidate | `SkillCreatorOrchestrator.create_candidate` | Skill-Creator phases 1–4 on the live body, NO promotion; a candidate under another name is refused |
+| Autopilot | `corvin_operator/skill_creator/autonomous.py` | loss signal = ≥3 ORGANIC (outcome) grades in 14 d with mean < 0.5; forks at most one per pass; executes the gates; approval stays human. Daemon thread started by the console routes module (every 10 min, all tenants with a registry). Switch: `<root>/canary/autopilot.json` via `POST /autopilot` |
+
+**Gates** (`canary.evaluate`, pure): below `MIN_SAMPLES` (5) candidate outcome
+grades → hold. Reference = the live variant's outcome mean during the canary
+once it has 5 grades, else the live mean recorded at start. Candidate ≥
+reference → next step of `10 → 25 → 50`; at 50 → `ready` (awaits approval).
+Candidate < reference − 0.15 → rollback. Usage auto-grades (capped 0.3) are
+counted, never averaged.
+
+**Approve** replaces the registry body AND its grades with the candidate's
+canary grades (`set_grades`) — `create(overwrite=True)` alone empties the
+grade list and would drop the skill below the injection gate. **Rollback** of
+an approved canary restores `previous.md` and the previous grades.
+
+**Audit:** every transition is written to the tenant chain BEFORE it takes
+effect (`skill.canary_started` / `_traffic_changed` / `_status_changed` /
+`_graded` / `_autopilot_changed`, allowlists registered at runtime through
+`register_event_allowlist`); a failed chain write refuses the change. Each
+lifecycle event stores its chain record hash, shown in the panel's History.
+
+**Serving surfaces — say this honestly:** only the per-turn injection path
+splits (messenger bridges via `adapter.py`, delegated tasks via
+`corvin_delegate.skill_context`). The engine plugin slot the registry writes
+is a file Claude Code loads as-is; it keeps the LIVE body until approval.
+
+**CSRF:** mutations use the console's `X-CSRF-Token` (router-level guard). The
+body `session_token` / `client_nonce` scheme these routes used to demand could
+never validate (token derived for `/status` with `now`, checked for
+`/approve` with `csrf_nonce_issued_at`) and was removed.
+
+**E2E:** `core/console/tests/test_autonomous_forge_canary_e2e.py` (HTTP
+lifecycle, autopilot fork on a loss signal, gates, refusals, free tier 402,
+concurrent first import, engine timeout mid-LDD) and
+`tests/e2e/test_skill_canary_bridge_e2e.py` (real `adapter.process_one`
+turns: sticky split read from the engine's system-prompt file, follow-up
+grades land on the served variant, chain verifies).
+
+**Must NOT do:** write candidate grades into the registry · key the served
+ledger on the raw channel id · let a paused canary serve the candidate · roll
+out to 100 % without an operator approval · read `sys.modules` instead of
+`import_module` for the canary module (a concurrent first import returned a
+half-initialised module — live 500, 2026-09-28).
+
 ## MCP Plugin Manager (ADR-0096) — user-installable external MCP tools
 
 **Status:** Implemented (M1–M4 complete).  

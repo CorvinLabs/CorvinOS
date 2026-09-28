@@ -63,8 +63,9 @@ Every entitlement is a **capability** with an enforcement class per CONCEPT-0041
 | `space.domains` | L | 1 | ∞ | existing gates re-pointed |
 | `datasource.connections_concurrent` | L | 1 | ∞ | existing gates re-pointed |
 | `layers.custom_bc` | L | 1 | ∞ | `custom_layer_gate.py` |
+| `skill_forge_per_day` (skill authoring) | L | 5/day (UTC) | ∞ | `SkillRegistry.create` charges; console pre-checks (ADR-2095) |
 | **Member Only (Class L)** | | | | |
-| `forge.create` | L | ✗ | ∞ | ADR-0701 chokepoints G1–G5 |
+| `forge.create` | L | ✗ | ∞ | ADR-0701 chokepoints — Tool Forge, panels, plugin builder; for SKILLS it is the member test only (ADR-2095) |
 | **Network Gates (Class N)** | | | | |
 | `marketplace.publish` | N | ✗ | ✓ | ADR-0704 §5 |
 | `a2a.network` | N | ✗ | ∞ peers | ADR-0702 credential verification |
@@ -136,8 +137,16 @@ result = require_capability(
 
 **Enforcement Sites (Chokepoints):**
 1. **L6 (ToolForge):** `operator/forge/forge/registry.py::Registry.create` → `require_capability("forge.create")`
-2. **L7 (SkillForge):** `operator/skill-forge/skill_forge/registry.py::SkillRegistry.create` → same
-3. **Console UI:** `FastAPI require_forge_capability(rec)` on `/skill-creator/generate`, `/skills/manual`
+2. **L7 (SkillForge):** `operator/skill-forge/skill_forge/registry.py::SkillRegistry.create` →
+   `skill_authoring_tier()`: member (`forge.create` ALLOW) writes freely; the free tier writes
+   within `skill_forge_per_day` (5 per UTC day), charged by `charge_skill_quota()` right before
+   the write (a linter rejection costs nothing). `quota_exempt=True` only for a skill canary's
+   approve / rollback — the canary FORK was the charged generation (ADR-2095).
+3. **Console UI:** `require_skill_forge_quota(rec)` on `/skill-creator/generate`,
+   `/skills/manual` (POST/PUT) and `/autonomous-forge/fork` — a PRE-check, so a minutes-long
+   generation is not started with no credit left; answers 402 `{"error": "limit_reached",
+   "limit", "used", "resets_at", "message"}`. `GET /skill-creator/quota` feeds the Skill Forge
+   panel ("N of 5 new skills left today" / "Daily limit reached").
 4. **Compute:** `core/console/routes/compute.py::run_compute` → `require_capability("compute.run")`
 5. **Marketplace:** `routes/marketplace.py::publish` → `require_capability("marketplace.publish")`
 6. **A2A Pairing:** `a2a_verifier.py::verify_delegation` → `require_capability("a2a.network")`

@@ -137,10 +137,12 @@ FREE_TIER: dict[str, Any] = {
     # Free tier: 3/day; Member: unlimited.
     "tool_forge_per_day":       3,
 
-    # Skill Forge (ADR-0365)
-    # Daily limit for Skill Forge skill generations (L7, SkillForge compute_run).
-    # Free tier: 3/day; Member: unlimited.
-    "skill_forge_per_day":      3,
+    # Skill Forge (ADR-0365, re-activated by ADR-2095)
+    # Daily skill-authoring writes on the free tier — every surface counts the
+    # same (Skill-Creator, manual editor, MCP skill_create, canary fork), charged
+    # by SkillRegistry.create. Member: unlimited. Tool Forge stays member-only
+    # (forge.create).
+    "skill_forge_per_day":      5,
 
     # Plugin Limit (ADR-0365)
     # Maximum number of simultaneously loaded custom plugins.

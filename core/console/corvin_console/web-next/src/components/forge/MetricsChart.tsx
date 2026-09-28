@@ -1,192 +1,92 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import {
-  LineChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
   Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  ReferenceLine,
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-
-export interface MetricsDataPoint {
-  timestamp: number; // Unix timestamp in seconds
-  latency_p95_ms: number;
-  error_rate: number; // 0-100
-  confidence: number; // 0-1
-}
+import type { MetricPoint, Variant, VariantStats } from '@/lib/api/autonomous-forge';
+import { VARIANT_COLOR, VARIANT_LABEL, formatScore, outcomeSeries } from './autonomous-forge-encoding';
 
 interface MetricsChartProps {
-  data: MetricsDataPoint[];
-  loading?: boolean;
+  points: MetricPoint[];
+  stats: Record<Variant, VariantStats> | null;
 }
 
+const VARIANTS: Variant[] = ['live', 'candidate'];
+const AXIS = { fontSize: 12, fill: 'hsl(var(--muted-foreground))' };
+
 /**
- * MetricsChart: Displays real-time latency, error rate, and confidence trends
- * Data points are 1-minute buckets over the last hour.
+ * Running mean rating per variant over its own ratings (one shared 0–1 axis).
+ * Below two ratings a line draws nothing, so the form degrades to bars.
  */
-export const MetricsChart: React.FC<MetricsChartProps> = ({
-  data,
-  loading = false,
-}) => {
-  const chartData = useMemo(() => {
-    return data.map((point) => ({
-      ...point,
-      time: new Date(point.timestamp * 1000).toLocaleTimeString('en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
-      confidence_pct: Math.round(point.confidence * 100),
-    }));
-  }, [data]);
-
-  if (loading) {
-    return (
-      <Card>
-        <CardContent className="py-12 text-center text-muted-foreground">
-          Loading metrics...
-        </CardContent>
-      </Card>
-    );
-  }
-
-  if (chartData.length === 0) {
-    return (
-      <Card>
-        <CardContent className="py-12 text-center text-muted-foreground">
-          No metrics data available
-        </CardContent>
-      </Card>
-    );
-  }
-
+export const MetricsChart: React.FC<MetricsChartProps> = ({ points, stats }) => {
+  const rows = outcomeSeries(points);
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Real-time Metrics (Last 60 minutes)</CardTitle>
+        <CardTitle className="text-base">Mean rating as ratings arrive</CardTitle>
       </CardHeader>
-
-      <CardContent className="space-y-6">
-        {/* Latency Chart */}
-        <div>
-          <h3 className="text-sm font-semibold mb-4">P95 Latency (ms)</h3>
-          <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis
-                dataKey="time"
-                tick={{ fontSize: 12 }}
-                interval={Math.floor(chartData.length / 6)}
+      <CardContent>
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-8 text-center">
+            No ratings yet. A rating is recorded when a user answers after a turn that used the skill.
+          </p>
+        ) : rows.length < 2 && stats ? (
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart
+              data={VARIANTS.map((v) => ({ variant: VARIANT_LABEL[v], key: v, mean: stats[v].outcome_mean ?? 0 }))}
+              layout="vertical"
+              margin={{ left: 16, right: 24 }}
+            >
+              <CartesianGrid horizontal={false} stroke="var(--viz-grid)" />
+              <XAxis type="number" domain={[0, 1]} tick={AXIS} />
+              <YAxis type="category" dataKey="variant" tick={AXIS} width={80} />
+              <Tooltip formatter={(v: number) => formatScore(v)} />
+              <Bar dataKey="mean" minPointSize={2} radius={[0, 4, 4, 0]} barSize={18}
+                shape={(props: any) => (
+                  <rect {...props} fill={VARIANT_COLOR[props.payload.key as Variant]} rx={4} />
+                )}
               />
-              <YAxis tick={{ fontSize: 12 }} />
+            </BarChart>
+          </ResponsiveContainer>
+        ) : (
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={rows} margin={{ left: 0, right: 24, top: 8 }}>
+              <CartesianGrid vertical={false} stroke="var(--viz-grid)" />
+              <XAxis dataKey="n" tick={AXIS} label={{ value: 'Rating #', position: 'insideBottomRight', offset: -4, ...AXIS }} />
+              <YAxis domain={[0, 1]} ticks={[0, 0.25, 0.5, 0.75, 1]} tick={AXIS} width={36} />
               <Tooltip
-                contentStyle={{
-                  backgroundColor: 'var(--background)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px',
-                }}
-                formatter={(value: any) => value.toFixed(0)}
+                formatter={(v: number, name: string) => [formatScore(v), name]}
+                labelFormatter={(n) => `Rating #${n}`}
               />
-              <ReferenceLine
-                y={1500}
-                stroke="#ef4444"
-                strokeDasharray="5 5"
-                label="Budget (1500ms)"
+              <Legend
+                formatter={(value: string) => <span style={{ color: 'hsl(var(--foreground))' }}>{value}</span>}
               />
-              <Line
-                type="monotone"
-                dataKey="latency_p95_ms"
-                stroke="#3b82f6"
-                dot={false}
-                strokeWidth={2}
-                name="P95 Latency"
-              />
+              {VARIANTS.map((v) => (
+                <Line
+                  key={v}
+                  type="monotone"
+                  dataKey={v}
+                  name={VARIANT_LABEL[v]}
+                  stroke={VARIANT_COLOR[v]}
+                  strokeWidth={2}
+                  strokeDasharray={v === 'candidate' ? '6 3' : undefined}
+                  dot={{ r: 4, strokeWidth: 2, stroke: 'hsl(var(--card))', fill: VARIANT_COLOR[v] }}
+                  connectNulls
+                  isAnimationActive={false}
+                />
+              ))}
             </LineChart>
           </ResponsiveContainer>
-        </div>
-
-        {/* Error Rate Chart */}
-        <div>
-          <h3 className="text-sm font-semibold mb-4">Error Rate (%)</h3>
-          <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis
-                dataKey="time"
-                tick={{ fontSize: 12 }}
-                interval={Math.floor(chartData.length / 6)}
-              />
-              <YAxis tick={{ fontSize: 12 }} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: 'var(--background)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px',
-                }}
-                formatter={(value: any) => value.toFixed(2)}
-              />
-              <ReferenceLine
-                y={5}
-                stroke="#ef4444"
-                strokeDasharray="5 5"
-                label="SLO (5%)"
-              />
-              <Line
-                type="monotone"
-                dataKey="error_rate"
-                stroke="#ef4444"
-                dot={false}
-                strokeWidth={2}
-                name="Error Rate"
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Confidence Score Chart */}
-        <div>
-          <h3 className="text-sm font-semibold mb-4">Confidence Score</h3>
-          <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis
-                dataKey="time"
-                tick={{ fontSize: 12 }}
-                interval={Math.floor(chartData.length / 6)}
-              />
-              <YAxis
-                domain={[0, 100]}
-                tick={{ fontSize: 12 }}
-                label={{ value: '%', angle: -90, position: 'insideLeft' }}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: 'var(--background)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px',
-                }}
-                formatter={(value: any) => value.toFixed(0)}
-              />
-              <ReferenceLine
-                y={70}
-                stroke="#10b981"
-                strokeDasharray="5 5"
-                label="Target (70%)"
-              />
-              <Line
-                type="monotone"
-                dataKey="confidence_pct"
-                stroke="#10b981"
-                dot={false}
-                strokeWidth={2}
-                name="Confidence"
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
+        )}
       </CardContent>
     </Card>
   );

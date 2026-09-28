@@ -61,6 +61,8 @@
                  thing the real number is measured against. */
     --viz-role-os: #c3974b;
     --viz-role-worker: #1295a1;
+    --viz-variant-live: #c3974b;
+    --viz-variant-candidate: #1295a1;
     --viz-tier-1: #d6b171;
     --viz-tier-2: #ca9b49;
     --viz-tier-3: #775822;
@@ -100,6 +102,8 @@
        lightness band; --accent itself is too light for a data mark here. */
     --viz-role-os: #bc882f;
     --viz-role-worker: #1295a1;
+    --viz-variant-live: #bc882f;
+    --viz-variant-candidate: #1295a1;
     --viz-tier-1: #e6cfa8;
     --viz-tier-2: #dab981;
     --viz-tier-3: #ae8132;

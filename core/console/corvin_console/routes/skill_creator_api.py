@@ -11,7 +11,7 @@ import asyncio
 import logging
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Dict, Any, Optional
 from uuid import uuid4
@@ -22,7 +22,6 @@ from pydantic import BaseModel, Field
 from .. import auth as session_auth
 from .. import audit as console_audit
 from ..deps import require_csrf, require_session
-from .license_gates import require_forge_capability
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +47,7 @@ try:
     )
     from skill_creator.llm_client import resolve_llm_client, engine_id_of
     from skill_creator.registry_bridge import (
+        _load_registry_module,
         delete_skill,
         list_skills,
         read_skill,
@@ -58,6 +58,7 @@ except ImportError as e:
     logger.warning(f"SkillCreatorOrchestrator import failed: {e}")
     SkillCreatorOrchestrator = None
     SkillCreatorError = Exception
+    _load_registry_module = None
     resolve_llm_client = None
     engine_id_of = None
     list_skills = None
@@ -119,6 +120,71 @@ def _registry_root(tenant_id: str) -> Path:
     console tenant-routing rule (CLAUDE.md, ADR-0007).
     """
     return _forge_paths.tenant_home(tenant_id) / "skill-forge"
+
+# ── Free-tier skill quota (ADR-2095) ──────────────────────────────────────────
+#
+# Members author skills without limit; the free tier gets
+# ``skill_forge_per_day`` skill writes per UTC day. The registry CHARGES the
+# credit at the write (every surface — Skill-Creator, manual editor, MCP,
+# canary fork — counts the same); the console only PRE-CHECKS here, so a
+# minutes-long generation is not started when nothing is left to spend.
+
+def _next_utc_midnight() -> str:
+    now = datetime.now(timezone.utc)
+    return (now + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
+def skill_quota(tenant_id: str) -> Dict[str, Any]:
+    """``{tier, limit, used, remaining, resets_at}`` for the caller's tenant."""
+    if _load_registry_module is None:
+        raise ValueError("license_required: Skill-Creator not available")
+    mod = _load_registry_module()
+    tid, home = mod._tenant_and_home(_registry_root(tenant_id))
+    status = mod.skill_quota_status(tid, home)
+    status["resets_at"] = _next_utc_midnight()
+    return status
+
+
+def limit_reached(status: Dict[str, Any]) -> HTTPException:
+    """The 402 the console renders as "daily limit reached"."""
+    return HTTPException(
+        status_code=402,
+        detail={
+            "error": "limit_reached",
+            "feature": "skill_forge_per_day",
+            "limit": status.get("limit"),
+            "used": status.get("used"),
+            "resets_at": status.get("resets_at") or _next_utc_midnight(),
+            "message": (f"Daily Skill Forge limit reached ({status.get('used')}/"
+                        f"{status.get('limit')} on the free tier). It resets at "
+                        f"00:00 UTC — upgrade for unlimited skills."),
+            "upgrade_url": "https://corvin-labs.com/upgrade",
+        },
+    )
+
+
+def quota_exceeded_to_http(exc: Exception) -> HTTPException:
+    """Map the registry's ``SkillQuotaExceeded`` (raised at the write) to 402."""
+    return limit_reached({"limit": getattr(exc, "limit", None),
+                          "used": getattr(exc, "used", None)})
+
+
+async def require_skill_forge_quota(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> session_auth.SessionRecord:
+    """FastAPI dependency: refuse with 402 ``limit_reached`` when the free
+    tier has no skill credit left today; members always pass. Fail-closed:
+    an enforcement failure is a 503, never a pass."""
+    try:
+        status = skill_quota(rec.tenant_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail={
+            "error": "license_enforcement_unavailable", "reason": str(exc)[:200]})
+    if status.get("remaining") == 0:
+        raise limit_reached(status)
+    return rec
+
 
 router = APIRouter(prefix="/skill-creator", tags=["skill-creator"])
 
@@ -204,7 +270,7 @@ class GeneratedSkill(BaseModel):
 async def generate_skill(
     req: SkillGenerationRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-    _: Annotated[session_auth.SessionRecord, Depends(require_forge_capability)],
+    _: Annotated[session_auth.SessionRecord, Depends(require_skill_forge_quota)],
 ) -> Dict[str, Any]:
     """POST /skill-creator/generate
 
@@ -315,6 +381,21 @@ async def generate_skill(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/quota")
+async def get_quota(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> Dict[str, Any]:
+    """GET /skill-creator/quota — today's skill credits for the tenant.
+
+    ``limit``/``remaining`` are null on an unlimited (member) tier.
+    """
+    try:
+        return skill_quota(rec.tenant_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail={
+            "error": "license_enforcement_unavailable", "reason": str(exc)[:200]})
+
+
 @router.get("/status/{run_id}", response_model=GenerationStatusResponse)
 async def check_status(
     run_id: str,
@@ -421,11 +502,16 @@ async def delete_generated_skill(
     if skill_metadata is None:
         raise HTTPException(status_code=404, detail=f"skill not found: {name}")
 
-    # Check if current user is the creator or has admin role
+    # Check if current user is the creator or the install's owner. The console
+    # has exactly one human role, "owner" — SessionRecord carries no is_admin,
+    # and every generated skill records created_by="skill-creator", never a
+    # session fingerprint — so the previous `getattr(rec, "is_admin", False)`
+    # made every generated skill undeletable. What must NOT delete is a tool-
+    # driven synthetic session (ADR-0193 is_internal_tool), i.e. an LLM.
     creator_id = skill_metadata.get("created_by")
-    is_admin = getattr(rec, "is_admin", False)
+    is_owner = rec.tier == "owner" and not rec.is_internal_tool
 
-    if creator_id and creator_id != rec.sid_fingerprint and not is_admin:
+    if creator_id and creator_id != rec.sid_fingerprint and not is_owner:
         # Audit the failed deletion attempt (security event)
         console_audit.action_denied(
             tenant_id=rec.tenant_id,
@@ -623,6 +709,9 @@ def _operator_hint(exc: Exception) -> str:
     authenticates through the Claude Code CLI, not an API key.
     """
     text = str(exc)
+    if "daily skill forge limit reached" in text:
+        return ("Daily Skill Forge limit reached on the free tier. It resets at "
+                "00:00 UTC — upgrade for unlimited skills.")
     if "claude binary not found" in text:
         return ("Claude Code CLI not found. Install it or set CORVIN_CLAUDE_BIN "
                 "to its path — skill generation runs on your Claude subscription.")

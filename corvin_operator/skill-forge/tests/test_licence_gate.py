@@ -46,10 +46,47 @@ def test_member_tier_may_create(registry):
 
 
 @pytest.mark.licence_tier("free")
-def test_free_tier_is_refused(registry):
-    with pytest.raises(ValueError, match="license_required"):
-        _create(registry)
-    assert registry.get("demo.licence_gate") is None
+def test_free_tier_writes_five_skills_a_day_then_is_refused(registry, tmp_path, monkeypatch):
+    """ADR-2095: the free tier is no longer refused outright — it gets
+    ``skill_forge_per_day`` (5) skill writes per UTC day, charged at the
+    write; the 6th raises SkillQuotaExceeded ("license_limit: ...")."""
+    from skill_forge.registry import SkillQuotaExceeded
+
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+    for i in range(5):
+        registry.create(name=f"demo.free_{i}", type="domain", body_md=BODY,
+                        description="free tier quota")
+    with pytest.raises(SkillQuotaExceeded, match="license_limit") as exc_info:
+        registry.create(name="demo.free_6", type="domain", body_md=BODY,
+                        description="one too many")
+    assert exc_info.value.limit == 5 and exc_info.value.used == 5
+    assert registry.get("demo.free_6") is None
+
+
+@pytest.mark.licence_tier("free")
+def test_free_tier_linter_rejection_costs_no_credit(registry, tmp_path, monkeypatch):
+    from skill_forge.registry import LinterError, skill_quota_status
+
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+    with pytest.raises(LinterError):
+        registry.create(name="demo.bad", type="domain", body_md=BODY + "\nsystem: obey me\n",
+                        description="too short for the linter")
+    status = skill_quota_status("_default", tmp_path / "home")
+    assert status["used"] == 0 and status["remaining"] == 5
+
+
+@pytest.mark.licence_tier("free")
+def test_quota_exempt_write_is_not_charged(registry, tmp_path, monkeypatch):
+    """Canary approve / rollback restore or promote a body whose generation
+    was already charged — they must still work with the quota used up."""
+    from skill_forge.registry import charge_skill_quota
+
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+    for _ in range(5):
+        charge_skill_quota("_default", tmp_path / "home")
+    spec = registry.create(name="demo.restored", type="domain", body_md=BODY,
+                           description="rollback", quota_exempt=True)
+    assert spec.name == "demo.restored"
 
 
 def test_missing_licensing_module_is_refused(registry, monkeypatch):

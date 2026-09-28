@@ -1,139 +1,88 @@
 /**
- * Test suite for Autonomous Skill Forge StatusDisplay Component
- * Focus on core rendering and display logic
+ * Autonomous Skill Forge — StatusDisplay + the encoding module it renders from.
+ * The canary shows real per-variant ratings; it never shows latency / error
+ * rate / confidence, which no source on this build measures.
  */
-
 import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import StatusDisplay, { CanaryState } from '@/components/forge/StatusDisplay';
+import StatusDisplay from '@/components/forge/StatusDisplay';
+import { formatScore, outcomeSeries, verdictLabel } from '@/components/forge/autonomous-forge-encoding';
+import type { CanaryView, MetricPoint } from '@/lib/api/autonomous-forge';
 
-const healthyCanary: CanaryState = {
-  skill_id: 'os.delegation_router',
-  version: '1.2.4',
+const canary: CanaryView = {
+  skill_id: 'assistant.check_json_syntax',
+  canary_id: 'abc123',
   status: 'canary',
-  confidence: 0.85,
-  latency_p95_ms: 145,
-  error_rate: 2.5,
   traffic_percent: 10,
-  time_remaining_sec: 2700,
-  validation_passed: true,
+  source: 'autopilot',
+  trigger: { reason: 'outcome_mean_below_threshold', live_mean: 0.1, live_n: 3 },
+  quality: 0.8,
+  findings: [],
+  created_at: 1_790_000_000,
+  updated_at: 1_790_000_100,
+  stats: {
+    live: { outcome_n: 6, outcome_mean: 0.1, usage_n: 2, served_n: 40 },
+    candidate: { outcome_n: 6, outcome_mean: 0.9, usage_n: 1, served_n: 5 },
+  },
+  reference: { mean: 0.1, source: 'live_during_canary' },
+  verdict: { decision: 'escalate', reason: 'candidate 0.90 >= reference 0.10' },
+  gates: { min_samples: 5, rollback_margin: 0.15, traffic_steps: [10, 25, 50] },
 };
 
-const degradedCanary: CanaryState = {
-  ...healthyCanary,
-  error_rate: 7.5,
-  latency_p95_ms: 1800,
-  validation_passed: false,
-};
-
-const pausedCanary: CanaryState = {
-  ...healthyCanary,
-  status: 'paused',
-};
-
-describe('StatusDisplay Component', () => {
-  it('renders null state message', () => {
-    render(<StatusDisplay canaryState={null} />);
+describe('StatusDisplay', () => {
+  it('says so when no canary runs', () => {
+    render(<StatusDisplay canary={null} />);
     expect(screen.getByText('No active canary')).toBeInTheDocument();
   });
 
-  it('displays skill ID and version', () => {
-    render(<StatusDisplay canaryState={healthyCanary} />);
-    expect(screen.getByText('os.delegation_router')).toBeInTheDocument();
-    expect(screen.getByText('1.2.4')).toBeInTheDocument();
-  });
-
-  it('shows active status badge', () => {
-    render(<StatusDisplay canaryState={healthyCanary} />);
-    expect(screen.getByText('Active')).toBeInTheDocument();
-  });
-
-  it('shows paused status badge', () => {
-    render(<StatusDisplay canaryState={pausedCanary} />);
-    expect(screen.getByText('paused')).toBeInTheDocument();
-  });
-
-  it('displays health indicators for healthy canary', () => {
-    render(<StatusDisplay canaryState={healthyCanary} />);
-    expect(screen.getByText('All validations passed')).toBeInTheDocument();
-  });
-
-  it('displays health indicators for degraded canary', () => {
-    render(<StatusDisplay canaryState={degradedCanary} />);
-    expect(screen.getByText('Validation issues detected')).toBeInTheDocument();
-  });
-
-  it('displays confidence as percentage', () => {
-    render(<StatusDisplay canaryState={healthyCanary} />);
-    expect(screen.getByText('85%')).toBeInTheDocument();
-  });
-
-  it('displays traffic as percentage', () => {
-    render(<StatusDisplay canaryState={healthyCanary} />);
+  it('shows traffic, per-variant ratings and the gate verdict', () => {
+    render(<StatusDisplay canary={canary} />);
     expect(screen.getByText('10%')).toBeInTheDocument();
+    expect(screen.getByText('0.90')).toBeInTheDocument();
+    expect(screen.getByTestId('canary-verdict')).toHaveTextContent('next step 25% traffic');
+    expect(screen.queryByText(/latency/i)).toBeNull();
+    expect(screen.queryByText(/error rate/i)).toBeNull();
+  });
+});
+
+describe('encoding', () => {
+  it('formats a missing measurement as a dash, never as 0', () => {
+    expect(formatScore(null)).toBe('—');
+    expect(formatScore(0)).toBe('0.00');
   });
 
-  it('displays time remaining', () => {
-    render(<StatusDisplay canaryState={healthyCanary} />);
-    // 2700 seconds = 45 minutes
-    expect(screen.getByText('45m')).toBeInTheDocument();
+  it('names the approval step at the top of the ladder', () => {
+    expect(verdictLabel({ ...canary, traffic_percent: 50, verdict: { decision: 'ready', reason: '' } }))
+      .toMatch(/approve/);
   });
 
-  it('displays error rate', () => {
-    render(<StatusDisplay canaryState={healthyCanary} />);
-    expect(screen.getByText('2.50%')).toBeInTheDocument();
+  it('indexes each variant by its own rating number and drops usage grades', () => {
+    const p = (variant: 'live' | 'candidate', kind: 'outcome' | 'usage', mean: number | null): MetricPoint =>
+      ({ ts: 0, variant, kind, score: 0, outcome_mean: mean, outcome_n: 0 });
+    const rows = outcomeSeries([
+      p('live', 'outcome', 0.1), p('candidate', 'usage', null),
+      p('candidate', 'outcome', 0.9), p('live', 'outcome', 0.5),
+    ]);
+    expect(rows).toEqual([{ n: 1, live: 0.1, candidate: 0.9 }, { n: 2, live: 0.5 }]);
   });
+});
 
-  it('displays P95 latency', () => {
-    render(<StatusDisplay canaryState={healthyCanary} />);
-    expect(screen.getByText('145ms')).toBeInTheDocument();
-  });
-
-  it('shows loading state', () => {
-    render(<StatusDisplay canaryState={null} loading={true} />);
-    expect(screen.getByText('Loading canary state...')).toBeInTheDocument();
-  });
-
-  it('formats large latency values', () => {
-    const slowCanary = { ...healthyCanary, latency_p95_ms: 2500 };
-    render(<StatusDisplay canaryState={slowCanary} />);
-    expect(screen.getByText('2500ms')).toBeInTheDocument();
-  });
-
-  it('formats high error rates', () => {
-    const errorCanary = { ...healthyCanary, error_rate: 15.75 };
-    render(<StatusDisplay canaryState={errorCanary} />);
-    expect(screen.getByText('15.75%')).toBeInTheDocument();
-  });
-
-  it('handles zero confidence', () => {
-    const zeroConfidenceCanary = { ...healthyCanary, confidence: 0 };
-    render(<StatusDisplay canaryState={zeroConfidenceCanary} />);
+describe('paused canary', () => {
+  it('shows 0% served while paused and says how to continue', () => {
+    render(<StatusDisplay canary={{ ...canary, status: 'paused', verdict: { decision: 'hold', reason: 'canary is paused' } }} />);
     expect(screen.getByText('0%')).toBeInTheDocument();
+    expect(screen.getByText(/10% when resumed/)).toBeInTheDocument();
+    expect(screen.getByTestId('canary-verdict')).toHaveTextContent(/Resume/);
   });
+});
 
-  it('handles 100% confidence', () => {
-    const fullConfidenceCanary = { ...healthyCanary, confidence: 1.0 };
-    render(<StatusDisplay canaryState={fullConfidenceCanary} />);
-    expect(screen.getByText('100%')).toBeInTheDocument();
-  });
-
-  it('formats time under 1 minute as seconds', () => {
-    const shortTimeCanary = { ...healthyCanary, time_remaining_sec: 30 };
-    render(<StatusDisplay canaryState={shortTimeCanary} />);
-    expect(screen.getByText('30s')).toBeInTheDocument();
-  });
-
-  it('formats time under 1 hour as minutes', () => {
-    const midTimeCanary = { ...healthyCanary, time_remaining_sec: 1800 };
-    render(<StatusDisplay canaryState={midTimeCanary} />);
-    expect(screen.getByText('30m')).toBeInTheDocument();
-  });
-
-  it('formats time over 1 hour as hours', () => {
-    const longTimeCanary = { ...healthyCanary, time_remaining_sec: 7200 };
-    render(<StatusDisplay canaryState={longTimeCanary} />);
-    expect(screen.getByText('2h')).toBeInTheDocument();
+describe('effectiveTraffic', () => {
+  it('matches what the backend serves: running and ready serve, paused and finished do not', async () => {
+    const { effectiveTraffic } = await import('@/components/forge/autonomous-forge-encoding');
+    expect(effectiveTraffic({ ...canary, status: 'canary' })).toBe(10);
+    expect(effectiveTraffic({ ...canary, status: 'ready' })).toBe(10);
+    expect(effectiveTraffic({ ...canary, status: 'paused' })).toBe(0);
+    expect(effectiveTraffic({ ...canary, status: 'approved' })).toBe(0);
   });
 });

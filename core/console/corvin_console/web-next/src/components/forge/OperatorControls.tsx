@@ -1,303 +1,122 @@
 import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { AlertCircle, CheckCircle, Pause, PlayCircle, RotateCcw } from 'lucide-react';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { CheckCircle, Clock, FileText, Pause, PlayCircle, RotateCcw } from 'lucide-react';
+import type { CanaryAction, CanaryView } from '@/lib/api/autonomous-forge';
+import { getCandidate } from '@/lib/api/autonomous-forge';
+import { isActive } from './autonomous-forge-encoding';
 
 interface OperatorControlsProps {
-  skillId: string;
-  currentVersion: string;
-  canaryActive: boolean;
-  onApprove: () => Promise<void>;
-  onDefer: (reason: string) => Promise<void>;
-  onPause: () => Promise<void>;
-  onResume: () => Promise<void>;
-  onRollback: () => Promise<void>;
-  disabled?: boolean;
+  canary: CanaryView;
+  busy: boolean;
+  onAction: (action: CanaryAction) => Promise<void>;
 }
 
-type DialogType = 'approve' | 'defer' | 'rollback' | null;
+const CONFIRM: Partial<Record<CanaryAction, { title: string; body: string }>> = {
+  approve: {
+    title: 'Approve the candidate?',
+    body: 'The candidate becomes the live skill for every chat. Its ratings from this canary become the skill\'s ratings. The previous version is kept and can be restored with Rollback.',
+  },
+  rollback: {
+    title: 'Roll back?',
+    body: 'A running canary stops serving the candidate. An approved canary restores the previous version and its ratings.',
+  },
+  defer: {
+    title: 'Defer the candidate?',
+    body: 'The canary ends without a rollout; every chat gets the live skill again.',
+  },
+};
 
-/**
- * OperatorControls: Buttons for operator approval/deferral/rollback
- */
-export const OperatorControls: React.FC<OperatorControlsProps> = ({
-  skillId,
-  currentVersion,
-  canaryActive,
-  onApprove,
-  onDefer,
-  onPause,
-  onResume,
-  onRollback,
-  disabled = false,
-}) => {
-  const [activeDialog, setActiveDialog] = useState<DialogType>(null);
-  const [deferReason, setDeferReason] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export const OperatorControls: React.FC<OperatorControlsProps> = ({ canary, busy, onAction }) => {
+  const [confirm, setConfirm] = useState<CanaryAction | null>(null);
+  const [bodies, setBodies] = useState<{ live_body: string; candidate_body: string } | null>(null);
+  const [bodiesOpen, setBodiesOpen] = useState(false);
+  const active = isActive(canary.status);
 
-  const handleApprove = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      await onApprove();
-      setActiveDialog(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to approve');
-    } finally {
-      setLoading(false);
+  const run = async (action: CanaryAction) => {
+    if (CONFIRM[action] && confirm !== action) {
+      setConfirm(action);
+      return;
     }
+    setConfirm(null);
+    await onAction(action);
   };
 
-  const handleDefer = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      await onDefer(deferReason);
-      setActiveDialog(null);
-      setDeferReason('');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to defer');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handlePause = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      await onPause();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to pause');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleResume = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      await onResume();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to resume');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleRollback = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      await onRollback();
-      setActiveDialog(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to rollback');
-    } finally {
-      setLoading(false);
-    }
+  const showBodies = async () => {
+    setBodiesOpen(true);
+    if (!bodies) setBodies(await getCandidate(canary.skill_id));
   };
 
   return (
-    <>
-      <Card>
-        <CardHeader>
-          <CardTitle>Operator Controls</CardTitle>
-        </CardHeader>
-
-        <CardContent className="space-y-4">
-          {error && (
-            <div className="flex items-start gap-2 p-3 bg-red-500/10 text-red-600 dark:text-red-400 rounded-lg border border-red-500/20">
-              <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
-              <div>
-                <div className="font-semibold text-sm">Error</div>
-                <div className="text-sm">{error}</div>
-              </div>
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <p className="text-sm text-muted-foreground">
-              Manage the canary deployment of {skillId}@{currentVersion}
-            </p>
-          </div>
-
-          {/* Approval/Deferral Actions */}
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              onClick={() => setActiveDialog('approve')}
-              disabled={disabled || loading || !canaryActive}
-              className="bg-green-600 hover:bg-green-700 text-white"
-              size="sm"
-            >
-              <CheckCircle className="w-4 h-4 mr-2" />
-              Approve & Rollout
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Decision</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <Button variant="outline" className="w-full justify-start" onClick={showBodies}>
+          <FileText className="w-4 h-4 mr-2" /> Compare live and candidate
+        </Button>
+        {active && (
+          <>
+            <Button className="w-full justify-start" disabled={busy} onClick={() => run('approve')}>
+              <CheckCircle className="w-4 h-4 mr-2" /> Approve candidate
             </Button>
-
-            <Button
-              onClick={() => setActiveDialog('defer')}
-              disabled={disabled || loading || !canaryActive}
-              variant="outline"
-              size="sm"
-            >
-              Defer & Keep
-            </Button>
-          </div>
-
-          {/* Pause/Resume and Rollback */}
-          <div className="grid grid-cols-2 gap-2 pt-2 border-t">
-            {canaryActive ? (
-              <Button
-                onClick={handlePause}
-                disabled={disabled || loading}
-                variant="secondary"
-                size="sm"
-              >
-                <Pause className="w-4 h-4 mr-2" />
-                Pause
+            {canary.status === 'paused' ? (
+              <Button variant="outline" className="w-full justify-start" disabled={busy} onClick={() => run('resume')}>
+                <PlayCircle className="w-4 h-4 mr-2" /> Resume canary
               </Button>
             ) : (
-              <Button
-                onClick={handleResume}
-                disabled={disabled || loading}
-                variant="secondary"
-                size="sm"
-              >
-                <PlayCircle className="w-4 h-4 mr-2" />
-                Resume
+              <Button variant="outline" className="w-full justify-start" disabled={busy} onClick={() => run('pause')}>
+                <Pause className="w-4 h-4 mr-2" /> Pause canary
               </Button>
             )}
-
-            <Button
-              onClick={() => setActiveDialog('rollback')}
-              disabled={disabled || loading}
-              variant="destructive"
-              size="sm"
-            >
-              <RotateCcw className="w-4 h-4 mr-2" />
-              Emergency Rollback
+            <Button variant="outline" className="w-full justify-start" disabled={busy} onClick={() => run('defer')}>
+              <Clock className="w-4 h-4 mr-2" /> Defer
             </Button>
-          </div>
-        </CardContent>
-      </Card>
+          </>
+        )}
+        {(active || canary.status === 'approved') && (
+          <Button variant="destructive" className="w-full justify-start" disabled={busy} onClick={() => run('rollback')}>
+            <RotateCcw className="w-4 h-4 mr-2" /> Roll back
+          </Button>
+        )}
+        {!active && canary.status !== 'approved' && (
+          <p className="text-sm text-muted-foreground">This canary is finished.</p>
+        )}
+      </CardContent>
 
-      {/* Approval Confirmation Dialog */}
-      <Dialog open={activeDialog === 'approve'} onOpenChange={(open) => !open && setActiveDialog(null)}>
+      <Dialog open={confirm !== null} onOpenChange={(o) => !o && setConfirm(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Approve & Rollout to 100%</DialogTitle>
+            <DialogTitle>{confirm ? CONFIRM[confirm]?.title : ''}</DialogTitle>
           </DialogHeader>
-
-          <div className="space-y-4">
-            <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
-              <p className="text-sm text-muted-foreground">
-                This will immediately promote <strong>{skillId}@{currentVersion}</strong> from
-                canary (10%) to full production (100%).
-              </p>
-            </div>
-
-            <div className="space-y-1 text-sm">
-              <p className="font-semibold">This action:</p>
-              <ul className="list-disc pl-5 text-muted-foreground">
-                <li>Routes all new traffic to v{currentVersion}</li>
-                <li>Terminates the canary window</li>
-                <li>Is <strong>immediately irreversible</strong> (use emergency rollback if issues arise)</li>
-              </ul>
-            </div>
-          </div>
-
+          <p className="text-sm text-muted-foreground">{confirm ? CONFIRM[confirm]?.body : ''}</p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setActiveDialog(null)} disabled={loading}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleApprove}
-              disabled={loading}
-              className="bg-green-600 hover:bg-green-700 text-white"
-            >
-              {loading ? 'Approving...' : 'Approve'}
-            </Button>
+            <Button variant="outline" onClick={() => setConfirm(null)}>Cancel</Button>
+            <Button disabled={busy} onClick={() => confirm && run(confirm)}>Confirm</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Defer Dialog */}
-      <Dialog open={activeDialog === 'defer'} onOpenChange={(open) => !open && setActiveDialog(null)}>
-        <DialogContent>
+      <Dialog open={bodiesOpen} onOpenChange={setBodiesOpen}>
+        <DialogContent className="max-w-5xl">
           <DialogHeader>
-            <DialogTitle>Defer & Keep Previous Version</DialogTitle>
+            <DialogTitle className="font-mono text-base">{canary.skill_id}</DialogTitle>
           </DialogHeader>
-
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Keep running the previous version. The canary will be stopped and marked as
-              deferred.
-            </p>
-
-            <div>
-              <label className="text-sm font-semibold mb-2 block">Reason (optional)</label>
-              <Textarea
-                placeholder="Why are you deferring this version? (helps with decision analysis)"
-                value={deferReason}
-                onChange={(e) => setDeferReason(e.target.value)}
-                className="min-h-24"
-              />
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setActiveDialog(null)} disabled={loading}>
-              Cancel
-            </Button>
-            <Button onClick={handleDefer} disabled={loading} variant="secondary">
-              {loading ? 'Deferring...' : 'Defer'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Rollback Confirmation Dialog */}
-      <Dialog open={activeDialog === 'rollback'} onOpenChange={(open) => !open && setActiveDialog(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Emergency Rollback</DialogTitle>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg flex gap-2">
-              <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
-              <div className="text-sm text-muted-foreground">
-                This immediately reverts to the stable version and disables this canary. Use
-                only in emergencies.
+          <div className="grid gap-4 md:grid-cols-2">
+            {(['live_body', 'candidate_body'] as const).map((k) => (
+              <div key={k} className="min-w-0">
+                <p className="text-xs font-medium mb-1">{k === 'live_body' ? 'Live (at canary start)' : 'Candidate'}</p>
+                <pre className="text-xs whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-3 max-h-[60vh] overflow-y-auto">
+                  {bodies ? bodies[k] : 'Loading…'}
+                </pre>
               </div>
-            </div>
-
-            <div className="space-y-1 text-sm">
-              <p className="font-semibold">This action:</p>
-              <ul className="list-disc pl-5 text-muted-foreground">
-                <li>Instantly halts the canary deployment</li>
-                <li>Routes all traffic back to the stable version</li>
-                <li>Marks this version as rolled back in audit logs</li>
-              </ul>
-            </div>
+            ))}
           </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setActiveDialog(null)} disabled={loading}>
-              Cancel
-            </Button>
-            <Button onClick={handleRollback} disabled={loading} variant="destructive">
-              {loading ? 'Rolling back...' : 'Confirm Rollback'}
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
-    </>
+    </Card>
   );
 };
 

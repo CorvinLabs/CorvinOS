@@ -41,7 +41,7 @@ from .. import _bootstrap  # noqa: F401 — puts corvin_operator/skill-forge + f
 from .. import audit as console_audit
 from .. import auth as session_auth
 from ..deps import require_csrf, require_session
-from .license_gates import require_forge_capability
+from .skill_creator_api import require_skill_forge_quota
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -227,6 +227,10 @@ def _write_skill(
             "linter rejected: " + "; ".join(getattr(exc, "violations", []) or [str(exc)]),
         ) from exc
     except (ValueError, KeyError) as exc:
+        if str(exc).startswith("license_limit"):
+            # ADR-2095: the free tier's daily skill quota ran out at the write.
+            from .skill_creator_api import quota_exceeded_to_http  # noqa: PLC0415
+            raise quota_exceeded_to_http(exc) from exc
         if str(exc).startswith("license_required"):
             # The G2 registry gate refused (e.g. the tier changed between the
             # G3 dependency and the write) — a licence verdict, never a 400.
@@ -280,8 +284,9 @@ def list_manual_skills(
 def create_manual_skill(
     body: SkillCreateRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-    # ADR-0701 G3: manual authoring is forge.create (member-only) → 402.
-    _licensed: Annotated[session_auth.SessionRecord, Depends(require_forge_capability)],
+    # ADR-0701 G3 as amended by ADR-2095: members unlimited, free tier within
+    # its daily skill quota → 402 "limit_reached" when it is used up.
+    _licensed: Annotated[session_auth.SessionRecord, Depends(require_skill_forge_quota)],
 ) -> dict[str, Any]:
     if not _SKILL_NAME_RE.match(body.name):
         raise HTTPException(
@@ -314,8 +319,9 @@ def update_manual_skill(
     name: str,
     body: SkillUpdateRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-    # ADR-0701 G3: manual authoring is forge.create (member-only) → 402.
-    _licensed: Annotated[session_auth.SessionRecord, Depends(require_forge_capability)],
+    # ADR-0701 G3 as amended by ADR-2095: members unlimited, free tier within
+    # its daily skill quota → 402 "limit_reached" when it is used up.
+    _licensed: Annotated[session_auth.SessionRecord, Depends(require_skill_forge_quota)],
 ) -> dict[str, Any]:
     if not _SKILL_NAME_RE.match(name):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid skill name")

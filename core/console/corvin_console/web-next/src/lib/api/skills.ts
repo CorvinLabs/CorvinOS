@@ -247,6 +247,19 @@ export interface GeneratedSkillList {
   skills: GeneratedSkillSummary[];
 }
 
+/** Today's skill credits (free tier: 5/day; member: unlimited → nulls). */
+export interface SkillQuota {
+  tier: "free" | "member";
+  limit: number | null;
+  used: number;
+  remaining: number | null;
+  resets_at: string;
+}
+
+export async function getSkillQuota(signal?: AbortSignal): Promise<SkillQuota> {
+  return api<SkillQuota>("/skill-creator/quota", { signal });
+}
+
 export async function listGeneratedSkills(
   signal?: AbortSignal,
 ): Promise<GeneratedSkillList> {

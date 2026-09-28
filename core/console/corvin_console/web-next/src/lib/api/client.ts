@@ -54,6 +54,13 @@ function formatDetailMessage(detail: unknown): string {
       ? `Validation error: ${messages.join(", ")}`
       : String(detail);
   }
+  // A structured refusal ({error, message, reason, ...}) — e.g. the 402
+  // "limit_reached" / "license_required" answers — carries a human sentence.
+  if (detail && typeof detail === "object") {
+    const obj = detail as { message?: unknown; reason?: unknown; error?: unknown };
+    const text = obj.message ?? obj.reason ?? obj.error;
+    if (typeof text === "string" && text) return text;
+  }
   return String(detail);
 }
 

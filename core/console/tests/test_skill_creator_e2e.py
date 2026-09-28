@@ -108,11 +108,18 @@ def fake_engine(*, fail_with: Exception | None = None, spec_json: str = SPEC_JSO
 
 @contextmanager
 def console_client(tmp_path: Path, engine=None, *, live: bool = False,
-                   tenant: str = "_default"):
+                   tenant: str = "_default", tier: str | None = "member"):
     """Mount the console router and yield an AUTHENTICATED TestClient.
 
     The route derives its tenant from the session record, so the test has to
     carry a real session cookie — the same contract the console SPA has.
+
+    ``/generate`` is gated on ``forge.create`` (member tier). The licence is
+    activated on ``license.validator`` — the module name the hosts
+    (corvin_gateway.app, console standalone/auth) load it under — NOT on the
+    module the capability API imports. That split is the live defect of
+    2026-09-28, so the fixture must keep reproducing it. ``tier=None`` runs
+    on the Free tier.
     """
     home = tmp_path / "corvin_home"
     (home / "tenants" / tenant / "global" / "auth").mkdir(parents=True, exist_ok=True)
@@ -144,6 +151,10 @@ def console_client(tmp_path: Path, engine=None, *, live: bool = False,
     route._skill_stats.update({"total_generated": 0, "avg_quality": 0.0,
                                "total_iterations": 0, "last_generated_at": None})
 
+    from license import validator as _host_validator  # the hosts' import name
+    orig_license = _host_validator._ACTIVE_LICENSE
+    _host_validator._set_active_license({"tier": tier} if tier else None)
+
     rec = _auth.create_session(tenant_id=tenant, token_fingerprint="test-fp")
     client = TestClient(app, raise_server_exceptions=False)
     client.cookies.set("corvin_console_sid", rec.sid)
@@ -151,6 +162,7 @@ def console_client(tmp_path: Path, engine=None, *, live: bool = False,
     try:
         yield client, route
     finally:
+        _host_validator._set_active_license(orig_license)
         sc.resolve_llm_client = orig_resolve
         route._generation_runs.clear()
         route._generation_runs.update(orig_runs)
@@ -184,6 +196,61 @@ def poll_until_done(client, run_id: str, timeout_s: float = 30.0) -> dict:
             return body
         time.sleep(0.1)
     pytest.fail(f"run {run_id} did not finish within {timeout_s}s: {body}")
+
+
+# ── licence gate ──────────────────────────────────────────────────────────
+
+def test_free_tier_gets_five_skills_a_day_then_limit_reached(tmp_path):
+    """ADR-2095: the free tier authors 5 skills per UTC day. Each successful
+    generation consumes one credit AT THE REGISTRY WRITE; the 6th request is
+    refused up front with 402 "limit_reached" (no engine time spent) and the
+    console's /quota endpoint says so."""
+    with console_client(tmp_path, fake_engine(), tier=None) as (client, route):
+        q = client.get("/v1/console/skill-creator/quota").json()
+        assert q["tier"] == "free" and q["limit"] == 5 and q["remaining"] == 5, q
+
+        for i in range(5):
+            resp = client.post("/v1/console/skill-creator/generate",
+                               json={"user_request": f"erzeuge Skill Nummer {i} der JSON validiert",
+                                     "async": True},
+                               headers=csrf_headers(client.session_record))
+            assert resp.status_code == 202, resp.text
+            body = poll_until_done(client, resp.json()["run_id"])
+            assert body["status"] == "success", body
+
+        q = client.get("/v1/console/skill-creator/quota").json()
+        assert q["used"] == 5 and q["remaining"] == 0, q
+
+        resp = client.post("/v1/console/skill-creator/generate",
+                           json={"user_request": "erzeuge noch einen Skill der JSON validiert",
+                                 "async": True},
+                           headers=csrf_headers(client.session_record))
+        assert resp.status_code == 402, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error"] == "limit_reached"
+        assert detail["limit"] == 5 and detail["used"] == 5
+        assert "Daily Skill Forge limit reached" in detail["message"]
+
+
+def test_member_has_no_skill_quota(tmp_path):
+    with console_client(tmp_path, fake_engine(), tier="member") as (client, route):
+        q = client.get("/v1/console/skill-creator/quota").json()
+        assert q["tier"] == "member" and q["limit"] is None and q["remaining"] is None
+
+
+def test_member_licence_loaded_by_the_host_opens_the_gate(tmp_path):
+    """The live 500 of 2026-09-28: the gateway loaded a member licence into
+    ``license.validator`` while the capability API read the never-loaded
+    ``corvin_operator.license.validator`` twin and saw Free."""
+    import corvin_operator.license.validator as twin
+    assert twin._ACTIVE_LICENSE is None or twin is __import__("license.validator").validator
+    with console_client(tmp_path, fake_engine(), tier="member") as (client, route):
+        resp = client.post("/v1/console/skill-creator/generate",
+                           json={"user_request": "erzeuge einen Skill der JSON validiert",
+                                 "async": True},
+                           headers=csrf_headers(client.session_record))
+        assert resp.status_code == 202, resp.text
+        poll_until_done(client, resp.json()["run_id"])
 
 
 # ── happy path ────────────────────────────────────────────────────────────

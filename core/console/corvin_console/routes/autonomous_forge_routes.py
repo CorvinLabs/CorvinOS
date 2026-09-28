@@ -1,269 +1,427 @@
-"""Autonomous Skill Forge Console Integration Routes (ADR-0902).
+"""Autonomous Skill Forge — console routes (ADR-2094).
 
-REST API endpoints for:
-  - Monitoring canary state
-  - Approving/deferring skill deployments (semi-autonomous)
-  - Pausing/resuming autonomous mode
-  - Emergency rollbacks
-  - Audit trail querying
-  - Manifest viewing
+The console surface of the skill canary: a candidate body for a registered
+skill is served to a share of chats, both variants are graded apart, and the
+operator (or the autopilot, within its gates) moves it through the lifecycle.
 
-All endpoints require valid session auth (tenant_id from SessionRecord).
-All mutations emit audit events to the tenant's audit chain.
-Canary metrics are immutable (read-only).
+  GET  /v1/console/autonomous-forge/status             autopilot, canaries, skills
+  GET  /v1/console/autonomous-forge/metrics?skill_id=  per-variant grade series
+  GET  /v1/console/autonomous-forge/history?limit=     canary lifecycle records
+  GET  /v1/console/autonomous-forge/candidate/{skill}  live vs candidate body
+  POST /v1/console/autonomous-forge/fork               forge a candidate (async)
+  GET  /v1/console/autonomous-forge/fork/{run_id}      fork run status
+  POST /v1/console/autonomous-forge/{approve,defer,pause,resume,rollback}
+  POST /v1/console/autonomous-forge/autopilot          switch the autopilot
+  POST /v1/console/autonomous-forge/tick               run one autopilot pass now
 
-Wire format
------------
+Every route is session-gated and every mutation CSRF-gated by the router-level
+guard (the console's ``X-CSRF-Token`` header). The body-carried
+``session_token`` / ``client_nonce`` scheme these routes used to demand could
+never validate — the token was derived for ``/status`` with the current time
+and checked for ``/approve`` with ``csrf_nonce_issued_at`` — so no request
+ever passed it (ADR-2094).
 
-GET /v1/console/autonomous-forge/status
-  → Returns current canary state + metrics
-
-POST /v1/console/autonomous-forge/approve
-  → Approve canary, roll out to 100%, emit audit event
-
-POST /v1/console/autonomous-forge/defer
-  → Defer canary to later, keep old version live
-
-POST /v1/console/autonomous-forge/pause
-  → Disable autonomous forge system
-
-POST /v1/console/autonomous-forge/resume
-  → Re-enable autonomous forge system
-
-POST /v1/console/autonomous-forge/rollback
-  → Emergency rollback to previous version
-
-GET /v1/console/autonomous-forge/history
-  → Audit trail of last N fork/decision cycles
-
-GET /v1/console/autonomous-forge/manifest/:skill_id/:version
-  → View generated skill manifest
-
-Compliance (load-bearing)
-------------------------
-
-✅ Tenant isolation: All responses filtered by tenant_id from auth
-✅ Audit-first: Every decision emits immutable event
-✅ Fail-closed: Invalid decisions → 400/403 error
-✅ Immutable: Canary metrics read-only (no mutations)
-✅ Semi-autonomous: Approval required before 100% rollout
+Tenant: always ``rec.tenant_id``. Registry root: ``<tenant_home>/skill-forge``
+— the root ``skill_inject`` serves from. Canary transitions are written to the
+tenant audit chain by ``skill_forge.canary`` BEFORE they take effect.
 """
+
 from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Dict, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import audit as console_audit
-from ..deps import require_csrf, require_session
 from .. import auth as session_auth
-from ..csrf import (
-    derive_csrf_token_session_bound,
-    validate_csrf_token_session_bound,
-    format_csrf_error_for_log,
-)
-from ..api_schemas.autonomous_forge import (
-    CanaryStateResponse,
-    ApproveRequest,
-    ApproveResponse,
-    DeferRequest,
-    DeferResponse,
-    PauseRequest,
-    PauseResponse,
-    ResumeRequest,
-    ResumeResponse,
-    RollbackRequest,
-    RollbackResponse,
-    HistoryResponse,
-    HistoryEntry,
-    ManifestResponse,
-)
-
+from ..api_schemas.autonomous_forge import ManifestResponse
+from ..deps import require_csrf, require_session, require_session_csrf_on_mutation
 from ..validation.input_validator import validate_skill_id, validate_version
-from ..deps import require_session_csrf_on_mutation
+from .skill_creator_api import (
+    _forge_paths, _registry_root, _require_namespace, quota_exceeded_to_http,
+    require_skill_forge_quota,
+)
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)])
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers: Import autonomous forge components
-# ─────────────────────────────────────────────────────────────────────────────
+try:  # skill_creator_api put corvin_operator/ on sys.path
+    from skill_creator import autonomous as _auto
+    from skill_creator.registry_bridge import registry_for as _registry_for
+except ImportError as exc:  # pragma: no cover — reported, never silent
+    log.warning("Autonomous Skill Forge unavailable: %s", exc)
+    _auto = None
+    _registry_for = None
 
-_AUTONOMOUS_AVAILABLE = False
-_VALIDATOR = None
 
-try:
-    # corvin_operator/skill-forge/ has a dash, so `from skill_forge...` (or
-    # `from corvin_operator.skill_forge...`) never resolved as a plain
-    # import — this try/except silently swallowed that ImportError on every
-    # boot, logging a warning and leaving _AUTONOMOUS_AVAILABLE permanently
-    # False. Neither flag has any reader in this module today, so nothing
-    # was functionally gated by it, but the boot log was misleading.
-    # importlib.util loads the dashed directory directly (same pattern as
-    # tests/skill_forge/test_trigger_detector.py). validator.py does
-    # `from .result import ...` etc, which needs a real parent package with
-    # __path__ set, so the whole autonomous/__init__.py is loaded (it
-    # already resolves its own submodule relative imports) rather than
-    # validator.py alone.
-    import importlib.util
-    import types as _types
+def _require_available() -> None:
+    if _auto is None:
+        raise HTTPException(status_code=503, detail="Autonomous Skill Forge is not available on this build")
 
-    _THIS_DIR = Path(__file__).resolve().parent.parent
-    _REPO = _THIS_DIR.parents[2]
-    _SKILL_FORGE_DIR = _REPO / "corvin_operator" / "skill-forge"
 
-    def _ensure_forge_namespace(dotted_name: str, path: Path):
-        existing = sys.modules.get(dotted_name)
-        if existing is not None:
-            return existing
-        _module = _types.ModuleType(dotted_name)
-        _module.__path__ = [str(path)]
-        sys.modules[dotted_name] = _module
-        return _module
+def _canary_mod():
+    return _auto._canary_module()
 
-    def _load_forge_module(dotted_name: str, file_path: Path):
-        existing = sys.modules.get(dotted_name)
-        if existing is not None:
-            return existing
-        _spec = importlib.util.spec_from_file_location(dotted_name, file_path)
-        _module = importlib.util.module_from_spec(_spec)
-        sys.modules[dotted_name] = _module
-        _spec.loader.exec_module(_module)
-        return _module
 
-    _ensure_forge_namespace("corvin_operator.skill_forge", _SKILL_FORGE_DIR)
-    _autonomous_pkg = _load_forge_module(
-        "corvin_operator.skill_forge.autonomous",
-        _SKILL_FORGE_DIR / "autonomous" / "__init__.py",
-    )
-    SkillValidator = _autonomous_pkg.SkillValidator
+def _store(tenant_id: str):
+    return _auto.canary_store(_registry_root(tenant_id))
 
-    _VALIDATOR = SkillValidator()
-    _AUTONOMOUS_AVAILABLE = True
-except ImportError as e:
-    log.warning(f"Autonomous skill forge not available: {e}")
-    _AUTONOMOUS_AVAILABLE = False
+
+def _audit_path(tenant_id: str) -> Path:
+    return _registry_for(_registry_root(tenant_id)).audit_path()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helper: CSRF Token Validation with Nonce Rotation
+# Views
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _validate_and_rotate_csrf(
-    rec: session_auth.SessionRecord,
-    presented_token: str,
-    presented_nonce: str,
-    route_path: str,
-    tenant_id: str,
-) -> tuple[bool, str | None, str | None]:
-    """Validate CSRF token with session binding and rotate nonce on success.
+def _view(state: dict) -> dict:
+    cm = _canary_mod()
+    ref, ref_source = cm.reference_mean(state)
+    return {
+        "skill_id": state["skill"],
+        "canary_id": state["canary_id"],
+        "status": state["status"],
+        "traffic_percent": int(state.get("traffic_percent", 0)),
+        "source": state.get("source"),
+        "trigger": state.get("trigger") or {},
+        "quality": state.get("quality"),
+        "findings": state.get("findings") or [],
+        "created_at": state.get("created_at"),
+        "updated_at": state.get("updated_at"),
+        "stats": cm.variant_stats(state),
+        "reference": {"mean": ref, "source": ref_source},
+        "verdict": cm.evaluate(state),
+        "gates": {"min_samples": cm.MIN_SAMPLES, "rollback_margin": cm.ROLLBACK_MARGIN,
+                  "traffic_steps": list(cm.TRAFFIC_STEPS)},
+        "candidate_sha": state.get("candidate_sha"),
+        "live_sha": state.get("live_sha"),
+    }
 
-    Args:
-      rec: Current session record
-      presented_token: Token from request body
-      presented_nonce: Nonce from request body
-      route_path: Route being protected (e.g., "/v1/console/autonomous-forge/approve")
-      tenant_id: Tenant scope (from auth)
 
-    Returns:
-      (valid: bool, error_detail: str | None, new_nonce: str | None)
-        - valid=True, error_detail=None, new_nonce=<string> on success
-        - valid=False, error_detail=<reason>, new_nonce=None on failure
-    """
-    now = time.time()
-    result = validate_csrf_token_session_bound(
-        csrf_secret=rec.csrf_secret,
-        session_id=rec.sid,
-        presented_token=presented_token,
-        presented_nonce=presented_nonce,
-        session_nonce=rec.csrf_nonce,
-        route_path=route_path,
-        token_issued_at=rec.csrf_nonce_issued_at,
-        now=now,
-    )
+# ─────────────────────────────────────────────────────────────────────────────
+# Operator fork runs (in-process, tenant-bound)
+# ─────────────────────────────────────────────────────────────────────────────
 
-    if not result.valid:
-        # Log CSRF validation failure
-        error_msg = format_csrf_error_for_log(result.error_reason)
+_fork_runs: Dict[str, Dict[str, Any]] = {}
+_fork_lock = threading.Lock()
+
+
+def _spawn_fork(tenant_id: str, skill_id: str, *, source: str, instruction: str,
+                sid_fingerprint: str) -> str:
+    run_id = f"fork-{uuid4().hex[:12]}"
+    with _fork_lock:
+        _fork_runs[run_id] = {"run_id": run_id, "tenant_id": tenant_id, "skill_id": skill_id,
+                              "status": "running", "phase": "planning", "progress": 5,
+                              "message": "Starting…", "error": None, "started_at": time.time()}
+
+    def _progress(phase: str, progress: int, message: str) -> None:
+        with _fork_lock:
+            _fork_runs[run_id].update(phase=phase, progress=progress, message=message)
+
+    def _run() -> None:
         try:
-            console_audit.system_event(
-                tenant_id=tenant_id,
-                event="autonomous_forge.csrf_validation_failed",
-                details={
-                    "reason": result.error_reason,
-                    "route_path": route_path,
-                    "sid_fingerprint": rec.sid_fingerprint,
-                    "timestamp": datetime.utcnow().isoformat(),
-                },
-                severity="WARNING",
-            )
-        except Exception as e:
-            log.error(f"Failed to audit CSRF failure: {e}")
-        return False, result.error_reason, None
+            state = _auto.fork(_registry_root(tenant_id), skill_id, source=source,
+                               instruction=instruction, progress_cb=_progress,
+                               trigger={"reason": "operator_request"})
+            with _fork_lock:
+                _fork_runs[run_id].update(status="success", progress=100, phase="canary",
+                                          canary_id=state["canary_id"],
+                                          message=f"Canary started at {state['traffic_percent']}%")
+            console_audit.action_performed(
+                tenant_id=tenant_id, sid_fingerprint=sid_fingerprint,
+                action="skill.canary_forked", target_kind="skill_canary",
+                target_id=skill_id, run_id=run_id)
+        except Exception as exc:  # noqa: BLE001 — surfaced in the run record
+            log.exception("candidate fork %s for %s failed", run_id, skill_id)
+            with _fork_lock:
+                _fork_runs[run_id].update(status="failed", error=str(exc)[:500],
+                                          message=str(exc)[:200])
+            console_audit.action_failed(
+                tenant_id=tenant_id, sid_fingerprint=sid_fingerprint,
+                action="skill.canary_forked", target_kind="skill_canary",
+                target_id=skill_id, reason=type(exc).__name__)
 
-    # CSRF validation passed — generate new nonce for next operation
-    return True, None, result.new_nonce
+    threading.Thread(target=_run, name=f"skill-fork-{run_id}", daemon=True).start()
+    return run_id
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helper: Fetch current canary state (stub for demo)
+# Read routes
 # ─────────────────────────────────────────────────────────────────────────────
 
+@router.get("/status")
+def get_status(rec: Annotated[session_auth.SessionRecord, Depends(require_session)]) -> dict:
+    _require_available()
+    root = _registry_root(rec.tenant_id)
+    store = _store(rec.tenant_id)
+    cm = _canary_mod()
+    states = store.list_states()
+    canaries = [_view(s) for s in states if s.get("status") in cm.ACTIVE]
+    settings = _auto.autopilot_settings(root)
+    with _fork_lock:
+        runs = [dict(r) for r in _fork_runs.values()
+                if r["tenant_id"] == rec.tenant_id and r["status"] == "running"]
+    return {
+        "autopilot": {
+            "enabled": bool(settings.get("enabled")),
+            "last_tick": settings.get("last_tick"),
+            "last_actions": settings.get("last_actions") or [],
+            "interval_s": _auto.TICK_INTERVAL_S,
+            "loss_rule": {"threshold": _auto.LOSS_THRESHOLD,
+                          "min_outcomes": _auto.LOSS_MIN_OUTCOMES,
+                          "window_days": _auto.LOSS_WINDOW_S // 86400},
+        },
+        "canaries": canaries,
+        "skills": _auto.skills_overview(root) if (root / "skills_registry.json").exists() else [],
+        "forks_in_flight": _auto.forks_in_flight(root),
+        "fork_runs": [{k: r[k] for k in ("run_id", "skill_id", "status", "phase", "progress", "message")}
+                      for r in runs],
+    }
 
-def _get_current_canary_state(tenant_id: str) -> Optional[CanaryStateResponse]:
-    """The tenant's active canary deployment, or None.
 
-    No canary monitor exists on this build (nothing deploys a canary, and there is
-    no metrics source for confidence / latency / error rate), so there is never an
-    active canary and this returns None — the route answers 404 "No active canary
-    deployment". It used to return a hard-coded ``os.delegation_router 2.1.0,
-    confidence 0.92`` canary, which the console must never show (ADR-0763: never
-    fabricate). Wire a real CanaryMonitor here; do not reintroduce sample data.
-    """
-    return None
+@router.get("/metrics")
+def get_metrics(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    skill_id: str = Query(..., max_length=128),
+) -> dict:
+    """Every grade the canary recorded, in order, with the running mean of
+    its variant's OUTCOME grades — the measurement the gates act on."""
+    _require_available()
+    _require_namespace(skill_id)
+    state = _store(rec.tenant_id).state(skill_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"no canary for {skill_id}")
+    running: dict[str, list[float]] = {"live": [], "candidate": []}
+    points = []
+    for g in sorted(state.get("grades", []), key=lambda g: g.get("ts", 0)):
+        if g.get("kind") == "outcome":
+            running[g["variant"]].append(float(g["score"]))
+        vals = running[g["variant"]]
+        points.append({
+            "ts": g.get("ts"), "variant": g["variant"], "kind": g.get("kind"),
+            "score": g.get("score"),
+            "outcome_mean": round(sum(vals) / len(vals), 4) if vals else None,
+            "outcome_n": len(vals),
+        })
+    return {"skill_id": skill_id, "canary_id": state["canary_id"], "points": points,
+            "stats": _canary_mod().variant_stats(state)}
 
 
-def _require_active_canary(tenant_id: str, skill_id: str) -> None:
-    """Refuse a canary decision when there is no canary to decide on (409).
-
-    Approve / defer / rollback used to write an audit record and answer as if a
-    rollout had happened ("rolled_out_at") while nothing was deployed. A decision
-    is recorded only against a real active canary for the same skill."""
-    state = _get_current_canary_state(tenant_id)
-    if state is None or state.skill_id != skill_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="No active canary deployment for this skill — nothing to decide",
-        )
+@router.get("/history")
+def get_history(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    limit: int = Query(20, ge=1, le=200),
+) -> dict:
+    _require_available()
+    states = _store(rec.tenant_id).list_states()[:limit]
+    return {"attempts": [{**_view(s), "events": s.get("events", [])} for s in states],
+            "total_count": len(states)}
 
 
-def _get_canary_history(tenant_id: str, limit: int = 10) -> HistoryResponse:
-    """Fetch canary decision history from audit trail.
+@router.get("/candidate/{skill_id}")
+def get_candidate(
+    skill_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict:
+    """The two bodies the operator decides between."""
+    _require_available()
+    _require_namespace(skill_id)
+    store = _store(rec.tenant_id)
+    state = store.state(skill_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"no canary for {skill_id}")
+    try:
+        live_at_start = (store.dir / skill_id / "live_at_start.md").read_text(encoding="utf-8")
+    except OSError:
+        live_at_start = ""
+    return {"skill_id": skill_id, "canary_id": state["canary_id"], "status": state["status"],
+            "live_body": live_at_start, "candidate_body": store.candidate_body(skill_id) or ""}
 
-    In production, this would query the tenant's audit.jsonl for events:
-      - 'autonomous_forge.skill_forked'
-      - 'autonomous_forge.validation_passed'
-      - 'autonomous_forge.canary_deployed'
-      - 'autonomous_forge.operator_approved'
-      - 'autonomous_forge.operator_deferred'
-      - 'autonomous_forge.rollback'
 
-    For now, returns empty history for integration testing.
-    """
-    # TODO: Query tenant audit chain for fork/decision events
-    return HistoryResponse(
-        history=[],
-        total_count=0,
-        limit=limit,
-    )
+@router.get("/fork/{run_id}")
+def get_fork_run(
+    run_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict:
+    with _fork_lock:
+        run = dict(_fork_runs.get(run_id) or {})
+    if not run or run.get("tenant_id") != rec.tenant_id:
+        raise HTTPException(status_code=404, detail="unknown fork run")
+    run.pop("tenant_id", None)
+    return run
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mutations
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ForkRequest(BaseModel):
+    skill_id: str = Field(..., max_length=128)
+    instruction: str = Field(default="", max_length=2000,
+                             description="What the candidate should change; empty = derived from the loss")
+
+
+class SkillAction(BaseModel):
+    skill_id: str = Field(..., max_length=128)
+    reason: str = Field(default="", max_length=200)
+
+
+class AutopilotRequest(BaseModel):
+    enabled: bool
+
+
+def _conflict(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=409, detail=str(exc))
+
+
+def _operator_action(rec: session_auth.SessionRecord, action: str, skill_id: str) -> None:
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+        action=f"skill.canary_{action}", target_kind="skill_canary", target_id=skill_id)
+
+
+@router.post("/fork", status_code=status.HTTP_202_ACCEPTED)
+def fork_candidate(
+    body: ForkRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _: Annotated[session_auth.SessionRecord, Depends(require_skill_forge_quota)],
+) -> dict:
+    """Forge a candidate for an existing skill and start its canary.
+
+    A fork is a skill generation: on the free tier it consumes one daily
+    skill credit (ADR-2095) — pre-checked here, charged when the candidate
+    is staged. Approve and rollback then write without a further charge."""
+    _require_available()
+    _require_namespace(body.skill_id)
+    root = _registry_root(rec.tenant_id)
+    if _registry_for(root).get(body.skill_id) is None:
+        raise HTTPException(status_code=404, detail=f"skill not found: {body.skill_id}")
+    if _store(rec.tenant_id).active(body.skill_id) is not None:
+        raise HTTPException(status_code=409, detail=f"{body.skill_id} already has an active canary")
+    if body.skill_id in _auto.forks_in_flight(root):
+        raise HTTPException(status_code=409, detail=f"a candidate for {body.skill_id} is already being forged")
+    run_id = _spawn_fork(rec.tenant_id, body.skill_id, source="operator",
+                         instruction=body.instruction.strip(), sid_fingerprint=rec.sid_fingerprint)
+    return {"status": "accepted", "run_id": run_id, "skill_id": body.skill_id}
+
+
+def _lifecycle(rec: session_auth.SessionRecord, body: SkillAction, action: str) -> dict:
+    _require_available()
+    _require_namespace(body.skill_id)
+    cm = _canary_mod()
+    store = _store(rec.tenant_id)
+    try:
+        if action in ("approve", "rollback"):
+            reg = _registry_for(_registry_root(rec.tenant_id))
+            state = (store.approve(body.skill_id, reg) if action == "approve"
+                     else store.rollback(body.skill_id, reg,
+                                         reason_code=body.reason or "operator_rollback"))
+        elif action == "defer":
+            state = store.defer(body.skill_id, reason_code=body.reason or "deferred")
+        elif action == "pause":
+            state = store.pause(body.skill_id)
+        else:
+            state = store.resume(body.skill_id)
+    except cm.CanaryConflict as exc:
+        raise _conflict(exc)
+    except cm.CanaryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ValueError as exc:
+        if str(exc).startswith("license_limit"):
+            raise quota_exceeded_to_http(exc)
+        if str(exc).startswith("license_required"):
+            raise HTTPException(status_code=402, detail={"error": "license_required",
+                                                         "reason": str(exc)[:200]})
+        raise
+    _operator_action(rec, action, body.skill_id)
+    return {"canary": _view(state)}
+
+
+@router.post("/approve")
+def approve(body: SkillAction,
+            rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> dict:
+    """Make the candidate the live body (its canary grades become the skill's grades)."""
+    return _lifecycle(rec, body, "approve")
+
+
+@router.post("/defer")
+def defer(body: SkillAction,
+          rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> dict:
+    """End the canary without a rollout; the live body stays."""
+    return _lifecycle(rec, body, "defer")
+
+
+@router.post("/pause")
+def pause(body: SkillAction,
+          rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> dict:
+    """Serve every chat the live body until resumed."""
+    return _lifecycle(rec, body, "pause")
+
+
+@router.post("/resume")
+def resume(body: SkillAction,
+           rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> dict:
+    return _lifecycle(rec, body, "resume")
+
+
+@router.post("/rollback")
+def rollback(body: SkillAction,
+             rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> dict:
+    """Active canary: stop serving the candidate. Approved: restore the previous body."""
+    return _lifecycle(rec, body, "rollback")
+
+
+@router.post("/autopilot")
+def set_autopilot(body: AutopilotRequest,
+                  rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> dict:
+    _require_available()
+    root = _registry_root(rec.tenant_id)
+    writer = _canary_mod().audit_writer(_audit_path(rec.tenant_id))
+    settings = _auto.set_autopilot(root, body.enabled, audit=writer)
+    _operator_action(rec, "autopilot_" + ("on" if body.enabled else "off"), "autopilot")
+    return {"enabled": settings["enabled"]}
+
+
+@router.post("/tick", status_code=status.HTTP_202_ACCEPTED)
+def run_tick(rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> dict:
+    """Run one autopilot pass now (gates, then at most one loss-signal fork)
+    on a worker thread; the result lands in ``status.autopilot``."""
+    _require_available()
+    root = _registry_root(rec.tenant_id)
+    threading.Thread(target=_auto.tick, args=(root,), name="skill-forge-tick", daemon=True).start()
+    _operator_action(rec, "tick", "autopilot")
+    return {"status": "accepted"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Autopilot scheduler — one per console process, over every tenant's root
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _tenant_roots() -> list[Path]:
+    tenants = Path(_forge_paths.corvin_home()) / "tenants"
+    if not tenants.is_dir():
+        return []
+    return [d / "skill-forge" for d in sorted(tenants.iterdir())
+            if (d / "skill-forge" / "skills_registry.json").is_file()]
+
+
+if _auto is not None and "pytest" not in sys.modules:
+    _auto.start_scheduler(_tenant_roots)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Generated-skill manifest (read-only, path-traversal hardened)
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _get_manifest(skill_id: str, version: str, tenant_id: str) -> Optional[ManifestResponse]:
     """Fetch generated skill manifest from storage.
@@ -306,539 +464,6 @@ def _get_manifest(skill_id: str, version: str, tenant_id: str) -> Optional[Manif
         timestamp=datetime.utcfromtimestamp(manifest_path.stat().st_mtime),
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Routes
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-@router.get(
-    "/status",
-    response_model=CanaryStateResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Get current canary state",
-    description="Returns current canary metrics and status (immutable) + CSRF token for mutations",
-)
-def get_canary_status(
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-) -> CanaryStateResponse:
-    """Get current canary deployment state with CSRF token for next mutation.
-
-    Returns:
-      - skill_id, version, status
-      - confidence, latency_p95_ms, error_rate
-      - traffic_percent, time_remaining_sec
-      - created_at, tenant_id
-      - session_token: HMAC-bound token (64-char hex) for next mutation
-      - fixed_fingerprint: Pre-computed nonce from session (for token replay prevention)
-      - token_expires_at: TTL 1 hour from now
-
-    CRITICAL SECURITY:
-      - session_token = HMAC-SHA256(csrf_secret, sid) bound to session
-      - Token is session-scoped and cannot be used in different sessions
-      - fixed_fingerprint (nonce) must be included in next mutation request
-      - token_expires_at is 1 hour from now; requests with older tokens are rejected
-
-    Tenant isolation: Filtered by rec.tenant_id.
-    No audit logging (read-only operation).
-    """
-    tenant_id = rec.tenant_id
-
-    state = _get_current_canary_state(tenant_id)
-    if not state:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No active canary deployment found",
-        )
-
-    # Generate CSRF token bound to this session + current nonce
-    now = datetime.utcnow()
-    ts = now.timestamp()
-    csrf_token = derive_csrf_token_session_bound(
-        csrf_secret=rec.csrf_secret,
-        session_id=rec.sid,
-        timestamp=ts,
-        nonce=rec.csrf_nonce,
-        route_path="/v1/console/autonomous-forge/status",
-    )
-
-    # Include session_token, fixed_fingerprint (nonce), and expiry
-    state.session_token = csrf_token
-    state.fixed_fingerprint = rec.csrf_nonce
-    state.token_expires_at = now + timedelta(hours=1)
-
-    return state
-
-
-@router.post(
-    "/approve",
-    response_model=ApproveResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Approve canary and roll out to 100%",
-    description="Operator approves the canary deployment; rolls out to 100% traffic immediately.",
-)
-def approve_skill(
-    body: ApproveRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-) -> ApproveResponse:
-    """Approve a canary skill and roll out to 100% traffic.
-
-    Request:
-      - skill_id: str
-      - version: str
-      - operator_id: str (from auth, validated)
-      - session_token: str (HMAC-bound CSRF token, 64-char hex)
-      - client_nonce: str (one-time nonce from session, 32-char hex)
-
-    Response:
-      - status: 'approved'
-      - rolled_out_at: datetime
-      - audit_event_id: str
-
-    Side effects:
-      - Validate CSRF token + nonce (fail-closed: 403 on invalid)
-      - Rotate session nonce (old token becomes invalid for next operation)
-      - Emit audit event 'operator_approved_skill'
-      - Update skill registry to 100% traffic
-      - Update deployment state
-
-    Tenant isolation: body.operator_id must match rec.sid_fingerprint.
-    Fail-closed: Invalid skill_id, version, or CSRF token → 400/403.
-    """
-    tenant_id = rec.tenant_id
-    operator_id = rec.sid_fingerprint  # Enforce: operator_id from auth, not body
-    _require_active_canary(tenant_id, body.skill_id)
-
-    # CRITICAL SECURITY: Validate CSRF token with session binding
-    valid, error_reason, new_nonce = _validate_and_rotate_csrf(
-        rec=rec,
-        presented_token=body.session_token,
-        presented_nonce=body.client_nonce,
-        route_path="/v1/console/autonomous-forge/approve",
-        tenant_id=tenant_id,
-    )
-
-    if not valid:
-        log.warning(
-            f"CSRF validation failed for /approve: {error_reason} "
-            f"(tenant {tenant_id}, operator {operator_id})"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"CSRF validation failed: {error_reason}",
-        )
-
-    if operator_id != body.operator_id:
-        log.warning(
-            f"Approve request mismatch: claimed operator {body.operator_id} != "
-            f"authenticated {operator_id} (tenant {tenant_id})"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="operator_id does not match authenticated session",
-        )
-
-    # Validate skill_id + version format (fail-closed, prevent path traversal)
-    if not validate_skill_id(body.skill_id):
-        log.warning(
-            f"Approve request with invalid skill_id: {body.skill_id} "
-            f"(tenant {tenant_id}, operator {operator_id})"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="skill_id format invalid (must be alphanumeric with -, _, . only)",
-        )
-
-    if not validate_version(body.version):
-        log.warning(
-            f"Approve request with invalid version: {body.version} "
-            f"(skill {body.skill_id}, tenant {tenant_id}, operator {operator_id})"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="version format invalid (must be semantic X.Y.Z)",
-        )
-
-    # TODO: Query skill registry to validate skill exists
-    # (This is additional validation after format check; fail-closed if skill doesn't exist)
-
-    # Emit audit event
-    audit_event_id = f"audit-evt-{datetime.utcnow().isoformat()}"
-    try:
-        console_audit.system_event(
-            tenant_id=tenant_id,
-            event="autonomous_forge.operator_approved_skill",
-            details={
-                "skill_id": body.skill_id,
-                "version": body.version,
-                "operator_id": operator_id,
-                "sid_fingerprint": rec.sid_fingerprint,
-                "timestamp": datetime.utcnow().isoformat(),
-            },
-            severity="INFO",
-        )
-    except Exception as e:
-        log.error(f"Failed to audit approve event: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="audit event emission failed",
-        )
-
-    # Persist nonce rotation (update session with new nonce)
-    if new_nonce:
-        from dataclasses import replace as dataclass_replace
-        bumped_rec = dataclass_replace(rec, csrf_nonce=new_nonce, csrf_nonce_issued_at=time.time())
-        try:
-            session_auth._write_record(bumped_rec)
-        except Exception as e:
-            log.error(f"Failed to rotate CSRF nonce: {e}")
-            # Non-fatal: operation succeeds but nonce rotation failed
-            # Next request will use old nonce and fail CSRF validation
-            # (forcing re-fetch of /status to get new token)
-
-    return ApproveResponse(
-        status="approved",
-        rolled_out_at=datetime.utcnow(),
-        audit_event_id=audit_event_id,
-    )
-
-
-@router.post(
-    "/defer",
-    response_model=DeferResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Defer canary deployment",
-    description="Operator defers the canary; keeps old version live.",
-)
-def defer_skill(
-    body: DeferRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-) -> DeferResponse:
-    """Defer a canary skill to a later time.
-
-    Request:
-      - skill_id: str
-      - version: str
-      - reason: str (max 500 chars)
-      - operator_id: str (from auth, validated)
-
-    Response:
-      - status: 'deferred'
-      - defer_until: datetime (24h from now)
-
-    Side effects:
-      - Emit audit event 'operator_deferred_skill'
-      - Keep current version at 100% traffic
-      - Mark canary for retry at defer_until
-
-    Tenant isolation: body.operator_id must match rec.sid_fingerprint.
-    """
-    tenant_id = rec.tenant_id
-    operator_id = rec.sid_fingerprint
-    _require_active_canary(tenant_id, body.skill_id)
-
-    if operator_id != body.operator_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="operator_id does not match authenticated session",
-        )
-
-    # Validate skill_id + version format (fail-closed, prevent path traversal)
-    if not validate_skill_id(body.skill_id):
-        log.warning(
-            f"Defer request with invalid skill_id: {body.skill_id} "
-            f"(tenant {tenant_id}, operator {operator_id})"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="skill_id format invalid (must be alphanumeric with -, _, . only)",
-        )
-
-    if not validate_version(body.version):
-        log.warning(
-            f"Defer request with invalid version: {body.version} "
-            f"(skill {body.skill_id}, tenant {tenant_id}, operator {operator_id})"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="version format invalid (must be semantic X.Y.Z)",
-        )
-
-    # Emit audit event
-    audit_event_id = f"audit-evt-{datetime.utcnow().isoformat()}"
-    try:
-        console_audit.system_event(
-            tenant_id=tenant_id,
-            event="autonomous_forge.operator_deferred_skill",
-            details={
-                "skill_id": body.skill_id,
-                "version": body.version,
-                "reason": body.reason[:500],  # Truncate if needed
-                "operator_id": operator_id,
-                "sid_fingerprint": rec.sid_fingerprint,
-                "timestamp": datetime.utcnow().isoformat(),
-            },
-            severity="INFO",
-        )
-    except Exception as e:
-        log.error(f"Failed to audit defer event: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="audit event emission failed",
-        )
-
-    defer_until = datetime.utcnow() + timedelta(hours=24)
-    return DeferResponse(
-        status="deferred",
-        defer_until=defer_until,
-    )
-
-
-@router.post(
-    "/pause",
-    response_model=PauseResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Pause autonomous skill forge",
-    description="Disable autonomous forge system; no new forks will be generated.",
-)
-def pause_autonomous(
-    body: PauseRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-) -> PauseResponse:
-    """Pause the autonomous skill forge system.
-
-    Request:
-      - operator_id: str (from auth, validated)
-      - reason: str (max 500 chars)
-
-    Response:
-      - autonomous_forge_enabled: false
-      - paused_at: datetime
-      - audit_event_id: str
-
-    Side effects:
-      - Emit audit event 'autonomous_forge_paused'
-      - Disable trigger detection
-      - Stop fork generation
-      - Keep existing canaries running (no interruption)
-
-    Fail-closed: Invalid operator_id → 403.
-    """
-    tenant_id = rec.tenant_id
-    operator_id = rec.sid_fingerprint
-
-    if operator_id != body.operator_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="operator_id does not match authenticated session",
-        )
-
-    # Emit audit event
-    audit_event_id = f"audit-evt-{datetime.utcnow().isoformat()}"
-    try:
-        console_audit.system_event(
-            tenant_id=tenant_id,
-            event="autonomous_forge.paused",
-            details={
-                "reason": body.reason[:500],
-                "operator_id": operator_id,
-                "sid_fingerprint": rec.sid_fingerprint,
-                "timestamp": datetime.utcnow().isoformat(),
-            },
-            severity="INFO",
-        )
-    except Exception as e:
-        log.error(f"Failed to audit pause event: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="audit event emission failed",
-        )
-
-    return PauseResponse(
-        autonomous_forge_enabled=False,
-        paused_at=datetime.utcnow(),
-        audit_event_id=audit_event_id,
-    )
-
-
-@router.post(
-    "/resume",
-    response_model=ResumeResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Resume autonomous skill forge",
-    description="Re-enable autonomous forge system.",
-)
-def resume_autonomous(
-    body: ResumeRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-) -> ResumeResponse:
-    """Resume the autonomous skill forge system.
-
-    Request:
-      - operator_id: str (from auth, validated)
-
-    Response:
-      - autonomous_forge_enabled: true
-      - resumed_at: datetime
-      - audit_event_id: str
-
-    Side effects:
-      - Emit audit event 'autonomous_forge_resumed'
-      - Enable trigger detection
-      - Resume fork generation on loss signals
-
-    Fail-closed: Invalid operator_id → 403.
-    """
-    tenant_id = rec.tenant_id
-    operator_id = rec.sid_fingerprint
-
-    if operator_id != body.operator_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="operator_id does not match authenticated session",
-        )
-
-    # Emit audit event
-    audit_event_id = f"audit-evt-{datetime.utcnow().isoformat()}"
-    try:
-        console_audit.system_event(
-            tenant_id=tenant_id,
-            event="autonomous_forge.resumed",
-            details={
-                "operator_id": operator_id,
-                "sid_fingerprint": rec.sid_fingerprint,
-                "timestamp": datetime.utcnow().isoformat(),
-            },
-            severity="INFO",
-        )
-    except Exception as e:
-        log.error(f"Failed to audit resume event: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="audit event emission failed",
-        )
-
-    return ResumeResponse(
-        autonomous_forge_enabled=True,
-        resumed_at=datetime.utcnow(),
-        audit_event_id=audit_event_id,
-    )
-
-
-@router.post(
-    "/rollback",
-    response_model=RollbackResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Emergency rollback",
-    description="Roll back a deployed skill to its previous version immediately.",
-)
-def rollback_skill(
-    body: RollbackRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-) -> RollbackResponse:
-    """Emergency rollback of a skill to the previous version.
-
-    Request:
-      - skill_id: str
-      - reason: str (max 500 chars)
-      - operator_id: str (from auth, validated)
-
-    Response:
-      - rolled_back_to_version: str
-      - timestamp: datetime
-      - audit_event_id: str
-
-    Side effects:
-      - Emit audit event 'operator_rolled_back_skill'
-      - Switch production traffic back to previous version
-      - Cancel any active canaries for this skill
-
-    Tenant isolation: body.operator_id must match rec.sid_fingerprint.
-    Fail-closed: Invalid skill_id or no prior version → 400.
-    """
-    tenant_id = rec.tenant_id
-    operator_id = rec.sid_fingerprint
-    _require_active_canary(tenant_id, body.skill_id)
-
-    if operator_id != body.operator_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="operator_id does not match authenticated session",
-        )
-
-    # Validate skill_id format (fail-closed, prevent path traversal)
-    if not validate_skill_id(body.skill_id):
-        log.warning(
-            f"Rollback request with invalid skill_id: {body.skill_id} "
-            f"(tenant {tenant_id}, operator {operator_id})"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="skill_id format invalid (must be alphanumeric with -, _, . only)",
-        )
-
-    # TODO: Query skill registry to find previous version
-    rolled_back_to = "2.0.5"  # Mock for now
-
-    # Emit audit event
-    audit_event_id = f"audit-evt-{datetime.utcnow().isoformat()}"
-    try:
-        console_audit.system_event(
-            tenant_id=tenant_id,
-            event="autonomous_forge.operator_rolled_back_skill",
-            details={
-                "skill_id": body.skill_id,
-                "rolled_back_to_version": rolled_back_to,
-                "reason": body.reason[:500],
-                "operator_id": operator_id,
-                "sid_fingerprint": rec.sid_fingerprint,
-                "timestamp": datetime.utcnow().isoformat(),
-            },
-            severity="INFO",
-        )
-    except Exception as e:
-        log.error(f"Failed to audit rollback event: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="audit event emission failed",
-        )
-
-    return RollbackResponse(
-        rolled_back_to_version=rolled_back_to,
-        timestamp=datetime.utcnow(),
-        audit_event_id=audit_event_id,
-    )
-
-
-@router.get(
-    "/history",
-    response_model=HistoryResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Get autonomous forge audit trail",
-    description="Returns last N fork/decision cycles.",
-)
-def get_history(
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-    limit: Annotated[int, Query(ge=1, le=100)] = 10,
-    skill_id: Annotated[Optional[str], Query()] = None,
-) -> HistoryResponse:
-    """Get audit trail of autonomous forge decisions.
-
-    Query parameters:
-      - limit: [1, 100] (default 10)
-      - skill_id: optional filter by skill ID
-
-    Returns:
-      - history: List of HistoryEntry (newest first)
-      - total_count: Total forks for tenant (may exceed limit)
-      - limit: Applied limit
-
-    Tenant isolation: Filtered by rec.tenant_id.
-    No audit logging (read-only operation).
-    """
-    tenant_id = rec.tenant_id
-
-    return _get_canary_history(tenant_id, limit=limit)
 
 
 @router.get(

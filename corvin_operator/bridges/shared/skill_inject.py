@@ -207,6 +207,59 @@ def is_available() -> bool:
     return _sf is not None
 
 
+# ── Skill canary (ADR-2094) ─────────────────────────────────────────────────
+#
+# While a skill has an active canary, a share of chats is served the
+# candidate body instead of the live one, and every grade is recorded against
+# the variant that chat was served. Candidate grades go to the canary, never
+# into the registry — the live skill's mean keeps measuring the live body.
+
+def _canary_for(reg: Any, scope: str) -> Any:
+    """The SkillCanary of the registry root that holds ``scope``, or None."""
+    if reg is None:
+        return None
+    try:
+        from skill_forge import canary as _canary_mod  # type: ignore  # noqa: PLC0415
+        root = reg._root_for(scope)
+        if not (root / "canary").is_dir():
+            return None  # no canary ever started under this root — skip the I/O
+        return _canary_mod.SkillCanary(root, audit_path=reg.audit_path())
+    except Exception:  # noqa: BLE001 — a canary fault must never break a turn
+        return None
+
+
+def _scope_of(reg: Any, name: str) -> str | None:
+    try:
+        return reg.find_scope(name)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _grade_with_canary(reg: Any, *, name: str, channel_id: str | None,
+                       run_id: str, score: float, notes: str, kind: str,
+                       organic: bool = False) -> Any:
+    """Grade ``name`` for the turn ``run_id``.
+
+    No active canary (or the chat was served the live body): the registry
+    grade, exactly as before — plus a ``live`` tally on the canary. Served the
+    candidate: the grade goes to the canary only.
+    """
+    scope = _scope_of(reg, name)
+    can = _canary_for(reg, scope) if scope else None
+    variant = can.served_variant(name, channel_id) if can is not None else None
+    if variant == "candidate":
+        return can.record_grade(name, variant="candidate", score=score,
+                                run_id=run_id, kind=kind)
+    res = reg.grade(name, run_id, float(score), notes=notes, organic=organic) \
+        if organic else reg.grade(name, run_id, float(score), notes=notes)
+    if variant == "live":
+        try:
+            can.record_grade(name, variant="live", score=score, run_id=run_id, kind=kind)
+        except Exception:  # noqa: BLE001
+            pass
+    return res
+
+
 # ── Public API ──────────────────────────────────────────────────────────────
 
 
@@ -608,7 +661,12 @@ def collect_active_skills(
         if scope == "core":
             body = core_bodies.get(spec.name, "")
         else:
-            body = _load_body(reg, spec.name) or ""
+            body = None
+            can = _canary_for(reg, scope)
+            if can is not None and can.variant_for(spec.name, channel_id) == "candidate":
+                body = can.candidate_body(spec.name)
+            if body is None:
+                body = _load_body(reg, spec.name) or ""
         body = _strip_front_matter(body).strip()
         # Sanitize wrapper-tag escapes BEFORE capping so the cap-marker
         # ends up cleanly outside the wrapper text.
@@ -834,16 +892,22 @@ def auto_grade_from_output(
                 matched = "name"
                 break
         if matched is None:
-            body = _load_body(reg, spec.name) or ""
-            body = _strip_front_matter(body).strip()
-            snippet = body[:_BODY_SNIPPET_LEN].strip().lower()
-            if snippet and _has_positive_mention(out_lower, snippet):
-                matched = "body"
+            bodies = [_load_body(reg, spec.name) or ""]
+            can = _canary_for(reg, _scope)
+            if can is not None and can.served_variant(spec.name, channel_id) == "candidate":
+                bodies = [can.candidate_body(spec.name) or ""]
+            for body in bodies:
+                body = _strip_front_matter(body).strip()
+                snippet = body[:_BODY_SNIPPET_LEN].strip().lower()
+                if snippet and _has_positive_mention(out_lower, snippet):
+                    matched = "body"
         if matched is None:
             continue
         try:
-            res = reg.grade(spec.name, run_id, float(score),
-                            notes=f"auto-grade ({matched} match) turn={run_id}")
+            res = _grade_with_canary(
+                reg, name=spec.name, channel_id=channel_id, run_id=run_id,
+                score=float(score), kind="usage",
+                notes=f"auto-grade ({matched} match) turn={run_id}")
             graded.append({"name": spec.name, "matched": matched, "result": res})
         except Exception:  # noqa: BLE001
             # Don't fail the bridge turn over a grade-write hiccup.
@@ -979,10 +1043,10 @@ def grade_from_user_followup(
             # the one grade source that may lift a skill over the promotion
             # bar. Auto-grade (usage detection) and bootstrap seeds stay
             # non-organic and are clamped to AUTO_GRADE_CAP_MAX.
-            res = reg.grade(
-                name, prev_run_id, float(score),
+            res = _grade_with_canary(
+                reg, name=name, channel_id=channel_id, run_id=prev_run_id,
+                score=float(score), kind="outcome", organic=True,
                 notes=f"outcome ({signal}) prev_run={prev_run_id}",
-                organic=True,
             )
             graded.append({
                 "name": name, "signal": signal,

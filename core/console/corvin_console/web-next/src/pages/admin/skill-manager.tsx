@@ -1,7 +1,13 @@
 import React, { useState, useEffect } from 'react';
+import { CheckCircle2, Loader2, Package, RefreshCw, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Progress } from '@/components/ui/progress';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { getCurrentCsrf } from '@/lib/csrf-fetch';
 import { errorMessage } from '@/pages/skills/endpoints';
 
@@ -33,6 +39,7 @@ export function SkillManager() {
     progress: 0,
     success: null,
   });
+  const [confirmUninstall, setConfirmUninstall] = useState<SkillInfo | null>(null);
 
   useEffect(() => {
     fetchSkills();
@@ -132,87 +139,115 @@ export function SkillManager() {
     }
   };
 
-  return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold">Skill Manager</h1>
-        <p className="text-gray-600 mt-2">Manage installed skills and versions</p>
-      </div>
+  const uninstall = (skill: SkillInfo) => {
+    fetch(
+      `/v1/console/skills-manager/skills/uninstall/${encodeURIComponent(skill.skill_id)}/${encodeURIComponent(skill.version)}`,
+      { method: 'DELETE' }
+    )
+      .then(async r => {
+        // A refusal carries `detail`, not `message` —
+        // reading data.message showed an empty error.
+        if (!r.ok) throw new Error(await errorMessage(r));
+        return r.json();
+      })
+      .then(data => {
+        if (data.success) {
+          setUpload(prev => ({ ...prev, success: data.message }));
+          setTimeout(() => {
+            fetchSkills();
+            setUpload(prev => ({ ...prev, success: null }));
+          }, 1500);
+        } else {
+          setError(data.message || 'Uninstall failed');
+        }
+      })
+      .catch((err: unknown) =>
+        setError(err instanceof Error && err.message ? err.message : 'Uninstall failed'));
+  };
 
-      <div className="flex gap-2">
-        <button onClick={fetchSkills} disabled={loading}
-          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
-          {loading ? 'Loading...' : 'Refresh'}
-        </button>
+  return (
+    <div className="space-y-6 p-6 max-w-5xl">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold">Skill Manager</h1>
+          <p className="text-muted-foreground mt-2">
+            Install skill packages and manage the versions that are loaded.
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={fetchSkills} disabled={loading}>
+          <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </Button>
       </div>
 
       {/* Upload Section */}
       <Card>
         <CardHeader>
-          <CardTitle>Install New Skill</CardTitle>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Upload className="w-4 h-4 text-accent" /> Install a skill package
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-3">
-            <div>
-              <label className="block text-sm font-medium mb-1">Skill ID</label>
-              <input
-                type="text"
+            <div className="space-y-1.5">
+              <Label htmlFor="sm-skill-id">Skill ID</Label>
+              <Input
+                id="sm-skill-id"
                 value={upload.skillId}
                 onChange={(e) => setUpload(prev => ({ ...prev, skillId: e.target.value }))}
-                placeholder="e.g., my-awesome-skill"
-                className="w-full px-3 py-2 border rounded"
+                placeholder="e.g. my-awesome-skill"
                 disabled={upload.uploading}
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Version</label>
-              <input
-                type="text"
+            <div className="space-y-1.5">
+              <Label htmlFor="sm-version">Version</Label>
+              <Input
+                id="sm-version"
                 value={upload.version}
                 onChange={(e) => setUpload(prev => ({ ...prev, version: e.target.value }))}
-                placeholder="e.g., 1.0.0"
-                className="w-full px-3 py-2 border rounded"
+                placeholder="e.g. 1.0.0"
                 disabled={upload.uploading}
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">ZIP File</label>
-              <input
+            <div className="space-y-1.5">
+              <Label htmlFor="sm-file">ZIP file</Label>
+              <Input
+                id="sm-file"
                 type="file"
                 accept=".zip"
                 onChange={handleFileChange}
-                className="w-full px-3 py-2 border rounded"
                 disabled={upload.uploading}
+                className="file:mr-3 file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs file:text-foreground"
               />
             </div>
           </div>
 
           {upload.file && (
-            <p className="text-sm text-gray-600">
-              Selected: <span className="font-mono">{upload.file.name}</span>
+            <p className="text-sm text-muted-foreground">
+              Selected: <span className="font-mono text-foreground">{upload.file.name}</span>
             </p>
           )}
 
-          {upload.uploading && (
-            <div className="w-full bg-gray-200 rounded h-2">
-              <div
-                className="bg-green-600 h-2 rounded transition-all"
-                style={{ width: `${upload.progress}%` }}
-              />
-            </div>
-          )}
+          {upload.uploading && <Progress value={upload.progress} />}
 
-          <button
+          <Button
+            variant="accent"
+            className="w-full"
             onClick={handleUpload}
             disabled={upload.uploading || !upload.file || !upload.skillId || !upload.version}
-            className="w-full px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {upload.uploading ? `Uploading ${Math.round(upload.progress)}%` : 'Install Skill'}
-          </button>
+            {upload.uploading ? (
+              <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Uploading {Math.round(upload.progress)}%</>
+            ) : (
+              <><Upload className="w-4 h-4 mr-2" /> Install skill</>
+            )}
+          </Button>
 
           {upload.success && (
-            <Alert variant="default" className="bg-green-100 border-green-300">
-              <AlertDescription className="text-green-800">✅ {upload.success}</AlertDescription>
+            <Alert>
+              <AlertDescription className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-accent shrink-0" /> {upload.success}
+              </AlertDescription>
             </Alert>
           )}
         </CardContent>
@@ -224,69 +259,76 @@ export function SkillManager() {
         </Alert>
       )}
 
-      {!loading && skills.length === 0 && (
-        <Card>
-          <CardContent className="pt-6">
-            <p className="text-gray-600">No skills installed yet.</p>
-          </CardContent>
-        </Card>
-      )}
+      <div className="space-y-3">
+        <h2 className="text-lg font-semibold">
+          Installed skills
+          {!loading && <span className="ml-2 text-sm font-normal text-muted-foreground">{skills.length}</span>}
+        </h2>
 
-      <div>
-        <h2 className="text-xl font-bold mb-4">Installed Skills</h2>
-        <div className="grid gap-4">
-          {skills.map((skill) => (
-            <Card key={`${skill.skill_id}-${skill.version}`}>
-              <CardHeader>
-                <div className="flex justify-between items-center">
-                  <div>
-                    <CardTitle>{skill.skill_id}</CardTitle>
-                    <p className="text-sm text-gray-500">v{skill.version}</p>
-                  </div>
-                  <div className="flex gap-2 items-center">
-                    <Badge>{skill.boot_layer}</Badge>
-                    <button
-                      onClick={() => {
-                        if (confirm(`Uninstall ${skill.skill_id}@${skill.version}?`)) {
-                          fetch(
-                            `/v1/console/skills-manager/skills/uninstall/${encodeURIComponent(skill.skill_id)}/${encodeURIComponent(skill.version)}`,
-                            { method: 'DELETE' }
-                          )
-                            .then(async r => {
-                              // A refusal carries `detail`, not `message` —
-                              // reading data.message showed an empty error.
-                              if (!r.ok) throw new Error(await errorMessage(r));
-                              return r.json();
-                            })
-                            .then(data => {
-                              if (data.success) {
-                                setUpload(prev => ({ ...prev, success: data.message }));
-                                setTimeout(() => {
-                                  fetchSkills();
-                                  setUpload(prev => ({ ...prev, success: null }));
-                                }, 1500);
-                              } else {
-                                setError(data.message || 'Uninstall failed');
-                              }
-                            })
-                            .catch((err: unknown) =>
-                              setError(err instanceof Error && err.message ? err.message : 'Uninstall failed'));
-                        }
-                      }}
-                      className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700"
-                    >
-                      Uninstall
-                    </button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {skill.verified && <p className="text-xs text-green-600">✅ Verified</p>}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        {loading && skills.length === 0 ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground py-6">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading installed skills…
+          </div>
+        ) : skills.length === 0 ? (
+          <Card>
+            <CardContent className="py-8 text-center text-sm text-muted-foreground">
+              <Package className="w-6 h-6 mx-auto mb-2 opacity-60" />
+              No skill packages installed yet.
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardContent className="p-0">
+              <ul className="divide-y">
+                {skills.map((skill) => (
+                  <li key={`${skill.skill_id}-${skill.version}`}
+                      className="flex flex-wrap items-center gap-3 px-4 py-3">
+                    <Package className="w-4 h-4 text-muted-foreground shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-mono text-sm truncate">{skill.skill_id}</div>
+                      <div className="text-xs text-muted-foreground">v{skill.version}</div>
+                    </div>
+                    {skill.verified && (
+                      <Badge variant="ok" className="gap-1">
+                        <ShieldCheck className="w-3 h-3" /> Verified
+                      </Badge>
+                    )}
+                    <Badge variant="outline">{skill.boot_layer}</Badge>
+                    <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive"
+                            onClick={() => setConfirmUninstall(skill)}>
+                      <Trash2 className="w-4 h-4 mr-1" /> Uninstall
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        )}
       </div>
+
+      <Dialog open={confirmUninstall !== null} onOpenChange={(o) => !o && setConfirmUninstall(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Uninstall this skill?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            <span className="font-mono text-foreground">
+              {confirmUninstall?.skill_id}@{confirmUninstall?.version}
+            </span>{' '}
+            is removed from this install.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmUninstall(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => {
+              const target = confirmUninstall;
+              setConfirmUninstall(null);
+              if (target) uninstall(target);
+            }}>
+              Uninstall
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

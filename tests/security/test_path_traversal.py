@@ -290,14 +290,16 @@ class TestAutonomousForgeRouteSecurity:
         rec.sid_fingerprint = "test-operator-id"
         return rec
 
-    def test_get_manifest_valid_skill_version(self, mock_session_rec):
-        """GET /manifest/{skill_id}/{version} with valid inputs → 200."""
+    def test_get_manifest_valid_but_absent_is_404(self, mock_session_rec, tmp_path, monkeypatch):
+        """GET /manifest/{skill_id}/{version}: valid inputs, no manifest on disk
+        → 404, never a generated placeholder (ADR-0763)."""
+        from fastapi import HTTPException
         from core.console.corvin_console.routes.autonomous_forge_routes import get_manifest
 
-        result = get_manifest("os.delegation_router", "1.2.3", mock_session_rec)
-        assert result is not None
-        assert result.skill_json["id"] == "os.delegation_router"
-        assert result.skill_json["version"] == "1.2.3"
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+        with pytest.raises(HTTPException) as exc_info:
+            get_manifest("os.delegation_router", "1.2.3", mock_session_rec)
+        assert exc_info.value.status_code == 404
 
     def test_get_manifest_invalid_skill_id_path_traversal(self, mock_session_rec):
         """GET /manifest/{skill_id}/{version} with ../../ escape → 400."""
@@ -352,140 +354,27 @@ class TestAutonomousForgeRouteSecurity:
         assert exc_info.value.status_code == 400
         assert "semantic" in exc_info.value.detail.lower()
 
-    @patch("core.console.corvin_console.routes.autonomous_forge_routes._validate_and_rotate_csrf")
-    @patch("core.console.corvin_console.routes.autonomous_forge_routes.console_audit")
-    def test_approve_skill_valid_inputs(self, mock_audit, mock_csrf, mock_session_rec):
-        """POST /approve with valid skill_id, version → 200.
-
-        CSRF/nonce validation (Fix #2/#6) is orthogonal to path-traversal
-        validation (Fix #4/#5) under test here, so the CSRF gate is mocked
-        to 'valid'. The route also calls dataclasses.replace(rec, ...) on
-        success (nonce rotation), which requires a real dataclass instance —
-        a bare MagicMock raises TypeError there — so this test uses a real
-        SessionRecord instead of the generic mock_session_rec fixture.
-        """
-        import time as _time
-        from core.console.corvin_console.auth import SessionRecord
-        from core.console.corvin_console.routes.autonomous_forge_routes import approve_skill
-        from core.console.corvin_console.api_schemas.autonomous_forge import ApproveRequest
-
-        mock_csrf.return_value = (True, None, "n" * 32)
-
-        now = _time.time()
-        real_rec = SessionRecord(
-            sid="sid-test",
-            sid_fingerprint="test-operator-id",
-            tier="free",
-            tenant_id="_default",
-            token_fingerprint="tok-test",
-            csrf_secret="secret-test",
-            csrf_nonce="c" * 32,
-            csrf_nonce_issued_at=now,
-            created_at=now,
-            last_seen_at=now,
-            expires_at=now + 3600,
-        )
-
-        body = ApproveRequest(
-            skill_id="os.delegation_router",
-            version="1.2.3",
-            operator_id="test-operator-id",
-            session_token="a" * 64,
-            client_nonce="b" * 32,
-        )
-
-        result = approve_skill(body, real_rec)
-        assert result.status == "approved"
-        assert result.rolled_out_at is not None
-
-    @patch("core.console.corvin_console.routes.autonomous_forge_routes._validate_and_rotate_csrf")
-    @patch("core.console.corvin_console.routes.autonomous_forge_routes.console_audit")
-    def test_approve_skill_invalid_skill_id(self, mock_audit, mock_csrf, mock_session_rec):
-        """POST /approve with skill_id="../../etc" → 400."""
+    @pytest.mark.parametrize("route", ["approve", "defer", "pause", "resume", "rollback"])
+    @pytest.mark.parametrize("skill_id", ["../../etc/passwd", "..\\windows\\system",
+                                          "assistant/../../x", "assistant.x/y"])
+    def test_canary_mutation_rejects_traversal(self, route, skill_id, mock_session_rec):
+        """POST /{approve,defer,pause,resume,rollback} with a traversal skill_id
+        → 400 before any path is built (ADR-2094 canary routes)."""
         from fastapi import HTTPException
-        from core.console.corvin_console.routes.autonomous_forge_routes import approve_skill
-        from core.console.corvin_console.api_schemas.autonomous_forge import ApproveRequest
+        from core.console.corvin_console.routes import autonomous_forge_routes as r
 
-        mock_csrf.return_value = (True, None, "n" * 32)
-
-        body = ApproveRequest(
-            skill_id="../../etc/passwd",
-            version="1.2.3",
-            operator_id="test-operator-id",
-            session_token="a" * 64,
-            client_nonce="b" * 32,
-        )
-
+        handler = getattr(r, route)
+        body = r.SkillAction(skill_id=skill_id)
         with pytest.raises(HTTPException) as exc_info:
-            approve_skill(body, mock_session_rec)
-
-        assert exc_info.value.status_code == 400
-        assert "invalid" in exc_info.value.detail.lower()
-
-    @patch("core.console.corvin_console.routes.autonomous_forge_routes._validate_and_rotate_csrf")
-    @patch("core.console.corvin_console.routes.autonomous_forge_routes.console_audit")
-    def test_approve_skill_invalid_version(self, mock_audit, mock_csrf, mock_session_rec):
-        """POST /approve with version="../../" → 400."""
-        from fastapi import HTTPException
-        from core.console.corvin_console.routes.autonomous_forge_routes import approve_skill
-        from core.console.corvin_console.api_schemas.autonomous_forge import ApproveRequest
-
-        mock_csrf.return_value = (True, None, "n" * 32)
-
-        body = ApproveRequest(
-            skill_id="os.router",
-            version="../../",
-            operator_id="test-operator-id",
-            session_token="a" * 64,
-            client_nonce="b" * 32,
-        )
-
-        with pytest.raises(HTTPException) as exc_info:
-            approve_skill(body, mock_session_rec)
-
+            handler(body, mock_session_rec)
         assert exc_info.value.status_code == 400
 
-    @patch("core.console.corvin_console.routes.autonomous_forge_routes.console_audit")
-    def test_defer_skill_invalid_skill_id(self, mock_audit, mock_session_rec):
-        """POST /defer with invalid skill_id → 400."""
+    def test_canary_mutation_outside_namespace_is_422(self, mock_session_rec):
         from fastapi import HTTPException
-        from core.console.corvin_console.routes.autonomous_forge_routes import defer_skill
-        from core.console.corvin_console.api_schemas.autonomous_forge import DeferRequest
-
-        body = DeferRequest(
-            skill_id="/etc/passwd",
-            version="1.2.3",
-            operator_id="test-operator-id",
-            reason="Testing path traversal",
-            session_token="a" * 64,
-            client_nonce="b" * 20,
-        )
+        from core.console.corvin_console.routes import autonomous_forge_routes as r
 
         with pytest.raises(HTTPException) as exc_info:
-            defer_skill(body, mock_session_rec)
-
-        assert exc_info.value.status_code == 400
-
-    @patch("core.console.corvin_console.routes.autonomous_forge_routes.console_audit")
-    def test_rollback_skill_invalid_skill_id(self, mock_audit, mock_session_rec):
-        """POST /rollback with invalid skill_id → 400."""
-        from fastapi import HTTPException
-        from core.console.corvin_console.routes.autonomous_forge_routes import rollback_skill
-        from core.console.corvin_console.api_schemas.autonomous_forge import RollbackRequest
-
-        body = RollbackRequest(
-            skill_id="../../windows/system",
-            operator_id="test-operator-id",
-            reason="Testing path traversal",
-            session_token="a" * 64,
-            client_nonce="b" * 20,
-        )
-
-        with pytest.raises(HTTPException) as exc_info:
-            rollback_skill(body, mock_session_rec)
-
-        assert exc_info.value.status_code == 400
-
-
+            r.defer(r.SkillAction(skill_id="code.not_mine"), mock_session_rec)
+        assert exc_info.value.status_code == 422
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

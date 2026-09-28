@@ -25,10 +25,10 @@ from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 try:  # package-relative (normal import path)
-    from .llm_client import resolve_llm_client, engine_id_of
+    from .llm_client import resolve_llm_client, engine_id_of, ClaudeCodeUnavailable
     from .registry_bridge import promote_to_registry
 except ImportError:  # pragma: no cover — flat sys.path insert (console route)
-    from skill_creator.llm_client import resolve_llm_client, engine_id_of
+    from skill_creator.llm_client import resolve_llm_client, engine_id_of, ClaudeCodeUnavailable
     from skill_creator.registry_bridge import promote_to_registry
 
 
@@ -796,64 +796,81 @@ class SkillTester:
         loss_history = []
         best_spec, best_loss = spec, 1.0
 
-        for k in range(1, self.max_iterations + 1):
-            logger.info(f"LDD Iteration k={k}")
+        try:
+            for k in range(1, self.max_iterations + 1):
+                logger.info(f"LDD Iteration k={k}")
 
-            # 1. Generate test scenario
-            scenario = await self._generate_test_scenario(current_spec)
+                # 1. Generate test scenario
+                scenario = await self._generate_test_scenario(current_spec)
 
-            # 2. Test skill in scenario
-            test_result = await self._test_skill(current_spec, scenario)
+                # 2. Test skill in scenario
+                test_result = await self._test_skill(current_spec, scenario)
 
-            # 3. Measure loss
-            loss = self._measure_loss(test_result, current_spec)
-            loss_history.append(loss)
-            if loss <= best_loss:
-                best_spec, best_loss = current_spec, loss
+                # 3. Measure loss
+                loss = self._measure_loss(test_result, current_spec)
+                loss_history.append(loss)
+                if loss <= best_loss:
+                    best_spec, best_loss = current_spec, loss
 
-            logger.info(f"  k={k}: loss={loss:.3f}, scenario={scenario[:50]}...")
+                logger.info(f"  k={k}: loss={loss:.3f}, scenario={scenario[:50]}...")
 
-            # 4. Check convergence
-            if loss <= self.convergence_threshold:  # Converged
-                logger.info(f"  Converged at k={k}")
-                self.converged = True
-                self.final_loss = loss
-                current_spec = current_spec.__class__(
-                    **{**current_spec.__dict__, "iteration_count": k}
-                )
-                return current_spec
+                # 4. Check convergence
+                if loss <= self.convergence_threshold:  # Converged
+                    logger.info(f"  Converged at k={k}")
+                    self.converged = True
+                    self.final_loss = loss
+                    current_spec = current_spec.__class__(
+                        **{**current_spec.__dict__, "iteration_count": k}
+                    )
+                    return current_spec
 
-            # 5. Diagnose & fix
-            if k < self.max_iterations:
-                diagnosis = await self._diagnose_loss(loss, test_result, current_spec)
-                current_spec = await self._apply_fix(current_spec, diagnosis)
-            else:
-                # k == max_iterations without convergence.
-                #
-                # A hard raise here throws away k_max cloud calls' worth of
-                # refinement and hands the operator nothing. LDD's escalation
-                # signal is preserved as a NON-converged result the caller
-                # prices into `quality_score` (see SkillCreatorOrchestrator),
-                # not as a lost run.
-                self.converged = False
-                self.final_loss = best_loss
-                if self.escalate_on_k_max:
+                # 5. Diagnose & fix
+                if k < self.max_iterations:
+                    diagnosis = await self._diagnose_loss(loss, test_result, current_spec)
+                    current_spec = await self._apply_fix(current_spec, diagnosis)
+                else:
+                    # k == max_iterations without convergence.
+                    #
+                    # A hard raise here throws away k_max cloud calls' worth of
+                    # refinement and hands the operator nothing. LDD's escalation
+                    # signal is preserved as a NON-converged result the caller
+                    # prices into `quality_score` (see SkillCreatorOrchestrator),
+                    # not as a lost run.
+                    self.converged = False
+                    self.final_loss = best_loss
+                    if self.escalate_on_k_max:
+                        logger.warning(
+                            "k_max reached without convergence. Loss history: %s", loss_history
+                        )
+                        raise LDDIterationError(
+                            f"LDD did not converge after {self.max_iterations} iterations. "
+                            f"Loss history: {loss_history}. "
+                            f"Consider architectural change or larger step size."
+                        )
                     logger.warning(
-                        "k_max reached without convergence. Loss history: %s", loss_history
+                        "k_max reached without convergence (best_loss=%.3f). "
+                        "Loss history: %s — returning best iterate.",
+                        best_loss, loss_history,
                     )
-                    raise LDDIterationError(
-                        f"LDD did not converge after {self.max_iterations} iterations. "
-                        f"Loss history: {loss_history}. "
-                        f"Consider architectural change or larger step size."
+                    return SkillSpec(
+                        **{**best_spec.__dict__, "iteration_count": self.max_iterations}
                     )
-                logger.warning(
-                    "k_max reached without convergence (best_loss=%.3f). "
-                    "Loss history: %s — returning best iterate.",
-                    best_loss, loss_history,
-                )
-                return SkillSpec(
-                    **{**best_spec.__dict__, "iteration_count": self.max_iterations}
-                )
+        except ClaudeCodeUnavailable as exc:
+            # An engine failure after at least one MEASURED iterate is the
+            # k_max case above in another shape: the refinement so far is real
+            # and scored, so return the best iterate as NON-converged instead
+            # of discarding minutes of engine work (live 2026-09-28: a refine
+            # call on a long skill ran past the per-call timeout at k=2 and the
+            # whole candidate was lost). Before the first measurement there is
+            # nothing scored to return.
+            if not loss_history:
+                raise
+            logger.warning("LDD stopped after %d measured iteration(s) on an engine "
+                           "failure (%s); returning best iterate (loss=%.3f)",
+                           len(loss_history), exc, best_loss)
+            self.converged = False
+            self.final_loss = best_loss
+            return SkillSpec(**{**best_spec.__dict__, "iteration_count": len(loss_history)})
 
         return current_spec
 
@@ -1424,6 +1441,49 @@ class SkillCreatorOrchestrator:
         logger.info(f"=== SKILL CREATION START (engine={self.engine_id}) ===\n"
                     f"Request: {user_request}\n")
 
+        spec, findings, quality_score = await self._build(user_request, base)
+
+        # Phase 5: Promotion
+        logger.info("PHASE 5: PROMOTION...")
+        self._progress("promotion", 90, f"Promoting '{spec.name}'…")
+        artifact = self.promoter.promote(spec, quality_score)
+        # Carry the findings out with the artifact. They used to be counted
+        # into a number and then dropped, so an operator saw "Quality: 0%"
+        # with no way to learn what the reviewers actually objected to.
+        artifact.review_findings = findings
+        logger.info(f"  Skill promoted: {artifact.spec.name}")
+
+        logger.info(f"=== SKILL CREATION COMPLETE ===\n")
+        return artifact
+
+    async def create_candidate(self, user_request: str,
+                               base: Dict[str, str]) -> Dict[str, Any]:
+        """Phases 1-4 for an EXISTING skill, without promotion (ADR-2094).
+
+        The result is a candidate body for a skill canary: the live skill is
+        not touched. The refine planner keeps ``base["name"]``; a candidate
+        that comes back under another name is refused rather than staged
+        against the wrong skill.
+        """
+        spec, findings, quality_score = await self._build(user_request, base)
+        if spec.name != base["name"]:
+            raise SkillCreatorError(
+                f"refine returned {spec.name!r} for base {base['name']!r} — not staged")
+        self._progress("promotion", 95, f"Staging candidate for '{spec.name}'…")
+        return {
+            "name": spec.name,
+            "purpose": spec.purpose,
+            "body": self.promoter._render_body(spec),
+            "quality": quality_score,
+            "iterations": spec.iteration_count,
+            "findings": [
+                {"dimension": f.dimension, "summary": f.summary, "verdict": f.verdict.value}
+                for f in findings
+            ],
+        }
+
+    async def _build(self, user_request: str, base: Optional[Dict[str, str]]):
+        """Phases 1-4: plan, validate, LDD-iterate, review."""
         # Phase 1: Planning
         logger.info("PHASE 1: PLANNING...")
         self._progress(
@@ -1458,16 +1518,4 @@ class SkillCreatorOrchestrator:
         logger.info("  Review complete: quality=%.2f (%d confirmed, %d plausible, "
                     "converged=%s)", quality_score, confirmed_count,
                     plausible_count, converged)
-
-        # Phase 5: Promotion
-        logger.info("PHASE 5: PROMOTION...")
-        self._progress("promotion", 90, f"Promoting '{spec.name}'…")
-        artifact = self.promoter.promote(spec, quality_score)
-        # Carry the findings out with the artifact. They used to be counted
-        # into a number and then dropped, so an operator saw "Quality: 0%"
-        # with no way to learn what the reviewers actually objected to.
-        artifact.review_findings = findings
-        logger.info(f"  Skill promoted: {artifact.spec.name}")
-
-        logger.info(f"=== SKILL CREATION COMPLETE ===\n")
-        return artifact
+        return spec, findings, quality_score

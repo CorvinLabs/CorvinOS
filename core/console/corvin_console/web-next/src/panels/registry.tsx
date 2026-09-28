@@ -75,7 +75,19 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   ControlSubsystemsPage,
   ControlOverridesPage,
   ControlSnapshotsPage,
+  // The backend manifest names the Learning dashboard after its component
+  // (routes/capabilities.py); it is the same page the registry mounts.
+  VibeDashboard: VibeEngineeringPage as unknown as ComponentType,
 };
+
+/** Manifest components whose routes App.tsx mounts itself (chat + chat/:sid):
+ *  a manifest route here would duplicate them, so they are skipped silently. */
+const MOUNTED_IN_APP = new Set(["ChatPage"]);
+
+/** Names already warned about. manifestPanelRoutes() runs on every render of
+ *  the route tree, so an unconditional warn flooded the console hundreds of
+ *  times per session with the same two lines. */
+const warnedUnknown = new Set<string>();
 
 const rc = (route: string, label: string, component: ComponentType,
             extra?: Partial<ConsolePanel>): ConsolePanel => ({
@@ -293,7 +305,10 @@ export function manifestPanelRoutes(panels: readonly PanelDescriptor[]) {
       const componentName = p.element.component;
       const C = COMPONENTS_BY_NAME[componentName];
       if (!C) {
-        console.warn(`manifestPanelRoutes: unknown component "${componentName}" for panel "${p.id}"`);
+        if (!MOUNTED_IN_APP.has(componentName) && !warnedUnknown.has(componentName)) {
+          warnedUnknown.add(componentName);
+          console.warn(`manifestPanelRoutes: unknown component "${componentName}" for panel "${p.id}"`);
+        }
         return null;
       }
       return <Route key={p.id} path={p.route} element={<C />} />;

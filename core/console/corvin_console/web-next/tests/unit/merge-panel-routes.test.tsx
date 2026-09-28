@@ -52,4 +52,33 @@ describe("mergePanelRoutes", () => {
     const m = [panel("plugins", { kind: "react-component", component: "MarketplacePage" }, "marketplace")];
     expect(paths(mergePanelRoutes(m)).filter((x) => x === "marketplace")).toHaveLength(1);
   });
+
+  it("resolves the backend's component names without a warning (2026-09-28 console flood)", () => {
+    // routes/capabilities.py names the chat + Learning panels "ChatPage" and
+    // "VibeDashboard"; both warned on EVERY render of the route tree.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    const m = [
+      panel("vibe-engineering", { kind: "react-component", component: "VibeDashboard" }),
+      panel("chat", { kind: "react-component", component: "ChatPage" }),
+    ];
+    const routes = mergePanelRoutes(m);
+    mergePanelRoutes(m);
+    const vibe = routes.filter((r) => r && String(r.props.path) === "vibe-engineering");
+    expect(vibe).toHaveLength(1);
+    expect(vibe[0]!.key).toBe("vibe-engineering"); // the manifest route, not the fallback
+    // chat is mounted by App.tsx itself — no manifest route, no warning.
+    expect(paths(routes)).not.toContain("chat");
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("warns about a genuinely unknown component once, not per render", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    const m = [panel("dashboard", { kind: "react-component", component: "StillNoSuchPage" })];
+    mergePanelRoutes(m);
+    mergePanelRoutes(m);
+    mergePanelRoutes(m);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
 });
