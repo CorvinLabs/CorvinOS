@@ -1,4 +1,3 @@
-from core.security.csrf import require_csrf
 """Instance Agent — FastAPI application.
 
 Endpoints:
@@ -116,7 +115,6 @@ class SecretPayload(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-@require_csrf
 @app.post("/secrets/{key_name}", status_code=200)
 async def post_secret(key_name: str, body: SecretPayload) -> dict[str, Any]:
     """Receive an encrypted BYOK secret, decrypt, write to vault.
@@ -207,7 +205,6 @@ class ConfigPushPayload(BaseModel):
     model_config = {"extra": "allow"}
 
 
-@require_csrf
 @app.post("/config-push", status_code=200)
 async def post_config_push(body: ConfigPushPayload) -> dict[str, Any]:
     """Receive one or more config-push events from the Management API."""
@@ -227,7 +224,7 @@ def main() -> None:
     host = os.environ.get("CORVIN_AGENT_HOST", "127.0.0.1")
     port = int(os.environ.get("CORVIN_AGENT_PORT", "8766"))
     logging.basicConfig(level=logging.INFO)
-    uvicorn.run("operator.agent.main:app", host=host, port=port, reload=False)
+    uvicorn.run("corvin_operator.agent.main:app", host=host, port=port, reload=False)
 
 
 if __name__ == "__main__":

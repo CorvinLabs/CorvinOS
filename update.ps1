@@ -892,7 +892,26 @@ if ($NoRollback -or $ConsoleOnly) {
 Write-Step "Rolling back"
 $rb = $true
 Stop-Console
-if ($PrevRev -and (Test-Path -LiteralPath (Join-Path $Src ".git"))) {
+if ($PrevRev -and (Test-Path -LiteralPath (Join-Path $Src ".git")) -and $Kind -eq "checkout") {
+    # A developer checkout can hold uncommitted work here; `reset --hard` would
+    # destroy it with no copy left (same fix as update.sh). Move HEAD back only
+    # if the update moved it, with --keep, which refuses instead of overwriting.
+    if ((Get-Rev) -ne $PrevRev) {
+        if ((Invoke-Git @("reset", "-q", "--keep", $PrevRev)) -ne 0) {
+            # Still the NEW code: restoring the old frontend or reinstalling now
+            # would pair an old bundle with new code. Leave everything as is.
+            $newShort = "$(Get-Rev)".Substring(0, [Math]::Min(9, "$(Get-Rev)".Length))
+            $oldShort = $PrevRev.Substring(0, [Math]::Min(9, $PrevRev.Length))
+            Write-Host "  Not rolled back: your uncommitted changes overlap files the update changed." -ForegroundColor Red
+            Write-Host "  The code is still the updated revision $newShort, with your changes intact."
+            Write-Host "  To go back to ${oldShort}:  git -C `"$Src`" stash; git -C `"$Src`" reset --keep $oldShort"
+            Write-Host "  then run update.ps1 -ConsoleOnly (and git stash pop). Log: $LogFile"
+            Start-ConsoleAgain
+            Exit-SetupLock
+            exit 2
+        }
+    }
+} elseif ($PrevRev -and (Test-Path -LiteralPath (Join-Path $Src ".git"))) {
     if ((Invoke-Git @("reset", "-q", "--hard", $PrevRev)) -ne 0) { $rb = $false }
 } elseif ($script:ZipSwapped -and (Test-Path -LiteralPath "$Src.prev")) {
     foreach ($keep in @(".corvin", "core\console\corvin_console\web-next\node_modules")) {
