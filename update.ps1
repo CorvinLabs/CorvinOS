@@ -794,7 +794,17 @@ if (Test-Path -LiteralPath $ToolPy) {
 
 # A task whose action points at a file that no longer exists (an older
 # installer's wrapper .vbs, a moved uv bin dir) "starts" fine and launches
-# nothing. Point it at the current corvinos-serve, as install.ps1 registers it.
+# nothing. A task whose action launches corvinos-serve.exe DIRECTLY (no
+# wscript.exe wrapper) is a different, equally real bug: Task Scheduler shows
+# the window of any console-subsystem exe it starts itself -- there is no
+# Scheduled-Task equivalent of -WindowStyle Hidden, since that flag only
+# works when POWERSHELL, not Task Scheduler, calls CreateProcess -- so a
+# visible terminal opens at every logon and every time this script restarts
+# the task. Both shapes get the same repair: point it at the current
+# corvinos-serve through a generated WScript.Shell .vbs wrapper, exactly as
+# install.ps1 registers it and bridge.ps1 already does for the per-channel
+# bridge tasks (wscript.exe is a GUI-subsystem executable with no console of
+# its own; WshShell.Run(cmd, 0, False) hides the CHILD window at creation).
 function Expand-EnvPath {
     param([string]$Path)
     $out = $Path
@@ -803,31 +813,46 @@ function Expand-EnvPath {
         if ($v) { $out = $out.Replace($m.Value, $v) }
     }
     return $out
-}function Test-TaskActionValid {
+}
+
+function Test-TaskActionValid {
     param($Task)
     foreach ($a in @($Task.Actions)) {
         $exe = ([string]$a.Execute).Trim('"')
         if (-not $exe) { return $false }
-        if ((Split-Path -Leaf $exe) -match '^(w|c)script(\.exe)?$') {
-            if ([string]$a.Arguments -match '"([^"]+\.(vbs|js|wsf))"|(\S+\.(vbs|js|wsf))') {
-                $target = if ($Matches[1]) { $Matches[1] } else { $Matches[3] }
-                if (-not (Test-Path -LiteralPath (Expand-EnvPath $target))) { return $false }
-            }
-        } elseif ($exe -match '[\\/]' -and -not (Test-Path -LiteralPath (Expand-EnvPath $exe))) {
+        if ((Split-Path -Leaf $exe) -notmatch '(?i)^wscript(\.exe)?$') {
+            # Not wrapped through wscript.exe at all -- a visible-window task,
+            # migrate it regardless of whether the target exe still exists.
             return $false
+        }
+        if ([string]$a.Arguments -match '"([^"]+\.(vbs|js|wsf))"|(\S+\.(vbs|js|wsf))') {
+            $target = if ($Matches[1]) { $Matches[1] } else { $Matches[3] }
+            if (-not (Test-Path -LiteralPath (Expand-EnvPath $target))) { return $false }
         }
     }
     return $true
 }
+
+function New-HiddenConsoleAction {
+    param([string]$TaskName, [string]$ExePath, [int]$ServePort)
+    $vbsDir = Join-Path $CorvinHome "bin"
+    $null = New-Item -ItemType Directory -Force -Path $vbsDir -ErrorAction SilentlyContinue
+    $vbsPath = Join-Path $vbsDir "$TaskName.vbs"
+    $targetCmd = "`"$ExePath`" --no-browser --port $ServePort"
+    $vbsEscaped = $targetCmd.Replace('"', '""')
+    Set-Content -LiteralPath $vbsPath -Value "CreateObject(""WScript.Shell"").Run ""$vbsEscaped"", 0, False" -Encoding ASCII
+    return New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B `"$vbsPath`""
+}
+
 function Repair-ConsoleTask {
     param($Task)
     if (-not $Task -or (Test-TaskActionValid $Task)) { return }
     $serve = Get-Command corvinos-serve -ErrorAction SilentlyContinue
     if (-not $serve) { return }
     try {
-        $action = New-ScheduledTaskAction -Execute $serve.Source -Argument "--no-browser --port $Port"
+        $action = New-HiddenConsoleAction -TaskName $Task.TaskName -ExePath $serve.Source -ServePort $Port
         $null = Set-ScheduledTask -TaskName $Task.TaskName -TaskPath $Task.TaskPath -Action $action -ErrorAction Stop
-        Write-Ok "repaired autostart task $($Task.TaskName) (its launcher was missing)"
+        Write-Ok "repaired autostart task $($Task.TaskName) (hidden launcher)"
     } catch {
         Write-LogFile "could not repair task $($Task.TaskName): $($_.Exception.Message)"
     }

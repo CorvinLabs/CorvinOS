@@ -1791,6 +1791,29 @@ if (-not $foreignOwner) {
     $Port = $freePort
 }
 
+# Task Scheduler shows the window of any console-subsystem exe it launches
+# itself -- there is no Scheduled-Task equivalent of Start-Process's
+# -WindowStyle Hidden, because that flag only works when POWERSHELL is the
+# one calling CreateProcess, not the Task Scheduler service. corvinos-serve.exe
+# is a console-subsystem exe, so a task action pointing at it directly flashes
+# (or leaves open) a visible terminal at every logon. bridge.ps1 already hit
+# this exact class of bug for the per-channel bridge tasks; the fix here is
+# the same one, reused verbatim: run the target through a generated
+# WScript.Shell .vbs wrapper. wscript.exe is a GUI-subsystem executable (it
+# never allocates a console of its own) and WshShell.Run(cmd, 0, False) hides
+# the CHILD window at creation -- a different OS code path than
+# -WindowStyle Hidden's hide-after-creation, and the standard fix for this.
+function New-HiddenConsoleAction {
+    param([string]$TaskName, [string]$ExePath, [int]$ServePort)
+    $vbsDir = Join-Path $CorvinHome "bin"
+    $null = New-Item -ItemType Directory -Force -Path $vbsDir -ErrorAction SilentlyContinue
+    $vbsPath = Join-Path $vbsDir "$TaskName.vbs"
+    $targetCmd = "`"$ExePath`" --no-browser --port $ServePort"
+    $vbsEscaped = $targetCmd.Replace('"', '""')
+    Set-Content -LiteralPath $vbsPath -Value "CreateObject(""WScript.Shell"").Run ""$vbsEscaped"", 0, False" -Encoding ASCII
+    return New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B `"$vbsPath`""
+}
+
 Write-Step "Registering autostart task"
 $taskName = "CorvinOS-AutoRestart"
 $taskPath = "\CorvinOS\"
@@ -1809,7 +1832,13 @@ if ($DryRun) {
             $taskName = "CorvinOS-AutoRestart-$env:USERNAME"
             $existingTask = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue
         }
-        if ($existingTask) {
+        # An existing task from before this fix (or one update.ps1 has not yet
+        # repaired) still points straight at corvinos-serve.exe -- migrate it
+        # instead of leaving the visible-window task in place.
+        $existingIsHidden = [bool]($existingTask -and @($existingTask.Actions | Where-Object {
+            (Split-Path -Leaf ([string]$_.Execute).Trim('"')) -match '(?i)^wscript(\.exe)?$'
+        }).Count)
+        if ($existingTask -and $existingIsHidden) {
             Write-Log -Message "Scheduled task $taskName already exists (state: $($existingTask.State))" -Level "Info"
         } else {
             $serveCmd = Get-Command corvinos-serve -ErrorAction SilentlyContinue
@@ -1821,12 +1850,15 @@ if ($DryRun) {
             # install does not have, so it failed every time.
             # --no-browser: the task exists to keep the console SERVING across
             # logons. Without it, every single logon hijacks the default browser.
-            $action = New-ScheduledTaskAction -Execute $serveCmd.Source `
-                -Argument "--no-browser --port $Port"
+            $action = New-HiddenConsoleAction -TaskName $taskName -ExePath $serveCmd.Source -ServePort $Port
             $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
             # -RunWithoutNetwork is not a New-ScheduledTaskSettingsSet
             # parameter and made this call throw unconditionally.
-            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+            # -Hidden mirrors bridge.ps1's per-channel task registration --
+            # keep both IDENTICAL, or a visible/closable window on one path
+            # while the other is hidden is exactly the drift that let a real
+            # "close the window, the app dies" bug reach users before.
+            $settings = New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries `
                 -DontStopIfGoingOnBatteries -StartWhenAvailable `
                 -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
 
@@ -1840,10 +1872,11 @@ if ($DryRun) {
                 if ($taskName -ne "CorvinOS-AutoRestart" -or
                     [string]$_.Exception.Message -notmatch 'Access is denied|0x80070005') { throw }
                 $taskName = "CorvinOS-AutoRestart-$env:USERNAME"
+                $action = New-HiddenConsoleAction -TaskName $taskName -ExePath $serveCmd.Source -ServePort $Port
                 $null = Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath `
                     -Action $action -Trigger $trigger -Settings $settings -Force -ErrorAction Stop
             }
-            Write-Log -Message "Scheduled task registered: $taskPath$taskName" -Level "Success"
+            Write-Log -Message "Scheduled task registered (hidden launcher): $taskPath$taskName" -Level "Success"
         }
     } catch {
         # Non-fatal: group policy commonly blocks task registration.
