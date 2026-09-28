@@ -175,48 +175,71 @@ class TestWindowsSystemServiceManager:
             with pytest.raises(ElevationRequired):
                 mgr.install_service(name="webui", command="C:\\corvin.exe")
 
-    def test_install_uses_s4u_logon_never_a_password_and_bounded_restart(self):
+    def test_install_uses_s4u_logon_never_a_password_and_bounded_restart(self, monkeypatch):
         """WA-4/WA-5/WA-6 + ADR-0184: registered via PowerShell
         Register-ScheduledTask with an S4U principal (no password, never
         SYSTEM), RunLevel Limited (unelevated runtime), and a BOUNDED
         restart-on-failure policy (the systemd Restart=on-failure equivalent
         the old bare `schtasks /sc onstart` lacked)."""
-        mgr = WindowsSystemServiceManager()
-        with mock.patch(
-            "corvinOS.installer.system_service_manager.is_elevated",
-            return_value=True,
-        ), mock.patch(
-            "corvinOS.installer.system_service_manager.current_user",
-            return_value="silvio",
-        ), mock.patch("subprocess.run") as run:
-            run.return_value = mock.Mock(returncode=0, stderr="", stdout="")
-            mgr.install_service(name="webui", command="C:\\corvin.exe -m uvicorn app")
+        with tempfile.TemporaryDirectory() as tmp:
+            monkeypatch.setenv("CORVIN_HOME", tmp)
+            mgr = WindowsSystemServiceManager()
+            with mock.patch(
+                "corvinOS.installer.system_service_manager.is_elevated",
+                return_value=True,
+            ), mock.patch(
+                "corvinOS.installer.system_service_manager.current_user",
+                return_value="silvio",
+            ), mock.patch("subprocess.run") as run:
+                run.return_value = mock.Mock(returncode=0, stderr="", stdout="")
+                mgr.install_service(name="webui", command="C:\\corvin.exe -m uvicorn app")
 
-        # Call 1 registers the task; call 2 starts it immediately (parity
-        # with Linux `enable --now` / macOS RunAtLoad -- review finding: a
-        # registered-but-not-started always-on service reads as a no-op
-        # until the next reboot).
-        argv = run.call_args_list[0].args[0]
-        start_argv = run.call_args_list[1].args[0]
-        assert start_argv[:2] == ["schtasks", "/run"]
-        assert argv[0] == "powershell"
-        ps = argv[-1]
-        # S4U logon — no password ever, and the invoking user (not SYSTEM).
-        assert "-LogonType S4U" in ps
-        assert "-UserId 'silvio'" in ps
-        assert "-Password" not in ps
-        assert "SYSTEM" not in ps
-        # WA-6: unelevated runtime.
-        assert "-RunLevel Limited" in ps
-        assert "-RunLevel Highest" not in ps
-        # WA-4: bounded restart-on-failure.
-        assert "-RestartCount 5" in ps
-        assert "-RestartInterval (New-TimeSpan -Minutes 1)" in ps
-        assert "-AtStartup" in ps
-        # WA-5: the executable is its own quoted -Execute token (not torn apart
-        # from its args), and args are carried separately.
-        assert "-Execute 'C:\\corvin.exe'" in ps
-        assert "-Argument '-m uvicorn app'" in ps
+            # Call 1 registers the task; call 2 starts it immediately (parity
+            # with Linux `enable --now` / macOS RunAtLoad -- review finding: a
+            # registered-but-not-started always-on service reads as a no-op
+            # until the next reboot).
+            argv = run.call_args_list[0].args[0]
+            start_argv = run.call_args_list[1].args[0]
+            assert start_argv[:2] == ["schtasks", "/run"]
+            assert argv[0] == "powershell"
+            ps = argv[-1]
+            # S4U logon — no password ever, and the invoking user (not SYSTEM).
+            assert "-LogonType S4U" in ps
+            assert "-UserId 'silvio'" in ps
+            assert "-Password" not in ps
+            assert "SYSTEM" not in ps
+            # WA-6: unelevated runtime.
+            assert "-RunLevel Limited" in ps
+            assert "-RunLevel Highest" not in ps
+            # WA-4: bounded restart-on-failure.
+            assert "-RestartCount 5" in ps
+            assert "-RestartInterval (New-TimeSpan -Minutes 1)" in ps
+            assert "-AtStartup" in ps
+            # Registration-chain gap fix (2026-09-28): this Scheduled Task
+            # used to point -Execute straight at the console-subsystem
+            # program, showing a visible terminal at every boot (the same
+            # bug class already fixed for the Stufe-1 autostart task in
+            # commit 5c73f59f2, but this Stufe-2 registration path builds
+            # its own Register-ScheduledTask call in Python and was never
+            # touched by that fix). It must now launch wscript.exe against a
+            # generated hidden-launch .vbs wrapper instead — and -Hidden must
+            # be set on the task settings too (belt-and-suspenders, matching
+            # install.ps1's identical Stufe-1 setting).
+            assert "-Execute 'C:\\corvin.exe'" not in ps
+            assert "-Execute 'wscript.exe'" in ps
+            assert "-Hidden" in ps
+            vbs_dir = Path(tmp) / "bin"
+            vbs_path = vbs_dir / "CorvinOS-AlwaysOn-webui.vbs"
+            assert f'//B "{vbs_path}"' in ps
+            assert vbs_path.exists()
+            vbs_content = vbs_path.read_text()
+            # The .vbs runs the ORIGINAL program+args hidden (SW_HIDE=0) —
+            # this is what actually starts CorvinOS; wscript.exe itself is
+            # just the invisible launcher Task Scheduler shows instead.
+            assert 'CreateObject("WScript.Shell").Run' in vbs_content
+            assert ', 0, False' in vbs_content
+            assert "C:\\corvin.exe" in vbs_content
+            assert "-m uvicorn app" in vbs_content
 
     def test_install_with_pre_exec_warns_it_is_not_wired(self, capsys):
         """Regression: pre_exec (WA-19 auto-update) used to be silently

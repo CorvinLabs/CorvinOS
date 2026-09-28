@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from .dependencies import pip_install as _pip_install
+from .platform import no_console_window_flags
 
 # All paths derived relative to repo root — never hardcoded user homes.
 _CONSOLE_DEPS = [
@@ -165,6 +166,7 @@ def start_server(repo_root: Path) -> bool:
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        creationflags=no_console_window_flags(),
     )
 
     # Wait up to 15 s for the port to accept connections

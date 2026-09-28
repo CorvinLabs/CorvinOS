@@ -25,6 +25,29 @@ class PkgMgr(str, Enum):
     NONE = "none"
 
 
+def no_console_window_flags() -> int:
+    """Windows-only ``creationflags`` addend: ``CREATE_NO_WINDOW``.
+
+    Mirrors ``corvin_operator/bridges/shared/agents/_win_shim.py``'s
+    identically-named helper (kept local rather than imported — the
+    installer has no dependency on the bridges/agents package). A
+    console-subsystem child (here: ``python -m uvicorn`` / ``claude auth
+    login``) spawned from a console-LESS parent gets a brand-new, visible
+    console window unless told otherwise; today every caller in this
+    installer already runs from an attached console (install.ps1 itself),
+    so no window currently flashes — this closes the gap defensively
+    before an unattended/headless installer invocation is ever added.
+
+    Always safe to OR into any existing ``creationflags``: returns 0 on
+    POSIX, and 0 if ``subprocess.CREATE_NO_WINDOW`` is unavailable (any
+    non-Windows interpreter, including CI running these call sites under
+    mocks on Linux/macOS).
+    """
+    if os.name != "nt":
+        return 0
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 @dataclass
 class PlatformInfo:
     os_kind: OS = OS.UNKNOWN

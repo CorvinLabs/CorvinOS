@@ -106,6 +106,38 @@ def test_noninteractive_launches_auth_login_not_stale_login_subcommand(monkeypat
     )
 
 
+def test_noninteractive_popen_passes_no_console_window_flags(monkeypatch):
+    """Registration-chain gap fix (2026-09-28): unlike every other Windows
+    subprocess spawn in the codebase (see agents/_win_shim.py's
+    no_console_window_flags), this Popen call carried no creationflags at
+    all — a console-subsystem child spawned from a console-less parent
+    shows a brand-new visible window on Windows unless told otherwise.
+    Currently unreachable in practice (install.ps1 always has an attached
+    console today), but the fix closes it defensively rather than leaving
+    an inconsistent call site for the next unattended installer path."""
+    monkeypatch.setattr(deps_mod, "find_claude_creds", lambda: None)
+    monkeypatch.setattr(deps_mod.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(deps_mod.time, "sleep", lambda s: None)
+
+    captured_kwargs = {}
+
+    class _FakeProc:
+        stdout = iter([])
+        def poll(self):
+            return 0
+
+    def _fake_popen(cmd, **kwargs):
+        captured_kwargs.update(kwargs)
+        return _FakeProc()
+
+    monkeypatch.setattr(deps_mod.subprocess, "Popen", _fake_popen)
+
+    deps_mod.ensure_claude_login(interactive=False)
+
+    assert "creationflags" in captured_kwargs
+    assert captured_kwargs["creationflags"] == deps_mod.no_console_window_flags()
+
+
 def test_noninteractive_polls_until_credentials_appear(monkeypatch):
     monkeypatch.setattr(deps_mod.shutil, "which", lambda name: "/usr/bin/claude")
     monkeypatch.setattr(deps_mod.time, "sleep", lambda s: None)

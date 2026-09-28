@@ -43,6 +43,22 @@
 - Historical `hermes.*` audit events keep their `EVENT_SEVERITY` entries so
   records already in the hash chain stay readable; nothing emits them any more.
 
+### Fixed — Windows: no more visible terminal window for a background-running Corvin
+- Every remaining Task-Scheduler-registered launch path that pointed a
+  console-subsystem executable straight at `-Execute` now wraps it in a
+  generated hidden-launch `.vbs` invoked via `wscript.exe //B` (Task
+  Scheduler has no equivalent of `Start-Process -WindowStyle Hidden` — that
+  flag only works when PowerShell itself calls `CreateProcess`, not the Task
+  Scheduler service). Covers the default login-time autostart task
+  (`install.ps1`/`update.ps1`) and the opt-in always-on `corvin-service
+  install` boot-time task (ADR-0184 Stufe 2) — the latter previously showed
+  a console window at every single boot for anyone who had opted into it.
+- The installer's own uvicorn/`claude auth login` subprocess spawns now pass
+  the same `CREATE_NO_WINDOW` flag every other Windows subprocess spawn in
+  the codebase already uses, closing a latent inconsistency (not reachable
+  today since `install.ps1` always has an attached console, but would have
+  shown a window the day an unattended installer invocation is added).
+
 ### Tasks panel on the Task-Tracking SSOT (ADR-2056)
 - `core/task_tracking/` is now a working store: per-tenant SQLite, audit-first
   `task_item.*` events in the core chain, hierarchy + dependency rules,

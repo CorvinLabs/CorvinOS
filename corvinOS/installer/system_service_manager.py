@@ -320,6 +320,43 @@ def _dequote(token: str) -> str:
     return token
 
 
+def _corvin_home_dir() -> Path:
+    """CORVIN_HOME-aware runtime root (env → ~/.corvin). Kept local (mirrors
+    ``service_manager.py``'s identical helper) so this installer module has
+    no import dependency on the runtime path package."""
+    env = os.environ.get("CORVIN_HOME")
+    if env:
+        return Path(os.path.expanduser(os.path.expandvars(env)))
+    return Path.home() / ".corvin"
+
+
+def _write_hidden_launch_vbs(task_name: str, program: str, arguments: list[str]) -> Path:
+    """Write a WScript wrapper that launches *program* with a hidden window,
+    and return its path.
+
+    Windows Task Scheduler has no equivalent of ``Start-Process -WindowStyle
+    Hidden`` — that flag only works when PowerShell itself calls
+    CreateProcess, not the Task Scheduler service (see ``install.ps1``'s
+    ``New-HiddenConsoleAction``, whose ``.vbs``-via-``wscript.exe //B``
+    pattern this reproduces byte-for-byte from Python: without it, a
+    console-subsystem target — here ``python.exe -m uvicorn ...`` — shows a
+    visible terminal window at every boot for anyone who opted into the
+    Stufe-2 always-on service). ``wscript.exe`` is a GUI-subsystem process
+    with no console of its own; ``WScript.Shell.Run(cmd, 0, False)`` starts
+    *cmd* with ``SW_HIDE`` and does not wait for it to exit.
+    """
+    vbs_dir = _corvin_home_dir() / "bin"
+    vbs_dir.mkdir(parents=True, exist_ok=True)
+    vbs_path = vbs_dir / f"{task_name}.vbs"
+    target_cmd = " ".join([f'"{program}"', *arguments])
+    vbs_escaped = target_cmd.replace('"', '""')
+    vbs_path.write_text(
+        f'CreateObject("WScript.Shell").Run "{vbs_escaped}", 0, False',
+        encoding="ascii",
+    )
+    return vbs_path
+
+
 class WindowsSystemServiceManager(SystemServiceManager):
     """Windows boot-time Scheduled Task, registered via PowerShell
     ``Register-ScheduledTask`` so it can carry a BOUNDED restart-on-failure
@@ -393,18 +430,31 @@ class WindowsSystemServiceManager(SystemServiceManager):
         arguments = parts[1:]
         desc = description or f"CorvinOS {name} service (always-on)"
 
-        action_arg = ""
-        if arguments:
-            arg_str = " ".join(arguments)
-            action_arg = f" -Argument {_ps_single_quote(arg_str)}"
+        # Hide the console window (see _write_hidden_launch_vbs docstring):
+        # the task launches wscript.exe (GUI-subsystem, no console) against a
+        # generated .vbs wrapper instead of the console-subsystem program
+        # directly — same fix as install.ps1's New-HiddenConsoleAction /
+        # commit 5c73f59f2, reproduced here because THIS registration path
+        # (corvin-service install, ADR-0184 Stufe 2) builds its own
+        # Register-ScheduledTask call in Python and was never touched by
+        # that fix.
+        vbs_path = _write_hidden_launch_vbs(task_name, program, arguments)
+        wscript_arg = '//B "{}"'.format(vbs_path)
+        wrapped_action = (
+            f"-Execute {_ps_single_quote('wscript.exe')} "
+            f"-Argument {_ps_single_quote(wscript_arg)}"
+        )
 
         # WA-4: -RestartCount 5 / -RestartInterval 1min = bounded restart-on-
         # failure (mirrors Linux Restart=on-failure + StartLimitBurst=5).
+        # -Hidden mirrors install.ps1's identical belt-and-suspenders setting
+        # on the wscript-wrapped action — keep both in sync (see that file's
+        # comment on the "close the window, the app dies" class of bug).
         ps = (
             f"$ErrorActionPreference='Stop';"
-            f"$Action=New-ScheduledTaskAction -Execute {_ps_single_quote(program)}{action_arg};"
+            f"$Action=New-ScheduledTaskAction {wrapped_action};"
             f"$Trigger=New-ScheduledTaskTrigger -AtStartup;"
-            f"$Settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries "
+            f"$Settings=New-ScheduledTaskSettingsSet -Hidden -AllowStartIfOnBatteries "
             f"-DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) "
             f"-RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) "
             f"-MultipleInstances IgnoreNew;"

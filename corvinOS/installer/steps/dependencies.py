@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-from .platform import OS, PkgMgr, PlatformInfo, pkg_install
+from .platform import OS, PkgMgr, PlatformInfo, no_console_window_flags, pkg_install
 
 
 # ── Claude Code ────────────────────────────────────────────────────────────
@@ -197,6 +197,7 @@ def ensure_claude_login(interactive: bool = True) -> bool:
             [claude_bin, "auth", "login"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
+            creationflags=no_console_window_flags(),
         )
     except OSError as exc:
         print(f"⚠ Could not start 'claude auth login': {exc}")

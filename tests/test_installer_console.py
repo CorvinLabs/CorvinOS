@@ -258,6 +258,32 @@ def test_kill_port_is_noop_when_neither_lsof_nor_fuser_available(monkeypatch: py
 # ── start_server: kill-port-first, immediate-exit, timeout, success ─────────
 
 
+def test_start_server_passes_no_console_window_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Registration-chain gap fix (2026-09-28): the uvicorn Popen carried no
+    creationflags at all, unlike every other Windows subprocess spawn in the
+    codebase (agents/_win_shim.py's no_console_window_flags) — a console-
+    subsystem child spawned from a console-less parent shows a brand-new
+    visible window on Windows unless told otherwise."""
+    monkeypatch.setattr(console_mod.time, "sleep", mock.Mock())
+
+    fake_proc = mock.Mock()
+    fake_proc.poll.return_value = None
+    fake_proc.returncode = None
+    captured_kwargs = {}
+
+    def _fake_popen(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return fake_proc
+
+    with mock.patch.object(console_mod, "_kill_port"), \
+         mock.patch.object(console_mod.subprocess, "Popen", side_effect=_fake_popen), \
+         mock.patch.object(console_mod, "_port_open", return_value=True):
+        console_mod.start_server(tmp_path)
+
+    assert "creationflags" in captured_kwargs
+    assert captured_kwargs["creationflags"] == console_mod.no_console_window_flags()
+
+
 def test_start_server_kills_port_before_spawning_uvicorn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """start_server must clear any stale listener on the port before it ever
     spawns a new uvicorn process — otherwise the new process can fail to bind
