@@ -196,6 +196,47 @@ def _collapse_ws(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
+def _extract_json_object(text: str) -> Optional[str]:
+    """Extract the first balanced top-level JSON object from an LLM reply.
+
+    A greedy ``re.search(r"\\{.*\\}", text, re.DOTALL)`` spans from the first
+    '{' to the LAST '}' in the whole reply. The generated ``method`` field is
+    a Markdown body that may itself contain example braces (a code snippet,
+    a sample config), so the real object often closes long before the regex
+    match ends — ``json.loads`` then parses that real object successfully
+    and raises "Extra data" on whatever follows inside the over-wide match.
+    Balanced, string-aware brace counting finds the actual object boundary
+    instead of guessing from the outermost braces.
+    """
+    if not isinstance(text, str):
+        return None
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
 def shorten_purpose(raw: Any, max_len: int = PURPOSE_LEN[1]) -> str:
     """Trim an over-long purpose to the contract without mangling it.
 
@@ -464,11 +505,11 @@ Reply with the updated spec as JSON ONLY, no prose outside the object:
             messages=[{"role": "user", "content": prompt}]
         )
         text = response.content[0].text
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
+        json_str = _extract_json_object(text)
+        if json_str is None:
             raise PlanningError("Refine returned no JSON")
         try:
-            data = json.loads(match.group())
+            data = json.loads(json_str)
         except (json.JSONDecodeError, ValueError) as exc:
             raise PlanningError(f"Refine returned unparseable JSON: {exc}") from exc
 
@@ -529,12 +570,12 @@ Reply with the corrected spec as JSON ONLY, no prose outside the object:
             messages=[{"role": "user", "content": prompt}]
         )
         text = response.content[0].text
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
+        json_str = _extract_json_object(text)
+        if json_str is None:
             logger.warning("Spec repair returned no JSON — keeping original spec")
             return spec
         try:
-            fixed = json.loads(match.group())
+            fixed = json.loads(json_str)
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning("Spec repair returned unparseable JSON (%s)", exc)
             return spec
@@ -620,11 +661,14 @@ The character limits are hard — a spec outside them is rejected."""
 
         # Parse JSON from response
         response_text = response.content[0].text
-        json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
-        if not json_match:
+        json_str = _extract_json_object(response_text)
+        if json_str is None:
             raise PlanningError(f"Could not extract JSON from synthesis")
 
-        spec_dict = json.loads(json_match.group())
+        try:
+            spec_dict = json.loads(json_str)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise PlanningError(f"Synthesis returned unparseable JSON: {exc}") from exc
 
         # Build SkillSpec
         return SkillSpec(
@@ -943,11 +987,11 @@ then score it. Reply with JSON ONLY, no prose outside the object:
         """Extract the JSON rubric from a reviewer reply (raw or fenced)."""
         if not isinstance(text, str):
             return None
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
+        json_str = _extract_json_object(text)
+        if json_str is None:
             return None
         try:
-            parsed = json.loads(match.group())
+            parsed = json.loads(json_str)
         except (json.JSONDecodeError, ValueError):
             return None
         if not isinstance(parsed, dict):
