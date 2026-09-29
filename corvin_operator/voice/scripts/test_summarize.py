@@ -1384,3 +1384,19 @@ def test_profile_mandates_only_openers_summarize_itself_emits(lang, learning) ->
         "will obey, no detector will recognise it, and the annex gets spoken "
         "twice"
     )
+
+
+def test_session_title_cleans_llm_output(monkeypatch) -> None:
+    monkeypatch.setattr(summarize, "_summary_cloud_permitted", lambda: True)
+    monkeypatch.setattr(summarize.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(summarize, "_claude_authenticated", lambda: True)
+    monkeypatch.setattr(summarize, "_run_claude_print",
+                        lambda *a, **k: '"Primzahlen-Funktion in Python."\nErklaerung...')
+    assert summarize.generate_session_title("User: x\n\nAssistant: y") == "Primzahlen-Funktion in Python"
+
+
+def test_session_title_empty_when_local_only_or_no_transcript(monkeypatch) -> None:
+    monkeypatch.setattr(summarize, "_summary_cloud_permitted", lambda: False)
+    assert summarize.generate_session_title("User: x") == ""
+    monkeypatch.setattr(summarize, "_summary_cloud_permitted", lambda: True)
+    assert summarize.generate_session_title("  ") == ""

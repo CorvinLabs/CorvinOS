@@ -4045,6 +4045,100 @@ def _spawn_session_summary_auto(sess: "WebChatSession") -> None:
 
 
 # ---------------------------------------------------------------------------
+# LLM session title — upgrades the instant first-words heuristic title
+# ---------------------------------------------------------------------------
+
+#: Strong refs to in-flight title tasks (a bare create_task() is only weakly held).
+_SESSION_TITLE_TASKS: "set[asyncio.Task[Any]]" = set()
+_SESSION_TITLE_INFLIGHT: "set[tuple[str, str]]" = set()
+_SESSION_TITLE_TRANSCRIPT_BUDGET = 4000
+_SESSION_TITLE_TIMEOUT_S = 100.0
+
+
+def _first_user_text(tenant_id: str, sid: str) -> str:
+    for turn in read_turns(tenant_id, sid):
+        if turn.get("role") == "user":
+            text = _turn_text(turn).strip()
+            if text:
+                return text
+    return ""
+
+
+def upgrade_session_title(tenant_id: str, sid: str) -> str:
+    """Replace the first-words heuristic title with an LLM topic title.
+
+    Runs blocking (subprocess) — call via ``asyncio.to_thread``. Returns the
+    new title, or "" when nothing changed. Only ever overwrites a title that
+    is still EXACTLY what ``_derive_auto_title`` produced from the first user
+    turn: an operator rename (or a title set at creation) is never touched, and
+    once upgraded the title no longer matches, so this is idempotent. A failed
+    generation leaves the heuristic title, and the next turn retries.
+    """
+    sess = get_session(tenant_id, sid)
+    if sess is None or not sess.title.strip():
+        return ""
+    first = _first_user_text(tenant_id, sid)
+    if not first or sess.title != _derive_auto_title(first):
+        return ""
+    from .routes import voice as _voice  # noqa: PLC0415 — avoid import cycle at module load
+    script = _voice._VOICE_SCRIPTS / "summarize.py"
+    if not script.exists():
+        return ""
+    transcript = _voice._build_session_transcript(
+        tenant_id, sid, budget=_SESSION_TITLE_TRANSCRIPT_BUDGET)
+    if not transcript:
+        return ""
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(script), "--title-mode",
+             "--max-chars", str(_AUTO_TITLE_MAX_CHARS)],
+            input=transcript, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=_SESSION_TITLE_TIMEOUT_S,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+    title = (proc.stdout or "").strip().splitlines()[0].strip() if proc.returncode == 0 and (proc.stdout or "").strip() else ""
+    if not title:
+        return ""
+    # Re-read: the operator may have renamed the chat while the LLM ran.
+    fresh = get_session(tenant_id, sid)
+    if fresh is None or fresh.title != sess.title:
+        return ""
+    fresh.title = title[:_TITLE_MAX_CHARS]
+    _save(fresh)
+    _audit_emit(fresh, "web.session_title_generated", title_chars=len(fresh.title))
+    return fresh.title
+
+
+async def _run_session_title_upgrade(tenant_id: str, sid: str) -> None:
+    await asyncio.to_thread(upgrade_session_title, tenant_id, sid)
+
+
+def _spawn_session_title_upgrade(sess: "WebChatSession") -> None:
+    """Detached, best-effort title upgrade; never delays or breaks the turn."""
+    key = (sess.tenant_id, sess.sid)
+    if key in _SESSION_TITLE_INFLIGHT or len(_SESSION_TITLE_TASKS) >= 2:
+        return
+    coro = _run_session_title_upgrade(sess.tenant_id, sess.sid)
+    try:
+        task = asyncio.create_task(coro)
+    except RuntimeError:
+        coro.close()
+        return
+    _SESSION_TITLE_TASKS.add(task)
+    _SESSION_TITLE_INFLIGHT.add(key)
+
+    def _done(t: "asyncio.Task[Any]") -> None:
+        _SESSION_TITLE_TASKS.discard(t)
+        _SESSION_TITLE_INFLIGHT.discard(key)
+        if not t.cancelled() and t.exception() is not None:
+            _log.warning("session title upgrade failed for %s:%s: %r",
+                         sess.tenant_id, sess.sid, t.exception())
+
+    task.add_done_callback(_done)
+
+
+# ---------------------------------------------------------------------------
 # ADR-0222 k=3 — native-arm-only DECISION collection (ship-dark, zero-cost)
 # ---------------------------------------------------------------------------
 #
@@ -6976,6 +7070,8 @@ async def _stream_turn_impl(
     # this turn (touch() above ran first).
     if rc == 0:
         _spawn_session_summary_auto(sess)
+        # Swap the instant first-words title for a real topic title.
+        _spawn_session_title_upgrade(sess)
 
     # ADR-0222 k=3: native-arm-only DECISION collection (ship-dark, zero-cost).
     # We reached this native completion, so the arm that ACTUALLY ran is native.

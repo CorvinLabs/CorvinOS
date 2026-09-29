@@ -183,5 +183,68 @@ class FirstTurnAutoTitleTests(unittest.TestCase):
         self.assertEqual(reloaded.title, "")
 
 
+class LlmTitleUpgradeTests(FirstTurnAutoTitleTests):
+    __test__ = True
+    """`upgrade_session_title` swaps the heuristic title for an LLM topic title."""
+
+    PROMPT = "Schreib mir eine Python-Funktion für Primzahlen"
+
+    def _session_with_heuristic_title(self):
+        sess = self.cr.create_session("_default")
+        self._apply_gate(sess, self.PROMPT)
+        self.cr._append_turn(sess, "user", [{"kind": "text", "text": self.PROMPT}])
+        self.cr._append_turn(sess, "assistant", [{"kind": "text", "text": "def is_prime(n): ..."}])
+        return sess
+
+    def _fake_run(self, stdout: str, rc: int = 0):
+        import subprocess as sp
+        seen: list = []
+
+        def _run(cmd, **kw):
+            seen.append((cmd, kw))
+            return sp.CompletedProcess(cmd, rc, stdout=stdout, stderr="")
+        return _run, seen
+
+    def test_heuristic_title_is_upgraded(self) -> None:
+        from unittest.mock import patch
+        sess = self._session_with_heuristic_title()
+        run, seen = self._fake_run("Primzahlen-Funktion in Python\n")
+        with patch.object(self.cr.subprocess, "run", run):
+            out = self.cr.upgrade_session_title("_default", sess.sid)
+        self.assertEqual(out, "Primzahlen-Funktion in Python")
+        self.assertEqual(self.cr.get_session("_default", sess.sid).title, out)
+        self.assertIn("--title-mode", seen[0][0])
+        self.assertIn("Primzahlen", seen[0][1]["input"])
+
+    def test_manual_rename_is_never_overwritten(self) -> None:
+        from unittest.mock import patch
+        sess = self._session_with_heuristic_title()
+        self.cr.rename_session("_default", sess.sid, "Mein Projekt")
+        run, seen = self._fake_run("Irgendwas anderes")
+        with patch.object(self.cr.subprocess, "run", run):
+            self.assertEqual(self.cr.upgrade_session_title("_default", sess.sid), "")
+        self.assertEqual(self.cr.get_session("_default", sess.sid).title, "Mein Projekt")
+        self.assertEqual(seen, [])  # no LLM call at all
+
+    def test_failure_keeps_heuristic_title(self) -> None:
+        from unittest.mock import patch
+        sess = self._session_with_heuristic_title()
+        before = self.cr.get_session("_default", sess.sid).title
+        for rc, out in ((1, "x"), (0, "")):
+            run, _ = self._fake_run(out, rc)
+            with patch.object(self.cr.subprocess, "run", run):
+                self.assertEqual(self.cr.upgrade_session_title("_default", sess.sid), "")
+        self.assertEqual(self.cr.get_session("_default", sess.sid).title, before)
+
+    def test_idempotent_after_upgrade(self) -> None:
+        from unittest.mock import patch
+        sess = self._session_with_heuristic_title()
+        run, seen = self._fake_run("Primzahlen in Python")
+        with patch.object(self.cr.subprocess, "run", run):
+            self.cr.upgrade_session_title("_default", sess.sid)
+            self.assertEqual(self.cr.upgrade_session_title("_default", sess.sid), "")
+        self.assertEqual(len(seen), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
