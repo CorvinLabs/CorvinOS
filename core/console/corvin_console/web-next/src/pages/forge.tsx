@@ -7,6 +7,7 @@ import {
   TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Loader2 } from 'lucide-react';
+import { api } from '@/lib/api';
 import ToolsTab from '@/components/forge/ToolsTab';
 import SkillsTab from '@/components/forge/SkillsTab';
 import OSSkillsTab from '@/components/forge/OSSkillsTab';
@@ -70,26 +71,24 @@ export default function ForgePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch all data on mount
+  // Fetch all data on mount. Uses the shared `api()` client (not raw
+  // `fetch`) so this page gets the same request timeout and 401-session-
+  // renewal handling every other panel gets — see lib/api/client.ts. Raw
+  // `fetch` here previously meant a hung backend left the page spinning
+  // forever (no timeout to reject it) and a transient session hiccup any
+  // other panel silently recovers from instead surfaced as an opaque
+  // "Failed to fetch forge data" with no indication of which call failed
+  // or why.
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [toolsRes, skillsRes, osSkillsRes, graphRes] = await Promise.all([
-          fetch('/v1/console/forge/tools'),
-          fetch('/v1/console/forge/skills'),
-          fetch('/v1/console/forge/os-skills'),
-          fetch('/v1/console/forge/graph'),
+        const [toolsData, skillsData, osSkillsData, graphData] = await Promise.all([
+          api<{ tools?: ForgeTool[] }>('/forge/tools'),
+          api<{ skills?: ForgeSkill[] }>('/forge/skills'),
+          api<{ os_skills?: ForgeOSSkill[] }>('/forge/os-skills'),
+          api<{ edges?: ForgeDependency[] }>('/forge/graph'),
         ]);
-
-        if (!toolsRes.ok || !skillsRes.ok || !osSkillsRes.ok || !graphRes.ok) {
-          throw new Error('Failed to fetch forge data');
-        }
-
-        const toolsData = await toolsRes.json();
-        const skillsData = await skillsRes.json();
-        const osSkillsData = await osSkillsRes.json();
-        const graphData = await graphRes.json();
 
         setTools(toolsData.tools || []);
         setSkills(skillsData.skills || []);
