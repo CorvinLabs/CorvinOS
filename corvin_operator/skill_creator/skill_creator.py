@@ -283,6 +283,43 @@ def normalize_method(raw: Any) -> str:
     return text
 
 
+def shorten_method(raw: Any, max_len: int = METHOD_LEN[1]) -> str:
+    """Trim an over-long method body to the contract without corrupting it.
+
+    Measured live failure: a REFINE round grew an already near-cap method
+    from `assistant.pptx_video_builder` to 5165/5000 chars — "Method length
+    5165 outside range [100, 5000]" failed the whole run at Phase 2. The one
+    engine-call repair round (`SkillPlanner.repair`) asks the model to shrink
+    it, but that is not reliable for a body this size, and a ~3% overage
+    should not cost a multi-minute run. Trimmed deterministically, same shape
+    as `shorten_purpose`: prefer a Markdown section/paragraph boundary so the
+    cut reads cleanly, then a sentence boundary, else a word boundary with an
+    ellipsis. The leading heading (Rule 5) is always preserved since the cut
+    only removes text from the end.
+
+    Too SHORT is not repaired here — that is a real defect in the generated
+    spec, and the validator rejects it.
+    """
+    text = str(raw or "")
+    if len(text) <= max_len:
+        return text
+
+    window = text[:max_len]
+    section_break = max(window.rfind("\n\n#"), window.rfind("\n\n"))
+    if section_break >= int(max_len * 0.5):
+        return window[:section_break].rstrip() + "\n"
+
+    sentence_end = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+    if sentence_end >= int(max_len * 0.5):
+        return window[: sentence_end + 1].rstrip()
+
+    word_window = text[: max_len - 1]
+    cut = word_window.rfind(" ")
+    if cut < int(max_len * 0.5):
+        cut = max_len - 1
+    return word_window[:cut].rstrip() + "…"
+
+
 def normalize_spec(spec: "SkillSpec") -> "SkillSpec":
     """Apply every deterministic, meaning-preserving fix before validation.
 
@@ -297,7 +334,7 @@ def normalize_spec(spec: "SkillSpec") -> "SkillSpec":
             **spec.__dict__,
             "name": normalize_skill_name(spec.name, spec.scope),
             "purpose": shorten_purpose(spec.purpose),
-            "method": normalize_method(spec.method),
+            "method": shorten_method(normalize_method(spec.method)),
         }
     )
 

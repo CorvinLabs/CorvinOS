@@ -45,6 +45,7 @@ from skill_creator.skill_creator import (
     normalize_skill_name,
     normalize_spec,
     shorten_purpose,
+    shorten_method,
 )
 
 
@@ -550,6 +551,44 @@ class TestMethodNormalisation:
         assert normalize_method("\n\n# Title\n\nBody").startswith("# Title")
 
 
+class TestMethodShortening:
+    def test_measured_live_failure_is_trimmed_not_rejected(self):
+        """The measured live failure: refining `assistant.pptx_video_builder`
+        grew the method to 5165/5000 and failed the whole run. A ~3% overage
+        must be trimmed, not rejected."""
+        body = "# PPTX Video Builder\n\n" + ("Follow these clear steps. " * 200)
+        assert len(body) > METHOD_LEN[1]
+        out = shorten_method(body)
+        assert len(out) <= METHOD_LEN[1]
+        assert out.startswith("# PPTX Video Builder")
+
+    def test_cuts_at_a_section_boundary_when_one_is_available(self):
+        head = "# Title\n\n" + ("Step. " * 10)
+        section = "\n\n## Next Section\n\n" + ("More. " * 1000)
+        body = head + section
+        # +2 admits only the section's leading blank line into the window,
+        # not the heading itself — the cut must land before "## Next Section".
+        out = shorten_method(body, max_len=len(head) + 2)
+        assert out.rstrip("\n") == head.rstrip()
+
+    def test_no_usable_boundary_cuts_at_a_word_with_an_ellipsis(self):
+        body = "# Title\n\n" + " ".join(["word"] * 2000)
+        out = shorten_method(body, max_len=100)
+        assert len(out) <= 100
+        assert out.endswith("…")
+
+    def test_method_within_bounds_is_unchanged(self):
+        body = "# Title\n\nShort body."
+        assert shorten_method(body) == body
+
+    def test_too_short_is_not_padded(self):
+        """Too short is a real defect — the validator must still see it."""
+        out = shorten_method("# T\n\ntiny")
+        assert out == "# T\n\ntiny"
+        with pytest.raises(ValidationError, match="Method length"):
+            SkillValidator().validate(_spec(method=out))
+
+
 class TestNormalizeSpec:
     def test_normalises_name_purpose_and_method_together(self):
         spec = normalize_spec(_spec(
@@ -626,6 +665,31 @@ class TestValidateWithRepair:
 
         assert out.name == "assistant.json_syntax_check"
         assert len(out.purpose) <= PURPOSE_LEN[1]
+        assert client.messages.create.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_overlong_method_from_a_refine_round_is_repaired_without_an_engine_call(
+        self, tmp_path,
+    ):
+        """E2E reproduction of the reported failure: refining
+        `assistant.pptx_video_builder` returned a 5165-char method and the
+        run died at Phase 2 with "Method length 5165 outside range
+        [100, 5000]". The refine round's own output is now run through the
+        same deterministic normalisation as any other spec, so the overage
+        never reaches the validator."""
+        client = MagicMock()
+        orch = SkillCreatorOrchestrator(client, str(tmp_path))
+
+        overlong = _spec(
+            name="assistant.pptx_video_builder",
+            method="# PPTX Video Builder\n\n" + ("Follow these clear steps. " * 200),
+        )
+        assert len(overlong.method) > METHOD_LEN[1]  # reproduces the 5165/5000 overage
+
+        out = await orch._validate_with_repair(overlong)
+
+        assert METHOD_LEN[0] <= len(out.method) <= METHOD_LEN[1]
+        assert out.method.startswith("# PPTX Video Builder")
         assert client.messages.create.call_count == 0
 
 

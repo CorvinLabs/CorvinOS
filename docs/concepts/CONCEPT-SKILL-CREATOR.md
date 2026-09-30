@@ -494,17 +494,23 @@ File: ~/.claude/skills/assistant.analyze_local_files.md
 
 **Normalise → validate → repair once → validate (ADR-0405).** Phase 1
 generates freely and this gate is fail-closed, so without a step in between a
-formatting slip destroys a run that already cost minutes of engine time. Both
-live failures were exactly that: `assistant.json-syntax-check` and
-`Purpose length 201 outside range [20, 200]`.
+formatting slip destroys a run that already cost minutes of engine time. Three
+live failures were exactly that: `assistant.json-syntax-check`,
+`Purpose length 201 outside range [20, 200]`, and a REFINE round on
+`assistant.pptx_video_builder` that grew an already near-cap method to
+`Method length 5165 outside range [100, 5000]`.
 
 1. `normalize_spec` — meaning-preserving only: name separators → `_`,
    whitespace collapse, ```` ``` ````-fence and leading-blank-line stripping,
    over-long purpose trimmed at a sentence boundary (or a word boundary with
-   `…`). Costs no engine call. Too-short is never padded.
+   `…`), over-long method trimmed the same way (preferring a Markdown
+   section/paragraph boundary, then a sentence boundary, then a word
+   boundary with `…` — the leading heading survives because the cut only
+   removes text from the end). Costs no engine call. Too-short is never
+   padded.
 2. `SkillValidator.collect_violations` — ALL violations, not just the first.
 3. One `SkillPlanner.repair` call with that list, for what normalisation
-   cannot fix (method length, forbidden patterns).
+   cannot fix (forbidden patterns, too-short purpose/method).
 4. `validate` — raises exactly as before if anything survives.
 
 **Fail:** Skill-Creator returns errors; user cannot override.
