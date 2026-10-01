@@ -859,6 +859,27 @@ A rejection's reason stays on the answering side by protocol design (the
 signed `rejected` response carries no reason); the feed says so instead of
 guessing.
 
+**Console chat embedding (2026-10-01).** The chat page's status bar has a
+**Relay** toggle that mounts the same `AgentLiveFeed` component as a panel in
+place of the message list (`web-next/src/pages/chat.tsx`, mutually exclusive
+with the audit panel). It is composition, not a merge: feed records carry
+`peer_id`/`task_id` but no chat session id, so the panel shows the host
+tenant's whole feed and never writes into chat history. No new endpoint, no
+flag. The embedding wraps the feed in `overflow-hidden` because the
+component's outer `min-h-[34rem]` is sized for the full Agent Hub page.
+E2E: `web-next/tests/e2e/chat-relay-panel.spec.ts` (real console, no API
+mocks).
+
+**Agent-initiated relay depends on the persona MCP wiring.** For the chat or
+bridge *agent* to send A2A itself it needs `mcp__corvin_orchestration__a2a_send`,
+which the cowork resolver attaches only for a persona file with
+`orchestration_enabled: true`. Measured 2026-10-01: commit `c93ef9915`
+(2026-09-06) deleted every persona JSON, so the resolver attaches no
+forge / skill_forge / corvin_orchestration server on any surface — every
+live worker carried only `imagegen-zero-config`, and
+`core/console/tests/test_chat_mcp_wiring.py` fails 4/4. Operator-initiated
+relay (the panel composer, `POST /a2a/feed/send`) is unaffected.
+
 Tests: `corvin_operator/bridges/shared/test_a2a_feed.py` (real sender → real
 receiver over HTTP: four records per exchange, forged envelope stores nothing,
 broken store never breaks a send, retention, clear),

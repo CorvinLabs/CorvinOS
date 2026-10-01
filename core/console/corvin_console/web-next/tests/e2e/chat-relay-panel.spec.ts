@@ -14,8 +14,13 @@
  *     real GET /a2a/feed endpoint) — proven by its "peers" empty-state
  *     reaching render without a JS error, not by a mocked response
  *  5. Closing the panel (X button) restores the message list
- *  6. Opening Relay while the Audit panel is open closes Audit (mutually
- *     exclusive panels) and vice versa
+ *  6. Fallback: with GET /a2a/feed failing, the panel shows the error instead
+ *     of crashing, and the chat input works again after closing it
+ *  7. The toggle reflects open/closed state
+ *
+ * Not covered here: Audit ↔ Relay mutual exclusion. The only in-app path that
+ * opens the audit panel is a TDE-graph link on a message bubble, which needs
+ * a completed turn with TDE data.
  */
 
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
@@ -108,6 +113,31 @@ test.describe("Chat Relay Activity panel", () => {
       // Close via the panel's own X button.
       await page.getByRole("button", { name: "Close Relay Activity panel" }).click();
       await expect(page.getByText("Relay Activity — all A2A peer traffic on this instance")).toHaveCount(0);
+
+      expect(jsErrors, `Unexpected JS errors: ${jsErrors.join("; ")}`).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("feed backend down: panel shows the error, chat recovers on close", async () => {
+    const page = await sharedContext.newPage();
+    const jsErrors = attachJsErrorCollector(page);
+    try {
+      // Fault injection on the feed only — the chat itself stays real.
+      await page.route("**/v1/console/a2a/feed**", (route) => route.abort("failed"));
+      await page.goto(`${BASE_URL}/app/chat/${sid}`, { waitUntil: "load" });
+      await page.waitForTimeout(1500);
+
+      await page.getByRole("button", { name: "Relay", exact: true }).click();
+      await expect(page.getByText("Relay Activity — all A2A peer traffic on this instance")).toBeVisible();
+      // AgentLiveFeed surfaces the fetch error as text instead of crashing.
+      await expect(page.getByText("Failed to fetch")).toBeVisible({ timeout: 8000 });
+
+      await page.getByRole("button", { name: "Close Relay Activity panel" }).click();
+      const input = page.getByPlaceholder("Message Corvin…");
+      await expect(input).toBeVisible();
+      await expect(input).toBeEditable();
 
       expect(jsErrors, `Unexpected JS errors: ${jsErrors.join("; ")}`).toEqual([]);
     } finally {

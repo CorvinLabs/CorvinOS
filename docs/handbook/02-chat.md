@@ -51,6 +51,15 @@ Messages flow top-to-bottom with the most recent at the bottom.
 | Person icon (right of your messages) | Identifies you as the sender |
 | Star/sparkle icon (left of AI responses) | Identifies the AI persona |
 
+### Status bar (above the input)
+
+| Element | Meaning |
+|---|---|
+| **Engine** pill | Current AI engine — click to change routing |
+| **Persona** pill | Active persona — click to manage |
+| **Voice on/off** pill | Toggle voice-note synthesis for responses |
+| **Relay** pill | Show / hide the Relay Activity panel (A2A traffic with paired agents) |
+
 ### Message input area (bottom)
 
 | Element | Meaning |
@@ -78,6 +87,25 @@ Click **Voice on** in the top bar. The AI's next response will be synthesised as
 ### Review the audit trail for a session
 
 Click **Audit** in the top bar. This opens the audit log filtered to events for the current session — useful to verify consent was granted, which engine was used, and that all turns were recorded.
+
+### Watch or message connected agents (A2A relay)
+
+Click **Relay** in the status bar. The conversation is replaced by the Relay
+Activity panel — the same live feed as the [Agent Hub](19-agent-hub.md):
+every task this instance sent to or received from a paired CorvinOS
+instance, the peer's reply and the attachments. You can send a peer a task
+from the panel's own composer; sending returns immediately and the reply
+appears when the peer answers, so the chat stays usable meanwhile.
+
+- The panel shows **all** A2A traffic of this instance, not only traffic
+  related to the open chat — A2A messages are tied to a peer, not to a chat
+  session.
+- Relay messages never enter the chat's own history; the two stay separate.
+- Opening it closes the audit panel and vice versa. Click **Relay** again or
+  the **×** to return to the conversation; **Open Agent Hub** jumps to the
+  full page (pairing, connections, audit trail).
+- A2A belongs to the instance's host tenant. A session of another tenant
+  sees an error in the panel instead of a feed.
 
 ### Use `/btw` for mid-stream injection
 
