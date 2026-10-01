@@ -73,7 +73,6 @@ class CreationResult:
 
     # Metadata
     generated_at: str = ""
-    test_count: int = 0
     validation_errors: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -82,6 +81,5 @@ class CreationResult:
             "artifact_name": self.artifact_name,
             "artifact_type": self.artifact_type.value,
             "artifact_body_length": len(self.artifact_body),
-            "test_count": self.test_count,
             "validation_errors": self.validation_errors,
         }

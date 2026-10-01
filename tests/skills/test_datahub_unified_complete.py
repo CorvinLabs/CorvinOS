@@ -214,7 +214,7 @@ class TestE2EPipeline:
         assert result.success
         assert result.artifact_name == "user_skill"
         assert len(result.artifact_body) > 100
-        assert result.test_count > 0
+        assert result.validation_errors == []
 
 
 if __name__ == "__main__":

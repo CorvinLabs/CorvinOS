@@ -22,9 +22,6 @@ class UnifiedCreator:
         # Phase 4: Validate artifact
         validation_errors = self._validate_artifact(artifact_body, request.creation_type)
 
-        # Phase 5: Add tests
-        tests = self._generate_tests(artifact_body, request.creation_type)
-
         # Phase 6: Optimize
         artifact_body = self._optimize_artifact(artifact_body)
 
@@ -37,7 +34,6 @@ class UnifiedCreator:
             artifact_type=request.creation_type,
             artifact_body=artifact_body,
             generated_at=datetime.utcnow().isoformat() + "Z",
-            test_count=len(tests),
             validation_errors=validation_errors,
         )
 
@@ -169,21 +165,6 @@ def {request.name.lower().replace('-', '_')}(data):
             errors.append("Skill missing Pattern section")
 
         return errors
-
-    def _generate_tests(self, body: str, artifact_type: CreationType) -> list:
-        """Generate tests for artifact (Phase 5)."""
-
-        tests = []
-
-        if artifact_type == CreationType.SKILL:
-            tests.append("test_skill_generated")
-            tests.append("test_skill_pattern_present")
-
-        elif artifact_type == CreationType.TOOL:
-            tests.append("test_tool_callable")
-            tests.append("test_tool_input_validation")
-
-        return tests
 
     def _optimize_artifact(self, body: str) -> str:
         """Optimize artifact (Phase 6)."""

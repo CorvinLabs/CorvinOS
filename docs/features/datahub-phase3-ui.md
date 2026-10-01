@@ -1,208 +1,109 @@
-# DataHub Phase 3: Console UI + HTTP Wiring
+# DataHub: Console Panel + HTTP API
 
-**Status:** ✅ Production Ready (k=1-5 complete)  
-**Implemented:** 2026-09-16  
-**ADR:** ADR-0510 (VIBE Engineering Hub), ADR-0512 (Vector Semantic Layer)
+**Status:** Working end to end since 2026-10-01 (backend E2E
+`core/console/tests/test_datahub_api_e2e.py`, browser E2E
+`web-next/tests/e2e/panel-datahub-unified.spec.ts`)
+**ADRs:** ADR-0661 (security scan before any model input), ADR-0510
 
----
+## What was broken until 2026-10-01
 
-## Overview
+The panel had never produced an artifact:
 
-DataHub Phase 3 brings the unified data artifact creation system to the CorvinOS console via HTTP API + React UI.
+- it posted to `/v1/datahub/ingest` and `/v1/datahub/create`, which do not exist (404);
+- `POST /v1/console/datahub/create` answered 500 on every call (`rec.user_id` — the
+  session record has no such field); a test with a hand-made session hid it;
+- `GET /datahub/list` was declared after `GET /datahub/{artifact_id}` and never matched;
+- CSV ingestion was a stub returning no rows; SQL/API/Parquet returned `[]` and still
+  produced a "completed" artifact; the generated body was thrown away;
+- `test_count` counted names of tests nothing ever wrote;
+- the ADR-0661 security scanner never ran, nothing was audited, and `data_path`
+  could read another tenant's files.
 
-### Features
-
-- **Create** artifacts (Skills, Tools, Datasets, Pipelines) from data sources
-- **List** all artifacts with pagination
-- **Retrieve** artifact metadata and preview
-- **Delete** artifacts (soft delete, audit-logged)
-
-### Architecture
+## Flow
 
 ```
-Console UI (React) → HTTP Routes (FastAPI) → DataHub Skills (Phase 1-2) → Storage
+DataHub panel (pages/datahub-unified.tsx)
+  → POST /v1/console/datahub/analyze   read + scan the file, show rows/fields/scan
+  → POST /v1/console/datahub/create    generate the artifact, store it
+  → GET  /v1/console/datahub/list | /{id} | DELETE /{id}
+        └─ core/skills/os_skills/datahub_unified  (ingest, describe)
+           └─ core/skills/os_skills/data_hub/security/scanner.py  (ADR-0661 scanner)
 ```
 
----
+One ingestion path and one scanner: `datahub_unified` scans every row with the
+`data_hub` scanner; there is no second, unscanned path.
 
-## HTTP API Reference
+## HTTP API
 
-### Create Artifact
+All routes need a console session; `POST`/`DELETE` also need `X-CSRF-Token` (the
+SPA's fetch wrapper adds it). The tenant comes from the session.
 
-**Endpoint:** `POST /v1/console/datahub/create`
+### Source fields (analyze and create)
 
-**Request:**
-```json
-{
-  "name": "user_profiler_skill",
-  "description": "Analyzes user behavior data",
-  "creation_type": "skill",
-  "data_source": "json",
-  "data_path": "/data/users.json",
-  "sample_rows": 100,
-  "complexity": "medium"
-}
-```
+| Field | Rule |
+|---|---|
+| `data_source` | `json` or `csv`. `sql`, `api`, `parquet` → 400 "not supported on this build" |
+| `data_path` | a file on the host, ≤ 50 MB, extension matching `data_source`. A path inside the Corvin home that is not this tenant's home → 400 |
+| `sample_rows` | 1–10000 (default 100) |
 
-**Response (201 Created):**
-```json
-{
-  "artifact_id": "a3b4c5d6",
-  "status": "completed",
-  "message": "Artifact created successfully",
-  "metadata": { ... }
-}
-```
+### POST /datahub/analyze
 
-### Retrieve Artifact
+→ `{"analysis": {"row_count", "sample_rows", "schema", "completeness", "security": {"secret", "pii", "injection"}}}`
 
-**Endpoint:** `GET /v1/console/datahub/{artifact_id}`
+`completeness` counts `null` and `""` as empty. `security` counts matches from the
+ADR-0661 scanner; values are never returned.
 
-**Response (200 OK):**
-```json
-{
-  "artifact_id": "a3b4c5d6",
-  "name": "user_profiler_skill",
-  "description": "Analyzes user behavior data",
-  "creation_type": "skill",
-  "created_at": "2026-09-16T10:30:45Z",
-  "status": "completed",
-  "test_count": 5,
-  "validation_errors": []
-}
-```
+### POST /datahub/create (201)
 
-### Delete Artifact
+Body: the source fields plus `name`, `description`, `creation_type`
+(`skill`/`tool`/`dataset`/`pipeline`), `complexity` (`low`/`medium`/`high`).
 
-**Endpoint:** `DELETE /v1/console/datahub/{artifact_id}`
+| Answer | When |
+|---|---|
+| 201 `{artifact_id, status, message, metadata}` | created (`status: completed`, or `failed` with `validation_errors`) |
+| 409 | a live artifact with this name exists |
+| 422 | the source contains a secret, or has no rows |
+| 400 | invalid source (see above) or unreadable file |
 
-**Response (200 OK):**
-```json
-{
-  "status": "deleted",
-  "artifact_id": "a3b4c5d6"
-}
-```
+`metadata`: `artifact_id, name, description, creation_type, created_at, status,
+row_count, validation_errors`. The generated text describes the rows actually read.
 
-### List Artifacts
+### GET /datahub/list?limit=50&offset=0
 
-**Endpoint:** `GET /v1/console/datahub/list?limit=50&offset=0`
+→ `{items: [metadata…], total, limit, offset}`, newest first, deleted ones omitted.
 
-**Response (200 OK):**
-```json
-{
-  "items": [ ... ],
-  "total": 42,
-  "limit": 50,
-  "offset": 0
-}
-```
+### GET /datahub/{artifact_id}
 
----
+→ metadata plus `body` (the generated text). `artifact_id` is 8 hex characters;
+anything else → 404.
 
-## Console UI (React Component)
+### DELETE /datahub/{artifact_id}
 
-### DataHubPanel
+Soft delete → `{"status": "deleted", "artifact_id"}`.
 
-**Location:** `core/console/corvin_console/web-next/src/components/DataHubPanel.tsx`
+## Storage and audit
 
-**Features:**
-- **Create tab:** Form for new artifact creation
-- **List tab:** Paginated artifact list with delete action
-- **Status badges:** Visual indicator for artifact status
-- **Error handling:** User-friendly error alerts
+Artifacts: `<tenant global>/datahub_artifacts/<artifact_id>.json`, written atomically
+at mode `0600`. Each create and delete chains one `console.action_performed` record
+(`action: datahub.create | datahub.delete`, `target_kind: datahub_artifact`,
+`target_id: <artifact_id>`) to the tenant audit chain. Names, descriptions and data
+never enter the chain.
 
-**Usage:**
-```tsx
-import { DataHubPanel } from '@/components/DataHubPanel';
+## Tests
 
-export default function DataHubPage() {
-  return <DataHubPanel />;
-}
-```
-
----
-
-## Data Models
-
-### Artifact Status
-- `pending` → Creation in progress
-- `completed` → Creation successful
-- `failed` → Creation failed
-- `deleted` → Soft deleted (record preserved)
-
-### Creation Types
-- `skill` → Reusable skill
-- `tool` → MCP tool
-- `dataset` → Data snapshot
-- `pipeline` → Workflow
-
-### Data Sources
-- `json` → JSON file/array
-- `csv` → CSV file
-- `sql` → SQL query
-- `api` → HTTP API
-- `parquet` → Parquet file
-
----
-
-## Tenant Isolation
-
-All operations are tenant-scoped:
-
-**Storage:** `~/.corvin/tenants/<tenant_id>/global/datahub_artifacts/`
-
-**Security:** Every HTTP route filters by `SessionRecord.tenant_id`
-
----
-
-## Audit Trail
-
-All create/delete operations logged:
-
-```json
-{
-  "timestamp": "2026-09-16T10:30:45Z",
-  "event_type": "artifact_created",
-  "artifact_id": "a3b4c5d6",
-  "tenant_id": "_default",
-  "created_by": "user@example.com"
-}
-```
-
----
-
-## Testing
-
-### Unit Tests
 ```bash
-pytest tests/skills/test_datahub_unified_complete.py -v
+pytest core/console/tests/test_datahub_api_e2e.py        # real router + session, sandbox chain
+pytest tests/skills/test_datahub_unified_complete.py
+cd core/console/corvin_console/web-next && \
+  npx playwright test tests/e2e/panel-datahub-unified.spec.ts --project=chromium   # live console
 ```
 
-### E2E Tests
-```bash
-pytest tests/skills/test_datahub_phase3_http_e2e.py -v
-```
+The browser spec uses plain `@playwright/test`, not `panel-fixtures`: that fixture
+mocks `/auth/whoami` without a `csrf_token`, under which no raw-fetch mutation can
+succeed.
 
-Tests cover: CRUD operations, pagination, conflict handling, error cases.
+## Not covered
 
----
-
-## Deployment
-
-No special configuration required. Routes are always available once the console plugin boots.
-
----
-
-## Implementation Files
-
-- **HTTP Routes:** `core/console/corvin_console/routes/datahub_api.py`
-- **React Component:** `core/console/corvin_console/web-next/src/components/DataHubPanel.tsx`
-- **Tests:** `tests/skills/test_datahub_phase3_http_e2e.py`
-- **App Integration:** `core/console/corvin_console/app.py`
-
----
-
-**Version:** Phase 3 (HTTP + UI)  
-**Last Updated:** 2026-09-16  
-**Author:** Claude Haiku 4.5
+The DataHub Creator workspace (`panels/datahub-creator/`, ADR-0878) is a separate
+surface backed by `routes/datahub_creator_routes.py` (`/v1/console/datahub/projects*`). It is
+registered in neither `PANELS` nor `NAV_GROUPS`, so no route mounts it.

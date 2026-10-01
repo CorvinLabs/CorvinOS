@@ -97,7 +97,6 @@ def test_datahub_api_creation():
         "artifact_name": result.artifact_name,
         "artifact_type": result.artifact_type.value,
         "artifact_body_length": len(result.artifact_body),
-        "test_count": result.test_count,
         "validation_errors": result.validation_errors
     }
 
