@@ -1972,7 +1972,10 @@ class RemoteTriggerReceiver:
         # silently. Invalid signature → WARNING audit event; envelope is NOT
         # rejected (an invalid CorvinID cert is an attestation-quality signal,
         # not an auth failure — HMAC already authenticated the sender).
-        if env.corvin_id_jwt and _IBC_JWT_OK:
+        # A CORVIN-prefixed value is the Ed25519 IBC, verified in step 6.9;
+        # RS256 can never accept it and would audit a false failure.
+        if (env.corvin_id_jwt and _IBC_JWT_OK
+                and not env.corvin_id_jwt.startswith("CORVIN-")):
             try:
                 import jwt as _cid_jwt_mod  # noqa: PLC0415
                 # Read the RS256 trust anchor (same key used for IBC and network attestation).

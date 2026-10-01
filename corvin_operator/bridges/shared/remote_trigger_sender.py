@@ -134,6 +134,7 @@ try:
         get_ibc_jwt as _get_ibc_jwt,
         sign_payload as _sign_payload,
         build_canonical_payload as _build_canonical_payload,
+        _decode_corvin_claims_unverified,
     )
     _IBC_AVAILABLE = True
 except ImportError:
@@ -1925,12 +1926,9 @@ class RemoteTriggerSender:
                         instruction=instruction,
                     )
                     sig = _sign_payload(canonical)
-                    # Extract jti from IBC JWT (decode without verify — already
-                    # verified at bind time; we only need the claim value).
-                    import jwt as _jwt_mod  # noqa: PLC0415
-                    ibc_decoded = _jwt_mod.decode(
-                        ibc_jwt, options={"verify_signature": False}
-                    )
+                    # Read jti without verifying (verified at bind time). The IBC
+                    # is a CORVIN-<h>.<p>.<s> token, which PyJWT cannot parse.
+                    ibc_decoded = _decode_corvin_claims_unverified(ibc_jwt)
                     # GDPR Art. 6(1)(b) basis: the full IBC JWT is transmitted to
                     # peers as part of the A2A pairing contract. Peers are trusted
                     # operators under the same pairing agreement; the `email` claim
