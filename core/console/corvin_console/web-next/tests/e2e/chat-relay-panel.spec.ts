@@ -9,7 +9,8 @@
  * Covers:
  *  1. Navigate to a real chat session via the real server (no API mocking)
  *  2. The panel is closed by default — message list visible, no relay chrome
- *  3. Clicking "Relay" opens the panel and hides the message list
+ *  3. Clicking "Relay" opens the panel, hides the chat composer and keeps the
+ *     feed's own composer inside the viewport (1280x720)
  *  4. The panel renders through the REAL AgentLiveFeed component (hits the
  *     real GET /a2a/feed endpoint) — proven by its "peers" empty-state
  *     reaching render without a JS error, not by a mocked response
@@ -96,23 +97,30 @@ test.describe("Chat Relay Activity panel", () => {
     const jsErrors = attachJsErrorCollector(page);
     try {
       await page.goto(`${BASE_URL}/app/chat/${sid}`, { waitUntil: "load" });
-      await page.waitForTimeout(1500);
-
       const relayToggle = page.getByRole("button", { name: "Relay", exact: true });
       await expect(relayToggle).toBeVisible();
+      const chatInput = page.getByPlaceholder("Message Corvin…");
+      await expect(chatInput).toBeVisible();
 
       // Closed by default.
       await expect(page.getByText("Relay Activity — all A2A peer traffic on this instance")).toHaveCount(0);
 
-      // Open — panel chrome appears, hits the real backend (no route mocking
-      // in this spec at all), message list area is hidden.
+      // Open: the real feed loads (its agent rail renders from GET /a2a/feed),
+      // the chat composer gives way so only one input is on screen, and the
+      // feed's own composer area is inside the viewport at Playwright's
+      // default 1280x720 — a clipped composer is the regression this guards.
       await relayToggle.click();
       await expect(page.getByText("Relay Activity — all A2A peer traffic on this instance")).toBeVisible();
-      await page.waitForTimeout(1000); // let AgentLiveFeed's initial poll land
+      await expect(page.getByText("Agents", { exact: true })).toBeVisible();
+      await expect(chatInput).toBeHidden();
+      const feedComposer = page.getByText("Pick an agent on the left to message it.")
+        .or(page.getByRole("button", { name: /send/i }).last());
+      await expect(feedComposer.first()).toBeInViewport({ ratio: 1 });
 
-      // Close via the panel's own X button.
+      // Close via the panel's own X button: the conversation and its composer return.
       await page.getByRole("button", { name: "Close Relay Activity panel" }).click();
       await expect(page.getByText("Relay Activity — all A2A peer traffic on this instance")).toHaveCount(0);
+      await expect(chatInput).toBeVisible();
 
       expect(jsErrors, `Unexpected JS errors: ${jsErrors.join("; ")}`).toEqual([]);
     } finally {
@@ -127,8 +135,6 @@ test.describe("Chat Relay Activity panel", () => {
       // Fault injection on the feed only — the chat itself stays real.
       await page.route("**/v1/console/a2a/feed**", (route) => route.abort("failed"));
       await page.goto(`${BASE_URL}/app/chat/${sid}`, { waitUntil: "load" });
-      await page.waitForTimeout(1500);
-
       await page.getByRole("button", { name: "Relay", exact: true }).click();
       await expect(page.getByText("Relay Activity — all A2A peer traffic on this instance")).toBeVisible();
       // AgentLiveFeed surfaces the fetch error as text instead of crashing.
@@ -149,8 +155,6 @@ test.describe("Chat Relay Activity panel", () => {
     const page = await sharedContext.newPage();
     try {
       await page.goto(`${BASE_URL}/app/chat/${sid}`, { waitUntil: "load" });
-      await page.waitForTimeout(1500);
-
       const relayToggle = page.getByRole("button", { name: "Relay", exact: true });
       await expect(relayToggle).toHaveAttribute(
         "title",

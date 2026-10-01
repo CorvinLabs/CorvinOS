@@ -596,7 +596,7 @@ function Composer({ peer, onSent }: { peer: A2AFeedPeer; onSent: () => void }) {
 
 // ── main ───────────────────────────────────────────────────────────
 
-export function AgentLiveFeed() {
+export function AgentLiveFeed({ className }: { className?: string } = {}) {
   const { session } = useAuth();
   const [messages, setMessages] = React.useState<A2AFeedMessage[]>([]);
   const [peersList, setPeersList] = React.useState<A2AFeedPeer[]>([]);
@@ -835,8 +835,11 @@ export function AgentLiveFeed() {
     }
   }
 
+  // minmax(0,1fr) on both axes: an auto row grows to the agent rail's height
+  // (many peers) and a 1fr column grows to the widest unbreakable string in
+  // a message — either pushes the composer out of the clipped box.
   return (
-    <div className="grid h-[calc(100vh-15rem)] min-h-[34rem] grid-cols-1 overflow-hidden rounded-2xl border border-border bg-card/30 md:grid-cols-[16rem_1fr]">
+    <div className={cn("grid h-[calc(100vh-15rem)] min-h-[34rem] grid-cols-1 grid-rows-[minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card/30 md:grid-cols-[16rem_minmax(0,1fr)]", className)}>
       {/* ── agent rail ── */}
       <aside className="hidden flex-col border-r border-border bg-muted/20 md:flex">
         <div className="flex items-center justify-between px-4 pb-2 pt-4">

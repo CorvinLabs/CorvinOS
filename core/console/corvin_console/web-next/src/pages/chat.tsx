@@ -816,6 +816,13 @@ function ChatPane({
   // to filter by even if we wanted to inline it. The panel shows ALL
   // host-tenant A2A traffic, not just traffic related to this chat.
   const [relayOpen, setRelayOpen] = React.useState(false);
+  // display:none resets the hidden list's scroll position; return to the
+  // newest message when it becomes visible again.
+  React.useEffect(() => {
+    if (relayOpen || auditOpen) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [relayOpen, auditOpen]);
   const [workdirInfo, setWorkdirInfo] = React.useState<{ path: string; opened: boolean; error?: string } | null>(null);
   // Voice-out is on by default — the operator can flip it off via the
   // toggle in the chat header, the choice is then session-local.
@@ -1468,6 +1475,9 @@ function ChatPane({
   const setInputRef = React.useRef(setInput);
   const sendUserRef = React.useRef(sendUser);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  // The relay panel has its own textarea; Space there is typing, not PTT.
+  const relayOpenRef = React.useRef(relayOpen);
+  relayOpenRef.current = relayOpen;
   React.useEffect(() => {
     recordingRef.current = recording;
     if (recording) pttPendingRef.current = false; // recording confirmed — clear pending
@@ -1497,6 +1507,7 @@ function ChatPane({
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code !== "Space" || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
       if (isNativeSpaceTarget(e.target)) return;
+      if (relayOpenRef.current) return;
       if (recordingRef.current || streamingRef.current) return;
 
       // Outside textarea → prevent default immediately (no character typed).
@@ -1825,12 +1836,11 @@ function ChatPane({
               </button>
             </div>
           </div>
-          {/* overflow-hidden clips AgentLiveFeed's own min-h-[34rem] (sized
-              for its full-page Agent Hub context) to this panel's flex
-              slot — without it the inner component pushes past the
-              available height and overlaps the status bar below. */}
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <AgentLiveFeed />
+          {/* The feed's own height (100vh-15rem, min 34rem) is sized for the
+              Agent Hub page; here it must fill the slot instead, or its
+              composer ends up below the visible edge. */}
+          <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
+            <AgentLiveFeed className="h-auto min-h-0 flex-1 rounded-none border-0" />
           </div>
         </div>
       )}
@@ -1926,7 +1936,9 @@ function ChatPane({
         }}
       />
 
-      <footer className="bg-background/95 px-8 py-4">
+      {/* Hidden, not unmounted, while the relay panel is open: one composer
+          at a time, and the chat draft survives. */}
+      <footer className={cn("bg-background/95 px-8 py-4", relayOpen && "hidden")}>
         <div className="mx-auto w-full max-w-4xl space-y-2">
           {/* Hidden file input */}
           <input

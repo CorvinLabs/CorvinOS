@@ -865,10 +865,23 @@ place of the message list (`web-next/src/pages/chat.tsx`, mutually exclusive
 with the audit panel). It is composition, not a merge: feed records carry
 `peer_id`/`task_id` but no chat session id, so the panel shows the host
 tenant's whole feed and never writes into chat history. No new endpoint, no
-flag. The embedding wraps the feed in `overflow-hidden` because the
-component's outer `min-h-[34rem]` is sized for the full Agent Hub page.
+flag. `AgentLiveFeed` takes a `className` the chat uses to make it a flex
+item (`h-auto min-h-0 flex-1`) instead of its page-sized
+`h-[calc(100vh-15rem)] min-h-[34rem]`. While the panel is open the chat's own
+composer is hidden (not unmounted, the draft survives) and Space does not
+trigger push-to-talk, so exactly one input is on screen.
+
+**Layout invariant of the feed grid** (fixed 2026-10-01, Agent Hub too): both
+axes must be `minmax(0,1fr)` — `grid-rows-[minmax(0,1fr)]` and
+`md:grid-cols-[16rem_minmax(0,1fr)]`. With an `auto` row the agent rail's
+content height (18 peers on this install) sets the row height; with a plain
+`1fr` column one unbreakable string in a message widened the column to
+131 202 px. Either pushes the composer, own replies, the Live toggle and the
+clear button out of the clipped box. It is invisible on an install with few
+peers and short messages, which is why no test saw it.
 E2E: `web-next/tests/e2e/chat-relay-panel.spec.ts` (real console, no API
-mocks).
+mocks) asserts the feed's composer is in the 1280x720 viewport; it fails with
+either `minmax` reverted (positive control run 2026-10-01).
 
 **Agent-initiated relay depends on the persona MCP wiring.** For the chat or
 bridge *agent* to send A2A itself it needs `mcp__corvin_orchestration__a2a_send`,
