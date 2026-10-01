@@ -3862,6 +3862,42 @@ a real licence change MUST invalidate outstanding sessions (ADR-0154 M3).
   `CORVIN_HOME` without first decoupling the 70 install-reading tests.
 
 
+## Context architecture — four problems, not one (ADR-2101, 2026-10-01)
+
+"Context drift" named four unrelated problems, and memory notes cited the wrong ADRs for
+them. ADR-2101 splits them; use these names:
+
+| # | Problem | Owning ADRs | State (2026-10-01) |
+|---|---|---|---|
+| P1 | Visibility — the operator sees what the pipeline built | 0275, 0276, 0277, 0278, 0399 | done |
+| P2 | Source contamination — a stale, duplicate or synthesised fragment enters a turn | 2098, 0407 anchor amendment | partial: 2098 live, anchor flag off, `llm_synthesis` contamination open |
+| P3 | Goal drift — the agent solves a different problem | 0404, 0406, 0407 | not wired: no live caller of the goal monitor |
+| P4 | Cross-session persistence — task context survives a session break | 0405, 0865 | not built |
+
+ADR-0862/0863/0864/0866 are not context ADRs. P2 depends on P1; P3 depends on P1; P4
+builds on P3's goal capture.
+
+**Known P2 source:** `stages/llm_synthesis.py` runs `claude -p` in a temp directory.
+Claude Code gives that subprocess an auto-memory directory named after the temp dir, and
+the synthesis model has copied that path into a rewritten task as a "constraint". It also
+lists keyword-matched ADRs as "related". Every process start leaves one empty
+`~/.claude/projects/-tmp-corvin-ce-synthesis-*` directory; `atexit` removes only `/tmp`.
+
+**ADR↔memory link lint.** `python3 scripts/adr_memory_link_lint.py` checks every ADR
+citation in the Claude Code memory directory against `Corvin-ADR/decisions/`:
+
+| Code | Level | Meaning |
+|---|---|---|
+| `DANGLING` | error | cited id has no ADR file |
+| `STATUS_CONFLICT` | error | a ✅/DONE or PROPOSED/NOT WIRED marker within 40 characters of the only ADR on the line contradicts its frontmatter `status` |
+| `AMBIGUOUS_ID` | warning | the id is carried by more than one file (once per note) |
+| `DESCRIPTION_MISMATCH` | warning | `ADR-NNNN (description)` shares no word with the ADR's title |
+| `ID_FILENAME_MISMATCH` | warning | the number exists only in a file name, not as a frontmatter id |
+
+Options: `--memory-dir`, `--adr-dir`, `--strict` (warnings fail), `--json`. Exit 0 clean,
+1 on errors, 2 on a missing directory. `archive/`, `MEMORY.md` and note frontmatter are
+skipped. Tests: `tests/scripts/test_adr_memory_link_lint.py` (run through the CLI).
+
 ## Context Source Priority Resolver (ADR-2098, 2026-10-01)
 
 **Symptom this closes:** the CEL memory stage (`stages/memory.py`) runs
