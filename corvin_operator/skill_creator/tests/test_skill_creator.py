@@ -46,6 +46,7 @@ from skill_creator.skill_creator import (
     normalize_spec,
     shorten_purpose,
     shorten_method,
+    _extract_json_object,
 )
 
 
@@ -589,6 +590,72 @@ class TestMethodShortening:
             SkillValidator().validate(_spec(method=out))
 
 
+class TestExtractJsonObject:
+    """The measured live failure: refining `assistant.pptx_video_builder`
+
+    (a multi-hundred-line Markdown body) came back with an inline example
+    quoted in plain text — `(z.B. "Folie 3: ... lesbar")` — left unescaped.
+    The first bare `"` flipped `in_string` off mid-value, so the real
+    closing `}` read as still "inside a string" and extraction returned
+    None: "Refine returned no JSON" for a reply that had the whole object
+    sitting right there.
+    """
+
+    def test_well_formed_json_round_trips_unchanged(self):
+        import json as _json
+        payload = _json.dumps({
+            "name": "assistant.x",
+            "method": '# T\n\nExample: {"key": "value"} and trailing prose.',
+        })
+        out = _extract_json_object(payload)
+        assert out == payload
+        assert _json.loads(out) == _json.loads(payload)
+
+    def test_bare_quote_inside_a_string_value_is_repaired(self):
+        """Reproduces the exact `assistant.pptx_video_builder` reply shape:
+        an inline example quoted with bare `"` inside the `method` value."""
+        buggy = (
+            '{"name": "assistant.pptx_video_builder", "scope": "assistant", '
+            '"purpose": "Builds narrated PPTX videos and now verifies every '
+            'rendered slide.", '
+            '"method": "# PPTX Video Builder\\n\\nTier B: notiere eine '
+            'Beobachtung (z.B. "Folie 3: Wasserzeichen liegt hinter Tabelle, '
+            'lesbar"). Danach weiter mit Phase 2.", '
+            '"dependencies": ["ffmpeg"], "keywords": ["pptx", "video"]}'
+        )
+        out = _extract_json_object(buggy)
+        assert out is not None
+
+        import json as _json
+        data = _json.loads(out)  # must not raise
+        assert data["name"] == "assistant.pptx_video_builder"
+        assert "Folie 3: Wasserzeichen liegt hinter Tabelle, lesbar" in data["method"]
+        assert data["dependencies"] == ["ffmpeg"]
+
+    def test_literal_newline_inside_a_string_value_is_repaired(self):
+        buggy = '{"name": "x", "method": "# T\n\nActual raw newline above."}'
+        out = _extract_json_object(buggy)
+        assert out is not None
+
+        import json as _json
+        data = _json.loads(out)
+        assert data["method"] == "# T\n\nActual raw newline above."
+
+    def test_trailing_prose_after_the_object_is_excluded(self):
+        text = ('{"name": "x", "method": "# T\\n\\nUses {curly} in code."}'
+                '\n\nLet me know if you would like changes!')
+        out = _extract_json_object(text)
+        import json as _json
+        data = _json.loads(out)
+        assert data["method"] == "# T\n\nUses {curly} in code."
+
+    def test_no_opening_brace_returns_none(self):
+        assert _extract_json_object("sorry, I cannot do that") is None
+
+    def test_unbalanced_object_returns_none(self):
+        assert _extract_json_object('{"name": "x"') is None
+
+
 class TestNormalizeSpec:
     def test_normalises_name_purpose_and_method_together(self):
         spec = normalize_spec(_spec(
@@ -844,6 +911,30 @@ class TestRefine:
         spec = await planner.plan("validate json files carefully",
                                   base={"name": "assistant.x", "body": "# X"})
         assert spec.name.startswith("assistant.")
+
+    @pytest.mark.asyncio
+    async def test_refine_survives_a_reply_with_an_unescaped_inline_quote(self, tmp_path):
+        """E2E reproduction of the reported failure: refining
+        `assistant.pptx_video_builder` FAILED Phase 1 Planning with "Refine
+        returned no JSON" — the model's reply quoted an inline example
+        (`(z.B. "Folie 3: ... lesbar")`) without escaping those inner quotes,
+        which desynced the old brace counter past the real closing `}`."""
+        buggy_reply = (
+            '{"name": "assistant.pptx_video_builder", "scope": "assistant", '
+            '"purpose": "Builds narrated PPTX videos and now verifies every '
+            'rendered slide.", '
+            '"method": "# PPTX Video Builder\\n\\nTier B: notiere eine '
+            'Beobachtung (z.B. "Folie 3: Wasserzeichen liegt hinter Tabelle, '
+            'lesbar"). Danach weiter mit Phase 2.", '
+            '"dependencies": ["ffmpeg"], "keywords": ["pptx", "video"]}'
+        )
+        base = {"name": "assistant.pptx_video_builder", "body": "# PPTX Video Builder\n\nOld."}
+        planner = SkillPlanner(refine_engine(buggy_reply))
+
+        spec = await planner.plan("verifiziere jede gerenderte Folie", base=base)
+
+        assert spec.name == "assistant.pptx_video_builder"
+        assert "Folie 3: Wasserzeichen liegt hinter Tabelle, lesbar" in spec.method
 
 
 class TestDeleteAndBody:

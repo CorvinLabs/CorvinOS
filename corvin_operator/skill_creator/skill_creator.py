@@ -197,7 +197,8 @@ def _collapse_ws(text: str) -> str:
 
 
 def _extract_json_object(text: str) -> Optional[str]:
-    """Extract the first balanced top-level JSON object from an LLM reply.
+    """Extract the first balanced top-level JSON object from an LLM reply,
+    repairing unescaped quotes/control characters inside string values.
 
     A greedy ``re.search(r"\\{.*\\}", text, re.DOTALL)`` spans from the first
     '{' to the LAST '}' in the whole reply. The generated ``method`` field is
@@ -205,35 +206,86 @@ def _extract_json_object(text: str) -> Optional[str]:
     a sample config), so the real object often closes long before the regex
     match ends — ``json.loads`` then parses that real object successfully
     and raises "Extra data" on whatever follows inside the over-wide match.
-    Balanced, string-aware brace counting finds the actual object boundary
-    instead of guessing from the outermost braces.
+    A balanced, string-aware brace counter replaced the regex for that
+    reason — but it still assumed every ``"`` inside the ``method`` value was
+    escaped the way real JSON requires.
+
+    Measured live failure: refining ``assistant.pptx_video_builder`` (a
+    multi-hundred-line Markdown body) came back with one inline example
+    quoted in plain text — ``(z.B. "Folie 3: ... lesbar")`` — and the model
+    left those inner quotes bare. The first bare ``"`` flips ``in_string``
+    off mid-value; every ``"`` after it keeps flipping the state, so the
+    closing ``}`` of the real object gets read as still "inside a string"
+    and extraction returns None — "Refine returned no JSON" for a reply that
+    had the whole object sitting right there. A bare ``"`` is only treated as
+    a real string terminator when the next non-whitespace character looks
+    like JSON syntax (``,`` ``}`` ``]`` ``:``, or end-of-text); otherwise
+    it's Markdown content and gets escaped in the rebuilt text instead, so
+    ``json.loads`` can parse the result afterward. A raw, unescaped control
+    character inside a string (``\\n``/``\\r``/``\\t`` pasted literally
+    instead of as the JSON escape) is repaired the same way — ``json.loads``
+    rejects a literal control character in a string outright.
     """
     if not isinstance(text, str):
         return None
     start = text.find("{")
     if start == -1:
         return None
+
+    out: list[str] = []
     depth = 0
     in_string = False
     escape = False
-    for i in range(start, len(text)):
+    n = len(text)
+    i = start
+    while i < n:
         ch = text[i]
         if in_string:
             if escape:
+                out.append(ch)
                 escape = False
-            elif ch == "\\":
+                i += 1
+                continue
+            if ch == "\\":
+                out.append(ch)
                 escape = True
-            elif ch == '"':
-                in_string = False
+                i += 1
+                continue
+            if ch == '"':
+                j = i + 1
+                while j < n and text[j] in " \t\r\n":
+                    j += 1
+                if j >= n or text[j] in ",}]:":
+                    in_string = False
+                    out.append(ch)
+                else:
+                    # Bare quote inside the value: escape it rather than
+                    # ending the string here.
+                    out.append('\\"')
+                i += 1
+                continue
+            if ch in "\n\r\t":
+                out.append({"\n": "\\n", "\r": "\\r", "\t": "\\t"}[ch])
+                i += 1
+                continue
+            out.append(ch)
+            i += 1
             continue
+        # Outside any string.
         if ch == '"':
             in_string = True
+            out.append(ch)
         elif ch == "{":
             depth += 1
+            out.append(ch)
         elif ch == "}":
             depth -= 1
+            out.append(ch)
             if depth == 0:
-                return text[start:i + 1]
+                return "".join(out)
+        else:
+            out.append(ch)
+        i += 1
     return None
 
 
