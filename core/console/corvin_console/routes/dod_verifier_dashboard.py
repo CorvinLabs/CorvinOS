@@ -1,10 +1,9 @@
-"""DoD Verifier Dashboard API Routes (ADR-0XXX).
+"""DoD Verifier API routes.
 
 Provides REST endpoints for Definition-of-Done verification:
   - POST /api/dod/verify — run verification on a project
   - GET /api/dod/history/{task_id} — fetch verification history
   - POST /api/dod/feedback — submit feedback on DoD checks
-  - WS /api/dod/stream — real-time WebSocket updates
 
 Tenant isolation enforced. All operations audit-logged.
 
@@ -20,7 +19,9 @@ from pathlib import Path
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, Body
+import re
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 
 try:
     from core.skills.os_skills.definition_of_done_verifier.skill_base_wrapper import (
@@ -28,6 +29,8 @@ try:
         DoD_VerifierInput,
     )
     from core.skills.os_skills.definition_of_done_verifier.skill import (
+        REPO_ROOT,
+        _default_audit_path,
         DoD_VerificationResult,
         AuditFailedError,
     )
@@ -44,6 +47,8 @@ except ImportError:
         DoD_VerifierInput,
     )
     from core.skills.os_skills.definition_of_done_verifier.skill import (
+        REPO_ROOT,
+        _default_audit_path,
         DoD_VerificationResult,
         AuditFailedError,
     )
@@ -94,35 +99,61 @@ def get_verifier(tenant_id: str) -> DoD_VerifierSkillWrapper:
                 Returns:
                     True if audit emit succeeded, False on error (fail-closed, logged).
                 """
+                # A False return makes the wrapper raise AuditFailedError, so an
+                # unrecorded verification never reaches the caller.
                 try:
-                    # Extract event details for audit emission
                     ok = emit_skill_executed_event(
-                        skill_id="os.definition_of_done_verifier",
+                        skill_id=_DOD_SKILL_ID,
                         tenant_id=self.tenant_id,
-                        input_data=getattr(event, "input", None),
-                        output_data=getattr(event, "output", None),
-                        latency_ms=getattr(event, "latency_ms", 0),
-                        line_of_moral_responsibility=f"{__file__}:get_verifier",
-                        error=None
+                        input_data=event.input_hash,
+                        output_data=event.output_hash or None,
+                        latency_ms=event.latency_ms,
+                        line_of_moral_responsibility=event.lom,
+                        error="VerificationError" if event.error_message else None,
                     )
-                    if not ok:
-                        logger.error("DoD audit event was not written to the chain")
-                        return False
-                    logger.debug(f"[AUDIT WIRED] dod_verifier event emitted to chain: {event.skill_id}")
-                    return True
-                except Exception as e:
-                    # Fail-closed: log error but don't raise (audit is advisory, not blocking)
-                    logger.error(f"Failed to emit DoD audit event: {e} (chain write may have failed)")
+                except Exception:
+                    logger.exception("DoD audit event was not written to the chain")
                     return False
+                if not ok:
+                    logger.error("DoD audit event was not written to the chain")
+                return bool(ok)
 
         _verifiers[tenant_id] = DoD_VerifierSkillWrapper(
             tenant_id=tenant_id,
             audit_trail=RealAuditTrail(tenant_id),
-            audit_path=_tenant_home(tenant_id) / "global" / "forge" / "audit.jsonl",
-            cwd=Path.home() / "projects" / "CorvinOS",
+            audit_path=_default_audit_path(tenant_id),
+            cwd=REPO_ROOT,
         )
 
     return _verifiers[tenant_id]
+
+
+# The body reaches ``git diff`` and ``git grep`` as arguments and names files to
+# read: refuse anything that could be read as an option or leaves the checkout.
+_REV = r"[A-Za-z0-9_][A-Za-z0-9_./~^@{}-]{0,99}"
+_COMMIT_RANGE = re.compile(rf"^{_REV}(\.\.\.?{_REV})?$")
+_SYMBOL = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,199}$")
+
+
+def _validated_inputs(payload: Dict[str, Any]) -> Dict[str, Any]:
+    commit_range = str(payload.get("commit_range") or "HEAD~1")
+    if not _COMMIT_RANGE.match(commit_range):
+        raise HTTPException(status_code=400, detail="commit_range must be a revision or A..B range")
+    symbol = payload.get("symbol_name")
+    if symbol is not None and not _SYMBOL.match(str(symbol)):
+        raise HTTPException(status_code=400, detail="symbol_name must be an identifier")
+    files: Dict[str, Optional[Path]] = {}
+    for key in ("test_path", "test_output_file"):
+        raw = payload.get(key)
+        if not raw:
+            files[key] = None
+            continue
+        p = Path(str(raw))
+        p = (p if p.is_absolute() else REPO_ROOT / p).resolve()
+        if not p.is_relative_to(REPO_ROOT):
+            raise HTTPException(status_code=400, detail=f"{key} must be inside the project")
+        files[key] = p
+    return {"commit_range": commit_range, "symbol_name": symbol, **files}
 
 
 def get_event_store(tenant_id: str) -> EventStore:
@@ -166,40 +197,23 @@ async def run_dod_verification(
     if not payload.get("task_id"):
         raise HTTPException(status_code=400, detail="task_id required")
 
+    checked = _validated_inputs(payload)
+
     try:
         verifier = get_verifier(tenant_id)
-
-        # Build input
         input_data = DoD_VerifierInput(
-            task_id=payload["task_id"],
-            task_type=payload.get("task_type", "feature"),
-            symbol_name=payload.get("symbol_name"),
-            test_path=Path(payload["test_path"]) if payload.get("test_path") else None,
-            test_output_file=Path(payload["test_output_file"]) if payload.get("test_output_file") else None,
-            commit_range=payload.get("commit_range", "HEAD~1"),
-            keyword=payload.get("keyword", "feat:"),
-            commit_msg=payload.get("commit_msg", ""),
-            project_path=Path(payload["project_path"]) if payload.get("project_path") else None,
+            task_id=str(payload["task_id"])[:200],
+            task_type=str(payload.get("task_type", "feature"))[:50],
+            symbol_name=checked["symbol_name"],
+            test_path=checked["test_path"],
+            test_output_file=checked["test_output_file"],
+            commit_range=checked["commit_range"],
+            keyword=str(payload.get("keyword", "feat:"))[:100],
+            commit_msg=str(payload.get("commit_msg", ""))[:4000],
         )
 
-        # Execute skill (audit-first — ADR-0232 compliance)
+        # The wrapper chains the result before returning it (fail-closed).
         result: DoD_VerificationResult = verifier.execute(input_data)
-
-        # Emit audit event to real chain (GDPR Art. 30 — immutable record)
-        try:
-            _audited = emit_skill_executed_event(
-                skill_id="os.definition_of_done_verifier",
-                tenant_id=tenant_id,
-                input_data={"task_id": result.task_id, "task_type": input_data.task_type},
-                output_data={"score": result.score, "passed": result.passed, "checks": len(result.checks)},
-                latency_ms=0,  # Will be computed by verifier
-                line_of_moral_responsibility=f"{__file__}:run_dod_verification:145",
-                error=None
-            )
-            if not _audited:
-                logger.error("DoD verification audit event was not written to the chain")
-        except Exception as e:
-            logger.warning(f"Failed to emit DoD audit event: {e}")
 
         # Log to learning event store (non-blocking, supplemental). The store
         # takes a LearningEvent: the dict passed here before raised
@@ -342,25 +356,3 @@ async def get_dod_history(
         and (e.signal or {}).get("task_id") == task_id
     ][-limit:]
     return {"task_id": task_id, "verifications": verifications}
-
-
-@router.websocket("/stream")
-async def dod_stream(
-    websocket: WebSocket,
-    task_id: str = Query(...),
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)] = None,
-) -> None:
-    """WebSocket stream for real-time DoD verification updates.
-
-    Subscribe to live updates for a task.
-
-    Message format:
-    {
-        "event_type": "dod_verification_executed" | "dod_feedback_received",
-        "task_id": "task_123",
-        "data": {...}
-    }
-    """
-    # TODO: wire to event emitter for live updates
-    # For now, just close connection
-    await websocket.close(code=1000, reason="WebSocket streaming not yet implemented")

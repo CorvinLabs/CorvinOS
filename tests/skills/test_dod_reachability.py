@@ -41,7 +41,7 @@ class TestReachabilityCheck:
 
             result = check.run("xyz_nonexistent_12345", Path("/repo"))
             assert result.passed == False
-            assert "not found" in result.evidence.lower()
+            assert "no use" in result.evidence.lower()
             assert result.check_name == "reachability"
 
     def test_grep_timeout_fail_closed(self):
@@ -93,36 +93,31 @@ class TestReachabilityCheck:
             assert result.check_name == "reachability"
 
     def test_exclude_tests_default(self):
-        """Test: By default, exclude test directories (--exclude-dir=test)."""
+        """Test: By default, matches in test files are not call sites."""
         check = ReachabilityCheck()
         with patch("subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "src/code.py:1: symbol\n"
+            mock_run.return_value.stdout = (
+                "tests/test_code.py:1: symbol()\n"
+                "src/test_helpers.py:2: symbol()\n"
+                "web/a.test.tsx:3: symbol()\n"
+            )
 
             result = check.run("symbol", Path("/repo"))
 
-            # Verify grep was called with --exclude-dir flags
-            call_args = mock_run.call_args
-            cmd = call_args[0][0]
-            assert "--exclude-dir=test" in cmd
-            assert "--exclude-dir=tests" in cmd
-            assert "--exclude-dir=__pycache__" in cmd
-            assert result.passed == True
+            cmd = mock_run.call_args[0][0]
+            assert cmd[:2] == ["git", "grep"]
+            assert "-F" in cmd and "-w" in cmd
+            assert result.passed == False
 
     def test_exclude_tests_can_be_disabled(self):
         """Test: exclude_tests=False removes test directory filters."""
         check = ReachabilityCheck()
         with patch("subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "tests/code.py:1: symbol\n"
+            mock_run.return_value.stdout = "tests/code.py:1: symbol()\n"
 
             result = check.run("symbol", Path("/repo"), exclude_tests=False)
-
-            # Verify grep was called WITHOUT --exclude-dir flags
-            call_args = mock_run.call_args
-            cmd = call_args[0][0]
-            assert "--exclude-dir=test" not in cmd
-            assert "--exclude-dir=tests" not in cmd
             assert result.passed == True
 
     def test_check_result_is_frozen(self):
@@ -142,7 +137,7 @@ class TestReachabilityCheck:
         cwd = Path("/home/user/project")
         with patch("subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "src/file.py:1: symbol\n"
+            mock_run.return_value.stdout = "src/file.py:1: run(symbol)\n"
 
             result = check.run("symbol", cwd)
 
@@ -156,7 +151,7 @@ class TestReachabilityCheck:
         check = ReachabilityCheck()
         with patch("subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "src/file.py:1: my_symbol\n"
+            mock_run.return_value.stdout = "src/file.py:1: my_symbol()\n"
 
             result = check.run("my_symbol", Path("/repo"))
 
@@ -170,7 +165,7 @@ class TestReachabilityCheck:
         check = ReachabilityCheck()
         with patch("subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "src/file.py:1: symbol\n"
+            mock_run.return_value.stdout = "src/file.py:1: run(symbol)\n"
 
             result = check.run("symbol", Path("/repo"), timeout_s=30)
 
@@ -181,42 +176,36 @@ class TestReachabilityCheck:
 
 
 class TestReachabilityCheckIntegration:
-    """Integration tests for ReachabilityCheck (can be skipped in CI if fs access not available)."""
+    """Real ``git grep`` against a throwaway repository."""
+
+    @staticmethod
+    def _repo(files: dict) -> Path:
+        root = Path(tempfile.mkdtemp())
+        for rel, text in files.items():
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text)
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        return root
 
     @pytest.mark.integration
-    def test_real_filesystem_grep_basic(self):
-        """Integration: Real grep on temp filesystem."""
-        check = ReachabilityCheck()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a test file with a symbol
-            test_file = Path(tmpdir) / "test.py"
-            test_file.write_text("def my_function(): pass\n")
-
-            # Should find the symbol
-            result = check.run("my_function", Path(tmpdir))
-            assert result.passed == True
-            assert "my_function" in result.evidence
+    def test_definition_only_is_unreachable(self):
+        root = self._repo({"src/a.py": "def my_function():\n    pass\n",
+                           "tests/test_a.py": "from src.a import my_function\nmy_function()\n"})
+        assert ReachabilityCheck().run("my_function", root).passed is False
 
     @pytest.mark.integration
-    def test_real_filesystem_excludes_tests(self):
-        """Integration: Real grep respects test exclusion."""
-        check = ReachabilityCheck()
+    def test_caller_outside_tests_is_reachable(self):
+        root = self._repo({"src/a.py": "def my_function():\n    pass\n",
+                           "src/b.py": "from src.a import my_function\nmy_function()\n"})
+        result = ReachabilityCheck().run("my_function", root)
+        assert result.passed is True
+        assert "src/b.py" in result.evidence
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmppath = Path(tmpdir)
-
-            # Create symbol in tests/ (should be excluded)
-            tests_dir = tmppath / "tests"
-            tests_dir.mkdir()
-            (tests_dir / "test_file.py").write_text("def symbol(): pass\n")
-
-            # Create same symbol in src/ (should be found)
-            src_dir = tmppath / "src"
-            src_dir.mkdir()
-            (src_dir / "file.py").write_text("def symbol(): pass\n")
-
-            # With exclude_tests=True, should find src/ only
-            result = check.run("symbol", tmppath, exclude_tests=True)
-            # Result depends on grep behavior; mainly checking no error
-            assert isinstance(result, CheckResult)
+    @pytest.mark.integration
+    def test_substring_and_prose_do_not_count(self):
+        root = self._repo({"src/a.py": "class Metrics:\n    pass\n",
+                           "src/b.py": "LiveMetrics()\n",
+                           "README.md": "Use Metrics() here.\n"})
+        assert ReachabilityCheck().run("Metrics", root).passed is False

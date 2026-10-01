@@ -37,7 +37,13 @@ except ImportError:
         AuditTrail,
     )
 
-from .skill import DoD_VerifierSkill, DoD_VerificationResult, AuditFailedError
+from .skill import (
+    REPO_ROOT,
+    AuditFailedError,
+    DoD_VerificationResult,
+    DoD_VerifierSkill,
+    _default_audit_path,
+)
 
 
 @dataclass(frozen=True)
@@ -87,15 +93,15 @@ class DoD_VerifierSkillWrapper(BaseSkill[DoD_VerificationResult]):
         Args:
             tenant_id: Tenant scope for all operations
             audit_trail: Audit trail implementation
-            audit_path: Path to audit chain (default: ~/.corvin/tenants/<tenant>/global/forge/audit.jsonl)
-            cwd: Working directory for checks (default: ~/projects/CorvinOS)
+            audit_path: Path to audit chain (default: the tenant's chain)
+            cwd: Working directory for checks (default: this checkout)
         """
         super().__init__(tenant_id, audit_trail)
 
         if audit_path is None:
-            audit_path = Path.home() / ".corvin" / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
+            audit_path = _default_audit_path(tenant_id)
         if cwd is None:
-            cwd = Path.home() / "projects" / "CorvinOS"
+            cwd = REPO_ROOT
 
         self.verifier = DoD_VerifierSkill(audit_path=audit_path, cwd=cwd)
         self.tenant_id = tenant_id

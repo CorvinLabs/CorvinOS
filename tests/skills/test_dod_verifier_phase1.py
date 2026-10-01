@@ -209,10 +209,10 @@ class TestPhase1Gate:
         assert engine.is_passed(0.80)
 
     @pytest.mark.gate
-    def test_skill_emits_audit_event(self):
-        """Verify audit event emission is implemented."""
-        skill = DoD_VerifierSkill()
-        assert hasattr(skill, '_emit_audit_event')
+    def test_skill_does_not_claim_its_own_audit(self):
+        """The core skill writes no audit record (its old stub only printed);
+        DoD_VerifierSkillWrapper chains the result before returning it."""
+        assert not hasattr(DoD_VerifierSkill(), '_emit_audit_event')
 
 
 if __name__ == "__main__":

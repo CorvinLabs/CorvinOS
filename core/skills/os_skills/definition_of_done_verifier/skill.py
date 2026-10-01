@@ -15,6 +15,13 @@ from .checks.docs_sync import DocsSyncCheck
 from .checks.reproducibility import ReproducibilityCheck
 from .scoring import ScoringEngine
 
+REPO_ROOT = Path(__file__).resolve().parents[4]
+
+
+def _default_audit_path(tenant_id: str) -> Path:
+    from core.paths.tenant import tenant_audit_chain
+    return Path(tenant_audit_chain(tenant_id))
+
 
 @dataclass(frozen=True)
 class DoD_VerificationResult:
@@ -88,9 +95,9 @@ class DoD_VerifierSkill:
     ):
         """Initialize Skill with paths."""
         if audit_path is None:
-            audit_path = Path.home() / ".corvin" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+            audit_path = _default_audit_path("_default")
         if cwd is None:
-            cwd = Path.home() / "projects" / "CorvinOS"
+            cwd = REPO_ROOT
 
         self.audit_path = audit_path
         self.cwd = cwd
@@ -108,11 +115,11 @@ class DoD_VerifierSkill:
         commit_msg: str = "",
         tenant_id: str = "_default",
     ) -> DoD_VerificationResult:
-        """
-        Execute DoD Verifier Skill.
+        """Run the 5 checks concurrently and compute the score.
 
-        Runs 5 checks concurrently, computes score, emits audit event.
-        Fail-closed: if audit cannot be emitted, raises AuditFailedError.
+        Writes no audit record itself: ``DoD_VerifierSkillWrapper`` chains the
+        result before returning it. ``audit_event_id`` is the digest of this
+        verification, which the chained record's output hash covers.
         """
 
         # Run 5 checks concurrently
@@ -203,17 +210,6 @@ class DoD_VerifierSkill:
         )
         audit_event_hash = audit_event.compute_hash()
 
-        try:
-            # TODO in Phase 2: wire to audit_backend.write_event()
-            # For now, just simulate the write
-            self._emit_audit_event(audit_event, audit_event_hash)
-        except Exception as e:
-            raise AuditFailedError(
-                f"DoD verification not recorded. Audit write failed: {e}. "
-                f"Task cannot be marked done."
-            )
-
-        # Return result ONLY AFTER audit succeeds
         return DoD_VerificationResult(
             task_id=task_id,
             score=score,
@@ -224,22 +220,6 @@ class DoD_VerifierSkill:
             audit_event_id=audit_event_hash,
             timestamp=timestamp,
         )
-
-    def _emit_audit_event(self, event: DoD_VerifiedEvent, hash_val: str) -> None:
-        """Emit audit event (stub for Phase 1)."""
-        # TODO Phase 2: integrate with actual audit_backend
-        # For now, just log to stdout
-        event_dict = {
-            "event_type": event.event_type,
-            "task_id": event.task_id,
-            "tenant_id": event.tenant_id,
-            "timestamp": event.timestamp,
-            "score": event.score,
-            "passed": event.passed,
-            "hash": hash_val,
-        }
-        print(f"[AUDIT] {json.dumps(event_dict)}")
-
 
 if __name__ == "__main__":
     # Example usage

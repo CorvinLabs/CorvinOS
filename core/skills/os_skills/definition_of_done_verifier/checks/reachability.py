@@ -1,9 +1,9 @@
 """ReachabilityCheck: Is there a real call site outside tests?"""
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -14,8 +14,22 @@ class CheckResult:
     check_name: str = "reachability"
 
 
+_TEST_PATH = re.compile(r"(^|/)(tests?/|test_[^/]*$|[^/]*_test\.py$|[^/]*\.test\.[jt]sx?$)")
+
+
+# Prose that mentions a symbol is not a call site.
+_CODE_PATHSPECS = ("*.py", "*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.sh",
+                   "*.yaml", "*.yml", "*.toml")
+
+# An import, a bare name in a parenthesised import list, or an ``__all__`` entry
+# names the symbol without using it.
+_IMPORT_ONLY = re.compile(
+    r"^\s*(from\s+\S+\s+)?import\b|^\s*['\"]?\w+['\"]?\s*,?\s*(#.*)?$"
+)
+
+
 class ReachabilityCheck:
-    """Grep-based reachability check (fail-closed)."""
+    """Search tracked files for a use of the symbol that is not its definition (fail-closed)."""
 
     def run(
         self,
@@ -24,63 +38,48 @@ class ReachabilityCheck:
         timeout_s: int = 5,
         exclude_tests: bool = True,
     ) -> CheckResult:
-        """
-        Search for real call site of symbol.
+        """Return passed=True only for a match outside tests that is not a def/class line.
 
-        Returns CheckResult with passed=(symbol found outside tests) + evidence.
-        Fail-closed: timeout, error, or no matches → passed=False.
+        ``git grep`` searches tracked files only; ``grep -r`` over a checkout with
+        .venv, node_modules and worktrees exceeded the budget on every run.
         """
         if not symbol_name or not symbol_name.strip():
-            return CheckResult(
-                passed=False,
-                evidence="Symbol name is empty",
-                check_name="reachability"
-            )
+            return CheckResult(passed=False, evidence="Symbol name is empty")
 
-        # Grep for symbol name (exclude test directories by default)
         try:
-            cmd = ["grep", "-r", symbol_name]
-            if exclude_tests:
-                cmd.extend(["--exclude-dir=test", "--exclude-dir=tests", "--exclude-dir=__pycache__"])
-            cmd.append(str(cwd))
-
             result = subprocess.run(
-                cmd,
+                ["git", "grep", "-n", "-w", "-F", "-e", symbol_name, "--", *_CODE_PATHSPECS],
                 timeout=timeout_s,
                 cwd=cwd,
                 capture_output=True,
                 text=True,
                 shell=False,
             )
-
-            if result.returncode == 0 and result.stdout:
-                # Found matches
-                lines = result.stdout.strip().split("\n")[:3]
-                evidence = "\n".join(lines)
-                return CheckResult(
-                    passed=True,
-                    evidence=evidence,
-                    check_name="reachability"
-                )
-            else:
-                # No matches
-                return CheckResult(
-                    passed=False,
-                    evidence=f"Symbol '{symbol_name}' not found in call sites",
-                    check_name="reachability"
-                )
-
         except subprocess.TimeoutExpired:
-            return CheckResult(
-                passed=False,
-                evidence=f"Grep timeout (>{timeout_s}s) — symbol search took too long",
-                check_name="reachability"
-            )
-
+            return CheckResult(passed=False, evidence=f"git grep timeout (>{timeout_s}s)")
         except Exception as e:
-            # Fail-closed: any error → fail
-            return CheckResult(
-                passed=False,
-                evidence=f"Grep error: {type(e).__name__}: {str(e)[:50]}",
-                check_name="reachability"
-            )
+            return CheckResult(passed=False, evidence=f"git grep error: {type(e).__name__}")
+
+        if result.returncode not in (0, 1):
+            return CheckResult(passed=False, evidence="git grep failed")
+
+        definition = re.compile(
+            rf"^\s*(async\s+)?(def|class)\s+{re.escape(symbol_name)}\b"
+            rf"|^\s*(export\s+)?(function|const|class|interface|type)\s+{re.escape(symbol_name)}\b"
+        )
+        call_sites = []
+        for line in result.stdout.splitlines():
+            path, _, rest = line.partition(":")
+            _lineno, _, code = rest.partition(":")
+            if exclude_tests and _TEST_PATH.search(path):
+                continue
+            if definition.search(code) or _IMPORT_ONLY.search(code):
+                continue
+            call_sites.append(line)
+
+        if call_sites:
+            return CheckResult(passed=True, evidence="\n".join(call_sites[:3]))
+        return CheckResult(
+            passed=False,
+            evidence=f"No use of '{symbol_name}' outside tests and its definition",
+        )

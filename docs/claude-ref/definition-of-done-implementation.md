@@ -2,541 +2,158 @@
 
 **Canonical Reference:** [ADR-0721](../../corvin_decisions/decisions/ADR-0721-dod-verifier-skill-architecture.md), [ADR-0722](../../corvin_decisions/decisions/ADR-0722-dod-loss-signal-learning-integration.md), [ADR-0723](../../corvin_decisions/decisions/ADR-0723-dod-implementation-plan.md)
 
-**Last Updated:** 2026-09-26  
-**Status:** Implemented; unit/adversarial tests green, no HTTP-level E2E yet (see Testing)
+**Last Updated:** 2026-10-01
+**Status:** Implemented and reachable through the console API; HTTP-level E2E in
+`core/console/tests/test_dod_verify_route_e2e.py`. No UI panel calls it, and no
+optimizer consumes DoD feedback yet.
 
 ---
 
 ## Overview
 
-The **Definition-of-Done Verifier** is a learnable Skill 2.0 that evaluates task completion against 5 canonical checks, computes a confidence score (0.0–1.0), and prevents incomplete work from being marked "done." It is wired into the console and bridges to the learning loop (ADR-0314).
+The Definition-of-Done Verifier scores a task against five checks and returns a
+score in `[0, 1]`; `passed` means `score >= 0.80`. Every verification is chained to
+the tenant's audit trail before the result is returned (fail-closed).
 
-**Key Properties:**
-- ✅ **Fail-Closed:** No audit trail → task cannot be marked done
-- ✅ **Learnable:** Check weights tune via feedback loop (ADR-0314)
-- ✅ **Audit-First:** Every verification emitted to ADR-0232 chain
-- ✅ **Tenant-Isolated:** GDPR Art. 5, 6 compliance (per-tenant checks + trails)
+**Until 2026-10-01 the verifier could not pass on this repository.** Reachability ran
+`grep -r` over the whole checkout (`.venv`, `node_modules`, worktrees) and hit its 5 s
+timeout every time, and the audit check looked for a top-level `task_id` that no chain
+record carries. Those two checks are 45 % of the weight, so the ceiling was 55 %.
 
----
+## The five checks
 
-## Phase Breakdown
+| Check | Weight | Passes when | Implementation |
+|---|---|---|---|
+| **reachability** | 0.20 | the symbol is used in a tracked code file (`*.py`, `*.ts(x)`, `*.js(x)`, `*.mjs`, `*.sh`, `*.y(a)ml`, `*.toml`) on a line that is not its `def`/`class`/`function` definition, not an import or `__all__` entry, and not in a test file | `git grep -n -w -F -e <symbol>` — whole-word, literal, tracked files only. Skipped (fails) when no `symbol_name` is given |
+| **audit_trail** | 0.25 | the tenant chain holds ≥1 record whose `task_id` (top level or under `details`) equals the task id | scans `tenant_audit_chain(tenant)` |
+| **test_evidence** | 0.20 | `test_path` exists and `test_output_file` contains `passed` and no failures | reads the captured file |
+| **docs_sync** | 0.20 | `git diff <commit_range> -- docs/` contains `keyword` | heuristic |
+| **reproducibility** | 0.15 | the commit message names a runnable command (`pytest`, `npm`, `make`, …) | keyword match — it does **not** re-run anything |
 
-### Phase 1: Core Skill Architecture (COMPLETE)
+Checks run concurrently; a check that raises or exceeds its timeout fails.
 
-**Deliverable:** 5 core DoD checks + scoring logic
-
-| Check | Verifies | Fail-Closed Behavior |
-|-------|----------|-----|
-| **Reachability** | Symbol has real call site outside tests | No matches → FAIL |
-| **Audit Trail** | Event emitted to ADR-0232 chain | No chain record → FAIL |
-| **Test Evidence** | Test output file exists + contains PASS | File missing or FAIL in output → FAIL |
-| **Docs Sync** | Code changes matched by doc updates | Changed files have no doc counterpart → FAIL |
-| **Reproducibility** | Can re-run verification + get same score | Score divergence > tolerance → FAIL |
-
-**Location:**
 ```
 core/skills/os_skills/definition_of_done_verifier/
-  ├── skill.py                 # Main Skill class + verification logic
-  ├── checks/
-  │   ├── reachability.py      # Call-site search (grep-based)
-  │   ├── audit_trail.py       # Audit chain validation
-  │   ├── test_evidence.py     # Test output parsing
-  │   ├── docs_sync.py         # Doc/code correlation
-  │   └── reproducibility.py   # Determinism check
-  ├── scoring.py               # Score computation (weighted checks)
-  └── hardening.py             # Timeout protection, fail-closed gates
+  ├── skill.py              # DoD_VerifierSkill: runs the checks, scores
+  ├── skill_base_wrapper.py # DoD_VerifierSkillWrapper: chains the result, then returns it
+  ├── checks/               # the five checks above
+  ├── scoring.py            # weighted score, threshold 0.80
+  ├── weight_optimizer.py   # exists; nothing feeds it DoD feedback yet
+  └── hardening.py
 ```
 
-**Key Definitions:**
-- **score:** `(check_1_weight * check_1_result) + ... → [0.0, 1.0]`
-- **passed:** `score >= threshold` (threshold = 0.80 for wave 3)
-- **weights:** Learnable per check type (ADR-0722 tuning)
+`DoD_VerifierSkill` writes no audit record itself (until 2026-10-01 its
+`_emit_audit_event` only printed to stdout). `audit_event_id` in the result is the
+digest of the verification, not the id of a chain record.
 
-### Phase 2: Learning Loop Integration (IN PROGRESS)
+## Console API
 
-**Deliverable:** Weight optimizer + feedback loop
+Mounted at `/v1/console/api/dod/*` (`core/console/corvin_console/routes/dod_verifier_dashboard.py`).
+Every route needs a console session; `POST` routes also need the `X-CSRF-Token` header.
+The tenant comes from the session, never from the body.
 
-| Component | Purpose | Status |
-|-----------|---------|--------|
-| **FeedbackEvent** | User input (accurate/inaccurate/not_applicable) | ✅ Defined |
-| **WeightOptimizer** | Adjusts check weights via feedback | 🟡 Wired to learning store |
-| **LossSignal** | Computes confidence delta | ✅ Implemented |
-| **Learning Loop** | Closes: feedback → weights → next verification | 🟡 Pipeline active |
+### POST /v1/console/api/dod/verify
 
-**API (Feedback Loop):**
-```python
-# Step 1: Run verification
-POST /api/dod/verify
-  body: { task_id, task_type, commit_range, symbol_name }
-  response: { score: 0.85, passed: true, checks: {...}, audit_event_id }
-
-# Step 2: Submit feedback
-POST /api/dod/feedback
-  body: { task_id, check_name, feedback: "accurate", note: "..." }
-  response: { accepted: true, weight_adjustment: -0.02 }
-
-# Step 3: Weights tune automatically
-#   (learning optimizer runs daily, updates registry)
-```
-
-**Learning Integration (ADR-0314):**
-- **EventStore:** `/home/shumway/projects/CorvinOS/core/learning/event_store.py`
-- **Event Types:** `dod_verification_executed`, `dod_feedback_received`, `dod_weight_updated`
-- **Tenant Scope:** All queries filtered by `tenant_id` (no cross-tenant leakage)
-
-### Phase 3: Hardening (COMPLETE)
-
-**Deliverable:** Timeout protection, fail-closed gates, audit-first architecture
-
-| Mechanism | Behavior | Compliance |
-|-----------|----------|-----------|
-| **Timeout Gates** | Each check has `timeout_s` limit; timeout → FAIL | Fail-closed, ADR-0232 |
-| **Audit-First** | Emit event BEFORE marking task done | GDPR Art. 30 (immutable record) |
-| **Tenant Isolation** | No tenant_id → denied (fail-closed) | GDPR Art. 5, 6 |
-| **PII Scrubbing** | Hashed inputs/outputs (never raw content) | GDPR Art. 32 |
-
-**Error Handling:**
-```python
-# Verification execution (fail-closed)
-try:
-    result = verifier.execute(input_data)  # ADR-0232 audit-first
-except AuditFailedError:
-    # Audit chain write failed → task cannot be marked done
-    raise HTTPException(500, "Verification audit failed")
-except TimeoutError:
-    # Check timeout → task incomplete (fail-closed)
-    return { "passed": False, "reason": "Check timeout" }
-```
-
----
-
-## Installation & Running Locally
-
-### Prerequisites
-```bash
-# Ensure CorvinOS is installed
-cd /home/shumway/projects/CorvinOS
-python -m pip install -e .
-
-# Verify audit chain is reachable
-ls -la ~/.corvin/tenants/_default/global/forge/audit.jsonl
-```
-
-### Running the Skill (Standalone)
-```python
-from pathlib import Path
-from core.skills.os_skills.definition_of_done_verifier.skill_base_wrapper import (
-    DoD_VerifierSkillWrapper,
-    DoD_VerifierInput,
-)
-
-# Initialize verifier
-verifier = DoD_VerifierSkillWrapper(
-    tenant_id="_default",
-    audit_path=Path.home() / ".corvin" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl",
-    cwd=Path("/home/shumway/projects/CorvinOS"),
-)
-
-# Run verification
-input_data = DoD_VerifierInput(
-    task_id="task_123",
-    task_type="feature",
-    symbol_name="my_new_function",
-    commit_range="HEAD~5..HEAD",
-    commit_msg="feat: add my_new_function",
-)
-
-result = verifier.execute(input_data)
-print(f"Score: {result.score:.1%}")
-print(f"Passed: {result.passed}")
-print(f"Checks: {result.checks}")
-```
-
-### Running via Console API
-```bash
-# Start console (if not running)
-systemctl --user start corvin-webui
-
-# Run verification (requires authentication)
-curl -X POST http://localhost:8765/api/dod/verify \
-  -H "Content-Type: application/json" \
-  -H "Cookie: session=<session_id>" \
-  -d '{
-    "task_id": "task_123",
-    "task_type": "feature",
-    "symbol_name": "my_new_function",
-    "commit_range": "HEAD~5..HEAD"
-  }'
-
-# Expected response:
-# {
-#   "task_id": "task_123",
-#   "score": 0.85,
-#   "passed": true,
-#   "checks": { "reachability": true, "audit": true, ... },
-#   "audit_event_id": "abc123...",
-#   "timestamp": "2026-09-26T..."
-# }
-```
-
----
-
-## API Reference
-
-### POST /api/dod/verify
-
-Run a Definition-of-Done verification on a task.
-
-**Request:**
 ```json
 {
   "task_id": "task_123",
-  "task_type": "feature",  // or "bugfix", "refactor", "docs"
-  "symbol_name": "DoD_VerifierSkillWrapper",  // optional: check reachability
-  "commit_range": "HEAD~5..HEAD",  // git range to check
-  "commit_msg": "feat(core): add DoD verifier",  // optional
-  "project_path": "/path/to/project",  // optional
-  "test_path": "/path/to/tests",  // optional
-  "test_output_file": "/path/to/test-output.txt"  // optional
+  "task_type": "feature",
+  "symbol_name": "DoD_VerifierSkillWrapper",
+  "commit_range": "HEAD~5..HEAD",
+  "keyword": "feat:",
+  "commit_msg": "feat(core): add DoD verifier — pytest tests/…",
+  "test_path": "tests/skills/test_dod_reachability.py",
+  "test_output_file": "outputs/pytest.txt"
 }
 ```
 
-**Response (Success):**
+Input rules (HTTP 400 otherwise) — the body reaches `git` as arguments and names files
+to read:
+
+- `commit_range`: a revision or `A..B` / `A...B`; may not start with `-`.
+- `symbol_name`: an identifier (`[A-Za-z_][A-Za-z0-9_.]*`).
+- `test_path`, `test_output_file`: resolved (symlinks too) and must lie inside the
+  checkout. Relative paths are taken from the checkout root.
+
+Response:
+
 ```json
 {
   "task_id": "task_123",
-  "score": 0.85,
+  "score": 0.8,
   "passed": true,
-  "checks": {
-    "reachability": { "passed": true, "evidence": "..." },
-    "audit_trail": { "passed": true, "evidence": "..." },
-    "test_evidence": { "passed": true, "evidence": "..." },
-    "docs_sync": { "passed": true, "evidence": "..." },
-    "reproducibility": { "passed": false, "evidence": "Score divergence: 0.02" }
-  },
-  "weights": {
-    "reachability": 0.25,
-    "audit_trail": 0.25,
-    "test_evidence": 0.20,
-    "docs_sync": 0.15,
-    "reproducibility": 0.15
-  },
-  "reason": "Task complete. DoD score: 85.0%",
-  "audit_event_id": "dod_verified_abc123...",
-  "timestamp": "2026-09-26T..."
+  "checks": {"reachability": {"passed": true, "evidence": "…", "check_name": "reachability"}, "…": {}},
+  "weights": {"w_reach": 0.2, "w_audit": 0.25, "w_test": 0.2, "w_docs": 0.2, "w_repro": 0.15},
+  "reason": "Task complete. DoD score: 80.0%",
+  "audit_event_id": "<sha256 of the verification>",
+  "timestamp": "2026-10-01T…"
 }
 ```
 
-**Response (Failure - Audit):**
-```json
-{
-  "detail": "Verification audit failed. Task cannot be marked done."
-}
-// HTTP 500
+Exactly one `skill.executed` record (`skill_id: os.definition_of_done_verifier`, input
+and output hashed) is chained per verification. If it cannot be written the route
+answers `500 "Verification audit failed. Task cannot be marked done."` and returns no
+score. The result is also stored as a learning `OUTCOME` event, which `/history` reads.
+
+### POST /v1/console/api/dod/feedback
+
+`{"task_id": "…", "check_name": "…", "feedback": "accurate" | "inaccurate" | "not_applicable", "note": "…"}`
+→ `{"accepted": true, "feedback_id": "…"}`. Stored as a learning `FEEDBACK` event; the
+free-text `note` is not persisted. No weight is adjusted.
+
+### GET /v1/console/api/dod/history/{task_id}?limit=10
+
+→ `{"task_id": "…", "verifications": [{"timestamp": …, "task_id": …, "score": …, "passed": …}]}`
+
+There is no WebSocket stream (the `/stream` stub that closed every connection was
+removed 2026-10-01), and the Flask `quality_api.py` blueprint that nothing imported is gone.
+
+## Running it
+
+```bash
+# Standalone
+python - <<'EOF'
+from core.skills.os_skills.definition_of_done_verifier.skill import DoD_VerifierSkill
+r = DoD_VerifierSkill().execute(task_id="task_123", task_type="feature",
+                                symbol_name="DoD_VerifierSkillWrapper")
+print(r.score, r.checks["reachability"])
+EOF
 ```
 
-### POST /api/dod/feedback
+`DoD_VerifierSkill()` defaults to this checkout and the `_default` tenant chain
+(`core.paths.tenant.tenant_audit_chain`), honouring `CORVIN_HOME`.
 
-Submit feedback on a DoD verification (used by learning loop).
+## Troubleshooting
 
-**Request:**
-```json
-{
-  "task_id": "task_123",
-  "check_name": "test_evidence",
-  "feedback": "accurate",  // or "inaccurate", "not_applicable"
-  "note": "Tests passed but coverage was incomplete"
-}
-```
-
-**Response:**
-```json
-{
-  "accepted": true,
-  "feedback_id": "feedback_task_123_1695753296",
-  "weight_adjustment": -0.02  // Predicted adjustment (actual tuning runs daily)
-}
-```
-
-### GET /api/dod/history/{task_id}
-
-Fetch verification history for a task.
-
-**Request:**
-```
-GET /api/dod/history/task_123?limit=10
-```
-
-**Response:**
-```json
-{
-  "task_id": "task_123",
-  "history": [
-    {
-      "timestamp": "2026-09-26T...",
-      "score": 0.85,
-      "passed": true,
-      "audit_event_id": "..."
-    },
-    {
-      "timestamp": "2026-09-25T...",
-      "score": 0.62,
-      "passed": false,
-      "audit_event_id": "..."
-    }
-  ],
-  "trend": "improving"  // or "stable", "declining"
-}
-```
-
-### WS /api/dod/stream
-
-Real-time WebSocket stream of DoD verification events (for dashboard).
-
-**Connect:**
-```javascript
-const ws = new WebSocket("ws://localhost:8765/api/dod/stream");
-
-ws.onmessage = (event) => {
-  const { event_type, task_id, score, passed, timestamp } = JSON.parse(event.data);
-  // event_type: "verification_started", "check_completed", "verification_done"
-  console.log(`Task ${task_id}: score=${score}, passed=${passed}`);
-};
-```
-
----
-
-## Operator Runbook
-
-### When to Run Verification
-
-| Scenario | Action |
-|----------|--------|
-| **Before merging to main** | Run verification on the branch; score must be ≥ 0.80 |
-| **End of sprint/week** | Run bulk verification on all tasks; identify low-scorers |
-| **After failed deployment** | Verify the deployed code; investigate gap |
-| **Learning loop tuning** | Run daily; observe weight shifts in trend dashboard |
-
-### Interpreting Score
-
-| Score Range | Interpretation | Action |
-|-------------|-----------------|--------|
-| **0.90–1.0** | Excellent | Ready to ship |
-| **0.80–0.89** | Good | Ship with review |
-| **0.70–0.79** | Fair | Additional work needed |
-| **< 0.70** | Poor | Block merge; fix gaps |
-
-### Troubleshooting Low Scores
-
-**Reachability: FAIL**
-```
-Evidence: Symbol 'my_function' not found in call sites
-→ Add a real call site (route handler, CLI command, etc.)
-  or provide proof of reachability (URL, endpoint, plugin registry)
-```
-
-**Audit Trail: FAIL**
-```
-Evidence: No audit event in chain
-→ Verify audit chain is writable: ls -la ~/.corvin/tenants/_default/global/forge/audit.jsonl
-→ Check console logs: journalctl --user -u corvin-webui | grep "AUDIT"
-→ Restart audit service if needed: systemctl --user restart corvin-audit-chain
-```
-
-**Test Evidence: FAIL**
-```
-Evidence: Test output file missing or contains FAIL
-→ Ensure tests are in --test_path and output in --test_output_file
-→ Run: pytest <test_path> -v --tb=short > <test_output_file>
-→ Verify output contains "passed" not "failed"
-```
-
-**Docs Sync: FAIL**
-```
-Evidence: Code changed but docs didn't
-→ List changed files: git diff HEAD~5..HEAD --name-only
-→ For each .py change, ensure corresponding .md update (docs/claude-ref/ or README)
-→ Or add file to .docsignore if exemption justified
-```
-
-**Reproducibility: FAIL**
-```
-Evidence: Score diverged by X% on re-run
-→ Check for non-deterministic sources: random seeds, timestamps, network calls
-→ Run twice in succession: scores should match (±0.02 tolerance)
-→ Investigate checks with high variance; may indicate timing issues
-```
-
-### Escalation Thresholds
-
-| Condition | Escalation |
-|-----------|------------|
-| **Score < 0.50** | Contact task owner; investigate root cause |
-| **Audit fails** | Page on-call operator; audit chain may be corrupted |
-| **>5 tasks score < 0.70** | Weekly review: adjust DoD thresholds or check weights |
-| **Learning loop not tuning weights** | Check event store: `ls -la ~/.corvin/tenants/_default/global/learning/` |
-
----
-
-## Architecture Diagrams
-
-### Verification Flow
-```
-┌─────────────────────────────────────────────────────────┐
-│ POST /api/dod/verify                                    │
-│ (Task: task_id, symbol_name, commit_range)             │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-                       ▼
-        ┌──────────────────────────────┐
-        │  DoD_VerifierSkillWrapper    │
-        │  (Tenant-isolated)           │
-        └──────────────────────────────┘
-                       │
-         ┌─────────────┼─────────────┐
-         ▼             ▼             ▼             ▼             ▼
-    Reachability  AuditTrail   TestEvidence  DocSync  Reproducibility
-         │             │             │             │             │
-         └─────────────┼─────────────┴─────────────┴─────────────┘
-                       ▼
-        ┌──────────────────────────────┐
-        │  Score Computation           │
-        │  (Weighted sum of checks)    │
-        └──────────────────────────────┘
-                       │
-         ┌─────────────┘
-         │
-         ├─→ Emit to ADR-0232 chain (audit-first)
-         │
-         ├─→ Log to learning event store
-         │
-         └─→ Return { score, passed, checks }
-```
-
-### Learning Loop
-```
-┌────────────────────────────────────────────────┐
-│ Verification Result                            │
-│ (score: 0.85, checks: {...})                  │
-└────────────────────┬───────────────────────────┘
-                     │
-                     ▼
-           ┌──────────────────────┐
-           │ User Feedback        │
-           │ POST /api/dod/feedback
-           │ (check: accurate)    │
-           └──────────┬───────────┘
-                      │
-                      ▼
-         ┌────────────────────────────┐
-         │  Learning Event Store      │
-         │  (ADR-0314)                │
-         │  - FeedbackEvent           │
-         │  - VerificationEvent       │
-         │  - WeightUpdateEvent       │
-         └────────────┬───────────────┘
-                      │
-      ┌───────────────┴───────────────┐
-      │  (Daily: WeightOptimizer)     │
-      │  Tuning loop:                  │
-      │  feedback → loss_signal →      │
-      │  new_weights → registry        │
-      └───────────────┬───────────────┘
-                      │
-                      ▼
-         ┌────────────────────────────┐
-         │ Updated Weights (registry) │
-         │ Next verification uses:    │
-         │ reachability: 0.26         │
-         │ audit_trail: 0.24          │
-         │ ...                        │
-         └────────────────────────────┘
-```
-
----
+| Failing check | Usual cause |
+|---|---|
+| reachability | the symbol is only defined, imported or used in tests — add a real call site; or the file is untracked (`git grep` sees tracked files only) |
+| audit_trail | nothing chained a record with this `task_id` (task records carry it under `details`) |
+| test_evidence | path outside the checkout (400), or the captured output has no `passed` |
+| docs_sync | no change under `docs/` in `commit_range` mentions `keyword` |
+| reproducibility | the commit message names no command |
 
 ## Testing
 
-### Tests that exist (re-run 2026-09-28: 80 passed — reachability 15, audit_trail 10, phase1 12, phase2 26, phase3_adversarial 17)
 ```bash
-pytest tests/skills/test_dod_reachability.py -v
-pytest tests/skills/test_dod_audit_trail.py -v
-pytest tests/skills/test_dod_verifier_phase1.py -v
-pytest tests/skills/test_dod_verifier_phase2.py -v
-pytest tests/skills/test_dod_verifier_phase3_adversarial.py -v
+pytest core/console/tests/test_dod_verify_route_e2e.py   # real router, real session, sandbox chain
+pytest tests/skills/test_dod_reachability.py             # incl. git grep on a throwaway repo
+pytest tests/skills/test_dod_audit_trail.py tests/skills/test_dod_verifier_phase1.py \
+       tests/skills/test_dod_verifier_phase2.py tests/skills/test_dod_verifier_phase3_adversarial.py
+pytest core/skills/os_skills/definition_of_done_verifier/tests
 ```
 
-Not written yet (earlier revisions of this page listed them as if they existed):
-per-check files for test-evidence / docs-sync / reproducibility / scoring, and
-the E2E files `tests/e2e/test_dod_verifier_e2e.py`,
-`tests/e2e/test_dod_verifier_api_e2e.py`, `tests/e2e/test_audit_trail_wired_e2e.py`.
-The console routes (`routes/dod_verifier_dashboard.py`: `POST /verify`,
-`POST /feedback`, `GET /history/{task_id}`) are mounted in `app.py` but have no
-HTTP-level E2E test.
+Run the suites in separate processes: `tests/skills/*` puts `core/skills/os_skills/` on
+`sys.path`, where its `audit` package shadows the console's.
 
-### Running All DoD Tests
-```bash
-pytest tests/ -k "dod" -v --tb=short
-```
+## Compliance
 
----
+- Inputs and outputs reach the chain only as SHA-256 digests; error messages are
+  chained as a class name only.
+- The tenant is taken from the authenticated session.
+- Score, checks and reason are always returned together (EU AI Act Art. 50 transparency).
 
-## Compliance & Security
+## Related
 
-### GDPR Compliance (Art. 5, 6, 30, 32)
-
-| Article | Requirement | Implementation |
-|---------|-------------|-----------------|
-| **Art. 5** | Accountability (every action audited) | All verifications emitted to ADR-0232 chain |
-| **Art. 6** | Lawful basis (explicit purpose) | Verification purpose: task completion validation |
-| **Art. 30** | Records of processing (immutable) | Audit chain is hash-linked, append-only |
-| **Art. 32** | Security (encryption, integrity) | Fail-closed gates, tenant isolation, no PII |
-
-### EU AI Act Compliance (Art. 50)
-
-| Requirement | Implementation |
-|-------------|-----------------|
-| **Transparency** | Score + checks + reasoning always returned |
-| **Attribution** | Audit event includes `line_of_moral_responsibility` |
-| **Auditability** | Full verification trail in audit chain (ADR-0232) |
-
-### Data Classification (L34 Flow Guard)
-
-- **Input:** Commit message, symbol names → **PUBLIC** (no secrets allowed)
-- **Output:** Score, checks → **PUBLIC** (operator-facing)
-- **Audit Events:** Hashed inputs/outputs → **INTERNAL** (audit chain only)
-
----
-
-## FAQ
-
-**Q: Can I lower the threshold from 0.80?**  
-A: Threshold is in `DoD_VerificationResult.DEFAULT_THRESHOLD` (currently 0.80 for wave 3). Lower thresholds reduce safety; discuss with architecture team before changing.
-
-**Q: What if reachability check can't find a call site?**  
-A: Fail-closed (symbol marked unreachable). If the function is genuinely used (e.g., indirectly via reflection), document the exception in commit message: `fix: DoD reachability exemption (see ADR-0721 exception clause)`.
-
-**Q: Does the learning loop run automatically?**  
-A: Yes, `WeightOptimizer` runs daily (cron: 3 AM UTC). Manual trigger: `corvin dod learn --tenant=_default`.
-
-**Q: Can I skip DoD verification?**  
-A: No. DoD is **non-negotiable** for wave 3 and beyond. Use `[skip-dod-check]` flag in commit message ONLY for security hotfixes (requires on-call approval).
-
-**Q: Is audit trail encrypted?**  
-A: No, but hash-chained (ADR-0232). Encryption at-rest is handled by L37 (separate infrastructure component).
-
----
-
-## Related References
-
-- **ADR-0721:** DoD Verifier Skill Architecture (decision rationale, trade-offs)
-- **ADR-0722:** DoD Loss Signal & Learning Integration (optimizer design)
-- **ADR-0723:** DoD Implementation Plan (phase breakdown, timeline)
-- **ADR-0314:** Learning Infrastructure (feedback event schema)
-- **ADR-0232/0233:** Audit Chain (hash-linking, boot tripwire)
-- **ADR-0532:** OS-Skills Agentic Control Plane (Skills 2.0 architecture)
-- **Skill:** `assistant.definition_of_done_verifier` (marketplace entry)
-
----
-
-**Last Updated:** 2026-09-27 · **Status:** Implemented, E2E coverage incomplete
+ADR-0721 (architecture), ADR-0722 (learning integration), ADR-0723 (plan),
+ADR-0314 (learning events), ADR-0232/0233 (audit chain), ADR-0532 (Skills 2.0).

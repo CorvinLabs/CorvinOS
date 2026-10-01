@@ -56,7 +56,10 @@ class AuditTrailCheck:
 
                     try:
                         event = json.loads(line)
-                        if event.get("task_id") == task_id:
+                        details = event.get("details")
+                        nested = details.get("task_id") if isinstance(details, dict) else None
+                        # Chain records carry task_id under ``details``.
+                        if task_id in (event.get("task_id"), nested):
                             count += 1
                             last_events.append(event.get("event_type", "?"))
                             if len(last_events) > 3:
