@@ -1,0 +1,9 @@
+{
+  "name": "assistant",
+  "description": "Generalist — all tools, no model pin (routing stays ADR-0952)",
+  "forge_enabled": true,
+  "skill_forge_enabled": true,
+  "orchestration_enabled": true,
+  "capability_aware": true,
+  "tool_namespace": "assistant"
+}
