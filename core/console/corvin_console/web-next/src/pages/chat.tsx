@@ -8,6 +8,7 @@ import {
   FileText,
   FolderOpen,
   GitGraph,
+  Globe2,
   Hammer,
   ListChecks,
   Loader2,
@@ -87,6 +88,7 @@ import {
   useStreamStates,
 } from "@/lib/streaming-state";
 import { useVoicePlayback, type VoiceState } from "@/lib/useVoicePlayback";
+import { AgentLiveFeed } from "@/components/agent-hub/live-feed";
 
 // ── Web Speech API (not in lib.dom for the prefixed Chrome/Edge implementation) ──
 interface SpeechRecognitionResultLike {
@@ -705,11 +707,15 @@ const ChatStatusBar = React.memo(function ChatStatusBar({
   personaName,
   voiceOut,
   onVoiceToggle,
+  relayOpen,
+  onRelayToggle,
 }: {
   effectiveEngine: string;
   personaName: string | null | undefined;
   voiceOut: boolean;
   onVoiceToggle: () => void;
+  relayOpen: boolean;
+  onRelayToggle: () => void;
 }) {
   const navigate = useNavigate();
   const meta = ENGINE_META[effectiveEngine] ?? ENGINE_META["claude_code"];
@@ -749,6 +755,19 @@ const ChatStatusBar = React.memo(function ChatStatusBar({
           {voiceOut ? <Volume2 className="h-3 w-3" /> : <VolumeX className="h-3 w-3" />}
           Voice {voiceOut ? "on" : "off"}
         </button>
+        <button
+          onClick={onRelayToggle}
+          title={relayOpen ? "Hide relay activity" : "Show A2A relay activity (connected agent peers)"}
+          className={cn(
+            "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+            relayOpen
+              ? "border-accent/30 bg-accent/5 text-accent hover:bg-accent/10"
+              : "border-border/50 bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground",
+          )}
+        >
+          <Globe2 className="h-3 w-3" />
+          Relay
+        </button>
         <span className="ml-auto text-[10px] text-muted-foreground/50">
           type <kbd className="rounded bg-muted/60 px-1 font-mono text-[9px]">/</kbd> for commands
         </span>
@@ -769,6 +788,7 @@ function ChatPane({
   const { session: auth, refresh: refreshAuth } = useAuth();
   const csrf = auth!.csrf_token;
   const qc = useQueryClient();
+  const navigate = useNavigate();
   // Messages and streaming state come from the persistent registry instead of
   // local state. The registry keeps WS connections alive across chat switches
   // so streaming continues in the background.
@@ -789,6 +809,13 @@ function ChatPane({
   React.useEffect(() => { setCccActions([]); }, [sid]);
   const [auditOpen, setAuditOpen] = React.useState(false);
   const [auditTab, setAuditTab] = React.useState<"single" | "dual-track" | "tde-graph">("single");
+  // Relay Activity panel — A2A peer traffic, composed from the Agent Hub's
+  // own live-feed component. Deliberately a SEPARATE panel, never merged
+  // into the message list: a2a_feed.py records carry no chat session_id (A2A
+  // is peer/tenant-scoped, not session-scoped), so there is no correlation
+  // to filter by even if we wanted to inline it. The panel shows ALL
+  // host-tenant A2A traffic, not just traffic related to this chat.
+  const [relayOpen, setRelayOpen] = React.useState(false);
   const [workdirInfo, setWorkdirInfo] = React.useState<{ path: string; opened: boolean; error?: string } | null>(null);
   // Voice-out is on by default — the operator can flip it off via the
   // toggle in the chat header, the choice is then session-local.
@@ -1770,7 +1797,45 @@ function ChatPane({
         </div>
       )}
 
-      <div ref={scrollRef} className={cn("relative min-h-0 overflow-y-auto px-8 py-8", auditOpen ? "hidden" : "flex-1")}>
+      {/* Relay Activity panel — replaces message list when open, same slot
+          pattern as the Audit Trail panel above; the two are mutually
+          exclusive (opening one closes the other) rather than stacked. */}
+      {relayOpen && (
+        <div className="flex flex-col flex-1 min-h-0 border-b border-border">
+          <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-1.5 flex-shrink-0">
+            <span className="flex items-center gap-1.5 text-[10px] font-semibold text-muted-foreground">
+              <Globe2 className="h-3 w-3" />
+              Relay Activity — all A2A peer traffic on this instance
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => navigate("/app/agent-hub")}
+                className="text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                title="Open full Agent Hub"
+              >
+                Open Agent Hub
+              </button>
+              <button
+                onClick={() => setRelayOpen(false)}
+                className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                title="Close"
+                aria-label="Close Relay Activity panel"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+          {/* overflow-hidden clips AgentLiveFeed's own min-h-[34rem] (sized
+              for its full-page Agent Hub context) to this panel's flex
+              slot — without it the inner component pushes past the
+              available height and overlaps the status bar below. */}
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <AgentLiveFeed />
+          </div>
+        </div>
+      )}
+
+      <div ref={scrollRef} className={cn("relative min-h-0 overflow-y-auto px-8 py-8", (auditOpen || relayOpen) ? "hidden" : "flex-1")}>
         {recording && <RecordingOverlay onStop={stopRecording} />}
         <div className="mx-auto w-full max-w-4xl space-y-6">
           {persistedTasks.length > 0 && (
@@ -1829,6 +1894,7 @@ function ChatPane({
               onViewTdeGraph={() => {
                 setAuditTab("tde-graph");
                 setAuditOpen(true);
+                setRelayOpen(false);
               }}
             />
           ))}
@@ -1853,6 +1919,11 @@ function ChatPane({
         personaName={activePersona}
         voiceOut={voiceOut}
         onVoiceToggle={handleVoiceToggle}
+        relayOpen={relayOpen}
+        onRelayToggle={() => {
+          setRelayOpen((v) => !v);
+          setAuditOpen(false);
+        }}
       />
 
       <footer className="bg-background/95 px-8 py-4">
