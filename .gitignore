@@ -175,3 +175,6 @@ dist_release/
 # the adapter now writes them under <corvin_home>/bridges/mid_turn_heartbeats/.
 corvin_operator/bridges/shared/mid_turn_heartbeats/
 corvin_operator/bridges/shared/settings.json
+
+# Key material never belongs in this public repo (ADR-0891 amendment, 2026-10-01)
+/Corvin-Keys/

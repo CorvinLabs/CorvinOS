@@ -1,5 +1,13 @@
 """Credential Rotation Daemon — Phase 1 Execution (ADR-0869).
 
+NO ROTATION IMPLEMENTED (measured 2026-10-01, ADR-0891 amendment).
+``rotate_credential()`` refuses with ``FAILED`` / ``rotation_not_implemented``
+and ``verify_audit_trail()`` reports ``not_implemented``. Both used to report
+success — "completed" for a rotation that changed nothing, "audit_trail_intact"
+without reading the chain — the same false-success shape as the defused
+``scripts/rotate_corvin_keys_gdpr.py``. ``bootstrap_pipeline`` only constructs
+the daemon; nothing calls these methods in production.
+
 Implements credential rotation with:
 - Policy-driven scheduling
 - Fail-closed error handling
@@ -164,102 +172,33 @@ class RotationDaemon:
     def rotate_credential(
         self, credential_id: str
     ) -> RotationResult:
-        """Execute credential rotation (Phase 1: inventory + audit baseline).
+        """Refuse: this daemon has no rotation implementation.
 
-        Phase 1 does NOT modify credentials; it establishes the audit trail baseline
-        and prepares for Phase 2 automation.
-
-        Args:
-            credential_id: Credential to rotate
-
-        Returns:
-            RotationResult with status and audit event
+        The credentials it schedules are third-party secrets (GitHub, Hetzner,
+        Cloudflare, PyPI, OpenAI, ...). Rotating them needs the provider's own
+        revocation + issuance, which happens in the provider's dashboard
+        (ADR-0891 Phase 1). Reporting COMPLETED here would claim a rotation
+        that did not happen, so the result is FAILED and the scheduler is not
+        advanced.
         """
-        start_time = datetime.now(timezone.utc)
-
-        try:
-            # Step 1: Emit started event
-            started_event = self.emit_audit_event(
-                event_type="credential_rotation_started",
-                credential_id=credential_id,
-                status=RotationStatus.IN_PROGRESS,
-            )
-            if not started_event:
-                return RotationResult(
-                    credential_id=credential_id,
-                    status=RotationStatus.FAILED,
-                    error_message="Failed to emit started event",
-                )
-
-            # Step 2: Phase 1 - No actual rotation yet (placeholder)
-            logger.info(f"Phase 1 rotation for {credential_id}: audit trail established")
-
-            # Step 3: Compute duration
-            duration_ms = int(
-                (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
-            )
-
-            # Step 4: Mark as rotated in scheduler
-            self.scheduler.mark_rotated(credential_id)
-
-            # Step 5: Emit completed event
-            completed_event = self.emit_audit_event(
-                event_type="credential_rotation_completed",
-                credential_id=credential_id,
-                status=RotationStatus.COMPLETED,
-                duration_ms=duration_ms,
-            )
-
-            return RotationResult(
-                credential_id=credential_id,
-                status=RotationStatus.COMPLETED,
-                duration_ms=duration_ms,
-                audit_event=completed_event,
-            )
-
-        except Exception as e:
-            logger.error(f"Rotation failed for {credential_id}: {e}")
-            duration_ms = int(
-                (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
-            )
-
-            # Mark as error in scheduler
-            self.scheduler.mark_error(credential_id)
-
-            # Emit failed event
-            failed_event = self.emit_audit_event(
-                event_type="credential_rotation_failed",
-                credential_id=credential_id,
-                status=RotationStatus.FAILED,
-                error_message=str(e),
-                duration_ms=duration_ms,
-            )
-
-            return RotationResult(
-                credential_id=credential_id,
-                status=RotationStatus.FAILED,
-                error_message=str(e),
-                duration_ms=duration_ms,
-                audit_event=failed_event,
-            )
+        logger.warning(
+            "credential rotation refused for %s: rotation_not_implemented",
+            credential_id,
+        )
+        return RotationResult(
+            credential_id=credential_id,
+            status=RotationStatus.FAILED,
+            error_message="rotation_not_implemented",
+            duration_ms=0,
+        )
 
     def verify_audit_trail(self) -> tuple[bool, str]:
-        """Verify audit trail integrity (hash-chain validation).
+        """Report that no verification is performed here.
 
-        Returns:
-            (is_valid, message) tuple
+        The audit chain is verified at boot by the ADR-0232 tripwire
+        (``tripwire.py::assert_all``); this daemon does not read it.
         """
-        if not self.audit_backend:
-            return False, "No audit backend configured"
-
-        try:
-            # This would call the audit backend's verify method
-            # For now, just confirm backend is available
-            logger.info("Audit trail verification passed")
-            return True, "audit_trail_intact"
-        except Exception as e:
-            logger.error(f"Audit trail verification failed: {e}")
-            return False, str(e)
+        return False, "not_implemented"
 
 
 def bootstrap_rotation_daemon_phase1(

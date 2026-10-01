@@ -137,96 +137,50 @@ class TestRotationDaemon:
         assert event.error_message == "Network timeout"
         assert event.duration_ms == 5000
 
-    def test_rotate_credential_success(self):
-        """Test successful credential rotation."""
+    def test_rotate_credential_refuses_without_claiming_success(self):
+        """No implementation exists, so the daemon must not report COMPLETED."""
         mock_backend = MagicMock()
-        daemon = RotationDaemon(
-            tenant_id="_default", audit_backend=mock_backend
-        )
+        daemon = RotationDaemon(tenant_id="_default", audit_backend=mock_backend)
 
         result = daemon.rotate_credential("GITHUB_TOKEN")
 
         assert result.credential_id == "GITHUB_TOKEN"
-        assert result.status == RotationStatus.COMPLETED
-        assert result.error_message is None
-        assert result.duration_ms is not None
-        assert result.audit_event is not None
+        assert result.status == RotationStatus.FAILED
+        assert result.error_message == "rotation_not_implemented"
+        assert result.audit_event is None
 
-    def test_rotate_credential_updates_scheduler(self):
-        """Test that rotation updates scheduler."""
-        mock_backend = MagicMock()
-        daemon = RotationDaemon(
-            tenant_id="_default", audit_backend=mock_backend
-        )
+    def test_rotate_credential_does_not_advance_scheduler(self):
+        """A refused rotation must not be counted as a rotation."""
+        daemon = RotationDaemon(tenant_id="_default", audit_backend=MagicMock())
         daemon.scheduler.add_credential("GITHUB_TOKEN")
-        initial_schedule = daemon.scheduler.get_schedule("GITHUB_TOKEN")
-        assert initial_schedule.rotation_count == 0
 
         daemon.rotate_credential("GITHUB_TOKEN")
 
-        updated_schedule = daemon.scheduler.get_schedule("GITHUB_TOKEN")
-        assert updated_schedule.rotation_count == 1
+        assert daemon.scheduler.get_schedule("GITHUB_TOKEN").rotation_count == 0
 
-    def test_rotate_credential_audit_trail(self):
-        """Test rotation creates audit trail."""
+    def test_rotate_credential_emits_no_completion_record(self):
+        """No 'credential_rotation_completed' record for a rotation that did not happen."""
         mock_backend = MagicMock()
-        daemon = RotationDaemon(
-            tenant_id="_default", audit_backend=mock_backend
-        )
+        daemon = RotationDaemon(tenant_id="_default", audit_backend=mock_backend)
 
-        daemon.rotate_credential("GITHUB_TOKEN")
-
-        # Should have called write_event at least twice (started, completed)
-        assert mock_backend.write_event.call_count >= 2
-
-    def test_rotate_credential_timing(self):
-        """Test that rotation timing is tracked."""
-        mock_backend = MagicMock()
-        daemon = RotationDaemon(
-            tenant_id="_default", audit_backend=mock_backend
-        )
-
-        result = daemon.rotate_credential("GITHUB_TOKEN")
-
-        assert result.duration_ms is not None
-        assert result.duration_ms >= 0
-
-    def test_rotate_credential_multiple_creds(self):
-        """Test rotating multiple credentials."""
-        mock_backend = MagicMock()
-        daemon = RotationDaemon(
-            tenant_id="_default", audit_backend=mock_backend
-        )
-
-        results = []
         for cred_id in ["GITHUB_TOKEN", "HETZNER_API_TOKEN", "CLOUDFLARE_ID"]:
-            result = daemon.rotate_credential(cred_id)
-            results.append(result)
+            assert daemon.rotate_credential(cred_id).status == RotationStatus.FAILED
 
-        assert len(results) == 3
-        for result in results:
-            assert result.status == RotationStatus.COMPLETED
+        for call in mock_backend.write_event.call_args_list:
+            event = call.args[0] if call.args else call.kwargs.get("event", {})
+            assert event.get("event_type") != "credential_rotation_completed"
 
     def test_rotate_credential_without_backend(self):
-        """Test rotation without audit backend (fails closed)."""
+        """Refused regardless of backend."""
         daemon = RotationDaemon(tenant_id="_default", audit_backend=None)
-        result = daemon.rotate_credential("GITHUB_TOKEN")
+        assert daemon.rotate_credential("GITHUB_TOKEN").status == RotationStatus.FAILED
 
-        # Rotation should fail because started event cannot be emitted
-        assert result.status == RotationStatus.FAILED
-
-    def test_verify_audit_trail_without_backend(self):
-        """Test audit trail verification without backend."""
-        daemon = RotationDaemon(audit_backend=None)
-        is_valid, message = daemon.verify_audit_trail()
-        assert is_valid is False
-
-    def test_verify_audit_trail_with_backend(self):
-        """Test audit trail verification with backend."""
-        mock_backend = MagicMock()
-        daemon = RotationDaemon(audit_backend=mock_backend)
-        is_valid, message = daemon.verify_audit_trail()
-        assert is_valid is True
+    def test_verify_audit_trail_does_not_claim_intact(self):
+        """The daemon does not read the chain, so it must not report it intact."""
+        for backend in (None, MagicMock()):
+            is_valid, message = RotationDaemon(audit_backend=backend).verify_audit_trail()
+            assert is_valid is False
+            assert message == "not_implemented"
 
 
 class TestRotationResult:
@@ -304,49 +258,3 @@ class TestBootstrapRotationDaemon:
         assert daemon1.tenant_id != daemon2.tenant_id
 
 
-class TestRotationDaemonIntegration:
-    """Integration tests for RotationDaemon."""
-
-    def test_full_rotation_workflow(self):
-        """Test complete rotation workflow."""
-        mock_backend = MagicMock()
-        daemon = RotationDaemon(
-            tenant_id="_default", audit_backend=mock_backend
-        )
-
-        # Apply policy
-        policy = RotationPolicy(
-            credential_ids=["GITHUB_TOKEN", "HETZNER_API_TOKEN"],
-            schedule_type=RotationScheduleType.MONTHLY,
-        )
-        daemon.apply_policy(policy)
-
-        # Rotate credentials
-        results = []
-        for cred_id in policy.credential_ids:
-            result = daemon.rotate_credential(cred_id)
-            results.append(result)
-
-        # Verify all rotations succeeded
-        assert len(results) == 2
-        for result in results:
-            assert result.status == RotationStatus.COMPLETED
-            assert result.error_message is None
-
-    def test_rotation_with_audit_trail_chain(self):
-        """Test rotation maintains audit trail chain."""
-        mock_backend = MagicMock()
-        daemon = RotationDaemon(
-            tenant_id="_default", audit_backend=mock_backend
-        )
-
-        # Rotate credential
-        result = daemon.rotate_credential("GITHUB_TOKEN")
-
-        # Extract audit events from mock calls
-        calls = mock_backend.write_event.call_args_list
-        assert len(calls) >= 2  # At least started and completed
-
-        # Verify chain (each event should reference previous)
-        # This is verified by the audit event generation
-        assert result.audit_event is not None
