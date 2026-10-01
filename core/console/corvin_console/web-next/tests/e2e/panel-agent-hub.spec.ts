@@ -13,7 +13,7 @@ test.describe('Agent Hub Panel', () => {
   test('navigates to agent-hub and loads', async ({ panelNav }) => {
     await panelNav.goto(panelSlug);
     await panelNav.assertLoaded(panelSlug);
-    expect(panelNav.page).toHaveURL(/\/app\/agent-hub/);
+    await expect(panelNav.page).toHaveURL(/\/app\/agent-hub/);
   });
 
   test('displays page title', async ({ panelNav }) => {

@@ -13,7 +13,7 @@ test.describe('Chat Panel', () => {
   test('navigates to chat and loads', async ({ panelNav }) => {
     await panelNav.goto(panelSlug);
     await panelNav.assertLoaded(panelSlug);
-    expect(panelNav.page).toHaveURL(/\/app\/chat/);
+    await expect(panelNav.page).toHaveURL(/\/app\/chat/);
   });
 
   test('displays page title', async ({ panelNav }) => {

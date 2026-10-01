@@ -294,8 +294,9 @@ export function ChatPage() {
 
   return (
     <div className="-mx-6 -my-8 grid h-[calc(100vh-3.5rem)] grid-cols-[1fr_18rem] overflow-hidden">
-      {/* Active chat pane — left + center, full-bleed */}
-      <main className="flex min-h-0 flex-col overflow-hidden bg-background">
+      <h1 className="sr-only">Chat</h1>
+      {/* The layout already owns the page's single <main> landmark. */}
+      <section aria-label="Chat" className="flex min-h-0 flex-col overflow-hidden bg-background">
         {activeSid ? (
           <ChatPane
             key={activeSid}
@@ -305,7 +306,7 @@ export function ChatPage() {
         ) : (
           <EmptyState onNew={() => createMut.mutate()} pending={createMut.isPending} />
         )}
-      </main>
+      </section>
 
       {/* Sessions sidebar — right side; chat-pane content stays centered. */}
       <aside className="flex min-h-0 flex-col border-l border-border bg-card/40">
