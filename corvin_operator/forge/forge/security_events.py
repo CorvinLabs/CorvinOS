@@ -938,6 +938,7 @@ EVENT_SEVERITY: dict[str, str] = {
     "context.prompt_injection_detected":"CRITICAL",# L10: prompt injection detected in context
     "context.snapshot_taken":           "INFO",    # L10: context snapshot captured (Phase 3 GAP-1)
     "context.adapted":                  "INFO",    # L10: context adapted for task/agent (Phase 3 GAP-1)
+    "context.duplicate_memory_merged":  "INFO",    # ADR-2098: CSPR collapsed same-topic memory matches
     "context.cache_flushed":            "INFO",    # L10: context cache cleared (Phase 3 GAP-1)
     "context.audit_validated":          "INFO",    # L10: context audit trail validated (Phase 3 GAP-1)
     # Layer 22 — Compute Fabric Safety Audit (core/compute/compute_runtime.py)
@@ -3599,6 +3600,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "context.adapted": frozenset({
         "context_id", "tenant_id", "adaptation_type", "delta_summary",
         "user_model_updated",
+    }),
+    "context.duplicate_memory_merged": frozenset({
+        "context_id", "tenant_id", "topic_key", "kept_filename", "merged_count",
     }),
     "context.cache_flushed": frozenset({
         "context_id", "tenant_id", "reason", "retention_days_before_flush",

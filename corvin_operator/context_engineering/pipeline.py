@@ -500,6 +500,14 @@ def render_brief_to_text(brief: Any, *, include_content: bool = False) -> str:
     matches = getattr(mc, "matches", []) if mc else []
     if matches:
         _top = matches[:5]
+        # ADR-2098 (Context Source Priority Resolver): a topic the CEL pipeline
+        # already surfaced in an EARLIER turn of this session is tagged by the
+        # context_priority stage, not dropped (fail-closed toward visibility).
+        # Reframe it instead of repeating the same authoritative-new-fact framing
+        # turn after turn — that repeated framing is what drives a model to
+        # re-ask about something the session dialogue already settled.
+        from .context_priority import topic_key as _topic_key  # noqa: PLC0415
+        _repeat_topics = getattr(brief, "memory_repeat_topics", None) or set()
         # Precompute bodies once (each read hits disk). EXP-001 Entry 19: when content is present,
         # frame it ASSERTIVELY and present the fact DIRECTLY (no "past memory" hedge, no title
         # prefix) — the "Relevant past memory:" framing made the model discount a name-type fact
@@ -512,7 +520,10 @@ def render_brief_to_text(brief: Any, *, include_content: bool = False) -> str:
         for m in _top:
             _b = _bodies[id(m)]
             _title = getattr(m, 'title', None) or getattr(m, 'filename', '?')
-            lines.append(f"  - {_b}" if _b else f"  - {_title}")
+            _line = f"  - {_b}" if _b else f"  - {_title}"
+            if _repeat_topics and _topic_key(m) in _repeat_topics:
+                _line += " (bereits in dieser Session erwähnt — ggf. nicht mehr aktuell)"
+            lines.append(_line)
     rel = getattr(brief, "related_decisions", None) or []
     if rel:
         lines.append("Related decisions (ADRs):")

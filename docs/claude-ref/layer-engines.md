@@ -3861,3 +3861,56 @@ a real licence change MUST invalidate outstanding sessions (ADR-0154 M3).
   permanent and is counted as a delegated run. Don't widen the fixture to
   `CORVIN_HOME` without first decoupling the 70 install-reading tests.
 
+
+## Context Source Priority Resolver (ADR-2098, 2026-10-01)
+
+**Symptom this closes:** the CEL memory stage (`stages/memory.py`) runs
+`MemoryLookup` fresh on every turn's raw task text. A memory file that happens
+to match the current turn's words gets re-injected and rendered as an
+"authoritative" new fact every time — even when THIS session's own dialogue
+already settled the topic several turns ago. Operator-observed: a multi-phase
+task is planned, the operator says "do Phase 0", and the agent re-asks
+questions about Phase 0 that were already answered earlier in the SAME
+conversation, because a stale/duplicate memory fragment about "Phase 0"
+re-enters the prompt weighted as if it were new.
+
+**Mechanism — stage `context_priority`** (`operator/context_engineering/
+stages/context_priority_stage.py`, `trust=builtin`, `requires=("memory",)`),
+wired into BOTH `DEFAULT_PIPELINE` and `ACTIVE_PIPELINE`
+(`stages/config.py`) immediately after the `memory` root stage:
+
+1. **Intra-turn duplicate collapse** — matches sharing a normalized topic key
+   (`context_priority.topic_key`, exact match, not fuzzy — ambiguous near
+   misses stay visible by design) are collapsed to the single
+   most-recently-modified one. The collapse is hash-chained
+   (`context.duplicate_memory_merged`, `EVENT_SEVERITY` + `_EVENT_ALLOWLIST`
+   in `forge/security_events.py`), mirroring `l10_adapter.py`'s
+   `context.adapted` audit pattern.
+2. **Session-scoped repeat tagging** — a topic already surfaced in an
+   EARLIER turn of THIS session is tagged on `brief.memory_repeat_topics`
+   (a dynamic attribute, same pattern as `pipeline.py`'s
+   `brief.anchor_facts`), never silently dropped. `render_brief_to_text`
+   appends "(bereits in dieser Session erwähnt — ggf. nicht mehr aktuell)" to
+   a repeated line instead of repeating the same authoritative-new-fact
+   framing turn after turn — that repeated framing is what drove the
+   re-asking behaviour.
+
+**Session-Independence (ADR-2098 §4):** the "seen topics" store is a small
+JSON file per `(tenant, session)` under `tenant_home(tenant_id) /
+cel_context_priority / <session>.json` (`context_priority.py`, same shape as
+the `anchor` module's load-bearing-fact store) — never written into the
+global memory files. A brand-new session with no prior turns sees global
+memory exactly as before.
+
+**What this does NOT do:** it has no access to the live dialogue transcript
+(CEL only ever sees the current turn's raw task text) and does not implement
+priority adjudication against the task-plan/checkpoint tier from ADR-2098's
+full design — only the two CEL-reachable halves (dedup + session-scoped
+repeat tagging) are wired. Treat the tier-priority and event-bus-driven
+invalidation parts of ADR-2098 as still open.
+
+**Must NOT do:** don't widen `topic_key` to fuzzy/similarity matching (ADR-2098
+chose exact-match-only so an ambiguous case stays visible, never silently
+merged) · don't write the seen-topics store into the global memory directory
+· don't drop a repeated match from `mc.matches` — tag and reframe, never
+suppress.
