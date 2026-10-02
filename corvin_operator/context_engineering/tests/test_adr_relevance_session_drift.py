@@ -218,6 +218,20 @@ class TestRealCorpusRegression:
         # Measured 2026-10-02 after R7: 4 of 515, all ungrammatical "Let's <question>".
         assert len(noisy) <= 6, noisy
 
+    def test_a_named_adr_keeps_its_best_lexical_neighbour(self):
+        """Review R8-CEL-3: the cut against the named ADR's synthetic 1.0
+        dropped the best second ADR."""
+        clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))
+        got = [m.id for m in clf.find_relevant_adrs(SimpleNamespace(
+            raw_input="Does ADR-0952 conflict with the session ledger design?"))]
+        assert got[0] == "ADR-0952" and "ADR-2102" in got, got
+
+    def test_inflected_request_verbs_are_weak(self):
+        from .adr_retrieval_eval import NEGATIVE_INFLECTED
+        clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))
+        for q in NEGATIVE_INFLECTED:
+            assert [m.id for m in clf.find_relevant_adrs(SimpleNamespace(raw_input=q))] == [], q
+
     def test_an_adr_named_by_id_comes_first(self):
         from .adr_retrieval_eval import NAMED
         clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))

@@ -212,6 +212,13 @@ def is_protected_path(path: str | Path) -> bool:
     # recorded in its session ledger as the assistant's answer (review R7-3).
     if "pending_notifications" in abs_p.parts:
         return True
+    # The CEL anchor store (re-injected every turn as "always honor these",
+    # review R8-CEL-2) and the console's ledger — its per-chat turn logs are
+    # what the console re-supplies (R8-CEL-5).
+    if "cel_anchors" in abs_p.parts:
+        return True
+    if "web_chat" in abs_p.parts and abs_p.name.endswith(".turns.jsonl"):
+        return True
 
     home = _corvin_home()
     home_str = str(home)

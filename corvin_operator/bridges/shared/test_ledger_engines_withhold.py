@@ -83,8 +83,9 @@ def test_history_the_data_flow_policy_forbids_for_this_engine_is_withheld(monkey
     seen: list = []
     monkeypatch.setattr(adapter, "_CodexCliEngine", _engine_recording(seen))
     monkeypatch.setattr(adapter, "_run_pre_dispatch_gates", lambda *a, **k: None)
-    monkeypatch.setattr(adapter, "_check_compliance_or_fail",
-                        lambda engine, **kw: "[data-flow] refused" if "SECRET" in (kw.get("prompt") or "") else None)
+    import spawn_gates  # type: ignore
+    monkeypatch.setattr(spawn_gates, "check_l34",
+                        lambda engine, tid, **kw: "[data-flow] refused" if "SECRET" in (kw.get("prompt") or "") else None)
     try:
         adapter._call_codex_streaming_via_engine("next", "telegram", chat, {}, None, "off", wd, {})
     except Exception:  # noqa: BLE001

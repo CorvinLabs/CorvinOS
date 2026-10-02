@@ -64,6 +64,14 @@ def test_destroying_the_cwd_does_not_reach_the_ledger():
     assert any(r.get("user") == "keep me" for r in sl.read_ledger(WD))
 
 
+def _fresh_migration(*legacy_files):
+    """A first start: no once-per-install marker yet, legacy files pre-cutoff."""
+    for f in legacy_files:
+        os.utime(f, (1_700_000_000, 1_700_000_000))
+    (TH / "session_ledger" / ".legacy_migrated").unlink(missing_ok=True)
+    return sl.migrate_legacy_ledgers([TH / "sessions"])
+
+
 def test_a_ledger_left_in_the_old_place_is_moved_out_and_still_protected():
     wd = TH / "sessions/voice/telegram/456"
     old = wd / ".corvin-ledger"
@@ -71,7 +79,7 @@ def test_a_ledger_left_in_the_old_place_is_moved_out_and_still_protected():
     (old / "ledger.jsonl").write_text('{"kind":"turn","seq":1,"n":1,"user_text":"legacy","assistant_text":"a"}\n')
     assert path_gate.is_protected_path(old / "ledger.jsonl")
     assert sl.read_ledger(wd) == []                    # never adopted lazily (R6-3)
-    assert sl.migrate_legacy_ledgers([TH / "sessions"]) >= 1   # at process start
+    assert _fresh_migration(old / "ledger.jsonl") >= 1   # at process start
     assert [r["user"] for r in sl.read_ledger(wd)] == ["legacy"]
     assert not old.exists() and sl.ledger_path(wd).is_file()
 
@@ -93,7 +101,7 @@ def test_old_and_new_ledgers_are_merged_not_dropped():
     (wd / ".corvin-ledger").mkdir()
     (wd / ".corvin-ledger" / "ledger.jsonl").write_text(
         '{"kind":"turn","ts":10,"seq":1,"n":1,"user_text":"old-1","assistant_text":"a"}\n')
-    sl.migrate_legacy_ledgers([TH / "sessions"])
+    _fresh_migration(wd / ".corvin-ledger" / "ledger.jsonl")
     recs = sl.read_ledger(wd)
     assert [r["user"] for r in recs] == ["old-1", "new-2"] and [r["n"] for r in recs] == [1, 2]
     assert not (wd / ".corvin-ledger").exists()
@@ -116,7 +124,7 @@ def test_a_symlinked_legacy_ledger_is_never_migrated():
     wd = TH / "sessions/voice/telegram/attacker"
     wd.mkdir(parents=True, exist_ok=True)
     os.symlink(sl.ledger_dir(victim), wd / ".corvin-ledger")
-    sl.migrate_legacy_ledgers([TH / "sessions"])
+    _fresh_migration()
     assert sl.read_ledger(wd) == []
     assert not sl.ledger_dir(wd).is_symlink()
     sl.append_turn(wd, channel="telegram", chat_key="attacker", user_text="mine", assistant_text="x")
@@ -133,3 +141,12 @@ def test_a_commit_message_mentioning_the_ledger_is_not_blocked():
     """Review R7-5: hint words blocked ordinary commands."""
     assert _bash('git commit -m "$(printf %s fix-session_ledger-merge)"')[0] is True
     assert _bash("cat > data/ledger.jsonl <<'EOF'\n{}\nEOF")[0] is True
+
+
+def test_the_anchor_store_and_the_console_ledger_are_protected():
+    """Review R8: both are re-supplied into every later system prompt."""
+    th = Path(os.environ["CORVIN_HOME"]) / "tenants/_default"
+    for target in (th / "cel_anchors/discord_123.jsonl", th / "cel_anchors/x.pending.jsonl",
+                   th / "global/web_chat/sessions/abc.turns.jsonl"):
+        assert path_gate.is_protected_path(target), target
+        assert _bash(f"echo '{{}}' >> {target}")[0] is False

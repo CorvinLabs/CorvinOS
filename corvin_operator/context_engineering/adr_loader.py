@@ -48,14 +48,18 @@ minute minutes hour hours
 #: ARE topics in this corpus (create: forge.create / skill_create; write:
 #: copy-on-write, skill writes; work: work items; three: three-tier; per day:
 #: quotas) are NOT stop words (review R5-1 measured the recall they cost);
-#: as the request's OPENING verb they carry none, see _LEADING_VERBS.
+#: as request verbs they are weak evidence, see _WEAK_VERBS.
 #: Request verbs ("write a haiku", "let's plan a trip", "I'd like to create…")
 #: are WEAK evidence wherever they stand: they add to a score but never count as
 #: one of the two matched terms a result needs — like a two-digit number. A
 #: position rule ("only the opening verb") broke on "Let's", "I'd" and every
 #: greeting (review R7-1); as plain stop words they cost recall on questions
 #: where they ARE the topic ("forge.create", "copy-on-write", R5-1).
-_WEAK_VERB_WORDS = "write create draft make plan learn work compose".split()
+#: Inflected forms too: the stemmer maps "planning" to "plann", "written" to
+#: "written", "wrote" to "wrot" — the rule must hold for them (review R8-CEL-6).
+_WEAK_VERB_WORDS = ("write writes writing written wrote create creates creating "
+                    "draft drafting make makes making made plan plans planning planned "
+                    "learn learning work working compose composing").split()
 _WEAK_VERBS: frozenset = frozenset()   # their stems; filled once _stem exists
 
 

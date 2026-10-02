@@ -3588,10 +3588,9 @@ def _resolve_spawn_inputs(
                 channel=str(channel or ""), chat_key=str(chat_key),
                 tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default",
                 withhold=_ledger_consent_withhold(channel, str(chat_key)),
+                view_gate=_ledger_data_flow_gate(
+                    "claude_code", channel=str(channel or ""), chat_key=str(chat_key)),
             )
-            _ledger_block = _ledger_data_flow_gate(
-                _ledger_block, "claude_code", channel=str(channel or ""),
-                chat_key=str(chat_key), workdir=_session_dir(channel, str(chat_key)))
             if _ledger_block:
                 sys_prompt = sys_prompt + _ledger_block
         except Exception as e:  # noqa: BLE001
@@ -4568,35 +4567,25 @@ def _ledger_consent_withhold(channel: str, chat_key: str):
     return _check
 
 
-def _ledger_data_flow_gate(block: str, engine_name: str, *, channel: str, chat_key: str,
-                           workdir: Path) -> str:
-    """L34 on the RE-SUPPLIED history, against the engine about to read it.
+def _ledger_data_flow_gate(engine_name: str, *, channel: str, chat_key: str):
+    """``view_gate`` for ``session_ledger.render_context``: L34 on the history
+    the worker can read (the whole view — a superset of the injected block),
+    against the engine about to read it, BEFORE the view is written.
 
-    The ledger block reaches the model in the system prompt, which no pre-spawn
-    gate inspects — only the new message is. A side turn recorded past L34
-    (e.g. a /plugin-builder answer) or a turn admitted on a local engine would
-    otherwise reach an engine the tenant's data-classification matrix forbids
-    for it (review R7-4). Refused → the block is replaced by one line and the
-    worker-readable view is removed for this spawn. Never raises; a gate error
-    refuses (the helper is fail-closed for a nameless engine / missing module).
-    """
-    if not block:
-        return block
-    import types as _types  # noqa: PLC0415
-    try:
-        msg = _check_compliance_or_fail(
-            _types.SimpleNamespace(name=engine_name), prompt=block, persona=None,
-            channel=channel, chat_key=chat_key)
-    except Exception:  # noqa: BLE001
-        msg = "data-flow gate error"
-    if msg is None:
-        return block
-    try:
-        (Path(workdir) / ".corvin-history.md").unlink(missing_ok=True)
-    except OSError:
-        pass
-    return ("\n\nEarlier turns of this chat exist but are withheld from this engine: "
-            "the tenant's data-classification policy does not allow sending them here.\n")
+    The pre-spawn gate inspects only the new message. A side turn recorded past
+    L34 (a /plugin-builder answer) or a turn admitted on a local engine would
+    otherwise reach an engine the tenant's matrix forbids for it (R7-4); gating
+    only the block missed what truncation, the index and the /new fence leave
+    in the view (R8-1). FAIL-CLOSED: ``spawn_gates.check_l34`` is called
+    directly — ``_check_compliance_or_fail`` turns a gate exception into an
+    allow, which is right for a spawn decision it shares with other gates but
+    not here, where nothing else checks this text."""
+    tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+
+    def _gate(text: str):
+        from spawn_gates import check_l34 as _sg_l34  # type: ignore  # noqa: PLC0415
+        return _sg_l34(engine_name, tid, prompt=text, channel=channel, chat_key=chat_key)
+    return _gate
 
 
 def _ledger_record_side_turn(channel: str, chat_key: str, user_text: str, reply_text: str, *,
@@ -6690,11 +6679,9 @@ def _call_codex_streaming_via_engine(
                 _session_dir(channel, str(chat_key)), channel=str(channel or ""),
                 chat_key=str(chat_key), engine_transcript=False,
                 withhold=_ledger_consent_withhold(channel, str(chat_key)),
+                view_gate=_ledger_data_flow_gate(
+                    getattr(_CodexCliEngine, "name", "codex_cli"), channel=str(channel or ""), chat_key=str(chat_key)),
                 tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default").strip()
-            _ledger_block = _ledger_data_flow_gate(
-                _ledger_block, getattr(_CodexCliEngine, "name", "codex_cli"),
-                channel=str(channel or ""), chat_key=str(chat_key),
-                workdir=_session_dir(channel, str(chat_key))).strip()
             if _ledger_block:
                 system_parts.append(_ledger_block)
         except Exception as e:  # noqa: BLE001
@@ -7037,11 +7024,9 @@ def _call_opencode_streaming_via_engine(
                 _session_dir(channel, str(chat_key)), channel=str(channel or ""),
                 chat_key=str(chat_key), engine_transcript=False,
                 withhold=_ledger_consent_withhold(channel, str(chat_key)),
+                view_gate=_ledger_data_flow_gate(
+                    getattr(_OpenCodeEngine, "name", "opencode"), channel=str(channel or ""), chat_key=str(chat_key)),
                 tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default").strip()
-            _ledger_block = _ledger_data_flow_gate(
-                _ledger_block, getattr(_OpenCodeEngine, "name", "opencode"),
-                channel=str(channel or ""), chat_key=str(chat_key),
-                workdir=_session_dir(channel, str(chat_key))).strip()
             if _ledger_block:
                 system_parts.append(_ledger_block)
         except Exception as e:  # noqa: BLE001
@@ -12364,6 +12349,14 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # bridge's CEL INBOUND path exactly (env tenant, the same `_cel_session`
     # key the spawn passed), so capture lands in the SAME (tenant, session_key)
     # store the next turn's brief reads.
+    if _CEL_AVAILABLE and getattr(_TURN_OUTCOME, "refused", None):
+        # A refused turn's text is never kept: drop the candidate goal its
+        # inbound hook stored before the gate ran (review R8-CEL-4).
+        try:
+            _cel_mod.discard_pending_goal(os.environ.get("CORVIN_TENANT_ID", "_default"),
+                                          _cel_session(channel, chat_key))
+        except Exception:  # noqa: BLE001
+            pass
     if (_cel_maybe_capture_decision is not None and answer
             and not getattr(_TURN_OUTCOME, "refused", None)):
         try:

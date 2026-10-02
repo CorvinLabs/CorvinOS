@@ -62,7 +62,8 @@ class MemoryMatch:
    one of the two matched terms a result needs ("20 minutes"); fillers of an
    everyday request (help, explain, give, tell, suggest, …) are stop words, and
    request verbs that can ALSO be topics here (create, write, work, plan, make,
-   draft, learn, compose) are weak evidence wherever they stand — unless the
+   draft, learn, compose, and their inflections: planning, written, wrote, …) are
+   weak evidence wherever they stand — unless the
    ADR's title carries them next to a non-weak title word ("forge.create
    capability" for "Who can create forge tools?"). A position rule ("only the
    opening verb") broke on "Let's", "I'd" and greetings (review R7-1); "worker"
@@ -73,8 +74,9 @@ class MemoryMatch:
    the owner's message is stripped first — it is framing, not the question.
    An ADR the task names by id (`ADR-0952`, `adr 2102`) is a direct lookup: it is
    returned first at relevance 1.0, and its number is not a topic word. Next to
-   it, other ADRs need two matched terms and a score above half of the named one
-   — "Merge ADR-0760" returns ADR-0760 alone.
+   it, other ADRs need two strong matched terms (cut relative to the best LEXICAL
+   score, not to the named ADR's 1.0) — "Merge ADR-0760" returns ADR-0760 alone,
+   "Does ADR-0952 conflict with the session ledger design?" also ADR-2102.
 2. Score every ADR (`ADRLoader.score_query`, which takes TOKENS — re-tokenising
    double-stems): idf-weighted overlap, title hits ×1.0, preview hits ×0.5,
    normalised by the query's 6 rarest terms, unknown terms counted at the

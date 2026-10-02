@@ -436,10 +436,21 @@ def test_only_the_loader_s_plugin_files_are_roots(tmp_path, monkeypatch):
     assert {c for _f, c in _dead()} == {"OutsidePlugin", "ShadowedPlugin"}
 
 
-def test_a_startup_module_name_never_links_to_a_script_sibling():
-    """Review R7-3: ``abc``/``os`` are imported before any script runs, so a
-    sibling ``abc.py`` beside a path-launched script is never what loads."""
-    assert {"abc", "os", "codecs", "io"} <= z._STARTUP_MODULES
-    idx, _live, _roots, _rep = _real()
-    shared = z.REPO / "corvin_operator" / "bridges" / "shared"
-    assert idx.resolve("abc", shared / "adapter.py") == []
+def test_a_startup_module_name_never_links_to_a_script_sibling(tmp_path, monkeypatch):
+    """Review R7-3/R8-1/R8-2: ``abc``/``types``/``os`` are imported before any
+    script runs, so a sibling beside a path-launched script is dead — in a
+    package directory and in a plain one. Positive control: a non-startup
+    stdlib name (``profile``) beside the same script does link."""
+    assert {"abc", "os", "types", "codecs", "io"} <= z._STARTUP_MODULES
+    sub = "from core.base import Subsystem\nclass {}(Subsystem): pass\n"
+    _tree(tmp_path, {
+        "core/main.py": "x = 1\n",
+        "core/base.py": "class Subsystem: pass\n",
+        "core/tool/run.py": "import types\nimport abc\nimport profile\n",
+        "core/tool/start.sh": "python3 run.py\n",
+        "core/tool/types.py": sub.format("TypesDead"),
+        "core/tool/abc.py": sub.format("AbcDead"),
+        "core/tool/profile.py": sub.format("ProfileLive"),
+    })
+    _sandbox(monkeypatch, tmp_path)
+    assert {c for _f, c in _dead()} == {"TypesDead", "AbcDead"}

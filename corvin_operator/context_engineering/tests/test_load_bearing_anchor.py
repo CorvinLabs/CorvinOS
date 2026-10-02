@@ -499,3 +499,16 @@ def test_the_session_goal_survives_the_fact_cap(isolated, monkeypatch):
     assert len(facts) <= _anchor.CAP
     assert [f["text"] for f in facts if f["kind"] == "goal"] == [
         "Migrate billing to Postgres without downtime"]
+
+
+def test_a_refused_turn_leaves_no_candidate_goal(isolated, monkeypatch):
+    """Review R8-CEL-4: the candidate was the refused turn's text, on disk."""
+    _set_flag(monkeypatch, True)
+    from types import SimpleNamespace
+    sess = SimpleNamespace(sid="discord:refused-1", sender="u")
+    brief = SimpleNamespace(raw_input="FORBIDDEN-ASK", memory_context=None, related_decisions=[])
+    _pipeline._maybe_apply_anchor("FORBIDDEN-ASK", "_default", sess, brief, {})
+    pending = _anchor._pending_path("_default", sess.sid)
+    assert pending.exists()
+    _pipeline.discard_pending_goal("_default", sess)
+    assert not pending.exists()

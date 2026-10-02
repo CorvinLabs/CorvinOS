@@ -808,14 +808,16 @@ structurally excluded. The CLI transcript is NOT the record — auto-compaction 
 
 - **Record:** every bridge turn is appended verbatim to
   `<tenant>/session_ledger/<channel>/<chat>/ledger.jsonl` — OUTSIDE the worker's cwd (a
-  pre-R5 `<workdir>/.corvin-ledger/` is moved there ONCE at adapter start, merged if both
-  exist — never lazily, where a worker could plant one) — by
+  pre-R5 `<workdir>/.corvin-ledger/` is moved there ONCE PER INSTALL at adapter start —
+  marker `session_ledger/.legacy_migrated`, only files older than `LEGACY_CUTOFF`, merged if
+  both exist, a legacy `/new` never merged — so a worker cannot plant one) — by
   `session_ledger.append_turn` in `process_one`, right after the answer is final (before
   TTS/outbox); the console's `turns.jsonl` is its ledger. Lines are removed only by GDPR
   erasure (`L-session-ledger`, any identity key) — and, on the console, by an explicit
   delete of the chat (which also clears its CEL anchor store) or the pre-existing
   50-chats-per-tenant cap (oldest chat, whole). `path_gate` denies writes to any
-  `session_ledger`/`.corvin-ledger`/`pending_notifications` path, including through a glob,
+  `session_ledger`/`.corvin-ledger`/`pending_notifications`/`cel_anchors` path and to the
+  console's `web_chat/**/*.turns.jsonl`, including through a glob,
   quotes, a backslash or a directly assigned shell variable. **Boundary (stated, not
   hidden):** `path_gate` is a syntactic guard against accidental and naive writes. Deliberate
   evasion by a worker running as the same OS user — a program it wrote (a script,
@@ -828,8 +830,10 @@ structurally excluded. The CLI transcript is NOT the record — auto-compaction 
   On disk the texts are `user_text`/`assistant_text` — `user` is an erasure identity key.
   Delivered `/task` results, console slash-command replies, a refused `/btw` and the
   streamed part of a cancelled console answer are recorded too.
-- **The re-supplied history passes L34 against the engine that will read it** (block and
-  view withheld on refusal) — side turns and an engine switch cannot route around it.
+- **The re-supplied history passes L34 against the engine that will read it** — the WHOLE
+  view (a superset of the block), before it is written; refused or a gate error → no view,
+  one line instead of the block (fail-closed) — side turns and an engine switch cannot route
+  around it.
 - **The worker reads a VIEW, never the record:** `<workdir>/.corvin-history.md`, regenerated
   on every spawn (bridge and console) with the same withholding as the injected block; the
   block names only that file. Erasure deletes every view (it regenerates).
@@ -855,7 +859,8 @@ structurally excluded. The CLI transcript is NOT the record — auto-compaction 
   which records the boundary. Only `manual` (`/new`) fences re-supply; unknown reasons
   count as unwanted.
 - **CEL gets a per-chat session** (`adapter._cel_session`); a turn with no session key
-  writes no anchor fact — never a shared `_nosession` bucket. The anchored goal AND the
+  writes no anchor fact — never a shared `_nosession` bucket (the live one was deleted
+  2026-10-03). A refused turn's candidate goal is discarded. The anchored goal AND the
   pending candidate carry their `sender`, so an Art. 17 request finds them in a group chat's
   store; writers and the erasure handler share one `flock` on `cel_anchors/.store.lock`.
 

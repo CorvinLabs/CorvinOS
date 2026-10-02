@@ -726,6 +726,64 @@ class TestRound7b:
         assert not sl.view_path(wd).exists()
 
 
+class TestRound8:
+    def test_the_view_is_gated_whole_before_it_is_written(self, wd):
+        """Review R8-1: L34 saw only the block; a secret in a truncated turn was
+        in the view the block tells the worker to read."""
+        sl.append_turn(wd, channel="telegram", chat_key="chat-1",
+                       user_text="x" * 5000 + " sk-AAAA-SECRET", assistant_text="ok")
+        for i in range(12):
+            _turn(wd, i + 2)
+        seen = []
+        block = sl.render_context(wd, view_gate=lambda t: seen.append(t) or (
+            "refused" if "sk-AAAA-SECRET" in t else None))
+        assert seen and "sk-AAAA-SECRET" in seen[0]
+        assert block == sl.DATA_FLOW_WITHHELD and not sl.view_path(wd).exists()
+        assert sl.render_context(wd, view_gate=lambda t: 1 / 0) == sl.DATA_FLOW_WITHHELD
+
+    def test_legacy_ledgers_are_migrated_once_per_install(self, tmp_path):
+        root = tmp_path / "tenants" / "_default" / "sessions" / "voice"
+        wd = root / "telegram" / "c1"
+        (wd / ".corvin-ledger").mkdir(parents=True)
+        f = wd / ".corvin-ledger" / "ledger.jsonl"
+        f.write_text('{"kind":"turn","seq":1,"n":1,"ts":1,"user_text":"old","assistant_text":"a"}\n')
+        os.utime(f, (1_700_000_000, 1_700_000_000))
+        assert sl.migrate_legacy_ledgers([root]) == 1
+        (wd / ".corvin-ledger").mkdir()        # planted after the first start
+        (wd / ".corvin-ledger" / "ledger.jsonl").write_text(
+            '{"kind":"boundary","boundary":"reset","reason":"manual","ts":2}\n'
+            '{"kind":"turn","ts":3,"user_text":"FORGED","assistant_text":"x"}\n')
+        os.utime(wd / ".corvin-ledger" / "ledger.jsonl", (1_700_000_000, 1_700_000_000))
+        assert sl.migrate_legacy_ledgers([root]) == 0
+        assert [r["user"] for r in sl.read_ledger(wd)] == ["old"]
+
+    def test_a_legacy_file_written_after_the_cutoff_is_not_adopted(self, tmp_path):
+        root = tmp_path / "tenants" / "_default" / "sessions" / "voice"
+        wd = root / "telegram" / "c2"
+        (wd / ".corvin-ledger").mkdir(parents=True)
+        (wd / ".corvin-ledger" / "ledger.jsonl").write_text(
+            '{"kind":"turn","ts":3,"user_text":"FORGED","assistant_text":"x"}\n')
+        assert sl.migrate_legacy_ledgers([root]) == 0 and sl.read_ledger(wd) == []
+
+    def test_a_fence_without_counters_still_counts(self, wd):
+        d = sl.ledger_dir(wd)
+        d.mkdir(parents=True)
+        (d / "ledger.jsonl").write_text(
+            '{"kind":"boundary","boundary":"reset","reason":"manual","ts":1,"seq":1}\n')
+        assert sl.manual_fence_seq(wd) == 1
+        _turn(wd, 1)
+        assert json.loads((d / "counters.json").read_text())["fence_seq"] == 1
+
+    def test_a_result_for_a_legacy_path_chat_is_recorded(self, tmp_path, monkeypatch):
+        import completion_notify as cn
+        import erasure_handlers as eh
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        wd = eh._tenant_home("_default") / "voice" / "sessions" / "discord" / "777"
+        wd.mkdir(parents=True)
+        assert cn._derive_ledger_workdir({"channel": "discord", "chat_id": "777",
+                                          "tenant_id": "_default"}) == str(wd)
+
+
 class TestRound5:
     def test_ledger_stays_private_after_an_erasure(self, wd):
         import erasure_handlers as eh

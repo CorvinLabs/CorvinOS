@@ -368,6 +368,17 @@ def promote_pending_goal(tenant_id: str, session_key: str,
         return None
 
 
+def discard_pending_goal(tenant_id: str, session_key: str) -> None:
+    """Remove the candidate goal. Called when the turn that stored it was
+    REFUSED: the candidate is that turn's text, and a refused turn's text is
+    never kept (review R8-CEL-4). Never raises."""
+    try:
+        with _StoreLock(tenant_id):
+            _pending_path(tenant_id, session_key).unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def clear(tenant_id: str, session_key: str) -> None:
     """Delete the session's anchor store. Never raises."""
     try:

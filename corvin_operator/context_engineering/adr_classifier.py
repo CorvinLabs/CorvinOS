@@ -4,8 +4,7 @@ import dataclasses
 import logging
 import re
 from typing import Dict, List, Optional
-from .adr_loader import (ADRLoader, ADRMetadata, MIN_RELEVANCE, RELATIVE_CUTOFF,
-                         get_loader, tokenize)
+from .adr_loader import ADRLoader, ADRMetadata, MIN_RELEVANCE, get_loader, tokenize
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +77,10 @@ class ADRClassifier:
         # word is then no evidence of a second relevant decision (review R5-2).
         scored = self.loader.score_query(keywords, min_relevance=0.0,
                                          allow_single_term=not named) if keywords else []
-        if named:
-            # The named ADR is the best match (1.0); the loader's relative cut
-            # (strictly above RELATIVE_CUTOFF × best) applies against it too.
-            scored = [(i, s) for i, s in scored if s > RELATIVE_CUTOFF]
+        # No extra cut against the named ADR's synthetic 1.0: it dropped the
+        # best second ADR of "Does ADR-0952 conflict with the session ledger?"
+        # (review R8-CEL-3). The loader already cuts against the best LEXICAL
+        # score, and a named request needs two strong matched terms.
         own: Dict[str, float] = dict(scored)
         direct = [(i, 1.0) for i in named[:max_results]]
         seen_ids = set(named)

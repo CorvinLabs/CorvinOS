@@ -16,7 +16,8 @@ Mechanism — three rules, each structural rather than best-effort:
 1. **Record.** Every finished turn is appended to
    ``<…>/session_ledger/<channel>/<chat>/ledger.jsonl`` — a sibling tree of the
    session tree, outside the worker's cwd (:func:`ledger_dir`; a ledger in the
-   pre-R5 ``<workdir>/.corvin-ledger/`` place is moved there on first use) —
+   pre-R5 ``<workdir>/.corvin-ledger/`` is moved there once per install, at adapter start —
+   :func:`migrate_legacy_ledgers`) —
    one JSON object per line, opened
    ``O_APPEND``, ``flock``-serialised, fsynced, mode 0600. The worker reads
    only the generated view ``<workdir>/.corvin-history.md``. Nothing in this
@@ -78,7 +79,11 @@ from typing import Any, Iterable, Optional
 #: and all (review R5-1/R5-3). ``path_gate`` denies writes to any path with a
 #: ``session_ledger`` component.
 STORE_DIRNAME = "session_ledger"
-#: The pre-R5 location inside the workdir; moved to :func:`ledger_dir` on first use.
+#: 2026-10-03 00:38 CEST — every shipped writer since uses the store; a legacy
+#: ``.corvin-ledger/`` touched later was not written by a pre-R5 bridge.
+LEGACY_CUTOFF = 1790980800.0
+#: The pre-R5 location inside the workdir; moved by :func:`migrate_legacy_ledgers`
+#: once per install, at adapter start (never lazily).
 LEDGER_DIRNAME = ".corvin-ledger"
 LEDGER_FILE = "ledger.jsonl"
 #: The worker-readable history: a VIEW regenerated on every render, with the
@@ -128,14 +133,33 @@ def migrate_legacy_ledgers(roots: Iterable[Path | str]) -> int:
     exists (a new-code writer ran first while old code still wrote the old
     place) the two are MERGED, ordered by time and renumbered under the
     writer's lock — never one silently dropped (review R6-4). Returns the
-    number of legacy ledgers handled. Never raises."""
+    number of legacy ledgers handled. Never raises.
+
+    ONCE PER INSTALL, not once per start (review R8-2): a per-store marker
+    (``<store root>/.legacy_migrated``, outside every worker cwd) is written
+    after the first pass and every later start skips the root — otherwise each
+    restart adopted whatever a worker had planted in ``.corvin-ledger/`` since,
+    forged ``/new`` fence included. Even on that first pass a legacy file last
+    modified after ``LEGACY_CUTOFF`` (no pre-R5 writer exists after it) is not
+    adopted, and a legacy ``reset`` boundary is never merged into an existing
+    store."""
     done = 0
     for root in roots:
+        marker = ledger_dir(Path(root) / "_" / "_").parent.parent / ".legacy_migrated"
+        if marker.exists():
+            continue
         try:
             files = sorted(Path(root).rglob(f"{LEDGER_DIRNAME}/{LEDGER_FILE}"))
         except OSError:
             continue
         for f in files:
+            try:
+                if os.lstat(f).st_mtime > LEGACY_CUTOFF:
+                    _audit("session_ledger.append_failed",
+                           details={"record_kind": "migration", "reason": "legacy_after_cutoff"})
+                    continue
+            except OSError:
+                continue
             try:
                 legacy, wd = f.parent, f.parent.parent
                 # Never through a link, never a non-regular or multiply linked
@@ -167,6 +191,11 @@ def migrate_legacy_ledgers(roots: Iterable[Path | str]) -> int:
             except Exception as exc:  # noqa: BLE001
                 _audit("session_ledger.append_failed",
                        details={"record_kind": "migration", "reason": type(exc).__name__})
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(str(int(time.time())), encoding="utf-8")
+        except OSError:
+            pass
     return done
 
 
@@ -187,7 +216,9 @@ def _merge_into(store: Path, legacy_file: Path) -> None:
                         out.append(r)
                 return out
             seen, merged = set(), []
-            for r in _recs(path) + _recs(legacy_file):
+            legacy_recs = [r for r in _recs(legacy_file)
+                           if not (r.get("kind") == "boundary" and r.get("boundary") == "reset")]
+            for r in _recs(path) + legacy_recs:
                 key = json.dumps({k: v for k, v in r.items() if k not in ("seq", "n")},
                                  sort_keys=True, ensure_ascii=False)
                 if key not in seen:
@@ -303,6 +334,7 @@ def _append(workdir: Path | str, record: dict[str, Any]) -> Optional[dict[str, A
                     hwm = json.loads(hwm_path.read_text(encoding="utf-8"))
                 except (OSError, ValueError):
                     hwm = {}
+                scanned_fence = 0
                 seq = int(hwm.get("seq") or 0) if isinstance(hwm, dict) else 0
                 turns = int(hwm.get("n") or 0) if isinstance(hwm, dict) else 0
                 for line in fh:
@@ -313,6 +345,11 @@ def _append(workdir: Path | str, record: dict[str, Any]) -> Optional[dict[str, A
                     if isinstance(prev, dict):
                         seq = max(seq, int(prev.get("seq") or 0))
                         turns = max(turns, int(prev.get("n") or 0))
+                        if (prev.get("kind") == "boundary" and prev.get("boundary") == "reset"
+                                and prev.get("reason") in _manual_reasons()):
+                            # A ledger moved in without its counters (pre-R5
+                            # rename) still carries its /new fence (R8-4).
+                            scanned_fence = max(scanned_fence, int(prev.get("seq") or 0))
                 rec = dict(record)
                 rec["seq"] = seq + 1
                 if rec.get("kind") == "turn":
@@ -328,7 +365,8 @@ def _append(workdir: Path | str, record: dict[str, Any]) -> Optional[dict[str, A
                 fh.write(json.dumps(_to_disk(rec), ensure_ascii=False) + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())
-                fence = int(hwm.get("fence_seq") or 0) if isinstance(hwm, dict) else 0
+                fence = max(int(hwm.get("fence_seq") or 0) if isinstance(hwm, dict) else 0,
+                            scanned_fence)
                 if (rec.get("kind") == "boundary" and rec.get("boundary") == "reset"
                         and rec.get("reason") in _manual_reasons()):
                     fence = rec["seq"]
@@ -684,8 +722,16 @@ def manual_fence_seq(workdir: Path | str) -> int:
     ledger. 0 when there was none. Never raises."""
     try:
         data = json.loads((ledger_dir(workdir) / _HWM_FILE).read_text(encoding="utf-8"))
-        return int(data.get("fence_seq") or 0)
+        fence = int(data.get("fence_seq") or 0)
     except (OSError, ValueError, AttributeError, TypeError):
+        fence = 0
+    if fence:
+        return fence
+    # No fence in the sidecar: a migrated ledger may carry one in its records.
+    try:
+        last = last_manual_reset(read_ledger(workdir))
+        return int(last.get("seq") or 0) if last else 0
+    except Exception:  # noqa: BLE001
         return 0
 
 
@@ -862,11 +908,45 @@ def render_from_records(
     return block, stats
 
 
+#: What the worker gets instead of the history when the data-flow gate refuses it.
+DATA_FLOW_WITHHELD = ("\n\nEarlier turns of this chat exist but are withheld from this "
+                      "engine: the tenant's data-classification policy does not allow "
+                      "sending them here.\n")
+
+
+def _publish(workdir: Path | str, records: list[dict[str, Any]], block: str, *,
+             withhold: Optional[Any], view_gate: Optional[Any]) -> str:
+    """Gate, then publish: ``view_gate(text) -> refusal | None`` is asked about
+    the FULL view — everything the worker can read, a superset of the block
+    (which truncates, indexes and omits) — BEFORE the view is written. Gating
+    only the block let a secret in a truncated or pre-/new turn reach the
+    engine through the view (review R8-1). Refused, or the gate raising → no
+    view (an older one is removed) and one line instead of the block."""
+    view = render_view(records, withhold=withhold)
+    if view_gate is not None:
+        try:
+            refused = view_gate(view)
+        except Exception:  # noqa: BLE001 — fail closed
+            refused = "data-flow gate error"
+        if refused is not None:
+            try:
+                view_path(workdir).unlink(missing_ok=True)
+            except OSError:
+                pass
+            return DATA_FLOW_WITHHELD
+    try:
+        _replace_atomically(view_path(workdir), view)
+    except Exception:  # noqa: BLE001 — the view is a convenience
+        pass
+    return block
+
+
 def render_context(
     workdir: Path | str, *, channel: str = "", chat_key: str = "",
     session_id: Optional[str] = None, tenant_id: str = "",
     engine_transcript: bool = True,
     withhold: Optional[Any] = None,
+    view_gate: Optional[Any] = None,
     verbatim_budget: int = VERBATIM_BUDGET, index_budget: int = INDEX_BUDGET,
 ) -> str:
     """The block to append to this turn's system prompt ("" when the live
@@ -896,7 +976,7 @@ def render_context(
         block, stats = render_from_records(
             records, live, verbatim_budget=verbatim_budget, index_budget=index_budget,
             withhold=withhold)
-        write_view(workdir, records, withhold=withhold)
+        block = _publish(workdir, records, block, withhold=withhold, view_gate=view_gate)
         _note_render(workdir, stats, channel=channel, chat_key=chat_key, tenant_id=tenant_id)
         return block
     except Exception as exc:  # noqa: BLE001
@@ -983,7 +1063,7 @@ def records_from_turn_log(turns: list[dict[str, Any]],
 def render_turn_log_context(
     turns: list[dict[str, Any]], workdir: Path | str, *, resumed: bool,
     channel: str = "web", chat_key: str = "", tenant_id: str = "",
-    current_prompt: Optional[str] = None,
+    current_prompt: Optional[str] = None, view_gate: Optional[Any] = None,
 ) -> str:
     """:func:`render_context` for a surface that already keeps its own
     append-only turn log and resumes with ``--continue`` (no pinned session
@@ -998,7 +1078,7 @@ def render_turn_log_context(
         block, stats = render_from_records(records, live)
         # The worker is pointed at this view, never at the raw turn log: the
         # log keeps a refused message's text for the chat UI (review R5-2).
-        write_view(workdir, records)
+        block = _publish(workdir, records, block, withhold=None, view_gate=view_gate)
         _note_render(workdir, stats, channel=channel, chat_key=chat_key, tenant_id=tenant_id)
         return block
     except Exception as exc:  # noqa: BLE001

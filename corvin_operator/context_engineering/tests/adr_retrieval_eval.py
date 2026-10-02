@@ -118,6 +118,9 @@ NEGATIVE = [
 
 #: Written AFTER the round-4 rules were chosen and measured once, untuned:
 #: 2026-10-02, 0/25 returned an ADR.
+#: Inflected request verbs (review R8-CEL-6).
+NEGATIVE_INFLECTED = ["I need help planning my week", "Written a poem, can you check it?"]
+
 NEGATIVE_HELD_OUT = [
  "Draft a cover letter for a nursing position", "What's the best way to store fresh basil?",
  "Book a table for two at an Italian restaurant", "Compare the iPhone and Pixel cameras",

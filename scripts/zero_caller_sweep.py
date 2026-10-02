@@ -84,7 +84,10 @@ REPO = Path(__file__).resolve().parent.parent
 BASELINE = Path(__file__).resolve().parent / "zero_caller_baseline.json"
 SCAN_DIRS = ("core", "corvin_operator", "ops", "corvinOS", "scripts", "tools")
 EXCLUDE_PARTS = {"tests", "test", "node_modules", ".venv", "venv", "__pycache__",
-                 "worktrees", ".claude", "archived_v2", "dist", "build"}
+                 "worktrees", ".claude", "archived_v2", "dist", "build",
+                 # The live runtime tree: worker-written outputs are not
+                 # entry points of the shipped code (review R8-3).
+                 ".corvin"}
 
 #: Registration bases: a subclass is only useful once something registers it.
 CONTRACTS = {
@@ -446,9 +449,10 @@ class Index:
         rel = dotted.replace(".", "/")
         head, _, tail = dotted.partition(".")
         external = head in self.external
-        if src is not None and not (external and (src.parent / "__init__.py") in self.file_set
-                                    and (src.parent not in self.script_dirs
-                                         or head in _STARTUP_MODULES)):
+        # A startup module is never a sibling, in any directory (R8-1).
+        if src is not None and not (external and head in _STARTUP_MODULES) and not (
+                external and (src.parent / "__init__.py") in self.file_set
+                and src.parent not in self.script_dirs):
             sib = self._at(src.parent, rel)
             if sib:
                 return sib[:1]
@@ -641,25 +645,16 @@ def _root_refs(idx: Index) -> tuple[set[Path], list[str], list[tuple[str, Path]]
     return idx.root_refs
 
 
-def _startup_modules() -> frozenset:
-    """Top-level modules the interpreter has imported before any script runs
-    (``abc``, ``os``, ``codecs``, ``io``, ``site``, …): a sibling ``abc.py``
-    beside a script can never shadow them (review R7-3). Measured from a
-    fresh ``python -I`` once per run; a fixed floor if that fails."""
-    import subprocess  # noqa: PLC0415
-    floor = {"abc", "os", "io", "codecs", "encodings", "site", "stat", "posixpath",
-             "genericpath", "_collections_abc", "sys", "builtins", "types", "warnings"}
-    try:
-        out = subprocess.run([sys.executable, "-I", "-c",
-                              "import sys; print(' '.join(sorted(sys.modules)))"],
-                             capture_output=True, text=True, timeout=20).stdout
-        floor |= {m.split(".")[0] for m in out.split()}
-    except Exception:  # noqa: BLE001
-        pass
-    return frozenset(floor)
-
-
-_STARTUP_MODULES = _startup_modules()
+#: Top-level modules CPython has imported before any script runs (``python -I
+#: -c 'import sys; print(sorted(sys.modules))'`` on 3.11/3.12, union): a sibling
+#: ``abc.py`` beside a script can never shadow them (review R7-3). A FIXED list —
+#: measuring it per run made the result depend on the interpreter (R8-3).
+_STARTUP_MODULES = frozenset("""
+_abc _codecs _collections_abc _distutils_hack _frozen_importlib _frozen_importlib_external
+_imp _io _signal _sitebuiltins _stat _thread _warnings _weakref abc builtins codecs
+encodings genericpath io marshal os posix posixpath site stat sys time types warnings
+zipimport
+""".split())
 
 
 def roots(idx: Index) -> set[Path]:

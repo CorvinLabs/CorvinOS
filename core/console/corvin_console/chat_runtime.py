@@ -132,6 +132,7 @@ _cel_persist_assembly = None  # G1: Glass-Box assembly persistence (console pari
 _cel_build_sections = None
 _cel_record_outcome = None  # G4: outcome-feedback loop (ADR-0269 Phase-4b)
 _cel_capture_decision = None  # ADR-0407: decision-point capture (outbound hook)
+_cel_discard_pending = None   # refused turn → drop its candidate goal (R8-CEL-4)
 try:
     import importlib.util as _ilu  # noqa: PLC0415
     # Source tree → <repo>/corvin_operator/context_engineering. Wheel → the vendored
@@ -176,6 +177,7 @@ try:
         # cel_load_bearing_anchor; the wrapper re-checks the flag, so a default
         # install never writes and the turn is byte-identical.
         _cel_capture_decision = _cel_mod.maybe_capture_decision_point
+        _cel_discard_pending = getattr(_cel_mod, "discard_pending_goal", None)
         _CEL_AVAILABLE = True
         # G4 (ADR-0269 Phase-4b): record_turn_outcome lives in stages.grades and is
         # NOT re-exported from the package __init__ — bind it from the submodule in a
@@ -2191,33 +2193,22 @@ def _session_ledger_block(sess: WebChatSession, current_prompt: str = "") -> str
         # The worker is pointed at the generated ``.corvin-history.md`` view in
         # its workdir, never at ``turns.jsonl``: the UI log keeps a refused
         # message's text for the chat window (review R5-2).
-        block = _ledger.render_turn_log_context(
+        def _view_gate(text: str):
+            # L34 on everything the worker can read, against the engine that
+            # will read it, before the view is written (R7-4, R8-1).
+            from spawn_gates import check_l34 as _l34  # type: ignore  # noqa: PLC0415
+            return _l34(_configured_os_engine(sess.tenant_id) or "claude_code",
+                        sess.tenant_id, prompt=text, channel=CHANNEL, chat_key=sess.chat_key)
+
+        return _ledger.render_turn_log_context(
             read_turns(sess.tenant_id, sess.sid), sess.workdir,
             resumed=sess.turn_count > 0,
             channel="web", chat_key=sess.chat_key, tenant_id=sess.tenant_id,
             # The system prompt is built BEFORE this turn's user message is
             # logged; naming it lets an earlier unanswered message stay history.
             current_prompt=current_prompt or None,
+            view_gate=_view_gate,
         )
-        if block:
-            # L34 on the re-supplied history against the engine that will read
-            # it — the pre-spawn gate sees only this turn's message (R7-4).
-            try:
-                from spawn_gates import check_l34 as _l34  # type: ignore  # noqa: PLC0415
-                refused = _l34(_configured_os_engine(sess.tenant_id) or "claude_code",
-                               sess.tenant_id, prompt=block, channel=CHANNEL,
-                               chat_key=sess.chat_key)
-            except Exception:  # noqa: BLE001 — fail closed
-                refused = "data-flow gate error"
-            if refused is not None:
-                try:
-                    (Path(sess.workdir) / ".corvin-history.md").unlink(missing_ok=True)
-                except OSError:
-                    pass
-                return ("\n\nEarlier turns of this chat exist but are withheld from this "
-                        "engine: the tenant's data-classification policy does not allow "
-                        "sending them here.\n")
-        return block
     except Exception:  # noqa: BLE001
         return ""
 
@@ -5702,6 +5693,8 @@ async def _stream_turn_impl(
         # after one would be lost — leaving the user line unmarked, so the
         # session ledger would re-supply the refused text (review R4-1).
         touch(sess, increment_turn=True)
+        if _cel_discard_pending is not None:
+            _cel_discard_pending(sess.tenant_id, sess)
         _append_turn(sess, "assistant", [{"kind": "text", "text": _gate_refusal}],
                      gate_refused="pre_spawn")
         yield {"type": "delta", "text": _gate_refusal}
@@ -6233,6 +6226,8 @@ async def _stream_turn_impl(
                     _exec_ctx = _exec_ctx_builder.complete()
                 except Exception:  # noqa: BLE001 — best-effort
                     pass
+                if _cel_discard_pending is not None:
+                    _cel_discard_pending(sess.tenant_id, sess)
                 _append_turn(sess, "assistant", [{"kind": "text", "text": _fb_gate}],
                              execution_context=_exec_ctx.to_dict() if _exec_ctx else None,
                              gate_refused="pre_spawn")

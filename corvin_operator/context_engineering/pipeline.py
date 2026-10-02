@@ -148,6 +148,19 @@ def maybe_capture_decision_point(reply_text: str, tenant: str = "_default",
         return None
 
 
+def discard_pending_goal(tenant: str = "_default", session: Any = None) -> None:
+    """A refused turn: drop the candidate goal its inbound hook stored. Never
+    raises; independent of the anchor flag (a candidate written while it was on
+    must still go)."""
+    try:
+        session_key = _session_key_of(session, "")
+        if session_key:
+            from . import anchor  # noqa: PLC0415
+            anchor.discard_pending_goal(tenant, session_key)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def render_anchor_block(brief: Any, *, count_injection: bool = True) -> str:
     """The anchor section alone, for the active pipeline's LLM-synthesised
     prompt, which replaces the deterministic brief. Used inside

@@ -567,11 +567,19 @@ def _derive_ledger_workdir(rec: dict) -> str:
     if not chat:
         return ""
     try:
-        voice_session_dir = _bridge_paths().voice_session_dir
-        safe = "".join(ch if ch.isalnum() else "_" for ch in chat)[:64] or "anon"
-        d = Path(voice_session_dir(str(rec.get("channel") or ""), safe,
-                                   tenant_id=str(rec.get("tenant_id") or "_default")))
-        return str(d) if d.is_dir() else ""
+        # The SAME candidate list ``adapter._session_dir`` resolves from —
+        # canonical tenant dir first, then the legacy layouts it still falls
+        # back to (review R8-3: a chat on the legacy path got its result
+        # delivered and never recorded).
+        try:
+            from . import session_state as _ss  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            import session_state as _ss  # type: ignore  # noqa: PLC0415
+        for d in _ss.claude_session_dirs(str(rec.get("channel") or ""), chat,
+                                         tenant_id=str(rec.get("tenant_id") or "_default")):
+            if Path(d).is_dir():
+                return str(d)
+        return ""
     except Exception:  # noqa: BLE001 — not a bridge channel / no paths module
         return ""
 
