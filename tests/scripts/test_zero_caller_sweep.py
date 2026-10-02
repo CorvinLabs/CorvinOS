@@ -6,6 +6,7 @@ pinned here against the real tree, plus a synthetic tree for the mechanics.
 """
 from __future__ import annotations
 
+import functools
 import sys
 from pathlib import Path
 
@@ -15,9 +16,17 @@ sys.path.insert(0, str(REPO / "scripts"))
 import zero_caller_sweep as z  # noqa: E402
 
 
-def test_known_live_modules_are_reachable():
+@functools.lru_cache(maxsize=1)
+def _real():
+    """(index, reachable set, roots, sweep report) for the real tree — built
+    once per session; each build parses ~2500 files."""
     idx = z.Index(z.production_files())
     live = z.reachable(idx)
+    return idx, live, z.roots(idx), z.sweep()
+
+
+def test_known_live_modules_are_reachable():
+    idx, live, _, _ = _real()
     for rel in ("corvin_operator/bridges/shared/session_ledger.py",
                 "corvin_operator/context_engineering/stages/l10_adapter.py",
                 "core/skills/os_skills/delegation_router.py",
@@ -26,7 +35,7 @@ def test_known_live_modules_are_reachable():
 
 
 def test_known_dead_context_bridges_are_flagged():
-    dead = {(d["file"], d["class"]) for d in z.sweep()["dead"]}
+    dead = {(d["file"], d["class"]) for d in _real()[3]["dead"]}
     assert ("core/orchestration/subsystems/context_bridge.py", "ContextBridge") in dead
     # phase1's ContextBridge is imported (package __init__ re-export, pulled in
     # by a mounted console route) but never instantiated — reachable by import,
@@ -34,15 +43,19 @@ def test_known_dead_context_bridges_are_flagged():
     assert ("core/skills/os_skills/phase1/context_bridge.py", "ContextBridge") not in dead
     # review R1-C10: the skill_registry_phase1 `Skill` base and unscheduled stages
     assert ("core/skills/workflow_optimizer.py", "WorkflowOptimizerSkill") in dead
-    assert any(d["file"].endswith("adr_reranking_stage.py") for d in z.sweep()["dead"])
+    assert any(d["file"].endswith("adr_reranking_stage.py") for d in _real()[3]["dead"])
 
 
-def test_plugin_json_entry_points_are_not_roots():
-    """Review R2-C15: the plugin bootstrap loads plugin.yaml → provider.py /
-    plugin.py; a plugin.json entry_point is never loaded, so those plugins
-    (which also import a nonexistent ``corvin_plugins.BasePlugin``) are dead."""
-    dead = {d["file"] for d in z.sweep()["dead"]}
-    assert "core/plugins/buildin/ai/vibe_engineering/src/vibe_routing.py" in dead
+def test_plugin_contract_is_the_real_lifecycle_shape_on_the_real_tree():
+    """Review R5-2: the old "Plugin"/"BasePlugin" contracts matched nothing that
+    exists — the four plugin.json plugins hit them only through an import of a
+    nonexistent ``corvin_plugins.BasePlugin``. The contract is now the shape the
+    loader accepts (``plugin_id`` + ``on_load``); positive control: the
+    copy-and-edit templates have exactly that shape and are never imported."""
+    assert "Plugin" not in z.CONTRACTS and "BasePlugin" not in z.CONTRACTS
+    dead = {(d["file"], d["class"]): d["contract"] for d in _real()[3]["dead"]}
+    assert dead[("core/plugins/templates/router_backend_plugin.py", "MyRouterPlugin")] == "CorvinPlugin"
+    assert ("core/plugins/buildin/ai/vibe_engineering/src/vibe_routing.py", "VibeRouter") not in dead
 
 
 def test_the_gate_passes_on_the_committed_baseline():
@@ -255,6 +268,143 @@ def test_docstring_does_not_overclaim_dead_means_no_path():
 def test_real_tree_bridge_manager_is_reachable():
     """Review R4-20 on the real tree: the console routes put
     corvin_operator/bridges on sys.path before ``import bridge_manager``."""
-    idx = z.Index(z.production_files())
-    assert "corvin_operator/bridges" in idx.path_roots
-    assert REPO / "corvin_operator/bridges/bridge_manager.py" in z.reachable(idx)
+    idx, live, _, _ = _real()
+    assert "corvin_operator/bridges" in idx.active_roots
+    assert REPO / "corvin_operator/bridges/bridge_manager.py" in live
+
+
+_SUB = "from core.base import Subsystem\nclass {}(Subsystem): pass\n"
+
+
+def test_stdlib_and_third_party_names_never_link_into_the_repo(tmp_path, monkeypatch):
+    """Review R5-1: ``import types`` reached ``video_producer/types.py`` through
+    a sys.path root only a DEAD file inserted, ``import random`` reached
+    ``strategies/random.py`` by unique suffix, ``import queue`` a ``core/queue``
+    package through a measured root. A stdlib / declared third-party name links
+    into the repo only from a non-package script directory or the repo root,
+    and sys.path roots count only when a REACHABLE file inserts them."""
+    ins = ("import sys\nfrom pathlib import Path\n"
+           "sys.path.insert(0, str(Path(__file__).resolve().parent.parent / '{}'))\n")
+    _tree(tmp_path, {
+        "core/base.py": "class Subsystem: pass\n",
+        "core/app/__init__.py": "",
+        "core/app/main.py": ("import types, random, queue, yaml, packaging\n"
+                             "import core.pkg.mod\nimport core.live.boot\nimport helper\nimport livehelper\n"),
+        # a dead file's insert must not make `vp/` a root for anyone
+        "core/dead/boot.py": ins.format("vp"),
+        "core/vp/types.py": _SUB.format("StdTypes"),
+        "core/vp/helper.py": _SUB.format("DeadRootHelper"),
+        "core/other/helper.py": "x = 1\n",            # bare `helper` ambiguous by suffix
+        # unique suffix, stdlib name
+        "core/compute/strategies/random.py": _SUB.format("StdRandom"),
+        # a REACHABLE file inserts `core`: `queue` is still the stdlib, but a
+        # plain name found there links (fixpoint over reachable files)
+        "core/live/__init__.py": "",
+        "core/live/boot.py": ins.format("."),
+        "core/queue/__init__.py": _SUB.format("StdQueue"),
+        "core/livehelper.py": _SUB.format("LiveHelper"),
+        "core/zz/livehelper.py": "x = 1\n",           # bare `livehelper` ambiguous by suffix
+        "core/yaml/__init__.py": _SUB.format("ThirdPartyYaml"),
+        "core/packaging.py": _SUB.format("ThirdPartyPackaging"),
+        # inside a package an absolute `import random` is the stdlib, not a sibling
+        "core/pkg/__init__.py": "",
+        "core/pkg/mod.py": "import random\n",
+        "core/pkg/random.py": _SUB.format("SiblingRandom"),
+    })
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\ndependencies = ["PyYAML >= 6"]\n\n'
+        '[project.scripts]\nx = "core.app.main:run"\n')
+    _sandbox(monkeypatch, tmp_path)
+    assert {c for _, c in _dead()} == {"StdTypes", "DeadRootHelper", "StdRandom", "StdQueue",
+                                       "ThirdPartyYaml", "ThirdPartyPackaging", "SiblingRandom"}
+
+
+def test_stdlib_namesake_from_a_script_directory_still_links(tmp_path, monkeypatch):
+    """The one place Python does look first: a script's own (non-package)
+    directory is ``sys.path[0]``."""
+    _tree(tmp_path, {
+        "core/base.py": "class Subsystem: pass\n",
+        "core/main.py": "import core.tools_dir.run\n",
+        "core/tools_dir/run.py": "import platform\n",          # no __init__.py: a script dir
+        "core/tools_dir/platform.py": _SUB.format("ScriptDirPlatform"),
+    })
+    _sandbox(monkeypatch, tmp_path)
+    assert _dead() == set()
+
+
+def test_plugin_contract_is_the_lifecycle_shape(tmp_path, monkeypatch):
+    """Review R5-2: an unwired plugin.json plugin with a plain class carrying
+    ``plugin_id`` + ``on_load`` — the shape ``bootstrap._load_builtin_class``
+    accepts — was not flagged, because the contract was a ``Plugin`` base class
+    that does not exist."""
+    shape = "class {}:\n    plugin_id = 'x'\n    def on_load(self, ctx): pass\n"
+    _tree(tmp_path, {
+        "core/main.py": "import core.pbase\n",
+        "core/plugins/buildin/ai/probe_plugin/plugin.json": '{"entry_point": "src/probe.py:ProbePlugin"}',
+        "core/plugins/buildin/ai/probe_plugin/src/probe.py": shape.format("ProbePlugin"),
+        "core/plugins/buildin/ai/live_plugin/plugin.yaml": "plugin_id: live\n",
+        "core/plugins/buildin/ai/live_plugin/provider.py": shape.format("LivePlugin"),
+        "core/pbase.py": ("class PBase:\n    def __init__(self): self.plugin_id = 'b'\n"
+                          "    async def on_load(self, ctx): pass\n"),
+        "core/child.py": "from core.pbase import PBase\nclass ChildPlugin(PBase): pass\n",
+        "core/half.py": "class OnlyOnLoad:\n    def on_load(self, ctx): pass\n",
+        "core/proto.py": ("from typing import Protocol\nclass ShapeProto(Protocol):\n"
+                          "    plugin_id: str\n    def on_load(self, ctx): ...\n"),
+    })
+    _sandbox(monkeypatch, tmp_path)
+    impls = {d["class"]: d["contract"] for d in z.implementations(z.Index(z.production_files()))}
+    assert impls == {"ProbePlugin": "CorvinPlugin", "LivePlugin": "CorvinPlugin",
+                     "PBase": "CorvinPlugin", "ChildPlugin": "CorvinPlugin"}
+    assert _dead() == {("core/plugins/buildin/ai/probe_plugin/src/probe.py", "ProbePlugin"),
+                       ("core/child.py", "ChildPlugin")}
+
+
+def test_missed_roots_are_roots(tmp_path, monkeypatch):
+    """Review R5-3: ``-m pkg`` runs pkg/__main__.py; tools/ targets of a
+    tools/systemd unit; an ExecStart continued on the next line; shell
+    launchers outside corvin_operator/ and ops/; ``-m`` inside a shell script.
+    Comments, echo text and file lists in a shell script are not launches."""
+    _tree(tmp_path, {
+        "core/base.py": "class Subsystem: pass\n",
+        "core/main.py": "x = 1\n",
+        "core/svc/__init__.py": "",
+        "core/svc/__main__.py": "from .runner import R\n",
+        "core/svc/runner.py": _SUB.format("R"),
+        "ops/svc.service": "[Service]\nExecStart=/usr/bin/python3 -m core.svc --flag\n",
+        "tools/loop.py": _SUB.format("ToolLoop"),
+        "tools/systemd/loop.service": "[Service]\nExecStart=%h/CorvinOS/.venv/bin/python tools/loop.py -x\n",
+        "core/cont/verify.py": _SUB.format("Continued"),
+        "ops/systemd/cont.service": ("[Service]\nExecStart=/usr/bin/docker exec c /opt/venv/bin/python \\\n"
+                                     "    /opt/repo/core/cont/verify.py --all\n"),
+        "core/sh/script.py": _SUB.format("ShellPath"),
+        "core/shm/__init__.py": "",
+        "core/shm/mod.py": _SUB.format("ShellDashM"),
+        "core/shc/commented.py": _SUB.format("Commented"),
+        "core/she/echoed.py": _SUB.format("Echoed"),
+        "core/shl/listed.py": _SUB.format("Listed"),
+        "deploy/run.sh": ('#!/bin/bash\n# core/shc/commented.py is the old entry point\n'
+                          'echo "run: python3 core/she/echoed.py"\nFILES=(\n  "core/shl/listed.py"\n)\n'
+                          'python3 core/sh/script.py\n"$PY" -u -m core.shm.mod \\\n  --x\n'),
+    })
+    _sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(z, "SCAN_DIRS", ("core", "tools"))
+    assert {c for _, c in _dead()} == {"Commented", "Echoed", "Listed"}
+
+
+def test_real_tree_missed_roots():
+    """Review R5-3 on the real tree."""
+    _, live, roots, _ = _real()
+    assert REPO / "core/compute/corvin_compute/__main__.py" in roots   # corvin-compute@.service
+    assert REPO / "tools/loop_a_pipeline.py" in roots                  # tools/systemd/corvin-loop-a.service
+    assert REPO / "corvin_operator/voice/scripts/voice_audit.py" in roots   # continued ExecStart
+
+
+def test_real_tree_stdlib_namesakes_are_not_linked():
+    """Review R5-1 on the real tree: these were reachable only as stdlib
+    namesakes (``types``, ``queue``, ``platform``)."""
+    idx, live, _, _ = _real()
+    for rel in ("core/skills/os_skills/video_producer/types.py", "core/queue/__init__.py",
+                "core/platform/__init__.py"):
+        assert REPO / rel not in live, rel
+    src = REPO / "corvin_operator/bridges/shared/adapter.py"
+    assert idx.resolve("types", src) == [] and idx.resolve("queue", src) == []

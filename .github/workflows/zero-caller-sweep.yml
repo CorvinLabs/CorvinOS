@@ -1,7 +1,8 @@
 name: Zero-Caller Sweep
 
 # Fails when a NEW implementation of a registration contract (Brain Hub
-# Subsystem, OS BaseSkill, CEL stage, Plugin) has no import path from any
+# Subsystem, OS BaseSkill, CEL stage, Plugin = a class with plugin_id + on_load)
+# has no import path from any
 # entry point. Pre-existing dead ones are recorded in
 # scripts/zero_caller_baseline.json; wiring or deleting one means removing its
 # baseline line. Background: three "context bridge" implementations were built

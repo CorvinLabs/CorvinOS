@@ -16,9 +16,14 @@ Method:
      the importing file's own directory; the repo root and the packages the
      wheel maps to top level (``[tool.hatch.build.targets.wheel.sources]``);
      the directories the importing file itself puts on ``sys.path``; every
-     directory any production file puts on ``sys.path`` (``PATH_ROOTS``,
-     derived from the AST of the ``sys.path.insert/append`` calls, not a hand
-     list). At each step a name that matches more than one file links NOWHERE
+     directory a REACHABLE file puts on ``sys.path`` (derived from the AST of
+     the ``sys.path.insert/append`` calls, iterated to a fixpoint with the
+     walk — a root only a dead file inserts is on no process's path); then a
+     unique dotted suffix. A name whose top level is the standard library or a
+     third-party package pyproject declares never gets past the repo-root
+     step, and its own-directory step counts only from a non-package (script)
+     directory: ``import types`` is the stdlib, not some ``…/types.py``.
+     At each step a name that matches more than one file links NOWHERE
      — Python would pick one by ``sys.path`` order, which is a property of the
      running process, and linking all of them let one live module keep every
      same-named file "reachable". A file path (in a shell launcher, a systemd
@@ -26,16 +31,23 @@ Method:
      directory, then the repo root, then by its most specific unique path
      suffix; an ambiguous one links nowhere.
   2. Roots: every ``[project.scripts]`` target, every module/script a systemd
-     unit or shell launcher in the repo starts, every builtin plugin the
-     plugin bootstrap loads (``plugin.yaml`` → ``provider.py``/``plugin.py``),
-     and the long-running hosts (bridge adapter, gateway app, console
-     standalone). Importing a module also reaches its packages' ``__init__``.
+     unit's ``ExecStart*`` (continuation lines joined) or a shell script
+     anywhere in the repo starts — by path, or by ``-m pkg`` which also roots
+     ``pkg/__main__.py`` (shell comments, echo/printf text and lines that are
+     neither a python call, an assignment, ``exec``/``nohup`` nor the script
+     itself as the command do not count) — every builtin plugin the plugin
+     bootstrap loads (``plugin.yaml`` → ``provider.py``/``plugin.py``), and the
+     long-running hosts (bridge adapter, gateway app, console standalone).
+     Importing a module also reaches its packages' ``__init__``.
   3. Contract implementations: classes whose base resolves — through the
      file's own imports and aliases (``from … import Subsystem as _Base``) and
      through package re-exports — to a registration base named in
      ``CONTRACTS``, closed over subclassing by (file, class) identity, never by
-     bare class name; plus every module calling ``register_stage(``. A base the
-     sweep cannot resolve counts only if its own name is a contract name.
+     bare class name; every class whose body or in-repo bases define the
+     plugin lifecycle shape (``plugin_id`` + ``on_load`` — what every plugin
+     load path accepts; ``CorvinPlugin`` is a Protocol nobody subclasses);
+     plus every module calling ``register_stage(``. A base the sweep cannot
+     resolve counts only if its own name is a contract name.
   4. Report each implementation whose module is not reachable from a root.
 
 What a result means. "Reachable" means a statically resolvable import/mention
@@ -70,7 +82,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 BASELINE = Path(__file__).resolve().parent / "zero_caller_baseline.json"
-SCAN_DIRS = ("core", "corvin_operator", "ops", "corvinOS", "scripts")
+SCAN_DIRS = ("core", "corvin_operator", "ops", "corvinOS", "scripts", "tools")
 EXCLUDE_PARTS = {"tests", "test", "node_modules", ".venv", "venv", "__pycache__",
                  "worktrees", ".claude", "archived_v2", "dist", "build"}
 
@@ -80,9 +92,62 @@ CONTRACTS = {
     "BaseSkill": "OS skill, phase-1 base (ADR-0535)",
     "Skill": "OS skill (skill_registry_phase1, ADR-0532)",
     "ContextStage": "CEL stage (ADR-0277)",
-    "Plugin": "plugin type",
-    "BasePlugin": "plugin type (BasePlugin)",
+    "CorvinPlugin": "plugin lifecycle (plugin_id + on_load, ADR-0030)",
 }
+
+#: The plugin contract is STRUCTURAL: ``corvin_plugins.protocol.CorvinPlugin`` is
+#: a ``typing.Protocol`` nobody has to subclass, and every load path
+#: (``bootstrap._load_builtin_class``, ``bootstrap_declared``,
+#: ``bootstrap_global``) accepts a class by its ``plugin_id`` + ``on_load``
+#: shape. A class whose body — or an in-repo base's body — defines both is
+#: therefore a plugin implementation, whatever it subclasses.
+PLUGIN_SHAPE = frozenset({"plugin_id", "on_load"})
+
+#: Top-level names Python resolves OUTSIDE this repo: the standard library and
+#: the import names of the third-party distributions pyproject declares. A bare
+#: ``import random`` is the stdlib, never ``…/strategies/random.py`` — such a
+#: name links into the repo only where Python itself would look there first
+#: (see ``Index.resolve``). Deterministic on purpose: derived from pyproject,
+#: not from whatever happens to be installed, so CI (pytest only) and a full
+#: venv compute the same graph.
+_STDLIB = frozenset(getattr(sys, "stdlib_module_names", ()))
+#: Distribution → import name where the two differ.
+_DIST_IMPORT_NAMES = {
+    "scikit_learn": "sklearn", "pyyaml": "yaml", "pyjwt": "jwt",
+    "python_multipart": "multipart", "piper_tts": "piper", "edge_tts": "edge_tts",
+    "python_telegram_bot": "telegram", "discord.py": "discord",
+    "whatsapp_web.py": "whatsapp", "psycopg2_binary": "psycopg2",
+    "faster_whisper": "faster_whisper", "ffmpeg_python": "ffmpeg",
+    "google_api_python_client": "googleapiclient",
+    "opentelemetry_api": "opentelemetry", "opentelemetry_sdk": "opentelemetry",
+    "opentelemetry_exporter_otlp_proto_grpc": "opentelemetry",
+    "opentelemetry_exporter_otlp_proto_http": "opentelemetry",
+}
+#: Importable in every environment this runs in without being declared:
+#: ``packaging``/``pluggy`` come with pytest (the CI job installs it), ``grpc``
+#: with the declared OTLP-gRPC exporter, ``pip``/``setuptools`` with the venv.
+_TRANSITIVE_IMPORT_NAMES = frozenset({"packaging", "pluggy", "_pytest", "grpc",
+                                      "pip", "setuptools", "pkg_resources"})
+
+
+def third_party_names() -> frozenset[str]:
+    """Import names of the distributions pyproject declares (runtime and every
+    optional group), plus the transitive ones in ``_TRANSITIVE_IMPORT_NAMES``."""
+    import tomllib   # py >= 3.11 (the CI job pins 3.11)
+    try:
+        proj = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8")).get("project", {})
+    except (OSError, tomllib.TOMLDecodeError):
+        return _TRANSITIVE_IMPORT_NAMES
+    specs = list(proj.get("dependencies") or [])
+    for group in (proj.get("optional-dependencies") or {}).values():
+        specs.extend(group)
+    out = set(_TRANSITIVE_IMPORT_NAMES)
+    for spec in specs:
+        m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", spec)
+        if m:
+            norm = m.group(1).lower().replace("-", "_")
+            out.add(_DIST_IMPORT_NAMES.get(norm, norm))
+    return frozenset(out)
 
 #: Long-running hosts that are not console scripts.
 EXTRA_ROOTS = (
@@ -306,6 +371,16 @@ class Index:
                 roots.extend(r for r in ins if r not in roots)
         #: Every directory production code puts on ``sys.path`` (measured).
         self.path_roots = tuple(sorted(roots))
+        #: The ``sys.path`` roots ``resolve`` honours for a foreign importer.
+        #: Every measured one until ``reachable()`` narrows it to the roots of
+        #: REACHABLE files — a directory only a dead file inserts is on no
+        #: running process's ``sys.path`` (review R5-1).
+        self.active_roots: tuple[str, ...] = self.path_roots
+        #: Names Python finds outside the repo (stdlib + declared third party).
+        self.external = _STDLIB | third_party_names()
+        self._resolved: dict[tuple[str, Path | None], list[Path]] = {}
+        self.refs: dict[Path, tuple[set[Path], list[str], list[str]]] = {}
+        self.root_refs: tuple[set[Path], list[str], list[tuple[str, Path]]] | None = None
         #: Every trailing run of path components → the files whose repo path
         #: ends with it ("voice/scripts/voice_audit.py" → [that file]).
         self.by_path_suffix: dict[tuple[str, ...], list[Path]] = defaultdict(list)
@@ -335,31 +410,50 @@ class Index:
             return None
         return hits if len(hits) == 1 else []
 
-    def resolve(self, dotted: str, src: Path | None = None) -> list[Path]:
-        """Files ``import <dotted>`` loads from ``src`` — at most one.
+    def set_active_roots(self, active: tuple[str, ...]) -> None:
+        self.active_roots = tuple(active)
+        self._resolved.clear()
 
-        Steps (first that matches wins): ``src``'s own directory; the repo root
-        and wheel-mapped top-level packages; the directories ``src`` itself
-        puts on ``sys.path``; any production ``sys.path`` root; then the name
-        if it is UNIQUE as a dotted suffix in the tree. A step with more than
-        one match returns no edge — never all of them (review R3-6, R4-16)."""
+    def resolve(self, dotted: str, src: Path | None = None) -> list[Path]:
+        """Files ``import <dotted>`` loads from ``src`` — at most one."""
+        key = (dotted, src)
+        if key not in self._resolved:
+            self._resolved[key] = self._resolve(dotted, src)
+        return self._resolved[key]
+
+    def _resolve(self, dotted: str, src: Path | None) -> list[Path]:
+        """Steps (first that matches wins): ``src``'s own directory; the repo
+        root and wheel-mapped top-level packages; the directories ``src``
+        itself puts on ``sys.path``; any ``sys.path`` root a REACHABLE file
+        inserts (``active_roots``); then the name if it is UNIQUE as a dotted
+        suffix in the tree. A step with more than one match returns no edge —
+        never all of them (review R3-6, R4-16).
+
+        A name whose top level is the stdlib or a declared third-party package
+        (``self.external``) stops after the second step, and its first step
+        counts only from a directory that is not a package — the script
+        directory Python puts at ``sys.path[0]``. Inside a package an absolute
+        ``import random`` is the stdlib; the sys.path, insert and suffix steps
+        would otherwise turn ``import types`` into some ``…/types.py`` (R5-1)."""
         if not dotted:
             return []
         rel = dotted.replace(".", "/")
-        if src is not None:
+        head, _, tail = dotted.partition(".")
+        external = head in self.external
+        if src is not None and not (external and (src.parent / "__init__.py") in self.file_set):
             sib = self._at(src.parent, rel)
             if sib:
                 return sib[:1]
-        head, _, tail = dotted.partition(".")
         fixed = self._at(REPO, rel)
         if head in self.mapped:
             fixed += self._at(self.mapped[head], tail) if tail else \
                 [c for c in (self.mapped[head] / "__init__.py",) if c in self.file_set]
         steps = [fixed]
-        if src is not None and src in self.inserts_by_file:
-            steps.append([c for r in self.inserts_by_file[src] for c in self._at(REPO / r, rel)])
-        steps.append([c for r in self.path_roots for c in self._at(REPO / r, rel)])
-        steps.append(self.by_suffix.get(dotted, []))
+        if not external:
+            if src is not None and src in self.inserts_by_file:
+                steps.append([c for r in self.inserts_by_file[src] for c in self._at(REPO / r, rel)])
+            steps.append([c for r in self.active_roots for c in self._at(REPO / r, rel)])
+            steps.append(self.by_suffix.get(dotted, []))
         for hits in steps:
             u = self._unique(hits)
             if u is not None:
@@ -408,38 +502,52 @@ def _relative_target(f: Path, node: ast.ImportFrom) -> Path:
     return anchor / base.replace(".", "/") if base else anchor
 
 
-def edges_of(f: Path, idx: Index) -> set[Path]:
+def _refs_of(f: Path, idx: Index) -> tuple[set[Path], list[str], list[str]]:
+    """What ``f`` names, before resolution: (relative-import files, dotted
+    module names, ``…/x.py`` path mentions). Parsed once per Index — the
+    ``sys.path`` fixpoint re-resolves these, it never re-walks the AST."""
+    if f in idx.refs:
+        return idx.refs[f]
+    files: set[Path] = set()
+    mods: list[str] = []
+    paths: list[str] = []
     tree = idx.tree(f)
-    if tree is None:
-        return set()
-    out: set[Path] = set()
-    for node in ast.walk(tree):
+    for node in ast.walk(tree) if tree is not None else ():
         if isinstance(node, ast.Import):
-            for a in node.names:
-                out.update(idx.resolve(a.name, f))
+            mods.extend(a.name for a in node.names)
         elif isinstance(node, ast.ImportFrom):
             base = node.module or ""
             if node.level:
                 tgt = _relative_target(f, node)
                 for c in (tgt.with_suffix(".py"), tgt / "__init__.py"):
                     if c.is_file():
-                        out.add(c)
+                        files.add(c)
                 for a in node.names:
                     for c in ((tgt / a.name).with_suffix(".py"), tgt / a.name / "__init__.py"):
                         if c.is_file():
-                            out.add(c)
+                            files.add(c)
             else:
-                out.update(idx.resolve(base, f))
-                for a in node.names:
-                    out.update(idx.resolve(f"{base}.{a.name}", f))
+                mods.append(base)
+                mods.extend(f"{base}.{a.name}" for a in node.names)
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             s = node.value.strip()
             if len(s) > 200:
                 continue
             if _MODSTR.match(s):
-                out.update(idx.resolve(s.split(":")[0], f))
+                mods.append(s.split(":")[0])
             elif s.endswith(".py") and "/" in s:
-                out.update(idx.resolve_path(s, f.parent))
+                paths.append(s)
+    idx.refs[f] = (files, mods, paths)
+    return idx.refs[f]
+
+
+def edges_of(f: Path, idx: Index) -> set[Path]:
+    rel_files, mods, paths = _refs_of(f, idx)
+    out: set[Path] = set(rel_files)
+    for m in mods:
+        out.update(idx.resolve(m, f))
+    for s in paths:
+        out.update(idx.resolve_path(s, f.parent))
     # Importing a.b.c executes a/__init__.py and a/b/__init__.py first.
     for target in list(out):
         parent = target.parent
@@ -452,55 +560,107 @@ def edges_of(f: Path, idx: Index) -> set[Path]:
     return {p for p in out if p in idx.file_set}
 
 
-def roots(idx: Index) -> set[Path]:
-    rs: set[Path] = set()
-    for r in EXTRA_ROOTS:
-        if (REPO / r).is_file():
-            rs.add(REPO / r)
+def _repo_walk(match) -> list[Path]:
+    """Every repo file ``match(name)`` accepts, pruning ``EXCLUDE_PARTS`` and
+    ``.git`` on the way down (an ``rglob`` walks ``node_modules`` first)."""
+    out = []
+    for dirpath, dirnames, filenames in os.walk(REPO):
+        dirnames[:] = sorted(d for d in dirnames if d not in EXCLUDE_PARTS and d != ".git")
+        out.extend(Path(dirpath) / n for n in sorted(filenames) if match(n))
+    return out
+
+
+#: ``python … -m pkg.mod`` on a line that runs a Python interpreter.
+_DASH_M = re.compile(r"(?:^|\s)-m\s+([A-Za-z_][\w.]*)")
+_PY_LINE = re.compile(r"python|\$\{?\w*PY", re.I)
+#: A shell line that can start a script without naming the interpreter: an
+#: assignment the launch line expands later, ``exec``/``nohup``, or the path
+#: itself as the command (shebang).
+_SH_LAUNCH = re.compile(r"(?:(?:export\s+|local\s+|readonly\s+)?[A-Za-z_]\w*=|exec\b|nohup\b|[\w./${}-]+\.py(?:\s|$))")
+
+
+def _root_refs(idx: Index) -> tuple[set[Path], list[str], list[tuple[str, Path]]]:
+    """Entry points before resolution: (files, ``-m``/console-script modules,
+    (path mention, its file's directory)). Collected once per Index."""
+    if idx.root_refs is not None:
+        return idx.root_refs
+    files: set[Path] = {REPO / r for r in EXTRA_ROOTS if (REPO / r).is_file()}
+    mods: list[str] = []
+    paths: list[tuple[str, Path]] = []
     pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
     sect = pyproject.split("[project.scripts]", 1)[-1].split("\n[", 1)[0]
-    for m in re.findall(r'=\s*"([\w.]+):\w+"', sect):
-        rs.update(idx.resolve(m))
-    for unit in REPO.rglob("*.service"):
-        if EXCLUDE_PARTS & set(unit.relative_to(REPO).parts):
-            continue
-        for line in unit.read_text(encoding="utf-8", errors="replace").splitlines():
-            if not line.startswith("ExecStart"):
+    mods.extend(re.findall(r'=\s*"([\w.]+):\w+"', sect))
+    for unit in _repo_walk(lambda n: n.endswith(".service")):
+        # systemd joins a line ending in a backslash with the next one.
+        text = re.sub(r"\\[ \t]*\n", " ", unit.read_text(encoding="utf-8", errors="replace"))
+        for line in text.splitlines():
+            if not line.lstrip().startswith("ExecStart"):
                 continue
-            for m in re.findall(r"-m\s+([\w.]+)", line):
-                rs.update(idx.resolve(m))
-            for p in re.findall(r"([\w./%{}$-]+\.py)\b", line):
-                rs.update(idx.resolve_path(p, unit.parent))
+            mods.extend(_DASH_M.findall(line))
+            paths.extend((p, unit.parent) for p in re.findall(r"([\w./%{}$-]+\.py)\b", line))
     # Builtin plugins are loaded through their manifest, not imported: the real
     # loader (core/plugins/corvin_plugins/bootstrap.py::_builtin_plugin_dirs /
     # _load_builtin_class) walks for plugin.yaml and loads provider.py or
     # plugin.py by file path. A plugin.json entry_point is NOT loaded by it.
-    for manifest in REPO.rglob("plugin.yaml"):
-        if EXCLUDE_PARTS & set(manifest.relative_to(REPO).parts):
-            continue
+    for manifest in _repo_walk(lambda n: n == "plugin.yaml"):
         for fname in ("provider.py", "plugin.py"):
             cand = manifest.parent / fname
             if cand in idx.file_set:
-                rs.add(cand)
-    # bridge.sh and other shell launchers start python files by path.
-    for sh in list((REPO / "corvin_operator").rglob("*.sh")) + list((REPO / "ops").rglob("*.sh")):
-        if EXCLUDE_PARTS & set(sh.relative_to(REPO).parts):
-            continue
-        for p in re.findall(r"([\w./${}-]+\.py)\b", sh.read_text(encoding="utf-8", errors="replace")):
-            rs.update(idx.resolve_path(p, sh.parent))
+                files.add(cand)
+    # Shell launchers anywhere in the repo start python files by path or by -m.
+    # Comments and echo/printf text are not launches: a stale status script
+    # NAMING a module in a comment kept that module's package alive (R5-3).
+    for sh in _repo_walk(lambda n: n.endswith(".sh")):
+        text = re.sub(r"\\[ \t]*\n", " ", sh.read_text(encoding="utf-8", errors="replace"))
+        for line in text.splitlines():
+            line = re.sub(r"(?:^|\s)#.*", "", line).strip()
+            if not line or re.match(r"(?:echo|printf)\b", line):
+                continue
+            if _PY_LINE.search(line):
+                mods.extend(_DASH_M.findall(line))
+            elif not _SH_LAUNCH.match(line):
+                continue   # a file list, a heredoc body, a test -f …
+            paths.extend((p, sh.parent) for p in re.findall(r"([\w./${}-]+\.py)\b", line))
+    idx.root_refs = (files, mods, paths)
+    return idx.root_refs
+
+
+def roots(idx: Index) -> set[Path]:
+    files, mods, paths = _root_refs(idx)
+    rs = set(files)
+    for m in mods:
+        for hit in idx.resolve(m):
+            rs.add(hit)
+            # ``python -m pkg`` runs pkg/__main__.py (after pkg/__init__.py).
+            main = hit.parent / "__main__.py"
+            if hit.name == "__init__.py" and main in idx.file_set:
+                rs.add(main)
+    for p, base in paths:
+        rs.update(idx.resolve_path(p, base))
     return rs
 
 
 def reachable(idx: Index) -> set[Path]:
-    graph = {f: edges_of(f, idx) for f in idx.files}
-    seen = set(roots(idx))
-    q = deque(seen)
-    while q:
-        for nxt in graph.get(q.popleft(), ()):
-            if nxt not in seen:
-                seen.add(nxt)
-                q.append(nxt)
-    return seen
+    """Files reachable from ``roots``. ``sys.path`` roots are taken only from
+    files already reachable, iterated to a fixpoint: start with none, add the
+    inserts of every reachable file, re-walk until the set stops growing. The
+    root set only grows, so this terminates; leaves ``idx.active_roots`` at
+    the fixpoint for the contract pass that follows (review R5-1)."""
+    active: tuple[str, ...] = ()
+    while True:
+        idx.set_active_roots(active)
+        seen = set(roots(idx))
+        q = deque(seen)
+        while q:
+            for nxt in edges_of(q.popleft(), idx):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    q.append(nxt)
+        grown = tuple(sorted(set(active).union(
+            *(idx.inserts_by_file.get(f, ()) for f in seen))))
+        if grown == active:
+            return seen
+        active = grown
 
 
 # ── contract classes, by (file, class) identity ─────────────────────────────
@@ -608,12 +768,33 @@ class _Classes:
         return out
 
 
+def _plugin_members(node: ast.ClassDef) -> set[str]:
+    """Which of ``PLUGIN_SHAPE`` a class body defines: a method, a class
+    attribute (assigned or annotated) or ``self.<name> = …`` in a method."""
+    out: set[str] = set()
+    for st in node.body:
+        if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            out.add(st.name)
+            for n in ast.walk(st):
+                tgts = n.targets if isinstance(n, ast.Assign) else \
+                    [n.target] if isinstance(n, ast.AnnAssign) else []
+                out.update(t.attr for t in tgts if isinstance(t, ast.Attribute)
+                           and isinstance(t.value, ast.Name) and t.value.id == "self")
+        elif isinstance(st, ast.Assign):
+            out.update(t.id for t in st.targets if isinstance(t, ast.Name))
+        elif isinstance(st, ast.AnnAssign) and isinstance(st.target, ast.Name):
+            out.add(st.target.id)
+    return out & PLUGIN_SHAPE
+
+
 def _contract_classes(idx: Index) -> tuple[_Classes, dict[ClassId, str]]:
     """ClassId → contract, closed over subclassing by identity: ``class B(A)``
     implements a contract only if the ``A`` it imports does (R3-18, R4-18)."""
     cls = _Classes(idx)
     known: dict[ClassId, str] = {}
     edges: list[tuple[ClassId, ClassId]] = []
+    shape: dict[ClassId, set[str]] = {}
+    protocols: set[ClassId] = set()
     for f in idx.files:
         t = idx.tree(f)
         if t is None:
@@ -624,11 +805,28 @@ def _contract_classes(idx: Index) -> tuple[_Classes, dict[ClassId, str]]:
                 me = (rel, node.name)
                 if node.name in CONTRACTS:
                     known.setdefault(me, node.name)
+                shape[me] = _plugin_members(node)
+                if any((b.id if isinstance(b, ast.Name) else getattr(b, "attr", "")) == "Protocol"
+                       for b in node.bases):
+                    protocols.add(me)
                 for b in cls.bases_of(f, node):
                     if b != me:
                         edges.append((me, b))
     for c in CONTRACTS:
         known[("*", c)] = c
+    # The plugin contract is the lifecycle SHAPE, inherited through in-repo
+    # bases; a Protocol declaring the shape is a contract, not an implementation.
+    changed = True
+    while changed:
+        changed = False
+        for child, base in edges:
+            extra = shape.get(base, set()) - shape.get(child, set())
+            if extra and child in shape:
+                shape[child] |= extra
+                changed = True
+    for me, members in shape.items():
+        if PLUGIN_SHAPE <= members and me not in protocols:
+            known.setdefault(me, "CorvinPlugin")
     changed = True
     while changed:
         changed = False
@@ -648,7 +846,8 @@ def implementations(idx: Index) -> list[dict]:
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef) and node.name not in CONTRACTS:
-                hit = next((contract_of[b] for b in sorted(cls.bases_of(f, node)) if b in contract_of), None)
+                hit = contract_of.get((str(f.relative_to(REPO)), node.name)) or next(
+                    (contract_of[b] for b in sorted(cls.bases_of(f, node)) if b in contract_of), None)
                 if hit:
                     out.append({"file": str(f.relative_to(REPO)), "class": node.name,
                                 "contract": hit, "kind": CONTRACTS[hit]})
