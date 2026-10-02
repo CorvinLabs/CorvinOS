@@ -151,3 +151,10 @@ def test_slash_command_turn_is_recorded_and_resupplied(run):
     assert not any("ECHO-9965" in c["prompt"] for c in run["calls"]), "a slash command spawned the engine"
     sp = _call_for(run, "DELTA-8854")["system_prompt"]
     assert SLASH in sp and "configured engine for this tenant" in sp
+
+
+def test_the_worker_is_pointed_at_the_view_never_at_the_turn_log(run):
+    """Review R5-2: the console's turns.jsonl keeps a refused message's text for
+    the chat window; the block must name the generated view instead."""
+    sp = _call_for(run, "DELTA-8854")["system_prompt"]
+    assert ".corvin-history.md" in sp and "turns.jsonl" not in sp

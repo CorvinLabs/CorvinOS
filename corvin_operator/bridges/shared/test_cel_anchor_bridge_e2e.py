@@ -103,8 +103,9 @@ def main() -> int:
         check(st2 == st, f"an unwanted reset keeps the same store: {st2}")
 
         # /new needs a session to wipe; the fake engine leaves none, so mark one.
-        wd = next(p.parent.parent for p in (sb / "home").rglob(".corvin-ledger/ledger.jsonl")
-                  if json.loads(p.read_text().splitlines()[0])["chat_key"] == chats[0])
+        led = next(p.parent for p in (sb / "home").rglob("session_ledger/*/*/ledger.jsonl")
+                   if json.loads(p.read_text().splitlines()[0])["chat_key"] == chats[0])
+        wd = led.parents[2] / "sessions" / "voice" / led.parent.name / led.name
         (wd / ".session_started").touch()
         r = subprocess.run([sys.executable, str(h.RESET), "--channel", h.CHANNEL, "--chat-id",
                             chats[0], "--reason", "manual"], env=env, capture_output=True, text=True)

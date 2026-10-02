@@ -199,12 +199,14 @@ def is_protected_path(path: str | Path) -> bool:
     abs_str = str(abs_p)
     sep = os.sep
 
-    # ADR-2102 — a chat's session ledger lives in the worker's cwd so the
-    # worker can READ its own history; it must never WRITE it: a forged line
-    # is re-supplied into every later system prompt as "the user said", and a
-    # forged /new fence or a deleted line makes the chat forget. Wherever the
-    # session dir is (tenant tree, legacy XDG cache), the component decides.
-    if ".corvin-ledger" in abs_p.parts:
+    # ADR-2102 — a chat's session ledger. The worker must never WRITE it: a
+    # forged line is re-supplied into every later system prompt as "the user
+    # said", and a forged /new fence or a deleted line makes the chat forget.
+    # It lives OUTSIDE the worker's cwd (``session_ledger/``) since review R5,
+    # so cwd-relative globs, ``$PWD`` and ``find .`` cannot reach it; the old
+    # in-cwd name stays protected for ledgers not yet migrated. Wherever the
+    # tree is (tenant home, legacy voice root), the component decides.
+    if "session_ledger" in abs_p.parts or ".corvin-ledger" in abs_p.parts:
         return True
 
     home = _corvin_home()
@@ -629,7 +631,7 @@ _TARGET_ALL_CMDS = ("truncate", "ln", "chmod", "chown", "chgrp", "chattr",
 # to static parsing, so a protected file argument is fail-closed.
 _SCRIPTED_EDITORS = ("ex", "ed")
 _PROTECTED_HINTS = ("forge", "skill-forge", "audit.jsonl", "policy.json",
-                    ".corvin", ".corvin-ledger", "ledger.jsonl",
+                    ".corvin", ".corvin-ledger", "ledger.jsonl", "session_ledger",
                     "secrets.json", "corvin-voice",
                     # ADR-0012 — data-locality operator policy
                     "data_policy.yaml", "data_policy.yml",
@@ -1004,6 +1006,13 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
 
     # Command substitution with a protected hint inside → fail-closed.
     if (re.search(r"\$\(", cmd) or "`" in cmd) and _looks_protected(cmd):
+        return [], True
+
+    # Parameter expansion with a protected hint inside → fail-closed: the hook
+    # cannot know what `D=…; echo x >> $D/ledger.jsonl` writes to, because the
+    # assignment is made by the same shell that expands it (review R5-1; the
+    # same shape reached the audit chain).
+    if re.search(r"\$\{?[A-Za-z_]", cmd) and _looks_protected(cmd):
         return [], True
 
     # V-013: Command substitution in pipe position — e.g.
@@ -1387,6 +1396,19 @@ def _check_unguarded(payload: dict) -> tuple[bool, str]:
         for t in targets:
             if is_protected_path(t):
                 return False, _deny_msg("Bash", t, command=cmd[:80])
+            # A glob in a target is expanded by the shell, not by this hook:
+            # `cat x > .corvin-led?er/ledger.jsonl` named no protected path
+            # literally (review R5-1). Check what it matches NOW, and fail
+            # closed when it carries a protected hint but matches nothing yet.
+            if any(c in t for c in "*?["):
+                import glob as _glob  # noqa: PLC0415
+                try:
+                    matches = _glob.glob(str(_abs(t)), recursive=True)
+                except Exception:  # noqa: BLE001
+                    matches = []
+                if any(is_protected_path(m) for m in matches) or (
+                        not matches and _looks_protected(t)):
+                    return False, _deny_msg("Bash", t, command=cmd[:80])
 
         # Gate 1: Python AST analysis — inspect any Python code that would
         # be executed by this Bash command before it runs.
@@ -1668,7 +1690,7 @@ def _self_test_vectors() -> list[tuple[str, dict]]:
     else:
         slot_str = str(forge_skill)  # fall back to scope path
 
-    ledger = home / "tenants" / "_default" / "sessions" / "voice" / "x" / "y" / ".corvin-ledger" / "ledger.jsonl"
+    ledger = home / "tenants" / "_default" / "session_ledger" / "x" / "y" / "ledger.jsonl"
     return [
         # ADR-2102 — a forged session-ledger line is re-supplied as "the user said".
         ("direct-write-session-ledger",

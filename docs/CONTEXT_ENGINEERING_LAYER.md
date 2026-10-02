@@ -58,13 +58,18 @@ class MemoryMatch:
 1. Tokenise the task into whole, stop-word-free, stemmed words
    (`adr_loader.tokenize`) — never substrings; 3-digit+ numbers and article
    numbers are kept ("Bedrock 403", "Art. 17" ≠ "Art. 32"), a bare two-digit
-   quantity ("10 minutes") is not; the verbs and fillers of an everyday request
-   (write, help, learn, explain, give, three, day, …) are stop words; a small
+   — and two-digit numbers too ("10/day", "Phase 10"); fillers of an everyday
+   request (help, explain, give, tell, suggest, …) are stop words, while words
+   that ARE topics here (create, write, work, three, day) are dropped only as the
+   request's OPENING verb ("Write a haiku…"); "worker" is not stemmed into
+   "work"; "Artikel 17" is the token of "Art. 17"; a small
    German→English table maps core terms (Kontext, Sitzung, Kette, Löschung, …)
    because the corpus is English. A bridge group-chat observer block in front of
    the owner's message is stripped first — it is framing, not the question.
    An ADR the task names by id (`ADR-0952`, `adr 2102`) is a direct lookup: it is
-   returned first at relevance 1.0, and its number is not a topic word.
+   returned first at relevance 1.0, and its number is not a topic word. Next to
+   it, other ADRs need two matched terms and a score above half of the named one
+   — "Merge ADR-0760" returns ADR-0760 alone.
 2. Score every ADR (`ADRLoader.score_query`, which takes TOKENS — re-tokenising
    double-stems): idf-weighted overlap, title hits ×1.0, preview hits ×0.5,
    normalised by the query's 6 rarest terms, unknown terms counted at the
@@ -98,7 +103,12 @@ Measured on the real corpus with the labelled sets in
 `corvin_operator/context_engineering/tests/adr_retrieval_eval.py`: tuning set
 24/24 with 0 forbidden hits and 0 noise on the must-be-empty questions (42
 everyday non-CorvinOS requests since review round 4, where 8 of 40 had returned
-ADRs; a second set of 25 written after that fix and measured once: 0/25);
+ADRs; a second set of 25 written after that fix: 0/25; one timer request is
+listed under AMBIGUOUS with its reason). Review round 5 measured the recall
+cost of round 4's stop words on 61 fresh CorvinOS questions and narrowed them:
+recall is back to the pre-round-4 loader's (40/46 and 14/15 on the reviewer's
+sets), and 160 "<verb> ADR-NNNN" requests return the named ADR first with no
+unrelated extra;
 held-out set (written by a reviewer after tuning) 7/9, one query with off-topic hits —
 the misses and the borderline cases are listed in the file, and one rule was
 kept because of the held-out score (disclosed there). Regression tests:

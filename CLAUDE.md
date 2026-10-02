@@ -806,25 +806,31 @@ Operator directive (2026-10-02): context drift / forgetting of session content m
 structurally excluded. The CLI transcript is NOT the record — auto-compaction dropped
 185 599 tokens in one Discord session, and every reset wipes it.
 
-- **Record:** every bridge turn is appended verbatim to `<workdir>/.corvin-ledger/ledger.jsonl`
-  (`session_ledger.append_turn` in `process_one`, right after the answer is final — before
+- **Record:** every bridge turn is appended verbatim to
+  `<tenant>/session_ledger/<channel>/<chat>/ledger.jsonl` — OUTSIDE the worker's cwd (a
+  pre-R5 `<workdir>/.corvin-ledger/` is moved there on first use) — by
+  `session_ledger.append_turn` in `process_one`, right after the answer is final (before
   TTS/outbox); the console's `turns.jsonl` is its ledger. Lines are removed only by GDPR
   erasure (`L-session-ledger`, any identity key) — and, on the console, by an explicit
-  delete of the chat or the pre-existing 50-chats-per-tenant cap (oldest chat, whole).
-  The worker cannot write it: `path_gate` denies any path with a `.corvin-ledger`
-  component. On disk the texts are `user_text`/`assistant_text` — `user` is an erasure
-  identity key. Delivered `/task` results and console slash-command replies are recorded
-  as turns too (`spawned=False`).
+  delete of the chat (which also clears its CEL anchor store) or the pre-existing
+  50-chats-per-tenant cap (oldest chat, whole). `path_gate` denies writes to any
+  `session_ledger`/`.corvin-ledger` path, including through a glob or a shell variable.
+  On disk the texts are `user_text`/`assistant_text` — `user` is an erasure identity key.
+  Delivered `/task` results, console slash-command replies, a refused `/btw` and the
+  streamed part of a cancelled console answer are recorded too.
+- **The worker reads a VIEW, never the record:** `<workdir>/.corvin-history.md`, regenerated
+  on every spawn (bridge and console) with the same withholding as the injected block; the
+  block names only that file. Erasure deletes every view (it regenerates).
 - **A gate's refusal is recorded, never re-supplied:** a turn L44 / a pre-spawn gate refused
-  is stored as `user_sha256` + length only — never its text. Console refusals are persisted
-  BEFORE the first `yield` (a disconnect closes the generator there). Side turns
-  (`/plugin-builder`, `/task`, console slash commands) pass the gate before they are recorded;
-  TDE delegation runs L44 too.
+  is stored in the ledger as `user_sha256` + length only — never its text. The console's UI
+  log keeps the text for the chat window, but the worker is never pointed at it. Console
+  refusals are persisted BEFORE the first `yield`. Side turns (`/plugin-builder`, `/task`,
+  console slash commands) pass the gate before they are recorded; TDE delegation runs L44 too.
 - **Group observers:** their framed block is stored apart (`observer_text`), the owner's
-  message is `user`. On re-supply — Claude, Codex and OpenCode alike — the observers' lines
-  are withheld once any observer's consent ends (checked once per observer per spawn, only for
-  turns being re-supplied); the owner's words and the recorded answer stay. The CEL
-  (retrieval, anchor goal) only ever sees the owner's text.
+  message is `user`. In the block and the view — Claude, Codex and OpenCode alike — the
+  observers' lines are withheld once any observer's consent ends; the owner's words and the
+  recorded answer stay. An observer's Art. 17 erasure removes only their lines from the
+  record. The CEL (retrieval, anchor goal) only ever sees the owner's text.
 - **`spawned` is measured, not inferred:** set where the `claude` CLI is actually started
   (console: only the OS-turn answer, `cli_spawned`); delegated/copilot/gate-answered turns
   and `/btw` notes are never "live".
@@ -837,10 +843,12 @@ structurally excluded. The CLI transcript is NOT the record — auto-compaction 
   which records the boundary. Only `manual` (`/new`) fences re-supply; unknown reasons
   count as unwanted.
 - **CEL gets a per-chat session** (`adapter._cel_session`); a turn with no session key
-  writes no anchor fact — never a shared `_nosession` bucket. The anchored goal carries its
-  `sender`, so an Art. 17 request finds it in a group chat's store.
+  writes no anchor fact — never a shared `_nosession` bucket. The anchored goal AND the
+  pending candidate carry their `sender`, so an Art. 17 request finds them in a group chat's
+  store; writers and the erasure handler share one `flock` on `cel_anchors/.store.lock`.
 
-**Must NOT do:** delete or rewrite `.corvin-ledger/` in any reset/cleanup path · add a reset
+**Must NOT do:** delete or rewrite the ledger in any reset/cleanup path · put the record (or a
+copy of the re-supplied block) inside a worker's cwd · point the worker at a raw log · add a reset
 that bypasses `reset_claude_session_state` · decide coverage from bookkeeping instead of the
 transcript · summarise ledger turns with an LLM · store a refused turn's text · fold observer
 lines into `user` · persist a refusal after a `yield` · put the volatile counts back into the block

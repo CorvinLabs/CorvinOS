@@ -8,6 +8,15 @@ the session-drift analysis, and the round-1 adversarial review.
 from __future__ import annotations
 
 POSITIVE = [
+    # Review R5-1: words that ARE topics here must stay searchable
+    # (create / write / work / three / per-day quotas, "Artikel 17").
+    ("forge.create permission", {"ADR-0701"}, set()),
+    ("Who can create forge tools?", {"ADR-0701"}, set()),
+    ("Why does skill_create fail after five skills a day?", {"ADR-2095"}, set()),
+    ("10 CE turns per day", {"ADR-0276", "ADR-0216"}, set()),
+    ("copy on write", {"ADR-0571", "ADR-0824"}, set()),
+    ("Show me how the three-tier OS model routing works", {"ADR-0952"}, set()),
+    ("Löschung nach Artikel 17 für einen Nutzer", {"ADR-0045", "ADR-0530"}, set()),
     ("Fix the audit chain hash verification failing at boot tripwire",
      {"ADR-0334", "ADR-0328", "ADR-0641", "ADR-0260"}, set()),
     ("Warum schlägt der Boot-Tripwire beim Verifizieren der Audit-Kette fehl?",
@@ -83,7 +92,7 @@ HELD_OUT = [
 NEGATIVE = [
     "hallo wie geht es dir heute",
     "what's the weather in Berlin tomorrow",
- "Write a haiku about autumn", "Set a timer for 10 minutes", "Plan a three day trip to Rome",
+ "Write a haiku about autumn", "Plan a three day trip to Rome",
  "Draft a cover letter for a marketing job", "What's a good recipe for lasagna?",
  "Translate 'good morning' into Spanish", "How tall is the Eiffel tower?",
  "Remind me to call my mother on Sunday", "Recommend a book about the history of Japan",
@@ -128,6 +137,8 @@ NAMED = [
     ("Update ADR-0760 status to accepted", "ADR-0760"),
     ("ADR-0045", "ADR-0045"),
     ("bitte schau dir adr 2102 an", "ADR-2102"),
+    ("Merge ADR-0760", "ADR-0760"),
+    ("Deploy ADR-2102", "ADR-2102"),
 ]
 
 #: No ADR covers the subject, and a lexical matcher cannot know that. Measured
@@ -137,6 +148,11 @@ NAMED = [
 #: most these". Excluding them by threshold costs recall on real questions
 #: (0.25 → 21/22, 0.30 → 18/22); a title-anchor rule cost 1–2 of 22.
 AMBIGUOUS = [
+    # Review R5-1: "timer" stems to "time" and "10" names the Phase-10 ADRs;
+    # both are common corpus words, and matched-common-words-only is also the
+    # shape of real questions ("audit chain"). Recorded, not hidden.
+    ("Set a timer for 10 minutes", {"ADR-2047", "ADR-0273", "ADR-0285", "ADR-0904",
+                                    "ADR-2046", "ADR-2107", "ADR-2045", "ADR-2049"}),
     ("Path gate hook blocks file writes outside workdir", {"ADR-0652", "ADR-0295", "ADR-0673"}),
     # The short-question single-word rule (+2 held-out hits) admits the voice-
     # summary ADR here; recorded as its known cost, not hidden.

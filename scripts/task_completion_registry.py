@@ -33,9 +33,23 @@ import argparse
 _DONE = {"ACCEPTED", "IMPLEMENTED", "DEPLOYED", "COMPLETE", "COMPLETED", "DONE", "LIVE", "SHIPPED"}
 _ARCHIVED = {"REJECTED", "SUPERSEDED", "DEPRECATED", "WITHDRAWN", "OBSOLETE", "ABANDONED"}
 
-_VALID_ID_RE = re.compile(r"^ADR-(\d{4,})$")
-_FILENAME_NUM_RE = re.compile(r"^(?:adr[-_])?(\d{3,})(?=[-_.])", re.IGNORECASE)
-_FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---", re.DOTALL)
+# A decision's number is the one its FILE NAME carries, exactly as
+# ``task_tracking_git_sync.adr_meta`` (globs ``ADR-NNNN-*.md``, ``ADR-NNNN.md``,
+# ``NNNN-*.md``, ``NNNN.md``) and ``context_engineering.adr_loader`` key it:
+# four digits, optionally behind an upper-case ``ADR-``, then a hyphen or the end
+# of the stem. Renumbering moved ~57 files to new numbers but left their OLD id in
+# the frontmatter (``ADR-0800-0472-…`` says ``id: ADR-0472``), so the file name
+# is the current number and the frontmatter id is only a fallback.
+_FILENAME_NUM_RE = re.compile(r"^(?:ADR-)?(\d{4})(?:-|$)")
+_FM_ID_RE = re.compile(r"^(?:ADR-)?(\d{4})(?!\d)")
+# Same block delimiter as core.quality_gates.artifacts.parse_frontmatter, which
+# is what adr_meta reads a record's status through.
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.S)
+
+try:
+    import yaml  # type: ignore
+except ImportError:  # pragma: no cover — the shipped venv carries PyYAML
+    yaml = None
 
 
 def _status_word(status: Optional[str]) -> str:
@@ -50,37 +64,66 @@ def _fm_value(frontmatter: str, key: str) -> Optional[str]:
     return v or None
 
 
-def _canonical_id(raw_id: Optional[str], filename: str) -> Optional[str]:
-    """``ADR-NNNN`` for a decision record, None for anything else.
+def _parse_frontmatter(text: str) -> tuple:
+    """``(fields, body)`` read the way adr_meta reads them: YAML, and a block
+    that does not parse to a mapping counts as no frontmatter. Without PyYAML
+    the ``key: value`` lines are read directly."""
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        return {}, text
+    body = text[m.end():]
+    if yaml is None:
+        return {k: _fm_value(m.group(1), k) for k in ("id", "status")}, body
+    try:
+        data = yaml.safe_load(m.group(1))
+    except Exception:  # noqa: BLE001 — a broken block is "no frontmatter", as in adr_meta
+        return {}, body
+    return (data if isinstance(data, dict) else {}), body
 
-    A well-formed frontmatter id wins; a missing or malformed one falls back to
-    the number the filename starts with. Number 0 is the placeholder the
-    non-decision ``DOC-*`` files carry and is never a decision."""
-    m = _VALID_ID_RE.match(raw_id or "")
-    num = m.group(1) if m else None
-    if num is None:
-        fm = _FILENAME_NUM_RE.match(filename)
-        num = fm.group(1) if fm else None
-    if num is None or int(num) == 0:
+
+def _filename_number(filename: str) -> Optional[str]:
+    """The four-digit number a decision file's name carries, or None."""
+    m = _FILENAME_NUM_RE.match(Path(filename).stem)
+    if m is None or m.group(1) == "0000":
         return None
-    return f"ADR-{int(num):04d}"
+    return m.group(1)
+
+
+def _fallback_number(raw_id: Optional[str], filename: str) -> Optional[str]:
+    """The frontmatter id's number, for a file whose name carries none.
+
+    ``DOC-*`` reports and placeholder ids (``ADR-0000``, ``ADR-0XXX``) are not
+    decisions."""
+    if filename.startswith("DOC-"):
+        return None
+    m = _FM_ID_RE.match(str(raw_id or ""))
+    if m is None or m.group(1) == "0000":
+        return None
+    return m.group(1)
 
 
 def _read_adr_record(path: Path) -> Optional[dict]:
     content = path.read_text(encoding="utf-8", errors="replace")
-    match = _FRONTMATTER_RE.match(content)
-    frontmatter = match.group(1) if match else ""
-    adr_id = _canonical_id(_fm_value(frontmatter, "id"), path.name)
-    if adr_id is None:
+    fields, body = _parse_frontmatter(content)
+    file_num = _filename_number(path.name)
+    num = file_num or _fallback_number(fields.get("id"), path.name)
+    if num is None:
         return None
-    body = content[match.end():] if match else content
     title_match = re.search(r"^# (.+)$", body, re.MULTILINE)
     return {
-        "adr_id": adr_id,
-        "status": _fm_value(frontmatter, "status"),
+        "adr_id": f"ADR-{num}",
+        "by_filename": file_num is not None,
+        "status": str(fields.get("status") or "").strip() or None,
         "title": title_match.group(1).strip() if title_match else None,
         "file": path.name,
     }
+
+
+def _file_order(rec: dict) -> tuple:
+    """adr_meta's file order for one number: ``ADR-NNNN-*.md`` (sorted),
+    ``ADR-NNNN.md``, ``NNNN-*.md`` (sorted), ``NNNN.md``."""
+    stem = Path(rec["file"]).stem
+    return (not stem.startswith("ADR-"), stem == rec["adr_id"] or stem == rec["adr_id"][4:], rec["file"])
 
 
 def _sibling_rank(i_rec: tuple) -> tuple:
@@ -89,6 +132,20 @@ def _sibling_rank(i_rec: tuple) -> tuple:
     i, rec = i_rec
     word = _status_word(rec["status"])
     return (word in _ARCHIVED, word in _DONE, i)
+
+
+def _task_status(adr_status: Optional[str]) -> str:
+    """Registry state of a record status. Every word adr_meta reads as done
+    (``status_for`` → complete) is ACCEPTED here — not only the literal word —
+    so the registry and the sync never disagree on whether a number is done."""
+    word = _status_word(adr_status)
+    if word in _DONE:
+        return "ACCEPTED"
+    if word in _ARCHIVED:
+        return "ARCHIVED"
+    if word == "PROPOSED":
+        return "IN_PROGRESS"
+    return "UNKNOWN"
 
 
 @dataclass
@@ -130,19 +187,22 @@ class TaskRegistry:
 
         Every ``*.md`` file is considered, not only ``ADR-*.md``: the record repo
         carries two naming schemes side by side (``ADR-NNNN-slug.md`` and the
-        older ``NNNN-slug.md``), and a prefix-only glob silently dropped every
-        record of the second kind. A file is keyed by its frontmatter ``id``
-        when that is a well-formed ``ADR-NNNN``; otherwise by the number its
-        filename starts with. Files that yield neither (``DOC-*``, ``README``,
-        placeholder ids such as ``ADR-0000`` / ``ADR-0XXX``) are not decisions
-        and are skipped.
+        older ``NNNN-slug.md``). A file is keyed by the number its FILE NAME
+        carries — the same key ``corvin_console.task_tracking_git_sync.adr_meta``
+        and ``context_engineering.adr_loader`` use (four digits, ``ADR-`` prefix
+        optional, then ``-`` or the end of the stem; ``ADR-0800-0472-…`` is
+        ADR-0800, whatever its stale frontmatter id says). A file whose name
+        carries no number (``adr_0801_system.md``, ``ADR-001-…``) falls back to
+        its frontmatter id, and only for a number no file name carries — so it
+        can never outvote the files adr_meta reads. ``DOC-*``, ``README`` and
+        placeholder ids (``ADR-0000`` / ``ADR-0XXX``) are not decisions.
 
         One number can be carried by several files. The record that decides is
-        chosen exactly as ``corvin_console.task_tracking_git_sync.adr_meta``
-        chooses it, so a stale sibling can never mark work done: superseded /
-        rejected siblings are ignored while a live one exists, and among live
-        siblings the one that is NOT done wins — two live records that disagree
-        read as open. The result no longer depends on which file sorts last.
+        chosen exactly as ``adr_meta`` chooses it (same file order, same rank),
+        so a stale sibling can never mark work done: superseded / rejected
+        siblings are ignored while a live one exists, and among live siblings
+        the one that is NOT done wins — two live records that disagree read as
+        open. Every status ``adr_meta`` reads as done maps to ACCEPTED.
         """
         tasks: Dict[str, TaskStatus] = {}
 
@@ -161,17 +221,11 @@ class TaskRegistry:
                 records.setdefault(rec["adr_id"], []).append(rec)
 
         for adr_id, recs in records.items():
+            by_name = [r for r in recs if r["by_filename"]]
+            recs = sorted(by_name or recs, key=_file_order)
             chosen = min(enumerate(recs), key=_sibling_rank)[1]
             adr_status = chosen["status"] or "UNKNOWN"
-            word = _status_word(adr_status)
-            if word == "ACCEPTED":
-                task_status = "ACCEPTED"
-            elif word == "PROPOSED":
-                task_status = "IN_PROGRESS"
-            elif word in _ARCHIVED:
-                task_status = "ARCHIVED"
-            else:
-                task_status = "UNKNOWN"
+            task_status = _task_status(chosen["status"])
 
             notes = f"status read from {chosen['file']}"
             if len(recs) > 1:

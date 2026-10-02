@@ -38,15 +38,20 @@ funktioniert funktionieren zwischen jetzt dann hier dort welche welcher
 eines einen einem einer eine ihr ihre ihren ihrem sein seine seinen ob sag sage
 alle allen nach pro bzw usw etwa also
 adr adrs phase status proposed accepted implemented
-write writes wrote written explain explains help helps learn create creates give gives
-tell show suggest recommend draft find know think like good best thing things way lot
-one two three four five day days week weeks minute minutes hour hours work works
+explain explains help helps give gives
+tell show suggest recommend find know think like good best thing things way lot
+minute minutes hour hours
 """.split())
-#: The last three lines above (review R4-3): the verbs and fillers of an
-#: everyday REQUEST ("write me…", "help me learn…", "a three day…") carry no
-#: topic, but each is rare enough in ADR prose to score — they made 8 of 40
-#: everyday non-CorvinOS requests return ADRs. Measured on that tuning set
-#: and on a separate held-out set in tests/adr_retrieval_eval.py.
+#: The last three lines above (review R4-3): fillers of an everyday REQUEST
+#: ("help me…", "explain…") carry no topic, but each is rare enough in ADR prose
+#: to score — they made everyday non-CorvinOS requests return ADRs. Words that
+#: ARE topics in this corpus (create: forge.create / skill_create; write:
+#: copy-on-write, skill writes; work: work items; three: three-tier; per day:
+#: quotas) are NOT stop words (review R5-1 measured the recall they cost);
+#: as the request's OPENING verb they carry none, see _LEADING_VERBS.
+#: An opening imperative ("Write a haiku…", "Create a shopping list…") names the
+#: action, not the subject; anywhere else these words can be the subject.
+_LEADING_VERBS = frozenset("write create draft make plan learn work compose".split())
 
 #: German → English for the core vocabulary of this corpus (ADRs are English).
 #: Applied before stemming; deliberately small — a translation table is not a
@@ -84,12 +89,20 @@ _INACTIVE_STATUSES = frozenset({"superseded", "rejected", "deprecated", "withdra
 _STATUS_RANK = {"accepted": 3, "implemented": 3, "proposed": 2}
 
 
+#: Words the suffix stripper would merge with a DIFFERENT concept of this
+#: corpus: "worker" (an engine process) is not "work" (work items), and
+#: "continue the ADR-0952 work" matched "Session-Pinned Workers" (review R5-2).
+_STEM_EXCEPTIONS = {"worker": "worker", "workers": "worker"}
+
+
 def _stem(word: str) -> str:
     """Tiny suffix stripper that maps a word family onto ONE stem
     (route/routes/routing → rout, classify/classifier/classification → classif,
     erase/erasure → eras, cache/caching/cached → cach) without a stemming
     dependency. Longest suffix first; a trailing ``i``/``e`` left by a suffix
     (classifi-er, eras-ure) is folded the same way the bare form is."""
+    if word in _STEM_EXCEPTIONS:
+        return _STEM_EXCEPTIONS[word]
     if word.endswith("sses"):
         word = word[:-2]          # classes/processes/accesses → class/process/access
     for suf in ("ications", "ication", "ations", "ation", "ences", "ence", "ings",
@@ -109,17 +122,20 @@ def tokenize(text: str) -> List[str]:
     """Whole-word, stop-word-free, stemmed tokens (order-preserving, deduped)."""
     out: Dict[str, None] = {}
     prev = ""
-    for w in _TOKEN_RE.findall((text or "").lower()):
+    for i, w in enumerate(_TOKEN_RE.findall((text or "").lower())):
         w = _DE_EN.get(w, w)
+        if i == 0 and w in _LEADING_VERBS:
+            prev = w
+            continue
         if re.fullmatch(r"l\d{1,2}", w):        # layer ids: L4, L35
             out[w] = None
         elif w.isdigit() and prev == "layer" and len(w) <= 2:
             out.pop(_stem("layer"), None)      # "Layer 36" ≡ "L36": the generic word goes
             out["l" + str(int(w))] = None
-        elif w.isdigit() and (len(w) >= 3 or prev in ("art", "artikel")):
-            # "Art. 17" vs "Art. 32", "Art. 5", "403": numbers carry topic. A
-            # bare two-digit number ("10 minutes") is a quantity, not a topic.
-            out[(prev + w) if prev in ("art", "artikel") else w] = None
+        elif w.isdigit() and (len(w) >= 2 or prev in ("art", "artikel")):
+            # "Art. 17" vs "Art. 32", "Art. 5", "403", "10/day": numbers carry
+            # topic. "Artikel 17" is the same token as "Art. 17" (R5-5).
+            out[("art" + w) if prev in ("art", "artikel") else w] = None
         elif not (w in _STOPWORDS or len(w) < 3 or w.isdigit()):
             out[_stem(w)] = None
         prev = w
@@ -438,6 +454,7 @@ class ADRLoader:
 
     def score_query(
         self, terms: Iterable[str], min_relevance: float = MIN_RELEVANCE,
+        allow_single_term: bool = True,
     ) -> List[Tuple[str, float]]:
         """Rank ADRs by idf-weighted whole-token overlap with ``terms`` (the
         output of :func:`tokenize`). See docs/CONTEXT_ENGINEERING_LAYER.md §2 for
@@ -488,6 +505,8 @@ class ADRLoader:
             # word is rare and in the ADR's title ("Bedrock 403"). Measured: +2
             # on the held-out set; "summarize this PDF" → ADR-0596 (voice
             # summarization) is its recorded borderline case.
+            if len(hits) < 2 and not allow_single_term:
+                continue
             if len(hits) < 2:
                 # ...and the word must be in the TITLE: a preview mention is
                 # not what the decision is about.

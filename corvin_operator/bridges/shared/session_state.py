@@ -179,7 +179,7 @@ def reset_claude_session_state(workdir: Path, *, reason: str = "unspecified",
     Returns the names of the entries removed, for logging. Missing entries are
     not an error — the operation is idempotent by construction.
 
-    The chat's append-only session ledger (``.corvin-ledger/``) is not Claude
+    The chat's append-only session ledger (``session_ledger/``, outside the workdir) is not Claude
     state and is never removed here. When a session actually existed, the
     reset is recorded in that ledger as a boundary carrying ``reason``; an
     unknown reason counts as unwanted (the ledger then re-supplies the earlier

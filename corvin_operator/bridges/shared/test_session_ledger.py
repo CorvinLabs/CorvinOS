@@ -285,7 +285,7 @@ class TestView:
         assert st["omitted"] % sl.CUT_STEP == 0 or st["omitted"] == 120 - st["verbatim"] - st["indexed"]
         assert f"Turns #1–#{st['omitted']}" in block
         assert "### Turn #120" in block
-        assert ".corvin-ledger/ledger.jsonl" in block
+        assert ".corvin-history.md" in block
 
     def test_cut_moves_in_steps(self, wd):
         for i in range(1, 60):
@@ -571,13 +571,47 @@ class TestRound4:
         assert "observers' lines withheld" in block
         assert "OBS-WORDS" in sl.render_context(wd, withhold=lambda r: None)
 
-    def test_withhold_is_asked_only_for_resupplied_turns(self, wd):
+    def test_withhold_is_asked_only_for_resupplied_turns_in_the_block(self, wd):
         _turn(wd, 1, u="live-one")
         _turn(wd, 2, u="live-two")
         _transcript(wd, SID, [_user("live-one"), _user("live-two")])
         asked = []
-        sl.render_context(wd, withhold=lambda r: asked.append(r["n"]))
+        live = sl.scan_transcript(sl.transcript_path(wd, SID))[0]
+        sl.render_from_records(sl.read_ledger(wd), live, withhold=lambda r: asked.append(r["n"]))
         assert asked == []
+
+    def test_view_file_withholds_like_the_block(self, wd):
+        """The worker reads the generated view, never the raw ledger (R5-3)."""
+        sl.append_turn(wd, channel="telegram", chat_key="chat-1", user_text="OWNER-ASK",
+                       observer_text="---BEGIN-OBSERVER-ab---\n  12:00 anna: OBS-WORDS\n"
+                                     "---END-OBSERVER-ab---\n\n",
+                       assistant_text="ok", observers=[{"user": "anna"}])
+        sl.append_turn(wd, channel="telegram", chat_key="chat-1", user_text="BAD-ASK",
+                       assistant_text="no", refused="house_rules")
+        block = sl.render_context(wd, withhold=lambda r: "observer_consent" if r.get("observers") else None)
+        view = sl.view_path(wd).read_text()
+        assert ".corvin-history.md" in block and "ledger.jsonl" not in block
+        assert "OWNER-ASK" in view and "OBS-WORDS" not in view and "BAD-ASK" not in view
+
+    def test_observer_erasure_keeps_the_owners_turn(self, tmp_path, monkeypatch):
+        import erasure_handlers as eh
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        d = eh._tenant_home("_default") / "sessions" / "voice" / "whatsapp" / "grp2"
+        d.mkdir(parents=True)
+        sl.append_turn(d, channel="whatsapp", chat_key="grp2", sender="owner",
+                       user_text="OWNER: the release date is 12 March",
+                       observer_text="---BEGIN-OBSERVER-ab---\n  12:00 obs1: OBS1-WORDS\n"
+                                     "---END-OBSERVER-ab---\n\n",
+                       assistant_text="noted", observers=[{"user": "obs1"}])
+        sl.render_context(d)                               # writes the view
+        assert "OBS1-WORDS" in sl.view_path(d).read_text()
+        res = eh.SessionLedgerHandler(tenant_id="_default").purge("obs1", "r")
+        assert res.count == 1
+        [rec] = sl.read_ledger(d)
+        assert rec["user"].startswith("OWNER: the release") and rec["assistant"] == "noted"
+        assert rec["observers"] == [] and rec["observer_text"] == ""
+        assert "OBS1-WORDS" not in sl.ledger_path(d).read_text()
+        assert not sl.view_path(d).exists()               # views regenerate
 
     def test_purge_survives_a_torn_utf8_line(self, wd):
         import erasure_handlers as eh
@@ -603,6 +637,19 @@ class TestRound4:
         assert turns[0]["assistant"] == "BG-RESULT-Q3: revenue up 4%"
         assert "summarise the Q3 report" in turns[0]["user"] and turns[0]["sender"] == "u1"
         assert "BG-RESULT-Q3" in sl.render_context(wd)
+
+
+class TestRound5:
+    def test_ledger_stays_private_after_an_erasure(self, wd):
+        import erasure_handlers as eh
+        _turn(wd, 1)
+        sl.append_turn(wd, channel="telegram", chat_key="other", user_text="o", assistant_text="x")
+        old = os.umask(0o002)
+        try:
+            assert eh._purge_jsonl_file(sl.ledger_path(wd), "chat-1") == 1
+        finally:
+            os.umask(old)
+        assert stat.S_IMODE(sl.ledger_path(wd).stat().st_mode) == 0o600
 
 
 if __name__ == "__main__":

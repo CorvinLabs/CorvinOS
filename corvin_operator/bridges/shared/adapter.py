@@ -3576,6 +3576,7 @@ def _resolve_spawn_inputs(
     # is re-supplied from the chat's append-only ledger on EVERY spawn,
     # including the fresh retry after a context-overflow / corrupted-session
     # reset. See session_ledger.py for the coverage rule and the budget.
+    _ledger_block = ""
     if chat_key:
         try:
             try:
@@ -3909,7 +3910,15 @@ def _resolve_spawn_inputs(
                         _cel_wd, _cel_turn,
                         sections=(_cel_mod.build_sections(_pa_src)
                                   if _pa_src is not None else []),
-                        cel_text=_cel_text, final_prompt=sys_prompt,
+                        # The inspector copy never carries the re-supplied
+                        # chat history: it would be a second verbatim copy in
+                        # the worker's cwd that no withholding or erasure
+                        # reaches (review R5-4). Its size is kept instead.
+                        cel_text=_cel_text,
+                        final_prompt=(sys_prompt.replace(
+                            _ledger_block,
+                            f"\n\n[session ledger block: {len(_ledger_block)} chars, not persisted]\n")
+                            if _ledger_block else sys_prompt),
                         forged_tools=list(_cel_forged_tools),
                         forged_skills=[getattr(s, "skill_id", "?") for s in
                                        (getattr(_pa_b, "skills_to_bind", None) or [])])
@@ -4519,7 +4528,9 @@ def _cel_session(channel: str, chat_key: str | None):
     except Exception:  # noqa: BLE001 — no ledger → the plain chat key
         pass
     import types as _types  # noqa: PLC0415
-    return _types.SimpleNamespace(sid=key)
+    # ``sender``: the author of this turn, so an anchored (or candidate) goal is
+    # attributable to them in a group chat's store (review R5-4).
+    return _types.SimpleNamespace(sid=key, sender=str(getattr(_TURN_OUTCOME, "sender", "") or ""))
 
 
 def _ledger_consent_withhold(channel: str, chat_key: str):
@@ -11264,6 +11275,11 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                     channel=channel, chat_key=str(chat_key), user=sender,
                     details={"delivered": False, "text_len": len(btw_text), "blocked": "house_rules"},
                 )
+                # The user saw this exchange: record it, refused (hash only),
+                # so the chat's history does not silently miss it (review R5-7).
+                _ledger_record_side_turn(channel, str(chat_key), "/btw " + btw_text, _btw_hr,
+                                         msg_id=str(msg_id or ""), sender=str(sender or ""),
+                                         refused="house_rules")
                 _hr_ack = {"channel": channel, "to": sender, "text": _btw_hr}
                 if chat_id is not None:
                     _hr_ack["chat_id"] = chat_id
@@ -12100,6 +12116,8 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         _TURN_OUTCOME.refused = None
         _TURN_OUTCOME.failed = None
         _TURN_OUTCOME.cli_spawned = False
+        # The turn's author, for the CEL session (anchor goal attribution).
+        _TURN_OUTCOME.sender = str(sender or "")
         answer, prompt = _maybe_delegate_worker(
             prompt, channel=channel, chat_key=chat_key,
             persona=str((profile or {}).get("persona")

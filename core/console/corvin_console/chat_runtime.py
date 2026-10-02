@@ -1268,6 +1268,22 @@ def delete_session(tenant_id: str, sid: str) -> bool:
         except OSError:
             pass
     delete_turns(tenant_id, sid)
+    # The chat's CEL anchor store (goal / decision facts, keyed by the sid) and
+    # its ledger render state: deleting the chat removes every copy of its
+    # words, not only the turn log (review R5, CEL side note).
+    try:
+        from corvin_operator.context_engineering import anchor as _anchor  # noqa: PLC0415
+        _anchor.clear(tenant_id, sid)
+    except Exception:  # noqa: BLE001 — best-effort, like the workdir removal
+        pass
+    try:
+        _shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
+        if str(_shared) not in sys.path:
+            sys.path.insert(0, str(_shared))
+        import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+        shutil.rmtree(_ledger.ledger_dir(wd), ignore_errors=True)
+    except Exception:  # noqa: BLE001
+        pass
     return True
 
 
@@ -2172,10 +2188,12 @@ def _session_ledger_block(sess: WebChatSession, current_prompt: str = "") -> str
         if str(_shared) not in sys.path:
             sys.path.insert(0, str(_shared))
         import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
-        tpath = _turns_path(sess.tenant_id, sess.sid)
+        # The worker is pointed at the generated ``.corvin-history.md`` view in
+        # its workdir, never at ``turns.jsonl``: the UI log keeps a refused
+        # message's text for the chat window (review R5-2).
         return _ledger.render_turn_log_context(
             read_turns(sess.tenant_id, sess.sid), sess.workdir,
-            resumed=sess.turn_count > 0, ledger_file=str(tpath),
+            resumed=sess.turn_count > 0,
             channel="web", chat_key=sess.chat_key, tenant_id=sess.tenant_id,
             # The system prompt is built BEFORE this turn's user message is
             # logged; naming it lets an earlier unanswered message stay history.
@@ -2186,7 +2204,7 @@ def _session_ledger_block(sess: WebChatSession, current_prompt: str = "") -> str
 
 
 def _turn_system_prompt(sess: WebChatSession, task_text: str = "",
-                        cel_brief: str = "") -> str:
+                        cel_brief: str = "", *, ledger_prompt: str | None = None) -> str:
     """Base web-chat system prompt + per-turn uploaded-file manifest, plus the
     bridge-parity context blocks (ADR-0114): the resolved persona role, the
     Layer-12 voice-profile audience shaping, the Tier-1 user profile and the
@@ -2207,7 +2225,10 @@ def _turn_system_prompt(sess: WebChatSession, task_text: str = "",
         + _acs_directive_block(task_text)
         + _cel_brief_block(cel_brief)
         + _infinite_session_context_block(sess)
-        + _session_ledger_block(sess, task_text)
+        # ``ledger_prompt``: this turn's message even when ``task_text`` is
+        # held out of the cached prompt (cel_cache_stable) — without it an
+        # earlier unanswered message was dropped from history (review R5-6).
+        + _session_ledger_block(sess, task_text if ledger_prompt is None else ledger_prompt)
         # LAST WORD on language. The rule near the top and the profile line in
         # the middle were both present and still lost: in a ~10 KB, overwhelmingly
         # ENGLISH system prompt a single early directive gets diluted, and an
@@ -2265,7 +2286,7 @@ def _web_workspace_roots(tenant_id: str) -> list[str]:
 
 
 def _write_turn_system_prompt(sess: WebChatSession, task_text: str = "",
-                              cel_brief: str = "") -> Path:
+                              cel_brief: str = "", *, ledger_prompt: str | None = None) -> Path:
     """Write this turn's merged system prompt to a file in the session
     workdir and return its path.
 
@@ -2288,13 +2309,15 @@ def _write_turn_system_prompt(sess: WebChatSession, task_text: str = "",
     which already skip ``name.startswith(".")``).
     """
     path = sess.workdir / ".corvin-system-prompt.txt"
-    path.write_text(_turn_system_prompt(sess, task_text, cel_brief), encoding="utf-8")
+    path.write_text(_turn_system_prompt(sess, task_text, cel_brief, ledger_prompt=ledger_prompt),
+                    encoding="utf-8")
     return path
 
 
 def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
                  browser_token: str | None = None, task_text: str = "",
-                 purpose: str = "turn", cel_brief: str = "") -> list[str]:
+                 purpose: str = "turn", cel_brief: str = "",
+                 ledger_prompt: str | None = None) -> list[str]:
     """Build a ``claude -p`` invocation for this turn.
 
     Resume mode uses ``--continue`` so the per-workdir session state
@@ -2353,7 +2376,8 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
              "--output-format", "stream-json",
              "--verbose",
              "--append-system-prompt-file",
-             str(_write_turn_system_prompt(sess, task_text, cel_brief))]
+             str(_write_turn_system_prompt(sess, task_text, cel_brief,
+                                           ledger_prompt=ledger_prompt))]
 
     # MCP servers — the persona's resolver-injected servers + mcp_manager
     # catalog tools, exactly like the bridge adapter's spawn path. Without
@@ -5238,7 +5262,8 @@ async def _stream_turn_impl(
         _volatile_user_prefix = (
             _acs_directive_block(prompt) + _cel_brief_block(_cel_brief_text)).strip()
         args = _build_args(sess, resume=resume, model=_os_model,
-                           browser_token=_browser_token, task_text="", cel_brief="")
+                           browser_token=_browser_token, task_text="", cel_brief="",
+                           ledger_prompt=prompt)
     else:
         args = _build_args(sess, resume=resume, model=_os_model,
                            browser_token=_browser_token, task_text=prompt,
@@ -6938,6 +6963,17 @@ async def _stream_turn_impl(
         # already catches both). Emit the paired completion before re-raising.
         _audit_emit(sess, "web.turn.cancelled")
         _os_emit_completed(rc=-1)
+        # The user already saw the streamed part of the answer: keep it, marked,
+        # so the session ledger re-supplies what was said instead of "(no text
+        # answer)" (review R5-7). Synchronous file I/O — no await after a cancel.
+        if final_text_parts:
+            try:
+                _append_turn(sess, "assistant",
+                             [{"kind": "text",
+                               "text": "".join(final_text_parts) + "\n[answer cancelled here]"}],
+                             cli_spawned=True)
+            except Exception:  # noqa: BLE001
+                pass
         raise
     finally:
         if not _stdout_drained_normally:

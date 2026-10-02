@@ -133,6 +133,57 @@ def _store_path(tenant_id: str, session_key: str) -> Path:
             / f"{_safe_key(session_key)}.jsonl")
 
 
+#: Lock file shared by every writer of the anchor stores and by the GDPR
+#: erasure handler (``erasure_handlers.CELAnchorHandler``), which run in
+#: different processes (bridge vs console). A read-modify-write under an
+#: in-process lock alone let a turn re-write a store an erasure had just
+#: purged, while the erasure reported APPLIED (review R5-3).
+STORE_LOCK_NAME = ".store.lock"
+_held = threading.local()
+
+
+class _StoreLock:
+    """``with _StoreLock(tenant):`` — the in-process RLock plus an exclusive
+    ``flock`` on ``cel_anchors/.store.lock``. Without fcntl (Windows) only the
+    in-process lock holds."""
+
+    def __init__(self, tenant_id: str):
+        self._tenant_id = tenant_id
+        self._fd = None
+
+    def __enter__(self):
+        _lock.acquire()
+        depth = getattr(_held, "depth", 0)
+        _held.depth = depth + 1
+        if depth:
+            # Re-entered on this thread (promote_pending_goal → add_fact): the
+            # outer frame holds the flock; a second flock on a new fd of the
+            # same file would block on ourselves.
+            return self
+        try:
+            import fcntl  # noqa: PLC0415
+            d = _store_path(self._tenant_id, "x").parent
+            d.mkdir(parents=True, exist_ok=True)
+            self._fd = open(d / STORE_LOCK_NAME, "a+")
+            fcntl.flock(self._fd.fileno(), fcntl.LOCK_EX)
+        except ImportError:
+            self._fd = None
+        except Exception:
+            _held.depth = depth
+            _lock.release()
+            raise
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            if self._fd is not None:
+                self._fd.close()        # closing the fd releases the flock
+        finally:
+            _held.depth = getattr(_held, "depth", 1) - 1
+            _lock.release()
+        return False
+
+
 def _text_hash(text: str) -> str:
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
@@ -179,7 +230,7 @@ def add_fact(tenant_id: str, session_key: str, kind: str, text: str, *,
     kind = kind if kind in KINDS else _DEFAULT_KIND
     h = _text_hash(text)
     try:
-        with _lock:
+        with _StoreLock(tenant_id):
             facts = load_facts(tenant_id, session_key)
             if any(f.get("hash") == h for f in facts):
                 return None  # dedup by text-hash
@@ -216,7 +267,8 @@ def _pending_path(tenant_id: str, session_key: str) -> Path:
     return _store_path(tenant_id, session_key).with_suffix(".pending.jsonl")
 
 
-def set_pending_goal(tenant_id: str, session_key: str, text: str) -> None:
+def set_pending_goal(tenant_id: str, session_key: str, text: str, *,
+                     sender: str = "") -> None:
     """Remember this turn's task as the CANDIDATE session goal. It is not a
     fact yet: the inbound hook runs before the acceptable-use / Gate-1 checks,
     and a refused task must never become a goal that is re-injected every turn
@@ -225,12 +277,19 @@ def set_pending_goal(tenant_id: str, session_key: str, text: str) -> None:
     text = (text or "").strip()
     if not text:
         return
+    rec: dict = {"text": text}
+    if sender:
+        # The author, identity-keyed: in a group chat the store is named after
+        # the chat, so only this lets an Art. 17 request find the candidate
+        # (it is often a refused turn's text, review R5-4).
+        rec["sender"] = str(sender)
     try:
-        p = _pending_path(tenant_id, session_key)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"text": text}, ensure_ascii=False) + "\n", encoding="utf-8")
-        tmp.replace(p)
+        with _StoreLock(tenant_id):
+            p = _pending_path(tenant_id, session_key)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
+            tmp.replace(p)
     except Exception:  # noqa: BLE001
         pass
 
@@ -243,16 +302,19 @@ def promote_pending_goal(tenant_id: str, session_key: str,
     the inbound hook (a delegated worker turn), and promoting "whatever was
     stored last" made the refused task the goal (review R3). Never raises."""
     try:
-        p = _pending_path(tenant_id, session_key)
-        if not p.is_file():
-            return None
-        text = str(json.loads(p.read_text(encoding="utf-8")).get("text") or "")
-        p.unlink()
-        if not text or text.strip() != (answered_task or "").strip():
-            return None
-        if any(f.get("kind") == "goal" for f in load_facts(tenant_id, session_key)):
-            return None
-        return add_fact(tenant_id, session_key, "goal", text, sender=sender)
+        with _StoreLock(tenant_id):
+            p = _pending_path(tenant_id, session_key)
+            if not p.is_file():
+                return None
+            pending = json.loads(p.read_text(encoding="utf-8"))
+            text = str(pending.get("text") or "")
+            p.unlink()
+            if not text or text.strip() != (answered_task or "").strip():
+                return None
+            if any(f.get("kind") == "goal" for f in load_facts(tenant_id, session_key)):
+                return None
+            return add_fact(tenant_id, session_key, "goal", text,
+                            sender=sender or str(pending.get("sender") or ""))
     except Exception:  # noqa: BLE001
         return None
 
@@ -260,9 +322,10 @@ def promote_pending_goal(tenant_id: str, session_key: str,
 def clear(tenant_id: str, session_key: str) -> None:
     """Delete the session's anchor store. Never raises."""
     try:
-        _store_path(tenant_id, session_key).unlink()
-    except FileNotFoundError:
-        pass
+        with _StoreLock(tenant_id):
+            for p in (_store_path(tenant_id, session_key),
+                      _pending_path(tenant_id, session_key)):
+                p.unlink(missing_ok=True)
     except Exception:  # noqa: BLE001
         pass
 

@@ -97,9 +97,19 @@ def _system_prompt(sb: Path, n: int) -> str:
 
 
 def _workdir(sb: Path) -> Path:
-    hits = list((sb / "home").rglob(".corvin-ledger/ledger.jsonl"))
+    # The ledger lives OUTSIDE the worker's cwd (review R5): the store tree
+    # ``<tenant>/session_ledger/<channel>/<chat>/`` mirrors the session tree.
+    hits = list((sb / "home").rglob("session_ledger/*/*/ledger.jsonl"))
     assert len(hits) == 1, hits
-    return hits[0].parent.parent
+    d = hits[0].parent
+    wd = d.parents[2] / "sessions" / "voice" / d.parent.name / d.name
+    assert not list(wd.rglob("ledger.jsonl")), "a ledger copy inside the worker cwd"
+    return wd
+
+
+def _ledger_file(wd: Path) -> Path:
+    """``<tenant>/session_ledger/<channel>/<chat>/ledger.jsonl`` for a session workdir."""
+    return wd.parents[3] / "session_ledger" / wd.parent.name / wd.name / "ledger.jsonl"
 
 
 def _write_transcript(sb: Path, wd: Path, entries: list[dict]) -> None:
@@ -176,7 +186,11 @@ def main() -> int:
         sp5 = _system_prompt(sb, 5)
         check(HEADER not in sp5 and not any(MSGS[k] in sp5 for k in "ABCD"),
               "/new starts fresh: nothing re-supplied")
-        check("before the operator's /new" in sp5, "/new leaves one pointer to the ledger file")
+        check("before the operator's /new" in sp5, "/new leaves one pointer to the history view")
+        check(".corvin-history.md" in sp5 and "ledger.jsonl" not in sp5,
+              "the worker is pointed at the view, never at the record")
+        view = (wd / ".corvin-history.md").read_text()
+        check(all(MSGS[k] in view for k in "ABCD"), "the view still holds the turns before /new")
 
         print("6 FOXTROT — the new topic continues")
         _send(sb, "F", 6)
@@ -187,7 +201,7 @@ def main() -> int:
               "the fence and the ledger file are named")
 
         print("7 the record itself")
-        recs = [json.loads(l) for l in (wd / ".corvin-ledger" / "ledger.jsonl").read_text().splitlines()]
+        recs = [json.loads(l) for l in _ledger_file(wd).read_text().splitlines()]
         turns = [r for r in recs if r["kind"] == "turn"]
         check([r["n"] for r in turns] == [1, 2, 3, 4, 5, 6], "six turns, numbered 1..6")
         check([r["user_text"] for r in turns] == [MSGS[k] for k in "ABCDEF"], "every user text kept verbatim")
@@ -196,7 +210,7 @@ def main() -> int:
         bounds = [(r["boundary"], r["reason"]) for r in recs if r["kind"] == "boundary"]
         check(bounds == [("compaction", "auto"), ("reset", "timeout"), ("reset", "manual")],
               f"boundaries recorded in order: {bounds}")
-        check(oct((wd / ".corvin-ledger" / "ledger.jsonl").stat().st_mode & 0o777) == "0o600",
+        check(oct(_ledger_file(wd).stat().st_mode & 0o777) == "0o600",
               "ledger file is 0600")
 
         print("8 audit chain (sandbox)")

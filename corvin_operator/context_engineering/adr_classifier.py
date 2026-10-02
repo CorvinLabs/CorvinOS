@@ -4,7 +4,8 @@ import dataclasses
 import logging
 import re
 from typing import Dict, List, Optional
-from .adr_loader import ADRLoader, ADRMetadata, MIN_RELEVANCE, get_loader, tokenize
+from .adr_loader import (ADRLoader, ADRMetadata, MIN_RELEVANCE, RELATIVE_CUTOFF,
+                         get_loader, tokenize)
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,15 @@ class ADRClassifier:
         # and must still clear MIN_RELEVANCE. The old code added every 2-hop
         # neighbour unscored and then cut ``list(set)[:max_results]`` — an
         # arbitrary subset, which could drop the best seed for a stranger.
-        scored = self.loader.score_query(keywords, min_relevance=0.0) if keywords else []
+        # With an ADR named, the rest of the request is usually one verb
+        # ("Merge ADR-0760", "continue the ADR-0952 work"): a single matched
+        # word is then no evidence of a second relevant decision (review R5-2).
+        scored = self.loader.score_query(keywords, min_relevance=0.0,
+                                         allow_single_term=not named) if keywords else []
+        if named:
+            # The named ADR is the best match (1.0); the loader's relative cut
+            # (strictly above RELATIVE_CUTOFF × best) applies against it too.
+            scored = [(i, s) for i, s in scored if s > RELATIVE_CUTOFF]
         own: Dict[str, float] = dict(scored)
         direct = [(i, 1.0) for i in named[:max_results]]
         seen_ids = set(named)

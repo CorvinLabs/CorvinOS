@@ -393,3 +393,48 @@ def test_observer_lines_never_become_the_goal_and_the_goal_is_erasable(isolated,
     res = eh.CELAnchorHandler(tenant_id="_default").purge("owner-7", "r")
     assert res.count >= 1
     assert not any(f["kind"] == "goal" for f in _anchor.load_facts("_default", _Sess.sid))
+
+
+def test_erasure_waits_for_an_anchor_write_in_flight(isolated, monkeypatch):
+    """Review R5-3: a turn's read-modify-write of the store and a GDPR purge
+    (another process) interleaved, the turn re-wrote the purged goal and the
+    purge still reported APPLIED. Both now hold the store's flock."""
+    import sys
+    import threading
+    import time
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "bridges" / "shared"))
+    import erasure_handlers as eh
+    key = "discord:groupchan-777"
+    _anchor.add_fact("_default", key, "goal", "plan the move", sender="owner-7")
+    done = {}
+    with _anchor._StoreLock("_default"):            # a turn mid read-modify-write
+        facts = _anchor.load_facts("_default", key)
+        t = threading.Thread(target=lambda: done.update(
+            r=eh.CELAnchorHandler(tenant_id="_default").purge("owner-7", "r")))
+        t.start()
+        time.sleep(0.3)
+        assert "r" not in done, "the purge ran while a write was in flight"
+        _anchor._write_all("_default", key, facts)   # the turn's write-back
+    t.join(5)
+    assert done["r"].count >= 1
+    assert not [f for f in _anchor.load_facts("_default", key) if f.get("sender") == "owner-7"]
+
+
+def test_pending_goal_names_its_sender_and_is_erased_with_them(isolated, monkeypatch):
+    """Review R5-4: a group chat's candidate goal (often a refused turn's text)
+    had no identity key, so an erasure for its author left it on disk."""
+    _set_flag(monkeypatch, True)
+    import sys
+    from pathlib import Path
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "bridges" / "shared"))
+    import erasure_handlers as eh
+    sess = SimpleNamespace(sid="discord:groupchan-555", sender="owner-7")
+    task = "my phone is 0170-1234567, plan the move"
+    brief = SimpleNamespace(raw_input=task, memory_context=None, related_decisions=[])
+    _pipeline._maybe_apply_anchor(task, "_default", sess, brief, {})
+    pending = _anchor._pending_path("_default", sess.sid)
+    assert pending.is_file() and "owner-7" in pending.read_text()
+    eh.CELAnchorHandler(tenant_id="_default").purge("owner-7", "r")
+    assert not pending.exists()

@@ -1158,8 +1158,16 @@ def _atomic_replace_text(target: Path, text: str) -> None:
     directory, and there the rename durability is the filesystem's own guarantee.
     """
     tmp = target.with_name(f"{target.name}.{os.getpid()}.erasing")
+    # Keep the target's mode: a private store (the session ledger is 0600)
+    # must not come back at the process umask after an erasure (review R5-6).
     try:
-        with open(tmp, "w", encoding="utf-8", errors="surrogateescape") as fh:
+        mode = target.stat().st_mode & 0o777
+    except OSError:
+        mode = 0o600
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+        os.fchmod(fd, mode)
+        with open(fd, "w", encoding="utf-8", errors="surrogateescape") as fh:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
@@ -1925,13 +1933,28 @@ class CELAnchorHandler:
                 BRIDGE_CHANNELS = ()
             forms = {safe} | {_cel_safe_key(f"{ch}:{subject_id}") for ch in BRIDGE_CHANNELS}
             epoch_re = re.compile("(?:" + "|".join(re.escape(x) for x in forms) + r")(?:_\d+)?")
-            for f in sorted(root.glob("*.jsonl")):
-                stem = f.name[: -len(".pending.jsonl")] if f.name.endswith(".pending.jsonl") else f.stem
-                if (epoch_re.fullmatch(stem)
-                        or _name_names_subject(f.name, subject_id)):
-                    f.unlink()
-                    removed += 1
-            removed += _purge_path(root, subject_id)
+            # Hold the writers' store lock (anchor.STORE_LOCK_NAME) across the
+            # whole purge: a turn's read-modify-write of a store would otherwise
+            # re-write a store purged in between, and the erasure reported
+            # APPLIED over data that was back on disk (review R5-3).
+            import fcntl  # noqa: PLC0415
+            with open(root / ".store.lock", "a+") as lock_fh:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+                for f in sorted(root.glob("*.jsonl")):
+                    stem = (f.name[: -len(".pending.jsonl")] if f.name.endswith(".pending.jsonl")
+                            else f.stem)
+                    if (epoch_re.fullmatch(stem)
+                            or _name_names_subject(f.name, subject_id)):
+                        f.unlink()
+                        removed += 1
+                n = _purge_path(root, subject_id)
+                removed += n
+                if n:
+                    # A store (or pending candidate) left with no record is
+                    # removed rather than kept as an empty file.
+                    for f in root.glob("*.jsonl"):
+                        if not f.read_text(encoding="utf-8", errors="surrogateescape").strip():
+                            f.unlink(missing_ok=True)
         except Exception as exc:  # noqa: BLE001
             return ErasureLayerResult(
                 layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
@@ -1942,6 +1965,46 @@ class CELAnchorHandler:
         return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
                        empty_reason="no CEL anchor store matched subject",
                        applied_reason="removed {n} CEL anchor store(s) for subject")
+
+
+def _purge_ledger_file(f: Path, subject_id: str) -> int:
+    """Record-wise erasure of one session ledger. A record attributed to the
+    subject (chat key, sender, …) is removed. A record that names the subject
+    ONLY as a group observer is REWRITTEN instead: the observers' framed lines
+    (``observer_text``) and the subject's entry go, the owner's turn and the
+    answer stay — erasing a bystander must not make the chat forget the
+    owner's words (review R5-5). Torn lines: as :func:`_purge_jsonl_file`."""
+    kept: list[str] = []
+    hit = 0
+    for line in f.read_text(encoding="utf-8", errors="surrogateescape").splitlines():
+        rec = None
+        if line.strip():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                if subject_id and subject_id in line:
+                    hit += 1
+                    continue
+        if isinstance(rec, dict):
+            observers = rec.get("observers") if isinstance(rec.get("observers"), list) else []
+            own = {k: v for k, v in rec.items() if k != "observers"}
+            if _mentions_subject(own, subject_id):
+                hit += 1
+                continue
+            if any(_mentions_subject(o, subject_id) for o in observers):
+                hit += 1
+                if not rec.get("observer_text"):
+                    # An older record folded the observers' lines into the
+                    # owner's text: they cannot be separated — the record goes.
+                    continue
+                rec["observers"] = [o for o in observers if not _mentions_subject(o, subject_id)]
+                rec["observer_text"] = ""
+                rec["observer_text_erased"] = True
+                line = json.dumps(rec, ensure_ascii=False)
+        kept.append(line)
+    if hit:
+        _atomic_replace_text(f, "\n".join(kept) + ("\n" if kept else ""))
+    return hit
 
 
 def _ledger_safe_key(subject_id: str) -> str:
@@ -1961,7 +2024,8 @@ class SessionLedgerHandler:
     """GDPR Art. 17 erasure for the per-chat session ledger (2026-10-02).
 
     ``session_ledger.py`` appends every bridge turn VERBATIM to
-    ``<tenant>/sessions/voice/<channel>/<safe_chat>/.corvin-ledger/ledger.jsonl``
+    ``<tenant>/session_ledger/<channel>/<safe_chat>/ledger.jsonl`` (pre-R5: in the
+    session workdir, ``.corvin-ledger/``)
     and nothing else ever removes a line: a session reset keeps it on purpose.
     The chat directory is the SANITISED chat key (``a-b`` → ``a_b``), so
     attribution by directory name — what the L-infinite-session handler does —
@@ -1976,37 +2040,54 @@ class SessionLedgerHandler:
 
     def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
         t0 = time.time()
-        # The tenant session tree plus the pre-ADR-0007 voice-session root the
-        # adapter still falls back to on an unmigrated install.
-        roots = [r for r in (_tenant_home(self.tenant_id) / "sessions",
-                             _tenant_home(self.tenant_id) / "voice" / "sessions")
-                 if r.is_dir()]
-        if not roots:
+        th = _tenant_home(self.tenant_id)
+        # The ledger store (``session_ledger/``, outside every worker cwd) for
+        # the tenant tree and the pre-ADR-0007 voice root, plus ledgers not yet
+        # migrated out of a session workdir (``.corvin-ledger/``).
+        store_roots = [r for r in (th / "session_ledger", th / "voice" / "session_ledger")
+                       if r.is_dir()]
+        session_roots = [r for r in (th / "sessions", th / "voice" / "sessions") if r.is_dir()]
+        if not store_roots and not session_roots:
             return _result(self.layer_id, t0, 0, absent=True,
                            absent_reason="session tree absent",
                            empty_reason="", applied_reason="")
+        files = sorted({*(f for r in store_roots for f in r.rglob("ledger.jsonl")),
+                        *(f for r in session_roots for f in r.rglob(".corvin-ledger/ledger.jsonl"))})
         removed = 0
         try:
             import fcntl  # noqa: PLC0415
-            for f in sorted(f for r in roots for f in r.rglob(".corvin-ledger/ledger.jsonl")):
+            for f in files:
                 # Hold the WRITER's lock across read → filter → replace, or a turn
                 # appended mid-purge is lost. The writer re-checks the inode
                 # after taking the lock, so it never appends to the replaced file.
                 with open(f, "a+", encoding="utf-8") as lock_fh:
                     fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
                     try:
-                        n = _purge_jsonl_file(f, subject_id)
+                        n = _purge_ledger_file(f, subject_id)
                         # A boundary written by the inactivity sweep knows only
                         # the SANITISED directory name ("…@s.whatsapp.net" →
                         # "…_s_whatsapp_net"); match that form too.
                         safe = _ledger_safe_key(subject_id)
                         if safe and safe != subject_id:
-                            n += _purge_jsonl_file(f, safe)
+                            n += _purge_ledger_file(f, safe)
                         removed += n
                         if n and not f.read_text(encoding="utf-8").strip():
                             f.unlink()
                     finally:
                         fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+            # Anything else under the store tree follows the generic rule (a
+            # file named after the subject, a JSON/JSONL record naming it).
+            # The ledger pass ran first, so an observer's records were already
+            # rewritten, not dropped, before this pass sees them.
+            for r in store_roots:
+                removed += _purge_path(r, subject_id, match_dir_name=False)
+            if removed:
+                # The worker-readable history views are regenerated from the
+                # ledger on the next turn; any of them may quote what was just
+                # erased, so all go (they hold nothing the ledger does not).
+                for r in session_roots:
+                    for v in r.rglob(".corvin-history.md"):
+                        v.unlink(missing_ok=True)
         except Exception as exc:  # noqa: BLE001
             return ErasureLayerResult(
                 layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
@@ -2208,7 +2289,7 @@ COVERED_DIRS: dict[str, frozenset[str]] = {
     # R4-F1 — the two stores the round-2 guard could not see.
     "L-cel-anchors":         frozenset({"cel_anchors"}),
     # 2026-10-02 — the verbatim per-chat session ledger under sessions/.
-    "L-session-ledger":      frozenset({"sessions"}),
+    "L-session-ledger":      frozenset({"sessions", "session_ledger"}),
     "L-acs-index":           frozenset({"global/acs"}),
     # R4-F1 — the remaining live stores the review listed for triage.
     "L-tenant-memory":       frozenset({"memory"}),
@@ -2362,7 +2443,7 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         L24DataSnapshotHandler(tenant_id=tenant_id),        # R4-F4: was a no-op stub
         # R4-F1: stores the round-2 guard's writer list could not see.
         CELAnchorHandler(tenant_id=tenant_id),              # cel_anchors/
-        SessionLedgerHandler(tenant_id=tenant_id),          # sessions/**/.corvin-ledger/
+        SessionLedgerHandler(tenant_id=tenant_id),          # session_ledger/** (+ legacy .corvin-ledger/)
         ACSGlobalIndexHandler(tenant_id=tenant_id),         # global/acs/runs/
         IdentityMappingHandlerBase(),
     ]

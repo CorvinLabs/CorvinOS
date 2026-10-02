@@ -209,6 +209,10 @@ class TestRealCorpusRegression:
             got = [m.id for m in clf.find_relevant_adrs(
                 SimpleNamespace(normalized=SimpleNamespace(summary=q)))]
             assert got and got[0] == adr_id, (q, got)
+            # Nothing unrelated next to it: the rest of such a request is one
+            # verb, not evidence of a second decision (review R5-2).
+            related = set(clf.loader.find_related_adr_ids(adr_id, depth=2, max_results=50))
+            assert not [x for x in got[1:] if x not in related], (q, got)
 
     def test_duplicate_file_does_not_take_a_result_slot(self):
         clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))

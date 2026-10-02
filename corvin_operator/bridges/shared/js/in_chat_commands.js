@@ -1060,7 +1060,7 @@ function resetReply(ctx) {
   lines.push('Project files in this chat\'s session dir are kept; only Claude\'s memory was cleared.');
   // Session ledger (ADR-2102): /new starts a fresh context but deletes nothing
   // from the chat's append-only turn record — say so, it is the user's data.
-  lines.push('The full history of this chat stays in its session ledger (.corvin-ledger/ledger.jsonl) and is not re-sent unless you ask about it.');
+  lines.push('The full history of this chat stays in its session ledger and is not re-sent unless you ask about it.');
   return { reply: lines.join('\n'), kind: 'reset' };
 }
 

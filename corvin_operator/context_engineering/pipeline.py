@@ -102,7 +102,8 @@ def _maybe_apply_anchor(task: str, tenant: str, session: Any, brief: Any,
         # promote it only for the turn that carried exactly this task.
         goal = _OBSERVER_BLOCK_RE.sub("", task or getattr(brief, "raw_input", "") or "").strip()
         if goal and not any(f.get("kind") == "goal" for f in existing):
-            anchor.set_pending_goal(tenant, session_key, goal)
+            anchor.set_pending_goal(tenant, session_key, goal,
+                                    sender=str(getattr(session, "sender", "") or ""))
         facts = anchor.load_facts(tenant, session_key)
         try:
             brief.anchor_facts = facts
