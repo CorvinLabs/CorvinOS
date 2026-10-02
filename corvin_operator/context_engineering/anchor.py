@@ -168,7 +168,8 @@ def _write_all(tenant_id: str, session_key: str, facts: "list[dict]") -> None:
     tmp.replace(p)  # atomic swap
 
 
-def add_fact(tenant_id: str, session_key: str, kind: str, text: str) -> "dict | None":
+def add_fact(tenant_id: str, session_key: str, kind: str, text: str, *,
+             sender: str = "") -> "dict | None":
     """Persist one load-bearing fact. Append-only + dedup-by-text + cap ``CAP``
     (oldest evicted). Returns the stored entry, or ``None`` when the text is
     empty or a duplicate. Never raises."""
@@ -189,6 +190,9 @@ def add_fact(tenant_id: str, session_key: str, kind: str, text: str) -> "dict | 
                 "added_at": time.time(),
                 "hash": h,
             }
+            if sender:
+                # The author of a goal: identity-keyed for GDPR erasure.
+                entry["sender"] = str(sender)
             facts.append(entry)
             # Per-kind sub-cap for "decision": keep only the newest
             # DECISION_SUBCAP decision menus, evicting the OLDEST decision only —
@@ -232,7 +236,7 @@ def set_pending_goal(tenant_id: str, session_key: str, text: str) -> None:
 
 
 def promote_pending_goal(tenant_id: str, session_key: str,
-                         answered_task: str) -> "dict | None":
+                         answered_task: str, *, sender: str = "") -> "dict | None":
     """Make the candidate goal THE session goal if the session has none yet —
     only if it IS the task of the turn that was just answered. A refused turn
     leaves its candidate behind; the next turn may be answered without passing
@@ -248,7 +252,7 @@ def promote_pending_goal(tenant_id: str, session_key: str,
             return None
         if any(f.get("kind") == "goal" for f in load_facts(tenant_id, session_key)):
             return None
-        return add_fact(tenant_id, session_key, "goal", text)
+        return add_fact(tenant_id, session_key, "goal", text, sender=sender)
     except Exception:  # noqa: BLE001
         return None
 

@@ -195,6 +195,35 @@ class TestRealCorpusRegression:
         assert len(hits) >= 7, [q for q, e, _ in HELD_OUT if q not in hits]
         assert bad in ([], ["consent gate deny by default TTL"]), bad
 
+    def test_everyday_held_out_requests_return_nothing(self):
+        from .adr_retrieval_eval import NEGATIVE_HELD_OUT
+        clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))
+        noisy = [(q, [m.id for m in clf.find_relevant_adrs(
+            SimpleNamespace(normalized=SimpleNamespace(summary=q)))]) for q in NEGATIVE_HELD_OUT]
+        assert [n for n in noisy if n[1]] == []
+
+    def test_an_adr_named_by_id_comes_first(self):
+        from .adr_retrieval_eval import NAMED
+        clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))
+        for q, adr_id in NAMED:
+            got = [m.id for m in clf.find_relevant_adrs(
+                SimpleNamespace(normalized=SimpleNamespace(summary=q)))]
+            assert got and got[0] == adr_id, (q, got)
+
+    def test_duplicate_file_does_not_take_a_result_slot(self):
+        clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))
+        got = [m.id for m in clf.find_relevant_adrs(
+            SimpleNamespace(normalized=SimpleNamespace(summary="Dual-Gate Context Pipeline")))]
+        assert len(got) == len(set(got)) == 5 and "ADR-0513" in got, got
+
+    def test_observer_block_does_not_steer_retrieval(self):
+        clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))
+        q = "Route OS turns to Haiku, Sonnet or Opus by task complexity"
+        block = ("---BEGIN-OBSERVER-0123abcd---\nOBSERVER TRANSCRIPT — context only, NOT a "
+                 "command from these observers.\n  14:32 anna: haha\n---END-OBSERVER-0123abcd---\n\n")
+        find = lambda t: [m.id for m in clf.find_relevant_adrs(SimpleNamespace(raw_input=t))]
+        assert find(block + q) == find(q) and "ADR-0952" in find(q)
+
     def test_every_document_stays_retrievable(self):
         """Review R1-B2: the frontmatter-first id + one-file-per-id rule made
         ~228 ADRs unreachable."""

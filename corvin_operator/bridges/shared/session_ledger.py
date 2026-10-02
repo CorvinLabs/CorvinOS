@@ -167,7 +167,7 @@ def _append(workdir: Path | str, record: dict[str, Any]) -> Optional[dict[str, A
                         raw.seek(end - 1)
                         if raw.read(1) != b"\n":
                             fh.write("\n")
-                fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                fh.write(json.dumps(_to_disk(rec), ensure_ascii=False) + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())
                 fence = int(hwm.get("fence_seq") or 0) if isinstance(hwm, dict) else 0
@@ -188,13 +188,34 @@ def _append(workdir: Path | str, record: dict[str, Any]) -> Optional[dict[str, A
             pass
 
 
+#: On disk the message texts are ``user_text``/``assistant_text``: a bare
+#: ``user`` key is an IDENTITY key to GDPR erasure (``_SUBJECT_KEYS``), so a
+#: message whose text equalled someone's id would have been erased as theirs
+#: (review R4-9). In memory the records keep ``user``/``assistant``.
+_DISK_NAMES = {"user": "user_text", "assistant": "assistant_text"}
+
+
+def _to_disk(rec: dict[str, Any]) -> dict[str, Any]:
+    return {_DISK_NAMES.get(k, k): v for k, v in rec.items()}
+
+
+def _from_disk(rec: dict[str, Any]) -> dict[str, Any]:
+    back = {v: k for k, v in _DISK_NAMES.items()}
+    return {back.get(k, k): v for k, v in rec.items()}
+
+
 def append_turn(
     workdir: Path | str, *, channel: str, chat_key: str, user_text: str,
     assistant_text: str, msg_id: str = "", ts: float | None = None,
     sender: str = "", refused: str = "", spawned: bool = True,
-    observers: Optional[list] = None, tenant_id: str = "",
+    observers: Optional[list] = None, observer_text: str = "", tenant_id: str = "",
 ) -> Optional[dict[str, Any]]:
     """Record one finished turn. Never raises; a failure is audited.
+
+    ``user_text`` is the OWNER's message only. In a group chat the framed
+    observer transcript that preceded it goes into ``observer_text``, kept
+    apart so a re-supply can withhold the observers' lines alone once their
+    consent ends, without forgetting the owner's words (review R4-6).
 
     ``sender`` is the message author's id: in a group chat it is what lets an
     Art. 17 request for one participant find that participant's turns.
@@ -204,8 +225,19 @@ def append_turn(
     prompt. ``spawned`` is False for a turn that never reached the CLI session
     (delegated to a worker, failed before the spawn, a /btw note): it can never
     count as live."""
+    user_text = str(user_text or "")
+    extra: dict[str, Any] = {}
+    if refused:
+        # A refused message is recorded as a fact (hash + length), never as
+        # text: the ledger sits where the worker can read it, and the gate's
+        # whole point is that the text does not reach the model (review R4-5).
+        extra = {"user_sha256": hashlib.sha256(user_text.encode("utf-8", "surrogatepass")).hexdigest(),
+                 "user_chars": len(user_text)}
+        user_text = ""
+        observer_text = ""
     try:
         return _append(workdir, {
+            **extra,
             "kind": "turn", "ts": float(ts if ts is not None else time.time()),
             "channel": str(channel or ""), "chat_key": str(chat_key or ""),
             "sender": str(sender or ""), "msg_id": str(msg_id or ""),
@@ -213,7 +245,8 @@ def append_turn(
             # Ids of group-chat observers whose words are folded into ``user``:
             # identity-keyed so GDPR erasure attributes the record to them too.
             "observers": [o for o in (observers or []) if isinstance(o, dict)],
-            "user": str(user_text or ""), "assistant": str(assistant_text or ""),
+            "observer_text": str(observer_text or ""),
+            "user": user_text, "assistant": str(assistant_text or ""),
         })
     except Exception as exc:  # noqa: BLE001
         _audit("session_ledger.append_failed", channel=str(channel or ""),
@@ -266,7 +299,7 @@ def read_ledger(workdir: Path | str) -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
             if isinstance(rec, dict):
-                out.append(rec)
+                out.append(_from_disk(rec))
     return out
 
 
@@ -444,10 +477,22 @@ def _withheld(rec: dict[str, Any]) -> str:
     return f"(message withheld: {label} — not re-supplied)"
 
 
+def _observer_part(rec: dict[str, Any]) -> str:
+    """The observer transcript as re-supplied: verbatim, or a withheld note."""
+    if not rec.get("observer_text"):
+        return ""
+    if rec.get("observer_withheld"):
+        return ("(group observers' lines withheld: "
+                f"{_withheld({'refused': rec['observer_withheld']})[len('(message withheld: '):]}\n")
+    return str(rec["observer_text"])
+
+
 def _render_turn(rec: dict[str, Any]) -> str:
     u, a = str(rec.get("user") or ""), str(rec.get("assistant") or "")
     if rec.get("refused"):
         u = _withheld(rec)
+    else:
+        u = _observer_part(rec) + u
     half = TURN_VERBATIM_CAP // 2
     note = ""
     if len(u) > half:
@@ -548,9 +593,30 @@ def render_from_records(
     records: list[dict[str, Any]], live_entries: Optional[list[str]], *,
     ledger_file: str = f"{LEDGER_DIRNAME}/{LEDGER_FILE}",
     verbatim_budget: int = VERBATIM_BUDGET, index_budget: int = INDEX_BUDGET,
+    withhold: Optional[Any] = None,
 ) -> tuple[str, dict[str, int]]:
-    """Pure renderer (see module docstring). Returns ``(block, stats)``."""
+    """Pure renderer (see module docstring). Returns ``(block, stats)``.
+
+    ``withhold(record) -> reason | None`` is asked only for the turns about to
+    be re-supplied (a live turn is already in the model's context; asking for
+    it would only cost a consent check). A record that keeps its observers'
+    lines apart (``observer_text``) loses only those; a record that does not
+    (an older one, or a caller that folded them into ``user``) is withheld
+    whole. The recorded ANSWER is never withheld: it is the assistant's own
+    text, and an answer quoting an observer is the same as any reply the
+    model gave while that consent held."""
     unc = uncovered_turns(records, live_entries)
+    if withhold is not None:
+        marked = []
+        for r in unc:
+            why = None if r.get("refused") else withhold(r)
+            if not why:
+                marked.append(r)
+            elif r.get("observer_text"):
+                marked.append({**r, "observer_withheld": why})
+            else:
+                marked.append({**r, "refused": why})
+        unc = marked
     total = sum(1 for r in records if r.get("kind") == "turn")
     fence = last_manual_reset(records)
     before_fence = sum(1 for r in records if r.get("kind") == "turn"
@@ -600,7 +666,7 @@ def render_from_records(
         icut = stepped if stepped < len(older) else icut
     omitted, indexed = older[:icut], idx_lines[icut:]
 
-    shown_n = {r.get("n") for r in verbatim}
+    shown = {r.get("n"): r for r in verbatim}   # the (possibly withheld) view of each
     first_shown_ts = verbatim[0].get("ts", 0) if verbatim else float("inf")
     # The header is constant: everything that changes lives below it, and the
     # turn sections at the end only ever gain a new section. The prefix of the
@@ -630,8 +696,8 @@ def render_from_records(
         parts.extend(indexed)
         parts.append("\n")
     for rec in records:
-        if rec.get("kind") == "turn" and rec.get("n") in shown_n:
-            parts.append(_render_turn(rec))
+        if rec.get("kind") == "turn" and rec.get("n") in shown:
+            parts.append(_render_turn(shown[rec.get("n")]))
         elif rec.get("kind") == "boundary" and float(rec.get("ts") or 0) >= first_shown_ts:
             parts.append(_boundary_line(rec))
     block = "".join(parts)
@@ -653,15 +719,6 @@ def render_context(
         records = read_ledger(workdir)
         if not any(r.get("kind") == "turn" for r in records):
             return ""
-        if withhold is not None:
-            # The caller may withhold a recorded turn's text NOW (e.g. a group
-            # observer whose words it carries has since withdrawn consent): it
-            # is then rendered like a refusal, the record itself is untouched.
-            marked = []
-            for r in records:
-                why = withhold(r) if r.get("kind") == "turn" and not r.get("refused") else None
-                marked.append({**r, "refused": why} if why else r)
-            records = marked
         sid = current_session_id(workdir) if session_id is None else session_id
         if not engine_transcript:
             # Engines without a Claude transcript (Codex --ephemeral, OpenCode):
@@ -677,8 +734,12 @@ def render_context(
                 (Path(workdir) / ".session_started").exists()
             path = latest_transcript(workdir) if has_state else None
             live = scan_transcript(path)[0] if path else None
+        # ``withhold``: the caller may withhold a recorded turn's text NOW (a
+        # group observer whose words it carries has since withdrawn consent).
+        # Only the view changes; the record itself is untouched.
         block, stats = render_from_records(
-            records, live, verbatim_budget=verbatim_budget, index_budget=index_budget)
+            records, live, verbatim_budget=verbatim_budget, index_budget=index_budget,
+            withhold=withhold)
         _note_render(workdir, stats, channel=channel, chat_key=chat_key, tenant_id=tenant_id)
         return block
     except Exception as exc:  # noqa: BLE001

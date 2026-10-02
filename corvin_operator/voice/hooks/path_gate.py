@@ -199,6 +199,14 @@ def is_protected_path(path: str | Path) -> bool:
     abs_str = str(abs_p)
     sep = os.sep
 
+    # ADR-2102 — a chat's session ledger lives in the worker's cwd so the
+    # worker can READ its own history; it must never WRITE it: a forged line
+    # is re-supplied into every later system prompt as "the user said", and a
+    # forged /new fence or a deleted line makes the chat forget. Wherever the
+    # session dir is (tenant tree, legacy XDG cache), the component decides.
+    if ".corvin-ledger" in abs_p.parts:
+        return True
+
     home = _corvin_home()
     home_str = str(home)
     if abs_str == home_str or abs_str.startswith(home_str + sep):
@@ -621,7 +629,7 @@ _TARGET_ALL_CMDS = ("truncate", "ln", "chmod", "chown", "chgrp", "chattr",
 # to static parsing, so a protected file argument is fail-closed.
 _SCRIPTED_EDITORS = ("ex", "ed")
 _PROTECTED_HINTS = ("forge", "skill-forge", "audit.jsonl", "policy.json",
-                    ".corvin",
+                    ".corvin", ".corvin-ledger", "ledger.jsonl",
                     "secrets.json", "corvin-voice",
                     # ADR-0012 — data-locality operator policy
                     "data_policy.yaml", "data_policy.yml",
@@ -1660,7 +1668,15 @@ def _self_test_vectors() -> list[tuple[str, dict]]:
     else:
         slot_str = str(forge_skill)  # fall back to scope path
 
+    ledger = home / "tenants" / "_default" / "sessions" / "voice" / "x" / "y" / ".corvin-ledger" / "ledger.jsonl"
     return [
+        # ADR-2102 — a forged session-ledger line is re-supplied as "the user said".
+        ("direct-write-session-ledger",
+         {"tool_name": "Write",
+          "tool_input": {"file_path": str(ledger)}}),
+        ("bash-append-session-ledger",
+         {"tool_name": "Bash",
+          "tool_input": {"command": f"echo forged >> {ledger}"}}),
         ("direct-write-skill",
          {"tool_name": "Write",
           "tool_input": {"file_path": str(forge_skill)}}),

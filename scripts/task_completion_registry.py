@@ -11,7 +11,9 @@ Sources (Priority Order):
 3. Memory registry (MEMORY.md and topic files)
 4. Implementation plans (docs/implementation-plans/)
 
-Output: ~/.corvin/task_registry.json (machine-readable, for context pipeline)
+Output: $CORVIN_HOME/task_registry.json (default ~/.corvin; machine-readable, for
+context pipeline). Paths are overridable: --corvin-home, --adr-root, --repo-root,
+--memory-root.
 """
 
 import json
@@ -20,7 +22,73 @@ from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
+import os
 import subprocess
+import argparse
+
+
+# Status vocabulary — kept identical to
+# core/console/corvin_console/task_tracking_git_sync.py (_DONE / _ARCHIVED), so the
+# daily registry and the task-tracking sync pick the same sibling for a number.
+_DONE = {"ACCEPTED", "IMPLEMENTED", "DEPLOYED", "COMPLETE", "COMPLETED", "DONE", "LIVE", "SHIPPED"}
+_ARCHIVED = {"REJECTED", "SUPERSEDED", "DEPRECATED", "WITHDRAWN", "OBSOLETE", "ABANDONED"}
+
+_VALID_ID_RE = re.compile(r"^ADR-(\d{4,})$")
+_FILENAME_NUM_RE = re.compile(r"^(?:adr[-_])?(\d{3,})(?=[-_.])", re.IGNORECASE)
+_FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---", re.DOTALL)
+
+
+def _status_word(status: Optional[str]) -> str:
+    return (str(status or "").strip().split() or [""])[0].upper().strip(".,;:()")
+
+
+def _fm_value(frontmatter: str, key: str) -> Optional[str]:
+    m = re.search(rf"^{key}:[ \t]*(.*?)[ \t]*$", frontmatter, re.MULTILINE)
+    if not m:
+        return None
+    v = m.group(1).split(" #", 1)[0].strip().strip("'\"").strip()
+    return v or None
+
+
+def _canonical_id(raw_id: Optional[str], filename: str) -> Optional[str]:
+    """``ADR-NNNN`` for a decision record, None for anything else.
+
+    A well-formed frontmatter id wins; a missing or malformed one falls back to
+    the number the filename starts with. Number 0 is the placeholder the
+    non-decision ``DOC-*`` files carry and is never a decision."""
+    m = _VALID_ID_RE.match(raw_id or "")
+    num = m.group(1) if m else None
+    if num is None:
+        fm = _FILENAME_NUM_RE.match(filename)
+        num = fm.group(1) if fm else None
+    if num is None or int(num) == 0:
+        return None
+    return f"ADR-{int(num):04d}"
+
+
+def _read_adr_record(path: Path) -> Optional[dict]:
+    content = path.read_text(encoding="utf-8", errors="replace")
+    match = _FRONTMATTER_RE.match(content)
+    frontmatter = match.group(1) if match else ""
+    adr_id = _canonical_id(_fm_value(frontmatter, "id"), path.name)
+    if adr_id is None:
+        return None
+    body = content[match.end():] if match else content
+    title_match = re.search(r"^# (.+)$", body, re.MULTILINE)
+    return {
+        "adr_id": adr_id,
+        "status": _fm_value(frontmatter, "status"),
+        "title": title_match.group(1).strip() if title_match else None,
+        "file": path.name,
+    }
+
+
+def _sibling_rank(i_rec: tuple) -> tuple:
+    """Lowest rank decides: a live record before an archived one, an open one
+    before a done one, then file order (mirrors task_tracking_git_sync.adr_meta)."""
+    i, rec = i_rec
+    word = _status_word(rec["status"])
+    return (word in _ARCHIVED, word in _DONE, i)
 
 
 @dataclass
@@ -47,71 +115,80 @@ class TaskStatus:
 class TaskRegistry:
     """Builds and maintains canonical task registry."""
 
-    def __init__(self, corvin_home: str = None):
-        self.corvin_home = Path(corvin_home or Path.home() / ".corvin")
+    def __init__(self, corvin_home: str = None, adr_root: str = None,
+                 repo_root: str = None, memory_root: str = None):
+        # CORVIN_HOME is honoured (the systemd unit sets it); never hard-wire ~/.corvin.
+        self.corvin_home = Path(corvin_home or os.environ.get("CORVIN_HOME") or Path.home() / ".corvin")
         self.registry_file = self.corvin_home / "task_registry.json"
-        self.adr_root = Path.home() / "projects" / "Corvin-ADR" / "decisions"
-        self.repo_root = Path.home() / "projects" / "CorvinOS"
-        self.memory_root = self.repo_root / ".claude" / "projects" / "-home-shumway-projects-CorvinOS" / "memory"
+        self.adr_root = Path(adr_root) if adr_root else Path.home() / "projects" / "Corvin-ADR" / "decisions"
+        self.repo_root = Path(repo_root) if repo_root else Path.home() / "projects" / "CorvinOS"
+        self.memory_root = (Path(memory_root) if memory_root else
+                            self.repo_root / ".claude" / "projects" / "-home-shumway-projects-CorvinOS" / "memory")
 
     def scan_adr_registry(self) -> Dict[str, TaskStatus]:
-        """Scan Corvin-ADR/decisions/ for task definitions and status."""
-        tasks = {}
+        """Scan Corvin-ADR/decisions/ for task definitions and status.
+
+        Every ``*.md`` file is considered, not only ``ADR-*.md``: the record repo
+        carries two naming schemes side by side (``ADR-NNNN-slug.md`` and the
+        older ``NNNN-slug.md``), and a prefix-only glob silently dropped every
+        record of the second kind. A file is keyed by its frontmatter ``id``
+        when that is a well-formed ``ADR-NNNN``; otherwise by the number its
+        filename starts with. Files that yield neither (``DOC-*``, ``README``,
+        placeholder ids such as ``ADR-0000`` / ``ADR-0XXX``) are not decisions
+        and are skipped.
+
+        One number can be carried by several files. The record that decides is
+        chosen exactly as ``corvin_console.task_tracking_git_sync.adr_meta``
+        chooses it, so a stale sibling can never mark work done: superseded /
+        rejected siblings are ignored while a live one exists, and among live
+        siblings the one that is NOT done wins — two live records that disagree
+        read as open. The result no longer depends on which file sorts last.
+        """
+        tasks: Dict[str, TaskStatus] = {}
 
         if not self.adr_root.exists():
             print(f"⚠️  ADR root not found: {self.adr_root}")
             return tasks
 
-        for adr_file in sorted(self.adr_root.glob("ADR-*.md")):
-            # Parse frontmatter
+        records: Dict[str, List[dict]] = {}
+        for adr_file in sorted(self.adr_root.glob("*.md")):
             try:
-                with open(adr_file) as f:
-                    content = f.read()
-
-                match = re.match(r'^---\n(.*?)\n---', content, re.DOTALL)
-                if not match:
-                    continue
-
-                frontmatter = match.group(1)
-
-                # Extract fields
-                id_match = re.search(r'^id:\s*(\S+)', frontmatter, re.MULTILINE)
-                status_match = re.search(r'^status:\s*(\S+)', frontmatter, re.MULTILINE)
-
-                if not id_match:
-                    continue
-
-                adr_id = id_match.group(1)
-                adr_status = status_match.group(1) if status_match else "UNKNOWN"
-
-                # Convert ADR status to task status
-                if adr_status == "ACCEPTED":
-                    task_status = "ACCEPTED"
-                elif adr_status == "PROPOSED":
-                    task_status = "IN_PROGRESS"
-                elif adr_status == "SUPERSEDED":
-                    task_status = "ARCHIVED"
-                else:
-                    task_status = "UNKNOWN"
-
-                # Extract title (first heading after frontmatter)
-                title_match = re.search(r'^# (.+)$', content[match.end():], re.MULTILINE)
-                title = title_match.group(1) if title_match else adr_id
-
-                # Create task entry
-                task_id = adr_id.lower().replace("-", "_")
-                tasks[task_id] = TaskStatus(
-                    task_id=task_id,
-                    title=title,
-                    category="adr",
-                    status=task_status,
-                    adr_id=adr_id,
-                    adr_status=adr_status,
-                    completion_date=datetime.now(timezone.utc).isoformat() if adr_status == "ACCEPTED" else None,
-                )
-
-            except Exception as e:
+                rec = _read_adr_record(adr_file)
+            except Exception as e:  # noqa: BLE001 — one unreadable file never stops the scan
                 print(f"⚠️  Error parsing {adr_file}: {e}")
+                continue
+            if rec is not None:
+                records.setdefault(rec["adr_id"], []).append(rec)
+
+        for adr_id, recs in records.items():
+            chosen = min(enumerate(recs), key=_sibling_rank)[1]
+            adr_status = chosen["status"] or "UNKNOWN"
+            word = _status_word(adr_status)
+            if word == "ACCEPTED":
+                task_status = "ACCEPTED"
+            elif word == "PROPOSED":
+                task_status = "IN_PROGRESS"
+            elif word in _ARCHIVED:
+                task_status = "ARCHIVED"
+            else:
+                task_status = "UNKNOWN"
+
+            notes = f"status read from {chosen['file']}"
+            if len(recs) > 1:
+                notes += (f"; {len(recs)} files carry this number "
+                          f"({', '.join(r['file'] for r in recs)})")
+
+            task_id = adr_id.lower().replace("-", "_")
+            tasks[task_id] = TaskStatus(
+                task_id=task_id,
+                title=chosen["title"] or adr_id,
+                category="adr",
+                status=task_status,
+                adr_id=adr_id,
+                adr_status=adr_status,
+                completion_date=datetime.now(timezone.utc).isoformat() if task_status == "ACCEPTED" else None,
+                notes=notes,
+            )
 
         return tasks
 
@@ -271,9 +348,16 @@ class TaskRegistry:
         return "\n".join(report)
 
 
-def main():
+def main(argv: Optional[List[str]] = None):
     """Run the registry builder."""
-    registry = TaskRegistry()
+    ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
+    ap.add_argument("--corvin-home", help="runtime root (default: $CORVIN_HOME, else ~/.corvin)")
+    ap.add_argument("--adr-root", help="decisions/ directory to scan")
+    ap.add_argument("--repo-root", help="CorvinOS checkout for the git scan")
+    ap.add_argument("--memory-root", help="memory directory holding MEMORY.md")
+    args = ap.parse_args(argv)
+    registry = TaskRegistry(corvin_home=args.corvin_home, adr_root=args.adr_root,
+                            repo_root=args.repo_root, memory_root=args.memory_root)
     tasks = registry.build_registry()
     registry.save_registry(tasks)
 

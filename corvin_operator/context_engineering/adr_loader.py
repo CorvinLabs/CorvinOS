@@ -38,7 +38,15 @@ funktioniert funktionieren zwischen jetzt dann hier dort welche welcher
 eines einen einem einer eine ihr ihre ihren ihrem sein seine seinen ob sag sage
 alle allen nach pro bzw usw etwa also
 adr adrs phase status proposed accepted implemented
+write writes wrote written explain explains help helps learn create creates give gives
+tell show suggest recommend draft find know think like good best thing things way lot
+one two three four five day days week weeks minute minutes hour hours work works
 """.split())
+#: The last three lines above (review R4-3): the verbs and fillers of an
+#: everyday REQUEST ("write me…", "help me learn…", "a three day…") carry no
+#: topic, but each is rare enough in ADR prose to score — they made 8 of 40
+#: everyday non-CorvinOS requests return ADRs. Measured on that tuning set
+#: and on a separate held-out set in tests/adr_retrieval_eval.py.
 
 #: German → English for the core vocabulary of this corpus (ADRs are English).
 #: Applied before stemming; deliberately small — a translation table is not a
@@ -108,8 +116,9 @@ def tokenize(text: str) -> List[str]:
         elif w.isdigit() and prev == "layer" and len(w) <= 2:
             out.pop(_stem("layer"), None)      # "Layer 36" ≡ "L36": the generic word goes
             out["l" + str(int(w))] = None
-        elif w.isdigit() and (len(w) >= 2 or prev in ("art", "artikel")):
-            # "Art. 17" vs "Art. 32", "Art. 5", "403": numbers carry topic
+        elif w.isdigit() and (len(w) >= 3 or prev in ("art", "artikel")):
+            # "Art. 17" vs "Art. 32", "Art. 5", "403": numbers carry topic. A
+            # bare two-digit number ("10 minutes") is a quantity, not a topic.
             out[(prev + w) if prev in ("art", "artikel") else w] = None
         elif not (w in _STOPWORDS or len(w) < 3 or w.isdigit()):
             out[_stem(w)] = None

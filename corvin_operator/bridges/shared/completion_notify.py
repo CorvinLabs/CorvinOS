@@ -210,6 +210,8 @@ def register(
     tenant_id: str = "_default",
     label: str = "",
     want_voice: bool = False,
+    ledger_dir: str = "",
+    ledger_chat_key: str = "",
 ) -> str:
     """Register a pending completion notification and return its task id.
 
@@ -235,6 +237,11 @@ def register(
         "tenant_id": str(tenant_id or "_default"),
         "label": str(label or ""),
         "want_voice": bool(want_voice),
+        # ADR-2102: the originating chat's session-ledger directory. The
+        # delivered result is appended there (spawned=False), so the chat's
+        # next turn knows what the background task answered.
+        "ledger_dir": str(ledger_dir or ""),
+        "ledger_chat_key": str(ledger_chat_key or ""),
         "state": _STATE_PENDING,
         "text": None,
         "voice_text": None,
@@ -530,6 +537,33 @@ def _emit_via_proactive(env: dict, rec: dict, *, voice_path: str | None,
         return "denied"
 
 
+def _record_in_ledger(rec: dict) -> None:
+    """Append a delivered background result to its chat's session ledger
+    (ADR-2102) as a turn the CLI session never ran (``spawned=False``): the user
+    saw it in the chat, so the chat's later turns must be able to see it too.
+    Exactly once — it runs only on the delivering poller, under the record's
+    O_EXCL lock. Best-effort: never raises, never blocks a delivery."""
+    wd = rec.get("ledger_dir")
+    if not wd:
+        return
+    try:
+        try:
+            from . import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+        label = str(rec.get("label") or "").strip()
+        _ledger.append_turn(
+            Path(wd), channel=str(rec.get("channel") or ""),
+            chat_key=str(rec.get("ledger_chat_key") or ""),
+            user_text=f"(background task finished: {label})" if label
+            else "(background task finished)",
+            assistant_text=str(rec.get("text") or ""),
+            msg_id=str(rec.get("id") or ""), sender=str(rec.get("sender") or ""),
+            spawned=False, tenant_id=str(rec.get("tenant_id") or ""))
+    except Exception as e:  # noqa: BLE001
+        print(f"completion_notify: ledger append failed: {e}", file=sys.stderr)
+
+
 def deliver_ready(
     outbox_dir: str | Path, *, now: float | None = None,
     synthesize_voice: "Callable[[str], str | None] | None" = None,
@@ -745,6 +779,7 @@ def deliver_ready(
             rec["delivered_at"] = now
             _atomic_write(path, rec)
             delivered += 1
+            _record_in_ledger(rec)
         except Exception as e:  # noqa: BLE001 — per-record isolation: one poisoned
             # record (e.g. an unexpected data shape, or a provenance import error
             # in _envelope_for) must not abort the loop and starve every record

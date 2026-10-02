@@ -76,9 +76,58 @@ HELD_OUT = [
     ("Layer 36 erasure", {"ADR-0045"}, {"ADR-0089", "ADR-0048", "ADR-0053", "ADR-0055"}),
 ]
 
+#: Requests no ADR covers. The everyday set was added in review round 4: on it
+#: 8 of 40 returned ADRs (request verbs — write/help/learn/explain — and two-digit
+#: quantities scored as topic words). Fixed by the request-verb stop words and
+#: the three-digit number rule in adr_loader; measured 2026-10-02: 0/42.
 NEGATIVE = [
     "hallo wie geht es dir heute",
     "what's the weather in Berlin tomorrow",
+ "Write a haiku about autumn", "Set a timer for 10 minutes", "Plan a three day trip to Rome",
+ "Draft a cover letter for a marketing job", "What's a good recipe for lasagna?",
+ "Translate 'good morning' into Spanish", "How tall is the Eiffel tower?",
+ "Remind me to call my mother on Sunday", "Recommend a book about the history of Japan",
+ "What is the capital of Australia?", "Tell me a joke about cats", "How do I bake sourdough bread?",
+ "Summarise the plot of Hamlet", "Convert 30 degrees Celsius to Fahrenheit",
+ "Write a birthday message for my sister", "Which running shoes are best for flat feet?",
+ "Explain how photosynthesis works", "Give me a workout plan for beginners",
+ "What movies are playing this weekend?", "Help me write an apology email to my landlord",
+ "How many calories are in an apple?", "Suggest names for a golden retriever puppy",
+ "What's the difference between a crocodile and an alligator?", "Write a short poem about the sea",
+ "How do I change a flat tyre?", "Wie wird das Wetter morgen in Hamburg?",
+ "Schreib mir ein Gedicht über den Herbst", "Was koche ich heute Abend?",
+ "Erklär mir die Relativitätstheorie einfach", "Plane eine Radtour an der Ostsee",
+ "Find a cheap flight to Lisbon in March", "Create a shopping list for a barbecue",
+ "What time is it in Tokyo?", "Help me learn French vocabulary", "Who won the world cup in 2014?",
+ "Write a limerick about a programmer", "How do I clean a cast iron pan?",
+ "What should I pack for a ski trip?", "Compose a thank-you note for a teacher",
+ "Give me tips to sleep better",
+]
+
+#: Written AFTER the round-4 rules were chosen and measured once, untuned:
+#: 2026-10-02, 0/25 returned an ADR.
+NEGATIVE_HELD_OUT = [
+ "Draft a cover letter for a nursing position", "What's the best way to store fresh basil?",
+ "Book a table for two at an Italian restaurant", "Compare the iPhone and Pixel cameras",
+ "How long should I boil an egg?", "Write a toast for my best friend's wedding",
+ "What are some fun things to do in Barcelona?", "Explain the rules of cricket",
+ "Recommend a podcast about astronomy", "How do I get red wine out of a carpet?",
+ "Plan a vegetarian menu for the week", "What's the population of Canada?",
+ "Help me name my bakery", "Was ist ein gutes Geschenk für meinen Vater?",
+ "Wie lange dauert ein Flug nach New York?", "Fasse den Roman Faust kurz zusammen",
+ "Give me a riddle for kids", "Why is the sky blue?", "Teach me how to juggle",
+ "List some indoor plants that need little light", "Schedule a dentist appointment next Tuesday",
+ "Describe a sunset over the mountains", "How do I tie a bow tie?",
+ "What's a healthy breakfast?", "Tell me about the Roman empire",
+]
+
+#: An ADR named by id is returned first (direct lookup, review R4-4).
+NAMED = [
+    ("Continue the ADR-0952 work", "ADR-0952"),
+    ("Review ADR-0407", "ADR-0407"),
+    ("Update ADR-0760 status to accepted", "ADR-0760"),
+    ("ADR-0045", "ADR-0045"),
+    ("bitte schau dir adr 2102 an", "ADR-2102"),
 ]
 
 #: No ADR covers the subject, and a lexical matcher cannot know that. Measured

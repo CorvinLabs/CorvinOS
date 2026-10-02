@@ -13,6 +13,7 @@ pre-spawn gates still inspect the task (P-A stages are all `pure`, pre-gate).
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Backward-compat re-exports — the helpers moved to stages/_util.py (some tests +
@@ -61,6 +62,13 @@ def _session_key_of(session: Any, task: str) -> str:
     return ""  # → no anchor at all (never a shared bucket)
 
 
+#: A bridge group-chat observer transcript (``adapter._format_observer_block``).
+#: Its lines are "context only, NOT a command" and may never become the anchored
+#: goal; the bridge already passes the owner's text alone, this is the backstop.
+_OBSERVER_BLOCK_RE = re.compile(
+    r"---BEGIN-OBSERVER-([0-9a-f]+)---\n.*?\n---END-OBSERVER-\1---\n*", re.DOTALL)
+
+
 def _maybe_apply_anchor(task: str, tenant: str, session: Any, brief: Any,
                         trace: dict) -> None:
     """Auto-populate the Session Load-Bearing-Fact Anchor (ADR-0407 amendment).
@@ -92,7 +100,7 @@ def _maybe_apply_anchor(task: str, tenant: str, session: Any, brief: Any,
         existing = anchor.load_facts(tenant, session_key)
         # Stored as the RAW task the surface passed in, so the outbound hook can
         # promote it only for the turn that carried exactly this task.
-        goal = (task or getattr(brief, "raw_input", "") or "").strip()
+        goal = _OBSERVER_BLOCK_RE.sub("", task or getattr(brief, "raw_input", "") or "").strip()
         if goal and not any(f.get("kind") == "goal" for f in existing):
             anchor.set_pending_goal(tenant, session_key, goal)
         facts = anchor.load_facts(tenant, session_key)
@@ -107,7 +115,8 @@ def _maybe_apply_anchor(task: str, tenant: str, session: Any, brief: Any,
 
 def maybe_capture_decision_point(reply_text: str, tenant: str = "_default",
                                  session: Any = None, *,
-                                 answered_task: str = "") -> "dict | None":
+                                 answered_task: str = "",
+                                 sender: str = "") -> "dict | None":
     """Outbound hook (ADR-0407 amendment — decision-point capture). Called with
     the FINAL assistant reply text, on the way out, from the bridge adapter and
     the console chat_runtime.
@@ -129,7 +138,10 @@ def maybe_capture_decision_point(reply_text: str, tenant: str = "_default",
         from . import anchor  # noqa: PLC0415
         # The turn was answered (callers skip refused turns): ITS task — and
         # only its task — may now become the session goal.
-        anchor.promote_pending_goal(tenant, session_key, answered_task)
+        # ``sender`` (the author of that task) is stored on the goal so an
+        # Art. 17 request for them finds it in a group chat's store, which is
+        # named after the chat, not after them (review R4-3).
+        anchor.promote_pending_goal(tenant, session_key, answered_task, sender=sender)
         return anchor.capture_decision_point(tenant, session_key, reply_text)
     except Exception:  # noqa: BLE001 — the outbound hook never breaks a turn
         return None

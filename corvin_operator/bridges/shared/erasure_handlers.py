@@ -1159,7 +1159,7 @@ def _atomic_replace_text(target: Path, text: str) -> None:
     """
     tmp = target.with_name(f"{target.name}.{os.getpid()}.erasing")
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
+        with open(tmp, "w", encoding="utf-8", errors="surrogateescape") as fh:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
@@ -1535,16 +1535,22 @@ def _purge_jsonl_file(f: Path, subject_id: str) -> int:
     """Drop every JSONL line naming the subject; keep the rest. Atomic."""
     kept: list[str] = []
     hit = 0
-    try:
-        lines = f.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeDecodeError):
-        return 0
+    # surrogateescape: a torn multi-byte character (crash / ENOSPC mid-write)
+    # must not make the whole file unreadable and the purge silently match
+    # nothing (review R4-4); undecodable bytes are written back unchanged.
+    lines = f.read_text(encoding="utf-8", errors="surrogateescape").splitlines()
     for line in lines:
         rec = None
         if line.strip():
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
+                # A torn line cannot be attributed by key. If it carries the
+                # subject id at all it goes: it is garbage to every reader,
+                # and keeping it would keep the subject's data (review R4-4).
+                if subject_id and subject_id in line:
+                    hit += 1
+                    continue
                 rec = None
         if rec is not None and _mentions_subject(rec, subject_id):
             hit += 1

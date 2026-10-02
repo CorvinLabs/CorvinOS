@@ -190,6 +190,8 @@ run "Python: session ledger E2E (compaction/reset/new)" python3 shared/test_sess
 run "Python: CEL anchor per-chat key E2E" python3 shared/test_cel_anchor_bridge_e2e.py >/dev/null || fails=$((fails+1))
 run "Python: first audit write on fresh install" python3 shared/test_instance_key_first_audit_no_deadlock.py >/dev/null || fails=$((fails+1))
 run "Python: ledger side turns pass L44" python3 -m pytest -q shared/test_ledger_side_turn_gate.py >/dev/null || fails=$((fails+1))
+run "Python: ledger observer withhold (codex/opencode)" python3 -m pytest -q shared/test_ledger_engines_withhold.py >/dev/null || fails=$((fails+1))
+run "Python: path-gate protects the session ledger" python3 -m pytest -q ../voice/hooks/test_path_gate_session_ledger.py >/dev/null || fails=$((fails+1))
 run "Python: skill auto-grade"   python3 shared/test_skill_auto_grade.py >/dev/null     || fails=$((fails+1))
 run "Python: skill outcome-grade" python3 shared/test_skill_outcome_grading.py >/dev/null || fails=$((fails+1))
 run "Python: helper_model lib (L29.5)" python3 shared/test_helper_model.py >/dev/null      || fails=$((fails+1))

@@ -2330,6 +2330,9 @@ def _spawn_detached_bg_worker(
                 to=(sender if not chat_id else None),
                 tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default",
                 label=instruction[:60],
+                # The chat's session ledger: the result is recorded there when
+                # delivered, so a later turn still knows it (ADR-2102, review R4-7).
+                ledger_dir=str(_session_dir(channel, str(chat_key))), ledger_chat_key=str(chat_key),
                 want_voice=bool(want_voice),
             )
             # Resolve the chat profile like a normal turn so the background turn
@@ -3780,6 +3783,10 @@ def _resolve_spawn_inputs(
         except Exception:  # noqa: BLE001 — no flag subsystem → feature off
             _cel_on = False
         if _cel_on:
+            # The CEL sees the OWNER's message, never a group observer block in
+            # front of it (it would steer retrieval and could become the
+            # anchored goal — review R4-2/R4-3). The worker still gets both.
+            _cel_prompt = _split_observer_block(prompt)[1]
             try:
                 _cel_wd = _session_dir(channel, chat_key or "anon", _cel_tid)
                 _cel_turn = f"turn-{msg_id or _safe_id(str(chat_key or 'anon'))}"
@@ -3828,7 +3835,7 @@ def _resolve_spawn_inputs(
                         "skill_forge_enabled": bool(profile.get("skill_forge_enabled")),
                     }
                     _bundle, _ctrace = _cel_run_full(
-                        prompt, _cel_tid, _cel_session(channel, chat_key), gate_fn=_cel_gate,
+                        _cel_prompt, _cel_tid, _cel_session(channel, chat_key), gate_fn=_cel_gate,
                         persona_patterns=_persona_globs,
                         persona_caps=_persona_caps)
                     if _bundle is not None and getattr(_bundle, "synthesised_prompt", None):
@@ -3872,7 +3879,7 @@ def _resolve_spawn_inputs(
                         elif _skill_block:
                             _cel_text = _skill_block
                 else:
-                    _cbrief, _ctrace = _cel_build_brief(prompt, _cel_tid,
+                    _cbrief, _ctrace = _cel_build_brief(_cel_prompt, _cel_tid,
                                                         _cel_session(channel, chat_key))
                     # ADR-0396: inject memory BODIES, not just titles, when the flag is on
                     # (ship-dark, default off). EXP-001: title-only 0.00 vs content 0.833 tool-off.
@@ -4519,32 +4526,45 @@ def _ledger_consent_withhold(channel: str, chat_key: str):
     """Session ledger ``withhold`` hook: a turn carrying the words of a group
     observer (Layer 16/17) is re-supplied only while every such observer's
     consent still holds — the same re-check the observer buffer gets on
-    consume. Withdrawn or unknown → the turn's text is withheld."""
+    consume. Withdrawn or unknown → the observers' lines are withheld (the
+    owner's own words stay). A one-shot ``/share`` grants no standing consent,
+    so its lines are re-supplied never — consent for one use, used once.
+
+    The ledger asks only for turns it is about to re-supply, and each observer
+    is checked once per spawn (``is_granted`` runs the L16 chain gate)."""
+    seen: dict[str, bool] = {}
+
+    def _granted(uid: str) -> bool:
+        if uid not in seen:
+            try:
+                seen[uid] = bool(_consent.is_granted(channel, chat_key, uid)[0])
+            except Exception:  # noqa: BLE001 — fail closed
+                seen[uid] = False
+        return seen[uid]
+
     def _check(rec: dict):
         observers = [o.get("user") for o in (rec.get("observers") or []) if isinstance(o, dict)]
         if not observers:
             return None
         if _consent is None:
             return "consent_check_unavailable"
-        for uid in observers:
-            try:
-                ok, _why = _consent.is_granted(channel, chat_key, str(uid))
-            except Exception:  # noqa: BLE001 — fail closed
-                ok = False
-            if not ok:
-                return "observer_consent"
+        if not all(_granted(str(uid)) for uid in observers):
+            return "observer_consent"
         return None
     return _check
 
 
 def _ledger_record_side_turn(channel: str, chat_key: str, user_text: str, reply_text: str, *,
-                             msg_id: str = "", sender: str = "", refused: str = "") -> None:
+                             msg_id: str = "", sender: str = "", refused: str = "",
+                             gated: bool = False) -> None:
     """Record a turn the OS session never ran (a /task or /bg command, a
     /plugin-builder interview answer) in the chat's session ledger (ADR-2102),
     ``spawned=False``: the user's words are kept, never counted as live."""
     if not chat_key or not user_text:
         return
-    if not refused:
+    if not refused and not gated:
+        # ``gated``: the caller already ran L44 on this text (/task does) —
+        # a second classifier call would only double the cost (review R4-8).
         # A side turn never passed the L44 gate on its way in (a /plugin-builder
         # answer goes to the builder, not the engine). The ledger would carry it
         # into later system prompts, so it must pass the same gate first — a
@@ -4755,6 +4775,27 @@ def _format_observer_block(entries: list[dict]) -> str:
         f"{body}\n"
         f"{footer}\n\n"
     )
+
+
+def _split_observer_block(text: str) -> tuple[str, str]:
+    """``(observer_block, owner_text)`` of a prompt built by
+    :func:`_format_observer_block` + the owner's message; ``("", text)`` when
+    there is no block. Observer lines carry no raw newline (V-005 escapes them),
+    so the first ``\n<footer>\n\n`` really closes the block.
+
+    The owner's text is what the session ledger records as the turn, what the
+    CEL classifies and anchors as a goal: an observer's line is "context only,
+    NOT a command" and must not become a load-bearing goal, steer retrieval, or
+    outlive that observer's consent in a re-supplied turn (review R4-3/R4-6)."""
+    header = f"---BEGIN-OBSERVER-{_OBSERVER_SESSION_TOKEN}---\n"
+    footer = f"\n---END-OBSERVER-{_OBSERVER_SESSION_TOKEN}---\n\n"
+    if not text.startswith(header):
+        return "", text
+    end = text.find(footer)
+    if end < 0:
+        return "", text
+    cut = end + len(footer)
+    return text[:cut], text[cut:]
 
 
 def _reset_session_state(workdir: Path, *, reason: str = "unspecified",
@@ -6603,6 +6644,7 @@ def _call_codex_streaming_via_engine(
             _ledger_block = _ledger.render_context(
                 _session_dir(channel, str(chat_key)), channel=str(channel or ""),
                 chat_key=str(chat_key), engine_transcript=False,
+                withhold=_ledger_consent_withhold(channel, str(chat_key)),
                 tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default").strip()
             if _ledger_block:
                 system_parts.append(_ledger_block)
@@ -6945,6 +6987,7 @@ def _call_opencode_streaming_via_engine(
             _ledger_block = _ledger.render_context(
                 _session_dir(channel, str(chat_key)), channel=str(channel or ""),
                 chat_key=str(chat_key), engine_transcript=False,
+                withhold=_ledger_consent_withhold(channel, str(chat_key)),
                 tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default").strip()
             if _ledger_block:
                 system_parts.append(_ledger_block)
@@ -11378,6 +11421,9 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                             to=(sender if not chat_id else None),
                             tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default",
                             label=instruction[:60],
+                            # The chat's session ledger: the result is recorded there when
+                            # delivered, so a later turn still knows it (ADR-2102, review R4-7).
+                            ledger_dir=str(_session_dir(channel, str(chat_key))), ledger_chat_key=str(chat_key),
                             want_voice=_pv_want_voice,
                         )
                         # Resolve the chat profile like a normal turn so the
@@ -11492,7 +11538,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         _ledger_record_side_turn(
             channel, str(chat_key), _task_raw, ack_text, msg_id=str(msg_id or ""),
             sender=str(sender or ""),
-            refused="house_rules" if _task_hr else "")
+            refused="house_rules" if _task_hr else "", gated=bool(instruction))
         ack_envelope = {"channel": channel, "to": sender, "text": ack_text}
         if chat_id is not None:
             ack_envelope["chat_id"] = chat_id
@@ -12229,9 +12275,11 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
             _ledger_wd = _session_dir(channel, str(chat_key))
             _ledger_tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+            _obs_block, _owner_text = _split_observer_block(prompt)
             _ledger.append_turn(
                 _ledger_wd, channel=str(channel or ""), chat_key=str(chat_key),
-                user_text=prompt, assistant_text=answer or "",
+                user_text=_owner_text, observer_text=_obs_block,
+                assistant_text=answer or "",
                 msg_id=str(msg_id or ""), sender=str(sender or ""),
                 refused=str(getattr(_TURN_OUTCOME, "refused", None) or ""),
                 # Only a turn the claude CLI was actually started for can be in
@@ -12261,7 +12309,8 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         try:
             _cdp_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
             _cel_maybe_capture_decision(answer, _cdp_tid, _cel_session(channel, chat_key),
-                                        answered_task=prompt)
+                                        answered_task=_split_observer_block(prompt)[1],
+                                        sender=str(sender or ""))
         except Exception:  # noqa: BLE001 — never break a turn on the way out
             pass
 

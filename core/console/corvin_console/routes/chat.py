@@ -682,6 +682,9 @@ async def chat_stream(
                         )
                     except Exception:  # noqa: BLE001
                         pass
+                    # Recorded BEFORE the send (a disconnect must not lose it):
+                    # the session ledger re-supplies it to later turns (ADR-2102).
+                    chat_runtime.record_side_turn(sess, prompt, _sc_reply)
                     await websocket.send_json({"type": "delta", "text": _sc_reply})
                     await websocket.send_json({"type": "done"})
                     continue

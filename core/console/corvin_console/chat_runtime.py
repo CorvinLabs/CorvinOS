@@ -3614,6 +3614,30 @@ def _turns_path(tenant_id: str, sid: str) -> Path:
     return _store_dir(tenant_id) / f"{sid}.turns.jsonl"
 
 
+def record_side_turn(sess: "WebChatSession", prompt: str, reply: str) -> None:
+    """Persist a turn the OS session never ran — a console slash command the
+    dispatcher answered deterministically (/plugin-builder, /help, …) — so the
+    session ledger (ADR-2102) still knows it: ``cli_spawned=False``, never live.
+
+    The ledger re-supplies the user's text into later system prompts, so it
+    passes the same pre-spawn gate a turn would, against the engine that will
+    read it; a refusal (or a gate error — fail closed) is marked
+    ``gate_refused`` and withheld (review R4-10). Never raises."""
+    try:
+        refusal = _spawn_gates.check_console_spawn_or_refusal(
+            prompt, tenant_id=sess.tenant_id, persona="assistant", channel=CHANNEL,
+            chat_key=sess.chat_key, engine_id=_configured_os_engine(sess.tenant_id))
+    except Exception:  # noqa: BLE001 — fail closed
+        refusal = "gate unavailable"
+    try:
+        _append_turn(sess, "user", [{"kind": "text", "text": prompt}])
+        _append_turn(sess, "assistant", [{"kind": "text", "text": reply}],
+                     gate_refused="side_turn" if refusal is not None else None,
+                     cli_spawned=False)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
                  voice_key_hint: str | None = None, tde_progress: dict[str, Any] | None = None,
                  execution_context: dict[str, Any] | None = None,
@@ -5629,11 +5653,15 @@ async def _stream_turn_impl(
                     reason="pre_spawn_gate_blocked")
         _route_meta["no_engine"] = True
         _os_emit_completed(rc=1)
-        yield {"type": "delta", "text": _gate_refusal}
-        yield {"type": "result", "text": _gate_refusal, "usage": None}
+        # Persist the refusal BEFORE the first yield: a client that disconnects
+        # mid-stream closes this generator at a yield, and a refusal written
+        # after one would be lost — leaving the user line unmarked, so the
+        # session ledger would re-supply the refused text (review R4-1).
         touch(sess, increment_turn=True)
         _append_turn(sess, "assistant", [{"kind": "text", "text": _gate_refusal}],
                      gate_refused="pre_spawn")
+        yield {"type": "delta", "text": _gate_refusal}
+        yield {"type": "result", "text": _gate_refusal, "usage": None}
         yield {"type": "done"}
         return
 
@@ -6152,8 +6180,7 @@ async def _stream_turn_impl(
                             reason="pre_spawn_gate_blocked")
                 _route_meta["no_engine"] = True
                 _os_emit_completed(rc=1)
-                yield {"type": "delta", "text": _fb_gate}
-                yield {"type": "result", "text": _fb_gate, "usage": None}
+                # Persisted before the first yield — see the first gate (R4-1).
                 touch(sess, increment_turn=True)
                 # Phase 2a: Complete context with error code for this error path
                 _exec_ctx = None
@@ -6166,6 +6193,8 @@ async def _stream_turn_impl(
                              execution_context=_exec_ctx.to_dict() if _exec_ctx else None,
                              gate_refused="pre_spawn")
                 _emit_execution_context_event(_exec_ctx, _os_turn_id, sess)
+                yield {"type": "delta", "text": _fb_gate}
+                yield {"type": "result", "text": _fb_gate, "usage": None}
                 yield {"type": "done"}
                 return
             if _fb_quota_exceeded:

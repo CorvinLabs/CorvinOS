@@ -190,8 +190,8 @@ def main() -> int:
         recs = [json.loads(l) for l in (wd / ".corvin-ledger" / "ledger.jsonl").read_text().splitlines()]
         turns = [r for r in recs if r["kind"] == "turn"]
         check([r["n"] for r in turns] == [1, 2, 3, 4, 5, 6], "six turns, numbered 1..6")
-        check([r["user"] for r in turns] == [MSGS[k] for k in "ABCDEF"], "every user text kept verbatim")
-        check(all(r["assistant"].startswith("[fake") and MSGS[k][:20] in r["assistant"]
+        check([r["user_text"] for r in turns] == [MSGS[k] for k in "ABCDEF"], "every user text kept verbatim")
+        check(all(r["assistant_text"].startswith("[fake") and MSGS[k][:20] in r["assistant_text"]
                   for r, k in zip(turns, "ABCDEF")), "every answer kept")
         bounds = [(r["boundary"], r["reason"]) for r in recs if r["kind"] == "boundary"]
         check(bounds == [("compaction", "auto"), ("reset", "timeout"), ("reset", "manual")],

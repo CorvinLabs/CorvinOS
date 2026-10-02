@@ -811,11 +811,20 @@ structurally excluded. The CLI transcript is NOT the record — auto-compaction 
   TTS/outbox); the console's `turns.jsonl` is its ledger. Lines are removed only by GDPR
   erasure (`L-session-ledger`, any identity key) — and, on the console, by an explicit
   delete of the chat or the pre-existing 50-chats-per-tenant cap (oldest chat, whole).
+  The worker cannot write it: `path_gate` denies any path with a `.corvin-ledger`
+  component. On disk the texts are `user_text`/`assistant_text` — `user` is an erasure
+  identity key. Delivered `/task` results and console slash-command replies are recorded
+  as turns too (`spawned=False`).
 - **A gate's refusal is recorded, never re-supplied:** a turn L44 / a pre-spawn gate refused
-  keeps its refusal; its user text is withheld from the view (it would bypass the gate). Side
-  turns (`/plugin-builder`, `/task`) pass L44 before they are recorded; TDE delegation runs
-  L44 too. A turn carrying group-observer words names the observers (erasable by them) and
-  is withheld once an observer's consent ends.
+  is stored as `user_sha256` + length only — never its text. Console refusals are persisted
+  BEFORE the first `yield` (a disconnect closes the generator there). Side turns
+  (`/plugin-builder`, `/task`, console slash commands) pass the gate before they are recorded;
+  TDE delegation runs L44 too.
+- **Group observers:** their framed block is stored apart (`observer_text`), the owner's
+  message is `user`. On re-supply — Claude, Codex and OpenCode alike — the observers' lines
+  are withheld once any observer's consent ends (checked once per observer per spawn, only for
+  turns being re-supplied); the owner's words and the recorded answer stay. The CEL
+  (retrieval, anchor goal) only ever sees the owner's text.
 - **`spawned` is measured, not inferred:** set where the `claude` CLI is actually started
   (console: only the OS-turn answer, `cli_spawned`); delegated/copilot/gate-answered turns
   and `/btw` notes are never "live".
@@ -828,11 +837,13 @@ structurally excluded. The CLI transcript is NOT the record — auto-compaction 
   which records the boundary. Only `manual` (`/new`) fences re-supply; unknown reasons
   count as unwanted.
 - **CEL gets a per-chat session** (`adapter._cel_session`); a turn with no session key
-  writes no anchor fact — never a shared `_nosession` bucket.
+  writes no anchor fact — never a shared `_nosession` bucket. The anchored goal carries its
+  `sender`, so an Art. 17 request finds it in a group chat's store.
 
 **Must NOT do:** delete or rewrite `.corvin-ledger/` in any reset/cleanup path · add a reset
 that bypasses `reset_claude_session_state` · decide coverage from bookkeeping instead of the
-transcript · summarise ledger turns with an LLM · put the volatile counts back into the block
+transcript · summarise ledger turns with an LLM · store a refused turn's text · fold observer
+lines into `user` · persist a refusal after a `yield` · put the volatile counts back into the block
 header (breaks the append-only prefix) · build another "context bridge" —
 `scripts/zero_caller_sweep.py --check` fails CI on a new unreachable Subsystem/Skill/Stage/Plugin.
 

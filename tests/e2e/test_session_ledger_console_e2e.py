@@ -68,6 +68,10 @@ MSGS = [
     "DELTA-8854 summarise what you know about me",
 ]
 
+#: A console slash command: the dispatcher answers it, no engine runs. It must
+#: still reach later turns through the ledger (review R4-10).
+SLASH = "/engine ECHO-9965"
+
 
 @pytest.fixture(scope="module")
 def run(tmp_path_factory):
@@ -100,7 +104,7 @@ def run(tmp_path_factory):
                        headers={"x-csrf-token": csrf})
             assert r.status_code == 200, r.text
             sid = r.json()["session"]["sid"]
-            for text in MSGS:
+            for text in MSGS[:3] + [SLASH] + MSGS[3:]:
                 with c.websocket_connect(f"/v1/console/chat/sessions/{sid}/stream") as ws:
                     assert ws.receive_json()["type"] == "ready"
                     ws.send_json({"type": "user", "text": text})
@@ -141,3 +145,9 @@ def test_turns_lost_to_compaction_are_resupplied_verbatim(run):
         assert m in sp, f"{m!r} missing after compaction"
     assert "ack ALPHA-5521" in sp, "the assistant side is re-supplied too"
     assert "DELTA-8854" not in sp.split(HEADER, 1)[1], "the in-flight turn is not history"
+
+
+def test_slash_command_turn_is_recorded_and_resupplied(run):
+    assert not any("ECHO-9965" in c["prompt"] for c in run["calls"]), "a slash command spawned the engine"
+    sp = _call_for(run, "DELTA-8854")["system_prompt"]
+    assert SLASH in sp and "configured engine for this tenant" in sp

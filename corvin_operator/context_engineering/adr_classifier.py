@@ -2,10 +2,19 @@
 
 import dataclasses
 import logging
+import re
 from typing import Dict, List, Optional
 from .adr_loader import ADRLoader, ADRMetadata, MIN_RELEVANCE, get_loader, tokenize
 
 logger = logging.getLogger(__name__)
+
+#: An ADR the operator names by id ("continue the ADR-0952 work"). Lexically its
+#: number is one body token among many — 86 of 400 "Implement ADR-NNNN" queries
+#: found the named ADR (review R4-4) — so a named id is a direct lookup.
+#: Same shape as ``pipeline._OBSERVER_BLOCK_RE`` (adapter._format_observer_block).
+_OBSERVER_BLOCK_RE = re.compile(
+    r"---BEGIN-OBSERVER-([0-9a-f]+)---\n.*?\n---END-OBSERVER-\1---\n*", re.DOTALL)
+_ADR_REF_RE = re.compile(r"\bADR[-_ ]?(\d{3,4})\b", re.IGNORECASE)
 
 
 class ADRClassifier:
@@ -43,8 +52,17 @@ class ADRClassifier:
         Returns:
             List of relevant ADRMetadata objects ranked by relevance.
         """
-        keywords = self._extract_keywords(task)
-        if not keywords:
+        summary = self._summary(task)
+        named: List[str] = []
+        for num in _ADR_REF_RE.findall(summary or ""):
+            adr_id = f"ADR-{int(num):04d}"
+            if adr_id not in named and self.loader.get_adr(adr_id) is not None:
+                named.append(adr_id)
+        # The named ids' numbers are not topic words for the lexical match:
+        # every ADR that merely cites ADR-0952 would otherwise match it.
+        numbers = {n.lstrip("0") for n in _ADR_REF_RE.findall(summary or "")}
+        keywords = [k for k in self._extract_keywords(task) if k.lstrip("0") not in numbers]
+        if not keywords and not named:
             return []
 
         # Every returned ADR carries its OWN lexical score against the task.
@@ -54,9 +72,21 @@ class ADRClassifier:
         # and must still clear MIN_RELEVANCE. The old code added every 2-hop
         # neighbour unscored and then cut ``list(set)[:max_results]`` — an
         # arbitrary subset, which could drop the best seed for a stranger.
-        scored = self.loader.score_query(keywords, min_relevance=0.0)
+        scored = self.loader.score_query(keywords, min_relevance=0.0) if keywords else []
         own: Dict[str, float] = dict(scored)
-        direct = [(i, s) for i, s in scored if s >= MIN_RELEVANCE][:max_results]
+        direct = [(i, 1.0) for i in named[:max_results]]
+        seen_ids = set(named)
+        for i, s in scored:
+            if len(direct) >= max_results or s < MIN_RELEVANCE:
+                break
+            # One slot per ADR id: a duplicate file (``ADR-NNNN~stem``) of an
+            # id already taken must not consume a seed slot (review R4-5).
+            meta = self.loader.get_adr(i)
+            key = meta.id if meta is not None and meta.id else i
+            if key in seen_ids:
+                continue
+            seen_ids.add(key)
+            direct.append((i, s))
         if not direct:
             return []
         final: Dict[str, float] = dict(direct)
@@ -68,8 +98,14 @@ class ADRClassifier:
                 if blended >= MIN_RELEVANCE:
                     final[n_id] = round(blended, 4)
 
+        # Deduplicate BEFORE the cut: a second file carrying the same id (stored
+        # as ``ADR-NNNN~stem``) must not take a result slot and then be dropped,
+        # pushing a relevant ADR out (review R4-5). Named ids lead.
         results = []
-        for adr_id, score in sorted(final.items(), key=lambda x: (-x[1], x[0]))[:max_results]:
+        order = sorted(final.items(), key=lambda x: (x[0] not in named, -x[1], x[0]))
+        for adr_id, score in order:
+            if len(results) >= max_results:
+                break
             metadata = self.loader.get_adr(adr_id)
             if metadata and metadata.id and metadata.id not in {r.id for r in results}:
                 results.append(dataclasses.replace(metadata, relevance=score))
@@ -77,30 +113,24 @@ class ADRClassifier:
         logger.info(f"Found {len(results)} relevant ADRs for task")
         return results
 
-    def _extract_keywords(self, task: object) -> List[str]:
-        """Extract searchable keywords from task.
-
-        Args:
-            task: Task object.
-
-        Returns:
-            List of keywords (max 24).
-        """
-        keywords = []
-
-        # Try to extract from task.normalized.summary or task.raw_input
+    @staticmethod
+    def _summary(task: object) -> str:
         if hasattr(task, "normalized") and hasattr(task.normalized, "summary"):
-            summary = task.normalized.summary
+            text = str(task.normalized.summary or "")
         elif hasattr(task, "raw_input"):
-            summary = task.raw_input
+            text = str(task.raw_input or "")
         elif hasattr(task, "summary"):
-            summary = task.summary
+            text = str(task.summary or "")
         else:
-            summary = str(task)[:500]
+            text = str(task)[:500]
+        # A bridge group-chat observer transcript in front of the owner's
+        # message is framing, not the question: its boilerplate filled the
+        # first 24 tokens and steered retrieval (review R4-2). The bridge
+        # passes the owner's text alone; this is the backstop.
+        return _OBSERVER_BLOCK_RE.sub("", text)
 
-        if not summary:
-            return []
-
-        # Whole-word, stop-word-free, stemmed tokens; the first 24 carry the
-        # task (a long brief's tail is usually boilerplate).
-        return tokenize(summary)[:24]
+    def _extract_keywords(self, task: object) -> List[str]:
+        """Whole-word, stop-word-free, stemmed tokens of the task; the first 24
+        carry it (a long brief's tail is usually boilerplate)."""
+        summary = self._summary(task)
+        return tokenize(summary)[:24] if summary else []

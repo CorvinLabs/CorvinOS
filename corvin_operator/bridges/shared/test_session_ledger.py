@@ -537,5 +537,73 @@ def _clean_entry(text):
     return sl._clean("User input:\n" + text)
 
 
+
+class TestRound4:
+    """Adversarial review round 4 (2026-10-02) reproductions."""
+
+    def test_refused_text_is_stored_as_a_hash_only(self, wd):
+        import hashlib
+        sl.append_turn(wd, channel="telegram", chat_key="chat-1", user_text="FORBIDDEN-ASK",
+                       assistant_text="no", refused="house_rules")
+        raw = sl.ledger_path(wd).read_text(encoding="utf-8")
+        assert "FORBIDDEN-ASK" not in raw
+        rec = sl.read_ledger(wd)[0]
+        assert rec["user_sha256"] == hashlib.sha256(b"FORBIDDEN-ASK").hexdigest()
+        assert rec["user_chars"] == len("FORBIDDEN-ASK") and rec["user"] == ""
+
+    def test_message_text_is_not_stored_under_an_identity_key(self, wd):
+        """``user`` is an erasure identity key: a message whose text equals
+        someone's id must not erase the record as theirs."""
+        import erasure_handlers as eh
+        sl.append_turn(wd, channel="telegram", chat_key="chat-1", user_text="bob", assistant_text="x")
+        on_disk = json.loads(sl.ledger_path(wd).read_text().splitlines()[0])
+        assert "user" not in on_disk and on_disk["user_text"] == "bob"
+        assert eh._purge_jsonl_file(sl.ledger_path(wd), "bob") == 0
+        assert sl.read_ledger(wd)[0]["user"] == "bob"
+
+    def test_withdrawn_observer_consent_withholds_only_the_observer_lines(self, wd):
+        sl.append_turn(wd, channel="telegram", chat_key="chat-1", user_text="OWNER-ASK",
+                       observer_text="---BEGIN-OBSERVER-ab---\n  12:00 anna: OBS-WORDS\n"
+                                     "---END-OBSERVER-ab---\n\n",
+                       assistant_text="ok", observers=[{"user": "anna"}])
+        block = sl.render_context(wd, withhold=lambda r: "observer_consent")
+        assert "OWNER-ASK" in block and "OBS-WORDS" not in block
+        assert "observers' lines withheld" in block
+        assert "OBS-WORDS" in sl.render_context(wd, withhold=lambda r: None)
+
+    def test_withhold_is_asked_only_for_resupplied_turns(self, wd):
+        _turn(wd, 1, u="live-one")
+        _turn(wd, 2, u="live-two")
+        _transcript(wd, SID, [_user("live-one"), _user("live-two")])
+        asked = []
+        sl.render_context(wd, withhold=lambda r: asked.append(r["n"]))
+        assert asked == []
+
+    def test_purge_survives_a_torn_utf8_line(self, wd):
+        import erasure_handlers as eh
+        f = sl.ledger_path(wd)
+        _turn(wd, 1)
+        with open(f, "ab") as fh:     # crash mid multi-byte character
+            fh.write(b'{"kind": "turn", "chat_key": "chat-1", "user_text": "M\xc3')
+        assert eh._purge_jsonl_file(f, "chat-1") == 2
+        assert f.read_bytes() == b""
+
+    def test_delivered_background_result_lands_in_the_chat_ledger(self, wd, tmp_path, monkeypatch):
+        import completion_notify as cn
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        tid = cn.register("bgt_ledger1", channel="telegram", chat_id="chat-1", sender="u1",
+                          label="summarise the Q3 report", ledger_dir=str(wd),
+                          ledger_chat_key="chat-1")
+        assert cn.mark_done(tid, text="BG-RESULT-Q3: revenue up 4%")
+        out = tmp_path / "outbox"
+        assert cn.deliver_ready(out) == 1
+        assert cn.deliver_ready(out) == 0          # delivered once ⇒ recorded once
+        turns = [r for r in sl.read_ledger(wd) if r["kind"] == "turn"]
+        assert len(turns) == 1 and turns[0]["spawned"] is False
+        assert turns[0]["assistant"] == "BG-RESULT-Q3: revenue up 4%"
+        assert "summarise the Q3 report" in turns[0]["user"] and turns[0]["sender"] == "u1"
+        assert "BG-RESULT-Q3" in sl.render_context(wd)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
