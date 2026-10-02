@@ -206,6 +206,47 @@ def add_fact(tenant_id: str, session_key: str, kind: str, text: str) -> "dict | 
         return None
 
 
+def _pending_path(tenant_id: str, session_key: str) -> Path:
+    # Same directory and the same subject-bearing name as the store, so the
+    # L-cel-anchors erasure handler (name match on *.jsonl) removes it too.
+    return _store_path(tenant_id, session_key).with_suffix(".pending.jsonl")
+
+
+def set_pending_goal(tenant_id: str, session_key: str, text: str) -> None:
+    """Remember this turn's task as the CANDIDATE session goal. It is not a
+    fact yet: the inbound hook runs before the acceptable-use / Gate-1 checks,
+    and a refused task must never become a goal that is re-injected every turn
+    with no gate in front of it. :func:`promote_pending_goal` turns it into the
+    goal once a reply was actually delivered. Never raises."""
+    text = (text or "").strip()
+    if not text:
+        return
+    try:
+        p = _pending_path(tenant_id, session_key)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"text": text}, ensure_ascii=False) + "\n", encoding="utf-8")
+        tmp.replace(p)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def promote_pending_goal(tenant_id: str, session_key: str) -> "dict | None":
+    """Make the candidate goal THE session goal if the session has none yet.
+    Called on the way out of a turn that was answered (not refused). Never raises."""
+    try:
+        p = _pending_path(tenant_id, session_key)
+        if not p.is_file():
+            return None
+        text = str(json.loads(p.read_text(encoding="utf-8")).get("text") or "")
+        p.unlink()
+        if not text or any(f.get("kind") == "goal" for f in load_facts(tenant_id, session_key)):
+            return None
+        return add_fact(tenant_id, session_key, "goal", text)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def clear(tenant_id: str, session_key: str) -> None:
     """Delete the session's anchor store. Never raises."""
     try:

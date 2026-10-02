@@ -809,11 +809,16 @@ structurally excluded. The CLI transcript is NOT the record — auto-compaction 
 - **Record:** every bridge turn is appended verbatim to `<workdir>/.corvin-ledger/ledger.jsonl`
   (`session_ledger.append_turn` in `process_one`, right after the answer is final — before
   TTS/outbox); the console's `turns.jsonl` is its ledger. Lines are removed only by GDPR
-  erasure (`L-session-ledger`, by `chat_key` or `sender`) — and, on the console, by the
-  pre-existing 50-chats-per-tenant cap, which deletes the OLDEST chat whole.
-- **Coverage = an exact match in the transcript after its last `compact_boundary`**: a turn
-  is live only if a not-yet-claimed entry equals it or ends with `"\n" + it`, matched
-  newest-first; unreadable ⇒ nothing covered ⇒ everything re-supplied.
+  erasure (`L-session-ledger`, any identity key) — and, on the console, by an explicit
+  delete of the chat or the pre-existing 50-chats-per-tenant cap (oldest chat, whole).
+- **A gate's refusal is recorded, never re-supplied:** a turn L44 / a pre-spawn gate refused
+  keeps its refusal; its user text is withheld from the view (it would bypass the gate).
+  Delegated/failed turns and `/btw` notes are recorded `spawned: false` — never "live".
+- **Coverage = a contiguous exact match against the transcript after its last
+  `compact_boundary`**: the newest spawned turn must be the newest user entry (equal, or
+  ending `"\n" + text`), the next one the entry before it; the first mismatch ends it.
+  Unreadable ⇒ nothing covered ⇒ everything re-supplied. Codex/OpenCode (no Claude
+  transcript): everything re-supplied every spawn.
 - **Every reset goes through `session_state.reset_claude_session_state(wd, reason=...)`**,
   which records the boundary. Only `manual` (`/new`) fences re-supply; unknown reasons
   count as unwanted.

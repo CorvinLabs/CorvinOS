@@ -14,11 +14,14 @@ Method:
      resolved the way the bridges' ``sys.path`` inserts resolve them), plus any
      string literal naming a repo module (``"pkg.mod:Class"`` registries,
      ``importlib.import_module("…")``, file paths ending in ``.py``). Strings
-     over-approximate reachability, so a module reported dead is dead.
+     over-approximate reachability, so a module reported dead has no import
+     path. "Imported" is not "used": a class reached only through a package
+     ``__init__`` re-export counts as reachable here.
   2. Roots: every ``[project.scripts]`` target, every module/script a systemd
-     unit or shell launcher in the repo starts, every ``plugin.json``
-     ``entry_point``, and the long-running hosts (bridge adapter, gateway app,
-     console standalone).
+     unit or shell launcher in the repo starts, every builtin plugin the
+     plugin bootstrap loads (``plugin.yaml`` → ``provider.py``/``plugin.py``),
+     and the long-running hosts (bridge adapter, gateway app, console
+     standalone). Importing a module also reaches its packages' ``__init__``.
   3. Contract implementations: subclasses of the registration bases listed in
      ``CONTRACTS`` and every module calling ``register_stage(``.
   4. Report each implementation whose module is not reachable from a root.
@@ -180,6 +183,14 @@ def edges_of(f: Path, idx: Index) -> set[Path]:
                     out.add(cand)
                 else:
                     out.update(idx.by_base.get(Path(s).stem, [])[:2])
+    # Importing a.b.c executes a/__init__.py and a/b/__init__.py first.
+    for target in list(out):
+        parent = target.parent
+        while parent != REPO and parent.is_relative_to(REPO):
+            init = parent / "__init__.py"
+            if init in idx.file_set:
+                out.add(init)
+            parent = parent.parent
     out.discard(f)
     return {p for p in out if p in idx.file_set}
 
@@ -203,19 +214,15 @@ def roots(idx: Index) -> set[Path]:
                 rs.update(idx.resolve(m))
             for p in re.findall(r"([\w./%{}-]+\.py)\b", line):
                 rs.update(idx.by_base.get(Path(p).stem, [])[:3])
-    # Plugins are discovered through their manifest, not imported:
-    # plugin.json "entry_point": "module:Class" next to src/<module>.py
-    # (core/plugins/corvin_plugins/bootstrap.py scans buildin/ for these).
-    for manifest in REPO.rglob("plugin.json"):
+    # Builtin plugins are loaded through their manifest, not imported: the real
+    # loader (core/plugins/corvin_plugins/bootstrap.py::_builtin_plugin_dirs /
+    # _load_builtin_class) walks for plugin.yaml and loads provider.py or
+    # plugin.py by file path. A plugin.json entry_point is NOT loaded by it.
+    for manifest in REPO.rglob("plugin.yaml"):
         if EXCLUDE_PARTS & set(manifest.relative_to(REPO).parts):
             continue
-        try:
-            entry = str(json.loads(manifest.read_text(encoding="utf-8")).get("entry_point") or "")
-        except (OSError, ValueError, AttributeError):
-            continue
-        mod = entry.split(":")[0].replace(".", "/")
-        for cand in (manifest.parent / "src" / f"{mod}.py", manifest.parent / f"{mod}.py",
-                     manifest.parent / "src" / mod / "__init__.py"):
+        for fname in ("provider.py", "plugin.py"):
+            cand = manifest.parent / fname
             if cand in idx.file_set:
                 rs.add(cand)
     # bridge.sh and other shell launchers start python files by path.

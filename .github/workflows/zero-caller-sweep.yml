@@ -11,6 +11,8 @@ on:
   pull_request:
     paths:
       - '**.py'
+      - '**.sh'
+      - '**/plugin.yaml'
       - 'pyproject.toml'
       - '**.service'
       - 'scripts/zero_caller_baseline.json'
@@ -20,6 +22,8 @@ on:
       - main
     paths:
       - '**.py'
+      - '**.sh'
+      - '**/plugin.yaml'
       - 'pyproject.toml'
       - '**.service'
       - 'scripts/zero_caller_baseline.json'

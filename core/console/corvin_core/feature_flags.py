@@ -666,7 +666,7 @@ REGISTRY: tuple[FeatureFlag, ...] = (
     ),
     FeatureFlag(
         id="fast_chat_mode",
-        label="Fast chat routing (workload-aware model tier, ADR-0043)",
+        label="Fast chat routing (workload-aware model tier, ADR-2104)",
         description=(
             "Route a turn the workload classifier is confident is plain CHAT to the "
             "cheaper/faster model tier instead of the tenant's default OS model. Off "

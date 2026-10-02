@@ -58,7 +58,7 @@ def _session_key_of(session: Any, task: str) -> str:
         if wd:
             from pathlib import Path as _P  # noqa: PLC0415
             return _P(str(wd)).name
-    return ""  # → "_nosession" bucket in the store
+    return ""  # → no anchor at all (never a shared bucket)
 
 
 def _maybe_apply_anchor(task: str, tenant: str, session: Any, brief: Any,
@@ -86,10 +86,13 @@ def _maybe_apply_anchor(task: str, tenant: str, session: Any, brief: Any,
             anchor.add_fact(tenant, session_key, kind, text)
         # The ORIGINAL session goal is added once and then persists — re-adding a
         # fresh per-turn task would evict the real constraints under the cap.
+        # This hook runs BEFORE the acceptable-use / Gate-1 checks, so the task
+        # is only a CANDIDATE here; maybe_capture_decision_point promotes it
+        # after a reply was delivered. A refused task never becomes the goal.
         existing = anchor.load_facts(tenant, session_key)
         goal = (getattr(brief, "raw_input", "") or task or "").strip()
         if goal and not any(f.get("kind") == "goal" for f in existing):
-            anchor.add_fact(tenant, session_key, "goal", goal)
+            anchor.set_pending_goal(tenant, session_key, goal)
         facts = anchor.load_facts(tenant, session_key)
         try:
             brief.anchor_facts = facts
@@ -121,12 +124,15 @@ def maybe_capture_decision_point(reply_text: str, tenant: str = "_default",
         if not session_key:  # same rule as _maybe_apply_anchor: never pool chats
             return None
         from . import anchor  # noqa: PLC0415
+        # The turn was answered (callers skip refused turns): its task may now
+        # become the session goal.
+        anchor.promote_pending_goal(tenant, session_key)
         return anchor.capture_decision_point(tenant, session_key, reply_text)
     except Exception:  # noqa: BLE001 — the outbound hook never breaks a turn
         return None
 
 
-def render_anchor_block(brief: Any) -> str:
+def render_anchor_block(brief: Any, *, count_injection: bool = True) -> str:
     """The anchor section alone, for the active pipeline's LLM-synthesised
     prompt, which replaces the deterministic brief. Used inside
     ``_gate2_and_bind`` so the block is gated and reaches both surfaces.
@@ -135,7 +141,8 @@ def render_anchor_block(brief: Any) -> str:
     if not facts:
         return ""
     from . import anchor as _anchor  # noqa: PLC0415
-    _anchor.record_injection(len(facts))
+    if count_injection:
+        _anchor.record_injection(len(facts))
     return "\n".join(_anchor.render_lines(facts))
 
 
@@ -310,10 +317,12 @@ def _gate2_and_bind(bundle: Any, trace: dict, gate, persona_patterns,
     # Gate-2 builds its payload, so (a) both surfaces (bridge + console) deliver
     # them and (b) Gate-2 inspects them — prepending after the gate let stored
     # goals and captured menus reach the worker un-gated (review 2026-10-02).
+    _anchor_folded = 0
     if bundle.synthesised_prompt:
-        _anchor_txt = render_anchor_block(getattr(bundle, "brief", None))
+        _anchor_txt = render_anchor_block(getattr(bundle, "brief", None), count_injection=False)
         if _anchor_txt and _anchor_txt not in bundle.synthesised_prompt:
             bundle.synthesised_prompt = _anchor_txt + "\n\n" + bundle.synthesised_prompt
+            _anchor_folded = len(getattr(getattr(bundle, "brief", None), "anchor_facts", None) or [])
     tool_names = " ".join(getattr(t, "name", "") for t in (bundle.tools_to_bind or []))
     # An mcp_config (server URL/command) reaches the worker via apply_tool_bindings
     # → Gate-2 must see it too (review R2 finding A3, defense-in-depth: forge tools
@@ -330,7 +339,7 @@ def _gate2_and_bind(bundle: Any, trace: dict, gate, persona_patterns,
     # Gate-2 inspected", so it must cover the fallback channel, not only the
     # synthesised one.
     rendered = "" if bundle.synthesised_prompt else (
-        render_brief_to_text(getattr(bundle, "brief", None)) or "")
+        render_brief_to_text(getattr(bundle, "brief", None), count_injection=False) or "")
     final_payload = " ".join(
         x for x in (bundle.synthesised_prompt or "", rendered, tool_names, mcp_cfgs,
                     skill_ids, skill_bodies) if x).strip()
@@ -346,6 +355,9 @@ def _gate2_and_bind(bundle: Any, trace: dict, gate, persona_patterns,
             bundle.tools_to_bind = []
             bundle.skills_to_bind = []
             return bundle
+    if _anchor_folded:  # counted only once Gate-2 let it through
+        from . import anchor as _anchor  # noqa: PLC0415
+        _anchor.record_injection(_anchor_folded)
     if bundle.tools_to_bind:
         # A ToolRef carrying its OWN mcp_config is refused HERE, in the enforcer,
         # not at each boundary (review R7 — the first cut put it in the bridge, so
@@ -504,7 +516,8 @@ def _memory_body(match: Any, cap: int = 800) -> str:
         return ""
 
 
-def render_brief_to_text(brief: Any, *, include_content: bool = False) -> str:
+def render_brief_to_text(brief: Any, *, include_content: bool = False,
+                         count_injection: bool = True) -> str:
     """Format the brief into a compact system-prompt block. Empty string when
     there is nothing useful (I5: off is a quiet path). Unchanged from pre-P-A for
     parity; the LLM synthesis stage (P-C) may set a ``synthesised_prompt`` that
@@ -528,7 +541,8 @@ def render_brief_to_text(brief: Any, *, include_content: bool = False) -> str:
         lines.extend(_anchor.render_lines(_anchor_facts))
         # Move-2: loud, not silent — bump the watchdog-readable counter + log the
         # injection. Muting this call is the mutation the Move-2 test catches.
-        _anchor.record_injection(len(_anchor_facts))
+        if count_injection:  # a gate's inspection copy is not an injection
+            _anchor.record_injection(len(_anchor_facts))
     mc = getattr(brief, "memory_context", None)
     matches = getattr(mc, "matches", []) if mc else []
     if matches:

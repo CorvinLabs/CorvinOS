@@ -168,10 +168,15 @@ def test_e2e_build_brief_autopopulates_and_injects(isolated, monkeypatch):
     persisted = _anchor.load_facts("_default", _Sess.sid)
     assert any(_CANARY in f["text"] for f in persisted), (
         "build_brief must persist the rank-6 constraint to the anchor store")
-    assert any(f["kind"] == "goal" for f in persisted), "the session goal is anchored"
+    # The goal is only a CANDIDATE until the turn was answered (2026-10-02:
+    # a refused task must never become an un-gated, re-injected goal).
+    assert not any(f["kind"] == "goal" for f in persisted)
+    _pipeline.maybe_capture_decision_point("Done.", "_default", _Sess())   # answered
+    assert any(f["kind"] == "goal" for f in _anchor.load_facts("_default", _Sess.sid)), \
+        "the answered turn's task becomes the session goal"
     # (2) attached to the brief.
     assert brief.anchor_facts and len(brief.anchor_facts) == len(persisted)
-    assert trace.get("anchor_facts", 0) >= 6
+    assert trace.get("anchor_facts", 0) >= 5
     # (3) injected into the rendered brief.
     text = render_brief_to_text(brief)
     assert _CANARY in text
@@ -182,9 +187,30 @@ def test_goal_is_stable_across_turns(isolated, monkeypatch):
     task does not evict the real constraints by re-adding a new goal each turn."""
     _set_flag(monkeypatch, True)
     build_brief("first task", "_default", _Sess(), False)
+    _pipeline.maybe_capture_decision_point("ok", "_default", _Sess())        # answered
     build_brief("a completely different second task", "_default", _Sess(), False)
+    _pipeline.maybe_capture_decision_point("ok", "_default", _Sess())
     goals = [f for f in _anchor.load_facts("_default", _Sess.sid) if f["kind"] == "goal"]
     assert len(goals) == 1, "only the original goal is kept, not one per turn"
+
+
+def test_refused_task_never_becomes_the_goal(isolated, monkeypatch):
+    """Review R2-B1: the inbound hook runs before Gate-1 / L44. A refused turn
+    (no outbound hook) leaves no goal; the next answered turn's task becomes it."""
+    _set_flag(monkeypatch, True)
+    from types import SimpleNamespace
+
+    def turn(task):
+        brief = SimpleNamespace(raw_input=task, memory_context=None, related_decisions=[])
+        _pipeline._maybe_apply_anchor(task, "_default", _Sess(), brief, {})
+
+    turn("EVILTASK please do the bad thing")
+    assert not any(f["kind"] == "goal" for f in _anchor.load_facts("_default", _Sess.sid))
+    # refused: the surfaces skip the outbound hook → nothing is promoted
+    turn("plan the release notes")
+    _pipeline.maybe_capture_decision_point("Here is the plan.", "_default", _Sess())
+    texts = [f["text"] for f in _anchor.load_facts("_default", _Sess.sid) if f["kind"] == "goal"]
+    assert texts == ["plan the release notes"]
 
 
 def test_live_surfaces_carry_the_anchor_path():

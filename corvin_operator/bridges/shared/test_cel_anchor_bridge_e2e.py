@@ -85,6 +85,21 @@ def main() -> int:
         check(r.returncode == 0, "timeout reset ran")
         _send(sb, chats[0], "continue with the export", 3)
         st2 = _stores(sb)
+        # The anchored goal of turn 1 (promoted once turn 1 was answered) must
+        # reach the WORKER prompt of this turn — deterministic CEL path.
+        calls = [json.loads(l) for l in (sb / "args.jsonl").read_text().splitlines() if l.strip()]
+        a_calls = [c for c in calls if c.get("chat_key") == chats[0]]
+        args = a_calls[-1]["args"]
+        sp = (args[args.index("--append-system-prompt") + 1] if "--append-system-prompt" in args
+              else Path(args[args.index("--append-system-prompt-file") + 1]).read_text())
+        check("migrate the billing export to Parquet" in sp.split("Load-bearing facts", 1)[-1]
+              if "Load-bearing facts" in sp else False,
+              "chat A's anchored goal reaches the worker's system prompt")
+        b_calls = [c for c in calls if c.get("chat_key") == chats[1]]
+        b_args = b_calls[-1]["args"]
+        b_sp = (b_args[b_args.index("--append-system-prompt") + 1] if "--append-system-prompt" in b_args
+                else Path(b_args[b_args.index("--append-system-prompt-file") + 1]).read_text())
+        check("billing export" not in b_sp, "chat A's goal never reaches chat B's worker")
         check(st2 == st, f"an unwanted reset keeps the same store: {st2}")
 
         # /new needs a session to wipe; the fake engine leaves none, so mark one.

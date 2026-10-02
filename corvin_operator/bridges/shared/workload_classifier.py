@@ -1,4 +1,4 @@
-"""Hybrid workload classifier — ADR-0043.
+"""Hybrid workload classifier — ADR-2104.
 
 Classifies user messages into CHAT vs. CODE workloads using heuristic patterns
 (engine-agnostic). Classification result is consumed by engine_models.py to
@@ -211,7 +211,7 @@ def classify_and_store_workload_hint(
     audit_callback: "callable | None" = None,
 ) -> dict:
     """
-    ADR-0043 Phase 1: Classify user message and store hint in session.
+    ADR-2104 Phase 1: Classify user message and store hint in session.
 
     Called early in the bridge request handler (before spawn-input
     resolution; the hint is threaded into _resolve_os_model as a parameter).

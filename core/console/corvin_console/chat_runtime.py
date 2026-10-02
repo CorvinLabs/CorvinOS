@@ -2158,7 +2158,7 @@ def _cel_brief_block(cel_brief: str) -> str:
     return "\n\n" + cel_brief.strip() + "\n"
 
 
-def _session_ledger_block(sess: WebChatSession) -> str:
+def _session_ledger_block(sess: WebChatSession, current_prompt: str = "") -> str:
     """Re-supply every turn of this chat the live CLI transcript does not hold.
 
     The chat's ``turns.jsonl`` is already an append-only record of every turn;
@@ -2177,6 +2177,9 @@ def _session_ledger_block(sess: WebChatSession) -> str:
             read_turns(sess.tenant_id, sess.sid), sess.workdir,
             resumed=sess.turn_count > 0, ledger_file=str(tpath),
             channel="web", chat_key=sess.chat_key, tenant_id=sess.tenant_id,
+            # The system prompt is built BEFORE this turn's user message is
+            # logged; naming it lets an earlier unanswered message stay history.
+            current_prompt=current_prompt or None,
         )
     except Exception:  # noqa: BLE001
         return ""
@@ -2204,7 +2207,7 @@ def _turn_system_prompt(sess: WebChatSession, task_text: str = "",
         + _acs_directive_block(task_text)
         + _cel_brief_block(cel_brief)
         + _infinite_session_context_block(sess)
-        + _session_ledger_block(sess)
+        + _session_ledger_block(sess, task_text)
         # LAST WORD on language. The rule near the top and the profile line in
         # the middle were both present and still lost: in a ~10 KB, overwhelmingly
         # ENGLISH system prompt a single early directive gets diluted, and an
@@ -3613,7 +3616,8 @@ def _turns_path(tenant_id: str, sid: str) -> Path:
 
 def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
                  voice_key_hint: str | None = None, tde_progress: dict[str, Any] | None = None,
-                 execution_context: dict[str, Any] | None = None) -> None:
+                 execution_context: dict[str, Any] | None = None,
+                 gate_refused: str | None = None) -> None:
     """Append one turn (user or assistant) to the session's turns log.
 
     ``voice_key_hint`` (ADR-0194 Phase 1) pins the voice_key of the text this
@@ -3649,6 +3653,10 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
         payload["tde_progress"] = tde_progress
     if execution_context:
         payload["execution_context"] = execution_context
+    if gate_refused:
+        # A pre-spawn gate answered: the session ledger re-supplies this turn
+        # with the user's text WITHHELD, never past the gate (ADR-2102).
+        payload["gate_refused"] = gate_refused
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
@@ -5617,7 +5625,8 @@ async def _stream_turn_impl(
         yield {"type": "delta", "text": _gate_refusal}
         yield {"type": "result", "text": _gate_refusal, "usage": None}
         touch(sess, increment_turn=True)
-        _append_turn(sess, "assistant", [{"kind": "text", "text": _gate_refusal}])
+        _append_turn(sess, "assistant", [{"kind": "text", "text": _gate_refusal}],
+                     gate_refused="pre_spawn")
         yield {"type": "done"}
         return
 

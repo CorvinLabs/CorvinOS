@@ -39,7 +39,7 @@ def test_first_audit_write_on_fresh_install_completes():
         assert str(chain).startswith(d), f"chain escaped the sandbox: {chain}"
         kinds = [json.loads(l)["event_type"] for l in chain.read_text().splitlines() if l.strip()]
         assert "session_ledger.boundary" in kinds
-        assert (Path(d) / "home").rglob("instance_key.pem"), "the key was generated"
+        assert any((Path(d) / "home").rglob("instance_key.pem")), "the key was generated"
 
 
 if __name__ == "__main__":

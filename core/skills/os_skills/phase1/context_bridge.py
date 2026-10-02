@@ -17,7 +17,8 @@ Compliance:
 - GDPR Art. 30/32: split decisions immutable, audit-logged
 - ADR-0050: manages main-thread session pinning, worker memory bridges
 
-NOT ON ANY LIVE PATH (verified 2026-10-02; listed in scripts/zero_caller_baseline.json).
+IMPORTED, NEVER USED (verified 2026-10-02): ``phase1/__init__`` re-exports it and
+a mounted console route imports that package, but nothing instantiates it.
 Cross-session continuity is ``corvin_operator/bridges/shared/session_ledger.py``
 (bridge + console, Corvin-ADR ADR-2102). Do not build another context bridge:
 wire this one into a live entry point or delete it.

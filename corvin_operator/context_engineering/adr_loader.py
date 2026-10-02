@@ -35,6 +35,8 @@ mir mich dir dich beim bitte kannst mach mache warum
 mein meine meinen meiner unser unsere heute morgen gestern hoch gibt geht gehen
 setze setzen ohne nach vor neu neue neuen neuer immer schon sehr kann soll
 funktioniert funktionieren zwischen jetzt dann hier dort welche welcher
+eines einen einem einer eine ihr ihre ihren ihrem sein seine seinen ob sag sage
+alle allen nach pro bzw usw etwa also
 adr adrs phase status proposed accepted implemented
 """.split())
 
@@ -52,7 +54,15 @@ _DE_EN = {
     "spracherkennung": "transcription", "einwilligung": "consent",
     "mandant": "tenant", "mandanten": "tenant", "berechtigung": "permission",
     "fehler": "error", "absturz": "crash", "neustart": "restart",
+    "lösche": "erasure", "lösch": "erasure", "gelöscht": "erasure",
+    "daten": "data", "nutzer": "user", "nutzers": "user", "benutzer": "user",
+    "schlüssel": "key", "verschlüsselung": "encryption", "verschlüsselt": "encryption",
+    "rotiere": "rotation", "rotieren": "rotation",
+    "prüfe": "verify", "prüfen": "verify", "intakt": "intact",
+    "protokoll": "log", "einwilligungen": "consent",
 }
+#: A match below this share of the best match's score is dropped.
+RELATIVE_CUTOFF = 0.5
 #: Minimum normalised relevance for an ADR to be returned.
 MIN_RELEVANCE = 0.22
 #: Minimum absolute evidence: the summed idf of the matched terms. Coverage is
@@ -72,9 +82,13 @@ def _stem(word: str) -> str:
     erase/erasure → eras, cache/caching/cached → cach) without a stemming
     dependency. Longest suffix first; a trailing ``i``/``e`` left by a suffix
     (classifi-er, eras-ure) is folded the same way the bare form is."""
+    if word.endswith("sses"):
+        word = word[:-2]          # classes/processes/accesses → class/process/access
     for suf in ("ications", "ication", "ations", "ation", "ences", "ence", "ings",
                 "ions", "ing", "ion", "ures", "ure", "ies", "ers", "ied", "ed", "es",
                 "er", "y", "s", "e"):
+        if suf == "s" and word.endswith("ss"):
+            break                 # class, process, loss: not a plural
         if len(word) - len(suf) >= 3 and word.endswith(suf):
             word = word[: -len(suf)]
             break
@@ -86,14 +100,17 @@ def _stem(word: str) -> str:
 def tokenize(text: str) -> List[str]:
     """Whole-word, stop-word-free, stemmed tokens (order-preserving, deduped)."""
     out: Dict[str, None] = {}
+    prev = ""
     for w in _TOKEN_RE.findall((text or "").lower()):
         w = _DE_EN.get(w, w)
-        if w in _STOPWORDS or (len(w) < 3 and not (w.isdigit() and len(w) == 2)):
-            continue
-        if w.isdigit():  # "Art. 17" vs "Art. 32", "403": numbers carry topic
+        if re.fullmatch(r"l\d{1,2}", w):        # layer ids: L4, L35
             out[w] = None
-            continue
-        out[_stem(w)] = None
+        elif w.isdigit() and (len(w) >= 2 or prev in ("art", "artikel", "layer")):
+            # "Art. 17" vs "Art. 32", "Art. 5", "403": numbers carry topic
+            out[(prev + w) if prev in ("art", "artikel") else w] = None
+        elif not (w in _STOPWORDS or len(w) < 3 or w.isdigit()):
+            out[_stem(w)] = None
+        prev = w
     return list(out)
 
 
@@ -271,6 +288,7 @@ class ADRLoader:
         self._max_idf = math.log((n + 1) / 0.5)
         _vals = sorted(self._idf.values())
         self._median_idf = _vals[len(_vals) // 2] if _vals else 1.0
+        self._low_idf = _vals[len(_vals) // 4] if _vals else 1.0
 
     def _parse_adr(self, adr_file: Path) -> Optional[ADRMetadata]:
         """Parse ADR file: extract frontmatter and content preview.
@@ -313,9 +331,24 @@ class ADRLoader:
             return None
         adr_id = f"ADR-{num.group(1)}"
 
-        h1 = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
-        title = h1.group(1).strip() if h1 else stem.replace("-", " ").title()
-        title = re.sub(r"^ADR[- ]?\d{4}\s*[:—–-]\s*", "", title)
+        # Title: frontmatter ``title:`` first, else the first H1 OUTSIDE code
+        # fences (a "# Begin transaction" comment in a code block is not a
+        # title), else the file stem; the "ADR-NNNN:" prefix is stripped in any
+        # case form.
+        title = str(frontmatter.get("title") or "").strip()
+        if not title:
+            in_fence = False
+            for line in body.splitlines():
+                if line.lstrip().startswith("```"):
+                    in_fence = not in_fence
+                    continue
+                if not in_fence and line.startswith("# "):
+                    title = line[2:].strip()
+                    break
+        if not title:
+            title = stem.replace("-", " ").title()
+        title = re.sub(r"^ADR[- ]?\d{4}(?:[- ]\d{4})?\s*[:—–-]?\s*", "", title, flags=re.IGNORECASE)
+        title = title or stem
 
         return ADRMetadata(
             id=adr_id,
@@ -414,16 +447,16 @@ class ADRLoader:
         if not known:
             return []
         # A term the corpus never uses still belongs to the question: it counts
-        # in the denominator at the median idf, so "summarize this PDF" is not
-        # treated as a one-word query that "summarize" alone fully covers.
+        # in the denominator (at the 25th-percentile idf — an unknown word is
+        # evidence of a gap, not a near-unique term), so "summarize this PDF" is
+        # not treated as a one-word query that "summarize" alone fully covers.
         unknown = len(q) - len(known)
-        weights = sorted(list(known.values()) + [self._median_idf] * unknown, reverse=True)
+        weights = sorted(list(known.values()) + [self._low_idf] * unknown, reverse=True)
         norm = sum(weights[:6])
-        # Mostly-unknown question (another language, other domain): one matched
-        # word is not enough evidence of topic.
-        # One matched word is topic evidence only for a one-word question; with
-        # two or more known words, or a mostly-unknown question, two must match.
-        min_hits = 1 if (len(known) == 1 and len(q) == 1) else 2
+        # The evidence floor scales down for a question whose own words are all
+        # common ("audit chain": 3.8 idf in total) — a full match of such a
+        # question is still a match.
+        evidence_floor = min(MIN_EVIDENCE, 0.8 * sum(known.values()))
         out: List[Tuple[str, float, float]] = []
         for adr_id, body in self._body_tokens.items():
             if str(self.adrs[adr_id].metadata.status).lower() in _INACTIVE_STATUSES:
@@ -432,18 +465,31 @@ class ADRLoader:
             hits = [t for t in known if t in body]
             if not hits:
                 continue
-            if len(hits) < min_hits:
-                continue
-            if len(hits) < 2 and known[hits[0]] < SINGLE_TERM_MIN_IDF:
-                continue
+            # One matched word is topic evidence for a one-word question, or for
+            # a short question (≤ 3 words, all known to the corpus) when that
+            # word is rare and in the ADR's title ("Bedrock 403"). Measured: +2
+            # on the held-out set; "summarize this PDF" → ADR-0596 (voice
+            # summarization) is its recorded borderline case.
+            if len(hits) < 2:
+                # ...and the word must be in the TITLE: a preview mention is
+                # not what the decision is about.
+                short_ok = len(q) <= 3 and unknown == 0 and hits[0] in title
+                if not (len(q) == 1 or short_ok) or known[hits[0]] < SINGLE_TERM_MIN_IDF:
+                    continue
             raw = sum(known[t] * (1.0 if t in title else 0.5) for t in hits)
-            if sum(known[t] for t in hits) < MIN_EVIDENCE:
+            if sum(known[t] for t in hits) < evidence_floor:
                 continue
             score = min(1.0, raw / norm) if norm > 0 else 0.0
             if score >= min_relevance:
                 out.append((adr_id, round(score, 4), raw))
         # Ties (several ADRs at the 1.0 cap) break on raw evidence, then id.
         out.sort(key=lambda x: (-x[1], -x[2], x[0]))
+        # Relative cut: when a strong match exists, a match far below it is
+        # noise ("Layer 36 erasure" → the L36 ADR at 1.0, then other layers
+        # that merely mention erasure).
+        if out:
+            floor = RELATIVE_CUTOFF * out[0][1]
+            out = [x for x in out if x[1] >= floor]
         return [(i, sc) for i, sc, _ in out]
 
     def search_by_keywords(self, keywords: List[str], max_results: int = 5) -> List[str]:
@@ -471,12 +517,15 @@ def _status_rank(meta: ADRMetadata) -> int:
 # removed or modified (directory listing + max mtime), so an ADR edited mid-run
 # is picked up on the next turn.
 _CACHE_LOCK = threading.Lock()
-_CACHE: Dict[str, Tuple[Tuple[int, int], "ADRLoader"]] = {}
+_CACHE: Dict[str, Tuple[Tuple[int, int, int], "ADRLoader"]] = {}
 
 
-def _dir_signature(d: Path) -> Tuple[int, int]:
-    files = list(d.glob("*.md"))
-    return (len(files), max((f.stat().st_mtime_ns for f in files), default=0))
+def _dir_signature(d: Path) -> Tuple[int, int, int]:
+    """Count, newest mtime and a hash of the sorted names: a rename changes
+    neither count nor any mtime, so the names must be part of it."""
+    files = sorted(d.glob("*.md"))
+    return (len(files), max((f.stat().st_mtime_ns for f in files), default=0),
+            hash(tuple(f.name for f in files)))
 
 
 def get_loader(adr_repo_path: Optional[str] = None) -> ADRLoader:

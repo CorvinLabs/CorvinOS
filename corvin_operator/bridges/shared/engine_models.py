@@ -748,7 +748,7 @@ def resolve_engine_egress_host(tenant_id: str, engine_id: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Workload-based model tier routing (ADR-0043)
+# Workload-based model tier routing (ADR-2104)
 # ---------------------------------------------------------------------------
 
 # Per-engine model tier definitions: maps engine→workload→model_id
@@ -822,7 +822,7 @@ def resolve_model_for_workload(
     """Resolve the actual model to use based on engine, workload classification,
     and user's chosen model.
 
-    ADR-0043 Phase 1: Route CHAT workloads (high confidence) to the engine's fast tier,
+    ADR-2104 Phase 1: Route CHAT workloads (high confidence) to the engine's fast tier,
     CODE to full tier, UNCERTAIN to user's choice (safe fallback).
 
     Args:

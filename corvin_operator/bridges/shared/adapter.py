@@ -4380,7 +4380,7 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
         engine_id = "claude_code"
     env["CORVIN_ENGINE_ID"] = engine_id
     env["CORVIN_CHAT_KEY"] = channel_value  # for TEB audit context
-    # ADR-0043 M1 — Hybrid workload classifier for fast-chat routing (opt-in).
+    # ADR-2104 M1 — Hybrid workload classifier for fast-chat routing (opt-in).
     # Model routing consumes the hint as a function parameter in
     # _resolve_os_model Tier 2.7 — NOT these env vars. They are exported to
     # the child spawn env for observability/debugging only. Inherited values
@@ -4505,9 +4505,9 @@ def _cel_session(channel: str, chat_key: str | None):
             from . import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
         except ImportError:
             import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
-        fence = _ledger.last_manual_reset(_ledger.read_ledger(_session_dir(channel, str(chat_key))))
-        if fence:
-            key += f"#{int(fence.get('seq') or 0)}"
+        fence_seq = _ledger.manual_fence_seq(_session_dir(channel, str(chat_key)))
+        if fence_seq:
+            key += f"#{fence_seq}"
     except Exception:  # noqa: BLE001 — no ledger → the plain chat key
         pass
     import types as _types  # noqa: PLC0415
@@ -5070,7 +5070,7 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
 
     workdir = _session_dir(channel, chat_key)
 
-    # ADR-0043 — Classify workload (CHAT vs. CODE) for hybrid model routing (opt-in).
+    # ADR-2104 — Classify workload (CHAT vs. CODE) for hybrid model routing (opt-in).
     # The hint is threaded as a PARAMETER through _resolve_spawn_inputs into
     # _resolve_os_model Tier 2.7 (never via os.environ — racy + cross-tenant).
     # Dual import: production runs adapter.py as a top-level module, where a
@@ -6535,6 +6535,21 @@ def _call_codex_streaming_via_engine(
         _btw_buffered = drain_btw_buffer(str(chat_key))
         if _btw_buffered:
             system_parts.append(_btw_buffered)
+        # Session ledger (ADR-2102): this engine keeps no Claude transcript, so
+        # nothing is provably live — the chat's turns are re-supplied every spawn.
+        try:
+            try:
+                from . import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+            except ImportError:
+                import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+            _ledger_block = _ledger.render_context(
+                _session_dir(channel, str(chat_key)), channel=str(channel or ""),
+                chat_key=str(chat_key), engine_transcript=False,
+                tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default").strip()
+            if _ledger_block:
+                system_parts.append(_ledger_block)
+        except Exception as e:  # noqa: BLE001
+            log(f"session ledger inject failed: {e}")
     system_prompt = "\n\n".join(system_parts) if system_parts else None
 
     _env_idle = os.environ.get("ADAPTER_STREAM_IDLE_TIMEOUT")
@@ -6862,6 +6877,21 @@ def _call_opencode_streaming_via_engine(
         _btw_buffered = drain_btw_buffer(str(chat_key))
         if _btw_buffered:
             system_parts.append(_btw_buffered)
+        # Session ledger (ADR-2102): this engine keeps no Claude transcript, so
+        # nothing is provably live — the chat's turns are re-supplied every spawn.
+        try:
+            try:
+                from . import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+            except ImportError:
+                import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+            _ledger_block = _ledger.render_context(
+                _session_dir(channel, str(chat_key)), channel=str(channel or ""),
+                chat_key=str(chat_key), engine_transcript=False,
+                tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default").strip()
+            if _ledger_block:
+                system_parts.append(_ledger_block)
+        except Exception as e:  # noqa: BLE001
+            log(f"session ledger inject failed: {e}")
     system_prompt = "\n\n".join(system_parts) if system_parts else None
 
     _env_idle = os.environ.get("ADAPTER_STREAM_IDLE_TIMEOUT")
@@ -7236,11 +7266,22 @@ def _current_turn_task() -> "_TurnTask | None":
     return getattr(_TURN_TASK, "cur", None)
 
 
+#: Per-thread outcome of the bridge turn being processed: the refusal reason
+#: when a gate (L44 house-rules, capability, budget, …) answered instead of the
+#: engine. process_one resets it before the turn and reads it after, so the
+#: session ledger and the CEL outbound hook can tell a refusal from an answer.
+_TURN_OUTCOME = threading.local()
+
+
 def _turn_refused(reason: str, retry_count: "int | None" = None, *, cancelled: bool = False) -> None:
     """Mark the current attempt as not answered before its branch returns the
     explanatory text — otherwise the wrapper records that text as a completed
     reply. ``engine_error``/``timeout`` are failures; a user ``/cancel`` is a
     cancellation; anything else is a refusal (see _ENGINE_FAILURE_REASONS)."""
+    if not cancelled and reason not in _ENGINE_FAILURE_REASONS:
+        _TURN_OUTCOME.refused = str(reason)
+    else:
+        _TURN_OUTCOME.failed = str(reason)
     turn = _current_turn_task()
     if turn is None:
         return
@@ -7475,7 +7516,7 @@ def _call_claude_streaming_impl(
 
     workdir = _session_dir(channel, chat_key)
 
-    # ADR-0043 — Classify workload (CHAT vs. CODE) for hybrid model routing (opt-in).
+    # ADR-2104 — Classify workload (CHAT vs. CODE) for hybrid model routing (opt-in).
     # The hint is threaded as a PARAMETER through _resolve_spawn_inputs into
     # _resolve_os_model Tier 2.7 (never via os.environ — racy + cross-tenant).
     # Dual import: production runs adapter.py as a top-level module, where a
@@ -11148,6 +11189,23 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             details={"delivered": delivered, "queued": queued,
                      "text_len": len(btw_text)},
         )
+        # Session ledger (ADR-2102): a /btw note is the user's words in this
+        # chat — record it (never "live": it is not its own spawned turn).
+        if btw_text and (delivered or queued) and chat_key:
+            try:
+                try:
+                    from . import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+                except ImportError:
+                    import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+                _ledger.append_turn(
+                    _session_dir(channel, str(chat_key)), channel=str(channel or ""),
+                    chat_key=str(chat_key), user_text="/btw " + btw_text,
+                    assistant_text=("(note delivered to the running turn)" if delivered
+                                    else "(note queued for the next turn)"),
+                    msg_id=str(msg_id or ""), sender=str(sender or ""), spawned=False,
+                    tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default")
+            except Exception as e:  # noqa: BLE001
+                log(f"session ledger btw append failed (non-fatal): {e}")
         if delivered:
             ack_text = "📝 Note delivered to the running task."
         elif queued:
@@ -11914,12 +11972,15 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         _deleg_meta: dict = {"turn_id": _new_route_turn_id()}
         _route_t0 = time.monotonic()
         _LAST_OS_TURN_STATUS.pop(chat_key, None)
+        _TURN_OUTCOME.refused = None
+        _TURN_OUTCOME.failed = None
         answer, prompt = _maybe_delegate_worker(
             prompt, channel=channel, chat_key=chat_key,
             persona=str((profile or {}).get("persona")
                         or (profile or {}).get("name") or ""),
             meta=_deleg_meta,
         )
+        _TURN_OUTCOME.delegated = answer is not None
         if "routed_engine" not in _deleg_meta:
             _record_unrouted_turn(_route_tid, _deleg_meta, prompt, delegated=answer is not None)
         if answer is not None:
@@ -12091,7 +12152,13 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             _ledger.append_turn(
                 _ledger_wd, channel=str(channel or ""), chat_key=str(chat_key),
                 user_text=prompt, assistant_text=answer or "",
-                msg_id=str(msg_id or ""), sender=str(sender or ""), tenant_id=_ledger_tid,
+                msg_id=str(msg_id or ""), sender=str(sender or ""),
+                refused=str(getattr(_TURN_OUTCOME, "refused", None) or ""),
+                # Only a turn the OS CLI session actually ran can be in its
+                # transcript; delegated / failed turns never count as live.
+                spawned=not (getattr(_TURN_OUTCOME, "delegated", False)
+                             or getattr(_TURN_OUTCOME, "failed", None)),
+                tenant_id=_ledger_tid,
             )
             _ledger.note_compactions(
                 _ledger_wd, channel=str(channel or ""), chat_key=str(chat_key),
@@ -12107,7 +12174,8 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # bridge's CEL INBOUND path exactly (env tenant, the same `_cel_session`
     # key the spawn passed), so capture lands in the SAME (tenant, session_key)
     # store the next turn's brief reads.
-    if _cel_maybe_capture_decision is not None and answer:
+    if (_cel_maybe_capture_decision is not None and answer
+            and not getattr(_TURN_OUTCOME, "refused", None)):
         try:
             _cdp_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
             _cel_maybe_capture_decision(answer, _cdp_tid, _cel_session(channel, chat_key))

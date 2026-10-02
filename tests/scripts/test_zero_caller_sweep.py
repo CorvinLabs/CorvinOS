@@ -28,16 +28,21 @@ def test_known_live_modules_are_reachable():
 def test_known_dead_context_bridges_are_flagged():
     dead = {(d["file"], d["class"]) for d in z.sweep()["dead"]}
     assert ("core/orchestration/subsystems/context_bridge.py", "ContextBridge") in dead
-    assert ("core/skills/os_skills/phase1/context_bridge.py", "ContextBridge") in dead
+    # phase1's ContextBridge is imported (package __init__ re-export, pulled in
+    # by a mounted console route) but never instantiated — reachable by import,
+    # so NOT flagged; "imported" is not "used" (review R2-C16).
+    assert ("core/skills/os_skills/phase1/context_bridge.py", "ContextBridge") not in dead
     # review R1-C10: the skill_registry_phase1 `Skill` base and unscheduled stages
     assert ("core/skills/workflow_optimizer.py", "WorkflowOptimizerSkill") in dead
     assert any(d["file"].endswith("adr_reranking_stage.py") for d in z.sweep()["dead"])
 
 
-def test_manifest_discovered_plugins_are_not_flagged():
-    """A builtin plugin is loaded from plugin.json's entry_point, not imported."""
+def test_plugin_json_entry_points_are_not_roots():
+    """Review R2-C15: the plugin bootstrap loads plugin.yaml → provider.py /
+    plugin.py; a plugin.json entry_point is never loaded, so those plugins
+    (which also import a nonexistent ``corvin_plugins.BasePlugin``) are dead."""
     dead = {d["file"] for d in z.sweep()["dead"]}
-    assert "core/plugins/buildin/ai/vibe_engineering/src/vibe_routing.py" not in dead
+    assert "core/plugins/buildin/ai/vibe_engineering/src/vibe_routing.py" in dead
 
 
 def test_the_gate_passes_on_the_committed_baseline():

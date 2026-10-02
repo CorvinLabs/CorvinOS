@@ -74,7 +74,16 @@ class TestParser:
         assert "ADR-0101" in corpus.adrs
         assert not any(k.startswith("ADR-0101-") for k in corpus.adrs)
 
-    def test_frontmatter_id_wins_over_filename_number(self, corpus):
+    def test_filename_number_wins_over_a_stale_frontmatter_id(self, tmp_path):
+        """Renumbered files keep their OLD id in the frontmatter (review R1-B2)."""
+        d = tmp_path / "dec"
+        d.mkdir()
+        _adr(d, "ADR-0785-0407-skill-eligibility-classes.md", id_="ADR-0407",
+             status="ACCEPTED", title="Skill eligibility classes")
+        loader = ADRLoader(adr_repo_path=str(d))
+        assert "ADR-0785" in loader.adrs and "ADR-0407" not in loader.adrs
+
+    def test_consistent_ids_resolve_with_the_h1_title(self, corpus):
         assert "ADR-0788" in corpus.adrs
         assert corpus.adrs["ADR-0788"].metadata.title == "Custom GitHub Repository Discovery"
 
@@ -173,6 +182,18 @@ class TestRealCorpusRegression:
         assert not forbidden, forbidden
         assert not noise, noise
         assert len(hits) == len(POSITIVE), misses
+
+    def test_held_out_set_does_not_regress(self):
+        """Held-out queries (round-2 reviewer). Measured 2026-10-02: 7/9 found,
+        off-topic hits only on the documented consent query."""
+        from .adr_retrieval_eval import HELD_OUT
+        clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))
+        find = lambda q: {m.id for m in clf.find_relevant_adrs(
+            SimpleNamespace(normalized=SimpleNamespace(summary=q)))}
+        hits = [q for q, exp, _ in HELD_OUT if find(q) & exp]
+        bad = [q for q, _, forb in HELD_OUT if find(q) & forb]
+        assert len(hits) >= 7, [q for q, e, _ in HELD_OUT if q not in hits]
+        assert bad in ([], ["consent gate deny by default TTL"]), bad
 
     def test_every_document_stays_retrievable(self):
         """Review R1-B2: the frontmatter-first id + one-file-per-id rule made

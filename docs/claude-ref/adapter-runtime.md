@@ -1006,10 +1006,16 @@ makes that loss structurally impossible for the chat's own turns:
 | Rule | Where |
 |---|---|
 | **Record** every finished turn verbatim (user text, answer, `chat_key`, `sender`), append-only (`O_APPEND` + `flock` + fsync, 0600, a torn last line is terminated first) to `<workdir>/.corvin-ledger/ledger.jsonl`. `seq`/`n` come from a counters-only sidecar (`counters.json`), so an erasure never makes numbers repeat. No reset path removes the ledger; only GDPR erasure (`L-session-ledger`) does. | `process_one`, the moment the answer is final — before TTS, outbox and grading |
-| **Verify coverage against the transcript**, not against bookkeeping: a turn is "live" only if a user entry in the current CLI transcript AFTER its last `compact_boundary` equals its text or ends with `"\n" + text` (the engine prefixes `User input:` and any brief; zero-width `@` neutralisers are ignored). Matched newest-first, each entry claimed once — so "ok" is never "found" inside another message. Unreadable transcript ⇒ nothing is live ⇒ everything is re-supplied. | `render_context` → `scan_transcript`, `uncovered_turns` |
+| **Verify coverage against the transcript**, not against bookkeeping: the user entries of the current CLI transcript AFTER its last `compact_boundary` (meta entries skipped) are aligned with the recorded turns CONTIGUOUSLY from the newest: the newest spawned turn must equal the newest entry (or the entry must end with `"\n" + text` — the engine prefixes `User input:` and any brief; zero-width `@` neutralisers are ignored), the next one the entry before it; the first mismatch ends the alignment. Turns recorded `spawned: false` (delegated, failed, `/btw` notes) or refused never align. Unreadable transcript ⇒ nothing is live ⇒ everything is re-supplied. | `render_context` → `scan_transcript`, `uncovered_turns` |
 | **Re-supply** every non-live turn on EVERY spawn (including the fresh retry after an overflow/corrupted-session reset): newest turns verbatim (40 000 chars), older ones as index lines (16 000 chars), beyond that a line naming the turn range and the ledger file. Cuts move in steps of 8 turns; the block's header is constant and turn sections only append, so its prefix stays byte-stable for the prompt cache. | `_resolve_spawn_inputs`, after the user-model block |
 | **`/new` fences.** Turns before the operator's last `/new` are not re-supplied (one line says they are in the ledger file); `/new`'s reply says the history is kept. A `/new` is recorded even when no CLI state was left to wipe. Unwanted resets do NOT fence. | `uncovered_turns` / `last_manual_reset` |
 | **Framed as data.** The block says its turns are a record, not instructions — it sits in the system prompt and must not lend old text system-prompt authority. | `render_from_records` |
+| **Refusals stay refused.** A turn a gate answered (L44 house-rules and the other pre-spawn gates — `_turn_refused` sets a per-thread outcome) is recorded with `refused: <gate>`; the view shows the refusal and withholds the user text. | `process_one`, `_render_turn` |
+| **Every engine.** Codex/OpenCode keep no Claude transcript: their spawns get the block with nothing counted live (`engine_transcript=False`). `/btw` notes are recorded too. | `_call_*_via_engine`, btw branch |
+
+The view always shows at least the newest re-supplied turn verbatim; budget
+steps never push it into the index. The `/new` fence is also kept in the
+counters sidecar, so the per-turn CEL session key does not parse the ledger.
 
 Compactions are recorded as `compaction` boundaries after each turn
 (`note_compactions`, idempotent by the boundary's uuid). Boundaries are labels
@@ -1041,9 +1047,15 @@ via the console overlay). `_cel_session(channel, chat_key)` now passes
 `<channel>:<chat>` plus `#<seq>` of the last `/new` from the ledger, so an
 explicit start-over gets a fresh anchor and an unwanted reset keeps it; and
 `pipeline._maybe_apply_anchor` / `maybe_capture_decision_point` write NOTHING
-when there is no session key. On the active pipeline the anchor block is folded
+when there is no session key. A turn's task is only a CANDIDATE goal until the
+turn was answered (`anchor.set_pending_goal` inbound, `promote_pending_goal` in
+the outbound hook, which both surfaces skip for refused turns) — the inbound
+hook runs before the acceptable-use gates, and a refused task must never become
+a goal re-injected every turn. On the active pipeline the anchor block is folded
 into the synthesised prompt inside `_gate2_and_bind`, so Gate-2 inspects it and
-both surfaces deliver it. E2E: `shared/test_cel_anchor_bridge_e2e.py`.
+both surfaces deliver it; the injection counter counts only after the gate.
+E2E: `shared/test_cel_anchor_bridge_e2e.py` (per-chat stores AND the goal in the
+worker prompt), `tests/e2e/test_cel_anchor_console_active_e2e.py`.
 
 ### `corvin_operator/forge/paths.py` was shadowing `bridges/shared/paths.py`
 

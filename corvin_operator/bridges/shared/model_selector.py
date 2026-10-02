@@ -998,7 +998,7 @@ def resolve_os_model(
       2.   profile.model                                             → explicit per-persona/profile pin
       1.5. profile._persona_os_model                                → per-persona pin (ADR-0123)
       2.5. spec.engine_models.<engine_id>.os_model in tenant YAML   → per-engine tenant default (ADR-0119)
-      2.7. ADR-0043 workload classification (CHAT fast-path only)    → opt-in tenant feature flag
+      2.7. ADR-2104 workload classification (CHAT fast-path only)    → opt-in tenant feature flag
       2.8. ADR-0165 ATO plan recommendation                          → complexity-based routing
       2.9. classify_os_model(task_input)                             → real complexity classifier (ADR-0952, autoselect-gated)
       3.   autoselect(payload_chars) + floor                         → adaptive (default path)
@@ -1008,7 +1008,7 @@ def resolve_os_model(
     console) passes ``None``; Tiers 2 and 1.5 then simply no-op and fall
     through to Tier 2.5, which is the tier that matters for parity.
 
-    ``workload_hint`` / ``chat_key`` / ``audit_fn`` are ADR-0043 bridge
+    ``workload_hint`` / ``chat_key`` / ``audit_fn`` are ADR-2104 bridge
     concerns: a caller that never passes ``workload_hint`` never reaches
     Tier 2.7 and never needs to supply ``audit_fn``.
 
@@ -1056,7 +1056,7 @@ def resolve_os_model(
         except Exception:  # noqa: BLE001
             pass
 
-    # Tier 2.7 — ADR-0043 workload classification (hybrid CHAT/CODE routing).
+    # Tier 2.7 — ADR-2104 workload classification (hybrid CHAT/CODE routing).
     # The hint arrives as a PARAMETER threaded from the caller's request
     # handler, NOT via env vars: os.environ is process-global in a daemon
     # serving parallel chats/tenants, so an env channel is both racy and a

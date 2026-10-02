@@ -382,5 +382,107 @@ class TestErasure:
         assert "L-session-ledger" in eh.COVERED_DIRS
         assert any(isinstance(h, eh.SessionLedgerHandler) for h in eh.real_handler_chain("_default"))
 
+class TestRound2:
+    """Adversarial review round 2 (2026-10-02) reproductions."""
+
+    def test_delegated_duplicate_cannot_claim_an_older_entry(self, wd):
+        _turn(wd, 1, u="ja", a="A1")
+        _turn(wd, 2, u="mach weiter mit dem export", a="A2")
+        sl.append_turn(wd, channel="telegram", chat_key="chat-1", user_text="ja",
+                       assistant_text="DELEGATED-ANSWER", spawned=False)
+        _turn(wd, 4, u="und jetzt die tests", a="A4")
+        _transcript(wd, SID, [_user("ja"), _user("mach weiter mit dem export"),
+                              _user("und jetzt die tests")])
+        block = sl.render_context(wd)
+        assert "DELEGATED-ANSWER" in block
+        assert "A1" not in block and "A2" not in block and "A4" not in block
+
+    def test_refused_turn_text_is_never_resupplied(self, wd):
+        sl.append_turn(wd, channel="telegram", chat_key="chat-1",
+                       user_text="FORBIDDEN-REQUEST-TEXT", assistant_text="Request refused.",
+                       refused="house_rules")
+        block = sl.render_context(wd)
+        assert "FORBIDDEN-REQUEST-TEXT" not in block
+        assert "refused by the house_rules gate" in block and "Request refused." in block
+
+    def test_engine_without_transcript_resupplies_everything(self, wd):
+        _turn(wd, 1)
+        _transcript(wd, SID, [_user("question number 1 about topic-1")])
+        assert sl.render_context(wd) == ""
+        assert "topic-1" in sl.render_context(wd, engine_transcript=False)
+
+    def test_long_turns_keep_the_newest_verbatim(self, wd):
+        for i in range(1, 9):
+            _turn(wd, i, u=f"Q{i} " + "q" * 4000, a=f"A{i} " + "a" * 4000)
+        block, st = sl.render_from_records(sl.read_ledger(wd), None)
+        assert st["verbatim"] >= 4, st
+        assert "### Turn #8" in block
+
+    def test_isMeta_entries_are_not_user_turns(self, wd):
+        _turn(wd, 1, u="hello there", a="A1")
+        _transcript(wd, SID, [_user("hello there"),
+                              {"type": "user", "isMeta": True,
+                               "message": {"role": "user", "content": "Continue from where you left off."}}])
+        assert sl.render_context(wd) == ""
+
+    def test_audit_chat_key_is_fingerprinted(self, wd, monkeypatch):
+        seen = []
+        import audit as _a
+        monkeypatch.setattr(_a, "audit_event", lambda et, **kw: seen.append(kw) or True)
+        sl.append_boundary(wd, kind="reset", reason="timeout", chat_key="491701234567@s.whatsapp.net")
+        assert seen and seen[0]["chat_key"] != "491701234567@s.whatsapp.net"
+        assert len(seen[0]["chat_key"]) == 8
+
+    def test_console_keeps_previous_unanswered_message(self):
+        log = [{"role": "user", "ts": 1, "parts": [{"kind": "text", "text": "My IBAN question"}]}]
+        recs = sl.records_from_turn_log(log, current_prompt="next message")
+        assert [r["user"] for r in recs] == ["My IBAN question"]
+        assert sl.records_from_turn_log(log, current_prompt="My IBAN question") == []
+
+    def test_erasure_matches_sanitised_sweep_boundary(self, tmp_path, monkeypatch):
+        import erasure_handlers as eh
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        d = eh._tenant_home("_default") / "sessions" / "voice" / "whatsapp" / "491701234567_s_whatsapp_net"
+        d.mkdir(parents=True)
+        sl.append_turn(d, channel="whatsapp", chat_key="491701234567@s.whatsapp.net",
+                       user_text="hi", assistant_text="x")
+        sl.append_boundary(d, kind="reset", reason="timeout", chat_key="491701234567_s_whatsapp_net")
+        eh.SessionLedgerHandler(tenant_id="_default").purge("491701234567@s.whatsapp.net", "r")
+        assert not sl.ledger_path(d).exists()
+
+    def test_cel_anchor_of_a_whatsapp_chat_is_erased_by_raw_jid(self, tmp_path, monkeypatch):
+        import erasure_handlers as eh
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        anchors = eh._tenant_home("_default") / "cel_anchors"
+        anchors.mkdir(parents=True)
+        key = eh._cel_safe_key("whatsapp:491701234567@s.whatsapp.net")
+        for name in (f"{key}.jsonl", f"{key}_12.jsonl", f"{key}.pending.jsonl", "telegram_99.jsonl"):
+            (anchors / name).write_text('{"kind": "goal", "text": "t"}\n')
+        eh.CELAnchorHandler(tenant_id="_default").purge("491701234567@s.whatsapp.net", "r")
+        assert sorted(p.name for p in anchors.glob("*.jsonl")) == ["telegram_99.jsonl"]
+
+    def test_purge_and_append_do_not_lose_a_turn(self, tmp_path, monkeypatch):
+        """Review R2-A4: an append racing the purge's read→replace was lost."""
+        import threading, time as _t
+        import erasure_handlers as eh
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        d = eh._tenant_home("_default") / "sessions" / "voice" / "discord" / "998877"
+        d.mkdir(parents=True)
+        sl.append_turn(d, channel="discord", chat_key="998877", sender="alice", user_text="a1", assistant_text="x")
+        real = eh._purge_jsonl_file
+
+        def slow(f, subj):
+            text = f.read_text()
+            _t.sleep(0.4)          # an append arrives here
+            f.write_text(text)     # (no-op rewrite; real purge below)
+            return real(f, subj)
+        monkeypatch.setattr(eh, "_purge_jsonl_file", slow)
+        th = threading.Thread(target=lambda: eh.SessionLedgerHandler(tenant_id="_default").purge("alice", "r"))
+        th.start(); _t.sleep(0.1)
+        sl.append_turn(d, channel="discord", chat_key="998877", sender="bob", user_text="bob msg", assistant_text="y")
+        th.join()
+        assert [r["user"] for r in sl.read_ledger(d)] == ["bob msg"]
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

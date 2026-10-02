@@ -21,8 +21,9 @@ Mechanism — three rules, each structural rather than best-effort:
    own state files and never this directory. The only path that removes
    ledger content is GDPR Art. 17 erasure: ``erasure_handlers.
    SessionLedgerHandler`` (layer ``L-session-ledger``) purges every record
-   naming the subject's ``chat_key`` — record-wise, because the chat
-   directory carries the SANITISED key and cannot be matched by name.
+   naming the subject under any identity key (``chat_key``, ``sender``, … —
+   ``_SUBJECT_KEYS``), raw or in the sanitised directory form, under this
+   module's lock; record-wise, because the directory name cannot be matched.
 2. **Verify coverage against the transcript, not against bookkeeping.** A turn
    counts as present in the live context only when its user text is found in
    the CURRENT CLI transcript *after its last ``compact_boundary``*. A turn
@@ -53,6 +54,7 @@ Audit (content-free, ``audit.audit_event``):
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -83,7 +85,18 @@ def ledger_path(workdir: Path | str) -> Path:
     return Path(workdir) / LEDGER_DIRNAME / LEDGER_FILE
 
 
+def _pii_fp(value: Any) -> Any:
+    """Same one-way 8-hex fingerprint the adapter's audit floor applies to chat
+    ids (adapter._pii_fp): a raw chat id (a WhatsApp JID is a phone number)
+    must never reach the append-only chain."""
+    if not isinstance(value, str) or not value:
+        return value
+    return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()[:8]
+
+
 def _audit(event_type: str, **kw: Any) -> None:
+    if "chat_key" in kw:
+        kw["chat_key"] = _pii_fp(kw["chat_key"])
     try:
         try:
             from . import audit as _a  # type: ignore
@@ -103,10 +116,24 @@ def _append(workdir: Path | str, record: dict[str, Any]) -> Optional[dict[str, A
         os.chmod(path.parent, 0o700)
     except OSError:
         pass
-    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+    for _attempt in range(5):
+        fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+        fh = os.fdopen(fd, "a+", encoding="utf-8")
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            same = os.fstat(fh.fileno()).st_ino == os.stat(path).st_ino
+        except FileNotFoundError:
+            same = False
+        if same:
+            break
+        # An erasure rewrite replaced the file while we waited for its lock:
+        # appending to the old inode would write into an unlinked file.
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fh.close()
+    else:
+        raise OSError("ledger file kept being replaced")
     try:
-        with os.fdopen(fd, "a+", encoding="utf-8") as fh:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        with fh:
             try:
                 fh.seek(0)
                 # High-water marks, not line counts: an Art. 17 purge removes
@@ -143,9 +170,13 @@ def _append(workdir: Path | str, record: dict[str, Any]) -> Optional[dict[str, A
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())
+                fence = int(hwm.get("fence_seq") or 0) if isinstance(hwm, dict) else 0
+                if (rec.get("kind") == "boundary" and rec.get("boundary") == "reset"
+                        and rec.get("reason") in _manual_reasons()):
+                    fence = rec["seq"]
                 tmp = hwm_path.with_suffix(".tmp")
-                tmp.write_text(json.dumps({"seq": rec["seq"], "n": rec.get("n", turns)}),
-                               encoding="utf-8")
+                tmp.write_text(json.dumps({"seq": rec["seq"], "n": rec.get("n", turns),
+                                           "fence_seq": fence}), encoding="utf-8")
                 os.replace(tmp, hwm_path)
                 return rec
             finally:
@@ -160,17 +191,24 @@ def _append(workdir: Path | str, record: dict[str, Any]) -> Optional[dict[str, A
 def append_turn(
     workdir: Path | str, *, channel: str, chat_key: str, user_text: str,
     assistant_text: str, msg_id: str = "", ts: float | None = None,
-    sender: str = "", tenant_id: str = "",
+    sender: str = "", refused: str = "", spawned: bool = True, tenant_id: str = "",
 ) -> Optional[dict[str, Any]]:
     """Record one finished turn. Never raises; a failure is audited.
 
     ``sender`` is the message author's id: in a group chat it is what lets an
-    Art. 17 request for one participant find that participant's turns."""
+    Art. 17 request for one participant find that participant's turns.
+    ``refused`` names the gate that answered instead of the engine (e.g.
+    ``house_rules``): the turn is recorded, but its user text is never
+    re-supplied — that would carry refused text past the gate into the system
+    prompt. ``spawned`` is False for a turn that never reached the CLI session
+    (delegated to a worker, failed before the spawn, a /btw note): it can never
+    count as live."""
     try:
         return _append(workdir, {
             "kind": "turn", "ts": float(ts if ts is not None else time.time()),
             "channel": str(channel or ""), "chat_key": str(chat_key or ""),
             "sender": str(sender or ""), "msg_id": str(msg_id or ""),
+            "refused": str(refused or ""), "spawned": bool(spawned) and not refused,
             "user": str(user_text or ""), "assistant": str(assistant_text or ""),
         })
     except Exception as exc:  # noqa: BLE001
@@ -344,7 +382,8 @@ def scan_transcript(path: Optional[Path]) -> tuple[Optional[list[str]], list[dic
                     e = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if e.get("type") == "user" and not e.get("isCompactSummary"):
+                if (e.get("type") == "user" and not e.get("isCompactSummary")
+                        and not e.get("isMeta")):
                     text = "\n".join(_user_texts(e))
                     if text.strip():
                         live.append(_clean(text))
@@ -393,8 +432,14 @@ def _one_line(text: str, n: int) -> str:
     return t if len(t) <= n else t[: n - 1] + "…"
 
 
+def _withheld(rec: dict[str, Any]) -> str:
+    return f"(message refused by the {rec.get('refused')} gate — not re-supplied)"
+
+
 def _render_turn(rec: dict[str, Any]) -> str:
     u, a = str(rec.get("user") or ""), str(rec.get("assistant") or "")
+    if rec.get("refused"):
+        u = _withheld(rec)
     half = TURN_VERBATIM_CAP // 2
     note = ""
     if len(u) > half:
@@ -424,6 +469,17 @@ def _manual_reasons() -> frozenset:
         return frozenset({"manual"})
 
 
+def manual_fence_seq(workdir: Path | str) -> int:
+    """``seq`` of the operator's last ``/new`` from the counters sidecar — what
+    a per-turn caller (the CEL session key) needs, without parsing the whole
+    ledger. 0 when there was none. Never raises."""
+    try:
+        data = json.loads((Path(workdir) / LEDGER_DIRNAME / _HWM_FILE).read_text(encoding="utf-8"))
+        return int(data.get("fence_seq") or 0)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return 0
+
+
 def last_manual_reset(records: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
     """The operator's most recent explicit ``/new`` (or None)."""
     manual = _manual_reasons()
@@ -442,29 +498,33 @@ def uncovered_turns(
 
     A turn is live only if a transcript entry IS its message: equal to it, or
     ending with ``"\n" + message`` (the spawn puts a brief / volatile prefix
-    in front of the user's text, never after it). Matching runs newest-first,
-    in order, and each entry is consumed once, so a short reply ("ok") cannot
-    be "found" inside an unrelated message, and two identical messages need
-    two entries. Anything unproven is re-supplied."""
+    in front of the user's text, never after it), aligned contiguously from
+    the newest turn and entry backwards. Anything unproven is re-supplied."""
     fence = last_manual_reset(records)
     fence_seq = int(fence.get("seq") or 0) if fence else 0
     turns = [r for r in records if r.get("kind") == "turn" and int(r.get("seq") or 0) > fence_seq]
     if live_entries is None:
         return turns
-    # Match from the END: what survives in the transcript is always the most
-    # recent stretch of the chat, so the newest turn claims the newest entry.
+    # Align from the END and CONTIGUOUSLY: the live entries are the newest
+    # stretch of turns that were actually spawned on this CLI session, in
+    # order. The newest spawned turn must be the newest entry, the next one
+    # the entry before it, and so on; the first mismatch ends the alignment —
+    # everything older is re-supplied. A free search back through the entries
+    # let a delegated "ja" claim an older "ja" and drop its own answer
+    # (review R2-A1). Turns that never reached the CLI (delegated, refused,
+    # failed, /btw notes: ``spawned`` false) never align.
     covered: set[int] = set()
     pos = len(live_entries)
     for idx in range(len(turns) - 1, -1, -1):
-        msg = _clean(str(turns[idx].get("user") or ""))
-        if not msg:
+        rec = turns[idx]
+        if rec.get("refused") or rec.get("spawned") is False:
             continue
-        for i in range(pos - 1, -1, -1):
-            e = live_entries[i]
-            if e == msg or e.endswith("\n" + msg):
-                covered.add(idx)
-                pos = i
-                break
+        msg = _clean(str(rec.get("user") or ""))
+        e = live_entries[pos - 1] if pos > 0 else None
+        if not msg or e is None or not (e == msg or e.endswith("\n" + msg)):
+            break
+        covered.add(idx)
+        pos -= 1
     return [r for i, r in enumerate(turns) if i not in covered]
 
 
@@ -492,19 +552,27 @@ def render_from_records(
         cut -= 1
         used += sizes[cut]
     if cut > 0:
-        cut = min(len(unc), ((cut + CUT_STEP - 1) // CUT_STEP) * CUT_STEP)
+        stepped = ((cut + CUT_STEP - 1) // CUT_STEP) * CUT_STEP
+        # Stepping keeps the view stable, but it may never push the newest
+        # turns out of the verbatim part (a step past the end showed NO turn
+        # verbatim, review R2-C11): fall back to the exact cut.
+        cut = stepped if stepped < len(unc) else cut
+    # The newest uncovered turn is always shown verbatim (one turn is capped at
+    # TURN_VERBATIM_CAP, far below the budget).
+    cut = min(cut, len(unc) - 1)
     older, verbatim = unc[:cut], unc[cut:]
 
     # Index: newest of the older turns that fit, same stepping.
     idx_lines = [f"- #{r.get('n')} {_when(r.get('ts'))} · U: "
-                 f"{_one_line(str(r.get('user') or ''), _INDEX_SIDE)} · A: "
+                 f"{_withheld(r) if r.get('refused') else _one_line(str(r.get('user') or ''), _INDEX_SIDE)} · A: "
                  f"{_one_line(str(r.get('assistant') or ''), _INDEX_SIDE)}\n" for r in older]
     icut, iused = len(older), 0
     while icut > 0 and iused + len(idx_lines[icut - 1]) <= index_budget:
         icut -= 1
         iused += len(idx_lines[icut])
     if icut > 0:
-        icut = min(len(older), ((icut + CUT_STEP - 1) // CUT_STEP) * CUT_STEP)
+        stepped = ((icut + CUT_STEP - 1) // CUT_STEP) * CUT_STEP
+        icut = stepped if stepped < len(older) else icut
     omitted, indexed = older[:icut], idx_lines[icut:]
 
     shown_n = {r.get("n") for r in verbatim}
@@ -550,6 +618,7 @@ def render_from_records(
 def render_context(
     workdir: Path | str, *, channel: str = "", chat_key: str = "",
     session_id: Optional[str] = None, tenant_id: str = "",
+    engine_transcript: bool = True,
     verbatim_budget: int = VERBATIM_BUDGET, index_budget: int = INDEX_BUDGET,
 ) -> str:
     """The block to append to this turn's system prompt ("" when the live
@@ -559,7 +628,11 @@ def render_context(
         if not any(r.get("kind") == "turn" for r in records):
             return ""
         sid = current_session_id(workdir) if session_id is None else session_id
-        if sid:
+        if not engine_transcript:
+            # Engines without a Claude transcript (Codex --ephemeral, OpenCode):
+            # nothing is provably live, so every turn is re-supplied.
+            live = None
+        elif sid:
             path = transcript_path(workdir, sid)
             live = scan_transcript(path)[0] if path else None
         else:
@@ -601,13 +674,14 @@ def _note_render(workdir: Path | str, stats: dict[str, int], **kw: Any) -> None:
         pass
 
 
-def records_from_turn_log(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def records_from_turn_log(turns: list[dict[str, Any]],
+                          current_prompt: Optional[str] = None) -> list[dict[str, Any]]:
     """Ledger turn records from an existing append-only per-chat turn log of
     ``{"role": "user"|"assistant", "ts", "parts": [{"kind": "text", ...}]}``
-    lines (the console's ``turns.jsonl``). The LAST user message with no
-    answer yet — the turn in flight — is not history and is left out; an
-    earlier unanswered one (cancelled, failed) is kept, marked; consecutive
-    assistant messages are joined into one answer."""
+    lines (the console's ``turns.jsonl``). The turn in flight — the last user
+    message, when it equals ``current_prompt`` — is not history and is left
+    out; every other unanswered one (cancelled, failed, a refreshed tab) is
+    kept, marked. Consecutive assistant messages are joined into one answer."""
     out: list[dict[str, Any]] = []
     pending: Optional[dict[str, Any]] = None
 
@@ -628,9 +702,15 @@ def records_from_turn_log(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
         elif role == "assistant" and pending is not None:
             pending["assistant"] = (pending["assistant"] + "\n" + _text(t)).strip()
             pending["_answered"] = True
-    if pending is not None and pending["_answered"]:
-        pending["assistant"] = pending["assistant"] or "(no text answer)"
-        out.append(pending)
+            if t.get("gate_refused"):
+                pending["refused"] = str(t.get("gate_refused"))
+    if pending is not None:
+        in_flight = (not pending["_answered"] and current_prompt is not None
+                     and _clean(pending["user"]) == _clean(current_prompt))
+        # Without current_prompt the caller cannot tell: keep the old rule.
+        if pending["_answered"] or (current_prompt is not None and not in_flight):
+            pending["assistant"] = pending["assistant"] or "(no text answer)"
+            out.append(pending)
     for rec in out:
         rec.pop("_answered", None)
     for i, rec in enumerate(out, 1):
@@ -641,13 +721,14 @@ def records_from_turn_log(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def render_turn_log_context(
     turns: list[dict[str, Any]], workdir: Path | str, *, resumed: bool,
     ledger_file: str, channel: str = "web", chat_key: str = "", tenant_id: str = "",
+    current_prompt: Optional[str] = None,
 ) -> str:
     """:func:`render_context` for a surface that already keeps its own
     append-only turn log and resumes with ``--continue`` (no pinned session
     id): the live transcript is the newest one in ``workdir`` when the spawn
     resumes, and nothing is live on a fresh spawn. Never raises."""
     try:
-        records = records_from_turn_log(turns)
+        records = records_from_turn_log(turns, current_prompt)
         if not records:
             return ""
         path = latest_transcript(workdir) if resumed else None

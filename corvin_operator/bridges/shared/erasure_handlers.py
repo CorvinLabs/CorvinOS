@@ -1907,9 +1907,21 @@ class CELAnchorHandler:
             # separators into "_". A subject given as "<channel>:<chat>" must
             # therefore also match "<safe>_<digits>" — without it every store
             # written after a /new survived an erasure reported as APPLIED.
-            epoch_re = re.compile(re.escape(safe) + r"_\d+")
+            # A bridge chat's key is "<channel>:<raw chat id>" — a raw id such
+            # as a WhatsApp JID never appears verbatim in the sanitised file
+            # name, so also try every bridge channel prefix.
+            try:
+                try:
+                    from .channels import BRIDGE_CHANNELS  # type: ignore  # noqa: PLC0415
+                except ImportError:
+                    from channels import BRIDGE_CHANNELS  # type: ignore  # noqa: PLC0415
+            except Exception:  # noqa: BLE001
+                BRIDGE_CHANNELS = ()
+            forms = {safe} | {_cel_safe_key(f"{ch}:{subject_id}") for ch in BRIDGE_CHANNELS}
+            epoch_re = re.compile("(?:" + "|".join(re.escape(x) for x in forms) + r")(?:_\d+)?")
             for f in sorted(root.glob("*.jsonl")):
-                if (f.stem == safe or epoch_re.fullmatch(f.stem)
+                stem = f.name[: -len(".pending.jsonl")] if f.name.endswith(".pending.jsonl") else f.stem
+                if (epoch_re.fullmatch(stem)
                         or _name_names_subject(f.name, subject_id)):
                     f.unlink()
                     removed += 1
@@ -1926,6 +1938,18 @@ class CELAnchorHandler:
                        applied_reason="removed {n} CEL anchor store(s) for subject")
 
 
+def _ledger_safe_key(subject_id: str) -> str:
+    """The adapter's directory form of a chat id (session_state.safe_chat_key)."""
+    try:
+        try:
+            from .session_state import safe_chat_key  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from session_state import safe_chat_key  # type: ignore  # noqa: PLC0415
+        return safe_chat_key(subject_id)
+    except Exception:  # noqa: BLE001
+        return re.sub(r"[^A-Za-z0-9_.-]", "_", subject_id or "")
+
+
 @dataclass
 class SessionLedgerHandler:
     """GDPR Art. 17 erasure for the per-chat session ledger (2026-10-02).
@@ -1936,9 +1960,10 @@ class SessionLedgerHandler:
     The chat directory is the SANITISED chat key (``a-b`` → ``a_b``), so
     attribution by directory name — what the L-infinite-session handler does —
     misses any subject whose id carries a character the sanitiser rewrites.
-    Every record names its raw ``chat_key``, so the purge is record-wise
-    (``_purge_jsonl_file``) over every ledger in the tenant's session tree; a
-    ledger left with no records is removed.
+    Every record names its raw ``chat_key`` (and a turn its ``sender``), so
+    the purge is record-wise (``_purge_jsonl_file``: any identity key in
+    ``_SUBJECT_KEYS``) over every ledger in the tenant's session trees, under
+    the writer's lock; a ledger left with no records is removed.
     """
     tenant_id: str = "_default"
     layer_id: str = "L-session-ledger"
@@ -1956,11 +1981,26 @@ class SessionLedgerHandler:
                            empty_reason="", applied_reason="")
         removed = 0
         try:
+            import fcntl  # noqa: PLC0415
             for f in sorted(f for r in roots for f in r.rglob(".corvin-ledger/ledger.jsonl")):
-                n = _purge_jsonl_file(f, subject_id)
-                removed += n
-                if n and not f.read_text(encoding="utf-8").strip():
-                    f.unlink()
+                # Hold the WRITER's lock across read → filter → replace, or a turn
+                # appended mid-purge is lost. The writer re-checks the inode
+                # after taking the lock, so it never appends to the replaced file.
+                with open(f, "a+", encoding="utf-8") as lock_fh:
+                    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+                    try:
+                        n = _purge_jsonl_file(f, subject_id)
+                        # A boundary written by the inactivity sweep knows only
+                        # the SANITISED directory name ("…@s.whatsapp.net" →
+                        # "…_s_whatsapp_net"); match that form too.
+                        safe = _ledger_safe_key(subject_id)
+                        if safe and safe != subject_id:
+                            n += _purge_jsonl_file(f, safe)
+                        removed += n
+                        if n and not f.read_text(encoding="utf-8").strip():
+                            f.unlink()
+                    finally:
+                        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
         except Exception as exc:  # noqa: BLE001
             return ErasureLayerResult(
                 layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
