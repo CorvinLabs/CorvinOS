@@ -191,6 +191,19 @@ def _abs(p: str | Path) -> Path:
         return pp
 
 
+def _is_ledger_store_path(path: str | Path) -> bool:
+    """A path inside a ledger-class store: the session ledger (and its pre-R5
+    in-workdir name), the CEL anchor store, the completion queue, the console's
+    turn logs (directory or file). Never raises."""
+    try:
+        parts = _abs(path).parts
+    except Exception:  # noqa: BLE001 — unresolvable → treat as protected
+        return True
+    return (any(c in parts for c in ("session_ledger", ".corvin-ledger", "cel_anchors",
+                                     "pending_notifications"))
+            or ("web_chat" in parts and (str(path).endswith(".turns.jsonl") or "sessions" in parts)))
+
+
 def is_protected_path(path: str | Path) -> bool:
     """True if writing to *path* should be blocked."""
     if not path:
@@ -647,9 +660,17 @@ _SCRIPTED_EDITORS = ("ex", "ed")
 #: workdir (which lives under the corvin home) is not blocked.
 _CREATE_PATH_CMDS = ("mkdir", "touch", "patch", "xxd", "uniq", "split", "csplit",
                      "tac", "mkfifo", "mknod")
-#: Output options that name the file a command writes (curl -o, wget -O,
-#: sort -o, openssl -out, …).
+#: Output options that name the file a command writes — only for commands
+#: where they DO (`grep -o`/`ls -o` take no file; applying the flags to every
+#: command blocked read-only searches, review R10-3). Also the run-together
+#: form `-o<path>` (R10-1).
 _OUTPUT_FLAGS = ("-o", "-O", "--output", "--output-document", "-out", "--out")
+_OUTPUT_FLAG_CMDS = ("curl", "wget", "sort", "openssl", "pandoc", "gcc", "cc", "clang",
+                     "g++", "go", "rustc", "xz", "zstd", "gzip", "convert", "magick",
+                     "ffmpeg", "pdftotext", "dot", "plantuml")
+#: Read-only commands allowed after a `cd` INTO a ledger-class store.
+_READ_ONLY_CMDS = ("cd", "pushd", "popd", "cat", "less", "more", "head", "tail", "ls",
+                   "wc", "grep", "rg", "stat", "file", "jq", "echo", "pwd", "true")
 #: The ledger / anchor / queue stores, as PATH fragments: a bare word
 #: ("session_ledger" in a commit message) is not a hint (R7-5), a path is.
 _LEDGER_HINTS = ("session_ledger/", ".corvin-ledger/", "cel_anchors/",
@@ -1123,6 +1144,25 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
     # closed — the relative target would land inside the protected tree at run
     # time. (cd into an unrelated dir, or cd-into-tree + a read like cat/ls, is
     # not blocked.)
+    # A `cd` INTO a ledger-class store (session ledger, anchors, notification
+    # queue, console turn logs): only reads may follow, any write — `sed -i`,
+    # `sort -o`, `patch`, `touch`, a redirect — to a relative name lands in the
+    # record (review R10-2).
+    for _seg in segs:
+        try:
+            _ct = _split_tokens(_seg)
+        except ValueError:
+            continue
+        if (_ct and _ct[0].rsplit("/", 1)[-1] in ("cd", "pushd") and len(_ct) > 1
+                and _is_ledger_store_path(_ct[1])):
+            for _other in segs:
+                try:
+                    _ot = _strip_cmd_wrappers(_split_tokens(_other))
+                except ValueError:
+                    return [], True
+                if _ot and (_ot[0].rsplit("/", 1)[-1] not in _READ_ONLY_CMDS
+                            or _REDIRECT_RE.search(_other)):
+                    return [], True
     _cd_into_tree = any(_seg_chdirs_into_tree(_seg) for _seg in segs)
     if _cd_into_tree:
         _DESTRUCTIVE_ALL = (_TARGET_ALL_CMDS + _DEST_LAST_CMDS + _FIND_CMDS
@@ -1161,12 +1201,15 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
         if not toks:
             continue
         cmd_name = toks[0].rsplit("/", 1)[-1]
-        # Any command's output option names a file it writes (R9-4).
-        for _i, _t in enumerate(toks[1:], 1):
-            if _t in _OUTPUT_FLAGS and _i + 1 < len(toks):
-                targets.append(toks[_i + 1])
-            elif _t.startswith(("--output=", "--output-document=", "-out=")):
-                targets.append(_t.split("=", 1)[1])
+        # The output option of a command that writes a file names a target (R9-4).
+        if cmd_name in _OUTPUT_FLAG_CMDS:
+            for _i, _t in enumerate(toks[1:], 1):
+                if _t in _OUTPUT_FLAGS and _i + 1 < len(toks):
+                    targets.append(toks[_i + 1])
+                elif _t.startswith(("--output=", "--output-document=", "-out=")):
+                    targets.append(_t.split("=", 1)[1])
+                elif _t[:2] in ("-o", "-O") and len(_t) > 2 and not _t.startswith("--"):
+                    targets.append(_t[2:])
         if cmd_name in _ARCHIVE_CMDS:
             # Archive EXTRACTION whose destination touches the corvin tree can
             # overwrite audit.jsonl. Fail closed on an explicit -C/-d/-D/-o dest
@@ -1242,7 +1285,11 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
                 if _looks_protected(seg):
                     return [], True  # fail-closed: mutating find touching a protected hint
         elif cmd_name in _CREATE_PATH_CMDS:
-            targets.extend(_all_nonflag(toks[1:]))
+            # Only the ledger-class stores: a session workdir sits under the
+            # corvin home, and the full protected set (memory/, admin/,
+            # compute/, …) blocked `mkdir memory` in it (review R10-3).
+            if any(_is_ledger_store_path(a) for a in _all_nonflag(toks[1:])):
+                return [], True
         elif cmd_name in _TARGET_ALL_CMDS:
             # truncate/ln/chmod/chown/chattr/rm/rmdir/unlink/shred/...: EVERY
             # non-flag arg is a candidate path that can wipe / truncate /

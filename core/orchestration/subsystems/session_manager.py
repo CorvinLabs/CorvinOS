@@ -129,6 +129,15 @@ class SessionManager(Subsystem):
         if session_id and session_id in self.open_sessions:
             self.open_sessions.pop(session_id, None)
 
+        # ADR-0409: Clean up session-scoped CEL skills (best-effort)
+        if session_id:
+            try:
+                from core.console.corvin_console.routes.skill_lifecycle_cleanup import on_session_close
+                on_session_close(tenant_id=self.tenant_id, session_id=session_id)
+            except Exception as e:
+                # Best-effort cleanup; don't block session close on cleanup failure
+                logger.warning(f"CEL skill cleanup failed for session {session_id}: {e}")
+
     def create_session(
         self,
         session_id: Optional[str] = None,

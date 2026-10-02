@@ -92,6 +92,10 @@ class ADRClassifier:
             # multi-topic requests keep their neighbour (prev. 8 / 12).
             from .adr_loader import _is_weak
             strong_kw = {k for k in keywords if not _is_weak(k)}
+            # The request's own verb ("Test …", "Close …", "Audit …") names the
+            # action on the named ADR, never the topic of another (R10-3).
+            lead = tokenize(_ADR_REF_RE.sub(" ", summary).strip().split(" ", 1)[0])
+            strong_kw -= set(lead)
             titles = getattr(self.loader, "_title_tokens", {})
             scored = [(i, s) for i, s in scored if len(strong_kw & titles.get(i, set())) >= 2]
         own: Dict[str, float] = dict(scored)

@@ -75,13 +75,16 @@ class MemoryMatch:
    An ADR the task names by id (`ADR-0952`, `adr 2102`) is a direct lookup: it is
    returned first at relevance 1.0, and its number is not a topic word. Next to
    it, another ADR is admitted only when the request names ITS topic: two strong
-   (non-weak) request words in its title — "Review ADR-0952 today" returns
-   ADR-0952 alone, "Does ADR-0952 conflict with the session ledger design?" also
-   ADR-2102 (measured on 2400 "<verb> ADR-NNNN <tail>" requests: 103 with an
-   off-graph extra, all with a topic word in the tail such as "console" or
-   "bridge"; 10 of 12 multi-topic requests keep their neighbour). A run-together
-   identifier (`RemoteTriggerReceiver`, `OpenClawEngine`) is also indexed as its
-   words, so the plain-English name finds its ADR.
+   (non-weak) request words in its title, the request's own leading verb ("Test
+   …", "Close …") not counted — "Review ADR-0952 today" returns ADR-0952 alone,
+   "Does ADR-0952 conflict with the session ledger design?" also ADR-2102.
+   Measured: of 2400 requests with filler tails ("by end of day", "and check the
+   open items") 99 carry an off-graph extra (prev. 203; before round 9 1190); of
+   2400 with CorvinOS-topic tails 8; 10 of 12 multi-topic requests keep their
+   neighbour. A run-together identifier (`RemoteTriggerReceiver`,
+   `OpenClawEngine`) is INDEXED also as its words — corpus side only, so the
+   plain-English name finds its ADR while a typed brand name ("PowerPoint",
+   "WhatsApp") stays one query term.
 2. Score every ADR (`ADRLoader.score_query`, which takes TOKENS — re-tokenising
    double-stems): idf-weighted overlap, title hits ×1.0, preview hits ×0.5,
    normalised by the query's 6 rarest terms, unknown terms counted at the

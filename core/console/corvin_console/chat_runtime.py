@@ -2226,7 +2226,8 @@ def _session_ledger_block(sess: WebChatSession, current_prompt: str = "") -> str
 
 
 def _turn_system_prompt(sess: WebChatSession, task_text: str = "",
-                        cel_brief: str = "", *, ledger_prompt: str | None = None) -> str:
+                        cel_brief: str = "", *, ledger_prompt: str | None = None,
+                        with_ledger: bool = True) -> str:
     """Base web-chat system prompt + per-turn uploaded-file manifest, plus the
     bridge-parity context blocks (ADR-0114): the resolved persona role, the
     Layer-12 voice-profile audience shaping, the Tier-1 user profile and the
@@ -2250,7 +2251,8 @@ def _turn_system_prompt(sess: WebChatSession, task_text: str = "",
         # ``ledger_prompt``: this turn's message even when ``task_text`` is
         # held out of the cached prompt (cel_cache_stable) — without it an
         # earlier unanswered message was dropped from history (review R5-6).
-        + _session_ledger_block(sess, task_text if ledger_prompt is None else ledger_prompt)
+        + (_session_ledger_block(sess, task_text if ledger_prompt is None else ledger_prompt)
+           if with_ledger else "\n\n[session ledger block: not persisted]\n")
         # LAST WORD on language. The rule near the top and the profile line in
         # the middle were both present and still lost: in a ~10 KB, overwhelmingly
         # ENGLISH system prompt a single early directive gets diluted, and an
@@ -5254,7 +5256,11 @@ async def _stream_turn_impl(
                         sections=(_cel_build_sections(_pa_src)
                                   if (_pa_src is not None and _cel_build_sections) else []),
                         cel_text=_cel_brief_text,
-                        final_prompt=_turn_system_prompt(sess, prompt, _cel_brief_text),
+                        # The inspector copy lives in the worker's cwd: it never
+                        # carries the re-supplied history (review R10-4, same rule
+                        # as the bridge's cel-briefs).
+                        final_prompt=_turn_system_prompt(sess, prompt, _cel_brief_text,
+                                                         with_ledger=False),
                         forged_tools=list(_cel_trace.get("tools_bound", []) or []),
                         forged_skills=_pa_forged_skills)
             except Exception:  # noqa: BLE001 — inspector detail is best-effort

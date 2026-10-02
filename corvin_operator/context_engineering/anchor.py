@@ -368,23 +368,49 @@ def promote_pending_goal(tenant_id: str, session_key: str,
         return None
 
 
-def adopt_store(tenant_id: str, old_key: str, new_key: str, *, written_after: float) -> bool:
-    """Move the store of ``old_key`` to ``new_key`` when the new one does not
-    exist yet and the old one was last written after ``written_after`` (its
-    facts belong to the epoch that started then). Used once, when a ``/new``
-    fence the counters had lost is rebuilt (review R9-3). Never raises."""
+def adopt_store(tenant_id: str, old_key: str, new_key: str, *, written_after: float) -> int:
+    """Carry the FACTS of ``old_key`` added after ``written_after`` (a ``/new``
+    fence's time) to ``new_key``; returns how many moved. Never raises.
+
+    Per fact, not per file: a file's mtime says nothing about its oldest line,
+    and moving the whole store carried the pre-/new goal and constraints into
+    the fresh epoch — and any rewrite (an erasure) re-armed it (review R10-1).
+    Idempotent: moved facts are removed from ``old_key``, a fact already in
+    ``new_key`` (same hash) is not duplicated. The session goal is the EARLIEST
+    post-fence goal: an older one replaces a later one in ``new_key`` (e.g. a
+    goal promoted from a turn that only failed)."""
     try:
         with _StoreLock(tenant_id):
-            moved = False
-            for old_p, new_p in ((_store_path(tenant_id, old_key), _store_path(tenant_id, new_key)),
-                                 (_pending_path(tenant_id, old_key), _pending_path(tenant_id, new_key))):
-                if (old_p.is_file() and not new_p.exists()
-                        and old_p.stat().st_mtime > written_after):
-                    old_p.rename(new_p)
-                    moved = True
+            old = load_facts(tenant_id, old_key)
+            moving = [f for f in old if float(f.get("added_at") or 0) > written_after]
+            if not moving:
+                return 0
+            new = load_facts(tenant_id, new_key)
+            have = {f.get("hash") for f in new}
+            new_goal = next((f for f in new if f.get("kind") == "goal"), None)
+            moved = 0
+            for f in moving:
+                if f.get("hash") in have:
+                    continue
+                if f.get("kind") == "goal":
+                    if new_goal is not None and float(new_goal.get("added_at") or 0) <= float(
+                            f.get("added_at") or 0):
+                        continue
+                    new = [x for x in new if x.get("kind") != "goal"]
+                    new_goal = f
+                new.append(f)
+                moved += 1
+            new.sort(key=lambda f: float(f.get("added_at") or 0))
+            if moved:
+                _write_all(tenant_id, new_key, new)
+            keep = [f for f in old if f not in moving]
+            if keep:
+                _write_all(tenant_id, old_key, keep)
+            else:
+                _store_path(tenant_id, old_key).unlink(missing_ok=True)
             return moved
     except Exception:  # noqa: BLE001
-        return False
+        return 0
 
 
 def discard_pending_goal(tenant_id: str, session_key: str) -> None:

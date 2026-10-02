@@ -4533,8 +4533,10 @@ def _cel_session(channel: str, chat_key: str | None):
                 try:
                     from context_engineering import anchor as _anc  # type: ignore  # noqa: PLC0415
                     _tid = os.environ.get("CORVIN_TENANT_ID", "_default")
-                    if (_anc._store_path(_tid, key).is_file()
-                            and not _anc._store_path(_tid, f"{key}#{fence_seq}").exists()):
+                    # Facts written under the un-fenced key AFTER the /new
+                    # belong to the new epoch; pre-/new ones stay where they
+                    # are (per-fact, idempotent — review R10-1).
+                    if _anc._store_path(_tid, key).is_file():
                         _fence = _ledger.last_manual_reset(_ledger.read_ledger(_wd))
                         if _fence:
                             _anc.adopt_store(_tid, key, f"{key}#{fence_seq}",
@@ -4612,7 +4614,8 @@ def _ledger_data_flow_withhold(engine_name: str, *, channel: str, chat_key: str)
         try:
             from data_classification import classify_task  # type: ignore  # noqa: PLC0415
             texts = (rec.get("user"), rec.get("observer_text"), rec.get("assistant"))
-            classes = {classify_task(str(t)) for t in texts if t}
+            persona = rec.get("persona") or None   # as the pre-spawn gate classified it
+            classes = {classify_task(str(t), persona=persona) for t in texts if t}
         except Exception:  # noqa: BLE001
             return "data_flow"
         return None if all(_allowed(c) for c in classes) else "data_flow"
@@ -5421,6 +5424,7 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         # e.stderr is arbitrary CLI output — never assume it's speakable
         # (bug report 2026-07-12: raw technical text used to be read aloud
         # verbatim by TTS instead of a natural sentence).
+        _TURN_OUTCOME.failed = "engine_error"   # not an answer (anchor goal, R10-4)
         return with_voice_override(
             f"Claude API call failed: {e.stderr[:200]}",
             "The call to Claude Code failed.",
@@ -6145,6 +6149,7 @@ def _call_claude_streaming_via_engine(
             # "error" — both key on a non-empty error_text / non-zero rc.
             rc = rc or 1
             error_text = f"adapter streaming loop error ({type(e).__name__})"
+            _TURN_OUTCOME.failed = "engine_error"
             return with_voice_override(
                 f"Claude API call failed: internal adapter error "
                 f"({type(e).__name__}) — the turn was stopped and not retried.",
@@ -6398,6 +6403,7 @@ def _call_claude_streaming_via_engine(
                 )
             # error_text is arbitrary provider/transport text — never assume
             # it's speakable.
+            _TURN_OUTCOME.failed = "engine_error"
             error_msg = f"Claude API call failed: {error_text[:200]}"
             if "429" in error_text:
                 error_msg += "\n⚠️ Rate limit exceeded — please wait a moment and try again."
@@ -6430,6 +6436,7 @@ def _call_claude_streaming_via_engine(
                     "⏱️ Request cancelled — Claude did not deliver stream events for too long.",
                     "The request was cancelled because Claude took too long to respond.",
                 )
+            _TURN_OUTCOME.failed = "engine_error"
             return with_voice_override(
                 f"Claude API call failed (rc={rc}).",
                 "The call to Claude Code failed.",
@@ -12364,6 +12371,9 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 user_text=_owner_text, observer_text=_obs_block,
                 assistant_text=answer or "",
                 msg_id=str(msg_id or ""), sender=str(sender or ""),
+                # The persona the pre-spawn gate classified this turn under: the
+                # per-turn L34 re-check must use it too (review R10-6).
+                persona=str((profile or {}).get("name") or (profile or {}).get("persona") or ""),
                 refused=str(getattr(_TURN_OUTCOME, "refused", None) or ""),
                 # Only a turn the claude CLI was actually started for can be in
                 # its transcript. Measured at the spawn, not inferred: delegated,
@@ -12395,8 +12405,12 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                                           _cel_session(channel, chat_key))
         except Exception:  # noqa: BLE001
             pass
+    # Only an ANSWERED turn may promote its candidate goal: a refusal never,
+    # and an engine failure / cancel neither — "Claude API call failed …" is
+    # not an answer to the task (review R10-4).
     if (_cel_maybe_capture_decision is not None and answer
-            and not getattr(_TURN_OUTCOME, "refused", None)):
+            and not getattr(_TURN_OUTCOME, "refused", None)
+            and not getattr(_TURN_OUTCOME, "failed", None)):
         try:
             _cdp_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
             _cel_maybe_capture_decision(answer, _cdp_tid, _cel_session(channel, chat_key),

@@ -2012,7 +2012,10 @@ def _purge_ledger_file(f: Path, subject_id: str) -> int:
                     # An older record folded the observers' lines into the
                     # owner's text: they cannot be separated — the record goes.
                     continue
-                rec["observers"] = [o for o in observers if not _mentions_subject(o, subject_id)]
+                # All observer lines go (they cannot be split per person), so
+                # no observer is left whose consent could withhold the owner's
+                # words later (review R10-7).
+                rec["observers"] = []
                 rec["observer_text"] = ""
                 rec["observer_text_erased"] = True
                 line = json.dumps(rec, ensure_ascii=False)

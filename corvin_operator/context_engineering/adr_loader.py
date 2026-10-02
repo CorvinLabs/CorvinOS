@@ -138,17 +138,21 @@ _CAMEL_RE = re.compile(r"\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b")
 _CAMEL_SPLIT_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
-def tokenize(text: str) -> List[str]:
+def tokenize(text: str, *, expand_camel: bool = False) -> List[str]:
     """Whole-word, stop-word-free, stemmed tokens (order-preserving, deduped)."""
     out: Dict[str, None] = {}
     prev = ""
     text = text or ""
     # A run-together identifier ("RemoteTriggerReceiver", "OpenClawEngine") is
-    # also indexed as its words, so a plain-English question finds the ADR that
-    # names its subject in code style (review R9-CEL-2). Both forms are kept.
-    camel = " ".join(m.group(0) for m in _CAMEL_RE.finditer(text))
-    if camel:
-        text = text + " " + _CAMEL_SPLIT_RE.sub(" ", camel)
+    # also INDEXED as its words, so a plain-English question finds the ADR that
+    # names its subject in code style (review R9-CEL-2). Corpus side only
+    # (``expand_camel``): on the query side one typed word ("PowerPoint",
+    # "WhatsApp") became two or three matched terms and passed the two-term
+    # rule on its own (R10-2).
+    if expand_camel:
+        camel = " ".join(m.group(0) for m in _CAMEL_RE.finditer(text))
+        if camel:
+            text = text + " " + _CAMEL_SPLIT_RE.sub(" ", camel)
     for w in _TOKEN_RE.findall(text.lower()):
         w = _DE_EN.get(w, w)
         if re.fullmatch(r"l\d{1,2}", w):        # layer ids: L4, L35
@@ -329,8 +333,8 @@ class ADRLoader:
         df: Dict[str, int] = {}
         for adr_id, node in self.adrs.items():
             m = node.metadata
-            tt = set(tokenize(m.title))
-            bt = set(tokenize(m.content_preview)) | tt
+            tt = set(tokenize(m.title, expand_camel=True))
+            bt = set(tokenize(m.content_preview, expand_camel=True)) | tt
             self._title_tokens[adr_id] = tt
             self._body_tokens[adr_id] = bt
             for t in bt:

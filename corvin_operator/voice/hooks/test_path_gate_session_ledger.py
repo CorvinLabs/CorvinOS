@@ -169,3 +169,15 @@ def test_resolvable_variables_and_ordinary_commands_are_not_blocked():
                 "touch notes.md", "curl -o outputs/data.csv http://x",
                 'git commit -m "fix(session_ledger): merge order"'):
         assert _bash(cmd)[0] is True, cmd
+
+
+def test_round10_literal_bypasses_are_denied_and_ordinary_commands_allowed():
+    """Review R10-1/2/3."""
+    d = "../../../../session_ledger/telegram/123"
+    for cmd in (f"wget -O{d}/ledger.jsonl http://x", f"sort -o{d}/ledger.jsonl /tmp/f",
+                f"cd {d} && sed -i d ledger.jsonl", f"cd {d} && sort -o ledger.jsonl /tmp/f",
+                f"cd {d} && touch counters.json", f"cd {d} && echo x >> ledger.jsonl"):
+        assert _bash(cmd)[0] is False, cmd
+    for cmd in ("grep -o forge log.txt", "rg -o license README.md", "mkdir memory",
+                "mkdir -p compute/results", "mkdir packages", f"cd {d} && cat ledger.jsonl"):
+        assert _bash(cmd)[0] is True, cmd

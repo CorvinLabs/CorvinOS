@@ -800,6 +800,25 @@ class TestRound9:
         assert json.loads((d / "counters.json").read_text())["fence_seq"] == 1
 
 
+class TestRound10:
+    def test_observer_erasure_leaves_no_observer_to_withhold_the_owner(self, tmp_path, monkeypatch):
+        import erasure_handlers as eh
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        d = eh._tenant_home("_default") / "sessions" / "voice" / "whatsapp" / "grp3"
+        d.mkdir(parents=True)
+        sl.append_turn(d, channel="whatsapp", chat_key="grp3", sender="owner", user_text="OWNER WORDS",
+                       observer_text="---BEGIN-OBSERVER-ab---\n  a: x\n  b: y\n---END-OBSERVER-ab---\n\n",
+                       assistant_text="ok", observers=[{"user": "alice"}, {"user": "bob"}])
+        eh.SessionLedgerHandler(tenant_id="_default").purge("alice", "r")
+        block = sl.render_context(d, withhold=lambda r: "observer_consent" if r.get("observers") else None)
+        assert "OWNER WORDS" in block
+
+    def test_turn_records_its_persona(self, wd):
+        rec = sl.append_turn(wd, channel="telegram", chat_key="chat-1", user_text="mails",
+                             assistant_text="x", persona="inbox")
+        assert sl.read_ledger(wd)[0]["persona"] == "inbox"
+
+
 class TestRound5:
     def test_ledger_stays_private_after_an_erasure(self, wd):
         import erasure_handlers as eh

@@ -515,16 +515,26 @@ def test_a_refused_turn_leaves_no_candidate_goal(isolated, monkeypatch):
 
 
 def test_a_store_written_after_a_rebuilt_fence_is_adopted(isolated, monkeypatch):
-    """Review R9-3: the rebuilt /new fence moved the CEL key; facts written
-    after the real /new under the old key are carried to the fenced key, a
-    store older than the fence is not."""
-    import os, time
-    _anchor.add_fact("_default", "discord:154", "goal", "post-new goal")
+    """Review R9-3 / R10-1: facts written under the un-fenced key AFTER the
+    real /new are carried to the fenced key — per fact: pre-/new facts stay,
+    and the earliest post-fence goal wins over a later one already there
+    (the live case: a goal promoted from a turn that only failed)."""
+    import time
+    fence_ts = time.time() - 30
+    pre = _anchor.add_fact("_default", "discord:154", "constraint", "PRE-new constraint")
+    facts = _anchor.load_facts("_default", "discord:154")
+    facts[0]["added_at"] = fence_ts - 100
+    _anchor._write_all("_default", "discord:154", facts)
+    _anchor.add_fact("_default", "discord:154", "goal", "real post-new goal")
+    _anchor.add_fact("_default", "discord:154#1", "goal", "ja")
+    late = _anchor.load_facts("_default", "discord:154#1")
+    late[0]["added_at"] = time.time() + 100
+    _anchor._write_all("_default", "discord:154#1", late)
     assert _anchor.adopt_store("_default", "discord:154", "discord:154#1",
-                               written_after=time.time() - 60)
-    assert [f["text"] for f in _anchor.load_facts("_default", "discord:154#1")] == ["post-new goal"]
-    _anchor.add_fact("_default", "discord:155", "goal", "pre-new goal")
-    p = _anchor._store_path("_default", "discord:155")
-    os.utime(p, (1_700_000_000, 1_700_000_000))
-    assert not _anchor.adopt_store("_default", "discord:155", "discord:155#1",
-                                   written_after=1_800_000_000)
+                               written_after=fence_ts) == 1
+    new = _anchor.load_facts("_default", "discord:154#1")
+    assert [f["text"] for f in new if f["kind"] == "goal"] == ["real post-new goal"]
+    assert "PRE-new constraint" not in [f["text"] for f in new]
+    assert [f["text"] for f in _anchor.load_facts("_default", "discord:154")] == ["PRE-new constraint"]
+    assert _anchor.adopt_store("_default", "discord:154", "discord:154#1",
+                               written_after=fence_ts) == 0     # idempotent

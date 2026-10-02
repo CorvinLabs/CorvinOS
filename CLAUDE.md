@@ -817,7 +817,8 @@ structurally excluded. The CLI transcript is NOT the record — auto-compaction 
   delete of the chat (which also clears its CEL anchor store) or the pre-existing
   50-chats-per-tenant cap (oldest chat, whole). `path_gate` denies writes to any
   `session_ledger`/`.corvin-ledger`/`pending_notifications`/`cel_anchors` path and to the
-  console's `web_chat/**/*.turns.jsonl`, including through a glob,
+  console's `web_chat/**/*.turns.jsonl` (also by output options, create commands, and any
+  write after a `cd` into one of them), including through a glob,
   quotes, a backslash or a directly assigned shell variable. **Boundary (stated, not
   hidden):** `path_gate` is a syntactic guard against accidental and naive writes. Deliberate
   evasion by a worker running as the same OS user — a program it wrote (a script,

@@ -404,6 +404,7 @@ def append_turn(
     assistant_text: str, msg_id: str = "", ts: float | None = None,
     sender: str = "", refused: str = "", spawned: bool = True,
     observers: Optional[list] = None, observer_text: str = "", tenant_id: str = "",
+    persona: str = "",
 ) -> Optional[dict[str, Any]]:
     """Record one finished turn. Never raises; a failure is audited.
 
@@ -441,6 +442,9 @@ def append_turn(
             # identity-keyed so GDPR erasure attributes the record to them too.
             "observers": [o for o in (observers or []) if isinstance(o, dict)],
             "observer_text": str(observer_text or ""),
+            # The persona the turn ran under — data classification depends on
+            # it (an `inbox` persona's text is personal data, review R10-6).
+            "persona": str(persona or ""),
             "user": user_text, "assistant": str(assistant_text or ""),
         })
     except Exception as exc:  # noqa: BLE001
