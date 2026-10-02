@@ -72,9 +72,16 @@ def _maybe_apply_anchor(task: str, tenant: str, session: Any, brief: Any,
     the render re-injects them uncapped, truncation-safe, every turn."""
     if brief is None or not _anchor_enabled(tenant):
         return
+    session_key = _session_key_of(session, task)
+    if not session_key:
+        # No session identity ⇒ no anchor. The store used to fall back to one
+        # shared "_nosession" bucket, which on the bridge (session=None) pooled
+        # the load-bearing facts of EVERY chat of a tenant and re-injected them
+        # into each other's turns. Writing nothing is the only safe default.
+        trace["anchor_skipped"] = "no_session_key"
+        return
     try:
         from . import anchor  # noqa: PLC0415
-        session_key = _session_key_of(session, task)
         for kind, text in anchor.collect_load_bearing(brief):
             anchor.add_fact(tenant, session_key, kind, text)
         # The ORIGINAL session goal is added once and then persists — re-adding a
@@ -110,11 +117,26 @@ def maybe_capture_decision_point(reply_text: str, tenant: str = "_default",
     try:
         if not reply_text or not _anchor_enabled(tenant):
             return None
-        from . import anchor  # noqa: PLC0415
         session_key = _session_key_of(session, reply_text)
+        if not session_key:  # same rule as _maybe_apply_anchor: never pool chats
+            return None
+        from . import anchor  # noqa: PLC0415
         return anchor.capture_decision_point(tenant, session_key, reply_text)
     except Exception:  # noqa: BLE001 — the outbound hook never breaks a turn
         return None
+
+
+def render_anchor_block(brief: Any) -> str:
+    """The anchor section alone, for a caller whose prompt is NOT the
+    deterministic brief (the active pipeline's LLM-synthesised prompt). Without
+    it the anchored facts were persisted every turn and injected never on that
+    path. Empty when the brief carries no anchor facts."""
+    facts = getattr(brief, "anchor_facts", None) or []
+    if not facts:
+        return ""
+    from . import anchor as _anchor  # noqa: PLC0415
+    _anchor.record_injection(len(facts))
+    return "\n".join(_anchor.render_lines(facts))
 
 
 def build_context(task: str, tenant: str = "_default", session: Any = None,
@@ -376,6 +398,7 @@ def run_full_pipeline(task: str, tenant: str = "_default", session: Any = None,
                                   persona=persona)
     if bundle is None:
         return None, trace
+    _maybe_apply_anchor(task, tenant, session, bundle.brief, trace)
     gate = gate_fn or (lambda _text: (True, ""))
     if not _gate1(bundle, trace, gate, task):
         return bundle, trace
@@ -396,6 +419,7 @@ async def run_full_pipeline_async(task: str, tenant: str = "_default",
                                   persona=persona)
     if bundle is None:
         return None, trace
+    _maybe_apply_anchor(task, tenant, session, bundle.brief, trace)
     gate = gate_fn or (lambda _text: (True, ""))
     if not _gate1(bundle, trace, gate, task):
         return bundle, trace

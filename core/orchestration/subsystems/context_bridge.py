@@ -1,4 +1,10 @@
-"""Context Bridge subsystem: Manage session splits and memory transfer."""
+"""Context Bridge subsystem: Manage session splits and memory transfer.
+
+NOT ON ANY LIVE PATH (verified 2026-10-02; listed in scripts/zero_caller_baseline.json).
+Cross-session continuity is ``corvin_operator/bridges/shared/session_ledger.py``
+(bridge + console, Corvin-ADR ADR-2102). Do not build another context bridge:
+wire this one into a live entry point or delete it.
+"""
 
 import logging
 from typing import Any, Dict, List

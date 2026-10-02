@@ -800,6 +800,33 @@ first.
 
 ---
 
+## Session Ledger — a chat's turns are never forgotten (ADR-2102, load-bearing)
+
+Operator directive (2026-10-02): context drift / forgetting of session content must be
+structurally excluded. The CLI transcript is NOT the record — auto-compaction dropped
+185 599 tokens in one Discord session, and every reset wipes it.
+
+- **Record:** every bridge turn is appended verbatim to `<workdir>/.corvin-ledger/ledger.jsonl`
+  (`session_ledger.append_turn` in `process_one`); the console's `turns.jsonl` is its ledger.
+  Only GDPR erasure (`L-session-ledger`) removes lines.
+- **Coverage = the transcript after its last `compact_boundary`**, checked every spawn;
+  unreadable ⇒ nothing covered ⇒ everything re-supplied (fail towards remembering).
+- **Every reset goes through `session_state.reset_claude_session_state(wd, reason=...)`**,
+  which records the boundary. Only `manual` (`/new`) fences re-supply; unknown reasons
+  count as unwanted.
+- **CEL gets a per-chat session** (`adapter._cel_session`); a turn with no session key
+  writes no anchor fact — never a shared `_nosession` bucket.
+
+**Must NOT do:** delete or rewrite `.corvin-ledger/` in any reset/cleanup path · add a reset
+that bypasses `reset_claude_session_state` · decide coverage from bookkeeping instead of the
+transcript · summarise ledger turns with an LLM · put the volatile counts back into the block
+header (breaks the append-only prefix) · build another "context bridge" —
+`scripts/zero_caller_sweep.py --check` fails CI on a new unreachable Subsystem/Skill/Stage/Plugin.
+
+→ Full reference: [adapter-runtime.md](docs/claude-ref/adapter-runtime.md) § Session ledger
+
+---
+
 ## Worker-Engine Model Routing (ADR-0759, load-bearing)
 
 **`tenant.corvin.yaml` is CO-OWNED.** The console writes `spec.engine_models`,

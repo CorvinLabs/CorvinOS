@@ -388,7 +388,8 @@ def _wipe_forge_session_dir(*, forge_chan_id: str,
 
 def _wipe_voice_state(*, channel: str, chat_id: str,
                       failures: list[str],
-                      tenant_id: str = "_default") -> bool:
+                      tenant_id: str = "_default",
+                      reason: str = "manual") -> bool:
     """Clear Claude's conversation state in the adapter's per-chat session dir.
 
     Resolution and deletion both go through ``session_state`` — the SSOT the
@@ -434,7 +435,7 @@ def _wipe_voice_state(*, channel: str, chat_id: str,
         if not target.is_dir():
             continue
         try:
-            removed = _session_state.reset_claude_session_state(target)
+            removed = _session_state.reset_claude_session_state(target, reason=reason)
             if removed:
                 removed_any = True
         except Exception as e:  # noqa: BLE001
@@ -607,7 +608,7 @@ def reset_session(
     )
     voice_state_removed = _wipe_voice_state(
         channel=channel, chat_id=chat_id, failures=failures,
-        tenant_id=tenant_id,
+        tenant_id=tenant_id, reason=reason,
     )
     # Layer 20 — reset the session's context budget quota so the next turn
     # starts with a fresh 100k tokens (or the operator's configured default).

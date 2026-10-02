@@ -1919,6 +1919,49 @@ class CELAnchorHandler:
                        applied_reason="removed {n} CEL anchor store(s) for subject")
 
 
+@dataclass
+class SessionLedgerHandler:
+    """GDPR Art. 17 erasure for the per-chat session ledger (2026-10-02).
+
+    ``session_ledger.py`` appends every bridge turn VERBATIM to
+    ``<tenant>/sessions/voice/<channel>/<safe_chat>/.corvin-ledger/ledger.jsonl``
+    and nothing else ever removes a line: a session reset keeps it on purpose.
+    The chat directory is the SANITISED chat key (``a-b`` → ``a_b``), so
+    attribution by directory name — what the L-infinite-session handler does —
+    misses any subject whose id carries a character the sanitiser rewrites.
+    Every record names its raw ``chat_key``, so the purge is record-wise
+    (``_purge_jsonl_file``) over every ledger in the tenant's session tree; a
+    ledger left with no records is removed.
+    """
+    tenant_id: str = "_default"
+    layer_id: str = "L-session-ledger"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        root = _tenant_home(self.tenant_id) / "sessions"
+        if not root.is_dir():
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="session tree absent",
+                           empty_reason="", applied_reason="")
+        removed = 0
+        try:
+            for f in sorted(root.rglob(".corvin-ledger/ledger.jsonl")):
+                n = _purge_jsonl_file(f, subject_id)
+                removed += n
+                if n and not f.read_text(encoding="utf-8").strip():
+                    f.unlink()
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
+                reason=f"session ledger purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
+                       empty_reason="no session-ledger record matched subject",
+                       applied_reason="removed {n} session-ledger record(s) for subject")
+
+
 def _path_value_names_subject(obj: Any, subject_id: str, depth: int = 0) -> bool:
     """True when any string in ``obj`` is a PATH with the subject as a segment.
 
@@ -2107,6 +2150,8 @@ COVERED_DIRS: dict[str, frozenset[str]] = {
     "L24-data-snapshot":     frozenset({"global/data"}),
     # R4-F1 — the two stores the round-2 guard could not see.
     "L-cel-anchors":         frozenset({"cel_anchors"}),
+    # 2026-10-02 — the verbatim per-chat session ledger under sessions/.
+    "L-session-ledger":      frozenset({"sessions"}),
     "L-acs-index":           frozenset({"global/acs"}),
     # R4-F1 — the remaining live stores the review listed for triage.
     "L-tenant-memory":       frozenset({"memory"}),
@@ -2260,6 +2305,7 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         L24DataSnapshotHandler(tenant_id=tenant_id),        # R4-F4: was a no-op stub
         # R4-F1: stores the round-2 guard's writer list could not see.
         CELAnchorHandler(tenant_id=tenant_id),              # cel_anchors/
+        SessionLedgerHandler(tenant_id=tenant_id),          # sessions/**/.corvin-ledger/
         ACSGlobalIndexHandler(tenant_id=tenant_id),         # global/acs/runs/
         IdentityMappingHandlerBase(),
     ]

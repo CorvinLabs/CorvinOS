@@ -1,13 +1,70 @@
 """ADR Loader: Parse ADRs from Corvin-ADR repo with dependency graph traversal."""
 
 import logging
+import math
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Iterable, Optional, Set, Tuple
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# --- Lexical relevance (session-drift analysis 2026-10-02, §L1) -------------
+# The previous matcher counted a keyword as a hit when it was a SUBSTRING of the
+# title or preview, weighted every word equally and accepted a single hit as a
+# seed. A drift/memory question therefore surfaced Tree-of-Thoughts and Compute
+# Fabric ADRs because they share "layer"/"session"/"across". Matching is now on
+# whole (lightly stemmed) tokens, weighted by inverse document frequency over the
+# ADR corpus, and an ADR must clear MIN_RELEVANCE to be returned at all.
+_TOKEN_RE = re.compile(r"[a-zäöüß0-9]+")
+_STOPWORDS = frozenset("""
+a an and are as at be been being but by can could did do does for from had has have
+how i if in into is it its may might must no not of on or our shall should so such
+than that the their them then there these they this those to too was we were what
+when where which while who why will with would you your about above after again
+against all also any because before below between both each few further here more
+most other over same some only own very just now via per use used using make made
+across within without please
+new add adds added fix fixes fixed get set run runs ran need needs want wants
+der die das und oder mit für von zu zum zur ist sind ein eine einen einem einer
+nicht auch auf aus bei bis dass den dem des durch noch nur über unter vom wie wir
+ich du sie es was wenn alle alles diese dieser dieses doch hat haben wird werden
+mir mich dir dich beim bitte kannst mach mache warum
+adr adrs phase status proposed accepted implemented
+""".split())
+#: Minimum normalised relevance for an ADR to be returned.
+MIN_RELEVANCE = 0.25
+#: Minimum absolute evidence: the summed idf of the matched terms. Coverage is
+#: normalised by the query's own idf mass, so a query made only of words every
+#: ADR uses would otherwise "cover" itself fully and match everything.
+MIN_EVIDENCE = 4.0
+#: A single matched term only counts when it is this rare (idf, natural log):
+#: ~ fewer than 1 in 60 ADRs mention it.
+SINGLE_TERM_MIN_IDF = 4.1
+_INACTIVE_STATUSES = frozenset({"superseded", "rejected", "deprecated", "withdrawn"})
+_STATUS_RANK = {"accepted": 3, "implemented": 3, "proposed": 2}
+
+
+def _stem(word: str) -> str:
+    """Tiny suffix stripper — enough to join session/sessions, drift/drifting,
+    persist/persistence/persisted without pulling a stemming dependency."""
+    for suf in ("ations", "ation", "ences", "ence", "ings", "ing", "ies", "ers",
+                "ed", "es", "er", "s"):
+        if len(word) - len(suf) >= 4 and word.endswith(suf):
+            return word[: -len(suf)]
+    return word
+
+
+def tokenize(text: str) -> List[str]:
+    """Whole-word, stop-word-free, stemmed tokens (order-preserving, deduped)."""
+    out: Dict[str, None] = {}
+    for w in _TOKEN_RE.findall((text or "").lower()):
+        if len(w) < 3 or w in _STOPWORDS or w.isdigit():
+            continue
+        out[_stem(w)] = None
+    return list(out)
 
 
 @dataclass
@@ -43,6 +100,10 @@ class ADRMetadata:
 
     content_preview: str = ""
     """First 500 chars of ADR body."""
+
+    relevance: float = 0.0
+    """Lexical relevance to the query that selected this ADR ([0, 1]); 0.0 when
+    the metadata did not come from a scored search."""
 
 
 @dataclass
@@ -134,12 +195,16 @@ class ADRLoader:
             logger.warning(f"Decisions directory not found: {self.decisions_dir}")
             return
 
-        for adr_file in self.decisions_dir.glob("*.md"):
+        for adr_file in sorted(self.decisions_dir.glob("*.md")):
             try:
                 metadata = self._parse_adr(adr_file)
                 if metadata:
-                    node = ADRNode(metadata=metadata)
-                    self.adrs[metadata.id] = node
+                    prev = self.adrs.get(metadata.id)
+                    # ~100 ids are carried by two files. Keep the one a reader
+                    # should be pointed at (accepted over proposed over the
+                    # rest), not whichever glob happened to yield last.
+                    if prev is None or _status_rank(metadata) > _status_rank(prev.metadata):
+                        self.adrs[metadata.id] = ADRNode(metadata=metadata)
                     logger.debug(f"Loaded ADR: {metadata.id}")
             except Exception as e:
                 logger.warning(f"Failed to parse {adr_file}: {e}")
@@ -148,6 +213,24 @@ class ADRLoader:
 
         # Build graph after all ADRs loaded
         self._build_graph()
+        self._build_index()
+
+    def _build_index(self) -> None:
+        """Token sets per ADR plus corpus idf, for :meth:`score_query`."""
+        self._title_tokens: Dict[str, Set[str]] = {}
+        self._body_tokens: Dict[str, Set[str]] = {}
+        df: Dict[str, int] = {}
+        for adr_id, node in self.adrs.items():
+            m = node.metadata
+            tt = set(tokenize(m.title))
+            bt = set(tokenize(m.content_preview)) | tt
+            self._title_tokens[adr_id] = tt
+            self._body_tokens[adr_id] = bt
+            for t in bt:
+                df[t] = df.get(t, 0) + 1
+        n = max(len(self.adrs), 1)
+        self._idf = {t: math.log((n + 1) / (c + 0.5)) for t, c in df.items()}
+        self._max_idf = math.log((n + 1) / 0.5)
 
     def _parse_adr(self, adr_file: Path) -> Optional[ADRMetadata]:
         """Parse ADR file: extract frontmatter and content preview.
@@ -174,15 +257,24 @@ class ADRLoader:
         except yaml.YAMLError:
             return None
 
-        # Extract ADR ID from filename (e.g., "0269-title.md" → "ADR-0269")
+        # The id comes from the frontmatter (ADR-0264 makes it canonical) and
+        # falls back to the file name. Both "0269-title.md" and
+        # "ADR-0269-title.md" are in the corpus; the old ``re.match(r"(\d{4})")``
+        # failed on the second shape and used the whole stem as the id.
         stem = adr_file.stem
-        match = re.match(r"(\d{4})", stem)
-        adr_id = f"ADR-{match.group(1)}" if match else stem
+        fm_id = re.match(r"^(?:ADR-)?(\d{4})(?!\d)", str(frontmatter.get("id", "")))
+        fn_id = re.match(r"^(?:ADR-)?(\d{4})(?!\d)", stem)
+        num = fm_id or fn_id
+        adr_id = f"ADR-{num.group(1)}" if num else stem
+
+        h1 = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
+        title = h1.group(1).strip() if h1 else stem.replace("-", " ").title()
+        title = re.sub(r"^ADR[- ]?\d{4}\s*[:—–-]\s*", "", title)
 
         return ADRMetadata(
             id=adr_id,
-            title=stem.replace("-", " ").title(),
-            status=frontmatter.get("status", "proposed"),
+            title=title,
+            status=str(frontmatter.get("status") or "proposed").strip(),
             depends_on=frontmatter.get("depends_on", []),
             related=frontmatter.get("related", []),
             supersedes=frontmatter.get("supersedes", []),
@@ -246,6 +338,51 @@ class ADRLoader:
         results.sort(key=lambda x: x[1])
         return [adr_id for adr_id, _ in results[:max_results]]
 
+    def score_query(
+        self, terms: Iterable[str], min_relevance: float = MIN_RELEVANCE,
+    ) -> List[Tuple[str, float]]:
+        """Rank ADRs by idf-weighted whole-token overlap with ``terms``.
+
+        A term found in the title counts fully, one found only in the body
+        preview counts half. The score is normalised by the query's own idf mass
+        (capped at the 6 rarest terms, so a long prompt is not penalised for
+        being long) and lies in [0, 1]. An ADR is returned only when it clears
+        ``min_relevance`` AND matches either two distinct terms or one term rare
+        enough (``SINGLE_TERM_MIN_IDF``) to be specific on its own, and the
+        matched terms carry at least ``MIN_EVIDENCE`` idf in total. Superseded /
+        rejected ADRs are never returned. Ties break on id, so the order is
+        deterministic.
+        """
+        if not hasattr(self, "_idf"):
+            self._build_index()
+        q = [t for t in dict.fromkeys(tokenize(" ".join(terms)))]
+        if not q:
+            return []
+        weights = {t: self._idf.get(t, self._max_idf) for t in q}
+        # Terms the corpus never uses carry no evidence either way.
+        known = {t: w for t, w in weights.items() if t in self._idf}
+        if not known:
+            return []
+        norm = sum(sorted(known.values(), reverse=True)[:6])
+        out: List[Tuple[str, float]] = []
+        for adr_id, body in self._body_tokens.items():
+            if str(self.adrs[adr_id].metadata.status).lower() in _INACTIVE_STATUSES:
+                continue
+            title = self._title_tokens[adr_id]
+            hits = [t for t in known if t in body]
+            if not hits:
+                continue
+            if len(hits) < 2 and known[hits[0]] < SINGLE_TERM_MIN_IDF:
+                continue
+            raw = sum(known[t] * (1.0 if t in title else 0.5) for t in hits)
+            if sum(known[t] for t in hits) < MIN_EVIDENCE:
+                continue
+            score = min(1.0, raw / norm) if norm > 0 else 0.0
+            if score >= min_relevance:
+                out.append((adr_id, round(score, 4)))
+        out.sort(key=lambda x: (-x[1], x[0]))
+        return out
+
     def search_by_keywords(self, keywords: List[str], max_results: int = 5) -> List[str]:
         """Find ADRs by keyword matching against title + content preview.
 
@@ -258,26 +395,44 @@ class ADRLoader:
         """
         if not keywords:
             return []
+        return [adr_id for adr_id, _ in self.score_query(keywords)[:max_results]]
 
-        # Score each ADR
-        scores = {}
-        keywords_lower = [kw.lower() for kw in keywords]
 
-        for adr_id, node in self.adrs.items():
-            score = 0
-            title_lower = node.metadata.title.lower()
-            content_lower = node.metadata.content_preview.lower()
+def _status_rank(meta: ADRMetadata) -> int:
+    return _STATUS_RANK.get(str(meta.status).strip().lower(), 0)
 
-            # Title matches are weighted higher
-            for kw in keywords_lower:
-                if kw in title_lower:
-                    score += 2
-                if kw in content_lower:
-                    score += 1
 
-            if score > 0:
-                scores[adr_id] = score
+# One parsed corpus per process. GraphStage builds a fresh GraphTraversal on
+# every turn, and parsing ~1 100 ADR files costs ~0.5 s — that was paid on the
+# request path every turn. The cache is invalidated when any file is added,
+# removed or modified (directory listing + max mtime), so an ADR edited mid-run
+# is picked up on the next turn.
+_CACHE_LOCK = threading.Lock()
+_CACHE: Dict[str, Tuple[Tuple[int, int], "ADRLoader"]] = {}
 
-        # Sort by score, return top N
-        sorted_adr_ids = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        return [adr_id for adr_id, _ in sorted_adr_ids[:max_results]]
+
+def _dir_signature(d: Path) -> Tuple[int, int]:
+    files = list(d.glob("*.md"))
+    return (len(files), max((f.stat().st_mtime_ns for f in files), default=0))
+
+
+def get_loader(adr_repo_path: Optional[str] = None) -> ADRLoader:
+    """Shared, freshness-checked :class:`ADRLoader`."""
+    if adr_repo_path:
+        d: Optional[Path] = Path(adr_repo_path)
+    else:
+        root = Path(__file__).parent.parent.parent
+        d = next((root / sp for sp in ADRLoader.SEARCH_PATHS
+                  if (root / sp).is_dir() and any((root / sp).glob("*.md"))), None)
+    if d is None or not d.is_dir():
+        return ADRLoader(adr_repo_path=adr_repo_path)
+    key = str(d.resolve())
+    sig = _dir_signature(d)
+    with _CACHE_LOCK:
+        hit = _CACHE.get(key)
+        if hit and hit[0] == sig:
+            return hit[1]
+    loader = ADRLoader(adr_repo_path=str(d))
+    with _CACHE_LOCK:
+        _CACHE[key] = (sig, loader)
+    return loader

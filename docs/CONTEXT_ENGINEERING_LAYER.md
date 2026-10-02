@@ -54,12 +54,28 @@ class MemoryMatch:
 
 **What it does:** Finds relevant architectural decisions (ADRs) and follows their dependency graph.
 
-**Traversal Strategy:**
-1. Find ADRs by keyword match (full-text search in decision docs)
-2. Score by relevance (keyword precision, field weights)
-3. Follow `depends_on` edges (depth-limited: default depth=2)
-4. Detect conflicts (look for `supersedes` relationships)
-5. Score by depth (direct hits 0.95, +1 level = 0.7× multiplier)
+**Traversal Strategy (as implemented, 2026-10-02):**
+1. Tokenise the task into whole, stop-word-free, lightly stemmed words
+   (`adr_loader.tokenize`) — never substrings.
+2. Score every ADR (`ADRLoader.score_query`): idf-weighted overlap, title hits
+   ×1.0, preview hits ×0.5, normalised by the query's 6 rarest terms → [0, 1].
+   An ADR is returned only if it clears `MIN_RELEVANCE` (0.25), its matched
+   terms carry ≥ `MIN_EVIDENCE` (4.0) idf, and it matches two terms or one rare
+   one (`SINGLE_TERM_MIN_IDF`). Superseded/rejected ADRs never match.
+3. The top `top_n` direct matches seed a walk over `depends_on`/`related`/
+   `supersedes` (depth 2). A neighbour is added only if it is itself relevant:
+   `0.6·own + 0.2·seed` must clear `MIN_RELEVANCE` — an edge alone is not
+   relevance.
+4. The returned `RelatedDecision.relevance_score` is that score (it was a
+   constant 0.5 placeholder before); order is score, then id — deterministic.
+5. Ids come from the frontmatter `id` (filename as fallback; both `0269-…` and
+   `ADR-0269-…` names parse), titles from the H1; of two files sharing an id the
+   accepted one is kept. The parsed corpus is cached per process and
+   invalidated on any file add/remove/edit (`get_loader`) — it was re-parsed
+   (~0.5 s) on every turn.
+
+Regression fixtures: `tests/test_adr_relevance_session_drift.py` (the
+ADR-0788 GitHub-discovery and voice-STT contaminations recorded on 2026-10-02).
 
 **Conflict Detection:**
 - If ADR-X `supersedes: [ADR-Y]`, flag Y as obsolete

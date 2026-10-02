@@ -986,6 +986,59 @@ L37-retained `cel-briefs/` audit sidecars. This is what the `/new` reply
 promises in so many words, and it is why the reset deletes entries rather than
 the directory.
 
+Since 2026-10-02 `reset_claude_session_state(workdir, *, reason=...)` also
+records the reset as a boundary in the chat's **session ledger** (next
+section) whenever a session actually existed. Every caller passes its reason:
+`manual` (`/new`, `/clear`, `/reset`, the in-adapter `_reset` branch),
+`timeout` (inactivity sweep), `context_overflow`, `session_corrupted`. An
+unknown reason counts as unwanted, so a new caller that forgets it fails
+towards remembering.
+
+## Session ledger — session content is never forgotten (ADR-2102, 2026-10-02)
+
+The CLI transcript behind `--resume`/`--continue` loses content two ways the
+adapter does not control: **auto-compaction** (measured on this install's
+Discord bridge: 197 886 → 12 287 tokens, 185 599 dropped in one compaction) and
+**session resets** (context overflow, corrupted/idle stream, the 7-day
+inactivity sweep, `/new`). `corvin_operator/bridges/shared/session_ledger.py`
+makes that loss structurally impossible for the chat's own turns:
+
+| Rule | Where |
+|---|---|
+| **Record** every finished turn verbatim, append-only (`O_APPEND` + `flock` + fsync, 0600) to `<workdir>/.corvin-ledger/ledger.jsonl`. No reset path removes it; only GDPR erasure (`L-session-ledger`) does. | `process_one`, right before L28.1 recall indexing |
+| **Verify coverage against the transcript**, not against bookkeeping: a turn is "live" only if its user text is in the current CLI transcript AFTER its last `compact_boundary`. Unreadable transcript ⇒ nothing is live ⇒ everything is re-supplied. | `render_context` → `scan_transcript` |
+| **Re-supply** every non-live turn on EVERY spawn (including the fresh retry after an overflow/corrupted-session reset): newest turns verbatim (40 000 chars), older ones as index lines (16 000 chars), beyond that a line naming the turn range and the ledger file. Cuts move in steps of 8 turns; the block's header is constant and turn sections only append, so its prefix stays byte-stable for the prompt cache. | `_resolve_spawn_inputs`, after the user-model block |
+| **`/new` fences.** Turns before the operator's last `/new` are not re-supplied (one line says they are in the ledger file); `/new`'s reply says the history is kept. Unwanted resets do NOT fence. | `uncovered_turns` / `last_manual_reset` |
+
+Compactions are recorded as `compaction` boundaries after each turn
+(`note_compactions`, idempotent by the boundary's uuid). Boundaries are labels
+for the view and the audit trail — coverage never depends on them.
+
+Audit (content-free): `session_ledger.boundary`,
+`session_ledger.context_resupplied` (only when the re-supplied set changes),
+`session_ledger.append_failed`.
+
+The console web-chat applies the same renderer to its existing append-only
+`turns.jsonl` (`chat_runtime._session_ledger_block`, `render_turn_log_context`)
+— one rule, two surfaces, no second store.
+
+**What it does not cover:** a turn whose recording fails (disk error — audited
+as `append_failed`), and anything beyond the budget is in the view only as an
+index line or a file reference (the worker can Read/Grep the ledger file; a
+persona in `restricted` media mode cannot). E2E proof:
+`shared/test_session_ledger_e2e.py` (adapter process + `session_reset.py`),
+`tests/e2e/test_session_ledger_console_e2e.py` (console WebSocket).
+
+### CEL session identity on the bridge
+
+The adapter used to call the CEL with `session=None`, which pooled every chat
+of a tenant into ONE `_nosession` anchor bucket (live: the anchor flag is on
+via the console overlay). `_cel_session(channel, chat_key)` now passes
+`<channel>:<chat>` plus `#<seq>` of the last `/new` from the ledger, so an
+explicit start-over gets a fresh anchor and an unwanted reset keeps it; and
+`pipeline._maybe_apply_anchor` / `maybe_capture_decision_point` write NOTHING
+when there is no session key. E2E: `shared/test_cel_anchor_bridge_e2e.py`.
+
 ### `corvin_operator/forge/paths.py` was shadowing `bridges/shared/paths.py`
 
 Removed the same day. It was a nine-line stub ("stub for audit_metrics

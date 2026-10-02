@@ -241,3 +241,56 @@ def test_move2_mutation_is_caught(isolated, monkeypatch):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── 2026-10-02: no session identity ⇒ no anchor (never a shared bucket) ─────
+
+def test_no_session_key_writes_nothing(isolated, monkeypatch):
+    """The bridge used to call build_brief(..., session=None); the store then
+    fell back to ONE "_nosession" bucket shared by every chat of the tenant and
+    re-injected one chat's facts into another's turns. Now: nothing is written,
+    nothing is injected, and the trace says why."""
+    _set_flag(monkeypatch, True)
+    brief, trace = build_brief("keep working on the compliance audit chain", "_default", None,
+                               meter=False)
+    assert trace.get("anchor_skipped") == "no_session_key"
+    assert not (getattr(brief, "anchor_facts", None) or [])
+    assert not list(Path(isolated).rglob("_nosession.jsonl"))
+
+
+def test_no_session_key_captures_no_decision(isolated, monkeypatch):
+    _set_flag(monkeypatch, True)
+    reply = "Which do you prefer?\n1. Option A\n2. Option B"
+    assert _pipeline.maybe_capture_decision_point(reply, "_default", None) is None
+    assert not list(Path(isolated).rglob("*.jsonl"))
+
+
+def test_two_chats_never_share_facts(isolated, monkeypatch):
+    _set_flag(monkeypatch, True)
+
+    class _A:
+        sid = "telegram:chat-a"
+
+    class _B:
+        sid = "telegram:chat-b"
+
+    reply = "Which export format should I use?\n1. CSV-ONLY-CHAT-A\n2. Parquet"
+    assert _pipeline.maybe_capture_decision_point(reply, "_default", _A()) is not None
+    brief_a, _ = build_brief("continue", "_default", _A(), meter=False)
+    brief_b, _ = build_brief("continue", "_default", _B(), meter=False)
+    text_a = " ".join(f.get("text", "") for f in (brief_a.anchor_facts or []))
+    text_b = " ".join(f.get("text", "") for f in (brief_b.anchor_facts or []))
+    assert "CSV-ONLY-CHAT-A" in text_a
+    assert "CSV-ONLY-CHAT-A" not in text_b
+
+
+def test_render_anchor_block_for_synthesised_prompts(isolated, monkeypatch):
+    """The active pipeline replaces the deterministic brief with an
+    LLM-synthesised prompt; render_anchor_block is what keeps the anchored
+    facts in front of it (adapter call site)."""
+    _set_flag(monkeypatch, True)
+    brief, _ = build_brief("keep working on the compliance audit chain", "_default", _Sess(),
+                           meter=False)
+    block = _pipeline.render_anchor_block(brief)
+    assert _CANARY in block
+    assert _pipeline.render_anchor_block(None) == ""

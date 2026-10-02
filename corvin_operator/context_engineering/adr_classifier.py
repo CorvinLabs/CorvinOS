@@ -1,8 +1,9 @@
 """ADR Classifier: Match tasks to relevant ADRs."""
 
+import dataclasses
 import logging
-from typing import List, Optional
-from .adr_loader import ADRLoader, ADRMetadata
+from typing import Dict, List, Optional
+from .adr_loader import ADRLoader, ADRMetadata, MIN_RELEVANCE, get_loader, tokenize
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ class ADRClassifier:
         Args:
             adr_loader: ADRLoader instance (creates new one if None).
         """
-        self.loader = adr_loader or ADRLoader()
+        self.loader = adr_loader or get_loader()
         logger.info("ADRClassifier initialized")
 
     def find_relevant_adrs(
@@ -42,31 +43,36 @@ class ADRClassifier:
         Returns:
             List of relevant ADRMetadata objects ranked by relevance.
         """
-        # Extract keywords from task
         keywords = self._extract_keywords(task)
         if not keywords:
             return []
 
-        # Search ADRs by keywords
-        seed_adr_ids = self.loader.search_by_keywords(keywords, max_results=top_n)
-        if not seed_adr_ids:
+        # Every returned ADR carries its OWN lexical score against the task.
+        # The top_n direct matches seed the graph walk. A graph neighbour (depends_on /
+        # related / supersedes) is only added when it is itself relevant: it
+        # inherits a decayed share of its seed's score, blended with its own,
+        # and must still clear MIN_RELEVANCE. The old code added every 2-hop
+        # neighbour unscored and then cut ``list(set)[:max_results]`` — an
+        # arbitrary subset, which could drop the best seed for a stranger.
+        scored = self.loader.score_query(keywords, min_relevance=0.0)
+        own: Dict[str, float] = dict(scored)
+        direct = [(i, s) for i, s in scored if s >= MIN_RELEVANCE][:max_results]
+        if not direct:
             return []
+        final: Dict[str, float] = dict(direct)
+        for seed_id, seed_score in direct[:top_n]:
+            for n_id in self.loader.find_related_adr_ids(seed_id, depth=2, max_results=max_results * 2):
+                if n_id in final:
+                    continue
+                blended = 0.6 * own.get(n_id, 0.0) + 0.4 * seed_score * 0.5
+                if blended >= MIN_RELEVANCE:
+                    final[n_id] = round(blended, 4)
 
-        # Traverse graph from each seed, collect related ADRs
-        related_adr_ids = set()
-        for seed_id in seed_adr_ids:
-            related = self.loader.find_related_adr_ids(seed_id, depth=2, max_results=max_results)
-            related_adr_ids.update(related)
-
-        # Add seed ADRs themselves
-        related_adr_ids.update(seed_adr_ids)
-
-        # Collect metadata, limit to max_results
         results = []
-        for adr_id in list(related_adr_ids)[:max_results]:
+        for adr_id, score in sorted(final.items(), key=lambda x: (-x[1], x[0]))[:max_results]:
             metadata = self.loader.get_adr(adr_id)
             if metadata and metadata.id:
-                results.append(metadata)
+                results.append(dataclasses.replace(metadata, relevance=score))
 
         logger.info(f"Found {len(results)} relevant ADRs for task")
         return results
@@ -78,7 +84,7 @@ class ADRClassifier:
             task: Task object.
 
         Returns:
-            List of keywords (max 10).
+            List of keywords (max 24).
         """
         keywords = []
 
@@ -95,13 +101,6 @@ class ADRClassifier:
         if not summary:
             return []
 
-        # Simple keyword extraction: split by spaces, filter short words, deduplicate
-        words = summary.lower().split()
-        keywords = [
-            w.strip(".,!?;:")
-            for w in words
-            if len(w) >= 4 and w not in {"the", "that", "this", "from", "with", "have"}
-        ]
-
-        # Deduplicate and limit to 10
-        return list(dict.fromkeys(keywords))[:10]
+        # Whole-word, stop-word-free, stemmed tokens; the first 24 carry the
+        # task (a long brief's tail is usually boilerplate).
+        return tokenize(summary)[:24]

@@ -3867,12 +3867,12 @@ a real licence change MUST invalidate outstanding sessions (ADR-0154 M3).
 "Context drift" named four unrelated problems, and memory notes cited the wrong ADRs for
 them. ADR-2101 splits them; use these names:
 
-| # | Problem | Owning ADRs | State (2026-10-01) |
+| # | Problem | Owning ADRs | State (2026-10-01; updated 2026-10-02) |
 |---|---|---|---|
 | P1 | Visibility — the operator sees what the pipeline built | 0275, 0276, 0277, 0278, 0399 | done |
-| P2 | Source contamination — a stale, duplicate or synthesised fragment enters a turn | 2098, 0407 anchor amendment | partial: 2098 live, anchor flag off, `llm_synthesis` contamination open |
+| P2 | Source contamination — a stale, duplicate or synthesised fragment enters a turn | 2098, 0407 anchor amendment | 2026-10-02: 2098 live; anchor on (console overlay) and keyed per chat (the bridge pooled all chats into `_nosession`); `llm_synthesis` temp-path stripped; ADR retrieval relevance-scored (`graph` stage) |
 | P3 | Goal drift — the agent solves a different problem | 0404, 0406, 0407 | not wired: no live caller of the goal monitor |
-| P4 | Cross-session persistence — task context survives a session break | 0405, 0865 | not built |
+| P4 | Cross-session persistence — task context survives a session break | 0405, 0865 → 2102 | 2026-10-02: chat content — session ledger (ADR-2102), bridge + console, E2E-proven; task/goal state (ADR-0405) still not built |
 
 ADR-0862/0863/0864/0866 are not context ADRs. P2 depends on P1; P3 depends on P1; P4
 builds on P3's goal capture.

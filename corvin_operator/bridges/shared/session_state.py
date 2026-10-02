@@ -36,6 +36,7 @@ must not be deleted by a user-facing reset.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -164,16 +165,36 @@ def tenant_sessions_root(tenant_id: str | None = None) -> Path | None:
         return None
 
 
-def reset_claude_session_state(workdir: Path) -> list[str]:
+#: Reset reasons that are the operator's explicit "start over" (``/new``,
+#: ``/clear``, ``/reset``). Every other reason — context overflow, a corrupted
+#: or idle stream, the inactivity sweep, an unknown caller — is an UNWANTED
+#: reset, after which the session ledger re-supplies the chat's earlier turns.
+MANUAL_RESET_REASONS: frozenset[str] = frozenset({"manual"})
+
+
+def reset_claude_session_state(workdir: Path, *, reason: str = "unspecified") -> list[str]:
     """Delete only Claude's conversation state in ``workdir``; keep project files.
 
     Returns the names of the entries removed, for logging. Missing entries are
     not an error — the operation is idempotent by construction.
+
+    The chat's append-only session ledger (``.corvin-ledger/``) is not Claude
+    state and is never removed here. When a session actually existed, the
+    reset is recorded in that ledger as a boundary carrying ``reason``; an
+    unknown reason counts as unwanted (the ledger then re-supplies the earlier
+    turns), so a new caller that forgets to pass one fails towards
+    remembering, not towards forgetting.
     """
     removed: list[str] = []
     workdir = Path(workdir)
     if not workdir.is_dir():
         return removed
+    try:
+        _prev_session = json.loads(
+            (workdir / ".main_session.json").read_text(encoding="utf-8")
+        ).get("session_id") or ""
+    except (OSError, ValueError, AttributeError):
+        _prev_session = ""
 
     for name in CLAUDE_STATE_FILES:
         p = workdir / name
@@ -191,6 +212,19 @@ def reset_claude_session_state(workdir: Path) -> list[str]:
             continue
         removed.append(p.name + "/" if is_real_dir else p.name)
 
+    if removed:
+        try:
+            try:
+                from . import session_ledger as _ledger  # type: ignore
+            except ImportError:
+                import session_ledger as _ledger  # type: ignore
+            _ledger.append_boundary(
+                workdir, kind="reset", reason=str(reason or "unspecified"),
+                channel=workdir.parent.name, chat_key=workdir.name,
+                session_id=str(_prev_session),
+            )
+        except Exception:  # noqa: BLE001 — a reset must never fail on the label
+            pass
     return removed
 
 

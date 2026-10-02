@@ -221,6 +221,12 @@ turn; and a consumer on the chat/worker start path that calls
 `resume_from_bridge` and injects the result. None of that exists. See the
 ADR-0541 amendment of 2026-09-07.
 
+**Chat continuity is a different subsystem (2026-10-02).** Re-supplying a
+chat's own turns across a reset or a compaction is done by the session ledger
+(`corvin_operator/bridges/shared/session_ledger.py`, Corvin-ADR ADR-2102), not
+here: it needs the conversation text, which this subsystem's content-freedom
+rule rightly forbids. See `adapter-runtime.md` § Session ledger.
+
 ## Tests
 
 - `tests/skills/test_infinite_session_phase_a.py` — schema, parser, EventStore, adversarial (traversal, tenant, tamper, concurrency), plan→snapshots→restart→recover.

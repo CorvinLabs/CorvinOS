@@ -3568,6 +3568,27 @@ def _resolve_spawn_inputs(
         except Exception as e:  # noqa: BLE001
             log(f"user_model inject failed: {e}")
 
+    # Session ledger — every turn of this chat that the live CLI transcript
+    # does not verifiably hold (earlier session, unwanted reset, compaction)
+    # is re-supplied from the chat's append-only ledger on EVERY spawn,
+    # including the fresh retry after a context-overflow / corrupted-session
+    # reset. See session_ledger.py for the coverage rule and the budget.
+    if chat_key:
+        try:
+            try:
+                from . import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+            except ImportError:
+                import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+            _ledger_block = _ledger.render_context(
+                _session_dir(channel, str(chat_key)),
+                channel=str(channel or ""), chat_key=str(chat_key),
+                tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default",
+            )
+            if _ledger_block:
+                sys_prompt = sys_prompt + _ledger_block
+        except Exception as e:  # noqa: BLE001
+            log(f"session ledger inject failed: {e}")
+
     # Layer 9 — capability-flag warning. The cowork resolver already
     # injects forge / skill-forge MCP server stanzas onto
     # profile.mcp_servers when persona.forge_enabled /
@@ -3806,11 +3827,24 @@ def _resolve_spawn_inputs(
                         "skill_forge_enabled": bool(profile.get("skill_forge_enabled")),
                     }
                     _bundle, _ctrace = _cel_run_full(
-                        prompt, _cel_tid, None, gate_fn=_cel_gate,
+                        prompt, _cel_tid, _cel_session(channel, chat_key), gate_fn=_cel_gate,
                         persona_patterns=_persona_globs,
                         persona_caps=_persona_caps)
                     if _bundle is not None and getattr(_bundle, "synthesised_prompt", None):
                         _cel_text = _bundle.synthesised_prompt.strip()
+                        # The anchored facts sit at the head of the deterministic
+                        # brief; the synthesised prompt replaces that brief, so
+                        # put them in front of it explicitly.
+                        try:
+                            # Same module copy the adapter loaded by file path
+                            # (sys.modules["context_engineering"]), not a second one.
+                            from context_engineering.pipeline import (  # type: ignore  # noqa: PLC0415
+                                render_anchor_block as _cel_anchor_block)
+                            _anchor_txt = _cel_anchor_block(_bundle.brief)
+                            if _anchor_txt:
+                                _cel_text = _anchor_txt + "\n\n" + _cel_text
+                        except Exception:  # noqa: BLE001
+                            pass
                     elif _ctrace.get("gate2_denied") or _ctrace.get("gate1_denied"):
                         # A denied turn injects NOTHING — not even the deterministic
                         # brief fallback, which Gate-2 never inspected (review R2 A2):
@@ -3848,7 +3882,8 @@ def _resolve_spawn_inputs(
                         elif _skill_block:
                             _cel_text = _skill_block
                 else:
-                    _cbrief, _ctrace = _cel_build_brief(prompt, _cel_tid, None)
+                    _cbrief, _ctrace = _cel_build_brief(prompt, _cel_tid,
+                                                        _cel_session(channel, chat_key))
                     # ADR-0396: inject memory BODIES, not just titles, when the flag is on
                     # (ship-dark, default off). EXP-001: title-only 0.00 vs content 0.833 tool-off.
                     try:
@@ -4463,6 +4498,33 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
     return env
 
 
+def _cel_session(channel: str, chat_key: str | None):
+    """The CEL session identity of a bridge chat: ``<channel>:<chat>`` plus the
+    epoch of the operator's last ``/new`` from the chat's session ledger.
+
+    CEL used to get ``None`` here, so the per-session stores (load-bearing
+    anchor, seen-topics) either skipped the bridge or pooled every chat of a
+    tenant into one bucket. The ``/new`` epoch starts a fresh anchor after an
+    explicit start-over, while an UNWANTED reset (overflow, timeout, corrupted
+    stream) keeps the same key — the facts are exactly what must survive it.
+    """
+    if not chat_key:
+        return None
+    key = f"{channel}:{chat_key}"
+    try:
+        try:
+            from . import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+        fence = _ledger.last_manual_reset(_ledger.read_ledger(_session_dir(channel, str(chat_key))))
+        if fence:
+            key += f"#{int(fence.get('seq') or 0)}"
+    except Exception:  # noqa: BLE001 — no ledger → the plain chat key
+        pass
+    import types as _types  # noqa: PLC0415
+    return _types.SimpleNamespace(sid=key)
+
+
 def _session_dir(channel: str, chat_key: str, tenant_id: str | None = None) -> Path:
     """Per-chat working directory at tenants/<tid>/sessions/<channel>/<safe_chat_key>/.
 
@@ -4651,7 +4713,7 @@ def _format_observer_block(entries: list[dict]) -> str:
     )
 
 
-def _reset_session_state(workdir: Path) -> list[str]:
+def _reset_session_state(workdir: Path, *, reason: str = "unspecified") -> list[str]:
     """Delete only Claude's conversation state — keep all project files.
     Returns the names of the entries that were removed (for logging).
 
@@ -4664,7 +4726,7 @@ def _reset_session_state(workdir: Path) -> list[str]:
         from .session_state import reset_claude_session_state  # type: ignore
     except ImportError:
         from session_state import reset_claude_session_state  # type: ignore
-    return reset_claude_session_state(workdir)
+    return reset_claude_session_state(workdir, reason=reason)
 
 
 def _build_context_bar(channel: str, chat_key: str, profile: dict | None) -> str:
@@ -6031,7 +6093,7 @@ def _call_claude_streaming_via_engine(
                         except Exception:  # noqa: BLE001
                             pass
                         try:
-                            _reset_session_state(workdir)
+                            _reset_session_state(workdir, reason="context_overflow")
                         except Exception as _wipe_err:  # noqa: BLE001
                             log(f"session reset failed: {_wipe_err}")
                         return call_claude_streaming(
@@ -6142,7 +6204,7 @@ def _call_claude_streaming_via_engine(
                     except Exception:  # noqa: BLE001
                         pass
                     try:
-                        _reset_session_state(workdir)
+                        _reset_session_state(workdir, reason="session_corrupted")
                     except Exception as wipe_err:  # noqa: BLE001
                         log(f"session reset failed: {wipe_err}")
                 elif has_session:
@@ -11022,7 +11084,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         except Exception as _pws_exc:  # noqa: BLE001
             log(f"reset session: worker-session purge failed ({type(_pws_exc).__name__})")
         workdir = _session_dir(channel, chat_key)
-        removed = _reset_session_state(workdir)
+        removed = _reset_session_state(workdir, reason="manual")
         # Phase 1 hygiene — wipe the prev-turn outcome-grading snapshot. After
         # /reset, the next user message belongs to a fresh task and must NOT
         # apply approval/rejection signals to skills from the abandoned
@@ -12033,7 +12095,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     if _cel_maybe_capture_decision is not None and answer:
         try:
             _cdp_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
-            _cel_maybe_capture_decision(answer, _cdp_tid, None)
+            _cel_maybe_capture_decision(answer, _cdp_tid, _cel_session(channel, chat_key))
         except Exception:  # noqa: BLE001 — never break a turn on the way out
             pass
 
@@ -12219,6 +12281,30 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 )
         except Exception as e:  # noqa: BLE001
             log(f"auto_grade failed (non-fatal): {e}")
+
+    # Session ledger — record this turn append-only BEFORE anything else can
+    # lose it, then note any CLI compaction the turn triggered. Unlike recall
+    # (redacted, searchable, opt-out-able) the ledger is the verbatim record
+    # the next spawn re-supplies from; see session_ledger.py.
+    if chat_key and prompt:
+        try:
+            try:
+                from . import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+            except ImportError:
+                import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+            _ledger_wd = _session_dir(channel, str(chat_key))
+            _ledger_tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+            _ledger.append_turn(
+                _ledger_wd, channel=str(channel or ""), chat_key=str(chat_key),
+                user_text=prompt, assistant_text=answer or "",
+                msg_id=str(msg_id or ""), tenant_id=_ledger_tid,
+            )
+            _ledger.note_compactions(
+                _ledger_wd, channel=str(channel or ""), chat_key=str(chat_key),
+                tenant_id=_ledger_tid,
+            )
+        except Exception as e:  # noqa: BLE001
+            log(f"session ledger append failed (non-fatal): {e}")
 
     # Layer 28.1 (ADR-0016) — index the (user, assistant) turn-pair into
     # the per-tenant conversation_recall FTS5 store. Redaction runs

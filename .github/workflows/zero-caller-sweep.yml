@@ -1,0 +1,47 @@
+name: Zero-Caller Sweep
+
+# Fails when a NEW implementation of a registration contract (Brain Hub
+# Subsystem, OS BaseSkill, CEL stage, Plugin) has no import path from any
+# entry point. Pre-existing dead ones are recorded in
+# scripts/zero_caller_baseline.json; wiring or deleting one means removing its
+# baseline line. Background: three "context bridge" implementations were built
+# and none was reachable (Corvin-ADR ADR-2102).
+
+on:
+  pull_request:
+    paths:
+      - '**.py'
+      - 'pyproject.toml'
+      - '**.service'
+      - 'scripts/zero_caller_baseline.json'
+      - '.github/workflows/zero-caller-sweep.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - '**.py'
+      - 'pyproject.toml'
+      - '**.service'
+      - 'scripts/zero_caller_baseline.json'
+      - '.github/workflows/zero-caller-sweep.yml'
+
+jobs:
+  zero-caller-sweep:
+    name: No new unreachable contract implementations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Run sweep (gate)
+        run: python3 scripts/zero_caller_sweep.py --check
+
+      - name: Run sweep tests
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest tests/scripts/test_zero_caller_sweep.py -q

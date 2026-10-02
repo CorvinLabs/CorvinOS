@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Try to import ADR support (Phase 3)
 try:
-    from .adr_loader import ADRLoader
+    from .adr_loader import ADRLoader, get_loader
     from .adr_classifier import ADRClassifier
     ADR_AVAILABLE = True
 except ImportError:
@@ -102,7 +102,7 @@ class GraphTraversal:
         self.adr_classifier: Optional[ADRClassifier] = None
         if enable_adr and ADR_AVAILABLE:
             try:
-                adr_loader = ADRLoader()
+                adr_loader = get_loader()
                 self.adr_classifier = ADRClassifier(adr_loader)
                 logger.info(f"GraphTraversal initialized with ADR support ({len(adr_loader.adrs)} ADRs loaded)")
             except Exception as e:
@@ -192,8 +192,8 @@ class GraphTraversal:
         # Score by relevance + distance
         scored = self._score_decisions(all_decisions, task)
 
-        # Sort by relevance (descending)
-        ranked = sorted(scored, key=lambda d: d.relevance_score, reverse=True)
+        # Sort by relevance (descending); id breaks ties so the order is stable
+        ranked = sorted(scored, key=lambda d: (-d.relevance_score, d.decision_id))
 
         # Cache results
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -263,9 +263,10 @@ class GraphTraversal:
 
         related = []
         for decision in decisions:
-            # Placeholder scoring: for now, all scores are 0.5
-            # Real implementation would calculate task similarity
-            score = 0.5
+            # An ADR decision carries the classifier's real lexical relevance.
+            # The generic (Phase 2) path has no scorer; it keeps the neutral
+            # 0.5 it always had, and today produces no decisions at all.
+            score = float(decision.get("relevance", 0.5))
             distance = decision.get("distance", 2)
 
             try:
@@ -306,6 +307,7 @@ class GraphTraversal:
             "distance": distance,
             "context": getattr(adr_metadata, "content_preview", "")[:200],
             "status": getattr(adr_metadata, "status", "unknown"),
+            "relevance": float(getattr(adr_metadata, "relevance", 0.0) or 0.0),
         }
 
     def _get_task_id(self, task: object) -> str:

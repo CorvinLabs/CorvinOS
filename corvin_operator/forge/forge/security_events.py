@@ -331,6 +331,11 @@ EVENT_SEVERITY: dict[str, str] = {
     # Layer 28 — GDPR Art. 17 recall purge (L36 handler emits per-layer confirmation).
     # Metadata only: layer_id, count. subject_id is NEVER logged (pseudonymity).
     "memory.recall_purged":         "WARNING",
+    # Session ledger (session-drift analysis 2026-10-02, L0/L4): the chat's
+    # append-only verbatim turn record and its re-supply into each spawn.
+    "session_ledger.boundary":           "INFO",
+    "session_ledger.context_resupplied": "INFO",
+    "session_ledger.append_failed":      "WARNING",
     # Layer 28.1 — GDPR Art. 17 turn deletion (conversation_recall.forget()).
     # Metadata only: channel, chat_key, before_ts, rows_deleted. Never text content.
     # Detail allow-list lives in conversation_recall.py::_AUDIT_ALLOWED_FIELDS.
@@ -4210,6 +4215,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "memory.recall_purged": frozenset({"count", "layer", "status"}),
     "memory.recall_query": frozenset({"caller_persona", "channel", "chat_key", "query_chars", "result_count", "since", "until"}),
     "memory.turn_indexed": frozenset({"asst_chars", "channel", "chat_key", "msg_id", "persona", "redacted_class_count", "redacted_classes", "user_chars"}),
+    "session_ledger.boundary": frozenset({"boundary", "channel", "chat_key", "pre_tokens", "reason", "turns_recorded"}),
+    "session_ledger.context_resupplied": frozenset({"before_manual_reset", "channel", "chat_key", "chars", "indexed", "omitted", "turns_resupplied", "turns_total", "verbatim"}),
+    "session_ledger.append_failed": frozenset({"channel", "chat_key", "reason", "record_kind"}),
     "memory.turns_forgotten": frozenset({"before_ts", "channel", "chat_key", "rows_deleted"}),
     "memory.user_model_distill_failed": frozenset({"channel", "chat_key", "error_type", "raw_chars", "reason"}),
     "memory.user_model_distilled": frozenset({"changed_fields", "channel", "chat_key", "distill_count", "judge_wall_clock_s", "previous_distill_count"}),

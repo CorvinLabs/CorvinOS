@@ -2158,6 +2158,30 @@ def _cel_brief_block(cel_brief: str) -> str:
     return "\n\n" + cel_brief.strip() + "\n"
 
 
+def _session_ledger_block(sess: WebChatSession) -> str:
+    """Re-supply every turn of this chat the live CLI transcript does not hold.
+
+    The chat's ``turns.jsonl`` is already an append-only record of every turn;
+    the CLI transcript behind ``--continue`` is not (auto-compaction rewrites
+    it). ``session_ledger`` checks each recorded turn against the transcript
+    after its last ``compact_boundary`` and re-supplies the missing ones on
+    every turn — the same rule the bridge adapter applies (one renderer, two
+    surfaces). Fail-safe: any error yields "" and the turn proceeds."""
+    try:
+        _shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
+        if str(_shared) not in sys.path:
+            sys.path.insert(0, str(_shared))
+        import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+        tpath = _turns_path(sess.tenant_id, sess.sid)
+        return _ledger.render_turn_log_context(
+            read_turns(sess.tenant_id, sess.sid), sess.workdir,
+            resumed=sess.turn_count > 0, ledger_file=str(tpath),
+            channel="web", chat_key=sess.chat_key, tenant_id=sess.tenant_id,
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _turn_system_prompt(sess: WebChatSession, task_text: str = "",
                         cel_brief: str = "") -> str:
     """Base web-chat system prompt + per-turn uploaded-file manifest, plus the
@@ -2180,6 +2204,7 @@ def _turn_system_prompt(sess: WebChatSession, task_text: str = "",
         + _acs_directive_block(task_text)
         + _cel_brief_block(cel_brief)
         + _infinite_session_context_block(sess)
+        + _session_ledger_block(sess)
         # LAST WORD on language. The rule near the top and the profile line in
         # the middle were both present and still lost: in a ~10 KB, overwhelmingly
         # ENGLISH system prompt a single early directive gets diluted, and an

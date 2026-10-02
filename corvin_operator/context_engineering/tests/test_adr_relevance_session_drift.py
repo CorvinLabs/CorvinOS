@@ -1,0 +1,174 @@
+"""ADR retrieval relevance (session-drift analysis 2026-10-02, §L1).
+
+The graph stage fed ``brief.related_decisions`` from a substring keyword match:
+any ADR sharing one 4-letter word with the task became a seed, every 2-hop graph
+neighbour was added unscored, ``list(set)[:5]`` picked an arbitrary subset and
+every result carried the placeholder score 0.5. A session-drift question came
+back annotated with Tree-of-Thoughts, Compute-Fabric and GitHub-discovery ADRs,
+and ``llm_synthesis`` forwarded them to the worker as "related decisions".
+
+These tests pin the replacement: whole-token idf relevance, a minimum score,
+real scores end to end, and the parser fixes (frontmatter id, H1 title,
+duplicate ids) that the old matcher's output depended on.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from ..adr_classifier import ADRClassifier
+from ..adr_loader import ADRLoader, MIN_RELEVANCE, get_loader, tokenize
+from ..graph_traversal import GraphTraversal
+
+_REAL_ADR_DIR = Path(__file__).resolve().parents[3].parent / "Corvin-ADR" / "decisions"
+
+
+def _adr(d: Path, name: str, *, id_: str, status: str, title: str, body: str = "",
+         depends_on: tuple = ()) -> None:
+    deps = "[" + ", ".join(depends_on) + "]"
+    (d / name).write_text(
+        f"---\nid: {id_}\nstatus: {status}\ndepends_on: {deps}\n---\n\n# {title}\n\n{body}\n",
+        encoding="utf-8")
+
+
+@pytest.fixture()
+def corpus(tmp_path: Path) -> ADRLoader:
+    d = tmp_path / "decisions"
+    d.mkdir()
+    _adr(d, "0100-session-bridge.md", id_="ADR-0100", status="PROPOSED",
+         title="ADR-0100: Session context bridge for cross-session continuity",
+         body="Snapshot task state at session end and restore it in the next session.")
+    _adr(d, "ADR-0101-drift-anchor.md", id_="ADR-0101", status="ACCEPTED",
+         title="ADR-0101: Load-bearing fact anchor against context drift",
+         body="Facts survive compaction because they are re-injected every turn.")
+    # Shares only generic words ("layer", "session") with a drift question.
+    _adr(d, "0102-tree-of-thoughts.md", id_="ADR-0102", status="ACCEPTED",
+         title="Tree of thoughts unified learning hierarchy",
+         body="Each layer of the session tree scores candidate thoughts.")
+    # File name carries a different number than the frontmatter id (renumber debris).
+    _adr(d, "ADR-0788-0454-custom-github-discovery.md", id_="ADR-0788", status="PROPOSED",
+         title="ADR-0454: Custom GitHub Repository Discovery",
+         body="Discover repositories in a GitHub organisation.")
+    # Two files carry one id; the accepted one must win regardless of glob order.
+    _adr(d, "0103-a-competing-proposal.md", id_="ADR-0103", status="PROPOSED",
+         title="Context filter priority tree (competing proposal)")
+    _adr(d, "0103-b-context-filter.md", id_="ADR-0103", status="ACCEPTED",
+         title="Context filtering by intent classification")
+    _adr(d, "0104-superseded-bridge.md", id_="ADR-0104", status="SUPERSEDED",
+         title="Session context bridge v0", body="Old session bridge design.")
+    # Graph neighbour of 0100 that is NOT about the query at all.
+    _adr(d, "0105-compute-fabric.md", id_="ADR-0105", status="ACCEPTED",
+         title="Compute fabric", body="Remote compute workers.", depends_on=("ADR-0100",))
+    for i in range(40):  # background corpus so idf separates rare from common terms
+        _adr(d, f"0{200 + i}-filler.md", id_=f"ADR-0{200 + i}", status="ACCEPTED",
+             title=f"Filler decision {i} about the layer and session runtime",
+             body="Generic platform layer session runtime text.")
+    return ADRLoader(adr_repo_path=str(d))
+
+
+class TestParser:
+    def test_adr_prefixed_filename_gets_a_real_id(self, corpus):
+        # The old parser used the whole stem ("ADR-0101-drift-anchor") as the id.
+        assert "ADR-0101" in corpus.adrs
+        assert not any(k.startswith("ADR-0101-") for k in corpus.adrs)
+
+    def test_frontmatter_id_wins_over_filename_number(self, corpus):
+        assert "ADR-0788" in corpus.adrs
+        assert corpus.adrs["ADR-0788"].metadata.title == "Custom GitHub Repository Discovery"
+
+    def test_title_comes_from_h1_without_id_prefix(self, corpus):
+        assert corpus.adrs["ADR-0100"].metadata.title.startswith("Session context bridge")
+
+    def test_duplicate_id_keeps_the_accepted_file(self, corpus):
+        assert corpus.adrs["ADR-0103"].metadata.status == "ACCEPTED"
+        assert "intent" in corpus.adrs["ADR-0103"].metadata.title
+
+
+class TestScoring:
+    def test_tokenize_is_whole_word_and_stemmed(self):
+        assert tokenize("Sessions drifting across the contextstage") == ["session", "drift", "contextstage"]
+
+    def test_generic_overlap_is_not_relevance(self, corpus):
+        ids = [i for i, _ in corpus.score_query(tokenize("why does the layer session runtime break"))]
+        assert "ADR-0102" not in ids
+
+    def test_on_topic_adrs_rank_first_with_real_scores(self, corpus):
+        hits = corpus.score_query(tokenize("context drift across a session boundary: bridge the task state"))
+        ids = [i for i, _ in hits]
+        assert ids[:2] == ["ADR-0100", "ADR-0101"] or ids[:2] == ["ADR-0101", "ADR-0100"]
+        assert all(MIN_RELEVANCE <= s <= 1.0 for _, s in hits)
+        assert len({s for _, s in hits}) > 1, "scores must discriminate, not be a constant"
+
+    def test_superseded_adr_is_never_returned(self, corpus):
+        ids = [i for i, _ in corpus.score_query(tokenize("session context bridge design"), min_relevance=0.0)]
+        assert "ADR-0104" not in ids
+
+    def test_unrelated_query_returns_nothing(self, corpus):
+        assert corpus.score_query(tokenize("wie spät ist es heute")) == []
+
+    def test_order_is_deterministic(self, corpus):
+        q = tokenize("session bridge drift anchor")
+        assert corpus.score_query(q) == corpus.score_query(q)
+
+
+class TestClassifier:
+    def test_irrelevant_graph_neighbour_is_not_pulled_in(self, corpus):
+        task = SimpleNamespace(normalized=SimpleNamespace(
+            summary="session context bridge: snapshot and restore task state"))
+        got = ADRClassifier(corpus).find_relevant_adrs(task, top_n=3, max_results=5)
+        ids = [m.id for m in got]
+        assert ids and ids[0] == "ADR-0100"
+        assert "ADR-0105" not in ids, "a dependency edge alone is not relevance"
+        assert all(m.relevance >= MIN_RELEVANCE for m in got)
+
+    def test_graph_traversal_carries_the_classifier_score(self, corpus):
+        gt = GraphTraversal(enable_adr=False)
+        gt.adr_classifier = ADRClassifier(corpus)
+        res = gt.find_related_decisions(SimpleNamespace(
+            id="t1", normalized=SimpleNamespace(summary="context drift anchor for load-bearing facts")))
+        assert res.related_decisions[0].decision_id == "ADR-0101"
+        assert res.related_decisions[0].relevance_score != 0.5
+
+
+@pytest.mark.skipif(not _REAL_ADR_DIR.is_dir(), reason="Corvin-ADR checkout not present")
+class TestRealCorpusRegression:
+    """The exact contaminations recorded in the 2026-10-02 analysis."""
+
+    # The brief that requested the analysis was annotated with ADR-0788 (GitHub
+    # repository discovery); a context-drift repair task with meta-learning,
+    # aggregation and voice-STT ADRs.
+    CASES = [
+        ("Analyse session content drift and memory forgetting across sessions, root cause by layer",
+         {"ADR-0788"}, {"ADR-0405", "ADR-0407", "ADR-2098", "ADR-0040"}),
+        ("repair context drift: the context brief carries stale memory and the wrong decisions",
+         {"ADR-0623", "ADR-0326", "ADR-0624", "ADR-0637", "ADR-0185"}, None),
+    ]
+
+    @pytest.mark.parametrize("query,forbidden,expected_any", CASES)
+    def test_session_drift_queries(self, query, forbidden, expected_any):
+        loader = ADRLoader(adr_repo_path=str(_REAL_ADR_DIR))
+        task = SimpleNamespace(normalized=SimpleNamespace(summary=query))
+        got = {m.id for m in ADRClassifier(loader).find_relevant_adrs(task)}
+        assert not (got & forbidden), f"off-topic ADRs surfaced: {got & forbidden}"
+        if expected_any:
+            assert got & expected_any, f"no on-topic ADR among {got}"
+
+    def test_loader_is_cached_and_cheap_per_turn(self):
+        import time
+        first = get_loader(str(_REAL_ADR_DIR))
+        t0 = time.perf_counter()
+        again = get_loader(str(_REAL_ADR_DIR))
+        assert again is first
+        assert (time.perf_counter() - t0) < 0.2, "per-turn ADR load must not re-parse the corpus"
+
+
+def test_cache_picks_up_a_new_adr(tmp_path):
+    d = tmp_path / "decisions"
+    d.mkdir()
+    _adr(d, "0001-a.md", id_="ADR-0001", status="ACCEPTED", title="Alpha")
+    first = get_loader(str(d))
+    _adr(d, "0002-b.md", id_="ADR-0002", status="ACCEPTED", title="Beta")
+    second = get_loader(str(d))
+    assert second is not first and "ADR-0002" in second.adrs

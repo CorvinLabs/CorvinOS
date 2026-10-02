@@ -8,6 +8,10 @@ Key design principles:
   - v2 is mutable (used for task execution)
   - v1 fields are preserved in v2 for audit trail
   - Both versions coexist without breaking existing code
+
+Name collision only: this is the ExecutionContext v1/v2 shim (ADR-0358), NOT
+session continuity — for that see ``corvin_operator/bridges/shared/session_ledger.py``
+(Corvin-ADR ADR-2102).
 """
 
 from typing import Optional, Any, Dict
