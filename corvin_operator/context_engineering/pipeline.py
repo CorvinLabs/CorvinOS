@@ -127,10 +127,10 @@ def maybe_capture_decision_point(reply_text: str, tenant: str = "_default",
 
 
 def render_anchor_block(brief: Any) -> str:
-    """The anchor section alone, for a caller whose prompt is NOT the
-    deterministic brief (the active pipeline's LLM-synthesised prompt). Without
-    it the anchored facts were persisted every turn and injected never on that
-    path. Empty when the brief carries no anchor facts."""
+    """The anchor section alone, for the active pipeline's LLM-synthesised
+    prompt, which replaces the deterministic brief. Used inside
+    ``_gate2_and_bind`` so the block is gated and reaches both surfaces.
+    Empty when the brief carries no anchor facts."""
     facts = getattr(brief, "anchor_facts", None) or []
     if not facts:
         return ""
@@ -305,6 +305,15 @@ def _gate2_and_bind(bundle: Any, trace: dict, gate, persona_patterns,
     is rolled back (A4). Re-validation ALWAYS runs (A2): None/empty patterns drop
     all forged tools (fail-closed); the bridge passes ["*"] for an all-allowed
     persona so an all-allowed persona is not wrongly narrowed."""
+    # The anchored facts head the deterministic brief, but a synthesised prompt
+    # REPLACES that brief. Fold them into the synthesised prompt HERE, before
+    # Gate-2 builds its payload, so (a) both surfaces (bridge + console) deliver
+    # them and (b) Gate-2 inspects them — prepending after the gate let stored
+    # goals and captured menus reach the worker un-gated (review 2026-10-02).
+    if bundle.synthesised_prompt:
+        _anchor_txt = render_anchor_block(getattr(bundle, "brief", None))
+        if _anchor_txt and _anchor_txt not in bundle.synthesised_prompt:
+            bundle.synthesised_prompt = _anchor_txt + "\n\n" + bundle.synthesised_prompt
     tool_names = " ".join(getattr(t, "name", "") for t in (bundle.tools_to_bind or []))
     # An mcp_config (server URL/command) reaches the worker via apply_tool_bindings
     # → Gate-2 must see it too (review R2 finding A3, defense-in-depth: forge tools

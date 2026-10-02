@@ -71,7 +71,7 @@ class ADRClassifier:
         results = []
         for adr_id, score in sorted(final.items(), key=lambda x: (-x[1], x[0]))[:max_results]:
             metadata = self.loader.get_adr(adr_id)
-            if metadata and metadata.id:
+            if metadata and metadata.id and metadata.id not in {r.id for r in results}:
                 results.append(dataclasses.replace(metadata, relevance=score))
 
         logger.info(f"Found {len(results)} relevant ADRs for task")

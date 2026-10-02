@@ -1005,10 +1005,11 @@ makes that loss structurally impossible for the chat's own turns:
 
 | Rule | Where |
 |---|---|
-| **Record** every finished turn verbatim, append-only (`O_APPEND` + `flock` + fsync, 0600) to `<workdir>/.corvin-ledger/ledger.jsonl`. No reset path removes it; only GDPR erasure (`L-session-ledger`) does. | `process_one`, right before L28.1 recall indexing |
-| **Verify coverage against the transcript**, not against bookkeeping: a turn is "live" only if its user text is in the current CLI transcript AFTER its last `compact_boundary`. Unreadable transcript ⇒ nothing is live ⇒ everything is re-supplied. | `render_context` → `scan_transcript` |
+| **Record** every finished turn verbatim (user text, answer, `chat_key`, `sender`), append-only (`O_APPEND` + `flock` + fsync, 0600, a torn last line is terminated first) to `<workdir>/.corvin-ledger/ledger.jsonl`. `seq`/`n` come from a counters-only sidecar (`counters.json`), so an erasure never makes numbers repeat. No reset path removes the ledger; only GDPR erasure (`L-session-ledger`) does. | `process_one`, the moment the answer is final — before TTS, outbox and grading |
+| **Verify coverage against the transcript**, not against bookkeeping: a turn is "live" only if a user entry in the current CLI transcript AFTER its last `compact_boundary` equals its text or ends with `"\n" + text` (the engine prefixes `User input:` and any brief; zero-width `@` neutralisers are ignored). Matched newest-first, each entry claimed once — so "ok" is never "found" inside another message. Unreadable transcript ⇒ nothing is live ⇒ everything is re-supplied. | `render_context` → `scan_transcript`, `uncovered_turns` |
 | **Re-supply** every non-live turn on EVERY spawn (including the fresh retry after an overflow/corrupted-session reset): newest turns verbatim (40 000 chars), older ones as index lines (16 000 chars), beyond that a line naming the turn range and the ledger file. Cuts move in steps of 8 turns; the block's header is constant and turn sections only append, so its prefix stays byte-stable for the prompt cache. | `_resolve_spawn_inputs`, after the user-model block |
-| **`/new` fences.** Turns before the operator's last `/new` are not re-supplied (one line says they are in the ledger file); `/new`'s reply says the history is kept. Unwanted resets do NOT fence. | `uncovered_turns` / `last_manual_reset` |
+| **`/new` fences.** Turns before the operator's last `/new` are not re-supplied (one line says they are in the ledger file); `/new`'s reply says the history is kept. A `/new` is recorded even when no CLI state was left to wipe. Unwanted resets do NOT fence. | `uncovered_turns` / `last_manual_reset` |
+| **Framed as data.** The block says its turns are a record, not instructions — it sits in the system prompt and must not lend old text system-prompt authority. | `render_from_records` |
 
 Compactions are recorded as `compaction` boundaries after each turn
 (`note_compactions`, idempotent by the boundary's uuid). Boundaries are labels
@@ -1020,7 +1021,10 @@ Audit (content-free): `session_ledger.boundary`,
 
 The console web-chat applies the same renderer to its existing append-only
 `turns.jsonl` (`chat_runtime._session_ledger_block`, `render_turn_log_context`)
-— one rule, two surfaces, no second store.
+— one rule, two surfaces, no second store. A console turn without a text answer
+(cancelled, failed, artifact-only) is kept, marked "(no text answer)"; only the
+in-flight last message is left out. The console's 50-chats-per-tenant cap still
+deletes the oldest chat whole — a retention rule that predates the ledger.
 
 **What it does not cover:** a turn whose recording fails (disk error — audited
 as `append_failed`), and anything beyond the budget is in the view only as an
@@ -1037,7 +1041,9 @@ via the console overlay). `_cel_session(channel, chat_key)` now passes
 `<channel>:<chat>` plus `#<seq>` of the last `/new` from the ledger, so an
 explicit start-over gets a fresh anchor and an unwanted reset keeps it; and
 `pipeline._maybe_apply_anchor` / `maybe_capture_decision_point` write NOTHING
-when there is no session key. E2E: `shared/test_cel_anchor_bridge_e2e.py`.
+when there is no session key. On the active pipeline the anchor block is folded
+into the synthesised prompt inside `_gate2_and_bind`, so Gate-2 inspects it and
+both surfaces deliver it. E2E: `shared/test_cel_anchor_bridge_e2e.py`.
 
 ### `corvin_operator/forge/paths.py` was shadowing `bridges/shared/paths.py`
 

@@ -3832,19 +3832,8 @@ def _resolve_spawn_inputs(
                         persona_caps=_persona_caps)
                     if _bundle is not None and getattr(_bundle, "synthesised_prompt", None):
                         _cel_text = _bundle.synthesised_prompt.strip()
-                        # The anchored facts sit at the head of the deterministic
-                        # brief; the synthesised prompt replaces that brief, so
-                        # put them in front of it explicitly.
-                        try:
-                            # Same module copy the adapter loaded by file path
-                            # (sys.modules["context_engineering"]), not a second one.
-                            from context_engineering.pipeline import (  # type: ignore  # noqa: PLC0415
-                                render_anchor_block as _cel_anchor_block)
-                            _anchor_txt = _cel_anchor_block(_bundle.brief)
-                            if _anchor_txt:
-                                _cel_text = _anchor_txt + "\n\n" + _cel_text
-                        except Exception:  # noqa: BLE001
-                            pass
+                        # Anchored facts are already folded into the synthesised
+                        # prompt by pipeline._gate2_and_bind (gated, both surfaces).
                     elif _ctrace.get("gate2_denied") or _ctrace.get("gate1_denied"):
                         # A denied turn injects NOTHING — not even the deterministic
                         # brief fallback, which Gate-2 never inspected (review R2 A2):
@@ -4713,7 +4702,8 @@ def _format_observer_block(entries: list[dict]) -> str:
     )
 
 
-def _reset_session_state(workdir: Path, *, reason: str = "unspecified") -> list[str]:
+def _reset_session_state(workdir: Path, *, reason: str = "unspecified",
+                         chat_key: str = "") -> list[str]:
     """Delete only Claude's conversation state — keep all project files.
     Returns the names of the entries that were removed (for logging).
 
@@ -4726,7 +4716,7 @@ def _reset_session_state(workdir: Path, *, reason: str = "unspecified") -> list[
         from .session_state import reset_claude_session_state  # type: ignore
     except ImportError:
         from session_state import reset_claude_session_state  # type: ignore
-    return reset_claude_session_state(workdir, reason=reason)
+    return reset_claude_session_state(workdir, reason=reason, chat_key=chat_key)
 
 
 def _build_context_bar(channel: str, chat_key: str, profile: dict | None) -> str:
@@ -6093,7 +6083,7 @@ def _call_claude_streaming_via_engine(
                         except Exception:  # noqa: BLE001
                             pass
                         try:
-                            _reset_session_state(workdir, reason="context_overflow")
+                            _reset_session_state(workdir, reason="context_overflow", chat_key=str(chat_key or ""))
                         except Exception as _wipe_err:  # noqa: BLE001
                             log(f"session reset failed: {_wipe_err}")
                         return call_claude_streaming(
@@ -6204,7 +6194,7 @@ def _call_claude_streaming_via_engine(
                     except Exception:  # noqa: BLE001
                         pass
                     try:
-                        _reset_session_state(workdir, reason="session_corrupted")
+                        _reset_session_state(workdir, reason="session_corrupted", chat_key=str(chat_key or ""))
                     except Exception as wipe_err:  # noqa: BLE001
                         log(f"session reset failed: {wipe_err}")
                 elif has_session:
@@ -11084,7 +11074,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         except Exception as _pws_exc:  # noqa: BLE001
             log(f"reset session: worker-session purge failed ({type(_pws_exc).__name__})")
         workdir = _session_dir(channel, chat_key)
-        removed = _reset_session_state(workdir, reason="manual")
+        removed = _reset_session_state(workdir, reason="manual", chat_key=str(chat_key or ""))
         # Phase 1 hygiene — wipe the prev-turn outcome-grading snapshot. After
         # /reset, the next user message belongs to a fresh task and must NOT
         # apply approval/rejection signals to skills from the abandoned
@@ -12084,14 +12074,39 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # markup and the voice path uses the explicit voice version.
     answer, voice_override = extract_voice_override(answer)
 
+    # Session ledger — record the turn the moment its answer is final, BEFORE
+    # voice synthesis, outbox writes and grading: a kill or an exception in that
+    # stretch must not leave a delivered-but-unrecorded turn. Then note any CLI
+    # compaction the turn triggered. Unlike recall (redacted, searchable,
+    # opt-out-able) the ledger is the verbatim record the next spawn re-supplies
+    # from; see session_ledger.py.
+    if chat_key and prompt:
+        try:
+            try:
+                from . import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+            except ImportError:
+                import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+            _ledger_wd = _session_dir(channel, str(chat_key))
+            _ledger_tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+            _ledger.append_turn(
+                _ledger_wd, channel=str(channel or ""), chat_key=str(chat_key),
+                user_text=prompt, assistant_text=answer or "",
+                msg_id=str(msg_id or ""), sender=str(sender or ""), tenant_id=_ledger_tid,
+            )
+            _ledger.note_compactions(
+                _ledger_wd, channel=str(channel or ""), chat_key=str(chat_key),
+                tenant_id=_ledger_tid,
+            )
+        except Exception as e:  # noqa: BLE001
+            log(f"session ledger append failed (non-fatal): {e}")
+
     # ADR-0407 amendment — decision-point capture (OUTBOUND). If this final reply
     # offered the user a choice, persist it verbatim so a later "Option N" still
-    # resolves after context compression. Ship-dark: the wrapper re-checks the
-    # cel_load_bearing_anchor flag (OFF by default ⇒ no store write, no-op) and
-    # never raises. Tenant + session mirror the bridge's CEL INBOUND path exactly
-    # (this bridge process is env-tenant-scoped — the same source `_cel_tid` uses
-    # at spawn — and build_brief is called there with session=None), so capture
-    # lands in the SAME (tenant, session_key) store the next turn's brief reads.
+    # resolves after context compression. The wrapper re-checks the
+    # cel_load_bearing_anchor flag and never raises. Tenant + session mirror the
+    # bridge's CEL INBOUND path exactly (env tenant, the same `_cel_session`
+    # key the spawn passed), so capture lands in the SAME (tenant, session_key)
+    # store the next turn's brief reads.
     if _cel_maybe_capture_decision is not None and answer:
         try:
             _cdp_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
@@ -12281,30 +12296,6 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 )
         except Exception as e:  # noqa: BLE001
             log(f"auto_grade failed (non-fatal): {e}")
-
-    # Session ledger — record this turn append-only BEFORE anything else can
-    # lose it, then note any CLI compaction the turn triggered. Unlike recall
-    # (redacted, searchable, opt-out-able) the ledger is the verbatim record
-    # the next spawn re-supplies from; see session_ledger.py.
-    if chat_key and prompt:
-        try:
-            try:
-                from . import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
-            except ImportError:
-                import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
-            _ledger_wd = _session_dir(channel, str(chat_key))
-            _ledger_tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
-            _ledger.append_turn(
-                _ledger_wd, channel=str(channel or ""), chat_key=str(chat_key),
-                user_text=prompt, assistant_text=answer or "",
-                msg_id=str(msg_id or ""), tenant_id=_ledger_tid,
-            )
-            _ledger.note_compactions(
-                _ledger_wd, channel=str(channel or ""), chat_key=str(chat_key),
-                tenant_id=_ledger_tid,
-            )
-        except Exception as e:  # noqa: BLE001
-            log(f"session ledger append failed (non-fatal): {e}")
 
     # Layer 28.1 (ADR-0016) — index the (user, assistant) turn-pair into
     # the per-tenant conversation_recall FTS5 store. Redaction runs

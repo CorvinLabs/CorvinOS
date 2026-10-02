@@ -16,8 +16,9 @@ Method:
      ``importlib.import_module("…")``, file paths ending in ``.py``). Strings
      over-approximate reachability, so a module reported dead is dead.
   2. Roots: every ``[project.scripts]`` target, every module/script a systemd
-     unit in the repo starts, and the long-running hosts (bridge adapter,
-     gateway app, console standalone).
+     unit or shell launcher in the repo starts, every ``plugin.json``
+     ``entry_point``, and the long-running hosts (bridge adapter, gateway app,
+     console standalone).
   3. Contract implementations: subclasses of the registration bases listed in
      ``CONTRACTS`` and every module calling ``register_stage(``.
   4. Report each implementation whose module is not reachable from a root.
@@ -51,9 +52,11 @@ EXCLUDE_PARTS = {"tests", "test", "node_modules", ".venv", "venv", "__pycache__"
 #: Registration bases: a subclass is only useful once something registers it.
 CONTRACTS = {
     "Subsystem": "Brain Hub subsystem (ADR-0347)",
-    "BaseSkill": "OS skill (ADR-0532/0535)",
+    "BaseSkill": "OS skill, phase-1 base (ADR-0535)",
+    "Skill": "OS skill (skill_registry_phase1, ADR-0532)",
     "ContextStage": "CEL stage (ADR-0277)",
     "Plugin": "plugin type",
+    "BasePlugin": "plugin type (BasePlugin)",
 }
 
 #: Long-running hosts that are not console scripts.
@@ -200,6 +203,21 @@ def roots(idx: Index) -> set[Path]:
                 rs.update(idx.resolve(m))
             for p in re.findall(r"([\w./%{}-]+\.py)\b", line):
                 rs.update(idx.by_base.get(Path(p).stem, [])[:3])
+    # Plugins are discovered through their manifest, not imported:
+    # plugin.json "entry_point": "module:Class" next to src/<module>.py
+    # (core/plugins/corvin_plugins/bootstrap.py scans buildin/ for these).
+    for manifest in REPO.rglob("plugin.json"):
+        if EXCLUDE_PARTS & set(manifest.relative_to(REPO).parts):
+            continue
+        try:
+            entry = str(json.loads(manifest.read_text(encoding="utf-8")).get("entry_point") or "")
+        except (OSError, ValueError, AttributeError):
+            continue
+        mod = entry.split(":")[0].replace(".", "/")
+        for cand in (manifest.parent / "src" / f"{mod}.py", manifest.parent / f"{mod}.py",
+                     manifest.parent / "src" / mod / "__init__.py"):
+            if cand in idx.file_set:
+                rs.add(cand)
     # bridge.sh and other shell launchers start python files by path.
     for sh in list((REPO / "corvin_operator").rglob("*.sh")) + list((REPO / "ops").rglob("*.sh")):
         if EXCLUDE_PARTS & set(sh.relative_to(REPO).parts):
@@ -246,11 +264,39 @@ def implementations(idx: Index) -> list[dict]:
     return out
 
 
+def unscheduled_stages() -> list[dict]:
+    """CEL stages that are registered (and so importable) but named by no
+    SHIPPED pipeline list. A tenant's own ``tenant.corvin.yaml`` pipeline may
+    still schedule one, so these are reported as their own kind."""
+    cfg = REPO / "corvin_operator" / "context_engineering" / "stages" / "config.py"
+    stages_dir = cfg.parent
+    if not cfg.is_file():
+        return []
+    shipped = set(re.findall(r'"([a-z_0-9]+)"', cfg.read_text(encoding="utf-8")))
+    out = []
+    for f in sorted(stages_dir.glob("*.py")):
+        try:
+            tree = ast.parse(f.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                sid = next((st.value.value for st in node.body
+                            if isinstance(st, ast.Assign) and isinstance(st.value, ast.Constant)
+                            and any(getattr(t, "id", "") == "id" for t in st.targets)
+                            and isinstance(st.value.value, str)), None)
+                if sid and sid not in shipped:
+                    out.append({"file": str(f.relative_to(REPO)), "class": node.name,
+                                "contract": "ContextStage",
+                                "kind": f"CEL stage '{sid}' in no shipped pipeline"})
+    return out
+
+
 def sweep() -> dict:
     idx = Index(production_files())
     live = reachable(idx)
     impls = implementations(idx)
-    dead = [i for i in impls if (REPO / i["file"]) not in live]
+    dead = [i for i in impls if (REPO / i["file"]) not in live] + unscheduled_stages()
     return {"modules": len(idx.files), "reachable": len(live),
             "implementations": len(impls), "dead": sorted(dead, key=lambda d: (d["file"], d["class"]))}
 
@@ -280,7 +326,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         for d in rep["dead"]:
             flag = "NEW " if d in new else ""
-            print(f"{flag}{d['file']}: {d['class']} ({d['kind']}) — no path from any entry point")
+            why = ("registered, scheduled by no shipped pipeline" if "pipeline" in d["kind"]
+                   else "no path from any entry point")
+            print(f"{flag}{d['file']}: {d['class']} ({d['kind']}) — {why}")
         print(f"{rep['modules']} modules, {rep['reachable']} reachable from entry points; "
               f"{rep['implementations']} contract implementations, {len(rep['dead'])} unreachable "
               f"({len(new)} not in baseline, {len(gone)} baseline entries now wired/removed)")

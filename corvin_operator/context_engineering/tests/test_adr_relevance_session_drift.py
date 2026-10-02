@@ -88,7 +88,14 @@ class TestParser:
 
 class TestScoring:
     def test_tokenize_is_whole_word_and_stemmed(self):
-        assert tokenize("Sessions drifting across the contextstage") == ["session", "drift", "contextstage"]
+        assert tokenize("Sessions drifting across the contextstage") == ["sess", "drift", "contextstag"]
+
+    def test_one_word_family_one_stem(self):
+        """Review R1-B6: route/routes/routing split into two stems."""
+        assert len(set(tokenize("route routes routing"))) == 1
+        assert len(set(tokenize("classify classifier classification"))) == 1
+        assert len(set(tokenize("erase erasure"))) == 1
+        assert tokenize("GDPR Art. 17") != tokenize("GDPR Art. 32")
 
     def test_generic_overlap_is_not_relevance(self, corpus):
         ids = [i for i, _ in corpus.score_query(tokenize("why does the layer session runtime break"))]
@@ -155,6 +162,29 @@ class TestRealCorpusRegression:
         if expected_any:
             assert got & expected_any, f"no on-topic ADR among {got}"
 
+    def test_labelled_retrieval_set(self):
+        """The measured quality bar (tests/adr_retrieval_eval.py): every real
+        question finds a covering ADR, no recorded off-topic hit comes back,
+        and chit-chat returns nothing."""
+        from .adr_retrieval_eval import POSITIVE, evaluate
+        clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))
+        hits, misses, forbidden, noise = evaluate(lambda q: [
+            m.id for m in clf.find_relevant_adrs(SimpleNamespace(normalized=SimpleNamespace(summary=q)))])
+        assert not forbidden, forbidden
+        assert not noise, noise
+        assert len(hits) == len(POSITIVE), misses
+
+    def test_every_document_stays_retrievable(self):
+        """Review R1-B2: the frontmatter-first id + one-file-per-id rule made
+        ~228 ADRs unreachable."""
+        loader = ADRLoader(adr_repo_path=str(_REAL_ADR_DIR))
+        files = {Path(n.metadata.file_path).name for n in loader.adrs.values()}
+        eligible = [f for f in _REAL_ADR_DIR.glob("*.md")
+                    if not f.name.startswith("DOC-") and f.read_text(errors="replace").startswith("---")
+                    and __import__("re").match(r"^(?:ADR-)?\d{4}(?!\d)", f.name)
+                    and not f.name.startswith(("0000", "ADR-0000"))]
+        assert {f.name for f in eligible} <= files | _UNPARSEABLE(eligible)
+
     def test_loader_is_cached_and_cheap_per_turn(self):
         import time
         first = get_loader(str(_REAL_ADR_DIR))
@@ -162,6 +192,22 @@ class TestRealCorpusRegression:
         again = get_loader(str(_REAL_ADR_DIR))
         assert again is first
         assert (time.perf_counter() - t0) < 0.2, "per-turn ADR load must not re-parse the corpus"
+
+
+def _UNPARSEABLE(files):
+    """Files whose frontmatter is not valid YAML (the loader skips them, as before)."""
+    import re
+    import yaml
+    bad = set()
+    for f in files:
+        m = re.match(r"^---\n(.*?)\n---", f.read_text(errors="replace"), re.DOTALL)
+        try:
+            yaml.safe_load(m.group(1)) if m else None
+        except yaml.YAMLError:
+            bad.add(f.name)
+        if not m:
+            bad.add(f.name)
+    return bad
 
 
 def test_cache_picks_up_a_new_adr(tmp_path):

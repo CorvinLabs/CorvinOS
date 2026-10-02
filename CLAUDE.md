@@ -807,10 +807,13 @@ structurally excluded. The CLI transcript is NOT the record — auto-compaction 
 185 599 tokens in one Discord session, and every reset wipes it.
 
 - **Record:** every bridge turn is appended verbatim to `<workdir>/.corvin-ledger/ledger.jsonl`
-  (`session_ledger.append_turn` in `process_one`); the console's `turns.jsonl` is its ledger.
-  Only GDPR erasure (`L-session-ledger`) removes lines.
-- **Coverage = the transcript after its last `compact_boundary`**, checked every spawn;
-  unreadable ⇒ nothing covered ⇒ everything re-supplied (fail towards remembering).
+  (`session_ledger.append_turn` in `process_one`, right after the answer is final — before
+  TTS/outbox); the console's `turns.jsonl` is its ledger. Lines are removed only by GDPR
+  erasure (`L-session-ledger`, by `chat_key` or `sender`) — and, on the console, by the
+  pre-existing 50-chats-per-tenant cap, which deletes the OLDEST chat whole.
+- **Coverage = an exact match in the transcript after its last `compact_boundary`**: a turn
+  is live only if a not-yet-claimed entry equals it or ends with `"\n" + it`, matched
+  newest-first; unreadable ⇒ nothing covered ⇒ everything re-supplied.
 - **Every reset goes through `session_state.reset_claude_session_state(wd, reason=...)`**,
   which records the boundary. Only `manual` (`/new`) fences re-supply; unknown reasons
   count as unwanted.

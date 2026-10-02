@@ -294,3 +294,32 @@ def test_render_anchor_block_for_synthesised_prompts(isolated, monkeypatch):
     block = _pipeline.render_anchor_block(brief)
     assert _CANARY in block
     assert _pipeline.render_anchor_block(None) == ""
+
+
+# ── 2026-10-02 review R1-B3/B4: the anchor block is gated and reaches both surfaces ──
+
+def _synth_bundle(facts):
+    from types import SimpleNamespace
+    brief = SimpleNamespace(anchor_facts=facts)
+    return SimpleNamespace(synthesised_prompt="synth ok", brief=brief, tools_to_bind=[],
+                           skills_to_bind=[], scratch={})
+
+
+def test_gate2_inspects_and_delivers_the_anchor_block():
+    facts = [{"kind": "goal", "text": "FORBIDDEN-GOAL-TEXT"}]
+    seen = []
+
+    def deny_forbidden(text):
+        seen.append(text)
+        return ("FORBIDDEN" not in text, "blocked")
+
+    trace: dict = {}
+    out = _pipeline._gate2_and_bind(_synth_bundle(facts), trace, deny_forbidden, ["*"])
+    assert any("FORBIDDEN-GOAL-TEXT" in t for t in seen), "Gate-2 never saw the anchor block"
+    assert trace.get("gate2_denied") and out.synthesised_prompt is None
+
+    trace = {}
+    out = _pipeline._gate2_and_bind(_synth_bundle([{"kind": "goal", "text": "ship billing"}]),
+                                    trace, lambda t: (True, ""), ["*"])
+    assert out.synthesised_prompt.endswith("synth ok")
+    assert "ship billing" in out.synthesised_prompt.split("synth ok")[0]

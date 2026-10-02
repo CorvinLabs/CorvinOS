@@ -52,6 +52,9 @@ MSGS = {
 
 def _env(sb: Path) -> dict:
     env = os.environ.copy()
+    # Under pytest the bridge conftest exports VOICE_AUDIT_PATH (it outranks
+    # FORGE_ROOT); the adapter must write THIS sandbox's chain, not that one.
+    env.pop("VOICE_AUDIT_PATH", None)
     env.update({
         "ADAPTER_INBOX": str(sb / "inbox"), "ADAPTER_OUTBOX": str(sb / "outbox"),
         "ADAPTER_PROCESSED": str(sb / "processed"),
@@ -108,7 +111,8 @@ def _write_transcript(sb: Path, wd: Path, entries: list[dict]) -> None:
 
 
 def _user(text: str) -> dict:
-    return {"type": "user", "message": {"role": "user", "content": f"[{CHANNEL}] {text}"}}
+    # Exactly how the engine frames a turn (agents/claude_code.guard_prompt_head).
+    return {"type": "user", "message": {"role": "user", "content": "User input:\n" + text}}
 
 
 def _reset(env: dict, reason: str) -> None:
@@ -206,8 +210,12 @@ def main() -> int:
         kinds = [e.get("event_type") or e.get("event") for e in events]
         check(kinds.count("session_ledger.boundary") == 3, "three session_ledger.boundary records")
         check("session_ledger.context_resupplied" in kinds, "context_resupplied recorded")
-        blob = json.dumps([e for e in events if str(e.get("event_type") or e.get("event")).startswith("session_ledger")])
-        check(not any(MSGS[k].split()[0] in blob for k in MSGS), "no turn text in the audit records")
+        ledger_events = [e for e in events
+                         if str(e.get("event_type") or e.get("event")).startswith("session_ledger")]
+        check(len(ledger_events) >= 4, f"session_ledger records present ({len(ledger_events)})")
+        blob = json.dumps(ledger_events)
+        check(bool(ledger_events) and not any(MSGS[k].split()[0] in blob for k in MSGS),
+              "no turn text in the session_ledger audit records")
     finally:
         proc.terminate()
         try:

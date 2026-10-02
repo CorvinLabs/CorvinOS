@@ -172,7 +172,8 @@ def tenant_sessions_root(tenant_id: str | None = None) -> Path | None:
 MANUAL_RESET_REASONS: frozenset[str] = frozenset({"manual"})
 
 
-def reset_claude_session_state(workdir: Path, *, reason: str = "unspecified") -> list[str]:
+def reset_claude_session_state(workdir: Path, *, reason: str = "unspecified",
+                               chat_key: str = "") -> list[str]:
     """Delete only Claude's conversation state in ``workdir``; keep project files.
 
     Returns the names of the entries removed, for logging. Missing entries are
@@ -183,7 +184,10 @@ def reset_claude_session_state(workdir: Path, *, reason: str = "unspecified") ->
     reset is recorded in that ledger as a boundary carrying ``reason``; an
     unknown reason counts as unwanted (the ledger then re-supplies the earlier
     turns), so a new caller that forgets to pass one fails towards
-    remembering, not towards forgetting.
+    remembering, not towards forgetting. An explicit ``/new`` is recorded even
+    when no CLI state was left (after the inactivity sweep, say): the operator
+    still asked to start over. ``chat_key`` is the RAW chat id — the directory
+    name is the sanitised one, which GDPR erasure cannot match.
     """
     removed: list[str] = []
     workdir = Path(workdir)
@@ -212,7 +216,7 @@ def reset_claude_session_state(workdir: Path, *, reason: str = "unspecified") ->
             continue
         removed.append(p.name + "/" if is_real_dir else p.name)
 
-    if removed:
+    if removed or reason in MANUAL_RESET_REASONS:
         try:
             try:
                 from . import session_ledger as _ledger  # type: ignore
@@ -220,7 +224,7 @@ def reset_claude_session_state(workdir: Path, *, reason: str = "unspecified") ->
                 import session_ledger as _ledger  # type: ignore
             _ledger.append_boundary(
                 workdir, kind="reset", reason=str(reason or "unspecified"),
-                channel=workdir.parent.name, chat_key=workdir.name,
+                channel=workdir.parent.name, chat_key=chat_key or workdir.name,
                 session_id=str(_prev_session),
             )
         except Exception:  # noqa: BLE001 — a reset must never fail on the label

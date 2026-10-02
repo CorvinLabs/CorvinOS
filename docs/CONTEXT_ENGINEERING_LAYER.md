@@ -55,27 +55,36 @@ class MemoryMatch:
 **What it does:** Finds relevant architectural decisions (ADRs) and follows their dependency graph.
 
 **Traversal Strategy (as implemented, 2026-10-02):**
-1. Tokenise the task into whole, stop-word-free, lightly stemmed words
-   (`adr_loader.tokenize`) — never substrings.
-2. Score every ADR (`ADRLoader.score_query`): idf-weighted overlap, title hits
-   ×1.0, preview hits ×0.5, normalised by the query's 6 rarest terms → [0, 1].
-   An ADR is returned only if it clears `MIN_RELEVANCE` (0.25), its matched
-   terms carry ≥ `MIN_EVIDENCE` (4.0) idf, and it matches two terms or one rare
-   one (`SINGLE_TERM_MIN_IDF`). Superseded/rejected ADRs never match.
+1. Tokenise the task into whole, stop-word-free, stemmed words
+   (`adr_loader.tokenize`) — never substrings; 2-digit+ numbers are kept
+   ("Art. 17" ≠ "Art. 32"); a small German→English table maps core terms
+   (Kontext, Sitzung, Kette, Löschung, …) because the corpus is English.
+2. Score every ADR (`ADRLoader.score_query`, which takes TOKENS — re-tokenising
+   double-stems): idf-weighted overlap, title hits ×1.0, preview hits ×0.5,
+   normalised by the query's 6 rarest terms, unknown terms counted at the
+   median idf → [0, 1]. An ADR is returned only if it clears `MIN_RELEVANCE`
+   (0.22), its matched terms carry ≥ `MIN_EVIDENCE` (4.0) idf, and it matches two
+   terms (one only for a one-word question). Superseded/rejected ADRs never match;
+   ties break on raw evidence.
 3. The top `top_n` direct matches seed a walk over `depends_on`/`related`/
    `supersedes` (depth 2). A neighbour is added only if it is itself relevant:
    `0.6·own + 0.2·seed` must clear `MIN_RELEVANCE` — an edge alone is not
    relevance.
 4. The returned `RelatedDecision.relevance_score` is that score (it was a
    constant 0.5 placeholder before); order is score, then id — deterministic.
-5. Ids come from the frontmatter `id` (filename as fallback; both `0269-…` and
-   `ADR-0269-…` names parse), titles from the H1; of two files sharing an id the
-   accepted one is kept. The parsed corpus is cached per process and
+5. Ids come from the file name's leading number (frontmatter `id` as fallback —
+   ~57 renumbered files still carry their OLD id there), titles from the H1;
+   `DOC-…` files and `ADR-0XXX` drafts are skipped. Every document stays
+   retrievable: of two files sharing an id the accepted one holds the plain key,
+   the other `"<id>~<stem>"`. The parsed corpus is cached per process and
    invalidated on any file add/remove/edit (`get_loader`) — it was re-parsed
    (~0.5 s) on every turn.
 
-Regression fixtures: `tests/test_adr_relevance_session_drift.py` (the
-ADR-0788 GitHub-discovery and voice-STT contaminations recorded on 2026-10-02).
+Measured on the real corpus with the labelled set
+`tests/adr_retrieval_eval.py` (22 questions, EN+DE, forbidden off-topic hits,
+must-be-empty questions): recall 22/22, 0 forbidden, 0 noise; one case with no
+covering ADR returns lexically adjacent ADRs and is recorded as such.
+Regression fixtures: `tests/test_adr_relevance_session_drift.py`.
 
 **Conflict Detection:**
 - If ADR-X `supersedes: [ADR-Y]`, flag Y as obsolete

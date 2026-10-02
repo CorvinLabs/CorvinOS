@@ -41,7 +41,10 @@ jobs:
       - name: Run sweep (gate)
         run: python3 scripts/zero_caller_sweep.py --check
 
+      # stdlib + pytest only. tests/conftest.py loads the console fixture plugin
+      # (FastAPI + the console package), which this job does not install, so it
+      # is blocked by name — same as audit-completeness.yml.
       - name: Run sweep tests
         run: |
           python3 -m pip install --quiet pytest
-          python3 -m pytest tests/scripts/test_zero_caller_sweep.py -q
+          python3 -m pytest -q -p no:tests.fixtures_console tests/scripts/test_zero_caller_sweep.py

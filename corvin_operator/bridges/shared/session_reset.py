@@ -435,7 +435,8 @@ def _wipe_voice_state(*, channel: str, chat_id: str,
         if not target.is_dir():
             continue
         try:
-            removed = _session_state.reset_claude_session_state(target, reason=reason)
+            removed = _session_state.reset_claude_session_state(
+                target, reason=reason, chat_key=str(chat_id))
             if removed:
                 removed_any = True
         except Exception as e:  # noqa: BLE001

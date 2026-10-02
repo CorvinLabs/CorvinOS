@@ -32,10 +32,29 @@ der die das und oder mit für von zu zum zur ist sind ein eine einen einem einer
 nicht auch auf aus bei bis dass den dem des durch noch nur über unter vom wie wir
 ich du sie es was wenn alle alles diese dieser dieses doch hat haben wird werden
 mir mich dir dich beim bitte kannst mach mache warum
+mein meine meinen meiner unser unsere heute morgen gestern hoch gibt geht gehen
+setze setzen ohne nach vor neu neue neuen neuer immer schon sehr kann soll
+funktioniert funktionieren zwischen jetzt dann hier dort welche welcher
 adr adrs phase status proposed accepted implemented
 """.split())
+
+#: German → English for the core vocabulary of this corpus (ADRs are English).
+#: Applied before stemming; deliberately small — a translation table is not a
+#: goal, only the words operators actually ask about in German.
+_DE_EN = {
+    "kontext": "context", "sitzung": "session", "sitzungen": "sessions",
+    "sitzungsinhalte": "session", "verlauf": "history", "gedächtnis": "memory",
+    "erinnerung": "memory", "vergessen": "forget",
+    "kompaktierung": "compaction", "löschen": "erasure", "löschung": "erasure",
+    "kette": "chain", "prüfung": "verification", "verifizieren": "verify",
+    "zähler": "counter", "nutzung": "usage", "kosten": "cost",
+    "modell": "model", "modelle": "models", "sprache": "speech",
+    "spracherkennung": "transcription", "einwilligung": "consent",
+    "mandant": "tenant", "mandanten": "tenant", "berechtigung": "permission",
+    "fehler": "error", "absturz": "crash", "neustart": "restart",
+}
 #: Minimum normalised relevance for an ADR to be returned.
-MIN_RELEVANCE = 0.25
+MIN_RELEVANCE = 0.22
 #: Minimum absolute evidence: the summed idf of the matched terms. Coverage is
 #: normalised by the query's own idf mass, so a query made only of words every
 #: ADR uses would otherwise "cover" itself fully and match everything.
@@ -48,12 +67,19 @@ _STATUS_RANK = {"accepted": 3, "implemented": 3, "proposed": 2}
 
 
 def _stem(word: str) -> str:
-    """Tiny suffix stripper — enough to join session/sessions, drift/drifting,
-    persist/persistence/persisted without pulling a stemming dependency."""
-    for suf in ("ations", "ation", "ences", "ence", "ings", "ing", "ies", "ers",
-                "ed", "es", "er", "s"):
-        if len(word) - len(suf) >= 4 and word.endswith(suf):
-            return word[: -len(suf)]
+    """Tiny suffix stripper that maps a word family onto ONE stem
+    (route/routes/routing → rout, classify/classifier/classification → classif,
+    erase/erasure → eras, cache/caching/cached → cach) without a stemming
+    dependency. Longest suffix first; a trailing ``i``/``e`` left by a suffix
+    (classifi-er, eras-ure) is folded the same way the bare form is."""
+    for suf in ("ications", "ication", "ations", "ation", "ences", "ence", "ings",
+                "ions", "ing", "ion", "ures", "ure", "ies", "ers", "ied", "ed", "es",
+                "er", "y", "s", "e"):
+        if len(word) - len(suf) >= 3 and word.endswith(suf):
+            word = word[: -len(suf)]
+            break
+    if len(word) > 4 and word[-1] in "ie":
+        word = word[:-1]
     return word
 
 
@@ -61,7 +87,11 @@ def tokenize(text: str) -> List[str]:
     """Whole-word, stop-word-free, stemmed tokens (order-preserving, deduped)."""
     out: Dict[str, None] = {}
     for w in _TOKEN_RE.findall((text or "").lower()):
-        if len(w) < 3 or w in _STOPWORDS or w.isdigit():
+        w = _DE_EN.get(w, w)
+        if w in _STOPWORDS or (len(w) < 3 and not (w.isdigit() and len(w) == 2)):
+            continue
+        if w.isdigit():  # "Art. 17" vs "Art. 32", "403": numbers carry topic
+            out[w] = None
             continue
         out[_stem(w)] = None
     return list(out)
@@ -199,12 +229,20 @@ class ADRLoader:
             try:
                 metadata = self._parse_adr(adr_file)
                 if metadata:
+                    # ~100 ids are carried by two files. EVERY document stays
+                    # retrievable (dropping one made ~21 % of the corpus
+                    # unreachable): the preferred file — accepted over proposed
+                    # over the rest — holds the plain id as its key, a sibling is
+                    # keyed "<id>~<file stem>". ``metadata.id`` is always the
+                    # plain ADR id, which is what a reader is shown.
                     prev = self.adrs.get(metadata.id)
-                    # ~100 ids are carried by two files. Keep the one a reader
-                    # should be pointed at (accepted over proposed over the
-                    # rest), not whichever glob happened to yield last.
-                    if prev is None or _status_rank(metadata) > _status_rank(prev.metadata):
+                    if prev is None:
                         self.adrs[metadata.id] = ADRNode(metadata=metadata)
+                    elif _status_rank(metadata) > _status_rank(prev.metadata):
+                        self.adrs[f"{metadata.id}~{Path(prev.metadata.file_path).stem}"] = prev
+                        self.adrs[metadata.id] = ADRNode(metadata=metadata)
+                    else:
+                        self.adrs[f"{metadata.id}~{adr_file.stem}"] = ADRNode(metadata=metadata)
                     logger.debug(f"Loaded ADR: {metadata.id}")
             except Exception as e:
                 logger.warning(f"Failed to parse {adr_file}: {e}")
@@ -231,6 +269,8 @@ class ADRLoader:
         n = max(len(self.adrs), 1)
         self._idf = {t: math.log((n + 1) / (c + 0.5)) for t, c in df.items()}
         self._max_idf = math.log((n + 1) / 0.5)
+        _vals = sorted(self._idf.values())
+        self._median_idf = _vals[len(_vals) // 2] if _vals else 1.0
 
     def _parse_adr(self, adr_file: Path) -> Optional[ADRMetadata]:
         """Parse ADR file: extract frontmatter and content preview.
@@ -257,15 +297,21 @@ class ADRLoader:
         except yaml.YAMLError:
             return None
 
-        # The id comes from the frontmatter (ADR-0264 makes it canonical) and
-        # falls back to the file name. Both "0269-title.md" and
-        # "ADR-0269-title.md" are in the corpus; the old ``re.match(r"(\d{4})")``
-        # failed on the second shape and used the whole stem as the id.
+        # The id is the file name's leading number ("0269-title.md" and
+        # "ADR-0269-title.md" both occur), falling back to the frontmatter id.
+        # Renumbering moved files to new numbers but left ~57 of them carrying
+        # their OLD frontmatter id (ADR-0785-0407-… says ``id: ADR-0407``), so
+        # the file name is the current one. A file with no 4-digit id at all
+        # (``ADR-0XXX-…`` drafts) is not a decision and is skipped.
         stem = adr_file.stem
         fm_id = re.match(r"^(?:ADR-)?(\d{4})(?!\d)", str(frontmatter.get("id", "")))
         fn_id = re.match(r"^(?:ADR-)?(\d{4})(?!\d)", stem)
-        num = fm_id or fn_id
-        adr_id = f"ADR-{num.group(1)}" if num else stem
+        num = fn_id or fm_id
+        # ``DOC-…`` reports and placeholder drafts (``ADR-0XXX-…``, id 0000)
+        # live in decisions/ but decide nothing.
+        if not num or num.group(1) == "0000" or stem.startswith("DOC-"):
+            return None
+        adr_id = f"ADR-{num.group(1)}"
 
         h1 = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
         title = h1.group(1).strip() if h1 else stem.replace("-", " ").title()
@@ -341,7 +387,8 @@ class ADRLoader:
     def score_query(
         self, terms: Iterable[str], min_relevance: float = MIN_RELEVANCE,
     ) -> List[Tuple[str, float]]:
-        """Rank ADRs by idf-weighted whole-token overlap with ``terms``.
+        """Rank ADRs by idf-weighted whole-token overlap with ``terms`` (the
+        output of :func:`tokenize`).
 
         A term found in the title counts fully, one found only in the body
         preview counts half. The score is normalised by the query's own idf mass
@@ -350,27 +397,42 @@ class ADRLoader:
         ``min_relevance`` AND matches either two distinct terms or one term rare
         enough (``SINGLE_TERM_MIN_IDF``) to be specific on its own, and the
         matched terms carry at least ``MIN_EVIDENCE`` idf in total. Superseded /
-        rejected ADRs are never returned. Ties break on id, so the order is
-        deterministic.
+        rejected ADRs are never returned. Query terms the corpus never uses
+        count in the denominator at the median idf, and a query where fewer
+        than half the terms are known needs two matched terms. Ties break on
+        raw evidence, then id, so the order is deterministic.
         """
         if not hasattr(self, "_idf"):
             self._build_index()
-        q = [t for t in dict.fromkeys(tokenize(" ".join(terms)))]
+        # ``terms`` are tokens from :func:`tokenize` — NOT re-tokenised here:
+        # stemming is not idempotent (eras → era), so a second pass silently
+        # turned the most specific matches into misses.
+        q = list(dict.fromkeys(t for t in terms if t))
         if not q:
             return []
-        weights = {t: self._idf.get(t, self._max_idf) for t in q}
-        # Terms the corpus never uses carry no evidence either way.
-        known = {t: w for t, w in weights.items() if t in self._idf}
+        known = {t: self._idf[t] for t in q if t in self._idf}
         if not known:
             return []
-        norm = sum(sorted(known.values(), reverse=True)[:6])
-        out: List[Tuple[str, float]] = []
+        # A term the corpus never uses still belongs to the question: it counts
+        # in the denominator at the median idf, so "summarize this PDF" is not
+        # treated as a one-word query that "summarize" alone fully covers.
+        unknown = len(q) - len(known)
+        weights = sorted(list(known.values()) + [self._median_idf] * unknown, reverse=True)
+        norm = sum(weights[:6])
+        # Mostly-unknown question (another language, other domain): one matched
+        # word is not enough evidence of topic.
+        # One matched word is topic evidence only for a one-word question; with
+        # two or more known words, or a mostly-unknown question, two must match.
+        min_hits = 1 if (len(known) == 1 and len(q) == 1) else 2
+        out: List[Tuple[str, float, float]] = []
         for adr_id, body in self._body_tokens.items():
             if str(self.adrs[adr_id].metadata.status).lower() in _INACTIVE_STATUSES:
                 continue
             title = self._title_tokens[adr_id]
             hits = [t for t in known if t in body]
             if not hits:
+                continue
+            if len(hits) < min_hits:
                 continue
             if len(hits) < 2 and known[hits[0]] < SINGLE_TERM_MIN_IDF:
                 continue
@@ -379,9 +441,10 @@ class ADRLoader:
                 continue
             score = min(1.0, raw / norm) if norm > 0 else 0.0
             if score >= min_relevance:
-                out.append((adr_id, round(score, 4)))
-        out.sort(key=lambda x: (-x[1], x[0]))
-        return out
+                out.append((adr_id, round(score, 4), raw))
+        # Ties (several ADRs at the 1.0 cap) break on raw evidence, then id.
+        out.sort(key=lambda x: (-x[1], -x[2], x[0]))
+        return [(i, sc) for i, sc, _ in out]
 
     def search_by_keywords(self, keywords: List[str], max_results: int = 5) -> List[str]:
         """Find ADRs by keyword matching against title + content preview.
@@ -395,7 +458,7 @@ class ADRLoader:
         """
         if not keywords:
             return []
-        return [adr_id for adr_id, _ in self.score_query(keywords)[:max_results]]
+        return [adr_id for adr_id, _ in self.score_query(tokenize(" ".join(keywords)))[:max_results]]
 
 
 def _status_rank(meta: ADRMetadata) -> int:

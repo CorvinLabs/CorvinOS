@@ -1902,8 +1902,15 @@ class CELAnchorHandler:
         removed = 0
         try:
             safe = _cel_safe_key(subject_id)
+            # A bridge chat's anchor key is "<channel>:<chat>" plus "#<seq>"
+            # after each /new (adapter._cel_session); _safe_key turns both
+            # separators into "_". A subject given as "<channel>:<chat>" must
+            # therefore also match "<safe>_<digits>" — without it every store
+            # written after a /new survived an erasure reported as APPLIED.
+            epoch_re = re.compile(re.escape(safe) + r"_\d+")
             for f in sorted(root.glob("*.jsonl")):
-                if f.stem == safe or _name_names_subject(f.name, subject_id):
+                if (f.stem == safe or epoch_re.fullmatch(f.stem)
+                        or _name_names_subject(f.name, subject_id)):
                     f.unlink()
                     removed += 1
             removed += _purge_path(root, subject_id)
@@ -1938,14 +1945,18 @@ class SessionLedgerHandler:
 
     def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
         t0 = time.time()
-        root = _tenant_home(self.tenant_id) / "sessions"
-        if not root.is_dir():
+        # The tenant session tree plus the pre-ADR-0007 voice-session root the
+        # adapter still falls back to on an unmigrated install.
+        roots = [r for r in (_tenant_home(self.tenant_id) / "sessions",
+                             _tenant_home(self.tenant_id) / "voice" / "sessions")
+                 if r.is_dir()]
+        if not roots:
             return _result(self.layer_id, t0, 0, absent=True,
                            absent_reason="session tree absent",
                            empty_reason="", applied_reason="")
         removed = 0
         try:
-            for f in sorted(root.rglob(".corvin-ledger/ledger.jsonl")):
+            for f in sorted(f for r in roots for f in r.rglob(".corvin-ledger/ledger.jsonl")):
                 n = _purge_jsonl_file(f, subject_id)
                 removed += n
                 if n and not f.read_text(encoding="utf-8").strip():
