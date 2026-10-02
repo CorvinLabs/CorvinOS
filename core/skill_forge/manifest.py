@@ -10,9 +10,11 @@ Every skill is defined via an immutable manifest that specifies:
 
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional, Any
+from enum import Enum
 import json
 import re
 import jsonschema
+from datetime import datetime
 
 
 class SkillManifestError(Exception):
@@ -33,6 +35,18 @@ class InvalidSkillIdError(SkillManifestError):
 class InvalidSchemaError(SkillManifestError):
     """Raised when input/output schema is not valid JSON schema."""
     pass
+
+
+class SkillLifecycle(Enum):
+    """CEL skill lifecycle classification — ADR-0409.
+
+    - durable: survives until operator deletes (manual skills, Skill-Creator packages)
+    - session: valid for one chat session; deleted on session end
+    - turn: valid for one turn; deleted 24h later (ephemeral binding cache)
+    """
+    durable = "durable"
+    session = "session"
+    turn = "turn"
 
 
 @dataclass(frozen=True)
@@ -74,6 +88,9 @@ class SkillManifest:
     boot_layer: str = "bundled"                         # "bundled" | "installed" | "community"
     active_by_default: bool = True
     removal_date: Optional[str] = None                  # ISO format for deprecation
+    lifecycle: str = "durable"                          # "durable" | "session" | "turn" (ADR-0409)
+    session_id: Optional[str] = None                    # for session/turn cleanup (CEL origin)
+    created_at: Optional[str] = None                    # ISO format timestamp for TTL calculation
 
     def __post_init__(self):
         """Validate manifest after initialization (frozen allows this once)."""
@@ -94,6 +111,9 @@ class SkillManifest:
 
         # Validate required_checks (must be known checks)
         self._validate_required_checks()
+
+        # Validate lifecycle (ADR-0409)
+        self._validate_lifecycle()
 
     def _validate_skill_id(self) -> None:
         """Validate skill_id format: namespace.name (no special chars)."""
@@ -169,6 +189,22 @@ class SkillManifest:
                 # Warn but don't fail (new checks might be added dynamically)
                 pass
 
+    def _validate_lifecycle(self) -> None:
+        """Validate lifecycle is one of the known values (ADR-0409)."""
+        valid_lifecycles = {"durable", "session", "turn"}
+        if self.lifecycle not in valid_lifecycles:
+            raise SkillManifestError(
+                f"Invalid lifecycle: {self.lifecycle}. "
+                f"Must be one of: {', '.join(valid_lifecycles)}"
+            )
+
+        # If session_id is set, lifecycle must be session or turn (not durable)
+        if self.session_id and self.lifecycle == "durable":
+            raise SkillManifestError(
+                f"Durable skills cannot have session_id set. "
+                f"Use lifecycle='session' or 'turn' instead."
+            )
+
     def to_dict(self) -> Dict[str, Any]:
         """Export manifest as dictionary (for serialization, JSON, etc.)."""
         return {
@@ -188,6 +224,9 @@ class SkillManifest:
             "boot_layer": self.boot_layer,
             "active_by_default": self.active_by_default,
             "removal_date": self.removal_date,
+            "lifecycle": self.lifecycle,
+            "session_id": self.session_id,
+            "created_at": self.created_at,
         }
 
     @staticmethod
@@ -210,6 +249,9 @@ class SkillManifest:
             boot_layer=data.get("boot_layer", "bundled"),
             active_by_default=data.get("active_by_default", True),
             removal_date=data.get("removal_date", None),
+            lifecycle=data.get("lifecycle", "durable"),
+            session_id=data.get("session_id", None),
+            created_at=data.get("created_at", None),
         )
 
     def to_json(self) -> str:
