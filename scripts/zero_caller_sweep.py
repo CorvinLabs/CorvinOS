@@ -376,6 +376,11 @@ class Index:
         #: REACHABLE files — a directory only a dead file inserts is on no
         #: running process's ``sys.path`` (review R5-1).
         self.active_roots: tuple[str, ...] = self.path_roots
+        # Directories a script is launched FROM by path (``cd shared && exec
+        # python adapter.py``): Python puts them at sys.path[0] for the whole
+        # process, package or not, so a stdlib-named sibling (``profile.py``)
+        # IS what ``import profile`` loads there (review R6-1). Set by roots().
+        self.script_dirs: set[Path] = set()
         #: Names Python finds outside the repo (stdlib + declared third party).
         self.external = _STDLIB | third_party_names()
         self._resolved: dict[tuple[str, Path | None], list[Path]] = {}
@@ -431,7 +436,8 @@ class Index:
 
         A name whose top level is the stdlib or a declared third-party package
         (``self.external``) stops after the second step, and its first step
-        counts only from a directory that is not a package — the script
+        counts only from a directory that is not a package, or from a directory
+        a script is launched from by path (``self.script_dirs``) — the script
         directory Python puts at ``sys.path[0]``. Inside a package an absolute
         ``import random`` is the stdlib; the sys.path, insert and suffix steps
         would otherwise turn ``import types`` into some ``…/types.py`` (R5-1)."""
@@ -440,7 +446,8 @@ class Index:
         rel = dotted.replace(".", "/")
         head, _, tail = dotted.partition(".")
         external = head in self.external
-        if src is not None and not (external and (src.parent / "__init__.py") in self.file_set):
+        if src is not None and not (external and (src.parent / "__init__.py") in self.file_set
+                                    and src.parent not in self.script_dirs):
             sib = self._at(src.parent, rel)
             if sib:
                 return sib[:1]
@@ -636,7 +643,9 @@ def roots(idx: Index) -> set[Path]:
             if hit.name == "__init__.py" and main in idx.file_set:
                 rs.add(main)
     for p, base in paths:
-        rs.update(idx.resolve_path(p, base))
+        hits = idx.resolve_path(p, base)
+        rs.update(hits)
+        idx.script_dirs.update(h.parent for h in hits)
     return rs
 
 

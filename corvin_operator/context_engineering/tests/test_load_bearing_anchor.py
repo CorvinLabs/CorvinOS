@@ -438,3 +438,51 @@ def test_pending_goal_names_its_sender_and_is_erased_with_them(isolated, monkeyp
     assert pending.is_file() and "owner-7" in pending.read_text()
     eh.CELAnchorHandler(tenant_id="_default").purge("owner-7", "r")
     assert not pending.exists()
+
+
+def _eh():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "bridges" / "shared"))
+    import erasure_handlers as eh
+    return eh
+
+
+def test_console_store_is_erased_by_the_console_subject(isolated, monkeypatch):
+    """Review R6-1: the console keys its store by the bare sid, its subject is
+    ``web:<sid>``."""
+    _anchor.add_fact("_default", "k3Jx9aQ2", "goal", "find me a flat in Leipzig")
+    res = _eh().CELAnchorHandler(tenant_id="_default").purge("web:k3Jx9aQ2", "r")
+    assert res.count >= 1 and _anchor.load_facts("_default", "k3Jx9aQ2") == []
+
+
+def test_every_epoch_of_a_long_chat_key_is_erased(isolated, monkeypatch):
+    """Review R6-2: for a key over 100 chars the digest covered '#<seq>', so the
+    store after a /new could never be matched."""
+    chat = "a:1Lg2" + "x" * 130
+    for key in (f"teams:{chat}", f"teams:{chat}#2"):
+        _anchor.add_fact("_default", key, "goal", "plan the offsite")
+    res = _eh().CELAnchorHandler(tenant_id="_default").purge(f"teams:{chat}", "r")
+    assert res.count >= 2
+    assert not list((isolated / "tenants" / "_default" / "cel_anchors").glob("*.jsonl"))
+
+
+def test_retrieved_adrs_never_evict_or_pose_as_offered_options(isolated, monkeypatch):
+    """Review R6-3: related ADRs were anchored as kind 'decision'."""
+    from types import SimpleNamespace
+    key = "sess-menu"
+    _anchor.capture_decision_point("_default", key, "Which do you prefer?\n1. Option A\n2. Option B")
+    brief = SimpleNamespace(blockers=[], memory_context=None, related_decisions=[
+        SimpleNamespace(decision_id=f"ADR-0{n}", title="audit chain must fail closed") for n in (260, 562, 828, 297)])
+    for kind, text in _anchor.collect_load_bearing(brief):
+        assert kind != "decision", text
+        _anchor.add_fact("_default", key, kind, text)
+    # a pre-R6 store may already hold an ADR id under kind "decision"
+    facts = _anchor.load_facts("_default", key) + [{"kind": "decision", "text": "ADR-0999"}]
+    lines = _anchor.render_lines(facts)
+    assert any("ADR-0999" in l for l in lines), "positive control: the legacy fact renders"
+    menu_at = lines.index(next(l for l in lines if l.startswith("Open decision points")))
+    assert any("Option A" in l for l in lines[menu_at:])
+    assert not any("ADR-0" in l for l in lines[menu_at:])
+    # a pre-R6 store holding an ADR id as a "decision" renders it as a constraint
+    assert not any("ADR-0999" in l for l in lines[menu_at:])

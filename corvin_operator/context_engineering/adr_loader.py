@@ -52,6 +52,10 @@ minute minutes hour hours
 #: An opening imperative ("Write a haiku…", "Create a shopping list…") names the
 #: action, not the subject; anywhere else these words can be the subject.
 _LEADING_VERBS = frozenset("write create draft make plan learn work compose".split())
+#: Polite / modal openers before that verb ("Please write…", "Could you create…",
+#: "I want to plan…") — the verb after them is still the opening one (review R6-4).
+_OPENERS = frozenset("""please pls kindly can could would will you let lets i we want need
+like to me us bitte kannst könntest würdest du mir uns ich möchte will""".split())
 
 #: German → English for the core vocabulary of this corpus (ADRs are English).
 #: Applied before stemming; deliberately small — a translation table is not a
@@ -122,11 +126,17 @@ def tokenize(text: str) -> List[str]:
     """Whole-word, stop-word-free, stemmed tokens (order-preserving, deduped)."""
     out: Dict[str, None] = {}
     prev = ""
-    for i, w in enumerate(_TOKEN_RE.findall((text or "").lower())):
+    opening = True
+    for w in _TOKEN_RE.findall((text or "").lower()):
         w = _DE_EN.get(w, w)
-        if i == 0 and w in _LEADING_VERBS:
-            prev = w
-            continue
+        if opening:
+            if w in _OPENERS:
+                prev = w
+                continue
+            opening = False
+            if w in _LEADING_VERBS:
+                prev = w
+                continue
         if re.fullmatch(r"l\d{1,2}", w):        # layer ids: L4, L35
             out[w] = None
         elif w.isdigit() and prev == "layer" and len(w) <= 2:
@@ -498,20 +508,24 @@ class ADRLoader:
                 continue
             title = self._title_tokens[adr_id]
             hits = [t for t in known if t in body]
-            if not hits:
+            # A bare two-digit number ("20 minutes", "10/day") is weak evidence:
+            # it may add to a score but never counts as one of the two matched
+            # terms a result needs (review R6-4).
+            strong = [t for t in hits if not (t.isdigit() and len(t) == 2)]
+            if not strong:
                 continue
             # One matched word is topic evidence for a one-word question, or for
             # a short question (≤ 3 words, all known to the corpus) when that
             # word is rare and in the ADR's title ("Bedrock 403"). Measured: +2
             # on the held-out set; "summarize this PDF" → ADR-0596 (voice
             # summarization) is its recorded borderline case.
-            if len(hits) < 2 and not allow_single_term:
+            if len(strong) < 2 and not allow_single_term:
                 continue
-            if len(hits) < 2:
+            if len(strong) < 2:
                 # ...and the word must be in the TITLE: a preview mention is
                 # not what the decision is about.
-                short_ok = len(q) <= 3 and unknown == 0 and hits[0] in title
-                if not (len(q) == 1 or short_ok) or known[hits[0]] < SINGLE_TERM_MIN_IDF:
+                short_ok = len(q) <= 3 and unknown == 0 and strong[0] in title
+                if not (len(q) == 1 or short_ok) or known[strong[0]] < SINGLE_TERM_MIN_IDF:
                     continue
             raw = sum(known[t] * (1.0 if t in title else 0.5) for t in hits)
             if sum(known[t] for t in hits) < evidence_floor:

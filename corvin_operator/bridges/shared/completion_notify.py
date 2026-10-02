@@ -537,13 +537,52 @@ def _emit_via_proactive(env: dict, rec: dict, *, voice_path: str | None,
         return "denied"
 
 
+_BRIDGE_PATHS = None
+
+
+def _bridge_paths():
+    """THIS directory's ``paths.py``. A bare ``import paths`` resolves to
+    whichever ``paths`` is first on ``sys.path`` — in a process that also has
+    ``corvin_operator/forge/forge`` on it, the forge module, which has no
+    ``voice_session_dir`` (the name collision the 2026-10-02 shadowing note in
+    adapter-runtime.md describes). Loaded by file path, once."""
+    global _BRIDGE_PATHS
+    if _BRIDGE_PATHS is None:
+        import importlib.util  # noqa: PLC0415
+        spec = importlib.util.spec_from_file_location(
+            "_corvin_bridge_paths", Path(__file__).resolve().with_name("paths.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _BRIDGE_PATHS = mod
+    return _BRIDGE_PATHS
+
+
+def _derive_ledger_workdir(rec: dict) -> str:
+    """The originating bridge chat's session workdir, for a producer that did
+    not pass ``ledger_dir`` (orchestration, compute, browser notices — review
+    R6-7). Same key the adapter uses: ``chat_id`` or the sender, sanitised like
+    ``adapter._safe_id``. "" when the channel is not a bridge channel."""
+    chat = rec.get("chat_id")
+    chat = str(chat) if chat not in (None, "") else str(rec.get("sender") or rec.get("to") or "")
+    if not chat:
+        return ""
+    try:
+        voice_session_dir = _bridge_paths().voice_session_dir
+        safe = "".join(ch if ch.isalnum() else "_" for ch in chat)[:64] or "anon"
+        d = Path(voice_session_dir(str(rec.get("channel") or ""), safe,
+                                   tenant_id=str(rec.get("tenant_id") or "_default")))
+        return str(d) if d.is_dir() else ""
+    except Exception:  # noqa: BLE001 — not a bridge channel / no paths module
+        return ""
+
+
 def _record_in_ledger(rec: dict) -> None:
     """Append a delivered background result to its chat's session ledger
     (ADR-2102) as a turn the CLI session never ran (``spawned=False``): the user
     saw it in the chat, so the chat's later turns must be able to see it too.
     Exactly once — it runs only on the delivering poller, under the record's
     O_EXCL lock. Best-effort: never raises, never blocks a delivery."""
-    wd = rec.get("ledger_dir")
+    wd = rec.get("ledger_dir") or _derive_ledger_workdir(rec)
     if not wd:
         return
     try:
@@ -554,7 +593,7 @@ def _record_in_ledger(rec: dict) -> None:
         label = str(rec.get("label") or "").strip()
         _ledger.append_turn(
             Path(wd), channel=str(rec.get("channel") or ""),
-            chat_key=str(rec.get("ledger_chat_key") or ""),
+            chat_key=str(rec.get("ledger_chat_key") or rec.get("chat_id") or rec.get("sender") or ""),
             user_text=f"(background task finished: {label})" if label
             else "(background task finished)",
             assistant_text=str(rec.get("text") or ""),

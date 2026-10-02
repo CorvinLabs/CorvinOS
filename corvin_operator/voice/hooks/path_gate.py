@@ -1008,12 +1008,6 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
     if (re.search(r"\$\(", cmd) or "`" in cmd) and _looks_protected(cmd):
         return [], True
 
-    # Parameter expansion with a protected hint inside → fail-closed: the hook
-    # cannot know what `D=…; echo x >> $D/ledger.jsonl` writes to, because the
-    # assignment is made by the same shell that expands it (review R5-1; the
-    # same shape reached the audit chain).
-    if re.search(r"\$\{?[A-Za-z_]", cmd) and _looks_protected(cmd):
-        return [], True
 
     # V-013: Command substitution in pipe position — e.g.
     # `$(output) | tee forge/out.py` or `echo x | tee $(some_path)`.
@@ -1393,9 +1387,25 @@ def _check_unguarded(payload: dict) -> tuple[bool, str]:
                 "MCP tools instead. Command (first 80 chars): "
                 + cmd[:80]
             )
+        # Shell assignments in the same command (`D=…; echo x >> $D/f`): the
+        # shell expands them, so the hook must too (review R5-1).
+        _assign = dict(re.findall(r"(?:^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=([^\s;&|]+)", cmd))
         for t in targets:
-            if is_protected_path(t):
+            # The shell removes quotes and backslashes before it opens a path:
+            # `session""_ledger` and `sess\ion_ledger` name the protected
+            # directory (review R6-2).
+            t_norm = re.sub(r"[\"'\\]", "", t)
+            for _name, _val in _assign.items():
+                t_norm = re.sub(r"\$\{?" + _name + r"\}?", re.sub(r"[\"']", "", _val), t_norm)
+            if is_protected_path(t) or is_protected_path(t_norm):
                 return False, _deny_msg("Bash", t, command=cmd[:80])
+            # A write target the hook cannot resolve (an unassigned variable)
+            # that names a protected file fails closed. Only WRITE targets —
+            # applying this to the whole command blocked `grep "$PAT" …` and
+            # any command whose cwd path contains ".corvin" (review R6-5).
+            if "$" in t_norm and _looks_protected(t_norm.replace(str(Path.cwd()), "")):
+                return False, _deny_msg("Bash", t, command=cmd[:80])
+            t = t_norm
             # A glob in a target is expanded by the shell, not by this hook:
             # `cat x > .corvin-led?er/ledger.jsonl` named no protected path
             # literally (review R5-1). Check what it matches NOW, and fail

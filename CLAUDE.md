@@ -808,13 +808,21 @@ structurally excluded. The CLI transcript is NOT the record — auto-compaction 
 
 - **Record:** every bridge turn is appended verbatim to
   `<tenant>/session_ledger/<channel>/<chat>/ledger.jsonl` — OUTSIDE the worker's cwd (a
-  pre-R5 `<workdir>/.corvin-ledger/` is moved there on first use) — by
+  pre-R5 `<workdir>/.corvin-ledger/` is moved there ONCE at adapter start, merged if both
+  exist — never lazily, where a worker could plant one) — by
   `session_ledger.append_turn` in `process_one`, right after the answer is final (before
   TTS/outbox); the console's `turns.jsonl` is its ledger. Lines are removed only by GDPR
   erasure (`L-session-ledger`, any identity key) — and, on the console, by an explicit
   delete of the chat (which also clears its CEL anchor store) or the pre-existing
   50-chats-per-tenant cap (oldest chat, whole). `path_gate` denies writes to any
-  `session_ledger`/`.corvin-ledger` path, including through a glob or a shell variable.
+  `session_ledger`/`.corvin-ledger` path, including through a glob, quotes, a backslash or
+  an assigned shell variable. **Boundary (stated, not hidden):** `path_gate` is a syntactic
+  guard. A worker running as the same OS user that executes a program it wrote (a script,
+  `find -exec sh`, `sqlite3 .output`) can write any file that user can — the ledger exactly
+  like the audit chain and the adapter's own code. Integrity against that needs OS-level
+  isolation of the worker (ADR-0241/0238), not another gate rule. Every adapter-side write
+  of a ledger/view/sidecar/anchor file goes through a fresh `mkstemp` temp or `O_NOFOLLOW`,
+  so a planted symlink is never followed.
   On disk the texts are `user_text`/`assistant_text` — `user` is an erasure identity key.
   Delivered `/task` results, console slash-command replies, a refused `/btw` and the
   streamed part of a cancelled console answer are recorded too.

@@ -639,6 +639,55 @@ class TestRound4:
         assert "BG-RESULT-Q3" in sl.render_context(wd)
 
 
+class TestRound6:
+    def test_the_view_never_writes_through_a_planted_symlink(self, wd):
+        """Review R6-1: a symlink named like the view's temp file made the
+        adapter overwrite the ledger with the view."""
+        _turn(wd, 1, u="keep-1")
+        _turn(wd, 2, u="keep-2")
+        before = sl.ledger_path(wd).read_text()
+        for pid in range(os.getpid() - 2, os.getpid() + 3):
+            os.symlink(sl.ledger_path(wd), wd / f".corvin-history.md.{pid}.tmp")
+        os.symlink(sl.ledger_path(wd), wd / ".corvin-history.md")
+        sl.render_context(wd)
+        assert sl.ledger_path(wd).read_text() == before
+        assert not sl.view_path(wd).is_symlink() and "keep-2" in sl.view_path(wd).read_text()
+
+
+class TestRound6b:
+    def test_legacy_console_refusal_is_withheld(self):
+        turns = [{"role": "user", "ts": 1, "parts": [{"kind": "text", "text": "OLD-REFUSED-ASK"}]},
+                 {"role": "assistant", "ts": 2, "parts": [{"kind": "text",
+                  "text": "[house-rules] This request is not permitted by the operator's policy."}]}]
+        [rec] = sl.records_from_turn_log(turns, current_prompt="next")
+        assert rec["refused"] == "pre_spawn"
+        assert "OLD-REFUSED-ASK" not in sl.render_view([rec])
+
+    def test_background_result_without_ledger_dir_is_still_recorded(self, tmp_path, monkeypatch):
+        import completion_notify as cn
+        import erasure_handlers as eh
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        wd = eh._tenant_home("_default") / "sessions" / "voice" / "telegram" / "c9"
+        wd.mkdir(parents=True)
+        tid = cn.register("orch_1", channel="telegram", chat_id="c9", sender="u1", label="orchestration")
+        assert cn.mark_done(tid, text="ORCH-RESULT-77")
+        assert cn.deliver_ready(tmp_path / "out") == 1
+        assert any(r.get("assistant") == "ORCH-RESULT-77" for r in sl.read_ledger(wd))
+
+    def test_erasure_removes_the_subjects_store_directory(self, tmp_path, monkeypatch):
+        import erasure_handlers as eh
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        jid = "4915112345678@s.whatsapp.net"
+        wd = eh._tenant_home("_default") / "sessions" / "voice" / "whatsapp" / eh._ledger_safe_key(jid)
+        wd.mkdir(parents=True)
+        sl.append_turn(wd, channel="whatsapp", chat_key=jid, user_text="hi", assistant_text="x")
+        sl.render_context(wd)
+        d = sl.ledger_dir(wd)
+        assert (d / "counters.json").exists()
+        eh.SessionLedgerHandler(tenant_id="_default").purge(jid, "r")
+        assert not d.exists()
+
+
 class TestRound5:
     def test_ledger_stays_private_after_an_erasure(self, wd):
         import erasure_handlers as eh

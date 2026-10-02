@@ -175,13 +175,13 @@ class TestRealCorpusRegression:
         """The measured quality bar (tests/adr_retrieval_eval.py): every real
         question finds a covering ADR, no recorded off-topic hit comes back,
         and chit-chat returns nothing."""
-        from .adr_retrieval_eval import POSITIVE, evaluate
+        from .adr_retrieval_eval import POSITIVE, POSITIVE_R6, evaluate
         clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))
         hits, misses, forbidden, noise = evaluate(lambda q: [
             m.id for m in clf.find_relevant_adrs(SimpleNamespace(normalized=SimpleNamespace(summary=q)))])
         assert not forbidden, forbidden
         assert not noise, noise
-        assert len(hits) == len(POSITIVE), misses
+        assert len(hits) == len(POSITIVE) + len(POSITIVE_R6), misses
 
     def test_held_out_set_does_not_regress(self):
         """Held-out queries (round-2 reviewer). Measured 2026-10-02: 7/9 found,

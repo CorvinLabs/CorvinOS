@@ -56,12 +56,14 @@ class MemoryMatch:
 
 **Traversal Strategy (as implemented, 2026-10-02):**
 1. Tokenise the task into whole, stop-word-free, stemmed words
-   (`adr_loader.tokenize`) — never substrings; 3-digit+ numbers and article
-   numbers are kept ("Bedrock 403", "Art. 17" ≠ "Art. 32"), a bare two-digit
-   — and two-digit numbers too ("10/day", "Phase 10"); fillers of an everyday
-   request (help, explain, give, tell, suggest, …) are stop words, while words
-   that ARE topics here (create, write, work, three, day) are dropped only as the
-   request's OPENING verb ("Write a haiku…"); "worker" is not stemmed into
+   (`adr_loader.tokenize`) — never substrings; numbers of two or more digits and
+   article numbers are kept ("Bedrock 403", "10/day", "Art. 17" ≠ "Art. 32"), but
+   a two-digit number is WEAK evidence: it adds to a score and never counts as
+   one of the two matched terms a result needs ("20 minutes"); fillers of an
+   everyday request (help, explain, give, tell, suggest, …) are stop words, while
+   words that ARE topics here (create, write, work, plan, …) are dropped only as
+   the request's OPENING verb, also after a polite or modal opener ("Please
+   write…", "Could you create…"); "worker" is not stemmed into
    "work"; "Artikel 17" is the token of "Art. 17"; a small
    German→English table maps core terms (Kontext, Sitzung, Kette, Löschung, …)
    because the corpus is English. A bridge group-chat observer block in front of
@@ -100,15 +102,17 @@ class MemoryMatch:
    (~0.5 s) on every turn.
 
 Measured on the real corpus with the labelled sets in
-`corvin_operator/context_engineering/tests/adr_retrieval_eval.py`: tuning set
-24/24 with 0 forbidden hits and 0 noise on the must-be-empty questions (42
-everyday non-CorvinOS requests since review round 4, where 8 of 40 had returned
-ADRs; a second set of 25 written after that fix: 0/25; one timer request is
-listed under AMBIGUOUS with its reason). Review round 5 measured the recall
-cost of round 4's stop words on 61 fresh CorvinOS questions and narrowed them:
-recall is back to the pre-round-4 loader's (40/46 and 14/15 on the reviewer's
-sets), and 160 "<verb> ADR-NNNN" requests return the named ADR first with no
-unrelated extra;
+`corvin_operator/context_engineering/tests/adr_retrieval_eval.py` (2026-10-02,
+after review round 6): positive sets 31/31 + 36/36 (round 6's realistic questions
+incl. polite openers) with 0 forbidden hits; 0 noise on 41 + 36 everyday
+non-CorvinOS requests, with 5 more listed under AMBIGUOUS WITH their measured hits
+(a timer, a running schedule, a date, baby names, an alarm — round 6's set had
+13/40 noisy before its fix, the pre-round-4 loader 10/40); a held-out negative
+set of 25 written after the round-4 fix: 0/25; the named-ADR set 7/7.
+Round 5 measured the recall cost of round 4's stop words on 61 fresh CorvinOS
+questions and narrowed them back to the pre-round-4 loader's recall (40/46 and
+14/15 on the reviewer's sets); 160 "<verb> ADR-NNNN" requests return the named
+ADR first with no unrelated extra;
 held-out set (written by a reviewer after tuning) 7/9, one query with off-topic hits —
 the misses and the borderline cases are listed in the file, and one rule was
 kept because of the held-out score (disclosed there). Regression tests:

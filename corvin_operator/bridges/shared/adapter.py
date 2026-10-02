@@ -13176,6 +13176,22 @@ def main() -> int:
     log(f"adapter started, polling {INBOX} every {POLL_INTERVAL}s "
         f"(MAX_PARALLEL={MAX_PARALLEL}, per-chat sequential)")
 
+    # ADR-2102 R6: move pre-R5 session ledgers out of the chat workdirs ONCE,
+    # before any turn runs — never lazily, where a worker could plant one.
+    try:
+        try:
+            from . import session_ledger as _boot_ledger  # type: ignore  # noqa: PLC0415
+            from .paths import voice_sessions_dir as _vsd_root  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            import session_ledger as _boot_ledger  # type: ignore  # noqa: PLC0415
+            from paths import voice_sessions_dir as _vsd_root  # type: ignore  # noqa: PLC0415
+        _moved = _boot_ledger.migrate_legacy_ledgers(
+            [SESSIONS_ROOT, _vsd_root(os.environ.get("CORVIN_TENANT_ID") or "_default")])
+        if _moved:
+            log(f"session ledger: migrated {_moved} legacy ledger(s) out of chat workdirs")
+    except Exception as _e:  # noqa: BLE001
+        log(f"session ledger migration skipped: {_e}")
+
     # (ADR-2091 removed the local-Ollama voice-summary prewarm and CORVIN_VOICE_PREWARM.)
 
     # The shadow model classifier (model_selector_shadow.shadow_classify_task,

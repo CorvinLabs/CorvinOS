@@ -408,3 +408,13 @@ def test_real_tree_stdlib_namesakes_are_not_linked():
         assert REPO / rel not in live, rel
     src = REPO / "corvin_operator/bridges/shared/adapter.py"
     assert idx.resolve("types", src) == [] and idx.resolve("queue", src) == []
+
+
+def test_stdlib_namesake_beside_a_script_launched_from_a_package_dir_links():
+    """Review R6-1: ``bridge.sh`` runs ``cd shared && python adapter.py``;
+    ``shared/`` is a package, yet ``import profile`` there loads
+    ``shared/profile.py`` (sys.path[0] is the script's directory)."""
+    idx, _live, _roots, _rep = _real()
+    shared = z.REPO / "corvin_operator" / "bridges" / "shared"
+    assert shared in idx.script_dirs
+    assert idx.resolve("profile", shared / "adapter.py") == [shared / "profile.py"]

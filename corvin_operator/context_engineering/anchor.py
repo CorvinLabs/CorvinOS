@@ -115,22 +115,50 @@ def captured_total() -> int:
 
 # ── Path resolution (tenant/session scoped, no env fallback) ───────────────
 
-def _safe_key(session_key: str) -> str:
+def _legacy_safe_key(session_key: str) -> str:
+    """The pre-R6 name: for a key over 100 chars the digest covered the
+    ``#<seq>`` epoch, so no erasure form could ever match a post-/new store."""
     s = re.sub(r"[^A-Za-z0-9_.-]", "_", str(session_key or "")).strip("_")
     if not s:
         return "_nosession"
-    if len(s) > 100:  # keep the path bounded but collision-safe
+    if len(s) > 100:
         digest = hashlib.sha1(str(session_key).encode("utf-8")).hexdigest()[:12]
         s = s[:80] + "_" + digest
     return s
+
+
+def _safe_key(session_key: str) -> str:
+    """``<sanitised chat key>`` plus ``_<seq>`` for a ``#<seq>`` /new epoch.
+    A long chat key is truncated with a digest of the CHAT part only, and the
+    epoch stays outside it — so ``erasure_handlers.CELAnchorHandler`` can match
+    every epoch of a chat from the chat key alone (review R6-2). Identical to
+    the old name for every key of 100 chars or less."""
+    key = str(session_key or "")
+    base, sep, epoch = key.rpartition("#")
+    if not (sep and epoch.isdigit()):
+        base, epoch = key, ""
+    s = re.sub(r"[^A-Za-z0-9_.-]", "_", base).strip("_")
+    if not s:
+        return f"_nosession_{epoch}" if epoch else "_nosession"
+    if len(s) > 100:  # keep the path bounded but collision-safe
+        digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
+        s = s[:80] + "_" + digest
+    return f"{s}_{epoch}" if epoch else s
 
 
 def _store_path(tenant_id: str, session_key: str) -> Path:
     # tenant_id is ALWAYS explicit → forge.paths.tenant_home never falls back to
     # the CORVIN_TENANT_ID env var here (CLAUDE.md § Multi-tenant Axis).
     from corvin_operator.forge.forge.paths import tenant_home  # noqa: PLC0415
-    return (Path(tenant_home(tenant_id)) / "cel_anchors"
-            / f"{_safe_key(session_key)}.jsonl")
+    root = Path(tenant_home(tenant_id)) / "cel_anchors"
+    p = root / f"{_safe_key(session_key)}.jsonl"
+    legacy = root / f"{_legacy_safe_key(session_key)}.jsonl"
+    if legacy != p and legacy.is_file() and not p.exists():
+        try:
+            legacy.rename(p)          # one-time move to the erasable name
+        except OSError:
+            pass
+    return p
 
 
 #: Lock file shared by every writer of the anchor stores and by the GDPR
@@ -210,13 +238,30 @@ def load_facts(tenant_id: str, session_key: str) -> "list[dict]":
         return []
 
 
+def _write_fresh(p: Path, text: str) -> None:
+    """Atomic write through a fresh ``mkstemp`` temp (O_EXCL, random name): a
+    fixed temp name follows a planted symlink (review R6-1)."""
+    import os  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+    fd, tmp = tempfile.mkstemp(prefix=f".{p.name}.", suffix=".tmp", dir=str(p.parent))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _write_all(tenant_id: str, session_key: str, facts: "list[dict]") -> None:
     p = _store_path(tenant_id, session_key)
     p.parent.mkdir(parents=True, exist_ok=True)
     body = "\n".join(json.dumps(f, ensure_ascii=False) for f in facts)
-    tmp = p.with_suffix(".jsonl.tmp")
-    tmp.write_text(body + ("\n" if body else ""), encoding="utf-8")
-    tmp.replace(p)  # atomic swap
+    _write_fresh(p, body + ("\n" if body else ""))
 
 
 def add_fact(tenant_id: str, session_key: str, kind: str, text: str, *,
@@ -249,7 +294,7 @@ def add_fact(tenant_id: str, session_key: str, kind: str, text: str, *,
             # DECISION_SUBCAP decision menus, evicting the OLDEST decision only —
             # constraint/id/goal entries are never displaced by this rule (that
             # is the whole point of a SUB-cap, not the global CAP below).
-            decisions = [f for f in facts if f.get("kind") == "decision"]
+            decisions = [f for f in facts if _is_menu(f)]
             if len(decisions) > DECISION_SUBCAP:
                 _evict = {id(f) for f in decisions[:-DECISION_SUBCAP]}
                 facts = [f for f in facts if id(f) not in _evict]
@@ -287,9 +332,7 @@ def set_pending_goal(tenant_id: str, session_key: str, text: str, *,
         with _StoreLock(tenant_id):
             p = _pending_path(tenant_id, session_key)
             p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_suffix(".tmp")
-            tmp.write_text(json.dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
-            tmp.replace(p)
+            _write_fresh(p, json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:  # noqa: BLE001
         pass
 
@@ -369,7 +412,11 @@ def collect_load_bearing(brief: Any) -> "list[tuple[str, str]]":
     for d in (getattr(brief, "related_decisions", None) or []):
         title = getattr(d, "title", "") or ""
         if any(sig in title.lower() for sig in _BLOCKER_SIGNALS):
-            _push("decision", getattr(d, "decision_id", None) or title)
+            # A RETRIEVED decision record is a constraint on the work, not a
+            # choice the assistant offered: as kind "decision" it evicted the
+            # captured "Option N" menu (DECISION_SUBCAP) and rendered ADR ids
+            # under "decision points you were offered" (review R6-3).
+            _push("constraint", getattr(d, "decision_id", None) or title)
 
     return facts
 
@@ -492,6 +539,15 @@ def capture_decision_point(tenant_id: str, session_key: str,
         return None
 
 
+_ADR_ID_RE = re.compile(r"ADR-\d+\S*")
+
+
+def _is_menu(f: dict) -> bool:
+    """A captured option menu. Stores written before review R6 may hold a bare
+    ADR id under kind "decision"; it is read as the constraint it is."""
+    return f.get("kind") == "decision" and not _ADR_ID_RE.fullmatch(str(f.get("text", "")).strip())
+
+
 def render_lines(facts: "list[dict]") -> "list[str]":
     """Render persisted anchor facts into brief lines — UNCAPPED, assertive header.
 
@@ -504,8 +560,8 @@ def render_lines(facts: "list[dict]") -> "list[str]":
     UNCAPPED."""
     if not facts:
         return []
-    decisions = [f for f in facts if f.get("kind") == "decision"]
-    others = [f for f in facts if f.get("kind") != "decision"]
+    decisions = [f for f in facts if _is_menu(f)]
+    others = [f for f in facts if not _is_menu(f)]
     lines: list[str] = []
     if others:
         lines.append(

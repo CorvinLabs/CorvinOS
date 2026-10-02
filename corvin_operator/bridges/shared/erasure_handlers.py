@@ -1157,7 +1157,13 @@ def _atomic_replace_text(target: Path, text: str) -> None:
     best-effort: it fails on filesystems that refuse an O_RDONLY fsync of a
     directory, and there the rename durability is the filesystem's own guarantee.
     """
-    tmp = target.with_name(f"{target.name}.{os.getpid()}.erasing")
+    # A fresh, unpredictable temp (O_EXCL via mkstemp): a fixed name opened
+    # with O_CREAT|O_TRUNC follows a planted symlink (review R6-1).
+    import tempfile as _tempfile  # noqa: PLC0415
+    _fd, _tmp_name = _tempfile.mkstemp(prefix=f".{target.name}.", suffix=".erasing",
+                                       dir=str(target.parent))
+    os.close(_fd)
+    tmp = Path(_tmp_name)
     # Keep the target's mode: a private store (the session ledger is 0600)
     # must not come back at the process umask after an erasure (review R5-6).
     try:
@@ -1165,7 +1171,7 @@ def _atomic_replace_text(target: Path, text: str) -> None:
     except OSError:
         mode = 0o600
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+        fd = os.open(tmp, os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0))
         os.fchmod(fd, mode)
         with open(fd, "w", encoding="utf-8", errors="surrogateescape") as fh:
             fh.write(text)
@@ -1877,13 +1883,17 @@ def _cel_safe_key(session_key: str) -> str:
     from the bridges sys.path, where ``operator.context_engineering`` is not
     importable.
     """
-    s = re.sub(r"[^A-Za-z0-9_.-]", "_", str(session_key or "")).strip("_")
+    key = str(session_key or "")
+    base, sep, epoch = key.rpartition("#")
+    if not (sep and epoch.isdigit()):
+        base, epoch = key, ""
+    s = re.sub(r"[^A-Za-z0-9_.-]", "_", base).strip("_")
     if not s:
-        return "_nosession"
+        return f"_nosession_{epoch}" if epoch else "_nosession"
     if len(s) > 100:
-        digest = hashlib.sha1(str(session_key).encode("utf-8")).hexdigest()[:12]
+        digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
         s = s[:80] + "_" + digest
-    return s
+    return f"{s}_{epoch}" if epoch else s
 
 
 @dataclass
@@ -1932,6 +1942,11 @@ class CELAnchorHandler:
             except Exception:  # noqa: BLE001
                 BRIDGE_CHANNELS = ()
             forms = {safe} | {_cel_safe_key(f"{ch}:{subject_id}") for ch in BRIDGE_CHANNELS}
+            # A console chat's store is named after the bare sid while the
+            # console's subject is "web:<sid>" (review R6-1): also match the
+            # part after the channel prefix.
+            if ":" in subject_id:
+                forms.add(_cel_safe_key(subject_id.split(":", 1)[1]))
             epoch_re = re.compile("(?:" + "|".join(re.escape(x) for x in forms) + r")(?:_\d+)?")
             # Hold the writers' store lock (anchor.STORE_LOCK_NAME) across the
             # whole purge: a turn's read-modify-write of a store would otherwise
@@ -2081,6 +2096,17 @@ class SessionLedgerHandler:
             # rewritten, not dropped, before this pass sees them.
             for r in store_roots:
                 removed += _purge_path(r, subject_id, match_dir_name=False)
+            # A store directory is named after the chat key — for a DM, the
+            # subject's id (a phone number). Once its ledger is gone, the
+            # directory and its number-only sidecars go too (review R6-6).
+            forms = {subject_id, _ledger_safe_key(subject_id)}
+            for r in store_roots:
+                for d in sorted(r.rglob("*"), reverse=True):
+                    if (d.is_dir() and d.name in forms
+                            and not (d / "ledger.jsonl").exists()):
+                        import shutil as _sh  # noqa: PLC0415
+                        _sh.rmtree(d, ignore_errors=True)
+                        removed += 1
             if removed:
                 # The worker-readable history views are regenerated from the
                 # ledger on the next turn; any of them may quote what was just

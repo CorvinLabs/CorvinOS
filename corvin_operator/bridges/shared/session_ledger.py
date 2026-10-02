@@ -101,7 +101,8 @@ _INDEX_SIDE = 150
 
 def ledger_dir(workdir: Path | str) -> Path:
     """The chat's record directory, outside ``workdir`` (see ``STORE_DIRNAME``).
-    A ledger still in the old in-workdir place is moved here on first use."""
+    Pure path arithmetic; pre-R5 ledgers are moved by
+    :func:`migrate_legacy_ledgers` at process start."""
     wd = Path(os.path.abspath(str(workdir)))
     parts = wd.parts
     if "sessions" in parts:
@@ -112,14 +113,108 @@ def ledger_dir(workdir: Path | str) -> Path:
         d = Path(*parts[:i]) / STORE_DIRNAME / Path(*(rest or ["_root"]))
     else:
         d = wd.parent / STORE_DIRNAME / wd.name
-    legacy = wd / LEDGER_DIRNAME
-    if legacy.is_dir() and not d.exists():
+    return d
+
+
+def migrate_legacy_ledgers(roots: Iterable[Path | str]) -> int:
+    """Move every pre-R5 ``<workdir>/.corvin-ledger/`` under ``roots`` to
+    :func:`ledger_dir`. Run ONCE at process start (``adapter.main``), never
+    lazily: a lazy move adopted a ``.corvin-ledger/`` a worker had planted in
+    its own cwd as the chat's history (review R6-3). Where the store already
+    exists (a new-code writer ran first while old code still wrote the old
+    place) the two are MERGED, ordered by time and renumbered under the
+    writer's lock — never one silently dropped (review R6-4). Returns the
+    number of legacy ledgers handled. Never raises."""
+    done = 0
+    for root in roots:
         try:
-            d.parent.mkdir(parents=True, exist_ok=True)
-            os.rename(legacy, d)       # atomic; a racing mover simply loses
+            files = sorted(Path(root).rglob(f"{LEDGER_DIRNAME}/{LEDGER_FILE}"))
+        except OSError:
+            continue
+        for f in files:
+            try:
+                legacy, wd = f.parent, f.parent.parent
+                d = ledger_dir(wd)
+                if not (d / LEDGER_FILE).exists():
+                    d.parent.mkdir(parents=True, exist_ok=True)
+                    if d.exists():          # a store dir without a ledger yet
+                        for item in legacy.iterdir():
+                            os.replace(item, d / item.name)
+                        legacy.rmdir()
+                    else:
+                        os.rename(legacy, d)
+                else:
+                    _merge_into(d, f)
+                    import shutil  # noqa: PLC0415
+                    shutil.rmtree(legacy, ignore_errors=True)
+                done += 1
+            except Exception as exc:  # noqa: BLE001
+                _audit("session_ledger.append_failed",
+                       details={"record_kind": "migration", "reason": type(exc).__name__})
+    return done
+
+
+def _merge_into(store: Path, legacy_file: Path) -> None:
+    """Merge a legacy ledger into the store ledger under the writer's lock."""
+    path = store / LEDGER_FILE
+    with open(path, "a+", encoding="utf-8") as lock_fh:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        try:
+            def _recs(p: Path) -> list[dict[str, Any]]:
+                out = []
+                for line in p.read_text(encoding="utf-8", errors="surrogateescape").splitlines():
+                    try:
+                        r = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(r, dict):
+                        out.append(r)
+                return out
+            seen, merged = set(), []
+            for r in _recs(path) + _recs(legacy_file):
+                key = json.dumps({k: v for k, v in r.items() if k not in ("seq", "n")},
+                                 sort_keys=True, ensure_ascii=False)
+                if key not in seen:
+                    seen.add(key)
+                    merged.append(r)
+            merged.sort(key=lambda r: float(r.get("ts") or 0))
+            n = fence = 0
+            for i, r in enumerate(merged, 1):
+                r["seq"] = i
+                if r.get("kind") == "turn":
+                    n += 1
+                    r["n"] = n
+                if (r.get("kind") == "boundary" and r.get("boundary") == "reset"
+                        and r.get("reason") in _manual_reasons()):
+                    fence = i
+            _replace_atomically(path, "".join(json.dumps(r, ensure_ascii=False) + "\n"
+                                              for r in merged))
+            _replace_atomically(store / _HWM_FILE, json.dumps(
+                {"seq": len(merged), "n": n, "fence_seq": fence}))
+        finally:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def _replace_atomically(target: Path, text: str, mode: int = 0o600) -> None:
+    """Write ``text`` to ``target`` via a FRESH temp file (``mkstemp``: O_EXCL,
+    random name) in the same directory, then ``os.replace``. A predictable
+    temp name opened with O_CREAT|O_TRUNC followed a symlink the worker had
+    planted in its cwd and overwrote the symlink's target — the ledger or the
+    audit chain — with the view (review R6-1). ``os.replace`` replaces a
+    symlink AT ``target`` itself, never what it points to."""
+    import tempfile  # noqa: PLC0415
+    fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
         except OSError:
             pass
-    return d
+        raise
 
 
 def ledger_path(workdir: Path | str) -> Path:
@@ -162,7 +257,9 @@ def _append(workdir: Path | str, record: dict[str, Any]) -> Optional[dict[str, A
     except OSError:
         pass
     for _attempt in range(5):
-        fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+        # O_NOFOLLOW: the record is never written THROUGH a symlink (R6-1).
+        fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT
+                     | getattr(os, "O_NOFOLLOW", 0), 0o600)
         fh = os.fdopen(fd, "a+", encoding="utf-8")
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
         try:
@@ -219,10 +316,8 @@ def _append(workdir: Path | str, record: dict[str, Any]) -> Optional[dict[str, A
                 if (rec.get("kind") == "boundary" and rec.get("boundary") == "reset"
                         and rec.get("reason") in _manual_reasons()):
                     fence = rec["seq"]
-                tmp = hwm_path.with_suffix(".tmp")
-                tmp.write_text(json.dumps({"seq": rec["seq"], "n": rec.get("n", turns),
-                                           "fence_seq": fence}), encoding="utf-8")
-                os.replace(tmp, hwm_path)
+                _replace_atomically(hwm_path, json.dumps(
+                    {"seq": rec["seq"], "n": rec.get("n", turns), "fence_seq": fence}))
                 return rec
             finally:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
@@ -809,11 +904,14 @@ def _note_render(workdir: Path | str, stats: dict[str, int], **kw: Any) -> None:
         _audit("session_ledger.context_resupplied", details=dict(stats), **kw)
     try:
         state.parent.mkdir(parents=True, exist_ok=True)
-        tmp = state.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"key": key}), encoding="utf-8")
-        os.replace(tmp, state)
+        _replace_atomically(state, json.dumps({"key": key}))
     except OSError:
         pass
+
+
+#: Every pre-spawn gate refusal (``spawn_gates`` / ``_spawn_gates``) starts
+#: with one of these tags; v1 console turn logs carry no ``gate_refused``.
+_LEGACY_REFUSAL_RE = re.compile(r"\[(?:house-rules|data-flow|egress|security)\] ")
 
 
 def records_from_turn_log(turns: list[dict[str, Any]],
@@ -848,6 +946,10 @@ def records_from_turn_log(turns: list[dict[str, Any]],
                 pending["spawned"] = bool(t.get("cli_spawned"))
             if t.get("gate_refused"):
                 pending["refused"] = str(t.get("gate_refused"))
+            elif t.get("v") is None and _LEGACY_REFUSAL_RE.match(_text(t).lstrip()):
+                # A pre-marker (v1) log: a gate's answer is recognised by the
+                # tag every pre-spawn refusal starts with (review R6-8).
+                pending["refused"] = "pre_spawn"
     if pending is not None:
         in_flight = (not pending["_answered"] and current_prompt is not None
                      and _clean(pending["user"]) == _clean(current_prompt))
@@ -925,11 +1027,7 @@ def write_view(workdir: Path | str, records: list[dict[str, Any]], *,
         if not any(r.get("kind") == "turn" for r in records):
             return None
         target = view_path(workdir)
-        tmp = target.with_name(f"{VIEW_FILE}.{os.getpid()}.tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(render_view(records, withhold=withhold))
-        os.replace(tmp, target)
+        _replace_atomically(target, render_view(records, withhold=withhold))
         return target
     except Exception:  # noqa: BLE001 — the view is a convenience, never a turn breaker
         return None
