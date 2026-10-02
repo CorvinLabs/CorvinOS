@@ -830,10 +830,12 @@ structurally excluded. The CLI transcript is NOT the record — auto-compaction 
   On disk the texts are `user_text`/`assistant_text` — `user` is an erasure identity key.
   Delivered `/task` results, console slash-command replies, a refused `/btw` and the
   streamed part of a cancelled console answer are recorded too.
-- **The re-supplied history passes L34 against the engine that will read it** — the WHOLE
-  view (a superset of the block), before it is written; refused or a gate error → no view,
-  one line instead of the block (fail-closed) — side turns and an engine switch cannot route
-  around it.
+- **The re-supplied history passes L34 against the engine that will read it, PER TURN** —
+  each recorded turn is classified on its own (its `[class:…]` marker included) and each
+  class is checked once per spawn; a forbidden turn is withheld in the block AND the view,
+  question and answer, the rest of the chat stays; a classifier/gate error withholds the
+  turn (fail-closed). Side turns and an engine switch cannot route around it. (A whole-view
+  gate hid the entire chat for one secret-looking string — review R9-1.)
 - **The worker reads a VIEW, never the record:** `<workdir>/.corvin-history.md`, regenerated
   on every spawn (bridge and console) with the same withholding as the injected block; the
   block names only that file. Erasure deletes every view (it regenerates).

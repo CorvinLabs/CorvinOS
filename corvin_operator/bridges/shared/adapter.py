@@ -2332,7 +2332,7 @@ def _spawn_detached_bg_worker(
                 label=instruction[:60],
                 # The chat's session ledger: the result is recorded there when
                 # delivered, so a later turn still knows it (ADR-2102, review R4-7).
-                ledger_dir=str(_session_dir(channel, str(chat_key))), ledger_chat_key=str(chat_key),
+                ledger_chat_key=str(chat_key),
                 want_voice=bool(want_voice),
             )
             # Resolve the chat profile like a normal turn so the background turn
@@ -3587,9 +3587,7 @@ def _resolve_spawn_inputs(
                 _session_dir(channel, str(chat_key)),
                 channel=str(channel or ""), chat_key=str(chat_key),
                 tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default",
-                withhold=_ledger_consent_withhold(channel, str(chat_key)),
-                view_gate=_ledger_data_flow_gate(
-                    "claude_code", channel=str(channel or ""), chat_key=str(chat_key)),
+                withhold=_ledger_withhold("claude_code", str(channel or ""), str(chat_key)),
             )
             if _ledger_block:
                 sys_prompt = sys_prompt + _ledger_block
@@ -4524,8 +4522,25 @@ def _cel_session(channel: str, chat_key: str | None):
             from . import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
         except ImportError:
             import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
-        fence_seq = _ledger.manual_fence_seq(_session_dir(channel, str(chat_key)))
+        _wd = _session_dir(channel, str(chat_key))
+        _ledger.repair_fence(_wd)
+        fence_seq = _ledger.manual_fence_seq(_wd)
         if fence_seq:
+            if _CEL_AVAILABLE:
+                # A ledger whose counters had lost its /new fence had its anchor
+                # written under the un-fenced key since that /new: carry facts
+                # written AFTER the fence to the fenced key (review R9-3).
+                try:
+                    from context_engineering import anchor as _anc  # type: ignore  # noqa: PLC0415
+                    _tid = os.environ.get("CORVIN_TENANT_ID", "_default")
+                    if (_anc._store_path(_tid, key).is_file()
+                            and not _anc._store_path(_tid, f"{key}#{fence_seq}").exists()):
+                        _fence = _ledger.last_manual_reset(_ledger.read_ledger(_wd))
+                        if _fence:
+                            _anc.adopt_store(_tid, key, f"{key}#{fence_seq}",
+                                             written_after=float(_fence.get("ts") or 0))
+                except Exception:  # noqa: BLE001
+                    pass
             key += f"#{fence_seq}"
     except Exception:  # noqa: BLE001 — no ledger → the plain chat key
         pass
@@ -4567,25 +4582,52 @@ def _ledger_consent_withhold(channel: str, chat_key: str):
     return _check
 
 
-def _ledger_data_flow_gate(engine_name: str, *, channel: str, chat_key: str):
-    """``view_gate`` for ``session_ledger.render_context``: L34 on the history
-    the worker can read (the whole view — a superset of the injected block),
-    against the engine about to read it, BEFORE the view is written.
+def _ledger_data_flow_withhold(engine_name: str, *, channel: str, chat_key: str):
+    """Per-TURN L34 for the re-supplied history: ``withhold(record) -> reason``.
 
-    The pre-spawn gate inspects only the new message. A side turn recorded past
-    L34 (a /plugin-builder answer) or a turn admitted on a local engine would
-    otherwise reach an engine the tenant's matrix forbids for it (R7-4); gating
-    only the block missed what truncation, the index and the /new fence leave
-    in the view (R8-1). FAIL-CLOSED: ``spawn_gates.check_l34`` is called
-    directly — ``_check_compliance_or_fail`` turns a gate exception into an
-    allow, which is right for a spawn decision it shares with other gates but
-    not here, where nothing else checks this text."""
+    The pre-spawn gate inspects only the new message, so a side turn recorded
+    past L34 or a turn admitted on a local engine would otherwise reach an
+    engine the tenant's matrix forbids for it (review R7-4). Each turn is
+    classified ON ITS OWN (``classify_task`` is pure; its ``[class:…]`` marker
+    is seen only at the start of the text it was written in — R9-2), and each
+    distinct class is checked against the engine once per spawn
+    (``check_l34(classification=…)``, audited). A refused class withholds that
+    turn only: gating the whole view hid every turn — after ``/new`` too — for
+    one secret-looking string in one answer (R9-1). Fail-closed: a classifier
+    or gate error withholds the turn."""
     tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+    verdict: dict = {}
 
-    def _gate(text: str):
-        from spawn_gates import check_l34 as _sg_l34  # type: ignore  # noqa: PLC0415
-        return _sg_l34(engine_name, tid, prompt=text, channel=channel, chat_key=chat_key)
-    return _gate
+    def _allowed(cls) -> bool:
+        if cls not in verdict:
+            try:
+                from spawn_gates import check_l34 as _sg_l34  # type: ignore  # noqa: PLC0415
+                verdict[cls] = _sg_l34(engine_name, tid, classification=cls,
+                                       channel=channel, chat_key=chat_key) is None
+            except Exception:  # noqa: BLE001 — fail closed
+                verdict[cls] = False
+        return verdict[cls]
+
+    def _check(rec: dict):
+        try:
+            from data_classification import classify_task  # type: ignore  # noqa: PLC0415
+            texts = (rec.get("user"), rec.get("observer_text"), rec.get("assistant"))
+            classes = {classify_task(str(t)) for t in texts if t}
+        except Exception:  # noqa: BLE001
+            return "data_flow"
+        return None if all(_allowed(c) for c in classes) else "data_flow"
+    return _check
+
+
+def _ledger_withhold(engine_name: str, channel: str, chat_key: str):
+    """Both per-turn reasons a recorded turn is not re-supplied to this
+    engine: an observer's ended consent, and the tenant's data-flow policy."""
+    consent = _ledger_consent_withhold(channel, chat_key)
+    data_flow = _ledger_data_flow_withhold(engine_name, channel=channel, chat_key=chat_key)
+
+    def _check(rec: dict):
+        return data_flow(rec) or consent(rec)
+    return _check
 
 
 def _ledger_record_side_turn(channel: str, chat_key: str, user_text: str, reply_text: str, *,
@@ -6678,9 +6720,7 @@ def _call_codex_streaming_via_engine(
             _ledger_block = _ledger.render_context(
                 _session_dir(channel, str(chat_key)), channel=str(channel or ""),
                 chat_key=str(chat_key), engine_transcript=False,
-                withhold=_ledger_consent_withhold(channel, str(chat_key)),
-                view_gate=_ledger_data_flow_gate(
-                    getattr(_CodexCliEngine, "name", "codex_cli"), channel=str(channel or ""), chat_key=str(chat_key)),
+                withhold=_ledger_withhold(getattr(_CodexCliEngine, "name", "codex_cli"), str(channel or ""), str(chat_key)),
                 tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default").strip()
             if _ledger_block:
                 system_parts.append(_ledger_block)
@@ -7023,9 +7063,7 @@ def _call_opencode_streaming_via_engine(
             _ledger_block = _ledger.render_context(
                 _session_dir(channel, str(chat_key)), channel=str(channel or ""),
                 chat_key=str(chat_key), engine_transcript=False,
-                withhold=_ledger_consent_withhold(channel, str(chat_key)),
-                view_gate=_ledger_data_flow_gate(
-                    getattr(_OpenCodeEngine, "name", "opencode"), channel=str(channel or ""), chat_key=str(chat_key)),
+                withhold=_ledger_withhold(getattr(_OpenCodeEngine, "name", "opencode"), str(channel or ""), str(chat_key)),
                 tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default").strip()
             if _ledger_block:
                 system_parts.append(_ledger_block)
@@ -11466,7 +11504,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                             label=instruction[:60],
                             # The chat's session ledger: the result is recorded there when
                             # delivered, so a later turn still knows it (ADR-2102, review R4-7).
-                            ledger_dir=str(_session_dir(channel, str(chat_key))), ledger_chat_key=str(chat_key),
+                            ledger_chat_key=str(chat_key),
                             want_voice=_pv_want_voice,
                         )
                         # Resolve the chat profile like a normal turn so the

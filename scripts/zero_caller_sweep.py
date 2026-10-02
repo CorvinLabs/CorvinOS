@@ -449,10 +449,13 @@ class Index:
         rel = dotted.replace(".", "/")
         head, _, tail = dotted.partition(".")
         external = head in self.external
-        # A startup module is never a sibling, in any directory (R8-1).
-        if src is not None and not (external and head in _STARTUP_MODULES) and not (
-                external and (src.parent / "__init__.py") in self.file_set
-                and src.parent not in self.script_dirs):
+        # A stdlib / third-party name resolves to a sibling only beside a
+        # script launched BY PATH (its directory is sys.path[0]) — package or
+        # not — and never for a module imported at interpreter start-up. A
+        # merely imported module's directory is not on sys.path (R9-1); a
+        # startup module is already loaded (R8-1).
+        if src is not None and not (external and (src.parent not in self.script_dirs
+                                                  or head in _STARTUP_MODULES)):
             sib = self._at(src.parent, rel)
             if sib:
                 return sib[:1]
@@ -646,14 +649,14 @@ def _root_refs(idx: Index) -> tuple[set[Path], list[str], list[tuple[str, Path]]
 
 
 #: Top-level modules CPython has imported before any script runs (``python -I
-#: -c 'import sys; print(sorted(sys.modules))'`` on 3.11/3.12, union): a sibling
+#: -c 'import sys; print(sorted(sys.modules))'`` on 3.11/3.12/3.13, intersection —
+#: ``types``/``warnings`` are NOT among them, a sibling of that name does load, R9-2): a sibling
 #: ``abc.py`` beside a script can never shadow them (review R7-3). A FIXED list —
 #: measuring it per run made the result depend on the interpreter (R8-3).
 _STARTUP_MODULES = frozenset("""
-_abc _codecs _collections_abc _distutils_hack _frozen_importlib _frozen_importlib_external
+_abc _codecs _collections_abc _frozen_importlib _frozen_importlib_external
 _imp _io _signal _sitebuiltins _stat _thread _warnings _weakref abc builtins codecs
-encodings genericpath io marshal os posix posixpath site stat sys time types warnings
-zipimport
+encodings genericpath io marshal os posix posixpath site stat sys time zipimport
 """.split())
 
 

@@ -641,8 +641,21 @@ _TARGET_ALL_CMDS = ("truncate", "ln", "chmod", "chown", "chgrp", "chattr",
 # Scripted line editors: the edit program arrives via stdin / `-c` and is opaque
 # to static parsing, so a protected file argument is fail-closed.
 _SCRIPTED_EDITORS = ("ex", "ed")
+#: Commands whose path arguments CREATE or OVERWRITE a file but do not destroy
+#: a tree (review R9-4): every non-flag argument is checked with
+#: is_protected_path only — no tree rule, so `mkdir outputs` in a session
+#: workdir (which lives under the corvin home) is not blocked.
+_CREATE_PATH_CMDS = ("mkdir", "touch", "patch", "xxd", "uniq", "split", "csplit",
+                     "tac", "mkfifo", "mknod")
+#: Output options that name the file a command writes (curl -o, wget -O,
+#: sort -o, openssl -out, …).
+_OUTPUT_FLAGS = ("-o", "-O", "--output", "--output-document", "-out", "--out")
+#: The ledger / anchor / queue stores, as PATH fragments: a bare word
+#: ("session_ledger" in a commit message) is not a hint (R7-5), a path is.
+_LEDGER_HINTS = ("session_ledger/", ".corvin-ledger/", "cel_anchors/",
+                 "pending_notifications/")
 _PROTECTED_HINTS = ("forge", "skill-forge", "audit.jsonl", "policy.json",
-                    ".corvin",
+                    ".corvin", *_LEDGER_HINTS,
                     "secrets.json", "corvin-voice",
                     # ADR-0012 — data-locality operator policy
                     "data_policy.yaml", "data_policy.yml",
@@ -1148,6 +1161,12 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
         if not toks:
             continue
         cmd_name = toks[0].rsplit("/", 1)[-1]
+        # Any command's output option names a file it writes (R9-4).
+        for _i, _t in enumerate(toks[1:], 1):
+            if _t in _OUTPUT_FLAGS and _i + 1 < len(toks):
+                targets.append(toks[_i + 1])
+            elif _t.startswith(("--output=", "--output-document=", "-out=")):
+                targets.append(_t.split("=", 1)[1])
         if cmd_name in _ARCHIVE_CMDS:
             # Archive EXTRACTION whose destination touches the corvin tree can
             # overwrite audit.jsonl. Fail closed on an explicit -C/-d/-D/-o dest
@@ -1222,6 +1241,8 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
                         targets.append(arg_toks[idx + 1])
                 if _looks_protected(seg):
                     return [], True  # fail-closed: mutating find touching a protected hint
+        elif cmd_name in _CREATE_PATH_CMDS:
+            targets.extend(_all_nonflag(toks[1:]))
         elif cmd_name in _TARGET_ALL_CMDS:
             # truncate/ln/chmod/chown/chattr/rm/rmdir/unlink/shred/...: EVERY
             # non-flag arg is a candidate path that can wipe / truncate /
@@ -1414,7 +1435,11 @@ def _check_unguarded(payload: dict) -> tuple[bool, str]:
             # that names a protected file fails closed. Only WRITE targets —
             # applying this to the whole command blocked `grep "$PAT" …` and
             # any command whose cwd path contains ".corvin" (review R6-5).
-            if "$" in t_norm and _looks_protected(t_norm.replace(str(Path.cwd()), "")):
+            # Only when the variable cannot be resolved even from the process
+            # environment, and only for the ledger-class stores: `pip freeze >
+            # "$PWD/requirements.txt"` resolves and was wrongly denied (R9-5).
+            _expanded = os.path.expandvars(t_norm)
+            if "$" in _expanded and any(h in _expanded for h in _LEDGER_HINTS):
                 return False, _deny_msg("Bash", t, command=cmd[:80])
             t = t_norm
             # A glob in a target is expanded by the shell, not by this hook:

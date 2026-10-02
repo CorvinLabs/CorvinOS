@@ -319,17 +319,21 @@ def test_stdlib_and_third_party_names_never_link_into_the_repo(tmp_path, monkeyp
                                        "ThirdPartyYaml", "ThirdPartyPackaging", "SiblingRandom"}
 
 
-def test_stdlib_namesake_from_a_script_directory_still_links(tmp_path, monkeypatch):
-    """The one place Python does look first: a script's own (non-package)
-    directory is ``sys.path[0]``."""
+def test_stdlib_namesake_links_only_beside_a_path_launched_script(tmp_path, monkeypatch):
+    """The one place Python does look first is the directory of a script run
+    BY PATH (sys.path[0]). A module merely IMPORTED from a directory without
+    __init__.py gets the stdlib (review R9-1)."""
     _tree(tmp_path, {
         "core/base.py": "class Subsystem: pass\n",
         "core/main.py": "import core.tools_dir.run\n",
-        "core/tools_dir/run.py": "import platform\n",          # no __init__.py: a script dir
-        "core/tools_dir/platform.py": _SUB.format("ScriptDirPlatform"),
+        "core/tools_dir/run.py": "import platform\n",          # imported, not launched
+        "core/tools_dir/platform.py": _SUB.format("ImportedDirPlatform"),
+        "core/launched/run.py": "import platform\n",
+        "core/launched/start.sh": "python3 run.py\n",
+        "core/launched/platform.py": _SUB.format("ScriptDirPlatform"),
     })
     _sandbox(monkeypatch, tmp_path)
-    assert _dead() == set()
+    assert {c for _f, c in _dead()} == {"ImportedDirPlatform"}
 
 
 def test_plugin_contract_is_the_lifecycle_shape(tmp_path, monkeypatch):
@@ -441,16 +445,17 @@ def test_a_startup_module_name_never_links_to_a_script_sibling(tmp_path, monkeyp
     script runs, so a sibling beside a path-launched script is dead — in a
     package directory and in a plain one. Positive control: a non-startup
     stdlib name (``profile``) beside the same script does link."""
-    assert {"abc", "os", "types", "codecs", "io"} <= z._STARTUP_MODULES
+    assert {"abc", "os", "codecs", "io"} <= z._STARTUP_MODULES
+    assert not {"types", "warnings"} & z._STARTUP_MODULES     # a sibling of those DOES load
     sub = "from core.base import Subsystem\nclass {}(Subsystem): pass\n"
     _tree(tmp_path, {
         "core/main.py": "x = 1\n",
         "core/base.py": "class Subsystem: pass\n",
         "core/tool/run.py": "import types\nimport abc\nimport profile\n",
         "core/tool/start.sh": "python3 run.py\n",
-        "core/tool/types.py": sub.format("TypesDead"),
+        "core/tool/types.py": sub.format("TypesLive"),
         "core/tool/abc.py": sub.format("AbcDead"),
         "core/tool/profile.py": sub.format("ProfileLive"),
     })
     _sandbox(monkeypatch, tmp_path)
-    assert {c for _f, c in _dead()} == {"TypesDead", "AbcDead"}
+    assert {c for _f, c in _dead()} == {"AbcDead"}             # types.py beside it is live

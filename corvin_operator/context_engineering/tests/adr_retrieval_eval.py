@@ -8,6 +8,9 @@ the session-drift analysis, and the round-1 adversarial review.
 from __future__ import annotations
 
 POSITIVE = [
+    # Review R9-CEL-2: a run-together identifier is also indexed as its words.
+    ("How does the remote trigger receiver validate a task envelope?", {"ADR-0048"}, set()),
+    ("open claw runtime engine", {"ADR-0076"}, set()),
     # Review R5-1: words that ARE topics here must stay searchable
     # (create / write / work / three / per-day quotas, "Artikel 17").
     ("forge.create permission", {"ADR-0701"}, set()),
@@ -118,9 +121,6 @@ NEGATIVE = [
 
 #: Written AFTER the round-4 rules were chosen and measured once, untuned:
 #: 2026-10-02, 0/25 returned an ADR.
-#: Inflected request verbs (review R8-CEL-6).
-NEGATIVE_INFLECTED = ["I need help planning my week", "Written a poem, can you check it?"]
-
 NEGATIVE_HELD_OUT = [
  "Draft a cover letter for a nursing position", "What's the best way to store fresh basil?",
  "Book a table for two at an Italian restaurant", "Compare the iPhone and Pixel cameras",
@@ -136,6 +136,9 @@ NEGATIVE_HELD_OUT = [
  "What's a healthy breakfast?", "Tell me about the Roman empire",
 ]
 
+#: Inflected request verbs (review R8-CEL-6).
+NEGATIVE_INFLECTED = ["I need help planning my week", "Written a poem, can you check it?"]
+
 #: An ADR named by id is returned first (direct lookup, review R4-4).
 NAMED = [
     ("Continue the ADR-0952 work", "ADR-0952"),
@@ -145,6 +148,11 @@ NAMED = [
     ("bitte schau dir adr 2102 an", "ADR-2102"),
     ("Merge ADR-0760", "ADR-0760"),
     ("Deploy ADR-2102", "ADR-2102"),
+    # Filler tails (review R9-CEL-1): still the named ADR alone or its graph.
+    ("Review ADR-0952 today", "ADR-0952"),
+    ("Continue the ADR-0952 work and update the docs", "ADR-0952"),
+    ("Merge ADR-0760 and push", "ADR-0760"),
+    ("Update ADR-2102 status to accepted now please", "ADR-2102"),
 ]
 
 #: No ADR covers the subject, and a lexical matcher cannot know that. Measured

@@ -74,9 +74,14 @@ class MemoryMatch:
    the owner's message is stripped first — it is framing, not the question.
    An ADR the task names by id (`ADR-0952`, `adr 2102`) is a direct lookup: it is
    returned first at relevance 1.0, and its number is not a topic word. Next to
-   it, other ADRs need two strong matched terms (cut relative to the best LEXICAL
-   score, not to the named ADR's 1.0) — "Merge ADR-0760" returns ADR-0760 alone,
-   "Does ADR-0952 conflict with the session ledger design?" also ADR-2102.
+   it, another ADR is admitted only when the request names ITS topic: two strong
+   (non-weak) request words in its title — "Review ADR-0952 today" returns
+   ADR-0952 alone, "Does ADR-0952 conflict with the session ledger design?" also
+   ADR-2102 (measured on 2400 "<verb> ADR-NNNN <tail>" requests: 103 with an
+   off-graph extra, all with a topic word in the tail such as "console" or
+   "bridge"; 10 of 12 multi-topic requests keep their neighbour). A run-together
+   identifier (`RemoteTriggerReceiver`, `OpenClawEngine`) is also indexed as its
+   words, so the plain-English name finds its ADR.
 2. Score every ADR (`ADRLoader.score_query`, which takes TOKENS — re-tokenising
    double-stems): idf-weighted overlap, title hits ×1.0, preview hits ×0.5,
    normalised by the query's 6 rarest terms, unknown terms counted at the
@@ -108,11 +113,11 @@ class MemoryMatch:
 
 Measured on the real corpus with the labelled sets in
 `corvin_operator/context_engineering/tests/adr_retrieval_eval.py` (2026-10-02,
-after review round 7): positive sets 31/31 + 36/36 (round 6's realistic questions
+after review round 9): positive sets 33/33 + 36/36 (round 6's realistic questions
 incl. polite openers) with 0 forbidden hits; 0 noise on 42 + 36 everyday
 non-CorvinOS requests, with 4 more listed under AMBIGUOUS WITH their measured hits
 (a running schedule, a date, baby names, an alarm); a held-out negative set of
-25: 0/25; the named-ADR set 7/7; the labelled everyday sets with a greeting or
+25: 0/25; the named-ADR set 11/11 (incl. filler tails); the labelled everyday sets with a greeting or
 "Let's"/"I'd like to" in front: 4 of 515. **Measured limit, not hidden:** on a
 FRESH set of 55 everyday requests a round-7 reviewer wrote, 10 return ADRs (every
 earlier loader version: 10–14) — everyday uses of corpus nouns (chain, tenant,

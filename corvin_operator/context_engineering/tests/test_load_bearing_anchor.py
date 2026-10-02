@@ -512,3 +512,19 @@ def test_a_refused_turn_leaves_no_candidate_goal(isolated, monkeypatch):
     assert pending.exists()
     _pipeline.discard_pending_goal("_default", sess)
     assert not pending.exists()
+
+
+def test_a_store_written_after_a_rebuilt_fence_is_adopted(isolated, monkeypatch):
+    """Review R9-3: the rebuilt /new fence moved the CEL key; facts written
+    after the real /new under the old key are carried to the fenced key, a
+    store older than the fence is not."""
+    import os, time
+    _anchor.add_fact("_default", "discord:154", "goal", "post-new goal")
+    assert _anchor.adopt_store("_default", "discord:154", "discord:154#1",
+                               written_after=time.time() - 60)
+    assert [f["text"] for f in _anchor.load_facts("_default", "discord:154#1")] == ["post-new goal"]
+    _anchor.add_fact("_default", "discord:155", "goal", "pre-new goal")
+    p = _anchor._store_path("_default", "discord:155")
+    os.utime(p, (1_700_000_000, 1_700_000_000))
+    assert not _anchor.adopt_store("_default", "discord:155", "discord:155#1",
+                                   written_after=1_800_000_000)

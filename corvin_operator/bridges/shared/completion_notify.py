@@ -210,7 +210,6 @@ def register(
     tenant_id: str = "_default",
     label: str = "",
     want_voice: bool = False,
-    ledger_dir: str = "",
     ledger_chat_key: str = "",
 ) -> str:
     """Register a pending completion notification and return its task id.
@@ -237,10 +236,9 @@ def register(
         "tenant_id": str(tenant_id or "_default"),
         "label": str(label or ""),
         "want_voice": bool(want_voice),
-        # ADR-2102: the originating chat's session-ledger directory. The
-        # delivered result is appended there (spawned=False), so the chat's
-        # next turn knows what the background task answered.
-        "ledger_dir": str(ledger_dir or ""),
+        # ADR-2102: the originating chat's raw key. The delivered result is
+        # appended to that chat's session ledger (spawned=False); its directory
+        # is DERIVED from channel + chat, never stored here (review R7-3).
         "ledger_chat_key": str(ledger_chat_key or ""),
         "state": _STATE_PENDING,
         "text": None,

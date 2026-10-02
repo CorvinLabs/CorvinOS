@@ -28,6 +28,18 @@ bound it. A supervisor tick — driven by the pollers that already run every
 idempotent) — reconciles each run against reality:
 
 * worker alive and its heartbeat fresh      → leave it alone
+
+FAILURE CLASSIFICATION (ADR-2107)
+---------------------------------
+Three failure classes guide retry decisions:
+
+* TRANSIENT (zombie, heartbeat stale, throttle): retry on next tick (no backoff)
+  → at most 2 consecutive, then escalate to UNKNOWN
+* PERMANENT (gate refusal, model_not_found, auth error): fail now, zero retries
+* UNKNOWN (wall-clock timeout, unrecognized): use ADR-0445 backoff unchanged
+
+The classifier observes process liveness, heartbeat age, engine terminal_reason,
+HTTP status, and attempt history. Unsure? Default to UNKNOWN (fail-safe).
 * worker gone / heartbeat stale, budget left → RESUME: spawn a fresh worker
   with a continuation prompt, tell the user via ``task_progress``
 * budget exhausted (attempts or wall clock)  → terminal: ``mark_done(ok=False)``
@@ -46,6 +58,7 @@ the completion deliveries.
 """
 from __future__ import annotations
 
+import enum
 import json
 import os
 import secrets
@@ -89,6 +102,64 @@ SUP_CARRY_CHARS = int(os.environ.get("SUP_CARRY_CHARS", "2000"))
 
 _STATE_ACTIVE = "active"
 _STATE_DONE = "done"
+
+
+class FailureClass(enum.Enum):
+    """Failure classification for retry decisions (ADR-2107)."""
+    TRANSIENT = "transient"      # zombie, wedge, throttling — retry next tick
+    PERMANENT = "permanent"      # gate denial, model_not_found — fail now
+    UNKNOWN = "unknown"          # unrecognized — use normal backoff
+
+
+def classify_failure(
+    task_id: str,
+    worker_pid: int | None,
+    exit_error: str | None,
+    heartbeat_age_s: float,
+    engine_response: dict | None,
+    attempt_log: list[dict],
+) -> tuple[FailureClass, str]:
+    """Classify a task failure to guide retry decisions (ADR-2107).
+
+    Returns (failure_class, reason_code) for audit and retry logic.
+    On any unrecognized signal: returns UNKNOWN (fail-safe default).
+    """
+    try:
+        # TRANSIENT: process died without reporting
+        if worker_pid is None or heartbeat_age_s > SUP_HEARTBEAT_STALE:
+            return (FailureClass.TRANSIENT, "process_dead_or_wedged")
+
+        # TRANSIENT: HTTP throttle (429/503)
+        if engine_response and engine_response.get("http_status") in (429, 503):
+            return (FailureClass.TRANSIENT, "http_throttled")
+
+        # PERMANENT: engine terminal reasons (cannot change on retry)
+        if engine_response:
+            terminal = engine_response.get("terminal_reason")
+            if terminal in ("model_not_found", "auth_error", "permission_error",
+                          "invalid_request"):
+                return (FailureClass.PERMANENT, f"engine_{terminal}")
+
+        # PERMANENT: gate refusal (L44, L34, consent)
+        if exit_error and "gate" in exit_error.lower():
+            return (FailureClass.PERMANENT, "gate_refusal")
+
+        # Count consecutive TRANSIENT attempts to cap the streak
+        consecutive_transient = 0
+        for attempt in reversed(attempt_log[-2:]):  # Last 2 attempts
+            if attempt.get("failure_class") == "transient":
+                consecutive_transient += 1
+            else:
+                break
+        if consecutive_transient >= 2:
+            return (FailureClass.UNKNOWN, "transient_streak_capped")
+
+        # Default: UNKNOWN (fail-safe for anything unrecognized)
+        return (FailureClass.UNKNOWN, "unrecognized")
+
+    except Exception:  # noqa: BLE001
+        # Classifier error → default to UNKNOWN (never raise)
+        return (FailureClass.UNKNOWN, "classifier_error")
 
 
 # ─── paths ─────────────────────────────────────────────────────────────────
@@ -328,25 +399,69 @@ def _read_heartbeat(task_id: str) -> float:
 
 
 def attempt_finished(task_id: str, *, ok: bool, summary: str = "",
-                     resumable: bool = False, now: float | None = None) -> bool:
-    """Record how the current attempt ended.
+                     resumable: bool = False, now: float | None = None,
+                     worker_pid: int | None = None,
+                     exit_error: str | None = None,
+                     engine_response: dict | None = None) -> bool:
+    """Record how the current attempt ended and classify the failure (ADR-2107).
 
     ``resumable=True`` (the worker hit its own wall-clock watchdog with partial
     output) tells the supervisor to continue rather than treat the attempt as a
     terminal failure. ``ok=True`` retires the run: the work is done.
+
+    ``worker_pid``, ``exit_error``, ``engine_response`` feed the classifier
+    (ADR-2107). If omitted, classification defaults to UNKNOWN (conservative).
     """
     now = time.time() if now is None else now
     path = _run_path(task_id)
     rec = _read(path)
     if rec is None:
         return False
+
     log = list(rec.get("attempt_log") or [])
+    attempt_num = int(rec.get("attempts", 0))
+
+    # Classify the failure (ADR-2107) — only if not ok
+    failure_class = FailureClass.UNKNOWN
+    reason_code = "not_classified"
+    if not ok:
+        heartbeat_ts = _read_heartbeat_timestamp(task_id)
+        heartbeat_age_s = now - heartbeat_ts if heartbeat_ts > 0 else 0
+        failure_class, reason_code = classify_failure(
+            task_id=task_id,
+            worker_pid=worker_pid,
+            exit_error=exit_error,
+            heartbeat_age_s=heartbeat_age_s,
+            engine_response=engine_response,
+            attempt_log=log,
+        )
+
+    # Emit audit event task.retry_classified (ADR-2107, ADR-0537)
+    try:
+        from security_events import emit  # type: ignore
+        emit(
+            "task.retry_classified",
+            tenant_id=rec.get("tenant_id", "_default"),
+            task_id=task_id,
+            attempt=attempt_num,
+            failure_class=failure_class.value,
+            reason_code=reason_code,
+            next_attempt_in_s=0 if failure_class == FailureClass.PERMANENT else (
+                0 if failure_class == FailureClass.TRANSIENT else
+                _backoff_for(attempt_num)
+            ),
+        )
+    except Exception:  # noqa: BLE001
+        pass  # Audit failure must not crash the supervisor
+
     log.append({
-        "n": int(rec.get("attempts", 0)),
+        "n": attempt_num,
         "at": now,
         "ok": bool(ok),
         "resumable": bool(resumable),
         "summary": (summary or "")[:400],
+        "failure_class": failure_class.value if not ok else None,
+        "reason_code": reason_code if not ok else None,
     })
     rec["attempt_log"] = log[-10:]  # bounded: last 10 attempts
     rec["worker_pid"] = None
@@ -357,7 +472,17 @@ def attempt_finished(task_id: str, *, ok: bool, summary: str = "",
         rec["done_at"] = now
         rec["outcome"] = "completed"
     else:
-        rec["next_attempt_at"] = now + _backoff_for(int(rec.get("attempts", 1)))
+        # Backoff timing per failure class (ADR-2107)
+        if failure_class == FailureClass.PERMANENT:
+            # No retry — backoff should be irrelevant, but set a placeholder
+            rec["next_attempt_at"] = now + 999999  # Unreachable
+        elif failure_class == FailureClass.TRANSIENT:
+            # Next tick, no backoff (normal backoff would be 60 s)
+            rec["next_attempt_at"] = now
+        else:  # UNKNOWN
+            # Normal backoff per ADR-0445
+            rec["next_attempt_at"] = now + _backoff_for(attempt_num)
+
     try:
         _atomic_write(path, rec)
     except OSError:

@@ -74,22 +74,31 @@ def test_split_observer_block_round_trips_the_real_format():
 
 
 def test_history_the_data_flow_policy_forbids_for_this_engine_is_withheld(monkeypatch):
-    """Review R7-4: L34 saw only the new message; the re-supplied history in the
-    system prompt reached an engine the tenant's matrix forbids for it."""
+    """Review R7-4 / R9-1 / R9-2: L34 per recorded turn against the engine that
+    reads the history — a [class:confidential] turn this engine may not see is
+    withheld (the marker is read at the start of ITS OWN text), the other
+    turns stay."""
     chat = "grp-l34"
     wd = adapter._session_dir("telegram", chat)
-    sl.append_turn(wd, channel="telegram", chat_key=chat, user_text="SECRET-AKIA-PAYLOAD",
-                   assistant_text="ok")
+    sl.append_turn(wd, channel="telegram", chat_key=chat,
+                   user_text="[class:confidential] PAYROLL-Q3 numbers", assistant_text="ok")
+    sl.append_turn(wd, channel="telegram", chat_key=chat, user_text="WEATHER-ASK", assistant_text="sunny")
     seen: list = []
+    calls: list = []
     monkeypatch.setattr(adapter, "_CodexCliEngine", _engine_recording(seen))
     monkeypatch.setattr(adapter, "_run_pre_dispatch_gates", lambda *a, **k: None)
     import spawn_gates  # type: ignore
-    monkeypatch.setattr(spawn_gates, "check_l34",
-                        lambda engine, tid, **kw: "[data-flow] refused" if "SECRET" in (kw.get("prompt") or "") else None)
+    from data_classification import DataClassification  # type: ignore
+
+    def fake_l34(engine, tid, **kw):
+        calls.append(kw.get("classification"))
+        return "[data-flow] refused" if kw.get("classification") == DataClassification.CONFIDENTIAL else None
+    monkeypatch.setattr(spawn_gates, "check_l34", fake_l34)
     try:
         adapter._call_codex_streaming_via_engine("next", "telegram", chat, {}, None, "off", wd, {})
     except Exception:  # noqa: BLE001
         pass
-    assert seen and "SECRET-AKIA-PAYLOAD" not in seen[0]
-    assert "withheld from this engine" in seen[0]
-    assert not (wd / ".corvin-history.md").exists()
+    assert seen and "PAYROLL-Q3" not in seen[0] and "WEATHER-ASK" in seen[0]
+    assert "data-classification policy" in seen[0]
+    assert "PAYROLL-Q3" not in (wd / ".corvin-history.md").read_text()
+    assert len(calls) == len(set(calls)), "each class is checked once per spawn"

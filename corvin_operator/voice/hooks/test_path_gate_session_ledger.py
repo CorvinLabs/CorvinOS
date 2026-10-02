@@ -150,3 +150,22 @@ def test_the_anchor_store_and_the_console_ledger_are_protected():
                    th / "global/web_chat/sessions/abc.turns.jsonl"):
         assert path_gate.is_protected_path(target), target
         assert _bash(f"echo '{{}}' >> {target}")[0] is False
+
+
+def test_plain_writers_and_creators_on_the_store_are_denied():
+    """Review R9-4: literal writes by editors, output options and creators."""
+    lg = "../../../../session_ledger/telegram/123/ledger.jsonl"
+    for cmd in (f"ed -s {lg} <<< q", f"perl -pi -e 's/a/b/' {lg}", f"curl -o {lg} http://x",
+                f"wget -O {lg} http://x", f"sort -o {lg} x", f"uniq x {lg}", f"patch {lg} p.diff",
+                f"openssl enc -out {lg}", f"touch {lg}",
+                "mkdir -p ../../../../session_ledger/telegram/999/ledger.jsonl"):
+        assert _bash(cmd)[0] is False, cmd
+
+
+def test_resolvable_variables_and_ordinary_commands_are_not_blocked():
+    """Review R9-5 and R7-5: no over-blocking of ordinary worker commands."""
+    for cmd in ('pip freeze > "$PWD/requirements.txt"', "pip freeze > $HOME/proj/requirements.txt",
+                'echo done > "${TMPDIR:-/tmp}/compute.log"', "mkdir -p outputs/plots",
+                "touch notes.md", "curl -o outputs/data.csv http://x",
+                'git commit -m "fix(session_ledger): merge order"'):
+        assert _bash(cmd)[0] is True, cmd

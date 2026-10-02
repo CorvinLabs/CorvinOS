@@ -134,11 +134,22 @@ def _stem(word: str) -> str:
 _WEAK_VERBS = frozenset(_stem(w) for w in _WEAK_VERB_WORDS)
 
 
+_CAMEL_RE = re.compile(r"\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b")
+_CAMEL_SPLIT_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
 def tokenize(text: str) -> List[str]:
     """Whole-word, stop-word-free, stemmed tokens (order-preserving, deduped)."""
     out: Dict[str, None] = {}
     prev = ""
-    for w in _TOKEN_RE.findall((text or "").lower()):
+    text = text or ""
+    # A run-together identifier ("RemoteTriggerReceiver", "OpenClawEngine") is
+    # also indexed as its words, so a plain-English question finds the ADR that
+    # names its subject in code style (review R9-CEL-2). Both forms are kept.
+    camel = " ".join(m.group(0) for m in _CAMEL_RE.finditer(text))
+    if camel:
+        text = text + " " + _CAMEL_SPLIT_RE.sub(" ", camel)
+    for w in _TOKEN_RE.findall(text.lower()):
         w = _DE_EN.get(w, w)
         if re.fullmatch(r"l\d{1,2}", w):        # layer ids: L4, L35
             out[w] = None

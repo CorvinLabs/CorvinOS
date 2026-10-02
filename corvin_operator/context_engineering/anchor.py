@@ -368,6 +368,25 @@ def promote_pending_goal(tenant_id: str, session_key: str,
         return None
 
 
+def adopt_store(tenant_id: str, old_key: str, new_key: str, *, written_after: float) -> bool:
+    """Move the store of ``old_key`` to ``new_key`` when the new one does not
+    exist yet and the old one was last written after ``written_after`` (its
+    facts belong to the epoch that started then). Used once, when a ``/new``
+    fence the counters had lost is rebuilt (review R9-3). Never raises."""
+    try:
+        with _StoreLock(tenant_id):
+            moved = False
+            for old_p, new_p in ((_store_path(tenant_id, old_key), _store_path(tenant_id, new_key)),
+                                 (_pending_path(tenant_id, old_key), _pending_path(tenant_id, new_key))):
+                if (old_p.is_file() and not new_p.exists()
+                        and old_p.stat().st_mtime > written_after):
+                    old_p.rename(new_p)
+                    moved = True
+            return moved
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def discard_pending_goal(tenant_id: str, session_key: str) -> None:
     """Remove the candidate goal. Called when the turn that stored it was
     REFUSED: the candidate is that turn's text, and a refused turn's text is

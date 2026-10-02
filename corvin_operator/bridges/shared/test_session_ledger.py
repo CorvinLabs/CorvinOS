@@ -631,8 +631,7 @@ class TestRound4:
         wd = eh._tenant_home("_default") / "sessions" / "voice" / "telegram" / "chat_1"
         wd.mkdir(parents=True)
         tid = cn.register("bgt_ledger1", channel="telegram", chat_id="chat-1", sender="u1",
-                          label="summarise the Q3 report", ledger_dir=str(wd),
-                          ledger_chat_key="chat-1")
+                          label="summarise the Q3 report", ledger_chat_key="chat-1")
         assert cn.mark_done(tid, text="BG-RESULT-Q3: revenue up 4%")
         out = tmp_path / "outbox"
         assert cn.deliver_ready(out) == 1
@@ -702,7 +701,11 @@ class TestRound7:
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
         tid = cn.register("forged_1", channel="telegram", chat_id="nochat", sender="u",
-                          ledger_dir=str(elsewhere), ledger_chat_key="nochat")
+                          ledger_chat_key="nochat")
+        rec_path = cn._record_path(tid)              # a forged queue record
+        rec = json.loads(rec_path.read_text())
+        rec["ledger_dir"] = str(elsewhere)
+        rec_path.write_text(json.dumps(rec))
         cn.mark_done(tid, text="INJECTED")
         cn.deliver_ready(tmp_path / "out")
         assert not list(tmp_path.rglob("ledger.jsonl"))
@@ -727,19 +730,20 @@ class TestRound7b:
 
 
 class TestRound8:
-    def test_the_view_is_gated_whole_before_it_is_written(self, wd):
-        """Review R8-1: L34 saw only the block; a secret in a truncated turn was
-        in the view the block tells the worker to read."""
+    def test_data_flow_withholds_the_forbidden_turn_only(self, wd):
+        """Review R8-1 + R9-1: the worker-readable view is withheld per turn —
+        one forbidden turn (here: a password in an answer, before /new) must
+        neither reach the view nor hide the rest of the chat."""
+        sl.append_turn(wd, channel="telegram", chat_key="chat-1", user_text="x" * 5000,
+                       assistant_text='conn = connect(password = "changeme-secret")')
+        sl.append_boundary(wd, kind="reset", reason="manual", chat_key="chat-1")
         sl.append_turn(wd, channel="telegram", chat_key="chat-1",
-                       user_text="x" * 5000 + " sk-AAAA-SECRET", assistant_text="ok")
-        for i in range(12):
-            _turn(wd, i + 2)
-        seen = []
-        block = sl.render_context(wd, view_gate=lambda t: seen.append(t) or (
-            "refused" if "sk-AAAA-SECRET" in t else None))
-        assert seen and "sk-AAAA-SECRET" in seen[0]
-        assert block == sl.DATA_FLOW_WITHHELD and not sl.view_path(wd).exists()
-        assert sl.render_context(wd, view_gate=lambda t: 1 / 0) == sl.DATA_FLOW_WITHHELD
+                       user_text="ROME-TRIP plan", assistant_text="ok")
+        refuse = lambda r: "data_flow" if "changeme" in (r.get("assistant") or "") else None
+        block = sl.render_context(wd, withhold=refuse)
+        view = sl.view_path(wd).read_text()
+        assert "ROME-TRIP" in block and "ROME-TRIP" in view
+        assert "changeme" not in view and "data-classification policy" in view
 
     def test_legacy_ledgers_are_migrated_once_per_install(self, tmp_path):
         root = tmp_path / "tenants" / "_default" / "sessions" / "voice"
@@ -782,6 +786,18 @@ class TestRound8:
         wd.mkdir(parents=True)
         assert cn._derive_ledger_workdir({"channel": "discord", "chat_id": "777",
                                           "tenant_id": "_default"}) == str(wd)
+
+
+class TestRound9:
+    def test_repair_fence_persists_a_fence_the_counters_lacked(self, wd):
+        d = sl.ledger_dir(wd)
+        d.mkdir(parents=True)
+        (d / "ledger.jsonl").write_text(
+            '{"kind":"boundary","boundary":"reset","reason":"manual","ts":5,"seq":1}\n')
+        (d / "counters.json").write_text('{"seq": 1, "n": 0, "fence_seq": 0}')
+        assert sl.repair_fence(wd) == (1, 5.0)
+        assert sl.repair_fence(wd) is None
+        assert json.loads((d / "counters.json").read_text())["fence_seq"] == 1
 
 
 class TestRound5:

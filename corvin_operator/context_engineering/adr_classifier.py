@@ -81,6 +81,19 @@ class ADRClassifier:
         # best second ADR of "Does ADR-0952 conflict with the session ledger?"
         # (review R8-CEL-3). The loader already cuts against the best LEXICAL
         # score, and a named request needs two strong matched terms.
+        if named:
+            # Next to an ADR named by id, another one is admitted only when the
+            # request names its TOPIC: two strong (non-weak) request words in
+            # its title. A body-only "review … today" match filled four of
+            # five slots (review R9-CEL-1); a fixed score cut instead dropped
+            # the real neighbour of "Does ADR-0952 conflict with the session
+            # ledger design?" (R8-CEL-3). Measured on 2400 tailed requests:
+            # 103 with an off-graph extra (prev. 486 / 934), 10 of 12
+            # multi-topic requests keep their neighbour (prev. 8 / 12).
+            from .adr_loader import _is_weak
+            strong_kw = {k for k in keywords if not _is_weak(k)}
+            titles = getattr(self.loader, "_title_tokens", {})
+            scored = [(i, s) for i, s in scored if len(strong_kw & titles.get(i, set())) >= 2]
         own: Dict[str, float] = dict(scored)
         direct = [(i, 1.0) for i in named[:max_results]]
         seen_ids = set(named)

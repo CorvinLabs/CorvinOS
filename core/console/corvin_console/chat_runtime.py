@@ -2193,12 +2193,24 @@ def _session_ledger_block(sess: WebChatSession, current_prompt: str = "") -> str
         # The worker is pointed at the generated ``.corvin-history.md`` view in
         # its workdir, never at ``turns.jsonl``: the UI log keeps a refused
         # message's text for the chat window (review R5-2).
-        def _view_gate(text: str):
-            # L34 on everything the worker can read, against the engine that
-            # will read it, before the view is written (R7-4, R8-1).
-            from spawn_gates import check_l34 as _l34  # type: ignore  # noqa: PLC0415
-            return _l34(_configured_os_engine(sess.tenant_id) or "claude_code",
-                        sess.tenant_id, prompt=text, channel=CHANNEL, chat_key=sess.chat_key)
+        engine = _configured_os_engine(sess.tenant_id) or "claude_code"
+        verdict: dict = {}
+
+        def _withhold(rec: dict):
+            # Per-turn L34 against the engine that will read the history: one
+            # forbidden turn is withheld, the rest stays (R7-4, R9-1/R9-2).
+            try:
+                from data_classification import classify_task  # type: ignore  # noqa: PLC0415
+                from spawn_gates import check_l34 as _l34  # type: ignore  # noqa: PLC0415
+                for cls in {classify_task(str(t)) for t in (rec.get("user"), rec.get("assistant")) if t}:
+                    if cls not in verdict:
+                        verdict[cls] = _l34(engine, sess.tenant_id, classification=cls,
+                                            channel=CHANNEL, chat_key=sess.chat_key) is None
+                    if not verdict[cls]:
+                        return "data_flow"
+                return None
+            except Exception:  # noqa: BLE001 — fail closed
+                return "data_flow"
 
         return _ledger.render_turn_log_context(
             read_turns(sess.tenant_id, sess.sid), sess.workdir,
@@ -2207,7 +2219,7 @@ def _session_ledger_block(sess: WebChatSession, current_prompt: str = "") -> str
             # The system prompt is built BEFORE this turn's user message is
             # logged; naming it lets an earlier unanswered message stay history.
             current_prompt=current_prompt or None,
-            view_gate=_view_gate,
+            withhold=_withhold,
         )
     except Exception:  # noqa: BLE001
         return ""
