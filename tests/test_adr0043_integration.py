@@ -1,4 +1,4 @@
-"""Integration tests for ADR-0043 workload classifier in adapter.py flow.
+"""Integration tests for ADR-2104 workload classifier in adapter.py flow.
 
 Tests that the classifier and router are properly wired into the spawn env
 and that the env vars are set correctly.

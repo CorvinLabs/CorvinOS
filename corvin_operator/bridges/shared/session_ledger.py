@@ -191,7 +191,8 @@ def _append(workdir: Path | str, record: dict[str, Any]) -> Optional[dict[str, A
 def append_turn(
     workdir: Path | str, *, channel: str, chat_key: str, user_text: str,
     assistant_text: str, msg_id: str = "", ts: float | None = None,
-    sender: str = "", refused: str = "", spawned: bool = True, tenant_id: str = "",
+    sender: str = "", refused: str = "", spawned: bool = True,
+    observers: Optional[list] = None, tenant_id: str = "",
 ) -> Optional[dict[str, Any]]:
     """Record one finished turn. Never raises; a failure is audited.
 
@@ -209,6 +210,9 @@ def append_turn(
             "channel": str(channel or ""), "chat_key": str(chat_key or ""),
             "sender": str(sender or ""), "msg_id": str(msg_id or ""),
             "refused": str(refused or ""), "spawned": bool(spawned) and not refused,
+            # Ids of group-chat observers whose words are folded into ``user``:
+            # identity-keyed so GDPR erasure attributes the record to them too.
+            "observers": [o for o in (observers or []) if isinstance(o, dict)],
             "user": str(user_text or ""), "assistant": str(assistant_text or ""),
         })
     except Exception as exc:  # noqa: BLE001
@@ -433,7 +437,11 @@ def _one_line(text: str, n: int) -> str:
 
 
 def _withheld(rec: dict[str, Any]) -> str:
-    return f"(message refused by the {rec.get('refused')} gate — not re-supplied)"
+    why = str(rec.get("refused"))
+    label = {"observer_consent": "an observer's consent has ended",
+             "consent_check_unavailable": "observer consent cannot be checked"}.get(
+        why, f"refused by the {why} gate")
+    return f"(message withheld: {label} — not re-supplied)"
 
 
 def _render_turn(rec: dict[str, Any]) -> str:
@@ -513,12 +521,20 @@ def uncovered_turns(
     # let a delegated "ja" claim an older "ja" and drop its own answer
     # (review R2-A1). Turns that never reached the CLI (delegated, refused,
     # failed, /btw notes: ``spawned`` false) never align.
+    # A /btw note delivered live sits in the transcript AFTER the user message
+    # of the turn it was injected into, but in the ledger BEFORE that turn's
+    # record (the turn is appended when its answer is final): such entries
+    # are stepped over instead of ending the alignment.
+    notes = {_clean(str(r.get("user") or "")[len("/btw "):]) for r in turns
+             if r.get("spawned") is False and str(r.get("user") or "").startswith("/btw ")}
     covered: set[int] = set()
     pos = len(live_entries)
     for idx in range(len(turns) - 1, -1, -1):
         rec = turns[idx]
         if rec.get("refused") or rec.get("spawned") is False:
             continue
+        while pos > 0 and live_entries[pos - 1] in notes:
+            pos -= 1
         msg = _clean(str(rec.get("user") or ""))
         e = live_entries[pos - 1] if pos > 0 else None
         if not msg or e is None or not (e == msg or e.endswith("\n" + msg)):
@@ -543,6 +559,15 @@ def render_from_records(
              "verbatim": 0, "indexed": 0, "omitted": 0, "chars": 0,
              "before_manual_reset": before_fence}
     if not unc:
+        if before_fence:
+            # Nothing to re-supply, but the model must still know the history
+            # before the operator's /new exists and where it is (the /new reply
+            # promises it is available "if you ask about it").
+            block = (f"\n\nEarlier history of this chat (before the operator's /new at "
+                     f"{_when(fence.get('ts'))}, {before_fence} turn(s)) is not in your context; "
+                     f"it is in `{ledger_file}` — read it only if the operator asks about it.\n")
+            stats["chars"] = len(block)
+            return block, stats
         return "", stats
 
     # Verbatim: newest turns that fit; the cut moves in CUT_STEP steps.
@@ -619,6 +644,7 @@ def render_context(
     workdir: Path | str, *, channel: str = "", chat_key: str = "",
     session_id: Optional[str] = None, tenant_id: str = "",
     engine_transcript: bool = True,
+    withhold: Optional[Any] = None,
     verbatim_budget: int = VERBATIM_BUDGET, index_budget: int = INDEX_BUDGET,
 ) -> str:
     """The block to append to this turn's system prompt ("" when the live
@@ -627,6 +653,15 @@ def render_context(
         records = read_ledger(workdir)
         if not any(r.get("kind") == "turn" for r in records):
             return ""
+        if withhold is not None:
+            # The caller may withhold a recorded turn's text NOW (e.g. a group
+            # observer whose words it carries has since withdrawn consent): it
+            # is then rendered like a refusal, the record itself is untouched.
+            marked = []
+            for r in records:
+                why = withhold(r) if r.get("kind") == "turn" and not r.get("refused") else None
+                marked.append({**r, "refused": why} if why else r)
+            records = marked
         sid = current_session_id(workdir) if session_id is None else session_id
         if not engine_transcript:
             # Engines without a Claude transcript (Codex --ephemeral, OpenCode):
@@ -702,6 +737,8 @@ def records_from_turn_log(turns: list[dict[str, Any]],
         elif role == "assistant" and pending is not None:
             pending["assistant"] = (pending["assistant"] + "\n" + _text(t)).strip()
             pending["_answered"] = True
+            if t.get("v") == 2:   # schema v2 records whether the OS CLI answered
+                pending["spawned"] = bool(t.get("cli_spawned"))
             if t.get("gate_refused"):
                 pending["refused"] = str(t.get("gate_refused"))
     if pending is not None:

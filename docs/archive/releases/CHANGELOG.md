@@ -2228,7 +2228,7 @@ and a cluster of A2A/voice correctness and security defects.
   0.10.48**, which removes the endpoint: it was unauthenticated and read the local
   audit log; aggregation is moving server-side.
 
-## [0.10.46] — 2026-07-18 — 20-language voice detection + ADR-0043 fast-chat routing hardening
+## [0.10.46] — 2026-07-18 — 20-language voice detection + ADR-0043 (now ADR-2104) fast-chat routing hardening
 
 ### Added — Voice
 
@@ -2246,7 +2246,7 @@ and a cluster of A2A/voice correctness and security defects.
   actually selected language. `say.py` gained `no`→Bokmål and Greek edge
   voices so every dropdown option resolves to a real voice keylessly.
 
-### Added — Model Routing (ADR-0043)
+### Added — Model Routing (ADR-0043, now ADR-2104)
 
 - **Fast-chat workload routing is now actually wired** (opt-in, default off:
   profile `fast_chat_mode` or tenant `spec.features.fast_chat_mode`). The

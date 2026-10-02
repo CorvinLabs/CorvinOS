@@ -1062,7 +1062,7 @@ def resolve_os_model(
     # serving parallel chats/tenants, so an env channel is both racy and a
     # cross-tenant leak by construction (adversarial review 2026-07-18).
     # Only the CHAT fast-path acts here. CODE/UNCERTAIN fall through to the
-    # existing tiers (adaptive Tier 3 / subscription Tier 4) — ADR-0043 says
+    # existing tiers (adaptive Tier 3 / subscription Tier 4) — ADR-2104 says
     # "respect the user's model choice", and hard-pinning the full tier for
     # CODE would bypass ADR-0112 adaptive selection.
     if workload_hint:
@@ -1128,7 +1128,7 @@ def resolve_os_model(
                         )
                         model = normalise_pin(model, engine_id) or model
                         if model:
-                            # ADR-0043 §6: audit every routing decision (BUG#15).
+                            # ADR-2104 §6: audit every routing decision (BUG#15).
                             # No user-message content — workload/confidence/model only.
                             if audit_fn is not None:
                                 try:

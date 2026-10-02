@@ -105,7 +105,10 @@ def tokenize(text: str) -> List[str]:
         w = _DE_EN.get(w, w)
         if re.fullmatch(r"l\d{1,2}", w):        # layer ids: L4, L35
             out[w] = None
-        elif w.isdigit() and (len(w) >= 2 or prev in ("art", "artikel", "layer")):
+        elif w.isdigit() and prev == "layer" and len(w) <= 2:
+            out.pop(_stem("layer"), None)      # "Layer 36" ≡ "L36": the generic word goes
+            out["l" + str(int(w))] = None
+        elif w.isdigit() and (len(w) >= 2 or prev in ("art", "artikel")):
             # "Art. 17" vs "Art. 32", "Art. 5", "403": numbers carry topic
             out[(prev + w) if prev in ("art", "artikel") else w] = None
         elif not (w in _STOPWORDS or len(w) < 3 or w.isdigit()):
@@ -301,19 +304,26 @@ class ADRLoader:
         """
         content = adr_file.read_text(encoding="utf-8")
 
-        # Extract frontmatter (YAML between --- markers)
+        # Frontmatter (YAML between --- markers). A file without it, or with
+        # unparseable YAML, is still a decision: its id comes from the file
+        # name and its status from the body's "Status:" line (eight numbered
+        # ADRs — incl. ADR-0255, a live flag's decision — were unretrievable).
         match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
-        if not match:
-            return None
-
-        frontmatter_str = match.group(1)
-        body_start = match.end()
-        body = content[body_start:].strip()
-
-        try:
-            frontmatter = yaml.safe_load(frontmatter_str) or {}
-        except yaml.YAMLError:
-            return None
+        frontmatter: dict = {}
+        if match:
+            body = content[match.end():].strip()
+            try:
+                frontmatter = yaml.safe_load(match.group(1)) or {}
+            except yaml.YAMLError:
+                frontmatter = {}
+            if not isinstance(frontmatter, dict):
+                frontmatter = {}
+        else:
+            body = content.strip()
+        if "status" not in frontmatter:
+            st = re.search(r"(?im)^\**status:?\**\s*:?\s*\**\s*([A-Za-z_]+)", body)
+            if st:
+                frontmatter["status"] = st.group(1)
 
         # The id is the file name's leading number ("0269-title.md" and
         # "ADR-0269-title.md" both occur), falling back to the frontmatter id.
@@ -421,19 +431,18 @@ class ADRLoader:
         self, terms: Iterable[str], min_relevance: float = MIN_RELEVANCE,
     ) -> List[Tuple[str, float]]:
         """Rank ADRs by idf-weighted whole-token overlap with ``terms`` (the
-        output of :func:`tokenize`).
+        output of :func:`tokenize`). See docs/CONTEXT_ENGINEERING_LAYER.md §2 for
+        the measured rules; this docstring states them in brief.
 
         A term found in the title counts fully, one found only in the body
-        preview counts half. The score is normalised by the query's own idf mass
-        (capped at the 6 rarest terms, so a long prompt is not penalised for
-        being long) and lies in [0, 1]. An ADR is returned only when it clears
-        ``min_relevance`` AND matches either two distinct terms or one term rare
-        enough (``SINGLE_TERM_MIN_IDF``) to be specific on its own, and the
-        matched terms carry at least ``MIN_EVIDENCE`` idf in total. Superseded /
-        rejected ADRs are never returned. Query terms the corpus never uses
-        count in the denominator at the median idf, and a query where fewer
-        than half the terms are known needs two matched terms. Ties break on
-        raw evidence, then id, so the order is deterministic.
+        preview counts half; the sum is normalised by the question's 6 heaviest
+        terms, unknown terms weighted at the corpus's 25th-percentile idf → [0, 1].
+        Returned only when the score clears ``min_relevance``, the matched terms
+        carry ≥ min(``MIN_EVIDENCE``, 80 % of the question's known idf), and two
+        terms match — one suffices for a one-word question, or for a ≤ 3-word
+        all-known question whose rare (``SINGLE_TERM_MIN_IDF``) word is in the
+        title. Results under ``RELATIVE_CUTOFF`` × best are cut; superseded /
+        rejected ADRs never match; ties break on raw evidence, then id.
         """
         if not hasattr(self, "_idf"):
             self._build_index()
@@ -489,7 +498,9 @@ class ADRLoader:
         # that merely mention erasure).
         if out:
             floor = RELATIVE_CUTOFF * out[0][1]
-            out = [x for x in out if x[1] >= floor]
+            # Strictly above: a document naming every term only in its body
+            # scores exactly half of one naming them in its title.
+            out = [x for x in out if x[1] > floor]
         return [(i, sc) for i, sc, _ in out]
 
     def search_by_keywords(self, keywords: List[str], max_results: int = 5) -> List[str]:

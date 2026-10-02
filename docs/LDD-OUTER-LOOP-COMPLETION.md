@@ -27,7 +27,7 @@ The adversarial review found **2 CRITICAL bugs in the skill design**, but that's
 - ✅ Result: All 5 layers pass, skill verified working
 
 ### Phase 2: Refinement Loop (Deliverable)
-- ✅ ADR-0391: Documents design, problem, solution, verification
+- ✅ ADR-2105: Documents design, problem, solution, verification
 - ✅ Skill availability: Stored in `~/.claude/skills/`
 - ✅ Tenant integration: Available for CorvinOS projects
 - ✅ Result: Production-ready documentation
@@ -165,7 +165,7 @@ fi
 ✅ NEW: ~/.claude/skills/full-stack-implementation-proof.md
 ✅ NEW: scripts/test-full-stack-proof-skill.py
 ✅ NEW: scripts/adversarial-review-of-skill.py
-✅ NEW: Corvin-ADR/decisions/ADR-0391-full-stack-proof-skill.md
+✅ NEW: Corvin-ADR/decisions/ADR-2105-full-stack-proof-skill.md
 ✅ NEW: docs/SKILL-VERIFICATION-STRATEGY.md
 ✅ NEW: docs/SKILL-IMPLEMENTATION-SYNTHESIS.md
 ✅ NEW: docs/LDD-OUTER-LOOP-COMPLETION.md (this file)

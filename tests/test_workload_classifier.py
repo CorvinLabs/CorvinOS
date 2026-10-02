@@ -1,4 +1,4 @@
-"""Unit tests for workload_classifier.py — ADR-0043."""
+"""Unit tests for workload_classifier.py — ADR-2104."""
 from __future__ import annotations
 
 import sys

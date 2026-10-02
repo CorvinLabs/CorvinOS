@@ -812,8 +812,13 @@ structurally excluded. The CLI transcript is NOT the record — auto-compaction 
   erasure (`L-session-ledger`, any identity key) — and, on the console, by an explicit
   delete of the chat or the pre-existing 50-chats-per-tenant cap (oldest chat, whole).
 - **A gate's refusal is recorded, never re-supplied:** a turn L44 / a pre-spawn gate refused
-  keeps its refusal; its user text is withheld from the view (it would bypass the gate).
-  Delegated/failed turns and `/btw` notes are recorded `spawned: false` — never "live".
+  keeps its refusal; its user text is withheld from the view (it would bypass the gate). Side
+  turns (`/plugin-builder`, `/task`) pass L44 before they are recorded; TDE delegation runs
+  L44 too. A turn carrying group-observer words names the observers (erasable by them) and
+  is withheld once an observer's consent ends.
+- **`spawned` is measured, not inferred:** set where the `claude` CLI is actually started
+  (console: only the OS-turn answer, `cli_spawned`); delegated/copilot/gate-answered turns
+  and `/btw` notes are never "live".
 - **Coverage = a contiguous exact match against the transcript after its last
   `compact_boundary`**: the newest spawned turn must be the newest user entry (equal, or
   ending `"\n" + text`), the next one the entry before it; the first mismatch ends it.

@@ -46,6 +46,9 @@ POSITIVE = [
     ("repair context drift: the context brief carries stale memory and the wrong decisions",
      {"ADR-2098", "ADR-0407", "ADR-0396", "ADR-0784"},
      {"ADR-0623", "ADR-0326", "ADR-0624", "ADR-0637", "ADR-0185"}),
+    # The repo's idiom "L<NN>" must find the ADR titled "Layer NN:" (review R3-3).
+    ("L36 erasure", {"ADR-0045"}, {"ADR-0048", "ADR-0053"}),
+    ("L35 egress allowed hosts", {"ADR-0043"}, set()),
     # Renumbered files whose frontmatter still carries the old id (review R1-B2).
     ("skill eligibility classes", {"ADR-0785"}, set()),
     ("per-tenant rwlock isolation", {"ADR-0797"}, set()),

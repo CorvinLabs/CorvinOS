@@ -204,7 +204,7 @@ class TestResets:
         session_state.reset_claude_session_state(wd, reason="timeout")
         assert "OLD-ANSWER" in sl.render_context(wd)
         assert session_state.reset_claude_session_state(wd, reason="manual") == []
-        assert sl.render_context(wd) == ""
+        assert "OLD-ANSWER" not in sl.render_context(wd)
         assert sl.last_manual_reset(sl.read_ledger(wd)) is not None
 
     def test_boundary_carries_the_raw_chat_key(self, wd):
@@ -222,7 +222,8 @@ class TestResets:
         _turn(wd, 1)
         (wd / ".session_started").touch()
         session_state.reset_claude_session_state(wd, reason="manual")
-        assert sl.render_context(wd) == ""  # /new: fresh start
+        fresh = sl.render_context(wd)          # /new: fresh start, one pointer line
+        assert "topic-1" not in fresh and "before the operator's /new" in fresh
         _turn(wd, 2)
         block = sl.render_context(wd)
         assert "topic-2" in block and "topic-1" not in block
@@ -482,6 +483,58 @@ class TestRound2:
         sl.append_turn(d, channel="discord", chat_key="998877", sender="bob", user_text="bob msg", assistant_text="y")
         th.join()
         assert [r["user"] for r in sl.read_ledger(d)] == ["bob msg"]
+
+
+class TestRound3:
+    """Adversarial review round 3 (2026-10-02) reproductions."""
+
+    def test_observer_text_is_erasable_by_the_observer(self, tmp_path, monkeypatch):
+        import erasure_handlers as eh
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        d = eh._tenant_home("_default") / "sessions" / "voice" / "whatsapp" / "grp1"
+        d.mkdir(parents=True)
+        sl.append_turn(d, channel="whatsapp", chat_key="grp1", sender="owner",
+                       user_text="[observer 4915112345678@s.whatsapp.net] my IBAN DE00\n\nsummarise",
+                       assistant_text="x", observers=[{"user": "4915112345678@s.whatsapp.net"}])
+        res = eh.SessionLedgerHandler(tenant_id="_default").purge("4915112345678@s.whatsapp.net", "r")
+        assert res.count == 1 and not sl.ledger_path(d).exists()
+
+    def test_withdrawn_observer_consent_withholds_the_turn(self, wd):
+        sl.append_turn(wd, channel="telegram", chat_key="chat-1", user_text="OBSERVER-WORDS",
+                       assistant_text="ok", observers=[{"user": "obs-1"}])
+        block = sl.render_context(wd, withhold=lambda r: "observer_consent" if r.get("observers") else None)
+        assert "OBSERVER-WORDS" not in block and "consent has ended" in block
+        assert "OBSERVER-WORDS" in sl.render_context(wd, withhold=lambda r: None)
+        assert sl.read_ledger(wd)[0]["user"] == "OBSERVER-WORDS"     # record untouched
+
+    def test_console_delegated_duplicate_does_not_claim_the_os_entry(self, wd):
+        """Review R3-3: "ja"→OS, "ja"→delegated; transcript holds one "ja"."""
+        log = [
+            {"role": "user", "ts": 1, "parts": [{"kind": "text", "text": "ja"}]},
+            {"role": "assistant", "ts": 2, "v": 2, "cli_spawned": True,
+             "parts": [{"kind": "text", "text": "OS-ANSWER-1"}]},
+            {"role": "user", "ts": 3, "parts": [{"kind": "text", "text": "ja"}]},
+            {"role": "assistant", "ts": 4, "v": 2, "cli_spawned": False,
+             "parts": [{"kind": "text", "text": "DELEGATED-ANSWER-2"}]},
+        ]
+        recs = sl.records_from_turn_log(log, current_prompt="next")
+        assert [r.get("spawned") for r in recs] == [True, False]
+        block, _ = sl.render_from_records(recs, [_clean_entry("ja")])
+        assert "DELEGATED-ANSWER-2" in block and "OS-ANSWER-1" not in block
+
+    def test_live_btw_note_does_not_break_alignment(self, wd):
+        _turn(wd, 1, u="first question", a="A1")
+        sl.append_turn(wd, channel="telegram", chat_key="chat-1", user_text="/btw also add tests",
+                       assistant_text="(note delivered to the running turn)", spawned=False)
+        _turn(wd, 3, u="second question", a="A3")
+        _transcript(wd, SID, [_user("first question"), _user("second question"),
+                              _user("also add tests")])
+        block = sl.render_context(wd)
+        assert "A1" not in block and "A3" not in block   # both live, note stepped over
+
+
+def _clean_entry(text):
+    return sl._clean("User input:\n" + text)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""End-to-end tests for ADR-0043: message → classification → routing.
+"""End-to-end tests for ADR-2104: message → classification → routing.
 
 These exercise the PRODUCTION path: classify_and_store_workload_hint from
 the production module (not a test copy), and adapter._resolve_os_model
@@ -113,7 +113,7 @@ def test_e2e_explicit_model_pin_beats_workload_routing() -> None:
 
 
 def test_e2e_routing_decision_is_audited() -> None:
-    """ADR-0043 §6: every fast-tier routing decision emits an audit event
+    """ADR-2104 §6: every fast-tier routing decision emits an audit event
     (BUG#15 — the old code died on a NameError inside a blanket except and
     never audited anything)."""
     import adapter  # type: ignore  # noqa: PLC0415

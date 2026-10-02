@@ -34,7 +34,7 @@ skills:
         tier: "alpha"
 
       - flag_id: "fast_chat_mode"
-        label: "Fast chat routing (workload-aware model tier, ADR-0043)"
+        label: "Fast chat routing (workload-aware model tier, ADR-2104)"
         default: false
         tier: "alpha"
 

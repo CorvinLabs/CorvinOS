@@ -1,4 +1,4 @@
-# Bridge Model Routing — Workload Classifier (ADR-0043)
+# Bridge Model Routing — Workload Classifier (ADR-2104)
 
 Fast-chat routing: conversational turns can use the engine's fast model
 tier; everything else keeps the user's chosen model / the adaptive tiers.
@@ -18,7 +18,7 @@ full history.
 
 Tier order (top wins): 1 `CORVIN_OS_MODEL_OVERRIDE` · 2 explicit
 `profile.model` pin · 1.5 persona pin (ADR-0123) · 2.5 per-engine tenant
-default (ADR-0119) · **2.7 workload routing (ADR-0043, this doc)** ·
+default (ADR-0119) · **2.7 workload routing (ADR-2104, this doc)** ·
 3 adaptive autoselect (ADR-0024/0112) · 4 None (CLI subscription default).
 
 Tier 2.7 acts ONLY when all of these hold:
@@ -77,7 +77,7 @@ user's model (free) — so CHAT requires the ABSENCE of every code signal:
 - per tenant: `spec.features.fast_chat_mode: true` in the tenant YAML
 
 There is deliberately NO env-var switch (a process-wide flag would apply
-across tenants) and no console UI yet (ADR-0043 lists the settings-page
+across tenants) and no console UI yet (ADR-2104 lists the settings-page
 exposure as follow-up).
 
 ## Audit

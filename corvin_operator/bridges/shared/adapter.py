@@ -3100,7 +3100,7 @@ def _resolve_os_model_bundled(
     """Bridge entry point for the shared OS model resolver.
 
     Thin wrapper — the actual 6-Tier cascade (ADR-0024 / ADR-0119 / ADR-0123 /
-    ADR-0043) now lives in ``model_selector.resolve_os_model()`` so the
+    ADR-2104) now lives in ``model_selector.resolve_os_model()`` so the
     console web-chat (``chat_runtime.py``) and this bridge adapter call the
     SAME function and cannot silently diverge again. See that function's
     docstring for the full tier order. Kept under this name/signature for
@@ -3583,6 +3583,7 @@ def _resolve_spawn_inputs(
                 _session_dir(channel, str(chat_key)),
                 channel=str(channel or ""), chat_key=str(chat_key),
                 tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default",
+                withhold=_ledger_consent_withhold(channel, str(chat_key)),
             )
             if _ledger_block:
                 sys_prompt = sys_prompt + _ledger_block
@@ -4514,6 +4515,60 @@ def _cel_session(channel: str, chat_key: str | None):
     return _types.SimpleNamespace(sid=key)
 
 
+def _ledger_consent_withhold(channel: str, chat_key: str):
+    """Session ledger ``withhold`` hook: a turn carrying the words of a group
+    observer (Layer 16/17) is re-supplied only while every such observer's
+    consent still holds — the same re-check the observer buffer gets on
+    consume. Withdrawn or unknown → the turn's text is withheld."""
+    def _check(rec: dict):
+        observers = [o.get("user") for o in (rec.get("observers") or []) if isinstance(o, dict)]
+        if not observers:
+            return None
+        if _consent is None:
+            return "consent_check_unavailable"
+        for uid in observers:
+            try:
+                ok, _why = _consent.is_granted(channel, chat_key, str(uid))
+            except Exception:  # noqa: BLE001 — fail closed
+                ok = False
+            if not ok:
+                return "observer_consent"
+        return None
+    return _check
+
+
+def _ledger_record_side_turn(channel: str, chat_key: str, user_text: str, reply_text: str, *,
+                             msg_id: str = "", sender: str = "", refused: str = "") -> None:
+    """Record a turn the OS session never ran (a /task or /bg command, a
+    /plugin-builder interview answer) in the chat's session ledger (ADR-2102),
+    ``spawned=False``: the user's words are kept, never counted as live."""
+    if not chat_key or not user_text:
+        return
+    if not refused:
+        # A side turn never passed the L44 gate on its way in (a /plugin-builder
+        # answer goes to the builder, not the engine). The ledger would carry it
+        # into later system prompts, so it must pass the same gate first — a
+        # refusal is recorded as refused and withheld (review R3).
+        try:
+            if _check_house_rules_or_fail(prompt=user_text, persona=None, channel=channel,
+                                          chat_key=str(chat_key)) is not None:
+                refused = "house_rules"
+        except Exception:  # noqa: BLE001 — fail closed: treat as refused
+            refused = "house_rules"
+    try:
+        try:
+            from . import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            import session_ledger as _ledger  # type: ignore  # noqa: PLC0415
+        _ledger.append_turn(
+            _session_dir(channel, str(chat_key)), channel=str(channel or ""),
+            chat_key=str(chat_key), user_text=user_text, assistant_text=reply_text or "",
+            msg_id=str(msg_id or ""), sender=str(sender or ""), refused=refused,
+            spawned=False, tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default")
+    except Exception as e:  # noqa: BLE001
+        log(f"session ledger side-turn append failed (non-fatal): {e}")
+
+
 def _session_dir(channel: str, chat_key: str, tenant_id: str | None = None) -> Path:
     """Per-chat working directory at tenants/<tid>/sessions/<channel>/<safe_chat_key>/.
 
@@ -5066,6 +5121,7 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
                     }, ensure_ascii=False) + "\n")
             except OSError:
                 pass
+        _TURN_OUTCOME.cli_spawned = True   # the fake stands in for the CLI spawn
         return f"[fake] {channel}:{chat_key} :: {prompt[:60]}"
 
     workdir = _session_dir(channel, chat_key)
@@ -5175,6 +5231,7 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         # Windows (2026-08-02, reported live) — without it, every turn on
         # this legacy fallback path flashes up a brand-new, visible console.
         # 0 (a safe no-op) on POSIX.
+        _TURN_OUTCOME.cli_spawned = True   # session ledger: reached the CLI session
         proc = subprocess.Popen(
             windows_shim_command(args), cwd=workdir,
             stdin=subprocess.PIPE,
@@ -5681,6 +5738,7 @@ def _call_claude_streaming_via_engine(
         },
     )
     _os_turn_started = True
+    _TURN_OUTCOME.cli_spawned = True   # session ledger: this turn reached the CLI session
     # ADR-0171 — engine span for the claude OS path (bypasses _emit_os_turn_event).
     _emit_os_engine_span("start", turn_id=_os_turn_id, chat_key=chat_key,
                          engine_id="claude_code",
@@ -7512,6 +7570,7 @@ def _call_claude_streaming_impl(
             _budget_account_turn(chat_key, "fake_stream", prompt, _fake_reply)
         except Exception:
             pass
+        _TURN_OUTCOME.cli_spawned = True   # the fake stands in for the CLI spawn
         return _fake_reply
 
     workdir = _session_dir(channel, chat_key)
@@ -8660,6 +8719,13 @@ def _run_tde_delegation(
             refusal = _check_egress_or_fail(
                 _eng, channel=channel, chat_key=str(chat_key),
                 tenant_id=tenant_id)
+        if refusal is None:
+            # L44 acceptable-use — the TDE fan-out is a worker spawn like any
+            # other; ACS runs it inside ACSRuntime.run, TDE did not. On deny the
+            # direct turn runs, whose own L44 gate refuses properly (review R3).
+            refusal = _check_house_rules_or_fail(
+                prompt=prompt, persona=persona, channel=channel,
+                chat_key=str(chat_key), tenant_id=tenant_id)
     except Exception as e:  # noqa: BLE001 — a broken gate must not fan out
         log(f"tde delegation: gate raised ({e!r}) — direct turn")
         return None
@@ -11240,6 +11306,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         chat_key = chat_id or sender
         instruction = _task_raw.split(None, 1)[1].strip() if " " in _task_raw else ""
         ack_text: str
+        _task_hr = None
         if not instruction:
             ack_text = ("Usage: `/task <what to do>` — I'll run it in the "
                         "background and message you here when it's done.")
@@ -11422,6 +11489,10 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                         except Exception:  # noqa: BLE001
                             pass
                         ack_text = "⚠ Could not start the background task."
+        _ledger_record_side_turn(
+            channel, str(chat_key), _task_raw, ack_text, msg_id=str(msg_id or ""),
+            sender=str(sender or ""),
+            refused="house_rules" if _task_hr else "")
         ack_envelope = {"channel": channel, "to": sender, "text": ack_text}
         if chat_id is not None:
             ack_envelope["chat_id"] = chat_id
@@ -11701,6 +11772,8 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             prompt, tenant_id=_pb_tenant_id, channel=channel, chat_key=_pb_chat_key,
         )
         if _pb_reply is not None:
+            _ledger_record_side_turn(channel, str(_pb_chat_key), prompt, _pb_reply,
+                                     msg_id=str(msg_id or ""), sender=str(sender or ""))
             ack_envelope = {"channel": channel, "to": sender, "text": _pb_reply}
             if chat_id is not None:
                 ack_envelope["chat_id"] = chat_id
@@ -11726,6 +11799,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # always pass through (they were admitted as one-shot at write time
     # and shouldn't be retroactively cancelled).
     obs_chat_key = chat_id or sender
+    _ledger_observers: list = []
     observer_entries = _consume_observer_buffer(channel, str(obs_chat_key))
     if observer_entries and _consent is not None:
         revalidated: list[dict] = []
@@ -11751,6 +11825,11 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 f"channel={channel} chat={obs_chat_key}")
         observer_entries = revalidated
     if observer_entries:
+        # Session ledger: the observers' words become part of this turn's text;
+        # their ids go into the record so an Art. 17 request for an observer
+        # finds it (review R3).
+        _ledger_observers = [{"user": str(e.get("from", ""))} for e in observer_entries
+                             if e.get("from")]
         prompt = _format_observer_block(observer_entries) + prompt
         log(f"observer transcript prepended channel={channel} "
             f"chat={obs_chat_key} entries={len(observer_entries)}")
@@ -11974,6 +12053,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         _LAST_OS_TURN_STATUS.pop(chat_key, None)
         _TURN_OUTCOME.refused = None
         _TURN_OUTCOME.failed = None
+        _TURN_OUTCOME.cli_spawned = False
         answer, prompt = _maybe_delegate_worker(
             prompt, channel=channel, chat_key=chat_key,
             persona=str((profile or {}).get("persona")
@@ -12154,10 +12234,12 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 user_text=prompt, assistant_text=answer or "",
                 msg_id=str(msg_id or ""), sender=str(sender or ""),
                 refused=str(getattr(_TURN_OUTCOME, "refused", None) or ""),
-                # Only a turn the OS CLI session actually ran can be in its
-                # transcript; delegated / failed turns never count as live.
-                spawned=not (getattr(_TURN_OUTCOME, "delegated", False)
-                             or getattr(_TURN_OUTCOME, "failed", None)),
+                # Only a turn the claude CLI was actually started for can be in
+                # its transcript. Measured at the spawn, not inferred: delegated,
+                # copilot/compute-blueprint and gate-answered turns never start it;
+                # a cancelled-after-start turn did.
+                spawned=bool(getattr(_TURN_OUTCOME, "cli_spawned", False)),
+                observers=_ledger_observers,
                 tenant_id=_ledger_tid,
             )
             _ledger.note_compactions(
@@ -12178,7 +12260,8 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             and not getattr(_TURN_OUTCOME, "refused", None)):
         try:
             _cdp_tid = os.environ.get("CORVIN_TENANT_ID", "_default")
-            _cel_maybe_capture_decision(answer, _cdp_tid, _cel_session(channel, chat_key))
+            _cel_maybe_capture_decision(answer, _cdp_tid, _cel_session(channel, chat_key),
+                                        answered_task=prompt)
         except Exception:  # noqa: BLE001 — never break a turn on the way out
             pass
 

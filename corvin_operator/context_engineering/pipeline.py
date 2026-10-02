@@ -90,7 +90,9 @@ def _maybe_apply_anchor(task: str, tenant: str, session: Any, brief: Any,
         # is only a CANDIDATE here; maybe_capture_decision_point promotes it
         # after a reply was delivered. A refused task never becomes the goal.
         existing = anchor.load_facts(tenant, session_key)
-        goal = (getattr(brief, "raw_input", "") or task or "").strip()
+        # Stored as the RAW task the surface passed in, so the outbound hook can
+        # promote it only for the turn that carried exactly this task.
+        goal = (task or getattr(brief, "raw_input", "") or "").strip()
         if goal and not any(f.get("kind") == "goal" for f in existing):
             anchor.set_pending_goal(tenant, session_key, goal)
         facts = anchor.load_facts(tenant, session_key)
@@ -104,7 +106,8 @@ def _maybe_apply_anchor(task: str, tenant: str, session: Any, brief: Any,
 
 
 def maybe_capture_decision_point(reply_text: str, tenant: str = "_default",
-                                 session: Any = None) -> "dict | None":
+                                 session: Any = None, *,
+                                 answered_task: str = "") -> "dict | None":
     """Outbound hook (ADR-0407 amendment — decision-point capture). Called with
     the FINAL assistant reply text, on the way out, from the bridge adapter and
     the console chat_runtime.
@@ -124,9 +127,9 @@ def maybe_capture_decision_point(reply_text: str, tenant: str = "_default",
         if not session_key:  # same rule as _maybe_apply_anchor: never pool chats
             return None
         from . import anchor  # noqa: PLC0415
-        # The turn was answered (callers skip refused turns): its task may now
-        # become the session goal.
-        anchor.promote_pending_goal(tenant, session_key)
+        # The turn was answered (callers skip refused turns): ITS task — and
+        # only its task — may now become the session goal.
+        anchor.promote_pending_goal(tenant, session_key, answered_task)
         return anchor.capture_decision_point(tenant, session_key, reply_text)
     except Exception:  # noqa: BLE001 — the outbound hook never breaks a turn
         return None

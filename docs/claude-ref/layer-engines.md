@@ -1666,7 +1666,7 @@ had no effect on the console's own chat, only on bridges.
 2.   profile.model                                            → explicit per-persona/profile pin
 1.5. profile._persona_os_model                                → per-persona pin (ADR-0123)
 2.5. spec.engine_models.<engine_id>.os_model in tenant YAML   → per-engine tenant default (ADR-0119)
-2.7. ADR-0043 workload classification (CHAT fast-path only)   → opt-in tenant feature flag
+2.7. ADR-2104 workload classification (CHAT fast-path only)   → opt-in tenant feature flag
 3.   autoselect_os_model(payload_chars) + apply_floor          → adaptive (default path)
 4.   None                                                      → CLI subscription default (Opus/Sonnet)
 ```

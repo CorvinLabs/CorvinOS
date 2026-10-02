@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="920" height="560" viewBox="0 0 920 560" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">
-  <title>ADR-0043 — Bridge model selection with workload routing (Tier 2.7)</title>
+  <title>ADR-2104 — Bridge model selection with workload routing (Tier 2.7)</title>
   <style>
     .box { fill:#f6f8fa; stroke:#57606a; rx:8; }
     .gate { fill:#fff8c5; stroke:#9a6700; rx:8; }
@@ -15,7 +15,7 @@
     </marker>
   </defs>
 
-  <text x="20" y="28" font-size="16" font-weight="bold" class="lbl">ADR-0043 — OS-turn model selection with fast-chat workload routing</text>
+  <text x="20" y="28" font-size="16" font-weight="bold" class="lbl">ADR-2104 — OS-turn model selection with fast-chat workload routing</text>
   <text x="20" y="46" class="sub">Hint travels as a FUNCTION PARAMETER (never os.environ): call_claude / call_claude_streaming → _build_claude_args / _resolve_spawn_inputs → _resolve_os_model</text>
 
   <rect x="20" y="66" width="270" height="52" class="box"/>
@@ -39,7 +39,7 @@
   <text x="265" y="260" class="sub">1  CORVIN_OS_MODEL_OVERRIDE (operator kill-switch)</text>
   <text x="265" y="277" class="sub">2  profile.model — explicit pin ALWAYS beats workload routing</text>
   <text x="265" y="294" class="sub">1.5 persona pin (ADR-0123) · 2.5 per-engine tenant default (ADR-0119)</text>
-  <text x="265" y="311" class="lbl" font-weight="bold">2.7 workload routing (ADR-0043) ↓</text>
+  <text x="265" y="311" class="lbl" font-weight="bold">2.7 workload routing (ADR-2104) ↓</text>
   <text x="265" y="328" class="sub">3  adaptive autoselect (ADR-0024/0112) · 4 None (CLI default)</text>
 
   <path class="arr" d="M465 336 V364"/>

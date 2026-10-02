@@ -171,7 +171,8 @@ def test_e2e_build_brief_autopopulates_and_injects(isolated, monkeypatch):
     # The goal is only a CANDIDATE until the turn was answered (2026-10-02:
     # a refused task must never become an un-gated, re-injected goal).
     assert not any(f["kind"] == "goal" for f in persisted)
-    _pipeline.maybe_capture_decision_point("Done.", "_default", _Sess())   # answered
+    _pipeline.maybe_capture_decision_point("Done.", "_default", _Sess(),
+                                           answered_task="audit chain task")   # answered
     assert any(f["kind"] == "goal" for f in _anchor.load_facts("_default", _Sess.sid)), \
         "the answered turn's task becomes the session goal"
     # (2) attached to the brief.
@@ -187,9 +188,10 @@ def test_goal_is_stable_across_turns(isolated, monkeypatch):
     task does not evict the real constraints by re-adding a new goal each turn."""
     _set_flag(monkeypatch, True)
     build_brief("first task", "_default", _Sess(), False)
-    _pipeline.maybe_capture_decision_point("ok", "_default", _Sess())        # answered
+    _pipeline.maybe_capture_decision_point("ok", "_default", _Sess(), answered_task="first task")
     build_brief("a completely different second task", "_default", _Sess(), False)
-    _pipeline.maybe_capture_decision_point("ok", "_default", _Sess())
+    _pipeline.maybe_capture_decision_point("ok", "_default", _Sess(),
+                                           answered_task="a completely different second task")
     goals = [f for f in _anchor.load_facts("_default", _Sess.sid) if f["kind"] == "goal"]
     assert len(goals) == 1, "only the original goal is kept, not one per turn"
 
@@ -208,9 +210,23 @@ def test_refused_task_never_becomes_the_goal(isolated, monkeypatch):
     assert not any(f["kind"] == "goal" for f in _anchor.load_facts("_default", _Sess.sid))
     # refused: the surfaces skip the outbound hook → nothing is promoted
     turn("plan the release notes")
-    _pipeline.maybe_capture_decision_point("Here is the plan.", "_default", _Sess())
+    _pipeline.maybe_capture_decision_point("Here is the plan.", "_default", _Sess(),
+                                           answered_task="plan the release notes")
     texts = [f["text"] for f in _anchor.load_facts("_default", _Sess.sid) if f["kind"] == "goal"]
     assert texts == ["plan the release notes"]
+
+
+def test_refused_task_is_not_promoted_by_a_delegated_next_turn(isolated, monkeypatch):
+    """Review R3-1: turn N refused (candidate stored, nothing promoted), turn N+1
+    answered by a delegated worker WITHOUT the inbound hook — its outbound hook
+    must not promote turn N's refused candidate."""
+    _set_flag(monkeypatch, True)
+    from types import SimpleNamespace
+    brief = SimpleNamespace(raw_input="", memory_context=None, related_decisions=[])
+    _pipeline._maybe_apply_anchor("EVILTASK refused by L44", "_default", _Sess(), brief, {})
+    _pipeline.maybe_capture_decision_point("worker result", "_default", _Sess(),
+                                           answered_task="summarise the logs")
+    assert not any(f["kind"] == "goal" for f in _anchor.load_facts("_default", _Sess.sid))
 
 
 def test_live_surfaces_carry_the_anchor_path():

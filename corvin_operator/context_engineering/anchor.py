@@ -231,16 +231,22 @@ def set_pending_goal(tenant_id: str, session_key: str, text: str) -> None:
         pass
 
 
-def promote_pending_goal(tenant_id: str, session_key: str) -> "dict | None":
-    """Make the candidate goal THE session goal if the session has none yet.
-    Called on the way out of a turn that was answered (not refused). Never raises."""
+def promote_pending_goal(tenant_id: str, session_key: str,
+                         answered_task: str) -> "dict | None":
+    """Make the candidate goal THE session goal if the session has none yet —
+    only if it IS the task of the turn that was just answered. A refused turn
+    leaves its candidate behind; the next turn may be answered without passing
+    the inbound hook (a delegated worker turn), and promoting "whatever was
+    stored last" made the refused task the goal (review R3). Never raises."""
     try:
         p = _pending_path(tenant_id, session_key)
         if not p.is_file():
             return None
         text = str(json.loads(p.read_text(encoding="utf-8")).get("text") or "")
         p.unlink()
-        if not text or any(f.get("kind") == "goal" for f in load_facts(tenant_id, session_key)):
+        if not text or text.strip() != (answered_task or "").strip():
+            return None
+        if any(f.get("kind") == "goal" for f in load_facts(tenant_id, session_key)):
             return None
         return add_fact(tenant_id, session_key, "goal", text)
     except Exception:  # noqa: BLE001

@@ -99,6 +99,15 @@ class Index:
     def __init__(self, files: list[Path]):
         self.files = files
         self.file_set = set(files)
+        # The parent of every TOP-LEVEL package is where that package imports
+        # from (core/orchestration for `-m corvin_orchestration.mcp_server`).
+        roots = set()
+        for f in files:
+            if f.name == "__init__.py" and not (f.parent.parent / "__init__.py").exists():
+                rel = f.parent.parent.relative_to(REPO)
+                if str(rel) != ".":
+                    roots.add(str(rel))
+        self.package_roots = tuple(sorted(roots))
         self.by_mod: dict[str, Path] = {}
         self.by_base: dict[str, list[Path]] = defaultdict(list)
         for f in files:
@@ -115,20 +124,42 @@ class Index:
                 self.by_suffix[".".join(parts[i:])].append(f)
 
     def resolve(self, dotted: str, src: Path | None = None) -> list[Path]:
+        """Files ``import <dotted>`` can load from ``src``.
+
+        Order: the source's own package (sibling); then modules whose dotted
+        path is exact relative to the repo root or to one of PATH_ROOTS (the
+        directories production code puts on ``sys.path``); then, only if the
+        name is UNIQUE in the tree, that one file. An ambiguous bare name that
+        none of these explains links nowhere — linking every same-named file
+        let one live ``session_ledger`` keep any other ``session_ledger.py``
+        "reachable" (review R3-6)."""
         if not dotted:
             return []
-        hits = list(self.by_suffix.get(dotted, []))
-        if src is not None:  # sibling / package-relative first
-            sib = src.parent / (dotted.replace(".", "/") + ".py")
-            pkg = src.parent / dotted.replace(".", "/") / "__init__.py"
-            for c in (sib, pkg):
+        rel = dotted.replace(".", "/")
+        if src is not None:
+            for c in (src.parent / (rel + ".py"), src.parent / rel / "__init__.py"):
                 if c in self.file_set:
                     return [c]
-        if len(hits) > 6:   # too generic a name ("utils", "config"): keep closest
-            if src is not None:
-                hits.sort(key=lambda h: -len(_common(h, src)))
-            hits = hits[:2]
-        return hits
+        exact = []
+        for root in ("",) + PATH_ROOTS + self.package_roots:
+            base = REPO / root if root else REPO
+            for c in (base / (rel + ".py"), base / rel / "__init__.py"):
+                if c in self.file_set:
+                    exact.append(c)
+        if exact:
+            return exact
+        hits = list(self.by_suffix.get(dotted, []))
+        return hits if len(hits) == 1 else []
+
+
+#: Directories production code inserts into ``sys.path`` (measured 2026-10-02
+#: from the sys.path.insert/append calls in core/, corvin_operator/, ops/).
+PATH_ROOTS: tuple[str, ...] = (
+    "corvin_operator", "corvin_operator/bridges/shared", "corvin_operator/forge",
+    "corvin_operator/skill-forge", "corvin_operator/bridges/shared/agents",
+    "core", "core/console", "core/plugins", "core/gateway", "core/compute",
+    "core/console/corvin_console", "ops/launcher",
+)
 
 
 def _common(a: Path, b: Path) -> tuple:
@@ -246,7 +277,36 @@ def reachable(idx: Index) -> set[Path]:
     return seen
 
 
+def _contract_classes(idx: Index) -> dict[str, str]:
+    """Class name → contract, closed over subclassing: ``class B(A)`` where A
+    implements a contract implements it too (review R3-18)."""
+    edges: list[tuple[str, str]] = []
+    for f in idx.files:
+        try:
+            tree = ast.parse(f.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                for b in node.bases:
+                    name = b.id if isinstance(b, ast.Name) else (
+                        b.attr if isinstance(b, ast.Attribute) else
+                        (b.value.id if isinstance(b, ast.Subscript) and isinstance(b.value, ast.Name) else None))
+                    if name and name != node.name:
+                        edges.append((node.name, name))
+    known = {c: c for c in CONTRACTS}
+    changed = True
+    while changed:
+        changed = False
+        for child, base in edges:
+            if base in known and child not in known:
+                known[child] = known[base]
+                changed = True
+    return known
+
+
 def implementations(idx: Index) -> list[dict]:
+    contract_of = _contract_classes(idx)
     out = []
     for f in idx.files:
         try:
@@ -260,9 +320,11 @@ def implementations(idx: Index) -> list[dict]:
                     name = b.id if isinstance(b, ast.Name) else (
                         b.attr if isinstance(b, ast.Attribute) else
                         (b.value.id if isinstance(b, ast.Subscript) and isinstance(b.value, ast.Name) else None))
-                    if name in CONTRACTS and node.name != name:
+                    if name in contract_of and node.name != name and node.name not in CONTRACTS:
+                        c = contract_of[name]
                         out.append({"file": str(f.relative_to(REPO)), "class": node.name,
-                                    "contract": name, "kind": CONTRACTS[name]})
+                                    "contract": c, "kind": CONTRACTS[c]})
+                        break
         if f.name != "registry.py" and any(
                 isinstance(n, ast.Call) and getattr(n.func, "id", getattr(n.func, "attr", "")) == "register_stage"
                 for n in ast.walk(tree)):
@@ -339,7 +401,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{rep['modules']} modules, {rep['reachable']} reachable from entry points; "
               f"{rep['implementations']} contract implementations, {len(rep['dead'])} unreachable "
               f"({len(new)} not in baseline, {len(gone)} baseline entries now wired/removed)")
-    return 1 if (a.check and new) else 0
+    # A stale baseline line (the implementation was wired or deleted) must be
+    # removed too, or it would later mask the same class going dead again.
+    return 1 if (a.check and (new or gone)) else 0
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Unit tests for engine_models.py workload-based model routing — ADR-0043."""
+"""Unit tests for engine_models.py workload-based model routing — ADR-2104."""
 from __future__ import annotations
 
 import sys

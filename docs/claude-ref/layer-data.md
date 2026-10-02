@@ -476,7 +476,7 @@ cache behaviour.
 ### References
 
 - `Corvin-ADR: decisions/0013-compute-worker-plugin.md` — the design ADR
-- `Corvin-ADR: decisions/0013-implementation-plan.md` — sub-phase fanout
+- `Corvin-ADR: implementation-plans/0013-implementation-plan.md` — sub-phase fanout
 - ADR-0001 — AWP's DelegationLoopRunner pattern (origin)
 - ADR-0007 Phase 3.1 — `tenant.corvin.yaml` schema extension
 - ADR-0012 — Large-Data Snapshot Layer (hard prerequisite for the

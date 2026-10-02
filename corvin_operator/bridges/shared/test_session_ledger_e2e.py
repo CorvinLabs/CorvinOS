@@ -173,7 +173,10 @@ def main() -> int:
         (wd / ".session_started").touch()  # the session DELTA created
         _reset(env, "manual")
         _send(sb, "E", 5)
-        check(HEADER not in _system_prompt(sb, 5), "/new starts fresh: nothing re-supplied")
+        sp5 = _system_prompt(sb, 5)
+        check(HEADER not in sp5 and not any(MSGS[k] in sp5 for k in "ABCD"),
+              "/new starts fresh: nothing re-supplied")
+        check("before the operator's /new" in sp5, "/new leaves one pointer to the ledger file")
 
         print("6 FOXTROT — the new topic continues")
         _send(sb, "F", 6)

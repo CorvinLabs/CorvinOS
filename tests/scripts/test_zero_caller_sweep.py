@@ -67,3 +67,60 @@ def test_mechanics_on_a_synthetic_tree(tmp_path, monkeypatch):
     monkeypatch.setattr(z, "SCAN_DIRS", ("core",))
     dead = {d["class"] for d in z.sweep()["dead"]}
     assert dead == {"Dead"}
+
+
+def _tree(tmp_path, files: dict[str, str]):
+    for rel, body in files.items():
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body)
+    (tmp_path / "pyproject.toml").write_text('[project.scripts]\nx = "core.main:run"\n')
+
+
+def _sandbox(monkeypatch, tmp_path):
+    monkeypatch.setattr(z, "REPO", tmp_path)
+    monkeypatch.setattr(z, "EXTRA_ROOTS", ())
+    monkeypatch.setattr(z, "SCAN_DIRS", ("core",))
+    monkeypatch.setattr(z, "PATH_ROOTS", ())
+
+
+def test_same_named_module_elsewhere_is_not_kept_alive(tmp_path, monkeypatch):
+    """Review R3-6: a live bare `import ledger` made every ledger.py reachable."""
+    _tree(tmp_path, {
+        "core/base.py": "class Subsystem: pass\n",
+        "core/main.py": "import ledger\n",
+        "core/ledger.py": "x = 1\n",
+        "core/zzprobe/ledger.py": "from core.base import Subsystem\nclass P(Subsystem): pass\n",
+    })
+    _sandbox(monkeypatch, tmp_path)
+    assert {d["class"] for d in z.sweep()["dead"]} == {"P"}
+
+
+def test_indirect_subclass_is_an_implementation(tmp_path, monkeypatch):
+    """Review R3-18: class B(A) with A(Subsystem) implements the contract."""
+    _tree(tmp_path, {
+        "core/base.py": "class Subsystem: pass\nclass Bridge(Subsystem): pass\n",
+        "core/main.py": "from core.base import Subsystem\n",
+        "core/zz.py": "from core.base import Bridge\nclass ProbeB(Bridge): pass\n",
+    })
+    _sandbox(monkeypatch, tmp_path)
+    assert "ProbeB" in {d["class"] for d in z.sweep()["dead"]}
+
+
+def test_check_fails_on_new_dead_and_on_stale_baseline(tmp_path, monkeypatch):
+    """Review R3-19/20: --check must exit 1 on a new dead implementation AND on a
+    baseline line that no longer applies."""
+    _tree(tmp_path, {
+        "core/base.py": "class Subsystem: pass\n",
+        "core/main.py": "from core.base import Subsystem\n",
+        "core/zz.py": "from core.base import Subsystem\nclass Dead(Subsystem): pass\n",
+    })
+    _sandbox(monkeypatch, tmp_path)
+    base = tmp_path / "baseline.json"
+    monkeypatch.setattr(z, "BASELINE", base)
+    base.write_text("[]")
+    assert z.main(["--check"]) == 1                       # new dead
+    base.write_text('["core/zz.py::Dead"]')
+    assert z.main(["--check"]) == 0                       # baselined
+    base.write_text('["core/zz.py::Dead", "core/gone.py::Old"]')
+    assert z.main(["--check"]) == 1                       # stale line

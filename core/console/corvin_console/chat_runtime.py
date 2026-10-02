@@ -3617,7 +3617,7 @@ def _turns_path(tenant_id: str, sid: str) -> Path:
 def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
                  voice_key_hint: str | None = None, tde_progress: dict[str, Any] | None = None,
                  execution_context: dict[str, Any] | None = None,
-                 gate_refused: str | None = None) -> None:
+                 gate_refused: str | None = None, cli_spawned: bool = False) -> None:
     """Append one turn (user or assistant) to the session's turns log.
 
     ``voice_key_hint`` (ADR-0194 Phase 1) pins the voice_key of the text this
@@ -3657,6 +3657,13 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
         # A pre-spawn gate answered: the session ledger re-supplies this turn
         # with the user's text WITHHELD, never past the gate (ADR-2102).
         payload["gate_refused"] = gate_refused
+    if role == "assistant":
+        # Session ledger (ADR-2102): only an answer the OS `claude` session
+        # produced puts its turn into that session's transcript. Delegated
+        # (TDE/ACS), gate- and error-answered turns did not; schema v2 says the
+        # flag is meaningful (older records carry neither and keep the old rule).
+        payload["v"] = 2
+        payload["cli_spawned"] = bool(cli_spawned)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
@@ -6156,7 +6163,8 @@ async def _stream_turn_impl(
                 except Exception:  # noqa: BLE001 — best-effort
                     pass
                 _append_turn(sess, "assistant", [{"kind": "text", "text": _fb_gate}],
-                             execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
+                             execution_context=_exec_ctx.to_dict() if _exec_ctx else None,
+                             gate_refused="pre_spawn")
                 _emit_execution_context_event(_exec_ctx, _os_turn_id, sess)
                 yield {"type": "done"}
                 return
@@ -6983,7 +6991,7 @@ async def _stream_turn_impl(
     # pipeline._session_key_of(sess, …).
     if _cel_capture_decision is not None and combined_text:
         try:
-            _cel_capture_decision(combined_text, sess.tenant_id, sess)
+            _cel_capture_decision(combined_text, sess.tenant_id, sess, answered_task=prompt)
         except Exception:  # noqa: BLE001 — never break a turn on the way out
             pass
     # ADR-0194 Phase 1: the exact string the client will hand to /voice/tts —
@@ -7071,7 +7079,8 @@ async def _stream_turn_impl(
 
     _append_turn(sess, "assistant", parts_persisted,
                  voice_key_hint=voice_key(_spoken_text) if _spoken_text.strip() else None,
-                 execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
+                 execution_context=_exec_ctx.to_dict() if _exec_ctx else None,
+                 cli_spawned=True)
 
     # Phase 2b: Emit execution context to L16 audit chain
     _emit_execution_context_event(_exec_ctx, _os_turn_id, sess)

@@ -200,11 +200,11 @@ class TestRealCorpusRegression:
         ~228 ADRs unreachable."""
         loader = ADRLoader(adr_repo_path=str(_REAL_ADR_DIR))
         files = {Path(n.metadata.file_path).name for n in loader.adrs.values()}
-        eligible = [f for f in _REAL_ADR_DIR.glob("*.md")
-                    if not f.name.startswith("DOC-") and f.read_text(errors="replace").startswith("---")
-                    and __import__("re").match(r"^(?:ADR-)?\d{4}(?!\d)", f.name)
-                    and not f.name.startswith(("0000", "ADR-0000"))]
-        assert {f.name for f in eligible} <= files | _UNPARSEABLE(eligible)
+        # Every numbered decision file — with or without (valid) frontmatter.
+        eligible = {f.name for f in _REAL_ADR_DIR.glob("*.md")
+                    if __import__("re").match(r"^(?:ADR-)?\d{4}(?!\d)", f.name)
+                    and not f.name.startswith(("0000", "ADR-0000"))}
+        assert eligible <= files, sorted(eligible - files)
 
     def test_loader_is_cached_and_cheap_per_turn(self):
         import time
@@ -213,22 +213,6 @@ class TestRealCorpusRegression:
         again = get_loader(str(_REAL_ADR_DIR))
         assert again is first
         assert (time.perf_counter() - t0) < 0.2, "per-turn ADR load must not re-parse the corpus"
-
-
-def _UNPARSEABLE(files):
-    """Files whose frontmatter is not valid YAML (the loader skips them, as before)."""
-    import re
-    import yaml
-    bad = set()
-    for f in files:
-        m = re.match(r"^---\n(.*?)\n---", f.read_text(errors="replace"), re.DOTALL)
-        try:
-            yaml.safe_load(m.group(1)) if m else None
-        except yaml.YAMLError:
-            bad.add(f.name)
-        if not m:
-            bad.add(f.name)
-    return bad
 
 
 def test_cache_picks_up_a_new_adr(tmp_path):

@@ -1,5 +1,5 @@
 """
-Integration layer for ADR-0043: Bridge → Workload Classifier → Session Hint.
+Integration layer for ADR-2104: Bridge → Workload Classifier → Session Hint.
 
 This module provides the bridge integration function that:
 1. Takes a user message (from Discord/Web/CLI)
