@@ -92,6 +92,21 @@ _SYS = (
 
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+_SYNTHESIS_TEMP_RE = re.compile(
+    r"~/.claude/projects/-tmp-corvin-ce-synthesis-[a-z0-9-]+(?:/memory)?/?",
+    re.IGNORECASE)
+
+
+def _sanitize_task_text(text: str) -> str:
+    """Remove synthesis temp directories from task text (ADR-2101 P2 fix).
+
+    The `llm_synthesis` stage runs in a temp directory (`corvin-ce-synthesis-*`).
+    Claude Code may inject that temp path into the task as a "constraint". This
+    path is never valid context for the worker — remove it before sending to LLM."""
+    if not isinstance(text, str):
+        return text
+    # Remove fake synthesis temp paths (they are never relevant context)
+    return _SYNTHESIS_TEMP_RE.sub("", text).strip()
 
 
 def parse_llm_json(text: str) -> "dict | None":
@@ -289,6 +304,12 @@ class LLMSynthesisStage:
             timeout_s = float(cfg.get("timeout_s") or _TIMEOUT_S)
         except (TypeError, ValueError):
             timeout_s = _TIMEOUT_S
+
+        # Sanitize bundle.task against synthesis-time contamination (ADR-2101 P2).
+        # The stage runs in a temp directory; Claude Code may inject that path as a "constraint".
+        # This path is never valid context for the worker — remove it before LLM synthesis.
+        task = _sanitize_task_text(bundle.task) if bundle.task else ""
+
         # The task is DATA to brief about, never a question to answer, and the
         # format instruction has to live in the USER prompt — not only in the
         # appended system prompt (measured 2026-08-19): `claude -p` is an agent
@@ -300,7 +321,7 @@ class LLMSynthesisStage:
             "Below is a task SOMEONE ELSE will carry out. Do NOT carry it out and "
             "do NOT answer it. Produce only the JSON briefing described in your "
             "instructions.\n\n"
-            f"TASK:\n{bundle.task}\n\nRETRIEVED CONTEXT:\n"
+            f"TASK:\n{task}\n\nRETRIEVED CONTEXT:\n"
             f"{_context_digest(bundle)}\n\n"
             'Reply with the JSON object only: {"brief": "…", "needs": '
             '{"tools": [], "skills": []}}')
