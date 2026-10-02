@@ -181,6 +181,8 @@ _SYSTEM_UNITS = [
     "corvin-supply-chain-weekly.timer",
     "corvin-supply-chain-critical.service",
     "corvin-supply-chain-critical.timer",
+    "corvin-ibc-maintain.service",
+    "corvin-ibc-maintain.timer",
     "corvin-webui.service",
 ]
 

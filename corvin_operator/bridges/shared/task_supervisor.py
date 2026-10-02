@@ -125,6 +125,17 @@ def classify_failure(
     On any unrecognized signal: returns UNKNOWN (fail-safe default).
     """
     try:
+        # Count consecutive TRANSIENT attempts to check streak cap FIRST
+        consecutive_transient = 0
+        for attempt in reversed(attempt_log):
+            if attempt.get("failure_class") == "transient":
+                consecutive_transient += 1
+            else:
+                break
+        # If 2+ consecutive TRANSIENT, escalate this one to UNKNOWN
+        if consecutive_transient >= 2:
+            return (FailureClass.UNKNOWN, "transient_streak_capped")
+
         # TRANSIENT: process died without reporting
         if worker_pid is None or heartbeat_age_s > SUP_HEARTBEAT_STALE:
             return (FailureClass.TRANSIENT, "process_dead_or_wedged")
@@ -143,16 +154,6 @@ def classify_failure(
         # PERMANENT: gate refusal (L44, L34, consent)
         if exit_error and "gate" in exit_error.lower():
             return (FailureClass.PERMANENT, "gate_refusal")
-
-        # Count consecutive TRANSIENT attempts to cap the streak
-        consecutive_transient = 0
-        for attempt in reversed(attempt_log[-2:]):  # Last 2 attempts
-            if attempt.get("failure_class") == "transient":
-                consecutive_transient += 1
-            else:
-                break
-        if consecutive_transient >= 2:
-            return (FailureClass.UNKNOWN, "transient_streak_capped")
 
         # Default: UNKNOWN (fail-safe for anything unrecognized)
         return (FailureClass.UNKNOWN, "unrecognized")
@@ -425,8 +426,8 @@ def attempt_finished(task_id: str, *, ok: bool, summary: str = "",
     failure_class = FailureClass.UNKNOWN
     reason_code = "not_classified"
     if not ok:
-        heartbeat_ts = _read_heartbeat_timestamp(task_id)
-        heartbeat_age_s = now - heartbeat_ts if heartbeat_ts > 0 else 0
+        heartbeat_ts = _read_heartbeat(task_id)
+        heartbeat_age_s = now - heartbeat_ts if heartbeat_ts > 0 else now
         failure_class, reason_code = classify_failure(
             task_id=task_id,
             worker_pid=worker_pid,

@@ -111,6 +111,8 @@ export interface InstanceIdentityStatus {
   hardware_bound: boolean;
   hardware_matches: boolean | null;
   revocation_status: "revoked" | "clean" | "unknown";
+  crl_fetched_at: number | null;
+  renewal_due: boolean;
 }
 
 export async function getInstanceIdentity(signal?: AbortSignal): Promise<InstanceIdentityStatus> {

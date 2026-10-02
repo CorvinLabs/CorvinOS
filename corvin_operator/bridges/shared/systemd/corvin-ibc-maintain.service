@@ -1,0 +1,15 @@
+[Unit]
+Description=Corvin A2A identity maintenance: refresh the IBC revocation list, renew a due IBC (ADR-2099 P0)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# The A2A receive path reads the revocation list from cache only, so this job
+# is what keeps it current. It also renews this instance's IBC once it expires
+# within 30 days. An unbound instance only refreshes the list. A failed fetch
+# or renewal exits 1 and leaves a WARNING in the audit chain.
+WorkingDirectory=__BRIDGES_DIR__/shared
+ExecStart=__PYTHON_BIN__ corvin_id_cli.py maintain
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=-%h/.config/corvin-voice/service.env

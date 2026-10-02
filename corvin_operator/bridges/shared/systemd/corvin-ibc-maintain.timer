@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily Corvin A2A identity maintenance (ADR-2099 P0)
+
+[Timer]
+OnBootSec=10min
+OnCalendar=*-*-* 04:15:00
+RandomizedDelaySec=30min
+Persistent=true
+Unit=corvin-ibc-maintain.service
+
+[Install]
+WantedBy=timers.target

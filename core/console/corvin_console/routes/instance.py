@@ -33,7 +33,9 @@ if str(_BRIDGES_SHARED) not in sys.path:
 try:
     from instance_identity import (  # type: ignore[import-not-found]
         check_hardware_binding,
+        crl_cache_fetched_at,
         get_ibc,
+        ibc_renewal_due,
         instance_id_metadata,
         revocation_status_cached,
     )
@@ -57,6 +59,9 @@ class InstanceIdentityStatus(BaseModel):
     hardware_bound: bool
     hardware_matches: bool | None = None
     revocation_status: str  # "revoked" | "clean" | "unknown"
+    # ADR-2099 P0: is the daily maintenance job (corvin-ibc-maintain.timer) working?
+    crl_fetched_at: float | None = None
+    renewal_due: bool = False
 
     model_config = {"extra": "forbid"}
 
@@ -103,4 +108,6 @@ async def get_instance_identity_status(
         hardware_bound=hw["bound"],
         hardware_matches=hw["matches"],
         revocation_status=revocation_status_cached(),
+        crl_fetched_at=crl_cache_fetched_at(),
+        renewal_due=ibc_renewal_due() if ibc is not None else False,
     )

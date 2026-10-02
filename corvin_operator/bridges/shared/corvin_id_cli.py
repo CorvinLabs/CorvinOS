@@ -361,6 +361,39 @@ def cmd_check_revocation(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_maintain(args: argparse.Namespace) -> int:
+    """Daily job (corvin-ibc-maintain.timer): refresh the CRL cache, renew a due IBC.
+
+    ADR-2099 P0 facts 4 + 5. Exit 1 when either step failed, so the timer's
+    unit shows the failure; an unbound instance is not a failure.
+    """
+    try:
+        from instance_identity import (  # type: ignore[import-not-found]
+            IBCError, _audit_ibc, ensure_ibc_fresh, refresh_revocation_list,
+        )
+    except ImportError as exc:
+        _die(f"Cannot import instance_identity: {exc}")
+
+    failed = False
+    try:
+        count = refresh_revocation_list()
+        _audit_ibc("instance.crl_refreshed", "INFO", {"revoked_count": count})
+        print(f"CRL refreshed: {count} revoked")
+    except Exception as exc:  # noqa: BLE001
+        failed = True
+        _audit_ibc("instance.crl_refresh_failed", "WARNING", {"reason": type(exc).__name__})
+        print(f"CRL refresh failed: {type(exc).__name__}", file=sys.stderr)
+
+    try:
+        state = ensure_ibc_fresh()
+        print(f"IBC: {state}")
+    except IBCError as exc:
+        failed = True
+        _audit_ibc("instance.ibc_renew_failed", "WARNING", {"reason": type(exc).__name__})
+        print(f"IBC renewal failed: {exc}", file=sys.stderr)
+    return 1 if failed else 0
+
+
 def cmd_export_pubkey(args: argparse.Namespace) -> int:
     """Print Ed25519 public key in PEM format."""
     (bind_instance, ensure_instance_key, get_ibc, get_instance_id,
@@ -497,6 +530,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("bind-hardware", help="Tether the current IBC to this machine's hardware fingerprint")
     sub.add_parser("check-hardware", help="Compare current hardware fingerprint against bound claim (local only)")
 
+    sub.add_parser("maintain", help="Refresh the CRL cache and renew the IBC when it expires within 30 days")
     p_check_revocation = sub.add_parser("check-revocation", help="Check the CRL for this instance's IBC")
     p_check_revocation.add_argument(
         "--refresh", action="store_true", help="Bypass the 24h CRL cache and force a network fetch"
@@ -516,6 +550,7 @@ _COMMAND_MAP = {
     "bind-hardware": cmd_bind_hardware,
     "check-hardware": cmd_check_hardware,
     "check-revocation": cmd_check_revocation,
+    "maintain": cmd_maintain,
 }
 
 

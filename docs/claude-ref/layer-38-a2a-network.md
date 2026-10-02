@@ -1095,3 +1095,56 @@ lock. `compact()` folds the sidecar into the records.
 Residual: during a rolling restart, a compaction can still race an old-version
 writer, which locks only the data file. Restart all feed writers together
 (gateway, adapter, MCP server).
+
+## IBC maintenance — CRL cache refresh + auto-renew (ADR-2099 P0 facts 4+5, 2026-10-01)
+
+The receive path's `require_ibc` gate (M2) checks a peer's `jti` against the
+revocation list, but it only ever reads `instance_identity`'s on-disk CRL
+cache — it never fetches. Until 2026-10-01 nothing refreshed that cache, so
+past its 7-day grace it silently stopped rejecting any revoked peer, and the
+IBC itself (one-year TTL) was never renewed automatically.
+
+`corvin-id maintain` (`corvin_operator/bridges/shared/corvin_id_cli.py`) now
+does both in one run, as `corvin-ibc-maintain.timer` — daily at 04:15,
+30 min jitter, `OnBootSec=10min` — installed by `bridge.sh` and registered in
+the installer's unit list (`corvinOS/installer/core.py`) so uninstall stops
+it:
+
+1. `instance_identity.refresh_revocation_list()` — fetches the CRL and
+   rewrites the cache atomically. Failure leaves the existing cache in place
+   and is audited (`instance.crl_refresh_failed`, WARNING).
+2. `instance_identity.ensure_ibc_fresh()` — renews the IBC
+   (`bind_instance()`) when it expires within 30 days, including an IBC that
+   has already expired (expiry is not revocation). An unbound instance only
+   refreshes the list — that is not a failure. A failed renewal is audited
+   (`instance.ibc_renew_failed`, WARNING).
+
+Either failure exits the job 1, so the systemd unit shows red. Both outcomes
+land in the hash-chained audit trail — `_audit_ibc()` had imported a
+`SecurityEventsPlugin` that never existed since this code was written, so no
+IBC event (issued, expired, revoked, and now crl_refreshed/renew_failed) ever
+reached the chain before this fix; it now writes through
+`forge.security_events.write_event` into the same `audit.audit_path()` the
+A2A receiver uses, deferred to a helper thread when called while
+`get_instance_pubkey_b64()` holds the signing lock (self-deadlock otherwise).
+
+The console dashboard's Instance Identity card reads
+`crl_fetched_at`/`renewal_due` from `GET /v1/console/instance/identity` and
+shows staleness (> 7 days) and an upcoming renewal inline
+(`core/console/corvin_console/routes/instance.py`,
+`core/console/corvin_console/web-next/src/pages/dashboard.tsx`).
+
+An IBC without a numeric `exp` claim used to pass (`exp is not None` guard,
+`None` only) — fixed to reject: an IBC without `exp` would otherwise verify
+forever (`instance_identity._verify_ibc_signature`).
+
+Proof: `corvin_operator/bridges/shared/test_ibc_maintain_e2e.py` runs the real
+CLI as a subprocess against a local HTTP stub standing in for
+Corvin-Features, and verifies the resulting chain with
+`security_events.verify_chain`. `test_ibc_trust_ring_parity.py` pins that the
+IBC issuer's trust ring and the license validator's session key ring never
+drift apart (a key in only one of them is a fleet-wide outage once
+`require_ibc` is required — fact 10, still open).
+
+Still open from ADR-2099 P0: nothing writes `require_ibc` (fact 3), so none
+of this is enforced on a live connection yet.

@@ -540,6 +540,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "instance.key_rotated":                 "WARNING",
     "instance.ibc_sig_failed":              "CRITICAL",
     "instance.ibc_hardware_mismatch":       "WARNING",
+    "instance.crl_refreshed":               "INFO",
+    "instance.crl_refresh_failed":          "WARNING",
+    "instance.ibc_renew_failed":            "WARNING",
     # ADR-0145 M3 — hardware tethering
     "instance.hardware_bound":              "INFO",
     # ADR-0153 M3 — per-event instance_id / Ed25519 audit-signature attestation.
@@ -996,6 +999,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "task.started":                     "INFO",
     "task.completed":                   "INFO",
     "task.failed":                      "WARNING",
+    # Task supervision + retry classification (ADR-2107, task_supervisor.py)
+    "task.retry_classified":            "INFO",
     # Skill A/B testing (core/skills/ab_testing.py)
     "ab_experiment_created":            "INFO",
     "ab_analysis_started":              "INFO",
@@ -3252,6 +3257,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # non-reversible), reason codes, origin_id. NEVER email, license_id, pubkey
     # material, or full JWT content.
     "instance.ibc_issued":            frozenset({"ibc_jti"}),
+    "instance.crl_refreshed":         frozenset({"revoked_count"}),
+    "instance.crl_refresh_failed":    frozenset({"reason"}),
+    "instance.ibc_renew_failed":      frozenset({"reason"}),
     "instance.ibc_verified":          frozenset({"origin_id", "ibc_jti", "sender_instance_id"}),
     "instance.ibc_expired":           frozenset(set()),
     "instance.ibc_revoked":           frozenset({"origin_id", "reason", "ibc_jti"}),
@@ -3872,6 +3880,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "task.started": frozenset({"task_id", "engine_id", "tenant_id"}),
     "task.completed": frozenset({"task_id", "duration_ms", "exit_code", "tenant_id"}),
     "task.failed": frozenset({"task_id", "exit_code", "timed_out", "tenant_id"}),
+    "task.retry_classified": frozenset({
+        "task_id", "attempt", "failure_class", "reason_code", "next_attempt_in_s", "tenant_id",
+    }),
     "ab_experiment_created": frozenset({
         "experiment_id", "skill_id", "baseline_version", "variant_version",
         "sample_size", "significance_threshold", "tenant_id",

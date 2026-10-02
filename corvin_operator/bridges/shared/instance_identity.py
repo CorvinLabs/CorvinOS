@@ -62,16 +62,47 @@ except ImportError:
 
 # Best-effort audit hook — imported lazily so unit tests without the forge
 # plugin can still use instance_identity.  CI lint: MUST NOT import anthropic.
-def _audit_ibc(event_type: str, severity: str, details: dict) -> None:
-    """Emit to the L16 audit chain if the SecurityEventsPlugin is available."""
+_audit_tls = threading.local()
+
+
+def _write_audit(event_type: str, severity: str, details: dict) -> None:
     try:
+        _forge_parent = Path(__file__).resolve().parents[2] / "forge"
+        if str(_forge_parent) not in sys.path:
+            sys.path.insert(0, str(_forge_parent))
+        from forge import security_events as _se  # type: ignore[import-not-found]
         try:
-            from .forge.security_events import SecurityEventsPlugin as _SEP  # type: ignore
+            from .audit import audit_path as _audit_path  # type: ignore[import-not-found]
         except ImportError:
-            from forge.security_events import SecurityEventsPlugin as _SEP  # type: ignore
-        _SEP().write_event(event_type, severity, details)
+            from audit import audit_path as _audit_path  # type: ignore[import-not-found,no-redef]
+        path = _audit_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _se.write_event(path, event_type, severity=severity, tool="", run_id="",
+                        details=details, hash_chain=True)
     except Exception:  # noqa: BLE001
         pass  # best-effort — never block IBC operations
+
+
+def _audit_ibc(event_type: str, severity: str, details: dict) -> None:
+    """Best-effort append to this process's tenant audit chain.
+
+    Until 2026-10-01 this imported a ``SecurityEventsPlugin`` that has never
+    existed, and the ``except`` swallowed the ImportError — no IBC event
+    (issued, expired, revoked) ever reached the chain. Same writer and path
+    as the A2A receiver: ``forge.security_events.write_event`` into
+    ``audit.audit_path()``.
+
+    ``write_event`` signs every record via :func:`sign_payload`, which on a
+    fresh install generates the instance key and audits that — while the
+    writer's non-reentrant lock is held. An event raised inside the signing
+    call is therefore written from a separate thread, which waits for the
+    outer write to release the lock instead of deadlocking on it.
+    """
+    if getattr(_audit_tls, "signing", False):
+        threading.Thread(target=_write_audit, args=(event_type, severity, details),
+                         name="ibc-audit-deferred").start()
+        return
+    _write_audit(event_type, severity, details)
 
 
 _INSTANCE_ID_FILE = "instance_id.json"
@@ -460,7 +491,11 @@ def get_instance_pubkey_b64() -> str:
     """
     if not _CRYPTO_OK:
         raise IBCError("cryptography package not installed")
-    key_path = ensure_instance_key()
+    _audit_tls.signing = True
+    try:
+        key_path = ensure_instance_key()
+    finally:
+        _audit_tls.signing = False
     with _lock:
         priv_pem = key_path.read_bytes()
     privkey = _serialization.load_pem_private_key(priv_pem, password=None)
@@ -480,7 +515,17 @@ def sign_payload(payload: bytes) -> str:
     """
     if not _CRYPTO_OK:
         raise IBCError("cryptography package not installed")
-    key_path = ensure_instance_key()
+    # security_events.write_event calls this while it HOLDS the chain lock. On a
+    # fresh install ensure_instance_key() generates the key and audits that;
+    # without the flag the audit re-entered write_event on the held lock and the
+    # first audit write of the install hung forever. The flag defers it to a
+    # thread (see _audit_ibc). Saved/restored so a nested call cannot clear it.
+    _prev_signing = getattr(_audit_tls, "signing", False)
+    _audit_tls.signing = True
+    try:
+        key_path = ensure_instance_key()
+    finally:
+        _audit_tls.signing = _prev_signing
     with _lock:
         priv_pem = key_path.read_bytes()
     privkey = _serialization.load_pem_private_key(priv_pem, password=None)
@@ -603,8 +648,13 @@ def _verify_ibc_signature(ibc_token: str) -> dict:
     if claims.get("iss") != "corvinlabs.io":
         raise IBCError(f"IBC has wrong iss={claims.get('iss')!r} — expected corvinlabs.io")
 
+    # ADR-2099 P0: an IBC without a numeric ``exp`` never expires, so a leaked
+    # one would verify forever. The issuer always sets it; a token without it
+    # is invalid.
     exp = claims.get("exp")
-    if exp is not None and exp < _dt.datetime.now(_dt.timezone.utc).timestamp():
+    if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+        raise IBCError("IBC has no numeric exp claim")
+    if exp < _dt.datetime.now(_dt.timezone.utc).timestamp():
         raise IBCError("IBC has expired")
 
     return claims
@@ -1065,24 +1115,102 @@ def is_ibc_revoked(*, force_refresh: bool = False) -> bool:
     return False
 
 
-def peer_ibc_revoked(jti: str, *, force_refresh: bool = False) -> bool:
-    """True only if a PEER's IBC jti is confirmed present on the CRL.
+def _read_crl_cache() -> dict[str, Any] | None:
+    cache_path = _crl_cache_path()
+    if not cache_path.exists():
+        return None
+    try:
+        import json as _json
+        cached = _json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    return cached if isinstance(cached, dict) else None
 
-    Unlike :func:`is_ibc_revoked` (which checks THIS instance's own cert), this
-    checks an incoming A2A peer's presented ``ibc_jti`` so the receiver can
-    reject a revoked instance (ADR-0145 M3 — IBC-1). Uses the cached
-    revocation list (24h TTL, 7-day offline grace) so the receive path never
-    blocks on a live network call. Ambiguity (empty jti, or CRL unreachable
-    with no cache) resolves to False — fail-open on the network dimension,
-    fail-closed only on a CONFIRMED revocation, per ADR-0145.
+
+def crl_cache_fetched_at() -> float | None:
+    """When the cached revocation list was last fetched (epoch seconds), or None."""
+    cached = _read_crl_cache()
+    if cached is None:
+        return None
+    try:
+        return float(cached.get("fetched_at", 0)) or None
+    except (TypeError, ValueError):
+        return None
+
+
+def peer_ibc_revoked(jti: str, *, force_refresh: bool = False) -> bool:
+    """True only if a PEER's IBC jti is confirmed present on the cached CRL.
+
+    Called on the A2A receive path, so it reads the cache only (ADR-2099 P0,
+    fact 4): it used to call :func:`fetch_revocation_list`, which made a live
+    fetch with a 15 s timeout once the cache was older than 24 h, and an
+    offline host paid that timeout on every envelope. The cache is refreshed
+    out of band by ``corvin-id maintain`` (corvin-ibc-maintain.timer).
+
+    A cache past the 7-day grace, or no cache, resolves to False (fail-open on
+    the network dimension, per ADR-0145). ``force_refresh`` is for operator
+    tools only and fetches first.
     """
     if not jti:
         return False
+    if force_refresh:
+        try:
+            return jti in fetch_revocation_list(force_refresh=True)
+        except Exception:  # noqa: BLE001
+            return False
+    cached = _read_crl_cache()
+    if cached is None:
+        return False
+    now = _dt.datetime.now(_dt.timezone.utc).timestamp()
+    if now - cached.get("fetched_at", 0) > _CRL_GRACE_SECONDS:
+        return False
+    return jti in cached.get("revoked_jti", [])
+
+
+def refresh_revocation_list() -> int:
+    """Fetch the CRL and rewrite the cache. Returns the number of revoked jtis.
+
+    Unlike :func:`fetch_revocation_list` this raises on failure, so the daily
+    maintenance job can report it instead of silently keeping a stale cache.
+    """
+    revoked = _fetch_crl_remote()
+    now = _dt.datetime.now(_dt.timezone.utc).timestamp()
+    _atomic_write(_crl_cache_path(), {"fetched_at": now, "revoked_jti": revoked})
+    return len(revoked)
+
+
+IBC_RENEW_WITHIN_SECONDS = 30 * 24 * 3600
+
+
+def ibc_renewal_due(*, within_seconds: int = IBC_RENEW_WITHIN_SECONDS) -> bool:
+    """True when this instance holds an IBC that expires within ``within_seconds``."""
+    cert_path = instance_cert_path()
+    if not cert_path.exists():
+        return False
     try:
-        revoked_list = fetch_revocation_list(force_refresh=force_refresh)
+        claims = _decode_corvin_claims_unverified(cert_path.read_text(encoding="utf-8").strip())
     except Exception:  # noqa: BLE001
         return False
-    return jti in revoked_list
+    exp = claims.get("exp")
+    if not isinstance(exp, (int, float)) or isinstance(exp, bool):
+        return True
+    return exp - _dt.datetime.now(_dt.timezone.utc).timestamp() < within_seconds
+
+
+def ensure_ibc_fresh(*, within_seconds: int = IBC_RENEW_WITHIN_SECONDS) -> str:
+    """Renew the IBC when it expires within ``within_seconds`` (ADR-2099 P0, fact 5).
+
+    Returns ``"unbound"`` (no IBC — binding needs an activated license and is
+    never started here), ``"fresh"``, or ``"renewed"``. Raises IBCError when a
+    due renewal fails, so the caller can report it. Also renews an IBC that
+    has already expired: expiry does not revoke the license.
+    """
+    if not instance_cert_path().exists():
+        return "unbound"
+    if not ibc_renewal_due(within_seconds=within_seconds):
+        return "fresh"
+    bind_instance()
+    return "renewed"
 
 
 def revocation_status_cached() -> str:
@@ -1122,7 +1250,11 @@ __all__ = [
     "check_hardware_binding",
     "compute_hardware_fp",
     "ensure_instance_key",
+    "crl_cache_fetched_at",
+    "ensure_ibc_fresh",
     "fetch_revocation_list",
+    "ibc_renewal_due",
+    "refresh_revocation_list",
     "get_ibc",
     "get_ibc_jwt",
     "get_instance_id",

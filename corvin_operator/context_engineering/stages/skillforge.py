@@ -41,13 +41,21 @@ def _skill_registry(tenant_id: str):
     return SkillRegistry(root)
 
 
-def _skill_create(tenant_id: str, name: str, body: str) -> None:
-    """Create a session-scoped learned-experience skill, in-process. Best-effort."""
+def _skill_create(tenant_id: str, name: str, body: str, session_id: str = None) -> None:
+    """Create a session-scoped learned-experience skill, in-process. Best-effort.
+
+    CEL skills are marked with lifecycle="turn" (default) for auto-cleanup.
+    session_id tags the skill for session-close deletion if needed.
+    """
+    from datetime import datetime
     _skill_registry(tenant_id).create(
         name=name, type="learned-experience", body_md=body,
         description=(body[:120].replace("\n", " ").strip() or name),
         claim={}, scope="session", overwrite=True,
-        created_by="context_engineering")
+        created_by="context_engineering",
+        lifecycle="turn",
+        session_id=session_id,
+        created_at=datetime.utcnow().isoformat())
 
 
 def _skill_exists(tenant_id: str, name: str) -> bool:
@@ -149,7 +157,9 @@ class SkillForgeStage:
             pre_existing = _skill_exists(ctx.tenant_id, safe)
             if not pre_existing:
                 try:
-                    _skill_create(ctx.tenant_id, safe, body)
+                    # CEL skills default to lifecycle="turn" with auto-cleanup (ADR-0409)
+                    session_id = getattr(ctx, 'session_id', None)
+                    _skill_create(ctx.tenant_id, safe, body, session_id=session_id)
                     # Track for rollback if Gate-2 rejects the payload (review R2 A4).
                     bundle.scratch.setdefault("_forged_skills", []).append(safe)
                 except Exception:  # noqa: BLE001 — fail-safe; still bind the ref

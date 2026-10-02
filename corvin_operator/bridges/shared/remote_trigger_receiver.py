@@ -743,6 +743,15 @@ class RemoteTriggerReceiver:
         forge_se: Any = None,
     ) -> None:
         self._registry = OriginRegistry(origins_dir)
+        # ADR-2099 P0: test mode lets CORVIN_IBC_PUBKEY_DER_B64 vouch for an
+        # unknown IBC kid, i.e. anyone who sets that variable can mint IBCs
+        # this receiver accepts. Never silent on a receiving host.
+        if os.environ.get("CORVIN_TEST_MODE") == "1":
+            import logging as _log
+            _log.getLogger("corvin.a2a").critical(
+                "A2A receiver started with CORVIN_TEST_MODE=1: IBCs signed by the "
+                "key in CORVIN_IBC_PUBKEY_DER_B64 are accepted. Never run a "
+                "production receiver in test mode.")
         if nonce_store is not None:
             self._nonces = nonce_store
         else:

@@ -42,16 +42,17 @@ def _b64url(raw: bytes) -> str:
 
 
 def _make_ibc(signer: Ed25519PrivateKey, *, sub: str, instance_pubkey_b64: str,
-              exp_offset_s: int = 3600) -> str:
+              exp_offset_s: int | None = 3600, jti: str | None = None) -> str:
     header = {"alg": "EdDSA", "kid": "ibc-test"}
     claims = {
         "type": "instance_binding",
         "iss": "corvinlabs.io",
         "sub": sub,
-        "jti": "ibc-" + secrets.token_hex(8),
+        "jti": jti or "ibc-" + secrets.token_hex(8),
         "instance_pubkey": instance_pubkey_b64,
-        "exp": int(time.time()) + exp_offset_s,
     }
+    if exp_offset_s is not None:
+        claims["exp"] = int(time.time()) + exp_offset_s
     h = _b64url(json.dumps(header).encode())
     p = _b64url(json.dumps(claims).encode())
     sig = _b64url(signer.sign(f"{h}.{p}".encode()))
@@ -64,6 +65,7 @@ class TestIbcAttachOverHttp(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
         self.emitted: list[dict] = []
+        self.fetches = 0
 
         def _capture(_path, event_type, **kwargs):
             self.emitted.append({"event_type": event_type, **kwargs})
@@ -86,10 +88,11 @@ class TestIbcAttachOverHttp(unittest.TestCase):
             mock.patch.object(rtr, "_forge_se", se),
             mock.patch.object(rts, "_forge_se", se),
             mock.patch.object(instance_identity, "_TEST_MODE_SNAPSHOT", "1"),
-            # CRL is an external Corvin Labs service; the receive path must not
-            # reach it from a test. Revocation itself is covered elsewhere.
-            mock.patch.object(rtr, "_peer_ibc_revoked", lambda _jti: False),
+            # The receive path must read the revocation list from cache only
+            # (ADR-2099 fact 4). A network fetch fails the test loudly.
+            mock.patch.object(instance_identity, "_fetch_crl_remote", self._no_network),
             mock.patch.dict(os.environ, {
+                "CORVIN_CRL_CACHE_PATH": str(self.tmp / "crl_cache.json"),
                 "CORVIN_IBC_PUBKEY_DER_B64": base64.b64encode(trust_der).decode(),
                 "CORVIN_INSTANCE_CERT_PATH": str(self.cert_path),
                 "CORVIN_INSTANCE_KEY_PATH": str(key_path),
@@ -123,6 +126,14 @@ class TestIbcAttachOverHttp(unittest.TestCase):
                         instance_id=self.iid_b, our_origin_id="peer-a")
         self.sender = RemoteTriggerSender(endpoints_dir=endpoints_a, instance_id=self.iid_a)
         self.addCleanup(self._tmp.cleanup)
+
+    def _no_network(self):
+        self.fetches += 1
+        raise AssertionError("revocation list fetched on the receive path")
+
+    def _write_crl(self, revoked: list[str], *, age_s: float = 0) -> None:
+        (self.tmp / "crl_cache.json").write_text(json.dumps(
+            {"fetched_at": time.time() - age_s, "revoked_jti": revoked}))
 
     def _set_require_ibc(self, value: bool) -> None:
         p = self.origins_b / "peer-a.json"
@@ -178,6 +189,38 @@ class TestIbcAttachOverHttp(unittest.TestCase):
         self._set_require_ibc(False)
         res = self._send()
         self.assertTrue(res.ok, f"status={res.status}")
+
+
+    def test_ibc_without_exp_rejected_when_required(self):
+        self._set_require_ibc(True)
+        self._bind(_make_ibc(self.trust_key, sub=self.iid_a,
+                             instance_pubkey_b64=self.instance_pubkey, exp_offset_s=None))
+        res = self._send()
+        self.assertFalse(res.ok, "an IBC without exp never expires and must not verify")
+        self.assertFalse(self._events("instance.ibc_verified"))
+
+    def test_ibc_revoked_in_cache_rejected(self):
+        self._set_require_ibc(True)
+        jti = "ibc-" + secrets.token_hex(8)
+        self._write_crl([jti])
+        self._bind(_make_ibc(self.trust_key, sub=self.iid_a,
+                             instance_pubkey_b64=self.instance_pubkey, jti=jti))
+        res = self._send()
+        self.assertFalse(res.ok)
+        self.assertEqual(self.fetches, 0)
+
+    def test_stale_crl_cache_is_never_fetched_on_receive(self):
+        # Older than the 24 h TTL: the old code made a live fetch (15 s timeout)
+        # inside receive() here, on every envelope.
+        self._set_require_ibc(True)
+        self._write_crl([], age_s=3 * 24 * 3600)
+        self._bind(_make_ibc(self.trust_key, sub=self.iid_a,
+                             instance_pubkey_b64=self.instance_pubkey))
+        t0 = time.monotonic()
+        res = self._send()
+        self.assertTrue(res.ok, f"status={res.status}")
+        self.assertEqual(self.fetches, 0)
+        self.assertLess(time.monotonic() - t0, 10)
 
 
 if __name__ == "__main__":

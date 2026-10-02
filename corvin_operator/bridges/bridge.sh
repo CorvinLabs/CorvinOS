@@ -100,6 +100,9 @@ UNIT_WATCHDOG_TIMER="corvin-voice-bridge-watchdog.timer"
 LEGACY_UNITS=("corvin-hermes-health.timer" "corvin-hermes-health.service")
 UNIT_CORVIN_BG_MONITOR_SVC="corvin-bg-monitor.service"
 UNIT_CORVIN_BG_MONITOR_TIMER="corvin-bg-monitor.timer"
+# ADR-2099 P0 — daily IBC revocation-list refresh + IBC renewal.
+UNIT_CORVIN_IBC_MAINTAIN_SVC="corvin-ibc-maintain.service"
+UNIT_CORVIN_IBC_MAINTAIN_TIMER="corvin-ibc-maintain.timer"
 ALL_UNITS=("$UNIT_ADAPTER" "$UNIT_WA" "$UNIT_TG" "$UNIT_DC" "$UNIT_SK" "$UNIT_EM" "$UNIT_SG" "$UNIT_TM" \
            "$UNIT_WATCHDOG_TIMER" "$UNIT_WATCHDOG_SVC" \
            "$UNIT_CORVIN_TIMEOUT_TIMER" "$UNIT_CORVIN_TIMEOUT_SVC" \
@@ -109,6 +112,7 @@ ALL_UNITS=("$UNIT_ADAPTER" "$UNIT_WA" "$UNIT_TG" "$UNIT_DC" "$UNIT_SK" "$UNIT_EM
            "$UNIT_CORVIN_SUPPLY_CHAIN_WEEKLY_TIMER" "$UNIT_CORVIN_SUPPLY_CHAIN_WEEKLY_SVC" \
            "$UNIT_CORVIN_SUPPLY_CHAIN_CRITICAL_TIMER" "$UNIT_CORVIN_SUPPLY_CHAIN_CRITICAL_SVC" \
            "$UNIT_CORVIN_BG_MONITOR_TIMER" "$UNIT_CORVIN_BG_MONITOR_SVC" \
+           "$UNIT_CORVIN_IBC_MAINTAIN_TIMER" "$UNIT_CORVIN_IBC_MAINTAIN_SVC" \
            "$UNIT_CORVIN_WEBUI")
 
 # Resolve absolute paths to node + python so systemd's empty PATH doesn't
@@ -337,6 +341,8 @@ install_units() {
               "$BRIDGES_DIR/shared/systemd/$UNIT_WATCHDOG_TIMER" \
               "$BRIDGES_DIR/shared/systemd/$UNIT_CORVIN_BG_MONITOR_SVC" \
               "$BRIDGES_DIR/shared/systemd/$UNIT_CORVIN_BG_MONITOR_TIMER" \
+              "$BRIDGES_DIR/shared/systemd/$UNIT_CORVIN_IBC_MAINTAIN_SVC" \
+              "$BRIDGES_DIR/shared/systemd/$UNIT_CORVIN_IBC_MAINTAIN_TIMER" \
               "$BRIDGES_DIR/whatsapp/systemd/$UNIT_WA" \
               "$BRIDGES_DIR/telegram/systemd/$UNIT_TG" \
               "$BRIDGES_DIR/discord/systemd/$UNIT_DC" \
@@ -445,6 +451,11 @@ cmd_up() {
     ok "corvin supply-chain critical-diff timer enabled (daily 05:00)"
   else
     warn "corvin supply-chain critical-diff timer could not be enabled"
+  fi
+  if systemctl --user enable --now "$UNIT_CORVIN_IBC_MAINTAIN_TIMER" 2>/dev/null; then
+    ok "corvin IBC maintenance timer enabled (daily 04:15, CRL refresh + IBC renewal)"
+  else
+    warn "corvin IBC maintenance timer could not be enabled"
   fi
   # WebUI host — uvicorn serving corvin-console under the gateway ASGI
   # app on 127.0.0.1:8765. Runs WITHOUT --reload so the command-centre chat

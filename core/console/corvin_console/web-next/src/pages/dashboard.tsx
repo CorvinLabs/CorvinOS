@@ -565,6 +565,16 @@ export function DashboardPage() {
 
 // ── Instance Identity Card ──────────────────────────────────────────────────
 
+const CRL_GRACE_S = 7 * 24 * 3600;
+
+function crlLine(fetchedAt: number | null): string {
+  if (!fetchedAt) return "Revocation list never fetched — run corvin-id maintain";
+  const ageS = Date.now() / 1000 - fetchedAt;
+  const when = new Date(fetchedAt * 1000).toLocaleString("en-US");
+  if (ageS > CRL_GRACE_S) return `Revocation list stale (last fetched ${when})`;
+  return `Revocation list fetched ${when}`;
+}
+
 function InstanceIdentityCard({ status }: { status: InstanceIdentityStatus }) {
   return (
     <div className="space-y-3 text-sm">
@@ -594,6 +604,14 @@ function InstanceIdentityCard({ status }: { status: InstanceIdentityStatus }) {
           <Badge variant="ok" className="text-[10px]">not revoked</Badge>
         )}
       </div>
+      <p className="text-xs text-muted-foreground" data-testid="ibc-maintenance">
+        {crlLine(status.crl_fetched_at)}
+        {status.ibc_bound && (status.renewal_due
+          ? " · IBC renewal due — it renews on the next daily run"
+          : status.expires_at
+            ? ` · IBC valid until ${new Date(status.expires_at * 1000).toLocaleDateString("en-US")}`
+            : "")}
+      </p>
       {!status.ibc_bound && (
         <p className="text-xs text-muted-foreground">
           Bind this instance to your Corvin Labs account with{" "}
