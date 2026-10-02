@@ -815,17 +815,21 @@ structurally excluded. The CLI transcript is NOT the record — auto-compaction 
   erasure (`L-session-ledger`, any identity key) — and, on the console, by an explicit
   delete of the chat (which also clears its CEL anchor store) or the pre-existing
   50-chats-per-tenant cap (oldest chat, whole). `path_gate` denies writes to any
-  `session_ledger`/`.corvin-ledger` path, including through a glob, quotes, a backslash or
-  an assigned shell variable. **Boundary (stated, not hidden):** `path_gate` is a syntactic
-  guard. A worker running as the same OS user that executes a program it wrote (a script,
-  `find -exec sh`, `sqlite3 .output`) can write any file that user can — the ledger exactly
-  like the audit chain and the adapter's own code. Integrity against that needs OS-level
+  `session_ledger`/`.corvin-ledger`/`pending_notifications` path, including through a glob,
+  quotes, a backslash or a directly assigned shell variable. **Boundary (stated, not
+  hidden):** `path_gate` is a syntactic guard against accidental and naive writes. Deliberate
+  evasion by a worker running as the same OS user — a program it wrote (a script,
+  `find -exec sh`, `sqlite3 .output`) or shell syntax the hook does not evaluate (variable
+  chains, `read`/`printf -v`, brace expansion, `$'…'` quoting) — can write any file that user
+  can: the ledger exactly like the audit chain and the adapter's own code. Integrity against that needs OS-level
   isolation of the worker (ADR-0241/0238), not another gate rule. Every adapter-side write
   of a ledger/view/sidecar/anchor file goes through a fresh `mkstemp` temp or `O_NOFOLLOW`,
   so a planted symlink is never followed.
   On disk the texts are `user_text`/`assistant_text` — `user` is an erasure identity key.
   Delivered `/task` results, console slash-command replies, a refused `/btw` and the
   streamed part of a cancelled console answer are recorded too.
+- **The re-supplied history passes L34 against the engine that will read it** (block and
+  view withheld on refusal) — side turns and an engine switch cannot route around it.
 - **The worker reads a VIEW, never the record:** `<workdir>/.corvin-history.md`, regenerated
   on every spawn (bridge and console) with the same withholding as the injected block; the
   block names only that file. Erasure deletes every view (it regenerates).

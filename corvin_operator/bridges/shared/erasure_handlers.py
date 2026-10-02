@@ -2059,9 +2059,17 @@ class SessionLedgerHandler:
         # The ledger store (``session_ledger/``, outside every worker cwd) for
         # the tenant tree and the pre-ADR-0007 voice root, plus ledgers not yet
         # migrated out of a session workdir (``.corvin-ledger/``).
-        store_roots = [r for r in (th / "session_ledger", th / "voice" / "session_ledger")
+        # The legacy session root the adapter still supports
+        # (``$XDG_CACHE_HOME/corvin-voice/sessions``, session_state.py) puts its
+        # store beside it — outside the tenant tree (review R7-2).
+        xdg = os.environ.get("XDG_CACHE_HOME")
+        legacy = Path(xdg) / "corvin-voice" if xdg else None
+        store_roots = [r for r in (th / "session_ledger", th / "voice" / "session_ledger",
+                                   *((legacy / "session_ledger",) if legacy else ()))
                        if r.is_dir()]
-        session_roots = [r for r in (th / "sessions", th / "voice" / "sessions") if r.is_dir()]
+        session_roots = [r for r in (th / "sessions", th / "voice" / "sessions",
+                                     *((legacy / "sessions",) if legacy else ()))
+                         if r.is_dir()]
         if not store_roots and not session_roots:
             return _result(self.layer_id, t0, 0, absent=True,
                            absent_reason="session tree absent",

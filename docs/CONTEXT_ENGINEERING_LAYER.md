@@ -60,10 +60,13 @@ class MemoryMatch:
    article numbers are kept ("Bedrock 403", "10/day", "Art. 17" ≠ "Art. 32"), but
    a two-digit number is WEAK evidence: it adds to a score and never counts as
    one of the two matched terms a result needs ("20 minutes"); fillers of an
-   everyday request (help, explain, give, tell, suggest, …) are stop words, while
-   words that ARE topics here (create, write, work, plan, …) are dropped only as
-   the request's OPENING verb, also after a polite or modal opener ("Please
-   write…", "Could you create…"); "worker" is not stemmed into
+   everyday request (help, explain, give, tell, suggest, …) are stop words, and
+   request verbs that can ALSO be topics here (create, write, work, plan, make,
+   draft, learn, compose) are weak evidence wherever they stand — unless the
+   ADR's title carries them next to a non-weak title word ("forge.create
+   capability" for "Who can create forge tools?"). A position rule ("only the
+   opening verb") broke on "Let's", "I'd" and greetings (review R7-1); "worker"
+   is not stemmed into
    "work"; "Artikel 17" is the token of "Art. 17"; a small
    German→English table maps core terms (Kontext, Sitzung, Kette, Löschung, …)
    because the corpus is English. A bridge group-chat observer block in front of
@@ -103,12 +106,17 @@ class MemoryMatch:
 
 Measured on the real corpus with the labelled sets in
 `corvin_operator/context_engineering/tests/adr_retrieval_eval.py` (2026-10-02,
-after review round 6): positive sets 31/31 + 36/36 (round 6's realistic questions
-incl. polite openers) with 0 forbidden hits; 0 noise on 41 + 36 everyday
-non-CorvinOS requests, with 5 more listed under AMBIGUOUS WITH their measured hits
-(a timer, a running schedule, a date, baby names, an alarm — round 6's set had
-13/40 noisy before its fix, the pre-round-4 loader 10/40); a held-out negative
-set of 25 written after the round-4 fix: 0/25; the named-ADR set 7/7.
+after review round 7): positive sets 31/31 + 36/36 (round 6's realistic questions
+incl. polite openers) with 0 forbidden hits; 0 noise on 42 + 36 everyday
+non-CorvinOS requests, with 4 more listed under AMBIGUOUS WITH their measured hits
+(a running schedule, a date, baby names, an alarm); a held-out negative set of
+25: 0/25; the named-ADR set 7/7; the labelled everyday sets with a greeting or
+"Let's"/"I'd like to" in front: 4 of 515. **Measured limit, not hidden:** on a
+FRESH set of 55 everyday requests a round-7 reviewer wrote, 10 return ADRs (every
+earlier loader version: 10–14) — everyday uses of corpus nouns (chain, tenant,
+session, cost, route, cloud, voice) and generic words that are rare in ADR
+previews. Lexical matching cannot tell "my bike chain" from "the audit chain";
+the labelled sets are what the tests hold, this is the expected rate off them.
 Round 5 measured the recall cost of round 4's stop words on 61 fresh CorvinOS
 questions and narrowed them back to the pre-round-4 loader's recall (40/46 and
 14/15 on the reviewer's sets); 160 "<verb> ADR-NNNN" requests return the named

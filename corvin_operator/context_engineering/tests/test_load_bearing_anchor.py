@@ -486,3 +486,16 @@ def test_retrieved_adrs_never_evict_or_pose_as_offered_options(isolated, monkeyp
     assert not any("ADR-0" in l for l in lines[menu_at:])
     # a pre-R6 store holding an ADR id as a "decision" renders it as a constraint
     assert not any("ADR-0999" in l for l in lines[menu_at:])
+
+
+def test_the_session_goal_survives_the_fact_cap(isolated, monkeypatch):
+    """Review R7-2: the global CAP evicted the goal, and the next turn re-armed a
+    pending goal from whatever the user said last."""
+    key = "sess-cap"
+    _anchor.add_fact("_default", key, "goal", "Migrate billing to Postgres without downtime")
+    for i in range(_anchor.CAP * 3):
+        _anchor.add_fact("_default", key, "constraint", f"constraint number {i}")
+    facts = _anchor.load_facts("_default", key)
+    assert len(facts) <= _anchor.CAP
+    assert [f["text"] for f in facts if f["kind"] == "goal"] == [
+        "Migrate billing to Postgres without downtime"]

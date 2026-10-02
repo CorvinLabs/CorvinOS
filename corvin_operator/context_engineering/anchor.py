@@ -298,8 +298,14 @@ def add_fact(tenant_id: str, session_key: str, kind: str, text: str, *,
             if len(decisions) > DECISION_SUBCAP:
                 _evict = {id(f) for f in decisions[:-DECISION_SUBCAP]}
                 facts = [f for f in facts if id(f) not in _evict]
-            if len(facts) > CAP:  # cap the newest CAP, evict oldest
-                facts = facts[-CAP:]
+            if len(facts) > CAP:  # cap the newest CAP, evict oldest — never the goal
+                # The ORIGINAL session goal is exempt: evicting it let the next
+                # turn re-arm a pending goal from whatever the user said last
+                # (review R7-2: "Migrate billing…" became "and the backups").
+                goals = [f for f in facts if f.get("kind") == "goal"]
+                rest = [f for f in facts if f.get("kind") != "goal"]
+                keep = rest[-max(CAP - len(goals), 0):] if CAP > len(goals) else []
+                facts = [f for f in facts if f.get("kind") == "goal" or any(f is k for k in keep)]
             _write_all(tenant_id, session_key, facts)
             return entry
     except Exception:  # noqa: BLE001 — persistence is best-effort, never break a turn

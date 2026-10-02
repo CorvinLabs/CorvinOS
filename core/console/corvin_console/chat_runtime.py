@@ -2191,7 +2191,7 @@ def _session_ledger_block(sess: WebChatSession, current_prompt: str = "") -> str
         # The worker is pointed at the generated ``.corvin-history.md`` view in
         # its workdir, never at ``turns.jsonl``: the UI log keeps a refused
         # message's text for the chat window (review R5-2).
-        return _ledger.render_turn_log_context(
+        block = _ledger.render_turn_log_context(
             read_turns(sess.tenant_id, sess.sid), sess.workdir,
             resumed=sess.turn_count > 0,
             channel="web", chat_key=sess.chat_key, tenant_id=sess.tenant_id,
@@ -2199,6 +2199,25 @@ def _session_ledger_block(sess: WebChatSession, current_prompt: str = "") -> str
             # logged; naming it lets an earlier unanswered message stay history.
             current_prompt=current_prompt or None,
         )
+        if block:
+            # L34 on the re-supplied history against the engine that will read
+            # it — the pre-spawn gate sees only this turn's message (R7-4).
+            try:
+                from spawn_gates import check_l34 as _l34  # type: ignore  # noqa: PLC0415
+                refused = _l34(_configured_os_engine(sess.tenant_id) or "claude_code",
+                               sess.tenant_id, prompt=block, channel=CHANNEL,
+                               chat_key=sess.chat_key)
+            except Exception:  # noqa: BLE001 — fail closed
+                refused = "data-flow gate error"
+            if refused is not None:
+                try:
+                    (Path(sess.workdir) / ".corvin-history.md").unlink(missing_ok=True)
+                except OSError:
+                    pass
+                return ("\n\nEarlier turns of this chat exist but are withheld from this "
+                        "engine: the tenant's data-classification policy does not allow "
+                        "sending them here.\n")
+        return block
     except Exception:  # noqa: BLE001
         return ""
 

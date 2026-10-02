@@ -582,7 +582,10 @@ def _record_in_ledger(rec: dict) -> None:
     saw it in the chat, so the chat's later turns must be able to see it too.
     Exactly once — it runs only on the delivering poller, under the record's
     O_EXCL lock. Best-effort: never raises, never blocks a delivery."""
-    wd = rec.get("ledger_dir") or _derive_ledger_workdir(rec)
+    # Always derived from the channel + chat, never taken from the record: a
+    # record's ``ledger_dir`` would let a forged queue file write anywhere
+    # (review R7-3). The queue itself is path_gate-protected.
+    wd = _derive_ledger_workdir(rec)
     if not wd:
         return
     try:

@@ -20,7 +20,11 @@ Mechanism — three rules, each structural rather than best-effort:
    one JSON object per line, opened
    ``O_APPEND``, ``flock``-serialised, fsynced, mode 0600. The worker reads
    only the generated view ``<workdir>/.corvin-history.md``. Nothing in this
-   module rewrites or deletes a line. Session resets go through
+   module rewrites or deletes a line — with one exception, the one-time
+   start-up merge of a pre-R5 ledger into an existing store
+   (:func:`migrate_legacy_ledgers`), which orders both by time and renumbers
+   ``seq``/``n``; that can move the ``/new`` fence number and so start a fresh
+   CEL anchor epoch for that chat. Session resets go through
    ``session_state.reset_claude_session_state``, which only removes the CLI's
    own state files and never this directory. The only path that removes
    ledger content is GDPR Art. 17 erasure: ``erasure_handlers.
@@ -134,6 +138,18 @@ def migrate_legacy_ledgers(roots: Iterable[Path | str]) -> int:
         for f in files:
             try:
                 legacy, wd = f.parent, f.parent.parent
+                # Never through a link, never a non-regular or multiply linked
+                # file: a worker can plant `.corvin-ledger -> <other chat>` or a
+                # file symlink, and the move/merge would adopt another chat's
+                # history or dead-end this chat's recording (review R7-2).
+                import stat as _stat  # noqa: PLC0415
+                ls_dir, ls_file = os.lstat(legacy), os.lstat(f)
+                if (_stat.S_ISLNK(ls_dir.st_mode) or not _stat.S_ISDIR(ls_dir.st_mode)
+                        or not _stat.S_ISREG(ls_file.st_mode) or ls_file.st_nlink != 1
+                        or any(os.path.islink(x) for x in legacy.iterdir())):
+                    _audit("session_ledger.append_failed",
+                           details={"record_kind": "migration", "reason": "unsafe_legacy_entry"})
+                    continue
                 d = ledger_dir(wd)
                 if not (d / LEDGER_FILE).exists():
                     d.parent.mkdir(parents=True, exist_ok=True)

@@ -622,9 +622,14 @@ class TestRound4:
         assert eh._purge_jsonl_file(f, "chat-1") == 2
         assert f.read_bytes() == b""
 
-    def test_delivered_background_result_lands_in_the_chat_ledger(self, wd, tmp_path, monkeypatch):
+    def test_delivered_background_result_lands_in_the_chat_ledger(self, tmp_path, monkeypatch):
         import completion_notify as cn
+        import erasure_handlers as eh
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        # The chat's workdir is derived from channel + chat (R7-3), never taken
+        # from the queue record.
+        wd = eh._tenant_home("_default") / "sessions" / "voice" / "telegram" / "chat_1"
+        wd.mkdir(parents=True)
         tid = cn.register("bgt_ledger1", channel="telegram", chat_id="chat-1", sender="u1",
                           label="summarise the Q3 report", ledger_dir=str(wd),
                           ledger_chat_key="chat-1")
@@ -686,6 +691,39 @@ class TestRound6b:
         assert (d / "counters.json").exists()
         eh.SessionLedgerHandler(tenant_id="_default").purge(jid, "r")
         assert not d.exists()
+
+
+class TestRound7:
+    def test_a_forged_ledger_dir_in_a_queue_record_is_ignored(self, tmp_path, monkeypatch):
+        """Review R7-3: the record's ledger_dir was trusted."""
+        import completion_notify as cn
+        import erasure_handlers as eh
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        tid = cn.register("forged_1", channel="telegram", chat_id="nochat", sender="u",
+                          ledger_dir=str(elsewhere), ledger_chat_key="nochat")
+        cn.mark_done(tid, text="INJECTED")
+        cn.deliver_ready(tmp_path / "out")
+        assert not list(tmp_path.rglob("ledger.jsonl"))
+
+
+class TestRound7b:
+    def test_xdg_cache_legacy_ledgers_are_erased(self, tmp_path, monkeypatch):
+        """Review R7-2: a chat on the supported XDG_CACHE_HOME legacy root kept
+        its ledger beside it, outside the tenant tree the erasure scanned."""
+        import erasure_handlers as eh
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        jid = "4915112345678@s.whatsapp.net"
+        wd = tmp_path / "cache" / "corvin-voice" / "sessions" / "whatsapp" / eh._ledger_safe_key(jid)
+        wd.mkdir(parents=True)
+        sl.append_turn(wd, channel="whatsapp", chat_key=jid, user_text="hi", assistant_text="x")
+        sl.render_context(wd)
+        assert sl.ledger_path(wd).is_file()
+        res = eh.SessionLedgerHandler(tenant_id="_default").purge(jid, "r")
+        assert res.count >= 1 and not sl.ledger_path(wd).exists()
+        assert not sl.view_path(wd).exists()
 
 
 class TestRound5:

@@ -49,13 +49,18 @@ minute minutes hour hours
 #: copy-on-write, skill writes; work: work items; three: three-tier; per day:
 #: quotas) are NOT stop words (review R5-1 measured the recall they cost);
 #: as the request's OPENING verb they carry none, see _LEADING_VERBS.
-#: An opening imperative ("Write a haiku…", "Create a shopping list…") names the
-#: action, not the subject; anywhere else these words can be the subject.
-_LEADING_VERBS = frozenset("write create draft make plan learn work compose".split())
-#: Polite / modal openers before that verb ("Please write…", "Could you create…",
-#: "I want to plan…") — the verb after them is still the opening one (review R6-4).
-_OPENERS = frozenset("""please pls kindly can could would will you let lets i we want need
-like to me us bitte kannst könntest würdest du mir uns ich möchte will""".split())
+#: Request verbs ("write a haiku", "let's plan a trip", "I'd like to create…")
+#: are WEAK evidence wherever they stand: they add to a score but never count as
+#: one of the two matched terms a result needs — like a two-digit number. A
+#: position rule ("only the opening verb") broke on "Let's", "I'd" and every
+#: greeting (review R7-1); as plain stop words they cost recall on questions
+#: where they ARE the topic ("forge.create", "copy-on-write", R5-1).
+_WEAK_VERB_WORDS = "write create draft make plan learn work compose".split()
+_WEAK_VERBS: frozenset = frozenset()   # their stems; filled once _stem exists
+
+
+def _is_weak(token: str) -> bool:
+    return (token.isdigit() and len(token) == 2) or token in _WEAK_VERBS
 
 #: German → English for the core vocabulary of this corpus (ADRs are English).
 #: Applied before stemming; deliberately small — a translation table is not a
@@ -122,21 +127,15 @@ def _stem(word: str) -> str:
     return word
 
 
+_WEAK_VERBS = frozenset(_stem(w) for w in _WEAK_VERB_WORDS)
+
+
 def tokenize(text: str) -> List[str]:
     """Whole-word, stop-word-free, stemmed tokens (order-preserving, deduped)."""
     out: Dict[str, None] = {}
     prev = ""
-    opening = True
     for w in _TOKEN_RE.findall((text or "").lower()):
         w = _DE_EN.get(w, w)
-        if opening:
-            if w in _OPENERS:
-                prev = w
-                continue
-            opening = False
-            if w in _LEADING_VERBS:
-                prev = w
-                continue
         if re.fullmatch(r"l\d{1,2}", w):        # layer ids: L4, L35
             out[w] = None
         elif w.isdigit() and prev == "layer" and len(w) <= 2:
@@ -508,10 +507,15 @@ class ADRLoader:
                 continue
             title = self._title_tokens[adr_id]
             hits = [t for t in known if t in body]
-            # A bare two-digit number ("20 minutes", "10/day") is weak evidence:
-            # it may add to a score but never counts as one of the two matched
-            # terms a result needs (review R6-4).
-            strong = [t for t in hits if not (t.isdigit() and len(t) == 2)]
+            # Weak evidence (a two-digit number, a request verb — _is_weak) may
+            # add to a score but never counts as one of the two matched terms a
+            # result needs (review R6-4, R7-1).
+            # A request verb counts after all when the decision is ABOUT it:
+            # in the title together with a non-weak title word ("forge.create
+            # capability" for "Who can create forge tools?").
+            strong = [t for t in hits if not _is_weak(t)]
+            if any(t in title for t in strong):
+                strong += [t for t in hits if t in _WEAK_VERBS and t in title]
             if not strong:
                 continue
             # One matched word is topic evidence for a one-word question, or for

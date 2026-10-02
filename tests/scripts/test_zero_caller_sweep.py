@@ -418,3 +418,28 @@ def test_stdlib_namesake_beside_a_script_launched_from_a_package_dir_links():
     shared = z.REPO / "corvin_operator" / "bridges" / "shared"
     assert shared in idx.script_dirs
     assert idx.resolve("profile", shared / "adapter.py") == [shared / "profile.py"]
+
+
+def test_only_the_loader_s_plugin_files_are_roots(tmp_path, monkeypatch):
+    """Review R7-1: a plugin.yaml outside the builtin root, or a plugin.py
+    shadowed by a provider.py, is never loaded — and must not count as live."""
+    shape = "class {}:\n    plugin_id = 'x'\n    def on_load(self, ctx): pass\n"
+    _tree(tmp_path, {
+        "core/main.py": "x = 1\n",
+        "core/zzplug/plugin.yaml": "plugin_id: z\n",
+        "core/zzplug/plugin.py": shape.format("OutsidePlugin"),
+        "core/plugins/buildin/ai/zz/plugin.yaml": "plugin_id: zz\n",
+        "core/plugins/buildin/ai/zz/provider.py": shape.format("LoadedPlugin"),
+        "core/plugins/buildin/ai/zz/plugin.py": shape.format("ShadowedPlugin"),
+    })
+    _sandbox(monkeypatch, tmp_path)
+    assert {c for _f, c in _dead()} == {"OutsidePlugin", "ShadowedPlugin"}
+
+
+def test_a_startup_module_name_never_links_to_a_script_sibling():
+    """Review R7-3: ``abc``/``os`` are imported before any script runs, so a
+    sibling ``abc.py`` beside a path-launched script is never what loads."""
+    assert {"abc", "os", "codecs", "io"} <= z._STARTUP_MODULES
+    idx, _live, _roots, _rep = _real()
+    shared = z.REPO / "corvin_operator" / "bridges" / "shared"
+    assert idx.resolve("abc", shared / "adapter.py") == []

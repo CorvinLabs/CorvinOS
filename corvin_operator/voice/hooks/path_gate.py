@@ -208,6 +208,10 @@ def is_protected_path(path: str | Path) -> bool:
     # tree is (tenant home, legacy voice root), the component decides.
     if "session_ledger" in abs_p.parts or ".corvin-ledger" in abs_p.parts:
         return True
+    # The pending-notification queue: a forged record is delivered to a chat AND
+    # recorded in its session ledger as the assistant's answer (review R7-3).
+    if "pending_notifications" in abs_p.parts:
+        return True
 
     home = _corvin_home()
     home_str = str(home)
@@ -631,7 +635,7 @@ _TARGET_ALL_CMDS = ("truncate", "ln", "chmod", "chown", "chgrp", "chattr",
 # to static parsing, so a protected file argument is fail-closed.
 _SCRIPTED_EDITORS = ("ex", "ed")
 _PROTECTED_HINTS = ("forge", "skill-forge", "audit.jsonl", "policy.json",
-                    ".corvin", ".corvin-ledger", "ledger.jsonl", "session_ledger",
+                    ".corvin",
                     "secrets.json", "corvin-voice",
                     # ADR-0012 — data-locality operator policy
                     "data_policy.yaml", "data_policy.yml",

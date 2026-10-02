@@ -3589,6 +3589,9 @@ def _resolve_spawn_inputs(
                 tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default",
                 withhold=_ledger_consent_withhold(channel, str(chat_key)),
             )
+            _ledger_block = _ledger_data_flow_gate(
+                _ledger_block, "claude_code", channel=str(channel or ""),
+                chat_key=str(chat_key), workdir=_session_dir(channel, str(chat_key)))
             if _ledger_block:
                 sys_prompt = sys_prompt + _ledger_block
         except Exception as e:  # noqa: BLE001
@@ -4563,6 +4566,37 @@ def _ledger_consent_withhold(channel: str, chat_key: str):
             return "observer_consent"
         return None
     return _check
+
+
+def _ledger_data_flow_gate(block: str, engine_name: str, *, channel: str, chat_key: str,
+                           workdir: Path) -> str:
+    """L34 on the RE-SUPPLIED history, against the engine about to read it.
+
+    The ledger block reaches the model in the system prompt, which no pre-spawn
+    gate inspects — only the new message is. A side turn recorded past L34
+    (e.g. a /plugin-builder answer) or a turn admitted on a local engine would
+    otherwise reach an engine the tenant's data-classification matrix forbids
+    for it (review R7-4). Refused → the block is replaced by one line and the
+    worker-readable view is removed for this spawn. Never raises; a gate error
+    refuses (the helper is fail-closed for a nameless engine / missing module).
+    """
+    if not block:
+        return block
+    import types as _types  # noqa: PLC0415
+    try:
+        msg = _check_compliance_or_fail(
+            _types.SimpleNamespace(name=engine_name), prompt=block, persona=None,
+            channel=channel, chat_key=chat_key)
+    except Exception:  # noqa: BLE001
+        msg = "data-flow gate error"
+    if msg is None:
+        return block
+    try:
+        (Path(workdir) / ".corvin-history.md").unlink(missing_ok=True)
+    except OSError:
+        pass
+    return ("\n\nEarlier turns of this chat exist but are withheld from this engine: "
+            "the tenant's data-classification policy does not allow sending them here.\n")
 
 
 def _ledger_record_side_turn(channel: str, chat_key: str, user_text: str, reply_text: str, *,
@@ -6657,6 +6691,10 @@ def _call_codex_streaming_via_engine(
                 chat_key=str(chat_key), engine_transcript=False,
                 withhold=_ledger_consent_withhold(channel, str(chat_key)),
                 tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default").strip()
+            _ledger_block = _ledger_data_flow_gate(
+                _ledger_block, getattr(_CodexCliEngine, "name", "codex_cli"),
+                channel=str(channel or ""), chat_key=str(chat_key),
+                workdir=_session_dir(channel, str(chat_key))).strip()
             if _ledger_block:
                 system_parts.append(_ledger_block)
         except Exception as e:  # noqa: BLE001
@@ -7000,6 +7038,10 @@ def _call_opencode_streaming_via_engine(
                 chat_key=str(chat_key), engine_transcript=False,
                 withhold=_ledger_consent_withhold(channel, str(chat_key)),
                 tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default").strip()
+            _ledger_block = _ledger_data_flow_gate(
+                _ledger_block, getattr(_OpenCodeEngine, "name", "opencode"),
+                channel=str(channel or ""), chat_key=str(chat_key),
+                workdir=_session_dir(channel, str(chat_key))).strip()
             if _ledger_block:
                 system_parts.append(_ledger_block)
         except Exception as e:  # noqa: BLE001

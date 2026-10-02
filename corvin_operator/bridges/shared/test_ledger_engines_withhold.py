@@ -71,3 +71,24 @@ def test_split_observer_block_round_trips_the_real_format():
     obs, owner = adapter._split_observer_block(block + "the owner's question")
     assert obs == block and owner == "the owner's question"
     assert adapter._split_observer_block("plain message") == ("", "plain message")
+
+
+def test_history_the_data_flow_policy_forbids_for_this_engine_is_withheld(monkeypatch):
+    """Review R7-4: L34 saw only the new message; the re-supplied history in the
+    system prompt reached an engine the tenant's matrix forbids for it."""
+    chat = "grp-l34"
+    wd = adapter._session_dir("telegram", chat)
+    sl.append_turn(wd, channel="telegram", chat_key=chat, user_text="SECRET-AKIA-PAYLOAD",
+                   assistant_text="ok")
+    seen: list = []
+    monkeypatch.setattr(adapter, "_CodexCliEngine", _engine_recording(seen))
+    monkeypatch.setattr(adapter, "_run_pre_dispatch_gates", lambda *a, **k: None)
+    monkeypatch.setattr(adapter, "_check_compliance_or_fail",
+                        lambda engine, **kw: "[data-flow] refused" if "SECRET" in (kw.get("prompt") or "") else None)
+    try:
+        adapter._call_codex_streaming_via_engine("next", "telegram", chat, {}, None, "off", wd, {})
+    except Exception:  # noqa: BLE001
+        pass
+    assert seen and "SECRET-AKIA-PAYLOAD" not in seen[0]
+    assert "withheld from this engine" in seen[0]
+    assert not (wd / ".corvin-history.md").exists()

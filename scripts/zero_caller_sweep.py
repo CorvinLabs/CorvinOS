@@ -447,7 +447,8 @@ class Index:
         head, _, tail = dotted.partition(".")
         external = head in self.external
         if src is not None and not (external and (src.parent / "__init__.py") in self.file_set
-                                    and src.parent not in self.script_dirs):
+                                    and (src.parent not in self.script_dirs
+                                         or head in _STARTUP_MODULES)):
             sib = self._at(src.parent, rel)
             if sib:
                 return sib[:1]
@@ -609,11 +610,19 @@ def _root_refs(idx: Index) -> tuple[set[Path], list[str], list[tuple[str, Path]]
     # loader (core/plugins/corvin_plugins/bootstrap.py::_builtin_plugin_dirs /
     # _load_builtin_class) walks for plugin.yaml and loads provider.py or
     # plugin.py by file path. A plugin.json entry_point is NOT loaded by it.
+    # Only under the builtin root it scans (``_BUILTIN_ROOT``), and only the
+    # FIRST of provider.py / plugin.py that exists — that is the one it loads;
+    # a plugin.yaml elsewhere, or a plugin.py shadowed by a provider.py, is
+    # never loaded (review R7-1).
+    builtin_root = REPO / "core" / "plugins" / "buildin"
     for manifest in _repo_walk(lambda n: n == "plugin.yaml"):
+        if builtin_root not in manifest.parents:
+            continue
         for fname in ("provider.py", "plugin.py"):
             cand = manifest.parent / fname
             if cand in idx.file_set:
                 files.add(cand)
+                break
     # Shell launchers anywhere in the repo start python files by path or by -m.
     # Comments and echo/printf text are not launches: a stale status script
     # NAMING a module in a comment kept that module's package alive (R5-3).
@@ -630,6 +639,27 @@ def _root_refs(idx: Index) -> tuple[set[Path], list[str], list[tuple[str, Path]]
             paths.extend((p, sh.parent) for p in re.findall(r"([\w./${}-]+\.py)\b", line))
     idx.root_refs = (files, mods, paths)
     return idx.root_refs
+
+
+def _startup_modules() -> frozenset:
+    """Top-level modules the interpreter has imported before any script runs
+    (``abc``, ``os``, ``codecs``, ``io``, ``site``, …): a sibling ``abc.py``
+    beside a script can never shadow them (review R7-3). Measured from a
+    fresh ``python -I`` once per run; a fixed floor if that fails."""
+    import subprocess  # noqa: PLC0415
+    floor = {"abc", "os", "io", "codecs", "encodings", "site", "stat", "posixpath",
+             "genericpath", "_collections_abc", "sys", "builtins", "types", "warnings"}
+    try:
+        out = subprocess.run([sys.executable, "-I", "-c",
+                              "import sys; print(' '.join(sorted(sys.modules)))"],
+                             capture_output=True, text=True, timeout=20).stdout
+        floor |= {m.split(".")[0] for m in out.split()}
+    except Exception:  # noqa: BLE001
+        pass
+    return frozenset(floor)
+
+
+_STARTUP_MODULES = _startup_modules()
 
 
 def roots(idx: Index) -> set[Path]:

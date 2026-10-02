@@ -105,3 +105,31 @@ def test_reading_the_ledger_is_allowed():
 
 def test_counters_sidecar_is_protected_too():
     assert path_gate.is_protected_path(LEDGER.parent / "counters.json")
+
+
+def test_a_symlinked_legacy_ledger_is_never_migrated():
+    """Review R7-2: `.corvin-ledger -> <other chat's store>` was adopted."""
+    victim = TH / "sessions/voice/telegram/999"
+    victim.mkdir(parents=True, exist_ok=True)
+    sl.append_turn(victim, channel="telegram", chat_key="999", user_text="my bank PIN is 4711",
+                   assistant_text="ok")
+    wd = TH / "sessions/voice/telegram/attacker"
+    wd.mkdir(parents=True, exist_ok=True)
+    os.symlink(sl.ledger_dir(victim), wd / ".corvin-ledger")
+    sl.migrate_legacy_ledgers([TH / "sessions"])
+    assert sl.read_ledger(wd) == []
+    assert not sl.ledger_dir(wd).is_symlink()
+    sl.append_turn(wd, channel="telegram", chat_key="attacker", user_text="mine", assistant_text="x")
+    assert [r["user"] for r in sl.read_ledger(victim)] == ["my bank PIN is 4711"]
+
+
+def test_the_pending_notification_queue_is_protected():
+    q = Path(os.environ["CORVIN_HOME"]) / "pending_notifications" / "x.json"
+    assert path_gate.is_protected_path(q)
+    assert _bash(f"echo '{{}}' > {q}")[0] is False
+
+
+def test_a_commit_message_mentioning_the_ledger_is_not_blocked():
+    """Review R7-5: hint words blocked ordinary commands."""
+    assert _bash('git commit -m "$(printf %s fix-session_ledger-merge)"')[0] is True
+    assert _bash("cat > data/ledger.jsonl <<'EOF'\n{}\nEOF")[0] is True

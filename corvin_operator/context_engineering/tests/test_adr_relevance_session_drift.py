@@ -202,6 +202,22 @@ class TestRealCorpusRegression:
             SimpleNamespace(normalized=SimpleNamespace(summary=q)))]) for q in NEGATIVE_HELD_OUT]
         assert [n for n in noisy if n[1]] == []
 
+    def test_greetings_and_contractions_do_not_turn_requests_into_topics(self):
+        """Review R7-1: a position rule for request verbs broke on "Let's",
+        "I'd" and any greeting; the verbs are weak evidence wherever they are."""
+        from .adr_retrieval_eval import NEGATIVE, NEGATIVE_R6, NEGATIVE_HELD_OUT
+        clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))
+        base = NEGATIVE + NEGATIVE_R6 + NEGATIVE_HELD_OUT
+        noisy = []
+        for prefix in ("Hi! ", "Ok, ", "Hello, ", "Let's ", "I'd like to "):
+            for q in base:
+                qq = prefix + q[0].lower() + q[1:]
+                got = [m.id for m in clf.find_relevant_adrs(SimpleNamespace(raw_input=qq))]
+                if got:
+                    noisy.append((qq, got))
+        # Measured 2026-10-02 after R7: 4 of 515, all ungrammatical "Let's <question>".
+        assert len(noisy) <= 6, noisy
+
     def test_an_adr_named_by_id_comes_first(self):
         from .adr_retrieval_eval import NAMED
         clf = ADRClassifier(get_loader(str(_REAL_ADR_DIR)))
