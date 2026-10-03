@@ -109,7 +109,16 @@ def _run_worker(sandbox, spec: dict, *, mode="ok", timeout_s="1800",
         "CORVIN_BG_TASK_TIMEOUT": timeout_s,
         "CORVIN_BG_TASK_HEARTBEAT": heartbeat,
         "TP_MIN_INTERVAL": "0",
-        "PYTHONPATH": str(sandbox["box"]),
+        # task_supervisor.py resolves `forge.security_events` for the ADR-2107
+        # audit event the same way adapter.py's own tenant-migration code does
+        # (ROOT.parent.parent / "forge") — but that computation is relative to
+        # __file__, which here is the SANDBOX COPY, not the real checkout. Put
+        # the real forge/ package on PYTHONPATH too so `import forge` resolves
+        # regardless of where task_supervisor.py physically sits (production
+        # never copies it, so this is a sandbox-only accommodation).
+        "PYTHONPATH": os.pathsep.join([
+            str(sandbox["box"]), str(HERE.parents[1] / "forge"),
+        ]),
     })
     return subprocess.run(
         [sys.executable, str(sandbox["box"] / "bg_task_worker.py"),
@@ -265,6 +274,106 @@ def test_crash_under_supervision_is_resumable(sandbox):
     run = sandbox["sup"].get_run(spec["task_id"])
     assert run["attempt_log"][-1]["resumable"] is True
     assert "engine exploded" in run["carry"]
+
+
+# ── ADR-2107/ADR-2103: the real worker's own self-report must classify ────
+#
+# These drive the REAL subprocess boundary (not a direct call to
+# attempt_finished()) and assert the failure_class/reason_code that landed
+# on disk — proving the worker_pid/exit_error signal-wiring added in
+# bg_task_worker.py actually reaches the classifier through a real process
+# exit, not just through a unit test that imports task_supervisor directly.
+
+
+def test_real_crash_self_report_classifies_unknown_not_transient(sandbox):
+    """The worker is ALIVE when it self-reports (it IS the process reporting)
+    — a crash it catches and reports itself must never classify TRANSIENT
+    (that class is reserved for a worker that is CONFIRMED gone, observed by
+    the supervisor's own zombie check, not for a live self-report). Before
+    the worker_pid=os.getpid() wiring, a bare self-report defaulted
+    worker_pid=None, which classify_failure() misread as 'confirmed dead'."""
+    spec = _prepare(sandbox, supervised=True)
+    r = _run_worker(sandbox, spec, mode="crash")
+    assert r.returncode == 0, r.stderr
+
+    run = sandbox["sup"].get_run(spec["task_id"])
+    last = run["attempt_log"][-1]
+    assert last["failure_class"] == "unknown", last
+    assert last["reason_code"] == "unrecognized", last
+    # TRANSIENT retries immediately (next_attempt_at == the report time);
+    # UNKNOWN must still carry the real ADR-0445 backoff.
+    assert run["next_attempt_at"] > time.time(), (
+        "an UNKNOWN self-report must still back off, not retry immediately"
+    )
+
+
+def test_real_timeout_self_report_classifies_unknown_with_exit_error(sandbox):
+    """The wall-clock watchdog path sets exit_error='WorkerTimeout' — verify
+    it reaches the classifier through the real subprocess and still lands on
+    UNKNOWN (a timeout is explicitly the ADR-2107 UNKNOWN example: 'the
+    worker's own wall-clock timeout with partial output')."""
+    spec = _prepare(sandbox, supervised=True)
+    r = _run_worker(sandbox, spec, mode="hang", timeout_s="2", wait=90)
+    assert r.returncode == 0, r.stderr
+
+    run = sandbox["sup"].get_run(spec["task_id"])
+    last = run["attempt_log"][-1]
+    assert last["failure_class"] == "unknown", last
+    assert last["reason_code"] == "unrecognized", last
+
+
+def test_real_crash_emits_the_retry_classified_audit_event(sandbox):
+    """The audit event (ADR-2107) must be written by the REAL subprocess run,
+    not only by a direct call to attempt_finished()."""
+    spec = _prepare(sandbox, supervised=True)
+    _run_worker(sandbox, spec, mode="crash")
+
+    chain = sandbox["home"] / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+    assert chain.exists(), "no audit chain was written at all"
+    records = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    classified = [r for r in records if r.get("event_type") == "task.retry_classified"]
+    assert classified, f"task.retry_classified never fired; saw {sorted({r.get('event_type') for r in records})}"
+    last = classified[-1]
+    assert last["details"]["task_id"] == spec["task_id"]
+    assert last["details"]["failure_class"] == "unknown"
+
+
+# ── ADR-2107: real recovery after a real classified failure ───────────────
+
+
+def test_real_failure_then_real_recovery_round_trip(sandbox):
+    """The end-to-end promise: a REAL crashed subprocess is classified, the
+    supervisor's continuation prompt carries the failure forward, and a
+    SECOND real subprocess finishes the job — the complete World A
+    failure→classify→resume→recover loop, driven entirely through real
+    subprocess boundaries (no direct attempt_finished()/classify_failure()
+    calls from the test)."""
+    spec = _prepare(sandbox, supervised=True)
+
+    # 1) Real failure, real classification.
+    r1 = _run_worker(sandbox, spec, mode="crash")
+    assert r1.returncode == 0, r1.stderr
+    run = sandbox["sup"].get_run(spec["task_id"])
+    assert run["state"] == "active"  # not retired — classification said retry
+    assert run["attempt_log"][-1]["failure_class"] == "unknown"
+    rec = sandbox["cn"]._read(sandbox["cn"]._record_path(spec["task_id"]))
+    assert rec["state"] == "pending", "a classified-retryable run must not report failure yet"
+
+    # 2) Real recovery: the supervisor's own continuation prompt, fed into a
+    #    SECOND real subprocess that actually succeeds.
+    prompt = sandbox["sup"].continuation_prompt(run)
+    spec2 = dict(spec, instruction=prompt)
+    r2 = _run_worker(sandbox, spec2, mode="ok")
+    assert r2.returncode == 0, r2.stderr
+
+    run2 = sandbox["sup"].get_run(spec["task_id"])
+    assert run2["state"] == "done"
+    rec2 = sandbox["cn"]._read(sandbox["cn"]._record_path(spec["task_id"]))
+    assert rec2["ok"] is True
+    assert rec2["state"] == "ready"
+    # The successful attempt's own log entry carries no failure classification.
+    assert run2["attempt_log"][-1]["failure_class"] is None
+    assert run2["attempt_log"][-1]["ok"] is True
 
 
 def test_a_resumed_worker_gets_the_continuation_prompt(sandbox):

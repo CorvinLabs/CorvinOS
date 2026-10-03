@@ -19,7 +19,11 @@ if str(HERE) not in sys.path:
 
 
 def test_classify_transient_process_death():
-    """TRANSIENT: worker pid is None (process died without reporting)."""
+    """TRANSIENT: supervisor confirms the process is gone (its own zombie
+    check — process_confirmed_dead=True). worker_pid=None ALONE must not
+    trigger this (see test_classify_bare_worker_pid_none_is_not_transient) —
+    a self-reporting caller that simply omits worker_pid is not evidence of
+    death."""
     import task_supervisor as sup
 
     failure_class, reason_code = sup.classify_failure(
@@ -29,10 +33,30 @@ def test_classify_transient_process_death():
         heartbeat_age_s=100.0,
         engine_response=None,
         attempt_log=[],
+        process_confirmed_dead=True,
     )
 
     assert failure_class == sup.FailureClass.TRANSIENT
     assert reason_code == "process_dead_or_wedged"
+
+
+def test_classify_bare_worker_pid_none_is_not_transient():
+    """A self-report that simply omits worker_pid (the attempt_finished()
+    default) must NOT be read as 'confirmed dead' — that previously
+    misclassified an ordinary crash self-report as TRANSIENT."""
+    import task_supervisor as sup
+
+    failure_class, reason_code = sup.classify_failure(
+        task_id="test_bare_1",
+        worker_pid=None,
+        exit_error=None,
+        heartbeat_age_s=5.0,
+        engine_response=None,
+        attempt_log=[],
+    )
+
+    assert failure_class == sup.FailureClass.UNKNOWN
+    assert reason_code == "unrecognized"
 
 
 def test_classify_transient_heartbeat_stale():
@@ -177,11 +201,18 @@ def test_attempt_finished_transient():
             sender="test",
         )
 
+        # attempt_finished() has no process_confirmed_dead knob (that signal
+        # is supervise()'s alone, since only it has actually checked
+        # liveness) — so the only way a SELF-REPORT classifies TRANSIENT is
+        # a stale heartbeat (the worker called in, but its heartbeat thread
+        # stopped stamping long before).
+        sup.touch_heartbeat(task_id, now=now - 1000)
+
         sup.attempt_finished(
             task_id=task_id,
             ok=False,
             summary="crashed",
-            worker_pid=None,
+            worker_pid=os.getpid(),
             exit_error=None,
             engine_response=None,
             now=now + 10,
@@ -269,6 +300,7 @@ def test_attempt_finished_unknown():
 
 if __name__ == "__main__":
     test_classify_transient_process_death()
+    test_classify_bare_worker_pid_none_is_not_transient()
     test_classify_transient_heartbeat_stale()
     test_classify_transient_throttle()
     test_classify_permanent_model_not_found()
@@ -279,4 +311,4 @@ if __name__ == "__main__":
     test_attempt_finished_transient()
     test_attempt_finished_permanent()
     test_attempt_finished_unknown()
-    print("✅ All 11 tests passed")
+    print("✅ All 12 tests passed")

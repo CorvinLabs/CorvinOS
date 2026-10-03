@@ -118,8 +118,19 @@ def classify_failure(
     heartbeat_age_s: float,
     engine_response: dict | None,
     attempt_log: list[dict],
+    *,
+    process_confirmed_dead: bool = False,
 ) -> tuple[FailureClass, str]:
     """Classify a task failure to guide retry decisions (ADR-2107).
+
+    ``process_confirmed_dead`` is an EXPLICIT signal from a caller that has
+    actually checked process liveness (``supervise()``'s zombie detection) —
+    it is deliberately NOT inferred from ``worker_pid is None``, because a
+    worker's own self-report (``attempt_finished``) routinely omits
+    ``worker_pid`` simply because the caller didn't pass it, which is "no
+    signal" (⇒ fall through, do not assume death), not "confirmed dead".
+    Overloading the omission that way previously misclassified a plain
+    self-reported crash as TRANSIENT.
 
     Returns (failure_class, reason_code) for audit and retry logic.
     On any unrecognized signal: returns UNKNOWN (fail-safe default).
@@ -136,8 +147,9 @@ def classify_failure(
         if consecutive_transient >= 2:
             return (FailureClass.UNKNOWN, "transient_streak_capped")
 
-        # TRANSIENT: process died without reporting
-        if worker_pid is None or heartbeat_age_s > SUP_HEARTBEAT_STALE:
+        # TRANSIENT: process confirmed dead (supervisor's own zombie check),
+        # or alive but wedged (heartbeat stale past SUP_HEARTBEAT_STALE).
+        if process_confirmed_dead or heartbeat_age_s > SUP_HEARTBEAT_STALE:
             return (FailureClass.TRANSIENT, "process_dead_or_wedged")
 
         # TRANSIENT: HTTP throttle (429/503)
@@ -399,6 +411,94 @@ def _read_heartbeat(task_id: str) -> float:
         return 0.0
 
 
+def _record_classified_failure(rec: dict, task_id: str, *,
+                               worker_pid: int | None,
+                               exit_error: str | None,
+                               heartbeat_age_s: float,
+                               summary: str,
+                               resumable: bool,
+                               now: float,
+                               engine_response: dict | None = None,
+                               process_confirmed_dead: bool = False) -> tuple:
+    """Classify a failed attempt, append it to ``rec['attempt_log']``, emit
+    the audit event, and set ``rec['next_attempt_at']`` per class (ADR-2107).
+
+    Mutates *rec* in place; the caller persists it (``_atomic_write``). Shared
+    by :func:`attempt_finished` (a worker's own self-report — always
+    ``process_confirmed_dead=False``, since it calling in at all proves it was
+    alive) and :func:`supervise`'s zombie/wedge detection (``True`` only on
+    the branch that has actually checked liveness and found the pid gone —
+    ADR-2107 names both process-death and wedge as TRANSIENT evidence, so
+    both call sites classify and audit the same way). Returns
+    ``(FailureClass, reason_code)``.
+    """
+    log = list(rec.get("attempt_log") or [])
+    attempt_num = int(rec.get("attempts", 0))
+    failure_class, reason_code = classify_failure(
+        task_id=task_id,
+        worker_pid=worker_pid,
+        exit_error=exit_error,
+        heartbeat_age_s=heartbeat_age_s,
+        engine_response=engine_response,
+        attempt_log=log,
+        process_confirmed_dead=process_confirmed_dead,
+    )
+
+    # Emit audit event task.retry_classified (ADR-2107, ADR-0537)
+    try:
+        tenant_id = str(rec.get("tenant_id") or "_default")
+        _forge_path = str(Path(__file__).resolve().parents[2] / "forge")
+        if _forge_path not in sys.path:
+            sys.path.insert(0, _forge_path)
+        from forge import security_events as _sec  # type: ignore
+        try:
+            from forge.paths import tenant_audit_chain as _tac  # type: ignore
+            chain_path = _tac(tenant_id)
+        except Exception:  # noqa: BLE001
+            chain_path = (_corvin_home() / "tenants" / tenant_id / "global"
+                         / "forge" / "audit.jsonl")
+        _sec.write_event(
+            chain_path,
+            "task.retry_classified",
+            details={
+                "tenant_id": tenant_id,
+                "task_id": task_id,
+                "attempt": attempt_num,
+                "failure_class": failure_class.value,
+                "reason_code": reason_code,
+                "next_attempt_in_s": 0 if failure_class in (
+                    FailureClass.PERMANENT, FailureClass.TRANSIENT,
+                ) else _backoff_for(attempt_num),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass  # Audit failure must not crash the supervisor
+
+    log.append({
+        "n": attempt_num,
+        "at": now,
+        "ok": False,
+        "resumable": bool(resumable),
+        "summary": (summary or "")[:400],
+        "failure_class": failure_class.value,
+        "reason_code": reason_code,
+    })
+    rec["attempt_log"] = log[-10:]  # bounded: last 10 attempts
+
+    # Backoff timing per failure class (ADR-2107)
+    if failure_class == FailureClass.PERMANENT:
+        # No retry — backoff should be irrelevant, but set a placeholder
+        rec["next_attempt_at"] = now + 999999  # Unreachable
+    elif failure_class == FailureClass.TRANSIENT:
+        # Next tick, no backoff (normal backoff would be 60 s)
+        rec["next_attempt_at"] = now
+    else:  # UNKNOWN
+        # Normal backoff per ADR-0445
+        rec["next_attempt_at"] = now + _backoff_for(attempt_num)
+
+    return failure_class, reason_code
+
+
 def attempt_finished(task_id: str, *, ok: bool, summary: str = "",
                      resumable: bool = False, now: float | None = None,
                      worker_pid: int | None = None,
@@ -419,70 +519,38 @@ def attempt_finished(task_id: str, *, ok: bool, summary: str = "",
     if rec is None:
         return False
 
-    log = list(rec.get("attempt_log") or [])
-    attempt_num = int(rec.get("attempts", 0))
-
-    # Classify the failure (ADR-2107) — only if not ok
-    failure_class = FailureClass.UNKNOWN
-    reason_code = "not_classified"
-    if not ok:
-        heartbeat_ts = _read_heartbeat(task_id)
-        heartbeat_age_s = now - heartbeat_ts if heartbeat_ts > 0 else now
-        failure_class, reason_code = classify_failure(
-            task_id=task_id,
-            worker_pid=worker_pid,
-            exit_error=exit_error,
-            heartbeat_age_s=heartbeat_age_s,
-            engine_response=engine_response,
-            attempt_log=log,
-        )
-
-    # Emit audit event task.retry_classified (ADR-2107, ADR-0537)
-    try:
-        from security_events import emit  # type: ignore
-        emit(
-            "task.retry_classified",
-            tenant_id=rec.get("tenant_id", "_default"),
-            task_id=task_id,
-            attempt=attempt_num,
-            failure_class=failure_class.value,
-            reason_code=reason_code,
-            next_attempt_in_s=0 if failure_class == FailureClass.PERMANENT else (
-                0 if failure_class == FailureClass.TRANSIENT else
-                _backoff_for(attempt_num)
-            ),
-        )
-    except Exception:  # noqa: BLE001
-        pass  # Audit failure must not crash the supervisor
-
-    log.append({
-        "n": attempt_num,
-        "at": now,
-        "ok": bool(ok),
-        "resumable": bool(resumable),
-        "summary": (summary or "")[:400],
-        "failure_class": failure_class.value if not ok else None,
-        "reason_code": reason_code if not ok else None,
-    })
-    rec["attempt_log"] = log[-10:]  # bounded: last 10 attempts
     rec["worker_pid"] = None
     if summary:
         rec["carry"] = summary[-SUP_CARRY_CHARS:]
+
     if ok:
+        log = list(rec.get("attempt_log") or [])
+        log.append({
+            "n": int(rec.get("attempts", 0)),
+            "at": now,
+            "ok": True,
+            "resumable": False,
+            "summary": (summary or "")[:400],
+            "failure_class": None,
+            "reason_code": None,
+        })
+        rec["attempt_log"] = log[-10:]
         rec["state"] = _STATE_DONE
         rec["done_at"] = now
         rec["outcome"] = "completed"
     else:
-        # Backoff timing per failure class (ADR-2107)
-        if failure_class == FailureClass.PERMANENT:
-            # No retry — backoff should be irrelevant, but set a placeholder
-            rec["next_attempt_at"] = now + 999999  # Unreachable
-        elif failure_class == FailureClass.TRANSIENT:
-            # Next tick, no backoff (normal backoff would be 60 s)
-            rec["next_attempt_at"] = now
-        else:  # UNKNOWN
-            # Normal backoff per ADR-0445
-            rec["next_attempt_at"] = now + _backoff_for(attempt_num)
+        heartbeat_ts = _read_heartbeat(task_id)
+        # No heartbeat ever recorded (unsupervised run, or a crash before the
+        # first stamp) is "no signal" — age 0, NOT "infinitely stale". The
+        # previous fallback of `now` (an epoch timestamp, not an age) made
+        # heartbeat_age_s always exceed SUP_HEARTBEAT_STALE, so ANY bare
+        # self-report with no heartbeat misclassified as TRANSIENT wedge.
+        heartbeat_age_s = (now - heartbeat_ts) if heartbeat_ts > 0 else 0.0
+        _record_classified_failure(
+            rec, task_id, worker_pid=worker_pid, exit_error=exit_error,
+            engine_response=engine_response, heartbeat_age_s=heartbeat_age_s,
+            summary=summary, resumable=resumable, now=now,
+        )
 
     try:
         _atomic_write(path, rec)
@@ -807,6 +875,19 @@ def supervise(*, now: float | None = None,
                     _emit(task_id, f"worker wedged (no heartbeat for "
                                    f"{int(hb_age)}s) — restarting it.", "stall")
                     _terminate(int(pid))
+                    # Classify + audit BEFORE falling through to the resume
+                    # decision (ADR-2107): a wedged worker never calls
+                    # attempt_finished() itself, so this is the only place
+                    # that observes it. heartbeat_age_s > SUP_HEARTBEAT_STALE
+                    # by construction here, so this always comes back
+                    # TRANSIENT (or UNKNOWN once the streak cap trips).
+                    _record_classified_failure(
+                        rec, task_id, worker_pid=int(pid), exit_error=None,
+                        heartbeat_age_s=hb_age,
+                        summary=f"worker wedged (no heartbeat for "
+                                f"{int(hb_age)}s)",
+                        resumable=True, now=now,
+                    )
                     # PERSIST the clearing immediately. Falling through to a
                     # `continue` below (backoff, lock contention) would discard
                     # this in-memory change, and the next tick would find the
@@ -821,6 +902,34 @@ def supervise(*, now: float | None = None,
                 else:
                     if in_grace:
                         continue  # too early to call it dead
+                    # Confirmed dead (SIGKILL/OOM/crash/reboot): the worker
+                    # never got a chance to call attempt_finished() itself —
+                    # classify + audit here, exactly once, so this TRANSIENT
+                    # path (ADR-2107) is observed like the wedge path above.
+                    hb_age = now - hb if hb else (now - last_attempt)
+                    _record_classified_failure(
+                        rec, task_id, worker_pid=None, exit_error=None,
+                        heartbeat_age_s=hb_age,
+                        summary="worker process died without reporting "
+                                "(SIGKILL/OOM/crash/reboot)",
+                        resumable=True, now=now,
+                        process_confirmed_dead=True,
+                    )
+                    # Clear the dead pid and PERSIST immediately — same
+                    # reasoning as the wedge branch above: without this, a
+                    # tick that then hits the backoff this classification
+                    # just armed would find the SAME confirmed-dead pid again
+                    # next time, re-classify it from scratch (a fresh
+                    # TRANSIENT verdict, since the most recent log entry is
+                    # the UNKNOWN that tripped the streak cap, not a
+                    # "transient" one) and so bypass the very backoff it just
+                    # set — turning one streak-capped decision into a
+                    # same-second resume loop.
+                    rec["worker_pid"] = None
+                    try:
+                        _atomic_write(path, rec)
+                    except OSError:
+                        pass
             elif in_grace and last_attempt > 0:
                 continue  # a spawn is in flight
 

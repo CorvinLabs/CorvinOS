@@ -242,6 +242,12 @@ def main() -> int:
     ok = True
     text = ""
     resumable = False
+    # Structured failure signal for classify_failure() (ADR-2107/ADR-2103).
+    # None of the gated engine paths (budget/L34/L35/L44) raise here — a
+    # refusal comes back as TEXT with ok=True (ADR-0551), so this worker
+    # never sees a structured engine_response; only a real Python exception
+    # or the wall-clock watchdog sets exit_error.
+    exit_error: str | None = None
     try:
         sys.path.insert(0, str(HERE))
         import adapter  # type: ignore  # heavy but self-contained
@@ -289,11 +295,13 @@ def main() -> int:
             # verdict: the partial output becomes the carry for the next
             # attempt. Unsupervised it stays exactly what it always was.
             resumable = supervised
+            exit_error = "WorkerTimeout"
             text = (f"background task timed out after {int(timeout)}s and was "
                     f"stopped.\n\n{text}".strip())
     except Exception as e:  # noqa: BLE001 — never let the worker die silently
         ok = False
         resumable = supervised
+        exit_error = type(e).__name__
         text = f"background task crashed: {type(e).__name__}: {e}"
         print(f"bg_task_worker: {text}", file=sys.stderr)
     finally:
@@ -301,8 +309,19 @@ def main() -> int:
 
     if run is not None:
         try:
+            # worker_pid=os.getpid(): this process is reporting on ITSELF, so
+            # it is by construction alive here — the "process dead" TRANSIENT
+            # path is never classified from this call site; that signal comes
+            # from the supervisor's own zombie/heartbeat check in supervise(),
+            # a different call site that observes a worker from the outside.
+            # engine_response stays None — see the comment at exit_error's
+            # declaration above for why no structured engine signal exists
+            # at this call site today (ADR-2107 Proof section item still open).
             sup.attempt_finished(task_id, ok=ok, summary=(text or ""),
-                                 resumable=resumable)
+                                 resumable=resumable,
+                                 worker_pid=os.getpid(),
+                                 exit_error=exit_error,
+                                 engine_response=None)
         except Exception:  # noqa: BLE001
             pass
 

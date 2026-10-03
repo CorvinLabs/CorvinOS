@@ -146,9 +146,21 @@ def test_a_wedged_worker_is_only_announced_once(env, monkeypatch):
     """Regression: the pid was cleared in memory but not persisted, so a tick
     that then hit the backoff discarded the change — and every following tick
     re-SIGTERMed the same stale pid and re-sent the "wedged" notice, forced
-    past the progress rate limit."""
+    past the progress rate limit.
+
+    Since ADR-2107, a wedge is classified TRANSIENT and its retry bypasses
+    backoff entirely — the resume now cascades in the SAME supervise() call
+    as the wedge detection, and the progress queue's newest-wins coalescing
+    (task_progress.emit: a still-undelivered record is overwritten, not
+    stacked) means the "wedged" notice is routinely superseded by "resuming
+    it" before any delivery — even one taken right after this same tick —
+    can ever see both. That coalescing is correct, intended behaviour, not
+    the regression. The regression this test actually guards is the one
+    SIGTERM/notice firing ONCE and never repeating across ticks for the SAME
+    stale pid — checked directly below on `terminated`, the invariant the
+    text-counting used to stand in for.
+    """
     monkeypatch.setenv("SUP_HEARTBEAT_STALE", "60")
-    monkeypatch.setenv("SUP_BACKOFF_BASE", "3600")  # long backoff: no resume yet
     sup = importlib.reload(env["sup"])
     env["sup"] = sup
     tid = _make_run(env)
@@ -169,7 +181,10 @@ def test_a_wedged_worker_is_only_announced_once(env, monkeypatch):
     env["tp"].deliver_progress(env["outbox"])
     texts = [json.loads(p.read_text()).get("text", "")
              for p in env["outbox"].glob("*.json")]
-    assert sum("wedged" in t for t in texts) == 1, texts
+    # "wedged" may be 0 (coalesced away by the immediate resume, expected
+    # under ADR-2107) but never more than 1 — that would mean the old bug
+    # (repeated SIGTERM/notice on the same stale pid) is back.
+    assert sum("wedged" in t for t in texts) <= 1, texts
 
 
 def test_budget_message_reads_naturally(env):
@@ -282,8 +297,12 @@ def test_a_poller_holding_the_spawn_lock_blocks_the_other(env):
 
 
 def test_a_resume_is_not_immediately_repeated(env, monkeypatch):
-    """A spawned worker that dies instantly must not burn the whole attempt
-    budget in one grace period."""
+    """A crash-on-startup loop must not burn the whole attempt budget in one
+    grace period. Since ADR-2107 a dead-on-arrival worker classifies
+    TRANSIENT and resumes immediately (no backoff) — but only for up to 2
+    CONSECUTIVE relaunches (the streak cap); the 3rd is escalated to UNKNOWN
+    and backs off normally. That streak cap, not a blanket backoff on every
+    resume, is what now bounds the loop."""
     monkeypatch.setenv("SUP_BACKOFF_BASE", "300")
     sup = importlib.reload(env["sup"])
     env["sup"] = sup
@@ -291,13 +310,15 @@ def test_a_resume_is_not_immediately_repeated(env, monkeypatch):
     _stage_dead_worker(env, tid)
 
     spawns = _Spawns()  # returns a pid that is not alive
-    assert sup.supervise(spawn=spawns) == 1
-    # Second tick, same second: nothing.
-    assert sup.supervise(spawn=spawns) == 0
+    t0 = time.time()
+    assert sup.supervise(spawn=spawns, now=t0) == 1      # 1st: TRANSIENT
+    assert sup.supervise(spawn=spawns, now=t0) == 1      # 2nd: still under the cap
+    # 3rd consecutive dead-on-arrival trips the streak cap → UNKNOWN → backoff.
+    assert sup.supervise(spawn=spawns, now=t0) == 0
     # …and still nothing a minute later, because the backoff is armed.
-    assert sup.supervise(spawn=spawns, now=time.time() + 60) == 0
-    # attempt 2's backoff is base * 2^(2-1) = 600 s.
-    assert sup.supervise(spawn=spawns, now=time.time() + 700) == 1
+    assert sup.supervise(spawn=spawns, now=t0 + 60) == 0
+    # attempt 3's backoff is base * 2^(3-1) = 1200 s, capped at SUP_BACKOFF_MAX (900 s).
+    assert sup.supervise(spawn=spawns, now=t0 + 900) == 1
 
 
 def test_a_freshly_registered_run_is_not_double_spawned(env, monkeypatch):
