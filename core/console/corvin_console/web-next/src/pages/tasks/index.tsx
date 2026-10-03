@@ -28,7 +28,7 @@ import { useAuth } from "@/lib/auth";
 import { ApiError } from "@/lib/api/client";
 import { getAllTasks, startInitiativesVerify, type TaskType, type UnifiedTask } from "@/lib/api/initiatives";
 import {
-  createTaskItem, getTaskItems, importInitiatives, linkTaskRun, patchTaskItem,
+  createTaskItem, getKbStatus, getTaskItems, importInitiatives, kbTransition, linkTaskRun, patchTaskItem,
   type Item, type ItemCreateBody, type ItemStatus,
 } from "@/lib/api/task-tracking";
 import { cn } from "@/lib/utils";
@@ -37,7 +37,7 @@ import { CreateDialog } from "./create-dialog";
 import { DetailDrawer } from "./detail-drawer";
 import {
   EMPTY_FILTERS, KIND_META, KIND_ORDER, PRIORITY_META, PRIORITY_ORDER, STATUS_META, WORK_KINDS, buildTree,
-  filtersActive, filtersFromQuery, filtersToQuery, kindMeta, matches, type Filters,
+  filtersActive, filtersFromQuery, filtersToQuery, isKbItem, kindMeta, matches, type Filters,
 } from "./encodings";
 import { clockSkewMs, formatUtc } from "./format";
 import { LIVE_QUERY, freshness } from "./live";
@@ -115,6 +115,13 @@ function Chip({ on, onClick, children, testId }: { on: boolean; onClick: () => v
   );
 }
 
+/** The KB's own refusal text for a 409 on a knowledge-base item, else null. */
+function kbRefusal(e: ApiError): string | null {
+  const d = (e.detail as { detail?: { message?: string; kb_refused?: boolean; kb_owned?: boolean } } | null)?.detail;
+  if (d && typeof d === "object" && (d.kb_refused || d.kb_owned) && d.message) return `Knowledge base: ${d.message}`;
+  return null;
+}
+
 function toggle<T>(arr: T[], v: T): T[] {
   return arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
 }
@@ -180,13 +187,33 @@ export default function TasksPage() {
   });
   const [boardError, setBoardError] = useState<string | null>(null);
   const move = useMutation({
-    mutationFn: (v: { item: Item; status: ItemStatus }) => patchTaskItem(v.item.id, { version: v.item.version, status: v.status }, csrf),
+    mutationFn: (v: { item: Item; status: ItemStatus; reason?: string; dod?: string }) => isKbItem(v.item)
+      ? kbTransition(v.item.id, v.status, csrf, { reason: v.reason, dod: v.dod })
+      : patchTaskItem(v.item.id, { version: v.item.version, status: v.status }, csrf),
     onSuccess: () => { setBoardError(null); qc.invalidateQueries({ queryKey: ["task-tracking"] }); },
     onError: (e) => {
-      setBoardError(e instanceof ApiError && e.status === 409 ? "That item changed elsewhere — the board was reloaded." : e instanceof Error ? e.message : "Move failed");
+      const kbMsg = e instanceof ApiError && e.status === 409 ? kbRefusal(e) : null;
+      setBoardError(kbMsg ?? (e instanceof ApiError && e.status === 409 ? "That item changed elsewhere — the board was reloaded." : e instanceof Error ? e.message : "Move failed"));
       qc.invalidateQueries({ queryKey: ["task-tracking"] });
     },
   });
+  // A KB task needs a reason to block/cancel and a definition of done to finish — asked at drop time.
+  const onBoardMove = useCallback((it: Item, status: ItemStatus) => {
+    if (!isKbItem(it)) { move.mutate({ item: it, status }); return; }
+    let reason: string | undefined;
+    let dod: string | undefined;
+    if (status === "blocked" || status === "archived") {
+      reason = window.prompt(status === "blocked" ? "Why is it blocked?" : "Why is it cancelled?")?.trim();
+      if (!reason) return;
+    }
+    if (status === "complete") {
+      dod = window.prompt("Definition of done — how was it verified?")?.trim();
+      if (!dod) return;
+    }
+    move.mutate({ item: it, status, reason, dod });
+  }, [move]);
+  const kbQ = useQuery({ queryKey: ["task-tracking", "kb-status"], queryFn: ({ signal }) => getKbStatus(signal),
+    ...LIVE_QUERY, retry: false });
   const imp = useMutation({
     mutationFn: () => importInitiatives(csrf),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["task-tracking"] }),
@@ -372,6 +399,15 @@ export default function TasksPage() {
           )}
 
           {boardError && <p role="alert" className="text-xs text-destructive">{boardError}</p>}
+          {kbQ.data?.enabled && kbQ.data.state !== "ok" && kbQ.data.state !== "idle" && (
+            <p role="status" data-testid="kb-projection-banner"
+              className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+              {kbQ.data.state === "blocked"
+                ? `Knowledge base is inconsistent (${kbQ.data.blocking ?? "?"} blocking finding${kbQ.data.blocking === 1 ? "" : "s"}: ${Object.keys(kbQ.data.failing ?? {}).join(", ")}) — the board shows the last consistent state. Run "kb check" in Corvin-Knowledge.`
+                : kbQ.data.state === "error" ? `Knowledge-base sync failed: ${kbQ.data.error ?? "unknown error"}`
+                : kbQ.data.state === "diverged" ? "Knowledge-base sync could not repair every difference — see kb status." : null}
+            </p>
+          )}
 
           {(view === "tree" || view === "timeline" || (items.length === 0 && workViews && view !== "graph")) && runs.length > 0 && (
             <section className="space-y-2" data-testid="work-runs" aria-label="Runs">
@@ -411,7 +447,7 @@ export default function TasksPage() {
                 {view === "tree" && <TreeView rows={rows} now={now} selected={selected} onSelect={(id) => setQuery({ item: id })}
                   collapsed={collapsed} onToggle={onToggle} filterActive={filtersActive(filters)} compact={Boolean(selected)} />}
                 {view === "board" && <BoardView items={items} filters={filters} now={now} byId={byId} busy={move.isPending}
-                  onSelect={(id) => setQuery({ item: id })} onMove={(item, status) => move.mutate({ item, status })}
+                  onSelect={(id) => setQuery({ item: id })} onMove={onBoardMove}
                   runs={runs} onLinkRun={openLink} />}
                 {view === "timeline" && <TimelineView rows={rows} now={now} selected={selected} onSelect={(id) => setQuery({ item: id })} />}
                 {view === "table" && <TableView items={flat} now={now} selected={selected} onSelect={(id) => setQuery({ item: id })}

@@ -220,12 +220,60 @@ def _refresh_out_of_window(tenant_id: str, p: dict[str, Any], current: dict[str,
             service.update(tenant_id, cur["id"], ItemPatch(version=cur["version"], **changed), actor=ACTOR)
 
 
+_TASK_ID_RE = re.compile(r"\bT-\d{4,}\b")
+RETIRED_REASON = "retired: tasks come from the knowledge base (Corvin-Knowledge, ADR-2205)"
+
+
+def _kb_mode(tenant_id: str, *, now: float | None, dry_run: bool) -> dict[str, Any] | None:
+    """Once the knowledge base projects into this tenant (ADR-2205), ADR numbers in
+    commit subjects stop creating tasks: those cards were the board's phantom
+    "in progress" lane (38 of 46 on 2026-10-03). Existing ADR cards are archived
+    with a reason, never deleted; a commit naming a KB task id (``T-0042``) is
+    linked to that task as evidence. Data-driven, not a flag: a tenant without
+    projected KB items keeps the ADR behaviour."""
+    from core.task_tracking import projection, service  # noqa: PLC0415
+    from core.task_tracking.models import ItemPatch, RunLinkBody  # noqa: PLC0415
+
+    kb = {k: v for k, v in projection.kb_items(tenant_id).items() if not v["deleted_at"]}
+    if not kb:
+        return None
+    repo = ha.repo_root()
+    slug = ha.repo_slug(repo)
+    out: dict[str, Any] = {"repo": slug, "mode": "kb", "retired": 0, "linked": 0}
+    current = service.synced_items(tenant_id, container_ref(slug), actor=ACTOR)
+    for ref, cur in current.items():
+        if cur["deleted_at"] or cur["status"] == "archived" or cur["foreign_edit"]:
+            continue
+        out["retired"] += 1
+        if not dry_run:
+            service.update(tenant_id, cur["id"], ItemPatch(version=cur["version"], status="archived",
+                                                           status_reason=RETIRED_REASON), actor=ACTOR)
+    by_task = {str(v["title"]).split(" · ", 1)[0]: v for v in kb.values() if v["kind"] == "task"}
+    linked = {r["id"]: r for r in service.synced_items(tenant_id, "kb:", actor=ACTOR).values()}
+    for c in ha.git_commits(repo, now=now):
+        for tid in set(_TASK_ID_RE.findall(c["subject"])):
+            item = by_task.get(tid)
+            if item is None:
+                continue
+            run_ref = f"commit:{slug}:{c['short']}"
+            if ("commit", run_ref) in (linked.get(item["id"], {}).get("run_refs") or set()):
+                continue
+            out["linked"] += 1
+            if not dry_run:
+                service.link_run(tenant_id, item["id"], RunLinkBody(run_type="commit", run_ref=run_ref),
+                                 actor=ACTOR)
+    return out
+
+
 def run(tenant_id: str, *, now: float | None = None, dry_run: bool = False, **plan_kw: Any) -> dict[str, Any]:
     from core.task_tracking import service  # noqa: PLC0415
     from core.task_tracking.models import ItemPatch, RunLinkBody  # noqa: PLC0415
 
     if tenant_id != ha.HOST_TENANT:
         return {"skipped": f"host-level sync runs for tenant {ha.HOST_TENANT!r} only"}
+    kb = _kb_mode(tenant_id, now=now, dry_run=dry_run)
+    if kb is not None:
+        return kb
     p = plan(tenant_id, now=now, **plan_kw)
     out: dict[str, Any] = {"repo": p["repo"], "commits": p["commits"], "planned": len(p["specs"]),
                            "inserted": 0, "updated": 0, "kept_operator_edits": 0, "linked": 0,

@@ -20,6 +20,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from core.task_tracking import service
 from core.task_tracking.models import (
@@ -28,6 +29,7 @@ from core.task_tracking.models import (
     ItemCreate,
     ItemPatch,
     RunLinkBody,
+    Status,
 )
 
 from .. import auth as session_auth
@@ -42,6 +44,11 @@ _EVIDENCE_PREFIX = "initiatives.json#"
 def _fail(exc: Exception) -> None:
     if isinstance(exc, service.Conflict):
         raise HTTPException(status_code=409, detail={"message": str(exc), "current": exc.current})
+    if isinstance(exc, service.KbOwned):
+        raise HTTPException(status_code=409, detail={"message": str(exc), "kb_owned": True})
+    from .. import kb_projection as _kbp  # noqa: PLC0415
+    if isinstance(exc, _kbp.KbTransitionRefused):
+        raise HTTPException(status_code=409, detail={"message": str(exc), "kb_refused": True})
     if isinstance(exc, service.NotFound):
         raise HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, service.TaskTrackingError):
@@ -266,6 +273,52 @@ def delete_run(item_id: str, rec: Annotated[session_auth.SessionRecord, Depends(
                run_ref: str = Query(..., max_length=200)) -> dict:
     return _call(service.unlink_run, rec.tenant_id, item_id, run_type, run_ref, actor=_ACTOR,
                  sid_fingerprint=rec.sid_fingerprint)
+
+
+# ── Knowledge-base projection (ADR-2205) ─────────────────────────────────────
+
+class KbTransitionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    to: Status
+    reason: str = Field(default="", max_length=500)
+    dod: str = Field(default="", max_length=1000)
+
+
+@router.post("/items/{item_id}/kb-transition")
+def post_kb_transition(item_id: str, body: KbTransitionBody,
+                       rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> dict:
+    """A board move of a KB item: runs the KB's state machine, then re-projects."""
+    from .. import kb_projection  # noqa: PLC0415
+
+    return _call(kb_projection.transition, rec.tenant_id, item_id, body.to, reason=body.reason,
+                 dod=body.dod, actor=_ACTOR, sid_fingerprint=rec.sid_fingerprint)
+
+
+@router.get("/kb/status")
+def get_kb_status(rec: Annotated[session_auth.SessionRecord, Depends(require_session)]) -> dict:
+    from .. import kb_projection  # noqa: PLC0415
+
+    st = dict(kb_projection.status(rec.tenant_id))
+    st.pop("payload", None)
+    st.pop("fingerprint", None)
+    st["enabled"] = kb_projection.kb_repo() is not None and rec.tenant_id == kb_projection.kb_tenant()
+    return st
+
+
+@router.post("/kb/sync")
+def post_kb_sync(rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> dict:
+    from .. import kb_projection  # noqa: PLC0415
+
+    if rec.tenant_id != kb_projection.kb_tenant():
+        raise HTTPException(status_code=404, detail="no knowledge base is bound to this tenant")
+    try:
+        st = dict(kb_projection.sync(rec.tenant_id, force=True))
+    except Exception as exc:  # noqa: BLE001
+        _fail(exc)
+        raise
+    st.pop("payload", None)
+    st.pop("fingerprint", None)
+    return st
 
 
 @router.post("/import")

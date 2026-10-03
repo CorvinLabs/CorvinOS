@@ -511,6 +511,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # noqa: BLE001
         logging.getLogger(__name__).warning("GitHub auto-sync boot resume failed: %s", exc)
 
+    # ADR-2205 — knowledge-base projector: keeps the task board equal to
+    # Corvin-Knowledge (heal -> export -> apply, drift repaired every tick).
+    # Both hosts start it; this one includes the console's ROUTER, not its lifespan.
+    try:
+        import corvin_console  # noqa: F401
+        from corvin_console import kb_projection as _kbp
+        _kbp.start()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("kb projection not started: %s", exc)
+
     # ADR-0191/ADR-0193 — idempotently seed the built-in zero-config tools
     # (image-generation, native browser) into the mcp_manager catalog on
     # every boot, so a genuinely fresh install has them active with no

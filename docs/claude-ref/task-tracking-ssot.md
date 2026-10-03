@@ -92,6 +92,9 @@ The prefix is not `task.` because `task.spawn_*` already names runtime spawns.
 | POST / DELETE | `/items/{id}/dependencies[/{dep}]` | cycle-checked |
 | POST / DELETE | `/items/{id}/runs` | `run_type` ∈ task_sources types except `initiative` |
 | POST | `/import` | idempotent `initiatives.json` import |
+| POST | `/items/{id}/kb-transition` | CSRF; `{to, reason?, dod?}` — board move of a knowledge-base task; runs `kb task` (the KB state machine) and re-projects; **409** `{message, kb_refused}` with the KB's own refusal |
+| GET | `/kb/status` | projector state: `ok`/`blocked`/`diverged`/`error`/`off`, `blocking`, `failing`, `drift_total` |
+| POST | `/kb/sync` | CSRF; one forced projector tick (heal → export → apply) |
 
 ## Runs are linked, not copied
 
@@ -148,6 +151,42 @@ doing it — was invisible. Two run sources and one writer close that:
   every type (chat and bridge turns, background tasks, A2A, agent sessions …) —
   running, paused or queued, never a scheduled reminder — running first;
   "Open activity" opens Activity unfiltered (ADR-2081).
+
+## Knowledge-base projection (ADR-2205)
+
+Initiatives, epics and tasks are authored in **Corvin-Knowledge** (`kb/initiatives`,
+`kb/epics`, `kb/tasks`, Markdown + frontmatter, one immutable `uid` each). The store
+holds a **projection** of them — items with `external_ref = kb:<uid>`, `category: kb`,
+label `kb`. One way only: nothing reads a status back into the KB.
+
+- **Projector** `corvin_console/kb_projection.py`, started by BOTH hosts
+  (`corvin_console.app`, `corvin_gateway.app`), tenant `CORVIN_KB_TENANT` (default
+  `_default`), KB at `CORVIN_KB_REPO` or the sibling `Corvin-Knowledge` checkout; no KB →
+  `state: off`. Every 2 s: KB changed (git HEAD or a file under `kb/{initiatives,epics,tasks}`)
+  → `kb heal` (derivable fixes only, committed + audited by the KB) → `kb export` →
+  `core/task_tracking/projection.apply` (upsert by `external_ref`, parent-first, actor
+  `sync:kb`; unchanged items untouched). KB unchanged → `projection.diff` against the last
+  export; any difference is **drift** (the store was written behind the KB's back) and is
+  re-applied at once (`drift_healed`). Removed from the KB → `archived`, never deleted.
+- **Fail-closed:** a KB whose `kb check` is red writes nothing but one
+  `task_item.projection_blocked` record; the board shows a banner and the last
+  consistent state.
+- **Status mapping:** KB `open/in_progress/blocked/done/cancelled` → store
+  `open/in_progress/blocked/complete/archived`; containers carry the KB's derived rollup.
+- **Ownership:** `service.update`/`delete` refuse writes to `status`, `parent_id`, `kind`,
+  `title`, `status_reason`, `category`, `labels` of a `kb:` item by any actor but `sync:kb`
+  (`KbOwned` → **409** `kb_owned`). Priority, assignee, deadline stay local.
+- **Board:** dragging a KB task calls `/kb-transition`; columns the KB state machine does
+  not allow for that card are dimmed and refuse the drop (`encodings.ts::canMove`); KB
+  containers never move. Blocking/cancelling asks for a reason, completing for a
+  definition of done.
+- **Audit:** per-item writes are `task_item.created/updated` (actor kind `sync`); plus
+  `task_item.projection_applied`, `task_item.projection_blocked`, `task_item.kb_transition`
+  (outcome `requested`, then `refused` if the KB said no — audit-first).
+- **Git sync:** once a tenant has projected KB items, `task_tracking_git_sync` stops
+  creating ADR tasks and archives the existing `git:<repo>#ADR-*` cards (reason names
+  ADR-2205); a commit subject naming a KB task id (`T-0042`) is linked to that task.
+- E2E: `core/console/tests/test_kb_projection_e2e.py` (real routes, real `kb.py`, fixture KB repo).
 
 ## The `initiatives.json` cutover
 

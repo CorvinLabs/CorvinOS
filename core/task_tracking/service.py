@@ -84,6 +84,24 @@ class Conflict(TaskTrackingError):
         self.current = current
 
 
+class KbOwned(TaskTrackingError):
+    """An item projected from the knowledge base (``external_ref`` ``kb:<uid>``) whose
+    KB-owned fields were written by someone other than the projection → HTTP 409.
+    The KB file is the one writer of those fields; a console edit would be silently
+    overwritten by the next projection, so it is refused instead (Corvin-Knowledge
+    docs/CONCEPT.md §8)."""
+
+
+#: Prefix of items the knowledge base owns, and the one actor allowed to write their owned fields.
+KB_REF_PREFIX = "kb:"
+KB_ACTOR = "sync:kb"
+KB_OWNED_FIELDS = frozenset({"status", "parent_id", "kind", "title", "status_reason", "category", "labels"})
+
+
+def _kb_owned(cur: dict[str, Any], actor: str) -> bool:
+    return str(cur.get("external_ref") or "").startswith(KB_REF_PREFIX) and actor != KB_ACTOR
+
+
 class AuditUnavailable(RuntimeError):
     """The core chain did not commit — nothing was written (→ HTTP 503)."""
 
@@ -602,6 +620,9 @@ def update(tenant_id: str, item_id: str, patch: ItemPatch, *, actor: str,
         changed = {k: v for k, v in new.items() if cur.get(k) != v}
         if not changed:
             return cur
+        if _kb_owned(cur, actor) and KB_OWNED_FIELDS & set(changed):
+            raise KbOwned(f"{sorted(KB_OWNED_FIELDS & set(changed))} of a knowledge-base item are written "
+                          "by the KB only — move it on the board (kb transition) or edit its KB file")
         kind = changed.get("kind", cur["kind"])
 
         # ADR deduplication check: if external_ref is being changed to an ADR ID, validate uniqueness
@@ -699,6 +720,8 @@ def delete(tenant_id: str, item_id: str, *, actor: str, sid_fingerprint: Optiona
         cur = _fetch(conn, tenant_id, item_id)
         if cur["deleted_at"]:
             return cur
+        if _kb_owned(cur, actor):
+            raise KbOwned("a knowledge-base item is removed by deleting or cancelling it in the KB")
         cascade_id = "d_" + uuid.uuid4().hex[:16]
         now = now_iso()
         ids = [item_id] + [d for d in _descendants(conn, tenant_id, item_id)

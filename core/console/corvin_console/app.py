@@ -842,6 +842,15 @@ def create_app() -> FastAPI:
             import logging
             logging.getLogger(__name__).warning("GitHub auto-sync boot resume failed: %s", exc)
 
+        # ADR-2205 — knowledge-base projector (same call as corvin_gateway.app).
+        try:
+            from . import kb_projection
+
+            kb_projection.start()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("kb projection not started: %s", exc)
+
         # ADR-2066 Phase 2 — Centralized Configuration Management
         # Initialize config manager for fail-closed config validation
         # NOT create_with_audit(tenant_audit_chain(...)): that binds an

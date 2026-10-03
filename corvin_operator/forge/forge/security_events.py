@@ -626,6 +626,12 @@ EVENT_SEVERITY: dict[str, str] = {
     "task_item.run_unlinked":       "INFO",
     "task_item.imported":           "INFO",
     "task_item.rolled_back":        "WARNING",
+    # Knowledge-base projection (Corvin-Knowledge, ADR-2205): one summary record per
+    # applied/blocked projection, one per board transition of a KB item. The per-item
+    # writes stay task_item.created/updated with actor_kind "sync".
+    "task_item.projection_applied": "INFO",
+    "task_item.projection_blocked": "WARNING",
+    "task_item.kb_transition":      "INFO",
     # ADR-0103 — A2A Network Membership Attestation.
     # Metadata only — SesT bytes, instruction, pairing cert body NEVER in chain.
     # Allow-list: instance_id, sest_fp_prefix (16 hex chars), pairing_id,
@@ -3008,6 +3014,15 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
             "task_item.run_linked", "task_item.run_unlinked", "task_item.imported",
             "task_item.rolled_back",
         )
+    },
+    **{
+        _et: frozenset({
+            "namespace", "sha", "created", "updated", "archived", "restored", "unchanged",
+            "drift_healed", "blocking", "item_id", "kind", "from_status", "to_status",
+            "outcome", "actor_kind", "sid_fingerprint", "tenant_id",
+        })
+        for _et in ("task_item.projection_applied", "task_item.projection_blocked",
+                    "task_item.kb_transition")
     },
     "engine.span.start": frozenset({
         "span_id", "parent_span_id", "role", "engine_id", "model_id",

@@ -5,7 +5,7 @@ import type { UnifiedTask } from "@/lib/api/initiatives";
 import type { Item, ItemStatus } from "@/lib/api/task-tracking";
 import { cn } from "@/lib/utils";
 import {
-  BOARD_COLUMNS, STATUS_META, boardColumns, buildTimeline, displayProgress, formatDeadline,
+  BOARD_COLUMNS, STATUS_META, boardColumns, buildTimeline, canMove, displayProgress, formatDeadline,
   itemSpan, kindMeta, priorityMeta, statusMeta, type Filters, type TreeRow,
 } from "./encodings";
 import { formatUtc } from "./format";
@@ -113,6 +113,8 @@ export function BoardView({ items, filters, now, byId, onSelect, onMove, busy, r
     return m;
   }, [runs]);
   const [over, setOver] = useState<ItemStatus | null>(null);
+  const [dragged, setDragged] = useState<Item | null>(null);
+  const allowed = (s: ItemStatus) => !dragged || canMove(dragged, s);
   const top = (it: Item): Item | undefined => {
     let cur = it.parent_id ? byId.get(it.parent_id) : undefined;
     for (let i = 0; cur?.parent_id && i < 64; i++) cur = byId.get(cur.parent_id);
@@ -122,14 +124,17 @@ export function BoardView({ items, filters, now, byId, onSelect, onMove, busy, r
     e.preventDefault();
     setOver(null);
     const it = byId.get(e.dataTransfer.getData("text/plain"));
-    if (it && it.status !== status) onMove(it, status);
+    setDragged(null);
+    if (it && canMove(it, status)) onMove(it, status);
   };
   return (
     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4" data-testid="board-view">
       {BOARD_COLUMNS.map((s) => (
         <section key={s} aria-label={STATUS_META[s].label}
-          className={cn("flex min-h-[8rem] flex-col rounded-lg border bg-muted/20", over === s && "ring-2 ring-ring")}
-          onDragOver={(e) => { e.preventDefault(); setOver(s); }}
+          className={cn("flex min-h-[8rem] flex-col rounded-lg border bg-muted/20", over === s && allowed(s) && "ring-2 ring-ring",
+            !allowed(s) && "opacity-40")}
+          data-drop-allowed={allowed(s) ? "true" : "false"}
+          onDragOver={(e) => { if (!allowed(s)) return; e.preventDefault(); setOver(s); }}
           onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(null); }}
           onDrop={drop(s)}>
           <header className="flex items-center justify-between border-b px-3 py-2">
@@ -147,7 +152,8 @@ export function BoardView({ items, filters, now, byId, onSelect, onMove, busy, r
               const root = top(it);
               return (
                 <button key={it.id} type="button" draggable={!busy} data-testid={`card-${it.id}`}
-                  onDragStart={(e) => e.dataTransfer.setData("text/plain", it.id)}
+                  onDragStart={(e) => { e.dataTransfer.setData("text/plain", it.id); setDragged(it); }}
+                  onDragEnd={() => setDragged(null)}
                   onClick={() => onSelect(it.id)}
                   className="rounded-md border border-l-4 bg-background p-2 text-left shadow-sm transition-colors hover:bg-muted/40"
                   style={{ borderLeftColor: priorityMeta(it.priority).stripe ?? "hsl(var(--border))" }}>

@@ -146,6 +146,15 @@ reads an ADR's status from its file. Where a number has two files it now ignores
 siblings and reads two disagreeing live siblings as open (never done), and it keeps items
 whose commits left the 7-day window following their record.
 
+**Knowledge-base projection (ADR-2205, 2026-10-03):** initiatives, epics and tasks are
+authored in Corvin-Knowledge (`kb/`, `scripts/kb.py`) and projected onto the board as
+`kb:<uid>` items by `corvin_console/kb_projection.py` (both hosts, every 2 s: heal →
+export → apply; drift is re-applied, a red KB blocks with a banner). KB-owned fields of a
+`kb:` item are writable only by actor `sync:kb` (409 `kb_owned`); a board move is
+`/kb-transition` → the KB state machine. Once a tenant has KB items the git sync archives
+its ADR cards. New knowledge goes to Corvin-Knowledge; Corvin-ADR is a pinned read-only
+source until `Corvin-Knowledge/docs/CUTOVER.md` runs. → `docs/claude-ref/task-tracking-ssot.md`
+
 ---
 
 ## Root MD Files Enforcement — Clean Root Policy (ADR-0516 Compliance, 2026-09-18)

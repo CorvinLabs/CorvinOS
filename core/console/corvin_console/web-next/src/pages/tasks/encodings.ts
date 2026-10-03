@@ -77,7 +77,30 @@ export const PARENT_RULES: Record<ItemKind, (ItemKind | null)[]> = {
 
 export const CATEGORY_LABEL: Record<string, string> = {
   gate: "Gate", precondition: "Precondition", checkpoint: "Checkpoint", criterion: "Criterion",
+  kb: "Knowledge base",
 };
+
+/** Items projected from the knowledge base: their status is written by the KB only. */
+export function isKbItem(it: Pick<Item, "external_ref">): boolean {
+  return (it.external_ref ?? "").startsWith("kb:");
+}
+
+/** The KB task state machine in board terms (complete = done, archived = cancelled). Mirrors
+ * Corvin-Knowledge scripts/kb.py TASK_FSM; the server refuses anything else regardless. */
+export const KB_MOVES: Record<ItemStatus, readonly ItemStatus[]> = {
+  open: ["in_progress", "archived"],
+  in_progress: ["blocked", "complete", "open", "archived"],
+  blocked: ["in_progress", "open", "archived"],
+  complete: [],
+  archived: [],
+};
+
+/** May *it* be dropped on column *to*? Containers of the KB never move — their status is derived. */
+export function canMove(it: Pick<Item, "external_ref" | "kind" | "status">, to: ItemStatus): boolean {
+  if (it.status === to) return false;
+  if (!isKbItem(it)) return true;
+  return it.kind === "task" && KB_MOVES[it.status].includes(to);
+}
 
 /** Progress shown for an item: the rollup for a parent, its own value for a leaf. */
 export function displayProgress(it: Pick<Item, "status" | "progress" | "rollup" | "child_ids">): number {

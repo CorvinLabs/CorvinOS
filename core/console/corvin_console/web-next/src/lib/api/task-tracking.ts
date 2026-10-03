@@ -180,6 +180,29 @@ export function patchTaskItem(id: string, body: ItemPatchBody, csrf: string): Pr
   return api<Item>(`${BASE}/items/${encodeURIComponent(id)}`, { method: "PATCH", body, csrf });
 }
 
+/** A board move of a knowledge-base item: the KB state machine decides, the card follows. */
+export function kbTransition(id: string, to: ItemStatus, csrf: string,
+  extra: { reason?: string; dod?: string } = {}): Promise<Item> {
+  return api<Item>(`${BASE}/items/${encodeURIComponent(id)}/kb-transition`,
+    { method: "POST", body: { to, ...extra }, csrf });
+}
+
+export interface KbProjectionStatus {
+  enabled: boolean;
+  state: "ok" | "blocked" | "diverged" | "error" | "off" | "idle";
+  sha?: string;
+  blocking?: number;
+  failing?: Record<string, number>;
+  error?: string;
+  items?: number;
+  drift_total?: number;
+  checked_at?: number;
+}
+
+export function getKbStatus(signal?: AbortSignal): Promise<KbProjectionStatus> {
+  return api<KbProjectionStatus>(`${BASE}/kb/status`, { signal, timeoutMs: POLL_TIMEOUT_MS });
+}
+
 export function deleteTaskItem(id: string, csrf: string): Promise<Item> {
   return api<Item>(`${BASE}/items/${encodeURIComponent(id)}/delete`, { method: "POST", csrf });
 }
