@@ -655,6 +655,25 @@ class TestExtractJsonObject:
     def test_unbalanced_object_returns_none(self):
         assert _extract_json_object('{"name": "x"') is None
 
+    def test_stray_brace_in_leading_prose_is_skipped(self):
+        # Live failure: Opus wrote prose with an unclosed '{' ahead of the
+        # object; a scan anchored on the first '{' never closed and the run
+        # died with "Could not extract JSON from synthesis".
+        text = ('## SkillSpec\n\nFalls `@{upstream fehlt, nachfragen.\n\n'
+                '```json\n{"name": "assistant.a", "method": "# T"}\n```')
+        import json as _json
+        assert _json.loads(_extract_json_object(text))["name"] == "assistant.a"
+
+    def test_balanced_placeholder_in_leading_prose_is_skipped(self):
+        text = ('Platzhalter wie `{name}` werden ersetzt.\n\n'
+                '{"name": "assistant.a", "method": "# T"}')
+        import json as _json
+        assert _json.loads(_extract_json_object(text))["name"] == "assistant.a"
+
+    def test_no_parseable_candidate_returns_first_balanced(self):
+        # Keeps "unparseable JSON" distinguishable from "no JSON at all".
+        assert _extract_json_object("x {name} y {also bad}") == "{name}"
+
 
 class TestNormalizeSpec:
     def test_normalises_name_purpose_and_method_together(self):

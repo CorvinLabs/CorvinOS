@@ -225,13 +225,38 @@ def _extract_json_object(text: str) -> Optional[str]:
     character inside a string (``\\n``/``\\r``/``\\t`` pasted literally
     instead of as the JSON escape) is repaired the same way — ``json.loads``
     rejects a literal control character in a string outright.
+
+    The object does not have to start at the FIRST '{' of the reply. Opus
+    regularly writes prose ahead of the object (``## SkillSpec``, a sentence
+    naming ``@{upstream}`` or a ``{name}`` placeholder); a scan anchored on
+    that stray brace never closes and the whole run failed with "Could not
+    extract JSON from synthesis" while the real object sat a few lines
+    below. Every '{' is therefore a candidate, in order: the first one that
+    parses as a JSON object wins; if none parses, the first balanced
+    candidate is returned so the caller still reports *unparseable* JSON
+    rather than *no* JSON.
     """
     if not isinstance(text, str):
         return None
+    first_balanced: Optional[str] = None
     start = text.find("{")
-    if start == -1:
-        return None
+    while start != -1:
+        candidate = _scan_json_object(text, start)
+        if candidate is not None:
+            try:
+                if isinstance(json.loads(candidate), dict):
+                    return candidate
+            except (json.JSONDecodeError, ValueError):
+                pass
+            if first_balanced is None:
+                first_balanced = candidate
+        start = text.find("{", start + 1)
+    return first_balanced
 
+
+def _scan_json_object(text: str, start: int) -> Optional[str]:
+    """Balanced, string-aware scan of one object starting at ``text[start]``
+    (see ``_extract_json_object``); None when it never closes."""
     out: list[str] = []
     depth = 0
     in_string = False
