@@ -48,18 +48,8 @@ def phase1_environment_setup():
         print(f"  ❌ Database init failed: {e}")
         return False
 
-    # Step 1.3: Import legacy board
-    print("\n1.3 Importing legacy board (initiatives.json)...")
-    try:
-        from core.console.corvin_console.task_tracking_import import import_initiatives
-        count = import_initiatives(
-            source_file="initiatives.json",
-            tenant_id="_default",
-            apply=True
-        )
-        print(f"  ✅ Imported {count} tasks from legacy board")
-    except Exception as e:
-        print(f"  ⚠️  Import failed (non-blocking): {e}")
+    # Step 1.3 (the initiatives.json import) is retired: work items live in the
+    # knowledge base (Corvin-Knowledge, ADR-2205) and are projected onto the board.
 
     print("\n✅ PHASE 1: COMPLETE")
     return True

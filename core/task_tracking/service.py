@@ -676,6 +676,11 @@ def decide(tenant_id: str, item_id: str, decision: str, version: int, *, actor: 
             raise Conflict("item changed since it was read", cur)
         if cur["approval_state"] == "none":
             raise TaskTrackingError("this item has no approval to decide")
+        if _kb_owned(cur, actor):
+            # a decision sets status (go -> complete); for a KB item that is the KB state
+            # machine's field — record the gate in the KB instead (kb task <id> ...)
+            raise KbOwned("a knowledge-base gate is decided in the KB: kb task <id> in_progress|done "
+                          "--dod 'go: …' (or blocked --reason 'no-go: …')")
         if cur["approval_state"] == decision:
             return cur
         now = now_iso()

@@ -10,8 +10,9 @@ subtask, plus issue / proposal). ADR-2051, amended by ADR-2056.
 | `service.py` | reads with derived rollups; every mutation audit-first (core chain, then row, one transaction) |
 
 Console surface: `core/console/corvin_console/routes/task_tracking.py`
-(`/v1/console/task-tracking/*`). Importer for the legacy board:
-`python -m corvin_console.task_tracking_import [--apply]`.
+(`/v1/console/task-tracking/*`). Work items come from the knowledge base (Corvin-Knowledge,
+ADR-2205) through `projection.py` + `corvin_console/kb_projection.py`; the legacy
+`initiatives.json` importer is retired.
 
 Tests: `core/console/tests/test_task_tracking_route.py` (HTTP, real chain),
 `tests/task_tracking/test_service.py` (service).

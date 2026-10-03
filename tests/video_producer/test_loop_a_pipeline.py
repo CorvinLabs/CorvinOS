@@ -1,10 +1,11 @@
 """Loop A pipeline — end to end through the real tools (Blender, espeak-ng, ffmpeg).
 
-A two-scene mini concept runs through the real runner CLI against a sandbox
-board: TTS (the offline espeak-ng provider — OpenAI is forced off so the test
+A two-scene mini concept runs through the real runner CLI: TTS (the offline espeak-ng provider — OpenAI is forced off so the test
 never spends money or leaves the host), render in time slices that resume,
 compose to an MP4 whose streams and duration are checked with ffprobe, and the
-human tasks marked blocked. Skipped when a tool is missing.
+the runner stopping at the human stages. Its board reporting is retired (ADR-2205: the
+Loop A items live in the knowledge base), so the run must write NO task store at all.
+Skipped when a tool is missing.
 """
 from __future__ import annotations
 
@@ -41,32 +42,9 @@ scenes:
     duration_s: 0.5
 """
 
-BOARD = {"version": 1, "initiatives": [{
-    "id": "loop-a", "label": "Loop A", "title": "3D PoC",
-    "tasks": [{"id": str(i), "title": t, "status": "pending", "progress": 0}
-              for i, t in [(1, "Blender setup"), (2, "YAML + TTS"), (3, "Render"), (4, "Compose"),
-                           (5, "Learning study"), (6, "Analysis")]]}]}
-
-
-def _task(home: Path, tid: str) -> dict:
-    """The task as the runner sees it — read back from the Task-Tracking SSOT."""
-    os.environ["CORVIN_HOME"] = str(home)
-    board = pipe.Board("_default", "loop-a")
-    t = board.task(tid)
-    assert t is not None, f"task {tid} missing from the SSOT"
-    return t
-
-
-def _seed_board(home: Path) -> None:
-    """The board as production has it: initiatives.json imported once into the SSOT."""
-    (home / "tenants/_default/global").mkdir(parents=True, exist_ok=True)
-    (home / "tenants/_default/global/initiatives.json").write_text(json.dumps(BOARD))
-    env = {**os.environ, "CORVIN_HOME": str(home), "VOICE_AUDIT_PATH": str(home / "audit.jsonl"),
-           "PYTHONPATH": os.pathsep.join([str(REPO / "core/console"), str(REPO / "corvin_operator/forge"),
-                                          str(REPO), os.environ.get("PYTHONPATH", "")])}
-    p = subprocess.run([sys.executable, "-m", "corvin_console.task_tracking_import", "--tenant", "_default", "--apply"],
-                       capture_output=True, text=True, env=env, timeout=120, cwd=str(REPO))
-    assert p.returncode == 0, p.stderr[-2000:]
+def _no_task_store(home: Path) -> None:
+    assert not (home / "tenants/_default/global/task_tracking/tasks.db").exists(), \
+        "the retired board reporting wrote the task store again"
 
 
 def _run(home: Path, concept: Path, out: Path, budget: int) -> dict:
@@ -83,7 +61,6 @@ def _run(home: Path, concept: Path, out: Path, budget: int) -> dict:
 
 def test_mini_concept_runs_to_a_video_on_its_own(tmp_path):
     home = tmp_path / "home"
-    _seed_board(home)
     concept = tmp_path / "mini.yaml"
     concept.write_text(MINI)
     out = tmp_path / "out"
@@ -91,8 +68,7 @@ def test_mini_concept_runs_to_a_video_on_its_own(tmp_path):
     # Slice 1: zero render budget — TTS completes, rendering is left pending.
     r1 = _run(home, concept, out, budget=0)
     assert r1["state"] == "rendering"
-    assert _task(home, "2")["status"] == "done"
-    assert "espeak-ng" in _task(home, "2")["note"]
+    _no_task_store(home)
     manifest = json.loads((out / "audio/manifest.json").read_text())
     assert manifest["chain"]["provider"] == "espeak-ng" and manifest["chain"]["duration_s"] > 1
     resolved = pipe.gen.load_concept(out / "concept.resolved.yaml")
@@ -102,15 +78,11 @@ def test_mini_concept_runs_to_a_video_on_its_own(tmp_path):
     # Slice 2: enough budget — render resumes, compose, human tasks blocked.
     r2 = _run(home, concept, out, budget=600)
     assert r2["state"] == "waiting_for_humans", r2
-    assert _task(home, "3")["status"] == "done"
-    assert _task(home, "4")["status"] == "done"
     video = out / "mini_chain.mp4"
     assert pipe.ffprobe_streams(video) == {"video", "audio"}
     expected = sum(round(s["duration_s"] * 10) for s in resolved["scenes"]) / 10
     assert abs(pipe.ffprobe_duration(video) - expected) < 0.5
-    for tid in ("5", "6"):
-        assert _task(home, tid)["status"] == "blocked"
-    assert "45 human participants" in _task(home, "5")["note"]
+    _no_task_store(home)
 
     # Slice 3: nothing left — idempotent, nothing re-rendered.
     before = {p: p.stat().st_mtime_ns for p in (out / "frames").rglob("*.exr")}

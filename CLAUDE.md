@@ -30,14 +30,13 @@ unchanged, so every `corvin_decisions/decisions/ADR-XXXX-*.md` reference still r
 **Why Submodule?**
 - ADRs live in the **external Corvin-Knowledge repo**, not duplicated in CorvinOS
 - Submodule keeps the local copy in sync without manual management
-- Task Registry (`~/.corvin/task_registry.json`) scans submodule path for ADR status
 - Prevents fragmentation (no local ADR copies that diverge from canonical repo)
 
 **Path Resolution:**
 | Lookup Type | Where | Resolution |
 |---|---|---|
 | ADR Git reference | Code comments | `corvin_decisions/decisions/ADR-XXXX.md` (submodule path) |
-| ADR by ID | Task registry sync | Via `corvin_decisions/` submodule absolute path |
+| ADR by ID | `kb show ADR-XXXX` / `kb find` | resolves ids, uids and former (renumbered) ids |
 | Old paths (deprecated) | `docs/decisions/`, `core/console/decisions/`, etc. | **→ See deprecation notice below** |
 
 **Deprecation Notices Placed:**
@@ -227,10 +226,10 @@ carried 9 disallowed `.md` files plus ~40 stray `.txt`/`.json`/script files — 
 
 | Document Type | Destination | Action |
 |---|---|---|
-| **ADR** (architectural decision) | `Corvin-Knowledge/decisions/ADR-XXXX-*.md` | Write with ADR-0264 frontmatter, commit to Corvin-Knowledge |
+| **ADR** (architectural decision) | `Corvin-Knowledge/decisions/ADR-XXXX-*.md` | `kb new decision --title …` (numbers + commits), then fill ADR-0264 frontmatter |
 | **Plan/Report/Status** | `Corvin-Knowledge/archive/<YYYY-MM-DD>/<name>.md` | Move to archive with timestamp folder |
-| **Concept/Reusable Method** | `Corvin-Knowledge/concepts/CONCEPT-NNNN-*.md` | Write with concept schema, commit to Corvin-Knowledge |
-| **Implementation Details** | `Corvin-Knowledge/implementation-plans/<name>.md` | Commit to Corvin-Knowledge |
+| **Concept/Reusable Method** | `Corvin-Knowledge/concepts/CONCEPT-NNNN-*.md` | `kb new concept --title …` |
+| **Implementation Details** | `Corvin-Knowledge/implementation-plans/PLAN-NNNN-*.md` | `kb new plan --title …` |
 | **Security/Policy** | CorvinOS root (if ≤500 LOC, load-bearing policy) | Add to SECURITY.md or create a new Security policy file (rare exception) |
 
 ### Cleanup Status (2026-09-18)
@@ -258,58 +257,58 @@ failed on `main` while 9 extra `.md` files sat in root.
 
 ---
 
-## Task Completion Registry — Single Source of Truth (load-bearing)
+## Knowledge Base — Corvin-Knowledge (ADR-2205, load-bearing)
 
-**Problem:** Before 2026-09-16, task completion status was fragmented:
-- MEMORY.md had visual markers (✅ COMPLETE) but no machine reading
-- ADR status (ACCEPTED) didn't link to operator task status
-- Git commits used inconsistent markers ([DONE], [COMPLETE], etc.)
-- Context pipeline suggested completed tasks repeatedly (e.g., "Skill Forge v2.0", "Model Selector")
+**ONE home for all knowledge AND all work status:** `/home/shumway/projects/Corvin-Knowledge`
+(read-only mirror in CorvinOS: the `corvin_decisions/` submodule). Every type is a Markdown
+file with frontmatter; its TYPE is the directory, its identity an immutable `uid`, its `id`
+the human handle. Run every command below as `python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py …`.
 
-**Solution: Canonical Task Registry** (`~/.corvin/task_registry.json`)
+| Type | Where | Id | Status |
+|---|---|---|---|
+| decision (ADR) | `decisions/` | `ADR-NNNN` | proposed · accepted · superseded · frozen · rejected |
+| concept / idea / plan | `concepts/` · `ideas/` · `implementation-plans/` (+`implementation/`) | `CONCEPT-` · `IDEA-` · `PLAN-NNNN` | as decision |
+| review | `adversarial-reviews/` (+`reviews/`) | `REVIEW-NNNN` | open · addressed · dismissed |
+| note (agent notes) | `notes/` | `NOTE-NNNN` | — |
+| initiative → epic → task | `kb/initiatives/` · `kb/epics/` · `kb/tasks/` | `I-NN` · `E-NNN` · `T-NNNN` | task: open · in_progress · blocked · done · cancelled; containers: DERIVED, never stored |
 
-1. **Single Source of Truth:** ADR status (`status: ACCEPTED` in frontmatter) is canonical
-   - ADRs with `status: ACCEPTED` = tasks marked done by the architect
-   - Context pipeline reads this registry, not MEMORY.md visual markers
-   - No more re-suggestions of completed work
+**Find knowledge first** (before writing anything new — duplicates are the failure this KB exists to prevent):
+- `kb find <words…> [--type decision|concept|…|task] [--status in_progress]` — exact id first, then ranked text match
+- `kb show <id|uid>` — path, status, links, **backlinks**, children, an ADR's derived `realization` (is it built?)
+- plain `grep -rl` over the repo works too; `git log --follow` reaches each file's first commit
 
-2. **Automated Daily Sync**
-   - Service: `~/.config/systemd/user/corvin-task-registry-sync.service`
-   - Timer: `~/.config/systemd/user/corvin-task-registry-sync.timer`
-   - Runs at 03:00 UTC daily via `scripts/task_completion_registry.py`
-   - Scans: Corvin-Knowledge/decisions/ → task_registry.json
+**Create** — never by hand-numbering a file: `kb new <type> --title "…" [--epic E-001 | --initiative I-01]
+[--link rel=target]…`. Relations: `implements depends_on related supersedes inspired_by formalized_as
+reviews derived_from evidence source discussed_in regresses`; a target is an id/uid (must resolve to
+exactly one entity — otherwise refused) or a URI (`https:`, `repo:CorvinOS/path`, `commit:`, …).
+A task needs an epic, an epic an initiative. ADRs keep the ADR-0264 frontmatter (`paths`/`docs`/`commits`).
 
-3. **Context Pipeline Integration**
-   - Module: `core/console/corvin_console/task_completion_verifier.py`
-   - Provides: `is_task_completed(task_id)`, `filter_suggestions(list)`
-   - Injects status brief: "✅ 84 COMPLETED, 🟡 X IN_PROGRESS, ❌ Y BLOCKED"
-   - Never suggests ACCEPTED tasks again
+**Work status** — ONLY `kb task <T-id> <to> [--reason …] [--dod …]` (state machine: done needs a
+definition of done and done dependencies; blocked/cancelled need a reason; done is terminal — a
+regression is a NEW task with `regresses:`). The console board
+(`/console/app/initiatives`) is a projection of `kb/`, updated within ~2 s; dragging a card runs the
+same state machine. An ADR's `accepted` means DECIDED, never "built" — "built" is the derived
+`realization` of the tasks that implement it.
 
-4. **How to Mark a Task Done**
-   - In ADR frontmatter, set: `status: ACCEPTED` (not PROPOSED)
-   - Commit to Corvin-Knowledge/decisions/
-   - Registry syncs daily → task automatically filtered from future suggestions
+**Consistency** — `kb check` must report `blocking: 0` before you push. Derivable deviations (missing
+uid/id, status spelling, a stored container status, a duplicate id) are healed automatically
+(`kb heal`, also run by the projector, committed + audited in `kb/audit.jsonl`); judgement calls are
+refused at write time. `kb/_meta/baseline.json` holds pre-existing hand-work findings — it only shrinks
+(`kb baseline`); never `--init` it again to hide a new finding.
 
-**Must NOT do (absolute):**
-- Don't keep `status: PROPOSED` in an ADR if the work is done (sync won't recognize it)
-- Don't use visual markers in MEMORY.md alone (update ADR status instead)
-- Don't suggest tasks from MEMORY.md visual marks if ADR says `status: ACCEPTED`
-- Don't run the registry manually between scheduled syncs without reason
+**Retired writers (2026-10-03) — do NOT revive:** `scripts/task_completion_registry.py` +
+`corvin-task-registry-sync.timer` + `task_registry.json` + `task_completion_verifier.py` (deleted) ·
+ADR-number → board task creation in `task_tracking_git_sync.py` (it now only archives those cards and
+links commits naming `T-NNNN`) · `loop_a`'s board reporting + `corvin-loop-a.timer` (its work is done;
+Loop A is `I-02`) · the `initiatives.json` import (`POST …/import` → 410; Loop A/B/C are `I-02..I-04`) ·
+`corvin-initiatives-verify.timer`. Corvin-ADR is frozen (`MOVED.md`).
 
-**Verify the Registry Works:**
-```bash
-# Check what's in the registry
-cat ~/.corvin/task_registry.json | jq '.tasks | length'  # Should show 370+
+**Must NOT do:** write a KB file without `kb new` / `kb task` for identity or status · PATCH a `kb:`
+card's status/title/parent in the console or tasks.db (409 `kb_owned`; drift is re-applied anyway) ·
+record a go/no-go `decision` on a `kb:` gate (409 — use `kb task`) · store a status on an epic/initiative
+· invent a status when importing · commit to Corvin-ADR · add a second board writer.
 
-# Verify ACCEPTED tasks
-cat ~/.corvin/task_registry.json | jq '.tasks | to_entries | map(select(.value.status == "ACCEPTED")) | length'  # Should show 84+
-
-# Check systemd timer
-systemctl --user status corvin-task-registry-sync.timer
-```
-
-→ Full implementation: `scripts/task_completion_registry.py` (Python, ~300 LOC)
-→ Verifier: `core/console/corvin_console/task_completion_verifier.py` (integration layer)
+→ `Corvin-Knowledge/docs/CONCEPT.md` §14 · `docs/CUTOVER.md` · `docs/claude-ref/task-tracking-ssot.md`
 
 ---
 

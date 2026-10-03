@@ -422,7 +422,10 @@ def main(argv: list[str] | None = None) -> int:
         except (ValueError, ProcessLookupError, PermissionError):
             lock.write_text(str(os.getpid()))  # stale lock from a killed run
     try:
-        board = Board(a.tenant, a.initiative, enabled=not a.no_board)
+        # Board reporting is retired (ADR-2205): its items moved into the knowledge base
+        # (Loop A = I-02) and the old refs are archived; reporting would revive a second
+        # status writer. Status of the Loop A tasks is set with `kb task` now.
+        board = Board(a.tenant, a.initiative, enabled=False)
         state = run(a.concept, out=out, board=board, budget_s=a.budget_s, threads=a.threads,
                     resolution=a.resolution, samples=a.samples)
         done, total = frame_totals(gen.load_concept(out / "concept.resolved.yaml"), out) \

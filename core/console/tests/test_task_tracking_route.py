@@ -193,51 +193,21 @@ class TaskTrackingRouteTest(unittest.TestCase):
                               headers={"X-CSRF-Token": csrf})
             self.assertEqual(r.status_code, 200, r.text)
 
-    def test_initiatives_import_is_idempotent_and_leaves_the_file_alone(self):
-        now = datetime.now(timezone.utc)
-        board = {"version": 1, "initiatives": [
-            {"id": "loop-b", "label": "Loop B", "title": "Fixes",
-             "start": _iso(now - timedelta(days=2)), "deadline": _iso(now + timedelta(days=2)),
-             "tasks": [
-                 {"id": "p0-a", "title": "Audit wiring", "group": "P0", "status": "running", "progress": 40,
-                  "evidence": {"paths": ["README.md"]},
-                  "verification": {"at": _iso(now), "passed": 0, "failed": 0, "errors": 0,
-                                   "paths_present": 1, "paths_total": 1}},
-                 {"id": "p0-b", "title": "Late", "group": "P0", "status": "pending",
-                  "due": _iso(now - timedelta(hours=1))},
-             ],
-             "gates": [{"id": "blocker", "title": "Blocker Gate", "at": _iso(now + timedelta(days=4)),
-                        "decision": "pending", "criteria": [{"label": "All green", "state": "pending"}]}]},
-            {"id": "loop-c", "label": "Loop C", "title": "Production",
-             "blocked_by": {"initiative": "loop-b", "gate": "blocker"},
-             "tasks": [{"id": "s1", "title": "Stream 1", "status": "pending"}]},
-        ]}
+    def test_initiatives_import_is_retired(self):
+        """ADR-2205: initiatives.json was imported into the knowledge base once; a second
+        import would put a second writer back on the board. The route answers 410, writes
+        nothing, and the list never offers an import again — even with a file present."""
         with _sandbox(self._tmp) as (client, csrf, home, _):
-            path = home / "tenants" / "_default" / "global" / "initiatives.json"
-            path.write_text(json.dumps(board))
-            before = path.read_bytes()
-            self.assertTrue(client.get(f"{_URL}/items").json()["import_available"])
-            r = self._post(client, csrf, "/import", None, 200).json()
-            self.assertEqual((r["inserted"], r["skipped"]), (r["planned"], 0))
-            again = self._post(client, csrf, "/import", None, 200).json()
-            self.assertEqual((again["inserted"], again["skipped"]), (0, r["planned"]))
-            self.assertEqual(path.read_bytes(), before)
-
+            g = home / "tenants" / "_default" / "global"
+            (g / "initiatives.json").write_text(json.dumps({"version": 1, "initiatives": [
+                {"id": "loop-x", "label": "X", "title": "X", "tasks": [{"id": "t", "title": "T"}]}]}))
+            r = self._post(client, csrf, "/import")
+            self.assertEqual(r.status_code, 410, r.text)
+            self.assertIn("knowledge base", r.json()["detail"])
             body = client.get(f"{_URL}/items").json()
-            by_title = {i["title"]: i for i in body["items"]}
-            self.assertEqual(by_title["P0"]["kind"], "epic")
-            wiring = by_title["Audit wiring"]
-            self.assertEqual((wiring["status"], wiring["progress"]), ("complete", 100))  # evidence-derived
-            self.assertEqual(wiring["evidence"]["state"], "ok")
-            self.assertTrue(by_title["Late"]["overdue"])
-            gate = by_title["Blocker Gate"]
-            self.assertEqual((gate["category"], gate["approval_state"]), ("gate", "pending"))
-            self.assertEqual(by_title["Loop C — Production"]["waiting_on"], [gate["id"]])
-            self.assertEqual(body["summary"]["approvals_pending"], 1)
+            self.assertEqual(body["items"], [])
             self.assertFalse(body["import_available"])
-            types = [e["event_type"] for e in _task_events(home)]
-            self.assertEqual(types.count("task_item.imported"), 1)
-            self.assertEqual(types.count("task_item.created"), r["planned"])
+            self.assertEqual(_task_events(home), [])
 
 
 if __name__ == "__main__":

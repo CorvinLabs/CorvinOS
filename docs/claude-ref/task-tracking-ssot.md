@@ -91,7 +91,7 @@ The prefix is not `task.` because `task.spawn_*` already names runtime spawns.
 | POST | `/items/{id}/decision` | `{decision: pending\|approved\|rejected, version}` |
 | POST / DELETE | `/items/{id}/dependencies[/{dep}]` | cycle-checked |
 | POST / DELETE | `/items/{id}/runs` | `run_type` ∈ task_sources types except `initiative` |
-| POST | `/import` | idempotent `initiatives.json` import |
+| POST | `/import` | **retired → 410** (2026-10-03): Loop A/B/C were imported into the KB once (`I-02..I-04`) |
 | POST | `/items/{id}/kb-transition` | CSRF; `{to, reason?, dod?}` — board move of a knowledge-base task; runs `kb task` (the KB state machine) and re-projects; **409** `{message, kb_refused}` with the KB's own refusal |
 | GET | `/kb/status` | projector state: `ok`/`blocked`/`diverged`/`error`/`off`, `blocking`, `failing`, `drift_total` |
 | POST | `/kb/sync` | CSRF; one forced projector tick (heal → export → apply) |
@@ -186,6 +186,14 @@ label `kb`. One way only: nothing reads a status back into the KB.
 - **Git sync:** once a tenant has projected KB items, `task_tracking_git_sync` stops
   creating ADR tasks and archives the existing `git:<repo>#ADR-*` cards (reason names
   ADR-2205); a commit subject naming a KB task id (`T-0042`) is linked to that task.
+- **Decisions:** `/items/{id}/decision` on a `kb:` item is refused (409 `kb_owned`) — a go
+  decision sets status, which is the KB state machine's field; record a gate with `kb task`.
+- **Writers of the store after 2026-10-03** (and nothing else): `sync:kb` (the projector), operator
+  edits of local, non-`kb:` items and of the local fields of `kb:` items (priority, assignee,
+  deadline), and `sync:git` (archives legacy ADR cards, links commits). Retired: `loop_a`'s board
+  reporting + timer, the `initiatives.json` import, `corvin-initiatives-verify.timer`,
+  `task_completion_registry.py` + its timer + `task_completion_verifier.py`. The 37 live
+  `initiatives.json#…` items were archived with "moved into the knowledge base: <id>".
 - E2E: `core/console/tests/test_kb_projection_e2e.py` (real routes, real `kb.py`, fixture KB repo).
 
 ## The `initiatives.json` cutover

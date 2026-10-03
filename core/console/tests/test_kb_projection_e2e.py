@@ -28,7 +28,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_admin_route import _audit_events, _sandbox  # noqa: E402
 
 _URL = "/v1/console/task-tracking"
-_KB_SRC = Path(__file__).resolve().parents[3].parent / "Corvin-Knowledge" / "scripts"
+def _projects_root() -> Path:
+    """Sibling repos live next to the MAIN checkout — also when this runs in a linked worktree."""
+    here = Path(__file__).resolve().parent
+    r = subprocess.run(["git", "-C", str(here), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                       capture_output=True, text=True)
+    return Path(r.stdout.strip()).parent.parent if r.returncode == 0 else Path(__file__).resolve().parents[4]
+
+
+_KB_SRC = _projects_root() / "Corvin-Knowledge" / "scripts"
 
 
 def _sh(*args, cwd=None):
@@ -108,6 +116,16 @@ class KbProjectionE2E(unittest.TestCase):
             self.assertEqual(r.status_code, 200, r.text)   # local fields stay editable
             r = client.post(f"{_URL}/items/{t1['id']}/delete", headers={"X-CSRF-Token": csrf})
             self.assertEqual(r.status_code, 409, r.text)
+            # a go/no-go decision would set status (go -> complete) past the KB state machine
+            cur = client.get(f"{_URL}/items/{t2['id']}").json()["item"]
+            r = client.patch(f"{_URL}/items/{t2['id']}", json={"version": cur["version"], "approval_state": "pending"},
+                             headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 200, r.text)
+            r = client.post(f"{_URL}/items/{t2['id']}/decision", json={"decision": "approved", "version": r.json()["version"]},
+                            headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 409, r.text)
+            self.assertTrue(r.json()["detail"]["kb_owned"])
+            self.assertEqual(self._items(client)[f"kb:{self.t2['uid']}"]["status"], "open")
 
             # 3. a board move is a KB transition
             r = client.post(f"{_URL}/items/{t1['id']}/kb-transition", json={"to": "in_progress"},

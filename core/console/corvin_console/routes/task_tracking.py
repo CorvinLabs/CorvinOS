@@ -147,18 +147,8 @@ def get_items(
     _attach_live_runs(rec.tenant_id, body["items"])
     # Offer the import only on a store that never held anything: once items
     # exist (even deleted ones) the import would skip them all.
-    body["import_available"] = (not body["items"]) and not service.has_any_rows(rec.tenant_id) \
-        and _import_pending(rec.tenant_id)
+    body["import_available"] = False   # the initiatives.json import is retired (ADR-2205)
     return body
-
-
-def _import_pending(tenant_id: str) -> bool:
-    try:
-        from .. import task_tracking_import as imp  # noqa: PLC0415
-
-        return bool(imp.plan(tenant_id))
-    except Exception:  # noqa: BLE001
-        return False
 
 
 @router.get("/summary")
@@ -323,12 +313,10 @@ def post_kb_sync(rec: Annotated[session_auth.SessionRecord, Depends(require_csrf
 
 @router.post("/import")
 def post_import(rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]) -> JSONResponse:
-    from .. import task_tracking_import as imp  # noqa: PLC0415
-
-    try:
-        res = imp.run(rec.tenant_id, actor=_ACTOR, sid_fingerprint=rec.sid_fingerprint)
-    except Exception as exc:  # noqa: BLE001
-        _fail(exc)
-        raise
-    return JSONResponse(res)
+    """Retired 2026-10-03 (ADR-2205): initiatives.json was imported into the knowledge base
+    (Corvin-Knowledge migration/2026-10-03-initiatives-import.py); a second import would put
+    a second writer back on the board."""
+    return JSONResponse(status_code=410, content={
+        "detail": "initiatives.json import is retired — work items live in the knowledge base "
+                  "(Corvin-Knowledge: scripts/kb.py new task …)"})
 
