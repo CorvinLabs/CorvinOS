@@ -125,6 +125,42 @@ class TestSkillPlanner:
         with pytest.raises(PlanningError):
             await planner.plan("erzeuge einen Skill")
 
+    @staticmethod
+    def _prose_then(retry_text: str):
+        """Client whose synthesis answers with prose only (no '{' at all)."""
+        client = MagicMock()
+        prompts: list = []
+
+        def _create(**kwargs):
+            prompt = kwargs["messages"][0]["content"]
+            prompts.append(prompt)
+            if "did not contain the\nrequired JSON object" in prompt:
+                text = retry_text
+            elif "SYNTHESIS:" in prompt:
+                text = "## SkillSpec\n\nSoll der Skill auch YAML prüfen?"
+            else:
+                text = "- point one\n- point two"
+            return MagicMock(content=[MagicMock(text=text)])
+
+        client.messages.create.side_effect = _create
+        return client, prompts
+
+    @pytest.mark.asyncio
+    async def test_synthesis_without_json_is_retried_once(self):
+        client, prompts = self._prose_then(SPEC_JSON)
+        spec = await SkillPlanner(client).plan("erzeuge einen Test Skill")
+        assert spec.name == "assistant.validate_json"
+        retry = prompts[-1]
+        assert "Soll der Skill auch YAML prüfen?" in retry  # previous reply carried over
+        assert "do NOT ask anything back" in retry
+
+    @pytest.mark.asyncio
+    async def test_second_miss_still_raises(self):
+        client, prompts = self._prose_then("still no object")
+        with pytest.raises(PlanningError, match="also after a JSON-only retry"):
+            await SkillPlanner(client).plan("erzeuge einen Test Skill")
+        assert len(prompts) == 4  # thesis, antithesis, synthesis, ONE retry
+
     def test_planning_thesis_antithesis_synthesis_flow(self):
         """Thesis → Antithesis → Synthesis pipeline exists."""
         mock_client = MagicMock()

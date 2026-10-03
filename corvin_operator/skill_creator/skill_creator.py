@@ -739,6 +739,43 @@ scope creep, dependencies, or hidden costs? Give 3-4 bullet points."""
         )
         return response.content[0].text
 
+    async def _convert_to_json(self, reply: str, user_request: str) -> str:
+        """Retry round: turn a synthesis reply without a JSON spec into one."""
+        prompt = f"""Your previous answer to a skill-synthesis task did not contain the
+required JSON object. Convert it into that object now.
+
+Original user request: "{user_request}"
+
+PREVIOUS ANSWER:
+{reply[:12000]}
+
+Rules:
+- Reply with ONE JSON object and nothing else: no prose, no code fence.
+- If the previous answer asked a question or lacks details, make the most
+  reasonable assumption yourself — do NOT ask anything back.
+- Escape every double quote and newline inside string values as JSON requires.
+
+{{
+  "name": "assistant.snake_case_name",
+  "scope": "assistant",
+  "purpose": "<one sentence, {PURPOSE_LEN[0]}-{PURPOSE_LEN[1]} characters INCLUDING spaces>",
+  "method": "<Markdown body starting with '# Title', {METHOD_LEN[0]}-{METHOD_LEN[1]} characters>",
+  "dependencies": ["<tool1>"],
+  "keywords": ["<keyword1>"]
+}}
+
+"name" MUST match ^(assistant|project)\\.[a-z_]+$ (lowercase + underscores only)."""
+
+        response = self.client.messages.create(
+            model="claude-opus-5",
+            max_tokens=4000,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        text = response.content[0].text
+        if _parse_spec_object(text) is None:
+            _log_reply_shape("synthesis-retry", response, text)
+        return text
+
     async def _synthesize_spec(self, thesis: str, antithesis: str,
                                 user_request: str) -> SkillSpec:
         """Synthesis: merge thesis & antithesis into concrete SkillSpec YAML."""
@@ -775,14 +812,21 @@ The character limits are hard — a spec outside them is rejected."""
 
         # Parse JSON from response
         response_text = response.content[0].text
-        json_str = _extract_json_object(response_text)
-        if json_str is None:
-            raise PlanningError(f"Could not extract JSON from synthesis")
-
-        try:
-            spec_dict = json.loads(json_str)
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise PlanningError(f"Synthesis returned unparseable JSON: {exc}") from exc
+        spec_dict = _parse_spec_object(response_text)
+        if spec_dict is None:
+            # The model sometimes answers the synthesis with prose only — a
+            # design discussion, a clarifying question, a Markdown spec — and
+            # the whole run (thesis + antithesis already paid for) died with
+            # "Could not extract JSON from synthesis". One conversion round
+            # turns that reply into the object; a second miss is a real error.
+            _log_reply_shape("synthesis", response, response_text)
+            response_text = await self._convert_to_json(response_text, user_request)
+            spec_dict = _parse_spec_object(response_text)
+            if spec_dict is None:
+                raise PlanningError(
+                    "Could not extract JSON from synthesis "
+                    "(also after a JSON-only retry)"
+                )
 
         # Build SkillSpec
         return SkillSpec(
@@ -794,6 +838,30 @@ The character limits are hard — a spec outside them is rejected."""
             dependencies=spec_dict.get("dependencies", []),
             keywords=spec_dict.get("keywords", []),
         )
+
+
+def _parse_spec_object(text: str) -> Optional[Dict[str, Any]]:
+    """The spec object of a planning reply, or None when it has none."""
+    json_str = _extract_json_object(text)
+    if json_str is None:
+        return None
+    try:
+        obj = json.loads(json_str)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _log_reply_shape(phase: str, response: Any, text: str) -> None:
+    """Log the SHAPE of a reply that carried no spec — never its content
+    (the reply restates the operator's request)."""
+    text = text if isinstance(text, str) else ""
+    logger.warning(
+        "Skill-Creator %s reply carried no JSON spec: chars=%d open_braces=%d "
+        "close_braces=%d fenced=%s stop_reason=%s",
+        phase, len(text), text.count("{"), text.count("}"), "```" in text,
+        getattr(response, "stop_reason", None),
+    )
 
 
 # ============================================================================
