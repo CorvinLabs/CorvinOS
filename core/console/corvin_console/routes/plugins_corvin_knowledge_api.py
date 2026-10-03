@@ -6,11 +6,14 @@ Mounted under the console router, so the live paths are
 GETs require a console session; every mutating POST additionally requires
 the CSRF token, like every other console route.
 
-The graph itself is read from the plugin's local checkout of Corvin-Knowledge
-(``graph/entities.jsonl`` + ``graph/relations.jsonl``); ``sync`` drives git in
-that checkout. Nothing here is a Flask blueprint: the console is FastAPI and
-``flask`` is not installed in its venv, so a blueprint import would remove the
-whole console from the gateway process on the next restart.
+The graph itself is read from the plugin's local checkout of Corvin-Knowledge —
+``kb/graph/entities.jsonl`` + ``kb/graph/relations.jsonl`` (ADR-2206), the output of
+``kb.py index``, translated to this panel's wire shape in ``load_graph_data()``. The
+pre-cutover ``graph/`` directory (ADR-MESH-002) is dead: 707 untracked rows, no
+relations, never updated since 2026-09-18 (ADR-2205 froze that design). ``sync`` drives
+git in the checkout. Nothing here is a Flask blueprint: the console is FastAPI and
+``flask`` is not installed in its venv, so a blueprint import would remove the whole
+console from the gateway process on the next restart.
 """
 from __future__ import annotations
 
@@ -36,7 +39,8 @@ router = APIRouter(
 
 CONFIG_FILE = Path.home() / ".claude" / "plugins" / "corvin-knowledge.json"
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "repo_path": "~/.corvin-knowledge/",
+    # ADR-2206: the knowledge home's real checkout, not the unused mesh-era convention.
+    "repo_path": "/home/shumway/projects/Corvin-Knowledge",
     "remote_url": "https://github.com/CorvinLabs/Corvin-Knowledge.git",
     "auto_sync_on_query": True,
     "consistency_level": "warn",
@@ -84,27 +88,31 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
 
 
 def load_graph_data(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Load entities + relations from the plugin's repository checkout."""
+    """Load entities + relations from the KB's generated graph (``kb.py index``, ADR-2206)
+    and translate it to this panel's wire shape. A node's id is ``uid or id`` — the SAME
+    fallback ``kb.py index`` uses for an edge's ``src``/``dst``, so every edge always
+    resolves to a node that exists."""
     config = config or load_config()
-    graph_dir = Path(config["repo_path"]).expanduser() / "graph"
+    graph_dir = Path(config["repo_path"]).expanduser() / "kb" / "graph"
     _entities_raw = _read_jsonl(graph_dir / "entities.jsonl")
     entities = [
         {
-            "id": row.get("id", ""),
+            "id": row.get("uid") or row.get("id", ""),
             "type": row.get("type", "decision"),
             "title": row.get("title", ""),
             "status": row.get("status", "proposed"),
-            "tags": row.get("tags", []),
+            "tags": row.get("labels", []),
         }
-        for row in _read_jsonl(graph_dir / "entities.jsonl")
+        for row in _entities_raw
     ]
     relations = [
         {
-            "from_id": row.get("from_id", ""),
-            "to_id": row.get("to_id", ""),
-            "relation": row.get("relation", "relates_to"),
+            "from_id": row.get("src", ""),
+            "to_id": row.get("dst", ""),
+            "relation": row.get("rel", "relates_to"),
         }
         for row in _read_jsonl(graph_dir / "relations.jsonl")
+        if not row.get("external") and row.get("resolved")
     ]
     # entities.jsonl is append-only in practice (the sync writes new rows for
     # re-proposed entities); the graph library refuses a duplicate node id
@@ -274,7 +282,7 @@ async def init_plugin(session: Any = Depends(require_csrf)) -> Dict[str, Any]:
     """Called on plugin installation: default config + graph directory."""
     try:
         save_config(DEFAULT_CONFIG.copy())
-        (Path(DEFAULT_CONFIG["repo_path"]).expanduser() / "graph").mkdir(parents=True, exist_ok=True)
+        (Path(DEFAULT_CONFIG["repo_path"]).expanduser() / "kb" / "graph").mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {

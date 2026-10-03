@@ -147,6 +147,10 @@ export const PANELS: ConsolePanel[] = [
   // The backend manifest declares the same route/component, so the sidebar
   // dedupes to ONE entry (mergeManifestNav keys on the path).
   rc("marketplace", "Marketplace", MarketplacePage, { nav: { label: "Marketplace", icon: "Blocks", group: "marketplace" } }),
+  // Knowledge Graph (ADR-2206): the real, current KB (decisions, concepts, ideas,
+  // plans, reviews, notes, initiatives/epics/tasks) as one graph. Was imported here
+  // but never placed into PANELS/NAV_GROUPS — unreachable since it was added.
+  rc("corvin-knowledge", "Knowledge Graph", CorvinKnowledgePage, { nav: { label: "Knowledge Graph", icon: "Share2", group: "knowledge" } }),
   // Cross-Device-Learning GitHub Integration (Iteration 1-5)
   rc("settings/github", "GitHub", GitHubPage,
      { nav: { label: "GitHub", icon: "Github", group: "system" } }),

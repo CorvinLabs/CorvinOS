@@ -40,17 +40,32 @@ const KEY_CONFIG = ["corvin-knowledge", "config"] as const;
 /** Rendered caption — also the deploy marker (a string literal, see ADR-0885). */
 export const MARKER_KNOWLEDGE = "Decisions, concepts and ideas of the configured knowledge repository, as the graph its relations describe.";
 
-/** Status → colour. Four closed values, one hue each; the graph library needs
- *  concrete colours, so these are the console's viz tokens resolved at render. */
-const STATUS_ORDER = ["proposed", "accepted", "verified", "superseded"] as const;
+/** Status -> colour. Two closed, nominal vocabularies (ADR-2108 decisions, ADR-2205
+ *  tasks/containers) in one graph; shape already disambiguates them (`box` for
+ *  decisions, `dot` for everything else, see GraphCanvas below), so a hue may be
+ *  reused across the two without ambiguity. Decision colours reuse the ordinal
+ *  `--viz-tier-*` ramp by IDENTITY, same as before this list grew (ADR-0761 notes
+ *  that reuse is not a freshly validated palette). Task colours reuse the Tasks
+ *  panel's own validated `--viz-status-*` tokens. */
+const DECISION_STATUS_ORDER = ["proposed", "accepted", "frozen", "rejected", "superseded"] as const;
+const TASK_STATUS_ORDER = ["open", "in_progress", "blocked", "done", "cancelled"] as const;
+const STATUS_ORDER = [...DECISION_STATUS_ORDER, ...TASK_STATUS_ORDER] as const;
 function statusColours(): Record<string, string> {
   const cs = getComputedStyle(document.documentElement);
   const v = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
   return {
-    proposed: v("--viz-tier-2", "#d29a3a"),
-    accepted: v("--viz-tier-1", "#3a9a6a"),
-    verified: v("--viz-role-worker", "#3a7fbf"),
+    // decisions (ADR-2108)
+    proposed: v("--viz-tier-2", "#ca9b49"),
+    accepted: v("--viz-tier-1", "#d6b171"),
+    frozen: v("--viz-tier-3", "#775822"),
+    rejected: v("--viz-status-blocked", "#b0306a"),
     superseded: v("--viz-baseline", "#8a8a8a"),
+    // tasks + containers (ADR-2205)
+    open: v("--viz-baseline", "#8a8a8a"),
+    in_progress: v("--viz-status-progress", "#c08a1e"),
+    blocked: v("--viz-status-blocked", "#b0306a"),
+    done: v("--viz-status-complete", "#2a78c6"),
+    cancelled: v("--viz-tier-3", "#775822"),
   };
 }
 
@@ -203,7 +218,7 @@ export function CorvinKnowledgePage() {
             <Card className="border-destructive/30 bg-destructive/10"><CardContent className="py-6 flex items-center gap-2 text-destructive text-sm"><AlertCircle size={18} /> The graph could not be loaded.</CardContent></Card>
           ) : entities.length === 0 ? (
             <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg" data-testid="knowledge-empty">
-              No entities at <span className="font-mono">{config.data?.repo_path ?? "the configured path"}</span>/graph. Point the repository path at a Corvin-Knowledge checkout under Settings, or pull it.
+              No entities at <span className="font-mono">{config.data?.repo_path ?? "the configured path"}</span>/kb/graph. Point the repository path at a Corvin-Knowledge checkout under Settings, run `kb index` there, or pull it.
             </div>
           ) : filtered.entities.length === 0 ? (
             <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">No entity matches.</div>
@@ -240,7 +255,7 @@ export function CorvinKnowledgePage() {
                 <div className="space-y-1">
                   <label className="text-sm font-medium" htmlFor="ck-repo">Repository path</label>
                   <Input id="ck-repo" className="font-mono" value={cfg.repo_path} onChange={(e) => setDraft({ ...cfg, repo_path: e.target.value })} />
-                  <p className="text-xs text-muted-foreground">Local checkout the graph is read from (graph/entities.jsonl, graph/relations.jsonl).</p>
+                  <p className="text-xs text-muted-foreground">Local checkout the graph is read from (kb/graph/entities.jsonl, kb/graph/relations.jsonl — ADR-2206).</p>
                 </div>
                 <div className="space-y-1">
                   <label className="text-sm font-medium" htmlFor="ck-remote">Remote URL</label>
