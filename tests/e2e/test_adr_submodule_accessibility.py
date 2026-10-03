@@ -4,7 +4,7 @@ E2E tests for ADR Submodule Integration (FIX #1 — ADR-0862)
 Verifies:
 1. Git submodule is properly initialized
 2. ADRs are accessible via submodule path
-3. Canonical ADR count matches Corvin-ADR repo
+3. Canonical ADR count matches Corvin-Knowledge repo
 4. No duplicate ADRs in local directories (deprecated paths)
 """
 
@@ -32,7 +32,7 @@ class TestADRSubmoduleIntegration:
 
         content = gitmodules_path.read_text()
         assert "corvin_decisions" in content, "corvin_decisions submodule not in .gitmodules"
-        assert "Corvin-ADR.git" in content, "Corvin-ADR repository URL not configured"
+        assert "Corvin-Knowledge.git" in content, "Corvin-Knowledge repository URL not configured"
 
     def test_submodule_initialized(self, repo_root):
         """Verify submodule is cloned and contains decisions"""
@@ -104,15 +104,15 @@ class TestADRSubmoduleIntegration:
                     f"ADRs should only exist in corvin_decisions/"
 
     def test_submodule_origin_url_correct(self, repo_root):
-        """Verify submodule points to correct Corvin-ADR repository"""
+        """Verify submodule points to correct Corvin-Knowledge repository"""
         # Read .gitmodules
         gitmodules_path = repo_root / ".gitmodules"
         content = gitmodules_path.read_text()
 
         # Extract URL
-        assert "url = https://github.com/CorvinLabs/Corvin-ADR.git" in content or \
-               "url=https://github.com/CorvinLabs/Corvin-ADR.git" in content.replace(" ", ""), \
-               "Submodule URL does not point to CorvinLabs/Corvin-ADR repository"
+        assert "url = https://github.com/CorvinLabs/Corvin-Knowledge.git" in content or \
+               "url=https://github.com/CorvinLabs/Corvin-Knowledge.git" in content.replace(" ", ""), \
+               "Submodule URL does not point to CorvinLabs/Corvin-Knowledge repository"
 
     def test_ci_workflow_mentions_submodule_init(self, repo_root):
         """Verify CI/CD workflows initialize submodules"""
@@ -142,7 +142,7 @@ class TestADRSubmoduleUsage:
         # Example: ADR-0862 (this integration)
         adr_path = repo_root / "corvin_decisions" / "decisions" / "ADR-0862-adr-submodule-integration.md"
 
-        # Note: This ADR file will be created in Corvin-ADR repo; test pattern is the verification
+        # Note: This ADR file will be created in Corvin-Knowledge repo; test pattern is the verification
         assert adr_path.parent.exists(), "ADR decisions directory not accessible"
 
     def test_code_can_reference_adr_via_submodule_path(self, repo_root):

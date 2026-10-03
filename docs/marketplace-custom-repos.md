@@ -114,8 +114,8 @@ See `docs/marketplace-api-reference.md` for endpoint documentation.
 
 ## Related Docs
 
-- [ADR-0450](../Corvin-ADR/decisions/ADR-0450-custom-github-repository-discovery-scope.md): Security & Scope Boundary
-- [ADR-0451](../Corvin-ADR/decisions/ADR-2133-custom-github-repository-api-storage.md): API Contract & Storage
-- [ADR-0452](../Corvin-ADR/decisions/ADR-0452-custom-repository-github-authentication.md): Token Encryption & Lifecycle
-- [ADR-0453](../Corvin-ADR/decisions/ADR-0453-custom-repository-error-handling.md): Error Handling & Taxonomy
-- [ADR-0454](../Corvin-ADR/decisions/ADR-0454-custom-github-repository-implementation.md): Implementation (Weeks 1-4)
+- [ADR-0450](../Corvin-Knowledge/decisions/ADR-0450-custom-github-repository-discovery-scope.md): Security & Scope Boundary
+- [ADR-0451](../Corvin-Knowledge/decisions/ADR-2133-custom-github-repository-api-storage.md): API Contract & Storage
+- [ADR-0452](../Corvin-Knowledge/decisions/ADR-0452-custom-repository-github-authentication.md): Token Encryption & Lifecycle
+- [ADR-0453](../Corvin-Knowledge/decisions/ADR-0453-custom-repository-error-handling.md): Error Handling & Taxonomy
+- [ADR-0454](../Corvin-Knowledge/decisions/ADR-0454-custom-github-repository-implementation.md): Implementation (Weeks 1-4)

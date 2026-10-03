@@ -4,7 +4,7 @@
 **Date:** 2026-09-02  
 **Branch:** `feature/phase1-bigbang-feature-flags`  
 **Commit:** `2394d5ad`  
-**ADR:** ADR-0549 (Corvin-ADR/decisions/)
+**ADR:** ADR-0549 (Corvin-Knowledge/decisions/)
 
 ---
 
@@ -411,7 +411,7 @@ Phase 1b will rewrite call-sites to use the Skills registry:
 ### Pre-Deployment Checks ✅
 - [x] All code committed (commit 2394d5ad)
 - [x] All tests passing (10/10)
-- [x] ADR-0549 documented (Corvin-ADR/decisions/)
+- [x] ADR-0549 documented (Corvin-Knowledge/decisions/)
 - [x] Compliance verified (GDPR, EU AI Act)
 - [x] Audit trail integration working
 - [x] Tenant isolation enforced
@@ -437,7 +437,7 @@ Phase 1b will rewrite call-sites to use the Skills registry:
 | **A2A Integration** | Working end-to-end |
 | **Audit Trail Events** | All Skill executions logged |
 | **Tenant Isolation** | Verified in tests |
-| **Documentation** | ADR-0549 (Corvin-ADR/), this report |
+| **Documentation** | ADR-0549 (Corvin-Knowledge/), this report |
 | **LDD k=1 Status** | ✅ COMPLETE |
 
 ---
@@ -456,4 +456,4 @@ The Skills Registry + A2A Bridge infrastructure is production-ready for Phase 1b
 **Author:** Corvin OS Team (Haiku 4.5)  
 **Branch:** feature/phase1-bigbang-feature-flags  
 **Commit:** 2394d5ad  
-**ADR:** ADR-0549 (Corvin-ADR/decisions/ADR-0549-phase1a-skills-registry-a2a-bridge.md)
+**ADR:** ADR-0549 (Corvin-Knowledge/decisions/ADR-0549-phase1a-skills-registry-a2a-bridge.md)

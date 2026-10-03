@@ -165,7 +165,7 @@ fi
 ✅ NEW: ~/.claude/skills/full-stack-implementation-proof.md
 ✅ NEW: scripts/test-full-stack-proof-skill.py
 ✅ NEW: scripts/adversarial-review-of-skill.py
-✅ NEW: Corvin-ADR/decisions/ADR-2105-full-stack-proof-skill.md
+✅ NEW: Corvin-Knowledge/decisions/ADR-2105-full-stack-proof-skill.md
 ✅ NEW: docs/SKILL-VERIFICATION-STRATEGY.md
 ✅ NEW: docs/SKILL-IMPLEMENTATION-SYNTHESIS.md
 ✅ NEW: docs/LDD-OUTER-LOOP-COMPLETION.md (this file)

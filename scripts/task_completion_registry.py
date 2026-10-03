@@ -180,13 +180,13 @@ class TaskRegistry:
         # CORVIN_HOME is honoured (the systemd unit sets it); never hard-wire ~/.corvin.
         self.corvin_home = Path(corvin_home or os.environ.get("CORVIN_HOME") or Path.home() / ".corvin")
         self.registry_file = self.corvin_home / "task_registry.json"
-        self.adr_root = Path(adr_root) if adr_root else Path.home() / "projects" / "Corvin-ADR" / "decisions"
+        self.adr_root = Path(adr_root) if adr_root else Path.home() / "projects" / "Corvin-Knowledge" / "decisions"
         self.repo_root = Path(repo_root) if repo_root else Path.home() / "projects" / "CorvinOS"
         self.memory_root = (Path(memory_root) if memory_root else
                             self.repo_root / ".claude" / "projects" / "-home-shumway-projects-CorvinOS" / "memory")
 
     def scan_adr_registry(self) -> Dict[str, TaskStatus]:
-        """Scan Corvin-ADR/decisions/ for task definitions and status.
+        """Scan Corvin-Knowledge/decisions/ for task definitions and status.
 
         Every ``*.md`` file is considered, not only ``ADR-*.md``: the record repo
         carries two naming schemes side by side (``ADR-NNNN-slug.md`` and the

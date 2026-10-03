@@ -230,12 +230,12 @@
 
 | Document | Location | Purpose |
 |---|---|---|
-| Master Orchestration Plan | Corvin-ADR/archive/2026-09-24/ | Complete 12-week plan + risk matrix |
-| Kickoff Checklist | Corvin-ADR/archive/2026-09-24/ | Team confirmations + action items |
-| ADR-2030 (Workflow Optimizer) | Corvin-ADR/decisions/ | Stream 1 detailed spec |
-| ADR-2031 (Security Orchestrator) | Corvin-ADR/decisions/ | Stream 2 detailed spec |
-| ADR-2032 (Flow Guard) | Corvin-ADR/decisions/ | Stream 3 detailed spec |
-| ADR-2033 (Feedback Schema) | Corvin-ADR/decisions/ | Stream 4 detailed spec |
+| Master Orchestration Plan | Corvin-Knowledge/archive/2026-09-24/ | Complete 12-week plan + risk matrix |
+| Kickoff Checklist | Corvin-Knowledge/archive/2026-09-24/ | Team confirmations + action items |
+| ADR-2030 (Workflow Optimizer) | Corvin-Knowledge/decisions/ | Stream 1 detailed spec |
+| ADR-2031 (Security Orchestrator) | Corvin-Knowledge/decisions/ | Stream 2 detailed spec |
+| ADR-2032 (Flow Guard) | Corvin-Knowledge/decisions/ | Stream 3 detailed spec |
+| ADR-2033 (Feedback Schema) | Corvin-Knowledge/decisions/ | Stream 4 detailed spec |
 | Stream Weekly Status | docs/phase-10/STREAM*_WEEKLY_STATUS.md | Per-stream tracking (updated Fri EOD) |
 | Gate Decision Log | docs/phase-10/PHASE10_GATE_DECISIONS.md | Gate 1–5 decision record + sign-offs |
 

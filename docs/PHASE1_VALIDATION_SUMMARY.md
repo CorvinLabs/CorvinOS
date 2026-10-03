@@ -29,7 +29,7 @@ Ready-to-fill decision gate for Friday 2026-09-13:
 - Escalation paths (if CONDITIONAL or NO-GO)
 
 ### 3. Updated ADR-0544
-**File:** `/home/shumway/projects/Corvin-ADR/decisions/ADR-0544-phase1-bigbang-feature-flags.md`
+**File:** `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0544-phase1-bigbang-feature-flags.md`
 
 Status updated: `PROPOSED` → `VALIDATION_PHASE`
 
@@ -285,7 +285,7 @@ Decision: NO-GO, escalate to legal review
 - `docs/PHASE1_GO_NO_GO_GATE_TEMPLATE.md` — Gate procedure (Friday template, 15 min)
 
 **ADR & Architecture:**
-- `Corvin-ADR/decisions/ADR-0544-phase1-bigbang-feature-flags.md` — Status updated, validation plan linked
+- `Corvin-Knowledge/decisions/ADR-0544-phase1-bigbang-feature-flags.md` — Status updated, validation plan linked
 - `docs/PHASE1_ADVERSARIAL_REVIEW_FINDINGS.md` — Original 10 findings (reference)
 
 **Reference (not required for execution):**

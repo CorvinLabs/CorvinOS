@@ -3,18 +3,18 @@
 Produces a small, plugin-scoped ADR in this repo's own ADR shape (Context /
 Decision / Alternatives / Consequences) — NOT a CorvinOS-repo ADR. It documents
 one decision: why this plugin idea was classified the way it was. It is meant
-to travel with the plugin's own repo, not to be filed in `Corvin-ADR/`.
+to travel with the plugin's own repo, not to be filed in `Corvin-Knowledge/`.
 
 Carries ADR-0264 frontmatter (id/status/depends_on/related/paths/docs) like
 every CorvinOS-repo ADR written after that convention, even though this
-document lives outside `Corvin-ADR/decisions/` and outside
+document lives outside `Corvin-Knowledge/decisions/` and outside
 `scripts/adr_graph.py`'s default search path: the schema is what makes an ADR
 machine-traversable, not its filing location, and a plugin's own generated
 ADR is exactly the kind of node a coding agent working inside that plugin's
 repo should be able to enter the graph from. `id` is plugin-scoped
-(`{plugin_id}-ADR-0001`, not a Corvin-ADR sequence number) since a plugin may
+(`{plugin_id}-ADR-0001`, not a Corvin-Knowledge sequence number) since a plugin may
 accumulate more than one generated ADR over its life without colliding with
-this repo's numbering. `related` points INTO the real Corvin-ADR corpus
+this repo's numbering. `related` points INTO the real Corvin-Knowledge corpus
 (ADR-0253, ADR-0156, the taxonomy ADRs) — cross-repo edges are allowed by
 design (ADR-0264 "Decision" §1: paths/edges are not required to resolve
 locally to be meaningful). `docs:` points at this ADR's own SIBLING generated
@@ -72,7 +72,7 @@ _SIBLING_DOCS = ("plugin-idea.md", "plugin-architecture.md", "build-plan.md")
 
 def _adr_frontmatter(plugin_id: str) -> list[str]:
     """ADR-0264 schema — see module docstring for why a plugin-scoped
-    generated ADR carries it even though it is filed outside Corvin-ADR/.
+    generated ADR carries it even though it is filed outside Corvin-Knowledge/.
 
     `docs:` names its sibling generated docs (relative to the shared
     `docs/` dir all four generators write into, see generators/scaffold.py)

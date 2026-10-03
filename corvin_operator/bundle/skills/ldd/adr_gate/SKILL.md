@@ -53,12 +53,12 @@ All three levels must appear explicitly in the ADR's **Context** and **Decision*
 **Step 1** — Find the next number:
 
 ```bash
-ls ../Corvin-ADR/decisions/ | grep -E '^[0-9]{4}' | sort | tail -1
+ls ../Corvin-Knowledge/decisions/ | grep -E '^[0-9]{4}' | sort | tail -1
 ```
 
 Add 1, zero-pad to 4 digits (e.g. `0068`).
 
-**Step 2** — Write to `../Corvin-ADR/decisions/XXXX-short-kebab-title.md`. Every ADR
+**Step 2** — Write to `../Corvin-Knowledge/decisions/XXXX-short-kebab-title.md`. Every ADR
 carries **both** the human-facing prose header **and** a machine-readable frontmatter
 block (ADR-0264 — "ADR Decision Graph"): the frontmatter is what makes an ADR a node a
 coding agent can traverse to instead of a document it must have already read.

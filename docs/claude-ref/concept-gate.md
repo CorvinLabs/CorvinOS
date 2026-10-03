@@ -20,7 +20,7 @@ don't need a concept.
 
 CorvinOS already has two kinds of durable, versioned knowledge:
 
-| | ADR (`Corvin-ADR/decisions/`) | Skill (SkillForge, `type: learned-experience`) | Concept (`Corvin-ADR/concepts/`) |
+| | ADR (`Corvin-Knowledge/decisions/`) | Skill (SkillForge, `type: learned-experience`) | Concept (`Corvin-Knowledge/concepts/`) |
 |---|---|---|---|
 | Answers | What did we decide, and why? | How, mechanically, every time? | Why does this way of working keep paying off? |
 | Length | As long as the decision needs | ≤8KB, prompt-injectable | As long as the evidence needs |
@@ -84,12 +84,12 @@ approach generalizes beyond this one file."
 
 ## Concept Destination
 
-**Concepts live in `Corvin-ADR/concepts/` (sibling repository), NOT in this repo** — same rule
-as ADRs. Fallback only if Corvin-ADR is genuinely unreachable to the current session:
+**Concepts live in `Corvin-Knowledge/concepts/` (sibling repository), NOT in this repo** — same rule
+as ADRs. Fallback only if Corvin-Knowledge is genuinely unreachable to the current session:
 `CorvinOS/docs/concepts/`, same schema, same gate.
 
 ```
-Corvin-ADR/concepts/CONCEPT-NNNN-short-title.md
+Corvin-Knowledge/concepts/CONCEPT-NNNN-short-title.md
 ```
 
 **Numbering:** independent 4-digit sequence starting at `0001`, own namespace, never
@@ -154,8 +154,8 @@ the concept's `skills:` field, not the name you originally intended.
 
 ## Hard Rules (Must NOT do)
 
-1. **Don't write concept content into the CorvinOS repo** when Corvin-ADR is reachable —
-   concepts live in Corvin-ADR only, same rule as ADRs.
+1. **Don't write concept content into the CorvinOS repo** when Corvin-Knowledge is reachable —
+   concepts live in Corvin-Knowledge only, same rule as ADRs.
 2. **Don't create a near-duplicate concept** — amend the existing one instead.
 3. **Don't edit or delete anything under an existing concept's `## Operator Notes` heading** —
    append a new dated sub-entry above it, only.
@@ -192,4 +192,4 @@ not fixed here (shared registry precedence, needs its own investigation).
 - [adr-gate.md](adr-gate.md) — Sibling gate for architectural decisions
 - [ldd-mandatory.md](ldd-mandatory.md) — LDD skill dispatch table (Concept Gate's row)
 - `corvin_operator/skill-forge/README.md` — SkillForge scopes, grading, promotion, namespace gate
-- Corvin-ADR repository, `concepts/` directory — the actual archive
+- Corvin-Knowledge repository, `concepts/` directory — the actual archive

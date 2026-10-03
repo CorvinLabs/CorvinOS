@@ -8,7 +8,7 @@ This directory is **no longer the canonical location** for ADRs.
 
 All ADRs have been migrated to a git submodule:
 - **Path:** `corvin_decisions/decisions/` (in this repository)
-- **Canonical Source:** `/home/shumway/projects/Corvin-ADR/decisions/`
+- **Canonical Source:** `/home/shumway/projects/Corvin-Knowledge/decisions/`
 - **Sync:** Automatically via git submodule (read-only)
 
 ## Migration Rationale
@@ -16,7 +16,7 @@ All ADRs have been migrated to a git submodule:
 | Issue | Solution |
 |---|---|
 | ADRs duplicated locally | Submodule keeps single canonical copy in sync |
-| Fragmentation across repos | External Corvin-ADR repo owns all core ADRs |
+| Fragmentation across repos | External Corvin-Knowledge repo owns all core ADRs |
 | Manual sync burden | Git handles submodule updates automatically |
 
 ## How to Access ADRs
@@ -32,7 +32,7 @@ cat corvin_decisions/decisions/ADR-XXXX-slug.md
 
 **From external repo (if needed):**
 ```bash
-cd /home/shumway/projects/Corvin-ADR
+cd /home/shumway/projects/Corvin-Knowledge
 ls decisions/ADR-*.md
 ```
 

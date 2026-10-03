@@ -129,7 +129,7 @@ and the real `claude` engine:
 `core/workflows/corvin_workflows/examples/expense_approval_pipeline.awp.yaml` (plain `dag`,
 proves `code`/`merge`/`retry` work standalone, not only inside a chatflow).
 
-→ Full design rationale: ADR-0188 (`Corvin-ADR/decisions/ADR-0188-awp-deterministic-nodes-branching-human-in-the-loop.md`).
+→ Full design rationale: ADR-0188 (`Corvin-Knowledge/decisions/ADR-0188-awp-deterministic-nodes-branching-human-in-the-loop.md`).
 
 ---
 

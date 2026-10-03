@@ -4,7 +4,7 @@
 
 **Date:** 2026-09-26  
 **Status:** COMPLETE  
-**ADR:** [ADR-2067](../Corvin-ADR/decisions/ADR-2067-plugin-registry-consistency-phase3.md)
+**ADR:** [ADR-2067](../Corvin-Knowledge/decisions/ADR-2067-plugin-registry-consistency-phase3.md)
 
 ---
 
@@ -517,7 +517,7 @@ Example audit event:
 
 ## References
 
-- **ADR:** [ADR-2067 — Plugin Registry Consistency](../Corvin-ADR/decisions/ADR-2067-plugin-registry-consistency-phase3.md)
+- **ADR:** [ADR-2067 — Plugin Registry Consistency](../Corvin-Knowledge/decisions/ADR-2067-plugin-registry-consistency-phase3.md)
 - **Phase 1:** Deployment State Sync (ADR-0407)
 - **Phase 2:** Config Management (ADR-2066)
 - **Phase 4:** Drift Detection & Alerting (ADR-0409)

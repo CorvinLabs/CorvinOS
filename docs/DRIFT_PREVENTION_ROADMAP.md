@@ -56,7 +56,7 @@ python -m pytest tests/deployment/test_phase1_deployment_state.py -v
 - ✅ `core/config/schema.json` — JSON Schema validation
 - ✅ `core/config/__init__.py` — Package exports
 - ✅ `tests/config/test_phase2_config_management.py` — 25+ test cases
-- ✅ `ADR-2066` — Design documented + ACCEPTED (Corvin-ADR/decisions/)
+- ✅ `ADR-2066` — Design documented + ACCEPTED (Corvin-Knowledge/decisions/)
 
 **Key Features:**
 - Centralized config store (file-based dev, etcd/Consul ready)

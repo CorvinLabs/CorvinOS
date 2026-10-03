@@ -246,7 +246,7 @@ CorvinOS successfully completed three critical phases of autonomous quality vali
 ### Support Contact
 - **On-Call:** ops-incident Slack channel
 - **Incident Escalation:** Levels 1–4 per runbook
-- **Post-Incident RCA:** Corvin-ADR/archive/<date>/
+- **Post-Incident RCA:** Corvin-Knowledge/archive/<date>/
 
 ---
 
@@ -287,4 +287,4 @@ Production release is **LIVE** as of this commit.
 
 ---
 
-**Archive Location:** `/home/shumway/projects/Corvin-ADR/archive/2026-09-20/PHASE_C_D_5_FINAL_REPORT.md`
+**Archive Location:** `/home/shumway/projects/Corvin-Knowledge/archive/2026-09-20/PHASE_C_D_5_FINAL_REPORT.md`

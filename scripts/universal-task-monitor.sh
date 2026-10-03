@@ -128,7 +128,7 @@ echo ""
 echo -e "${YELLOW}ℹ️  DATA SOURCES (Live reading)${NC}"
 echo "  • TaskCreate:   Claude Code task list (this session)"
 echo "  • Git Commits:  /home/shumway/projects/CorvinOS/.git (Phase 9 progress)"
-echo "  • ADRs:         /home/shumway/projects/Corvin-ADR/decisions/ (Phase 10 ready)"
+echo "  • ADRs:         /home/shumway/projects/Corvin-Knowledge/decisions/ (Phase 10 ready)"
 echo "  • Discord:      Manual checks on 3 channels (#3d-video-poc, #phase-9-remediation, #phase-10-engineering)"
 echo ""
 

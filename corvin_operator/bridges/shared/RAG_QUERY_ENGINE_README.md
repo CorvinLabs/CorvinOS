@@ -465,4 +465,4 @@ orch.cache_ttl_seconds = 600  # Increase to 10 min
 **For more information, see:**
 - `PHASE_3_COMPLETE.md` — Detailed implementation guide
 - `operator/rag-integration/README.md` — Full ADR context
-- `Corvin-ADR/decisions/0089-*.md` — Formal specification
+- `Corvin-Knowledge/decisions/0089-*.md` — Formal specification

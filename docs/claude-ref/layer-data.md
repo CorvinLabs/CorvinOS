@@ -232,7 +232,7 @@ Three new panels on the security dashboard
   AND test coverage.
 
 **References:**
-- `Corvin-ADR: decisions/ADR-0012-large-data-snapshot-layer.md` — ADR
+- `Corvin-Knowledge: decisions/ADR-0012-large-data-snapshot-layer.md` — ADR
 - `corvin_operator/forge/forge/corvin_data/` — package (10 modules)
 - `corvin_operator/forge/tests/test_corvin_data_*.py` — 7 suites, 333 cases
 - `corvin_operator/voice/hooks/path_gate.py` — protection layer
@@ -475,8 +475,8 @@ cache behaviour.
 
 ### References
 
-- `Corvin-ADR: decisions/ADR-0013-compute-worker-plugin.md` — the design ADR
-- `Corvin-ADR: implementation-plans/0013-implementation-plan.md` — sub-phase fanout
+- `Corvin-Knowledge: decisions/ADR-0013-compute-worker-plugin.md` — the design ADR
+- `Corvin-Knowledge: implementation-plans/0013-implementation-plan.md` — sub-phase fanout
 - ADR-0001 — AWP's DelegationLoopRunner pattern (origin)
 - ADR-0007 Phase 3.1 — `tenant.corvin.yaml` schema extension
 - ADR-0012 — Large-Data Snapshot Layer (hard prerequisite for the
@@ -719,7 +719,7 @@ All 102 assertions green. Key test classes:
 
 ### References
 
-- `Corvin-ADR: decisions/ADR-0023-strict-anonymization-snapshot-mode.md` — the ADR
+- `Corvin-Knowledge: decisions/ADR-0023-strict-anonymization-snapshot-mode.md` — the ADR
 - `corvin_operator/forge/forge/corvin_data/strict_anonymizer.py` — core module
 - `corvin_operator/forge/forge/corvin_data/data_policy.py` — policy schema extension
 - `corvin_operator/forge/forge/corvin_data/mcp_handlers.py` — MCP pipeline wiring
@@ -937,7 +937,7 @@ Connection config, secrets, and raw error details never appear in audit fields.
 
 ### References
 
-- `Corvin-ADR: decisions/0106-dsi-v1-external-datasource-interface.md` — the ADR
+- `Corvin-Knowledge: decisions/0106-dsi-v1-external-datasource-interface.md` — the ADR
 - `core/compute/corvin_compute/fabric/datasources/protocol.py` — M1 protocol
 - `core/compute/corvin_compute/fabric/datasources/manifest.py` — M2 manifest validation
 - `core/compute/corvin_compute/fabric/datasources/registry.py` — M2 registry functions

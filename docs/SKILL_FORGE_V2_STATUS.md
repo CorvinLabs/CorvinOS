@@ -354,7 +354,7 @@ CorvinOS/
 
 ### Documentation
 ```
-Corvin-ADR/decisions/
+Corvin-Knowledge/decisions/
 ├── ADR-0672  (Generator Architecture)
 ├── ADR-0673  (Folder Structure)
 ├── ADR-0674  (ZIP Format)

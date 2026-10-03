@@ -1,7 +1,7 @@
 # Plugin-Builder V2 — Concept
 
 **Status:** Implemented (2026-07-30) — see ADR-0262/ADR-0263 status headers in
-`Corvin-ADR/decisions/` for the exact scope shipped and the known cuts.
+`Corvin-Knowledge/decisions/` for the exact scope shipped and the known cuts.
 Working tree only as of this writing — not yet committed/pushed in either
 repo.
 **Date:** 2026-07-30
@@ -10,7 +10,7 @@ repo.
 **Scope:** `core/plugins/plugin_builder/` (interview, classifier, generators, session
 store) plus the `/plugin-builder` console command and the bridge adapter integration.
 **Formalized as:** ADR-0262 (idea-first interview, checkpoint, generated E2E tests)
-and ADR-0263 (`--ideas` co-ideation mode) — see `Corvin-ADR/decisions/`.
+and ADR-0263 (`--ideas` co-ideation mode) — see `Corvin-Knowledge/decisions/`.
 
 ---
 
@@ -263,7 +263,7 @@ dialectical scrutiny, 4-axis trace logging), not the literal spoken
 surface — the trace renders as a text block in the console UI and as a
 spoken-language equivalent over voice, same content, format adapted to
 transport (same principle as the checkpoint's verbatim-warning rule in
-ADR-0262). Full detail: `Corvin-ADR/decisions/0263-...md`, Amendment
+ADR-0262). Full detail: `Corvin-Knowledge/decisions/0263-...md`, Amendment
 section.
 
 ---

@@ -99,7 +99,7 @@ class MemoryLinker:
                 memory_root = repo_root.parent / "memory"
 
         self.memory_root = memory_root
-        self.adr_root = repo_root.parent / "Corvin-ADR" / "decisions"
+        self.adr_root = repo_root.parent / "Corvin-Knowledge" / "decisions"
 
         logger.info(f"MemoryLinker initialized: repo={self.repo_root}, memory={self.memory_root}")
 

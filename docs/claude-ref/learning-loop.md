@@ -1,6 +1,6 @@
 # ACP Learning Loop — closed end-to-end (ADR-0613)
 
-**Status:** live since 2026-09-06 · **ADR:** ADR-0613 (Corvin-ADR) · depends on ADR-0314, ADR-0532, ADR-0549, ADR-0555
+**Status:** live since 2026-09-06 · **ADR:** ADR-0613 (Corvin-Knowledge) · depends on ADR-0314, ADR-0532, ADR-0549, ADR-0555
 
 Until 2026-09-06 the ADR-0314 "learning loop" was a **log, not a loop**: Skills
 were booted and unit-tested, but the L5/L10 entry points had zero production

@@ -32,7 +32,7 @@ Integration points (each gating layer calls ``gate()`` before its operation):
   L10 path-gate · L16 license activation · L22 engine spawn · L29 delegation
   · L38 A2A instruction execution
 
-See ADR-0133 in Corvin-ADR/decisions/0133-clag.md.
+See ADR-0133 in Corvin-Knowledge/decisions/0133-clag.md.
 """
 from __future__ import annotations
 

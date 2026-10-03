@@ -264,7 +264,7 @@ CorvinOS compliance remediation cycle 2 has successfully implemented and verifie
 }
 ```
 
-**Code Location:** `/home/shumway/projects/Corvin-ADR/decisions/`
+**Code Location:** `/home/shumway/projects/Corvin-Knowledge/decisions/`
 
 ---
 

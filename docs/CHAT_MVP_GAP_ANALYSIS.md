@@ -354,7 +354,7 @@ async def import_connection(req: ImportRequest, session: Session):
 
 ## 📚 RELATED DOCS & REFERENCES
 
-- **ADR-2065:** `Corvin-ADR/decisions/ADR-2065-collab-chat-architecture.md` (PROPOSED)
+- **ADR-2065:** `Corvin-Knowledge/decisions/ADR-2065-collab-chat-architecture.md` (PROPOSED)
 - **ADR-2063:** A2A Feed (ACCEPTED) — `a2a_feed.py`
 - **ADR-0133:** CLAG (ACCEPTED) — `clag.py`
 - **ADR-0070:** Friendship Token — `a2a_friendship.py`

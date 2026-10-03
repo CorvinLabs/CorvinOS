@@ -7,7 +7,7 @@ fix — that bare CORVIN_HOME presence no longer redirects the plugin slot
 (it used to, which silently broke the mirror in every real production
 session, since CORVIN_HOME is the canonical runtime root there too, not a
 test-only signal). See registry.py::plugin_slot_dir's docstring and
-Corvin-ADR/concepts/0001-self-learning-project-concept-archive.md's
+Corvin-Knowledge/concepts/0001-self-learning-project-concept-archive.md's
 Production-Readiness Roadmap item P0-1 for the full writeup.
 """
 from __future__ import annotations

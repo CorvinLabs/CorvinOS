@@ -179,7 +179,7 @@
 
 ```
 CorvinOS/
-├── Corvin-ADR/
+├── Corvin-Knowledge/
 │   ├── decisions/
 │   │   ├── ADR-0387-plugin-marketplace-architecture.md
 │   │   ├── ADR-0388-sandbox-isolation.md

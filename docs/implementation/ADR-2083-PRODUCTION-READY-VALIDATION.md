@@ -126,7 +126,7 @@
 
 ### Pre-Merge Checklist
 
-- [x] **ADR authored and stored** → `/home/shumway/projects/Corvin-ADR/decisions/ADR-2083-*.md`
+- [x] **ADR authored and stored** → `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-2083-*.md`
 - [x] **Code modules written** → 3 new modules in `corvin_operator/` + `tests/`
 - [x] **Tests written** → 17 tests (unit + integration + E2E)
 - [x] **Documentation complete** → ADR + Integration Guide + This validation

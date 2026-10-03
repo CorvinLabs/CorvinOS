@@ -140,7 +140,7 @@ CorvinOS/
 │       ├── V1.0_IDEAS.md
 │       ├── V1.0_IMPLEMENTATION_PLAN.md
 │       └── ARCHITECTURE_DIAGRAM.md
-├── Corvin-ADR/
+├── Corvin-Knowledge/
 │   ├── decisions/
 │   │   ├── ADR-0400-v1.0-security-hardening.md
 │   │   └── ADR-0401-v1.0-release-process.md

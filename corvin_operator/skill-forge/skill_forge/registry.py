@@ -156,7 +156,7 @@ def plugin_slot_dir() -> Path:
     CORVIN_TEST_MODE): every existing test already sets the more specific
     CORVIN_PLUGIN_SLOT_DIR directly (verified across all 15 call sites before
     this change), so removing it changes zero test behavior while fixing
-    production. See Corvin-ADR/concepts/0001-self-learning-project-concept-
+    production. See Corvin-Knowledge/concepts/0001-self-learning-project-concept-
     archive.md's Production-Readiness Roadmap, item P0-1, for the fuller
     writeup and the two stale test assertions this change corrects in
     test_plugin_slot_compat.py.

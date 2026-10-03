@@ -409,4 +409,4 @@ For urgent issues:
 
 ---
 
-**Questions?** See [ADR-0347](../Corvin-ADR/decisions/ADR-0347-hub-architecture.md) (Hub Architecture) and [ADR-0348](../Corvin-ADR/decisions/ADR-0348-event-bus.md) (Event Bus) for design details.
+**Questions?** See [ADR-0347](../Corvin-Knowledge/decisions/ADR-0347-hub-architecture.md) (Hub Architecture) and [ADR-0348](../Corvin-Knowledge/decisions/ADR-0348-event-bus.md) (Event Bus) for design details.

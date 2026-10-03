@@ -197,6 +197,6 @@ Monitor these metrics:
 
 ## Support
 
-- **Bugs:** File in Corvin-ADR/issues
+- **Bugs:** File in Corvin-Knowledge/issues
 - **Questions:** See ADR-0721, ADR-0722, ADR-0723
 - **Design:** Consult CONCEPT-0043 (dialektical synthesis)

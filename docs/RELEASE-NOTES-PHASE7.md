@@ -227,7 +227,7 @@ No deprecated configs. All previous settings still valid.
 
 - **Project:** CorvinOS (https://github.com/CorvinLabs/CorvinOS)
 - **Maintainer:** Shumway (shumway@corvin-labs.com)
-- **ADR Repository:** `https://github.com/CorvinLabs/Corvin-ADR` (decisions/)
+- **ADR Repository:** `https://github.com/CorvinLabs/Corvin-Knowledge` (decisions/)
 
 ---
 

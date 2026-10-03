@@ -217,7 +217,7 @@ An alert fires when **either** of these conditions holds:
 | `core/learning/integration.py` | MODIFIED | +70 LOC | ✅ Complete |
 | `core/learning/__init__.py` | MODIFIED | +3 lines | ✅ Complete |
 | `tests/test_learning_phase8_anomaly.py` | NEW | 380 LOC | ✅ Complete |
-| `Corvin-ADR/decisions/ADR-0367-*.md` | NEW | 200 lines | ✅ Complete |
+| `Corvin-Knowledge/decisions/ADR-0367-*.md` | NEW | 200 lines | ✅ Complete |
 | `docs/PHASE8_ANOMALY_DETECTION_STATUS.md` | NEW | This file | ✅ Complete |
 
 ---

@@ -161,11 +161,11 @@ Cannot proceed with staging deployment until Phase 9 security fixes applied.
 |---|---|---|
 | **Phase 9 Security Remediation Plan** | `/home/shumway/projects/CorvinOS/docs/PHASE_9_SECURITY_REMEDIATION_PLAN.md` | ✅ COMPLETE (15-item P0/P1/P2 checklist) |
 | **Phase 10 Planning** | `/home/shumway/projects/CorvinOS/docs/PHASE_10_PLANNING_ADVANCED_SKILLS.md` | ✅ COMPLETE (8-week roadmap) |
-| **ADR-2030** | `/home/shumway/projects/Corvin-ADR/decisions/ADR-2030-workflow-optimizer-skill.md` | ✅ COMMITTED (Corvin-ADR commit 92c078d) |
-| **ADR-2031** | `/home/shumway/projects/Corvin-ADR/decisions/ADR-2031-security-orchestrator-skill.md` | ✅ COMMITTED |
-| **ADR-2032** | `/home/shumway/projects/Corvin-ADR/decisions/ADR-2032-flow-guard-skill.md` | ✅ COMMITTED |
-| **ADR-2033** | `/home/shumway/projects/Corvin-ADR/decisions/ADR-2033-phase-10-feedback-integration-schema.md` | ✅ COMMITTED |
-| **CONCEPT-0052** | `/home/shumway/projects/Corvin-ADR/concepts/CONCEPT-0052-advanced-skills-pattern.md` | ✅ COMMITTED |
+| **ADR-2030** | `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-2030-workflow-optimizer-skill.md` | ✅ COMMITTED (Corvin-ADR commit 92c078d) |
+| **ADR-2031** | `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-2031-security-orchestrator-skill.md` | ✅ COMMITTED |
+| **ADR-2032** | `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-2032-flow-guard-skill.md` | ✅ COMMITTED |
+| **ADR-2033** | `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-2033-phase-10-feedback-integration-schema.md` | ✅ COMMITTED |
+| **CONCEPT-0052** | `/home/shumway/projects/Corvin-Knowledge/concepts/CONCEPT-0052-advanced-skills-pattern.md` | ✅ COMMITTED |
 
 ---
 

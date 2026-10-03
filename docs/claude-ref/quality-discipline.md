@@ -19,7 +19,7 @@ An **Architectural Decision Record** documents a design choice where:
 2. The choice constrains future code non-trivially
 3. At least one structural trigger applies (see below)
 
-ADRs live in `../Corvin-ADR/decisions/` — separate from the CorvinOS codebase. This separation keeps them accessible, version-controlled, and divorced from code cleanup refactors.
+ADRs live in `../Corvin-Knowledge/decisions/` — separate from the CorvinOS codebase. This separation keeps them accessible, version-controlled, and divorced from code cleanup refactors.
 
 ### When to write an ADR
 
@@ -81,14 +81,14 @@ Every ADR decision (and every skip decision) requires explicit analysis at three
 **1. Find the next number:**
 
 ```bash
-ls ../Corvin-ADR/decisions/ | grep -E '^[0-9]{4}' | sort | tail -1
+ls ../Corvin-Knowledge/decisions/ | grep -E '^[0-9]{4}' | sort | tail -1
 ```
 
 Add 1, zero-pad to 4 digits (e.g., `0068`).
 
 **2. Write the ADR file:**
 
-Path: `../Corvin-ADR/decisions/XXXX-short-kebab-title.md`
+Path: `../Corvin-Knowledge/decisions/XXXX-short-kebab-title.md`
 
 Template:
 
@@ -122,10 +122,10 @@ If a level is empty, state it explicitly.]
 - [What else was evaluated and why it was rejected? Include the three-level impact for each alternative.]
 ```
 
-**3. Commit in the Corvin-ADR repo:**
+**3. Commit in the Corvin-Knowledge repo:**
 
 ```bash
-cd ../Corvin-ADR
+cd ../Corvin-Knowledge
 git add decisions/XXXX-short-kebab-title.md
 git commit -m "adr: add ADR-XXXX — [title]"
 git push
@@ -136,7 +136,7 @@ git push
 If the ADR describes a structural constraint that touches CorvinOS code, add a reference at the end of the relevant CLAUDE.md section:
 
 ```markdown
-→ ADR: `Corvin-ADR: decisions/XXXX-short-kebab-title.md`
+→ ADR: `Corvin-Knowledge: decisions/XXXX-short-kebab-title.md`
 ```
 
 **5. Write E2E tests for new invariants:**
@@ -279,7 +279,7 @@ opts in.
 - Weaken the ADR Gate (auto-skip security/compliance mechanisms without explicit written justification)
 - Leave a skip implicit (the one-sentence reason is mandatory)
 - Declare "done" on a structural change without running the gate
-- Write ADR content into the CorvinOS repo (ADRs live in Corvin-ADR only)
+- Write ADR content into the CorvinOS repo (ADRs live in Corvin-Knowledge only)
 - Defer docs to a follow-up commit when docs-as-definition-of-done applies
 - Add E2E tests after committing (tests and implementation same commit)
 - Mix code changes and ADR changes (separate PRs in separate repos)

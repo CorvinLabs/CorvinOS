@@ -311,9 +311,9 @@ curl -v http://localhost:4318/v1/metrics -X POST -d '{}'
 
 ## References
 
-- [ADR-0680 — OpenTelemetry Migration Strategy](../../Corvin-ADR/decisions/ADR-0680-otel-migration-strategy.md)
-- [ADR-0681 — OTEL Metrics Schema](../../Corvin-ADR/decisions/ADR-0681-otel-metrics-schema.md)
-- [ADR-0682 — Multi-Tenant Learning from OTEL Signals](../../Corvin-ADR/decisions/ADR-0682-multi-tenant-learning-from-otel-signals.md)
+- [ADR-0680 — OpenTelemetry Migration Strategy](../../Corvin-Knowledge/decisions/ADR-0680-otel-migration-strategy.md)
+- [ADR-0681 — OTEL Metrics Schema](../../Corvin-Knowledge/decisions/ADR-0681-otel-metrics-schema.md)
+- [ADR-0682 — Multi-Tenant Learning from OTEL Signals](../../Corvin-Knowledge/decisions/ADR-0682-multi-tenant-learning-from-otel-signals.md)
 - [OTEL SDK Docs](https://opentelemetry.io/docs/instrumentation/python/)
 - [OTLP Protocol Spec](https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/protocol/exporter.md)
 

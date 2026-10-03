@@ -11,7 +11,7 @@ Key design principles:
 
 Name collision only: this is the ExecutionContext v1/v2 shim (ADR-0358), NOT
 session continuity — for that see ``corvin_operator/bridges/shared/session_ledger.py``
-(Corvin-ADR ADR-2102).
+(Corvin-Knowledge ADR-2102).
 """
 
 from typing import Optional, Any, Dict

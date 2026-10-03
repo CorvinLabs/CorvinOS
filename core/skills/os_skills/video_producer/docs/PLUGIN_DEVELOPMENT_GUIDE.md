@@ -132,7 +132,7 @@ paths:
 docs:
   - docs/ARCHITECTURE.md
   - docs/BUILD_PROCESS.md
-canonical: "../../Corvin-ADR/decisions/ADR-NNNN.md"
+canonical: "../../Corvin-Knowledge/decisions/ADR-NNNN.md"
 ---
 ```
 
@@ -189,7 +189,7 @@ plugin/
     └── ... (implementation)
 ```
 
-**Key Rule:** Plugin ADRs have `canonical: "../../Corvin-ADR/decisions/..."` pointing to the central source of truth.
+**Key Rule:** Plugin ADRs have `canonical: "../../Corvin-Knowledge/decisions/..."` pointing to the central source of truth.
 
 ---
 
@@ -502,8 +502,8 @@ pytest tests/adversarial/ -v
 ## Knowledge Graph
 
 - Source: `/home/shumway/projects/CorvinOS/core/skills/os_skills/video_producer/`
-- Central: `/home/shumway/projects/Corvin-ADR/decisions/ADR-069{2..5}.md`
-- Concept: `/home/shumway/projects/Corvin-ADR/concepts/CONCEPT-0040.md`
+- Central: `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-069{2..5}.md`
+- Concept: `/home/shumway/projects/Corvin-Knowledge/concepts/CONCEPT-0040.md`
 ```
 
 ---
@@ -586,7 +586,7 @@ paths:
 docs:
   - core/skills/os_skills/video_producer/docs/BUILD_PROCESS.md
   - core/skills/os_skills/video_producer/docs/ARCHITECTURE.md
-canonical: "/home/shumway/projects/Corvin-ADR/decisions/ADR-0692.md"
+canonical: "/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0692.md"
 ---
 ```
 
@@ -600,7 +600,7 @@ grep -r "ADR-0692" core/skills/os_skills/video_producer/src/
 
 **"Which ADRs affect orchestrator.py?"**
 ```bash
-grep -r "orchestrator.py" /home/shumway/projects/Corvin-ADR/decisions/ | grep "paths:"
+grep -r "orchestrator.py" /home/shumway/projects/Corvin-Knowledge/decisions/ | grep "paths:"
 # → ADR-0692, ADR-0698, ...
 ```
 
@@ -633,7 +633,7 @@ grep -r "orchestrator.py" /home/shumway/projects/Corvin-ADR/decisions/ | grep "p
 
 ## Next Steps (After Completing This Guide)
 
-1. **Migrate to Corvin-ADR:** Move ADRs to `/home/shumway/projects/Corvin-ADR/decisions/`
+1. **Migrate to Corvin-ADR:** Move ADRs to `/home/shumway/projects/Corvin-Knowledge/decisions/`
 2. **Publish to Marketplace:** Register plugin in index v3 (ADR-0678)
 3. **Seed Learning Skill:** Create `assistant.<plugin>_skill` for optimizer
 4. **Monitor in Vibe:** Add dashboard panel for observability

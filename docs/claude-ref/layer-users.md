@@ -762,7 +762,7 @@ slash-command land in Phase 28.4.
 
 ### References
 
-- `Corvin-ADR: decisions/ADR-0016-conversation-recall-and-user-modeling.md` —
+- `Corvin-Knowledge: decisions/ADR-0016-conversation-recall-and-user-modeling.md` —
   the design ADR
 - `corvin_operator/bridges/shared/conversation_recall.py` — recall
   storage + index + redactor + persona-ACL helper

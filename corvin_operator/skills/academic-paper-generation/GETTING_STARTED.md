@@ -40,7 +40,7 @@ Use **`academic-paper-generation`** skill step-by-step if:
   - Each file: 500-2000 words describing an idea/principle
 
 - [ ] ADR files (if available, `.md` format)
-  - Example: `/projects/Corvin-ADR/decisions/*.md`
+  - Example: `/projects/Corvin-Knowledge/decisions/*.md`
   - These become "design decisions" section of paper
 
 - [ ] Paper metadata:

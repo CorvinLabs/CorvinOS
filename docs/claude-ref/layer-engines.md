@@ -7,8 +7,8 @@
 
 Backend-agnostic engine layer that lets Corvin spawn LLM-CLI
 subprocesses through a unified contract. AWP-integration roadmap
-(see `Corvin-ADR: decisions/ADR-0001-awp-as-orchestration-layer.md` and
-`Corvin-ADR: decisions/ADR-0002-phase2-adapter-engine-migration.md`).
+(see `Corvin-Knowledge: decisions/ADR-0001-awp-as-orchestration-layer.md` and
+`Corvin-Knowledge: decisions/ADR-0002-phase2-adapter-engine-migration.md`).
 
 **Module**: `bridges/shared/agents/`
 
@@ -1992,8 +1992,8 @@ narrower bound always wins) and is race-safe capped at
 
 ### References
 
-- `Corvin-ADR: decisions/ADR-0024-adaptive-os-model-selection.md` — the ADR
-- `Corvin-ADR: decisions/ADR-0112-acs-worker-model-inheritance.md` — worker split
+- `Corvin-Knowledge: decisions/ADR-0024-adaptive-os-model-selection.md` — the ADR
+- `Corvin-Knowledge: decisions/ADR-0112-acs-worker-model-inheritance.md` — worker split
 - `corvin_operator/bridges/shared/model_selector.py::resolve_os_model()` — the single
   6-Tier resolver both surfaces call (moved here from
   `adapter.py::_resolve_os_model_bundled` 2026-07-27, see ADR-0119/0123)
@@ -2172,7 +2172,7 @@ All 141 tests in the delegate plugin (Layer 29 + 29.1 + 29.2 +
 
 ### References
 
-- `Corvin-ADR: decisions/ADR-0022-engine-agnostic-forge-skillforge.md` — the ADR
+- `Corvin-Knowledge: decisions/ADR-0022-engine-agnostic-forge-skillforge.md` — the ADR
 - `core/delegate/corvin_delegate/skill_context.py` — pillar A
 - `core/delegate/corvin_delegate/mcp_config_builder.py` — pillar B
 - `core/delegate/corvin_delegate/delegation.py::_build_skill_block_for_engine` / `::_wire_mcp_for_engine` — wiring
@@ -2406,7 +2406,7 @@ Tests: `corvin_operator/bridges/shared/test_acs_runtime.py` —
 > **Since 2026-09-18 (ADR-0885)** this panel is the **Routing** tab (classifier overrides + turn pins) and the Model Usage block of the **Usage & Cost** tab of the Models console at `/app/models`; `/app/engine-config` redirects there. Every rule below still holds; the components moved verbatim to `web-next/src/pages/models/components/engine-parts.tsx`.
 
 *ADR pending: this pass is structural (two new endpoints, a new ADR-0181 provider,
-a new `model_source`) and needs a record in the Corvin-ADR repo, which is not
+a new `model_source`) and needs a record in the Corvin-Knowledge repo, which is not
 present on the Windows maintainer host this was built on. The number must be
 derived as max+1 THERE — do not guess one from this repo's references, and do not
 reuse 0650/0651, both of which are already taken twice over.*
@@ -3884,7 +3884,7 @@ lists keyword-matched ADRs as "related". Every process start leaves one empty
 `~/.claude/projects/-tmp-corvin-ce-synthesis-*` directory; `atexit` removes only `/tmp`.
 
 **ADR↔memory link lint.** `python3 scripts/adr_memory_link_lint.py` checks every ADR
-citation in the Claude Code memory directory against `Corvin-ADR/decisions/`:
+citation in the Claude Code memory directory against `Corvin-Knowledge/decisions/`:
 
 | Code | Level | Meaning |
 |---|---|---|

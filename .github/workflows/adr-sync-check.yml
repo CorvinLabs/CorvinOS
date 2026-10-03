@@ -56,7 +56,7 @@ jobs:
           echo "$CORE_CHANGES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          # ADR references: ADRs live ONLY in the sibling Corvin-ADR repo (ADR-0516),
+          # ADR references: ADRs live ONLY in the sibling Corvin-Knowledge repo (ADR-0516),
           # so a CorvinOS diff can never contain one. What a commit MUST carry
           # instead is a reference to the ADR that documents it ("[ADR-0635]",
           # "ADR-0635 documents ...") — we collect every ADR id named in the
@@ -70,10 +70,10 @@ jobs:
           echo "$COMMIT_MSGS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Check out Corvin-ADR (single source of truth)
+      - name: Check out Corvin-Knowledge (single source of truth)
         uses: actions/checkout@v4
         with:
-          repository: CorvinLabs/Corvin-ADR
+          repository: CorvinLabs/Corvin-Knowledge
           path: .corvin-adr
           fetch-depth: 1
 
@@ -96,7 +96,7 @@ jobs:
             exit 0
           fi
 
-          # Core code changed: every referenced ADR must exist in Corvin-ADR
+          # Core code changed: every referenced ADR must exist in Corvin-Knowledge
           if [ -z "$ADR_REFS" ]; then
             echo "status=fail" >> $GITHUB_OUTPUT
             exit 1
@@ -108,7 +108,7 @@ jobs:
             fi
           done
           if [ -n "$MISSING" ]; then
-            echo "Referenced ADRs not found in Corvin-ADR/decisions:$MISSING"
+            echo "Referenced ADRs not found in Corvin-Knowledge/decisions:$MISSING"
             echo "status=fail" >> $GITHUB_OUTPUT
             exit 1
           fi
@@ -163,7 +163,7 @@ jobs:
             Deine Code-Änderungen benötigen entsprechende ADR-Dokumentation.
 
             ### Aktion erforderlich:
-            1. Erstelle eine ADR in \`Corvin-ADR/decisions/ADR-XXXX-<slug>.md\`
+            1. Erstelle eine ADR in \`Corvin-Knowledge/decisions/ADR-XXXX-<slug>.md\`
             2. Update die Felder: \`paths\`, \`commits\`, \`status\`
             3. Push die ADR zusammen mit dem Code
 
@@ -173,6 +173,6 @@ jobs:
             - Reine Refactors: Beginne die Commit-Message mit \`refactor:\`
 
             → [ADR-Anforderungen](https://github.com/CorvinLabs/CorvinOS/blob/main/docs/claude-ref/adr-gate.md)
-            → [ADR-Beispiele](https://github.com/CorvinLabs/Corvin-ADR/tree/main/decisions)
+            → [ADR-Beispiele](https://github.com/CorvinLabs/Corvin-Knowledge/tree/main/decisions)
               `
             })

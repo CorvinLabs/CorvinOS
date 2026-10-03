@@ -1,7 +1,7 @@
 ---
 id: BUILD_PROCESS
 type: reference
-canonical: "../../../../Corvin-ADR/decisions/ADR-0692.md"
+canonical: "../../../../Corvin-Knowledge/decisions/ADR-0692.md"
 last_updated: 2026-09-13
 phases_completed: [1-Week-1, 1-Week-2]
 ---

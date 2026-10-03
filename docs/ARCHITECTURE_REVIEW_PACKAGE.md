@@ -278,7 +278,7 @@ docs/
 ├── ADR_REVIEW_BRIEFING.md ✅
 ├── IMPLEMENTATION_ROADMAP_v0.2.1_LEARNING_INTEGRATION.md ✅
 ├── JIRA_TICKETS_LEARNING_INTEGRATION.md ✅
-├── Corvin-ADR/decisions/
+├── Corvin-Knowledge/decisions/
 │   ├── ADR-0321-tool-execution-learning-events.md
 │   ├── ADR-0322-tool-performance-ranking-reuse.md
 │   ├── ADR-0323-skill-attribution-model.md

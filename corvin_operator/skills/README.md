@@ -45,8 +45,8 @@ Quick-reference guide for academic writing best practices.
 
 ```bash
 /paper-generator-orchestrator \
-  --concepts ./Corvin-ADR/concepts/*.md \
-  --adrs ./Corvin-ADR/decisions/*.md \
+  --concepts ./Corvin-Knowledge/concepts/*.md \
+  --adrs ./Corvin-Knowledge/decisions/*.md \
   --title "Your Paper Title" \
   --authors "Author Name (Corvin Labs)" \
   --scope full \

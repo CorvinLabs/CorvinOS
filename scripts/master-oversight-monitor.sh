@@ -8,7 +8,7 @@ set -e
 CORVIN_HOME="${CORVIN_HOME:-$HOME/.corvin}"
 TASK_REGISTRY="$CORVIN_HOME/task_registry.json"
 CORVIN_REPO="/home/shumway/projects/CorvinOS"
-ADR_REPO="/home/shumway/projects/Corvin-ADR"
+ADR_REPO="/home/shumway/projects/Corvin-Knowledge"
 
 # Colors
 RED='\033[0;31m'
@@ -95,7 +95,7 @@ if [ -d "$ADR_REPO/decisions" ]; then
     echo "  ADR-2032 (Flow Guard):             $adr_2032"
     echo "  ADR-2033 (Feedback Schema):        $adr_2033"
 else
-    echo "  ADRs:       ⚠️ Corvin-ADR repo not accessible"
+    echo "  ADRs:       ⚠️ Corvin-Knowledge repo not accessible"
 fi
 
 echo "  Status:     ⏳ AWAITING BLOCKER GATE (Sep 26, 08:00 AM UTC)"

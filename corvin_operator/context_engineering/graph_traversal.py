@@ -2,7 +2,7 @@
 
 Walks classifier graphs to discover related decisions.
 Phase 2: Generic decision discovery
-Phase 3: ADR-based decision discovery via Corvin-ADR repo
+Phase 3: ADR-based decision discovery via Corvin-Knowledge repo
 
 Features:
 - BFS traversal of classifier graphs
@@ -85,7 +85,7 @@ class GraphTraversal:
     Uses same caching pattern as Phase 1 MemoryLookup.
 
     Phase 2: Generic decision discovery (placeholder)
-    Phase 3: ADR-based decision discovery from Corvin-ADR repo
+    Phase 3: ADR-based decision discovery from Corvin-Knowledge repo
     """
 
     def __init__(self, cache_ttl_minutes: int = 30, enable_adr: bool = True):

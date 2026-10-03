@@ -267,7 +267,7 @@ EOF
 
 ## References
 
-- **ADR-2032** — Flow Guard Skill architecture (Corvin-ADR repo)
+- **ADR-2032** — Flow Guard Skill architecture (Corvin-Knowledge repo)
 - **ADR-0532** — Skills 2.0 architecture
 - **L34** — Data Flow Guard layer
 - **GDPR Art. 5, 6, 32** — Data processing principles

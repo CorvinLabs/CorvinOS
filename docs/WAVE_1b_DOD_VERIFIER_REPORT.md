@@ -89,7 +89,7 @@
 
 ✅ **ADR-2063 (ContentStore Design):**
 - Status: Referenced in design ✓
-- Verification: `ls -la /home/shumway/projects/Corvin-ADR/decisions/ADR-2063*.md`
+- Verification: `ls -la /home/shumway/projects/Corvin-Knowledge/decisions/ADR-2063*.md`
 - Result: REFERENCED + verified as data source
 
 **Reachability:** ✅ All API components reachable + ContentStore callable

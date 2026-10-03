@@ -46,7 +46,7 @@ class TestPostCommitHookExtraction:
 
         changed_files = [
             "core/quality_gates/validators.py",
-            "Corvin-ADR/decisions/ADR-0688-quality-gates-architecture.md",
+            "Corvin-Knowledge/decisions/ADR-0688-quality-gates-architecture.md",
             "tests/test_validators.py",
         ]
 

@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from adr_graph import _parse_frontmatter, _title_from_body  # noqa: E402
 
 _REPO = Path(__file__).resolve().parent.parent
-DEFAULT_ADR_DIR = _REPO.parent / "Corvin-ADR" / "decisions"
+DEFAULT_ADR_DIR = _REPO.parent / "Corvin-Knowledge" / "decisions"
 DEFAULT_MEMORY_DIR = Path.home() / ".claude" / "projects" / "-home-shumway-projects-CorvinOS" / "memory"
 
 ADR_REF_RE = re.compile(r"\bADR-(\d{4})(?!\d)")

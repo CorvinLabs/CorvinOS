@@ -145,7 +145,7 @@
 
 ```
 CorvinOS/
-├── Corvin-ADR/
+├── Corvin-Knowledge/
 │   ├── decisions/
 │   │   ├── ADR-0383-operator-fingerprint-data-model.md
 │   │   ├── ADR-0384-task-affinity-measurement.md

@@ -658,4 +658,4 @@ Before committing a manifest.yaml, verify:
 → **JSON Schema Spec:** https://json-schema.org/ (reference for schemas)  
 → **Semantic Versioning:** https://semver.org/ (version format)
 
-See `/home/shumway/projects/Corvin-ADR/decisions/ADR-0533-os-skill-manifest-and-versioning.md` for full ADR.
+See `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0533-os-skill-manifest-and-versioning.md` for full ADR.

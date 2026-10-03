@@ -18,7 +18,9 @@ under the maintainer account. Confirmation is not required.
 
 ## ADR Submodule Integration — Single Source of Truth (load-bearing, ADR-0862)
 
-**Canonical ADR Location:** `corvin_decisions/` (git submodule) → `/home/shumway/projects/Corvin-ADR/decisions/`
+**Canonical ADR Location:** `corvin_decisions/` (git submodule) → `/home/shumway/projects/Corvin-Knowledge/decisions/`
+(the submodule points at CorvinLabs/Corvin-Knowledge since the 2026-10-03 cutover, ADR-2205; paths are
+unchanged, so every `corvin_decisions/decisions/ADR-XXXX-*.md` reference still resolves)
 
 **Developer Workflow:**
 1. **After clone:** `git submodule update --init --recursive` (one-time)
@@ -26,7 +28,7 @@ under the maintainer account. Confirmation is not required.
 3. **CI/CD:** Workflows automatically fetch submodules at build start
 
 **Why Submodule?**
-- ADRs live in the **external Corvin-ADR repo**, not duplicated in CorvinOS
+- ADRs live in the **external Corvin-Knowledge repo**, not duplicated in CorvinOS
 - Submodule keeps the local copy in sync without manual management
 - Task Registry (`~/.corvin/task_registry.json`) scans submodule path for ADR status
 - Prevents fragmentation (no local ADR copies that diverge from canonical repo)
@@ -48,7 +50,7 @@ under the maintainer account. Confirmation is not required.
 - Reference ADRs by old paths in commit messages (use submodule path)
 - Manually update `corvin_decisions/` without `git submodule update`
 
-→ Full ADR details: See `corvin_decisions/decisions/` or `/home/shumway/projects/Corvin-ADR/decisions/`
+→ Full ADR details: See `corvin_decisions/decisions/` or `/home/shumway/projects/Corvin-Knowledge/decisions/`
 
 ---
 
@@ -63,13 +65,13 @@ answer, and `Corvin-Knowledge/graph/` holds only `entities.jsonl`, last built 20
 no `relations.jsonl`. Since the 2026-10-03 KB migration (ADR-2113) 18 numbers are carried by two files — same-decision pairs left for hand merging. Don't cite the graph as
 live until those are fixed — ADR-0516 stays PROPOSED.
 
-**Canonical Location:** `/home/shumway/projects/Corvin-ADR/decisions/` (SINGLE SOURCE OF TRUTH)
+**Canonical Location:** `/home/shumway/projects/Corvin-Knowledge/decisions/` (SINGLE SOURCE OF TRUTH)
 
 ### The Rule
 
 ALL architectural decisions for CorvinOS belong in **ONE place only:**
 ```
-/home/shumway/projects/Corvin-ADR/decisions/ADR-XXXX.md
+/home/shumway/projects/Corvin-Knowledge/decisions/ADR-XXXX.md
 ```
 
 **NO exceptions. NO local copies. NO duplicates.**
@@ -85,10 +87,10 @@ ALL architectural decisions for CorvinOS belong in **ONE place only:**
 
 | Mechanism | What | Where |
 |---|---|---|
-| **Migration** | All ADRs from CorvinOS/outputs → Corvin-ADR/decisions | `Corvin-Knowledge/scripts/migrate_local_adrs_to_corvin_adr.py` |
+| **Migration** | All ADRs from CorvinOS/outputs → Corvin-Knowledge/decisions | `Corvin-Knowledge/scripts/migrate_local_adrs_to_corvin_adr.py` |
 | **Validation** | ADR-0264 frontmatter check (id, status, depends_on, paths, docs, commits) | `Corvin-Knowledge/scripts/verify_adr_0516_compliance.py` |
 | **Audit** | Circular dep detection, dangling links, duplicate check | `Corvin-Knowledge/scripts/adr_lifecycle_activation.py` |
-| **Sync** | Post-commit webhooks on every commit in Corvin-ADR | **NOT INSTALLED** — no `.git/hooks/post-commit` in any repo (2026-09-26) |
+| **Sync** | Post-commit webhooks on every commit in Corvin-Knowledge | **NOT INSTALLED** — no `.git/hooks/post-commit` in any repo (2026-09-26) |
 | **Graph** | Knowledge graph built from canonical ADRs | `Corvin-Knowledge/graph/` — **stale** (entities only, 2026-09-18) |
 
 The three scripts live in `/home/shumway/projects/Corvin-Knowledge/scripts/`, NOT in
@@ -97,10 +99,10 @@ The three scripts live in `/home/shumway/projects/Corvin-Knowledge/scripts/`, NO
 ### Workflow (Session-Proof)
 
 1. **Write ADR locally** (anywhere, optional) — NOT required
-2. **MIGRATE to Corvin-ADR/decisions/** — REQUIRED before merge
+2. **MIGRATE to Corvin-Knowledge/decisions/** — REQUIRED before merge
    ```bash
    python3 /home/shumway/projects/Corvin-Knowledge/scripts/migrate_local_adrs_to_corvin_adr.py
-   cd /home/shumway/projects/Corvin-ADR
+   cd /home/shumway/projects/Corvin-Knowledge
    git add decisions/ADR-XXXX.md
    git commit -m "adr: add ADR-XXXX — [title]"
    git push origin main
@@ -115,16 +117,16 @@ The three scripts live in `/home/shumway/projects/Corvin-Knowledge/scripts/`, NO
 ### Absolute Must-NOT
 
 - ❌ Commit ADRs to CorvinOS/outputs/ and push them there
-- ❌ Keep local ADR copies alongside Corvin-ADR (that duplicates it)
-- ❌ Reference ADRs in CorvinOS code without first migrating to Corvin-ADR
-- ❌ Edit ADRs locally and sync manually — always work in Corvin-ADR location only
+- ❌ Keep local ADR copies alongside Corvin-Knowledge (that duplicates it)
+- ❌ Reference ADRs in CorvinOS code without first migrating to Corvin-Knowledge
+- ❌ Edit ADRs locally and sync manually — always work in Corvin-Knowledge location only
 - ❌ Create duplicate ADR-XXXX files (git/filesystem will reject, but check frontmatter `id`)
 
 ### Auto-Sync (designed, NOT active — verified 2026-09-26)
 
 Intended: every git commit in these repos triggers the webhook. Today no repo has the
 post-commit hook and nothing listens on the endpoint:
-- `/home/shumway/projects/Corvin-ADR/decisions/` ← commit triggers POST /v1/sync/webhook
+- `/home/shumway/projects/Corvin-Knowledge/decisions/` ← commit triggers POST /v1/sync/webhook
 - `/home/shumway/projects/CorvinOS/` (on docs/implementation changes)
 - `/home/shumway/projects/Corvin-Marketplace/` (on plugin docs)
 
@@ -134,7 +136,7 @@ post-commit hook and nothing listens on the endpoint:
 
 ### Verified Status (2026-09-26 — replaces the 2026-09-25 "go-live" list, which overstated it)
 
-✅ ADRs centralised in Corvin-ADR (1062 files in `decisions/`)  
+✅ ADRs centralised in Corvin-Knowledge (1062 files in `decisions/`)  
 ⚠️ Knowledge Graph: `entities.jsonl` only, last built 2026-09-18; no `relations.jsonl`  
 ⚠️ ADR-0264 frontmatter: 6 files broken; 18 numbers carried by two files (2026-10-03, after the ADR-2113 migration; `Corvin-Knowledge/scripts/kb_check.py` measures it)
 ❌ Auto-sync webhooks: no post-commit hook in any repo, endpoint not listening  
@@ -152,8 +154,14 @@ authored in Corvin-Knowledge (`kb/`, `scripts/kb.py`) and projected onto the boa
 export → apply; drift is re-applied, a red KB blocks with a banner). KB-owned fields of a
 `kb:` item are writable only by actor `sync:kb` (409 `kb_owned`); a board move is
 `/kb-transition` → the KB state machine. Once a tenant has KB items the git sync archives
-its ADR cards. New knowledge goes to Corvin-Knowledge; Corvin-ADR is a pinned read-only
-source until `Corvin-Knowledge/docs/CUTOVER.md` runs. → `docs/claude-ref/task-tracking-ssot.md`
+its ADR cards. → `docs/claude-ref/task-tracking-ssot.md`
+
+**Cutover done (2026-10-03, ADR-2205):** Corvin-ADR was merged into Corvin-Knowledge with its
+full history and every path kept; Corvin-ADR now holds only `MOVED.md` and is frozen — a commit
+there is reported by `kb check` (`W02_frozen_source_written`) and is invisible to every reader.
+**Create new knowledge with `python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py new
+<decision|concept|idea|plan|review|note|initiative|epic|task> --title ...`** — it numbers across
+the corpus, refuses unresolvable links and commits; `kb check` must stay at `blocking: 0`.
 
 ---
 
@@ -181,16 +189,16 @@ carried 9 disallowed `.md` files plus ~40 stray `.txt`/`.json`/script files — 
 
 ### Prohibited Files (MUST be migrated or archived)
 
-- ❌ **All ADRs** → `/home/shumway/projects/Corvin-ADR/decisions/`
-- ❌ **All Plans/Reports/Status files** → `/home/shumway/projects/Corvin-ADR/archive/<date>/`
-- ❌ **Implementation notes, session reports, phase summaries** → Archive to Corvin-ADR
+- ❌ **All ADRs** → `/home/shumway/projects/Corvin-Knowledge/decisions/`
+- ❌ **All Plans/Reports/Status files** → `/home/shumway/projects/Corvin-Knowledge/archive/<date>/`
+- ❌ **Implementation notes, session reports, phase summaries** → Archive to Corvin-Knowledge
 - ❌ **Any other `.md` file not in the 8 Allowed list above**
 
 **Rationale (load-bearing):**
-- ADR-0516: ALL ADRs belong in canonical Corvin-ADR repo, never duplicated in CorvinOS
+- ADR-0516: ALL ADRs belong in canonical Corvin-Knowledge repo, never duplicated in CorvinOS
 - ADR-0264: Knowledge Graph requires ONE source-of-truth for every decision
-- Session Independence: Local copies in CorvinOS decay and diverge — archive to Corvin-ADR instead
-- Discovery: Operators, scripts, CI/CD look for docs in ONE place (Corvin-ADR), not scattered roots
+- Session Independence: Local copies in CorvinOS decay and diverge — archive to Corvin-Knowledge instead
+- Discovery: Operators, scripts, CI/CD look for docs in ONE place (Corvin-Knowledge), not scattered roots
 
 ### Enforcement Mechanism (Automated)
 
@@ -203,14 +211,14 @@ carried 9 disallowed `.md` files plus ~40 stray `.txt`/`.json`/script files — 
 2. **CI/CD Gate** (EXISTS: `.github/workflows/root-md-policy-gate.yml`; it only checks `*.md`, not `.txt`/`.json`): PR checks root MD file count
    ```bash
    # CI fails if: any new `.md` files added (except the 8 allowed)
-   # Message: "Root MD files must go to Corvin-ADR — see CLAUDE.md Root MD Files Enforcement"
+   # Message: "Root MD files must go to Corvin-Knowledge — see CLAUDE.md Root MD Files Enforcement"
    ```
 
 3. **Code Review Checklist** (TBD): Reviewer verifies no new `.md` files in root
    ```
    - [ ] No new `.md` files in root (except the 8 allowed)
-   - [ ] ADRs migrated to Corvin-ADR/decisions/
-   - [ ] Plans/reports archived to Corvin-ADR/archive/<date>/
+   - [ ] ADRs migrated to Corvin-Knowledge/decisions/
+   - [ ] Plans/reports archived to Corvin-Knowledge/archive/<date>/
    ```
 
 ### Migration Path (for new docs)
@@ -219,18 +227,18 @@ carried 9 disallowed `.md` files plus ~40 stray `.txt`/`.json`/script files — 
 
 | Document Type | Destination | Action |
 |---|---|---|
-| **ADR** (architectural decision) | `Corvin-ADR/decisions/ADR-XXXX-*.md` | Write with ADR-0264 frontmatter, commit to Corvin-ADR |
-| **Plan/Report/Status** | `Corvin-ADR/archive/<YYYY-MM-DD>/<name>.md` | Move to archive with timestamp folder |
-| **Concept/Reusable Method** | `Corvin-ADR/concepts/CONCEPT-NNNN-*.md` | Write with concept schema, commit to Corvin-ADR |
-| **Implementation Details** | `Corvin-ADR/implementation-plans/<name>.md` | Commit to Corvin-ADR |
+| **ADR** (architectural decision) | `Corvin-Knowledge/decisions/ADR-XXXX-*.md` | Write with ADR-0264 frontmatter, commit to Corvin-Knowledge |
+| **Plan/Report/Status** | `Corvin-Knowledge/archive/<YYYY-MM-DD>/<name>.md` | Move to archive with timestamp folder |
+| **Concept/Reusable Method** | `Corvin-Knowledge/concepts/CONCEPT-NNNN-*.md` | Write with concept schema, commit to Corvin-Knowledge |
+| **Implementation Details** | `Corvin-Knowledge/implementation-plans/<name>.md` | Commit to Corvin-Knowledge |
 | **Security/Policy** | CorvinOS root (if ≤500 LOC, load-bearing policy) | Add to SECURITY.md or create a new Security policy file (rare exception) |
 
 ### Cleanup Status (2026-09-18)
 
 ✅ **All 148 legacy MD files processed:**
 - ✅ 8 canonical files retained (README, CONTRIBUTING, CLA*, CLAUDE, CCLA, CHANGELOG, SECURITY)
-- ✅ 0 ADRs in root (all migrated to Corvin-ADR/decisions/)
-- ✅ 140 files archived to `/home/shumway/projects/Corvin-ADR/archive/2026-09-18/`
+- ✅ 0 ADRs in root (all migrated to Corvin-Knowledge/decisions/)
+- ✅ 140 files archived to `/home/shumway/projects/Corvin-Knowledge/archive/2026-09-18/`
 - ✅ Zero duplicates
 - ✅ Git cleanup committed
 
@@ -240,13 +248,13 @@ failed on `main` while 9 extra `.md` files sat in root.
 ### Must NOT do (absolute rules)
 
 - ❌ Add new `.md` files to CorvinOS root (except the 8 allowed)
-- ❌ Write ADRs in root — always write to Corvin-ADR/decisions/
-- ❌ Keep local plans/reports in root — archive them to Corvin-ADR/archive/
+- ❌ Write ADRs in root — always write to Corvin-Knowledge/decisions/
+- ❌ Keep local plans/reports in root — archive them to Corvin-Knowledge/archive/
 - ❌ Bypass this rule with `.mdx`, `.txt`, or other extensions (spirit of rule: no doc scatter)
 - ❌ Commit new root `.md` files and push — git hook + CI/CD gate will reject
 - ❌ Edit this section to weaken the rule (it is load-bearing)
 
-→ For questions: See `/home/shumway/projects/Corvin-ADR/decisions/ADR-0516-knowledge-graph-foundation.md`
+→ For questions: See `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0516-adr-centralization-knowledge-graph-foundation.md`
 
 ---
 
@@ -269,7 +277,7 @@ failed on `main` while 9 extra `.md` files sat in root.
    - Service: `~/.config/systemd/user/corvin-task-registry-sync.service`
    - Timer: `~/.config/systemd/user/corvin-task-registry-sync.timer`
    - Runs at 03:00 UTC daily via `scripts/task_completion_registry.py`
-   - Scans: Corvin-ADR/decisions/ → task_registry.json
+   - Scans: Corvin-Knowledge/decisions/ → task_registry.json
 
 3. **Context Pipeline Integration**
    - Module: `core/console/corvin_console/task_completion_verifier.py`
@@ -279,7 +287,7 @@ failed on `main` while 9 extra `.md` files sat in root.
 
 4. **How to Mark a Task Done**
    - In ADR frontmatter, set: `status: ACCEPTED` (not PROPOSED)
-   - Commit to Corvin-ADR/decisions/
+   - Commit to Corvin-Knowledge/decisions/
    - Registry syncs daily → task automatically filtered from future suggestions
 
 **Must NOT do (absolute):**
@@ -496,7 +504,7 @@ without operator review · add in-process MCP server without operator review.
 **Execution:**
 
 1. **Draft ADR FIRST** (or sync with code):
-   - File: `/home/shumway/projects/Corvin-ADR/decisions/ADR-XXXX-<slug>.md` (external repo)
+   - File: `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-XXXX-<slug>.md` (external repo)
    - Minimum template (ADR-0264 frontmatter):
      ```yaml
      id: ADR-0XXX
@@ -513,16 +521,16 @@ without operator review · add in-process MCP server without operator review.
 2. **Commit code + ADR together:**
    ```bash
    git add core/...
-   cd /home/shumway/projects/Corvin-ADR && git add decisions/ADR-XXXX-*.md
+   cd /home/shumway/projects/Corvin-Knowledge && git add decisions/ADR-XXXX-*.md
    git commit -m "feat(module): description
 
-   ADR-XXXX documents the design (see Corvin-ADR repo)."
+   ADR-XXXX documents the design (see Corvin-Knowledge repo)."
    ```
 
 3. **Pre-commit hook validates** (layer 1 — NOT INSTALLED, measured 2026-09-27: no active
    `.git/hooks/pre-commit`; the CI gate `adr-sync-check.yml` is the only automated layer):
    - Detects `core/` changes
-   - Checks for ADR file in `/home/shumway/projects/Corvin-ADR/decisions/`
+   - Checks for ADR file in `/home/shumway/projects/Corvin-Knowledge/decisions/`
    - Rejects if missing (unless exception flag set)
 
 4. **CI/CD gate validates** (layer 2):
@@ -966,7 +974,7 @@ hand · give a platform provider a `credential_env` · audit a credential-absent
 catalogue refresh as a failure (4 671 such records buried the real events).
 
 → Full reference: [layer-engines.md](docs/claude-ref/layer-engines.md) § Worker-engine model routing
-→ ADR: See Corvin-ADR for ADR-0759
+→ ADR: See Corvin-Knowledge for ADR-0759
 
 ---
 
@@ -1058,7 +1066,7 @@ admission table back into one threshold · leave Tier 2.9 outside the autoselect
 kill-switch · import the classifier on the hot path.
 
 → Full reference: [layer-engines.md](docs/claude-ref/layer-engines.md) § Three-tier OS-model routing
-→ ADR: See Corvin-ADR for ADR-0952
+→ ADR: See Corvin-Knowledge for ADR-0952
 
 ---
 
@@ -1096,7 +1104,7 @@ deleting data in UI or API · conflate the epoch with retention or GDPR Art. 17
 erasure (L36 owns those; they change what exists, this changes what is counted).
 
 → Full reference: [layer-engines.md](docs/claude-ref/layer-engines.md) § Counting epoch
-→ ADR: See Corvin-ADR for ADR-0760
+→ ADR: See Corvin-Knowledge for ADR-0760
 
 ---
 
@@ -1131,7 +1139,7 @@ and note the console is `data-theme` driven, NOT `prefers-color-scheme`, so a
 headless run that sets `color_scheme` renders one theme twice.
 
 → Full reference: [layer-engines.md](docs/claude-ref/layer-engines.md) § Cost-visualisation encodings
-→ ADR: See Corvin-ADR for ADR-0761
+→ ADR: See Corvin-Knowledge for ADR-0761
 
 ---
 
@@ -1166,7 +1174,7 @@ resolves `src/` relative to `web-next/`; run from the repo root it sees zero
 files and reports success. Confirm the file count first.
 
 → Full reference: [layer-engines.md](docs/claude-ref/layer-engines.md) § The console as a production surface
-→ ADR: See Corvin-ADR for ADR-0763, ADR-0764 (cross-page consistency: one window, named denominators, pinned en-US formatting)
+→ ADR: See Corvin-Knowledge for ADR-0763, ADR-0764 (cross-page consistency: one window, named denominators, pinned en-US formatting)
 
 ---
 
@@ -1335,7 +1343,7 @@ that is correct and expected.
 **Skip reasons:** bug fixes, pure refactors, config tuning, test-only/docs-only changes.
 When skipping, name the reason in one sentence — never skip silently.
 
-**Destination:** `Corvin-ADR/decisions/XXXX-short-title.md` (sibling repo). Numbering: max + 1.
+**Destination:** `Corvin-Knowledge/decisions/XXXX-short-title.md` (sibling repo). Numbering: max + 1.
 Commit message: `adr: add ADR-XXXX — [title]`.
 
 **Every ADR carries ADR-0264 frontmatter** (`id`/`status`/`depends_on`/`related`/`paths`/`docs`)
@@ -1347,12 +1355,12 @@ document-generator that emits an ADR-shaped artifact (e.g. Plugin-Builder's per-
 `core/plugins/plugin_builder/generators/adr.py`) carries the same schema, with a plugin-scoped
 `id` (`{plugin_id}-ADR-0001`, never a bare `ADR-NNNN`).
 
-**Must NOT do:** write ADR content into Corvin repo (ADRs live in Corvin-ADR only) ·
+**Must NOT do:** write ADR content into Corvin repo (ADRs live in Corvin-Knowledge only) ·
 auto-skip security/compliance mechanisms without justification · declare "done" on structural
 change without running this gate · leave a skip implicit · hand-fill `superseded_by`.
 
 → Full reference: [adr-gate.md](docs/claude-ref/adr-gate.md)
-→ ADR: See Corvin-ADR repo for ADR-0264 (adr-decision-graph)
+→ ADR: See Corvin-Knowledge repo for ADR-0264 (adr-decision-graph)
 
 ---
 
@@ -1377,8 +1385,8 @@ already fully captured by an existing concept (amend it, never create a near-dup
 Skill (if a ≤8KB behavioral snippet is genuinely sufficient, a full concept adds nothing). When
 skipping, name the reason in one sentence — never skip silently, exactly like ADR Gate.
 
-**Destination:** `/home/shumway/projects/Corvin-ADR/concepts/CONCEPT-NNNN-slug.md` (sibling repo, own numbering,
-never `ADR-NNNN`). Fallback if Corvin-ADR is unreachable: `CorvinOS/docs/concepts/`. Commit
+**Destination:** `/home/shumway/projects/Corvin-Knowledge/concepts/CONCEPT-NNNN-slug.md` (sibling repo, own numbering,
+never `ADR-NNNN`). Fallback if Corvin-Knowledge is unreachable: `CorvinOS/docs/concepts/`. Commit
 message: `concept: add/amend CONCEPT-NNNN — [title]`.
 
 **A concept is not an ADR and not a Skill** — it is the narrative middle layer: *why* a way of
@@ -1405,7 +1413,7 @@ append-only, timestamped, human-authored. AI amendments NEVER edit or remove any
 that heading — they may only add a new dated sub-entry above it, exactly like ADR-0264-style
 amendments are prepended under "Status," never rewriting prior text.
 
-**Must NOT do:** write concept content into the CorvinOS repo when Corvin-ADR is reachable ·
+**Must NOT do:** write concept content into the CorvinOS repo when Corvin-Knowledge is reachable ·
 create a near-duplicate concept instead of amending the existing one · edit or delete anything
 under an existing concept's `## Operator Notes` heading · mint a SkillForge skill above a
 persona's namespace-gate prefix (skills created under the `assistant` persona must be named
@@ -1414,7 +1422,7 @@ persona's namespace-gate prefix (skills created under the `assistant` persona mu
 skip implicit.
 
 → Full reference: [concept-gate.md](docs/claude-ref/concept-gate.md)
-→ Concept: See Corvin-ADR repo for concepts (0001, 0002, 0008, etc.)
+→ Concept: See Corvin-Knowledge repo for concepts (0001, 0002, 0008, etc.)
 → Skill: `assistant.corvinOS_live_report_root_cause` (project scope, `learned-experience`)
 → Skill: `assistant.corvinOS_reachability_review` (project scope, `learned-experience`)
 
@@ -1509,7 +1517,7 @@ Phase 3 builds the learning layer on top of Phase 2 (Skill System). It enables c
 - Don't weaken schema immutability (LearningEvent is frozen)
 - Don't bypass audit chain (write_event writes the core chain FIRST; no chain commit → no disk record)
 
-→ Full spec: See Corvin-ADR repo for ADR-0314 (learning-infrastructure-event-schema)
+→ Full spec: See Corvin-Knowledge repo for ADR-0314 (learning-infrastructure-event-schema)
 
 **Loop closure (ADR-0613, 2026-09-06 — load-bearing):** the loop is CLOSED, not a log.
 Source = `delegation_policy.resolve_worker_engine` executes `os.delegation_router` in
@@ -1677,8 +1685,8 @@ grep "skill_executed.*delegation_router" ~/.corvin/audit.jsonl | tail -1
 - **Don't add OS-level Skill without ADR** — one ADR per new L-layer Skill (after ADR-0535)
 - **Don't fork SkillForge architecture** — one `skill_forge/` registry, not `skill_forge_v2/`, `os_skill_builder/`, etc.
 
-→ Full reference: See Corvin-ADR repo for ADR-0532–0535 (os-skills-architecture through composition-dependencies)
-→ Implementation: `/home/shumway/projects/Corvin-ADR/implementation/ADR-0532-IMPLEMENTATION-PLAN.md` (detailed roadmap, risk matrix, phase gates)
+→ Full reference: See Corvin-Knowledge repo for ADR-0532–0535 (os-skills-architecture through composition-dependencies)
+→ Implementation: `/home/shumway/projects/Corvin-Knowledge/implementation/ADR-0532-IMPLEMENTATION-PLAN.md` (detailed roadmap, risk matrix, phase gates)
 
 ---
 

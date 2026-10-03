@@ -56,10 +56,10 @@ Example: "Skipped ADR because this is a pure refactor of the Forge MCP handler (
 
 ## ADR Destination
 
-**ADRs live in `Corvin-ADR/decisions/` (sibling repository), NOT in this repo.**
+**ADRs live in `Corvin-Knowledge/decisions/` (sibling repository), NOT in this repo.**
 
 ```
-Corvin-ADR/decisions/XXXX-short-title.md
+Corvin-Knowledge/decisions/XXXX-short-title.md
 ```
 
 **Numbering:** max existing number + 1, four digits zero-padded (0042, 0156, etc.).
@@ -125,7 +125,7 @@ that silently rots — see ADR-0264's Context).
 
 ## ADR Decision Graph — traversal (ADR-0264)
 
-`scripts/adr_graph.py` (in this repo, reads `../Corvin-ADR/decisions/`) answers "which
+`scripts/adr_graph.py` (in this repo, reads `../Corvin-Knowledge/decisions/`) answers "which
 ADRs govern this file, and in what order should I read them":
 
 ```bash
@@ -158,7 +158,7 @@ rather than a bare `ADR-NNNN`, which is reserved for this repo's own sequence.
 
 ## Hard Rules (Must NOT do)
 
-1. **Don't write ADR content into the Corvin repo** — ADRs live in Corvin-ADR only.
+1. **Don't write ADR content into the Corvin repo** — ADRs live in Corvin-Knowledge only.
    The sibling repo is the source of truth.
 
 2. **Don't auto-skip for security/compliance mechanisms** without explicit written justification.
@@ -188,4 +188,4 @@ rather than a bare `ADR-NNNN`, which is reserved for this repo's own sequence.
 
 - [CLAUDE.md](../../CLAUDE.md) — Main conventions document
 - [compliance-baseline.md](compliance-baseline.md) — Compliance constraints (ADRs often needed here)
-- [Corvin-ADR repository](https://github.com/anthropics/corvin-adr) — Public ADR source of truth
+- [Corvin-Knowledge repository](https://github.com/anthropics/corvin-adr) — Public ADR source of truth

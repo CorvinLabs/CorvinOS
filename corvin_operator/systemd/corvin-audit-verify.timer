@@ -1,6 +1,6 @@
 [Unit]
 Description=Daily Audit Chain Verification (Phase B, ADR-0541)
-Documentation=https://github.com/CorvinLabs/Corvin-ADR/decisions/ADR-0541-session-bridging-eventstore-protocol.md
+Documentation=https://github.com/CorvinLabs/Corvin-Knowledge/decisions/ADR-0541-session-bridging-eventstore-protocol.md
 After=network.target
 
 [Timer]

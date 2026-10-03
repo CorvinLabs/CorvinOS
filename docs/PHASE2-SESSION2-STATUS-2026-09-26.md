@@ -92,7 +92,7 @@ Feature 5: Marketplace v3 + Installer
 **Scope:**
 - [ ] ADR-0728 (Feature 1 live data) — already written, verify current state
 - [ ] ADR-0729? (Feature 2-5 synthesis) — if needed
-- [ ] Update Corvin-ADR/decisions/ with k=5 completion
+- [ ] Update Corvin-Knowledge/decisions/ with k=5 completion
 
 ---
 

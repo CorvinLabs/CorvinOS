@@ -314,7 +314,7 @@ async def on_operator_rated_tool(
 | `core/learning/tool_execution.py` | **No change** | Already complete (Phase 1A) |
 | `core/learning/event_schema.py` | **No change** | Already has TOOL_EXECUTED, OPERATOR_RATED_TOOL |
 | `docs/implementation/PHASE6_LEARNING_INTEGRATION_STATUS.md` | **Update** | Record Phase 1B completion |
-| `Corvin-ADR/decisions/ADR-0321-tool-execution-learning-events.md` | **Update** | Change status to ACCEPTED |
+| `Corvin-Knowledge/decisions/ADR-0321-tool-execution-learning-events.md` | **Update** | Change status to ACCEPTED |
 
 ---
 

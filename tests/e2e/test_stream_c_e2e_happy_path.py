@@ -298,8 +298,8 @@ Use for validation.
         # In real implementation: call KG MCP tool or API
         # For now: return mock if available, None if not
         try:
-            # Attempt to load from Corvin-ADR if available
-            adr_path = Path("/home/shumway/projects/Corvin-ADR/decisions") / f"{adr_id}-*.md"
+            # Attempt to load from Corvin-Knowledge if available
+            adr_path = Path("/home/shumway/projects/Corvin-Knowledge/decisions") / f"{adr_id}-*.md"
             # This is a simplified check; real implementation would parse frontmatter
             return {"id": adr_id, "paths": [], "docs": [], "depends_on": []}
         except:

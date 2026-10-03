@@ -465,7 +465,7 @@ app.include_router(task_routes.router)
 - ✅ `core/task_tracking/store.py` (added snapshot_index table)
 
 ### ADR Documentation
-- ✅ `Corvin-ADR/decisions/ADR-2176-phase-c-k3-governance-rollback.md`
+- ✅ `Corvin-Knowledge/decisions/ADR-2176-phase-c-k3-governance-rollback.md`
 
 ---
 

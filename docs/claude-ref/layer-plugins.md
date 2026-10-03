@@ -506,7 +506,7 @@ own plugin loader in production. Removed the `CORVIN_HOME` branch
 entirely (every existing test already sets the more specific
 `CORVIN_PLUGIN_SLOT_DIR` directly, so this changed zero test behavior).
 Found via adversarial review of the Concept Gate mechanism; see
-`Corvin-ADR/concepts/0001-self-learning-project-concept-archive.md`'s
+`Corvin-Knowledge/concepts/0001-self-learning-project-concept-archive.md`'s
 Production-Readiness Roadmap, item P0-1.
 
 **Lifecycle hooks:**

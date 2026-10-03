@@ -322,7 +322,7 @@ def test_something(config_drift_monitor):
 
 ## References
 
-- **ADR:** `/home/shumway/projects/Corvin-ADR/decisions/ADR-0464-plugin-e2e-verification-framework.md`
+- **ADR:** `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0464-plugin-e2e-verification-framework.md`
 - **Fixture Code:** `tests/e2e/plugin_verification/conftest.py`
 - **Scanner:** `tests/e2e/plugin_verification/plugin_scanner.py`
 - **Test Generator:** `tests/e2e/plugin_verification/test_generator.py`

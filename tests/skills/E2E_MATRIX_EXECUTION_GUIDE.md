@@ -376,9 +376,9 @@ jobs:
 
 2. **Archive results:**
    ```bash
-   mkdir -p /home/shumway/projects/Corvin-ADR/archive/2026-09-19
-   cp e2e_test_matrix_results.json /home/shumway/projects/Corvin-ADR/archive/2026-09-19/
-   cp e2e_audit_trail_export.jsonl /home/shumway/projects/Corvin-ADR/archive/2026-09-19/
+   mkdir -p /home/shumway/projects/Corvin-Knowledge/archive/2026-09-19
+   cp e2e_test_matrix_results.json /home/shumway/projects/Corvin-Knowledge/archive/2026-09-19/
+   cp e2e_audit_trail_export.jsonl /home/shumway/projects/Corvin-Knowledge/archive/2026-09-19/
    ```
 
 3. **Update ADR status:**

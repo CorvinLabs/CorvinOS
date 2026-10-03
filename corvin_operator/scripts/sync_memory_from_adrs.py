@@ -2,7 +2,7 @@
 """
 ADR-to-Memory Sync Script
 
-Liest alle ADRs aus Corvin-ADR/decisions/ und aktualisiert die Memory-Datei
+Liest alle ADRs aus Corvin-Knowledge/decisions/ und aktualisiert die Memory-Datei
 automatisch. Läuft nach jedem Major Merge (via Cron/Post-Merge Hook).
 
 Usage:
@@ -122,7 +122,7 @@ def parse_frontmatter(content: str) -> Tuple[Dict, str]:
 
 def find_adrs(adr_repo: Path) -> List[ADREntry]:
     """
-    Finde alle ADRs in Corvin-ADR/decisions/.
+    Finde alle ADRs in Corvin-Knowledge/decisions/.
 
     Returns: List[ADREntry]
     """
@@ -175,11 +175,11 @@ def generate_memory_index(entries: List[ADREntry]) -> str:
     """
     timestamp = datetime.now().isoformat()
 
-    md = f"""# ADR Index — Auto-Synced from Corvin-ADR
+    md = f"""# ADR Index — Auto-Synced from Corvin-Knowledge
 
 **Last updated:** {timestamp}
 
-This file is auto-generated from `Corvin-ADR/decisions/` to keep memory in sync with
+This file is auto-generated from `Corvin-Knowledge/decisions/` to keep memory in sync with
 architectural decisions. Do NOT edit manually — run `python3 operator/scripts/sync_memory_from_adrs.py --commit`
 to regenerate.
 
@@ -237,7 +237,7 @@ to regenerate.
 
 ### By Regulation (GDPR, EU AI Act, etc.)
 
-See `Corvin-ADR/decisions/` for regulation annotations in ADR frontmatter.
+See `Corvin-Knowledge/decisions/` for regulation annotations in ADR frontmatter.
 
 ---
 
@@ -259,7 +259,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Sync ADRs from Corvin-ADR to CorvinOS memory"
+        description="Sync ADRs from Corvin-Knowledge to CorvinOS memory"
     )
     parser.add_argument("--dry-run", action="store_true", help="Show changes without writing")
     parser.add_argument("--commit", action="store_true", help="Git commit after update")
@@ -267,12 +267,12 @@ def main():
 
     # Locate repos
     corvinos_root = Path(__file__).parent.parent.parent  # CorvinOS/
-    adr_repo = corvinos_root.parent / "Corvin-ADR"
+    adr_repo = corvinos_root.parent / "Corvin-Knowledge"
     memory_dir = Path.home() / ".claude" / "projects" / "CorvinOS" / "memory"
     memory_file = memory_dir / "ADR-INDEX.md"
 
     if not adr_repo.exists():
-        print(f"ERROR: Corvin-ADR not found at {adr_repo}", file=sys.stderr)
+        print(f"ERROR: Corvin-Knowledge not found at {adr_repo}", file=sys.stderr)
         sys.exit(1)
 
     memory_dir.mkdir(parents=True, exist_ok=True)

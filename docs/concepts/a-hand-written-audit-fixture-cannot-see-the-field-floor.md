@@ -1,7 +1,7 @@
 # A hand-written audit fixture cannot see the field floor
 
 > **Where this belongs.** Concepts are canonically numbered in the sibling
-> `Corvin-ADR/concepts/` repo. That checkout does not exist on this machine, so
+> `Corvin-Knowledge/concepts/` repo. That checkout does not exist on this machine, so
 > this file lands in the documented fallback (`CorvinOS/docs/concepts/`).
 > Renumber it to `CONCEPT-NNNN` when it is moved.
 >

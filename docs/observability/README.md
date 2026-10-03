@@ -151,7 +151,7 @@ renderer differs.
 
 ## References
 
-- *(see Corvin-ADR repo)* — sub-phase fanout
+- *(see Corvin-Knowledge repo)* — sub-phase fanout
 - `core/gateway/corvin_gateway/audit_metrics.py` — aggregator + renderer
 - `core/gateway/corvin_gateway/app.py` — `GET /v1/tenants/{tid}/metrics`
 - `corvin_operator/voice/scripts/voice_audit.py` — `metrics` subcommand

@@ -145,8 +145,8 @@ CHECKLIST_ITEMS: List[ChecklistItem] = [
 
     # DOCS SYNCHRONIZED (21-24)
     ChecklistItem(
-        21, "DOCS", "ADR-2155/0641/0642/0644 all ACCEPTED in Corvin-ADR",
-        "ls /home/shumway/projects/Corvin-ADR/decisions/ | grep -E 'ADR-2155|ADR-2150|ADR-2151|ADR-0644'",
+        21, "DOCS", "ADR-2155/0641/0642/0644 all ACCEPTED in Corvin-Knowledge",
+        "ls /home/shumway/projects/Corvin-Knowledge/decisions/ | grep -E 'ADR-2155|ADR-2150|ADR-2151|ADR-0644'",
         evidence="all 4 ADRs exist with status: ACCEPTED"
     ),
     ChecklistItem(

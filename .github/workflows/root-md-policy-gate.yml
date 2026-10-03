@@ -67,9 +67,9 @@ jobs:
             done
             echo ""
             echo "Migration path:"
-            echo "  - ADRs → Corvin-ADR/decisions/"
-            echo "  - Plans/Reports → Corvin-ADR/archive/<DATE>/"
-            echo "  - Concepts → Corvin-ADR/concepts/"
+            echo "  - ADRs → Corvin-Knowledge/decisions/"
+            echo "  - Plans/Reports → Corvin-Knowledge/archive/<DATE>/"
+            echo "  - Concepts → Corvin-Knowledge/concepts/"
             echo ""
             echo "See: CLAUDE.md § Root MD Files Enforcement (ADR-0516)"
             exit 1
@@ -92,8 +92,8 @@ jobs:
             echo "✅ All $EXPECTED canonical files present"
           fi
 
-          # Verify ADRs are in Corvin-ADR
-          ADR_COUNT=$(find Corvin-ADR/decisions -name "ADR-*.md" -type f 2>/dev/null | wc -l)
+          # Verify ADRs are in Corvin-Knowledge
+          ADR_COUNT=$(find Corvin-Knowledge/decisions -name "ADR-*.md" -type f 2>/dev/null | wc -l)
           if [ "$ADR_COUNT" -gt 0 ]; then
-            echo "✅ $ADR_COUNT ADRs in canonical location (Corvin-ADR/decisions/)"
+            echo "✅ $ADR_COUNT ADRs in canonical location (Corvin-Knowledge/decisions/)"
           fi

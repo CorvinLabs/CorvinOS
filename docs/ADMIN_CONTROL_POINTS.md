@@ -4,7 +4,7 @@
 
 **Date:** 2026-07-27
 **Audience:** Operators, enterprise admins, anyone driving CorvinOS without the SPA
-**ADRs** (sibling repo `Corvin-ADR/decisions/`):
+**ADRs** (sibling repo `Corvin-Knowledge/decisions/`):
 `ADR-0239-admin-api-vs-web-ui.md` (admin API vs. web UI),
 `ADR-0243-core-vs-plugins-architecture.md` (the `boot_layer` axis),
 `ADR-0233-plugin-system-consolidation.md` (plugin lifecycle)

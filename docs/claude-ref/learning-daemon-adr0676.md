@@ -398,4 +398,4 @@ daemon.stop()
 - ADR-0314: Learning Infrastructure (event schema, persistence)
 - ADR-0233: Plugin audit integration (event backend)
 - ADR-0232: Boot tripwire (hash-chain verification)
-- ADR-0676 Implementation Plan: `/home/shumway/projects/Corvin-ADR/implementation/ADR-0676-IMPLEMENTATION-PLAN.md`
+- ADR-0676 Implementation Plan: `/home/shumway/projects/Corvin-Knowledge/implementation/ADR-0676-IMPLEMENTATION-PLAN.md`

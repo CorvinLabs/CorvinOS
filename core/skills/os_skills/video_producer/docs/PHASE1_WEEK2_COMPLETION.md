@@ -280,10 +280,10 @@ date: 2026-09-13
   - ADR-0695-assembly.md
 
 ### Central ADRs (Corvin-ADR repo)
-- `/home/shumway/projects/Corvin-ADR/decisions/ADR-0692.md` — Canonical source
-- `/home/shumway/projects/Corvin-ADR/decisions/ADR-0693.md`
-- `/home/shumway/projects/Corvin-ADR/decisions/ADR-0694.md`
-- `/home/shumway/projects/Corvin-ADR/decisions/ADR-0695.md`
+- `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0692.md` — Canonical source
+- `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0693.md`
+- `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0694.md`
+- `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0695.md`
 
 ### Tests
 - `tests/skills/test_video_producer_phase1.py` — Phase 1 tests (40+)

@@ -112,7 +112,7 @@ def test_corvin_home_env_selects_the_output(tmp_path: Path, adr: Path) -> None:
 # decision number the same state: same key (the FILE NAME's number), same
 # sibling choice, same done vocabulary.
 
-_REAL_ADR_ROOT = Path("/home/shumway/projects/Corvin-ADR")
+_REAL_ADR_ROOT = Path("/home/shumway/projects/Corvin-Knowledge")
 _STATE = {"ACCEPTED": "complete", "ARCHIVED": "archived", "IN_PROGRESS": "in_progress", "UNKNOWN": "in_progress"}
 
 
@@ -205,7 +205,7 @@ def test_accepted_and_implemented_siblings_read_done_in_either_order(tmp_path: P
     assert _disagreements(adr, tasks)[1] == []
 
 
-@pytest.mark.skipif(not (_REAL_ADR_ROOT / "decisions").is_dir(), reason="no Corvin-ADR checkout on this host")
+@pytest.mark.skipif(not (_REAL_ADR_ROOT / "decisions").is_dir(), reason="no Corvin-Knowledge checkout on this host")
 def test_registry_agrees_with_adr_meta_on_the_real_corpus(tmp_path: Path, capsys) -> None:
     """Read-only against the real record repo: the registry is written to tmp_path."""
     decisions = _REAL_ADR_ROOT / "decisions"

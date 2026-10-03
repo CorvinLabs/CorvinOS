@@ -2,7 +2,7 @@
 
 NOT ON ANY LIVE PATH (verified 2026-10-02; listed in scripts/zero_caller_baseline.json).
 Cross-session continuity is ``corvin_operator/bridges/shared/session_ledger.py``
-(bridge + console, Corvin-ADR ADR-2102). Do not build another context bridge:
+(bridge + console, Corvin-Knowledge ADR-2102). Do not build another context bridge:
 wire this one into a live entry point or delete it.
 """
 

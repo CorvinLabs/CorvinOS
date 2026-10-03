@@ -315,7 +315,7 @@ EOF
     log_error ""
     log_error "Next steps:"
     log_error "  1. Analyze post-mortem: $EXPORT_FILE"
-    log_error "  2. Document findings: Corvin-ADR/incidents/INCIDENT-XXXX-*.md"
+    log_error "  2. Document findings: Corvin-Knowledge/incidents/INCIDENT-XXXX-*.md"
     log_error "  3. Fix root cause before retry"
     log_error "  4. Re-run Phase 1 (after fix)"
 }

@@ -239,7 +239,7 @@ Location: https://github.com/CorvinLabs/CorvinOS/security/dependabot
 ## 📚 Reference Documents
 
 - **Phase 3 Plan:** `docs/PHASE-3-WINDOWS-DOCKER-E2E-RELEASE-PLAN.md` (this session)
-- **Installation Architecture:** ADR-0666 (Corvin-ADR/decisions/)
+- **Installation Architecture:** ADR-0666 (Corvin-Knowledge/decisions/)
 - **CI/CD Gate:** `.github/workflows/install-test.yml` (this session)
 - **Test Suite:** `tests/e2e/` + `tests/adversarial/` (Phase 1–2)
 - **CHANGELOG:** `CHANGELOG.md` (v1.0.0 release notes)

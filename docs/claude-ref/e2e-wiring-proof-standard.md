@@ -280,7 +280,7 @@ Before shipping a release (wheel, package, installer):
 ## Related Skills & Concepts
 
 - **`assistant.e2e_wiring_proof`** — SkillForge skill, auto-injected on entry-point tasks (learned-experience, project scope).
-- **CONCEPT-0008** — "Reachability review axis" in `Corvin-ADR/concepts/`; full narrative + evidence + alternatives.
+- **CONCEPT-0008** — "Reachability review axis" in `Corvin-Knowledge/concepts/`; full narrative + evidence + alternatives.
 
 ---
 
@@ -309,5 +309,5 @@ A: New code and changed entry points. Existing code without E2E coverage can be 
 **See also:**
 - `CLAUDE.md` § "E2E Wiring Proof"
 - `e2e-driven-iteration` skill (loop-driven-engineering)
-- CONCEPT-0008 in `Corvin-ADR/concepts/` (full evidence trail)
+- CONCEPT-0008 in `Corvin-Knowledge/concepts/` (full evidence trail)
 

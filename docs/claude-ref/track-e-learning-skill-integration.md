@@ -527,7 +527,7 @@ python3 -m pytest tests/test_track_e_*.py -v --tb=short
 3. **Gate 3:** `test_track_e_gate3_red_green.py` (8 test classes)
 4. **Gate 4:** `test_track_e_gate4_adversarial.py` (18 attack vectors)
 5. **Gate 5:** `docs/claude-ref/track-e-learning-skill-integration.md` (this doc)
-6. **Gate 5:** ADR-0675/0676 amendments (in Corvin-ADR repo)
+6. **Gate 5:** ADR-0675/0676 amendments (in Corvin-Knowledge repo)
 
 All changes audited to `~/.corvin/audit.jsonl` (GDPR Art. 30, 32).
 

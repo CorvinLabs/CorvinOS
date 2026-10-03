@@ -159,15 +159,15 @@ class Phase9Validator:
         return True
 
     def validate_adr_compliance(self) -> bool:
-        """Validate that ADRs are in Corvin-ADR (not in CorvinOS)."""
-        adr_path = Path("/home/shumway/projects/Corvin-ADR/decisions/")
+        """Validate that ADRs are in Corvin-Knowledge (not in CorvinOS)."""
+        adr_path = Path("/home/shumway/projects/Corvin-Knowledge/decisions/")
 
         adr_2028 = adr_path / "ADR-2028-natural-language-intent-router.md"
         adr_2029 = adr_path / "ADR-2029-user-centric-control-plane.md"
 
         for adr in [adr_2028, adr_2029]:
             if adr.exists():
-                self.log("PASS", f"ADR migrated to Corvin-ADR: {adr.name}")
+                self.log("PASS", f"ADR migrated to Corvin-Knowledge: {adr.name}")
             else:
                 self.log("WARN", f"ADR not found in canonical location: {adr.name}")
 

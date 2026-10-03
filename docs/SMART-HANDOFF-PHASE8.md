@@ -220,7 +220,7 @@ mypy core/
 
 **6. Create ADR** (before committing)
 ```bash
-# Draft in /home/shumway/projects/Corvin-ADR/decisions/ADR-NNNN-*.md
+# Draft in /home/shumway/projects/Corvin-Knowledge/decisions/ADR-NNNN-*.md
 # Must include: id, status: PROPOSED, depends_on, paths, docs, commits
 ```
 
@@ -367,7 +367,7 @@ See `docs/ops/TROUBLESHOOTING.md` for more issues.
 
 4. **Create feature branch + ADR** (15 min)
    - `git checkout -b feature/phase8-<option>`
-   - Draft ADR in Corvin-ADR/decisions/
+   - Draft ADR in Corvin-Knowledge/decisions/
 
 5. **Start loop-driven-engineering** (k=1)
    - Make small code change

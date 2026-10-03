@@ -48,7 +48,7 @@
    - Update `CLAUDE.md` with Phase 3 rules (if needed)
 
 **Deliverables:**
-- ✅ 4 ADRs in Corvin-ADR/decisions/ (ACCEPTED status)
+- ✅ 4 ADRs in Corvin-Knowledge/decisions/ (ACCEPTED status)
 - ✅ 3 reference docs in CorvinOS/docs/claude-ref/
 - ✅ Phase 3 execution roadmap
 
@@ -505,12 +505,12 @@ Audit: skill_feedback + skill_config_updated events logged + hash-chained"
 
 ## References
 
-→ **ADR-0532:** OS-Skills Architecture (`/home/shumway/projects/Corvin-ADR/decisions/ADR-0532-os-skills-architecture.md`)  
-→ **ADR-0533:** Manifest Schema & Versioning (`/home/shumway/projects/Corvin-ADR/decisions/ADR-0533-os-skill-manifest-and-versioning.md`)  
-→ **ADR-0534:** Feedback Validation (`/home/shumway/projects/Corvin-ADR/decisions/ADR-0534-learning-trust-boundary-feedback-validation.md`)  
-→ **ADR-0535:** Composition & DAG (`/home/shumway/projects/Corvin-ADR/decisions/ADR-0535-os-skill-composition-dependencies.md`)  
-→ **ADR-0314:** Learning Infrastructure (`/home/shumway/projects/Corvin-ADR/decisions/ADR-0314-learning-infrastructure-event-schema.md`)  
-→ **ADR-0232/0233:** Audit Chain (`/home/shumway/projects/Corvin-ADR/decisions/ADR-0232-boot-tripwire.md`, `ADR-0233-audit-chain-integrity.md`)  
+→ **ADR-0532:** OS-Skills Architecture (`/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0532-os-skills-architecture.md`)  
+→ **ADR-0533:** Manifest Schema & Versioning (`/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0533-os-skill-manifest-and-versioning.md`)  
+→ **ADR-0534:** Feedback Validation (`/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0534-learning-trust-boundary-feedback-validation.md`)  
+→ **ADR-0535:** Composition & DAG (`/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0535-os-skill-composition-dependencies.md`)  
+→ **ADR-0314:** Learning Infrastructure (`/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0314-learning-infrastructure-event-schema.md`)  
+→ **ADR-0232/0233:** Audit Chain (`/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0232-boot-tripwire.md`, `ADR-0233-audit-chain-integrity.md`)  
 
 See documentation created this session:
 - `docs/claude-ref/layer-44-os-skills.md` (architecture overview)

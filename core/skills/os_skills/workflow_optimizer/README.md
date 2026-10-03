@@ -2,7 +2,7 @@
 
 **Production-Ready OS-level Skill for Learning Task Routing from Operator Feedback**
 
-**ADR:** [ADR-2030](https://github.com/CorvinLabs/Corvin-ADR/decisions/ADR-2030-workflow-optimizer-skill.md)  
+**ADR:** [ADR-2030](https://github.com/CorvinLabs/Corvin-Knowledge/decisions/ADR-2030-workflow-optimizer-skill.md)  
 **Status:** Phase 10 Stream 1 (bootstrap complete, Week 1 implementation starting)  
 **Timeline:** 8–10 weeks (Sep 26 – Nov 28)
 
@@ -370,7 +370,7 @@ A: Synchronously after feedback. `POST /feedback` → optimizer processes → co
 - **Stream Lead:** TBD (assigned at Phase 10 kickoff)
 - **Slack:** #phase-10-engineering
 - **Status:** See `STREAM1_WEEKLY_LOG.md` (updated Fridays)
-- **ADR:** See `/home/shumway/projects/Corvin-ADR/decisions/ADR-2030-workflow-optimizer-skill.md`
+- **ADR:** See `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-2030-workflow-optimizer-skill.md`
 
 ---
 

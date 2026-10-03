@@ -398,7 +398,7 @@ Tier 4 (Integration)
 |---|---|---|
 | **All initiatives merged** | 18/18 | `git log --oneline main` shows 18 [HANDOFF] commits |
 | **Tests green** | 500+ passing | `pytest tests/ -v --tb=short` (all green) |
-| **All Tier ADRs ACCEPTED** | 18+ ADRs | `grep "status: accepted" Corvin-ADR/decisions/*.md` (18+) |
+| **All Tier ADRs ACCEPTED** | 18+ ADRs | `grep "status: accepted" Corvin-Knowledge/decisions/*.md` (18+) |
 | **Task Completion Registry updated** | All tasks marked ACCEPTED | `jq '.tasks | to_entries | map(select(.value.status == "ACCEPTED")) | length' task_registry.json` (≥18) |
 | **Audit trail complete** | No gaps in hash chain | `corvin audit verify-chain --since=tier-1-start` (0 gaps) |
 | **No broken tests from prior work** | All green, no flakes | `pytest tests/ --tb=short` (no xfails, no timeouts) |

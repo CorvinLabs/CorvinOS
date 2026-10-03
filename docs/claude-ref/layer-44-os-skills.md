@@ -524,4 +524,4 @@ git add ... && git commit -m "feat(os-skills): add delegation_router [audit-veri
 → **skill-manifest-ref.md:** Manifest schema reference with examples  
 → **skill-composition-dag.md:** DAG validation details  
 
-See `/home/shumway/projects/Corvin-ADR/decisions/` for full ADR documents.
+See `/home/shumway/projects/Corvin-Knowledge/decisions/` for full ADR documents.

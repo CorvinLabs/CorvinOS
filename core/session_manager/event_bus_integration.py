@@ -4,7 +4,7 @@ S3.2: EventBus Integration — Wires SessionManager to Brain v0.2 pub/sub
 NOT ON ANY LIVE PATH (verified 2026-10-02: no import path from any entry point,
 and nothing constructs the core/session_manager SessionManager it wires).
 Cross-session continuity is ``corvin_operator/bridges/shared/session_ledger.py``
-(bridge + console, Corvin-ADR ADR-2102). Do not build another context bridge:
+(bridge + console, Corvin-Knowledge ADR-2102). Do not build another context bridge:
 wire this one into a live entry point or delete it.
 ``wire_event_bus`` has no caller and nothing constructs the SessionManager it wires;
 the ADR-0348 ``session_split``/``context_transferred`` signals are carried on the live

@@ -23,7 +23,7 @@ from pathlib import Path
 from datetime import datetime
 from shutil import copy2
 
-ADR_REPO = Path("/home/shumway/projects/Corvin-ADR/decisions")
+ADR_REPO = Path("/home/shumway/projects/Corvin-Knowledge/decisions")
 ARCHIVE_DIR = ADR_REPO.parent / "archive" / datetime.now().strftime("%Y-%m-%d")
 
 REQUIRED_FIELDS = ["id", "status", "depends_on", "paths", "docs"]

@@ -3,7 +3,7 @@
 Enables multi-session tasks to inherit tool and strategy history from parent sessions.
 Maintains coherence chain for audit trail and enables learned preferences to carry forward.
 
-ADR Reference: ADR-0390 (Context Coherence Architecture) — to be created in Corvin-ADR
+ADR Reference: ADR-0390 (Context Coherence Architecture) — to be created in Corvin-Knowledge
 
 Key components:
 1. ToolCoherence — Tracks known good/bad tools and their success rates per error class

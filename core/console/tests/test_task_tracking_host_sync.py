@@ -1,7 +1,7 @@
 """Host activity → Task-Tracking SSOT (ADR-2060): agent sessions, commits, ADR-derived items.
 
 Driven through the real console router with a real session (``_sandbox`` from
-test_admin_route.py), a real temporary git repository, a temporary Corvin-ADR
+test_admin_route.py), a real temporary git repository, a temporary Corvin-Knowledge
 checkout and a temporary Claude Code home (``CLAUDE_CONFIG_DIR``). What must hold:
 
 * only interactive ``cli`` sessions appear; ``sdk-cli`` workers and sessions
@@ -76,7 +76,7 @@ class HostSyncTest(unittest.TestCase):
         self.sha_a = _commit(self.repo, "feat(x): first part of the thing [ADR-9001]", self.now - 3600)
         self.sha_b = _commit(self.repo, "feat(y): the other thing [ADR-9002]", self.now - 1800)
         _commit(self.repo, "chore: no record referenced here", self.now - 900)
-        self.adr = self.tmp / "Corvin-ADR"
+        self.adr = self.tmp / "Corvin-Knowledge"
         (self.adr / "decisions").mkdir(parents=True)
         self._adr(9001, "ACCEPTED", "The first thing")
         self._adr(9002, "PROPOSED", "The other thing")

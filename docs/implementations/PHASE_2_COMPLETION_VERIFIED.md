@@ -111,7 +111,7 @@ python3 -m pytest tests/test_credential_rotation_e2e.py  # ✅ Tests exist
 - **Blocker 2 docs:** ADR-0532 (OS-Skills) references L10 context adapter
 - **Blocker 3 docs:** ADR-0891 documents credential rotation + GDPR requirements
 
-All ADRs ACCEPTED and committed to Corvin-ADR/decisions/
+All ADRs ACCEPTED and committed to Corvin-Knowledge/decisions/
 
 ### ✅ Criterion 3: E2E Wiring Proof
 

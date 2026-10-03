@@ -374,7 +374,7 @@ def execute_workflow(self, workflow_id, root_skill, input_data, timeout_ms):
   - [ ] 50+ comprehensive tests
 
 ### Documentation
-- [ ] ADR-0774-phase3-k3-composition-engine.md (Corvin-ADR/decisions/)
+- [ ] ADR-0774-phase3-k3-composition-engine.md (Corvin-Knowledge/decisions/)
   - [ ] Problem statement
   - [ ] Solution (SkillDependencyGraph + SkillCompositionEngine)
   - [ ] Algorithm details (topological sort, workflow execution)

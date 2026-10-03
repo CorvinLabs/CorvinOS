@@ -238,7 +238,7 @@ missing sidebar.
 
 ## Related
 
-- **ADR:** [ADR-0561](../../../Corvin-ADR/decisions/ADR-0561-console-redesign-unified-concept.md) (Console Redesign), [ADR-0564](../../../Corvin-ADR/decisions/ADR-0564-console-vibedashboard-unified-tabs.md) (VibeDashboard Design)
+- **ADR:** [ADR-0561](../../../Corvin-Knowledge/decisions/ADR-0561-console-redesign-unified-concept.md) (Console Redesign), [ADR-0564](../../../Corvin-Knowledge/decisions/ADR-0564-console-vibedashboard-unified-tabs.md) (VibeDashboard Design)
 - **Hooks:** `useVibeData()` in `src/pages/vibe-engineering/hooks/useVibeData.ts`
 - **Sub-component:** `LearningDashboard` in `src/pages/vibe-engineering/components/`
   (`AuditChainGraph`, `GraphInspector` and `hooks/useAuditQuery` remain in the

@@ -111,7 +111,7 @@
 
 **ADR References (Required per CLAUDE.md ADR-Gate):**
 - **ADR-0543:** Wrapper+Phased Architecture for Phase 1b (decision made Sept 2)
-  - Status: Should be created in `Corvin-ADR/decisions/`
+  - Status: Should be created in `Corvin-Knowledge/decisions/`
   - Rationale: Transparent delegation vs. Big Bang refactoring
   - Supersedes: ADR-0544 (Big Bang approach)
   

@@ -101,7 +101,7 @@ def test_adr_doc_carries_adr_0264_frontmatter_parseable_by_the_graph_tool(idea, 
     # Three-layer graph (ADR-0264 second amendment): docs: names the
     # sibling generated docs, kept separate from paths: (code).
     assert fm["docs"] == ["plugin-idea.md", "plugin-architecture.md", "build-plan.md"]
-    # Plugin-scoped id must never collide with the Corvin-ADR repo's own
+    # Plugin-scoped id must never collide with the Corvin-Knowledge repo's own
     # sequential numbering scheme (ADR-NNNN) -- it carries the plugin_id.
     assert not fm["id"].startswith("ADR-")
 

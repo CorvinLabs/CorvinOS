@@ -544,7 +544,7 @@ docs/
 
 ### **Option A: Execute Phase A (Docs Refactor)**
 - Copy all diagrams + MD files to `docs/`
-- Migrate ADRs to `/Corvin-ADR/decisions/`
+- Migrate ADRs to `/Corvin-Knowledge/decisions/`
 - Commit + push to main
 - **Duration:** 1–2 hours
 
@@ -564,7 +564,7 @@ docs/
 **Last Updated:** 2026-09-06  
 **Owner:** shumway  
 **License:** Apache-2.0 + CLA v3.1  
-**Canonical ADR Repo:** `/home/shumway/projects/Corvin-ADR/decisions/`
+**Canonical ADR Repo:** `/home/shumway/projects/Corvin-Knowledge/decisions/`
 
 ---
 

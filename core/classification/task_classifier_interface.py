@@ -512,7 +512,7 @@ def example_usage():
     # Example 1: ADR writing
     classification = classifier.classify(
         instruction="Write an ADR for the new model routing system, including alternatives and trade-offs",
-        file_path="Corvin-ADR/decisions/ADR-0XXX.md"
+        file_path="Corvin-Knowledge/decisions/ADR-0XXX.md"
     )
     print(f"ADR Classification: {classification.to_dict()}")
     # Expected: model_class=LARGE, complexity=COMPLEX, reasoning_depth=DEEP

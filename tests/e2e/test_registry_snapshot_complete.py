@@ -135,7 +135,7 @@ class TestRegistrySnapshotCompletion:
         k=5: ADR-0864 must document GDPR Art. 30, 32 compliance.
         """
         repo_root = Path(__file__).parent.parent.parent
-        adr_path = Path("/home/shumway/projects/Corvin-ADR/decisions/ADR-0864-git-tracked-registry-snapshots.md")
+        adr_path = Path("/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0864-git-tracked-registry-snapshots.md")
 
         if adr_path.exists():
             with open(adr_path, 'r') as f:

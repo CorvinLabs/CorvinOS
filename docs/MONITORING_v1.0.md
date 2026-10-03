@@ -186,4 +186,4 @@ done
 ---
 
 **For detailed incident response, see:** `/home/shumway/projects/CorvinOS/docs/INCIDENT_RESPONSE.md`  
-**For ADR details, see:** `/home/shumway/projects/Corvin-ADR/decisions/ADR-0592*.md`
+**For ADR details, see:** `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0592*.md`

@@ -659,13 +659,13 @@ The network enforces *valid license*, not *unmodified binary*.
 ## ADR
 
 Full decision records:
-- `Corvin-ADR: decisions/ADR-0103-a2a-network-membership-attestation.md`
-- `Corvin-ADR: decisions/ADR-0197-a2a-send-typed-error-taxonomy.md` (error taxonomy)
-- `Corvin-ADR: decisions/ADR-0198-a2a-reconnect-broadcast.md` (proactive reconnect)
-- `Corvin-ADR: decisions/ADR-0199-a2a-ping-lightweight-peer-liveness.md` (a2a_ping)
-- `Corvin-ADR: decisions/ADR-0257-a2a-reciprocal-friendship-handshake.md`
-- `Corvin-ADR: decisions/ADR-0258-a2a-location-independent-connectivity.md` (relay fallback)
-- `Corvin-ADR: decisions/ADR-0261-a2a-relay-hardening.md` (self-delivery guard, slot reaper, byte budget, off-loop ack)
+- `Corvin-Knowledge: decisions/ADR-0103-a2a-network-membership-attestation.md`
+- `Corvin-Knowledge: decisions/ADR-0197-a2a-send-typed-error-taxonomy.md` (error taxonomy)
+- `Corvin-Knowledge: decisions/ADR-0198-a2a-reconnect-broadcast.md` (proactive reconnect)
+- `Corvin-Knowledge: decisions/ADR-0199-a2a-ping-lightweight-peer-liveness.md` (a2a_ping)
+- `Corvin-Knowledge: decisions/ADR-0257-a2a-reciprocal-friendship-handshake.md`
+- `Corvin-Knowledge: decisions/ADR-0258-a2a-location-independent-connectivity.md` (relay fallback)
+- `Corvin-Knowledge: decisions/ADR-0261-a2a-relay-hardening.md` (self-delivery guard, slot reaper, byte budget, off-loop ack)
 
 ---
 
@@ -819,7 +819,7 @@ relay), `core/console/tests/test_a2a_relay_config.py::TestRecheckAckDeadlock`.
 ## Zero-config connectivity — the token is the only input (ADR-2059, 2026-09-24)
 
 Builds on ADR-2057. Operator requirement: a user enters the friendship token and
-nothing else. Concept + root-cause analysis: `Corvin-ADR/concepts/a2a-robust-connectivity-concept.md`.
+nothing else. Concept + root-cause analysis: `Corvin-Knowledge/concepts/a2a-robust-connectivity-concept.md`.
 
 | Piece | What it does | Where |
 |---|---|---|

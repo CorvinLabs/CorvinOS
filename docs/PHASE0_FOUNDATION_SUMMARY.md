@@ -287,7 +287,7 @@ corvin backup verify --latest
 
 ## Archive & Versioning
 
-**Archive Location:** `/home/shumway/projects/Corvin-ADR/archive/2026-09-22/PHASE0_*/`  
+**Archive Location:** `/home/shumway/projects/Corvin-Knowledge/archive/2026-09-22/PHASE0_*/`  
 **Commit:** [To be committed to git]  
 **Signature:** Awaiting tech lead + SRE lead + product manager sign-off
 

@@ -15,7 +15,7 @@ docs:
 
 # CONCEPT-0007 — A readiness claim derived from configuration is not a measurement
 
-**Note on location:** this belongs in `Corvin-ADR/concepts/`. That repo does not
+**Note on location:** this belongs in `Corvin-Knowledge/concepts/`. That repo does not
 exist on the Windows box this was written on, so it lands in the documented
 `CorvinOS/docs/concepts/` fallback. Move it when the two are on one machine.
 

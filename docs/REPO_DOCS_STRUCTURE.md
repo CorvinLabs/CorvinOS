@@ -361,7 +361,7 @@ Before marking docs complete:
 - [ ] Cross-references verified (no 404s)
 - [ ] Diagrams embedded + render in Dark Mode
 - [ ] Code locations referenced correctly
-- [ ] ADR references point to `/Corvin-ADR/decisions/`
+- [ ] ADR references point to `/Corvin-Knowledge/decisions/`
 - [ ] Glossary complete (in README)
 - [ ] Reading paths all work
 - [ ] Git commit message follows format

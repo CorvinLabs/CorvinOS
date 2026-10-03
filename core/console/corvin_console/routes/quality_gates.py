@@ -417,7 +417,7 @@ async def get_artifact_history(
 async def run_all_gates(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> Dict[str, Any]:
-    """Run every gate validator over the REAL artifacts of the Corvin-ADR
+    """Run every gate validator over the REAL artifacts of the Corvin-Knowledge
     checkout (``core.quality_gates.artifacts``) and record each verdict as a
     hash-chained ``gate_events`` row plus a knowledge-graph node.
 
@@ -450,7 +450,7 @@ async def run_all_gates(
             _run_cache.pop(next(iter(_run_cache)))
     if root is None:
         run["status"] = "failed"
-        run["error"] = "no Corvin-ADR checkout found (CORVIN_ADR_ROOT, ../Corvin-ADR or corvin_decisions/)"
+        run["error"] = "no Corvin-Knowledge checkout found (CORVIN_ADR_ROOT, ../Corvin-Knowledge or corvin_decisions/)"
         run["completed_at"] = _now()
         return {"tenant_id": tenant_id, "run_id": run_id, "status": "failed", "error": run["error"],
                 "results_url": f"/v1/console/api/quality/gates/results/{run_id}", "timestamp": _now()}

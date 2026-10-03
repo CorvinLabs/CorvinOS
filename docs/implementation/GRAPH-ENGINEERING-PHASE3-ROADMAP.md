@@ -67,7 +67,7 @@
 **Scope:**
 1. **Memory linking:**
    - Normalizer extracts file paths + module names
-   - Search memory (MEMORY.md) + ADRs (Corvin-ADR/) for matches
+   - Search memory (MEMORY.md) + ADRs (Corvin-Knowledge/) for matches
    - Load matched memories + ADRs
 
 2. **Context ranking:**

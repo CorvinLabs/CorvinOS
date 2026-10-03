@@ -300,7 +300,7 @@ Two things this trigger must respect, both discovered in this investigation:
    `docs/claude-ref/layer-engines.md` and `docs/claude-ref/delegation-routing.md` (both already
    listed as the doc targets for the ADR-0216 metering-map change) need the new badge behavior
    and the quota fields documented; ADR-0216 itself
-   (`Corvin-ADR/decisions/ADR-0216-tde-shared-agentic-compute-pool-and-tenant-scoped-audit.md`)
+   (`Corvin-Knowledge/decisions/ADR-0216-tde-shared-agentic-compute-pool-and-tenant-scoped-audit.md`)
    does not need amending — the badge is a consumer of the existing pool, not a change to the
    pool's semantics, so this is docs-only, not an ADR-worthy decision (adr-gate: skip reason —
    config/UI surface for an already-decided mechanism, no new structural choice).

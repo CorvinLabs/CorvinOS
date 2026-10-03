@@ -362,7 +362,7 @@ npx playwright test tests/e2e/ --workers=1
 
 ## References
 
-- **Task Graph Architecture:** `/Corvin-ADR/decisions/ADR-0400-graph-native-task-execution-model.md`
+- **Task Graph Architecture:** `/Corvin-Knowledge/decisions/ADR-0400-graph-native-task-execution-model.md`
 - **Task Graph Data:** `/core/vibe_engineering/task_graph.py`
 - **Graph Builder:** `/core/vibe_engineering/graph_builder.py`
 - **Playwright Docs:** https://playwright.dev

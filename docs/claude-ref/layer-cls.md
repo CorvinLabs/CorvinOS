@@ -111,4 +111,4 @@ Caps skill body at 4 KiB per file.
 - Allow a stale caller-supplied `limit` to override the live license read (`check_boot_limit` ignores the `limit` parameter)
 - Write to `audit.jsonl` directly — use `audit_event()` from the shared audit module
 
-→ ADR: `Corvin-ADR: decisions/ADR-0156-custom-layer-system.md`
+→ ADR: `Corvin-Knowledge: decisions/ADR-0156-custom-layer-system.md`

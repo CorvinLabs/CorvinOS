@@ -18,7 +18,7 @@ daily quota metering, and five enforcement gates.
 
 ### 1. Architectural Decision Record (ADR)
 
-**Location:** `/home/shumway/projects/Corvin-ADR/decisions/ADR-0363-licensing-architecture-brain-forge.md`
+**Location:** `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-0363-licensing-architecture-brain-forge.md`
 
 **Contents:**
 - Problem statement (why licensing is needed)
@@ -335,7 +335,7 @@ daily quota metering, and five enforcement gates.
 
 | File | Location | Purpose |
 |------|----------|---------|
-| ADR-0363 | `/Corvin-ADR/decisions/ADR-0363-licensing-architecture-brain-forge.md` | Architectural decision record |
+| ADR-0363 | `/Corvin-Knowledge/decisions/ADR-0363-licensing-architecture-brain-forge.md` | Architectural decision record |
 | Implementation Spec | `/CorvinOS/docs/claude-ref/licensing-architecture.md` | Technical implementation guide |
 | Tier Matrix | `/CorvinOS/docs/claude-ref/tier-matrix.md` | Pricing and feature matrix |
 | Roadmap | `/CorvinOS/docs/implementation/licensing-implementation-roadmap.md` | 4-week execution plan |

@@ -288,7 +288,7 @@ v1.0 (Production Release)
 
 ```
 CorvinOS/
-├── Corvin-ADR/
+├── Corvin-Knowledge/
 │   ├── decisions/
 │   │   ├── ADR-0383…0386 (v0.6: Operator Modeling)
 │   │   ├── ADR-0387…0390 (v0.7: Plugin Ecosystem)

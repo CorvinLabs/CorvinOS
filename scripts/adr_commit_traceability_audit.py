@@ -5,7 +5,7 @@ import json, re, subprocess, sys
 from datetime import datetime
 from pathlib import Path
 
-ADR_REPO = Path("/home/shumway/projects/Corvin-ADR/decisions")
+ADR_REPO = Path("/home/shumway/projects/Corvin-Knowledge/decisions")
 CORVIN_OS = Path("/home/shumway/projects/CorvinOS")
 
 class ADRCommitAudit:

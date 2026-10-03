@@ -157,7 +157,7 @@ docs: ["docs/claude-ref/learning-infrastructure.md"]
 
 ```
 CorvinOS/
-├── /home/shumway/projects/Corvin-ADR/  (sibling repo)
+├── /home/shumway/projects/Corvin-Knowledge/  (sibling repo)
 │   └── decisions/
 │       ├── ADR-0314-learning-infrastructure.md
 │       ├── ADR-0315-confidence-intervals.md

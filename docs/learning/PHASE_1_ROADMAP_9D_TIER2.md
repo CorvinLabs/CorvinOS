@@ -283,7 +283,7 @@ touch core/learning/tests/tier2/test_{memory,plugin,security,9d_integration,adve
 
 # Draft ADR-0620 (for design review)
 cp /home/shumway/projects/CorvinOS/outputs/ADR_0620-0623_9D_LEARNING_VECTOR.md \
-   /home/shumway/projects/Corvin-ADR/decisions/ADR-0620-infrastructure-loops.md
+   /home/shumway/projects/Corvin-Knowledge/decisions/ADR-0620-infrastructure-loops.md
 
 # Commit baseline
 git add core/learning/tier2_loops core/learning/tests/tier2

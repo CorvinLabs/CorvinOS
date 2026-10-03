@@ -1,7 +1,7 @@
 """Quality Gates console — real runs over real artifacts (ADR-0688 amendment).
 
 Over HTTP (TestClient), session overridden, against a TEMP ``CORVIN_HOME``
-(the DuckDB event store lands there) and a TEMP Corvin-ADR root
+(the DuckDB event store lands there) and a TEMP Corvin-Knowledge root
 (``CORVIN_ADR_ROOT``) with a handful of markdown artifacts whose verdicts are
 known. Until 2026-09-20 "Run All Gates" wrote one hard-coded ``pass`` per gate
 and the page fetched paths that 404ed; every assertion below was red then.
@@ -94,7 +94,7 @@ Short narrative.
 
 @pytest.fixture
 def adr_root(tmp_path, monkeypatch) -> Path:
-    root = tmp_path / "Corvin-ADR"
+    root = tmp_path / "Corvin-Knowledge"
     (root / "decisions").mkdir(parents=True)
     (root / "concepts").mkdir()
     (root / "implementation-plans").mkdir()
@@ -214,7 +214,7 @@ def test_no_adr_root_is_a_failed_run_that_says_so(client, monkeypatch, tmp_path)
 
     monkeypatch.setattr(qg, "resolve_adr_root", lambda: None)
     r = client.post(f"{BASE}/run/all").json()
-    assert r["status"] == "failed" and "no Corvin-ADR checkout" in r["error"]
+    assert r["status"] == "failed" and "no Corvin-Knowledge checkout" in r["error"]
 
 
 def test_a_foreign_tenants_run_is_403(client, adr_root):

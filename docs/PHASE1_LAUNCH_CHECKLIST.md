@@ -114,7 +114,7 @@ Each checklist is owned by a specific role. Final go/no-go decision requires **A
   - ADR-2031 (Learning): migrated, frontmatter complete ✅
   - ADR-2032 (Cost): migrated, frontmatter complete ✅
   - ADR-2033 (Onboarding): migrated, frontmatter complete ✅
-  - Measurement: `ls /home/shumway/projects/Corvin-ADR/decisions/ | grep "ADR-203[0-3]"` = 4 files
+  - Measurement: `ls /home/shumway/projects/Corvin-Knowledge/decisions/ | grep "ADR-203[0-3]"` = 4 files
 
 - [ ] **Code comments on complex logic (>20 LOC per function)**
   - Optimizer algorithm: documented (why thresholds work)

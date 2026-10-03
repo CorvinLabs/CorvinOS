@@ -428,7 +428,7 @@ Nodes | SVG DOM | Layout State | Total
 
 ## References
 
-- **ADR-0400:** `Corvin-ADR/decisions/ADR-0400-graph-native-task-execution-model.md`
+- **ADR-0400:** `Corvin-Knowledge/decisions/ADR-0400-graph-native-task-execution-model.md`
 - **D3 Documentation:** https://d3js.org
 - **React + D3 Patterns:** https://observablehq.com/@d3/what-makes-software-good
 - **Accessibility Audit:** WCAG 2.1 AA (lighthouse score 95+)

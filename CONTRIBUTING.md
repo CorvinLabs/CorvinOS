@@ -144,7 +144,7 @@ This is **enforced by:**
 
 ### How to write an ADR
 
-1. Create file `Corvin-ADR/decisions/ADR-XXXX-short-title.md`
+1. Create file `Corvin-Knowledge/decisions/ADR-XXXX-short-title.md`
 2. Start with ADR-0264 frontmatter:
    ```yaml
    ---
@@ -163,7 +163,7 @@ This is **enforced by:**
 
 **Example:**
 ```bash
-git add core/newfeature/ Corvin-ADR/decisions/ADR-0320-newfeature.md
+git add core/newfeature/ Corvin-Knowledge/decisions/ADR-0320-newfeature.md
 git commit -m "feat(core): add new feature (ADR-0320)
 
 Implements the design from ADR-0320.

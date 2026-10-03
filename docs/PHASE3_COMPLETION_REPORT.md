@@ -211,7 +211,7 @@ def monitor_all_instances(self):
 
 ### 5. ADR Documentation (320 LOC)
 
-**File:** `/home/shumway/projects/Corvin-ADR/decisions/ADR-2067-plugin-registry-consistency-phase3.md`
+**File:** `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-2067-plugin-registry-consistency-phase3.md`
 
 **Content:**
 - Problem statement (4 gaps identified)
@@ -231,7 +231,7 @@ def monitor_all_instances(self):
 
 ### 1. ADR Gate ✅
 **Status:** PASSED
-- ADR-2067 created in canonical location (`Corvin-ADR/decisions/`)
+- ADR-2067 created in canonical location (`Corvin-Knowledge/decisions/`)
 - Frontmatter complete: id, status, depends_on, related, paths, docs
 - Design choice documented: centralized manifest vs per-instance config
 - Alternatives considered: 3 rejected with rationales

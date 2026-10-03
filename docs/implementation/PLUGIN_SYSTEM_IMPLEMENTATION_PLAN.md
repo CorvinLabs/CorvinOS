@@ -187,7 +187,7 @@ the docs and the code agree.
 | Salvage, then retire | Move `models.py` (enums, `Plugin`, `PluginManifest`, registry YAML round-trip, `DependencyResolver`, `SettingsValidator`) to `core/plugins/corvin_plugins/manifest.py`. Port its tests. Then delete `core/orchestration/plugin_system/` including the three 0-byte manager files. |
 | Quarantine the dead frontend | `PluginsPanel.tsx`, `MarketplaceInstall.tsx`, `usePlugins.ts`, `pages/plugins.tsx` are unreachable (no route, no nav) and call a nonexistent `/api/plugins`. Keep them, but mark them as pre-wiring drafts in a header comment; they are re-adopted in Phase 4 against the real endpoint. |
 | Correct the claims | `docs/concepts/PLUGIN_SYSTEM_PHASE3_ROADMAP.md` claims "Phase 1/1b/2a/2b complete, 56/56 green". Measured: 105 passed / 22 skipped **only with `test_api.py` excluded**; with it, collection aborts. Rewrite the status section to the measured state or delete the file in favour of this plan. |
-| Move the ADRs | Five `ADR-0XXX-*.md` files sit in `docs/concepts/` and `docs/adr/`. CLAUDE.md: ADRs live in `Corvin-ADR/decisions/` only. Assign real numbers (next free: **0233**) — see § 6. |
+| Move the ADRs | Five `ADR-0XXX-*.md` files sit in `docs/concepts/` and `docs/adr/`. CLAUDE.md: ADRs live in `Corvin-Knowledge/decisions/` only. Assign real numbers (next free: **0233**) — see § 6. |
 
 **Gate:** `uv run pytest core/plugins/tests core/orchestration -q` collects without error
 and is green. No import of a deleted module remains (`grep -rn plugin_system`).
@@ -356,7 +356,7 @@ instead of inventing them.
 Phase 1 gets **no** flag — the passthrough default is current behavior — and the compliance
 mechanisms (tripwire, audit chain, consent, deny-on-error) get no flag, ever.
 
-**ADRs.** Destination is `Corvin-ADR/decisions/` only. Two of the three were already
+**ADRs.** Destination is `Corvin-Knowledge/decisions/` only. Two of the three were already
 migrated in `c2444f5` — only one new number was needed:
 
 | Number | Title | State |

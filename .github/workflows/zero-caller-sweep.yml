@@ -6,7 +6,7 @@ name: Zero-Caller Sweep
 # entry point. Pre-existing dead ones are recorded in
 # scripts/zero_caller_baseline.json; wiring or deleting one means removing its
 # baseline line. Background: three "context bridge" implementations were built
-# and none was used (Corvin-ADR ADR-2102). Limit: an implementation a live
+# and none was used (Corvin-Knowledge ADR-2102). Limit: an implementation a live
 # package re-exports but nothing calls passes this gate.
 
 on:

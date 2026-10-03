@@ -292,7 +292,7 @@ Gates are enforcement-only; no opt-out flags. ImplementationGate is blocking and
 **Phase 3 (Optional, future):**
 - Knowledge graph + temporal lineage
 - Query support ("all Plans from this Idea?")
-- Bulk-import 350+ existing Corvin-ADRs
+- Bulk-import 350+ existing Corvin-Knowledges
 - Semantic generation via AI
 
 ---
@@ -311,7 +311,7 @@ Gates are enforcement-only; no opt-out flags. ImplementationGate is blocking and
 
 A **separate module** from `core.quality.gates` above: four validators
 (`IdeaGate`, `ConceptGate`, `ADRGate`, `ImplementationPlanGate`) that judge the
-markdown artifacts of the Corvin-ADR checkout and write every verdict as a
+markdown artifacts of the Corvin-Knowledge checkout and write every verdict as a
 hash-chained `gate_events` row in `<tenant>/global/quality_gates.db` (DuckDB).
 The console page `/console/app/quality` renders those rows and nothing else.
 
@@ -319,7 +319,7 @@ The console page `/console/app/quality` renders those rows and nothing else.
 the only producer is the console's **Run all gates** (`POST
 /v1/console/api/quality/gates/run/all`). Since 2026-09-20 that is a real job on
 a daemon thread: `core/quality_gates/artifacts.py` resolves the checkout
-(`CORVIN_ADR_ROOT` → `../Corvin-ADR` → `corvin_decisions/`), projects each file
+(`CORVIN_ADR_ROOT` → `../Corvin-Knowledge` → `corvin_decisions/`), projects each file
 of `decisions/`, `concepts/`, `implementation-plans/`, `ideas/` onto the dict
 its gate checks, runs the real validator, writes the gate event and a
 `kg_nodes` projection, and reports `artifacts_done / artifacts_total` on

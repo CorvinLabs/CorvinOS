@@ -21,7 +21,7 @@ from typing import Dict, List, Tuple
 
 # Paths
 CORVINOS_REPO = Path("/home/shumway/projects/CorvinOS")
-ADR_REPO = Path("/home/shumway/projects/Corvin-ADR/decisions")
+ADR_REPO = Path("/home/shumway/projects/Corvin-Knowledge/decisions")
 AUDIT_DIR = Path.home() / ".corvin" / "tenants" / "_default" / "global" / "audit"
 AUDIT_DIR.mkdir(parents=True, exist_ok=True)
 

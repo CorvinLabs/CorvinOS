@@ -1,7 +1,7 @@
 """ADR-0215 Phase 1 — Wiring Manifest loader + Reachability Gate.
 
 Two independent checks, both structural prevention for the bug class this
-ADR exists to close (see ADR-0215 in Corvin-ADR/decisions/):
+ADR exists to close (see ADR-0215 in Corvin-Knowledge/decisions/):
 
 1. **Manifest completeness + reachability.** Every ``.py`` module under a
    registered orchestration directory must have exactly one entry in that

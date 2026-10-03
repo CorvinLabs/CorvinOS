@@ -223,7 +223,7 @@ ADR-0541 amendment of 2026-09-07.
 
 **Chat continuity is a different subsystem (2026-10-02).** Re-supplying a
 chat's own turns across a reset or a compaction is done by the session ledger
-(`corvin_operator/bridges/shared/session_ledger.py`, Corvin-ADR ADR-2102), not
+(`corvin_operator/bridges/shared/session_ledger.py`, Corvin-Knowledge ADR-2102), not
 here: it needs the conversation text, which this subsystem's content-freedom
 rule rightly forbids. See `adapter-runtime.md` § Session ledger.
 

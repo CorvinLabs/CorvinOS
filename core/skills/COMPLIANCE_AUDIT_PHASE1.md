@@ -229,4 +229,4 @@ Maps every decision to the code location that made it.
 - **GDPR:** https://gdpr-info.eu
 - **EU AI Act:** https://digital-strategy.ec.europa.eu/en/policies/artificial-intelligence-act
 - **Corvin Compliance Baseline:** CLAUDE.md (Compliance Baseline section)
-- **ADRs:** Corvin-ADR/decisions/ (0232, 0233, 0314, 0532–0535, 0555)
+- **ADRs:** Corvin-Knowledge/decisions/ (0232, 0233, 0314, 0532–0535, 0555)

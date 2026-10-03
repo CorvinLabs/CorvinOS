@@ -1,6 +1,6 @@
 [Unit]
 Description=GitHub Pages Daily Metrics Export Service (ADR-0637)
-Documentation=https://github.com/CorvinLabs/Corvin-ADR/decisions/ADR-0637-github-pages-daily-export.md
+Documentation=https://github.com/CorvinLabs/Corvin-Knowledge/decisions/ADR-0637-github-pages-daily-export.md
 After=network.target
 
 [Service]

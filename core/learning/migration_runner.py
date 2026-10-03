@@ -27,8 +27,8 @@ def run_migration(tenant_id: str = "default") -> dict:
     metaphers_migrated = 0
     skills_migrated = 0
     
-    # Phase 1: Migrate Concepts from Corvin-ADR
-    concepts_dir = Path.home() / "projects" / "Corvin-ADR" / "concepts"
+    # Phase 1: Migrate Concepts from Corvin-Knowledge
+    concepts_dir = Path.home() / "projects" / "Corvin-Knowledge" / "concepts"
     if concepts_dir.exists():
         for concept_file in sorted(concepts_dir.glob("CONCEPT-*.md")):
             try:

@@ -1,4 +1,4 @@
-"""Real artifacts for the quality gates (ADR-0688) — read from the Corvin-ADR
+"""Real artifacts for the quality gates (ADR-0688) — read from the Corvin-Knowledge
 repository, the single source of truth for decisions, concepts, ideas and
 implementation plans (CLAUDE.md § ADR-0516).
 
@@ -47,7 +47,7 @@ KINDS: Dict[str, Dict[str, str]] = {
 
 
 def resolve_adr_root() -> Optional[Path]:
-    """The Corvin-ADR checkout: ``CORVIN_ADR_ROOT`` → the sibling checkout beside
+    """The Corvin-Knowledge checkout: ``CORVIN_ADR_ROOT`` → the sibling checkout beside
     the CorvinOS repo → the ``corvin_decisions`` submodule. ``None`` when none
     holds a ``decisions/`` directory (the run then reports it, never fakes it)."""
     candidates: List[Path] = []
@@ -55,7 +55,7 @@ def resolve_adr_root() -> Optional[Path]:
     if env:
         candidates.append(Path(env).expanduser())
     repo = Path(__file__).resolve().parents[2]
-    candidates.append(repo.parent / "Corvin-ADR")
+    candidates.append(repo.parent / "Corvin-Knowledge")
     candidates.append(repo / "corvin_decisions")
     for c in candidates:
         if (c / "decisions").is_dir():

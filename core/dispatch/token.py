@@ -14,7 +14,7 @@ Compliance:
 - Token validation fails closed (no token → DispatcherAuthError)
 - Tokens expire automatically after TTL (default 24h)
 
-See: ADR-0954 (Console Dispatcher Architecture) in Corvin-ADR.
+See: ADR-0954 (Console Dispatcher Architecture) in Corvin-Knowledge.
 """
 
 from abc import ABC, abstractmethod

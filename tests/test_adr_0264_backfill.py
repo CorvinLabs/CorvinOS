@@ -1,9 +1,9 @@
 """E2E coverage for scripts/adr_backfill.py, the ADR-0264 frontmatter
-backfill extractor used to migrate the pre-convention Corvin-ADR corpus.
+backfill extractor used to migrate the pre-convention Corvin-Knowledge corpus.
 
 Per adr_gate Step 5, this exercises the real extraction logic against real,
 hermetic fixture files (a tmp decisions/ dir + a tmp git repo standing in
-for Corvin-ADR, never mocked) plus real subprocess CLI runs -- the same
+for Corvin-Knowledge, never mocked) plus real subprocess CLI runs -- the same
 discipline as tests/test_adr_0264_decision_graph.py. The one thing NOT
 retested here is scripts.adr_graph itself (covered by its own suite);
 this file is specifically about what the extractor decides to write, and
@@ -50,7 +50,7 @@ def _write_and_commit(repo: Path, rel_path: str, content: str, message: str) -> 
 
 @pytest.fixture
 def adr_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "Corvin-ADR"
+    repo = tmp_path / "Corvin-Knowledge"
     (repo / "decisions").mkdir(parents=True)
     _init_git_repo(repo)
     return repo
@@ -59,7 +59,7 @@ def adr_repo(tmp_path: Path) -> Path:
 @pytest.fixture
 def corvin_repo(tmp_path: Path) -> Path:
     """Stands in for the CorvinOS repo -- adr_backfill greps ITS commit log
-    for `commits:`, a genuinely separate repo from Corvin-ADR."""
+    for `commits:`, a genuinely separate repo from Corvin-Knowledge."""
     repo = tmp_path / "CorvinOS"
     repo.mkdir()
     _init_git_repo(repo)
@@ -403,7 +403,7 @@ class TestRealCliEndToEnd:
     def test_full_run_backfills_fresh_files_and_syncs_docs_on_old_ones_together(
         self, adr_repo, corvin_repo,
     ):
-        """The real-world scenario this session ran against Corvin-ADR: one
+        """The real-world scenario this session ran against Corvin-Knowledge: one
         file has no frontmatter at all (fresh backfill), another already
         has ADR-0264 frontmatter WITHOUT docs: (pre-dates the schema
         upgrade) -- a single --write run must handle both correctly in one

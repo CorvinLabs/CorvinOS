@@ -26,7 +26,7 @@ from typing import Dict, List, Tuple
 import hashlib
 
 # Paths
-ADR_REPO = Path("/home/shumway/projects/Corvin-ADR/decisions")
+ADR_REPO = Path("/home/shumway/projects/Corvin-Knowledge/decisions")
 TENANT_HOME = Path.home() / ".corvin" / "tenants" / "_default" / "global"
 AUDIT_DIR = TENANT_HOME / "audit"
 AUDIT_DIR.mkdir(parents=True, exist_ok=True)

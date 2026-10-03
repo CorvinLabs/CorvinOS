@@ -3,8 +3,8 @@
 Companion to the short CLAUDE.md section. Full operational details
 live here.
 
-→ **ADR:** Corvin-ADR: decisions/ADR-0043-l35-egress-lockdown.md
-→ **ADR-0167 M1:** Corvin-ADR: decisions/ADR-0167-entangled-license-ratchet.md (ELR integration)
+→ **ADR:** Corvin-Knowledge: decisions/ADR-0043-l35-egress-lockdown.md
+→ **ADR-0167 M1:** Corvin-Knowledge: decisions/ADR-0167-entangled-license-ratchet.md (ELR integration)
 → **Modules:** 
   - `corvin_operator/bridges/shared/egress_gate.py` (policy enforcer + ratchet integration)
   - `corvin_operator/license/elr.py` (Entangled License Ratchet core, M1)

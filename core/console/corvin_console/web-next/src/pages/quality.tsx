@@ -1,6 +1,6 @@
 /**
  * Quality Gates (ADR-0688) — what the gate validators decided about the REAL
- * artifacts of the Corvin-ADR checkout (decisions, concepts, implementation
+ * artifacts of the Corvin-Knowledge checkout (decisions, concepts, implementation
  * plans, ideas), read from the hash-chained gate_events store.
  *
  * Until 2026-09-20 this page fetched `/v1/console/quality/gates/*` — the router
@@ -171,7 +171,7 @@ export default function QualityGatesPanel() {
       <Card>
         <CardContent className="py-3 text-sm space-y-2">
           <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
-            <span><span className="text-muted-foreground">Source:</span> <span className="font-mono text-xs">{s.source_root || "no Corvin-ADR checkout found"}</span></span>
+            <span><span className="text-muted-foreground">Source:</span> <span className="font-mono text-xs">{s.source_root || "no Corvin-Knowledge checkout found"}</span></span>
             <span><span className="text-muted-foreground">Events recorded:</span> <span className="font-mono tabular-nums">{s.events_total}</span></span>
             <span data-testid="as-of"><span className="text-muted-foreground">Newest verdict:</span> {asOf ?? "no gate run yet"}</span>
             {s.last_run && (

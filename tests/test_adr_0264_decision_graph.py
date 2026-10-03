@@ -273,9 +273,9 @@ class TestRealCliEndToEnd:
 
     def test_cli_against_the_real_repo_finds_adr_0264_itself(self):
         """Dogfooding check: ADR-0264's own frontmatter, committed in the
-        real Corvin-ADR repo, must be discoverable by its own tool."""
-        if not (_REPO.parent / "Corvin-ADR" / "decisions").is_dir():
-            pytest.skip("sibling Corvin-ADR checkout not present")
+        real Corvin-Knowledge repo, must be discoverable by its own tool."""
+        if not (_REPO.parent / "Corvin-Knowledge" / "decisions").is_dir():
+            pytest.skip("sibling Corvin-Knowledge checkout not present")
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "--adr", "0264"],
             capture_output=True, text=True, timeout=10,
@@ -301,8 +301,8 @@ class TestRealCliEndToEnd:
         `docs:` at docs/claude-ref/adr-gate.md in the real committed file --
         --doc must find it, proving docs-as-definition-of-done's reverse
         lookup actually works end-to-end, not just in a fixture."""
-        if not (_REPO.parent / "Corvin-ADR" / "decisions").is_dir():
-            pytest.skip("sibling Corvin-ADR checkout not present")
+        if not (_REPO.parent / "Corvin-Knowledge" / "decisions").is_dir():
+            pytest.skip("sibling Corvin-Knowledge checkout not present")
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "--doc", "docs/claude-ref/adr-gate.md"],
             capture_output=True, text=True, timeout=10,

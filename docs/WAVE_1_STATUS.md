@@ -18,7 +18,7 @@
 
 **Verification:**
 ```bash
-cd /home/shumway/projects/Corvin-ADR/decisions
+cd /home/shumway/projects/Corvin-Knowledge/decisions
 ls -1 | grep -oE 'ADR-[0-9]{4}' | sort | uniq -d | wc -l  # Returns 0 ✓
 ```
 

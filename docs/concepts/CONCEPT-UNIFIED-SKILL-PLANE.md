@@ -272,7 +272,7 @@ operator would first notice the system working.
   reachability contract, console lifecycle
 - [[CONCEPT-SKILL-CREATOR]] — the generator that produces `assistant.*` skills
 - `corvin_operator/context_engineering/stages/skillforge.py` — CEL skill binding.
-  Its code cites ADR-0283, which is not present in `Corvin-ADR/decisions/`
+  Its code cites ADR-0283, which is not present in `Corvin-Knowledge/decisions/`
   on this checkout (that directory starts at ADR-0321); the code comments are
   the current record.
 - `core/console/corvin_console/routes/packages.py` — package system, cites

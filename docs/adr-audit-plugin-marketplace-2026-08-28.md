@@ -186,12 +186,12 @@ Console Platform: ADR-0352–0366 (P0–P7 COMPLETE, adversarial-review 0 findin
 
 **Impact:**
 - Batch indexing scripts using `ls ADR-*.md | sort` miss these 6 ADRs
-- CI/CD gates that enforce `git add Corvin-ADR/decisions/ADR-XXXX-*.md` might reject them
+- CI/CD gates that enforce `git add Corvin-Knowledge/decisions/ADR-XXXX-*.md` might reject them
 - Documentation generators that search by prefix pattern fail
 
 **Action:** Rename files to add `ADR-` prefix (low-risk file rename, only affects frontmatter comment section if any):
 ```bash
-cd /home/shumway/projects/Corvin-ADR/decisions
+cd /home/shumway/projects/Corvin-Knowledge/decisions
 for i in 0350 0351 0352 0353 0354 0355; do
   mv ${i}-*.md ADR-${i}-*.md
 done
@@ -214,7 +214,7 @@ Plugin-Builder V2: ADR-0262/0263 (IMPLEMENTED 2026-07-30, 159 Tests grün, live 
 ```
 
 **Investigation:**
-- `/home/shumway/projects/Corvin-ADR/decisions/` contains NO `ADR-026[0-3]*.md` files
+- `/home/shumway/projects/Corvin-Knowledge/decisions/` contains NO `ADR-026[0-3]*.md` files
 - Code exists: `core/orchestration/tasks/plugin_install_task.py` is live
 - Tests exist: 159 tests mentioned in Memory
 - Hypothesis: ADRs were drafted but never committed to the Corvin-ADR repo

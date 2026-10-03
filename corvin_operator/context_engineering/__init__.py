@@ -5,7 +5,7 @@ Phases: Memory Lookup, Graph Traversal, Skill Injection, Approach Synthesis, Blo
 
 Phase 1 Lite (MVP): Memory Lookup only (ADR-0269).
 Phase 2: Graph Traversal + Skill Injection (ADR-0269 Phase 2).
-Phase 3: ADR-based decision discovery (Corvin-ADR integration).
+Phase 3: ADR-based decision discovery (Corvin-Knowledge integration).
 """
 
 from .memory_lookup import MemoryLookup, MemoryMatch

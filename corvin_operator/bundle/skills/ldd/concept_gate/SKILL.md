@@ -1,6 +1,6 @@
 ---
 name: concept_gate
-description: Concept Gate — evaluates after non-trivial tasks whether a reusable WORKING METHOD (not a decision, not a bug fix) is worth archiving; writes to Corvin-ADR/concepts/ when yes (or amends an existing entry), names the skip reason when no, requires evidence citations (real commits/tasks), and mints a bootstrap-graded companion SkillForge learned-experience skill so durable methods are auto-injected into future turns, not just archived.
+description: Concept Gate — evaluates after non-trivial tasks whether a reusable WORKING METHOD (not a decision, not a bug fix) is worth archiving; writes to Corvin-Knowledge/concepts/ when yes (or amends an existing entry), names the skip reason when no, requires evidence citations (real commits/tasks), and mints a bootstrap-graded companion SkillForge learned-experience skill so durable methods are auto-injected into future turns, not just archived.
 ---
 
 # Concept Gate — self-learning working-method archive
@@ -31,17 +31,17 @@ The default answer is: **no concept needed.** ADR Gate asks "does this decision 
 
 CorvinOS already has three kinds of durable, versioned knowledge:
 
-- **ADR** (`Corvin-ADR/decisions/`) — what did we decide, and why. Gated by `adr_gate`.
+- **ADR** (`Corvin-Knowledge/decisions/`) — what did we decide, and why. Gated by `adr_gate`.
 - **Skill** (SkillForge, `type: learned-experience`) — short (≤8KB), prompt-injectable, auto-graded from real usage.
-- **Concept** (`Corvin-ADR/concepts/`) — the narrative middle layer: *why* a way of working keeps paying off, with real evidence (cited commits/tasks), an explicit "when NOT to use" boundary, and the same three-level depth ADR-0264 models, applied to process instead of architecture.
+- **Concept** (`Corvin-Knowledge/concepts/`) — the narrative middle layer: *why* a way of working keeps paying off, with real evidence (cited commits/tasks), an explicit "when NOT to use" boundary, and the same three-level depth ADR-0264 models, applied to process instead of architecture.
 
 A concept that's durable and narrow enough SHOULD also mint a companion Skill — that's what makes the archive self-learning rather than a document nobody re-reads.
 
 ## How to write or amend a concept
 
-**Step 1** — Check whether a related concept already exists in `Corvin-ADR/concepts/`. If yes, AMEND it: add a new dated note prepended under Status (same convention ADR-0264 uses), never rewrite prior text, and never touch anything under an existing `## Operator Notes` heading.
+**Step 1** — Check whether a related concept already exists in `Corvin-Knowledge/concepts/`. If yes, AMEND it: add a new dated note prepended under Status (same convention ADR-0264 uses), never rewrite prior text, and never touch anything under an existing `## Operator Notes` heading.
 
-**Step 2** — If nothing existing covers it, find the next number and write to `Corvin-ADR/concepts/CONCEPT-NNNN-short-kebab-title.md` (own 4-digit sequence, never `ADR-NNNN`):
+**Step 2** — If nothing existing covers it, find the next number and write to `Corvin-Knowledge/concepts/CONCEPT-NNNN-short-kebab-title.md` (own 4-digit sequence, never `ADR-NNNN`):
 
 ```markdown
 ---
@@ -98,5 +98,5 @@ Do not leave the gate result implicit. A named skip is as valid as a written con
 
 - `docs/claude-ref/concept-gate.md` — full reference (destination, template, hard rules, known gaps)
 - `docs/claude-ref/adr-gate.md` — sibling gate for architectural decisions
-- `Corvin-ADR/concepts/0001-self-learning-project-concept-archive.md` — the framework itself
-- `Corvin-ADR/concepts/0002-live-report-driven-root-cause-method.md` — the first seeded concept
+- `Corvin-Knowledge/concepts/0001-self-learning-project-concept-archive.md` — the framework itself
+- `Corvin-Knowledge/concepts/0002-live-report-driven-root-cause-method.md` — the first seeded concept

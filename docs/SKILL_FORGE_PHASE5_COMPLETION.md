@@ -305,5 +305,5 @@ SkillActionResponse
 
 For questions about Phase 5, 6, or 7:
 1. Check the respective ADR (0681, 0682, 0683)
-2. Review implementation plan at `/home/shumway/projects/Corvin-ADR/implementation-plans/`
+2. Review implementation plan at `/home/shumway/projects/Corvin-Knowledge/implementation-plans/`
 3. Contact: Core team / ADR authors

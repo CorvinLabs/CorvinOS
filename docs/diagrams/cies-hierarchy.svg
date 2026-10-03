@@ -139,7 +139,7 @@
   <text x="730" y="620" class="text-desc">✓ Code + docs + ADR</text>
 
   <text x="730" y="650" class="text-desc" font-weight="bold">Output:</text>
-  <text x="730" y="665" class="text-desc">Corvin-ADR/decisions/</text>
+  <text x="730" y="665" class="text-desc">Corvin-Knowledge/decisions/</text>
 
   <!-- Deployment -->
   <rect x="1020" y="410" width="160" height="280" fill="#fff5f5" stroke="#cc0000" stroke-width="1.5" rx="6"/>

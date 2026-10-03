@@ -1,7 +1,7 @@
 """scripts/adr_0264_compliance_remediation.py must not touch ADRs unless --fix.
 
 Regression (2026-09-27 review): main() passed ``dry_run=args.dry_run``, so a
-bare run rewrote/unlinked files in the canonical Corvin-ADR repo, and the
+bare run rewrote/unlinked files in the canonical Corvin-Knowledge repo, and the
 archive rule matched legitimate legacy ADR names such as ADR-0030-plugin-system.md.
 """
 from __future__ import annotations

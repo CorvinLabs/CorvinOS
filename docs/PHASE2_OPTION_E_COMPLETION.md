@@ -502,7 +502,7 @@ CorvinOS/
 └── tests/e2e/
     └── test_marketplace_hub_and_licensing_phase2.py (400+ LoC)
 
-Corvin-ADR/
+Corvin-Knowledge/
 ├── decisions/
 │   ├── ADR-0768-marketplace-hub-phase1.md (924 lines)
 │   └── ADR-0769-licensing-phase2-a2a-rsa-gate.md (924 lines)

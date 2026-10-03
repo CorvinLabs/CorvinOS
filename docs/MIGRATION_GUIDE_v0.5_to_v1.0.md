@@ -555,8 +555,8 @@ corvinos-cli models install llama-2-3b-q4
 | Operator Handbook | `/docs/OPERATOR_HANDBOOK.md` |
 | Architecture Reference | `/docs/ARCHITECTURE_REFERENCE.md` |
 | API Reference | `/docs/API_REFERENCE.md` (auto-generated) |
-| ADRs (decisions) | `/Corvin-ADR/decisions/ADR-0383-0401/` |
-| Concepts (methodology) | `/Corvin-ADR/concepts/CONCEPT-0020-0032/` |
+| ADRs (decisions) | `/Corvin-Knowledge/decisions/ADR-0383-0401/` |
+| Concepts (methodology) | `/Corvin-Knowledge/concepts/CONCEPT-0020-0032/` |
 | Troubleshooting | `/docs/TROUBLESHOOTING.md` |
 | Discord community | https://discord.gg/corvinOS |
 | GitHub issues | https://github.com/corvinOS/corvinOS/issues |

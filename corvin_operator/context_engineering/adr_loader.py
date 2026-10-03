@@ -1,4 +1,4 @@
-"""ADR Loader: Parse ADRs from Corvin-ADR repo with dependency graph traversal."""
+"""ADR Loader: Parse ADRs from Corvin-Knowledge repo with dependency graph traversal."""
 
 import logging
 import math
@@ -222,7 +222,7 @@ class ADRLoader:
     """Load ADRs from flexible paths and build dependency graph.
 
     Searches for ADRs in this order:
-    1. Separate Corvin-ADR/ repo (sibling to project)
+    1. Separate Corvin-Knowledge/ repo (sibling to project)
     2. docs/decisions/ (in project repo)
     3. docs/adr/ (alternative naming)
     4. .docs/decisions/ (dotfile variant)
@@ -232,7 +232,7 @@ class ADRLoader:
 
     # Search paths (relative to project root) tried in order
     SEARCH_PATHS = [
-        "../Corvin-ADR/decisions",  # Separate repo (like CorvinOS)
+        "../Corvin-Knowledge/decisions",  # Separate repo (like CorvinOS)
         "docs/decisions",            # Same repo, docs/decisions (common pattern)
         "docs/adr",                  # Same repo, docs/adr (alternative)
         ".docs/decisions",           # Dotfile variant

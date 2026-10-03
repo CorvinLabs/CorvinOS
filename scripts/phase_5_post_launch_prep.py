@@ -297,7 +297,7 @@ class Phase5_PostLaunchPrep:
                         "6. If error spike: check recent error logs in audit trail",
                         "7. Apply fix OR rollback to previous version (scripts/rollback.sh)",
                         "8. Re-run quality gates",
-                        "9. Post-incident: write RCA in Corvin-ADR/archive/<date>/",
+                        "9. Post-incident: write RCA in Corvin-Knowledge/archive/<date>/",
                     ],
                 },
                 {
@@ -377,7 +377,7 @@ class Phase5_PostLaunchPrep:
                     "Prevention (how do we avoid this?)",
                     "Follow-ups (action items + owners)",
                 ],
-                "publish_location": "/home/shumway/projects/Corvin-ADR/archive/<date>/<incident-id>.md",
+                "publish_location": "/home/shumway/projects/Corvin-Knowledge/archive/<date>/<incident-id>.md",
             },
         }
 

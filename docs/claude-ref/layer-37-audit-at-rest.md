@@ -1,7 +1,7 @@
 # Layer 37 — Audit-at-rest Encryption + Retention (reference)
 
 **Module:** `corvin_operator/bridges/shared/audit_sealer.py`
-**ADR:** `Corvin-ADR: decisions/ADR-0044-l37-audit-at-rest.md`
+**ADR:** `Corvin-Knowledge: decisions/ADR-0044-l37-audit-at-rest.md`
 **Status:** Shipped M3 (2026-05-19). RFC 3161 TSA extension M3+ (2026-05-21).
 
 ---

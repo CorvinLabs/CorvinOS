@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ADR Decision Graph traversal (ADR-0264).
 
-The ADR corpus (../Corvin-ADR/decisions/) is a knowledge base built for a
+The ADR corpus (../Corvin-Knowledge/decisions/) is a knowledge base built for a
 coding agent to traverse, not a document set meant to be read cover to
 cover. This tool implements ADR-0264's traversal protocol: given a
 repo-relative path (or an ADR id directly), find the minimal relevant
@@ -52,7 +52,7 @@ from pathlib import Path
 import yaml
 
 _REPO = Path(__file__).resolve().parent.parent
-_DEFAULT_DECISIONS_DIR = _REPO.parent / "Corvin-ADR" / "decisions"
+_DEFAULT_DECISIONS_DIR = _REPO.parent / "Corvin-Knowledge" / "decisions"
 
 
 @dataclass

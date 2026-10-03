@@ -346,7 +346,7 @@ Refactor the engine configuration console from static "Cloud Code" → dynamic "
 
 ## References
 
-- **Master Design Package:** `/home/shumway/projects/Corvin-ADR/`
+- **Master Design Package:** `/home/shumway/projects/Corvin-Knowledge/`
   - ADR-0641, ADR-0642, ADR-2152, ADR-0644
   - CONCEPT-0033
 - **Dialektical Reasoning:** See CONCEPT-0033 context (Thesis/Antithesis/Synthesis)

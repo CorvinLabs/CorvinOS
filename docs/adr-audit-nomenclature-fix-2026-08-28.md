@@ -22,7 +22,7 @@ The ADR audit (2026-08-28) identified **8 ADR files missing the standard "ADR-" 
 ## Impact
 
 - Batch indexing scripts using `ls ADR-*.md | sort` missed these 6 ADRs
-- CI/CD gates that enforce `git add Corvin-ADR/decisions/ADR-XXXX-*.md` might reject them
+- CI/CD gates that enforce `git add Corvin-Knowledge/decisions/ADR-XXXX-*.md` might reject them
 - Documentation generators searching by prefix pattern failed
 - ADR graph tools (`scripts/adr_graph.py`) had reduced coverage
 
@@ -36,9 +36,9 @@ All 8 files have been renamed to include the "ADR-" prefix. No content or frontm
 
 **Verification:**
 ```bash
-$ ls -1 /home/shumway/projects/Corvin-ADR/decisions/ADR-0262-* \
-         /home/shumway/projects/Corvin-ADR/decisions/ADR-0263-* \
-         /home/shumway/projects/Corvin-ADR/decisions/ADR-0350-* | wc -l
+$ ls -1 /home/shumway/projects/Corvin-Knowledge/decisions/ADR-0262-* \
+         /home/shumway/projects/Corvin-Knowledge/decisions/ADR-0263-* \
+         /home/shumway/projects/Corvin-Knowledge/decisions/ADR-0350-* | wc -l
 8
 ```
 

@@ -47,7 +47,7 @@ reactivate:
   it is not in the CEL turn path. RAM-only, no persistence.
 - `core/quality/palace/IdeaPalace` — a filesystem ADR/idea-storage metaphor, not a turn-memory
   retriever. Unrelated.
-- `Corvin-ADR/MIGRATION_PLAN_MEMPLACE.md` — an unexecuted plan to migrate ADRs into IdeaPalace
+- `Corvin-Knowledge/MIGRATION_PLAN_MEMPLACE.md` — an unexecuted plan to migrate ADRs into IdeaPalace
   (`Status: PLAN`). Unrelated to retrieval.
 
 So this concept is effectively the never-built "v1.1 vector DB" — but placed where the LIVE

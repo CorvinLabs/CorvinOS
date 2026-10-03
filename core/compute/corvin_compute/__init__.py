@@ -1,6 +1,6 @@
 """corvin_compute — opt-in iterative compute worker plugin (ADR-0013).
 
-See Corvin-ADR ``decisions/ADR-0013-compute-worker-plugin.md`` for the design
+See Corvin-Knowledge ``decisions/ADR-0013-compute-worker-plugin.md`` for the design
 contract and ``implementation-plans/0013-implementation-plan.md`` for the
 phased rollout.
 

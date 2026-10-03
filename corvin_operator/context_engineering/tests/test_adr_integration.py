@@ -16,7 +16,7 @@ class TestADRLoader:
         """ADRLoader should initialize successfully."""
         loader = ADRLoader()
         assert loader is not None
-        # May have 0 ADRs if Corvin-ADR repo not available
+        # May have 0 ADRs if Corvin-Knowledge repo not available
         assert isinstance(loader.adrs, dict)
 
     def test_adr_search_by_keywords(self):
@@ -98,7 +98,7 @@ class TestADRClassifier:
         relevant_adrs = classifier.find_relevant_adrs(task, top_n=3, max_results=5)
 
         assert isinstance(relevant_adrs, list)
-        # May be empty if Corvin-ADR repo not available
+        # May be empty if Corvin-Knowledge repo not available
         for adr in relevant_adrs:
             assert isinstance(adr, ADRMetadata) or adr is None
 
@@ -111,7 +111,7 @@ class TestGraphTraversalWithADR:
         gt = GraphTraversal(enable_adr=True)
 
         assert gt is not None
-        # ADR classifier may be None if Corvin-ADR not available
+        # ADR classifier may be None if Corvin-Knowledge not available
         assert hasattr(gt, "adr_classifier")
 
     def test_graph_traversal_without_adr(self):

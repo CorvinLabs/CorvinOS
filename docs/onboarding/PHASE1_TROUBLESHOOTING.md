@@ -99,7 +99,7 @@ rm -rf .git/modules/corvin_decisions
 git rm -f corvin_decisions
 
 # Re-add submodule
-git submodule add https://github.com/CorvinLabs/Corvin-ADR.git corvin_decisions
+git submodule add https://github.com/CorvinLabs/Corvin-Knowledge.git corvin_decisions
 
 # Update
 git submodule update --init --recursive

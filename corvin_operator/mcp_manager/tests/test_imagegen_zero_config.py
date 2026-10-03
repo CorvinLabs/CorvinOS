@@ -2,7 +2,7 @@
 gate, the builtin catalog seeding, and the Tier-0 rate-limit handling.
 
 Not a full adversarial pass (see docs/image-generation-zero-config.md +
-Corvin-ADR 0191 for the design) — targeted regression coverage for the bugs
+Corvin-Knowledge 0191 for the design) — targeted regression coverage for the bugs
 actually found while live-testing this feature in a real chat turn:
   1. seed_builtin must use an absolute, dependency-guaranteed interpreter
      path (sys.executable), not a bare "python3" resolved via PATH.

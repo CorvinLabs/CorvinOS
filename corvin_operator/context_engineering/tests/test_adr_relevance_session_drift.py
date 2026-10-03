@@ -22,7 +22,7 @@ from ..adr_classifier import ADRClassifier
 from ..adr_loader import ADRLoader, MIN_RELEVANCE, get_loader, tokenize
 from ..graph_traversal import GraphTraversal
 
-_REAL_ADR_DIR = Path(__file__).resolve().parents[3].parent / "Corvin-ADR" / "decisions"
+_REAL_ADR_DIR = Path(__file__).resolve().parents[3].parent / "Corvin-Knowledge" / "decisions"
 
 
 def _adr(d: Path, name: str, *, id_: str, status: str, title: str, body: str = "",
@@ -148,7 +148,7 @@ class TestClassifier:
         assert res.related_decisions[0].relevance_score != 0.5
 
 
-@pytest.mark.skipif(not _REAL_ADR_DIR.is_dir(), reason="Corvin-ADR checkout not present")
+@pytest.mark.skipif(not _REAL_ADR_DIR.is_dir(), reason="Corvin-Knowledge checkout not present")
 class TestRealCorpusRegression:
     """The exact contaminations recorded in the 2026-10-02 analysis."""
 

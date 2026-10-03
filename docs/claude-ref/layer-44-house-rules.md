@@ -351,4 +351,4 @@ registration the deny record would lose `rule_id`.
 - Fail-open on missing/unparseable policy or manifest hash mismatch.
 - Wire M2 activation without the LIP manifest entry (unpinned rules ≠ guarantee).
 
-→ ADR: `Corvin-ADR: decisions/ADR-0143-l44-house-rules.md`
+→ ADR: `Corvin-Knowledge: decisions/ADR-0143-l44-house-rules.md`

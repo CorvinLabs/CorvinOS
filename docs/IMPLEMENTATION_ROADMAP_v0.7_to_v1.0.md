@@ -359,7 +359,7 @@ git push origin v1.0.0
 docs/RELEASE_NOTES_v1.0.md (features, metrics, upgrade path)
 
 # ADRs finalized
-Corvin-ADR/decisions/ADR-0401-v1-0-final-hardening.md
+Corvin-Knowledge/decisions/ADR-0401-v1-0-final-hardening.md
 
 # Announcement
 Canary deployment ready (10% users)

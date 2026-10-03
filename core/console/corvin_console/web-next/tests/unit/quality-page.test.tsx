@@ -31,7 +31,7 @@ const win = (p: number, w: number, f: number) => ({ pass: p, warn: w, fail: f, t
 const gate = (a: ReturnType<typeof win>, b = a, c = a) => ({ current: c, last_24h: a, last_7d: b, last_verdict: a.total ? (a.fail ? "fail" : "pass") : null, last_timestamp: null });
 
 const EMPTY = {
-  tenant_id: "_default", timestamp: "2026-09-20T10:00:00.000000Z", gates_total: 4, events_24h: 0, events_total: 0, as_of: null, source_root: "/srv/Corvin-ADR", last_run: null,
+  tenant_id: "_default", timestamp: "2026-09-20T10:00:00.000000Z", gates_total: 4, events_24h: 0, events_total: 0, as_of: null, source_root: "/srv/Corvin-Knowledge", last_run: null,
   summary: { ADRGate: gate(win(0, 0, 0)), ConceptGate: gate(win(0, 0, 0)), ImplementationPlanGate: gate(win(0, 0, 0)), IdeaGate: gate(win(0, 0, 0)) },
 };
 const AFTER = {
@@ -65,7 +65,7 @@ describe("Quality Gates page", () => {
     expect(screen.getByTestId("trend-caption").textContent).toMatch(/nothing to draw/);
     expect(screen.getByText("No gate has run yet.")).toBeInTheDocument();
     expect(screen.getByTestId("as-of").textContent).toMatch(/no gate run yet/);
-    expect(screen.getByText("/srv/Corvin-ADR")).toBeInTheDocument();
+    expect(screen.getByText("/srv/Corvin-Knowledge")).toBeInTheDocument();
   });
 
   it("run all gates: CSRF POST, progress from the job, counts in the message, failures with reason", async () => {
@@ -84,11 +84,11 @@ describe("Quality Gates page", () => {
       http.get(`${B}/results/r1`, () => {
         polls += 1;
         if (polls < 2) {
-          return HttpResponse.json({ run_id: "r1", status: "running", progress: 40, artifacts_total: 1091, artifacts_done: 436, gates_completed: 1, gates_total: 4, source_root: "/srv/Corvin-ADR", error: null, gates_results: [] });
+          return HttpResponse.json({ run_id: "r1", status: "running", progress: 40, artifacts_total: 1091, artifacts_done: 436, gates_completed: 1, gates_total: 4, source_root: "/srv/Corvin-Knowledge", error: null, gates_results: [] });
         }
         ran = true;
         return HttpResponse.json({
-          run_id: "r1", status: "completed", progress: 100, artifacts_total: 1091, artifacts_done: 1091, gates_completed: 4, gates_total: 4, source_root: "/srv/Corvin-ADR", error: null,
+          run_id: "r1", status: "completed", progress: 100, artifacts_total: 1091, artifacts_done: 1091, gates_completed: 4, gates_total: 4, source_root: "/srv/Corvin-Knowledge", error: null,
           gates_results: [
             { gate_name: "ADRGate", artifacts: 1005, pass: 267, warn: 0, fail: 738 }, { gate_name: "ConceptGate", artifacts: 67, pass: 1, warn: 0, fail: 66 },
             { gate_name: "ImplementationPlanGate", artifacts: 18, pass: 11, warn: 0, fail: 7 }, { gate_name: "IdeaGate", artifacts: 1, pass: 0, warn: 0, fail: 1 },

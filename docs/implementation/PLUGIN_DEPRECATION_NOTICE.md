@@ -187,8 +187,8 @@ def test_my_plugin_e2e():
 ## Support
 
 - **Migration Guide:** [docs/implementation/MIGRATION_GUIDE_TO_SKILLS.md](MIGRATION_GUIDE_TO_SKILLS.md)
-- **ADR-0538:** [ADR-0538 (Deprecation Covenant)](../../Corvin-ADR/decisions/ADR-0538-legacy-subsystem-deprecation-covenant.md)
-- **ADR-0532:** [ADR-0532 (ACP Skills Architecture)](../../Corvin-ADR/decisions/ADR-0532-agentic-control-plane.md)
+- **ADR-0538:** [ADR-0538 (Deprecation Covenant)](../../Corvin-Knowledge/decisions/ADR-0538-legacy-subsystem-deprecation-covenant.md)
+- **ADR-0532:** [ADR-0532 (ACP Skills Architecture)](../../Corvin-Knowledge/decisions/ADR-0532-agentic-control-plane.md)
 - **GitHub Issues:** (TBD) Link for questions + help
 
 ---

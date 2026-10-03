@@ -300,7 +300,7 @@ whenever `CORVIN_HOME` was set — but `CORVIN_HOME` is the canonical
 runtime root in every real session, not just tests, so that step
 silently misrouted every production install's slot mirror away from the
 path the engine actually scans. Removed; see
-`Corvin-ADR/concepts/0001-self-learning-project-concept-archive.md`'s
+`Corvin-Knowledge/concepts/0001-self-learning-project-concept-archive.md`'s
 Production-Readiness Roadmap item P0-1.
 
 **Limit — visibility is one subprocess delayed:** the engine reads

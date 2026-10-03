@@ -67,7 +67,7 @@
 - [x] Ops runbooks (deploy, rollback, monitor, troubleshoot)
 - [x] Smart-Handoff memo (Phase 8 resumption guide)
 - [x] Release notes (what's new in v1.0.0)
-- [x] ADRs centralized (ADR-0516 compliant, 10+ ADRs in Corvin-ADR/)
+- [x] ADRs centralized (ADR-0516 compliant, 10+ ADRs in Corvin-Knowledge/)
 
 ### ✅ Deployment Infrastructure
 - [x] Systemd services configured (auto-restart on failure)

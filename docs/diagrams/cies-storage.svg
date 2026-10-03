@@ -74,7 +74,7 @@
   <!-- Right side: Git -->
   <rect x="620" y="100" width="530" height="700" class="storage-git" rx="8"/>
   <text x="885" y="135" class="text-title" text-anchor="middle">Git Repository (Code-binding)</text>
-  <text x="885" y="155" class="text-label" text-anchor="middle">Location: Corvin-ADR/decisions/</text>
+  <text x="885" y="155" class="text-label" text-anchor="middle">Location: Corvin-Knowledge/decisions/</text>
 
   <!-- Git structure -->
   <rect x="640" y="180" width="490" height="600" fill="white" stroke="#0066cc" stroke-width="1" stroke-dasharray="2,2" rx="6"/>

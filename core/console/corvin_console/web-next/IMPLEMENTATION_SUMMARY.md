@@ -393,7 +393,7 @@ npm run dev
 
 ## Support & Reference
 
-- **ADR-0400:** `Corvin-ADR/decisions/ADR-0400-graph-native-task-execution-model.md`
+- **ADR-0400:** `Corvin-Knowledge/decisions/ADR-0400-graph-native-task-execution-model.md`
 - **README:** `web-next/TASK_GRAPH_VIEWER_README.md`
 - **Integration:** `web-next/TASK_GRAPH_INTEGRATION_GUIDE.md`
 - **D3 Docs:** https://d3js.org

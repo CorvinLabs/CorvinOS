@@ -463,4 +463,4 @@ See PHASE1_ROADMAP.md (Launch Checklist section, Week 4)
 
 **END OF PHASE 0 READY REPORT**
 
-**Archive Location:** `/home/shumway/projects/Corvin-ADR/archive/2026-09-22/PHASE0_READY_REPORT.md`
+**Archive Location:** `/home/shumway/projects/Corvin-Knowledge/archive/2026-09-22/PHASE0_READY_REPORT.md`

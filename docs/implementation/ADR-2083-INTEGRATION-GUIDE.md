@@ -334,7 +334,7 @@ systemctl restart corvin-gateway
 
 ## References
 
-- **ADR:** `/home/shumway/projects/Corvin-ADR/decisions/ADR-2083-non-interactive-bridge-autonomy-design.md`
+- **ADR:** `/home/shumway/projects/Corvin-Knowledge/decisions/ADR-2083-non-interactive-bridge-autonomy-design.md`
 - **ADR-0232:** Boot Tripwire (Audit Chain Foundation)
 - **ADR-0613:** Learning Loop Closure (Autonomy Feedback)
 - **Bridge Architecture:** `docs/implementation/BRIDGE_ARCHITECTURE.md` (TBD)

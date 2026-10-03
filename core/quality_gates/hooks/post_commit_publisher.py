@@ -106,7 +106,7 @@ def extract_artifact_id(commit_message: str, changed_files: list) -> Optional[st
     Strategy:
     1. Look for ADR-NNNN in commit message
     2. Look for CONCEPT-NNNN in commit message
-    3. Look for Corvin-ADR/decisions/ADR-NNNN in changed files
+    3. Look for Corvin-Knowledge/decisions/ADR-NNNN in changed files
     4. Look for concepts/CONCEPT-NNNN in changed files
 
     Args:
@@ -134,7 +134,7 @@ def extract_artifact_id(commit_message: str, changed_files: list) -> Optional[st
 
     # Search changed files
     for file in changed_files:
-        # ADR files: Corvin-ADR/decisions/ADR-NNNN-*.md
+        # ADR files: Corvin-Knowledge/decisions/ADR-NNNN-*.md
         adr_match = re.search(r"(ADR-\d{4})", file)
         if adr_match:
             return adr_match.group(1)

@@ -66,7 +66,7 @@
 
 **Step 1:** Find next available ADR ID
 ```bash
-cd /home/shumway/projects/Corvin-ADR/decisions
+cd /home/shumway/projects/Corvin-Knowledge/decisions
 ls -1 | grep -oE 'ADR-[0-9]{4}' | sed 's/ADR-//' | sort -n | tail -1
 # → Find max, then allocate 0910–0930 for OTEL/Observability renumbering
 ```
@@ -82,11 +82,11 @@ OLD_ID,OLD_FILE,NEW_ID,NEW_FILE,ACTION,RATIONALE
 **Step 3:** Execute Renames (with git tracking)
 ```bash
 # For each RENAME in map:
-git mv "Corvin-ADR/decisions/ADR-0681-otel-metrics-schema.md" \
-       "Corvin-ADR/decisions/ADR-0910-otel-metrics-schema.md"
+git mv "Corvin-Knowledge/decisions/ADR-0681-otel-metrics-schema.md" \
+       "Corvin-Knowledge/decisions/ADR-0910-otel-metrics-schema.md"
 
 # For each DELETE:
-git rm "Corvin-ADR/decisions/ADR-0730-DRAFT.md"
+git rm "Corvin-Knowledge/decisions/ADR-0730-DRAFT.md"
 
 # Commit:
 git commit -m "refactor(adr): T05 Deduplication Wave 1 — Renumber OTEL track 0681–0684→0910–0913, consolidate Phase B+VIBE ADRs"
@@ -117,7 +117,7 @@ Update `.git/hooks/pre-commit` to reject new duplicate IDs:
 #!/bin/bash
 # Pre-commit hook: Reject duplicate ADR IDs
 
-cd /home/shumway/projects/Corvin-ADR/decisions
+cd /home/shumway/projects/Corvin-Knowledge/decisions
 duplicates=$(ls -1 | grep -oE 'ADR-[0-9]{4}' | sort | uniq -d | wc -l)
 
 if [ "$duplicates" -gt 0 ]; then

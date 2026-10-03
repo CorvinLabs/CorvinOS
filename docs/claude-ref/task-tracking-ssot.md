@@ -129,7 +129,7 @@ doing it — was invisible. Two run sources and one writer close that:
   from the record's heading, `category: adr`). **Status follows the record's
   frontmatter status** (accepted/implemented/… → complete,
   rejected/superseded/… → archived, else or no file → in progress). The ADR
-  checkout is `resolve_adr_root()` (`CORVIN_ADR_ROOT` → sibling `Corvin-ADR` →
+  checkout is `resolve_adr_root()` (`CORVIN_ADR_ROOT` → sibling `Corvin-Knowledge` →
   submodule); both naming schemes (`ADR-NNNN-slug.md`, `NNNN-slug.md`) resolve.
   **When one number is carried by more than one file**, superseded/rejected
   siblings are ignored while a live one exists, and among live siblings the one

@@ -1,7 +1,7 @@
 """Layer 38 — A2A connectivity manager: the owner of "is this friendship
 reachable in both directions, and if not, which transport repairs it".
 
-Concept: Corvin-ADR/concepts/a2a-robust-connectivity-concept.md. Before this
+Concept: Corvin-Knowledge/concepts/a2a-robust-connectivity-concept.md. Before this
 module A2A had three mechanisms — direct HTTP, relay, reciprocal handshake —
 each assuming the other two worked, and none owning the outcome. A single
 lost ack left a pairing half-open forever; a relay listener built once at

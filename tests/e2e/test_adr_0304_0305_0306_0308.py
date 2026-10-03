@@ -12,7 +12,7 @@ All tests exercise REAL code paths (not mocks).
 
 import pytest
 
-# ADR-0304 is `status: proposed` in Corvin-ADR — "design complete, not yet
+# ADR-0304 is `status: proposed` in Corvin-Knowledge — "design complete, not yet
 # implemented on main" (status amendment 2026-09-16, zero commits). The
 # tenant-scoped lock API this module drives (TenantLock, TenantRWLock,
 # LockTimeoutError, DeadlockError, set_tenant_id, get_tenant_id) exists nowhere

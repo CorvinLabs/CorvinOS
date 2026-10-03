@@ -27,7 +27,7 @@ def test_migration_output_format():
         
         print(f"✅ Migration returned valid structure: {result['total_migrated']} items migrated")
     except Exception as e:
-        print(f"⚠️  Migration test (can fail if Corvin-ADR not accessible): {e}")
+        print(f"⚠️  Migration test (can fail if Corvin-Knowledge not accessible): {e}")
 
 
 def test_dashboard_api_returns_migrated_nodes():

@@ -86,7 +86,7 @@ from pathlib import Path
 import yaml
 
 _REPO = Path(__file__).resolve().parent.parent
-_ADR_REPO = _REPO.parent / "Corvin-ADR"
+_ADR_REPO = _REPO.parent / "Corvin-Knowledge"
 _DECISIONS_DIR = _ADR_REPO / "decisions"
 
 sys.path.insert(0, str(_REPO))

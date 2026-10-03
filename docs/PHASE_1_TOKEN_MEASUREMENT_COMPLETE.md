@@ -265,7 +265,7 @@ tests/unit/
   ✅ test_token_metrics_store_k2.py [NEW] 180 lines
   ✅ test_token_metrics_phase1_complete.py [NEW] 220 lines
 
-Corvin-ADR/
+Corvin-Knowledge/
   ✅ decisions/ADR-0432-*.md [NEW] (K=1)
   ✅ decisions/ADR-0363-*.md [NEW] (K=2)
 

@@ -58,7 +58,7 @@ Session 3+: Feature 2–5 implementation 📋
 - Scope: Skeleton generation + manifest schema (~300 LoC)
 - Time: 1–2 weeks
 - ADRs: 0672, 0673, 0674 (DESIGN COMPLETE)
-- Ref: `Corvin-ADR/implementation-plans/skill-forge-v2.0-phase1.md`
+- Ref: `Corvin-Knowledge/implementation-plans/skill-forge-v2.0-phase1.md`
 - Success: ZIP generation working, E2E tests green
 - **Status:** 🟢 READY TO START
 
@@ -93,7 +93,7 @@ pytest tests/e2e/test_phase2_feature1_endpoints.py -v
 ### Priority 2: Pick Phase 1 Feature (0.5h)
 - [ ] Decision: Start with Option A (Skill Forge) or Option C (DataHub)?
 - [ ] Reason: (scope, team size, dependencies, learning value)
-- [ ] Implementation plan: Corvin-ADR/implementation-plans/
+- [ ] Implementation plan: Corvin-Knowledge/implementation-plans/
 
 ### Priority 3: Kickoff Phase 1 Feature 1 (2–3h)
 - [ ] Create project directory structure
@@ -135,9 +135,9 @@ git commit -m "test(phase2-feature1): E2E test suite (pytest-ready)"
 ## 📚 REFERENCE DOCUMENTS
 
 - **Phase 2 Session 1:** phase2-session1-final-summary-2026-09-15.md
-- **Feature 1 ADR:** Corvin-ADR/decisions/ADR-0728-phase2-feature1-live-data-wiring.md
+- **Feature 1 ADR:** Corvin-Knowledge/decisions/ADR-0728-phase2-feature1-live-data-wiring.md
 - **Roadmap:** phase2_kickoff_2026_09_16.md
-- **Implementation Plans:** Corvin-ADR/implementation-plans/
+- **Implementation Plans:** Corvin-Knowledge/implementation-plans/
 
 ---
 

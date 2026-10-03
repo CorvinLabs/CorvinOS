@@ -433,7 +433,7 @@ GREEN, per this repo's reproduction-gate rule. See
 pattern (click into progress → `unmount()` → mount a fresh instance →
 assert the state is still there).
 
-→ ADR: See Corvin-ADR repo for ADR-2096 (console-panel-state-persistence)
+→ ADR: See Corvin-Knowledge repo for ADR-2096 (console-panel-state-persistence)
 
 ## Testing Console Updates
 
@@ -480,7 +480,7 @@ Before shipping Release 0.10.34:
 - [ ] a11y — keyboard nav, focus visible, alt text
 - [ ] No hardcoded colors in critical components
 - [ ] Console design guide updated (this file)
-- [ ] ADRs migrated to Corvin-ADR (ADR-0763, ADR-0764)
+- [ ] ADRs migrated to Corvin-Knowledge (ADR-0763, ADR-0764)
 - [ ] CHANGELOG updated with UI/UX improvements
 
 ## Related Documentation

@@ -116,7 +116,7 @@ class DataIntegrityChecker:
         """Verify ADR frontmatter 'commits' field matches 'git log'."""
         print("\n[CHECK 2] Git History Consistency (ADR → commit traceability)")
 
-        adr_dir = Path("/home/shumway/projects/Corvin-ADR/decisions")
+        adr_dir = Path("/home/shumway/projects/Corvin-Knowledge/decisions")
         if not adr_dir.exists():
             print(f"  ⚠️  ADR directory not found: {adr_dir}")
             self.results["git_history_consistency"] = {"status": "SKIP", "reason": "ADR dir not found"}

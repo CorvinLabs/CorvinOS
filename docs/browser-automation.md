@@ -129,7 +129,7 @@ for:
   open-ended "do X" voice command that synthesizes new agent actions.
 
 See `docs/browser-voice-guided-navigation.md` for the full design rationale
-and `Corvin-ADR/decisions/ADR-0189-browser-task-scoped-navigation-and-voice-guided-login.md`
+and `Corvin-Knowledge/decisions/ADR-0189-browser-task-scoped-navigation-and-voice-guided-login.md`
 for the formal decision record.
 
 ## Enable it

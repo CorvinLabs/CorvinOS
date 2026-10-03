@@ -105,5 +105,5 @@ echo "  • Memory sync available: $([ -x operator/scripts/sync_memory_from_adrs
 echo ""
 echo "Next steps:"
 echo "  1. Make a real change to core/"
-echo "  2. Create an ADR in Corvin-ADR/decisions/"
+echo "  2. Create an ADR in Corvin-Knowledge/decisions/"
 echo "  3. Commit both together"

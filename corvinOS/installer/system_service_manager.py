@@ -2,7 +2,7 @@
 
 Opt-in "always-on, survives a headless reboot with zero login" mode. This is
 a DIFFERENT tier from ``service_manager.py`` (Stufe 1: user-level, no
-elevation, on by default) — see ADR-0184 (Corvin-ADR/decisions/0184-*.md)
+elevation, on by default) — see ADR-0184 (Corvin-Knowledge/decisions/0184-*.md)
 for the two-tier model and why they must never be conflated.
 
 Must NOT do (ADR-0184):

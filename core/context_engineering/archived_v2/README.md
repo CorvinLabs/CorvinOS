@@ -62,7 +62,7 @@ These modules document:
 
 - **Active v1:** `core/context_engineering/dual_gate.py` (use this for production)
 - **Tests:** `core/context_engineering/tests/` (includes v2 test fixtures)
-- **Decision:** See Corvin-ADR repo for ADR-0866
+- **Decision:** See Corvin-Knowledge repo for ADR-0866
 
 ## Do NOT
 
