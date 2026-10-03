@@ -292,7 +292,7 @@ Gates are enforcement-only; no opt-out flags. ImplementationGate is blocking and
 **Phase 3 (Optional, future):**
 - Knowledge graph + temporal lineage
 - Query support ("all Plans from this Idea?")
-- Bulk-import 350+ existing Corvin-Knowledges
+- Bulk-import 350+ existing ADRs from Corvin-Knowledge
 - Semantic generation via AI
 
 ---
