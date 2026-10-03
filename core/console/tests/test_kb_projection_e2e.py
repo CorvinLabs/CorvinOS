@@ -36,7 +36,8 @@ def _projects_root() -> Path:
     return Path(r.stdout.strip()).parent.parent if r.returncode == 0 else Path(__file__).resolve().parents[4]
 
 
-_KB_SRC = _projects_root() / "Corvin-Knowledge" / "scripts"
+# CORVIN_KB_SCRIPTS: prove a KB change from its worktree before it is merged
+_KB_SRC = Path(os.environ.get("CORVIN_KB_SCRIPTS") or _projects_root() / "Corvin-Knowledge" / "scripts")
 
 
 def _sh(*args, cwd=None):
@@ -160,6 +161,11 @@ class KbProjectionE2E(unittest.TestCase):
             # 6. heal: an epic carrying a status is a derivable deviation
             ep = next((self.kb / "kb" / "epics").glob(f"{self.epic['id']}-*.md"))
             ep.write_text(ep.read_text().replace("title:", "status: done\ntitle:", 1))
+            st = self._sync(client, csrf)                     # uncommitted: held, never swept into a heal
+            self.assertEqual(st["state"], "held", st)
+            self.assertEqual(st["pending_uncommitted"], [str(ep.relative_to(self.kb))])
+            self.assertIn("status: done", ep.read_text())
+            self._commit("operator edit")
             st = self._sync(client, csrf)
             self.assertEqual(st["healed"], 1, st)
             self.assertNotIn("status:", ep.read_text().split("---")[1])
@@ -170,9 +176,15 @@ class KbProjectionE2E(unittest.TestCase):
             bad = self.kb / "kb" / "tasks" / "T-0099-orphan.md"
             bad.write_text("---\nid: T-0099\nuid: 01J00000000000000000000000\ntitle: orphan\n"
                            "status: open\nepic: E-404\n---\n")
+            self._commit("bad task")
             before = len(self._items(client))
             st = self._sync(client, csrf)
             self.assertEqual(st["state"], "blocked", st)
+            # still red on the next ticks: ONE projection_blocked record, not one per tick
+            n_blocked = [e.get("event_type") for e in _audit_events(home, "_default")].count("task_item.projection_blocked")
+            self._sync_tick(); self._sync_tick()
+            self.assertEqual([e.get("event_type") for e in _audit_events(home, "_default")]
+                             .count("task_item.projection_blocked"), n_blocked)
             self.assertEqual(len(self._items(client)), before)
             r = client.get(f"{_URL}/kb/status")
             self.assertEqual(r.json()["state"], "blocked")
@@ -180,6 +192,87 @@ class KbProjectionE2E(unittest.TestCase):
             evs = [e.get("event_type") for e in _audit_events(home, "_default")]
             for want in ("task_item.projection_applied", "task_item.kb_transition", "task_item.projection_blocked"):
                 self.assertIn(want, evs)
+
+    def _commit(self, msg):
+        _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A", cwd=self.kb)
+        _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg, cwd=self.kb)
+
+    def test_review_fixes_lock_restore_labels_graph_rollback_audit(self):
+        """2026-10-03 adversarial review: each assertion was red before its fix."""
+        from core.task_tracking import snapshots, service
+
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            self._sync(client, csrf)
+            items = self._items(client)
+            t1, t2 = items[f"kb:{self.t1['uid']}"], items[f"kb:{self.t2['uid']}"]
+            # (a) every KB-owned field is locked, not just status (test-review finding 4)
+            for patch in ({"title": "renamed"}, {"parent_id": None}, {"labels": ["x"]}):
+                r = client.patch(f"{_URL}/items/{t1['id']}", json={"version": t1["version"], **patch},
+                                 headers={"X-CSRF-Token": csrf})
+                self.assertEqual(r.status_code, 409, (patch, r.text))
+            # (b) a raw soft delete (no cascade id) is really restored — and recorded once
+            db = home / "tenants" / "_default" / "global" / "task_tracking" / "tasks.db"
+            with sqlite3.connect(db) as conn:
+                conn.execute("UPDATE items SET deleted_at='2026-01-01T00:00:00Z', cascading_delete_id=NULL WHERE id=?",
+                             (t2["id"],))
+            st = self._sync_tick()
+            self.assertEqual((st["state"], st["restored"]), ("ok", 1), st)
+            self.assertIsNone(client.get(f"{_URL}/items/{t2['id']}").json()["item"]["deleted_at"])
+            # (c) duplicate and >12 labels converge instead of re-writing every tick / crashing
+            tf = next((self.kb / "kb" / "tasks").glob(f"{self.t1['id']}-*.md"))
+            labels = ", ".join(["dup", "dup"] + [f"l{i}" for i in range(15)])
+            tf.write_text(tf.read_text().replace("title:", f"labels: [{labels}]\ntitle:", 1))
+            self._commit("labels")
+            st = self._sync(client, csrf)
+            self.assertEqual(st["state"], "ok", st)
+            got = self._items(client)[f"kb:{self.t1['uid']}"]["labels"]
+            self.assertEqual(len(got), 12)
+            self.assertEqual(got[:2], ["kb", "dup"])
+            self.assertEqual(self._sync(client, csrf)["updated"], 0)
+            # (d) the graph the Knowledge Graph panel reads is rebuilt by the projector
+            ents = (self.kb / "kb" / "graph" / "entities.jsonl").read_text()
+            self.assertIn(self.t1["uid"], ents)
+            # (e) a board rollback cannot rewrite a KB item
+            with self.assertRaises(service.KbOwned):
+                import asyncio
+                asyncio.run(snapshots.rollback_to_version("_default", t1["id"], 1, actor="operator"))
+            # (f) a transition's outcome is audited, the free text is not
+            r = client.post(f"{_URL}/items/{t1['id']}/kb-transition", json={"to": "in_progress"},
+                            headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 200, r.text)
+            r = client.post(f"{_URL}/items/{t1['id']}/kb-transition",
+                            json={"to": "blocked", "reason": "--dod=sneaky waiting on Jane"},
+                            headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertIn("--dod=sneaky waiting on Jane", tf.read_text())   # one reason, not an option
+            outcomes = [e.get("details", {}).get("outcome") for e in _audit_events(home, "_default")
+                        if e.get("event_type") == "task_item.kb_transition"]
+            self.assertEqual(outcomes.count("applied"), 2)
+            self.assertNotIn("Jane", (self.kb / "kb" / "audit.jsonl").read_text())
+
+    def test_projector_thread_starts_and_heals_drift(self):
+        """test-review finding 8: start()/_loop had no test; both hosts call it at boot."""
+        import time as _t
+        from corvin_console import kb_projection
+
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            kb_projection._started.discard("_default")
+            kb_projection._state.pop("_default", None)
+            self.assertTrue(kb_projection.start("_default"))
+            self.addCleanup(kb_projection.stop, "_default")
+            self.assertFalse(kb_projection.start("_default"))      # once per process
+            deadline = _t.time() + 30
+            while _t.time() < deadline and client.get(f"{_URL}/kb/status").json().get("state") != "ok":
+                _t.sleep(0.2)
+            self.assertEqual(client.get(f"{_URL}/kb/status").json()["state"], "ok")
+            t2 = self._items(client)[f"kb:{self.t2['uid']}"]
+            db = home / "tenants" / "_default" / "global" / "task_tracking" / "tasks.db"
+            with sqlite3.connect(db) as conn:
+                conn.execute("UPDATE items SET status='complete' WHERE id=?", (t2["id"],))
+            while _t.time() < deadline and client.get(f"{_URL}/kb/status").json().get("drift_total", 0) < 1:
+                _t.sleep(0.2)
+            self.assertGreaterEqual(client.get(f"{_URL}/kb/status").json()["drift_total"], 1)
+            self.assertEqual(self._items(client)[f"kb:{self.t2['uid']}"]["status"], "open")
 
     def _sync_tick(self):
         from corvin_console import kb_projection

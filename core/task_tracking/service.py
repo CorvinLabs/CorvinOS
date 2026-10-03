@@ -757,10 +757,16 @@ def restore(tenant_id: str, item_id: str, *, actor: str, sid_fingerprint: Option
         # The parent may have changed kind while this item was deleted.
         _check_parent(conn, tenant_id, cur["kind"], cur["parent_id"], item_id)
         now = now_iso()
-        res = conn.execute(
-            "UPDATE items SET deleted_at=NULL, deleted_by=NULL, restored_at=?, updated_at=?, version=version+1,"
-            " cascading_delete_id=NULL WHERE tenant_id=? AND cascading_delete_id=?",
-            (now, now, tenant_id, cur["cascading_delete_id"]))
+        sql = ("UPDATE items SET deleted_at=NULL, deleted_by=NULL, restored_at=?, updated_at=?, version=version+1,"
+               " cascading_delete_id=NULL WHERE tenant_id=? AND ")
+        if cur["cascading_delete_id"]:
+            res = conn.execute(sql + "cascading_delete_id=?", (now, now, tenant_id, cur["cascading_delete_id"]))
+        else:
+            # deleted without a cascade id (a raw write): `cascading_delete_id = NULL` matches
+            # nothing in SQL, so this used to restore nothing and still record a restore
+            res = conn.execute(sql + "id=? AND deleted_at IS NOT NULL", (now, now, tenant_id, item_id))
+        if res.rowcount == 0:
+            return cur
         _record(conn, tenant_id, item_id=item_id, event_type="task_item.restored", actor=actor,
                 chain_details={"kind": cur["kind"], "cascade_count": max(0, res.rowcount - 1),
                                **_actor_details(actor, sid_fingerprint)},

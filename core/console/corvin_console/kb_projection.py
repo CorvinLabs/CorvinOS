@@ -19,6 +19,7 @@ checkout next to this repo. No KB -> the projector is off and says so in its sta
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -38,6 +39,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _lock = threading.Lock()
 _state: dict[str, dict[str, Any]] = {}
 _started: set[str] = set()
+_stops: dict[str, threading.Event] = {}
 
 
 class KbTransitionRefused(service.TaskTrackingError):
@@ -54,8 +56,28 @@ def kb_tenant() -> str:
     return os.environ.get("CORVIN_KB_TENANT", "_default")
 
 
+_ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND")
+
+
+def _env(actor: str) -> dict[str, str]:
+    """A minimal environment for KB subprocesses: the console's own secrets (API keys,
+    tokens in os.environ) are never handed to code read from the KB repository."""
+    env = {k: os.environ[k] for k in _ENV_KEEP if k in os.environ}
+    env.update(KB_ACTOR=actor, KB_ACTOR_NAME=actor, KB_ACTOR_EMAIL="kb@corvin.local",
+               PYTHONDONTWRITEBYTECODE="1", GIT_TERMINAL_PROMPT="0")
+    return env
+
+
+def _uncommitted_work(repo: Path) -> list[str]:
+    """Work-item files edited but not committed. Export reads the working tree, so such an
+    edit would reach the board without the state machine (a hand-set `status: done`)."""
+    r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--", "kb/initiatives", "kb/epics", "kb/tasks"],
+                       capture_output=True, text=True, env=_env("sync:kb"))
+    return [ln[3:] for ln in r.stdout.splitlines() if ln.strip()]
+
+
 def _run(repo: Path, *args: str, actor: str = "sync:kb", timeout: int = 120) -> tuple[int, Any]:
-    env = {**os.environ, "KB_ACTOR": actor, "KB_ACTOR_NAME": actor, "KB_ACTOR_EMAIL": "kb@corvin.local"}
+    env = _env(actor)
     r = subprocess.run([sys.executable, str(repo / "scripts" / "kb.py"), "--repo", str(repo), *args],
                        capture_output=True, text=True, timeout=timeout, env=env)
     out = r.stdout.strip() or r.stderr.strip()
@@ -77,7 +99,8 @@ def fingerprint(repo: Path) -> str:
             for p in sorted(base.glob("*.md")):
                 st = p.stat()
                 parts.append(f"{p.name}:{st.st_mtime_ns}:{st.st_size}")
-    return str(hash("\n".join(parts)))
+    # sha256, not hash(): str hashes are salted per process, and this value is persisted
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:32]
 
 
 def _state_path(tenant_id: str) -> Path:
@@ -116,6 +139,11 @@ def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
         prev = _state.get(tenant_id) or {}
         fp = fingerprint(repo)
         now = time.time()
+        if not force and prev.get("fingerprint") == fp and prev.get("state") in ("blocked", "held"):
+            # unchanged and still red/held: nothing to redo — re-running wrote one
+            # projection_blocked audit record every tick (43 200 a day)
+            prev["checked_at"] = now
+            return prev
         if not force and prev.get("fingerprint") == fp and prev.get("payload"):
             d = projection.diff(tenant_id, prev["payload"])
             if not d:
@@ -128,6 +156,14 @@ def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
             _save(tenant_id, st)
             return st
         rc_h, healed = _run(repo, "heal")
+        pending = _uncommitted_work(repo)
+        if pending:
+            # hold the last good projection (drift is still repaired against it) until the
+            # edit is committed; the console banner names the files
+            st = {**prev, "state": "held", "pending_uncommitted": pending[:20], "fingerprint": fp,
+                  "checked_at": now}
+            _save(tenant_id, st)
+            return st
         rc, payload = _run(repo, "export")
         if rc != 0 or "items" not in payload:
             st = {"state": "error", "error": payload.get("error") or payload.get("raw") or f"export rc={rc}",
@@ -135,6 +171,8 @@ def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
             _save(tenant_id, st)
             return st
         res = projection.apply(tenant_id, payload)
+        if res["state"] != "blocked":
+            _run(repo, "index")   # kb/graph (Knowledge Graph panel) follows every KB change
         st = {**{k: v for k, v in res.items()}, "fingerprint": fingerprint(repo) if healed.get("commit") else fp,
               "payload": payload if res["state"] != "blocked" else None, "checked_at": now,
               "healed": healed.get("fixed", 0) if rc_h == 0 else None,
@@ -148,6 +186,9 @@ def transition(tenant_id: str, item_id: str, to_status: str, *, reason: str = ""
     repo = kb_repo()
     if repo is None:
         raise service.TaskTrackingError("no knowledge base on this host")
+    if tenant_id != kb_tenant():
+        # the projector serves ONE tenant; a move from another tenant would re-project there
+        raise service.TaskTrackingError("the knowledge base is projected for another tenant")
     with store.connect(tenant_id) as conn:
         cur = service._fetch(conn, tenant_id, item_id)
     ref = str(cur.get("external_ref") or "")
@@ -159,29 +200,35 @@ def transition(tenant_id: str, item_id: str, to_status: str, *, reason: str = ""
     details = {"item_id": item_id, "kind": cur["kind"], "from_status": cur["status"], "to_status": to_status,
                "actor_kind": actor.split(":")[0], **({"sid_fingerprint": sid_fingerprint} if sid_fingerprint else {})}
     service._chain(tenant_id, "task_item.kb_transition", {**details, "outcome": "requested"})  # audit-first
-    args = ["task", ref.split(":", 1)[1], to_kb, "--via", "console", "--actor", actor]
+    # `--opt=value`: a reason starting with "-" can never be read as another option
+    args = ["task", ref.split(":", 1)[1], to_kb, "--via=console", f"--actor={actor}"]
     if reason:
-        args += ["--reason", reason]
+        args.append(f"--reason={reason}")
     if dod:
-        args += ["--dod", dod]
-    rc, res = _run(repo, *args, actor=actor)
+        args.append(f"--dod={dod}")
+    try:
+        rc, res = _run(repo, *args, actor=actor)
+    except Exception:
+        service._chain(tenant_id, "task_item.kb_transition", {**details, "outcome": "error"})
+        raise
     if rc != 0:
         service._chain(tenant_id, "task_item.kb_transition", {**details, "outcome": "refused"})
         raise KbTransitionRefused(str(res.get("error") or res)[:500])
+    service._chain(tenant_id, "task_item.kb_transition", {**details, "outcome": "applied"})
     sync(tenant_id, force=True)
     with store.connect(tenant_id) as conn:
         return service._fetch(conn, tenant_id, item_id)
 
 
-def _loop(tenant_id: str) -> None:
-    while True:
+def _loop(tenant_id: str, stop: threading.Event) -> None:
+    while not stop.is_set():
         try:
             sync(tenant_id)
         except Exception as exc:  # noqa: BLE001 — the loop must survive; the status says what broke
             log.warning("kb projection tick failed: %s", exc)
             _save(tenant_id, {**(_state.get(tenant_id) or {}), "state": "error", "error": str(exc)[:300],
                               "checked_at": time.time()})
-        time.sleep(TICK_S)
+        stop.wait(TICK_S)
 
 
 def start(tenant_id: Optional[str] = None) -> bool:
@@ -194,6 +241,16 @@ def start(tenant_id: Optional[str] = None) -> bool:
     if kb_repo() is None or t in _started:
         return False
     _started.add(t)
-    threading.Thread(target=_loop, args=(t,), name=f"kb-projection-{t}", daemon=True).start()
+    _stops[t] = threading.Event()
+    threading.Thread(target=_loop, args=(t, _stops[t]), name=f"kb-projection-{t}", daemon=True).start()
     log.info("kb projection started for tenant %s from %s", t, kb_repo())
     return True
+
+
+def stop(tenant_id: Optional[str] = None) -> None:
+    """Stop the projector thread (tests; a host shutting down). It may be started again."""
+    t = tenant_id or kb_tenant()
+    ev = _stops.pop(t, None)
+    if ev is not None:
+        ev.set()
+    _started.discard(t)

@@ -203,11 +203,12 @@ export default function TasksPage() {
     let reason: string | undefined;
     let dod: string | undefined;
     if (status === "blocked" || status === "archived") {
-      reason = window.prompt(status === "blocked" ? "Why is it blocked?" : "Why is it cancelled?")?.trim();
+      reason = window.prompt((status === "blocked" ? "Why is it blocked?" : "Why is it cancelled?")
+        + " (stored in the task file in the knowledge base — no personal data)")?.trim();
       if (!reason) return;
     }
     if (status === "complete") {
-      dod = window.prompt("Definition of done — how was it verified?")?.trim();
+      dod = window.prompt("Definition of done — how was it verified? (stored in the knowledge base)")?.trim();
       if (!dod) return;
     }
     move.mutate({ item: it, status, reason, dod });
@@ -404,6 +405,8 @@ export default function TasksPage() {
               className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
               {kbQ.data.state === "blocked"
                 ? `Knowledge base is inconsistent (${kbQ.data.blocking ?? "?"} blocking finding${kbQ.data.blocking === 1 ? "" : "s"}: ${Object.keys(kbQ.data.failing ?? {}).join(", ")}) — the board shows the last consistent state. Run "kb check" in Corvin-Knowledge.`
+                : kbQ.data.state === "held"
+                ? `Uncommitted edits in the knowledge base (${(kbQ.data.pending_uncommitted ?? []).slice(0, 3).join(", ")}) — the board shows the last committed state until they are committed.`
                 : kbQ.data.state === "error" ? `Knowledge-base sync failed: ${kbQ.data.error ?? "unknown error"}`
                 : kbQ.data.state === "diverged" ? "Knowledge-base sync could not repair every difference — see kb status." : null}
             </p>

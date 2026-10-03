@@ -16,7 +16,7 @@ agent sessions, commits, ADR-derived items kept current by a sync). Diagram:
 | Vocabularies + request models (Pydantic v2) | `core/task_tracking/models.py` |
 | Reads (derived rollups) + audited mutations | `core/task_tracking/service.py` |
 | Console routes `/v1/console/task-tracking/*` | `core/console/corvin_console/routes/task_tracking.py` |
-| `initiatives.json` importer (CLI + route) | `core/console/corvin_console/task_tracking_import.py` |
+| KB projector (heal → export → apply → index, every 2 s) | `core/console/corvin_console/kb_projection.py` + `core/task_tracking/projection.py` |
 | Host activity readers (Claude Code sessions, git) | `core/console/corvin_console/host_activity.py` |
 | Git/ADR sync writer (CLI, timer every 5 min) | `core/console/corvin_console/task_tracking_git_sync.py`, `systemd/corvin-task-tracking-sync.{service,timer}` |
 | Panel | `web-next/src/pages/tasks/` (encodings in `encodings.ts`) |
@@ -196,25 +196,37 @@ label `kb`. One way only: nothing reads a status back into the KB.
   `initiatives.json#…` items were archived with "moved into the knowledge base: <id>".
 - E2E: `core/console/tests/test_kb_projection_e2e.py` (real routes, real `kb.py`, fixture KB repo).
 
-## The `initiatives.json` cutover
+## The `initiatives.json` cutover (historical)
 
-`python -m corvin_console.task_tracking_import [--tenant _default] [--apply]` —
-dry run by default. Items under a branch the operator deleted in the store are
-skipped, never re-created; a completion date the file does not state stays
-empty (never the import time). Insert-only, idempotent on `external_ref =
-initiatives.json#<iid>[/task|group|precondition|checkpoint|gate/…]`; the whole
-batch is validated before the first chain write. Mapping: initiative →
-initiative, task group → epic, task → task (status/progress as the board derived
-them), precondition / checkpoint / gate → task with that `category`, gate
-criterion → subtask, `blocked_by` → dependency on the gate.
+The importer (`task_tracking_import.py`) and the evidence verifier timer were retired on
+2026-10-03 (ADR-2205): `initiatives.json` was imported into the knowledge base (Loop A/B/C
+are `I-02..I-04`), `POST …/import` answers **410**, and the 37 board items it had created
+were archived "moved into the knowledge base: <id>". Work items are authored only with
+`kb new` and moved only with `kb task` / a board drag (`/kb-transition`).
 
-After the import the file is **frozen for authoring**: `PATCH …/tasks/{tid}`,
-`PUT …/gates/{gid}`, `PUT …/close` answer **410**. It is not deleted. The
-evidence verifier (`initiatives_verify.py`, timer every 5 min) still writes its
-`verification` results into it; the task route attaches them to items by
-`external_ref` (derived, never stored) and flags `claim_conflict` when an item
-is complete but its evidence does not pass. "Verify evidence" in the panel
-triggers a run.
+## Hardening (adversarial review 2026-10-03)
+
+- **Projector states:** `ok` · `blocked` (red KB — the last good projection stays; ONE
+  `projection_blocked` record per KB state, not one per tick) · `held` (work-item files edited
+  but not committed — export reads the working tree, so the projector waits; the banner names
+  the files) · `diverged` · `error` · `off`.
+- **Restore:** a soft-deleted `kb:` item is restored even when it was deleted without a cascade
+  id (a raw write); `task_item.restored` is recorded only when a row actually changed.
+- **Labels** are deduplicated and capped at 12 exactly like the store keeps them, so a KB file
+  with duplicate or many labels converges instead of being re-written every tick.
+- **`kb index`** runs after every applied export — the Knowledge Graph panel never goes stale.
+- **Transitions:** audited `requested` → `applied` | `refused` | `error`; options are passed as
+  `--reason=…`, so a reason that starts with `-` stays a reason; the free text reaches only the
+  task file (the KB audit log and commit message carry its hash). A move from a tenant the KB
+  is not projected into is refused.
+- **Subprocesses** (`kb.py`, the panel's `git`) get a minimal environment — the console's API
+  keys are never handed to code read from the KB checkout — and `git` runs with hooks and
+  fsmonitor switched off. **Trust boundary:** the projector executes `scripts/kb.py` FROM the
+  KB checkout; whoever can push to Corvin-Knowledge `main` can run code as the console user.
+  The panel's pull is `--ff-only` under the KB's own `kb/.lock`.
+- **Rollback** (`snapshots.rollback_to_version`) refuses a `kb:` item; the unmounted, unauthed
+  `core/task_tracking/routes.py` that exposed it was deleted.
+- **Stopping:** `kb_projection.stop(tenant)` ends the thread (tests, shutdown).
 
 ## Panel
 

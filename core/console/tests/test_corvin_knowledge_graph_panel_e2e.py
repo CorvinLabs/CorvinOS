@@ -15,11 +15,13 @@ the real GET route. What must hold:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_admin_route import _sandbox  # noqa: E402
@@ -44,7 +46,7 @@ def _this_checkout() -> Path:
     return Path(r.stdout.strip())
 
 
-_KB_SCRIPTS = _projects_root() / "Corvin-Knowledge" / "scripts"
+_KB_SCRIPTS = Path(os.environ.get("CORVIN_KB_SCRIPTS") or _projects_root() / "Corvin-Knowledge" / "scripts")
 
 
 def _sh(*args, cwd=None):
@@ -93,9 +95,19 @@ class KnowledgeGraphPanelE2E(unittest.TestCase):
         _sh(sys.executable, kb / "scripts/kb.py", "--repo", kb, "index")
 
         with _sandbox(self.tmp) as (client, csrf, _home, _):
-            r = client.post(f"{_URL}/config", json={"repo_path": str(kb)}, headers={"X-CSRF-Token": csrf})
-            self.assertEqual(r.status_code, 200, r.text)
-            r = client.get(f"{_URL}/graph")
+            # The route persists to ~/.claude/plugins/corvin-knowledge.json (CONFIG_FILE is bound
+            # at import). Without this redirect the test overwrote the OPERATOR's live config with
+            # a temp path that is deleted afterwards (found by the 2026-10-03 adversarial review).
+            from corvin_console.routes import plugins_corvin_knowledge_api as kg
+            live = Path.home() / ".claude" / "plugins" / "corvin-knowledge.json"
+            before = live.read_bytes() if live.exists() else None
+            cfg = self.tmp / "home" / ".claude" / "plugins" / "corvin-knowledge.json"
+            with mock.patch.object(kg, "CONFIG_FILE", cfg):   # restored on exit — never leaks
+                r = client.post(f"{_URL}/config", json={"repo_path": str(kb)}, headers={"X-CSRF-Token": csrf})
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertTrue(cfg.is_file())
+                r = client.get(f"{_URL}/graph")
+            self.assertEqual(live.read_bytes() if live.exists() else None, before)   # live file untouched
             self.assertEqual(r.status_code, 200, r.text)
             g = r.json()
 
@@ -118,8 +130,9 @@ class KnowledgeGraphPanelE2E(unittest.TestCase):
         self.assertTrue(all(r["from_id"] in ids and r["to_id"] in ids for r in g["relations"]))
 
     def test_panel_route_is_reachable_from_the_shell(self):
-        """ADR-2206 Context: the page component was imported but never routed. Prove the
-        built SPA actually contains a mounted route for it, through the real build output."""
+        """ADR-2206 Context: the page component was imported but never routed. This pins the
+        two SOURCE registrations (PANELS + NAV_GROUPS); that the served bundle carries them is
+        proved at deploy time by `scripts/console-deploy.sh --marker` (no build runs here)."""
         web = _this_checkout() / "core" / "console" / "corvin_console" / "web-next"
         reg = (web / "src" / "panels" / "registry.tsx").read_text()
         self.assertIn('rc("corvin-knowledge"', reg)

@@ -188,6 +188,10 @@ async def rollback_to_version(
         cur_v = int(cur["version"])
         if cur["deleted_at"]:
             return refuse(cur_v, "item is deleted — restore it first")
+        if str(cur.get("external_ref") or "").startswith(service.KB_REF_PREFIX) and actor != service.KB_ACTOR:
+            # a projected item's fields belong to the knowledge base (ADR-2205); a rollback
+            # would be a second board writer — the projector would only re-apply the KB
+            raise service.KbOwned("a knowledge-base item is changed in the KB, never rolled back on the board")
         if expected_version is not None and expected_version != cur_v:
             return refuse(cur_v, "item changed since it was read")
         if target_version >= cur_v:

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 680" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
   <title>Task-Tracking SSOT — write path, read path, runs, the initiatives.json cutover and the host-activity sync</title>
-  <desc>The Tasks panel calls /v1/console/task-tracking. Writes go through the service: apply in a SQLite transaction, append a task_item record to the tenant audit chain, then commit; a chain failure rolls back and answers 503. Reads derive rollups and attach evidence from the frozen initiatives.json by external_ref. Runtime runs stay in their own stores and are only linked. initiatives.json was imported once and its write routes now answer 410. A timer-driven git sync (default tenant only) writes ADR-derived items and links commits and Claude Code sessions through the same audited service; once the knowledge base projects into the tenant it archives those ADR cards instead. The knowledge-base projector (in the console host, every 2 s) heals, exports and applies Corvin-Knowledge initiatives, epics and tasks as kb:&lt;uid&gt; items, repairs drift, and refuses console writes to KB-owned fields; a board move of a KB item runs the KB state machine.</desc>
+  <desc>The Tasks panel calls /v1/console/task-tracking. Writes go through the service: apply in a SQLite transaction, append a task_item record to the tenant audit chain, then commit; a chain failure rolls back and answers 503. Reads derive rollups and attach evidence from the frozen initiatives.json by external_ref. Runtime runs stay in their own stores and are only linked. initiatives.json was imported once and its write routes now answer 410. A timer-driven git sync (default tenant only) writes ADR-derived items and links commits and Claude Code sessions through the same audited service; once the knowledge base projects into the tenant it archives those ADR cards instead. The knowledge-base projector (in the console host, every 2 s) heals, exports, applies and indexes Corvin-Knowledge initiatives, epics and tasks as kb:&lt;uid&gt; items, repairs drift, holds while work-item edits are uncommitted, and refuses console writes to KB-owned fields; a board move of a KB item runs the KB state machine.</desc>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#555"/>
@@ -93,8 +93,8 @@
 
   <rect class="core" x="20" y="540" width="880" height="125" rx="8"/>
   <text class="t" x="36" y="566">Knowledge-base projector (console host, every 2 s) — Corvin-Knowledge → items kb:&lt;uid&gt;</text>
-  <text class="s" x="36" y="588">KB changed → kb heal (derivable fixes, committed) → kb export → projection.apply (upsert by external_ref, parent-first)</text>
-  <text class="s" x="36" y="608">KB unchanged → projection.diff; any difference = drift → re-applied at once (drift_healed) · red KB → nothing written, banner</text>
+  <text class="s" x="36" y="588">KB changed → kb heal (derivable, committed) → kb export → projection.apply (parent-first) → kb index (graph)</text>
+  <text class="s" x="36" y="608">KB unchanged → diff; drift → re-applied (drift_healed) · red KB → blocked, one record · uncommitted edit → held</text>
   <text class="s" x="36" y="628">console PATCH/DELETE of status/parent/kind/title on kb: items → 409 kb_owned · board drag → kb-transition → kb task (state machine)</text>
   <text class="l" x="36" y="652">kb_projection.py · core/task_tracking/projection.py · actor sync:kb · task_item.projection_applied / _blocked / kb_transition</text>
 

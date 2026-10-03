@@ -17,7 +17,10 @@ console from the gateway process on the next restart.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,8 +42,10 @@ router = APIRouter(
 
 CONFIG_FILE = Path.home() / ".claude" / "plugins" / "corvin-knowledge.json"
 DEFAULT_CONFIG: Dict[str, Any] = {
-    # ADR-2206: the knowledge home's real checkout, not the unused mesh-era convention.
-    "repo_path": "/home/shumway/projects/Corvin-Knowledge",
+    # ADR-2206: the knowledge home's real checkout (the one the board projector reads,
+    # CORVIN_KB_REPO or the sibling of this repo), not the unused mesh-era convention.
+    "repo_path": str(Path(os.environ.get("CORVIN_KB_REPO") or
+                          Path(__file__).resolve().parents[5] / "Corvin-Knowledge")),
     "remote_url": "https://github.com/CorvinLabs/Corvin-Knowledge.git",
     "auto_sync_on_query": True,
     "consistency_level": "warn",
@@ -220,18 +225,43 @@ async def get_graph(session: Any = Depends(require_session)) -> Dict[str, Any]:
     return load_graph_data(effective_config(getattr(session, "tenant_id", "_default")))
 
 
+_GIT_ENV_KEEP = ("PATH", "HOME", "LANG", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND")
+
+
 def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    # A pulled repository may carry config the console would otherwise execute: hooks
+    # and an fsmonitor command are switched off, and the console's own environment
+    # (API keys, tokens) is not handed to git.
+    env = {k: os.environ[k] for k in _GIT_ENV_KEEP if k in os.environ}
+    env["GIT_TERMINAL_PROMPT"] = "0"
     return subprocess.run(
-        ["git", *args],
+        ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", *args],
         cwd=str(cwd),
         capture_output=True,
         text=True,
         timeout=_GIT_TIMEOUT_S,
+        env=env,
     )
 
 
+@contextlib.contextmanager
+def _kb_lock(repo: Path):
+    """The same lock `kb.py` takes for every write — a pull must never merge underneath a
+    projector heal or a board transition that is committing in the same checkout."""
+    lock = repo / "kb" / ".lock"
+    if not (repo / "kb").is_dir() or (repo / "kb").is_symlink() or lock.is_symlink():
+        raise HTTPException(status_code=400, detail="not a knowledge-base checkout (kb/ missing or a symlink)")
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 @router.post("/sync")
-async def sync_repository(
+def sync_repository(
     body: SyncRequest, session: Any = Depends(require_csrf)
 ) -> Dict[str, Any]:
     """Pull, push or both against the plugin's Corvin-Knowledge checkout."""
@@ -250,13 +280,17 @@ async def sync_repository(
         "errors": [],
     }
 
+    # A plain `def` route: git can take up to _GIT_TIMEOUT_S and must not stall the event loop.
     if sync_type in ("pull", "both"):
         try:
-            _git(["fetch", "origin"], repo_path)
-            merge = _git(["merge", "origin/main"], repo_path)
+            with _kb_lock(repo_path):
+                _git(["fetch", "origin"], repo_path)
+                # fast-forward only: a merge commit (or a conflicted tree) in the KB checkout
+                # would be written by no KB writer and is not this button's decision
+                merge = _git(["merge", "--ff-only", "origin/main"], repo_path)
             if merge.returncode != 0:
                 result["status"] = "conflict"
-                result["conflicts"].append(f"Merge conflict: {merge.stderr}")
+                result["conflicts"].append(f"Not a fast-forward — reconcile in the checkout: {merge.stderr.strip()[:300]}")
         except subprocess.TimeoutExpired:
             result["errors"].append("Git operation timed out")
         except OSError as exc:
@@ -282,7 +316,6 @@ async def init_plugin(session: Any = Depends(require_csrf)) -> Dict[str, Any]:
     """Called on plugin installation: default config + graph directory."""
     try:
         save_config(DEFAULT_CONFIG.copy())
-        (Path(DEFAULT_CONFIG["repo_path"]).expanduser() / "kb" / "graph").mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {

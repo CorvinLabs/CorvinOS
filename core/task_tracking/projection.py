@@ -27,6 +27,7 @@ STATUS_TO_KB = {"open": "open", "in_progress": "in_progress", "blocked": "blocke
                 "complete": "done", "archived": "cancelled"}
 PROJECTED = ("kind", "parent_id", "title", "status", "status_reason", "category", "labels")
 _LABEL_OK = __import__("re").compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+MAX_LABELS = 12   # models._Fields.labels max_length
 
 
 def _desired(it: dict[str, Any], ref_to_id: dict[str, str]) -> dict[str, Any]:
@@ -36,10 +37,13 @@ def _desired(it: dict[str, Any], ref_to_id: dict[str, str]) -> dict[str, Any]:
         reason = str(it["blocked_reason"])[:500]
     elif it["status"] == "cancelled":
         reason = "cancelled in the knowledge base"
-    labels = ["kb"] + [x for x in it.get("labels") or [] if _LABEL_OK.match(x) and x != "kb"]
+    labels = ["kb"]
+    for x in it.get("labels") or []:        # same shape the store keeps (deduped, <= 12) — or it never converges
+        if isinstance(x, str) and _LABEL_OK.match(x) and x not in labels and len(labels) < MAX_LABELS:
+            labels.append(x)
     return dict(kind=it["kind"], parent_id=ref_to_id.get(it["parent_ref"]) if it.get("parent_ref") else None,
                 title=it["title"][:200], status=status, status_reason=reason, category="kb",
-                labels=labels[:20])
+                labels=labels)
 
 
 def kb_items(tenant_id: str, namespace: str = "kb") -> dict[str, dict[str, Any]]:
@@ -107,6 +111,8 @@ def apply(tenant_id: str, payload: dict[str, Any], *, actor: str = service.KB_AC
             continue
         if cur["deleted_at"]:
             cur = service.restore(tenant_id, cur["id"], actor=actor)
+            if cur["deleted_at"]:
+                raise service.TaskTrackingError(f"could not restore {it['ref']}")
             counts["restored"] += 1
         changed = {k: want[k] for k in PROJECTED if cur.get(k) != want[k]}
         if not changed:

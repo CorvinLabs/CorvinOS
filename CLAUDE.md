@@ -55,14 +55,14 @@ unchanged, so every `corvin_decisions/decisions/ADR-XXXX-*.md` reference still r
 
 ## ADR-0516: Knowledge Graph Foundation (LOAD-BEARING RULE — Active)
 
-**Status:** 🟡 **PARTIAL — the single-source RULE is live; the graph AUTOMATION is not** (verified 2026-09-26)
+**Status:** 🟡 **PARTIAL — the single-source RULE and the KB graph are live; the hand-work backlog is not cleared** (verified 2026-10-03)
 
-Verified on this host 2026-09-26: the centralisation is done (`docs/decisions/` holds only
-a README, `corvin_decisions/` is the submodule). NOT running: no post-commit hook exists in
-any of the four repos, the webhook (`:8000/v1/sync/webhook`) and dashboard (`:3000`) do not
-answer, and `Corvin-Knowledge/graph/` holds only `entities.jsonl`, last built 2026-09-18,
-no `relations.jsonl`. Since the 2026-10-03 KB migration (ADR-2113) 18 numbers are carried by two files — same-decision pairs left for hand merging. Don't cite the graph as
-live until those are fixed — ADR-0516 stays PROPOSED.
+Verified on this host 2026-10-03: the centralisation is done (`docs/decisions/` holds only
+a README, `corvin_decisions/` is the submodule; 1012 files in `decisions/`). The graph is
+`Corvin-Knowledge/kb/graph/` (entities + relations), rebuilt by the console projector after
+every KB change (ADR-2205/2206); the webhook/dashboard design (`:8000`, `:3000`) is retired.
+Hand work left, held in `kb/_meta/baseline.json` (shrink-only): 11 numbers carried by two
+files, 7 broken frontmatters, 75 legacy status spellings — ADR-0516 stays PROPOSED.
 
 **Canonical Location:** `/home/shumway/projects/Corvin-Knowledge/decisions/` (SINGLE SOURCE OF TRUTH)
 
@@ -86,32 +86,27 @@ ALL architectural decisions for CorvinOS belong in **ONE place only:**
 
 | Mechanism | What | Where |
 |---|---|---|
-| **Migration** | All ADRs from CorvinOS/outputs → Corvin-Knowledge/decisions | `Corvin-Knowledge/scripts/migrate_local_adrs_to_corvin_adr.py` |
-| **Validation** | ADR-0264 frontmatter check (id, status, depends_on, paths, docs, commits) | `Corvin-Knowledge/scripts/verify_adr_0516_compliance.py` |
-| **Audit** | Circular dep detection, dangling links, duplicate check | `Corvin-Knowledge/scripts/adr_lifecycle_activation.py` |
-| **Sync** | Post-commit webhooks on every commit in Corvin-Knowledge | **NOT INSTALLED** — no `.git/hooks/post-commit` in any repo (2026-09-26) |
-| **Graph** | Knowledge graph built from canonical ADRs | `Corvin-Knowledge/graph/` — **stale** (entities only, 2026-09-18) |
+| **Create** | Numbers across the whole corpus, refuses unresolvable links, commits + audits | `Corvin-Knowledge/scripts/kb.py new decision --title …` |
+| **Validation** | Frontmatter, ids/uids, status vocabulary, links, duplicates, work-item state | `Corvin-Knowledge/scripts/kb.py check` (must be `blocking: 0`) + `scripts/adr_lint.py` (ADR-0264 ratchet) |
+| **CI** | Both of the above + the kb CLI E2E suite on every push/PR | `Corvin-Knowledge/.github/workflows/kb.yml` |
+| **Graph** | One node per entity, one edge per resolved link / `child_of` | `Corvin-Knowledge/kb/graph/` — rebuilt by `kb index`, run by the console projector after every KB change; read by the Knowledge Graph panel (ADR-2206). The old `graph/` dir is dead. |
+| **Sync webhook** | Post-commit webhooks | **NOT INSTALLED, retired design** — superseded by the projector (ADR-2205) |
 
-The three scripts live in `/home/shumway/projects/Corvin-Knowledge/scripts/`, NOT in
-`CorvinOS/scripts/`.
+The pre-KB scripts (`migrate_local_adrs_to_corvin_adr.py`, `verify_adr_0516_compliance.py`,
+`adr_lifecycle_activation.py`, the webhook/dashboard ones) were retired 2026-10-03 to
+`Corvin-Knowledge/archive/retired-scripts-2026-10-03/` — they read the frozen Corvin-ADR. Never run them.
 
 ### Workflow (Session-Proof)
 
-1. **Write ADR locally** (anywhere, optional) — NOT required
-2. **MIGRATE to Corvin-Knowledge/decisions/** — REQUIRED before merge
+1. **Find first** — `kb find <words>` / `kb show <id>`; amend an existing ADR instead of duplicating it.
+2. **Create in place** — never write an ADR anywhere else first:
    ```bash
-   python3 /home/shumway/projects/Corvin-Knowledge/scripts/migrate_local_adrs_to_corvin_adr.py
-   cd /home/shumway/projects/Corvin-Knowledge
-   git add decisions/ADR-XXXX.md
-   git commit -m "adr: add ADR-XXXX — [title]"
-   git push origin main
+   python3 /home/shumway/projects/Corvin-Knowledge/scripts/kb.py new decision --title "…"   # numbers + commits
+   # fill the ADR-0264 frontmatter (paths/docs/depends_on) and the body, then:
+   cd /home/shumway/projects/Corvin-Knowledge && git commit -am "adr: ADR-XXXX — …"
    ```
-3. **VALIDATE frontmatter** (ADR-0264 compliance) — REQUIRED before merge
-   ```bash
-   python3 /home/shumway/projects/Corvin-Knowledge/scripts/verify_adr_0516_compliance.py
-   ```
-4. **Webhook / dashboard** — NOT running on this host (2026-09-26); the graph is not
-   updated by a commit. Don't claim a graph update as proof of anything.
+3. **VALIDATE** — `python3 scripts/kb.py check` → `blocking: 0`, `python3 scripts/adr_lint.py` → ratchet OK.
+4. **Push** — `git push origin main` (CI re-runs both gates).
 
 ### Absolute Must-NOT
 
@@ -136,8 +131,8 @@ post-commit hook and nothing listens on the endpoint:
 ### Verified Status (2026-09-26 — replaces the 2026-09-25 "go-live" list, which overstated it)
 
 ✅ ADRs centralised in Corvin-Knowledge (1062 files in `decisions/`)  
-⚠️ Knowledge Graph: `entities.jsonl` only, last built 2026-09-18; no `relations.jsonl`  
-⚠️ ADR-0264 frontmatter: 6 files broken; 18 numbers carried by two files (2026-10-03, after the ADR-2113 migration; `Corvin-Knowledge/scripts/kb_check.py` measures it)
+✅ Knowledge Graph: `kb/graph/{entities,relations}.jsonl`, rebuilt by the projector (2026-10-03)  
+⚠️ ADR-0264 frontmatter: 7 files broken; 11 numbers carried by two files (2026-10-03; `kb.py check` measures it, `kb/_meta/baseline.json` lists them)
 ❌ Auto-sync webhooks: no post-commit hook in any repo, endpoint not listening  
 ❌ Dashboard at http://localhost:3000: not running  
 ✅ SINGLE SOURCE OF TRUTH rule: in force (this is the load-bearing part)

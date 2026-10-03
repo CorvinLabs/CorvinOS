@@ -275,6 +275,35 @@ class HostSyncTest(unittest.TestCase):
             refs = [i["external_ref"] for i in client.get(f"{ITEMS}/items").json()["items"]]
             self.assertNotIn("git:Proj#ADR-9001", refs)
 
+    def test_kb_mode_retires_adr_cards_and_links_task_commits(self):
+        """ADR-2205: once the KB projects into the tenant, ADR numbers in commits stop
+        creating cards, existing ADR cards are archived (never deleted) and a commit naming
+        a KB task id is linked to it (test-review finding 3: `_kb_mode` had no test)."""
+        from core.task_tracking import projection
+        from corvin_console import task_tracking_git_sync as g
+
+        with self._env() as (client, _csrf, home, _):
+            self.assertEqual(self._sync()["inserted"], 3)
+            payload = {"namespace": "kb", "ok": True, "sha": "abc", "items": [
+                {"ref": "kb:U1", "id": "I-01", "kind": "initiative", "title": "I-01 · KB", "status": "in_progress"},
+                {"ref": "kb:U2", "id": "E-001", "kind": "epic", "title": "E-001 · E", "status": "in_progress",
+                 "parent_ref": "kb:U1"},
+                {"ref": "kb:U3", "id": "T-0001", "kind": "task", "title": "T-0001 · Do it", "status": "in_progress",
+                 "parent_ref": "kb:U2"}]}
+            self.assertEqual(projection.apply("_default", payload)["state"], "ok")
+            sha = _commit(self.repo, "feat(z): the KB task [T-0001] [ADR-9003]", self.now - 60)
+            res = self._sync()
+            self.assertEqual((res["mode"], res["retired"], res["linked"]), ("kb", 3, 1), res)
+            items = {i["external_ref"]: i for i in client.get(f"{ITEMS}/items").json()["items"]}
+            self.assertNotIn("git:Proj#ADR-9003", items)                      # no new ADR card
+            for ref in ("git:Proj#ADR-9001", "git:Proj#ADR-9002"):
+                self.assertEqual(items[ref]["status"], "archived")
+                self.assertEqual(items[ref]["status_reason"], g.RETIRED_REASON)
+            runs = client.get(f"{ITEMS}/items/{items['kb:U3']['id']}").json()["runs"]
+            self.assertIn(("commit", f"commit:Proj:{sha[:12]}"), {(r["run_type"], r["run_ref"]) for r in runs})
+            again = self._sync()
+            self.assertEqual((again["retired"], again["linked"]), (0, 0), again)   # idempotent
+
     def test_cli_entry_point(self):
         """The timer's command line: a real subprocess against the sandbox store."""
         with self._env() as (_client, _csrf, home, _):

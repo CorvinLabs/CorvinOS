@@ -189,7 +189,8 @@ export function kbTransition(id: string, to: ItemStatus, csrf: string,
 
 export interface KbProjectionStatus {
   enabled: boolean;
-  state: "ok" | "blocked" | "diverged" | "error" | "off" | "idle";
+  state: "ok" | "blocked" | "held" | "diverged" | "error" | "off" | "idle";
+  pending_uncommitted?: string[];
   sha?: string;
   blocking?: number;
   failing?: Record<string, number>;
