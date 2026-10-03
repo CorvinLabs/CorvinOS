@@ -78,7 +78,8 @@ class MemoryMatch:
    (non-weak) request words in its title, the request's own leading verb ("Test
    …", "Close …") not counted — "Review ADR-0952 today" returns ADR-0952 alone,
    "Does ADR-0952 conflict with the session ledger design?" also ADR-2102.
-   Measured: of 2400 requests with filler tails ("by end of day", "and check the
+   Measured with throwaway review harnesses (the sets the tests hold are the ones
+   in `tests/adr_retrieval_eval.py`): of 2400 requests with filler tails ("by end of day", "and check the
    open items") 99 carry an off-graph extra (prev. 203; before round 9 1190); of
    2400 with CorvinOS-topic tails 8; 10 of 12 multi-topic requests keep their
    neighbour. A run-together identifier (`RemoteTriggerReceiver`,

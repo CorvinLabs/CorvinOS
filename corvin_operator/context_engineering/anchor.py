@@ -192,7 +192,9 @@ class _StoreLock:
             import fcntl  # noqa: PLC0415
             d = _store_path(self._tenant_id, "x").parent
             d.mkdir(parents=True, exist_ok=True)
-            self._fd = open(d / STORE_LOCK_NAME, "a+")
+            import os as _os  # noqa: PLC0415
+            self._fd = _os.fdopen(_os.open(d / STORE_LOCK_NAME, _os.O_RDWR | _os.O_CREAT
+                                           | getattr(_os, "O_NOFOLLOW", 0), 0o600), "a+")
             fcntl.flock(self._fd.fileno(), fcntl.LOCK_EX)
         except ImportError:
             self._fd = None

@@ -181,3 +181,16 @@ def test_round10_literal_bypasses_are_denied_and_ordinary_commands_allowed():
     for cmd in ("grep -o forge log.txt", "rg -o license README.md", "mkdir memory",
                 "mkdir -p compute/results", "mkdir packages", f"cd {d} && cat ledger.jsonl"):
         assert _bash(cmd)[0] is True, cmd
+
+
+def test_any_writer_naming_a_store_path_is_denied():
+    """Review R10-3 (round 10, data reviewer): in-place editors, downloaders,
+    archivers on a literal store path; reads and ordinary edits stay allowed."""
+    st = LEDGER.parent
+    for cmd in (f"perl -i -pe s/a/b/ {LEDGER}", f"ruby -i -pe x {LEDGER}", f"gawk -i inplace 1 {LEDGER}",
+                f"vim -c wq {LEDGER}", f"nano {LEDGER}", f"zip {st}/x.zip a", f"git -C {st} init",
+                f"wget -P {st} http://x", f"base64 -d /tmp/x -o {LEDGER}"):
+        assert _bash(cmd)[0] is False, cmd
+    for cmd in (f"grep -c turn {LEDGER}", "vim notes.md", "perl -i -pe s/a/b/ notes.md",
+                "git -C . status", "wget -P downloads http://x"):
+        assert _bash(cmd)[0] is True, cmd

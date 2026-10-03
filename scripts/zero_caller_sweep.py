@@ -594,6 +594,32 @@ _PY_LINE = re.compile(r"python|\$\{?\w*PY", re.I)
 _SH_LAUNCH = re.compile(r"(?:(?:export\s+|local\s+|readonly\s+)?[A-Za-z_]\w*=|exec\b|nohup\b|[\w./${}-]+\.py(?:\s|$))")
 
 
+_INTERP_TOKEN = re.compile(r"(?:^|/)python[\d.]*$|^\$\{?\w*PY\w*\}?$", re.I)
+
+
+def _interpreter_scripts(line: str) -> list[str]:
+    """The ``.py`` each Python interpreter on ``line`` is told to run."""
+    try:
+        import shlex  # noqa: PLC0415
+        toks = shlex.split(line, posix=True)
+    except ValueError:
+        toks = line.split()
+    out: list[str] = []
+    for i, t in enumerate(toks):
+        t = t.strip("\"'")
+        for pre in ("$(", "`"):
+            if t.startswith(pre):
+                t = t[len(pre):]
+        if not _INTERP_TOKEN.search(t):
+            continue
+        j = i + 1
+        while j < len(toks) and toks[j].startswith("-"):
+            j += 2 if toks[j] in ("-X", "-W") else 1
+        if j < len(toks) and toks[j].endswith(".py") and toks[j - 1] != "-m":
+            out.append(toks[j])
+    return out
+
+
 def _root_refs(idx: Index) -> tuple[set[Path], list[str], list[tuple[str, Path]]]:
     """Entry points before resolution: (files, ``-m``/console-script modules,
     (path mention, its file's directory)). Collected once per Index."""
@@ -641,7 +667,17 @@ def _root_refs(idx: Index) -> tuple[set[Path], list[str], list[tuple[str, Path]]
                 continue
             if _PY_LINE.search(line):
                 mods.extend(_DASH_M.findall(line))
-            elif not _SH_LAUNCH.match(line):
+                # Only the SCRIPT the interpreter runs — the first non-flag
+                # argument after the interpreter token. `cp x.py $COPY_DIR`,
+                # `… /usr/lib/python3/…`, `grep … x.py | tee $REPORT_PY` launch
+                # nothing (review R10-1).
+                found = _interpreter_scripts(line)
+                if found or not _SH_LAUNCH.match(line):
+                    paths.extend((p, sh.parent) for p in found)
+                    continue
+                # An assignment the launch line expands later
+                # (`PYTHON_SCRIPT=…/audit_verify.py`): the rule below applies.
+            if not _SH_LAUNCH.match(line):
                 continue   # a file list, a heredoc body, a test -f …
             paths.extend((p, sh.parent) for p in re.findall(r"([\w./${}-]+\.py)\b", line))
     idx.root_refs = (files, mods, paths)
@@ -929,6 +965,12 @@ def sweep() -> dict:
     live = reachable(idx)
     impls = implementations(idx)
     dead = [i for i in impls if (REPO / i["file"]) not in live] + unscheduled_stages()
+    # A file this interpreter cannot parse contributes no class and no edge —
+    # a dead implementation written in newer syntax would pass silently (R10-2).
+    # Each is a finding of its own, baselined like a dead class.
+    dead += [{"file": str(f.relative_to(REPO)), "class": "<unparseable>",
+              "contract": "-", "kind": f"does not parse on Python {sys.version_info[0]}.{sys.version_info[1]}"}
+             for f in idx.files if idx.tree(f) is None]
     return {"modules": len(idx.files), "reachable": len(live),
             "implementations": len(impls), "dead": sorted(dead, key=lambda d: (d["file"], d["class"]))}
 

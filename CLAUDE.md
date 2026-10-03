@@ -817,8 +817,9 @@ structurally excluded. The CLI transcript is NOT the record — auto-compaction 
   delete of the chat (which also clears its CEL anchor store) or the pre-existing
   50-chats-per-tenant cap (oldest chat, whole). `path_gate` denies writes to any
   `session_ledger`/`.corvin-ledger`/`pending_notifications`/`cel_anchors` path and to the
-  console's `web_chat/**/*.turns.jsonl` (also by output options, create commands, and any
-  write after a `cd` into one of them), including through a glob,
+  console's `web_chat/**/*.turns.jsonl` (also: any non-read command with such a path among
+  its arguments — in-place editors, downloaders, archivers, `git -C` —, output options,
+  create commands, and any write after a `cd` into one of them), including through a glob,
   quotes, a backslash or a directly assigned shell variable. **Boundary (stated, not
   hidden):** `path_gate` is a syntactic guard against accidental and naive writes. Deliberate
   evasion by a worker running as the same OS user — a program it wrote (a script,
@@ -873,7 +874,9 @@ that bypasses `reset_claude_session_state` · decide coverage from bookkeeping i
 transcript · summarise ledger turns with an LLM · store a refused turn's text · fold observer
 lines into `user` · persist a refusal after a `yield` · put the volatile counts back into the block
 header (breaks the append-only prefix) · build another "context bridge" —
-`scripts/zero_caller_sweep.py --check` fails CI on a new unreachable Subsystem/Skill/Stage/Plugin.
+`scripts/zero_caller_sweep.py --check` fails CI on a new unreachable Subsystem/Skill/Stage/Plugin
+(never-IMPORTED only — one re-exported by a live package and never called passes it) and on a new
+production file Python 3.11 cannot parse.
 
 → Full reference: [adapter-runtime.md](docs/claude-ref/adapter-runtime.md) § Session ledger
 

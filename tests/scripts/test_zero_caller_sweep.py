@@ -459,3 +459,30 @@ def test_a_startup_module_name_never_links_to_a_script_sibling(tmp_path, monkeyp
     })
     _sandbox(monkeypatch, tmp_path)
     assert {c for _f, c in _dead()} == {"AbcDead"}             # types.py beside it is live
+
+
+def test_only_the_script_an_interpreter_runs_is_a_root(tmp_path, monkeypatch):
+    """Review R10-1: `cp x.py $COPY_DIR` / a python3 path / `| tee $REPORT_PY`
+    on a line launch nothing; `"${PYTHON}" x.py` and `$(python3 x.py)` do."""
+    sub = "from core.base import Subsystem\nclass {}(Subsystem): pass\n"
+    _tree(tmp_path, {
+        "core/main.py": "x = 1\n", "core/base.py": "class Subsystem: pass\n",
+        "core/a/copied.py": sub.format("Copied"),
+        "core/a/grepped.py": sub.format("Grepped"),
+        "core/a/run1.py": sub.format("Run1"),
+        "core/a/run2.py": sub.format("Run2"),
+        "core/a/pack.sh": ('cp core/a/copied.py "$COPY_DIR/"\n'
+                           'grep -c S core/a/grepped.py | tee "$REPORT_PY"\n'
+                           '"${PYTHON}" core/a/run1.py --x\n'
+                           'OUT="$(python3 core/a/run2.py)"\n'),
+    })
+    _sandbox(monkeypatch, tmp_path)
+    assert {c for _f, c in _dead()} == {"Copied", "Grepped"}
+
+
+def test_an_unparseable_file_is_reported(tmp_path, monkeypatch):
+    """Review R10-2: a file this interpreter cannot parse contributed nothing
+    and passed silently."""
+    _tree(tmp_path, {"core/main.py": "x = 1\n", "core/broken.py": "def f(:\n"})
+    _sandbox(monkeypatch, tmp_path)
+    assert ("core/broken.py", "<unparseable>") in _dead()

@@ -137,7 +137,10 @@ def _sibling_rank(i_rec: tuple) -> tuple:
 def _task_status(adr_status: Optional[str]) -> str:
     """Registry state of a record status. Every word adr_meta reads as done
     (``status_for`` → complete) is ACCEPTED here — not only the literal word —
-    so the registry and the sync never disagree on whether a number is done."""
+    so the registry and the sync agree on done-ness for every file adr_meta
+    reads. Exception: a number carried ONLY by a file adr_meta does not glob
+    (e.g. ``adr_0950_only.md``, keyed by its frontmatter id) is in the registry
+    and absent from the sync (review R10-6)."""
     word = _status_word(adr_status)
     if word in _DONE:
         return "ACCEPTED"

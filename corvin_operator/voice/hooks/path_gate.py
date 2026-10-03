@@ -1201,6 +1201,21 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
         if not toks:
             continue
         cmd_name = toks[0].rsplit("/", 1)[-1]
+        # A non-read command with a ledger-class store path ANYWHERE in its
+        # arguments (also `-P`/`-C`/`-o<path>` forms) fails closed: in-place
+        # editors (`perl -i -pe`, `ruby -i`, `gawk -i inplace`, vi/vim/nano/
+        # emacs), downloaders (`wget -P`), `git -C`, `zip`, `base64 -o` — the
+        # list of writers is open-ended, the list of these stores is not
+        # (review R10-3). Reads (cat/grep/…) stay allowed.
+        if cmd_name not in _READ_ONLY_CMDS:
+            for _t in toks[1:]:
+                _cand = _t
+                if _t.startswith("-") and "=" in _t:
+                    _cand = _t.split("=", 1)[1]
+                elif _t[:2] in ("-o", "-O", "-P", "-C") and len(_t) > 2:
+                    _cand = _t[2:]
+                if not _cand.startswith("-") and _is_ledger_store_path(_cand.strip("\"'")):
+                    return [], True
         # The output option of a command that writes a file names a target (R9-4).
         if cmd_name in _OUTPUT_FLAG_CMDS:
             for _i, _t in enumerate(toks[1:], 1):

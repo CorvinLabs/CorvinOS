@@ -194,7 +194,7 @@ def migrate_legacy_ledgers(roots: Iterable[Path | str]) -> int:
                        details={"record_kind": "migration", "reason": type(exc).__name__})
         try:
             marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text(str(int(time.time())), encoding="utf-8")
+            _replace_atomically(marker, str(int(time.time())))
         except OSError:
             pass
     return done
@@ -203,7 +203,8 @@ def migrate_legacy_ledgers(roots: Iterable[Path | str]) -> int:
 def _merge_into(store: Path, legacy_file: Path) -> None:
     """Merge a legacy ledger into the store ledger under the writer's lock."""
     path = store / LEDGER_FILE
-    with open(path, "a+", encoding="utf-8") as lock_fh:
+    _fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(_fd, "a+", encoding="utf-8") as lock_fh:
         fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
         try:
             def _recs(p: Path) -> list[dict[str, Any]]:
