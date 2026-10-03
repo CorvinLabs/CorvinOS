@@ -60,7 +60,7 @@ Verified on this host 2026-09-26: the centralisation is done (`docs/decisions/` 
 a README, `corvin_decisions/` is the submodule). NOT running: no post-commit hook exists in
 any of the four repos, the webhook (`:8000/v1/sync/webhook`) and dashboard (`:3000`) do not
 answer, and `Corvin-Knowledge/graph/` holds only `entities.jsonl`, last built 2026-09-18,
-no `relations.jsonl`. 96 ADR numbers are carried by two files each. Don't cite the graph as
+no `relations.jsonl`. Since the 2026-10-03 KB migration (ADR-2113) 18 numbers are carried by two files — same-decision pairs left for hand merging. Don't cite the graph as
 live until those are fixed — ADR-0516 stays PROPOSED.
 
 **Canonical Location:** `/home/shumway/projects/Corvin-ADR/decisions/` (SINGLE SOURCE OF TRUTH)
@@ -136,7 +136,7 @@ post-commit hook and nothing listens on the endpoint:
 
 ✅ ADRs centralised in Corvin-ADR (1062 files in `decisions/`)  
 ⚠️ Knowledge Graph: `entities.jsonl` only, last built 2026-09-18; no `relations.jsonl`  
-⚠️ ADR-0264 frontmatter: 17 ADRs incomplete; 96 numbers carried by two files each  
+⚠️ ADR-0264 frontmatter: 6 files broken; 18 numbers carried by two files (2026-10-03, after the ADR-2113 migration; `Corvin-Knowledge/scripts/kb_check.py` measures it)
 ❌ Auto-sync webhooks: no post-commit hook in any repo, endpoint not listening  
 ❌ Dashboard at http://localhost:3000: not running  
 ✅ SINGLE SOURCE OF TRUTH rule: in force (this is the load-bearing part)
