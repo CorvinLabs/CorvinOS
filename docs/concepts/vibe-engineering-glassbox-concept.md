@@ -177,7 +177,7 @@ Bau, klarster Bedarf an eigenem Sicherheits-ADR).
 - **Vibe Inspector behalten statt entfernen?** Pro: das iframe-Panel ist der erste „externe Panel"-Referenzfall
   (ADR-0362/0363 P5) — Löschen nimmt ein lebendes Beispiel weg. Contra: es dupliziert `/traces` und verwirrt
   („warum zwei Seiten für dasselbe?"). **Entscheidung:** entfernen, aber die *PanelHost-iframe-Referenz* woanders
-  am Leben halten (z. B. das AI-generierte Panel aus ADR-0366 ist bereits der bessere lebende Beweis).
+  am Leben halten (z. B. das AI-generierte Panel aus ADR-2123 ist bereits der bessere lebende Beweis).
 - **Learning-Backends zu einem mergen?** Verworfen — die drei Systeme haben verschiedene Datenmodelle
   (Stage-Grades ≠ ToT-Muster ≠ ULO-Ziele). Ein UI-Zusammenschluss (ein Ort, drei Abschnitte) liefert die
   Verständlichkeit, ohne riskante Backend-Migration.

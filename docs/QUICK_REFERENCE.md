@@ -80,7 +80,7 @@ Cost reduction: 60–80%
 - **README_CORVINVS_EXPLAINED.md** — Full story + diagrams
 - **SYSTEM_OVERVIEW_COMPLETE.md** — Technical depth
 - **core/skills/os_skills/MANIFEST.json** — Skill registry
-- **ADR-0661** (Corvin-ADR) — Architecture decision
+- **ADR-2154** (Corvin-ADR) — Architecture decision
 
 ## Diagrams
 

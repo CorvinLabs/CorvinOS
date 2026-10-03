@@ -39,7 +39,7 @@ export function postThresholdImport(data: unknown, csrf: string): Promise<Import
   return api<ImportResult>("/learning/model-cost-optimizer/import", { method: "POST", body: data, csrf });
 }
 
-// ── Confidence learner analytics (ADR-0644/0885) ────────────────────────
+// ── Confidence learner analytics (ADR-2153/0885) ────────────────────────
 
 export interface RankedRow {
   model: string;

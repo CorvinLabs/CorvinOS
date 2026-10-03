@@ -11,7 +11,7 @@ Phase 1 (Week 1–2): Static config read/write, mock learning scores
 Phase 2 (Week 3–4): External provider testing, real learning integration
 Phase 3 (Week 5–6): Live learning feedback, dashboard updates
 
-ADR-0641: Engine Configuration Console
+ADR-2150: Engine Configuration Console
 ADR-0642: Model Selector Skill
 ADR-0007: Tenant isolation (all config per-tenant)
 ADR-0314: Learning infrastructure

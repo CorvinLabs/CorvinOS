@@ -1,5 +1,5 @@
 #!/bin/bash
-# Start NotificationRouter daemon — delivers CompletionEvents to Discord (ADR-0661)
+# Start NotificationRouter daemon — delivers CompletionEvents to Discord (ADR-0830)
 # Usage: ./scripts/start_notification_router.sh [start|stop|status]
 
 set -e

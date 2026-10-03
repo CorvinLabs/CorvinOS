@@ -337,7 +337,7 @@ Each phase is independent but can feed into the next.
 
 - **RUNBOOK.md:** Deployment, monitoring, troubleshooting
 - **TROUBLESHOOTING.md:** Common issues and fixes
-- **ADR-0661:** Architecture Decision (Phases 1-4 design)
+- **ADR-2154:** Architecture Decision (Phases 1-4 design)
 - **ADR-0314:** Learning Infrastructure (event schema)
 - **ADR-0232:** Boot Tripwire (audit fail-closed)
 

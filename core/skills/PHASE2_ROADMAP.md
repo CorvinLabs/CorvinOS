@@ -85,7 +85,7 @@
 
 - ADR-0532 → ACCEPTED (commit: 6550563b)
 - ADR-0533 → ACCEPTED (commit: 6550563b)
-- ADR-0534 → ACCEPTED (commit: 6550563b)
+- ADR-0808 → ACCEPTED (commit: 6550563b)
 - ADR-0535 → ACCEPTED (commit: 6550563b)
 - ADR-0555 → ACCEPTED (commit: 6550563b)
 - ADR-0537 → NEW (LoM cryptographic binding)

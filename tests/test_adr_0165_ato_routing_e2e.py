@@ -1,11 +1,11 @@
 """
-E2E Tests: ADR-0165 Model Selection Routing Injection (ATO Recommendations)
+E2E Tests: ADR-2155 Model Selection Routing Injection (ATO Recommendations)
 
 Comprehensive tests for ATO plan injection into the 7-Tier model resolver.
 Tests the fail-safe design, audit trail integration, and tier ordering.
 
 References:
-- ADR-0165: Model Selection Routing Injection (M6 Wiring)
+- ADR-2155: Model Selection Routing Injection (M6 Wiring)
 - ADR-0024: 6-Tier adaptive OS model selection
 - ADR-0377: Cost Optimizer (ATO classification source)
 
@@ -21,7 +21,7 @@ from corvin_operator.bridges.shared import model_selector as ms
 
 
 class TestATORoutingTier28:
-    """Test ADR-0165 Tier 2.8 ATO recommendation routing."""
+    """Test ADR-2155 Tier 2.8 ATO recommendation routing."""
 
     def test_resolve_os_model_ato_haiku_recommendation(self):
         """ATO recommends Haiku → should be returned at Tier 2.8."""
@@ -152,7 +152,7 @@ class TestATORoutingTier28:
 
 
 class TestATORoutingAudit:
-    """Test ADR-0165 audit event emission."""
+    """Test ADR-2155 audit event emission."""
 
     def test_ato_routing_audit_event_emitted(self):
         """Verify audit event is emitted when ATO routing applies."""
@@ -445,7 +445,7 @@ class TestCostSavingsSignal:
     def test_ato_routing_produces_cost_savings(self):
         """ATO routing to Haiku should produce cost savings vs Opus."""
         # This test is documentation that ATO routing produces the
-        # 45.5% cost savings mentioned in ADR-0165.
+        # 45.5% cost savings mentioned in ADR-2155.
 
         ato_hint = {
             "recommended_model": "haiku",

@@ -1,4 +1,4 @@
-"""WorkflowExecutor — High-level orchestration layer for Phase 2 workflow execution (ADR-0423 Phase 2).
+"""WorkflowExecutor — High-level orchestration layer for Phase 2 workflow execution (ADR-0787 Phase 2).
 
 Wraps Phase 1's DAGRunner and integrates:
 1. ExecutionContext v2 for decision tracking

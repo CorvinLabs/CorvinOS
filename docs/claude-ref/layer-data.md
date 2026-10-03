@@ -232,7 +232,7 @@ Three new panels on the security dashboard
   AND test coverage.
 
 **References:**
-- `Corvin-ADR: decisions/0012-large-data-snapshot-layer.md` — ADR
+- `Corvin-ADR: decisions/ADR-0012-large-data-snapshot-layer.md` — ADR
 - `corvin_operator/forge/forge/corvin_data/` — package (10 modules)
 - `corvin_operator/forge/tests/test_corvin_data_*.py` — 7 suites, 333 cases
 - `corvin_operator/voice/hooks/path_gate.py` — protection layer
@@ -475,7 +475,7 @@ cache behaviour.
 
 ### References
 
-- `Corvin-ADR: decisions/0013-compute-worker-plugin.md` — the design ADR
+- `Corvin-ADR: decisions/ADR-0013-compute-worker-plugin.md` — the design ADR
 - `Corvin-ADR: implementation-plans/0013-implementation-plan.md` — sub-phase fanout
 - ADR-0001 — AWP's DelegationLoopRunner pattern (origin)
 - ADR-0007 Phase 3.1 — `tenant.corvin.yaml` schema extension
@@ -719,7 +719,7 @@ All 102 assertions green. Key test classes:
 
 ### References
 
-- `Corvin-ADR: decisions/0023-strict-anonymization-snapshot-mode.md` — the ADR
+- `Corvin-ADR: decisions/ADR-0023-strict-anonymization-snapshot-mode.md` — the ADR
 - `corvin_operator/forge/forge/corvin_data/strict_anonymizer.py` — core module
 - `corvin_operator/forge/forge/corvin_data/data_policy.py` — policy schema extension
 - `corvin_operator/forge/forge/corvin_data/mcp_handlers.py` — MCP pipeline wiring

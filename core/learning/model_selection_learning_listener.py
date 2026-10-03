@@ -1,5 +1,5 @@
 """
-Model Selection Learning Listener — OUTCOME → ConfidenceOptimizer wiring (ADR-0644).
+Model Selection Learning Listener — OUTCOME → ConfidenceOptimizer wiring (ADR-2153).
 
 This module bridges the gap between task completion (OUTCOME events from the audit chain)
 and confidence optimizer updates. Without this listener, OUTCOME events are recorded but
@@ -11,7 +11,7 @@ Phase 1A (2026-09-14): Initial implementation
 - Emits confidence_updated events to audit trail
 - Runs as background service or on-demand via TaskManager integration
 
-Constraints (ADR-0644):
+Constraints (ADR-2153):
 - Audit-first: every confidence update is hash-chained before persisting
 - Tenant-scoped: outcomes and confidence updates must match tenant_id
 - Fail-soft: missing model_selection_config, missing optimizer → log and continue

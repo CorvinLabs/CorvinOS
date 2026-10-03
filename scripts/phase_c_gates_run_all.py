@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase C Measurement Gates Runner — ADR-0538
+"""Phase C Measurement Gates Runner — ADR-0811
 
 Execute all 5 gates, report pass/fail, decide deletion eligibility.
 """

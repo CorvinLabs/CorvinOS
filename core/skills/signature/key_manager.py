@@ -1,4 +1,4 @@
-"""Operator Key Manager — keypair management + rotation (Phase 1, ADR-0666).
+"""Operator Key Manager — keypair management + rotation (Phase 1, ADR-0831).
 
 Implements:
 1. Operator RSA keypair generation and storage

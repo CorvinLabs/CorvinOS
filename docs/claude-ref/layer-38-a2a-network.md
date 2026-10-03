@@ -659,13 +659,13 @@ The network enforces *valid license*, not *unmodified binary*.
 ## ADR
 
 Full decision records:
-- `Corvin-ADR: decisions/0103-a2a-network-membership-attestation.md`
-- `Corvin-ADR: decisions/0197-a2a-send-typed-error-taxonomy.md` (error taxonomy)
-- `Corvin-ADR: decisions/0198-a2a-reconnect-broadcast.md` (proactive reconnect)
-- `Corvin-ADR: decisions/0199-a2a-ping-lightweight-peer-liveness.md` (a2a_ping)
-- `Corvin-ADR: decisions/0257-a2a-reciprocal-friendship-handshake.md`
-- `Corvin-ADR: decisions/0258-a2a-location-independent-connectivity.md` (relay fallback)
-- `Corvin-ADR: decisions/0261-a2a-relay-hardening.md` (self-delivery guard, slot reaper, byte budget, off-loop ack)
+- `Corvin-ADR: decisions/ADR-0103-a2a-network-membership-attestation.md`
+- `Corvin-ADR: decisions/ADR-0197-a2a-send-typed-error-taxonomy.md` (error taxonomy)
+- `Corvin-ADR: decisions/ADR-0198-a2a-reconnect-broadcast.md` (proactive reconnect)
+- `Corvin-ADR: decisions/ADR-0199-a2a-ping-lightweight-peer-liveness.md` (a2a_ping)
+- `Corvin-ADR: decisions/ADR-0257-a2a-reciprocal-friendship-handshake.md`
+- `Corvin-ADR: decisions/ADR-0258-a2a-location-independent-connectivity.md` (relay fallback)
+- `Corvin-ADR: decisions/ADR-0261-a2a-relay-hardening.md` (self-delivery guard, slot reaper, byte budget, off-loop ack)
 
 ---
 

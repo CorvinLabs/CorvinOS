@@ -1,6 +1,6 @@
 """Per-subtask E2E — ADR-0020 Phase 30.1 (Engine-Trust-Härtung).
 
-Covers the contract from docs/decisions/0020-engine-trust-hardening.md
+Covers the contract from docs/decisions/ADR-0020-engine-trust-hardening.md
 and the must-NOT rules in the ADR's enforcement section. The dispatcher
 wiring (Phase 30.1b) is NOT in scope; this suite only exercises the
 data layer + verdict API + audit emission.

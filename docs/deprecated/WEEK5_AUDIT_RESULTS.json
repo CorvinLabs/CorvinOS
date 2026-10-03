@@ -1,6 +1,6 @@
 {
   "task_name": "Week 5: Audit deprecated API call sites",
-  "task_phase": "ADR-0538 Phase C",
+  "task_phase": "ADR-0811 Phase C",
   "task_week": 5,
   "completion_date": "2026-09-10",
   "status": "COMPLETE",

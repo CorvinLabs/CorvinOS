@@ -1,4 +1,4 @@
-"""Unit tests for WorkflowBridge (ADR-0423 Phase 2).
+"""Unit tests for WorkflowBridge (ADR-0787 Phase 2).
 
 Tests bidirectional event coordination between Brain and Workflow subsystems.
 Covers initialization, event handling, guidance publication, and tenant isolation.

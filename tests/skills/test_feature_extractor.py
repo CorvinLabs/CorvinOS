@@ -1,5 +1,5 @@
 """
-Unit Tests: Feature Extractor (ADR-0642)
+Unit Tests: Feature Extractor (ADR-2151)
 
 Tests deterministic feature extraction (no LLM calls).
 """

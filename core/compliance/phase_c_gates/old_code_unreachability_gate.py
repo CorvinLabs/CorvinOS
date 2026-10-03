@@ -1,4 +1,4 @@
-"""Gate 2: Old-Code Unreachability — ADR-0538 Phase C
+"""Gate 2: Old-Code Unreachability — ADR-0811 Phase C
 
 Measures: Audit trail proves Brain/Vibe/Context-v1 never called directly
 Pass Criteria: 0 direct_old_module_calls_detected

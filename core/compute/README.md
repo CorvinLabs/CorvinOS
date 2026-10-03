@@ -9,7 +9,7 @@ submits a run, gets a handle, and polls for progress / final result.
 The driver owns the iteration logic; the LLM stays out of the loop and
 sees only Top-K fingerprints, never raw parameter values.
 
-See `docs/decisions/0013-compute-worker-plugin.md` for the design and
+See `docs/decisions/ADR-0013-compute-worker-plugin.md` for the design and
 `Corvin-ADR: implementation-plans/0013-implementation-plan.md` for the phased rollout.
 
 ## Opt-in installation

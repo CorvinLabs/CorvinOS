@@ -77,7 +77,7 @@ class RepoRef(BaseModel):
 
 class RepoAdd(BaseModel):
     repo_url: str
-    # Named `token_ref` by ADR-0451 and by the form that posts it, though it
+    # Named `token_ref` by ADR-2133 and by the form that posts it, though it
     # carries the raw PAT — the encryption happens on this side, in the secrets
     # store. One name, the documented one: the superseded Flask draft called it
     # `token`, and a request built from that draft's shape is simply ignored.

@@ -297,7 +297,7 @@ workflow_config = get_config(tenant_id=rec.tenant_id)
 3. **ADR-0532** (Skills 2.0 Architecture) — Skill execution model ✅ DONE
 
 ### Recommended
-4. **ADR-0534** (Feedback Integration Schema) — Standardized feedback format ↔ Phase 10 Week 1
+4. **ADR-0808** (Feedback Integration Schema) — Standardized feedback format ↔ Phase 10 Week 1
 
 ### Optional (But Nice)
 5. **Grafana dashboard** (monitoring) — For observability
@@ -343,8 +343,8 @@ workflow_config = get_config(tenant_id=rec.tenant_id)
 | Blocker | Status | Mitigation |
 |---|---|---|
 | **Phase 9 remediation** | 🔴 ACTIVE (2–3 days) | Execute ASAP; Phase 10 kickoff dependent |
-| **ADR-0534 not written** | 🟡 PENDING | Write Week 1 (1-day task) |
-| **Feedback schema unclear** | 🟡 PENDING | Define in ADR-0534 Week 1 |
+| **ADR-0808 not written** | 🟡 PENDING | Write Week 1 (1-day task) |
+| **Feedback schema unclear** | 🟡 PENDING | Define in ADR-0808 Week 1 |
 | **Learning event volume** | 🟢 MANAGEABLE | Event store can handle 1k events/s |
 | **Skill versioning** | 🟢 SOLVED | Use semantic versioning + canary |
 
@@ -353,7 +353,7 @@ workflow_config = get_config(tenant_id=rec.tenant_id)
 ## NEXT STEPS
 
 1. **Complete Phase 9 remediation** (2–3 days)
-2. **Write ADR-0534** (Feedback Integration Schema) — 1 day
+2. **Write ADR-0808** (Feedback Integration Schema) — 1 day
 3. **Review Phase 10 plan with stakeholders** — 1 day
 4. **Kick off Week 1** (Workflow Optimizer) — 2026-09-26
 

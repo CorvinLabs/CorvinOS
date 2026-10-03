@@ -119,10 +119,10 @@ class TestPhaseB:
 
 
 class TestPhaseC:
-    """Phase C: Gate Validator + Atomic Rollback (ADR-0542, ADR-0543)."""
+    """Phase C: Gate Validator + Atomic Rollback (ADR-0542, ADR-0816)."""
 
     def test_ema_smoothing_algorithm(self):
-        """Test EMA smoothing (Fix 3.1, ADR-0543)."""
+        """Test EMA smoothing (Fix 3.1, ADR-0816)."""
         if LearningOptimizer is None:
             print(f"✅ Phase C Fix 3.1: EMA smoothing skipped (imports not available)")
             return

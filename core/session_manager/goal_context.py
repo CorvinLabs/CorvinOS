@@ -4,7 +4,7 @@ Enables goal persistence across session splits + integrity verification.
 Prevents task context drift by validating goal unchanged when resuming.
 
 ADR-0405: GoalContext Persistence
-ADR-0407: Task Context Drift Prevention (Master)
+ADR-0784: Task Context Drift Prevention (Master)
 GDPR Art. 30, 32: Every goal event (init, checkpoint, restore) is audit-logged.
 """
 

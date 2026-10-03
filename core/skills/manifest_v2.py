@@ -1,4 +1,4 @@
-"""Skill Manifest v2 — License binding schema (Phase 2, ADR-0667).
+"""Skill Manifest v2 — License binding schema (Phase 2, ADR-0833).
 
 Implements:
 1. Updated SkillManifest v2 with license binding

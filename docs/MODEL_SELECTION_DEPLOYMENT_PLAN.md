@@ -288,7 +288,7 @@ git push --force main
 - [ ] E2E test passes (user feedback → config update → next task uses it)
 - [ ] Adversarial review: 0 CRITICAL/HIGH findings (poisoning + drift tested)
 - [ ] Learning event schema verified (audit trail integration)
-- [ ] ADR-0643/0644 reviewed + updated if needed
+- [ ] ADR-2152/0644 reviewed + updated if needed
 - [ ] Docs updated (learning loop semantics, convergence targets)
 
 **Post-Deploy Monitoring:**

@@ -12174,7 +12174,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         # ADR-0005: AWP-runtime is removed from Corvin; AWP is consumed
         # only as a *protocol / declarative standard*. Engines (Claude
         # Code / Codex CLI / Gemini CLI / ...) do all execution. See
-        # docs/decisions/0005-awp-standards-only.md.
+        # docs/decisions/ADR-0005-awp-standards-only.md.
         # Worker-engine parity (ships dark behind `bridge_worker_engine_parity`,
         # ADR-0255) — falls back to the unchanged big-data-only carve-out
         # (`bridge_big_data_delegation`) while parity is off. Returns None for

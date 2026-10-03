@@ -46,7 +46,7 @@ POSITIVE = [
     ("Speech to text voice transcription audit metadata only",
      {"ADR-0921", "ADR-0185"}, {"ADR-0692"}),
     ("Wie setze ich den Usage-Zähler zurück ohne die Audit-Kette zu kürzen?",
-     {"ADR-0760"}, {"ADR-0366", "ADR-0696"}),
+     {"ADR-0760"}, {"ADR-0366", "ADR-0842"}),
     ("Data classification flow guard blocks sending secrets to a cloud engine",
      {"ADR-0042", "ADR-0335", "ADR-0329", "ADR-2049"}, set()),
     ("Delegation router skill shadow mode learning loop",
@@ -161,9 +161,13 @@ NAMED = [
 #: ADR-0673 ("Skill … Hook Contracts"). Recorded, not hidden: the bound is "at
 #: most these". Excluding them by threshold costs recall on real questions
 #: (0.25 → 21/22, 0.30 → 18/22); a title-anchor rule cost 1–2 of 22.
+#: 2026-10-03 (KB migration, ADR-2113): two more adjacent ADRs entered the loaded
+#: corpus — ADR-0265 ("A2A file-permission gate", had no frontmatter before) and
+#: ADR-2193 ("skill/hook injection", imported from a session output). Same class.
 AMBIGUOUS = [
 
-    ("Path gate hook blocks file writes outside workdir", {"ADR-0652", "ADR-0295", "ADR-0673"}),
+    ("Path gate hook blocks file writes outside workdir",
+     {"ADR-0652", "ADR-0295", "ADR-0673", "ADR-0265", "ADR-2193"}),
     # The short-question single-word rule (+2 held-out hits) admits the voice-
     # summary ADR here; recorded as its known cost, not hidden.
     ("Can you summarize this PDF for me?", {"ADR-0596"}),

@@ -7,7 +7,7 @@ imported ``model_selector_learning_enhancement`` — an in-memory second Beta
 learner with its own model-id table (two of four ids did not exist on any
 rate card) and its own price table. That module is gone; the multi-model
 ranking now lives on the ONE persisted, audited learner,
-``ConfidenceOptimizer.rank_models`` (ADR-0644 + ADR-0885), and reads the
+``ConfidenceOptimizer.rank_models`` (ADR-2153 + ADR-0885), and reads the
 published rate card the cost panels bill against.
 
 Phase 1 (skill instantiation/execution) is kept as it was. Phases 2–4 are

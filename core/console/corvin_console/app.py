@@ -204,7 +204,7 @@ from .routes import (
     task_graph_api as task_graph_api_route,
     # ADR-0641/0642 — Engine Configuration Console + Model Selector Skill
     engine_api as engine_api_route,
-    # ADR-0644 — real Bayesian confidence analytics (core.learning.model_selection_optimizer)
+    # ADR-2153 — real Bayesian confidence analytics (core.learning.model_selection_optimizer)
     model_selection_analytics as model_selection_analytics_route,
     # ADR-0377 Phase 2b, renamed ADR-0696 — Learned threshold persistence and console UI
     model_cost_optimizer_api as model_cost_optimizer_api_route,

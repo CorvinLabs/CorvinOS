@@ -1,4 +1,4 @@
-"""Unit tests for Skill invocation models (ADR-0598)."""
+"""Unit tests for Skill invocation models (ADR-2146)."""
 
 import pytest
 from datetime import datetime

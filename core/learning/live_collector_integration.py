@@ -281,7 +281,7 @@ class LiveCollectorIntegration:
         rollback_status: str = "no_rollback_needed"
     ):
         """
-        Called when Meta Loop (ADR-0623) adjusts hyperparameters.
+        Called when Meta Loop (ADR-2149) adjusts hyperparameters.
 
         Args:
             observation: {convergence_metrics, gradient_history, efficiency_metrics}

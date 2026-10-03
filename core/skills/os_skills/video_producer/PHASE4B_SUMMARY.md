@@ -298,7 +298,7 @@ Prevents undetected tampering: gap in chain = immediate audit failure.
 
 ## Next Steps (Phase 4c)
 
-1. **Model cost awareness** (ADR-0696 reference)
+1. **Model cost awareness** (ADR-0842 reference)
    - Factor token cost into win rate
    - Prefer cheaper models when quality difference < threshold
 

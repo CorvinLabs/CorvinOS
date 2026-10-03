@@ -1,4 +1,4 @@
-# Week 5: Deprecated API Monitoring Configuration (ADR-0538 Phase B)
+# Week 5: Deprecated API Monitoring Configuration (ADR-0811 Phase B)
 #
 # Real-time baseline metrics tracking for old Brain/Vibe/Context-v1 APIs
 # transitioning to new ACP Skills. Used for Phase C decision gate
@@ -134,7 +134,7 @@ escalation:
 
   - level: 2
     on: "Alert sustained > 30 min OR skill_availability < 99%"
-    action: "Notify Phase B lead (ADR-0538 owner)"
+    action: "Notify Phase B lead (ADR-0811 owner)"
 
   - level: 3
     on: "Multiple alerts OR high call rate (>50/min) sustained"

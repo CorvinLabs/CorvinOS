@@ -28,7 +28,7 @@ Load-bearing rules:
 
 ADR References:
   - ADR-0314: Learning Infrastructure (Event schema, EventStore, EventEmitter)
-  - ADR-0534: Feedback Ingestion (validation, scrubbing, buffering)
+  - ADR-0808: Feedback Ingestion (validation, scrubbing, buffering)
   - ADR-0876: Learning Feedback Wiring (this test verifies the wiring)
   - ADR-0613: Loop Closure (shadow mode verification)
 """

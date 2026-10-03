@@ -332,5 +332,5 @@ curl -X POST https://your-corvin/v1/console/api/v1/marketplace/custom-repositori
 
 - [User Guide](./marketplace-custom-repos.md)
 - [Security & Scope (ADR-0450)](../Corvin-ADR/decisions/ADR-0450-custom-github-repository-discovery-scope.md)
-- [API Contract (ADR-0451)](../Corvin-ADR/decisions/ADR-0451-custom-github-repository-api-storage.md)
+- [API Contract (ADR-0451)](../Corvin-ADR/decisions/ADR-2133-custom-github-repository-api-storage.md)
 - [Error Taxonomy (ADR-0453)](../Corvin-ADR/decisions/ADR-0453-custom-repository-error-handling.md)

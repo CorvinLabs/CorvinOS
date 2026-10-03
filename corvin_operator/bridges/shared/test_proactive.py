@@ -437,7 +437,7 @@ def test_e2e_solicited_completion_flag_off_ship_dark_direct_delivery(outbox, mon
     if audit.is_file():
         assert "proactive.emitted" not in audit.read_text()
 
-    # exactly-once: a second poll delivers nothing more (ADR-0445 preserved).
+    # exactly-once: a second poll delivers nothing more (ADR-2129 preserved).
     assert cn.deliver_ready(outbox) == 0
     assert len(_outbox_files(outbox)) == 1
 

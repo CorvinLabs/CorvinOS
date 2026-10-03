@@ -1,8 +1,8 @@
 # Image Generation — Zero-Config Tier (Concept)
 
 Companion to [imagegen-mcp.md](claude-ref/imagegen-mcp.md) (current BYOK-only integration)
-and the zero-config precedent in `Corvin-ADR/decisions/0185-cross-platform-voice-reliability.md`.
-Formalized in `Corvin-ADR/decisions/0191-zero-config-image-generation-tier.md`.
+and the zero-config precedent in `Corvin-ADR/decisions/ADR-0185-cross-platform-voice-reliability.md`.
+Formalized in `Corvin-ADR/decisions/ADR-0191-zero-config-image-generation-tier.md`.
 
 **Status: implemented (2026-07-12).** Live-tested end-to-end in a real chat turn (the model
 discovered and called the tool via ToolSearch, Tier 0 generated a real image, the one-time
@@ -198,7 +198,7 @@ L35 already fails closed on that.
 
 ## 10. Governance note
 
-Formalized as `Corvin-ADR/decisions/0191-zero-config-image-generation-tier.md` (Accepted,
+Formalized as `Corvin-ADR/decisions/ADR-0191-zero-config-image-generation-tier.md` (Accepted,
 2026-07-12) — it introduces a new default external dependency (an egress path) plus a new
 compliance-relevant mechanism (the disclosure gate), exactly this repo's own ADR-gate
 triggers. `docs/claude-ref/imagegen-mcp.md`'s existing "don't broaden this without an ADR"

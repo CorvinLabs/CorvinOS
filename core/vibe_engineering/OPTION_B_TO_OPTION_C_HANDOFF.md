@@ -29,7 +29,7 @@
 - `core/context_pipeline/v2_context_preservation.py` (360 LoC, production-ready)
 - `tests/test_context_pipeline_v2_ldd_k1_k3.py` (20+ tests, all green)
 - `tests/run_v2_validation.py` (standalone validator)
-- `Corvin-ADR/decisions/0399-context-pipeline-preservation-additive.md` (ACCEPTED)
+- `Corvin-ADR/decisions/ADR-0399-context-pipeline-preservation-additive.md` (ACCEPTED)
 
 ---
 
@@ -281,7 +281,7 @@ A  tests/test_context_pipeline_v2_ldd_k1_k3.py
 
 **Corvin-ADR files (separate repo):**
 ```
-A  Corvin-ADR/decisions/0399-context-pipeline-preservation-additive.md
+A  Corvin-ADR/decisions/ADR-0399-context-pipeline-preservation-additive.md
 ```
 
 **Next steps after k=2 verification:**

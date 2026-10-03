@@ -1,4 +1,4 @@
-"""Gate 5: Tenant-Isolation Safety — ADR-0538 Phase C
+"""Gate 5: Tenant-Isolation Safety — ADR-0811 Phase C
 
 Measures: Zero cross-tenant leakage in audit trail (GDPR Art. 5, 6, 32)
 Pass Criteria: 0_tenant_id_mismatches_detected

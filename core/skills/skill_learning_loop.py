@@ -1,4 +1,4 @@
-"""Skill Learning Loop — ADR-0683 Phase 7.
+"""Skill Learning Loop — ADR-0840 Phase 7.
 
 Implements feedback collection + Skill optimization with:
   - Outcome feedback aggregation (from ADR-0314 Learning Infrastructure)
@@ -9,7 +9,7 @@ Implements feedback collection + Skill optimization with:
   - Improvement measurement (confidence delta, latency delta)
   - Audit-first design (all tuning decisions logged)
 
-Load-bearing rules (ADR-0683 + ADR-0314 + ADR-0232):
+Load-bearing rules (ADR-0840 + ADR-0314 + ADR-0232):
   - All feedback immutable (never delete, only audit-append)
   - Optimization fail-closed (tuning never breaks Skill, rollback on error)
   - Audit trail required (every tuning decision logged with LoM)
@@ -69,7 +69,7 @@ class OptimizationProposal:
 
 
 class SkillLearningLoop:
-    """Feedback collection + Skill confidence tracking (ADR-0683)."""
+    """Feedback collection + Skill confidence tracking (ADR-0840)."""
 
     def __init__(self, store_path: Path):
         """Initialize learning loop.

@@ -94,7 +94,7 @@ class TestYouTubeLocalOnlyMode:
 
 
 class TestDirectorModeRemoval:
-    """Vector: ADR-0696 claimed IMPLEMENTED status for code with zero
+    """Vector: ADR-0841 claimed IMPLEMENTED status for code with zero
     production call sites. Confirm it's actually gone, not just undocumented."""
 
     def test_both_director_mode_trees_are_gone(self):

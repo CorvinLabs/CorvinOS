@@ -1,4 +1,4 @@
-"""Gate 3: No-Direct-Imports — ADR-0538 Phase C
+"""Gate 3: No-Direct-Imports — ADR-0811 Phase C
 
 Measures: Static import analysis + runtime call-site verification
 Pass Criteria: 0_static_imports_found AND all_runtime_callers_in_compat_layer

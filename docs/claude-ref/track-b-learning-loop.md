@@ -411,7 +411,7 @@ Learning Loop integrates seamlessly with Skill Forge:
 - **ADR-0314**: Learning Infrastructure (event schema, persistence, emission)
 - **ADR-0532**: OS-Skills Architecture (Skill system foundation)
 - **ADR-0533**: Skill Manifest Schema (metadata, dependencies, config)
-- **ADR-0534**: Feedback Integration (feedback → decision loop)
+- **ADR-0808**: Feedback Integration (feedback → decision loop)
 - **GDPR**: Articles 5 (principles), 6 (lawfulness), 30 (records), 32 (security)
 - **EU AI Act 2026**: Articles 5 (risk mitigation), 50 (transparency)
 

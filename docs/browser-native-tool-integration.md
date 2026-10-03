@@ -1,7 +1,7 @@
 # Browser Control as a Native Chat Tool (Concept)
 
 **Status: ADR filed; all four phases implemented (2026-07-16).** See
-`Corvin-ADR/decisions/0193-browser-native-chat-tool-integration.md` for the
+`Corvin-ADR/decisions/ADR-0193-browser-native-chat-tool-integration.md` for the
 accepted decision record — this doc is the fuller design behind it.
 `_BROWSE_SIGNAL_RE`, `_classify_browser_intent()`, `_handle_browser_command()`
 (and the bare-URL auto-detect + `/browser confirm|continue` sub-commands that

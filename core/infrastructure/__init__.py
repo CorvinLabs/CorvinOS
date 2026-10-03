@@ -7,7 +7,7 @@
 - L4: Module Contracts (ADR-0331)
 - L5: Self-Healing (ADR-0332)
 - L6: Subprocess Isolation (ADR-0333)
-- L7: Operator Dashboard (ADR-0334)
+- L7: Operator Dashboard (ADR-2121)
 """
 
 from core.infrastructure.boot_verification import (

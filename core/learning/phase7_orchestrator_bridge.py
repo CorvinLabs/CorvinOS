@@ -5,7 +5,7 @@ L1: Orchestration → Audit (VideoOrchestrator emits SkillExecutedEvent)
 L2: Audit → Learning (Optimizer reads, emits ConfigUpdateEvent)
 L3: Learning → Routing (config_store versioning + routing decision)
 
-Based on ADR-0537, 0696, 0690, 0688, 0689 (Skills 2.0 + Learning Loop)
+Based on ADR-2175, 0696, 0690, 0688, 0689 (Skills 2.0 + Learning Loop)
 Also integrates with existing: learning_events.py, active_loop.py, skill_optimizer.py
 
 NOT WIRED: no production caller as of 2026-09-27 (adversarial review).

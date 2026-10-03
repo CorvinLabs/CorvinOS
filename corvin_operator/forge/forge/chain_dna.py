@@ -22,7 +22,7 @@ Properties:
 Audit events: see EVENT_SEVERITY entries ``license.chain_dna_seeded``
 and ``license.chain_dna_mismatch`` in security_events.py.
 
-See ADR-0132 in Corvin-ADR/decisions/0132-lsad-audit-chain-dna.md.
+See ADR-0132 in Corvin-ADR/decisions/ADR-0132-lsad-audit-chain-dna.md.
 """
 from __future__ import annotations
 

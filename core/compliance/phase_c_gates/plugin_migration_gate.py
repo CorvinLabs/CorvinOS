@@ -1,4 +1,4 @@
-"""Gate 4: Plugin Migration — ADR-0538 Phase C
+"""Gate 4: Plugin Migration — ADR-0811 Phase C
 
 Measures: >=95% of plugins migrated to ACP Skills
 Pass Criteria: migration_rate >= 0.95

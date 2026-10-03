@@ -619,7 +619,7 @@ rules:
     implemented_by:
       - layer: "ADR-process"
         file: "docs/decisions/"
-        test: "docs/decisions/0056-compliance-manifest.md"
+        test: "docs/decisions/ADR-0056-compliance-manifest.md"
     invariants:
       - "every material change to a compliance layer produces a new or updated ADR"
       - "manifest version is bumped when any rule changes severity or invariants"

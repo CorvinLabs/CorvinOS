@@ -1,6 +1,6 @@
 """
 Phase 5b E2E: Upload UI — Full Installation Flow
-ADR-0681 Upload UI + Progress Tracking
+ADR-0838 Upload UI + Progress Tracking
 
 Validates:
 1. Form fields render correctly

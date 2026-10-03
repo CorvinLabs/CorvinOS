@@ -1265,7 +1265,7 @@ panels it knows about. Keep the static list complete; let the manifest extend it
 warning from vite, tsc or eslint. A new panel built as `pages/foo/` while the old
 `pages/foo.tsx` still exists therefore compiles, bundles, mounts its route and renders
 **the old page**, which presents exactly like a stale bundle and sends debugging into the
-three caches or the backend. It happened to the ADR-0400 Vibe Dashboard: the directory
+three caches or the backend. It happened to the ADR-2125 Vibe Dashboard: the directory
 shipped 2026-08-26, `pages/vibe-engineering.tsx` kept winning, and the panel was
 unreachable until the file was deleted on 2026-08-27 (ADR-0431). It happened AGAIN on
 2026-09-17: 95ecc2b6 re-added `pages/vibe-engineering.tsx`, the route crashed on nine
@@ -1558,7 +1558,7 @@ review, F6). Update this column in the same commit that adds or removes a call s
 - Wire into L5 (auto-routing) + L10 (context engineering) — **L5 done on bridge + console (ADR-2092, E2E through `adapter.process_one`); L10 done on console, registry now booted on the bridge but its bridge run is unproven**
 - Prove E2E: real requests flow through Skills, learning events emitted to ADR-0314
 - Tests: 25 E2E, 12 adversarial (crash recovery, timeout isolation, PII leakage)
-- Blocker: ADR-0532 Phase 1 + ADR-0533 manifest schema + ADR-0534 feedback integration ready
+- Blocker: ADR-0532 Phase 1 + ADR-0533 manifest schema + ADR-0808 feedback integration ready
 - Deliverable: `core/skills/os_skills/` directory with routing + context skills + test suite
 
 **Phase 2 (Weeks 5–10): Learning Loop**
@@ -1566,7 +1566,7 @@ review, F6). Update this column in the same commit that adds or removes a call s
 - Add `os.workflow_optimizer` (learns execution chains from user feedback)
 - Build dashboard (Vibe → OS-Skills observability panel)
 - Tests: 40 E2E + 18 adversarial (optimization convergence, stale feedback, feedback injection)
-- Blocker: ADR-0534 (feedback integration) accepted
+- Blocker: ADR-0808 (feedback integration) accepted
 - Deliverable: Learning loop E2E, dashboard, 2 skills composition-ready
 
 **Phase 3 (Weeks 11–24): Scale & Ecosystem**

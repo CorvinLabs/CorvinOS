@@ -1,6 +1,6 @@
 """
 Skill Invocation Service (Phase A)
-ADR-0598: Claude Code RPC API for Skill Execution
+ADR-0826: Claude Code RPC API for Skill Execution
 
 Single-Harness model: Claude Code executes all Skills.
 Models are swapped via ADR-0607 (OpenAI, Ollama Cloud, OpenRouter).

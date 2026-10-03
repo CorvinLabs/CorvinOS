@@ -311,7 +311,7 @@ After 5 successes, skill gets promoted even though operator never used it.
 #### Gap 7: Operator Feedback Loop Disconnected
 
 **Current State:**
-- Console UI (ADR-0322) allows operators to rate skills
+- Console UI (ADR-0778) allows operators to rate skills
 - Feedback is persisted as `user_feedback` learning events
 - **Missing:** Feedback is NOT used to adjust auto-promotion thresholds or exclusion lists
 

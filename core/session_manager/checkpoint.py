@@ -11,7 +11,7 @@ k=3: Phase 1 Task Context Drift — Goal persistence + integrity
 - Audit trail: every goal event logged (GDPR Art. 30)
 
 ADR-0405: GoalContext Persistence
-ADR-0407: Task Context Drift Prevention (Master)
+ADR-0784: Task Context Drift Prevention (Master)
 GDPR Art. 30, 32: Checkpoint creation is audit-logged.
 """
 

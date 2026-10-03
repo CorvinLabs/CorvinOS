@@ -48,7 +48,7 @@ class ModelProvider(ABC):
 
     @abstractmethod
     async def health_check(self) -> HealthCheckResult:
-        """Health check for provider (ADR-0643)."""
+        """Health check for provider (ADR-2152)."""
         pass
 
     @abstractmethod

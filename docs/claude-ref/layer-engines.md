@@ -7,8 +7,8 @@
 
 Backend-agnostic engine layer that lets Corvin spawn LLM-CLI
 subprocesses through a unified contract. AWP-integration roadmap
-(see `Corvin-ADR: decisions/0001-awp-as-orchestration-layer.md` and
-`Corvin-ADR: decisions/0002-phase2-adapter-engine-migration.md`).
+(see `Corvin-ADR: decisions/ADR-0001-awp-as-orchestration-layer.md` and
+`Corvin-ADR: decisions/ADR-0002-phase2-adapter-engine-migration.md`).
 
 **Module**: `bridges/shared/agents/`
 
@@ -1992,8 +1992,8 @@ narrower bound always wins) and is race-safe capped at
 
 ### References
 
-- `Corvin-ADR: decisions/0024-adaptive-os-model-selection.md` — the ADR
-- `Corvin-ADR: decisions/0112-acs-worker-model-inheritance.md` — worker split
+- `Corvin-ADR: decisions/ADR-0024-adaptive-os-model-selection.md` — the ADR
+- `Corvin-ADR: decisions/ADR-0112-acs-worker-model-inheritance.md` — worker split
 - `corvin_operator/bridges/shared/model_selector.py::resolve_os_model()` — the single
   6-Tier resolver both surfaces call (moved here from
   `adapter.py::_resolve_os_model_bundled` 2026-07-27, see ADR-0119/0123)
@@ -2172,7 +2172,7 @@ All 141 tests in the delegate plugin (Layer 29 + 29.1 + 29.2 +
 
 ### References
 
-- `Corvin-ADR: decisions/0022-engine-agnostic-forge-skillforge.md` — the ADR
+- `Corvin-ADR: decisions/ADR-0022-engine-agnostic-forge-skillforge.md` — the ADR
 - `core/delegate/corvin_delegate/skill_context.py` — pillar A
 - `core/delegate/corvin_delegate/mcp_config_builder.py` — pillar B
 - `core/delegate/corvin_delegate/delegation.py::_build_skill_block_for_engine` / `::_wire_mcp_for_engine` — wiring
@@ -2683,7 +2683,7 @@ traffic. It was not. **MEDIUM and COMPLEX were arithmetically unreachable**, and
 the empty tiers were a classifier defect wearing an empty-state.
 
 `_classify_complexity` (`core/skills/os_skills/model_selector.py`) documented the
-ADR-0642 rule — `SIMPLE: tokens < 500`, `COMPLEX: tokens > 3000` — and then
+ADR-2151 rule — `SIMPLE: tokens < 500`, `COMPLEX: tokens > 3000` — and then
 applied a different one. It consulted `_compute_feature_complexity`, a weighted
 average normalised against **hardcoded** 5000 tokens / 20 blocks / 50
 dependencies, against a 0.5 threshold. `ModelSelectorConfig.simple_max_tokens`

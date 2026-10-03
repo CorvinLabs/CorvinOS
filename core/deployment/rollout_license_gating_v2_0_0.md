@@ -433,4 +433,4 @@ Rollback **immediately** if:
 
 **Runbook prepared. Execute in production environment.**
 
-**Questions?** Reference ADR-0666/0667/0668 or CONCEPT-0036 in Corvin-ADR repo.
+**Questions?** Reference ADR-0831/0667/0668 or CONCEPT-0036 in Corvin-ADR repo.

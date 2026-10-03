@@ -134,7 +134,7 @@ def shadow_classify_task(task_input: str, tenant_id: str, chat_key: str | None =
 
 def report_turn_outcome(chat_key: str, success: bool) -> None:
     """Feed the real turn outcome into the Bayesian confidence optimizer
-    (ADR-0644, core.learning.model_selection_optimizer) for whatever task
+    (ADR-2153, core.learning.model_selection_optimizer) for whatever task
     type/model this chat_key's most recent shadow classification produced.
 
     ``success`` here is coarse and binary by design — "the claude_code engine

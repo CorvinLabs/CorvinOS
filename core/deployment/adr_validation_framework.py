@@ -3,7 +3,7 @@ ADR Compliance Validation Framework for 12-Week Production Rollout
 
 Validates adherence to key ADRs during production rollout:
 - ADR-0206 (Canary Strategy): traffic escalation, agreement rates, latency thresholds
-- ADR-0205 (Phase 7 Learning Loop): confidence convergence, feedback signals
+- ADR-2165 (Phase 7 Learning Loop): confidence convergence, feedback signals
 - ADR-0186 (Presence Heartbeat): instance ping, geo-tracking, consent signals
 - ADR-0369 (Edge Cases & Contingency): rollback scenarios, degradation handling
 
@@ -348,7 +348,7 @@ class ADRComplianceValidator:
                 status = ComplianceStatus.FAIL
 
             checks.append(ADRComplianceCheck(
-                adr_id="ADR-0205",
+                adr_id="ADR-2165",
                 check_name=f"feedback_count_{skill_id}",
                 status=status,
                 actual_value=feedback_count,
@@ -374,7 +374,7 @@ class ADRComplianceValidator:
                 status = ComplianceStatus.FAIL
 
             checks.append(ADRComplianceCheck(
-                adr_id="ADR-0205",
+                adr_id="ADR-2165",
                 check_name=f"confidence_convergence_{skill_id}",
                 status=status,
                 actual_value=confidence_sigma,
@@ -630,16 +630,16 @@ class ADRComplianceValidator:
                 return False, reasons
 
             # All critical checks must pass — and there must BE critical checks.
-            critical = [c for c in report.checks if c.adr_id in ["ADR-0206", "ADR-0205"]]
+            critical = [c for c in report.checks if c.adr_id in ["ADR-0206", "ADR-2165"]]
             if not critical:
-                return False, ["No ADR-0206/ADR-0205 checks in report (not measured)"]
+                return False, ["No ADR-0206/ADR-2165 checks in report (not measured)"]
             critical_passes = all(check.status == ComplianceStatus.PASS for check in critical)
 
             if not critical_passes:
                 failed_checks = [
                     f"{check.adr_id}/{check.check_name} ({check.message})"
                     for check in report.checks
-                    if check.status == ComplianceStatus.FAIL and check.adr_id in ["ADR-0206", "ADR-0205"]
+                    if check.status == ComplianceStatus.FAIL and check.adr_id in ["ADR-0206", "ADR-2165"]
                 ]
                 return False, failed_checks
 

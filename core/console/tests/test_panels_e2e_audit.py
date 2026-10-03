@@ -1,4 +1,4 @@
-"""E2E tests for panel API with audit trail integration (ADR-0366 + ADR-0299).
+"""E2E tests for panel API with audit trail integration (ADR-2123 + ADR-0299).
 
 Tests verify:
 1. Panel creation emits audit event

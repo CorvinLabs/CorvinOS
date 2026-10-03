@@ -164,7 +164,7 @@ class TestProviderHealthCheckTimeout:
 
     @pytest.mark.asyncio
     async def test_timeout_30_seconds_constraint(self):
-        """Test that providers timeout at 30s (ADR-0643)."""
+        """Test that providers timeout at 30s (ADR-2152)."""
         config = ModelProviderConfig(
             name="openrouter",
             api_key="test-key",

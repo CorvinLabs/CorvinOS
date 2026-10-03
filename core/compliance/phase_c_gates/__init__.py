@@ -1,4 +1,4 @@
-"""Phase C Measurement Gates — ADR-0538
+"""Phase C Measurement Gates — ADR-0811
 
 All 5 gates must PASS before Week 8 deletion of Brain/Vibe/Context-v1.
 """

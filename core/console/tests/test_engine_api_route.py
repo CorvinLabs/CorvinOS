@@ -94,7 +94,7 @@ class EngineApiRouteTests(unittest.TestCase):
         self.assertIsNone(body["last_learning_update"])
         for task_type in ("corvinOS", "SIMPLE", "MEDIUM", "COMPLEX"):
             self.assertEqual(body["models"][task_type]["run_count"], 0)
-            # 0.5 = ConfidenceOptimizer's uninformed Bayesian prior (ADR-0644),
+            # 0.5 = ConfidenceOptimizer's uninformed Bayesian prior (ADR-2153),
             # not 0.0 — ConfidenceOptimizer.get_stats() never returns 0.0 for
             # an unseen (task_type, model): that would misreport "confidently
             # bad" for a model nobody has fed outcomes for yet.
@@ -183,7 +183,7 @@ class EngineApiRouteTests(unittest.TestCase):
 
     def test_learned_confidence_is_real_bayesian_not_constant(self) -> None:
         """confidence_score/run_count per task type come from
-        ConfidenceOptimizer's real Bayesian+EMA update (ADR-0644), fed by
+        ConfidenceOptimizer's real Bayesian+EMA update (ADR-2153), fed by
         real turn outcomes — not the classifier's own static heuristic
         confidence, and not a hand-picked number."""
         import model_selector_shadow as mss

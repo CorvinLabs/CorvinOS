@@ -387,7 +387,7 @@ print(f"Audit write: {elapsed:.1f}ms")
 
 ## References
 
-- **ADR-0661:** DataHub Creator Architecture (Phases 1-4)
+- **ADR-2154:** DataHub Creator Architecture (Phases 1-4)
 - **ADR-0314:** Learning Infrastructure (event schema, persistence)
 - **ADR-0232:** Boot Tripwire (fail-closed audit verification)
 - **GDPR Art. 5:** Storage Limitation (retention policy)

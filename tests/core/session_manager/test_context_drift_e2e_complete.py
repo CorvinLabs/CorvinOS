@@ -1,4 +1,4 @@
-"""Comprehensive E2E test for Context Drift Prevention System (ADR-0407).
+"""Comprehensive E2E test for Context Drift Prevention System (ADR-0784).
 
 Full lifecycle test: Initialize → Diverge → Checkpoint → Resume → Drift Detect → Recover
 

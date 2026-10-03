@@ -23,7 +23,7 @@ Event schema (immutable):
     "tenant_id": "...",
 }
 
-Constraints (ADR-0644):
+Constraints (ADR-2153):
 - Only TaskManager can emit feedback (fail-closed)
 - Quality assessment: success=1.0, partial=0.5, fail=0.0 (+ bonuses for latency/cost)
 - Audit-first: core chain record BEFORE disk

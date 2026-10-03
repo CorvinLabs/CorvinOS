@@ -2,7 +2,7 @@
 
 Regression (2026-09-27 review): main() passed ``dry_run=args.dry_run``, so a
 bare run rewrote/unlinked files in the canonical Corvin-ADR repo, and the
-archive rule matched legitimate legacy ADR names such as 0030-plugin-system.md.
+archive rule matched legitimate legacy ADR names such as ADR-0030-plugin-system.md.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def mod(tmp_path, monkeypatch):
     decisions.mkdir()
     monkeypatch.setattr(m, "ADR_REPO", decisions)
     monkeypatch.setattr(m, "ARCHIVE_DIR", tmp_path / "archive")
-    (decisions / "0030-plugin-system.md").write_text("# ADR-0030 Plugin system\n")
+    (decisions / "ADR-0030-plugin-system.md").write_text("# ADR-0030 Plugin system\n")
     (decisions / "ADR-0001-x.md").write_text("---\nid: ADR-0001\n---\nbody\n")
     return m, decisions
 
@@ -44,5 +44,5 @@ def test_bare_invocation_changes_nothing(mod, monkeypatch):
 def test_fix_keeps_legacy_named_adrs_in_decisions(mod, monkeypatch):
     m, decisions = mod
     _run(m, monkeypatch, "--fix")
-    assert (decisions / "0030-plugin-system.md").exists()
+    assert (decisions / "ADR-0030-plugin-system.md").exists()
     assert "status:" in (decisions / "ADR-0001-x.md").read_text()

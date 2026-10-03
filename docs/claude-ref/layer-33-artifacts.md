@@ -1,6 +1,6 @@
 # Layer 33 — Session Artifact Memory — full reference
 
-ADR: `Corvin-ADR: decisions/0040-session-artifact-memory.md`
+ADR: `Corvin-ADR: decisions/ADR-0040-session-artifact-memory.md`
 Library: `corvin_operator/forge/forge/artifacts.py`
 MCP handlers: `corvin_operator/forge/forge/mcp_server.py`
 Auto-register hook: `corvin_operator/voice/hooks/path_gate.py` (PostToolUse branch)

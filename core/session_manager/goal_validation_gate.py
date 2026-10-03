@@ -1,6 +1,6 @@
 """GoalAlignmentValidator: Prevents context reduction from erasing the original goal.
 
-Phase 2 of Task Context Drift Prevention System (ADR-0404, ADR-0407).
+Phase 2 of Task Context Drift Prevention System (ADR-0404, ADR-0784).
 
 Validates that reduced context still covers the original goal semantically:
 - Semantic similarity: TF-IDF based (0.0-1.0)

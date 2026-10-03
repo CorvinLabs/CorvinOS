@@ -245,4 +245,4 @@ Exercises real interface boundary:
 - ADR-0404: Goal-Alignment Validation Gate (Phase 1)
 - ADR-0405: Cross-Session Goal Persistence (Phase 2)
 - ADR-0406: LDD Goal Re-Sync Protocol (Phase 3, this document)
-- ADR-0407: Task-Context-Drift Prevention System (Master)
+- ADR-0784: Task-Context-Drift Prevention System (Master)

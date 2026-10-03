@@ -86,7 +86,7 @@ docs: []
             r'^ADR_LDD_',
             r'^DOC-',
             # NOT legacy `NNNN-slug.md` names: those are real ADRs (e.g.
-            # 0030-plugin-system.md) and the ADR Gate still names that shape as
+            # ADR-0030-plugin-system.md) and the ADR Gate still names that shape as
             # the destination. A `^[0-9]+-[a-z]+-[a-z]+\.md$` pattern here
             # moved 21 live ADRs out of decisions/ on one run.
         ]

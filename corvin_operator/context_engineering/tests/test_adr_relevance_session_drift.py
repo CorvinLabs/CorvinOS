@@ -78,7 +78,7 @@ class TestParser:
         """Renumbered files keep their OLD id in the frontmatter (review R1-B2)."""
         d = tmp_path / "dec"
         d.mkdir()
-        _adr(d, "ADR-0785-0407-skill-eligibility-classes.md", id_="ADR-0407",
+        _adr(d, "ADR-0785-skill-eligibility-classes.md", id_="ADR-0407",
              status="ACCEPTED", title="Skill eligibility classes")
         loader = ADRLoader(adr_repo_path=str(d))
         assert "ADR-0785" in loader.adrs and "ADR-0407" not in loader.adrs

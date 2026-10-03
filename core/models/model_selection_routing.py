@@ -1,5 +1,5 @@
 """
-Phase 2: E2E Model Selection Routing (ADR-0641–0644)
+Phase 2: E2E Model Selection Routing (ADR-2150–0644)
 
 Wires task classification → model selection → provider routing → fallback.
 Integrates with audit trail for every selection.
@@ -76,7 +76,7 @@ class ModelSelectionRouter:
         # Step 1: Classify
         classification = self.selector.classify(task_input, tenant_id)
 
-        # Step 2: Audit the classification (ADR-0644)
+        # Step 2: Audit the classification (ADR-2153)
         self._audit_classification(tenant_id, classification)
 
         # Step 3: Build message list (or use provided)

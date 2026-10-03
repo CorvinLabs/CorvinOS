@@ -6,7 +6,7 @@ Tests the complete Skill Fork → Validation → Canary Deployment → Monitorin
 Compliance:
 - ADR-0532: OS-Skills architecture (autonomous routing)
 - ADR-0533: Skill manifest + canary deployment
-- ADR-0534: Feedback integration into learning loop
+- ADR-0808: Feedback integration into learning loop
 - ADR-0314: Learning infrastructure (event emission)
 - ADR-0232: Audit trail (hash-chained events)
 - ADR-0007: Tenant isolation (GDPR Art. 5, 6)

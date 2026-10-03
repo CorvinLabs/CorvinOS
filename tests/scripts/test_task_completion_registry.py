@@ -50,7 +50,7 @@ def adr(tmp_path: Path) -> Path:
 
 def test_unprefixed_files_reach_the_registry(tmp_path: Path, adr: Path) -> None:
     _adr(adr, "ADR-0100-prefixed.md", "ADR-0100", "ACCEPTED", "Prefixed")
-    _adr(adr, "0014-admin-ui.md", "ADR-0014", "PROPOSED", "Admin UI")
+    _adr(adr, "ADR-0014-admin-ui.md", "ADR-0014", "PROPOSED", "Admin UI")
     _adr(adr, "0207-edge-header.md", "ADR-0207", "ACCEPTED", "Edge header")
     tasks = _run(tmp_path, adr)
     assert tasks["adr_0100"]["status"] == "ACCEPTED"

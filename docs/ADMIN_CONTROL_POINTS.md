@@ -5,9 +5,9 @@
 **Date:** 2026-07-27
 **Audience:** Operators, enterprise admins, anyone driving CorvinOS without the SPA
 **ADRs** (sibling repo `Corvin-ADR/decisions/`):
-`0239-admin-api-vs-web-ui.md` (admin API vs. web UI),
-`0243-core-vs-plugins-architecture.md` (the `boot_layer` axis),
-`0233-plugin-system-consolidation.md` (plugin lifecycle)
+`ADR-0239-admin-api-vs-web-ui.md` (admin API vs. web UI),
+`ADR-0243-core-vs-plugins-architecture.md` (the `boot_layer` axis),
+`ADR-0233-plugin-system-consolidation.md` (plugin lifecycle)
 **Code:** `core/console/corvin_console/routes/admin.py` ·
 **Tests:** `core/console/tests/test_admin_route.py` — **24 passing**, measured 2026-07-27
 

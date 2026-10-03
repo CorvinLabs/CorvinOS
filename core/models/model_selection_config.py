@@ -1,4 +1,4 @@
-"""Real persistence for per-task-type model/provider selection (ADR-0641/0642).
+"""Real persistence for per-task-type model/provider selection (ADR-2150/0642).
 
 Storage: ``<corvin_home>/tenants/<tenant_id>/global/model_selection_config.json``
 

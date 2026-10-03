@@ -2,7 +2,7 @@
 
 Companion to the short CLAUDE.md section.
 
-→ **ADR:** Corvin-ADR: decisions/0045-L36-erasure-orchestrator.md
+→ **ADR:** Corvin-ADR: decisions/ADR-0045-l36-erasure-orchestrator.md
 → **Module:** `corvin_operator/bridges/shared/erasure_orchestrator.py`
 → **Tests:** `corvin_operator/bridges/shared/test_erasure_orchestrator.py`
 

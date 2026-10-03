@@ -1,7 +1,7 @@
 # Browser Automation — Task-Scoped Navigation & Voice-Guided Login (Concept)
 
 Companion to [browser-automation.md](browser-automation.md) (ADR-0182/0183/0187).
-Formalized in `Corvin-ADR/decisions/0189-browser-task-scoped-navigation-and-voice-guided-login.md`.
+Formalized in `Corvin-ADR/decisions/ADR-0189-browser-task-scoped-navigation-and-voice-guided-login.md`.
 
 **Status: implemented (2026-07-11).** All four phases in §7 shipped. Two
 implementation deltas versus the plan below, both simplifications that keep

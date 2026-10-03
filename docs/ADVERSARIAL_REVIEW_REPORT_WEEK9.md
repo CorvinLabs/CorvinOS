@@ -1,5 +1,5 @@
 # Adversarial Review Report — Meta Loop (Week 9)
-## Phase 2A: Meta Loop Self-Tuning (ADR-0623/0624/0625)
+## Phase 2A: Meta Loop Self-Tuning (ADR-2149/0624/0625)
 
 **Date:** 2026-09-06  
 **Reviewer:** Claude Code  
@@ -519,7 +519,7 @@ The Meta Loop is **safe for production deployment** under the following conditio
 ### Deployment Path: Week 10
 
 **Phase 2A Deployment (Week 10):**
-1. Merge ADR-0623/0624/0625 to Corvin-ADR ✓
+1. Merge ADR-2149/0624/0625 to Corvin-ADR ✓
 2. Merge implementation + tests to CorvinOS main ✓
 3. Enable monitoring dashboard (Vibe → Learning → Meta Loop panel)
 4. Staged rollout: 5% → 25% → 50% → 100% (with 2h observation windows)

@@ -104,7 +104,7 @@ Cannot proceed with staging deployment until Phase 9 security fixes applied.
 - Timeline: 8 weeks, 3–4 FTE, 2,000 LoC, 65 E2E tests, 20 adversarial gates
 - Testing: E2E, unit, adversarial, security
 - Compliance: Audit-first, consent-gated, house-rules non-bypassable, tenant-scoped
-- Risks & Blockers: Phase 9 remediation (2–3 days), ADR-0534 needed Week 1
+- Risks & Blockers: Phase 9 remediation (2–3 days), ADR-0808 needed Week 1
 
 **Phase 10 Kickoff:** 2026-09-26 (contingent on Phase 9 remediation)
 
@@ -221,14 +221,14 @@ python3 scripts/security_review_phase9.py
 ### Must Complete Before Phase 10 Week 1
 
 1. **Phase 9 remediation** ✅ Planned (2–3 days)
-2. **ADR-0534** ⏳ Not yet written (1-day task)
+2. **ADR-0808** ⏳ Not yet written (1-day task)
    - Feedback Integration Schema
    - Must be written Week 1 of Phase 10 if not done before
 3. **Stakeholder review** ⏳ Recommended (1 day)
 
 ### Phase 10 Kickoff: 2026-09-26 (Contingent)
 
-If Phase 9 fixes + ADR-0534 complete by 2026-09-25, Phase 10 starts Week 1 (Weeks 1–3: Workflow Optimizer).
+If Phase 9 fixes + ADR-0808 complete by 2026-09-25, Phase 10 starts Week 1 (Weeks 1–3: Workflow Optimizer).
 
 ---
 
@@ -293,7 +293,7 @@ MEMORY.md updated with Phase 9 security findings + Phase 10 readiness status. Ke
 ### Phase 10 Prep (Before 2026-09-26)
 
 1. **Day 4 (2026-09-24):** Stakeholder sign-off on Phase 10 plan
-2. **Day 5 (2026-09-25):** Write ADR-0534 (Feedback schema) + team kickoff prep
+2. **Day 5 (2026-09-25):** Write ADR-0808 (Feedback schema) + team kickoff prep
 3. **Day 6 (2026-09-26):** **Phase 10 Week 1 kickoff** (Workflow Optimizer)
 
 ---
@@ -304,7 +304,7 @@ MEMORY.md updated with Phase 9 security findings + Phase 10 readiness status. Ke
 |---|---|---|---|
 | **Phase 9 remediation overruns** | Medium | HIGH (Phase 10 delayed) | Fix P0 first; P1/P2 parallel to testing |
 | **Security re-review fails** | Low | HIGH (more fixes needed) | Comprehensive testing before re-review |
-| **Phase 10 dependencies unclear** | Low | MEDIUM (design time lost) | ADR-0534 written early Week 1 |
+| **Phase 10 dependencies unclear** | Low | MEDIUM (design time lost) | ADR-0808 written early Week 1 |
 | **Operator feedback quality low** | Medium | MEDIUM (learning poor) | Comprehensive feedback validation + UI guidance |
 
 ---

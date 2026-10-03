@@ -326,7 +326,7 @@ Apache-2.0 (same as Corvin-Knowledge)
 ## 🔗 Related
 
 - **Corvin-Knowledge** — https://github.com/CorvinLabs/Corvin-Knowledge
-- **ADR-MESH-002** — Plugin Contract & Distribution
+- **ADR-2201** — Plugin Contract & Distribution
 - **ADR-0884** — CorvinOS Integration (this plugin)
 - **CorvinOS Docs** — https://github.com/CorvinLabs/CorvinOS/docs
 

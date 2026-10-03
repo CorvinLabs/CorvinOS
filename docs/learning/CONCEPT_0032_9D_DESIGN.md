@@ -303,7 +303,7 @@ Tier 3 doesn't oscillate because:
 - Penalization: λ·L_meta prevents oscillation
 - Audit: Every weight change logged (delta_w, reason, timestamp)
 
-### **ADR-0623: Tiered Damping Protocol**
+### **ADR-2149: Tiered Damping Protocol**
 
 - Scope: Update rates per tier (η₁ > α₂ > α₃)
 - Oscillation detection: Variance check per tier

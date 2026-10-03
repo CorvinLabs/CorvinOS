@@ -146,7 +146,7 @@ systemctl --user status corvin-notification-daemon  # Daemon
 - `docs/ARCHITECTURE.md` — system design
 - `docs/RELEASE-NOTES-PHASE7.md` — what shipped
 - `ADR-0516` — ADR centralization rule (Corvin-ADR repo)
-- `ADR-0688` — Master Plan (Phases 1–6 design)
+- `ADR-2159` — Master Plan (Phases 1–6 design)
 
 ---
 

@@ -1,6 +1,6 @@
 /**
  * Marketplace — ONE panel for browsing the plugin index, managing installed
- * plugins, the skill catalogue (ADR-0682), skill packages and MCP tools (ADR-0892). Replaces
+ * plugins, the skill catalogue (ADR-0839), skill packages and MCP tools (ADR-0892). Replaces
  * /app/marketplace-hub (a synthetic index that fetched a 404), the manifest's
  * /app/plugin-center (a deleted component: the 404 page) and /app/packages.
  *

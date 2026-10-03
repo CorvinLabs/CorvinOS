@@ -271,6 +271,6 @@ Core learning infrastructure is **cryptographically sound** and **GDPR-compliant
 
 1. Merge Phase 3 with this adversarial review
 2. **Phase 4 (ADR-0533):** Wire Skill.execute() into consent + house-rules gates
-3. **Phase 4 (ADR-0534):** Implement optimizer feedback loop + config mutation audit
+3. **Phase 4 (ADR-0808):** Implement optimizer feedback loop + config mutation audit
 4. **Phase 4 (ADR-0320):** Define + validate metric label allowlist
 5. **Re-run adversarial tests** against Phase 4 to verify Defenses 3–5

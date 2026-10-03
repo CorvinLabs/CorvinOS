@@ -181,7 +181,7 @@ def _record_state(home: Path, *, ok: bool, detail: str) -> None:
 
 
 def _check_a2a_reconnect(home: Path) -> None:
-    """ADR-0198 (Corvin-ADR/decisions/0198-a2a-reconnect-broadcast.md):
+    """ADR-0198 (Corvin-ADR/decisions/ADR-0198-a2a-reconnect-broadcast.md):
     best-effort proactive A2A reconnect broadcast.
 
     Piggybacks on this thread's existing 5-minute cadence instead of

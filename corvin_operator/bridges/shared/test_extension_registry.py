@@ -1,7 +1,7 @@
 """Per-subtask E2E — ADR-0142 (Layer Extension API) M1–M4 + M6.
 
 Covers the load-bearing contract from
-Corvin-ADR/decisions/0142-layer-extension-api.md and the must-NOT rules:
+Corvin-ADR/decisions/ADR-0142-layer-extension-api.md and the must-NOT rules:
 
   * namespace gate rejects corvin.* / single-word / bad-charset names
     (ext.core_namespace_rejected emitted)

@@ -188,7 +188,7 @@ class TestGDPRArticle32Security:
 
     def test_pii_scrubbing_before_audit_write(self):
         """Verify _assert_safe() prevents PII leakage (fail-closed)."""
-        # ADR-0644: PII must be scrubbed before audit write
+        # ADR-2153: PII must be scrubbed before audit write
 
         potential_pii = {
             "user_email": "john@example.com",

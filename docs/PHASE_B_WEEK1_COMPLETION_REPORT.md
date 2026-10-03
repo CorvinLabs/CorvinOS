@@ -216,7 +216,7 @@ Tests:   8 E2E tests in test_phase_b_week1_complete.py
 ```
 
 ### Files Changed
-- ✅ ADR-0836-0677-skill-forge-v2-phase3-zip-packaging.md (status: proposed → accepted)
+- ✅ ADR-0836-skill-forge-v2-phase3-zip-packaging.md (status: proposed → accepted)
 - ✅ ADR-0678-unified-marketplace-with-navigation-hub.md (status: proposed → accepted)
 - ✅ tests/e2e/test_phase_b_week1_complete.py (new, 568 lines, 14 tests)
 

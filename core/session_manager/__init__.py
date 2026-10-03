@@ -12,7 +12,7 @@ Phase 3 Enhancement: Phase 1 Task Context Drift Prevention
 - Audit trail integration
 
 ADR-0405: GoalContext Persistence
-ADR-0407: Task Context Drift Prevention (Master)
+ADR-0784: Task Context Drift Prevention (Master)
 Depends on: ADR-0347 (Hub), ADR-0348 (EventBus), ADR-0399 (Context-Pipeline v2)
 """
 

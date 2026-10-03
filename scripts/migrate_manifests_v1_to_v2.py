@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Migrate Skill manifests from v1 to v2 (Phase 2, ADR-0667).
+"""Migrate Skill manifests from v1 to v2 (Phase 2, ADR-0833).
 
 Migrates all 34 builtin Skills from v1 manifest format to v2 with license binding.
 Each manifest is signed with the operator private key.

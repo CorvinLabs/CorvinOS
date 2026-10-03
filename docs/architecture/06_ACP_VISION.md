@@ -228,7 +228,7 @@ Compliance Skills (consent, house-rules) are **Meta-Skills** (monolithic, non-ve
 
 - **ADR-0532:** Phase 1–5 roadmap (8–12 weeks, ~2600 LoC)
 - **ADR-0533:** Skill manifest schema (plugin.json)
-- **ADR-0534:** Feedback integration (outcome sink, learning loop)
+- **ADR-0808:** Feedback integration (outcome sink, learning loop)
 - **ADR-0535:** Skill composition + DAG validation
 
 ---

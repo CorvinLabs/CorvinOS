@@ -255,7 +255,7 @@ pytest tests/e2e/test_plugin_corvin_knowledge_wiring.py -v
 ## 🔗 Related Documents
 
 - **ADR-0884** — This plugin's architectural decision
-- **ADR-MESH-002** — Plugin contract & distribution (canonical)
+- **ADR-2201** — Plugin contract & distribution (canonical)
 - **ADR-0262/0263** — Plugin-Builder v2 (how plugins are authored)
 - **ADR-0671** — Knowledge Graph Builder (tenant isolation)
 - **ADR-0519** — Self-Extending Knowledge Graph (learning loop)
@@ -264,7 +264,7 @@ pytest tests/e2e/test_plugin_corvin_knowledge_wiring.py -v
 
 ## ✍️ Attribution
 
-- **Architecture:** ADR-0884, ADR-MESH-002
+- **Architecture:** ADR-0884, ADR-2201
 - **Implementation:** Claude Haiku 4.5
 - **Review & Guidance:** Shumway
 

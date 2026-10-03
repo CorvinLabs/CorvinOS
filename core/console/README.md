@@ -5,7 +5,7 @@ Owner-self-service web UI for Corvin. Mounted onto the existing
 (SPA). Opt-in: a fresh Corvin install does not bootstrap this
 plugin.
 
-See [`docs/decisions/0015-console-self-service-ui.md`](../../docs/decisions/0015-console-self-service-ui.md)
+See [`docs/decisions/ADR-0015-console-self-service-ui.md`](../../docs/decisions/ADR-0015-console-self-service-ui.md)
 for the architecture decision and
 [`outputs/corvin-console-konzept.md`](../../outputs/corvin-console-konzept.md)
 for the original design document.

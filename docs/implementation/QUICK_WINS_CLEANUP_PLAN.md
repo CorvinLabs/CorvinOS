@@ -1,6 +1,6 @@
 # Quick Wins Cleanup — 3 Tasks, <2h Total
 
-**Status:** Ready to execute in parallel with ADR-0538 amendments  
+**Status:** Ready to execute in parallel with ADR-0811 amendments  
 **Risk:** LOW (test-only or unused code, no production impact)  
 **Reversibility:** 100% (git revert if needed)
 
@@ -230,7 +230,7 @@ git checkout HEAD@{1} -- core/vibe_engineering/
 
 ## Notes
 
-- ADR-0538 amendments do NOT block these quick wins (independent code paths)
+- ADR-0811 amendments do NOT block these quick wins (independent code paths)
 - Phase A can start before/during/after quick wins (no interaction)
 - Quick wins are purely maintenance (test-only + unused code cleanup)
 - Zero risk of production impact

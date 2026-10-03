@@ -4,7 +4,7 @@ Companion to the short CLAUDE.md section. Full operational details
 live here so the main CLAUDE.md stays under the per-session size
 budget.
 
-→ **ADR:** Corvin-ADR: decisions/0042-L34-data-classification.md
+→ **ADR:** Corvin-ADR: decisions/ADR-0042-l34-data-classification.md
 → **Module:** `corvin_operator/bridges/shared/data_classification.py`
 → **Tests:** `corvin_operator/bridges/shared/test_data_classification.py`
 
