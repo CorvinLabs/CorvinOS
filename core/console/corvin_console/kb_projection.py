@@ -56,6 +56,7 @@ def kb_tenant() -> str:
     return os.environ.get("CORVIN_KB_TENANT", "_default")
 
 
+_WORK_FILE = __import__("re").compile(r"^kb/(initiatives|epics|tasks)/[^/]+\.md$")
 _ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND")
 
 
@@ -71,9 +72,12 @@ def _env(actor: str) -> dict[str, str]:
 def _uncommitted_work(repo: Path) -> list[str]:
     """Work-item files edited but not committed. Export reads the working tree, so such an
     edit would reach the board without the state machine (a hand-set `status: done`)."""
-    r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--", "kb/initiatives", "kb/epics", "kb/tasks"],
+    r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "-uall", "--",
+                        "kb/initiatives", "kb/epics", "kb/tasks"],
                        capture_output=True, text=True, env=_env("sync:kb"))
-    return [ln[3:] for ln in r.stdout.splitlines() if ln.strip()]
+    # exactly what `kb export` reads (direct *.md children) — a scratch file is no work item
+    return [p for p in (ln[3:].strip('"') for ln in r.stdout.splitlines() if ln.strip())
+            if _WORK_FILE.match(p.split(" -> ")[-1])]
 
 
 def _run(repo: Path, *args: str, actor: str = "sync:kb", timeout: int = 120) -> tuple[int, Any]:
@@ -99,6 +103,7 @@ def fingerprint(repo: Path) -> str:
             for p in sorted(base.glob("*.md")):
                 st = p.stat()
                 parts.append(f"{p.name}:{st.st_mtime_ns}:{st.st_size}")
+    parts += _uncommitted_work(repo)   # committing (or reverting) an edit is a change of state too
     # sha256, not hash(): str hashes are salted per process, and this value is persisted
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:32]
 
@@ -139,44 +144,50 @@ def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
         prev = _state.get(tenant_id) or {}
         fp = fingerprint(repo)
         now = time.time()
-        if not force and prev.get("fingerprint") == fp and prev.get("state") in ("blocked", "held"):
-            # unchanged and still red/held: nothing to redo — re-running wrote one
-            # projection_blocked audit record every tick (43 200 a day)
-            prev["checked_at"] = now
-            return prev
-        if not force and prev.get("fingerprint") == fp and prev.get("payload"):
-            d = projection.diff(tenant_id, prev["payload"])
+        if not force and prev.get("fingerprint") == fp:
+            # Unchanged KB. The last GOOD projection is kept in every state (ok, blocked, held),
+            # so drift — a store write behind the KB's back — is repaired in all of them. A
+            # blocked/held state is not re-run: that wrote one projection_blocked record per tick.
+            d = projection.diff(tenant_id, prev["payload"]) if prev.get("payload") else []
             if not d:
                 prev["checked_at"] = now
                 return prev
             log.warning("kb projection drift: %d difference(s) with an unchanged KB — healing", len(d))
             res = projection.apply(tenant_id, prev["payload"], drift_healed=len(d))
-            st = {**prev, **{k: v for k, v in res.items() if k != "remaining"}, "remaining": res["remaining"],
-                  "checked_at": now, "drift_total": prev.get("drift_total", 0) + len(d)}
+            st = {**prev, **{k: v for k, v in res.items() if k not in ("remaining", "state")},
+                  "remaining": res["remaining"], "checked_at": now,
+                  "state": res["state"] if prev.get("state") in (None, "ok", "diverged") else prev["state"],
+                  "drift_total": prev.get("drift_total", 0) + len(d)}
             _save(tenant_id, st)
             return st
         rc_h, healed = _run(repo, "heal")
-        pending = _uncommitted_work(repo)
-        if pending:
-            # hold the last good projection (drift is still repaired against it) until the
-            # edit is committed; the console banner names the files
-            st = {**prev, "state": "held", "pending_uncommitted": pending[:20], "fingerprint": fp,
-                  "checked_at": now}
-            _save(tenant_id, st)
-            return st
         rc, payload = _run(repo, "export")
         if rc != 0 or "items" not in payload:
             st = {"state": "error", "error": payload.get("error") or payload.get("raw") or f"export rc={rc}",
-                  "fingerprint": None, "checked_at": now}
+                  "fingerprint": None, "checked_at": now, "payload": prev.get("payload")}
+            _save(tenant_id, st)
+            return st
+        fp = fingerprint(repo) if healed.get("commit") else fp
+        base = {"fingerprint": fp, "checked_at": now, "drift_total": prev.get("drift_total", 0),
+                "healed": healed.get("fixed", 0) if rc_h == 0 else None}
+        if not payload.get("ok"):
+            # red wins over held: an inconsistent KB is reported first (one record per state)
+            res = projection.apply(tenant_id, payload)
+            st = {**res, **base, "payload": prev.get("payload")}
+            _save(tenant_id, st)
+            return st
+        pending = _uncommitted_work(repo)
+        if pending:
+            # `kb export` reads the working tree: a hand-edited, uncommitted status would reach
+            # the board past the state machine. Hold the last good projection (drift is still
+            # repaired against it) and pause board moves until the edit is committed.
+            st = {**{k: v for k, v in prev.items() if k not in ("error",)}, **base, "state": "held",
+                  "pending_uncommitted": pending[:20], "payload": prev.get("payload")}
             _save(tenant_id, st)
             return st
         res = projection.apply(tenant_id, payload)
-        if res["state"] != "blocked":
-            _run(repo, "index")   # kb/graph (Knowledge Graph panel) follows every KB change
-        st = {**{k: v for k, v in res.items()}, "fingerprint": fingerprint(repo) if healed.get("commit") else fp,
-              "payload": payload if res["state"] != "blocked" else None, "checked_at": now,
-              "healed": healed.get("fixed", 0) if rc_h == 0 else None,
-              "drift_total": prev.get("drift_total", 0), "items": len(payload["items"])}
+        _run(repo, "index")   # kb/graph (Knowledge Graph panel) follows every KB change
+        st = {**res, **base, "payload": payload, "items": len(payload["items"])}
         _save(tenant_id, st)
         return st
 
@@ -199,6 +210,11 @@ def transition(tenant_id: str, item_id: str, to_status: str, *, reason: str = ""
     to_kb = projection.STATUS_TO_KB.get(to_status, to_status)
     details = {"item_id": item_id, "kind": cur["kind"], "from_status": cur["status"], "to_status": to_status,
                "actor_kind": actor.split(":")[0], **({"sid_fingerprint": sid_fingerprint} if sid_fingerprint else {})}
+    pending = _uncommitted_work(repo)
+    if pending:
+        # while held the board cannot show a move (it projects only committed state), so a
+        # move is refused with the reason instead of answering 200 for a card that stays put
+        raise KbTransitionRefused(f"board moves are paused: uncommitted knowledge-base edits {pending[:5]}")
     service._chain(tenant_id, "task_item.kb_transition", {**details, "outcome": "requested"})  # audit-first
     # `--opt=value`: a reason starting with "-" can never be read as another option
     args = ["task", ref.split(":", 1)[1], to_kb, "--via=console", f"--actor={actor}"]

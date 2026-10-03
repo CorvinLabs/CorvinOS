@@ -207,9 +207,10 @@ were archived "moved into the knowledge base: <id>". Work items are authored onl
 ## Hardening (adversarial review 2026-10-03)
 
 - **Projector states:** `ok` · `blocked` (red KB — the last good projection stays; ONE
-  `projection_blocked` record per KB state, not one per tick) · `held` (work-item files edited
-  but not committed — export reads the working tree, so the projector waits; the banner names
-  the files) · `diverged` · `error` · `off`.
+  `projection_blocked` record per KB state, not one per tick) · `held` (work-item `*.md` files
+  edited but not committed — export reads the working tree, so the projector keeps the last good
+  projection, still repairs drift against it, and refuses board moves with the reason; the banner
+  names the files; a red KB is reported as `blocked` first) · `diverged` · `error` · `off`.
 - **Restore:** a soft-deleted `kb:` item is restored even when it was deleted without a cascade
   id (a raw write); `task_item.restored` is recorded only when a row actually changed.
 - **Labels** are deduplicated and capped at 12 exactly like the store keeps them, so a KB file

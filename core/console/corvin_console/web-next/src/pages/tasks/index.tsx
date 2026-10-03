@@ -406,7 +406,7 @@ export default function TasksPage() {
               {kbQ.data.state === "blocked"
                 ? `Knowledge base is inconsistent (${kbQ.data.blocking ?? "?"} blocking finding${kbQ.data.blocking === 1 ? "" : "s"}: ${Object.keys(kbQ.data.failing ?? {}).join(", ")}) — the board shows the last consistent state. Run "kb check" in Corvin-Knowledge.`
                 : kbQ.data.state === "held"
-                ? `Uncommitted edits in the knowledge base (${(kbQ.data.pending_uncommitted ?? []).slice(0, 3).join(", ")}) — the board shows the last committed state until they are committed.`
+                ? `Uncommitted edits in the knowledge base (${(kbQ.data.pending_uncommitted ?? []).slice(0, 3).join(", ")}) — the board keeps its last consistent state and board moves are paused until they are committed.`
                 : kbQ.data.state === "error" ? `Knowledge-base sync failed: ${kbQ.data.error ?? "unknown error"}`
                 : kbQ.data.state === "diverged" ? "Knowledge-base sync could not repair every difference — see kb status." : null}
             </p>

@@ -161,9 +161,8 @@ class KbProjectionE2E(unittest.TestCase):
             # 6. heal: an epic carrying a status is a derivable deviation
             ep = next((self.kb / "kb" / "epics").glob(f"{self.epic['id']}-*.md"))
             ep.write_text(ep.read_text().replace("title:", "status: done\ntitle:", 1))
-            st = self._sync(client, csrf)                     # uncommitted: held, never swept into a heal
-            self.assertEqual(st["state"], "held", st)
-            self.assertEqual(st["pending_uncommitted"], [str(ep.relative_to(self.kb))])
+            st = self._sync(client, csrf)                     # uncommitted: never swept into a heal;
+            self.assertEqual(st["state"], "blocked", st)      # still red, so red is reported first
             self.assertIn("status: done", ep.read_text())
             self._commit("operator edit")
             st = self._sync(client, csrf)
@@ -249,6 +248,61 @@ class KbProjectionE2E(unittest.TestCase):
                         if e.get("event_type") == "task_item.kb_transition"]
             self.assertEqual(outcomes.count("applied"), 2)
             self.assertNotIn("Jane", (self.kb / "kb" / "audit.jsonl").read_text())
+
+    def test_held_state_repairs_drift_refuses_moves_and_yields_to_red(self):
+        """Refutation round 2026-10-03: held skipped drift repair, stuck on a scratch file,
+        answered 200 to a move it never showed, and hid a red KB."""
+        from corvin_console import kb_projection
+        from core.task_tracking import service
+
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            self.assertEqual(self._sync(client, csrf)["state"], "ok")
+            items = self._items(client)
+            t1, t2 = items[f"kb:{self.t1['uid']}"], items[f"kb:{self.t2['uid']}"]
+            scratch = self.kb / "kb" / "tasks" / "scratch.txt"
+            scratch.write_text("not a work item")
+            self.assertEqual(self._sync_tick()["state"], "ok")                 # (b) no held for a .txt
+            f1 = next((self.kb / "kb" / "tasks").glob(f"{self.t1['id']}-*.md"))
+            f1.write_text(f1.read_text() + "\nhalf-written\n")
+            st = self._sync_tick()
+            self.assertEqual(st["state"], "held", st)
+            db = home / "tenants" / "_default" / "global" / "task_tracking" / "tasks.db"
+            with sqlite3.connect(db) as conn:
+                conn.execute("UPDATE items SET status='complete' WHERE id=?", (t2["id"],))
+            st = self._sync_tick()
+            self.assertEqual((st["state"], st["drift_healed"]), ("held", 1), st)   # (a) drift repaired while held
+            self.assertEqual(self._items(client)[f"kb:{self.t2['uid']}"]["status"], "open")
+            r = client.post(f"{_URL}/items/{t2['id']}/kb-transition", json={"to": "in_progress"},
+                            headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 409, r.text)                       # (c) refused, not a silent 200
+            self.assertIn("paused", r.json()["detail"]["message"])
+            bad = self.kb / "kb" / "tasks" / "T-0099-orphan.md"                 # (d) red wins over held
+            bad.write_text("---\nid: T-0099\nuid: 01J00000000000000000000099\ntitle: o\nstatus: open\nepic: E-404\n---\n")
+            self.assertEqual(self._sync_tick()["state"], "blocked")
+            bad.unlink()
+            f1.write_text(f1.read_text().replace("\nhalf-written\n", ""))      # revert: back to clean
+            self.assertEqual(self._sync_tick()["state"], "ok")
+            # tenant check: the projector serves one tenant
+            with self.assertRaisesRegex(service.TaskTrackingError, "another tenant"):
+                kb_projection.transition("acme", t1["id"], "in_progress")
+
+    def test_kb_subprocess_never_sees_the_console_secrets(self):
+        """A KB checkout's code (a commit hook here) runs with a minimal environment."""
+        hook = self.kb / ".git" / "hooks" / "pre-commit"
+        dump = self.tmp / "hook-env.txt"
+        hook.write_text(f"#!/bin/sh\nenv > {dump}\nexit 0\n")
+        hook.chmod(0o755)
+        os.environ["ANTHROPIC_API_KEY"] = "sk-probe-must-not-leak"
+        self.addCleanup(os.environ.pop, "ANTHROPIC_API_KEY", None)
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            self._sync(client, csrf)
+            t1 = self._items(client)[f"kb:{self.t1['uid']}"]
+            r = client.post(f"{_URL}/items/{t1['id']}/kb-transition", json={"to": "in_progress"},
+                            headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 200, r.text)
+        env = dump.read_text()
+        self.assertIn("KB_ACTOR=", env)                                         # positive control
+        self.assertNotIn("sk-probe-must-not-leak", env)
 
     def test_projector_thread_starts_and_heals_drift(self):
         """test-review finding 8: start()/_loop had no test; both hosts call it at boot."""
