@@ -291,9 +291,10 @@ WARNINGS: they derive `implementation_ready` (the board's ready badge) and never
 --reviewer … --reviewer-cmd "<cmd>"` (seeds a known defect into a copy; a missed seed voids the
 round) → `kb review close` sets `addressed` ONLY for three calibrated zero rounds under different
 lead questions by a reviewer ≠ the ADR's author (`kb orchestrate` drives this one step at a time).
-A **code task** (its epic implements a decision) is done only with `kb task <T> done --evidence
-call_site=<prod file> --evidence e2e_test=<path> --evidence exit_code=0 --evidence commit=<sha on
-origin/main> [--evidence repo=CorvinOS]` (G5) — push first. The projector runs `kb sweep` every
+A **code task** (it or its epic implements a decision) is done only with `kb task <T> done --evidence
+call_site=<production code file> --evidence e2e_test=<test file> --evidence exit_code=0 --evidence
+commit=<sha on origin/main, not older than the task's start> [--evidence repo=CorvinOS]` (G5) — push
+first. G4 counts only a review closed by `kb review close` (audited); hand-edited verdicts never pass. The projector runs `kb sweep` every
 10 min (G6: vanished paths/evidence → a `regresses:` task) and mints recurring finding classes as
 SkillForge guidance skills (`kb learn`, `kb guidance`). Agents (`--actor agent:*`) are held to
 `kb/_meta/autonomy.yaml` (A1 drafts, A2 only ready + not human-required — a missing `risk:` IS

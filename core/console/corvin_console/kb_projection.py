@@ -281,11 +281,15 @@ def guidance_bridge(tenant_id: str, repo: Path) -> dict[str, Any]:
     for m in pend.get("mint") or []:
         name = guidance_skill_name(m["finding_class"])
         try:
-            if reg.get(name) is None:
-                reg.create(scope="user", name=name, type="learned-experience", body_md=m["body_md"],
-                           description=f"Corvin-Knowledge guidance for the recurring finding class "
-                                       f"{m['finding_class']} (advisory, retired when it shows no effect)",
-                           created_by="kb-guidance")
+            spec = reg.get(name)
+            if spec is None:
+                spec = reg.create(scope="user", name=name, type="learned-experience", body_md=m["body_md"],
+                                  description=f"Corvin-Knowledge guidance for the recurring finding class "
+                                              f"{m['finding_class']} (advisory, retired when it shows no effect)",
+                                  created_by="kb-guidance")
+            if not list(getattr(spec, "grades", None) or []):
+                # graded whenever it has no grade yet — not only right after create: a grade that
+                # failed once left an ungraded (never injected) skill acked as minted
                 reg.grade(name, run_id=f"kb-guidance-bootstrap:{m['finding_class']}", score=0.3,
                           notes="bootstrap seed minted from KB guidance — not earned usage", organic=False)
         except Exception as exc:  # noqa: BLE001 — one bad entry must not stop the others
@@ -355,6 +359,9 @@ def start(tenant_id: Optional[str] = None) -> bool:
     if kb_repo() is None or t in _started:
         return False
     _started.add(t)
+    # the slow loops start PERIODIC_S after boot: the first ticks belong to the projection
+    # (a periodic run holds _lock for its subprocesses and would delay the first sync)
+    _last_periodic.setdefault(t, time.time())
     _stops[t] = threading.Event()
     threading.Thread(target=_loop, args=(t, _stops[t]), name=f"kb-projection-{t}", daemon=True).start()
     log.info("kb projection started for tenant %s from %s", t, kb_repo())
