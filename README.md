@@ -1,9 +1,6 @@
 <p align="center">
   <img src="assets/banner.svg" alt="CorvinOS — the operating system for AI work" width="100%"/>
 </p>
-
-<h1 align="center">CorvinOS</h1>
-
 <p align="center">
   <strong>The operating system for AI work.</strong><br/>
   It routes every turn to the cheapest model that fits — and proves the saving from its own audit log.<br/>
