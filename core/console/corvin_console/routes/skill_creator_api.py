@@ -350,10 +350,14 @@ async def generate_skill(
         except forge_runs.GenerationBusy as busy:
             raise HTTPException(status_code=429, detail=str(busy))
 
-        orchestrator = SkillCreatorOrchestrator(
-            registry_root=str(_registry_root(rec.tenant_id))
-        )
         try:
+            # Orchestrator initialization must be inside the try block so that
+            # constructor exceptions (e.g., ClaudeCodeUnavailable) are caught
+            # and the run is marked as "failed" rather than left orphaned in
+            # "running" status (which would block the concurrency limit forever).
+            orchestrator = SkillCreatorOrchestrator(
+                registry_root=str(_registry_root(rec.tenant_id))
+            )
             artifact = await asyncio.to_thread(
                 lambda: asyncio.run(orchestrator.create_skill(user_request, base=base))
             )
