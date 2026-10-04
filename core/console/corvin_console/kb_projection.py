@@ -320,6 +320,17 @@ def periodic(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
         return {}
     _last_periodic[tenant_id] = now
     out: dict[str, Any] = {}
+    # The slow loops create tasks and trip breakers: they run only on a KB checkout that
+    # contains origin/main. A checkout that lags behind runs OLD kb.py with OLD data (review
+    # R2-C1: a stale checkout's first sweep regressed six tasks and tripped stop-all).
+    behind = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", "refs/remotes/origin/main", "HEAD"],
+                            capture_output=True, env=_env("sync:kb"))
+    has_origin = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "-q", "refs/remotes/origin/main"],
+                                capture_output=True, env=_env("sync:kb")).returncode == 0
+    if has_origin and behind.returncode != 0:
+        _periodic_out[tenant_id] = {"skipped": "the KB checkout does not contain origin/main — pull it", "at": now}
+        _save(tenant_id, dict(_state.get(tenant_id) or status(tenant_id)))
+        return _periodic_out[tenant_id]
     with _lock:
         rc, g = _run(repo, "guidance", "run", actor="kb-guidance")
         out["guidance"] = g if rc == 0 else {"error": str(g.get("error") or g)[:300]}

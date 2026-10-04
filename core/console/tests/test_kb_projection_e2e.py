@@ -569,6 +569,20 @@ class KbPeriodicLoopE2E(unittest.TestCase):
             self.assertTrue(any(i["title"].startswith(out["sweep"]["created"][0]) for i in items.values()))
             self.assertIn("periodic", client.get(f"{_URL}/kb/status").json())
 
+    def test_periodic_skips_a_kb_checkout_that_lags_behind_origin(self):
+        kb = self.kb
+        self._push()
+        (kb / "src" / "late.py").write_text("x = 1\n")
+        self._commit("a commit the checkout will not have")
+        self._push()
+        _sh("git", "reset", "-q", "--hard", "HEAD~1", cwd=kb)          # the checkout lags behind origin/main
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            from corvin_console import kb_projection as kp
+            out = kp.periodic("_default", force=True)
+            self.assertIn("skipped", out, out)
+            self.assertIn("pull", out["skipped"])
+            self.assertEqual(client.get(f"{_URL}/kb/status").json()["periodic"]["skipped"], out["skipped"])
+
     def test_guidance_is_minted_as_a_bootstrap_graded_skill_and_acknowledged(self):
         kb = self.kb
         _kb(kb, "new", "idea", "--title", "Alpha beta gamma delta")

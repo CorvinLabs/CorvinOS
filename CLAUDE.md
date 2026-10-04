@@ -58,11 +58,12 @@ unchanged, so every `corvin_decisions/decisions/ADR-XXXX-*.md` reference still r
 **Status:** 🟡 **PARTIAL — the single-source RULE and the KB graph are live; the hand-work backlog is not cleared** (verified 2026-10-03)
 
 Verified on this host 2026-10-03: the centralisation is done (`docs/decisions/` holds only
-a README, `corvin_decisions/` is the submodule; 1012 files in `decisions/`). The graph is
+a README, `corvin_decisions/` is the submodule; 1017 files in `decisions/`). The graph is
 `Corvin-Knowledge/kb/graph/` (entities + relations), rebuilt by the console projector after
 every KB change (ADR-2205/2206); the webhook/dashboard design (`:8000`, `:3000`) is retired.
-Hand work left, held in `kb/_meta/baseline.json` (shrink-only): 11 numbers carried by two
-files, 7 broken frontmatters, 75 legacy status spellings — ADR-0516 stays PROPOSED.
+Hand work left, held in `kb/_meta/baseline.json` (shrink-only, 158 entries on 2026-10-04): 11 numbers
+carried by two files, 5 broken frontmatters, 63 legacy/missing statuses, 67 dangling legacy links —
+ADR-0516 stays PROPOSED.
 
 **Canonical Location:** `/home/shumway/projects/Corvin-Knowledge/decisions/` (SINGLE SOURCE OF TRUTH)
 
@@ -132,7 +133,7 @@ post-commit hook and nothing listens on the endpoint:
 
 ✅ ADRs centralised in Corvin-Knowledge (1062 files in `decisions/`)  
 ✅ Knowledge Graph: `kb/graph/{entities,relations}.jsonl`, rebuilt by the projector (2026-10-03)  
-⚠️ ADR-0264 frontmatter: 7 files broken; 11 numbers carried by two files (2026-10-03; `kb.py check` measures it, `kb/_meta/baseline.json` lists them)
+⚠️ ADR-0264 frontmatter: 5 files broken; 11 numbers carried by two files (2026-10-04; `kb.py check` measures it, `kb/_meta/baseline.json` lists them)
 ❌ Auto-sync webhooks: no post-commit hook in any repo, endpoint not listening  
 ❌ Dashboard at http://localhost:3000: not running  
 ✅ SINGLE SOURCE OF TRUTH rule: in force (this is the load-bearing part)
