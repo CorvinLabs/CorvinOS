@@ -13,7 +13,7 @@
  */
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Globe2, Loader2, Paperclip, Send } from "lucide-react";
+import { AlertTriangle, Globe2, Loader2, Paperclip, Send, Mic, MicOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,6 +22,9 @@ import {
   a2aFeedBlobUrl, getA2AFeed, sendA2AFeedMessage, type A2AFeedMessage,
 } from "@/lib/api/a2a";
 import { ChatAvatar } from "./ChatAvatar";
+import { AttachmentChip } from "./AttachmentChip";
+import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
+import { useFileDrop } from "@/hooks/use-file-drop";
 
 const FEED_REFETCH_MS = 4_000;
 
@@ -89,7 +92,29 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
   const [text, setText] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
+  const [recording, setRecording] = React.useState(false);
   const endRef = React.useRef<HTMLDivElement>(null);
+  const mediaRef = React.useRef<MediaRecorder | null>(null);
+  const chunksRef = React.useRef<Blob[]>([]);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const {
+    pendingAttachments, uploading, uploadError, addFiles,
+    removeAttachment, onFileInputChange,
+  } = useAttachmentUpload({
+    uploadFn: async (files) => {
+      /* peer messages don't support attachments yet, but track them locally */
+      return files.map((f) => ({
+        name: f.name,
+        size: f.size,
+        mime: f.type,
+      }));
+    },
+    disabled: busy,
+  });
+  const { isDragging: _composerDragging, dropHandlers: _composerDropHandlers } = useFileDrop(
+    (files) => { void addFiles(files); },
+    { disabled: busy || uploading },
+  );
 
   const peer = feed.data?.peers.find((p) => p.peer_id === peerId);
   const label = peer?.label || peerId;
@@ -97,6 +122,37 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
   React.useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [msgs.length]);
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      chunksRef.current = [];
+      const mr = new MediaRecorder(stream);
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        // Peer messages don't transcribe audio yet; just append a placeholder
+        try {
+          setText((prev) => prev ? `${prev} [audio]` : "[audio]");
+        } catch {
+          setError("Audio processing failed");
+        }
+      };
+      mr.start();
+      mediaRef.current = mr;
+      setRecording(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "microphone access denied");
+    }
+  };
+
+  const stopRecording = () => {
+    mediaRef.current?.stop();
+    mediaRef.current = null;
+    setRecording(false);
+  };
 
   async function handleSend() {
     const body = text.trim();
@@ -149,10 +205,60 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
 
       <footer className="px-4 py-3 md:px-6">
         <div className="mx-auto w-full max-w-4xl space-y-1.5">
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="sr-only"
+            aria-label="Attach files"
+            onChange={onFileInputChange}
+            data-testid="file-input"
+          />
+          {/* Pending-attachment chips */}
+          {pendingAttachments.length > 0 && (
+            <div className="flex flex-wrap gap-1.5" data-testid="attachment-preview-bar">
+              {pendingAttachments.map((a, i) => (
+                <AttachmentChip
+                  key={`${a.name}-${i}`}
+                  attachment={a}
+                  onRemove={() => removeAttachment(i)}
+                />
+              ))}
+            </div>
+          )}
+          {/* Upload error */}
+          {uploadError && (
+            <p className="text-xs text-destructive" data-testid="upload-error">{uploadError}</p>
+          )}
           <div className="flex items-end gap-2 rounded-2xl border border-border bg-card px-2 py-1.5 shadow-sm transition-colors focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/15">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0 text-muted-foreground"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy || uploading || peer?.can_send === false}
+              title="Attach files"
+              data-testid="attach-button"
+            >
+              {uploading
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <Paperclip className="h-4 w-4" />
+              }
+            </Button>
+            <Button
+              variant={recording ? "destructive" : "ghost"}
+              size="icon"
+              className={cn("h-8 w-8 shrink-0", !recording && "text-muted-foreground")}
+              onClick={recording ? stopRecording : startRecording}
+              disabled={busy || peer?.can_send === false}
+              title={recording ? "Stop recording" : "Start recording"}
+            >
+              {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+            </Button>
             <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={1}
               placeholder={peer?.can_send === false ? "Sending to this agent is disabled" : `Message ${label}…`}
-              disabled={peer?.can_send === false}
+              disabled={peer?.can_send === false || recording || busy}
               className="min-h-[2rem] flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
               aria-label="Message to agent"
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
@@ -161,7 +267,6 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </Button>
           </div>
-          <p className="px-2 text-[10px] text-muted-foreground">Enter to send, Shift+Enter for a new line</p>
         </div>
       </footer>
     </div>

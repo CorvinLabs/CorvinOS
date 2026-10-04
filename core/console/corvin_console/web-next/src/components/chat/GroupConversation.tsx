@@ -16,7 +16,7 @@
  */
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe2, Loader2, Send, Trash2, UserPlus, Users } from "lucide-react";
+import { Globe2, Loader2, Send, Trash2, UserPlus, Users, Paperclip, Mic, MicOff } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +29,9 @@ import {
 import { getA2AFeed } from "@/lib/api/a2a";
 import { ChatAvatar } from "./ChatAvatar";
 import { MembersSection } from "./MembersSection";
+import { AttachmentChip } from "./AttachmentChip";
+import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
+import { useFileDrop } from "@/hooks/use-file-drop";
 
 const MESSAGES_REFETCH_MS = 4_000;
 
@@ -127,8 +130,30 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
   const [error, setError] = React.useState("");
   const [membersOpen, setMembersOpen] = React.useState(false);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const [recording, setRecording] = React.useState(false);
   const navigate = useNavigate();
   const endRef = React.useRef<HTMLDivElement>(null);
+  const mediaRef = React.useRef<MediaRecorder | null>(null);
+  const chunksRef = React.useRef<Blob[]>([]);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const {
+    pendingAttachments, uploading, uploadError, addFiles,
+    removeAttachment, onFileInputChange,
+  } = useAttachmentUpload({
+    uploadFn: async (files) => {
+      /* group messages don't support attachments yet, but track them locally */
+      return files.map((f) => ({
+        name: f.name,
+        size: f.size,
+        mime: f.type,
+      }));
+    },
+    disabled: busy,
+  });
+  const { isDragging: _composerDragging, dropHandlers: _composerDropHandlers } = useFileDrop(
+    (files) => { void addFiles(files); },
+    { disabled: busy || uploading },
+  );
 
   const count = messages.data?.length ?? 0;
   React.useEffect(() => {
@@ -140,6 +165,37 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
   const selfId = group.data?.participants[0]?.participant_id ?? "";
   const refreshGroup = () => {
     qc.invalidateQueries({ queryKey: ["chat-groups"] });
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      chunksRef.current = [];
+      const mr = new MediaRecorder(stream);
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        // Group messages don't transcribe audio yet; just append a placeholder
+        try {
+          setText((prev) => prev ? `${prev} [audio]` : "[audio]");
+        } catch {
+          setError("Audio processing failed");
+        }
+      };
+      mr.start();
+      mediaRef.current = mr;
+      setRecording(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "microphone access denied");
+    }
+  };
+
+  const stopRecording = () => {
+    mediaRef.current?.stop();
+    mediaRef.current = null;
+    setRecording(false);
   };
 
   async function handleSend() {
@@ -233,14 +289,65 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
 
       <footer className="px-4 py-3 md:px-6">
         <div className="mx-auto w-full max-w-4xl space-y-1.5">
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="sr-only"
+            aria-label="Attach files"
+            onChange={onFileInputChange}
+            data-testid="file-input"
+          />
+          {/* Pending-attachment chips */}
+          {pendingAttachments.length > 0 && (
+            <div className="flex flex-wrap gap-1.5" data-testid="attachment-preview-bar">
+              {pendingAttachments.map((a, i) => (
+                <AttachmentChip
+                  key={`${a.name}-${i}`}
+                  attachment={a}
+                  onRemove={() => removeAttachment(i)}
+                />
+              ))}
+            </div>
+          )}
+          {/* Upload error */}
+          {uploadError && (
+            <p className="text-xs text-destructive" data-testid="upload-error">{uploadError}</p>
+          )}
           {peerCount > 0 && (
             <Badge variant="outline" className="text-[10px]">
               <Globe2 className="mr-1 h-3 w-3" /> Messages are delivered to {plural(peerCount, "external agent")}
             </Badge>
           )}
           <div className="flex items-end gap-2 rounded-2xl border border-border bg-card px-2 py-1.5 shadow-sm transition-colors focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/15">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0 text-muted-foreground"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy || uploading}
+              title="Attach files"
+              data-testid="attach-button"
+            >
+              {uploading
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <Paperclip className="h-4 w-4" />
+              }
+            </Button>
+            <Button
+              variant={recording ? "destructive" : "ghost"}
+              size="icon"
+              className={cn("h-8 w-8 shrink-0", !recording && "text-muted-foreground")}
+              onClick={recording ? stopRecording : startRecording}
+              disabled={busy}
+              title={recording ? "Stop recording" : "Start recording"}
+            >
+              {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+            </Button>
             <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={1}
               placeholder={`Message ${g.title}…`}
+              disabled={recording || busy}
               className="min-h-[2rem] flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
               aria-label="Group message"
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
@@ -249,7 +356,6 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </Button>
           </div>
-          <p className="px-2 text-[10px] text-muted-foreground">Enter to send, Shift+Enter for a new line</p>
         </div>
       </footer>
     </div>
