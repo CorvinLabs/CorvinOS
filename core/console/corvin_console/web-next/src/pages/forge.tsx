@@ -24,25 +24,62 @@ import {
 
 /** Tab ids, in tab-bar order. Also the accepted `?tab=` values.
  *
- *  Skill Forge leads: creating a skill is what an operator opens this page to
- *  do, and the tools list is reference material next to it. The FIRST tab is
- *  also the default — a tab bar whose leftmost entry is not the one that
- *  opens reads as a bug — so `?tab=` is omitted for it and present for every
- *  other. */
-const FORGE_TABS = ['skill-forge', 'tool-forge', 'plugin-forge', 'autonomous-forge', 'tools', 'skills', 'os-skills', 'graph', 'audit'] as const;
+ *  Generator leads: creating something (a skill, a tool or a plugin) is what
+ *  an operator opens this page to do, and the tools/skills lists are
+ *  reference material next to it. The FIRST tab is also the default — a tab
+ *  bar whose leftmost entry is not the one that opens reads as a bug — so
+ *  `?tab=` is omitted for it and present for every other.
+ *
+ *  Skill Forge, Tool Forge and Plugin Forge used to be three separate top-
+ *  level tabs; they are now one "Generator" tab with the three as sub-tabs
+ *  (operator request, 2026-10-05) — the engine run/poll/phase protocol is the
+ *  one Skill Forge uses for all three (ADR-2217), so one door to it reads
+ *  better than three. See GENERATOR_SUBTABS below. */
+const FORGE_TABS = ['generator', 'autonomous-forge', 'tools', 'skills', 'os-skills', 'graph', 'audit'] as const;
 type ForgeTab = (typeof FORGE_TABS)[number];
 
-const DEFAULT_TAB: ForgeTab = 'skill-forge';
+const DEFAULT_TAB: ForgeTab = 'generator';
 
 /** Retired `?tab=` values, still honoured so existing links keep landing on
  *  the surface they named. `creator` was this tab's id until 2026-09-20, and
- *  /app/skill-forge-generator's redirect pointed at it. */
-const TAB_ALIASES: Record<string, ForgeTab> = { creator: 'skill-forge' };
+ *  /app/skill-forge-generator's redirect pointed at it; `skill-forge`,
+ *  `tool-forge` and `plugin-forge` were each a top-level tab id until they
+ *  were folded into Generator's sub-tabs (2026-10-05) — see
+ *  GENERATOR_SUB_ALIASES, which also reads these same three values to pick
+ *  the right sub-tab. */
+const TAB_ALIASES: Record<string, ForgeTab> = {
+  creator: 'generator',
+  'skill-forge': 'generator',
+  'tool-forge': 'generator',
+  'plugin-forge': 'generator',
+};
 
 function resolveTab(requested: string | null): ForgeTab {
   if (!requested) return DEFAULT_TAB;
   if (FORGE_TABS.includes(requested as ForgeTab)) return requested as ForgeTab;
   return TAB_ALIASES[requested] ?? DEFAULT_TAB;
+}
+
+/** Generator's own sub-tabs — Skill Forge leads here for the same reason it
+ *  used to lead the whole page. */
+const GENERATOR_SUBTABS = ['skill', 'tool', 'plugin'] as const;
+type GeneratorSubTab = (typeof GENERATOR_SUBTABS)[number];
+const DEFAULT_GENERATOR_SUB: GeneratorSubTab = 'skill';
+
+/** Old top-level tab ids (and the even older `creator` alias) map onto the
+ *  sub-tab they used to be, so a bookmark or in-app link minted before
+ *  2026-10-05 still lands on the right composer inside Generator. */
+const GENERATOR_SUB_ALIASES: Record<string, GeneratorSubTab> = {
+  creator: 'skill',
+  'skill-forge': 'skill',
+  'tool-forge': 'tool',
+  'plugin-forge': 'plugin',
+};
+
+function resolveGeneratorSub(requested: string | null): GeneratorSubTab {
+  if (!requested) return DEFAULT_GENERATOR_SUB;
+  if (GENERATOR_SUBTABS.includes(requested as GeneratorSubTab)) return requested as GeneratorSubTab;
+  return GENERATOR_SUB_ALIASES[requested] ?? DEFAULT_GENERATOR_SUB;
 }
 
 export default function ForgePage() {
@@ -51,16 +88,40 @@ export default function ForgePage() {
   // it (the standalone skills panel was folded in here on 2026-09-20). An
   // unknown value falls back to the default rather than rendering nothing.
   const [searchParams, setSearchParams] = useSearchParams();
-  const [activeTab, setActiveTab] = useState<string>(() =>
-    resolveTab(searchParams.get('tab')),
+  const initialTabParam = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState<string>(() => resolveTab(initialTabParam));
+  // A deep link into an old top-level tab (e.g. ?tab=tool-forge) names both
+  // WHICH sub-tab to open and that Generator is the top-level tab — ?sub=
+  // wins when present (it is what THIS page writes), the old ?tab= value is
+  // the fallback for links minted before 2026-10-05.
+  const [generatorSub, setGeneratorSub] = useState<GeneratorSubTab>(() =>
+    resolveGeneratorSub(searchParams.get('sub') ?? initialTabParam),
   );
 
-  /** Switch tab AND keep ?tab= in sync — the Skills tab hands skill creation
-   *  to Skill Forge through this, and a deep link has to survive a reload. */
+  /** Switch top-level tab AND keep ?tab= in sync — the Skills tab hands skill
+   *  creation to Generator's Skill Forge sub-tab through this, and a deep
+   *  link has to survive a reload. A value that used to be its own top-level
+   *  tab (skill-forge/tool-forge/plugin-forge/creator) now also picks the
+   *  right Generator sub-tab instead of just landing on whichever one was
+   *  last open. */
   const goToTab = (v: string) => {
     if (v === 'tools') void reloadToolsRef.current?.();
+    const sub = GENERATOR_SUB_ALIASES[v];
+    if (sub) {
+      setGeneratorSub(sub);
+      setActiveTab('generator');
+      setSearchParams(sub === DEFAULT_GENERATOR_SUB ? {} : { tab: 'generator', sub }, { replace: true });
+      return;
+    }
     setActiveTab(v);
     setSearchParams(v === DEFAULT_TAB ? {} : { tab: v }, { replace: true });
+  };
+
+  /** Switch Generator's own sub-tab, keeping ?tab=generator&sub= in sync. */
+  const goToGeneratorSub = (v: string) => {
+    const sub = GENERATOR_SUBTABS.includes(v as GeneratorSubTab) ? (v as GeneratorSubTab) : DEFAULT_GENERATOR_SUB;
+    setGeneratorSub(sub);
+    setSearchParams(sub === DEFAULT_GENERATOR_SUB ? {} : { tab: 'generator', sub }, { replace: true });
   };
   const reloadToolsRef = React.useRef<(() => Promise<void>) | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -180,22 +241,15 @@ export default function ForgePage() {
         className="flex-1 flex flex-col"
       >
         <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 mb-4">
-          {/* The ONE place a skill is created (2026-09-20), and the tab this
-              page opens on. Two composers over one registry: ADR-0405
-              orchestration (describe → watch the phases → read, refine, keep
-              or delete) and the template form rehomed from
-              /app/skill-forge-generator, whose own backend
-              (POST /v1/skill-forge/generate) was an unmounted Flask blueprint
-              answering 404 — the page could never create anything. Its fields
-              now write through POST /skills/manual, the same registry this
-              panel's library reads. The Skills tab's create dialog was the
-              third half-duplicate and now links here. */}
-          <TabsTrigger value="skill-forge">Skill Forge</TabsTrigger>
-          {/* Tool Forge + Plugin Forge: the same describe → run → phases flow
-              over the shared generation-run store. Tools land in Tools,
-              plugins are staged in Marketplace → Forged (never installed). */}
-          <TabsTrigger value="tool-forge">Tool Forge</TabsTrigger>
-          <TabsTrigger value="plugin-forge">Plugin Forge</TabsTrigger>
+          {/* The ONE place to create something (2026-09-20, folded further on
+              2026-10-05): Skill Forge, Tool Forge and Plugin Forge share the
+              same describe → run → phases protocol (ADR-2217) over the
+              shared generation-run store, so they live as sub-tabs of one
+              Generator tab instead of three top-level tabs. Skill Forge's own
+              two composers (ADR-0405 orchestration, and the template form
+              rehomed from /app/skill-forge-generator) are inside its
+              sub-tab, unchanged. */}
+          <TabsTrigger value="generator">Generator</TabsTrigger>
           <TabsTrigger value="autonomous-forge">Autonomous</TabsTrigger>
           <TabsTrigger value="tools">
             Tools
@@ -219,20 +273,30 @@ export default function ForgePage() {
           <TabsTrigger value="audit">Audit</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="skill-forge" className="flex-1 overflow-y-auto">
-          <SkillForgePanel />
-        </TabsContent>
+        <TabsContent value="generator" className="flex-1 overflow-y-auto">
+          <Tabs value={generatorSub} onValueChange={goToGeneratorSub} className="flex-1 flex flex-col">
+            <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 mb-4">
+              <TabsTrigger value="skill">Skill Forge</TabsTrigger>
+              <TabsTrigger value="tool">Tool Forge</TabsTrigger>
+              <TabsTrigger value="plugin">Plugin Forge</TabsTrigger>
+            </TabsList>
 
-        <TabsContent value="tool-forge" className="flex-1 overflow-y-auto">
-          <ForgeCreatorPanel
-            kind="tool"
-            onCreated={reloadTools}
-            onOpenTools={() => { void reloadTools(); goToTab('tools'); }}
-          />
-        </TabsContent>
+            <TabsContent value="skill" className="flex-1 overflow-y-auto">
+              <SkillForgePanel />
+            </TabsContent>
 
-        <TabsContent value="plugin-forge" className="flex-1 overflow-y-auto">
-          <ForgeCreatorPanel kind="plugin" />
+            <TabsContent value="tool" className="flex-1 overflow-y-auto">
+              <ForgeCreatorPanel
+                kind="tool"
+                onCreated={reloadTools}
+                onOpenTools={() => { void reloadTools(); goToTab('tools'); }}
+              />
+            </TabsContent>
+
+            <TabsContent value="plugin" className="flex-1 overflow-y-auto">
+              <ForgeCreatorPanel kind="plugin" />
+            </TabsContent>
+          </Tabs>
         </TabsContent>
 
         <TabsContent value="autonomous-forge" className="flex-1 overflow-y-auto">

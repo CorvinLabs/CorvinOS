@@ -1,7 +1,9 @@
 /**
  * Skill Forge — the console's ONE place to create a skill.
  *
- * Rendered as Forge's first tab, /console/app/forge?tab=skill-forge (ADR-0405).
+ * Rendered as the first sub-tab of Forge's Generator tab,
+ * /console/app/forge?tab=skill-forge (still accepted as an alias — see
+ * forge.tsx's GENERATOR_SUB_ALIASES, 2026-10-05) (ADR-0405).
  *
  * Named after the package it writes through. The registry behind both
  * composers is `skill_forge` (corvin_operator/skill-forge/skill_forge/) —

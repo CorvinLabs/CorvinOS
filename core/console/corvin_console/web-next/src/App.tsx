@@ -200,12 +200,16 @@ export default function App() {
                 against the live host, so the page was a duplicate view.
                 licensing-audit → the compliance panel's "Learning events"
                 section, which is where an auditor looks for them.
-                skill-forge-generator → Forge's Skill Forge tab, which absorbed
-                its fields as the "From template" composer. That page's backend
+                skill-forge-generator → Forge's Skill Forge sub-tab (inside
+                Generator since 2026-10-05), which absorbed its fields as the
+                "From template" composer. That page's backend
                 (POST /v1/skill-forge/generate) was an unmounted Flask blueprint
                 answering 404, so nothing working was removed. The tab was
-                called "creator" until the rename; forge.tsx still honours
-                ?tab=creator as an alias, so links minted in between survive. */}
+                called "creator" until the 2026-09-20 rename, then a top-level
+                "skill-forge" tab until 2026-10-05; forge.tsx still honours
+                both ?tab=creator and ?tab=skill-forge as aliases onto
+                Generator's Skill Forge sub-tab, so links minted at any point
+                survive. */}
             <Route path="skills" element={<Navigate to="/app/forge?tab=skills" replace />} />
             <Route
               path="skill-forge-generator"

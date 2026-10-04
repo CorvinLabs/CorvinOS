@@ -48,7 +48,7 @@ export function ForgedTab() {
       </p>
       {plugins.length === 0 ? (
         <p className="text-sm text-muted-foreground" data-testid="forged-empty">
-          Nothing forged yet. <Link to="/app/forge?tab=plugin-forge" className="text-accent underline">Generate a plugin</Link>.
+          Nothing forged yet. <Link to="/app/forge?tab=generator&sub=plugin" className="text-accent underline">Generate a plugin</Link>.
         </p>
       ) : (
         plugins.map((p) => (
