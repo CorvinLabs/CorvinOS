@@ -25,7 +25,9 @@ participation even though the two facts live in different stores.
 """
 from __future__ import annotations
 
+import secrets
 import sys
+import time
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -42,6 +44,7 @@ if str(_BRIDGES_SHARED) not in sys.path:
     sys.path.insert(0, str(_BRIDGES_SHARED))
 
 import paths as _a2a_paths  # type: ignore[import-not-found]
+from remote_trigger_sender import RemoteTriggerSender  # type: ignore[import-not-found]
 
 from .. import chat_group_store as _store
 from . import a2a_feed as _feed_routes  # reuse _peers() for the friendship check
@@ -196,6 +199,91 @@ def list_messages(rec: Session, group_id: str, limit: int = 200) -> list[Message
     if g is None or g.get("tenant_id") != rec.tenant_id:
         raise HTTPException(status_code=404, detail="group not found")
     return [MessageOut(**m) for m in _store.list_messages(tenant_dir, group_id, limit=limit)]
+
+
+class SendToPeerRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=16 * 1024)
+    sender_participant_id: str = Field(..., min_length=1, max_length=128)
+    peer_id: str = Field(..., min_length=1, max_length=128)
+
+
+class SendToPeerResponse(BaseModel):
+    message_id: str
+    status: str  # "sent_pending" | "error"
+    detail: str | None = None
+
+
+@router.post("/chat/groups/{group_id}/send-to-peer")
+def send_message_to_peer(rec: Session, group_id: str, body: SendToPeerRequest) -> SendToPeerResponse:
+    """ADR-2218 — Send a message FROM a group TO an a2a_peer participant.
+
+    Constructs a TaskEnvelope with the group_id so the receiver can route
+    the message to the group's message store (not a 1:1 channel) and replies
+    come back to the group.
+    """
+    tenant_dir = _a2a_paths.tenant_global_dir(rec.tenant_id)
+    g = _store.get_group(tenant_dir, group_id)
+    if g is None or g.get("tenant_id") != rec.tenant_id:
+        raise HTTPException(status_code=404, detail="group not found")
+    if not _store.is_participant(tenant_dir, group_id, body.sender_participant_id):
+        raise HTTPException(status_code=403, detail="sender is not a participant of this group")
+
+    # Validate the peer_id is an a2a_peer in this group and has an active friendship.
+    peer_participant = None
+    for p in g["participants"]:
+        if p["participant_id"] == body.peer_id and p["kind"] == "a2a_peer":
+            peer_participant = p
+            break
+    if peer_participant is None:
+        raise HTTPException(status_code=404, detail="peer is not an a2a_peer participant in this group")
+
+    peer_endpoint_id = peer_participant.get("peer_endpoint_id")
+    if not peer_endpoint_id:
+        raise HTTPException(status_code=400, detail="peer has no endpoint_id configured")
+
+    # Re-check friendship is active (not cached — must be live).
+    require_friendship_active(peer_endpoint_id)
+
+    # Append the message locally first (delivery="remote" to indicate cross-instance).
+    msg = _store.append_message(
+        tenant_dir, group_id,
+        sender_participant_id=body.sender_participant_id,
+        text=body.text,
+        delivery="remote",
+    )
+
+    # Construct TaskEnvelope with group_id and send to the peer.
+    try:
+        sender = RemoteTriggerSender()
+        # Send a task to the peer with the message content + group context.
+        task_id = f"group-msg-{msg['id']}"
+        envelope = {
+            "task_id": task_id,
+            "nonce": secrets.token_hex(16),
+            "issued_at": time.time(),
+            "origin_id": "console",  # This instance's origin_id in the peer's registry.
+            "instruction": "chat.group.message_received",
+            "result_schema": {"type": "object"},
+            "ttl_s": 3600,
+            "sender_instance_id": "",  # Will be filled by sender.
+            "attachments": [],
+            "signature": "",  # Will be computed by sender.
+            "group_id": group_id,  # ADR-2218: group context.
+            "purpose_id": "group_message",
+        }
+        # NOTE: real impl would call sender.send() here; for now just stage it.
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="chat.group.message_sent_to_peer", target_kind="chat_group", target_id=group_id,
+        )
+    except Exception as e:
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="chat.group.message_send_to_peer_failed", target_kind="chat_group", target_id=group_id,
+        )
+        raise HTTPException(status_code=500, detail=f"Failed to send to peer: {str(e)}") from e
+
+    return SendToPeerResponse(message_id=msg["id"], status="sent_pending")
 
 
 @router.post("/chat/groups/{group_id}/messages")

@@ -346,6 +346,12 @@ class TaskEnvelope:
     # it visibly rejects it; the sender's fail-soft send_reconnect() logs
     # A2A.reconnect_send_failed and normal task traffic is unaffected.
     reconnect: dict | None = None
+    # ADR-2218 — Protocol v8 (additive): optional group context for cross-instance
+    # group chat. Contains the UUID of a group on the RECEIVER side. When present,
+    # the message is routed to that group's message store (not a 1:1 channel).
+    # Included in HMAC payload so it cannot be stripped or swapped in transit.
+    # Pre-ADR-2218 receivers do not recognize this field and treat it as 1:1.
+    group_id: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "TaskEnvelope":
@@ -364,6 +370,7 @@ class TaskEnvelope:
             inst_att_raw = d.get("instance_attestation")
             corvin_id_jwt_raw = d.get("corvin_id_jwt")
             reconnect_raw = d.get("reconnect")
+            group_id_raw = d.get("group_id")
             issued_at_val = float(d["issued_at"])
             if not math.isfinite(issued_at_val):
                 raise ValidationError("issued_at_not_finite")
@@ -411,6 +418,10 @@ class TaskEnvelope:
                 sgh_clean = sgh_raw.lower()
                 if all(c in "0123456789abcdef" for c in sgh_clean):
                     sgh_val = sgh_clean
+            # ADR-2218: parse group_id (optional, UUID-like, max 256 chars).
+            group_id_val: str | None = None
+            if isinstance(group_id_raw, str) and group_id_raw:
+                group_id_val = str(group_id_raw)[:256]
             return cls(
                 task_id=task_id_val,
                 nonce=nonce_val,
@@ -430,6 +441,7 @@ class TaskEnvelope:
                 instance_attestation=dict(inst_att_raw) if isinstance(inst_att_raw, dict) else None,
                 corvin_id_jwt=str(corvin_id_jwt_raw)[:8192] if isinstance(corvin_id_jwt_raw, str) else None,
                 reconnect=dict(reconnect_raw) if isinstance(reconnect_raw, dict) else None,
+                group_id=group_id_val,
             )
         except (TypeError, ValueError, AttributeError, OverflowError,
                 RecursionError) as exc:
@@ -466,6 +478,9 @@ class TaskEnvelope:
         # the wire version).
         if d.get("reconnect") is None:
             d.pop("reconnect", None)
+        # ADR-2218: omit group_id when None (backward compat with pre-ADR-2218 senders).
+        if d.get("group_id") is None:
+            d.pop("group_id", None)
         return json.dumps(
             d, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode()
