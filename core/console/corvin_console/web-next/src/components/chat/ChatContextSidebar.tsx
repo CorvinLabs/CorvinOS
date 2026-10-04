@@ -243,10 +243,23 @@ export function ChatContextSidebar({
   /** Mode implied by the URL (e.g. a group is open → Peers). */
   initialMode?: SidebarMode;
 }) {
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const [stored, setStored] = usePersistedString(PREF_KEYS.chatSidebarMode, "chats");
   const mode: SidebarMode = (MODES as string[]).includes(stored) ? (stored as SidebarMode) : "chats";
   const pending = usePendingCount();
+
+  // Auto-navigate when clicking a tab if a group/peer is active
+  const handleTabClick = React.useCallback((m: SidebarMode) => {
+    setStored(m);
+    if (m === "peers") {
+      if (activeGroupId) {
+        navigate(`/app/chat/group/${encodeURIComponent(activeGroupId)}`);
+      } else if (activePeerId) {
+        navigate(`/app/chat/peer/${encodeURIComponent(activePeerId)}`);
+      }
+    }
+  }, [setStored, navigate, activeGroupId, activePeerId]);
 
   // Opening a group or agent while the Chats list is showing switches to the
   // panel it belongs to; from Peers or A2A the operator stays where they are.
@@ -261,11 +274,12 @@ export function ChatContextSidebar({
       const idx = ["1", "2", "3"].indexOf(e.key);
       if (idx < 0) return;
       e.preventDefault();
-      setStored(MODES[idx]);
+      const m = MODES[idx];
+      handleTabClick(m);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setStored]);
+  }, [handleTabClick]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -275,7 +289,7 @@ export function ChatContextSidebar({
           const selected = m === mode;
           return (
             <button key={m} role="tab" aria-selected={selected} title={`${MODE_META[m].label} (Alt+${i + 1})`}
-              onClick={() => setStored(m)}
+              onClick={() => handleTabClick(m)}
               className={cn(
                 "relative flex flex-1 items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors",
                 selected ? "border-b-2 border-accent text-foreground" : "text-muted-foreground hover:text-foreground",
