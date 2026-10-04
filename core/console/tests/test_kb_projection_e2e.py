@@ -565,6 +565,7 @@ class KbPeriodicLoopE2E(unittest.TestCase):
             self.assertEqual(kp.periodic("_default", force=True)["sweep"]["drift"], [])
             _sh("git", "rm", "-q", "src/feature.py", cwd=self.kb)
             self._commit("the feature vanished")
+            self._push()                                   # drift is judged on origin/main (ADR-2208 item 11)
             out = kp.periodic("_default", force=True)
             self.assertEqual(len(out["sweep"]["created"]), 1, out)
             self.assertEqual(kp.periodic("_default", force=True)["sweep"]["created"], [])   # never duplicated
