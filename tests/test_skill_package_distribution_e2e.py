@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from core.skills.phase1_manifest_v2 import SkillManifestV2
+from core.skills.manifest_v2 import SkillManifestV2
 from core.skills.skill_installer import SkillInstaller
 from core.skills.skill_packager import SkillPackager
 

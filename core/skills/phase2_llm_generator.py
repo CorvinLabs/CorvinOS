@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 import anthropic
 
-from core.skills.phase1_manifest_v2 import SkillManifestV2
+from core.skills.manifest_v2 import SkillManifestV2
 
 
 class SkillLLMGenerator:

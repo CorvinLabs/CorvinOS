@@ -756,6 +756,7 @@ class RemoteTriggerReceiver:
         instance_id: str | None = None,
         tenant_home: Path | None = None,
         forge_se: Any = None,
+        group_message_handler: Any = None,  # Callable for ADR-2218 group routing
     ) -> None:
         self._registry = OriginRegistry(origins_dir)
         # ADR-2099 P0: test mode lets CORVIN_IBC_PUBKEY_DER_B64 vouch for an
@@ -836,6 +837,9 @@ class RemoteTriggerReceiver:
             )
         # Injected forge_se for test isolation (avoids module-level patch conflicts).
         self._inst_forge_se = forge_se
+        # ADR-2218: optional callback for group message handling (phase 3).
+        # If provided, called when TaskEnvelope.group_id is present.
+        self._group_message_handler = group_message_handler
         # Tenant for events whose allowlist REQUIRES tenant_id. None = resolve
         # per event via _resolve_tenant_id() (CORVIN_TENANT_ID → _default).
         self._tenant_id: str | None = None
@@ -1181,11 +1185,44 @@ class RemoteTriggerReceiver:
             attachments=env.attachments,
         )
 
-        # M1 vs M2: decide whether to spawn a worker.
-        spawn_worker = (
-            (not self._force_m1_only)
-            and bool(origin_config.get("spawn_worker", False))
-        )
+        # ADR-2218: if group_id is present, route to group instead of spawning worker.
+        group_id = getattr(env, "group_id", None)
+        if group_id:
+            try:
+                # Handle group message: store in group's message store, emit audit event.
+                group_msg_status, group_msg_data = self._handle_group_message(
+                    group_id=group_id,
+                    sender_origin_id=env.origin_id,
+                    instruction=env.instruction,
+                    task_id=env.task_id,
+                    start=start,
+                )
+                worker_status = group_msg_status
+                worker_data = group_msg_data
+                worker_attachments = []
+                self._audit_best_effort(
+                    "a2a.group_message_received", "INFO",
+                    {"task_id": env.task_id, "origin_id": env.origin_id,
+                     "group_id": group_id, "status": worker_status,
+                     "duration_ms": int((time.time() - start) * 1000)},
+                )
+                spawn_worker = False
+            except Exception as group_exc:
+                # Group message handling failed — return error response.
+                resp = self._rejected_response(env.task_id, env.origin_id, recv_key_bytes)
+                self._audit_best_effort(
+                    "A2A.request_rejected", "WARNING",
+                    {"task_id": env.task_id, "origin_id": env.origin_id,
+                     "reason": f"group_message_failed:{str(group_exc)[:50]}",
+                     "status": "rejected", "duration_ms": int((time.time() - start) * 1000)},
+                )
+                return resp
+        else:
+            # M1 vs M2: decide whether to spawn a worker.
+            spawn_worker = (
+                (not self._force_m1_only)
+                and bool(origin_config.get("spawn_worker", False))
+            )
 
         if spawn_worker and not _worker_slot_acquire(env.origin_id):
             # Per-origin concurrency cap (round 3): one worker-enabled peer
@@ -2630,6 +2667,38 @@ class RemoteTriggerReceiver:
             )
         except Exception:
             pass
+
+    def _handle_group_message(
+        self,
+        group_id: str,
+        sender_origin_id: str,
+        instruction: str,
+        task_id: str,
+        start: float,
+    ) -> tuple[str, dict]:
+        """ADR-2218 Phase 3: Handle incoming group-context message.
+
+        If a group_message_handler callback was injected (by console/gateway),
+        call it to store the message in the group and return status.
+        Otherwise return error (backward compat for hosts without group support).
+
+        Returns: (status, response_data) where status is "accepted"|"error"
+        """
+        if not self._group_message_handler:
+            return ("error", {"reason": "group_handler_not_available"})
+
+        try:
+            result = self._group_message_handler(
+                group_id=group_id,
+                sender_origin_id=sender_origin_id,
+                instruction=instruction,
+                task_id=task_id,
+            )
+            # Handler returns {status, message_id, error?}
+            status = result.get("status", "error")
+            return (status, result)
+        except Exception as e:
+            return ("error", {"reason": f"handler_failed: {str(e)[:100]}"})
 
 
 # Tool names that execute code / drive shells in the worker (allow_bash=false

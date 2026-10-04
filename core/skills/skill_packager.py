@@ -20,7 +20,7 @@ from typing import Dict, Tuple, Optional, List
 from dataclasses import asdict, dataclass
 import logging
 
-from core.skills.phase1_manifest_v2 import SkillManifestV2
+from core.skills.manifest_v2 import SkillManifestV2
 
 logger = logging.getLogger(__name__)
 

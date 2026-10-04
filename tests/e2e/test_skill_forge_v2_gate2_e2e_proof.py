@@ -35,7 +35,7 @@ sys.path.insert(0, str(corvinOS_root))
 
 # Import skill packager and manifest
 from core.skills.skill_packager import SkillPackager
-from core.skills.phase1_manifest_v2 import SkillManifestV2, BootLayer, SkillDomain
+from core.skills.manifest_v2 import SkillManifestV2, BootLayer, SkillDomain
 
 # Color codes for terminal output
 class Colors:

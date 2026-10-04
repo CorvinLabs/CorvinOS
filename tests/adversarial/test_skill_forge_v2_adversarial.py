@@ -24,7 +24,7 @@ import pytest
 
 from core.skills.skill_packager import SkillPackager, PackagingError, ChecksumVerificationError
 from core.skills.skill_installer import SkillInstaller, InstallationError, DependencyResolutionError
-from core.skills.phase1_manifest_v2 import SkillManifestV2, BootLayer, SkillDomain
+from core.skills.manifest_v2 import SkillManifestV2, BootLayer, SkillDomain
 
 
 # ============================================================================

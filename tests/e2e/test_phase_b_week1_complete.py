@@ -81,7 +81,7 @@ def pre_execute(ctx):
         # Import here to avoid import errors if module doesn't exist
         try:
             from core.skills.skill_packager import SkillPackager
-            from core.skills.phase1_manifest_v2 import SkillManifestV2
+            from core.skills.manifest_v2 import SkillManifestV2
         except ImportError:
             pytest.skip("skill_packager or manifest module not available")
 
@@ -108,7 +108,7 @@ def pre_execute(ctx):
         """Test 2: Verify ZIP package integrity and structure"""
         try:
             from core.skills.skill_packager import SkillPackager
-            from core.skills.phase1_manifest_v2 import SkillManifestV2
+            from core.skills.manifest_v2 import SkillManifestV2
         except ImportError:
             pytest.skip("skill_packager or manifest module not available")
 
@@ -147,7 +147,7 @@ def pre_execute(ctx):
         """Test 3: Verify package checksums (integrity verification)"""
         try:
             from core.skills.skill_packager import SkillPackager
-            from core.skills.phase1_manifest_v2 import SkillManifestV2
+            from core.skills.manifest_v2 import SkillManifestV2
         except ImportError:
             pytest.skip("skill_packager or manifest module not available")
 
@@ -179,7 +179,7 @@ def pre_execute(ctx):
         """Test 4: Verify audit trail is created in package"""
         try:
             from core.skills.skill_packager import SkillPackager
-            from core.skills.phase1_manifest_v2 import SkillManifestV2
+            from core.skills.manifest_v2 import SkillManifestV2
         except ImportError:
             pytest.skip("skill_packager or manifest module not available")
 
@@ -213,7 +213,7 @@ def pre_execute(ctx):
         """Test 5: Verify generation context metadata is immutable"""
         try:
             from core.skills.skill_packager import SkillPackager
-            from core.skills.phase1_manifest_v2 import SkillManifestV2
+            from core.skills.manifest_v2 import SkillManifestV2
         except ImportError:
             pytest.skip("skill_packager or manifest module not available")
 
@@ -494,7 +494,7 @@ class TestPhaseBAIntegration:
         """Integration: Package a skill and verify it can be discovered"""
         try:
             from core.skills.skill_packager import SkillPackager
-            from core.skills.phase1_manifest_v2 import SkillManifestV2
+            from core.skills.manifest_v2 import SkillManifestV2
             from core.skills.marketplace_hub import MarketplaceHub, DiscoveryItem
         except ImportError:
             pytest.skip("Required modules not available")

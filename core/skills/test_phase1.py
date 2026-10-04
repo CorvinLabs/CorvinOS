@@ -10,7 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from datetime import datetime
 
-from core.skills.phase1_manifest_v2 import (
+from core.skills.manifest_v2 import (
     SkillManifestV2,
     SkillManifestValidator,
     BootLayer,

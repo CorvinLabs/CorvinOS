@@ -22,7 +22,7 @@ import statistics
 from unittest.mock import Mock, patch
 from datetime import datetime
 from pathlib import Path
-from core.skills.phase1_manifest_v2 import SkillManifestV2
+from core.skills.manifest_v2 import SkillManifestV2
 from core.skills.phase1_skeleton_generator import SkillSkeletonGenerator
 from core.skills.orchestrator import SkillOrchestrator
 from core.learning.event_persistence import EventStore

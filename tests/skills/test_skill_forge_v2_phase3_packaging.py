@@ -18,7 +18,7 @@ from pathlib import Path
 from datetime import datetime
 
 from core.skills.skill_packager import SkillPackager
-from core.skills.phase1_manifest_v2 import SkillManifestV2, BootLayer, SkillDomain
+from core.skills.manifest_v2 import SkillManifestV2, BootLayer, SkillDomain
 
 
 @pytest.fixture

@@ -24,7 +24,7 @@ from forge import paths as _forge_paths
 
 from core.skills.skill_packager import SkillPackager, ChecksumVerificationError
 from core.skills.skill_installer import SkillInstaller, InstallationError, _is_safe_segment
-from core.skills.phase1_manifest_v2 import SkillManifestV2
+from core.skills.manifest_v2 import SkillManifestV2
 from typing import Annotated, Any
 
 # ADR-0892 — every route on this router carried NO session dependency
