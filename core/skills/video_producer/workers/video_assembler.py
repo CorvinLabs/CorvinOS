@@ -193,63 +193,83 @@ class VideoAssemblerWorker:
 
                     width, height = self.resolution_map.get(self.resolution, (1920, 1080))
 
-                    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as vf:
-                        for frame in screenshot_files:
-                            vf.write(f"file '{frame}'\nduration {per_frame}\n")
-                        # concat demuxer requires the last file repeated without
-                        # a duration, or it gets dropped
-                        vf.write(f"file '{screenshot_files[-1]}'\n")
-                        frames_concat_file = vf.name
+                    # Each frame is its own `-loop 1 -t <per_frame>` input,
+                    # joined by the concat FILTER (not the concat demuxer).
+                    # The demuxer approach (one input, per-file `duration`
+                    # directives in a text manifest) was tried first and has
+                    # two conflicting failure modes depending on -vsync:
+                    # default (CFR) resampling inflates the last frame's
+                    # on-screen time by ~3x (measured: a 2-frame, 5s-each
+                    # sequence came out 14.96s instead of 10s — the video
+                    # track then runs long past the audio, and -shortest
+                    # does nothing because it only caps the longer stream at
+                    # the point the SHORTER one ends); switching to
+                    # `-vsync vfr` fixes the duration but passes the real
+                    # (very sparse — one PTS per multi-second frame) input
+                    # PTS straight through, which starves x264's CBR filler-
+                    # NAL padding of encode opportunities (measured: 751 bps
+                    # on a 2-frame/67s scene, against the 600k target and
+                    # the 100 kbps quality gate). `-loop 1 -t` per input
+                    # guarantees each frame's exact on-screen duration by
+                    # construction, and the concat filter's output is true
+                    # CFR at `-r`, so CBR padding has frames to pad —
+                    # confirmed by measurement: exactly 10.0s (not 10.0-15.0s)
+                    # and 598 kbps (not <1 kbps) on the same 2-frame/5s-each
+                    # case both broken approaches failed differently.
+                    cmd_mux = ["ffmpeg", "-y"]
+                    for frame in screenshot_files:
+                        cmd_mux.extend(["-loop", "1", "-t", f"{per_frame}", "-i", frame])
+                    audio_input_index = len(screenshot_files)
+                    cmd_mux.extend(["-i", concat_audio_path])
 
-                    try:
-                        cmd_mux = [
-                            "ffmpeg",
-                            "-y",  # Overwrite
-                            "-f", "concat",
-                            "-safe", "0",
-                            "-i", frames_concat_file,  # Video input: all frames, timed
-                            "-i", concat_audio_path,  # Audio input
-                            "-c:v", "libx264",  # Video codec
-                            "-preset", self.preset,  # Encoding preset
-                            # CRF targets constant perceptual quality, not a
-                            # bitrate floor, and libx264 ignores -minrate in
-                            # CRF mode (it's a VBV constraint for ABR/CBR only)
-                            # — confirmed by measurement: -crf 18 -minrate 400k
-                            # still produced 21 kbps on a 3-frame diagram scene.
-                            # Flat, low-texture vector content (sharp edges,
-                            # solid fills) compresses too well for any rate
-                            # mode to clear a minimum-bitrate gate UNLESS the
-                            # encoder is told to pad to it: plain -b:v/-minrate/
-                            # -maxrate still measured 33-35 kbps on this content
-                            # (libx264's internal VBV stays below target without
-                            # real CBR padding). Only -x264-params nal-hrd=cbr
-                            # forces actual filler-NAL padding to the floor —
-                            # confirmed by measurement: 592 kbps vs. a 600k
-                            # target on the identical frame.
-                            "-b:v", "600k",
-                            "-minrate", "600k",
-                            "-maxrate", "600k",
-                            "-bufsize", "300k",
-                            "-x264-params", "nal-hrd=cbr:force-cfr=1",
-                            "-pix_fmt", "yuv420p",  # Pixel format for compatibility
-                            "-vf", f"scale={width}:{height}",
-                            "-c:a", "aac",  # Audio codec
-                            "-b:a", "128k",  # Audio bitrate
-                            "-shortest",  # End at shortest input
-                            "-movflags", "+faststart",  # Streaming optimization
-                            "-metadata", f"title={output_path}",
-                            output_path,
-                        ]
+                    concat_inputs = "".join(f"[{i}:v]" for i in range(len(screenshot_files)))
+                    filter_complex = (
+                        f"{concat_inputs}concat=n={len(screenshot_files)}:v=1:a=0,"
+                        f"scale={width}:{height}[outv]"
+                    )
 
-                        result = subprocess.run(cmd_mux, capture_output=True, text=True, timeout=120)
-                        if result.returncode != 0:
-                            print(f"Video muxing failed: {result.stderr}")
-                            return False
+                    cmd_mux.extend([
+                        "-filter_complex", filter_complex,
+                        "-map", "[outv]",
+                        "-map", f"{audio_input_index}:a",
+                        "-r", "25",
+                        "-c:v", "libx264",  # Video codec
+                        "-preset", self.preset,  # Encoding preset
+                        # CRF targets constant perceptual quality, not a
+                        # bitrate floor, and libx264 ignores -minrate in
+                        # CRF mode (it's a VBV constraint for ABR/CBR only)
+                        # — confirmed by measurement: -crf 18 -minrate 400k
+                        # still produced 21 kbps on a 3-frame diagram scene.
+                        # Flat, low-texture vector content (sharp edges,
+                        # solid fills) compresses too well for any rate
+                        # mode to clear a minimum-bitrate gate UNLESS the
+                        # encoder is told to pad to it: plain -b:v/-minrate/
+                        # -maxrate still measured 33-35 kbps on this content
+                        # (libx264's internal VBV stays below target without
+                        # real CBR padding). Only -x264-params nal-hrd=cbr
+                        # forces actual filler-NAL padding to the floor —
+                        # confirmed by measurement: 592 kbps vs. a 600k
+                        # target on the identical frame.
+                        "-b:v", "600k",
+                        "-minrate", "600k",
+                        "-maxrate", "600k",
+                        "-bufsize", "300k",
+                        "-x264-params", "nal-hrd=cbr",
+                        "-pix_fmt", "yuv420p",  # Pixel format for compatibility
+                        "-c:a", "aac",  # Audio codec
+                        "-b:a", "128k",  # Audio bitrate
+                        "-shortest",  # End at shortest input
+                        "-movflags", "+faststart",  # Streaming optimization
+                        "-metadata", f"title={output_path}",
+                        output_path,
+                    ])
 
-                        return True
-                    finally:
-                        if os.path.exists(frames_concat_file):
-                            os.remove(frames_concat_file)
+                    result = subprocess.run(cmd_mux, capture_output=True, text=True, timeout=120)
+                    if result.returncode != 0:
+                        print(f"Video muxing failed: {result.stderr}")
+                        return False
+
+                    return True
                 else:
                     # No screenshots, just use audio
                     cmd_audio_only = [

@@ -262,7 +262,9 @@ def prepend_intro_with_fade(
         f"[0:v][1:v]xfade=transition=fade:duration={fade_duration_s}:offset={offset}[v];"
         f"[1:a]adelay=delays={delay_ms}|{delay_ms}[a]",
         "-map", "[v]", "-map", "[a]",
-        "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "medium",
+        "-b:v", "600k", "-nal-hrd", "cbr",
+        "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart",
         output_path,

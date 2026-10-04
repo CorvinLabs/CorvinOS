@@ -252,47 +252,47 @@ class VoiceSynthesizerWorker:
         return output_path
 
     def _get_audio_duration_ffprobe(self, audio_path: str) -> float:
-        """Get duration of audio file using ffprobe
+        """Get duration of audio file using ffprobe — fail-open, real duration always.
 
-        Phase 4: Parse ffprobe JSON output for real audio duration
+        Phase 4: Parse ffprobe JSON output for precise audio duration. This directly
+        affects frame-to-audio synchronization in video_assembler.py, so accuracy
+        is load-bearing (a 1-second measurement error leaves video and narration
+        desync by ~1s across the entire composition).
 
         Args:
             audio_path: Path to audio file
 
         Returns:
-            Duration in seconds
+            Duration in seconds (never guessed)
         """
 
         try:
-            # Check if it's a mock JSON file
-            if audio_path.endswith(".mp3") and os.path.getsize(audio_path) < 1000:
-                try:
-                    with open(audio_path, "r") as f:
-                        metadata = json.load(f)
-                        return float(metadata.get("duration_estimate", 5.0))
-                except (json.JSONDecodeError, ValueError):
-                    pass  # Not a JSON mock, try ffprobe
+            # Never use mock duration estimates — even for testing, ffprobe on
+            # a real MP3 is 1-2ms overhead. A 5s estimate that should be 90s
+            # causes video/audio drift across the whole scene.
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    audio_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
 
-            # Use ffprobe for real audio
-            cmd = [
-                "ffprobe",
-                "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1:noprint_wrappers=1",
-                audio_path,
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if result.returncode == 0 and result.stdout.strip():
+                return float(result.stdout.strip())
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            pass
 
-            if result.returncode == 0:
-                duration = float(result.stdout.strip())
-                return duration
-            else:
-                # Estimate duration from text length (fallback)
-                return 5.0
-
-        except Exception as e:
-            # Fallback: estimate from text length
-            return 5.0
+        # Fail-open: if ffprobe fails, the audio file may be incomplete or
+        # malformed, so log it and return 0 — callers will detect the broken
+        # audio and can retry or fall back. Never guess.
+        print(f"ffprobe failed on {audio_path}, duration unknown — may be incomplete")
+        return 0.0
 
     def _normalize_loudness_ffmpeg(self, audio_files: List[str], target_lufs: float):
         """Normalize audio files to target loudness using FFmpeg loudnorm filter
