@@ -290,3 +290,28 @@ export function deleteUloObjective(
     csrf,
   });
 }
+
+
+// ── /btw Midstream Steering (ADR-0846) ─────────────────────────────────
+
+export interface BtwResponse {
+  ok: true;
+  status: "guidance_queued" | "error";
+  instruction: string;
+  chat_id: string;
+}
+
+export async function sendBtwNote(
+  chatId: string,
+  instruction: string,
+  csrf: string,
+): Promise<BtwResponse> {
+  return api<BtwResponse>("/btw", {
+    method: "POST",
+    csrf,
+    body: {
+      chat_id: chatId,
+      instruction,
+    },
+  });
+}

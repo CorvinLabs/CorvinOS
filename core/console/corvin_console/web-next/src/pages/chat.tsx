@@ -45,6 +45,7 @@ import {
   openSessionWorkdir,
   uploadAttachments,
   transcribeAudio,
+  sendBtwNote,
   ApiError,
   type AttachmentMeta,
   type ChatSessionListResponse,
@@ -1213,6 +1214,32 @@ function ChatPane({
     const hasText = text.trim().length > 0;
     const hasAttachments = pendingAttachments.length > 0;
     if ((!hasText && !hasAttachments) || streaming) return;
+
+    // Handle /btw command (midstream steering)
+    if (hasText && text.trim().startsWith("/btw ")) {
+      const instruction = text.trim().substring(5); // Remove "/btw "
+      if (instruction.trim().length === 0) {
+        setError("Please provide a note for /btw");
+        return;
+      }
+
+      void (async () => {
+        try {
+          await sendBtwNote(sid, `/btw ${instruction}`, csrf);
+          setInput("");
+          setError(null);
+          // Flash a success message
+          setError("Note sent to active stream");
+          setTimeout(() => setError(null), 3_000);
+        } catch (err) {
+          const msg = err instanceof ApiError
+            ? `Error sending note: ${err.message}`
+            : "Failed to send note to active stream";
+          setError(msg);
+        }
+      })();
+      return;
+    }
 
     let fullText = text;
     if (hasAttachments) {
