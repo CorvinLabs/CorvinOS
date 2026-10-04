@@ -304,7 +304,7 @@ SkillForge guidance skills (`kb learn`, `kb guidance`). Agents (`--actor agent:*
 human-required, A3 human only) and circuit breakers (`kb breaker status|reset`, reset is human).
 `kb task … --dod` never replaces a planned definition of done (it becomes `completion_note`).
 kb commits like `git commit` does — it holds `index.lock` from its first write to the index swap
-(private index + `commit-tree` + compare-and-swap on the branch ref): no hooks run for kb commits, a
+(private index + `commit-tree` + compare-and-swap on the branch ref): no git hook runs for any kb git command, a
 `git add`/`commit` during a kb write fails on the lock (retry), and kb refuses to write while a
 rebase/merge/cherry-pick is in progress. `/kb/status` → `code.stale` says when the running projector
 predates its code on disk (restart the console).
