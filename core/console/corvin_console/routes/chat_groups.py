@@ -25,9 +25,7 @@ participation even though the two facts live in different stores.
 """
 from __future__ import annotations
 
-import secrets
 import sys
-import time
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -252,26 +250,28 @@ def send_message_to_peer(rec: Session, group_id: str, body: SendToPeerRequest) -
         delivery="remote",
     )
 
-    # Construct TaskEnvelope with group_id and send to the peer.
+    # Send the real TaskEnvelope to the peer, carrying group_id (ADR-2218)
+    # so the receiving instance's RemoteTriggerReceiver routes the message
+    # into its own group store instead of a 1:1 channel. ``instruction``
+    # IS the message text — the receiver passes it straight through to the
+    # group_message_handler callback (Phase 3).
     try:
         sender = RemoteTriggerSender()
-        # Send a task to the peer with the message content + group context.
-        task_id = f"group-msg-{msg['id']}"
-        envelope = {
-            "task_id": task_id,
-            "nonce": secrets.token_hex(16),
-            "issued_at": time.time(),
-            "origin_id": "console",  # This instance's origin_id in the peer's registry.
-            "instruction": "chat.group.message_received",
-            "result_schema": {"type": "object"},
-            "ttl_s": 3600,
-            "sender_instance_id": "",  # Will be filled by sender.
-            "attachments": [],
-            "signature": "",  # Will be computed by sender.
-            "group_id": group_id,  # ADR-2218: group context.
-            "purpose_id": "group_message",
-        }
-        # NOTE: real impl would call sender.send() here; for now just stage it.
+        result = sender.send(
+            peer_endpoint_id,
+            body.text,
+            purpose_id="group_message",
+            group_id=group_id,
+        )
+        if not result.ok:
+            console_audit.action_performed(
+                tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+                action="chat.group.message_send_to_peer_failed", target_kind="chat_group", target_id=group_id,
+            )
+            return SendToPeerResponse(
+                message_id=msg["id"], status="error",
+                detail=result.error_detail or result.status,
+            )
         console_audit.action_performed(
             tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
             action="chat.group.message_sent_to_peer", target_kind="chat_group", target_id=group_id,
@@ -314,3 +314,70 @@ def send_message(rec: Session, group_id: str, body: SendMessageRequest) -> Messa
         action="chat.group.message_sent", target_kind="chat_group", target_id=group_id,
     )
     return MessageOut(**msg)
+
+
+# ── A2A inbound group routing (ADR-2218 Phase 3.5) ─────────────────────────
+#
+# Callback injected into RemoteTriggerReceiver (see a2a_http_server.py's
+# ``build_server(group_message_handler=...)`` and whatever wires the console
+# into the gateway's A2A listener). Called from the RECEIVE path, not an
+# HTTP route — no Session/CSRF dependency here, that's the sender side's job.
+#
+# A2A is host-scoped (see a2a_feed.py::_a2a_tenant) — the receiver and its
+# origins are not tenant-partitioned, so this always resolves the PROCESS
+# tenant, never a tenant carried on the wire (there is none to carry).
+
+def handle_inbound_group_message(
+    *, group_id: str, sender_origin_id: str, instruction: str, task_id: str,
+) -> dict[str, Any]:
+    """ADR-2218 Phase 3.5: store an inbound A2A group message.
+
+    ``instruction`` IS the message text (RemoteTriggerSender.send() passes
+    the caller's instruction straight through — there is no separate
+    payload field on TaskEnvelope). ``sender_origin_id`` is our own local
+    name for the peer (``env.origin_id`` as resolved against our
+    ``origins_dir``), matched against the group's ``peer_endpoint_id`` —
+    the same field the OUTBOUND route (``send_message_to_peer``) checks
+    friendship against, so admission is symmetric in both directions.
+
+    Returns ``{"status": "accepted", "message_id": ...}`` on success or
+    ``{"status": "error", "reason": ...}`` — never raises (this runs
+    inside RemoteTriggerReceiver's never-raises contract).
+    """
+    import os as _os
+    try:
+        tenant_id = (_os.environ.get("CORVIN_TENANT_ID") or "_default").strip() or "_default"
+        tenant_dir = _a2a_paths.tenant_global_dir(tenant_id)
+
+        g = _store.get_group(tenant_dir, group_id)
+        if g is None:
+            return {"status": "error", "reason": "group_not_found"}
+
+        peer_participant = None
+        for p in g["participants"]:
+            if p["kind"] == "a2a_peer" and p.get("peer_endpoint_id") == sender_origin_id:
+                peer_participant = p
+                break
+        if peer_participant is None:
+            return {"status": "error", "reason": "sender_not_a_group_participant"}
+
+        # Live gate, same as the outbound route: a revoked friendship must
+        # not let a stale membership keep accepting messages into the group.
+        require_friendship_active(sender_origin_id)
+
+        msg = _store.append_message(
+            tenant_dir, group_id,
+            sender_participant_id=peer_participant["participant_id"],
+            text=instruction,
+            delivery="remote",
+        )
+        console_audit.action_performed(
+            tenant_id=tenant_id, sid_fingerprint=f"a2a:{sender_origin_id}",
+            action="chat.group.message_received_from_peer",
+            target_kind="chat_group", target_id=group_id,
+        )
+        return {"status": "accepted", "message_id": msg["id"]}
+    except HTTPException as exc:
+        return {"status": "error", "reason": f"friendship_check_failed:{exc.status_code}"}
+    except Exception as exc:  # noqa: BLE001 — never raise into the receiver
+        return {"status": "error", "reason": f"handler_exception:{type(exc).__name__}"}

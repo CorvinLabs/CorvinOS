@@ -214,6 +214,106 @@ class ChatGroupsE2ETests(unittest.TestCase):
         self.assertEqual(r.status_code, 404, r.text)
         self.assertIn("no active friendship", r.text)
 
+    def test_send_to_peer_rejects_non_a2a_peer(self):
+        """ADR-2218 Phase 2 route, re-verified: a peer_id that isn't an
+        a2a_peer participant of this group is refused."""
+        client = self._client()
+        group = client.post("/v1/console/chat/groups", json={"title": "G"}).json()
+        r = client.post(
+            f"/v1/console/chat/groups/{group['group_id']}/send-to-peer",
+            json={"text": "hi", "sender_participant_id": "fp-human-1",
+                  "peer_id": "does-not-exist"},
+        )
+        self.assertEqual(r.status_code, 404, r.text)
+        self.assertIn("not an a2a_peer", r.text)
+
+    def test_send_to_peer_constructs_real_envelope_with_group_id(self):
+        """ADR-2218 Phase 3.5: send-to-peer must call the REAL
+        RemoteTriggerSender.send() (not the Phase 2 stub that only staged
+        the envelope and never transmitted it), passing the message text
+        as ``instruction`` and the group's id as ``group_id`` so the peer's
+        receiver can route the reply back into the same group."""
+        self._enable_peer_endpoint("friend-peer")
+        client = self._client()
+        group = client.post("/v1/console/chat/groups", json={"title": "G"}).json()
+        client.post(
+            f"/v1/console/chat/groups/{group['group_id']}/participants",
+            json={"participant_id": "friend-peer", "kind": "a2a_peer",
+                  "peer_endpoint_id": "friend-peer"},
+        )
+
+        captured: dict = {}
+        from remote_trigger_sender import SendResult  # noqa: PLC0415
+
+        def _fake_send(self, endpoint_id, instruction, **kwargs):
+            captured["endpoint_id"] = endpoint_id
+            captured["instruction"] = instruction
+            captured["group_id"] = kwargs.get("group_id")
+            captured["purpose_id"] = kwargs.get("purpose_id")
+            return SendResult(
+                ok=True, status="ok", task_id="t-1", instance_id="peer-inst",
+                instance_id_match=True, data={}, attachments=[], duration_ms=5,
+                error_category=None, error_detail=None,
+            )
+
+        with patch.object(self.R.RemoteTriggerSender, "send", _fake_send):
+            r = client.post(
+                f"/v1/console/chat/groups/{group['group_id']}/send-to-peer",
+                json={"text": "hello remote peer", "sender_participant_id": "fp-human-1",
+                      "peer_id": "friend-peer"},
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["status"], "sent_pending")
+
+        # The actual wire call carried the real message text as the
+        # instruction (Phase 2 had hardcoded a command string here) and the
+        # group's id (so the receiver routes it, not a 1:1 fallback).
+        self.assertEqual(captured["endpoint_id"], "friend-peer")
+        self.assertEqual(captured["instruction"], "hello remote peer")
+        self.assertEqual(captured["group_id"], group["group_id"])
+        self.assertEqual(captured["purpose_id"], "group_message")
+
+        # Staged locally too, with delivery="remote".
+        msgs = client.get(f"/v1/console/chat/groups/{group['group_id']}/messages").json()
+        self.assertEqual(len(msgs), 1)
+        self.assertEqual(msgs[0]["text"], "hello remote peer")
+        self.assertEqual(msgs[0]["delivery"], "remote")
+
+    def test_send_to_peer_transport_failure_reports_error_without_crashing(self):
+        """A failed send (peer unreachable, auth failure, etc.) must come
+        back as a clean {"status": "error"} — the real sender.send() never
+        raises on transport failure, and the route must not turn that into
+        an uncaught 500."""
+        self._enable_peer_endpoint("friend-peer")
+        client = self._client()
+        group = client.post("/v1/console/chat/groups", json={"title": "G"}).json()
+        client.post(
+            f"/v1/console/chat/groups/{group['group_id']}/participants",
+            json={"participant_id": "friend-peer", "kind": "a2a_peer",
+                  "peer_endpoint_id": "friend-peer"},
+        )
+
+        from remote_trigger_sender import SendResult  # noqa: PLC0415
+
+        def _fake_send_fail(self, endpoint_id, instruction, **kwargs):
+            return SendResult(
+                ok=False, status="error", task_id="t-2", instance_id="",
+                instance_id_match=False, data={}, attachments=[], duration_ms=5,
+                error_category="unreachable", error_detail="peer unreachable",
+            )
+
+        with patch.object(self.R.RemoteTriggerSender, "send", _fake_send_fail):
+            r = client.post(
+                f"/v1/console/chat/groups/{group['group_id']}/send-to-peer",
+                json={"text": "will not arrive", "sender_participant_id": "fp-human-1",
+                      "peer_id": "friend-peer"},
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["status"], "error")
+        self.assertIn("unreachable", body["detail"])
+
     def test_get_group_cross_tenant_is_404(self):
         client_a = self._client(tenant="tenant-a")
         group = client_a.post("/v1/console/chat/groups", json={"title": "G"}).json()

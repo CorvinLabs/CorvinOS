@@ -914,7 +914,20 @@ try:
         from a2a_compute_engine import DeterministicComputeEngine as _DCE  # type: ignore[import-not-found]
         _a2a_engine_factory = lambda: _DCE()
 
-    _a2a_receiver = _RemoteTriggerReceiver(engine_factory=_a2a_engine_factory)
+    # ADR-2218 Phase 3.5: group-aware inbound routing. The handler lives in
+    # the console (chat_group_store.py owns the group data under
+    # tenant_global_dir); optional because a gateway can run without the
+    # console installed (ADR-0015) — in that case inbound group_id
+    # envelopes error cleanly instead of crashing receiver construction.
+    try:
+        from corvin_console.routes.chat_groups import handle_inbound_group_message as _group_handler  # type: ignore[import-not-found]
+    except Exception:
+        _group_handler = None
+
+    _a2a_receiver = _RemoteTriggerReceiver(
+        engine_factory=_a2a_engine_factory,
+        group_message_handler=_group_handler,
+    )
     _A2A_AVAILABLE = True
 except Exception:
     _A2A_AVAILABLE = False

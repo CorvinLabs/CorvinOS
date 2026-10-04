@@ -962,6 +962,7 @@ class RemoteTriggerSender:
         attachments: list | None = None,
         purpose_id: str | None = None,
         attestation: dict | None = None,
+        group_id: str | None = None,
     ) -> SendResult:
         """Send a signed TaskEnvelope and record the exchange in the A2A feed.
 
@@ -1008,7 +1009,7 @@ class RemoteTriggerSender:
             endpoint_id, wire_instruction,
             result_schema=result_schema, ttl_s=ttl_s, timeout_s=timeout_s,
             attachments=attachments, purpose_id=purpose_id,
-            attestation=attestation, task_id=task_id,
+            attestation=attestation, task_id=task_id, group_id=group_id,
         )
         _record_feed_response(endpoint_id, result, peer_label)
         return result
@@ -1025,6 +1026,7 @@ class RemoteTriggerSender:
         purpose_id: str | None = None,
         attestation: dict | None = None,
         task_id: str | None = None,
+        group_id: str | None = None,
     ) -> SendResult:
         """Send a signed TaskEnvelope to a registered endpoint.
 
@@ -1152,6 +1154,7 @@ class RemoteTriggerSender:
             network_attestation=net_att,
             sender_chain_tail=sender_chain_tail,
             sender_genesis_hash=sender_genesis_hash,
+            group_id=group_id,
         )
 
         # 2) Audit envelope_sent (before HTTP); include chain_anchor_sent.
@@ -1859,6 +1862,7 @@ class RemoteTriggerSender:
         sender_chain_tail: str | None = None,
         sender_genesis_hash: str | None = None,
         reconnect: dict | None = None,
+        group_id: str | None = None,
     ) -> dict:
         env: dict = {
             "task_id": task_id,
@@ -1908,6 +1912,12 @@ class RemoteTriggerSender:
         # fail-soft and simply reports False.
         if reconnect is not None and isinstance(reconnect, dict):
             env["reconnect"] = reconnect
+        # ADR-2218: group_id — cross-instance group chat context. Included in
+        # HMAC when present so it cannot be stripped or swapped in transit.
+        # Receivers that pre-date ADR-2218 ignore the field (additive,
+        # backward-compatible read — canonical_payload() omits it when None).
+        if group_id is not None and isinstance(group_id, str):
+            env["group_id"] = group_id[:256]
         # IBC concept (Protocol v7): instance_attestation — binds this envelope to
         # the sender's Instance Binding Certificate (IBC).  Included in HMAC when
         # present so it cannot be stripped or swapped in transit.  Receivers that

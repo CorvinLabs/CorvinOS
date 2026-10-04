@@ -765,7 +765,19 @@ def create_app() -> FastAPI:
             )
             _a2a_engine_factory = lambda: _DCE()  # noqa: E731
 
-        _a2a_receiver = _RemoteTriggerReceiver(engine_factory=_a2a_engine_factory)
+        # ADR-2218 Phase 3.5: group-aware inbound routing. Lazily imported
+        # (not at module top) so a console build without chat_groups wiring
+        # still boots A2A — matches the try/except around the receiver itself.
+        try:
+            from .routes.chat_groups import handle_inbound_group_message as _group_handler
+        except Exception:
+            log.exception("group_message_handler unavailable — inbound group messages will error, not route")
+            _group_handler = None
+
+        _a2a_receiver = _RemoteTriggerReceiver(
+            engine_factory=_a2a_engine_factory,
+            group_message_handler=_group_handler,
+        )
         _a2a_available = True
     except Exception:
         log.exception("A2A receiver unavailable — /v1/a2a/receive and /v1/a2a/ping will 503")
