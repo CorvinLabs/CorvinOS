@@ -1250,7 +1250,13 @@ class FriendshipTokenConfirmResponse(BaseModel):
 
 @router.get("/remote-trigger/pair/friendship-token/pending")
 def friendship_token_pending_list(
-    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    # A read needs a session, not a CSRF token — require_csrf demands the
+    # header on EVERY call including GET, which the frontend's read-only
+    # list call never sends (matches a2a_feed.py's Session alias, which
+    # gates CSRF on mutating methods only; this file predates that alias
+    # and still calls require_csrf directly everywhere, which was correct
+    # when every route here was a POST).
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> list[FriendshipTokenPendingPreview]:
     """List every non-expired chat-staged token request for this tenant —
     same discovery-surface rationale as a2a_feed's pending-send list."""
@@ -1268,7 +1274,7 @@ def friendship_token_pending_list(
 
 @router.get("/remote-trigger/pair/friendship-token/pending/{pending_id}")
 def friendship_token_pending_peek(
-    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     pending_id: str,
 ) -> FriendshipTokenPendingPreview:
     """Preview a chat-staged friendship-token request so the UI can render

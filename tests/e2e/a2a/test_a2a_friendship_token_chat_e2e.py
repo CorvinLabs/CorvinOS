@@ -14,7 +14,8 @@ A) The MCP tool (``corvin_operator/forge/forge/mcp_server.py``), driven
 
 B) The console pending/confirm routes (``core/console/corvin_console/routes/
    a2a_pair.py``), driven through the real FastAPI router + TestClient:
-   - no session -> 401 (the require_csrf dependency is live)
+   - no session -> 401 (require_session on reads, require_csrf on the
+     mutating confirm — a GET must not demand a CSRF header)
    - real session -> confirm mints a REAL token (parseable + HMAC-verifiable
      by a2a_friendship.parse_and_verify) exactly once (replay is 404)
    - the actual key material is only generated from the confirm route,
@@ -191,7 +192,11 @@ class FriendshipTokenConfirmRouteTests(_Sandbox):
         app = FastAPI()
         app.include_router(self.R.router, prefix="/v1/console")
         if tenant is not None:
+            # GET routes (list/peek) depend on require_session (no CSRF on a
+            # read); the POST confirm route depends on require_csrf. Override
+            # both to the same fake record so either dependency resolves.
             app.dependency_overrides[self.R.require_csrf] = lambda: _fake_record(tenant)
+            app.dependency_overrides[self.R.require_session] = lambda: _fake_record(tenant)
         return TestClient(app)
 
     def _stage(self, *, label: str = "friend-1", ttl_hours: float = 720.0) -> str:
