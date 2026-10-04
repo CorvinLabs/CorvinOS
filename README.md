@@ -76,18 +76,7 @@ More: [docs/setup/UPGRADE_GUIDE.md](docs/setup/UPGRADE_GUIDE.md)
 <details>
 <summary><b>From inside Claude Code — <code>/corvin:install</code> and <code>/corvin:update</code></b></summary>
 
-This repository is a Claude Code plugin marketplace. Once, from Claude Code started inside your clone:
-
-```text
-/plugin marketplace add /path/to/CorvinOS
-/plugin install corvin
-```
-
-- `/corvin:install` runs the clone's installer and waits until the console really serves the app. On a
-  healthy install it only re-verifies.
-- `/corvin:update --check` fetches `origin/main` and reports commits and versions behind — changes nothing.
-- `/corvin:update` runs the clone's updater when it is behind (`--force`: always), then re-checks the
-  console. Afterwards refresh the plugin itself with the `/plugin marketplace update …` line it prints.
+Step-by-step: [Installing via Claude Code](#-installing-via-claude-code) below.
 
 </details>
 
@@ -102,49 +91,45 @@ anything. Your clone is kept. `--dry-run` shows what would go, `--verify-only` o
 
 </details>
 
-### Voice languages
+## 🧩 Installing via Claude Code
 
-Changing **Settings → Voice → Display language** downloads that language's
-offline voice (Piper) in the background — progress and a retry button are on
-the same page — so speech keeps working without internet. Offline voices
-exist for de, en, es, fr, it, nl, pl, pt, ru, tr, uk, zh, sv, da, no, cs, fi,
-el and ar; ja and ko are spoken by the online voices only. Speech recognition
-needs no per-language download.
+CorvinOS is also a Claude Code plugin marketplace, so you can install, verify and update
+a full CorvinOS instance without leaving Claude Code. This is in addition to `install.sh` /
+`install.ps1` above, not instead of them — `/corvin:install` runs that same installer for you.
 
----
+**Prerequisite:** a local clone of this repository (`git clone
+https://github.com/CorvinLabs/CorvinOS.git`), and Claude Code started inside it (or pointed
+at it).
 
-## Maintainer: Update & Deploy Cycle
+1. **Add this repository as a plugin marketplace** (one time):
+   ```text
+   /plugin marketplace add /path/to/CorvinOS
+   ```
+2. **Install the `corvin` plugin:**
+   ```text
+   /plugin install corvin
+   ```
+3. **Install CorvinOS:**
+   ```text
+   /corvin:install
+   ```
+   This finds your checkout and runs its own `install.sh` (Windows: `install.ps1`) —
+   nothing is downloaded from a website — then waits for the console to answer a real
+   HTTP 200 with the app shell (not just "the port is open") before opening
+   `http://127.0.0.1:8765/console/` in your browser. Safe to re-run: on an already-healthy
+   install it only re-verifies instead of reinstalling.
+4. **Keep it updated**, whenever you like:
+   ```text
+   /corvin:update --check   # report commits/version behind origin/main — changes nothing
+   /corvin:update           # pull, reinstall, rebuild, restart, verify — rolls back on failure
+   ```
+   After an update, run the `/plugin marketplace update …` command `/corvin:update` prints
+   (refreshes Claude Code's own copy of the plugin) and reload any open console tab
+   (Ctrl+Shift+R).
 
-For maintainers pushing changes to `main`: `scripts/update-and-deploy.sh` (macOS/Linux)
-and `scripts/update-and-deploy.ps1` (Windows) run the full fail-closed cycle —
-`git pull origin main` → rebuild the console frontend (via `console-deploy.sh`) →
-run critical E2E tests → `git push origin main`. Both scripts are self-contained,
-use an exclusive lock to prevent concurrent runs, refuse to run with uncommitted
-changes, and abort on the first failure (nothing partial gets pushed).
-
-```bash
-# macOS / Linux
-bash scripts/update-and-deploy.sh                # full cycle: pull -> build -> test -> push
-bash scripts/update-and-deploy.sh --dry-run      # run everything except the final push
-bash scripts/update-and-deploy.sh --skip-tests   # skip E2E tests (not recommended)
-bash scripts/update-and-deploy.sh --verbose      # print each command
-```
-
-```powershell
-# Windows (PowerShell)
-.\scripts\update-and-deploy.ps1
-.\scripts\update-and-deploy.ps1 -DryRun
-.\scripts\update-and-deploy.ps1 -SkipTests
-.\scripts\update-and-deploy.ps1 -VerboseOutput
-```
-
-Exit codes: `0` success (pushed) · `1` git/build/test failure · `2` repo-state
-validation failure. Logs are written to a timestamped file (`/tmp/corvin-update-*.log`
-on macOS/Linux, `%TEMP%\corvin-update-deploy-*.log` on Windows).
-
-This is a **maintainer/developer workflow** (it ends in `git push origin main`) — not
-the end-user updater. End users update their checkout with `update.sh` / `update.ps1`,
-which pull, rebuild and restart the local console without pushing anything.
+There is no `/corvin:uninstall` yet — run `uninstall.sh` / `uninstall.ps1` from a terminal
+for that (see "Uninstall" above). Full technical reference:
+[docs/setup.md](docs/setup.md#alternative-as-a-claude-code-plugin).
 
 ---
 

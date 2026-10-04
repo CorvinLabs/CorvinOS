@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed — README: dedicated Claude Code install section, maintainer/voice sections moved out
+- Added a standalone, non-collapsed "Installing via Claude Code" section (marketplace add →
+  plugin install → `/corvin:install` → `/corvin:update`), step-by-step; the Quick Start's
+  collapsed Claude Code block now just points to it instead of duplicating the content.
+- Removed "Maintainer: Update & Deploy Cycle" (`scripts/update-and-deploy.sh`/`.ps1` are
+  unaffected and still documented in their own script headers) and "Voice languages" from
+  the README — both were maintainer/settings-page documentation, not install/update content.
+
 ### Added — `/corvin:update` and a one-screen README quick start
 - The Claude Code `corvin` plugin (0.2.0) gains `/corvin:update`: `--check` fetches
   `origin/main` and reports the checkout's commit and version against it without
