@@ -1,0 +1,75 @@
+# Example diagram: os.video_producer orchestrating its worker skills.
+# Demonstrates: absolute + relative positioning, icons, anchored arrows,
+# progressive-reveal animation via `steps`.
+theme: corvin-dark
+canvas: {w: 1920, h: 1080}
+elements:
+  - id: maestro
+    type: box
+    label: "os.video_producer"
+    at: [760, 90]
+    icon: layers
+    variant: accent
+
+  - id: w_analyzer
+    type: box
+    label: "asset_analyzer"
+    at: [120, 420]
+    icon: cpu
+
+  - id: w_voice
+    type: box
+    label: "voice_synthesizer"
+    right_of: w_analyzer
+    gap: 60
+    icon: mic
+
+  - id: w_shot
+    type: box
+    label: "screenshot_capturer"
+    right_of: w_voice
+    gap: 60
+    icon: camera
+
+  - id: w_assembler
+    type: box
+    label: "video_assembler"
+    right_of: w_shot
+    gap: 60
+    icon: film
+
+  - id: validator
+    type: box
+    label: "video_validator"
+    below: w_assembler
+    gap: 90
+    icon: shield
+
+  - id: a1
+    type: arrow
+    from: maestro.s
+    to: w_analyzer.n
+    label: "Phase 2"
+  - id: a2
+    type: arrow
+    from: maestro.s
+    to: w_voice.n
+  - id: a3
+    type: arrow
+    from: maestro.s
+    to: w_shot.n
+  - id: a4
+    type: arrow
+    from: maestro.s
+    to: w_assembler.n
+  - id: a5
+    type: arrow
+    from: w_assembler.s
+    to: validator.n
+    label: "Phase 6.5"
+
+steps:
+  - [maestro]
+  - [maestro, w_analyzer, a1]
+  - [maestro, w_analyzer, a1, w_voice, w_shot, w_assembler, a2, a3, a4]
+  - [maestro, w_analyzer, a1, w_voice, w_shot, w_assembler, a2, a3, a4, validator, a5]

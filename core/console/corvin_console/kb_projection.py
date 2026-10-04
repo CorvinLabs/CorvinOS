@@ -14,6 +14,13 @@ A board move of a KB item never patches the store: ``transition`` runs ``kb task
 (the KB's one status writer and state machine) and re-projects. A refused move
 answers with the state machine's own message.
 
+Every ``PERIODIC_S`` (not every tick) ``periodic`` runs the KB's slower loops
+(ADR-2208, CONCEPT-0090 §3.1/§3.4): ``kb guidance run`` (learning loop), ``kb sweep
+--create-tasks`` (G6 drift -> a regression task) and the SkillForge bridge, which mints
+a bootstrap-graded ``learned-experience`` skill for each active guidance file and
+retires the skill of retired guidance — reporting back through ``kb guidance ack``,
+so ``kb.py`` stays the only writer of KB files.
+
 The KB is located by ``CORVIN_KB_REPO`` or, by default, the ``Corvin-Knowledge``
 checkout next to this repo. No KB -> the projector is off and says so in its status.
 """
@@ -35,6 +42,10 @@ from core.task_tracking import projection, service, store
 log = logging.getLogger("corvin.kb_projection")
 
 TICK_S = 2.0
+PERIODIC_S = 600.0        # G6 sweep + guidance + SkillForge bridge: periodic, never per tick
+GUIDANCE_PERSONA = "assistant"   # SkillForge namespace the guidance skills are minted under
+_last_periodic: dict[str, float] = {}
+_periodic_out: dict[str, dict[str, Any]] = {}   # survives the per-tick state replacement
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _lock = threading.Lock()
 _state: dict[str, dict[str, Any]] = {}
@@ -113,6 +124,8 @@ def _state_path(tenant_id: str) -> Path:
 
 
 def _save(tenant_id: str, st: dict[str, Any]) -> None:
+    if tenant_id in _periodic_out:
+        st = {**st, "periodic": _periodic_out[tenant_id]}
     _state[tenant_id] = st
     try:
         p = _state_path(tenant_id)
@@ -236,6 +249,87 @@ def transition(tenant_id: str, item_id: str, to_status: str, *, reason: str = ""
         return service._fetch(conn, tenant_id, item_id)
 
 
+def _skill_registry(tenant_id: str):
+    """Tenant-native SkillForge registry acting for the `assistant` persona (the namespace
+    gate then refuses any name outside `assistant.*`). Same import path as the CEL's
+    explicit-skill stage: skill-forge and forge are on neither host's sys.path by default."""
+    base = _REPO_ROOT / "corvin_operator"
+    for d in (base / "skill-forge", base / "forge"):
+        if str(d) not in sys.path:
+            sys.path.insert(0, str(d))
+    from skill_forge.multi_registry import MultiSkillRegistry  # noqa: PLC0415
+    return MultiSkillRegistry(tenant_id=tenant_id, caller_persona=GUIDANCE_PERSONA)
+
+
+def guidance_skill_name(finding_class: str) -> str:
+    import re
+    return f"{GUIDANCE_PERSONA}.kb_guidance_" + re.sub(r"[^a-z0-9_]", "_", finding_class.lower())
+
+
+def guidance_bridge(tenant_id: str, repo: Path) -> dict[str, Any]:
+    """Mint/retire the SkillForge skills of KB guidance (T-0049). A skill is created once,
+    graded once with the capped bootstrap seed (organic=False clamps to the cap; disclosed
+    in the notes), then acknowledged in the KB. A failure leaves the guidance `pending`,
+    so the next period retries — nothing is acknowledged that did not happen."""
+    rc, pend = _run(repo, "guidance", "pending")
+    if rc != 0:
+        return {"error": str(pend.get("error") or pend)[:300]}
+    if not pend.get("mint") and not pend.get("retire"):
+        return {"minted": [], "retired": []}
+    reg = _skill_registry(tenant_id)
+    minted, retired, failed = [], [], []
+    for m in pend.get("mint") or []:
+        name = guidance_skill_name(m["finding_class"])
+        try:
+            if reg.get(name) is None:
+                reg.create(scope="user", name=name, type="learned-experience", body_md=m["body_md"],
+                           description=f"Corvin-Knowledge guidance for the recurring finding class "
+                                       f"{m['finding_class']} (advisory, retired when it shows no effect)",
+                           created_by="kb-guidance")
+                reg.grade(name, run_id=f"kb-guidance-bootstrap:{m['finding_class']}", score=0.3,
+                          notes="bootstrap seed minted from KB guidance — not earned usage", organic=False)
+        except Exception as exc:  # noqa: BLE001 — one bad entry must not stop the others
+            failed.append({"finding_class": m["finding_class"], "error": f"{type(exc).__name__}: {exc}"[:200]})
+            continue
+        rc, res = _run(repo, "guidance", "ack", m["finding_class"], f"--skill={name}")
+        (minted if rc == 0 else failed).append(name if rc == 0 else {"finding_class": m["finding_class"],
+                                                                     "error": str(res)[:200]})
+    for r in pend.get("retire") or []:
+        try:
+            if reg.get(r["skill"]) is not None:
+                reg.delete(r["skill"], reason="KB guidance retired (no effect, or blamed for a false refusal)")
+        except Exception as exc:  # noqa: BLE001
+            failed.append({"skill": r["skill"], "error": f"{type(exc).__name__}: {exc}"[:200]})
+            continue
+        rc, res = _run(repo, "guidance", "ack", r["finding_class"], "--retired")
+        (retired if rc == 0 else failed).append(r["skill"] if rc == 0 else {"skill": r["skill"],
+                                                                            "error": str(res)[:200]})
+    return {"minted": minted, "retired": retired, **({"failed": failed} if failed else {})}
+
+
+def periodic(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
+    """The KB's slow loops, every PERIODIC_S (T-0044/T-0049). Serialised with sync and
+    transitions — all of them commit to the KB."""
+    repo = kb_repo()
+    now = time.time()
+    if repo is None or (not force and now - _last_periodic.get(tenant_id, 0.0) < PERIODIC_S):
+        return {}
+    _last_periodic[tenant_id] = now
+    out: dict[str, Any] = {}
+    with _lock:
+        rc, g = _run(repo, "guidance", "run", actor="kb-guidance")
+        out["guidance"] = g if rc == 0 else {"error": str(g.get("error") or g)[:300]}
+        rc, sw = _run(repo, "sweep", "--create-tasks", actor="kb-sweep", timeout=300)
+        out["sweep"] = sw if rc == 0 else {"error": str(sw.get("error") or sw)[:300]}
+        try:
+            out["skills"] = guidance_bridge(tenant_id, repo)
+        except Exception as exc:  # noqa: BLE001 — SkillForge unavailable: report, retry next period
+            out["skills"] = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    _periodic_out[tenant_id] = {**out, "at": now}
+    _save(tenant_id, dict(_state.get(tenant_id) or status(tenant_id)))
+    return out
+
+
 def _loop(tenant_id: str, stop: threading.Event) -> None:
     while not stop.is_set():
         try:
@@ -244,6 +338,10 @@ def _loop(tenant_id: str, stop: threading.Event) -> None:
             log.warning("kb projection tick failed: %s", exc)
             _save(tenant_id, {**(_state.get(tenant_id) or {}), "state": "error", "error": str(exc)[:300],
                               "checked_at": time.time()})
+        try:
+            periodic(tenant_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("kb periodic loop failed: %s", exc)
         stop.wait(TICK_S)
 
 

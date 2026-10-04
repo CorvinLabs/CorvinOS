@@ -1,27 +1,26 @@
-"""Helper module for emitting feedback events to the learning loop (ADR-0314, ADR-0876).
-
-This module provides a reusable interface for routes to emit feedback events
-without duplicating EventEmitter/EventStore initialization logic.
+"""Helper for recording feedback events in the learning loop (ADR-0314, ADR-0876).
 
 Usage:
   from .feedback_emitter_helper import emit_feedback_event
 
-  success = await emit_feedback_event(
+  audit_ref = await emit_feedback_event(
       skill_id="os.video_producer",
       task_id=job_id,
-      tenant_id=tenant_id,
-      outcome_feedback="yes",  # or "no" or "unknown"
+      tenant_id=rec.tenant_id,
+      outcome_feedback="yes",  # or "no"
       quality_rating=5,
       reason="Scene rendering perfect",
       confidence=0.9,
-      source="user"
+      source="user",
+      scene_id="s01",
   )
+  # audit_ref is None when NOTHING was recorded.
 """
 
+import asyncio
 import logging
-from pathlib import Path
-from typing import Optional
 from datetime import datetime, timezone
+from typing import Optional
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -38,81 +37,60 @@ async def emit_feedback_event(
     confidence: Optional[float] = None,
     source: str = "user",
     lom: Optional[str] = None,
-) -> bool:
-    """Emit a feedback event to the learning EventStore (audit-first, fail-closed).
+    scene_id: Optional[str] = None,
+) -> Optional[str]:
+    """Record a feedback event in the learning EventStore (audit-first, fail-closed).
 
-    Args:
-        skill_id: Skill this feedback is about (e.g., "os.video_producer")
-        task_id: Task/job ID this feedback relates to
-        tenant_id: Tenant scope (GDPR Art. 32)
-        outcome_feedback: "yes" | "no" | "unknown" — correctness
-        quality_rating: 1–5 stars (optional)
-        preference_feedback: "llm" | "deterministic" | "either" (optional)
-        reason: User's explanation (scrubbed of PII)
-        confidence: User's confidence in feedback (0–1)
-        source: "user" | "system" | "audit"
-        lom: Line of Moral Responsibility (code location)
-
-    Returns:
-        True if feedback was successfully emitted, False on error (fail-soft)
+    The write is SYNCHRONOUS (run off the event loop): ``EventStore.write_event``
+    commits the tenant's audit-chain record first and only then the event, so a
+    returned ``audit_ref`` means the record exists; ``None`` means nothing was
+    recorded. The free-text ``reason`` is validated and scrubbed but never
+    persisted (CLAUDE.md § ADR-0613) — only whether one was given is stored.
     """
+    return await asyncio.to_thread(
+        _record_feedback_sync, skill_id, task_id, tenant_id, outcome_feedback,
+        quality_rating, preference_feedback, reason, confidence, source, lom, scene_id,
+    )
+
+
+def _record_feedback_sync(
+    skill_id, task_id, tenant_id, outcome_feedback, quality_rating,
+    preference_feedback, reason, confidence, source, lom, scene_id,
+) -> Optional[str]:
     try:
-        # Import learning infrastructure (lazy load to avoid startup dependency)
-        from core.learning.event_emitter import EventEmitter
         from core.learning.event_store import EventStore
-        from core.learning.feedback_sink import FeedbackEvent, FeedbackScrubber, FeedbackValidator, OutcomeFeedbackType, PreferenceFeedbackType
+        from core.learning.feedback_sink import (
+            FeedbackEvent, FeedbackScrubber, FeedbackValidator,
+            OutcomeFeedbackType, PreferenceFeedbackType,
+        )
+        from core.learning.learning_events import EventType, LearningEvent
         from core.paths.tenant import tenant_home
 
-        # Validate tenant_id
         if not tenant_id or not isinstance(tenant_id, str):
-            logger.error(f"feedback_emitter: invalid tenant_id={tenant_id!r}")
-            return False
+            logger.error("feedback_emitter: invalid tenant_id")
+            return None
 
-        # Get tenant home directory and initialize EventStore
+        # Fail closed: an unresolvable tenant is refused, never re-routed to a
+        # hand-built path (that ignored CORVIN_HOME and skipped validation).
         try:
-            _tenant_home = tenant_home(tenant_id)
-        except Exception as e:
-            logger.warning(f"feedback_emitter: could not resolve tenant home: {e}, using fallback")
-            _tenant_home = Path.home() / ".corvin" / "tenants" / tenant_id
+            event_store = EventStore(tenant_home(tenant_id), tenant_id=tenant_id)
+        except Exception as e:  # noqa: BLE001
+            logger.error("feedback_emitter: no event store for tenant (%s)", type(e).__name__)
+            return None
 
-        # Initialize EventStore (audit-first, fail-closed)
-        try:
-            event_store = EventStore(_tenant_home, tenant_id=tenant_id)
-        except Exception as e:
-            logger.error(f"feedback_emitter: failed to initialize EventStore: {e}")
-            return False
-
-        # Initialize EventEmitter (non-blocking, fire-and-forget)
-        try:
-            emitter = EventEmitter(event_store)
-        except Exception as e:
-            logger.error(f"feedback_emitter: failed to initialize EventEmitter: {e}")
-            return False
-
-        # Scrub reason of PII (GDPR Art. 5 minimization)
         scrubbed_reason = None
         if reason:
-            scrubber = FeedbackScrubber()
-            scrubbed_reason = scrubber.scrub(reason)
+            scrubbed_reason = FeedbackScrubber().scrub(reason)
             if scrubbed_reason is None:
-                logger.warning(f"feedback_emitter: reason scrubbing failed, dropping reason")
+                logger.warning("feedback_emitter: reason scrubbing failed, dropping reason")
 
-        # Convert string enums to proper types
-        outcome_fb = None
-        if outcome_feedback:
-            try:
-                outcome_fb = OutcomeFeedbackType(outcome_feedback.lower())
-            except (ValueError, AttributeError):
-                logger.warning(f"feedback_emitter: invalid outcome_feedback={outcome_feedback}")
+        try:
+            outcome_fb = OutcomeFeedbackType(outcome_feedback.lower()) if outcome_feedback else None
+            preference_fb = PreferenceFeedbackType(preference_feedback.lower()) if preference_feedback else None
+        except (ValueError, AttributeError):
+            logger.warning("feedback_emitter: invalid feedback enum — not recorded")
+            return None
 
-        preference_fb = None
-        if preference_feedback:
-            try:
-                preference_fb = PreferenceFeedbackType(preference_feedback.lower())
-            except (ValueError, AttributeError):
-                logger.warning(f"feedback_emitter: invalid preference_feedback={preference_feedback}")
-
-        # Create FeedbackEvent (immutable, frozen dataclass)
         try:
             feedback_event = FeedbackEvent.create(
                 skill_id=skill_id,
@@ -126,34 +104,31 @@ async def emit_feedback_event(
                 source=source,
                 lom=lom,
             )
-        except Exception as e:
-            logger.error(f"feedback_emitter: failed to create FeedbackEvent: {e}")
-            return False
+        except Exception as e:  # noqa: BLE001
+            logger.error("feedback_emitter: could not build FeedbackEvent (%s)", type(e).__name__)
+            return None
 
-        # Validate feedback (fail-closed: invalid feedback is dropped)
-        validator = FeedbackValidator(event_store=event_store)
-        is_valid, error_msg = validator.validate(feedback_event)
+        is_valid, error_msg = FeedbackValidator(event_store=event_store).validate(feedback_event)
         if not is_valid:
-            logger.warning(f"feedback_emitter: validation failed: {error_msg}")
-            return False
-
-        # Emit event to EventStore (non-blocking, audit-first)
-        # Convert FeedbackEvent to LearningEvent for EventStore
-        from core.learning.learning_events import LearningEvent, EventType
+            logger.warning("feedback_emitter: validation failed: %s", error_msg)
+            return None
 
         learning_event = LearningEvent(
             event_id=str(uuid4()),
             event_type=EventType.FEEDBACK,
             skill_id=skill_id,
             tenant_id=tenant_id,
-            timestamp=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+            timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             version="1.0",
             signal={
                 "feedback_id": feedback_event.feedback_id,
+                # the join keys the per-job learning-metrics reader filters on
+                "task_id": task_id,
+                "scene_id": scene_id,
                 "outcome_feedback": feedback_event.outcome_feedback.value if feedback_event.outcome_feedback else None,
                 "quality_rating": feedback_event.quality_rating,
                 "preference_feedback": feedback_event.preference_feedback.value if feedback_event.preference_feedback else None,
-                "reason": feedback_event.reason,
+                "reason_given": bool(feedback_event.reason),
                 "confidence": feedback_event.confidence,
                 "source": feedback_event.source,
                 "signature": feedback_event.signature,
@@ -162,21 +137,14 @@ async def emit_feedback_event(
             lom=lom,
         )
 
-        # Emit to EventStore (audit-first, fail-closed)
-        success = emitter.emit(learning_event)
-        if not success:
-            logger.error(f"feedback_emitter: EventEmitter queue full, feedback dropped (dropped_count={emitter.dropped})")
-            return False
+        # Synchronous, audit-first: the chain record is committed, then the event.
+        audit_ref = event_store.write_event(learning_event)
+        logger.info("feedback_emitter: feedback recorded (skill_id=%s, task_id=%s)", skill_id, task_id)
+        return audit_ref or None
 
-        logger.info(
-            f"feedback_emitter: ✓ feedback emitted (feedback_id={feedback_event.feedback_id}, "
-            f"skill_id={skill_id}, task_id={task_id}, tenant_id={tenant_id})"
-        )
-        return True
-
-    except Exception as e:
-        logger.exception(f"feedback_emitter: unexpected error: {e}")
-        return False
+    except Exception as e:  # noqa: BLE001
+        logger.error("feedback_emitter: feedback not recorded (%s)", type(e).__name__)
+        return None
 
 
 __all__ = ["emit_feedback_event"]

@@ -1,0 +1,69 @@
+# Demonstrates the three vocabulary additions: grid, brace, highlight.
+theme: corvin-dark
+canvas: {w: 1920, h: 1080}
+elements:
+  - id: bg_grid
+    type: grid
+    at: [0, 0]
+    size: [1920, 1080]
+    spacing: 64
+    opacity: 0.10
+
+  - id: maestro
+    type: box
+    label: "os.video_producer"
+    at: [760, 90]
+    icon: layers
+    variant: accent
+
+  - id: w1
+    type: box
+    label: "voice_synthesizer"
+    at: [280, 420]
+    icon: mic
+
+  - id: w2
+    type: box
+    label: "screenshot_capturer"
+    right_of: w1
+    gap: 60
+    icon: camera
+
+  - id: w3
+    type: box
+    label: "diagram_renderer"
+    right_of: w2
+    gap: 60
+    icon: film
+    variant: accent
+
+  - id: a1
+    type: arrow
+    from: maestro.s
+    to: w1.n
+  - id: a2
+    type: arrow
+    from: maestro.s
+    to: w2.n
+  - id: a3
+    type: arrow
+    from: maestro.s
+    to: w3.n
+
+  - id: grp
+    type: brace
+    spans: [w1, w2, w3]
+    side: bottom
+    label: "Phase 4 — parallel workers"
+
+  - id: hl
+    type: highlight
+    target: w3
+    style: glow
+    color: "#F0A830"
+
+steps:
+  - [bg_grid, maestro]
+  - [bg_grid, maestro, w1, w2, w3, a1, a2, a3]
+  - [bg_grid, maestro, w1, w2, w3, a1, a2, a3, grp]
+  - [bg_grid, maestro, w1, w2, w3, a1, a2, a3, grp, hl]

@@ -282,7 +282,7 @@ def measure(job: dict, video_output: Optional[dict]) -> dict:
     try:
         if started and completed:
             seconds = round((datetime.fromisoformat(str(completed)) - datetime.fromisoformat(str(started))).total_seconds(), 1)
-    except ValueError:
+    except (ValueError, TypeError):  # unparseable, or a tz-aware/naive mix
         seconds = None
     return {
         "job_id": job_id,

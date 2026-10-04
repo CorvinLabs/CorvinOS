@@ -3,10 +3,17 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "core" / "skills" / "os_skills"))
-
-from video_producer.skill import VideoProducerSkill, Scene
-from marketplace_hub.skill import MarketplaceHubSkill, MarketplaceItem, ItemType
+# The path is removed again right after the import: left on sys.path for the
+# rest of the pytest process, it changes module resolution for every test
+# that runs afterwards (e.g. corvin_console.app pulls in social_actor.py,
+# whose relative import then fails under this extra path entry).
+_os_skills_dir = str(Path(__file__).parent.parent.parent / "core" / "skills" / "os_skills")
+sys.path.insert(0, _os_skills_dir)
+try:
+    from video_producer.skill import VideoProducerSkill, Scene
+    from marketplace_hub.skill import MarketplaceHubSkill, MarketplaceItem, ItemType
+finally:
+    sys.path.remove(_os_skills_dir)
 
 
 def test_video_producer():

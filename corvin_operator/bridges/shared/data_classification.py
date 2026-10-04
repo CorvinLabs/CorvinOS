@@ -198,6 +198,20 @@ DEFAULT_ENGINE_COMPLIANCE: dict[str, EngineCompliance] = {
               "Used by chat_runtime to classify delegated web-chat turns. "
               "Max classification: INTERNAL without operator override.",
     ),
+    # Console Video Producer job (marketplace plugin contributor/media/video_producer,
+    # started by core/console/corvin_console/routes/video_producer_api.py). Every job
+    # sends the LLM-written narration — derived from the user's task text — to Google's
+    # public translate TTS endpoint (gTTS), so its floor is US cloud + external egress
+    # whatever storyboard backend it uses. The storyboard host (api.anthropic.com when
+    # the Anthropic backend is chosen) is validated separately by the route via L35.
+    "video_producer": EngineCompliance(
+        engine_id="video_producer",
+        locality="us_cloud",
+        network_egress="external",
+        notes="Console Video Producer: narration to translate.google.com (gTTS), "
+              "optional storyboard via api.anthropic.com. Max classification: "
+              "INTERNAL without operator override.",
+    ),
     "opencode_http": EngineCompliance(
         engine_id="opencode_http",
         locality="local",

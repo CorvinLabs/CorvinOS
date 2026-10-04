@@ -335,6 +335,8 @@ def invite_to_origin_dict(token: InviteToken) -> dict[str, Any]:
     arbitrary code execution.  Operators who want spawn_worker must
     explicitly enable it in the origin file after accepting the invite and
     reviewing the connection (CRIT-01 hardening, ADR-0099).
+
+    require_ibc: for new invites, require Corvino IBC attestation (ADR-2099 P0 Fact 3).
     """
     return {
         "origin_id": token.oid,
@@ -344,6 +346,7 @@ def invite_to_origin_dict(token: InviteToken) -> dict[str, Any]:
         "max_ttl_s": token.mt,
         "allowed_personas": token.pa,
         "spawn_worker": False,          # always False — operator must opt in
+        "require_ibc": True,            # ADR-2099 P0: enforce IBC for new invites
         "_invite_requested_spawn": token.spawn_worker,  # record intent for audit
         "_invite_ikey": token.ikey,
         "_invite_issuer": token.iid,

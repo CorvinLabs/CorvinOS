@@ -285,6 +285,21 @@ regression is a NEW task with `regresses:`). The console board
 same state machine. An ADR's `accepted` means DECIDED, never "built" — "built" is the derived
 `realization` of the tasks that implement it.
 
+**Gates, review loop, evidence (ADR-2208)** — G1–G4 (concept, back-edge, plan, closed review) are
+WARNINGS: they derive `implementation_ready` (the board's ready badge) and never block. A review:
+`kb review open --title … --reviews ADR-…` → rounds `kb review calibrate <REVIEW> --lead-question …
+--reviewer … --reviewer-cmd "<cmd>"` (seeds a known defect into a copy; a missed seed voids the
+round) → `kb review close` sets `addressed` ONLY for three calibrated zero rounds under different
+lead questions by a reviewer ≠ the ADR's author (`kb orchestrate` drives this one step at a time).
+A **code task** (its epic implements a decision) is done only with `kb task <T> done --evidence
+call_site=<prod file> --evidence e2e_test=<path> --evidence exit_code=0 --evidence commit=<sha on
+origin/main> [--evidence repo=CorvinOS]` (G5) — push first. The projector runs `kb sweep` every
+10 min (G6: vanished paths/evidence → a `regresses:` task) and mints recurring finding classes as
+SkillForge guidance skills (`kb learn`, `kb guidance`). Agents (`--actor agent:*`) are held to
+`kb/_meta/autonomy.yaml` (A1 drafts, A2 only ready + not human-required — a missing `risk:` IS
+human-required, A3 human only) and circuit breakers (`kb breaker status|reset`, reset is human).
+`kb task … --dod` never replaces a planned definition of done (it becomes `completion_note`).
+
 **Consistency** — `kb check` must report `blocking: 0` before you push. Derivable deviations (missing
 uid/id, status spelling, a stored container status, a duplicate id) are healed automatically
 (`kb heal`, also run by the projector, committed + audited in `kb/audit.jsonl`); judgement calls are
@@ -298,7 +313,10 @@ links commits naming `T-NNNN`) · `loop_a`'s board reporting + `corvin-loop-a.ti
 Loop A is `I-02`) · the `initiatives.json` import (`POST …/import` → 410; Loop A/B/C are `I-02..I-04`) ·
 `corvin-initiatives-verify.timer`. Corvin-ADR is frozen (`MOVED.md`).
 
-**Must NOT do:** write a KB file without `kb new` / `kb task` for identity or status · PATCH a `kb:`
+**Must NOT do:** set a review `addressed` by hand or with anything but `kb review close` · close a
+code task without G5 evidence on origin/main · run tests against the real KB (they committed 35 junk
+entities into it; `tests/kb/conftest.py` now fails such a run) · `--init-rule` an existing rule ·
+write a KB file without `kb new` / `kb task` for identity or status · PATCH a `kb:`
 card's status/title/parent in the console or tasks.db (409 `kb_owned`; drift is re-applied anyway) ·
 record a go/no-go `decision` on a `kb:` gate (409 — use `kb task`) · store a status on an epic/initiative
 · invent a status when importing · commit to Corvin-ADR · add a second board writer.

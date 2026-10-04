@@ -1,78 +1,67 @@
-"""Console API Extensions for Video Producer Learning (Phase 4b).
+"""Console API for Video Producer learning (Phase 4b), tenant-scoped.
 
-Endpoints:
-- POST /v1/console/video/jobs/{job_id}/feedback — Submit feedback
-- GET /v1/console/video/jobs/{job_id}/learning-metrics — Get learning metrics for a job
-- GET /v1/console/video/learning/stats — Get learning statistics
-- GET /v1/console/video/learning/models — Get model selection stats
-- GET /v1/console/video/learning/confidence — Get confidence metrics
+Endpoints (under /v1/console/video):
+- GET  /jobs/{job_id}/learning-metrics — feedback recorded for one job
+- POST /jobs/{job_id}/feedback         — record job-level feedback
+- GET  /learning/stats                 — counts over this tenant's feedback
+- GET  /learning/health                — whether the feedback store is reachable
+- /learning/models, /learning/confidence, /learning/select-model,
+  /learning/report-quality             — not built: 501, never sample numbers
+
+Every read and write uses the authenticated session's tenant.
 """
-
 from __future__ import annotations
 
 import logging
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Any, Optional, List, Dict
-from datetime import datetime
-import sys
-from pathlib import Path
-from fastapi import Depends
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+
 from ..deps import require_session_csrf_on_mutation
 
-# Add parent dirs to path for imports
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent.parent))
-
 logger = logging.getLogger(__name__)
+
 router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/video", tags=["video-learning"])
 
+_SessionRec = Depends(require_session_csrf_on_mutation)
+_SKILL_ID = "os.video_producer"
+_NOT_BUILT = "not available on this build"
 
-
-# ============================================================================
-# Request/Response Models
-# ============================================================================
 
 class FeedbackSubmissionRequest(BaseModel):
-    """Request model for feedback submission."""
-    scene_id: str
-    feedback_type: str = "quality"
-    rating: int
-    worker_notes: Optional[str] = None
+    scene_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    rating: int = Field(..., ge=1, le=5)
+    worker_notes: Optional[str] = Field(None, max_length=500)
 
-class VideoQualityReportRequest(BaseModel):
-    """Request model for video quality report."""
-    job_id: str
-    duration_seconds: int
-    quality_score: float
-    model_used: str
 
-# ============================================================================
-# Helper: Learning Metrics Provider (Mock/Stub for Phase 2)
-# ============================================================================
+def _feedback_events(tenant_id: str) -> List[Any]:
+    """This tenant's recorded video-producer feedback events (raises if the
+    store cannot be opened — callers decide how to report that)."""
+    from core.learning.event_store import EventStore  # noqa: PLC0415
+    from core.learning.learning_events import EventType  # noqa: PLC0415
+    from core.paths.tenant import tenant_home  # noqa: PLC0415
 
-async def _get_learning_metrics_for_job(job_id: str, tenant_id: str = "_default") -> Dict[str, Any]:
-    """What the operator taught the producer about THIS job: the ADR-0314
-    feedback events the scene-feedback route emitted for it. Until 2026-09-20
-    this returned one synthetic record for every job id."""
+    store = EventStore(tenant_home(tenant_id), tenant_id=tenant_id)
+    return store.query_events(tenant_id, event_type=EventType.FEEDBACK, skill_id=_SKILL_ID, limit=5000)
+
+
+def _job_learning_metrics(job_id: str, tenant_id: str) -> Dict[str, Any]:
     events: list = []
     try:
-        from core.learning.event_store import EventStore  # noqa: PLC0415
-        from core.learning.learning_events import EventType  # noqa: PLC0415
-        from core.paths.tenant import tenant_home  # noqa: PLC0415
-
-        store = EventStore(tenant_home(tenant_id), tenant_id=tenant_id)
-        for ev in store.query_events(tenant_id, event_type=EventType.FEEDBACK, skill_id="os.video_producer", limit=5000):
+        for ev in _feedback_events(tenant_id):
             sig = ev.signal or {}
             if str(sig.get("task_id")) == job_id:
                 events.append({
                     "timestamp": ev.timestamp,
+                    "scene_id": sig.get("scene_id"),
                     "outcome": sig.get("outcome_feedback"),
                     "quality_rating": sig.get("quality_rating"),
                     "confidence": sig.get("confidence"),
                     "source": sig.get("source"),
                 })
     except Exception as exc:  # noqa: BLE001 — no store, no events; never invent
-        logger.debug("learning metrics unavailable for %s: %s", job_id, exc)
+        logger.debug("learning metrics unavailable (%s)", type(exc).__name__)
     approved = sum(1 for e in events if e["outcome"] == "yes")
     rejected = sum(1 for e in events if e["outcome"] == "no")
     confs = [float(e["confidence"]) for e in events if isinstance(e.get("confidence"), (int, float))]
@@ -88,187 +77,98 @@ async def _get_learning_metrics_for_job(job_id: str, tenant_id: str = "_default"
 
 
 @router.get("/jobs/{job_id}/learning-metrics")
-async def get_job_learning_metrics(job_id: str) -> Dict[str, Any]:
-    """Get learning metrics for a video job.
+def get_job_learning_metrics(job_id: str, rec=_SessionRec) -> Dict[str, Any]:
+    """Feedback the operator recorded for THIS job, from this tenant's store."""
+    from .video_producer_api import _check_job_id  # noqa: PLC0415
 
-    Response:
-    {
-        "job_id": "...",
-        "total_feedback_events": 3,
-        "optimizer_iterations": 5,
-        "average_confidence": 0.82,
-        "convergence_trend": [...],
-        "per_scene_feedback": [...]
-    }
-    """
-    try:
-        metrics = await _get_learning_metrics_for_job(job_id)
-        return metrics
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    _check_job_id(job_id)
+    return _job_learning_metrics(job_id, rec.tenant_id)
+
 
 @router.post("/jobs/{job_id}/feedback")
-async def submit_feedback(job_id: str, feedback: FeedbackSubmissionRequest) -> Dict[str, Any]:
-    """Submit operator feedback for a video job.
+async def submit_feedback(job_id: str, feedback: FeedbackSubmissionRequest, rec=_SessionRec) -> Dict[str, Any]:
+    """Record a 1–5 rating for one scene of a job (same audit-first path as the
+    scene-feedback route). 503 when nothing was recorded."""
+    from .feedback_emitter_helper import emit_feedback_event  # noqa: PLC0415
+    from .video_producer_api import _check_job_id, _store  # noqa: PLC0415
 
-    Request Body:
-    {
-        "scene_id": "s01",
-        "feedback_type": "quality|relevance|correctness",
-        "rating": 1-5,
-        "worker_notes": "optional notes"
-    }
+    _check_job_id(job_id)
+    if not _store(rec).get_job(job_id):
+        raise HTTPException(status_code=404, detail="Job not found")
+    audit_ref = await emit_feedback_event(
+        skill_id=_SKILL_ID,
+        task_id=job_id,
+        tenant_id=rec.tenant_id,
+        quality_rating=feedback.rating,
+        reason=feedback.worker_notes,
+        source="user",
+        lom="corvin_console.routes.video_learning_api:submit_feedback",
+        scene_id=feedback.scene_id,
+    )
+    if not audit_ref:
+        raise HTTPException(status_code=503, detail="Feedback could not be recorded")
+    return {"job_id": job_id, "scene_id": feedback.scene_id, "rating": feedback.rating,
+            "status": "recorded", "audit_ref": audit_ref}
 
-    Response:
-    {
-        "success": true,
-        "job_id": "...",
-        "scene_id": "s01",
-        "feedback_type": "quality",
-        "rating": 4,
-        "message": "Feedback recorded and learning updated"
-    }
-    """
-    try:
-        # Validate
-        if not feedback.scene_id:
-            raise HTTPException(status_code=400, detail="scene_id required")
-
-        if not 1 <= feedback.rating <= 5:
-            raise HTTPException(status_code=400, detail="rating must be 1-5")
-
-        # In Phase 3+, emit feedback event to learning store (ADR-0314)
-        # For now, just acknowledge
-        return {
-            "success": True,
-            "job_id": job_id,
-            "scene_id": feedback.scene_id,
-            "feedback_type": feedback.feedback_type,
-            "rating": feedback.rating,
-            "message": "Feedback recorded and learning updated",
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/learning/stats")
-async def get_learning_stats() -> Dict[str, Any]:
-    """Get comprehensive learning statistics."""
+def get_learning_stats(rec=_SessionRec) -> Dict[str, Any]:
+    """Counts over this tenant's recorded feedback — measured, not sampled."""
     try:
-        return {
-            "confidence_metrics": {
-                "average": 0.78,
-                "min": 0.65,
-                "max": 0.95,
-            },
-            "model_stats": {
-                "total_decisions": 42,
-                "exploration_rate": 0.1,
-            },
-            "feedback_stats": {
-                "total_events": 128,
-                "positive": 92,
-                "neutral": 21,
-                "negative": 15,
-            },
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        events = _feedback_events(rec.tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("learning stats unavailable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Feedback store unavailable") from None
+    sigs = [ev.signal or {} for ev in events]
+    confs = [float(s["confidence"]) for s in sigs if isinstance(s.get("confidence"), (int, float))]
+    return {
+        "feedback_stats": {
+            "total_events": len(sigs),
+            "positive": sum(1 for s in sigs if s.get("outcome_feedback") == "yes"),
+            "negative": sum(1 for s in sigs if s.get("outcome_feedback") == "no"),
+            "rating_only": sum(1 for s in sigs if s.get("outcome_feedback") is None),
+        },
+        "confidence_metrics": {
+            "samples": len(confs),
+            "average": round(sum(confs) / len(confs), 3) if confs else None,
+            "min": min(confs) if confs else None,
+            "max": max(confs) if confs else None,
+        },
+        "source": "learning.event_store",
+    }
 
-@router.get("/learning/models")
-async def get_model_stats() -> Dict[str, Any]:
-    """Get model selection statistics."""
-    try:
-        return {
-            "total_decisions": 42,
-            "exploration_rate": 0.1,
-            "by_duration": {
-                "1min": {
-                    "selected_model": "claude-opus",
-                    "models": {
-                        "claude-opus": {
-                            "win_rate": 0.85,
-                            "attempts": 10,
-                            "wins": 8,
-                        },
-                        "claude-sonnet": {
-                            "win_rate": 0.75,
-                            "attempts": 8,
-                            "wins": 6,
-                        },
-                    }
-                }
-            }
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/learning/confidence")
-async def get_confidence_metrics() -> Dict[str, Any]:
-    """Get confidence metrics for worker components."""
-    try:
-        return {
-            "slide_renderer": {
-                "overall_score": 0.85,
-                "is_converged": True,
-                "metrics": {
-                    "slide_quality": {
-                        "confidence": 0.85,
-                        "samples": 12,
-                        "variance": 0.08,
-                    }
-                }
-            },
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/learning/select-model")
-async def select_model(data: Dict[str, int]) -> Dict[str, Any]:
-    """Select model for a new video."""
-    try:
-        duration = data.get("duration_seconds", 60)
-        return {
-            "model": "claude-opus",
-            "duration_seconds": duration,
-            "stats": {
-                "confidence": 0.82,
-                "past_performance": "strong",
-            }
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/learning/report-quality")
-async def report_video_quality(request: VideoQualityReportRequest) -> Dict[str, Any]:
-    """Report video quality and update model selection."""
-    try:
-        return {
-            "success": True,
-            "job_id": request.job_id,
-            "model_used": request.model_used,
-            "model_switched_to": None,
-            "message": "Quality recorded",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/learning/health")
-async def learning_health() -> Dict[str, Any]:
-    """Health check for learning infrastructure."""
+def learning_health(rec=_SessionRec) -> Dict[str, Any]:
+    """Whether this tenant's feedback store can actually be opened."""
     try:
-        return {
-            "status": "ok",
-            "components": {
-                "feedback_collector": "ready",
-                "confidence_scorer": "ready",
-                "model_selector": "ready",
-                "audit_trail": "ready",
-            },
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        _feedback_events(rec.tenant_id)
+        store = "ready"
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("feedback store unavailable (%s)", type(exc).__name__)
+        store = "unavailable"
+    return {"status": "ok" if store == "ready" else "degraded", "components": {"feedback_store": store}}
+
+
+def _not_built() -> None:
+    raise HTTPException(status_code=501, detail=f"Video model selection / confidence scoring is {_NOT_BUILT}")
+
+
+@router.get("/learning/models")
+def get_model_stats() -> Dict[str, Any]:
+    _not_built()
+
+
+@router.get("/learning/confidence")
+def get_confidence_metrics() -> Dict[str, Any]:
+    _not_built()
+
+
+@router.post("/learning/select-model")
+def select_model() -> Dict[str, Any]:
+    _not_built()
+
+
+@router.post("/learning/report-quality")
+def report_video_quality() -> Dict[str, Any]:
+    _not_built()

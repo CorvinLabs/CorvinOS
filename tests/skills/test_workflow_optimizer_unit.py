@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.skills.os_skills.workflow_optimizer import (
-    WorkflowOptimizerSkill,
+    WorkflowOptimizer,
     ExecutionTrace,
     OptimizationRecommendation,
     SkillMetadata,
@@ -24,8 +24,8 @@ from core.skills.os_skills.workflow_optimizer import (
 
 @pytest.fixture
 def skill():
-    """Create a WorkflowOptimizerSkill instance."""
-    return WorkflowOptimizerSkill()
+    """Create a WorkflowOptimizer instance."""
+    return WorkflowOptimizer()
 
 
 @pytest.fixture

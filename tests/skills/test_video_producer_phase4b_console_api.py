@@ -9,23 +9,44 @@ Tests for video learning API endpoints:
 - POST /v1/console/video/learning/report-quality
 """
 
+import pytest
+
+# ── Not runnable on main ──────────────────────────────────────────────────
+# These tests assert the PRE-2026-10-03 route behaviour: unauthenticated
+# requests, an unvalidated job id ("job1", not the real "job_<8 hex>" shape),
+# `{"success": True}` returned unconditionally, and hardcoded sample numbers
+# (0.78 confidence, 42 decisions, "claude-opus", every learning/models/
+# confidence/select-model/report-quality endpoint). The 2026-10-03 adversarial
+# review found exactly that — ADR-0763 "fabricates nothing" — and replaced it:
+# feedback now needs a session+CSRF and a real job, returns an audit_ref (503
+# if nothing was recorded) instead of an unconditional success flag, and the
+# four unbuilt endpoints answer 501 instead of sample data.
+#
+# The live surface IS covered, by tests driven through the real router with a
+# real session: core/console/tests/test_video_producer_routes_e2e.py
+# (test_unbuilt_endpoints_answer_501_not_fabricated_success,
+# test_scene_feedback_is_validated_recorded_and_read_back_per_tenant,
+# test_job_level_feedback_records_or_404s, among others).
+#
+# Delete this guard (and rewrite the tests below against the current
+# contract) in the commit that changes the route again, or delete the file.
+pytest.skip(
+    "Tests the pre-2026-10-03 fake route behaviour (unauthenticated, "
+    "unconditional success, hardcoded learning numbers). See "
+    "core/console/tests/test_video_producer_routes_e2e.py for the coverage "
+    "that runs against the current (honest, tenant-scoped) route.",
+    allow_module_level=True,
+)
+
 import json
 import tempfile
-import pytest
+import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-# The route module is FastAPI, not Flask: it exposes `router`, never a `bp`
-# blueprint, and `get_learning_loop` does not exist. This file registered a
-# Flask blueprint that was never there, so it was a collection error in every
-# run. It now drives the SAME endpoints through the shared `client` fixture
-# (tests/fixtures_console.py), which mounts the real console router at
-# /v1/console exactly like corvin_gateway does — the paths asserted below were
-# already written for that mount.
-from core.console.corvin_console.routes import video_learning_api  # noqa: F401
+from core.console.corvin_console.routes import video_learning_api  # noqa: F401,E402
 
 
 class TestVideoLearningAPI:

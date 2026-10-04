@@ -7,6 +7,20 @@
   },
   "plugins": [
     {
+      "name": "corvin",
+      "source": "./corvin_operator/corvin",
+      "description": "CorvinOS setup entry point for Claude Code. /corvin:install drives the existing corvin-install CLI to a verified, stable end-state (real console health check, not just 'port open') and opens the Web Console in the browser. Idempotent — safe to re-run on a partial or already-complete install.",
+      "version": "0.1.0",
+      "license": "MIT",
+      "keywords": [
+        "install",
+        "setup",
+        "onboarding",
+        "console",
+        "bootstrap"
+      ]
+    },
+    {
       "name": "voice",
       "source": "./corvin_operator/voice",
       "description": "Voice mode for Claude Code: reads assistant replies aloud (TTS) with auto language detection (de/en) and optional summarization. Also provides the WhatsApp / Telegram / Discord / Slack / Email bridges that funnel inbound messages into a Claude subprocess.",

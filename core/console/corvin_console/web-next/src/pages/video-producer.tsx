@@ -337,9 +337,9 @@ export function VideoProducerPage() {
   const job = useQuery({ queryKey: ["video", "job", selected], queryFn: ({ signal }) => api<Job>(`${BASE}/jobs/${selected}`, { signal }), enabled: !!selected, retry: false,
     refetchInterval: (q) => (q.state.data && ACTIVE.includes(q.state.data.status) ? 1000 : false) });
   const quality = useQuery({ queryKey: ["video", "quality", selected, job.data?.status], queryFn: ({ signal }) => api<Quality>(`${BASE}/jobs/${selected}/quality-metrics`, { signal }), enabled: !!selected && job.data?.status === "complete", retry: false });
-  const settings = useQuery({ queryKey: ["video", "settings"], queryFn: ({ signal }) => api<{ output_folder: string; tts_engine: string; max_duration_minutes: number }>(`${BASE}/settings`, { signal }), retry: false });
-  const [form, setForm] = useState<{ output_folder: string; tts_engine: string; max_duration_minutes: number } | null>(null);
-  useEffect(() => { if (settings.data && !form) setForm(settings.data); }, [settings.data, form]);
+  const settings = useQuery({ queryKey: ["video", "settings"], queryFn: ({ signal }) => api<{ output_folder: string; tts_engine: string; tts_engines: string[]; max_duration_minutes: number }>(`${BASE}/settings`, { signal }), retry: false });
+  const [form, setForm] = useState<{ tts_engine: string; max_duration_minutes: number } | null>(null);
+  useEffect(() => { if (settings.data && !form) setForm({ tts_engine: settings.data.tts_engine, max_duration_minutes: settings.data.max_duration_minutes }); }, [settings.data, form]);
 
   const create = useMutation({
     mutationFn: (t: string) => api<{ job_id: string }>(`${BASE}/jobs`, { method: "POST", csrf, body: { task: t } }),
@@ -463,13 +463,13 @@ export function VideoProducerPage() {
         </button>
         {settingsOpen && form && (
           <CardContent className="grid gap-3 md:grid-cols-3">
-            <label className="text-sm"><span className="text-xs text-muted-foreground">Output folder</span><Input value={form.output_folder} onChange={(e) => setForm({ ...form, output_folder: e.target.value })} /></label>
+            <label className="text-sm"><span className="text-xs text-muted-foreground">Output folder (this tenant's video directory)</span><Input value={settings.data?.output_folder ?? ""} readOnly disabled /></label>
             <label className="text-sm"><span className="text-xs text-muted-foreground">Text-to-speech</span>
               <select value={form.tts_engine} onChange={(e) => setForm({ ...form, tts_engine: e.target.value })} className="w-full mt-1 px-3 py-2 rounded-md border border-border bg-background text-sm">
-                <option value="azure">Azure</option><option value="google">Google</option><option value="local">Local</option>
+                {(settings.data?.tts_engines ?? [form.tts_engine]).map((t) => <option key={t} value={t}>{t === "gtts" ? "Google TTS (gTTS)" : t}</option>)}
               </select></label>
-            <label className="text-sm"><span className="text-xs text-muted-foreground">Max duration (minutes, 0 = unlimited)</span><Input type="number" min={0} value={form.max_duration_minutes} onChange={(e) => setForm({ ...form, max_duration_minutes: Math.max(0, parseInt(e.target.value) || 0) })} /></label>
-            <div className="md:col-span-3"><Button variant="outline" size="sm" disabled={save.isPending || !csrf} onClick={() => save.mutate(form)}>{save.isSuccess ? "Saved" : "Save settings"}</Button></div>
+            <label className="text-sm"><span className="text-xs text-muted-foreground">Max duration (minutes, 1–60)</span><Input type="number" min={1} max={60} value={form.max_duration_minutes} onChange={(e) => setForm({ ...form, max_duration_minutes: Math.min(60, Math.max(1, parseInt(e.target.value) || 1)) })} /></label>
+            <div className="md:col-span-3 flex items-center gap-3"><Button variant="outline" size="sm" disabled={save.isPending || !csrf} onClick={() => save.mutate(form)}>{save.isSuccess ? "Saved" : "Save settings"}</Button>{save.isError ? <span className="text-xs text-destructive">Settings were not saved.</span> : null}</div>
           </CardContent>
         )}
       </Card>

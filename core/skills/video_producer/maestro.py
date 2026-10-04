@@ -238,6 +238,15 @@ class MaestroOrchestrator:
             },
         )
 
+        # A failed phase stops the job where it is (fail-closed): advancing
+        # would hand the next worker a result that says "nothing was produced"
+        # and let the next gate (which only checks "result is not None") pass.
+        if not success:
+            raise RuntimeError(
+                f"Phase {job.current_phase.name} failed for job {job_id}; "
+                f"the job stays in {job.current_phase.name}"
+            )
+
         # Move to next phase
         next_phase_value = job.current_phase.value + 1
         if next_phase_value <= len(VideoJobPhase):

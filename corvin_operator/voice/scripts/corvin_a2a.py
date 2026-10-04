@@ -1364,7 +1364,7 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
             previous[p] = p.read_bytes() if p.exists() else None
         except OSError:
             previous[p] = None
-    _atomic_write(origin_path, _friendship.to_origin_dict(token))
+    _atomic_write(origin_path, _friendship.to_origin_dict(token, require_ibc=True))  # ADR-2099 P0
     _atomic_write(endpoint_path, _friendship.to_endpoint_dict(token))
 
     # Zero-config rendezvous (concept a2a-robust-connectivity, 2026-09-24):
