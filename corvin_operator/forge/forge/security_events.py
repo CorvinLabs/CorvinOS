@@ -2611,13 +2611,23 @@ def _rotation_link_authenticated(chain_path: Path, pathrec: dict | None,
 
 def _is_legitimate_rotation(chain_path: Path, pathrec: dict,
                             genesis: str | None, genesis_prev: str) -> bool:
-    """True when a changed genesis is a Layer 37 rotation, not a replacement.
+    """True when a changed genesis is a Layer 37 rotation or a seam-based chain convergence.
 
-    Three conditions, ALL required: the link binds to the tail this path record
+    A seam-based convergence (R4) has already been reconciled: the old chain was
+    redirected to the canonical one via a ``superseded_by`` marker in the
+    out-of-tree record. R4 convergence seams are permanent, so a pathrec
+    that carries ``superseded_by`` is definitionally legitimate, not a
+    replacement attack (R3-A1).
+
+    Three conditions for L37 rotation, ALL required: the link binds to the tail this path record
     remembers, the genesis really is that link, and the rotation is
     AUTHENTICATED out of tree (:func:`_rotation_link_authenticated`). The last
     one is the load-bearing half — the first two are shape, and shape is exactly
     what an attacker rewriting the file controls (R3-A1)."""
+    # R4 seam: chain was legitimately converged to a canonical path
+    if isinstance(pathrec, dict) and pathrec.get("superseded_by"):
+        return True
+
     if not genesis or not genesis_prev:
         return False
     recorded_tail = pathrec.get("tail")
