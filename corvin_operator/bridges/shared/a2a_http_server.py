@@ -967,6 +967,7 @@ def build_server(
     google_a2a_enabled: bool = False,
     agent_card_overrides: dict | None = None,
     forge_se: Any = None,
+    group_message_handler: Any = None,  # ADR-2218 Phase 3: group routing callback
 ) -> HardenedThreadingHTTPServer:
     """Build (but do not start) a hardened ThreadingHTTPServer with a bound receiver.
 
@@ -988,6 +989,12 @@ def build_server(
         When provided, the receiver (and sender) use this instead of the
         module-level _forge_se, preventing cross-test mock contamination.
 
+    group_message_handler
+        Optional callback for ADR-2218 Phase 3 group message routing. When
+        present and a TaskEnvelope carries group_id, invoked to store the
+        message in the group's message store. Signature:
+        (group_id, sender_origin_id, instruction, task_id) -> {status, message_id}.
+
     endpoints_dir / pending_dir
         Explicit dirs for the friendship-ack handler (POST
         /v1/a2a/friendship-ack). None = env-var-or-default. Two servers
@@ -1003,6 +1010,7 @@ def build_server(
         force_m1_only=force_m1_only,
         instance_id=instance_id,
         forge_se=forge_se,
+        group_message_handler=group_message_handler,
     )
 
     google_adapter: Any = None
