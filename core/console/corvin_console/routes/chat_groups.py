@@ -15,6 +15,7 @@ Routes (all behind a live session + CSRF on mutation):
   DELETE /chat/groups/{id}/participants/{pid}          remove a participant
   GET    /chat/groups/{id}/messages                     list messages
   POST   /chat/groups/{id}/messages                     send a message
+  POST   /chat/groups/{id}/attachments                  upload files (see upload_group_attachments)
 
 Two-layer authorization (ADR-2216 Decision, conceptual level): a group's
 OWN participant list is the authorization surface for "who sees this
@@ -31,9 +32,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+from .. import attachments_common as _attachments
 from .. import audit as console_audit
 from .. import auth as session_auth
 from ..deps import require_session_csrf_on_mutation
@@ -383,9 +385,46 @@ def send_message(rec: Session, group_id: str, body: SendMessageRequest) -> Messa
         action="chat.group.message_sent", target_kind="chat_group", target_id=group_id,
     )
     # A group message reaches every A2A peer in the group (ADR-2218); the
-    # receiving instance stores it under the same group_id.
+    # receiving instance stores it only as TEXT (``_deliver_to_peers`` sends
+    # ``text`` alone, no attachments) — an uploaded file below is visible to
+    # local participants of this group only, same as any other local-first
+    # chat surface without an A2A workdir to share.
     _schedule_delivery(tenant_id=rec.tenant_id, group=g, text=body.text)
     return MessageOut(**msg)
+
+
+@router.post("/chat/groups/{group_id}/attachments")
+async def upload_group_attachments(
+    rec: Session,
+    group_id: str,
+    files: Annotated[list[UploadFile], File(description="One or more files to attach")],
+) -> dict[str, Any]:
+    """Upload one or more files into the group's own ``attachments/`` directory.
+
+    Mirrors ``routes/chat.py::upload_attachments`` (same 50 MB/file limit, no
+    extension/MIME whitelist, same ``chat_attachment`` audit shape) — see
+    ``attachments_common.py`` for the shared validation/storage logic and why
+    it's safe without a type whitelist. The frontend embeds the returned
+    paths as a text line in the next group message, same pattern as session
+    chat; a peer in the group only ever receives that text (see the comment
+    on ``send_message`` above), never the file itself.
+    """
+    tenant_dir = _a2a_paths.tenant_global_dir(rec.tenant_id)
+    g = _store.get_group(tenant_dir, group_id)
+    if g is None or g.get("tenant_id") != rec.tenant_id:
+        raise HTTPException(status_code=404, detail="group not found")
+
+    attach_dir = _store.attachments_dir(tenant_dir, group_id)
+    if attach_dir is None:
+        raise HTTPException(status_code=404, detail="group not found")
+
+    results = await _attachments.receive_uploaded_files(files, attach_dir)
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+        action="upload", target_kind="chat_attachment", target_id=group_id,
+    )
+    return {"attachments": results}
 
 
 # ── A2A inbound group routing (ADR-2218 Phase 3.5) ─────────────────────────

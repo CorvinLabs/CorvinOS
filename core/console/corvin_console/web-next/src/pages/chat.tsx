@@ -36,16 +36,16 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  ApiError,
   createChatSession,
   deleteChatSession,
   getChatTurns,
   getProfile,
   listChatSessions,
-  transcribeAudio,
   updateChatSessionTitle,
   openSessionWorkdir,
   uploadAttachments,
+  transcribeAudio,
+  ApiError,
   type AttachmentMeta,
   type ChatSessionListResponse,
   type ChatSessionSummary,
@@ -88,9 +88,14 @@ import { ChatAvatar } from "@/components/chat/ChatAvatar";
 import { ChatContextSidebar, usePendingCount } from "@/components/chat/ChatContextSidebar";
 import { GroupConversation } from "@/components/chat/GroupConversation";
 import { PeerConversation } from "@/components/chat/PeerConversation";
+import { AttachmentChip } from "@/components/chat/AttachmentChip";
+import { RecordingOverlay } from "@/components/chat/RecordingOverlay";
+import { useVoiceInput as _useVoiceInput } from "@/hooks/use-voice-input";
+import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
+import { useFileDrop } from "@/hooks/use-file-drop";
 import { PanelRight } from "lucide-react";
 
-// ── Web Speech API (not in lib.dom for the prefixed Chrome/Edge implementation) ──
+// ── Web Speech API minimal surface (not in lib.dom.d.ts) ───────────────────
 interface SpeechRecognitionResultLike {
   isFinal: boolean;
   0?: { transcript: string };
@@ -759,10 +764,17 @@ function ChatPane({
   const [input, setInput] = React.useState("");
   const [paletteOpen, setPaletteOpen] = React.useState(false);
   const [paletteSel, setPaletteSel] = React.useState(0);
-  const [pendingAttachments, setPendingAttachments] = React.useState<AttachmentMeta[]>([]);
-  const [uploadError, setUploadError] = React.useState<string | null>(null);
-  const [uploading, setUploading] = React.useState(false);
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const {
+    pendingAttachments, uploading, uploadError, addFiles,
+    removeAttachment, clearAttachments, fileInputRef, onFileInputChange,
+  } = useAttachmentUpload<AttachmentMeta>({
+    uploadFn: (files) => uploadAttachments(sid, files, csrf),
+    disabled: streaming,
+  });
+  const { isDragging: _composerDragging, dropHandlers: _composerDropHandlers } = useFileDrop(
+    (files) => { void addFiles(files); },
+    { disabled: streaming || uploading },
+  );
   const [persistedTasks, setPersistedTasks] = React.useState<Task[]>([]);
   const [cccActions, setCccActions] = React.useState<StreamEvent[]>([]);
   // Reset CCC action cards when the session changes.
@@ -1195,22 +1207,6 @@ function ChatPane({
     stickToBottom.current = true;
   }, []);
 
-  // ── Upload files when selected ────────────────────────────────────────────
-  const handleFileSelect = async (evt: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(evt.target.files ?? []);
-    if (files.length === 0) return;
-    evt.target.value = "";
-    setUploading(true);
-    setUploadError(null);
-    try {
-      const metas = await uploadAttachments(sid, files, csrf);
-      setPendingAttachments((prev) => [...prev, ...metas]);
-    } catch (e) {
-      setUploadError(e instanceof Error ? e.message : "Upload failed");
-    } finally {
-      setUploading(false);
-    }
-  };
 
   // ── Send user message via registry ─────────────────────────────────────────
   const sendUser = (text: string) => {
@@ -1241,8 +1237,7 @@ function ChatPane({
     scrollToBottomOnSend();
     setError(null);
     setInput("");
-    setPendingAttachments([]);
-    setUploadError(null);
+    clearAttachments();
   };
 
   // ── Cancel a running engine turn via registry ────────────────────────────────
@@ -1836,7 +1831,7 @@ function ChatPane({
             accept=".txt,.csv,.md,.json,.yaml,.yml,.toml,.pdf,.xlsx,.xls,.png,.jpg,.jpeg,.gif,.webp,.svg,.py,.js,.ts,.html,.css,.sql"
             className="sr-only"
             aria-label="Attach files"
-            onChange={handleFileSelect}
+            onChange={onFileInputChange}
             data-testid="file-input"
           />
           {/* Pending-attachment chips */}
@@ -1846,9 +1841,7 @@ function ChatPane({
                 <AttachmentChip
                   key={`${a.path}-${i}`}
                   attachment={a}
-                  onRemove={() =>
-                    setPendingAttachments((prev) => prev.filter((_, idx) => idx !== i))
-                  }
+                  onRemove={() => removeAttachment(i)}
                 />
               ))}
             </div>
@@ -1977,34 +1970,9 @@ function ChatPane({
               </Button>
             )}
           </div>
-          <p className="px-2 text-[10px] text-muted-foreground">
-            Enter to send, Shift+Enter for a new line · hold Space to speak · <kbd className="rounded bg-muted/60 px-1 font-mono text-[9px]">/</kbd> for commands
-          </p>
         </div>
       </footer>
     </>
-  );
-}
-
-function RecordingOverlay({ onStop }: { onStop: () => void }) {
-  return (
-    <div className="pointer-events-none sticky top-0 z-10 -mx-4 -mt-5 mb-5 flex justify-center px-4 pt-3 md:-mx-6 md:px-6">
-      <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-destructive/40 bg-destructive/10 px-4 py-2 text-sm shadow-lg backdrop-blur">
-        <span className="relative flex h-2.5 w-2.5">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive opacity-75" />
-          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-destructive" />
-        </span>
-        <span className="font-medium text-destructive">
-          Recording — release <kbd className="rounded bg-background/60 px-1.5 py-0.5 font-mono text-[11px]">Space</kbd> to send
-        </span>
-        <button
-          onClick={onStop}
-          className="rounded-full bg-destructive px-2 py-0.5 text-[11px] font-medium text-destructive-foreground hover:bg-destructive/90"
-        >
-          Stop
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -2559,43 +2527,6 @@ function EmptyChat({ onTry }: { onTry: (text: string) => void }) {
         <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono">⌘+Enter</kbd> to send ·
         Hold <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono">Space</kbd> (or tap the mic) to speak
       </p>
-    </div>
-  );
-}
-
-function AttachmentChip({
-  attachment,
-  onRemove,
-}: {
-  attachment: AttachmentMeta;
-  onRemove: () => void;
-}) {
-  const isImage = attachment.mime.startsWith("image/");
-  const isPdf = attachment.mime === "application/pdf" || attachment.name.endsWith(".pdf");
-  const isCsv = attachment.mime === "text/csv" || attachment.name.endsWith(".csv");
-  const kb = (attachment.size / 1024).toFixed(1);
-
-  return (
-    <div
-      className="group flex items-center gap-1.5 rounded-lg border border-border/60 bg-card/60 px-2 py-1.5 text-xs"
-      data-testid="attachment-chip"
-      title={`${attachment.name} · ${kb} KB`}
-    >
-      <span className="text-accent shrink-0">
-        {isImage ? "🖼" : isPdf ? "📄" : isCsv ? "📊" : "📎"}
-      </span>
-      <span className="max-w-[120px] truncate font-mono text-[11px] text-foreground">
-        {attachment.name}
-      </span>
-      <span className="shrink-0 text-muted-foreground">{kb} KB</span>
-      <button
-        onClick={onRemove}
-        className="ml-0.5 shrink-0 rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:text-destructive hover:opacity-100"
-        aria-label={`Remove ${attachment.name}`}
-        data-testid="remove-attachment"
-      >
-        <X className="h-3 w-3" />
-      </button>
     </div>
   );
 }

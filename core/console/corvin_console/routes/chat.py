@@ -44,6 +44,7 @@ from fastapi import APIRouter, Cookie, Depends, File, HTTPException, Query, Uplo
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .. import attachments_common as _attachments
 from .. import audit as console_audit
 from .. import auth as session_auth
 from .. import chat_runtime
@@ -400,29 +401,6 @@ def get_session_workdir_path(
             logger.warning("workdir-path reveal failed for sid=%s", sid, exc_info=True)
     return {"ok": True, "path": str(workdir), "opened": opened}
 
-_ATTACH_MAX_BYTES = 20 * 1024 * 1024   # 20 MB per file
-_ATTACH_MAX_FILES = 10
-_ATTACH_ALLOWED_MIMES: frozenset[str] = frozenset({
-    "text/plain", "text/csv", "text/html", "text/markdown",
-    "application/json", "application/pdf",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.ms-excel",
-    "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml",
-})
-_ATTACH_ALLOWED_EXTS: frozenset[str] = frozenset({
-    ".txt", ".csv", ".md", ".json", ".yaml", ".yml", ".toml",
-    ".pdf", ".xlsx", ".xls",
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
-    ".py", ".js", ".ts", ".html", ".css", ".sql",
-})
-
-def _safe_attach_name(raw: str) -> str:
-    """Return a sanitised attachment filename (ASCII, no path sep)."""
-    name = Path(raw).name
-    # Replace unsafe chars, keep extension
-    clean = re.sub(r"[^\w.\- ]", "_", name).strip()
-    return clean or "file"
-
 
 @router.post("/chat/sessions/{sid}/attachments")
 async def upload_attachments(
@@ -434,51 +412,18 @@ async def upload_attachments(
 
     Returns a list of ``{name, size, mime, path}`` descriptors so the frontend
     can embed the paths in the next user message for Claude to read.
+
+    No file-extension/MIME whitelist (operator decision 2026-10-04, see
+    ``attachments_common.py``): path traversal is blocked by
+    ``attachments_common.safe_attach_name`` regardless of file type, so a
+    type whitelist added no safety beyond what that sanitiser already gives.
     """
-    if len(files) > _ATTACH_MAX_FILES:
-        raise HTTPException(http_status.HTTP_400_BAD_REQUEST,
-                            f"Too many files — max {_ATTACH_MAX_FILES} per upload")
     sess = chat_runtime.get_session(rec.tenant_id, sid)
     if sess is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "session not found")
 
     attach_dir = sess.workdir / "attachments"
-    attach_dir.mkdir(parents=True, exist_ok=True)
-
-    results: list[dict[str, Any]] = []
-    for upload in files:
-        ext = Path(upload.filename or "").suffix.lower()
-        if ext and ext not in _ATTACH_ALLOWED_EXTS:
-            raise HTTPException(
-                http_status.HTTP_422_UNPROCESSABLE_ENTITY,
-                f"File type {ext!r} not allowed",
-            )
-        data = await upload.read(_ATTACH_MAX_BYTES + 1)
-        if len(data) > _ATTACH_MAX_BYTES:
-            raise HTTPException(
-                http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                f"File exceeds 20 MB limit: {upload.filename!r}",
-            )
-        safe_name = _safe_attach_name(upload.filename or "file")
-        dest = attach_dir / safe_name
-        # Avoid overwrite by appending a counter suffix
-        if dest.exists():
-            base, dot_ext = (safe_name.rsplit(".", 1) if "." in safe_name
-                             else (safe_name, ""))
-            for i in range(1, 100):
-                candidate = attach_dir / (f"{base}_{i}.{dot_ext}" if dot_ext else f"{base}_{i}")
-                if not candidate.exists():
-                    dest = candidate
-                    safe_name = dest.name
-                    break
-        dest.write_bytes(data)
-        mime = upload.content_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
-        results.append({
-            "name": safe_name,
-            "size": len(data),
-            "mime": mime,
-            "path": f"attachments/{safe_name}",
-        })
+    results = await _attachments.receive_uploaded_files(files, attach_dir)
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,

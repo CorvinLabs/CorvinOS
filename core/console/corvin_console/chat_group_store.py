@@ -63,6 +63,15 @@ def _group_dir(tenant_global_dir: Path, group_id: str) -> Path | None:
     return _groups_dir(tenant_global_dir) / safe
 
 
+def attachments_dir(tenant_global_dir: Path, group_id: str) -> Path | None:
+    """``<tenant_global_dir>/chat_groups/<group_id>/attachments`` — ``None``
+    for a malformed ``group_id`` (same ``_safe_id`` gate ``_group_dir`` uses,
+    so a route never has to reach into this module's private helpers to get
+    a path-traversal-safe attachment directory)."""
+    d = _group_dir(tenant_global_dir, group_id)
+    return None if d is None else d / "attachments"
+
+
 def _atomic_write(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")

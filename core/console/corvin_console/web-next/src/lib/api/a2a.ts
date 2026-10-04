@@ -612,3 +612,86 @@ export async function clearA2AFeed(
 ): Promise<{ cleared: boolean; messages_removed: number; blobs_removed: number }> {
   return api(`/a2a/feed`, { method: "DELETE", csrf });
 }
+
+// ── Peer/A2A attachment encoding (client-side; NO upload route) ───────────
+//
+// Unlike session/group chat attachments (api/chat.ts::uploadAttachments,
+// api/chat-groups.ts::uploadGroupAttachments — server-stored, 50 MB/file,
+// no type whitelist), an A2A message embeds its attachments' bytes directly
+// as base64 inside an HMAC-signed envelope sent to a REMOTE instance. That
+// envelope has its own, much smaller, DoS-prevention caps — see
+// corvin_operator/bridges/shared/a2a_attachments.py's docstring ("reject
+// before HMAC verification: an attacker who could send arbitrary-sized
+// envelopes could DoS receivers regardless of signature validity") — so
+// peer-chat attachments deliberately do NOT get the session/group 50 MB
+// limit. This client mirrors those caps so the operator sees a clear error
+// before the round-trip, not instead of the backend's own enforcement
+// (`a2a_feed.py`'s `validate_attachments` call is still authoritative).
+
+/** Mirrors a2a_attachments.py::MAX_ATTACHMENTS_TOTAL_BYTES (1 MiB). */
+export const A2A_MAX_ATTACHMENTS_TOTAL_BYTES = 1024 * 1024;
+/** Mirrors a2a_attachments.py::MAX_ATTACHMENTS_COUNT. */
+export const A2A_MAX_ATTACHMENTS_COUNT = 16;
+
+export class A2AAttachmentLimitError extends Error {}
+
+/** Mirrors a2a_attachments.py::_NAME_RE — alnum/dot/underscore/hyphen only,
+ * no leading dot, no spaces (unlike session/group attachment names, which
+ * keep spaces via chat.py::_safe_attach_name). */
+function sanitizeA2AAttachmentName(raw: string, index: number): string {
+  const base = raw.replace(/^.*[/\\]/, ""); // strip any path components
+  let clean = base.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[.]+/, "");
+  if (!clean) clean = `file_${index}`;
+  return clean.slice(0, 128);
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      // "data:<mime>;base64,<payload>" — keep only the payload.
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("file read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Client-side encode for `sendA2AFeedMessage`'s `attachments` field. Throws
+ * `A2AAttachmentLimitError` before reading bytes if the count exceeds the
+ * protocol cap, and while accumulating if the running total does — the same
+ * two caps the backend enforces, checked early so dropping a large file
+ * (sized for session/group chat's 50 MB limit) fails fast with a message
+ * naming the real, far smaller, A2A limit.
+ */
+export async function encodeFilesForA2A(
+  files: File[],
+): Promise<{ name: string; mime: string; size: number; content_b64: string }[]> {
+  if (files.length > A2A_MAX_ATTACHMENTS_COUNT) {
+    throw new A2AAttachmentLimitError(
+      `Too many files for a peer message — max ${A2A_MAX_ATTACHMENTS_COUNT} (A2A envelope cap)`,
+    );
+  }
+  const out: { name: string; mime: string; size: number; content_b64: string }[] = [];
+  let total = 0;
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    total += f.size;
+    if (total > A2A_MAX_ATTACHMENTS_TOTAL_BYTES) {
+      throw new A2AAttachmentLimitError(
+        `Attachments too large for a peer message — max ${(A2A_MAX_ATTACHMENTS_TOTAL_BYTES / 1024).toFixed(0)} KiB total (A2A envelope cap, far smaller than session/group chat's 50 MB/file)`,
+      );
+    }
+    const content_b64 = await readFileAsBase64(f);
+    out.push({
+      name: sanitizeA2AAttachmentName(f.name, i),
+      mime: f.type || "application/octet-stream",
+      size: f.size,
+      content_b64,
+    });
+  }
+  return out;
+}
