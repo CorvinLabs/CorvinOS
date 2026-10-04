@@ -428,6 +428,77 @@ def test_generation_requires_a_session(tmp_path):
         assert resp.status_code in (401, 403)
 
 
+def test_sync_mode_is_capped_by_the_same_concurrency_gate(tmp_path, monkeypatch):
+    """Round-2 refutation of the round-1 forge review: `"async": false` built
+    its own orchestrator with no run record at all, so it bypassed
+    MAX_RUNNING_PER_TENANT entirely — a client could fire unlimited
+    concurrent synchronous generations. The sync branch now registers
+    through forge_runs.new_run exactly like the async one, so a second
+    concurrent sync call for the same tenant is refused with 429."""
+    import threading
+
+    from corvin_console import forge_runs
+
+    monkeypatch.setattr(forge_runs, "MAX_RUNNING_PER_TENANT", 1)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_engine():
+        client = MagicMock()
+        client.engine_id = "claude_code"
+
+        def _create(**kwargs):
+            prompt = kwargs["messages"][0]["content"]
+            if "Reply with JSON ONLY" in prompt:
+                text = CLEAN_RUBRIC
+            elif "SYNTHESIS:" in prompt:
+                started.set()
+                release.wait(timeout=10)
+                text = SPEC_JSON
+            elif "Generate a realistic test scenario" in prompt:
+                text = "User validates a 500-line JSON file"
+            elif "FINDING:" in prompt:
+                text = "VERDICT: REFUTED"
+            else:
+                text = "- point one\n- point two"
+            return MagicMock(content=[MagicMock(text=text)])
+
+        client.messages.create.side_effect = _create
+        return client
+
+    with console_client(tmp_path, slow_engine()) as (client, route):
+        first_result = {}
+
+        def first_call():
+            first_result["resp"] = client.post(
+                "/v1/console/skill-creator/generate",
+                json={"user_request": "erzeuge einen Skill der JSON validiert",
+                      "async": False},
+                headers=csrf_headers(client.session_record))
+
+        t = threading.Thread(target=first_call)
+        t.start()
+        try:
+            assert started.wait(timeout=10), "first sync run never reached the engine"
+
+            second = client.post(
+                "/v1/console/skill-creator/generate",
+                json={"user_request": "erzeuge noch einen Skill der JSON validiert",
+                      "async": False},
+                headers=csrf_headers(client.session_record))
+            assert second.status_code == 429, second.text
+        finally:
+            release.set()
+            t.join(timeout=15)
+
+        # The route decorator declares status_code=202 for the whole endpoint
+        # (pre-existing, both branches) — the sync branch's success is a 202
+        # with the sync JSON shape, not a 200; that part is unchanged here.
+        assert first_result["resp"].status_code == 202, first_result["resp"].text
+        assert first_result["resp"].json()["status"] == "success"
+
+
 def test_generate_requires_csrf(tmp_path):
     """Round-4 review F6: a session cookie alone must not be enough to spawn
     a real ``claude -p`` generation subprocess — a cross-site/XSS caller that

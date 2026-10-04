@@ -130,9 +130,31 @@ export const FORGED_PANEL_CSP =
   '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; ' +
   "script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; form-action 'none'\">";
 
+/** Runs before any of the untrusted HTML parses. `allow-scripts` without
+ *  `allow-top-navigation`/`allow-popups` stops the panel from navigating the
+ *  parent or opening a window, but self-navigation (`location.href = ...`,
+ *  `location.assign/replace`, a clicked `<a href>`, a `<meta refresh>`) is
+ *  unaffected by either the sandbox or the CSP's `default-src` — a same-frame
+ *  redirect can still beacon data out. Best-effort in-frame hardening here;
+ *  the authoritative stop is the parent's load-count guard (see forged.tsx),
+ *  which blanks the frame the moment ANY re-navigation fires a second `load`. */
+const FORGED_PANEL_LOCKDOWN =
+  "<script>(function(){" +
+  'try{var noop=function(){};location.assign=noop;location.replace=noop;' +
+  "Object.defineProperty(location,'href',{set:noop,get:function(){return '';}});}catch(e){}" +
+  "document.addEventListener('click',function(ev){" +
+  "var a=ev.target&&ev.target.closest&&ev.target.closest('a[href]');" +
+  "if(a&&!(a.getAttribute('href')||'').startsWith('#')){ev.preventDefault();ev.stopPropagation();}" +
+  "},true);" +
+  "new MutationObserver(function(muts){muts.forEach(function(m){m.addedNodes.forEach(function(n){" +
+  "if(n.tagName==='META'&&/refresh/i.test(n.getAttribute('http-equiv')||''))n.remove();});});})" +
+  ".observe(document.documentElement,{childList:true,subtree:true});" +
+  "})();</script>";
+
 export function previewDocument(html: string): string {
   // After a leading doctype (keeps standards mode); the parser hoists the meta into <head>.
+  const prefix = FORGED_PANEL_CSP + FORGED_PANEL_LOCKDOWN;
   const doctype = /^\s*<!doctype[^>]*>/i.exec(html);
-  if (doctype) return doctype[0] + FORGED_PANEL_CSP + html.slice(doctype[0].length);
-  return FORGED_PANEL_CSP + html;
+  if (doctype) return doctype[0] + prefix + html.slice(doctype[0].length);
+  return prefix + html;
 }

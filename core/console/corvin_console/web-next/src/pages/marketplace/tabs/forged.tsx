@@ -7,7 +7,7 @@
  * sandboxed to `allow-scripts` alone — never `allow-same-origin` — because it
  * is unreviewed community HTML.
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Loader2, Package } from "lucide-react";
@@ -112,6 +112,39 @@ function ForgedRow({ p, open, onToggle }: { p: ForgedPluginSummary; open: boolea
   );
 }
 
+/** Self-navigation inside a `sandbox="allow-scripts"` frame (no `allow-top-navigation`,
+ *  no `allow-popups`) isn't blocked by the sandbox or the CSP — only a same-frame
+ *  redirect is possible, but that's enough to beacon data out via the new URL. Any
+ *  such re-navigation (location change, clicked link, meta refresh) fires a SECOND
+ *  `load` event on this element, regardless of mechanism — so count loads and blank
+ *  the frame the instant a second one fires, rather than trying to enumerate every
+ *  in-frame navigation primitive (see FORGED_PANEL_LOCKDOWN in forge-creator.ts for
+ *  the best-effort in-frame half of this defense). */
+function SandboxedPanelPreview({ title, html }: { title: string; html: string }) {
+  const loads = useRef(0);
+  const [blocked, setBlocked] = useState(false);
+  if (blocked) {
+    return (
+      <p role="alert" className="text-xs text-destructive" data-testid="forged-panel-blocked">
+        Preview stopped: the panel tried to navigate away from its own content.
+      </p>
+    );
+  }
+  return (
+    <iframe
+      title={title}
+      sandbox={FORGED_PANEL_SANDBOX}
+      srcDoc={previewDocument(html)}
+      onLoad={() => {
+        loads.current += 1;
+        if (loads.current > 1) setBlocked(true);
+      }}
+      className="h-64 w-full rounded-md border border-border/60 bg-white"
+      data-testid="forged-panel-preview"
+    />
+  );
+}
+
 function ForgedDetail({ dirname }: { dirname: string }) {
   const detail = useQuery({ queryKey: [...KEY, dirname], queryFn: ({ signal }) => getForgedPlugin(dirname, signal) });
   const [file, setFile] = useState<string | null>(null);
@@ -135,13 +168,7 @@ function ForgedDetail({ dirname }: { dirname: string }) {
             Panel preview (sandboxed, scripts only, no network — no access to this console). It becomes a
             live panel only once plugin panels can be mounted after installation.
           </p>
-          <iframe
-            title={`${d.display_name} panel preview`}
-            sandbox={FORGED_PANEL_SANDBOX}
-            srcDoc={previewDocument(d.panel_html)}
-            className="h-64 w-full rounded-md border border-border/60 bg-white"
-            data-testid="forged-panel-preview"
-          />
+          <SandboxedPanelPreview title={`${d.display_name} panel preview`} html={d.panel_html} />
         </div>
       )}
       <div className="flex flex-wrap gap-1">

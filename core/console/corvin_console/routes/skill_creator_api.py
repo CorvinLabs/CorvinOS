@@ -336,13 +336,32 @@ async def generate_skill(
 
         # Sync mode: block until complete (not recommended for long tasks).
         # Runs on a worker thread so the generation subprocess cannot block
-        # the server's event loop for the whole run.
+        # the server's event loop for the whole run. Goes through the SAME
+        # forge_runs gate as the async path — this used to spawn the
+        # orchestrator directly with no run record at all, so an
+        # `"async": false` client could fire unlimited concurrent requests
+        # per tenant and bypass MAX_RUNNING_PER_TENANT entirely.
+        try:
+            sync_run_id = forge_runs.new_run(
+                tenant_id=rec.tenant_id, kind="skill", phases=PHASES,
+                sid_fingerprint=rec.sid_fingerprint,
+                base_skill=base["name"] if base else None,
+            )
+        except forge_runs.GenerationBusy as busy:
+            raise HTTPException(status_code=429, detail=str(busy))
+
         orchestrator = SkillCreatorOrchestrator(
             registry_root=str(_registry_root(rec.tenant_id))
         )
-        artifact = await asyncio.to_thread(
-            lambda: asyncio.run(orchestrator.create_skill(user_request, base=base))
-        )
+        try:
+            artifact = await asyncio.to_thread(
+                lambda: asyncio.run(orchestrator.create_skill(user_request, base=base))
+            )
+        except BaseException:
+            forge_runs.update_run(sync_run_id, status="failed", phase=PHASES[-1])
+            raise
+        forge_runs.update_run(sync_run_id, status="success", phase=PHASES[-1],
+                              target_id=artifact.spec.name)
         # AUDIT: Log skill creation (ADR-0232 compliance — every mutation audited)
         console_audit.action_performed(
             tenant_id=rec.tenant_id,

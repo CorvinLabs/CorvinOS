@@ -1390,8 +1390,13 @@ If no findings, output: VERDICT: REFUTED"""
 def parse_review_findings(review_text: str, dimension: str) -> List[ReviewFinding]:
     """Parse ``FINDING: … VERDICT: …`` blocks — shared by every Forge kind's review."""
     findings = []
-    finding_pattern = r"FINDING:\s*(.+?)\s+VERDICT:\s*(CONFIRMED|PLAUSIBLE|REFUTED)"
-    for match in re.finditer(finding_pattern, review_text or "", re.IGNORECASE | re.DOTALL):
+    # Strip markdown emphasis/heading/bullet decoration around the keywords so
+    # "**FINDING:**" / "### VERDICT:" / "`VERDICT:`" still match — a reviewer
+    # replying in markdown used to parse as zero findings (silently REFUTED).
+    cleaned = re.sub(r"[*_`#]+\s*(FINDING|VERDICT)\s*[*_`]*:", r"\1:",
+                      review_text or "", flags=re.IGNORECASE)
+    finding_pattern = r"FINDING:\s*(.+?)\s+VERDICT:\s*[*_`\s]*(CONFIRMED|PLAUSIBLE|REFUTED)"
+    for match in re.finditer(finding_pattern, cleaned, re.IGNORECASE | re.DOTALL):
         summary = match.group(1).strip()[:100]
         try:
             verdict = ReviewVerdict(match.group(2).lower())

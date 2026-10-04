@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
 from . import llm_client
@@ -119,11 +120,23 @@ async def run_reviewers(fns: Dict[str, Callable[[], Awaitable[str]]], *,
                     verdict=sc.ReviewVerdict.PLAUSIBLE, reasoning=str(result)[:200]))
             continue
         parsed = sc.parse_review_findings(result, dim)
-        if not parsed and on_error == "flag" and "VERDICT:" not in (result or "").upper():
-            findings.append(sc.ReviewFinding(
-                finding_id=dim + NO_VERDICT_SUFFIX, dimension=dim,
-                summary="reviewer replied without a verdict",
-                verdict=sc.ReviewVerdict.PLAUSIBLE, reasoning=(result or "")[:200]))
+        # A clean refutation ("VERDICT: REFUTED", no FINDING: line at all) is
+        # the documented happy path and legitimately parses to zero findings —
+        # flagging it would make every clean review look suspicious. What must
+        # be flagged fail-closed is everything else that failed to structure:
+        # no verdict keyword at all, OR a non-REFUTED verdict (CONFIRMED/
+        # PLAUSIBLE) that the parser still couldn't turn into a finding. The
+        # substring check used to be "VERDICT:" (no markdown-tolerance), so a
+        # markdown-decorated "**VERDICT:** CONFIRMED" slipped past it too —
+        # this reads the verdict itself, not just whether the word is present.
+        if not parsed and on_error == "flag":
+            decorated = re.sub(r"[*_`#]+", "", result or "").upper()
+            cleanly_refuted = bool(re.search(r"VERDICT:\s*REFUTED", decorated))
+            if not cleanly_refuted:
+                findings.append(sc.ReviewFinding(
+                    finding_id=dim + NO_VERDICT_SUFFIX, dimension=dim,
+                    summary="reviewer replied without a verdict",
+                    verdict=sc.ReviewVerdict.PLAUSIBLE, reasoning=(result or "")[:200]))
         findings.extend(parsed)
     return findings
 
