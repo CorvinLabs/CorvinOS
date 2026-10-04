@@ -132,7 +132,7 @@ const _ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Settings,               // settings
   Network,                // bridges
   AudioLines,             // voice
-  Headphones,             // voice-summaries
+  Headphones,             // voice-summaries (hidden from the sidebar 2026-10-04)
   Hammer,                 // forge
   BookOpen,               // skills, memory
   Boxes,                  // ldd
@@ -201,7 +201,6 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/app/bridges", label: "Channels", icon: Network },
       { to: "/app/voice",   label: "Voice",    icon: AudioLines },
-      { to: "/app/voice-summaries", label: "Voice Summaries", icon: Headphones },
     ],
   },
   {

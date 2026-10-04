@@ -55,6 +55,9 @@ const NAV_EXEMPT = new Set<string>([
   // routes stay mounted for deep-link stability, just no nav entry.
   "orgs",
   "space",
+  // Operator request (2026-10-04): hidden from the sidebar ahead of removal;
+  // the route stays mounted until the panel is deleted.
+  "voice-summaries",
   "agents",
   "flows",
   "people",
