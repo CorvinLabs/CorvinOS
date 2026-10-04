@@ -2,13 +2,11 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
-  Cloud,
   Cpu,
   Download,
   FileText,
   FolderOpen,
   GitGraph,
-  Globe2,
   Hammer,
   ListChecks,
   Loader2,
@@ -42,7 +40,6 @@ import {
   createChatSession,
   deleteChatSession,
   getChatTurns,
-  getPerChatEngine,
   getProfile,
   listChatSessions,
   transcribeAudio,
@@ -87,7 +84,6 @@ import {
   useStreamStates,
 } from "@/lib/streaming-state";
 import { useVoicePlayback, type VoiceState } from "@/lib/useVoicePlayback";
-import { AgentLiveFeed } from "@/components/agent-hub/live-feed";
 import { ChatAvatar } from "@/components/chat/ChatAvatar";
 import { ChatContextSidebar, usePendingCount } from "@/components/chat/ChatContextSidebar";
 import { GroupConversation } from "@/components/chat/GroupConversation";
@@ -641,15 +637,6 @@ function EmptyState({ onNew, pending }: { onNew: () => void; pending: boolean })
   );
 }
 
-// ── Per-chat engine selector ─────────────────────────────────────────────
-
-const ENGINE_META: Record<string, { label: string; icon: React.ComponentType<{className?: string}> }> = {
-  claude_code:  { label: "Claude Code", icon: Cloud },
-  codex_cli:    { label: "Codex",       icon: Cloud },
-  opencode:     { label: "OpenCode",    icon: Cloud },
-  copilot:      { label: "Copilot",     icon: Cloud },
-};
-
 // ADR-0214 — display labels for the per-turn agentic-compute badge
 // (stamped by the `engine` stream event; see chat-registry.ts).
 const AGENTIC_ENGINE_LABELS: Record<string, string> = {
@@ -752,82 +739,6 @@ function CommandPalette({
   );
 }
 
-const ChatStatusBar = React.memo(function ChatStatusBar({
-  effectiveEngine,
-  personaName,
-  voiceOut,
-  onVoiceToggle,
-  relayOpen,
-  onRelayToggle,
-}: {
-  effectiveEngine: string;
-  personaName: string | null | undefined;
-  voiceOut: boolean;
-  onVoiceToggle: () => void;
-  relayOpen: boolean;
-  onRelayToggle: () => void;
-}) {
-  const navigate = useNavigate();
-  const meta = ENGINE_META[effectiveEngine] ?? ENGINE_META["claude_code"];
-  const Icon = meta.icon;
-  return (
-    <div className="border-t border-border/30 bg-background/60 px-8 py-1.5">
-      <div className="mx-auto flex w-full max-w-4xl items-center gap-2">
-        <button
-          onClick={() => navigate("/app/models?tab=routing")}
-          title="AI Engine — click to change"
-          className={cn(
-            "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
-            "border-border/50 bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground",
-          )}
-        >
-          <Icon className="h-3 w-3" />
-          {meta.label}
-        </button>
-        <button
-          onClick={() => navigate("/app/personas")}
-          title="Active persona — click to manage"
-          className="flex items-center gap-1 rounded-full border border-border/50 bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <Sparkles className="h-3 w-3" />
-          {personaName ?? "auto"}
-        </button>
-        <button
-          onClick={onVoiceToggle}
-          title={voiceOut ? "Voice output on — click to disable" : "Voice output off — click to enable"}
-          className={cn(
-            "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
-            voiceOut
-              ? "border-accent/30 bg-accent/5 text-accent hover:bg-accent/10"
-              : "border-border/50 bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground",
-          )}
-        >
-          {voiceOut ? <Volume2 className="h-3 w-3" /> : <VolumeX className="h-3 w-3" />}
-          Voice {voiceOut ? "on" : "off"}
-        </button>
-        <button
-          onClick={onRelayToggle}
-          title={relayOpen ? "Hide relay activity" : "Show A2A relay activity (connected agent peers)"}
-          className={cn(
-            "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
-            relayOpen
-              ? "border-accent/30 bg-accent/5 text-accent hover:bg-accent/10"
-              : "border-border/50 bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground",
-          )}
-        >
-          <Globe2 className="h-3 w-3" />
-          Relay
-        </button>
-        <span className="ml-auto text-[10px] text-muted-foreground/50">
-          type <kbd className="rounded bg-muted/60 px-1 font-mono text-[9px]">/</kbd> for commands
-        </span>
-      </div>
-    </div>
-  );
-});
-
-
-
 function ChatPane({
   sid,
   session: meta,
@@ -838,7 +749,6 @@ function ChatPane({
   const { session: auth, refresh: refreshAuth } = useAuth();
   const csrf = auth!.csrf_token;
   const qc = useQueryClient();
-  const navigate = useNavigate();
   // Messages and streaming state come from the persistent registry instead of
   // local state. The registry keeps WS connections alive across chat switches
   // so streaming continues in the background.
@@ -859,20 +769,13 @@ function ChatPane({
   React.useEffect(() => { setCccActions([]); }, [sid]);
   const [auditOpen, setAuditOpen] = React.useState(false);
   const [auditTab, setAuditTab] = React.useState<"single" | "dual-track" | "tde-graph">("single");
-  // Relay Activity panel — A2A peer traffic, composed from the Agent Hub's
-  // own live-feed component. Deliberately a SEPARATE panel, never merged
-  // into the message list: a2a_feed.py records carry no chat session_id (A2A
-  // is peer/tenant-scoped, not session-scoped), so there is no correlation
-  // to filter by even if we wanted to inline it. The panel shows ALL
-  // host-tenant A2A traffic, not just traffic related to this chat.
-  const [relayOpen, setRelayOpen] = React.useState(false);
   // display:none resets the hidden list's scroll position; return to the
   // newest message when it becomes visible again.
   React.useEffect(() => {
-    if (relayOpen || auditOpen) return;
+    if (auditOpen) return;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [relayOpen, auditOpen]);
+  }, [auditOpen]);
   const [workdirInfo, setWorkdirInfo] = React.useState<{ path: string; opened: boolean; error?: string } | null>(null);
   // Voice-out is on by default — the operator can flip it off via the
   // toggle in the chat header, the choice is then session-local.
@@ -915,19 +818,6 @@ function ChatPane({
   // sessions list resolves later and meta.chat_key becomes available.
   // The web bridge always uses "web:<sid>" as the chat_key.
   const chatKey = `web:${sid}`;
-  // Engine preference for the status bar — same key as ChatEngineSelector so
-  // updates are shared from the React Query cache.
-  const enginePrefQ = useQuery({
-    queryKey: ["chat-engine-pref", chatKey],
-    queryFn: ({ signal }) => getPerChatEngine(chatKey, signal),
-    staleTime: 30_000,
-    retry: 0,
-  });
-  const effectiveEngine = enginePrefQ.data?.effective_engine ?? "claude_code";
-  // The web console does not expose per-chat persona pins via the
-  // chat-settings REST API (that API covers bridge channels only, not
-  // web sessions). Show the operator-configured global default instead.
-  const activePersona = profileQ.data?.profile?.identity?.default_persona;
   // TRUE when the operator explicitly picked a language in Settings → Profile.
   // Then it WINS over per-reply text detection (maintainer decision 2026-07-20):
   // detection used to override it, so a Deutsch profile still got English voice
@@ -1525,9 +1415,6 @@ function ChatPane({
   const setInputRef = React.useRef(setInput);
   const sendUserRef = React.useRef(sendUser);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
-  // The relay panel has its own textarea; Space there is typing, not PTT.
-  const relayOpenRef = React.useRef(relayOpen);
-  relayOpenRef.current = relayOpen;
   React.useEffect(() => {
     recordingRef.current = recording;
     if (recording) pttPendingRef.current = false; // recording confirmed — clear pending
@@ -1557,7 +1444,6 @@ function ChatPane({
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code !== "Space" || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
       if (isNativeSpaceTarget(e.target)) return;
-      if (relayOpenRef.current) return;
       if (recordingRef.current || streamingRef.current) return;
 
       // Outside textarea → prevent default immediately (no character typed).
@@ -1856,48 +1742,11 @@ function ChatPane({
         </div>
       )}
 
-      {/* Relay Activity panel — replaces message list when open, same slot
-          pattern as the Audit Trail panel above; the two are mutually
-          exclusive (opening one closes the other) rather than stacked. */}
-      {relayOpen && (
-        <div className="flex flex-col flex-1 min-h-0 border-b border-border">
-          <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-1.5 flex-shrink-0">
-            <span className="flex items-center gap-1.5 text-[10px] font-semibold text-muted-foreground">
-              <Globe2 className="h-3 w-3" />
-              Relay Activity — all A2A peer traffic on this instance
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => navigate("/app/agent-hub")}
-                className="text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                title="Open full Agent Hub"
-              >
-                Open Agent Hub
-              </button>
-              <button
-                onClick={() => setRelayOpen(false)}
-                className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                title="Close"
-                aria-label="Close Relay Activity panel"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          </div>
-          {/* The feed's own height (100vh-15rem, min 34rem) is sized for the
-              Agent Hub page; here it must fill the slot instead, or its
-              composer ends up below the visible edge. */}
-          <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
-            <AgentLiveFeed className="h-auto min-h-0 flex-1 rounded-none border-0" />
-          </div>
-        </div>
-      )}
-
       <div
         ref={scrollRef}
         className={cn(
           "relative min-h-0 overflow-y-auto bg-[radial-gradient(ellipse_at_top,hsl(var(--accent)/0.06),transparent_60%)] px-4 py-5 md:px-6",
-          (auditOpen || relayOpen) ? "hidden" : "flex-1",
+          auditOpen ? "hidden" : "flex-1",
         )}
       >
         {recording && <RecordingOverlay onStop={stopRecording} />}
@@ -1958,7 +1807,6 @@ function ChatPane({
               onViewTdeGraph={() => {
                 setAuditTab("tde-graph");
                 setAuditOpen(true);
-                setRelayOpen(false);
               }}
             />
           ))}
@@ -1978,21 +1826,7 @@ function ChatPane({
         </div>
       </div>
 
-      <ChatStatusBar
-        effectiveEngine={effectiveEngine}
-        personaName={activePersona}
-        voiceOut={voiceOut}
-        onVoiceToggle={handleVoiceToggle}
-        relayOpen={relayOpen}
-        onRelayToggle={() => {
-          setRelayOpen((v) => !v);
-          setAuditOpen(false);
-        }}
-      />
-
-      {/* Hidden, not unmounted, while the relay panel is open: one composer
-          at a time, and the chat draft survives. */}
-      <footer className={cn("border-t border-border bg-background/60 px-4 py-3 backdrop-blur md:px-6", relayOpen && "hidden")}>
+      <footer className="px-4 py-3 md:px-6">
         <div className="mx-auto w-full max-w-4xl space-y-1.5">
           {/* Hidden file input */}
           <input
@@ -2144,7 +1978,7 @@ function ChatPane({
             )}
           </div>
           <p className="px-2 text-[10px] text-muted-foreground">
-            Enter to send, Shift+Enter for a new line · hold Space to speak
+            Enter to send, Shift+Enter for a new line · hold Space to speak · <kbd className="rounded bg-muted/60 px-1 font-mono text-[9px]">/</kbd> for commands
           </p>
         </div>
       </footer>

@@ -231,7 +231,7 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
         </div>
       </div>
 
-      <footer className="border-t border-border bg-background/60 px-4 py-3 backdrop-blur md:px-6">
+      <footer className="px-4 py-3 md:px-6">
         <div className="mx-auto w-full max-w-4xl space-y-1.5">
           {peerCount > 0 && (
             <Badge variant="outline" className="text-[10px]">

@@ -147,7 +147,7 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
         </div>
       </div>
 
-      <footer className="border-t border-border bg-background/60 px-4 py-3 backdrop-blur md:px-6">
+      <footer className="px-4 py-3 md:px-6">
         <div className="mx-auto w-full max-w-4xl space-y-1.5">
           <div className="flex items-end gap-2 rounded-2xl border border-border bg-card px-2 py-1.5 shadow-sm transition-colors focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/15">
             <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={1}
