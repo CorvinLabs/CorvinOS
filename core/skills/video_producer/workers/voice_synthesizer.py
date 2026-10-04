@@ -19,6 +19,8 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+from .job_tmp import scene_path
+
 # ADR-2211: OpenAI TTS is the default narration backend for every video this
 # worker produces. "onyx" is OpenAI's calm, low male voice; speed is slowed
 # slightly (platform default is 1.0) so narration reads as composed rather
@@ -163,7 +165,7 @@ class VoiceSynthesizerWorker:
             (path to output MP3 audio file, provider name actually used)
         """
 
-        output_path = f"/tmp/{job_id}_scene_{scene_index}.mp3"
+        output_path = scene_path(job_id, "scene", scene_index, ".mp3")
 
         if self._synthesize_scene_openai(narration_text, output_path):
             return output_path, "openai-tts"
@@ -233,7 +235,7 @@ class VoiceSynthesizerWorker:
             Path to output file (JSON metadata)
         """
 
-        output_path = f"/tmp/{job_id}_scene_{scene_index}.mp3"
+        output_path = scene_path(job_id, "scene", scene_index, ".mp3")
 
         # Create metadata for mock audio
         metadata = {

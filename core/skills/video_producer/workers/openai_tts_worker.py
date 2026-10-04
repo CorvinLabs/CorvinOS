@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from typing import List, Optional
 from pathlib import Path
 
+from .job_tmp import scene_path
+
 
 @dataclass
 class VoiceResult:
@@ -223,8 +225,8 @@ class OpenAITTSWorker:
     def _synthesize_with_espeak(self, text: str, job_id: str, scene_idx: int) -> Optional[str]:
         """Synthesize using espeak-ng to WAV, then convert to MP3"""
 
-        wav_path = f"/tmp/{job_id}_espeak_{scene_idx}.wav"
-        mp3_path = f"/tmp/{job_id}_narration_{scene_idx}.mp3"
+        wav_path = scene_path(job_id, "espeak", scene_idx, ".wav")
+        mp3_path = scene_path(job_id, "narration", scene_idx, ".mp3")
 
         # Generate WAV with espeak-ng
         cmd = [

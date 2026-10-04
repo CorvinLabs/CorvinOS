@@ -15,6 +15,8 @@ import asyncio
 import os
 from pathlib import Path
 
+from .job_tmp import scene_path
+
 try:
     from PIL import Image
     HAS_PIL = True
@@ -230,7 +232,7 @@ class ScreenshotCapturerWorker:
             Path to mock PNG file
         """
 
-        output_path = f"/tmp/{job_id}_screenshot_{scene_index}.png"
+        output_path = scene_path(job_id, "screenshot", scene_index, ".png")
 
         # Create a simple PNG placeholder (1x1 pixel white image)
         # Minimal PNG: 8-byte signature + IHDR chunk + IDAT chunk + IEND chunk

@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from typing import List, Optional
 from enum import Enum
 
+from .job_tmp import scene_path
+
 
 class TTSProvider(Enum):
     OPENAI = "openai"
@@ -105,7 +107,7 @@ class VoiceSynthesizerMultiProvider:
                 )
 
                 # Save to MP3
-                output_path = f"/tmp/{job.job_id}_scene_{i}.mp3"
+                output_path = scene_path(job.job_id, "scene", i, ".mp3")
                 with open(output_path, "wb") as f:
                     f.write(response.content)
 
@@ -177,7 +179,7 @@ class VoiceSynthesizerMultiProvider:
             print(f"      Scene {i}: ", end="")
 
             # Create actual silence using ffmpeg
-            mp3_path = f"/tmp/{job.job_id}_scene_{i}.mp3"
+            mp3_path = scene_path(job.job_id, "scene", i, ".mp3")
 
             # Estimate duration: ~150 words per minute = 2.5 seconds per 10 words
             word_count = len(narration_text.split())
