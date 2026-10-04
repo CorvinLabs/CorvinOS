@@ -297,10 +297,13 @@ export interface SkillGenerationAccepted {
 /** Start a run. Passing `baseSkill` refines that skill in place. */
 export async function startSkillGeneration(
   userRequest: string,
-  baseSkill?: string | null,
+  baseSkill: string | null | undefined,
+  csrf: string,
 ): Promise<SkillGenerationAccepted> {
+  // The route is CSRF-gated (require_csrf); without the token every run 403'd.
   return api<SkillGenerationAccepted>("/skill-creator/generate", {
     method: "POST",
+    csrf,
     body: {
       user_request: userRequest,
       async: true,

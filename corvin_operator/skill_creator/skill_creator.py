@@ -1402,34 +1402,29 @@ If no findings, output: VERDICT: REFUTED"""
 
     def _parse_findings(self, review_text: str, dimension: str) -> List[ReviewFinding]:
         """Parse findings from review text."""
-        findings = []
+        return parse_review_findings(review_text, dimension)
 
-        # Simple parsing: look for FINDING: ... VERDICT: ...
-        finding_pattern = r"FINDING:\s*(.+?)\s+VERDICT:\s*(CONFIRMED|PLAUSIBLE|REFUTED)"
-        matches = re.finditer(finding_pattern, review_text, re.IGNORECASE | re.DOTALL)
 
-        for match in matches:
-            summary = match.group(1).strip()[:100]  # Truncate to 100 chars
-            verdict_str = match.group(2).upper()
-
-            try:
-                verdict = ReviewVerdict(verdict_str.lower())
-            except ValueError:
-                verdict = ReviewVerdict.PLAUSIBLE
-
-            findings.append(ReviewFinding(
-                finding_id=str(uuid4()),
-                dimension=dimension,
-                summary=summary,
-                verdict=verdict,
-                reasoning=summary,
-            ))
-
-        # If no findings parsed, assume REFUTED (null finding)
-        if not findings:
-            logger.debug(f"No explicit findings in {dimension} review; assuming REFUTED")
-
-        return findings
+def parse_review_findings(review_text: str, dimension: str) -> List[ReviewFinding]:
+    """Parse ``FINDING: … VERDICT: …`` blocks — shared by every Forge kind's review."""
+    findings = []
+    finding_pattern = r"FINDING:\s*(.+?)\s+VERDICT:\s*(CONFIRMED|PLAUSIBLE|REFUTED)"
+    for match in re.finditer(finding_pattern, review_text or "", re.IGNORECASE | re.DOTALL):
+        summary = match.group(1).strip()[:100]
+        try:
+            verdict = ReviewVerdict(match.group(2).lower())
+        except ValueError:
+            verdict = ReviewVerdict.PLAUSIBLE
+        findings.append(ReviewFinding(
+            finding_id=str(uuid4()),
+            dimension=dimension,
+            summary=summary,
+            verdict=verdict,
+            reasoning=summary,
+        ))
+    if not findings:
+        logger.debug(f"No explicit findings in {dimension} review; assuming REFUTED")
+    return findings
 
 
 def score_quality(findings: List[ReviewFinding], *, converged: bool = True,

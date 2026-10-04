@@ -10,17 +10,16 @@ Endpoints:
 import asyncio
 import logging
 import sys
-import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Dict, Any, Optional
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import auth as session_auth
 from .. import audit as console_audit
+from .. import forge_runs
 from ..deps import require_csrf, require_session
 
 logger = logging.getLogger(__name__)
@@ -192,10 +191,10 @@ router = APIRouter(prefix="/skill-creator", tags=["skill-creator"])
 # these labels; keep it in sync with SkillCreatorOrchestrator.create_skill.
 PHASES = ("planning", "validation", "ldd_iteration", "review", "promotion")
 
-# In-memory store for generation runs (in production: use DB).
-# Mutated from the generation worker thread → guarded by _runs_lock.
-_generation_runs: Dict[str, Dict[str, Any]] = {}
-_runs_lock = threading.Lock()
+# The run store is shared by every Forge kind (ADR-2217 D1); these names stay
+# because task_sources.py and the skill E2E read them.
+_generation_runs: Dict[str, Dict[str, Any]] = forge_runs.runs
+_runs_lock = forge_runs.runs_lock
 _skill_stats = {
     "total_generated": 0,
     "avg_quality": 0.0,
@@ -307,6 +306,14 @@ async def generate_skill(
 
         base = _resolve_base_skill(rec.tenant_id, req.base_skill)
 
+        try:
+            forge_runs.check_spawn_gates(
+                user_request, tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint, kind="skill",
+            )
+        except forge_runs.GenerationRefused as refused:
+            raise HTTPException(status_code=403, detail=str(refused))
+
         if req.async_:
             # Async mode: spawn background task, return run_id
             run_id = _spawn_generation_task(
@@ -407,10 +414,8 @@ async def check_status(
     tenant-bound: a run belongs to the tenant that started it; any other
     tenant (or a guessed run id) gets 404 (round-2 review, R2-B7).
     """
-    with _runs_lock:
-        run = dict(_generation_runs.get(run_id) or {})
-
-    if not run or run.get("tenant_id") != rec.tenant_id:
+    run = forge_runs.get_run(run_id, rec.tenant_id, kind="skill")
+    if run is None:
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
 
     response = {
@@ -587,117 +592,61 @@ def _resolve_base_skill(tenant_id: str, name: Optional[str]) -> Optional[Dict[st
 
 def _update_run(run_id: str, **fields: Any) -> None:
     """Thread-safe partial update of a run record."""
-    with _runs_lock:
-        run = _generation_runs.get(run_id)
-        if run is not None:
-            run.update(fields)
+    forge_runs.update_run(run_id, **fields)
 
 
 def _spawn_generation_task(user_request: str, tenant_id: str,
                            base: Optional[Dict[str, str]] = None,
                            sid_fingerprint: Optional[str] = None) -> str:
-    """Spawn the generation worker thread; return its run_id.
+    """Spawn the generation worker thread through the shared run store; return its run_id.
 
     The orchestrator drives a `claude -p` subprocess per phase (Max
     subscription), which is blocking and minutes-long — hence a thread with
     its own event loop rather than a task on the server's loop.
-
-    Args:
-        sid_fingerprint: Session fingerprint (for audit trail) — optional in async
     """
-    run_id = f"run-{uuid4().hex[:12]}"
+    run_id = forge_runs.new_run(
+        tenant_id=tenant_id, kind="skill", phases=PHASES,
+        sid_fingerprint=sid_fingerprint,
+        base_skill=base["name"] if base else None,
+    )
 
-    with _runs_lock:
-        _generation_runs[run_id] = {
-            "tenant_id": tenant_id,  # status polls are tenant-bound (R2-B7)
-            "status": "running",
-            "phase": PHASES[0],
-            "progress": 5,
-            "message": "Initializing…",
-            "engine": "unknown",
-            "base_skill": base["name"] if base else None,
-            "created_at": datetime.utcnow().isoformat(),
-            "sid_fingerprint": sid_fingerprint,  # Save for audit trail
+    def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
+        orchestrator = SkillCreatorOrchestrator(
+            progress_cb=progress,
+            registry_root=str(_registry_root(tenant_id)),
+        )
+        _update_run(run_id, engine=orchestrator.engine_id,
+                    message=f"Generating via {orchestrator.engine_id}…")
+        artifact = asyncio.run(orchestrator.create_skill(user_request, base=base))
+        _record_stats(artifact)
+        return {
+            "target_id": artifact.spec.name,
+            "phase": PHASES[-1],
+            "message": f"Skill '{artifact.spec.name}' generated successfully.",
+            "skill": {
+                "name": artifact.spec.name,
+                "purpose": artifact.spec.purpose,
+                "scope": artifact.spec.scope.value,
+                "quality": artifact.quality_score,
+                "iterations": artifact.ldd_iterations,
+                "dependencies": list(artifact.spec.dependencies),
+                "findings": [
+                    {"dimension": f.dimension, "summary": f.summary,
+                     "verdict": f.verdict.value}
+                    for f in (artifact.review_findings or [])
+                ],
+                "injectable": bool(artifact.registration.get("injectable")),
+                "registry_path": str(artifact.registration.get("path") or ""),
+            },
         }
 
-    def on_progress(phase: str, progress: int, message: str) -> None:
-        _update_run(run_id, phase=phase, progress=progress, message=message)
-
-    def run_task() -> None:
-        """Background worker for skill generation.
-
-        `tenant_id` is captured from the authenticated request, not read
-        inside the thread: a worker thread has no session, and reaching for
-        an env var here is exactly the console tenant-routing violation
-        CLAUDE.md forbids.
-        """
-        try:
-            orchestrator = SkillCreatorOrchestrator(
-                progress_cb=on_progress,
-                registry_root=str(_registry_root(tenant_id)),
-            )
-            _update_run(run_id, engine=orchestrator.engine_id,
-                        message=f"Generating via {orchestrator.engine_id}…")
-
-            artifact = asyncio.run(orchestrator.create_skill(user_request, base=base))
-
-            _update_run(
-                run_id,
-                status="success",
-                phase=PHASES[-1],
-                progress=100,
-                error=None,
-                message=f"Skill '{artifact.spec.name}' generated successfully.",
-                skill={
-                    "name": artifact.spec.name,
-                    "purpose": artifact.spec.purpose,
-                    "scope": artifact.spec.scope.value,
-                    "quality": artifact.quality_score,
-                    "iterations": artifact.ldd_iterations,
-                    "dependencies": list(artifact.spec.dependencies),
-                    "findings": [
-                        {"dimension": f.dimension, "summary": f.summary,
-                         "verdict": f.verdict.value}
-                        for f in (artifact.review_findings or [])
-                    ],
-                    "injectable": bool(artifact.registration.get("injectable")),
-                    "registry_path": str(artifact.registration.get("path") or ""),
-                },
-            )
-            # AUDIT: Log skill creation in async task (ADR-0232 compliance)
-            if sid_fingerprint:
-                console_audit.action_performed(
-                    tenant_id=tenant_id,
-                    sid_fingerprint=sid_fingerprint,
-                    action="skill.generated_created",
-                    target_kind="generated_skill",
-                    target_id=artifact.spec.name,
-                    run_id=run_id,
-                )
-            _record_stats(artifact)
-
-        except Exception as e:  # noqa: BLE001 — surface, never crash the thread
-            logger.exception("Skill generation run %s failed", run_id)
-            # AUDIT: Log async task failure
-            if sid_fingerprint:
-                console_audit.action_failed(
-                    tenant_id=tenant_id,
-                    sid_fingerprint=sid_fingerprint,
-                    action="skill.generated_creation_failed",
-                    target_kind="generated_skill",
-                    target_id=base["name"] if base else "new",
-                    reason="async_task_failed",
-                )
-            _update_run(
-                run_id,
-                status="failed",
-                error=str(e),
-                message=_operator_hint(e),
-            )
-
-    thread = threading.Thread(target=run_task, name=f"skill-creator-{run_id}", daemon=True)
-    thread.start()
-
+    forge_runs.spawn(
+        run_id=run_id, kind="skill", tenant_id=tenant_id,
+        sid_fingerprint=sid_fingerprint, work=work,
+        success_action="skill.generated_created",
+        failure_action="skill.generated_creation_failed",
+        hint=_operator_hint,
+    )
     return run_id
 
 

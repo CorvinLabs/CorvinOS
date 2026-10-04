@@ -1,6 +1,6 @@
-/** The five tabs of the Marketplace (ADR-0892 D1). The id is the URL value
- *  (`?tab=`); the order is the tab-bar order. */
-export const TAB_IDS = ["browse", "installed", "skills", "packages", "tools"] as const;
+/** The tabs of the Marketplace (ADR-0892 D1; "forged" ADR-2217). The id is the
+ *  URL value (`?tab=`); the order is the tab-bar order. */
+export const TAB_IDS = ["browse", "installed", "forged", "skills", "packages", "tools"] as const;
 export type TabId = (typeof TAB_IDS)[number];
 
 export const DEFAULT_TAB: TabId = "browse";
@@ -8,6 +8,7 @@ export const DEFAULT_TAB: TabId = "browse";
 export const TAB_LABEL: Record<TabId, string> = {
   browse: "Browse",
   installed: "Installed",
+  forged: "Forged",
   skills: "Skills",
   packages: "Packages",
   tools: "MCP tools",

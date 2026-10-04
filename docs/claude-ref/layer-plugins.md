@@ -764,6 +764,72 @@ out to 100 % without an operator approval · read `sys.modules` instead of
 `import_module` for the canary module (a concurrent first import returned a
 half-initialised module — live 500, 2026-09-28).
 
+## Console Forge generators — Skill, Tool and Plugin Forge (ADR-2217)
+
+The console's Forge panel generates three artifact kinds from a description, on
+ONE mechanism. Load this when touching `forge_runs.py`, `routes/forge_creator.py`,
+`routes/skill_creator_api.py` or `corvin_operator/skill_creator/{tool,plugin}_creator.py`.
+
+| Tab | Route | Orchestrator | Test oracle | Lands in |
+|---|---|---|---|---|
+| Skill Forge | `POST /v1/console/skill-creator/generate` | `SkillCreatorOrchestrator` | engine-graded LDD rubric | SkillForge registry |
+| Tool Forge | `POST /v1/console/forge-creator/tool/generate` | `ToolCreatorOrchestrator` | engine-written test cases **executed in the Forge sandbox** (`runner.run_tool`, bwrap) | Forge `MultiRegistry` user scope → Forge → Tools |
+| Plugin Forge | `POST /v1/console/forge-creator/plugin/generate` | `PluginCreatorOrchestrator` | `py_compile` of generated code + panel lint | **staged** in `<tenant_home>/plugin-builder/` → Marketplace → Forged |
+
+**One run store.** `core/console/corvin_console/forge_runs.py` owns the run records
+(tenant- AND kind-bound: a tool run id is 404 on `/skill-creator/status`), the
+worker thread, the success/failure audit and the four console pre-spawn gates
+(`_spawn_gates.check_console_spawn_or_refusal`: L44, ADR-0141, L34, L35). Every
+kind passes those gates BEFORE an engine is spawned; a refusal is 403 + a
+`forge.generation_refused` record. Skill generation skipped them until ADR-2217.
+`skill_creator_api._generation_runs` / `_runs_lock` are aliases of the shared store.
+
+**One engine and one review.** Tool and plugin runs resolve the engine through
+`skill_creator.skill_creator.resolve_llm_client` (patch that one attribute to
+script an engine in tests) and review with `skill_creator/artifact_review.py`:
+three dimensions (correctness, **security**, scope) parsed by the shared
+`parse_review_findings` and scored by `score_quality`.
+
+**Tool Forge is fail-closed.** Validation runs the MCP path's own gates as
+primitives (`Policy.name_allowed`, `Policy.namespace_check("assistant", …)`,
+`static_check.check_imports`) plus schema checks of every test input. The test
+loop registers the draft in a throw-away `Registry` in a temp dir (never the
+tenant store) and runs each case in the sandbox; each run is audited as
+`forge.tool_executed`. The tool reaches `MultiRegistry(tenant).create(scope="user")`
+only when every case passed and no reviewer CONFIRMED a security finding. No
+engine → the run fails; Tool Forge never fabricates code. A passing case proves
+execution + schema + the stated outputs — the cases are engine-written, so it
+does not prove semantic correctness.
+
+**Plugin Forge stages, never installs (ADR-0244, ADR-2186).** The engine maps the
+request onto the Builder's `PluginIdea`; without an engine the Builder's own
+deterministic extraction runs and the review is reported as skipped (quality
+`null`, never a fabricated score). `classifier.classify` + `write_artifacts`
+write docs + scaffold; an optional panel is written as `panel/index.html` +
+`panel/surface.yaml` (ADR-2189 shape, `sandbox: [allow-scripts]`). A failed check
+removes the half-written directory. `FORGE_PROVENANCE.json` (`generator:
+plugin_forge`, `installed: false`, `origin_on_install: community`) marks the
+directories the Forged routes manage; chat `/plugin-builder` scaffolds (no
+provenance) are not listed there. Nothing writes `registry.yaml` or loads code.
+
+**Marketplace → Forged** lists forged plugins as *not installed · unsigned ·
+community*, shows files, findings and egress hosts, and previews the panel in
+`<iframe sandbox="allow-scripts" srcdoc>` — never `allow-same-origin`. Forged
+plugins never appear in Browse (the real index only, ADR-0892).
+
+**Licence.** Tool and Plugin Forge are `forge.create` (member) at the route —
+`require_forge_capability`; only skills have the free-tier quota (ADR-2095).
+
+**Audit** (all through `console.action_performed` / `console.action_failed`, no
+new event type): `tool.generated_created`, `tool.generated_creation_failed`,
+`plugin.forged_staged`, `plugin.forged_staging_failed`, `plugin.forged_deleted`,
+`forge.generation_refused`; the Forge registry adds `tool.created`.
+
+**Diagram:** `docs/diagrams/forge-generators-flow.svg`.
+
+E2E: `core/console/tests/test_forge_creator_e2e.py` (real router, scripted
+engine, real sandbox); UI: `web-next/tests/unit/forge-creator.test.tsx`.
+
 ## MCP Plugin Manager (ADR-0096) — user-installable external MCP tools
 
 **Status:** Implemented (M1–M4 complete).  
