@@ -204,6 +204,23 @@ def check_l34(
             f"Operator: check tenant.corvin.yaml::spec.data_classification."
         )
 
+    # ADR-0532 Phase 1 — os.flow_guard shadow comparison. Never changes the
+    # return value below: this Skill accrues an audited trust record
+    # (ADR-2092 G0) by watching the SAME decision the production gate just
+    # made, it does not make one. A failure here must never affect the
+    # spawn — shadow_compare() is fail-safe and swallows its own exceptions.
+    try:
+        from core.skills.os_skills.flow_guard_skill import shadow_compare as _fg_shadow
+
+        _fg_shadow(
+            prompt=prompt,
+            engine_id=engine_id,
+            tenant_id=tenant,
+            production_allowed=decision.allowed,
+        )
+    except Exception as exc:  # noqa: BLE001 — shadow path must never affect L34
+        _log.debug("spawn_gates.check_l34: os.flow_guard shadow compare failed (%r)", exc)
+
     if decision.allowed:
         return None
 

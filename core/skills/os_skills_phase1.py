@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 from .skill_registry_phase1 import Skill, SkillMetadata, SkillOrigin, SkillTier
 from .os_skills.delegation_router import DelegationRouterSkill  # L5 routing skill (new module)
+from .os_skills.flow_guard_skill import FlowGuardSkill  # L34 shadow skill (ADR-0532 Phase 1)
 
 logger = logging.getLogger(__name__)
 
@@ -654,6 +655,7 @@ def register_builtin_skills(skills_registry: Any) -> None:
         HeadlessModeSkill(),
         PluginBuilderSkill(),
         CapabilitiesSkill(),
+        FlowGuardSkill(),
     ]
 
     # Idempotent: a second boot in the same process (tests, hot reload) must not
@@ -677,4 +679,5 @@ BUILTIN_SKILL_IDS: tuple[str, ...] = (
     "os.headless_mode",
     "os.plugin_builder",
     "os.capabilities",
+    "os.flow_guard",
 )
