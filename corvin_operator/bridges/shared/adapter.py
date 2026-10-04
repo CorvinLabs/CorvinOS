@@ -3136,7 +3136,7 @@ def _resolve_os_model_bundled(
         explicit = profile.get("model")
         return explicit.strip() if isinstance(explicit, str) and explicit.strip() else None
 
-    return _ms.resolve_os_model(
+    resolved_model = _ms.resolve_os_model(
         profile,
         payload_chars=payload_chars,
         engine_id=engine_id,
@@ -3147,6 +3147,25 @@ def _resolve_os_model_bundled(
         task_input=task_input,
         audit_fn=_audit_event,
     )
+
+    # ADR-0532 Phase 1 — os.workflow_optimizer shadow comparison. Never
+    # changes the resolved model above: this Skill accrues an audited
+    # trust record (ADR-2092 G0) by watching the SAME resolve_os_model()
+    # decision this function just made, it does not make one.
+    try:
+        from core.skills.os_skills.workflow_optimizer_wrapper import (
+            shadow_compare as _wo_shadow,
+        )
+
+        _wo_shadow(
+            task_input=task_input,
+            tenant_id=tenant_id,
+            production_model_id=resolved_model,
+        )
+    except Exception as exc:  # noqa: BLE001 — shadow path must never affect model routing
+        log(f"os.workflow_optimizer shadow compare failed ({exc!r})")
+
+    return resolved_model
 
 
 def _resolve_spawn_inputs(
