@@ -16,13 +16,21 @@ import uuid
 
 
 class VideoJobPhase(Enum):
-    """Video production phases with strict ordering"""
+    """Video production phases.
+
+    SCREENSHOTS and DIAGRAM_RENDER are alternatives for the same slot (both
+    populate job.screenshots_result with the visual frames ASSEMBLY consumes)
+    — never both for one job. _next_phase() picks between them; see its
+    docstring for the selection rule. Every other transition is strictly
+    sequential.
+    """
     ANALYSIS = 1           # Asset Analyzer Worker
     VOICE = 2              # Voice Synthesizer Worker
-    SCREENSHOTS = 3        # Screenshot Capturer Worker
-    ASSEMBLY = 4           # Video Assembler Worker
-    YOUTUBE = 5            # YouTube Uploader Worker
-    COMPLETE = 6
+    SCREENSHOTS = 3        # Screenshot Capturer Worker (real browser screenshots)
+    DIAGRAM_RENDER = 4     # Diagram Renderer Worker (declarative diagram specs -> PNG)
+    ASSEMBLY = 5           # Video Assembler Worker
+    YOUTUBE = 6            # YouTube Uploader Worker
+    COMPLETE = 7
 
 
 @dataclass(frozen=True)
@@ -46,8 +54,13 @@ class VideoJob:
     current_phase: VideoJobPhase = VideoJobPhase.ANALYSIS
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     feedback_history: List[FeedbackEvent] = field(default_factory=list)
-    # ADR-2212: when set, the SCREENSHOTS phase renders these diagram specs
-    # (via DiagramRendererWorker) instead of capturing real screenshots.
+    # ADR-2212 / ADR-2214: when set, the pipeline renders these diagram specs
+    # (via DiagramRendererWorker) instead of capturing real screenshots. Takes
+    # effect two ways depending on what the caller registered: a
+    # DIAGRAM_RENDER worker routes this job through that dedicated phase
+    # (ADR-2214, the normal Maestro job path); with no DIAGRAM_RENDER worker
+    # registered, a DiagramRendererWorker registered directly for SCREENSHOTS
+    # still works exactly as before (ADR-2212, unchanged for backward compat).
     # {scene_index: spec}, same vocabulary as diagram/compiler.py.
     diagram_specs: Optional[Dict[int, dict]] = None
     analysis_result: Optional[Dict] = None
@@ -90,6 +103,7 @@ class MaestroOrchestrator:
             VideoJobPhase.ANALYSIS: self._validate_analysis_phase,
             VideoJobPhase.VOICE: self._validate_voice_phase,
             VideoJobPhase.SCREENSHOTS: self._validate_screenshots_phase,
+            VideoJobPhase.DIAGRAM_RENDER: self._validate_diagram_render_phase,
             VideoJobPhase.ASSEMBLY: self._validate_assembly_phase,
             VideoJobPhase.YOUTUBE: self._validate_youtube_phase,
         }
@@ -207,13 +221,16 @@ class MaestroOrchestrator:
         # Execute phase
         result = worker.execute(job)
 
-        # Store result in job
+        # Store result in job. SCREENSHOTS and DIAGRAM_RENDER are
+        # alternatives for the same slot (see VideoJobPhase docstring) — both
+        # populate screenshots_result, so ASSEMBLY's gate and VideoAssemblerWorker
+        # need no branching on which one ran.
         phase_name = job.current_phase.name.lower()
         if phase_name == "analysis":
             job.analysis_result = result
         elif phase_name == "voice":
             job.voice_result = result
-        elif phase_name == "screenshots":
+        elif phase_name in ("screenshots", "diagram_render"):
             job.screenshots_result = result
         elif phase_name == "assembly":
             job.video_result = result
@@ -248,11 +265,34 @@ class MaestroOrchestrator:
             )
 
         # Move to next phase
-        next_phase_value = job.current_phase.value + 1
-        if next_phase_value <= len(VideoJobPhase):
-            job.current_phase = VideoJobPhase(next_phase_value)
+        next_phase = self._next_phase(job.current_phase, job)
+        if next_phase is not None:
+            job.current_phase = next_phase
 
         return result
+
+    def _next_phase(self, current: "VideoJobPhase", job: VideoJob) -> Optional["VideoJobPhase"]:
+        """Determine the phase after `current` for this job.
+
+        Linear for every phase except the VOICE -> {SCREENSHOTS, DIAGRAM_RENDER}
+        fork: DIAGRAM_RENDER runs instead of SCREENSHOTS only when the job
+        carries diagram_specs AND a DIAGRAM_RENDER worker is registered —
+        otherwise SCREENSHOTS runs exactly as before (ADR-2212 jobs that
+        register DiagramRendererWorker directly for SCREENSHOTS, with no
+        DIAGRAM_RENDER registration, are unaffected). Both forks converge on
+        ASSEMBLY, which only ever reads job.screenshots_result.
+        """
+        if current == VideoJobPhase.VOICE:
+            if job.diagram_specs and VideoJobPhase.DIAGRAM_RENDER in self.worker_registry:
+                return VideoJobPhase.DIAGRAM_RENDER
+            return VideoJobPhase.SCREENSHOTS
+        if current in (VideoJobPhase.SCREENSHOTS, VideoJobPhase.DIAGRAM_RENDER):
+            return VideoJobPhase.ASSEMBLY
+        next_value = current.value + 1
+        for phase in VideoJobPhase:
+            if phase.value == next_value:
+                return phase
+        return None
 
     def record_feedback(
         self,
@@ -402,6 +442,16 @@ class MaestroOrchestrator:
         Requires: Voice Synthesizer must have completed
         """
         return job.voice_result is not None
+
+    def _validate_diagram_render_phase(self, job: VideoJob) -> bool:
+        """Validate preconditions for Diagram Render phase
+
+        Requires: Voice Synthesizer must have completed, and the job must
+        actually carry diagram specs (same precondition DiagramRendererWorker
+        itself enforces — this gate just fails closed before dispatch
+        instead of after).
+        """
+        return job.voice_result is not None and bool(job.diagram_specs)
 
     def _validate_assembly_phase(self, job: VideoJob) -> bool:
         """Validate preconditions for Assembly phase
