@@ -46,6 +46,10 @@ class VideoJob:
     current_phase: VideoJobPhase = VideoJobPhase.ANALYSIS
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     feedback_history: List[FeedbackEvent] = field(default_factory=list)
+    # ADR-2212: when set, the SCREENSHOTS phase renders these diagram specs
+    # (via DiagramRendererWorker) instead of capturing real screenshots.
+    # {scene_index: spec}, same vocabulary as diagram/compiler.py.
+    diagram_specs: Optional[Dict[int, dict]] = None
     analysis_result: Optional[Dict] = None
     voice_result: Optional[Dict] = None
     screenshots_result: Optional[Dict] = None

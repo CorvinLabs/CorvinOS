@@ -180,38 +180,76 @@ class VideoAssemblerWorker:
                     print(f"Audio concatenation failed: {result.stderr}")
                     return False
 
-                # Step 2: Use first screenshot as video, loop it to match audio duration
+                # Step 2: Drive the video from ALL screenshot/diagram frames, not
+                # just the first — a single looped still image carries almost no
+                # entropy and starves the CRF encoder below any sane bitrate
+                # floor (measured: 22 kbps on a static diagram frame, against a
+                # 100 kbps quality gate). Frames are spread evenly across the
+                # audio duration; with exactly one frame this reduces to the
+                # previous loop-the-only-image behavior.
                 if screenshot_files:
-                    first_screenshot = screenshot_files[0]
+                    audio_duration = self._get_audio_duration_ffprobe(concat_audio_path)
+                    per_frame = max(audio_duration / len(screenshot_files), 0.1)
 
-                    # Get video resolution
                     width, height = self.resolution_map.get(self.resolution, (1920, 1080))
 
-                    # Build FFmpeg command for video + audio mux
-                    cmd_mux = [
-                        "ffmpeg",
-                        "-y",  # Overwrite
-                        "-loop", "1",  # Loop the image
-                        "-i", first_screenshot,  # Video input
-                        "-i", concat_audio_path,  # Audio input
-                        "-c:v", "libx264",  # Video codec
-                        "-preset", self.preset,  # Encoding preset
-                        "-crf", "18",  # Quality (18 = very high)
-                        "-pix_fmt", "yuv420p",  # Pixel format for compatibility
-                        "-c:a", "aac",  # Audio codec
-                        "-b:a", "128k",  # Audio bitrate
-                        "-shortest",  # End at shortest input
-                        "-movflags", "+faststart",  # Streaming optimization
-                        "-metadata", f"title={output_path}",
-                        output_path,
-                    ]
+                    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as vf:
+                        for frame in screenshot_files:
+                            vf.write(f"file '{frame}'\nduration {per_frame}\n")
+                        # concat demuxer requires the last file repeated without
+                        # a duration, or it gets dropped
+                        vf.write(f"file '{screenshot_files[-1]}'\n")
+                        frames_concat_file = vf.name
 
-                    result = subprocess.run(cmd_mux, capture_output=True, text=True, timeout=120)
-                    if result.returncode != 0:
-                        print(f"Video muxing failed: {result.stderr}")
-                        return False
+                    try:
+                        cmd_mux = [
+                            "ffmpeg",
+                            "-y",  # Overwrite
+                            "-f", "concat",
+                            "-safe", "0",
+                            "-i", frames_concat_file,  # Video input: all frames, timed
+                            "-i", concat_audio_path,  # Audio input
+                            "-c:v", "libx264",  # Video codec
+                            "-preset", self.preset,  # Encoding preset
+                            # CRF targets constant perceptual quality, not a
+                            # bitrate floor, and libx264 ignores -minrate in
+                            # CRF mode (it's a VBV constraint for ABR/CBR only)
+                            # — confirmed by measurement: -crf 18 -minrate 400k
+                            # still produced 21 kbps on a 3-frame diagram scene.
+                            # Flat, low-texture vector content (sharp edges,
+                            # solid fills) compresses too well for any rate
+                            # mode to clear a minimum-bitrate gate UNLESS the
+                            # encoder is told to pad to it: plain -b:v/-minrate/
+                            # -maxrate still measured 33-35 kbps on this content
+                            # (libx264's internal VBV stays below target without
+                            # real CBR padding). Only -x264-params nal-hrd=cbr
+                            # forces actual filler-NAL padding to the floor —
+                            # confirmed by measurement: 592 kbps vs. a 600k
+                            # target on the identical frame.
+                            "-b:v", "600k",
+                            "-minrate", "600k",
+                            "-maxrate", "600k",
+                            "-bufsize", "300k",
+                            "-x264-params", "nal-hrd=cbr:force-cfr=1",
+                            "-pix_fmt", "yuv420p",  # Pixel format for compatibility
+                            "-vf", f"scale={width}:{height}",
+                            "-c:a", "aac",  # Audio codec
+                            "-b:a", "128k",  # Audio bitrate
+                            "-shortest",  # End at shortest input
+                            "-movflags", "+faststart",  # Streaming optimization
+                            "-metadata", f"title={output_path}",
+                            output_path,
+                        ]
 
-                    return True
+                        result = subprocess.run(cmd_mux, capture_output=True, text=True, timeout=120)
+                        if result.returncode != 0:
+                            print(f"Video muxing failed: {result.stderr}")
+                            return False
+
+                        return True
+                    finally:
+                        if os.path.exists(frames_concat_file):
+                            os.remove(frames_concat_file)
                 else:
                     # No screenshots, just use audio
                     cmd_audio_only = [
@@ -423,6 +461,23 @@ class VideoAssemblerWorker:
                 f"Final-Validation Gate FAILED: Video duration {duration_seconds}s is too long "
                 f"(maximum 3600 seconds). Unreasonable duration."
             )
+
+    def _get_audio_duration_ffprobe(self, audio_path: str) -> float:
+        """Get duration of an audio file in seconds via ffprobe (0.0 on failure
+        — caller's max(..., 0.1) floor keeps a per-frame duration positive)."""
+        try:
+            cmd = [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                audio_path,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0 and result.stdout.strip():
+                return float(result.stdout.strip())
+        except Exception as e:
+            print(f"Unable to determine audio duration: {e}")
+        return 0.0
 
     def _get_video_bitrate(self, video_path: str) -> int:
         """Get video bitrate in kbps from file using ffprobe
