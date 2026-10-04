@@ -70,7 +70,7 @@ Every failure — bad signature, replay, unknown origin, missing consent — ans
 | LAN bind | **GATED** — flag `a2a_lan_bind` | gateway |
 | `a2a_send` from chat (two-step, browser + CSRF confirm) | **GATED** | Forge MCP tool |
 | Instance-bound attestation (IBC) | **PARTIAL** — new pairings require it; auto-renew open (ADR-2099) | `instance_identity.py` |
-| Group chat with foreign agents | **PARTIAL** — backend only, no chat UI, no wire-level group routing | `chat_group_store.py`, `routes/chat_groups.py` |
+| Group chat with foreign agents (inside the console chat; fan-out, mirror groups, hub relay) | **LIVE** | `chat_group_store.py`, `routes/chat_groups.py`, `pages/chat.tsx` |
 
 All `a2a_*` files above live in `corvin_operator/bridges/shared/` unless a path is given.
 
@@ -104,7 +104,7 @@ Grant execution only when you want the peer to run work on your instance: `corvi
 
 - **Execution is off by default.** A freshly paired peer can deliver tasks; it cannot make your instance run them until you set `spawn_worker` for it.
 - **Relay and LAN bind are gated.** Two instances that cannot reach each other directly need the relay flag turned on.
-- **IBC auto-renewal is open** (ADR-2099); group chat with foreign agents has a backend but no UI and no wire-level routing yet.
+- **IBC auto-renewal is open** (ADR-2099).
 - **The completeness ADR is still PROPOSED.** A2A audit coverage is documented in ADR-2042, which has not been accepted.
 - **Free tier: one peer.** More peers need a license; the pairing path answers 402 over the limit.
 
@@ -112,6 +112,6 @@ Grant execution only when you want the peer to run work on your instance: `corvi
 
 - Receiver and sender: `corvin_operator/bridges/shared/remote_trigger_receiver.py`, `remote_trigger_sender.py`; worker `a2a_worker.py`; relay `a2a_relay.py`; nonces `a2a_nonce_store.py`.
 - Reference: `docs/claude-ref/layer-38-a2a-network.md`.
-- ADRs (Corvin-Knowledge): ADR-0063 (invites), ADR-0070 (friendship tokens), ADR-2042 (A2A audit events), ADR-2064 (binding keys), ADR-2099 (IBC), ADR-2216 (chat-native tokens, group chat).
+- ADRs (Corvin-Knowledge): ADR-0063 (invites), ADR-0070 (friendship tokens), ADR-2042 (A2A audit events), ADR-2064 (binding keys), ADR-2099 (IBC), ADR-2216 (chat-native tokens, group chat), ADR-2218 (group routing over A2A).
 - GDPR erasure reaches paired peers: `erasure_a2a.py` — see [Organizations](organizations.md).
 - Related: [CorvinOS as an OS](operating-system.md) · [Organizations](organizations.md) · [Marketplace &amp; plugins](marketplace.md)

@@ -44,6 +44,10 @@ export async function getGroup(groupId: string, signal?: AbortSignal): Promise<C
   return api<ChatGroup>(`/chat/groups/${encodeURIComponent(groupId)}`, { signal });
 }
 
+export async function deleteGroup(groupId: string, csrf: string): Promise<{ deleted: boolean }> {
+  return api(`/chat/groups/${encodeURIComponent(groupId)}`, { method: "DELETE", csrf });
+}
+
 export async function addParticipant(
   groupId: string,
   body: { participant_id: string; kind: ParticipantKind; display_name?: string; peer_endpoint_id?: string },

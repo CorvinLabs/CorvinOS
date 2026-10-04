@@ -27,6 +27,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -78,16 +79,28 @@ def create_group(
     title: str,
     created_by_participant_id: str,
     created_by_kind: ParticipantKind = "human",
+    group_id: str | None = None,
+    created_by: str | None = None,
 ) -> dict[str, Any]:
-    """Create a new group with the creator as its first participant."""
-    group_id = secrets.token_urlsafe(16)
+    """Create a new group with the creator as its first participant.
+
+    ``group_id`` is only passed for a MIRROR of a group that lives on another
+    instance (ADR-2218): the id travels on the A2A envelope, so both sides
+    must store the conversation under the same id. It never overwrites.
+    """
+    if group_id is None:
+        group_id = secrets.token_urlsafe(16)
+    elif _safe_id(group_id) is None:
+        raise ChatGroupError("invalid group_id")
+    elif (_groups_dir(tenant_global_dir) / group_id / "meta.json").exists():
+        raise ChatGroupError("group already exists")
     now = time.time()
     record: dict[str, Any] = {
         "group_id": group_id,
         "tenant_id": tenant_id,
         "title": str(title)[:_MAX_TITLE_LEN] or "Untitled group",
         "created_at": now,
-        "created_by": created_by_participant_id,
+        "created_by": created_by or created_by_participant_id,
         "participants": [
             {
                 "participant_id": created_by_participant_id,
@@ -188,6 +201,16 @@ def remove_participant(
         raise ChatGroupError("participant not in group")
     _atomic_write(d / "meta.json", rec)
     return rec
+
+
+def delete_group(tenant_global_dir: Path, group_id: str) -> bool:
+    """Remove a group and its messages from THIS instance. A mirror of the
+    group on a peer's instance is theirs and stays. Returns False if absent."""
+    d = _group_dir(tenant_global_dir, group_id)
+    if d is None or not (d / "meta.json").exists():
+        return False
+    shutil.rmtree(d)
+    return True
 
 
 def is_participant(tenant_global_dir: Path, group_id: str, participant_id: str) -> bool:

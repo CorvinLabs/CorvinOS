@@ -167,20 +167,119 @@ class TestRealHandlerWiredToReceiver:
         assert data["reason"] == "sender_not_a_group_participant"
         assert store.list_messages(tenant_dir, group_id) == []
 
-    def test_message_for_unknown_group_is_rejected(self, group_with_peer):
-        cg, store, tenant_dir, group_id = group_with_peer
+    def test_unknown_group_from_active_friend_creates_mirror(self, group_with_peer):
+        """The first message of a group that lives on the sender's instance
+        opens a mirror here under the SAME group_id, with the local operator
+        first and the sender as an a2a_peer member — the "you were added to
+        a group" behaviour of a chat app."""
+        cg, store, tenant_dir, _gid = group_with_peer
         receiver = RemoteTriggerReceiver(
             origins_dir=tenant_dir / "origins",
             group_message_handler=cg.handle_inbound_group_message,
         )
 
         status, data = receiver._handle_group_message(
-            group_id="does-not-exist", sender_origin_id="remote-origin-xyz",
-            instruction="orphan message", task_id="task-1001", start=0,
+            group_id="remoteGroup123", sender_origin_id="remote-origin-xyz",
+            instruction="welcome to my group", task_id="task-1001", start=0,
         )
 
+        assert status == "accepted", data
+        g = store.get_group(tenant_dir, "remoteGroup123")
+        assert g is not None
+        assert g["created_by"] == "a2a:remote-origin-xyz"
+        assert g["participants"][0]["participant_id"] == "operator"
+        assert g["participants"][1]["kind"] == "a2a_peer"
+        assert g["participants"][1]["peer_endpoint_id"] == "remote-origin-xyz"
+        msgs = store.list_messages(tenant_dir, "remoteGroup123")
+        assert [m["text"] for m in msgs] == ["welcome to my group"]
+
+    def test_unknown_group_from_non_friend_is_rejected(self, group_with_peer, monkeypatch):
+        cg, store, tenant_dir, _gid = group_with_peer
+        from fastapi import HTTPException
+
+        def _deny(peer_endpoint_id):
+            raise HTTPException(status_code=404, detail="no active friendship for this peer")
+
+        monkeypatch.setattr(cg, "require_friendship_active", _deny)
+        receiver = RemoteTriggerReceiver(
+            origins_dir=tenant_dir / "origins",
+            group_message_handler=cg.handle_inbound_group_message,
+        )
+        status, data = receiver._handle_group_message(
+            group_id="strangerGroup", sender_origin_id="stranger",
+            instruction="spam", task_id="task-1003", start=0,
+        )
+        assert status == "error"
+        assert store.get_group(tenant_dir, "strangerGroup") is None
+
+    def test_unknown_group_with_unsafe_id_is_rejected(self, group_with_peer):
+        cg, store, tenant_dir, _gid = group_with_peer
+        receiver = RemoteTriggerReceiver(
+            origins_dir=tenant_dir / "origins",
+            group_message_handler=cg.handle_inbound_group_message,
+        )
+        status, data = receiver._handle_group_message(
+            group_id="../../etc", sender_origin_id="remote-origin-xyz",
+            instruction="x", task_id="task-1004", start=0,
+        )
         assert status == "error"
         assert data["reason"] == "group_not_found"
+
+
+class _SyncPool:
+    def submit(self, fn, *a, **kw):
+        fn(*a, **kw)
+
+
+class TestDelivery:
+    """Hub-and-spoke delivery: the owning instance relays, a mirror never does."""
+
+    def _sent(self, cg, monkeypatch):
+        sent: list[tuple[str, str, str]] = []
+
+        class _Res:
+            ok = True
+
+        def _fake_send(self, endpoint_id, instruction, **kw):
+            sent.append((endpoint_id, instruction, kw.get("group_id")))
+            return _Res()
+
+        monkeypatch.setattr(cg, "_FANOUT_POOL", _SyncPool())
+        monkeypatch.setattr(cg.RemoteTriggerSender, "send", _fake_send)
+        monkeypatch.setattr(cg.RemoteTriggerSender, "__init__", lambda self, *a, **k: None)
+        return sent
+
+    def test_owner_relays_peer_message_to_other_peers(self, group_with_peer, monkeypatch):
+        cg, store, tenant_dir, group_id = group_with_peer
+        store.add_participant(
+            tenant_dir, group_id, participant_id="peer-2", kind="a2a_peer",
+            display_name="Second", added_by="human-1", peer_endpoint_id="second-origin",
+        )
+        sent = self._sent(cg, monkeypatch)
+
+        res = cg.handle_inbound_group_message(
+            group_id=group_id, sender_origin_id="remote-origin-xyz",
+            instruction="hi all", task_id="t",
+        )
+        assert res["status"] == "accepted"
+        assert sent == [("second-origin", "[Remote Peer] hi all", group_id)]
+
+    def test_mirror_never_relays(self, group_with_peer, monkeypatch):
+        cg, store, tenant_dir, _gid = group_with_peer
+        sent = self._sent(cg, monkeypatch)
+        cg.handle_inbound_group_message(
+            group_id="mirrorG", sender_origin_id="remote-origin-xyz",
+            instruction="first", task_id="t1",
+        )
+        store.add_participant(
+            tenant_dir, "mirrorG", participant_id="peer-2", kind="a2a_peer",
+            display_name="Second", added_by="operator", peer_endpoint_id="second-origin",
+        )
+        cg.handle_inbound_group_message(
+            group_id="mirrorG", sender_origin_id="remote-origin-xyz",
+            instruction="second", task_id="t2",
+        )
+        assert sent == []
 
     def test_receiver_without_handler_errors_cleanly(self, tenant_env):
         """A receiver with no group_message_handler (e.g. gateway running

@@ -214,6 +214,49 @@ class ChatGroupsE2ETests(unittest.TestCase):
         self.assertEqual(r.status_code, 404, r.text)
         self.assertIn("no active friendship", r.text)
 
+    def test_group_message_fans_out_to_every_a2a_peer(self):
+        """ADR-2218: a message posted to a group reaches each A2A peer in it,
+        tagged with the group's id, and is stored as delivery="fanout"."""
+        self._enable_peer_endpoint("friend-peer")
+        client = self._client()
+        group = client.post("/v1/console/chat/groups", json={"title": "G"}).json()
+        client.post(
+            f"/v1/console/chat/groups/{group['group_id']}/participants",
+            json={"participant_id": "friend-peer", "kind": "a2a_peer",
+                  "peer_endpoint_id": "friend-peer"},
+        )
+        sent: list = []
+
+        class _Res:
+            ok = True
+
+        class _SyncPool:
+            def submit(self, fn, *a, **kw):
+                fn(*a, **kw)
+
+        def _fake_send(_self, endpoint_id, instruction, **kw):
+            sent.append((endpoint_id, instruction, kw.get("group_id")))
+            return _Res()
+
+        with patch.object(self.R, "_FANOUT_POOL", _SyncPool()), \
+             patch.object(self.R.RemoteTriggerSender, "send", _fake_send):
+            r = client.post(
+                f"/v1/console/chat/groups/{group['group_id']}/messages",
+                json={"text": "hello everyone", "sender_participant_id": "fp-human-1"},
+            )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["delivery"], "fanout")
+        self.assertEqual(sent, [("friend-peer", "hello everyone", group["group_id"])])
+
+    def test_group_without_peers_stays_local(self):
+        client = self._client()
+        group = client.post("/v1/console/chat/groups", json={"title": "G"}).json()
+        r = client.post(
+            f"/v1/console/chat/groups/{group['group_id']}/messages",
+            json={"text": "just us", "sender_participant_id": "fp-human-1"},
+        )
+        self.assertEqual(r.json()["delivery"], "local")
+
     def test_send_to_peer_rejects_non_a2a_peer(self):
         """ADR-2218 Phase 2 route, re-verified: a peer_id that isn't an
         a2a_peer participant of this group is refused."""
@@ -313,6 +356,25 @@ class ChatGroupsE2ETests(unittest.TestCase):
         body = r.json()
         self.assertEqual(body["status"], "error")
         self.assertIn("unreachable", body["detail"])
+
+    def test_delete_group_removes_it_and_its_messages(self):
+        client = self._client()
+        group = client.post("/v1/console/chat/groups", json={"title": "Doomed"}).json()
+        gid = group["group_id"]
+        client.post(f"/v1/console/chat/groups/{gid}/messages",
+                    json={"text": "bye", "sender_participant_id": "fp-human-1"})
+        r = client.delete(f"/v1/console/chat/groups/{gid}")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(client.get(f"/v1/console/chat/groups/{gid}").status_code, 404)
+        self.assertNotIn(gid, [g["group_id"] for g in client.get("/v1/console/chat/groups").json()])
+        self.assertEqual(client.delete(f"/v1/console/chat/groups/{gid}").status_code, 404)
+
+    def test_delete_group_cross_tenant_is_404(self):
+        group = self._client(tenant="tenant-a").post("/v1/console/chat/groups", json={"title": "A"}).json()
+        r = self._client(tenant="tenant-b").delete(f"/v1/console/chat/groups/{group['group_id']}")
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(
+            self._client(tenant="tenant-a").get(f"/v1/console/chat/groups/{group['group_id']}").status_code, 200)
 
     def test_get_group_cross_tenant_is_404(self):
         client_a = self._client(tenant="tenant-a")

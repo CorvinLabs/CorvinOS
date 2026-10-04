@@ -23,7 +23,7 @@ const KIND_ICON: Record<ParticipantKind, React.ComponentType<{ className?: strin
   human: UserIcon, agent: Bot, a2a_peer: Globe2,
 };
 const KIND_LABEL: Record<ParticipantKind, string> = {
-  human: "Mensch", agent: "Agent", a2a_peer: "A2A-Peer",
+  human: "human", agent: "agent", a2a_peer: "A2A peer",
 };
 
 function AddParticipantDialog({
@@ -59,25 +59,25 @@ function AddParticipantDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button size="sm" variant="outline" className="h-6 w-6 p-0" title="Teilnehmer hinzufügen">
+        <Button size="sm" variant="outline" className="h-6 w-6 p-0" title="Add member" aria-label="Add member">
           <UserPlus className="h-3 w-3" />
         </Button>
       </DialogTrigger>
       <DialogContent>
-        <DialogHeader><DialogTitle>Teilnehmer hinzufügen</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>Add member</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <Select value={kind} onChange={(e) => setKind(e.target.value as ParticipantKind)}>
-            <SelectItem value="human">Mensch (intern)</SelectItem>
-            <SelectItem value="agent">Agent (intern)</SelectItem>
-            <SelectItem value="a2a_peer">A2A-Peer (fremder Agent — braucht aktive Freundschaft)</SelectItem>
+            <SelectItem value="human">Human (internal)</SelectItem>
+            <SelectItem value="agent">Agent (internal)</SelectItem>
+            <SelectItem value="a2a_peer">A2A peer (external agent — needs an active friendship)</SelectItem>
           </Select>
-          <Input placeholder={kind === "a2a_peer" ? "Peer-Endpoint-ID" : "Teilnehmer-ID"}
+          <Input placeholder={kind === "a2a_peer" ? "Peer endpoint ID" : "Member ID"}
             value={participantId} onChange={(e) => setParticipantId(e.target.value)} />
           {kind === "a2a_peer" && (
-            <Input placeholder="Peer-Endpoint-ID (aus Agent Hub)" value={peerEndpointId}
+            <Input placeholder="Peer endpoint ID (from Peers)" value={peerEndpointId}
               onChange={(e) => setPeerEndpointId(e.target.value)} />
           )}
-          <Input placeholder="Anzeigename (optional)" value={displayName}
+          <Input placeholder="Display name (optional)" value={displayName}
             onChange={(e) => setDisplayName(e.target.value)} />
           {error && (
             <p className="text-xs text-destructive flex items-start gap-1">
@@ -88,7 +88,7 @@ function AddParticipantDialog({
         <DialogFooter>
           <Button disabled={busy || !participantId.trim() || (kind === "a2a_peer" && !peerEndpointId.trim())}
             onClick={handleAdd}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Hinzufügen"}
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -144,7 +144,7 @@ export function MembersSection({
                 {p.participant_id !== selfId && (
                   <button
                     className="shrink-0 opacity-0 text-muted-foreground hover:text-destructive group-hover:opacity-100"
-                    title="Entfernen"
+                    title="Remove" aria-label="Remove member"
                     onClick={() => handleRemove(p.participant_id)}
                   >
                     <Trash2 className="h-3 w-3" />

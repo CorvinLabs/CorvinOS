@@ -21,6 +21,7 @@ export const PREF_KEYS = {
   lastChatSid: "corvin.chat.lastSid",
   lastVisitedRoute: "corvin.lastVisitedRoute",
   voiceLang: "corvin.chat.voiceLang",
+  chatSidebarMode: "corvin.chat.sidebarMode",
 } as const;
 
 export type PrefKey = (typeof PREF_KEYS)[keyof typeof PREF_KEYS];

@@ -168,7 +168,6 @@ const NAV_GROUPS: NavGroup[] = [
       // ADR-2216 — group chat (human/agent/a2a_peer) + chat-native
       // friendship tokens. A real PANELS entry (registry.tsx), so
       // panel-nav-wiring.test.ts's walk covers this one normally.
-      { to: "/app/chat-groups", label: "Gruppenchats", icon: Users },
       { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
       // Vibe Engineering dashboard (ADR-0400): unified 3-column learnings view.
       // A panel needs BOTH registrations: panelRoutes() mounts /app/<route> from PANELS,

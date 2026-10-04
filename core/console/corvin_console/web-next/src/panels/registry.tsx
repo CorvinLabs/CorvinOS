@@ -17,7 +17,7 @@ import {
   DashboardPage, SettingsPage,
   ComputePage, BridgesPage, DiscoveryPage, VoicePage, VoiceSummariesPage, ForgePage,
   LddPage, CompliancePage, FilesPage, MemoryPage,
-  AgentHubPage, ChatGroupsPage, SkillManagerPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
+  AgentHubPage, SkillManagerPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
   MarketplacePage,
   GitHubPage, SyncMonitorPage,
@@ -51,7 +51,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   FilesPage,
   MemoryPage,
   AgentHubPage,
-  ChatGroupsPage,
   SkillManagerPage,
   ConnectorsPage,
   ApiKeysPage,
@@ -133,7 +132,6 @@ export const PANELS: ConsolePanel[] = [
   // native friendship tokens. NAV_GROUPS entry in layout.tsx "primary"
   // group, right after Chat (both registrations required, CLAUDE.md
   // Console Frontend rule).
-  rc("chat-groups", "Gruppenchats", ChatGroupsPage, { nav: { label: "Gruppenchats", icon: "Users", group: "primary" } }),
   rc("skill-manager", "Skills", SkillManagerPage, { nav: { label: "Skills", icon: "Zap", group: "build" } }),
   rc("connectors", "Connectors", ConnectorsPage, { nav: { label: "Connectors", icon: "Plug", group: "network" } }),
   rc("api-keys", "API Keys", ApiKeysPage, { nav: { label: "API Keys", icon: "KeyRound", group: "system" } }),

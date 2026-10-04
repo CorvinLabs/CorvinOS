@@ -10,6 +10,7 @@ Routes (all behind a live session + CSRF on mutation):
   GET    /chat/groups                                 list this tenant's groups
   POST   /chat/groups                                  create a group
   GET    /chat/groups/{id}                              group detail (incl. participants)
+  DELETE /chat/groups/{id}                              delete the group on this instance
   POST   /chat/groups/{id}/participants                add a participant
   DELETE /chat/groups/{id}/participants/{pid}          remove a participant
   GET    /chat/groups/{id}/messages                     list messages
@@ -26,6 +27,7 @@ participation even though the two facts live in different stores.
 from __future__ import annotations
 
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -52,6 +54,57 @@ router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)])
 Session = Annotated[session_auth.SessionRecord, Depends(require_session_csrf_on_mutation)]
 
 ParticipantKind = Literal["human", "agent", "a2a_peer"]
+
+# Outbound group delivery runs off the request thread: a peer send blocks for
+# up to its timeout, and a group message must not hold the HTTP response.
+_FANOUT_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="group-fanout")
+
+# A group created by an inbound envelope carries this creator prefix. Only a
+# group's ORIGIN instance relays peer messages onward; a mirror never does,
+# which is what keeps hub-and-spoke delivery loop-free.
+_MIRROR_CREATOR_PREFIX = "a2a:"
+_LOCAL_OPERATOR_ID = "operator"
+
+
+def _peer_label(peer_endpoint_id: str) -> str:
+    peer = next((p for p in _feed_routes._peers() if p["peer_id"] == peer_endpoint_id), None)
+    return str((peer or {}).get("label") or peer_endpoint_id)
+
+
+def _deliver_to_peers(
+    *, tenant_id: str, group_id: str, endpoint_ids: list[str], text: str,
+) -> None:
+    """Send one group message to each peer endpoint, carrying ``group_id``.
+    Never raises; every outcome is audited."""
+    for ep in endpoint_ids:
+        try:
+            result = RemoteTriggerSender().send(ep, text, purpose_id="group_message", group_id=group_id)
+            ok = bool(result.ok)
+        except Exception:  # noqa: BLE001 — a failing peer must not stop the others
+            ok = False
+        try:
+            console_audit.action_performed(
+                tenant_id=tenant_id, sid_fingerprint=f"a2a:{ep}",
+                action="chat.group.message_sent_to_peer" if ok else "chat.group.message_send_to_peer_failed",
+                target_kind="chat_group", target_id=group_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _schedule_delivery(
+    *, tenant_id: str, group: dict[str, Any], text: str, exclude: str | None = None,
+) -> list[str]:
+    endpoint_ids = [
+        p["peer_endpoint_id"] for p in group["participants"]
+        if p["kind"] == "a2a_peer" and p.get("peer_endpoint_id") and p["peer_endpoint_id"] != exclude
+    ]
+    if endpoint_ids:
+        _FANOUT_POOL.submit(
+            _deliver_to_peers, tenant_id=tenant_id, group_id=group["group_id"],
+            endpoint_ids=endpoint_ids, text=text,
+        )
+    return endpoint_ids
 
 
 def require_friendship_active(peer_endpoint_id: str) -> None:
@@ -137,6 +190,21 @@ def get_group(rec: Session, group_id: str) -> GroupOut:
     if g is None or g.get("tenant_id") != rec.tenant_id:
         raise HTTPException(status_code=404, detail="group not found")
     return GroupOut(**g)
+
+
+@router.delete("/chat/groups/{group_id}")
+def delete_group(rec: Session, group_id: str) -> dict[str, Any]:
+    """Delete a group and its messages on this instance; audited before it goes."""
+    tenant_dir = _a2a_paths.tenant_global_dir(rec.tenant_id)
+    g = _store.get_group(tenant_dir, group_id)
+    if g is None or g.get("tenant_id") != rec.tenant_id:
+        raise HTTPException(status_code=404, detail="group not found")
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+        action="chat.group.deleted", target_kind="chat_group", target_id=group_id,
+    )
+    _store.delete_group(tenant_dir, group_id)
+    return {"deleted": True, "group_id": group_id}
 
 
 @router.post("/chat/groups/{group_id}/participants")
@@ -303,16 +371,20 @@ def send_message(rec: Session, group_id: str, body: SendMessageRequest) -> Messa
         if p["kind"] == "a2a_peer" and p.get("peer_endpoint_id"):
             require_friendship_active(p["peer_endpoint_id"])
 
+    has_peers = any(p["kind"] == "a2a_peer" and p.get("peer_endpoint_id") for p in g["participants"])
     msg = _store.append_message(
         tenant_dir, group_id,
         sender_participant_id=body.sender_participant_id,
         text=body.text,
-        delivery="local",
+        delivery="fanout" if has_peers else "local",
     )
     console_audit.action_performed(
         tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
         action="chat.group.message_sent", target_kind="chat_group", target_id=group_id,
     )
+    # A group message reaches every A2A peer in the group (ADR-2218); the
+    # receiving instance stores it under the same group_id.
+    _schedule_delivery(tenant_id=rec.tenant_id, group=g, text=body.text)
     return MessageOut(**msg)
 
 
@@ -351,7 +423,29 @@ def handle_inbound_group_message(
 
         g = _store.get_group(tenant_dir, group_id)
         if g is None:
-            return {"status": "error", "reason": "group_not_found"}
+            # First message of a group that lives on the sender's instance:
+            # mirror it here, as a chat app shows a group you were added to.
+            # Only an ACTIVE friend may open one — the same gate that lets it
+            # send us anything at all.
+            require_friendship_active(sender_origin_id)
+            label = _peer_label(sender_origin_id)
+            try:
+                _store.create_group(
+                    tenant_dir, tenant_id=tenant_id, title=f"Group with {label}",
+                    created_by_participant_id=_LOCAL_OPERATOR_ID, created_by_kind="human",
+                    group_id=group_id, created_by=f"{_MIRROR_CREATOR_PREFIX}{sender_origin_id}",
+                )
+                g = _store.add_participant(
+                    tenant_dir, group_id, participant_id=sender_origin_id, kind="a2a_peer",
+                    display_name=label, added_by=f"{_MIRROR_CREATOR_PREFIX}{sender_origin_id}",
+                    peer_endpoint_id=sender_origin_id,
+                )
+            except _store.ChatGroupError:
+                return {"status": "error", "reason": "group_not_found"}
+            console_audit.action_performed(
+                tenant_id=tenant_id, sid_fingerprint=f"a2a:{sender_origin_id}",
+                action="chat.group.mirror_created", target_kind="chat_group", target_id=group_id,
+            )
 
         peer_participant = None
         for p in g["participants"]:
@@ -376,6 +470,15 @@ def handle_inbound_group_message(
             action="chat.group.message_received_from_peer",
             target_kind="chat_group", target_id=group_id,
         )
+        # Hub relay: the instance that OWNS the group forwards a peer's
+        # message to the group's other peers, attributed in the text. A
+        # mirror never relays, so delivery cannot loop.
+        if not str(g.get("created_by", "")).startswith(_MIRROR_CREATOR_PREFIX):
+            _schedule_delivery(
+                tenant_id=tenant_id, group=g,
+                text=f"[{peer_participant.get('display_name') or sender_origin_id}] {instruction}",
+                exclude=sender_origin_id,
+            )
         return {"status": "accepted", "message_id": msg["id"]}
     except HTTPException as exc:
         return {"status": "error", "reason": f"friendship_check_failed:{exc.status_code}"}

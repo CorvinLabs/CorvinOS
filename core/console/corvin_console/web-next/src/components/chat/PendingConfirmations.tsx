@@ -3,7 +3,7 @@
  * Extracted from pages/chat-groups.tsx PendingCard. Polls the two pending-list
  * endpoints (the chat-staged MCP tools return pending_id in their tool RESULT,
  * but chat_runtime.py only streams "tool_use" — no live push signal exists yet,
- * see chat-groups.tsx header comment).
+ * see GroupConversation.tsx).
  */
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -66,33 +66,33 @@ export function PendingConfirmations({ csrf, onChanged }: { csrf: string; onChan
   return (
     <div className="border-t border-border/40 bg-amber-500/5">
       <div className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-amber-700 dark:text-amber-400">
-        <Bell className="h-3.5 w-3.5" /> AUSSTEHEND ({total})
+        <Bell className="h-3.5 w-3.5" /> PENDING ({total})
       </div>
       <div className="space-y-1.5 px-3 pb-3">
         <p className="text-[10px] text-muted-foreground">
-          Nur vorbereitet — nichts gesendet, bis du bestätigst.
+          Staged only — nothing is sent until you confirm.
         </p>
         {error && <p className="text-[11px] text-destructive">{error}</p>}
         {lastToken && <TokenResultCard result={lastToken} />}
         {(sends.data ?? []).map((p) => (
           <div key={p.pending_id} className="rounded border border-amber-500/30 bg-background p-2 text-[11px] space-y-1">
             <span className="block truncate">
-              A2A an <strong>{p.peer_id}</strong>: &ldquo;{p.text.slice(0, 60)}&rdquo;
+              A2A to <strong>{p.peer_id}</strong>: &ldquo;{p.text.slice(0, 60)}&rdquo;
             </span>
             <Button size="sm" className="h-6 w-full px-2 text-[10px]" disabled={busyId === p.pending_id}
               onClick={() => handleConfirmSend(p.pending_id)}>
-              {busyId === p.pending_id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Senden bestätigen"}
+              {busyId === p.pending_id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Confirm send"}
             </Button>
           </div>
         ))}
         {(tokens.data ?? []).map((p) => (
           <div key={p.pending_id} className="rounded border border-amber-500/30 bg-background p-2 text-[11px] space-y-1">
             <span className="block truncate">
-              Token{p.label ? ` "${p.label}"` : ""} erzeugen
+              Create token{p.label ? ` "${p.label}"` : ""}
             </span>
             <Button size="sm" className="h-6 w-full px-2 text-[10px]" disabled={busyId === p.pending_id}
               onClick={() => handleConfirmToken(p.pending_id)}>
-              {busyId === p.pending_id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Erzeugen bestätigen"}
+              {busyId === p.pending_id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Confirm token"}
             </Button>
           </div>
         ))}

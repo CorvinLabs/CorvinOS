@@ -55,7 +55,7 @@ import {
   type ChatSessionSummary,
   type ChatTurn,
 } from "@/lib/api";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { cn, formatDate } from "@/lib/utils";
 import {
@@ -89,6 +89,10 @@ import {
 } from "@/lib/streaming-state";
 import { useVoicePlayback, type VoiceState } from "@/lib/useVoicePlayback";
 import { AgentLiveFeed } from "@/components/agent-hub/live-feed";
+import { ChatContextSidebar, usePendingCount } from "@/components/chat/ChatContextSidebar";
+import { GroupConversation } from "@/components/chat/GroupConversation";
+import { PeerConversation } from "@/components/chat/PeerConversation";
+import { PanelRight } from "lucide-react";
 
 // ── Web Speech API (not in lib.dom for the prefixed Chrome/Edge implementation) ──
 interface SpeechRecognitionResultLike {
@@ -229,12 +233,21 @@ export function ChatPage() {
     refetchInterval: 30_000,
   });
 
-  const { sid: activeSid } = useParams<{ sid?: string }>();
+  const { sid: activeSid, groupId, peerId } = useParams<{ sid?: string; groupId?: string; peerId?: string }>();
   const navigate = useNavigate();
+  const [drawerOpen, setDrawerOpen] = React.useState(false);
+  const pendingCount = usePendingCount();
+
+  // On narrow screens the sidebar is a drawer; picking a conversation closes
+  // it — keyed on the navigation, so re-picking the open one closes it too.
+  const location = useLocation();
+  React.useEffect(() => {
+    setDrawerOpen(false);
+  }, [location.key]);
 
   // Auto-redirect to last/first session when landing on /app/chat without a sid.
   React.useEffect(() => {
-    if (activeSid || !list.data || list.data.sessions.length === 0) return;
+    if (activeSid || groupId || peerId || !list.data || list.data.sessions.length === 0) return;
     let remembered: string | null = null;
     try {
       remembered = window.localStorage.getItem(PREF_KEYS.lastChatSid);
@@ -244,7 +257,7 @@ export function ChatPage() {
     const match = remembered ? list.data.sessions.find((s) => s.sid === remembered) : undefined;
     const pick = match ?? list.data.sessions[0];
     navigate(`/app/chat/${pick.sid}`, { replace: true });
-  }, [activeSid, list.data, navigate]);
+  }, [activeSid, groupId, peerId, list.data, navigate]);
 
   // Persist so the auto-redirect above can restore on next visit.
   React.useEffect(() => {
@@ -294,12 +307,55 @@ export function ChatPage() {
     onSettled: () => qc.invalidateQueries({ queryKey: ["chat", "sessions"] }),
   });
 
+  const csrf = session?.csrf_token ?? "";
+
+  const sessionsPanel = (
+    <>
+      {list.isLoading && <Skeleton className="h-10 w-full" />}
+      {list.data && list.data.sessions.length === 0 && (
+        <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+          No chats yet. Click "New" to start.
+        </p>
+      )}
+      {list.data?.sessions.map((s) => (
+        <SessionListItem
+          key={s.sid}
+          s={s}
+          active={s.sid === activeSid}
+          onPick={() => navigate(`/app/chat/${s.sid}`)}
+          onDelete={() => deleteMut.mutate(s.sid)}
+          deleting={deleteMut.isPending && deleteMut.variables === s.sid}
+          onRename={(title) => renameMut.mutate({ sid: s.sid, title })}
+        />
+      ))}
+    </>
+  );
+  const sessionsAction = (
+    <Button
+      variant="accent"
+      size="sm"
+      disabled={createMut.isPending}
+      onClick={() => createMut.mutate()}
+    >
+      {createMut.isPending ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <Plus className="h-3.5 w-3.5" />
+      )}
+      New
+    </Button>
+  );
+
   return (
-    <div className="-mx-6 -my-8 grid h-[calc(100vh-3.5rem)] grid-cols-[1fr_18rem] overflow-hidden">
+    <div className="-mx-6 -my-8 grid h-[calc(100vh-3.5rem)] grid-cols-1 overflow-hidden md:grid-cols-[1fr_20rem]">
       <h1 className="sr-only">Chat</h1>
       {/* The layout already owns the page's single <main> landmark. */}
-      <section aria-label="Chat" className="flex min-h-0 flex-col overflow-hidden bg-background">
-        {activeSid ? (
+      <section aria-label="Chat" className="relative flex min-h-0 flex-col overflow-hidden bg-background">
+        {groupId ? (
+          <GroupConversation key={`g:${groupId}`} groupId={groupId} csrf={csrf} />
+        ) : peerId ? (
+          <PeerConversation key={`p:${peerId}`} peerId={peerId} csrf={csrf} />
+        ) : activeSid ? (
           <ChatPane
             key={activeSid}
             sid={activeSid}
@@ -308,48 +364,42 @@ export function ChatPage() {
         ) : (
           <EmptyState onNew={() => createMut.mutate()} pending={createMut.isPending} />
         )}
+        <Button
+          variant="outline"
+          size="sm"
+          className="absolute right-3 top-2 z-20 gap-1 md:hidden"
+          aria-label="Open chats, peers and agent activity"
+          onClick={() => setDrawerOpen(true)}
+        >
+          <PanelRight className="h-3.5 w-3.5" />
+          {pendingCount > 0 && (
+            <span className="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold leading-4 text-white">
+              {pendingCount}
+            </span>
+          )}
+        </Button>
       </section>
 
-      {/* Sessions sidebar — right side; chat-pane content stays centered. */}
-      <aside className="flex min-h-0 flex-col border-l border-border bg-card/40">
-        <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-          <span className="font-serif text-lg">Chats</span>
-          <Button
-            variant="accent"
-            size="sm"
-            disabled={createMut.isPending}
-            onClick={() => createMut.mutate()}
-          >
-            {createMut.isPending ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Plus className="h-3.5 w-3.5" />
-            )}
-            New
-          </Button>
-        </div>
-        <div className="flex-1 overflow-y-auto px-2 py-2">
-          {list.isLoading && <Skeleton className="h-10 w-full" />}
-          {list.data && list.data.sessions.length === 0 && (
-            <p className="px-3 py-6 text-center text-xs text-muted-foreground">
-              No chats yet. Click "New" to start.
-            </p>
-          )}
-          {list.data?.sessions.map((s) => (
-            <SessionListItem
-              key={s.sid}
-              s={s}
-              active={s.sid === activeSid}
-              onPick={() => navigate(`/app/chat/${s.sid}`)}
-              onDelete={() => deleteMut.mutate(s.sid)}
-              deleting={deleteMut.isPending && deleteMut.variables === s.sid}
-              onRename={(title) => renameMut.mutate({ sid: s.sid, title })}
-            />
-          ))}
-        </div>
-        <div className="border-t border-border px-4 py-2 text-[10px] leading-relaxed text-muted-foreground">
-          Chat sessions are scoped to this browser. Switch sessions using the list above.
-        </div>
+      {drawerOpen && (
+        <div className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-hidden onClick={() => setDrawerOpen(false)} />
+      )}
+      {/* Context sidebar — right side; switchable between sessions, peers and A2A. */}
+      <aside
+        aria-label="Conversations"
+        className={cn(
+          "min-h-0 flex-col border-l border-border bg-card",
+          "md:static md:flex md:bg-card/40",
+          drawerOpen ? "fixed inset-y-0 right-0 z-40 flex w-80 max-w-[85vw] shadow-xl" : "hidden",
+        )}
+      >
+        <ChatContextSidebar
+          csrf={csrf}
+          sessionsPanel={sessionsPanel}
+          sessionsAction={sessionsAction}
+          activeGroupId={groupId}
+          activePeerId={peerId}
+          initialMode={groupId || peerId ? "peers" : undefined}
+        />
       </aside>
     </div>
   );

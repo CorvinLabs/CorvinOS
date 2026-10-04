@@ -371,39 +371,54 @@ endpoint disabled) after a peer joined immediately blocks the next message,
 not just future joins.
 
 Routes (`/v1/console/chat/groups...`): `GET/POST /chat/groups`,
-`GET /chat/groups/{id}`, `POST /chat/groups/{id}/participants`,
+`GET/DELETE /chat/groups/{id}`, `POST /chat/groups/{id}/participants`,
 `DELETE /chat/groups/{id}/participants/{pid}`,
-`GET/POST /chat/groups/{id}/messages`.
+`GET/POST /chat/groups/{id}/messages`, `POST /chat/groups/{id}/send-to-peer`.
 
-**Scope boundary (stated, not hidden):** a foreign peer's message INSIDE a
-group does not yet travel the A2A wire protocol with a `group_id` tag —
-sending to a human/agent participant is local-only (`chat_group_store`
-append). Routing an `a2a_peer` participant's OUTBOUND group message over
-`RemoteTriggerSender`, and routing an INBOUND reply back into the right
-group, is a real extension to the A2A envelope/receive path and is
-deliberately deferred past this ADR's first commit — today's inbound
-handler has nowhere to put a `group_id` even if one arrived.
+**Delivery across instances (ADR-2218).** A group lives on the instance that
+created it (its *origin*); its `group_id` travels on the `TaskEnvelope`.
 
-**Frontend (shipped 2026-10-04):** a dedicated `/app/chat-groups` panel
-(`web-next/src/pages/chat-groups.tsx`), NOT inline inside `chat.tsx`'s
-message stream — `chat_runtime.py`'s WebSocket protocol streams a
-`tool_use` event but never the matching result, so there is today no live
-signal to render an inline confirm card from inside a chat bubble; building
-that is a separate, larger streaming-protocol change. The panel instead
-polls two new list endpoints (`GET /a2a/feed/send/pending`,
-`GET /remote-trigger/pair/friendship-token/pending` — list variants of the
-existing peek-by-id routes, since no other discovery surface existed for a
-chat-staged `pending_id`) and renders Confirm buttons; group creation,
-participant management (including the `a2a_peer` live-friendship-gated
-add) and messaging are full CRUD against the routes above. A direct (non-
-chat) "create token" / "paste token to accept" pair reuses the pre-existing
-`friendship/create` and `friendship/import` routes unchanged. Registered in
-both `panels/registry.tsx` (PANELS) and `components/layout.tsx` (NAV_GROUPS
-"primary", right after Chat) per the Console Frontend dual-registration
-rule. Verified live: `scripts/console-deploy.sh --marker 'Gruppenchats'`
-and a `corvin-webui` restart (new backend routes need the process restart,
-not just the frontend rebuild — adding a route to an already-imported
-module is invisible until the Python process reloads it).
+- **Outbound fan-out.** `POST /chat/groups/{id}/messages` stores the message
+  (`delivery="fanout"` when the group has `a2a_peer` members, else `"local"`)
+  and hands one `RemoteTriggerSender.send(..., group_id=...)` per peer to a
+  background pool — the HTTP response never waits on a peer. Every outcome is
+  audited (`chat.group.message_sent_to_peer` / `..._send_to_peer_failed`).
+- **Inbound.** `RemoteTriggerReceiver` routes an envelope carrying `group_id`
+  to `chat_groups.handle_inbound_group_message`, wired at both receiver
+  construction sites (`corvin_console/standalone.py`, `corvin_gateway/app.py`).
+  It re-checks the friendship live and appends under the sender's
+  participant entry.
+- **Mirror groups.** The first message of a group this instance does not know
+  opens a *mirror* under the same `group_id` — only for an ACTIVE friend,
+  title `Group with <peer>`, local `operator` first, sender as `a2a_peer`,
+  `created_by = "a2a:<origin>"`, audited `chat.group.mirror_created`. A
+  non-friend or an id failing `^[A-Za-z0-9_-]{1,64}$` is refused.
+- **Hub relay, loop-free.** The ORIGIN instance forwards a peer's message to
+  the group's other peers as `[<sender>] <text>`; a mirror never relays. So a
+  three-instance group reads the same on all sides and nothing can circulate.
+  Third parties see a relayed message as coming from the origin, with the
+  author named in the text — the wire carries no per-message author.
+- **Delete** removes the group on THIS instance only; mirrors elsewhere stay.
+
+**Frontend — one chat page (2026-10-04).** Group chats and A2A conversations
+live inside `/app/chat` (`web-next/src/pages/chat.tsx`). The main area shows
+whatever the URL names: `/app/chat/<sid>` (operator ↔ CorvinOS session),
+`/app/chat/group/<id>` (`components/chat/GroupConversation.tsx`),
+`/app/chat/peer/<id>` (direct A2A thread from `GET /a2a/feed?peer_id=`,
+`components/chat/PeerConversation.tsx`). The right sidebar
+(`components/chat/ChatContextSidebar.tsx`) switches between **Chats**
+(sessions), **Peers** (groups, connected agents, friendship tokens) and
+**A2A** (pending confirmations a chat turn staged + recent agent traffic),
+with `Alt+1/2/3` and a pending-count badge; the choice persists in
+`localStorage` (`corvin.chat.sidebarMode`). Below `md` the sidebar is a
+drawer. Confirmations are still POLLED (`GET /a2a/feed/send/pending`,
+`GET /remote-trigger/pair/friendship-token/pending`) because
+`chat_runtime.py` streams `tool_use` but never its result, so no inline
+confirm card can be rendered from a chat bubble yet. The former
+`/app/chat-groups` panel is gone; the route redirects to `/app/chat`.
+E2E: `web-next/tests/e2e/chat-unified-panel.spec.ts` (live server, Chromium +
+Firefox), `tests/e2e/a2a/test_chat_groups_e2e.py`,
+`tests/e2e/test_a2a_group_routing_phase35_e2e.py`.
 
 ---
 

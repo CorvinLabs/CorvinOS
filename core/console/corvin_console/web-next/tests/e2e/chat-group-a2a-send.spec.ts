@@ -47,6 +47,10 @@ test.describe("Group Chat A2A Send-to-Peer", () => {
   });
 
   test.afterAll(async () => {
+    if (groupId) {
+      const csrf = await verifyLoggedIn(sharedContext);
+      await sharedContext.request.delete(`${API_BASE}/chat/groups/${groupId}`, { headers: { "X-CSRF-Token": csrf } });
+    }
     await sharedContext.close();
   });
 

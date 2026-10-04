@@ -151,6 +151,10 @@ export default function App() {
             <Route index element={<Navigate to="/app/chat" replace />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="chat/:sid" element={<ChatPage />} />
+            <Route path="chat/group/:groupId" element={<ChatPage />} />
+            <Route path="chat/peer/:peerId" element={<ChatPage />} />
+            {/* Group chats moved into the chat page; keep old bookmarks working. */}
+            <Route path="chat-groups" element={<Navigate to="/app/chat" replace />} />
             {/* ADR-0561 Phase 2: panels render from backend manifest + fallback registry.
                 Manifest provides dynamic panels (plugin, skill, ai-generated); registry
                 provides fallback core panels if manifest unavailable.
