@@ -1,6 +1,6 @@
 /** Small shared marks of the Tasks panel — every one carries text/icon, never colour alone. */
 import {
-  AlertTriangle, CheckCircle2, Circle, CircleDashed, Flag, Hourglass, Lock, PlayCircle, ShieldCheck, Archive,
+  AlertTriangle, CheckCircle2, Circle, CircleDashed, Flag, Hourglass, Lock, PlayCircle, ShieldCheck, Archive, BadgeCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { Evidence, Item, ItemStatus, Priority } from "@/lib/api/task-tracking";
@@ -83,6 +83,21 @@ export function EvidenceBadge({ evidence, conflict }: { evidence: Evidence | nul
       title={`${evidenceText(evidence)} · checked ${formatAgo(evidence.age_s)}${evidence.stale ? " (stale)" : ""}`}>
       {ok ? <ShieldCheck className="h-3 w-3" /> : evidence.state === "unverified" ? <CircleDashed className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
       {label}
+    </span>
+  );
+}
+
+/** Read-only badge for a KB epic whose implemented decision(s) are implementation_ready
+ * (ADR-2208 G1-G4). Sourced from the kb export's existing `labels` pipeline — never a
+ * writer: `labels.includes("ready")` is derived server-side, the same way every other
+ * KB label already is (T-0040). */
+export function ReadyBadge({ labels }: { labels: Item["labels"] }) {
+  if (!labels?.includes("ready")) return null;
+  return (
+    <span data-testid="ready-badge" title="implementation_ready: G1-G4 hold for the decision(s) this epic implements"
+      className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-emerald-700 dark:text-emerald-400">
+      <BadgeCheck className="h-3 w-3" />
+      Ready
     </span>
   );
 }

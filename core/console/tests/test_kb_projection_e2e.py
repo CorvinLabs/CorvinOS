@@ -52,6 +52,41 @@ def _kb(repo: Path, *args) -> dict:
     return json.loads(out)
 
 
+def _kb_lib_of(kb_repo: Path):
+    import importlib
+    import sys as _sys
+    _sys.path.insert(0, str(kb_repo / "scripts"))
+    mod = importlib.import_module("kb_lib")
+    _sys.path.remove(str(kb_repo / "scripts"))
+    return mod
+
+
+def _kb_file(d: Path, id_: str) -> Path:
+    return next(d.glob(f"{id_}-*.md"))
+
+
+def _kb_append_link(kb_repo: Path, d: Path, id_: str, rel: str, to: str):
+    """fm_set, not raw string concatenation: a second top-level `links:`/`paths:` key
+    (both already written by `kb new decision`) is a YAML collision, which fm_set
+    (CONCEPT.md's own frontmatter editor) is built to avoid."""
+    L = _kb_lib_of(kb_repo)
+    p = _kb_file(d, id_)
+    doc = L.parse(p)
+    existing = doc.fm.get("links") or []
+    new_links = list(existing) + [{"rel": rel, "to": to}]
+    value_yaml = "\n" + "\n".join(f"- rel: {x['rel']}\n  to: {x['to']}" for x in new_links)
+    text = L.fm_set(doc.text, "links", value_yaml)
+    L.write_doc(p, text, like=doc)
+
+
+def _kb_append_paths(kb_repo: Path, d: Path, id_: str, paths: list[str]):
+    L = _kb_lib_of(kb_repo)
+    p = _kb_file(d, id_)
+    doc = L.parse(p)
+    text = L.fm_set(doc.text, "paths", L.yaml_list(paths))
+    L.write_doc(p, text, like=doc)
+
+
 @unittest.skipUnless((_KB_SRC / "kb.py").is_file(), "needs the Corvin-Knowledge checkout next to CorvinOS")
 class KbProjectionE2E(unittest.TestCase):
     def setUp(self):
@@ -63,17 +98,35 @@ class KbProjectionE2E(unittest.TestCase):
         (kb / "kb" / "_meta").mkdir(parents=True)
         (kb / "kb" / "_meta" / "sources.yaml").write_text(
             "sources:\n  - name: kb\n    root: kb\n    writable: true\n    dirs:\n"
-            + "".join(f"      {d}: {t}\n" for d, t in (("decisions", "decision"), ("initiatives", "initiative"),
+            + "".join(f"      {d}: {t}\n" for d, t in (("decisions", "decision"), ("concepts", "concept"),
+                                                       ("initiatives", "initiative"),
                                                        ("epics", "epic"), ("tasks", "task"))))
         (kb / ".gitignore").write_text("kb/.lock\nkb/graph/\n")
         _sh("git", "init", "-q", "-b", "main", cwd=kb)
         _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init", cwd=kb)
         self.adr = _kb(kb, "new", "decision", "--title", "Board follows the KB")
+        # G1-G3 (T-0037/T-0038): satisfied via a SEPARATE epic+task, deliberately not the
+        # ones below -- t1 must stay without a definition_of_done for the state-machine
+        # refusal this test asserts (section 4), so G3's "every task has acceptance
+        # criteria" cannot be satisfied through self.epic without breaking that assertion.
+        # G3 only inspects epics carrying `implements:` (never tasks), so self.epic staying
+        # implements-free, exactly as before this gate existed, is sufficient and correct.
+        self.concept = _kb(kb, "new", "concept", "--title", "Board follows the KB (concept)",
+                           "--link", f"search={self.adr['id']}", "--link", f"formalized_as={self.adr['id']}")
+        _kb_append_link(kb, kb / "kb" / "decisions", self.adr["id"], "inspired_by", self.concept["id"])
         self.ini = _kb(kb, "new", "initiative", "--title", "Knowledge base")
         self.epic = _kb(kb, "new", "epic", "--title", "Projection", "--initiative", self.ini["id"])
         self.t1 = _kb(kb, "new", "task", "--title", "Project items", "--epic", self.epic["id"],
                       "--link", f"implements={self.adr['id']}")
         self.t2 = _kb(kb, "new", "task", "--title", "Heal drift", "--epic", self.epic["id"])
+        compliance_epic = _kb(kb, "new", "epic", "--title", "G3 compliance (fixture-only)",
+                              "--initiative", self.ini["id"], "--link", f"implements={self.adr['id']}")
+        _kb_append_paths(kb, kb / "kb" / "decisions", self.adr["id"], ["x.py"])
+        _kb_append_paths(kb, kb / "kb" / "epics", compliance_epic["id"], ["x.py"])
+        _kb(kb, "new", "task", "--title", "G3 compliance task", "--epic", compliance_epic["id"],
+           "--dod", "G3 acceptance criteria")
+        _sh("git", "add", "-A", cwd=kb)
+        _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "fixture: G1-G3 links", cwd=kb)
         os.environ["CORVIN_KB_REPO"] = str(kb)
 
     def tearDown(self):
@@ -95,7 +148,7 @@ class KbProjectionE2E(unittest.TestCase):
             # 1. projection: hierarchy + refs
             st = self._sync(client, csrf)
             self.assertEqual(st["state"], "ok", st)
-            self.assertEqual(st["created"], 4)
+            self.assertEqual(st["created"], 6)
             items = self._items(client)
             ini, epic = items[f"kb:{self.ini['uid']}"], items[f"kb:{self.epic['uid']}"]
             t1, t2 = items[f"kb:{self.t1['uid']}"], items[f"kb:{self.t2['uid']}"]
@@ -105,7 +158,7 @@ class KbProjectionE2E(unittest.TestCase):
             self.assertEqual(t1["category"], "kb")
             # idempotent: a second sync writes nothing
             again = self._sync(client, csrf)
-            self.assertEqual((again["created"], again["updated"], again["unchanged"]), (0, 0, 4))
+            self.assertEqual((again["created"], again["updated"], again["unchanged"]), (0, 0, 6))
 
             # 2. ownership: the board cannot patch a KB-owned field
             r = client.patch(f"{_URL}/items/{t1['id']}", json={"version": t1["version"], "status": "complete"},
@@ -331,6 +384,71 @@ class KbProjectionE2E(unittest.TestCase):
     def _sync_tick(self):
         from corvin_console import kb_projection
         return kb_projection.sync("_default")
+
+
+@unittest.skipUnless((_KB_SRC / "kb.py").is_file(), "needs the Corvin-Knowledge checkout next to CorvinOS")
+class KbReadyBadgeE2E(unittest.TestCase):
+    """T-0040: the board's read-only 'ready' label, through the real sync route.
+
+    G4 (review, T-0041/T-0042) is not built yet, so `implementation_ready` is honestly
+    False in production. This test proves the WIRING anyway, by patching ONLY this
+    fixture's private copy of kb_model.py (never the real one) to report G4 satisfied --
+    the same boundary the KB-side unit tests (Corvin-Knowledge/tests/test_board_ready_badge.py)
+    patch, carried end-to-end through the real HTTP sync into the real tasks.db row.
+    """
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        kb = self.kb = self.tmp / "kb-repo"
+        (kb / "scripts").mkdir(parents=True)
+        for f in ("kb.py", "kb_model.py", "kb_lib.py"):
+            shutil.copy(_KB_SRC / f, kb / "scripts" / f)
+        model_path = kb / "scripts" / "kb_model.py"
+        src = model_path.read_text()
+        patched = src.replace("g4 = False   # not built — T-0041/T-0042",
+                              "g4 = True    # TEST FIXTURE ONLY: simulates T-0041/T-0042 being built")
+        self.assertNotEqual(src, patched, "fixture patch point not found -- kb_model.py gate_status() changed shape")
+        model_path.write_text(patched)
+        (kb / "kb" / "_meta").mkdir(parents=True)
+        (kb / "kb" / "_meta" / "sources.yaml").write_text(
+            "sources:\n  - name: kb\n    root: kb\n    writable: true\n    dirs:\n"
+            + "".join(f"      {d}: {t}\n" for d, t in (
+                ("decisions", "decision"), ("concepts", "concept"), ("initiatives", "initiative"),
+                ("epics", "epic"), ("tasks", "task"))))
+        (kb / ".gitignore").write_text("kb/.lock\nkb/graph/\n")
+        _sh("git", "init", "-q", "-b", "main", cwd=kb)
+        _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init", cwd=kb)
+        self.adr = _kb(kb, "new", "decision", "--title", "Ready decision")
+        self.concept = _kb(kb, "new", "concept", "--title", "Ready concept",
+                           "--link", f"search={self.adr['id']}", "--link", f"formalized_as={self.adr['id']}")
+        # G1/G2: the decision links back to the concept
+        _kb_append_link(kb, kb / "kb" / "decisions", self.adr["id"], "inspired_by", self.concept["id"])
+        self.ini = _kb(kb, "new", "initiative", "--title", "Ready initiative")
+        self.epic = _kb(kb, "new", "epic", "--title", "Ready epic", "--initiative", self.ini["id"],
+                        "--link", f"implements={self.adr['id']}")
+        self.t1 = _kb(kb, "new", "task", "--title", "Ready task", "--epic", self.epic["id"],
+                     "--dod", "G3 acceptance criteria")
+        # G3: matching paths: on the decision and its implementing epic
+        _kb_append_paths(kb, kb / "kb" / "decisions", self.adr["id"], ["x.py"])
+        _kb_append_paths(kb, kb / "kb" / "epics", self.epic["id"], ["x.py"])
+        _sh("git", "add", "-A", cwd=kb)
+        _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "fixture: G1-G3 links", cwd=kb)
+        os.environ["CORVIN_KB_REPO"] = str(kb)
+
+    def tearDown(self):
+        os.environ.pop("CORVIN_KB_REPO", None)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_ready_label_reaches_the_real_task_store_row(self):
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            r = client.post(f"{_URL}/kb/sync", headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 200, r.text)
+            st = r.json()
+            self.assertEqual(st["state"], "ok", st)
+            r = client.get(f"{_URL}/items")
+            self.assertEqual(r.status_code, 200, r.text)
+            items = {i["external_ref"]: i for i in r.json()["items"]}
+            epic = items[f"kb:{self.epic['uid']}"]
+            self.assertIn("ready", epic["labels"], epic)
 
 
 if __name__ == "__main__":

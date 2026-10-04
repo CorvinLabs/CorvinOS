@@ -9,7 +9,7 @@ import {
   itemSpan, kindMeta, priorityMeta, statusMeta, type Filters, type TreeRow,
 } from "./encodings";
 import { formatUtc } from "./format";
-import { ApprovalTag, Deadline, EvidenceBadge, KindTag, PriorityChip, ProgressBar, StatusBadge, StatusIcon } from "./parts";
+import { ApprovalTag, Deadline, EvidenceBadge, KindTag, PriorityChip, ProgressBar, ReadyBadge, StatusBadge, StatusIcon } from "./parts";
 import { isActiveRun, runBoardColumn } from "./run-encodings";
 import { RunCard, RunsTableBody } from "./run-views";
 
@@ -168,6 +168,7 @@ export function BoardView({ items, filters, now, byId, onSelect, onMove, busy, r
                     {it.assignee && <span className="inline-flex items-center gap-0.5 text-xs text-muted-foreground"><User className="h-3 w-3" />{it.assignee}</span>}
                     <ApprovalTag state={it.approval_state} />
                     <EvidenceBadge evidence={it.evidence} conflict={it.claim_conflict} />
+                    <ReadyBadge labels={it.labels} />
                   </div>
                   {it.status === "in_progress" && it.progress != null && <ProgressBar value={it.progress} status={it.status} className="mt-1.5" />}
                 </button>
