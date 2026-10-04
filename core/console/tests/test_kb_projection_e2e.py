@@ -203,7 +203,10 @@ class KbProjectionE2E(unittest.TestCase):
                             headers={"X-CSRF-Token": csrf})
             self.assertEqual(r.status_code, 409, r.text)          # a container's status is derived
 
-            # 5. drift: a raw write behind the KB's back is repaired on the next tick
+            # 5. drift: a raw write behind the KB's back is repaired on the next tick. The refusals
+            # above are committed audit records (Corvin-Knowledge 912e36c), so HEAD moved: sync once
+            # so the next tick takes the unchanged-KB drift path this step pins.
+            self._sync(client, csrf)
             db = home / "tenants" / "_default" / "global" / "task_tracking" / "tasks.db"
             with sqlite3.connect(db) as conn:
                 conn.execute("UPDATE items SET status='complete' WHERE id=?", (t2["id"],))
@@ -390,11 +393,11 @@ class KbProjectionE2E(unittest.TestCase):
 class KbReadyBadgeE2E(unittest.TestCase):
     """T-0040: the board's read-only 'ready' label, through the real sync route.
 
-    G4 (review, T-0041/T-0042) is not built yet, so `implementation_ready` is honestly
-    False in production. This test proves the WIRING anyway, by patching ONLY this
-    fixture's private copy of kb_model.py (never the real one) to report G4 satisfied --
-    the same boundary the KB-side unit tests (Corvin-Knowledge/tests/test_board_ready_badge.py)
-    patch, carried end-to-end through the real HTTP sync into the real tasks.db row.
+    The fixture brings a decision to implementation_ready the real way — concept back-edge
+    (G1/G2), an implementing epic with overlapping paths and acceptance criteria (G3), and a
+    review closed three-consecutive-zero through `kb review calibrate` with an oracle reviewer
+    (G4) — and the label must reach the real tasks.db row. (Until 2026-10-04 this test
+    patched kb_model.py to fake G4, which was not built.)
     """
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -402,18 +405,12 @@ class KbReadyBadgeE2E(unittest.TestCase):
         (kb / "scripts").mkdir(parents=True)
         for f in ("kb.py", "kb_model.py", "kb_lib.py"):
             shutil.copy(_KB_SRC / f, kb / "scripts" / f)
-        model_path = kb / "scripts" / "kb_model.py"
-        src = model_path.read_text()
-        patched = src.replace("g4 = False   # not built — T-0041/T-0042",
-                              "g4 = True    # TEST FIXTURE ONLY: simulates T-0041/T-0042 being built")
-        self.assertNotEqual(src, patched, "fixture patch point not found -- kb_model.py gate_status() changed shape")
-        model_path.write_text(patched)
         (kb / "kb" / "_meta").mkdir(parents=True)
         (kb / "kb" / "_meta" / "sources.yaml").write_text(
             "sources:\n  - name: kb\n    root: kb\n    writable: true\n    dirs:\n"
             + "".join(f"      {d}: {t}\n" for d, t in (
-                ("decisions", "decision"), ("concepts", "concept"), ("initiatives", "initiative"),
-                ("epics", "epic"), ("tasks", "task"))))
+                ("decisions", "decision"), ("concepts", "concept"), ("reviews", "review"),
+                ("initiatives", "initiative"), ("epics", "epic"), ("tasks", "task"))))
         (kb / ".gitignore").write_text("kb/.lock\nkb/graph/\n")
         _sh("git", "init", "-q", "-b", "main", cwd=kb)
         _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init", cwd=kb)
@@ -432,6 +429,24 @@ class KbReadyBadgeE2E(unittest.TestCase):
         _kb_append_paths(kb, kb / "kb" / "epics", self.epic["id"], ["x.py"])
         _sh("git", "add", "-A", cwd=kb)
         _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "fixture: G1-G3 links", cwd=kb)
+        # G4: three calibrated zero rounds by an oracle reviewer (diffs the seeded copy)
+        oracle = self.tmp / "oracle.py"
+        oracle.write_text(
+            "import difflib, json, os, pathlib, sys\n"
+            "inp = json.load(sys.stdin); d = pathlib.Path(os.environ['KB_REVIEW_DIR'])\n"
+            f"repo = pathlib.Path({str(kb)!r}); out = []\n"
+            "for rel in inp['files']:\n"
+            "    orig = next(x for x in repo.rglob(pathlib.Path(rel).name) if '.kb-cache' not in x.parts)\n"
+            "    a, b = orig.read_text().split(chr(10)), (d / rel).read_text().split(chr(10))\n"
+            "    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b).get_opcodes():\n"
+            "        if tag != 'equal': out.append(dict(file=rel, line=j1 + 1, repro='diff', observed=tag))\n"
+            "print(json.dumps(dict(findings=out, claims_checked=['decision consistent'])))\n")
+        rev = _kb(kb, "review", "open", "--title", "Review", "--reviews", self.adr["id"])
+        for q in ("correctness", "failure paths", "docs versus code"):
+            rnd = _kb(kb, "review", "calibrate", rev["id"], "--lead-question", q, "--reviewer", "agent:rev",
+                      "--reviewer-cmd", f"{sys.executable} {oracle}")
+            self.assertEqual(rnd["calibration"], "passed", rnd)
+        self.assertEqual(_kb(kb, "review", "close", rev["id"])["terminated_reason"], "three-consecutive-zero")
         os.environ["CORVIN_KB_REPO"] = str(kb)
 
     def tearDown(self):
@@ -449,6 +464,131 @@ class KbReadyBadgeE2E(unittest.TestCase):
             items = {i["external_ref"]: i for i in r.json()["items"]}
             epic = items[f"kb:{self.epic['uid']}"]
             self.assertIn("ready", epic["labels"], epic)
+
+
+_ORACLE = (
+    "import difflib, json, os, pathlib, sys\n"
+    "inp = json.load(sys.stdin); d = pathlib.Path(os.environ['KB_REVIEW_DIR'])\n"
+    "repo = pathlib.Path(sys.argv[1]); out = []\n"
+    "for rel in inp['files']:\n"
+    "    orig = repo / rel\n"
+    "    if not orig.exists():\n"
+    "        orig = next(x for x in repo.rglob(pathlib.Path(rel).name) if '.kb-cache' not in x.parts)\n"
+    "    a, b = orig.read_text().split(chr(10)), (d / rel).read_text().split(chr(10))\n"
+    "    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b).get_opcodes():\n"
+    "        if tag != 'equal': out.append(dict(file=rel, line=j1 + 1, repro='diff', observed=tag))\n"
+    "print(json.dumps(dict(findings=out, claims_checked=['artifact consistent'])))\n")
+
+
+@unittest.skipUnless((_KB_SRC / "kb.py").is_file(), "needs the Corvin-Knowledge checkout next to CorvinOS")
+class KbPeriodicLoopE2E(unittest.TestCase):
+    """ADR-2208 T-0044/T-0049 in the host: the projector's periodic loop runs the real
+    `kb sweep --create-tasks` (G6 drift -> a regression task that reaches the board) and the
+    SkillForge bridge (KB guidance -> a bootstrap-graded learned-experience skill in the
+    tenant's real registry, acknowledged back through `kb guidance ack`)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        kb = self.kb = self.tmp / "Corvin-Knowledge"
+        (kb / "scripts").mkdir(parents=True)
+        for f in ("kb.py", "kb_model.py", "kb_lib.py"):
+            shutil.copy(_KB_SRC / f, kb / "scripts" / f)
+        (kb / "kb" / "_meta").mkdir(parents=True)
+        shutil.copy(_KB_SRC.parent / "kb" / "_meta" / "autonomy.yaml", kb / "kb" / "_meta" / "autonomy.yaml")
+        (kb / "kb" / "_meta" / "sources.yaml").write_text(
+            "sources:\n  - name: kb\n    root: .\n    writable: true\n    dirs:\n"
+            "      decisions: decision\n      concepts: concept\n      ideas: idea\n      reviews: review\n"
+            "      kb/initiatives: initiative\n      kb/epics: epic\n      kb/tasks: task\n")
+        (kb / ".gitignore").write_text("kb/.lock\nkb/graph/\n.kb-cache/\n")
+        (kb / "src").mkdir()
+        (kb / "src" / "feature.py").write_text("def feature(x):\n    if x > 1:\n        return x\n    return 0\n")
+        (kb / "tests").mkdir()
+        (kb / "tests" / "test_feature.py").write_text("def test_feature():\n    assert True\n")
+        origin = self.tmp / "origin.git"
+        _sh("git", "init", "-q", "--bare", "-b", "main", origin)
+        _sh("git", "init", "-q", "-b", "main", cwd=kb)
+        _sh("git", "remote", "add", "origin", str(origin), cwd=kb)
+        self._commit("init")
+        os.environ["CORVIN_KB_REPO"] = str(kb)
+
+    def tearDown(self):
+        os.environ.pop("CORVIN_KB_REPO", None)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _commit(self, msg):
+        _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A", cwd=self.kb)
+        _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg, cwd=self.kb)
+
+    def _push(self):
+        _sh("git", "push", "-q", "origin", "HEAD:main", cwd=self.kb)
+        _sh("git", "fetch", "-q", "origin", cwd=self.kb)
+
+    def _built_decision(self):
+        kb = self.kb
+        c = _kb(kb, "new", "concept", "--title", "Feature concept")
+        d = _kb(kb, "new", "decision", "--title", "Build the feature", "--link", f"inspired_by={c['id']}")
+        _kb_append_link(kb, kb / "concepts", c["id"], "formalized_as", d["id"])
+        _kb_append_paths(kb, kb / "decisions", d["id"], ["src/feature.py"])
+        self._commit("G1/G2 + paths")
+        i = _kb(kb, "new", "initiative", "--title", "Ship")
+        e = _kb(kb, "new", "epic", "--title", "Feature epic", "--initiative", i["id"], "--link", f"implements={d['id']}")
+        _kb_append_paths(kb, kb / "kb" / "epics", e["id"], ["src/feature.py"])
+        self._commit("G3 paths")
+        t = _kb(kb, "new", "task", "--title", "Implement it", "--epic", e["id"], "--dod", "feature() works")
+        oracle = self.tmp / "oracle.py"
+        oracle.write_text(_ORACLE)
+        rv = _kb(kb, "review", "open", "--title", "Review", "--reviews", d["id"])
+        for q in ("correctness", "failure paths", "docs versus code"):
+            _kb(kb, "review", "calibrate", rv["id"], "--lead-question", q, "--reviewer", "agent:rev",
+                "--reviewer-cmd", f"{sys.executable} {oracle} {kb}")
+        _kb(kb, "review", "close", rv["id"])
+        self._push()
+        sha = _sh("git", "rev-parse", "HEAD", cwd=kb).strip()
+        _kb(kb, "task", t["id"], "in_progress")
+        _kb(kb, "task", t["id"], "done", "--evidence", "call_site=src/feature.py", "--evidence",
+            "e2e_test=tests/test_feature.py", "--evidence", "exit_code=0", "--evidence", f"commit={sha}")
+        return d, e, t
+
+    def test_sweep_turns_vanished_work_into_a_regression_task_on_the_board(self):
+        d, e, t = self._built_decision()
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            from corvin_console import kb_projection as kp
+            r = client.post(f"{_URL}/kb/sync", headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.json()["state"], "ok", r.text)
+            items = {i["external_ref"]: i for i in client.get(f"{_URL}/items").json()["items"]}
+            self.assertEqual(items[f"kb:{t['uid']}"]["status"], "complete")
+            self.assertEqual(kp.periodic("_default", force=True)["sweep"]["drift"], [])
+            _sh("git", "rm", "-q", "src/feature.py", cwd=self.kb)
+            self._commit("the feature vanished")
+            out = kp.periodic("_default", force=True)
+            self.assertEqual(len(out["sweep"]["created"]), 1, out)
+            self.assertEqual(kp.periodic("_default", force=True)["sweep"]["created"], [])   # never duplicated
+            r = client.post(f"{_URL}/kb/sync", headers={"X-CSRF-Token": csrf})
+            items = {i["external_ref"]: i for i in client.get(f"{_URL}/items").json()["items"]}
+            self.assertNotEqual(items[f"kb:{t['uid']}"]["status"], "complete")   # regressed on the board
+            self.assertTrue(any(i["title"].startswith(out["sweep"]["created"][0]) for i in items.values()))
+            self.assertIn("periodic", client.get(f"{_URL}/kb/status").json())
+
+    def test_guidance_is_minted_as_a_bootstrap_graded_skill_and_acknowledged(self):
+        kb = self.kb
+        _kb(kb, "new", "idea", "--title", "Alpha beta gamma delta")
+        for title in ("Alpha beta gamma delta epsilon", "Alpha beta gamma delta zeta"):
+            r = subprocess.run([sys.executable, str(kb / "scripts" / "kb.py"), "--repo", str(kb), "new", "idea",
+                                "--title", title], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 2, r.stdout)
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            from corvin_console import kb_projection as kp
+            out = kp.periodic("_default", force=True)
+            name = kp.guidance_skill_name("G0_no_search_evidence")
+            self.assertEqual(out["guidance"]["created"], ["G0_no_search_evidence"], out)
+            self.assertEqual(out["skills"]["minted"], [name], out)
+            spec = kp._skill_registry("_default").get(name)
+            self.assertEqual(spec.type, "learned-experience")
+            self.assertEqual([g["score"] if isinstance(g, dict) else g.score for g in spec.grades], [0.3])
+            gfile = (kb / "kb" / "_meta" / "guidance" / "G0_no_search_evidence.md").read_text()
+            self.assertIn("skillforge_injection: minted", gfile)
+            self.assertIn(f"skill: {name}", gfile)
+            self.assertEqual(kp.periodic("_default", force=True)["skills"]["minted"], [])   # once
 
 
 if __name__ == "__main__":

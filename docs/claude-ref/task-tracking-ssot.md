@@ -194,7 +194,28 @@ label `kb`. One way only: nothing reads a status back into the KB.
   reporting + timer, the `initiatives.json` import, `corvin-initiatives-verify.timer`,
   `task_completion_registry.py` + its timer + `task_completion_verifier.py`. The 37 live
   `initiatives.json#…` items were archived with "moved into the knowledge base: <id>".
-- E2E: `core/console/tests/test_kb_projection_e2e.py` (real routes, real `kb.py`, fixture KB repo).
+- **Periodic loop (ADR-2208, every `PERIODIC_S` = 600 s, never per tick):** `kb guidance run`
+  (learning loop) → `kb sweep --create-tasks` (G6: a BUILT decision's `paths:`/`commits:` and done
+  tasks' `done_evidence` — what vanished becomes a NEW task with `regresses:`, which turns the done
+  card back to open on the board; the area is paused for agents) → the **SkillForge bridge**
+  (`guidance_bridge`): each active guidance file becomes a `learned-experience` skill
+  `assistant.kb_guidance_<class>` in the tenant registry (user scope), graded once with the capped
+  bootstrap seed and acknowledged with `kb guidance ack`; a retired guidance file deletes its skill.
+  `kb.py` stays the only writer of KB files. The result is in `/kb/status` → `periodic`.
+- **Code tasks need G5 evidence:** a task whose epic implements a decision is `done` only through
+  `kb task <id> done --evidence call_site=… --evidence e2e_test=… --evidence exit_code=0
+  --evidence commit=<sha on origin/main> [--evidence repo=CorvinOS]`. A board drag to *done* sends
+  no evidence, so for such a task it answers 409 with the KB's message — close it from the CLI.
+- **Definition of done:** the planned `definition_of_done` is the acceptance criterion and is never
+  overwritten; a `dod` sent with a board move to a task that already has one is stored as
+  `completion_note`.
+- **Reviews never reach the board:** `kb export` carries them in a separate `reviews` list. A
+  `kind: review` item put every projector tick into `error` (the board froze from T-0041 to
+  2026-10-04).
+- **Red means inconsistent, not unfinished:** `kb check`'s G1–G4 findings (no concept, no plan, no
+  closed review) are warnings — they never block the projection.
+- E2E: `core/console/tests/test_kb_projection_e2e.py` (real routes, real `kb.py`, fixture KB repo;
+  `KbPeriodicLoopE2E` drives `periodic()` — drift → regression task on the board, guidance → minted skill).
 
 ## The `initiatives.json` cutover (historical)
 
