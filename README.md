@@ -1,6 +1,40 @@
-# CorvinOS — The Self-Learning AI Operating System
+<p align="center">
+  <img src="assets/banner.svg" alt="CorvinOS — the operating system for AI work" width="100%"/>
+</p>
 
-> **CorvinOS is an operating system for AI workflows that learns, optimizes costs, and proves everything.**
+<h1 align="center">CorvinOS</h1>
+
+<p align="center">
+  <strong>The operating system for AI work.</strong><br/>
+  It routes every turn to the cheapest model that fits — and proves the saving from its own audit log.<br/>
+  It remembers, learns in the shadow before it decides, and runs your team's agents behind fail-closed gates.
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache_2.0-blue.svg" alt="License: Apache 2.0"/></a>
+  <img src="https://img.shields.io/badge/version-2.0.0-f0b429" alt="Version 2.0.0"/>
+  <img src="https://img.shields.io/badge/python-%E2%89%A53.10-3776ab" alt="Python 3.10+"/>
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-555" alt="Linux, macOS, Windows"/>
+  <img src="https://img.shields.io/badge/GDPR%20%2B%20EU%20AI%20Act-by%20design-3fb950" alt="GDPR and EU AI Act by design"/>
+</p>
+
+<p align="center">
+  <code>git clone https://github.com/CorvinLabs/CorvinOS.git && cd CorvinOS && ./install.sh</code>
+</p>
+
+<p align="center">
+  <a href="docs/overview/token-savings.md"><strong>Token savings</strong></a> &middot;
+  <a href="docs/overview/self-learning.md">Self-learning</a> &middot;
+  <a href="docs/overview/skills-acp.md">Skills 2.0 &amp; ACP</a> &middot;
+  <a href="docs/overview/operating-system.md">CorvinOS as an OS</a> &middot;
+  <a href="docs/overview/organizations.md">Organizations</a> &middot;
+  <a href="docs/overview/a2a.md">A2A</a> &middot;
+  <a href="docs/overview/video.md">Video</a> &middot;
+  <a href="docs/overview/marketplace.md">Marketplace &amp; plugins</a> &middot;
+  <a href="docs/overview/extensibility.md">Extensibility</a> &middot;
+  <a href="#-installing-via-claude-code">Claude Code</a> &middot;
+  <a href="docs/setup/INSTALLATION.md">Install guide</a>
+</p>
 
 ---
 
@@ -133,307 +167,163 @@ for that (see "Uninstall" above). Full technical reference:
 
 ---
 
-## The Problem We Solve
+## The problem we solve
 
-You use AI for important work. But three problems plague every AI system:
+AI is now doing real work — answering customers, writing code, drafting documents, running across teams. Four things go wrong almost everywhere:
 
-1. **🤑 Token Waste** — Each request to Claude costs money. Wrong model choice = wasted tokens.
-2. **👤 Operator Burden** — Humans must decide "which LLM for this task?" every time.
-3. **⚙️ Static Behavior** — Systems don't improve. Built once, deployed, forgotten.
+1. **Tokens are burned on the biggest model.** "Just use the best model to be safe" turns every greeting into an Opus call — and nobody can show afterwards what was actually spent, on what.
+2. **Nobody can prove what the AI did.** Logs are scattered, editable and incomplete. For GDPR and the EU AI Act, "trust us" is not an answer.
+3. **Agents forget and never improve.** The chat transcript gets compacted or reset; what worked yesterday is not remembered tomorrow.
+4. **It doesn't scale past one person.** Teams need roles, consent, quotas, shared channels and agents that can work with other agents — without opening a hole in the perimeter.
 
-**CorvinOS fixes all three.**
-
----
-
-## What is CorvinOS?
-
-CorvinOS is a **self-improving, auditable operating system** that:
-
-- **Routes intelligently** — Chooses Claude Haiku for simple tasks (cheap), Sonnet for routine work (balanced), Opus for complex reasoning (powerful)
-- **Learns automatically** — Every outcome feeds back. Weights optimize via gradient descent. Convergence in 2–3 weeks.
-- **Proves everything** — Immutable audit trail. Every decision logged + hash-chained. GDPR + EU AI Act compliant by design.
-- **Requires zero tuning** — Fully autonomous optimization loop. Operator just watches the dashboard.
-
-**Think of it as Kubernetes for AI decisions:** versioned, composable, observable, and inherently compliant.
+**CorvinOS is the system layer that fixes these around the agent you already use.**
 
 ---
 
-## What Makes It Different
+## What CorvinOS is
 
-![Complete System Architecture](/docs/diagrams/corvinOS_complete_system_3d.svg)
+You bring the agent — **Claude Code** by default, or Codex, OpenCode or Copilot CLI. CorvinOS boots it behind a compliance tripwire, routes every turn onto a model, puts fail-closed gates in front of what it may touch, keeps a ledger of every conversation, and writes every step into a hash-chained audit log — one per tenant. You talk to it through seven chat apps, voice, a web console, Claude Code, or another CorvinOS instance.
 
-**Traditional systems:**
-```
-Request → Claude → Response
-          (always expensive model)
-Cost: 100%
-Learning: None
-Audit: Minimal
-```
+<p align="center"><img src="docs/overview/img/os-stack.svg" alt="CorvinOS system stack: interfaces, router, external engines, gates, plugin registry, boot tripwire, memory and per-tenant audit chain" width="100%"/></p>
 
-**CorvinOS:**
-```
-Request → Smart Router → Right Model → Measure & Learn → Better Next Time
-          (learns)        (Haiku/Sonnet/Opus)  (feedback)  (converges)
-Cost: 20% (80% savings!)
-Learning: Continuous
-Audit: Immutable + hash-chained
-```
+<p align="center"><a href="docs/overview/operating-system.md"><strong>→ CorvinOS as an operating system</strong></a></p>
 
 ---
 
-## The Three Pillars
+## 💰 Token savings — with the receipts
 
-### 1️⃣ **Unified Skill Generation (Forge 2.0)**
+One resolver picks the model for every turn on every surface: conversation → Haiku, ordinary work → Sonnet, ADR, review and document work → the newest Opus. Pins always win. Every turn's four token counts land in the audit chain, and the console prices them against a reference model **with the counting window printed next to the total**.
 
-![OS Concept: Resource Management](/docs/diagrams/corvinOS_os_concept_3d.svg)
+<p align="center"><img src="docs/overview/img/token-savings-measured.svg" alt="Measured cost of routed OS turns versus the same tokens on Opus 5.5 and Opus 5" width="100%"/></p>
 
-CorvinOS replaces hand-built "Forge" systems with a **4-layer Agentic Control Plane:**
+Measured on the maintainer's install (607 priced turns, 2026-09-24 → 10-04): **$414 actual vs. $629 for the same tokens on Opus 5.5 (−34 %)** and $1,181 on Opus 5 (−65 %). Since three-tier routing went live on 2026-09-28: **−24 %** vs. Opus 5.5. Re-add it yourself from the chain — the page shows how, and what the numbers do *not* say.
 
-| Layer | What It Does | Output |
-|---|---|---|
-| **Layer 1: DataHub** | Ingest from everywhere (memory, files, RAG, MCP) + quality scoring + security scanning | Clean, scored data manifests |
-| **Layer 2: Creator 2.0** | Generate skills in 12 structured phases with loss tracking at each phase | Production-ready skills + quality score |
-| **Layer 3: Learning Daemon** | Process feedback, attribute outcomes to data sources, optimize weights via gradient descent | Improved routing map + convergence signal |
-| **Layer 4: Dashboard** | Operator visibility: skill lifecycle, audit chain, compliance export | GDPR-ready reports + learning metrics |
-
-**Result:** Skills that improve every day, without human intervention.
+<p align="center"><a href="docs/overview/token-savings.md"><strong>→ Token savings, the proof path and how to read the numbers</strong></a></p>
 
 ---
 
-### 2️⃣ **Intelligent Token Routing (60–80% Savings)**
+## 🧠 Self-learning — in the shadow first
 
-![Token Cost Comparison](/docs/diagrams/corvinOS_token_cost_3d.svg)
+CorvinOS learns the safe way round: a new learner first runs **in the shadow** — it decides alongside the rules, every decision and its outcome are recorded and joined in the audit chain, but it changes nothing until it has proven itself on enough real turns. Only then may it act. What learns today: **skill memory** — experience distilled into SkillForge skills that are injected into future turns only after they earned a grade.
 
-CorvinOS learns the optimal LLM distribution for your workload:
+<p align="center"><img src="docs/overview/img/self-learning-hero.svg" alt="The recorded learning loop: routing decision in shadow, engine decides, outcome joined, all in the audit chain" width="100%"/></p>
 
-**Real-world example: 1000 customer support requests × 1500 tokens**
+On the maintainer's install: 224 shadow routing decisions with a 0.98 outcome join rate (2026-09-28 → 10-04); the gate to let it decide needs ≥ 500.
 
-| Approach | Cost | Duration |
-|---|---|---|
-| **All Opus** (traditional) | $22,500/month | Static |
-| **CorvinOS optimized** | $4,320/month | Day 1 |
-| **After convergence** | $4,320/month (stable) | Week 3 |
-
-**The math:**
-- 60% of your requests → Haiku ($0.00080/token) = cheap, fast ✓
-- 30% of your requests → Sonnet ($0.003/token) = balanced ✓
-- 10% of your requests → Opus ($0.015/token) = complex ✓
-
-**This distribution is personalized to YOUR data.** It evolves as you get feedback.
+<p align="center"><a href="docs/overview/self-learning.md"><strong>→ Self-learning: what learns today, what waits in the shadow</strong></a></p>
 
 ---
 
-### 3️⃣ **Self-Learning Loop (6D Loss Vector)**
+## 🧩 Skills 2.0 & the Agentic Control Plane
 
-CorvinOS measures success on **6 dimensions simultaneously:**
+In CorvinOS a Skill is not a prompt — it is a **versioned program** with an id, a semantic version and an `execute()` that runs under a timeout and writes every execution into the audit chain with a line-of-responsibility hash. The Agentic Control Plane (ACP) is the plan to turn the OS's own subsystems — routing, context, workflows, security, data flow — into such Skills, one layer at a time, each earning its way out of the shadow.
 
-```
-Quality Score = 1.0 - mean([
-  data_quality,           (are your sources good?)
-  generation_quality,     (is the skill well-made?)
-  user_satisfaction,      (do users like the output?)
-  efficiency,             (is it fast & cheap?)
-  learning_loop_health,   (is feedback flowing?)
-  system_health           (no errors/crashes?)
-])
-```
+<p align="center"><img src="docs/overview/img/skills-acp-hero.svg" alt="The five control-plane layers and where each stands today" width="100%"/></p>
 
-**The learning loop:**
-
-```
-1. Skill executes on real data
-   ↓
-2. System measures output quality (6D)
-   ↓
-3. User provides feedback ("perfect!" or "needs work")
-   ↓
-4. Daemon attributes: which data source helped?
-   ↓
-5. Weights update via gradient descent (learning_rate = 0.01)
-   ↓
-6. After 500 samples: convergence reached
-   ↓
-7. Next skill generation uses optimized weights
-   ↓
-Quality improves 2–5% per cycle
-```
-
-**Timeline:**
-- **Week 1 (0–500 samples):** Weights oscillate, quality improves ~5%
-- **Week 2 (500–1000 samples):** Convergence reached, weights stabilize
-- **Week 3+:** Permanent improvement, autonomous optimization
+<p align="center"><a href="docs/overview/skills-acp.md"><strong>→ Skills 2.0 & ACP: anatomy of a Skill, the five layers, the gate</strong></a></p>
 
 ---
 
-## What's Now Possible
+## 🏢 CorvinOS in organizations
 
-### Before CorvinOS
-- Manual routing ("send this to Opus just to be safe")
-- No learning loop (same mistakes repeated)
-- Operators tuning thresholds by hand
-- Sparse audit trails (compliance nightmare)
-- Static quality (built once, forgotten)
+Teams work with CorvinOS where they already talk: Discord, Slack, Teams, Telegram, WhatsApp, Signal, email. Every chat carries roles (owner · admin · member · observer), quotas, consent, a one-time AI disclosure and proposals the owner approves — and every grant, refusal and turn is in the tenant's audit chain. GDPR erasure (Art. 17) runs across all stores.
 
-### After CorvinOS
-- ✅ **Autonomous routing** — System learns optimal LLM allocation
-- ✅ **Closed-loop learning** — Every outcome feeds back; system improves
-- ✅ **Zero manual tuning** — Gradient descent handles optimization
-- ✅ **Immutable audit trail** — Every decision logged + hash-chained
-- ✅ **Self-improving quality** — 2–5% gains per feedback cycle
-- ✅ **GDPR/EU AI Act compliant** — By design, not by accident
-- ✅ **Cost transparency** — See exactly where tokens go
-- ✅ **Operator control** — Dashboard shows everything; operator just watches
+<p align="center"><img src="docs/overview/img/organizations-hero.svg" alt="A team on one CorvinOS instance: channels, role, quota, consent and house-rules gates, worker, audit chain" width="100%"/></p>
 
----
+<p align="center"><a href="docs/overview/organizations.md"><strong>→ Organizations: roles, tenants, compliance</strong></a></p>
 
-## Real-World ROI
+### 🔗 A2A — agents across instances
 
-![Cost vs. Quality Pareto Frontier](/docs/diagrams/corvinOS_cost_quality_pareto_3d.svg)
+Separate CorvinOS instances pair as peers with a friendship token and exchange **signed task envelopes** (HMAC-SHA256, protocol v8, replay-protected, audit-first). A peer may run work on your instance only if you explicitly allow it — and then only under a per-peer tool denylist.
 
-**30-day CorvinOS deployment:**
+<p align="center"><img src="docs/overview/img/a2a-hero.svg" alt="Two CorvinOS instances paired as peers exchanging signed envelopes" width="100%"/></p>
 
-| Metric | Before | After | Change |
-|---|---|---|---|
-| Monthly cost | $18,000 | $3,600 | **-80%** 💰 |
-| Quality score | 88% | 92% | **+4%** ✓ |
-| System tuning | Manual (monthly) | Automatic | **Time saved** ⏱️ |
-| Audit trail | Sparse | Complete | **Compliant** 🔐 |
+<p align="center"><a href="docs/overview/a2a.md"><strong>→ A2A: pairing, the inbound pipeline, what is gated</strong></a></p>
 
-**Why both happen at once:**
-- **All Opus** (traditional): Expensive ($90k/month), high quality (95%) but wasteful
-- **All Haiku** (too cheap): Cheap ($0.4k/month) but terrible quality (72%)
-- **CorvinOS** (learned optimal): Cheap ($3.6k/month) AND high quality (92%) ✓
+### 🎬 Video producer
 
-CorvinOS learns YOUR optimal point on the Pareto frontier — the sweet spot where you save the most without losing quality.
+A Marketplace plugin turns a text task into a narrated MP4 with captions: storyboard by an LLM (local Ollama by default), narration, slides and an ffmpeg cut — behind the same house-rules, data-class and egress gates as every other turn.
 
-**Break-even:** 2–3 weeks. Pays for itself instantly.
+<p align="center"><img src="docs/overview/img/video-hero.svg" alt="Video pipeline: task, gates, storyboard, narration and slides, ffmpeg, MP4 and SRT" width="100%"/></p>
+
+<p align="center"><a href="docs/overview/video.md"><strong>→ Video: pipeline, setup, limits</strong></a></p>
 
 ---
 
-## The Technology
+## 🛒 Marketplace & plugin system
 
-### Compliance Built-In (GDPR + EU AI Act)
+One registry, one lifecycle: plugins are discovered from the **Corvin-Marketplace**, installed through a manifest gate, enabled per tenant and loaded in a fixed boot order — every step audited. Three independent axes describe each plugin: **boot layer** (load order, can it be switched off), **tier** (capability and licence), **origin** (who vouches for it).
 
-| Requirement | CorvinOS Implementation |
+<p align="center"><img src="docs/overview/img/marketplace-hero.svg" alt="Plugin lifecycle from the Corvin-Marketplace to the audit chain" width="100%"/></p>
+
+<p align="center"><a href="docs/overview/marketplace.md"><strong>→ Marketplace & plugins: lifecycle, the three axes, numbers</strong></a></p>
+
+### 🔧 Extensibility — build your own
+
+Typed plugins scaffolded from templates (`corvin plugin new <type> <id>`, then `corvin plugin check`), runtime-generated tools over MCP in a sandbox (Forge), self-written skills (SkillForge), a chat-driven `/plugin-builder`, MCP servers from the console, and Claude Code plugins — pick the smallest extension point that does the job.
+
+<p align="center"><img src="docs/overview/img/extensibility-hero.svg" alt="Where you can plug into CorvinOS: plugin types, Forge, SkillForge, MCP, custom layers, Claude Code plugins" width="100%"/></p>
+
+<p align="center"><a href="docs/overview/extensibility.md"><strong>→ Extensibility: every extension point and how to use it</strong></a></p>
+
+---
+
+## 🔐 Compliance by design (GDPR + EU AI Act)
+
+| Mechanism | What it guarantees |
 |---|---|
-| **Audit trail** | Hash-chained, immutable events (GDPR Art. 30) |
-| **Security** | Secrets redacted, PII flagged (GDPR Art. 32) |
-| **Transparency** | All decisions logged with data source attribution (EU AI Act) |
-| **User control** | Consent gates (fail-closed), opt-out anytime |
-| **Data minimization** | Metadata-only audit (never store prompts) |
-| **Right to erasure** | Cascading deletion with proof logging |
+| **Boot tripwire** | The audit chain must verify before anything starts — no override, no flag |
+| **Hash-chained audit log, one per tenant** | Every recorded step is linked to the one before it; tampering breaks the chain (GDPR Art. 30, 32) |
+| **AI disclosure + opt-out** | Every chat user is told once that they talk to an AI and can leave with `/pass` or `/leave` (EU AI Act Art. 50) |
+| **Consent gate** | Deny-by-default, time-limited consent before personal data is processed (GDPR Art. 6, 7) |
+| **House rules** | Acceptable-use gate in front of every turn, fail-closed, cannot be switched off (EU AI Act Art. 5) |
+| **Data classification × engine** | A turn's data class decides which engines may see it; an error refuses (fail-closed) |
+| **Right to erasure** | One orchestrator removes a person's data across all stores and records that it did (GDPR Art. 17) |
+| **Content-free telemetry** | Anonymous, opt-out signals only; anything that looks like personal data is dropped before sending |
 
-### Architecture
-
-CorvinOS is built on **Skills** — versioned programs that:
-- 🎯 Execute deterministically (Python + optional LLM)
-- 📊 Emit loss components for learning
-- 🔗 Compose like Python imports (DAG-validated)
-- 🔐 Are fully auditable (every execution logged)
-- 🚀 Can be swapped instantly (zero-downtime updates)
-
-### Convergence Guarantee
-
-Using **stochastic gradient descent with bounded learning rate:**
-- **Math:** Weights converge to local optimum within O(n) iterations
-- **Empirically:** <500 samples (~2–3 weeks of normal usage)
-- **Proof:** See [Technical Deep Dive](./docs/SYSTEM_OVERVIEW_COMPLETE.md)
+Reference: [`docs/claude-ref/compliance-baseline.md`](docs/claude-ref/compliance-baseline.md)
 
 ---
 
-## Read the Full Story
+## Status at a glance
 
-| Document | Best For | Time |
-|---|---|---|
-| **[CorvinOS Explained](./README_CORVINVS_EXPLAINED.md)** | Understanding the big picture with diagrams | 15 min |
-| **[Quick Reference](./docs/QUICK_REFERENCE.md)** | Fast lookups (cheat sheet) | 5 min |
-| **[System Overview](./docs/SYSTEM_OVERVIEW_COMPLETE.md)** | Technical deep dive + math + compliance | 20 min |
-| **[Forge 2.0 Status](./FORGE_2_0_LIVE.md)** | Live deployment status + metrics | 5 min |
+What runs today and what is still on the way — the overview pages give the details and the evidence.
 
----
-
-## Getting Started
-
-### 1. Understand the Concept (5 min)
-Read the [Conceptual Overview](./README_CORVINVS_EXPLAINED.md#1️⃣-conceptual-overview) — learn what an OS does and why AI needs one.
-
-### 2. See the Math (5 min)
-Check the [Token Economy](./README_CORVINVS_EXPLAINED.md#2️⃣-token-economy) — visualize how routing saves 80%.
-
-### 3. Explore the Architecture (10 min)
-Dive into [Skills as an OS](./README_CORVINVS_EXPLAINED.md#3️⃣-skills-as-an-os) — see the 4-layer Agentic Control Plane.
-
-### 4. Learn the Loop (10 min)
-Study [Learning Loops](./README_CORVINVS_EXPLAINED.md#4️⃣-learning-loops) — understand how convergence works.
-
-### 5. See It All Together (5 min)
-Review the [System Overview diagram](./README_CORVINVS_EXPLAINED.md#5️⃣-system-overview) — watch every layer working together.
+| Area | Today |
+|---|---|
+| Per-turn model routing + priced token proof | **LIVE** |
+| Fail-closed gates (house rules, data class, egress, path guard), consent, disclosure, erasure | **LIVE** |
+| Per-tenant hash-chained audit chain + boot tripwire | **LIVE** |
+| Session ledger, conversation recall, artifacts | **LIVE** |
+| Skill memory (grade-gated SkillForge injection) | **LIVE** |
+| Learning delegation router | **SHADOW** — recording, not deciding |
+| ACP layers for workflows, security, data flow | **NOT BUILT** |
+| Chat-team roles, quotas, proposals across 7 messengers | **LIVE** |
+| Multi-user console login / SSO | **NOT BUILT** |
+| A2A pairing + signed envelopes | **LIVE** · remote worker execution **GATED** (off by default) |
+| Plugin install / enable / load | **LIVE** · plugin update path **NOT BUILT** |
+| Video producer (Marketplace plugin) | **LIVE** · YouTube upload **NOT BUILT** |
 
 ---
 
-## Why CorvinOS Matters
+## Learn more
 
-Most AI systems are **static.** They're built by engineers, deployed, and frozen. Quality degrades over time as edge cases emerge and user needs shift.
-
-**CorvinOS is dynamic.** It learns. Every outcome feeds back. Every mistake becomes a lesson. Every success gets reinforced. The system gets better every single day.
-
-And it **proves its work.** Every decision is logged. Every weight change is auditable. Compliance isn't an afterthought—it's foundational.
-
-**This is what an OS for AI actually looks like.**
-
----
-
-## Status
-
-- ✅ **Forge 2.0** — DataHub + Creator + Daemon + Dashboard (production ready)
-- ✅ **Learning loops** — 6D loss vector, convergence proven
-- ✅ **Audit trail** — Hash-chained, GDPR/EU AI Act compliant
-- ✅ **Token routing** — 60–80% cost savings, proven
-- 🚀 **Ready for deployment** — Canary rollout plan ready
+| Page | What it answers |
+|---|---|
+| [Token savings](docs/overview/token-savings.md) | How the model is chosen, what it saved, how to verify it |
+| [Self-learning](docs/overview/self-learning.md) | What learns today and what waits in the shadow |
+| [Skills 2.0 & ACP](docs/overview/skills-acp.md) | What a Skill is and how the OS becomes Skills |
+| [CorvinOS as an OS](docs/overview/operating-system.md) | The system layer, mapped to real code |
+| [Organizations](docs/overview/organizations.md) · [A2A](docs/overview/a2a.md) · [Video](docs/overview/video.md) | Teams, instance-to-instance agents, video |
+| [Marketplace & plugins](docs/overview/marketplace.md) · [Extensibility](docs/overview/extensibility.md) | Installing and building extensions |
+| [Install guide](docs/setup/INSTALLATION.md) · [Upgrade guide](docs/setup/UPGRADE_GUIDE.md) · [Windows](docs/windows-installation-guide.md) | Getting it running |
 
 ---
 
-## Next Steps
-
-1. **Read the full guide** — Start with [CorvinOS Explained](./README_CORVINVS_EXPLAINED.md)
-2. **Deploy to staging** — Test with real workloads
-3. **Monitor the learning loop** — Watch quality improve over 2–3 weeks
-4. **Expand to production** — Canary rollout (5% → 25% → 50% → 100%)
-5. **Optimize continuously** — Dashboard shows every metric
-
----
-
-## Questions?
-
-- **How does routing work?** → [Token Economy](./README_CORVINVS_EXPLAINED.md#2️⃣-token-economy)
-- **How much does it save?** → [Real-World ROI](#real-world-roi) or [Token Cost Diagram](/docs/diagrams/corvinOS_token_cost_3d.svg)
-- **Is it compliant?** → [Compliance Built-In](#compliance-built-in-gdpr--eu-ai-act)
-- **How does learning work?** → [Learning Loops](./README_CORVINVS_EXPLAINED.md#4️⃣-learning-loops)
-- **What about audit trails?** → [System Overview](./docs/SYSTEM_OVERVIEW_COMPLETE.md)
-
----
-
-**CorvinOS: Your AI system learns, optimizes costs, and proves everything.**
-
-Deployed. Auditable. Compliant. Always improving.
-
----
-
-## Metrics at a Glance
-
-| Metric | Value | Status |
-|---|---|---|
-| Cost reduction | 60–80% | ✅ Proven |
-| Quality improvement | 2–5% per cycle | ✅ Measured |
-| Convergence time | 2–3 weeks (<500 samples) | ✅ Guaranteed |
-| Audit compliance | GDPR + EU AI Act | ✅ Built-in |
-| Operator tuning | Zero (fully autonomous) | ✅ Implemented |
-| Uptime SLA | 99.9% | ✅ Monitored |
-
----
-
-[![Version](https://img.shields.io/badge/version-2.0.0-blue)](CHANGELOG.md)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Status](https://img.shields.io/badge/status-Production-brightgreen)](FORGE_2_0_LIVE.md)
-[![Compliance](https://img.shields.io/badge/compliance-GDPR%2B%20EU%20AI%20Act-green)](docs/SYSTEM_OVERVIEW_COMPLETE.md)
+<p align="center">
+  <a href="LICENSE">Apache-2.0</a> &middot;
+  <a href="CONTRIBUTING.md">Contributing</a> &middot;
+  <a href="CLA.md">CLA</a> &middot;
+  <a href="SECURITY.md">Security</a> &middot;
+  <a href="CHANGELOG.md">Changelog</a>
+</p>

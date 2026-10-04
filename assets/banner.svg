@@ -1,85 +1,90 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" role="img" aria-labelledby="title desc">
-  <title id="title">Corvin — EU AI Act compliant · Self-improving · Agentic Compute</title>
-  <desc id="desc">Dark banner showing the Corvin logo mark (chevron, cursor underline) on the left, the CorvinOS wordmark in off-white with OS in gold, a feature strip with key pillars, and a tagline.</desc>
-
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 400" role="img" aria-labelledby="title desc">
+  <title id="title">CorvinOS — the operating system for AI work</title>
+  <desc id="desc">Dark banner: the Corvin logo mark and the CorvinOS wordmark on the left, the tagline "Saves tokens — and proves it. Learns from every run. Runs your organisation's AI." and six pillar chips; on the right a hash-chained audit trail of blocks feeding a three-tier model router.</desc>
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%"   stop-color="#0d1117"/>
-      <stop offset="55%"  stop-color="#111820"/>
-      <stop offset="100%" stop-color="#161b22"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0f15"/><stop offset="0.6" stop-color="#111820"/><stop offset="1" stop-color="#161b22"/>
     </linearGradient>
-    <!-- Brass / gold accent gradient -->
-    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%"   stop-color="#f0b429"/>
-      <stop offset="100%" stop-color="#c97800"/>
-    </linearGradient>
-    <!-- Layer bar palette — same as docs/assets/banner.svg for consistency -->
-    <linearGradient id="layer1" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#1c2840"/> <stop offset="100%" stop-color="#141e30"/>
-    </linearGradient>
-    <linearGradient id="layer2" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#1e3a5f"/> <stop offset="100%" stop-color="#152d4a"/>
-    </linearGradient>
-    <linearGradient id="layer3" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#2563eb"/> <stop offset="100%" stop-color="#1d55c5"/>
-    </linearGradient>
-    <linearGradient id="layer4" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#f0b429"/> <stop offset="100%" stop-color="#c97800"/>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f0b429"/><stop offset="1" stop-color="#c97800"/>
     </linearGradient>
     <radialGradient id="glow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%"   stop-color="#f0b429" stop-opacity="0.14"/>
-      <stop offset="100%" stop-color="#f0b429" stop-opacity="0"/>
+      <stop offset="0" stop-color="#f0b429" stop-opacity="0.16"/><stop offset="1" stop-color="#f0b429" stop-opacity="0"/>
     </radialGradient>
-    <!-- Subtle grid texture -->
-    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
-      <path d="M 28 0 L 0 0 0 28" fill="none" stroke="#ffffff" stroke-width="0.3" opacity="0.04"/>
+    <radialGradient id="glow2" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#58a6ff" stop-opacity="0.10"/><stop offset="1" stop-color="#58a6ff" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0 L0 0 0 32" fill="none" stroke="#ffffff" stroke-width="0.4" opacity="0.045"/>
     </pattern>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#8b949e"/>
+    </marker>
   </defs>
 
-  <!-- Background -->
-  <rect width="1280" height="320" fill="url(#bg)"/>
-  <rect width="1280" height="320" fill="url(#grid)"/>
-  <!-- Warm glow behind the logo mark -->
-  <ellipse cx="178" cy="160" rx="260" ry="180" fill="url(#glow)"/>
+  <rect width="1280" height="400" fill="url(#bg)"/>
+  <rect width="1280" height="400" fill="url(#grid)"/>
+  <ellipse cx="170" cy="170" rx="300" ry="220" fill="url(#glow)"/>
+  <ellipse cx="1040" cy="200" rx="330" ry="230" fill="url(#glow2)"/>
 
-  <!-- Subtle voice waveform stripe (brass tint, very low opacity) -->
-  <g opacity="0.05" stroke="#f0b429" stroke-width="2" fill="none" stroke-linecap="round">
-    <path d="M0 182 Q 70 142 140 182 T 280 182 T 420 182 T 560 182 T 700 182 T 840 182 T 980 182 T 1120 182 T 1260 182 T 1400 182"/>
-    <path d="M0 204 Q 70 172 140 204 T 280 204 T 420 204 T 560 204 T 700 204 T 840 204 T 980 204 T 1120 204 T 1260 204 T 1400 204"/>
-  </g>
-
-  <!-- ─── Logo mark — aligned to wordmark centre ─── -->
-  <g transform="translate(82 46) scale(1.6)">
+  <!-- logo mark -->
+  <g transform="translate(58 62) scale(1.55)">
     <path fill="none" stroke="#EEF1F5" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" d="M28 40 L56 60 L28 80"/>
     <rect fill="#EEF1F5" x="66" y="72" width="30" height="9" rx="2"/>
     <circle cx="80" cy="50" r="10" fill="#C9A227"/>
     <circle cx="80" cy="50" r="10" fill="none" stroke="#EEF1F5" stroke-width="2"/>
   </g>
 
-  <!-- ─── Wordmark ─── -->
-  <text x="308" y="176"
-        font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
-        font-size="96" font-weight="800" letter-spacing="-3.5">
-    <tspan fill="#e6edf3">Corvin</tspan><tspan fill="#f0b429">OS</tspan>
-  </text>
+  <!-- wordmark -->
+  <text x="268" y="160" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="92" font-weight="800" letter-spacing="-3"><tspan fill="#e6edf3">Corvin</tspan><tspan fill="url(#gold)">OS</tspan></text>
+  <text x="272" y="198" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="4.2" fill="#f0b429">THE OPERATING SYSTEM FOR AI WORK</text>
+  <text x="272" y="238" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="21" fill="#c9d1d9">Saves tokens — and proves it. Learns from every run.</text>
+  <text x="272" y="266" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="21" fill="#c9d1d9">Runs your organisation's AI — audited, end to end.</text>
 
-  <!-- Feature strip — small caps, brass accent -->
-  <text x="308" y="216"
-        font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
-        font-size="17" font-weight="600" letter-spacing="3.6" fill="#f0b429">
-    EU AI ACT  ·  SELF-IMPROVING  ·  AGENTIC COMPUTE  ·  GDPR
-  </text>
+  <!-- pillar chips -->
+  <g font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" text-anchor="middle">
+    <rect x="272" y="300" width="128" height="28" rx="14" fill="#0d1117" stroke="#f0b429"/><text x="336" y="319" fill="#f0b429">Token proof</text>
+    <rect x="410" y="300" width="128" height="28" rx="14" fill="#0d1117" stroke="#3fb950"/><text x="474" y="319" fill="#3fb950">Self-learning</text>
+    <rect x="548" y="300" width="128" height="28" rx="14" fill="#0d1117" stroke="#58a6ff"/><text x="612" y="319" fill="#58a6ff">Skills 2.0 · ACP</text>
+    <rect x="272" y="338" width="128" height="28" rx="14" fill="#0d1117" stroke="#bc8cff"/><text x="336" y="357" fill="#bc8cff">Teams · A2A</text>
+    <rect x="410" y="338" width="128" height="28" rx="14" fill="#0d1117" stroke="#39c5cf"/><text x="474" y="357" fill="#39c5cf">Marketplace</text>
+    <rect x="548" y="338" width="128" height="28" rx="14" fill="#0d1117" stroke="#e6edf3"/><text x="612" y="357" fill="#e6edf3">GDPR · EU AI Act</text>
+  </g>
 
-  <!-- Separator rule -->
-  <line x1="308" y1="236" x2="960" y2="236" stroke="#21262d" stroke-width="1"/>
+  <!-- right motif: hash-chained audit blocks -> router -> tiers -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" fill="#8b949e">
+    <rect x="770" y="66" width="104" height="46" rx="7" fill="#161b22" stroke="#30363d"/>
+    <text x="782" y="85" fill="#e6edf3">turn #4211</text><text x="782" y="102">h=9f3a…c1</text>
+    <rect x="904" y="66" width="104" height="46" rx="7" fill="#161b22" stroke="#30363d"/>
+    <text x="916" y="85" fill="#e6edf3">skill.exec</text><text x="916" y="102">h=41be…07</text>
+    <rect x="1038" y="66" width="104" height="46" rx="7" fill="#161b22" stroke="#f0b429"/>
+    <text x="1050" y="85" fill="#f0b429">engine.span</text><text x="1050" y="102">h=c7d2…5e</text>
+    <path d="M874 89 H900" stroke="#8b949e" stroke-width="1.5" marker-end="url(#ah)"/>
+    <path d="M1008 89 H1034" stroke="#8b949e" stroke-width="1.5" marker-end="url(#ah)"/>
+    <text x="770" y="130" font-size="10">hash-chained audit trail · one chain per tenant</text>
+  </g>
 
-  <!-- Tagline -->
-  <text x="308" y="260"
-        font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
-        font-size="20" font-weight="400" fill="#8b949e">
-    Compliant by design. Self-improving at runtime. Agentic Compute for LLM workloads.
-  </text>
+  <g font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+    <rect x="850" y="168" width="210" height="52" rx="10" fill="#1b222c" stroke="#58a6ff"/>
+    <text x="955" y="190" text-anchor="middle" font-size="14" font-weight="700" fill="#e6edf3">complexity router</text>
+    <text x="955" y="208" text-anchor="middle" font-size="11" fill="#8b949e">one resolver · every surface</text>
+    <path d="M1090 112 V142 H955 V164" fill="none" stroke="#8b949e" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#ah)"/>
 
-  <!-- Accent hairline beneath tagline -->
-  <rect x="308" y="278" width="240" height="2" rx="1" fill="url(#accent)" opacity="0.65"/>
+    <path d="M900 220 L815 268" stroke="#8b949e" stroke-width="1.5" marker-end="url(#ah)"/>
+    <path d="M955 220 L955 268" stroke="#8b949e" stroke-width="1.5" marker-end="url(#ah)"/>
+    <path d="M1010 220 L1095 268" stroke="#8b949e" stroke-width="1.5" marker-end="url(#ah)"/>
+
+    <rect x="752" y="272" width="126" height="56" rx="10" fill="#161b22" stroke="#3fb950"/>
+    <text x="815" y="296" text-anchor="middle" font-size="14" font-weight="700" fill="#3fb950">Haiku</text>
+    <text x="815" y="314" text-anchor="middle" font-size="11" fill="#8b949e">conversation</text>
+    <rect x="892" y="272" width="126" height="56" rx="10" fill="#161b22" stroke="#58a6ff"/>
+    <text x="955" y="296" text-anchor="middle" font-size="14" font-weight="700" fill="#58a6ff">Sonnet</text>
+    <text x="955" y="314" text-anchor="middle" font-size="11" fill="#8b949e">work requests</text>
+    <rect x="1032" y="272" width="126" height="56" rx="10" fill="#161b22" stroke="#f0b429"/>
+    <text x="1095" y="296" text-anchor="middle" font-size="14" font-weight="700" fill="#f0b429">Opus</text>
+    <text x="1095" y="314" text-anchor="middle" font-size="11" fill="#8b949e">complex work</text>
+    <text x="955" y="356" text-anchor="middle" font-size="12" fill="#8b949e">every turn priced from its own span — savings you can audit</text>
+  </g>
+
+  <rect x="272" y="380" width="240" height="2" rx="1" fill="url(#gold)" opacity="0.7"/>
 </svg>

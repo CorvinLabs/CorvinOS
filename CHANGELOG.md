@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed — README redesign and nine overview pages
+- New banner (`assets/banner.svg`), header with badges and a navigation row, and a rewritten
+  README from "The problem we solve" on: CorvinOS as the system layer around your agent, with
+  one diagram per topic and an honest status table.
+- Nine pages under `docs/overview/` — token savings, self-learning, Skills 2.0 & ACP, CorvinOS
+  as an OS, organizations, A2A, video, marketplace & plugins, extensibility — each with a
+  LIVE / SHADOW / GATED / PARTIAL / NOT BUILT status table and 2–4 SVG diagrams
+  (`docs/overview/img/`).
+- Removed figures that had no basis in the code ("60–80 % savings", "$22,500 → $4,320",
+  "convergence guaranteed", "quality +2–5 % per cycle", "99.9 % SLA", "Forge 2.0 production
+  ready") and the links to the non-existent `README_CORVINVS_EXPLAINED.md` / `FORGE_2_0_LIVE.md`.
+  The token page instead shows costs measured from the audit chain (2026-09-24 → 10-04) with the
+  reference model and the counting window named.
+
 ### Changed — README: dedicated Claude Code install section, maintainer/voice sections moved out
 - Added a standalone, non-collapsed "Installing via Claude Code" section (marketplace add →
   plugin install → `/corvin:install` → `/corvin:update`), step-by-step; the Quick Start's
