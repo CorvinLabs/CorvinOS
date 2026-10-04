@@ -343,11 +343,15 @@ class KbProjectionE2E(unittest.TestCase):
                 kb_projection.transition("acme", t1["id"], "in_progress")
 
     def test_kb_subprocess_never_sees_the_console_secrets(self):
-        """A KB checkout's code (a commit hook here) runs with a minimal environment."""
-        hook = self.kb / ".git" / "hooks" / "pre-commit"
+        """A KB checkout's code runs with a minimal environment. The probe sits in the checkout's
+        own scripts/kb.py (kb commits through commit-tree since 2026-10-04, so no hook runs)."""
         dump = self.tmp / "hook-env.txt"
-        hook.write_text(f"#!/bin/sh\nenv > {dump}\nexit 0\n")
-        hook.chmod(0o755)
+        kbpy = self.kb / "scripts" / "kb.py"
+        probe = f"import os as _o\nopen({str(dump)!r}, 'a').write(''.join(f'{{k}}={{v}}\\n' for k, v in _o.environ.items()))\n"
+        src = kbpy.read_text()
+        anchor = "from __future__ import annotations\n"
+        kbpy.write_text(src.replace(anchor, anchor + probe, 1))
+        _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "probe", cwd=self.kb)
         os.environ["ANTHROPIC_API_KEY"] = "sk-probe-must-not-leak"
         self.addCleanup(os.environ.pop, "ANTHROPIC_API_KEY", None)
         with _sandbox(self.tmp) as (client, csrf, home, _):

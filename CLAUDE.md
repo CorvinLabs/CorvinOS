@@ -301,6 +301,8 @@ SkillForge guidance skills (`kb learn`, `kb guidance`). Agents (`--actor agent:*
 `kb/_meta/autonomy.yaml` (A1 drafts, A2 only ready + not human-required — a missing `risk:` IS
 human-required, A3 human only) and circuit breakers (`kb breaker status|reset`, reset is human).
 `kb task … --dod` never replaces a planned definition of done (it becomes `completion_note`).
+kb commits through a private index (`commit-tree` + compare-and-swap `update-ref`): no hooks run for
+kb commits, and kb refuses to write while a rebase/merge/cherry-pick is in progress — finish it first.
 
 **Consistency** — `kb check` must report `blocking: 0` before you push. Derivable deviations (missing
 uid/id, status spelling, a stored container status, a duplicate id) are healed automatically
