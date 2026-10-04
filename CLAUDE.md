@@ -58,7 +58,7 @@ unchanged, so every `corvin_decisions/decisions/ADR-XXXX-*.md` reference still r
 **Status:** 🟡 **PARTIAL — the single-source RULE and the KB graph are live; the hand-work backlog is not cleared** (verified 2026-10-03)
 
 Verified on this host 2026-10-03: the centralisation is done (`docs/decisions/` holds only
-a README, `corvin_decisions/` is the submodule; 1017 files in `decisions/`). The graph is
+a README, `corvin_decisions/` is the submodule; ~1020 files in `decisions/` — `ls decisions | wc -l`). The graph is
 `Corvin-Knowledge/kb/graph/` (entities + relations), rebuilt by the console projector after
 every KB change (ADR-2205/2206); the webhook/dashboard design (`:8000`, `:3000`) is retired.
 Hand work left, held in `kb/_meta/baseline.json` (shrink-only, 158 entries on 2026-10-04): 11 numbers
@@ -131,7 +131,7 @@ post-commit hook and nothing listens on the endpoint:
 
 ### Verified Status (2026-09-26 — replaces the 2026-09-25 "go-live" list, which overstated it)
 
-✅ ADRs centralised in Corvin-Knowledge (1017 files in `decisions/`, 2026-10-04)  
+✅ ADRs centralised in Corvin-Knowledge (~1020 files in `decisions/`, 2026-10-04; it grows — count with `ls`)  
 ✅ Knowledge Graph: `kb/graph/{entities,relations}.jsonl`, rebuilt by the projector (2026-10-03)  
 ⚠️ ADR-0264 frontmatter: 5 files broken; 11 numbers carried by two files (2026-10-04; `kb.py check` measures it, `kb/_meta/baseline.json` lists them)
 ❌ Auto-sync webhooks: no post-commit hook in any repo, endpoint not listening  
@@ -301,8 +301,11 @@ SkillForge guidance skills (`kb learn`, `kb guidance`). Agents (`--actor agent:*
 `kb/_meta/autonomy.yaml` (A1 drafts, A2 only ready + not human-required — a missing `risk:` IS
 human-required, A3 human only) and circuit breakers (`kb breaker status|reset`, reset is human).
 `kb task … --dod` never replaces a planned definition of done (it becomes `completion_note`).
-kb commits through a private index (`commit-tree` + compare-and-swap `update-ref`): no hooks run for
-kb commits, and kb refuses to write while a rebase/merge/cherry-pick is in progress — finish it first.
+kb commits like `git commit` does — it holds `index.lock` from its first write to the index swap
+(private index + `commit-tree` + compare-and-swap on the branch ref): no hooks run for kb commits, a
+`git add`/`commit` during a kb write fails on the lock (retry), and kb refuses to write while a
+rebase/merge/cherry-pick is in progress. `/kb/status` → `code.stale` says when the running projector
+predates its code on disk (restart the console).
 
 **Consistency** — `kb check` must report `blocking: 0` before you push. Derivable deviations (missing
 uid/id, status spelling, a stored container status, a duplicate id) are healed automatically

@@ -586,7 +586,10 @@ class KbPeriodicLoopE2E(unittest.TestCase):
             out = kp.periodic("_default", force=True)
             self.assertIn("skipped", out, out)
             self.assertIn("pull", out["skipped"])
-            self.assertEqual(client.get(f"{_URL}/kb/status").json()["periodic"]["skipped"], out["skipped"])
+            st = client.get(f"{_URL}/kb/status").json()
+            self.assertEqual(st["periodic"]["skipped"], out["skipped"])
+            self.assertEqual(st["code"]["stale"], False)                    # this process runs the code on disk
+            self.assertEqual(st["code"]["loaded"], kp._LOADED_SHA)
 
     def test_guidance_is_minted_as_a_bootstrap_graded_skill_and_acknowledged(self):
         kb = self.kb

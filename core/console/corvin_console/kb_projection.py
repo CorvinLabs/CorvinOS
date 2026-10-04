@@ -46,6 +46,18 @@ PERIODIC_S = 600.0        # G6 sweep + guidance + SkillForge bridge: periodic, n
 GUIDANCE_PERSONA = "assistant"   # SkillForge namespace the guidance skills are minted under
 _last_periodic: dict[str, float] = {}
 _periodic_out: dict[str, dict[str, Any]] = {}   # survives the per-tick state replacement
+# the projector code this process LOADED — /kb/status compares it with the file on disk, so a
+# host still running yesterday's projector says so (review R4-C1: the periodic loop had been
+# committed for hours while the live process predated it)
+_LOADED_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12]
+
+
+def code_state() -> dict[str, Any]:
+    try:
+        now = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12]
+    except OSError:
+        now = None
+    return {"loaded": _LOADED_SHA, "on_disk": now, "stale": now is not None and now != _LOADED_SHA}
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _lock = threading.Lock()
 _state: dict[str, dict[str, Any]] = {}
@@ -139,11 +151,11 @@ def _save(tenant_id: str, st: dict[str, Any]) -> None:
 
 def status(tenant_id: str) -> dict[str, Any]:
     if tenant_id in _state:
-        return _state[tenant_id]
+        return {**_state[tenant_id], "code": code_state()}
     try:
-        return json.loads(_state_path(tenant_id).read_text())
+        return {**json.loads(_state_path(tenant_id).read_text()), "code": code_state()}
     except (OSError, ValueError):
-        return {"state": "off" if kb_repo() is None else "idle"}
+        return {"state": "off" if kb_repo() is None else "idle", "code": code_state()}
 
 
 def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
