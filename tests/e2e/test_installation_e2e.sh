@@ -101,14 +101,14 @@ else
     test_fail "UV_INSTALLER_SHA256 not found or invalid (expected 64-char hex)"
 fi
 
-# ─ Test 5: Corvinos version floor
-test_case "corvinos version floor (>= CORVIN_MIN_VERSION)"
-CORVIN_VERSION=$(grep "CORVIN_MIN_VERSION=" "$INSTALL_SCRIPT" | head -1 | cut -d'"' -f2)
-PYPROJECT_VERSION=$(grep '^version = ' "$REPO_ROOT/pyproject.toml" | cut -d'"' -f2)
-if [ "$CORVIN_VERSION" = "$PYPROJECT_VERSION" ]; then
+# ─ Test 5: local-checkout-only install (ADR-2215)
+test_case "installs only the local checkout (editable, no index, no download mode)"
+if grep -q 'uv tool install --force --editable "${EDITABLE}\[browser\]"' "$INSTALL_SCRIPT" \
+   && grep -q '_is_checkout' "$INSTALL_SCRIPT" \
+   && ! grep -q 'CORVIN_MIN_VERSION\|--pypi\|fetch_source' "$INSTALL_SCRIPT"; then
     test_pass
 else
-    test_fail "version mismatch: install.sh=$CORVIN_VERSION pyproject.toml=$PYPROJECT_VERSION"
+    test_fail "install.sh must install only the local checkout (editable), with no version floor, --pypi or download mode"
 fi
 
 # ─ Test 6: Claude Code detection logic is present
