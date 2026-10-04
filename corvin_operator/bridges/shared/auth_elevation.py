@@ -200,11 +200,35 @@ def grant(*, chat_key: str, pin: str, settings_pin: str | None,
                channel=channel, chat_key=chat_key,
                details={"reason": "wrong-pin"})
         count = _record_pin_failure(chat_key)
-        if count >= _PIN_FAIL_THRESHOLD:
+        lockout_triggered = count >= _PIN_FAIL_THRESHOLD
+        if lockout_triggered:
             _audit("auth.elevation_lockout_started",
                    channel=channel, chat_key=chat_key,
                    details={"reason": "threshold-reached", "lockout_s": _PIN_LOCKOUT_S,
                             "fail_count": count})
+
+        # ADR-0532 Phase 1 — os.security_orchestrator shadow comparison.
+        # Never changes the deterministic lockout above: this Skill accrues
+        # an audited trust record (ADR-2092 G0) by watching the SAME
+        # threshold-crossing the production lockout just computed, it does
+        # not decide anything. Fail-safe: any exception here is swallowed.
+        try:
+            from core.skills.os_skills.security_orchestrator_skill import (
+                shadow_compare as _so_shadow,
+            )
+
+            _so_shadow(
+                chat_key=chat_key,
+                tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default",
+                recent_failure_timestamps=[time.time() for _ in range(count)],
+                production_lockout_triggered=lockout_triggered,
+            )
+        except Exception as exc:  # noqa: BLE001 — shadow path must never affect auth
+            import logging as _logging
+            _logging.getLogger(__name__).debug(
+                "auth_elevation: os.security_orchestrator shadow compare failed (%r)", exc
+            )
+
         return False, "wrong-pin"
 
     now = time.time()
