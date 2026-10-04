@@ -174,7 +174,8 @@ def test_shadow_big_data_turn_keeps_the_bundled_engine_and_records_the_advice(br
     assert row["features"]["complexity"] == "simple" and row["features"]["is_big_data"] is True
     assert row["outcome"]["used"] == "acs" and row["outcome"]["ok"] is True
     (rec,) = _router_records(_chain(base))
-    assert rec["details"]["decision"] == {"engine": "native", "bundled_engine": "acs",
+    assert rec["details"]["decision"] == {"engine": "native", "decision": "native",
+                                          "bundled_engine": "acs",
                                           "shadow": True, "confidence": 0.8}
     _verify(base)
 
@@ -265,4 +266,103 @@ def test_flags_off_big_data_turn_never_writes_a_phase2_decision(bridge, monkeypa
     row = [r for r in _ledger() if r["outcome"] is not None and r["surface"] == "bridge"][-1]
     assert (row["phase"], row["source"], row["used"]) == ("shadow", "bundled", "acs")
     assert row["outcome"]["used"] == "acs"
+    _verify(base)
+
+
+# ── synthetic lifecycle simulation (ADR-2092 G4) ─────────────────────────────
+# The gates are fed synthetic history in a sandboxed CORVIN_HOME; every routed turn
+# still goes through ``adapter.process_one``. Synthetic rows can prove the mechanism;
+# they must never be written into a live ledger to clear its gate.
+
+def _seed_skill_served(n: int, *, ok: bool) -> None:
+    from core.skills.os_skills.monitoring import routing_ledger
+
+    for _ in range(n):
+        tid = routing_ledger.new_turn_id()
+        routing_ledger.record_decision(
+            tenant_id=TENANT, turn_id=tid, surface="bridge", phase="dual_write",
+            bundled="acs", used="native", source="skill", skill="native", skill_conf=0.8,
+            features={"complexity": "simple", "is_big_data": True})
+        routing_ledger.record_outcome(tenant_id=TENANT, turn_id=tid, surface="bridge",
+                                      used="native", ok=ok, latency_ms=5)
+
+
+def _wait_for(pred, timeout=5.0) -> bool:
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if pred():
+            return True
+        time.sleep(0.02)
+    return pred()
+
+
+def test_lifecycle_trailing_skill_trips_rollback_and_returns_to_shadow(bridge, monkeypatch):
+    adapter, base, acs = bridge
+    from core.skills.os_skills.monitoring import readiness, rollback_detector
+
+    _seed_ready_history()
+    monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+
+    # 1. Gates clear: the Skill's de-escalation is served.
+    _send(adapter, base, "Big Data?")
+    assert acs == []
+    assert not rollback_detector.rollback_active(TENANT)
+
+    # 2. A degraded period: Skill-served turns fail, bundled turns keep succeeding.
+    _seed_skill_served(120, ok=False)
+
+    # 3. The next Skill-served outcome runs the judge, which trips audit-first.
+    _send(adapter, base, "Big Data?")
+    assert acs == []
+    assert _wait_for(lambda: rollback_detector.rollback_active(TENANT))
+    trips = [e for e in _chain(base) if e["event_type"] == "routing.rollback_triggered"]
+    assert len(trips) == 1
+    assert trips[0]["details"]["skill_success_rate"] < trips[0]["details"]["bundled_success_rate"]
+
+    # 4. Tripped: the same request is delegated again, the refusal is audited.
+    _send(adapter, base, "Big Data?")
+    assert acs == ["Big Data?"]
+    refused = [e for e in _chain(base) if e["event_type"] == "routing.phase2_refused"]
+    assert [e["details"]["reason"] for e in refused] == ["rollback_active"]
+
+    # 5. An operator reset does not reopen Phase 2 by itself: the evidence gate now
+    #    sees native trailing delegated in the bucket and keeps the turn in shadow.
+    import delegation_policy as dp
+
+    rollback_detector.reset_rollback(
+        TENANT, audit=lambda et, d: dp._audit(et, d, tenant_id=TENANT))
+    assert not rollback_detector.rollback_active(TENANT)
+    readiness.clear_cache()
+    verdict = readiness.cached_evaluate(TENANT, "bridge", background=False)
+    assert not verdict.ready and verdict.reason.startswith("native_trails_delegated")
+    _send(adapter, base, "Big Data?")
+    assert acs == ["Big Data?", "Big Data?"]
+    assert [e["event_type"] for e in _chain(base)].count("routing.rollback_reset") == 1
+    _verify(base)
+
+
+def test_live_shaped_history_never_disagrees_so_phase2_stays_shadow(bridge, monkeypatch):
+    """Shape of the live ledger on 2026-10-04: every turn native, the Skill always
+    agrees. Phase 2 can only de-escalate to native, so it has nothing to change and
+    the gate says so instead of activating a no-op."""
+    adapter, base, acs = bridge
+    from core.skills.os_skills.monitoring import readiness, routing_ledger
+
+    for i in range(600):
+        tid = routing_ledger.new_turn_id()
+        cx = ("simple", "medium", "complex")[i % 3]
+        routing_ledger.record_decision(
+            tenant_id=TENANT, turn_id=tid, surface="console", phase="shadow",
+            bundled="native", used="native", source="bundled", skill="native",
+            skill_conf=0.8, features={"complexity": cx})
+        routing_ledger.record_outcome(tenant_id=TENANT, turn_id=tid, surface="console",
+                                      used="native", ok=True, latency_ms=5)
+    verdict = readiness.cached_evaluate(TENANT, "console", background=False)
+    assert (verdict.ready, verdict.reason, verdict.decisions) == (False, "skill_never_disagrees", 600)
+
+    monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+    _send(adapter, base, "Wie spät ist es?")
+    row = [r for r in _ledger() if r["surface"] == "bridge"][-1]
+    assert (row["phase"], row["used"], row["source"]) == ("shadow", "native", "bundled")
+    assert acs == []
     _verify(base)
