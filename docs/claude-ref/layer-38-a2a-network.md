@@ -334,10 +334,14 @@ match wins deterministically** (ids are operator-assigned and unique; a
 peer-controlled label equal to another peer's id must not make the victim
 unaddressable — peer-triggerable DoS otherwise). Below that, an ambiguous
 label raises `EndpointError("ambiguous_endpoint_ref")` instead of silently
-picking a peer. Both the CLI (`corvin-a2a send <name>`) and the MCP tool
-`a2a_send` (`corvin_orchestration.mcp_server`) accept a connection name; the
-agent discovers names via `a2a_list_endpoints` (labels are returned for
-disabled peers too, via `peek_label()`, sanitized read-side).
+picking a peer. The CLI (`corvin-a2a send <name>`) and the MCP tool
+`mcp__forge__a2a_send` (`forge.mcp_server`, ADR-2099 Phase 2) accept a
+connection name; the agent discovers names via `mcp__forge__a2a_list_endpoints`
+(labels are returned for disabled peers too, via `peek_label()`, sanitized
+read-side). In the console chat, `a2a_send` is gated by the
+`a2a_send_from_chat` flag (dark by default) and enforces a two-step confirm:
+the MCP tool stages a pending record only; a real browser session + CSRF token
+confirms the send, preventing LLM-steered sends without operator action.
 
 ---
 
@@ -1146,5 +1150,11 @@ IBC issuer's trust ring and the license validator's session key ring never
 drift apart (a key in only one of them is a fleet-wide outage once
 `require_ibc` is required — fact 10, still open).
 
-Still open from ADR-2099 P0: nothing writes `require_ibc` (fact 3), so none
-of this is enforced on a live connection yet.
+**ADR-2099 P0 facts 1, 3, 4 shipped (2026-10-04):** the sender attaches an
+IBC (fact 1, ab54f2183), all new pairings write `require_ibc=true`
+(fact 3, 2e4bc8566), and the CRL receive path was cache-only even before
+this session (fact 4, pre-existing). The receiver's M2 gate now enforces it:
+a peer with `require_ibc=true` and no attestation is rejected. Legacy origins
+written before the fact-3 commit keep their existing `require_ibc` value
+(likely `false`), so existing pairings are unaffected. Still open from P0:
+fact 9 (email field removal), fact 10 (second trust-ring key), and auto-renew.
