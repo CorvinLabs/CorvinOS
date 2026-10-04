@@ -19,6 +19,7 @@ import { Findings } from "@/components/forge/ForgeCreatorPanel";
 import {
   FORGED_PANEL_SANDBOX,
   deleteForgedPlugin,
+  previewDocument,
   getForgedPlugin,
   listForgedPlugins,
   type ForgedPluginSummary,
@@ -120,17 +121,24 @@ function ForgedDetail({ dirname }: { dirname: string }) {
   const shown = d.files.find((f) => f.path === file);
   return (
     <div className="space-y-3 border-t border-border/60 pt-3 text-xs" data-testid="forged-detail">
-      {d.request && <p><span className="text-muted-foreground">Request:</span> {d.request}</p>}
+      {d.request_chars !== null && (
+        <p className="text-muted-foreground">
+          Generated from a {d.request_chars}-character request (only its fingerprint is kept).
+        </p>
+      )}
       {d.egress_hosts.length > 0 && <p><span className="text-muted-foreground">Network hosts:</span> {d.egress_hosts.join(", ")}</p>}
       <Findings items={d.findings} skipped={d.review_skipped} />
       {d.warnings.map((w) => <p key={w} className="text-muted-foreground">Note: {w}</p>)}
       {d.panel_html && (
         <div className="space-y-1">
-          <p className="text-muted-foreground">Panel preview (sandboxed, scripts only — no access to this console)</p>
+          <p className="text-muted-foreground">
+            Panel preview (sandboxed, scripts only, no network — no access to this console). It becomes a
+            live panel only once plugin panels can be mounted after installation.
+          </p>
           <iframe
             title={`${d.display_name} panel preview`}
             sandbox={FORGED_PANEL_SANDBOX}
-            srcDoc={d.panel_html}
+            srcDoc={previewDocument(d.panel_html)}
             className="h-64 w-full rounded-md border border-border/60 bg-white"
             data-testid="forged-panel-preview"
           />

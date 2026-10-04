@@ -69,7 +69,7 @@ TYPE_LABELS = {
     "forge": "Forge tool",
     "compute": "Compute",
     "scheduled": "Scheduled",
-    "skill_creator": "Skill creator",
+    "skill_creator": "Forge generation",
     "agent": "Agent session",
     "commit": "Commit",
 }
@@ -678,8 +678,10 @@ def _skill_creator(home: Path, now: float) -> Iterator[dict]:
         if not isinstance(r, dict) or r.get("tenant_id", tid) != tid:
             continue
         raw = r.get("status")
-        yield _record(id=f"skill_creator:{rid}", type="skill_creator", subtype="generation",
-                      title=str(r.get("message") or r.get("phase") or "skill generation"),
+        # One run store serves Skill, Tool and Plugin Forge (ADR-2217); the kind is the subtype.
+        kind = str(r.get("kind") or "skill")
+        yield _record(id=f"skill_creator:{rid}", type="skill_creator", subtype=kind,
+                      title=str(r.get("message") or r.get("phase") or f"{kind} generation"),
                       status=status_map.get(raw, "running"), raw_status=raw,
                       created=_ts(r.get("created_at")), now=now)
 

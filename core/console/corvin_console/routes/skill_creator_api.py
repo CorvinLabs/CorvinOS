@@ -306,9 +306,11 @@ async def generate_skill(
 
         base = _resolve_base_skill(rec.tenant_id, req.base_skill)
 
+        # A refine sends the base skill's body to the engine too — it is gated with the request.
+        gate_text = user_request + ("\n\n" + base["body"] if base else "")
         try:
             forge_runs.check_spawn_gates(
-                user_request, tenant_id=rec.tenant_id,
+                gate_text, tenant_id=rec.tenant_id,
                 sid_fingerprint=rec.sid_fingerprint, kind="skill",
             )
         except forge_runs.GenerationRefused as refused:
@@ -316,10 +318,13 @@ async def generate_skill(
 
         if req.async_:
             # Async mode: spawn background task, return run_id
-            run_id = _spawn_generation_task(
-                user_request, rec.tenant_id, base=base,
-                sid_fingerprint=rec.sid_fingerprint
-            )
+            try:
+                run_id = _spawn_generation_task(
+                    user_request, rec.tenant_id, base=base,
+                    sid_fingerprint=rec.sid_fingerprint
+                )
+            except forge_runs.GenerationBusy as busy:
+                raise HTTPException(status_code=429, detail=str(busy))
             verb = "refinement" if base else "generation"
             return {
                 "status": "accepted",
@@ -646,6 +651,7 @@ def _spawn_generation_task(user_request: str, tenant_id: str,
         success_action="skill.generated_created",
         failure_action="skill.generated_creation_failed",
         hint=_operator_hint,
+        failure_target_id=base["name"] if base else "new",
     )
     return run_id
 

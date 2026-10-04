@@ -60,14 +60,14 @@
   <rect x="345" y="320" width="270" height="130" fill="#f5f5f5" stroke="#555" stroke-width="1.5"/>
   <text x="480" y="342" font-size="13" font-weight="bold" text-anchor="middle" fill="#333">Tool</text>
   <text x="480" y="362" font-size="10" text-anchor="middle" fill="#333">validate: name policy · persona namespace · AST imports</text>
-  <text x="480" y="380" font-size="10" text-anchor="middle" fill="#333">test: cases RUN in bwrap sandbox (temp bench)</text>
-  <text x="480" y="398" font-size="10" text-anchor="middle" fill="#a02c2c">keep only if all pass + no confirmed security finding</text>
+  <text x="480" y="380" font-size="10" text-anchor="middle" fill="#333">test: cases RUN only in bwrap (mandatory, temp bench)</text>
+  <text x="480" y="398" font-size="10" text-anchor="middle" fill="#a02c2c">keep only if all pass + security review complete &amp; clean</text>
   <text x="480" y="416" font-size="10" text-anchor="middle" fill="#333">→ MultiRegistry user scope (tool.created)</text>
 
   <rect x="650" y="320" width="270" height="130" fill="#f5f5f5" stroke="#555" stroke-width="1.5"/>
   <text x="785" y="342" font-size="13" font-weight="bold" text-anchor="middle" fill="#333">Plugin</text>
   <text x="785" y="362" font-size="10" text-anchor="middle" fill="#333">plan → Builder classify + write_artifacts</text>
-  <text x="785" y="380" font-size="10" text-anchor="middle" fill="#333">optional panel/ (surface.yaml, allow-scripts)</text>
+  <text x="785" y="380" font-size="10" text-anchor="middle" fill="#333">optional panel/ (surface.yaml) — preview only</text>
   <text x="785" y="398" font-size="10" text-anchor="middle" fill="#333">test: py_compile + panel lint</text>
   <text x="785" y="416" font-size="10" text-anchor="middle" fill="#a02c2c">keep: STAGED + provenance — never installed</text>
 

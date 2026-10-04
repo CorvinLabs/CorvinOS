@@ -111,14 +111,4 @@ def list_scaffolds(tenant_id: str) -> list[dict[str, Any]]:
         return _read(tenant_id)
 
 
-def remove(tenant_id: str, path: str) -> int:
-    """Drop every entry whose ``path`` is *path*; returns how many were dropped."""
-    with _lock:
-        records = _read(tenant_id)
-        kept = [r for r in records if r.get("path") != path]
-        if len(kept) != len(records):
-            _write(tenant_id, kept)
-        return len(records) - len(kept)
-
-
-__all__ = ["ScaffoldRecord", "record", "list_scaffolds", "remove", "MAX_ENTRIES"]
+__all__ = ["ScaffoldRecord", "record", "list_scaffolds", "MAX_ENTRIES"]

@@ -44,7 +44,7 @@ export interface ForgedPluginResult {
   quality: number | null;
   findings: ForgeFindingOut[];
   files: string[];
-  panel: { title: string; entry: string; sandbox: string[] } | null;
+  panel: { title: string; entry: string } | null;
   review_skipped: boolean;
 }
 
@@ -79,12 +79,12 @@ export interface ForgedPluginSummary {
 }
 
 export interface ForgedPluginDetail extends ForgedPluginSummary {
-  request: string | null;
+  request_chars: number | null;
   findings: ForgeFindingOut[];
   warnings: string[];
   egress_hosts: string[];
   engine: string | null;
-  panel: { title: string; entry: string; sandbox: string[] } | null;
+  panel: { title: string; entry: string } | null;
   panel_html: string | null;
   files: { path: string; size: number; content?: string }[];
 }
@@ -123,3 +123,16 @@ export function deleteForgedPlugin(dirname: string, csrf: string): Promise<{ ok:
 
 /** The ONLY sandbox a generated (community) panel preview gets — never allow-same-origin (ADR-2189 D2). */
 export const FORGED_PANEL_SANDBOX = "allow-scripts";
+
+/** Prepended to a previewed panel: no network, no external resources, inline code only.
+ *  The HTML lint at generation time is advisory; this policy is what holds. */
+export const FORGED_PANEL_CSP =
+  '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; ' +
+  "script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; form-action 'none'\">";
+
+export function previewDocument(html: string): string {
+  // After a leading doctype (keeps standards mode); the parser hoists the meta into <head>.
+  const doctype = /^\s*<!doctype[^>]*>/i.exec(html);
+  if (doctype) return doctype[0] + FORGED_PANEL_CSP + html.slice(doctype[0].length);
+  return FORGED_PANEL_CSP + html;
+}

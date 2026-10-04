@@ -49,9 +49,10 @@ const COPY: Record<ForgeKind, { title: string; description: string; label: strin
   tool: {
     title: "Tool Forge",
     description:
-      "Describe a tool. The engine writes it with its own test cases, the cases run in the Forge sandbox, " +
-      "three reviewers check correctness, security and scope, and the tool is registered only if every " +
-      "test passes and no security finding is confirmed.",
+      "Describe a tool. The engine writes it with its own test cases, the cases run in the Forge's " +
+      "bubblewrap sandbox, three reviewers check correctness, security and scope, and the tool is " +
+      "registered only if every test passes and the security review completes without a confirmed " +
+      "finding. The tests show the tool runs as its own cases expect — read them before relying on it.",
     label: "What tool do you want to create?",
     placeholder: "e.g., 'a tool that counts words and sentences in a text' or 'convert CSV text to JSON rows'",
     cta: "Generate Tool",
@@ -61,31 +62,74 @@ const COPY: Record<ForgeKind, { title: string; description: string; label: strin
     description:
       "Describe a plugin. The engine plans it, the Plugin Builder writes docs and a scaffold, the code is " +
       "compiled and reviewed, and the result is staged in Marketplace → Forged. Forged plugins are never " +
-      "installed automatically — they install as unsigned community code after you review them.",
+      "installed from the console: to use one, review it and move it into the marketplace contributor " +
+      "tree, where it installs as unsigned community code.",
     label: "What plugin do you want to create?",
     placeholder: "e.g., 'a plugin that summarises the daily weather from open-meteo'",
     cta: "Generate Plugin",
   },
 };
 
-export default function ForgeCreatorPanel({ kind, onCreated }: { kind: ForgeKind; onCreated?: () => void }) {
+/** The run id survives a tab switch (the tab unmounts) and a reload, per kind. */
+const runKey = (kind: ForgeKind) => `forge-creator-run:${kind}`;
+
+function storedRun(kind: ForgeKind): string | null {
+  try {
+    return window.sessionStorage.getItem(runKey(kind));
+  } catch {
+    return null;
+  }
+}
+
+function storeRun(kind: ForgeKind, runId: string | null) {
+  try {
+    if (runId) window.sessionStorage.setItem(runKey(kind), runId);
+    else window.sessionStorage.removeItem(runKey(kind));
+  } catch {
+    /* storage unavailable — the run is simply not re-attached */
+  }
+}
+
+export default function ForgeCreatorPanel({
+  kind,
+  onCreated,
+  onOpenTools,
+}: {
+  kind: ForgeKind;
+  onCreated?: () => void;
+  onOpenTools?: () => void;
+}) {
   const { session } = useAuth();
   const qc = useQueryClient();
   const [request, setRequest] = useState("");
   const [panelRequest, setPanelRequest] = useState("");
-  const [runId, setRunId] = useState<string | null>(null);
+  const [runId, setRunIdState] = useState<string | null>(() => storedRun(kind));
   const [error, setError] = useState<string | null>(null);
   const copy = COPY[kind];
+  const setRunId = (id: string | null) => {
+    storeRun(kind, id);
+    setRunIdState(id);
+  };
 
   const run = useQuery<ForgeRunStatus>({
     queryKey: ["forge-creator", "run", runId],
     queryFn: ({ signal }) => getForgeRunStatus(runId!, signal),
     enabled: !!runId,
     refetchInterval: (query) => {
+      if (query.state.error) return false;
       const s = query.state.data?.status;
       return s === "success" || s === "failed" ? false : 1000;
     },
   });
+
+  // Runs live in the console's memory: after a restart the status route
+  // answers 404. Say so and free the form instead of spinning forever.
+  useEffect(() => {
+    if (!run.error || !runId) return;
+    setError("This run is no longer known to the console (it may have restarted). Start a new one.");
+    setRunId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run.error, runId]);
 
   useEffect(() => {
     if (run.data?.status !== "success") return;
@@ -102,8 +146,8 @@ export default function ForgeCreatorPanel({ kind, onCreated }: { kind: ForgeKind
     onError: (e: Error) => setError(e.message),
   });
 
-  const isRunning = !!runId && (!run.data || run.data.status === "running");
-  const status = run.data;
+  const isRunning = !!runId && !run.error && (!run.data || run.data.status === "running");
+  const status = runId ? run.data : undefined;
 
   return (
     <Card data-testid={`${kind}-forge`}>
@@ -156,7 +200,8 @@ export default function ForgeCreatorPanel({ kind, onCreated }: { kind: ForgeKind
             {isRunning ? "Generating…" : copy.cta}
           </Button>
           <p className="text-[10px] text-muted-foreground">
-            A run takes several minutes and is charged to your Claude subscription. Member feature.
+            A run takes several minutes and is charged to your configured engine (Claude subscription
+            or API key). Member feature.
           </p>
         </div>
 
@@ -197,7 +242,13 @@ export default function ForgeCreatorPanel({ kind, onCreated }: { kind: ForgeKind
               })}
             </ol>
             <p className="text-xs" data-testid={`${kind}-run-message`}>{status.message}</p>
-            {status.tool && <ToolResult tool={status.tool} />}
+            {status.tool && (
+              <ToolResult
+                tool={status.tool}
+                registered={status.status === "success"}
+                onOpenTools={onOpenTools}
+              />
+            )}
             {status.plugin && (
               <div className="space-y-2 text-xs" data-testid="plugin-result">
                 <div className="flex flex-wrap items-center gap-2">
@@ -220,7 +271,15 @@ export default function ForgeCreatorPanel({ kind, onCreated }: { kind: ForgeKind
   );
 }
 
-function ToolResult({ tool }: { tool: NonNullable<ForgeRunStatus["tool"]> }) {
+function ToolResult({
+  tool,
+  registered,
+  onOpenTools,
+}: {
+  tool: NonNullable<ForgeRunStatus["tool"]>;
+  registered: boolean;
+  onOpenTools?: () => void;
+}) {
   return (
     <div className="space-y-2 text-xs" data-testid="tool-result">
       <div className="flex flex-wrap items-center gap-2">
@@ -242,7 +301,11 @@ function ToolResult({ tool }: { tool: NonNullable<ForgeRunStatus["tool"]> }) {
         ))}
       </ul>
       <Findings items={tool.findings} skipped={false} />
-      <Link to="/app/forge?tab=tools" className="text-accent underline">Open it in Tools</Link>
+      {registered && onOpenTools && (
+        <button type="button" onClick={onOpenTools} className="text-accent underline" data-testid="open-tools">
+          Open it in Tools
+        </button>
+      )}
     </div>
   );
 }

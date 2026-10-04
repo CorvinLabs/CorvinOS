@@ -3,8 +3,10 @@
 Generate a tool or a plugin from a description, exactly the way Skill Forge
 generates a skill: POST starts a run on the shared run store (``forge_runs``),
 the panel polls the tenant-bound status. Every route needs a session; every
-mutation needs CSRF and ``forge.create`` (ADR-0701, member-only — tools,
-panels and the plugin builder never left the member gate, ADR-2095).
+mutation needs CSRF. Generating needs ``forge.create`` (ADR-0701, member-only —
+tools, panels and the plugin builder never left the member gate, ADR-2095);
+deleting a forged plugin does not (ADR-0701 G3: delete is a state change, not
+generation — a lapsed member can still remove their own files).
 
 Endpoints:
   POST   /forge-creator/{kind}/generate    kind = tool | plugin
@@ -100,8 +102,11 @@ async def generate(
         raise HTTPException(status_code=403, detail=str(refused))
 
     tenant_id = rec.tenant_id
-    run_id = forge_runs.new_run(tenant_id=tenant_id, kind=kind, phases=_phases(kind),
-                                sid_fingerprint=rec.sid_fingerprint)
+    try:
+        run_id = forge_runs.new_run(tenant_id=tenant_id, kind=kind, phases=_phases(kind),
+                                    sid_fingerprint=rec.sid_fingerprint)
+    except forge_runs.GenerationBusy as busy:
+        raise HTTPException(status_code=429, detail=str(busy))
 
     if kind == "tool":
         def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
@@ -163,12 +168,15 @@ def _forged_root(tenant_id: str) -> Path:
 
 
 def _provenance(dest: Path) -> Optional[Dict[str, Any]]:
-    from skill_creator.plugin_creator import PROVENANCE_FILE  # noqa: PLC0415
+    from skill_creator.plugin_creator import PROVENANCE_FILE, PROVENANCE_SURFACE  # noqa: PLC0415
+    path = dest / PROVENANCE_FILE
+    if path.is_symlink():
+        return None
     try:
-        data = json.loads((dest / PROVENANCE_FILE).read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    return data if isinstance(data, dict) and data.get("generator") == "plugin_forge" else None
+    return data if isinstance(data, dict) and data.get("surface") == PROVENANCE_SURFACE else None
 
 
 def _forged_dir(tenant_id: str, dirname: str) -> Path:
@@ -243,7 +251,7 @@ async def get_forged(
         index = dest / "panel" / "index.html"
         if index.is_file() and not index.is_symlink():
             panel_html = index.read_text(encoding="utf-8", errors="replace")
-    return {**_summary(dest, prov), "request": prov.get("request"),
+    return {**_summary(dest, prov), "request_chars": prov.get("request_chars"),
             "findings": prov.get("findings") or [], "warnings": prov.get("warnings") or [],
             "egress_hosts": prov.get("egress_hosts") or [], "engine": prov.get("engine"),
             "panel": panel, "panel_html": panel_html, "files": files}
@@ -253,16 +261,18 @@ async def get_forged(
 async def delete_forged(
     dirname: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-    _lic: Annotated[session_auth.SessionRecord, Depends(require_forge_capability)],
 ) -> Dict[str, Any]:
     dest = _forged_dir(rec.tenant_id, dirname)
     plugin_id = (_provenance(dest) or {}).get("plugin_id") or dirname
-    shutil.rmtree(dest)
     try:
-        from plugin_builder import index_store  # noqa: PLC0415
-        index_store.remove(rec.tenant_id, str(dest))
-    except Exception as exc:  # noqa: BLE001 — the listing is best-effort; the files are gone
-        logger.warning("forged plugin %s: index cleanup failed: %s", dirname, exc)
+        shutil.rmtree(dest)
+    except OSError:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="plugin.forged_deleted", target_kind="generated_plugin",
+            target_id=plugin_id, reason="delete_failed",
+        )
+        raise HTTPException(status_code=500, detail="the forged plugin could not be fully deleted")
     console_audit.action_performed(
         tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
         action="plugin.forged_deleted", target_kind="generated_plugin", target_id=plugin_id,

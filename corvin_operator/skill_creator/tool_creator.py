@@ -32,13 +32,26 @@ TOOL_PHASES = ("planning", "validation", "sandbox_test", "review", "promotion")
 CALLER_PERSONA = "assistant"
 NAMESPACE = "assistant."
 K_MAX = 3
-MAX_TEST_CASES = 6
+MIN_TEST_CASES = 2
+MAX_TEST_CASES = 5
 MAX_IMPL_CHARS = 64 * 1024
 _NAME_OK = re.compile(r"^[a-z0-9_.]{1,128}$")
 
 
 class ToolCreatorError(Exception):
-    """A tool run failed; ``str()`` is shown to the operator."""
+    """A tool run failed; ``str()`` is shown to the operator.
+
+    ``result_fields`` travels onto the failed run record, so the operator sees
+    WHICH test cases failed or what the reviewers found, not only that it failed.
+    """
+
+    def __init__(self, message: str, *, summary: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.result_fields = {"tool": summary} if summary else {}
+
+
+class SandboxUnavailable(ToolCreatorError):
+    """No bubblewrap jail on this host — generated code is never run without one."""
 
 
 @dataclass
@@ -108,7 +121,7 @@ def _draft_from(data: Dict[str, Any]) -> ToolDraft:
         description=" ".join(str(data.get("description") or "").split())[:300],
         input_schema=data.get("input_schema") if isinstance(data.get("input_schema"), dict) else {},
         impl=str(data.get("impl") or ""),
-        test_cases=[c for c in cases if isinstance(c, dict)][:MAX_TEST_CASES] if isinstance(cases, list) else [],
+        test_cases=[c for c in cases if isinstance(c, dict)][:MAX_TEST_CASES + 1] if isinstance(cases, list) else [],
     )
 
 
@@ -122,7 +135,7 @@ def _draft_json(draft: ToolDraft) -> str:
 
 def _subset_mismatch(expect: Any, data: Any) -> Optional[str]:
     if not isinstance(expect, dict) or not expect:
-        return None
+        return "test case states no expected output"  # validation refuses these; never a free pass
     if not isinstance(data, dict):
         return f"output is {type(data).__name__}, expected an object"
     for key, value in expect.items():
@@ -191,9 +204,14 @@ class ToolCreatorOrchestrator:
         schema = draft.input_schema
         if schema.get("type") != "object" or not isinstance(schema.get("properties", {}), dict):
             problems.append('input_schema must be a JSON Schema object with "type": "object"')
-        if not 1 <= len(draft.test_cases) <= MAX_TEST_CASES:
-            problems.append(f"test_cases must hold 1 to {MAX_TEST_CASES} cases")
+        if not MIN_TEST_CASES <= len(draft.test_cases) <= MAX_TEST_CASES:
+            problems.append(f"test_cases must hold {MIN_TEST_CASES} to {MAX_TEST_CASES} cases")
+        if self._multi().get_in_scope(draft.name, "user") is not None:
+            problems.append(f"a tool named {draft.name!r} already exists — choose another name")
         for i, case in enumerate(draft.test_cases):
+            expect = case.get("expect")
+            if not isinstance(expect, dict) or not expect:
+                problems.append(f"test_cases[{i}].expect must name at least one expected output key")
             payload = case.get("input")
             if not isinstance(payload, dict):
                 problems.append(f"test_cases[{i}].input must be an object")
@@ -207,32 +225,43 @@ class ToolCreatorOrchestrator:
     # -- phase 3: real sandbox execution ---------------------------------
 
     def run_test_cases(self, draft: ToolDraft) -> Dict[str, Any]:
-        """Register the draft in a throw-away registry and run every case in the sandbox.
+        """Register the draft in a throw-away registry and run every case in the bwrap jail.
 
         The staging registry lives in a temp dir outside ``CORVIN_HOME``: it is
         a test bench, not the tenant's tool store, so the draft never reaches
-        the tenant registry. Each sandbox execution is still audited as
-        ``forge.tool_executed`` by the runner, like any tool run — generated
-        code did run on this host. ``registry.create`` still runs its
-        ``forge.create`` licence gate — the route already required it.
+        the tenant registry. Generated code runs ONLY inside bubblewrap — on a
+        host without it the run refuses before executing anything (the runner
+        would otherwise fall back to rlimits on the bare host). Every execution
+        is recorded on the TENANT chain as ``forge.tool_executed``.
         """
         from forge.registry import Registry  # noqa: PLC0415
         from forge.runner import run_tool  # noqa: PLC0415
+        from forge.sandbox import have_bwrap  # noqa: PLC0415
+
+        if not have_bwrap():
+            raise SandboxUnavailable(
+                "This host has no bubblewrap sandbox (bwrap). Tool Forge never runs generated "
+                "code without it — install bubblewrap to use Tool Forge.")
 
         results: List[Dict[str, Any]] = []
         with tempfile.TemporaryDirectory(prefix="tool-forge-bench-") as bench:
             registry = Registry(Path(bench))
             registry.create(name=draft.name, description=draft.description,
-                            input_schema=draft.input_schema, impl=draft.impl)
+                            input_schema=draft.input_schema, impl=draft.impl,
+                            tenant_id=self.tenant_id)
             for i, case in enumerate(draft.test_cases):
                 entry: Dict[str, Any] = {"index": i, "input": case.get("input"),
                                          "expect": case.get("expect", {})}
+                res = None
                 try:
                     res = run_tool(registry, draft.name, case.get("input") or {},
-                                   permission_mode="yes", policy=self._policy())
+                                   permission_mode="yes", policy=self._policy(),
+                                   use_sandbox=True, caller_persona=CALLER_PERSONA)
                     entry["sandbox"] = res.sandbox
                     entry["output"] = res.data
-                    if not res.ok:
+                    if not str(res.sandbox).startswith("bwrap"):
+                        entry["error"] = f"ran without the bwrap jail ({res.sandbox}) — not accepted"
+                    elif not res.ok:
                         entry["error"] = (res.stderr or "tool returned ok=false")[-400:]
                     else:
                         mismatch = _subset_mismatch(case.get("expect"), res.data)
@@ -241,9 +270,24 @@ class ToolCreatorOrchestrator:
                 except Exception as exc:  # noqa: BLE001 — a crashing case is a failing case
                     entry["error"] = f"{type(exc).__name__}: {str(exc)[-400:]}"
                 entry["passed"] = "error" not in entry
+                self._audit_execution(draft.name, res, entry["passed"])
                 results.append(entry)
         return {"cases": results, "passed": sum(1 for r in results if r["passed"]),
                 "total": len(results)}
+
+    def _audit_execution(self, name: str, res: Any, passed: bool) -> None:
+        """One tenant-chain record per execution of generated code (metadata only)."""
+        from forge.paths import tenant_audit_chain  # noqa: PLC0415
+        from forge.security_events import write_event  # noqa: PLC0415
+        write_event(
+            tenant_audit_chain(self.tenant_id), "forge.tool_executed", tool=name,
+            run_id=getattr(res, "run_id", "") or "",
+            details={"status": "passed" if passed else "failed",
+                     "exit_code": int(getattr(res, "exit_code", -1)),
+                     "duration_ms": int(float(getattr(res, "duration_s", 0.0)) * 1000),
+                     "sandbox": str(getattr(res, "sandbox", "none")),
+                     "cache_hit": False},
+        )
 
     # -- the run ----------------------------------------------------------
 
@@ -287,7 +331,8 @@ class ToolCreatorOrchestrator:
                 _FIX_PROMPT.format(draft=_draft_json(draft),
                                    failures=json.dumps(failures, indent=2, default=str)[:8000],
                                    contract=_CONTRACT)))
-            fixed.name = draft.name  # a fix never renames the tool under test
+            fixed.name = draft.name  # a fix never renames the tool under test …
+            fixed.test_cases = draft.test_cases  # … and never rewrites the cases that judge it
             if self.collect_violations(fixed):
                 break  # a "fix" that breaks the contract is not a fix
             draft = fixed
@@ -312,19 +357,27 @@ class ToolCreatorOrchestrator:
         if not converged:
             raise ToolCreatorError(
                 f"Not registered: {tests.get('total', 0) - tests.get('passed', 0)} of "
-                f"{tests.get('total', 0)} sandbox test case(s) still fail after {iterations} iteration(s).")
+                f"{tests.get('total', 0)} sandbox test case(s) still fail after {iterations} iteration(s).",
+                summary=summary)
         security = [f for f in findings
                     if f.dimension == "security" and f.verdict.value == "confirmed"]
         if security:
             raise ToolCreatorError(
-                "Not registered: the security reviewer confirmed a finding — " + security[0].summary)
+                "Not registered: the security reviewer confirmed a finding — " + security[0].summary,
+                summary=summary)
+        missing = ar.unreviewed(findings, "security")
+        if missing:
+            raise ToolCreatorError(
+                "Not registered: the security review did not complete — " + missing[0].summary,
+                summary=summary)
 
         self._progress("promotion", 90, f"Registering '{draft.name}'…")
         spec = self._multi().create(
             scope="user", name=draft.name, description=draft.description,
             input_schema=draft.input_schema, impl=draft.impl,
+            # Test inputs are request-derived; the registry keeps only their count.
             meta={"generated_by": "tool-forge", "engine": self.engine_id,
-                  "test_cases": draft.test_cases},
+                  "test_case_count": len(draft.test_cases)},
         )
         summary["registry_path"] = spec.impl_path
         summary["sha256"] = spec.sha256

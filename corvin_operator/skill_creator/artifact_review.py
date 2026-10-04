@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
 from . import llm_client
 from . import skill_creator as sc
@@ -48,7 +48,7 @@ If no findings, output: VERDICT: REFUTED"""
 
 #: Upper bound on the artifact text one reviewer sees; a review of a truncated
 #: artifact says so instead of silently judging half of it.
-MAX_ARTIFACT_CHARS = 40_000
+MAX_ARTIFACT_CHARS = 120_000
 
 
 def resolve_engine() -> Any:
@@ -88,38 +88,77 @@ def ask_json(client: Any, prompt: str, *, max_tokens: int = 8000) -> Dict[str, A
     return data
 
 
+#: Synthetic finding ids that mark a dimension whose review did not happen.
+#: A gate that must be fail-closed treats them as blocking.
+ERROR_SUFFIX = "-error"
+NO_VERDICT_SUFFIX = "-noverdict"
+TRUNCATED_ID = "artifact-truncated"
+
+
+async def run_reviewers(fns: Dict[str, Callable[[], Awaitable[str]]], *,
+                        on_error: str = "flag") -> List[sc.ReviewFinding]:
+    """Run one reviewer per dimension in parallel and parse their verdicts.
+
+    The ONE reviewer loop of every Forge kind — the Skill-Creator's phase 4
+    calls it too. ``on_error="flag"`` turns a reviewer that crashed, or replied
+    without any ``VERDICT:``, into a PLAUSIBLE finding with a synthetic id
+    (``<dim>-error`` / ``<dim>-noverdict``) so a fail-closed gate can see that
+    the dimension was never reviewed; ``"drop"`` keeps the Skill-Creator's
+    historical behaviour of skipping it.
+    """
+    dims = list(fns)
+    results = await asyncio.gather(*(fns[d]() for d in dims), return_exceptions=True)
+    findings: List[sc.ReviewFinding] = []
+    for dim, result in zip(dims, results):
+        if isinstance(result, BaseException):
+            logger.error("review dimension %s failed: %s", dim, result)
+            if on_error == "flag":
+                findings.append(sc.ReviewFinding(
+                    finding_id=dim + ERROR_SUFFIX, dimension=dim,
+                    summary=f"reviewer failed to run ({type(result).__name__})",
+                    verdict=sc.ReviewVerdict.PLAUSIBLE, reasoning=str(result)[:200]))
+            continue
+        parsed = sc.parse_review_findings(result, dim)
+        if not parsed and on_error == "flag" and "VERDICT:" not in (result or "").upper():
+            findings.append(sc.ReviewFinding(
+                finding_id=dim + NO_VERDICT_SUFFIX, dimension=dim,
+                summary="reviewer replied without a verdict",
+                verdict=sc.ReviewVerdict.PLAUSIBLE, reasoning=(result or "")[:200]))
+        findings.extend(parsed)
+    return findings
+
+
 async def review(client: Any, *, kind: str, name: str, purpose: str, artifact: str,
                  dimensions: Sequence[str] = tuple(DIMENSIONS)) -> List[sc.ReviewFinding]:
-    """Run one reviewer per dimension in parallel; an engine-less run returns []."""
+    """Correctness / security / scope review of a tool or plugin; engine-less → []."""
     if client is None:
         logger.warning("%s review skipped: no engine available", kind)
         return []
     text = artifact
-    if len(text) > MAX_ARTIFACT_CHARS:
+    truncated = len(text) > MAX_ARTIFACT_CHARS
+    if truncated:
         text = text[:MAX_ARTIFACT_CHARS] + "\n[artifact truncated for review]"
 
-    async def one(dimension: str) -> List[sc.ReviewFinding]:
+    def fn(dimension: str) -> Callable[[], Awaitable[str]]:
         prompt = _REVIEW_TEMPLATE.format(
             kind=kind, kind_title=kind.capitalize(), dimension_upper=dimension.upper(),
             what=DIMENSIONS[dimension], name=name, purpose=purpose, artifact=text,
         )
-        reply = await asyncio.to_thread(ask, client, prompt, max_tokens=800)
-        return sc.parse_review_findings(reply, dimension)
+        return lambda: asyncio.to_thread(ask, client, prompt, max_tokens=800)
 
-    results = await asyncio.gather(*(one(d) for d in dimensions), return_exceptions=True)
-    findings: List[sc.ReviewFinding] = []
-    for dimension, result in zip(dimensions, results):
-        if isinstance(result, Exception):
-            # A reviewer that could not run is not a clean dimension.
-            logger.error("%s review dimension %s failed: %s", kind, dimension, result)
-            findings.append(sc.ReviewFinding(
-                finding_id=f"{dimension}-error", dimension=dimension,
-                summary=f"reviewer failed to run ({type(result).__name__})",
-                verdict=sc.ReviewVerdict.PLAUSIBLE, reasoning=str(result)[:200],
-            ))
-            continue
-        findings.extend(result)
+    findings = await run_reviewers({d: fn(d) for d in dimensions}, on_error="flag")
+    if truncated:
+        findings.append(sc.ReviewFinding(
+            finding_id=TRUNCATED_ID, dimension="security",
+            summary=f"artifact exceeds {MAX_ARTIFACT_CHARS} characters; its tail was not reviewed",
+            verdict=sc.ReviewVerdict.PLAUSIBLE, reasoning=""))
     return findings
+
+
+def unreviewed(findings: List[sc.ReviewFinding], dimension: str) -> List[sc.ReviewFinding]:
+    """Synthetic findings saying *dimension* was not (fully) reviewed."""
+    return [f for f in findings if f.dimension == dimension and (
+        f.finding_id.endswith((ERROR_SUFFIX, NO_VERDICT_SUFFIX)) or f.finding_id == TRUNCATED_ID)]
 
 
 def quality(findings: List[sc.ReviewFinding], *, converged: bool, dimensions: int) -> float:

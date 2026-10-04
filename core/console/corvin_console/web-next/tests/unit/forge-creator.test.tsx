@@ -8,7 +8,7 @@
  *    panel in an iframe sandboxed to exactly `allow-scripts`, and deletes with
  *    CSRF after a two-click confirm.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -44,6 +44,7 @@ function wrap(ui: React.ReactNode) {
   return render(<QueryClientProvider client={qc}><MemoryRouter>{ui}</MemoryRouter></QueryClientProvider>);
 }
 
+beforeEach(() => { window.sessionStorage.clear(); });
 afterEach(() => { cleanup(); seen.length = 0; });
 
 describe("Plugin Forge", () => {
@@ -92,7 +93,8 @@ describe("Tool Forge", () => {
       })),
     );
     const onCreated = vi.fn();
-    wrap(<ForgeCreatorPanel kind="tool" onCreated={onCreated} />);
+    const onOpenTools = vi.fn();
+    wrap(<ForgeCreatorPanel kind="tool" onCreated={onCreated} onOpenTools={onOpenTools} />);
     expect(screen.queryByTestId("plugin-panel-request")).toBeNull();
     fireEvent.change(screen.getByTestId("tool-request"), { target: { value: "count the words in a text" } });
     fireEvent.click(screen.getByTestId("tool-submit"));
@@ -100,6 +102,51 @@ describe("Tool Forge", () => {
     expect(seen[0]).toMatchObject({ csrf: "csrf-test", body: { user_request: "count the words in a text" } });
     expect(screen.getByText("1/1 sandbox tests")).toBeTruthy();
     expect(onCreated).toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("open-tools"));
+    expect(onOpenTools).toHaveBeenCalled();
+  });
+
+  it("shows the failing cases of a refused tool and offers no Tools link", async () => {
+    server.use(
+      http.post("/v1/console/forge-creator/tool/generate", () =>
+        HttpResponse.json({ status: "accepted", run_id: "run-3", kind: "tool", message: "" }, { status: 202 })),
+      http.get("/v1/console/forge-creator/status/run-3", () => HttpResponse.json({
+        run_id: "run-3", kind: "tool", status: "failed", phase: "sandbox_test",
+        phases: ["planning", "validation", "sandbox_test", "review", "promotion"], progress: 60,
+        message: "Not registered: 1 of 1 sandbox test case(s) still fail after 3 iteration(s).",
+        engine: "claude_code", error: "x", plugin: null,
+        tool: { name: "assistant.word_count", description: "Counts.", input_schema: {},
+                tests: { passed: 0, total: 1, cases: [{ index: 0, input: { text: "a" }, expect: { words: 1 }, output: { words: 42 }, error: "'words': expected 1, got 42", passed: false, sandbox: "bwrap" }] },
+                iterations: 3, quality: 0.8, findings: [], sandbox: ["bwrap"] },
+      })),
+    );
+    wrap(<ForgeCreatorPanel kind="tool" onOpenTools={vi.fn()} />);
+    fireEvent.change(screen.getByTestId("tool-request"), { target: { value: "count the words in a text" } });
+    fireEvent.click(screen.getByTestId("tool-submit"));
+    await waitFor(() => expect(screen.getByText(/expected 1, got 42/)).toBeTruthy());
+    expect(screen.queryByTestId("open-tools")).toBeNull();
+  });
+
+  it("frees the form when the console no longer knows the run (restart → 404)", async () => {
+    window.sessionStorage.setItem("forge-creator-run:tool", "run-gone");
+    server.use(http.get("/v1/console/forge-creator/status/run-gone", () =>
+      HttpResponse.json({ detail: "Run not found: run-gone" }, { status: 404 })));
+    wrap(<ForgeCreatorPanel kind="tool" />);
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toMatch(/no longer known/);
+    expect(window.sessionStorage.getItem("forge-creator-run:tool")).toBeNull();
+  });
+
+  it("re-attaches to a run after the tab was left and re-entered", async () => {
+    window.sessionStorage.setItem("forge-creator-run:plugin", "run-9");
+    server.use(http.get("/v1/console/forge-creator/status/run-9", () => HttpResponse.json({
+      run_id: "run-9", kind: "plugin", status: "running", phase: "review",
+      phases: ["planning", "classification", "generation", "checks", "review", "staging"], progress: 75,
+      message: "Adversarial review…", engine: "claude_code", error: null, tool: null, plugin: null,
+    })));
+    wrap(<ForgeCreatorPanel kind="plugin" />);
+    expect(await screen.findByText("Adversarial review…")).toBeTruthy();
+    expect((screen.getByTestId("plugin-submit") as HTMLButtonElement).disabled).toBe(true);
   });
 });
 
@@ -108,8 +155,8 @@ describe("Marketplace → Forged", () => {
     server.use(
       http.get("/v1/console/forge-creator/plugins", () => HttpResponse.json({ plugins: [SUMMARY], count: 1 })),
       http.get("/v1/console/forge-creator/plugins/:dirname", () => HttpResponse.json({
-        ...SUMMARY, request: "weather", findings: [], warnings: [], egress_hosts: ["api.open-meteo.com"], engine: "claude_code",
-        panel: { title: "Weather Digest", entry: "panel/index.html", sandbox: ["allow-scripts"] },
+        ...SUMMARY, request_chars: 7, findings: [], warnings: [], egress_hosts: ["api.open-meteo.com"], engine: "claude_code",
+        panel: { title: "Weather Digest", entry: "panel/index.html" },
         panel_html: "<h1>Status</h1>", files: [{ path: "plugin.py", size: 10, content: "print(1)" }],
       })),
     );
@@ -120,7 +167,10 @@ describe("Marketplace → Forged", () => {
     fireEvent.click(screen.getByTestId("forged-toggle"));
     const frame = await screen.findByTestId("forged-panel-preview");
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(frame.getAttribute("srcdoc")).toBe("<h1>Status</h1>");
+    const doc = frame.getAttribute("srcdoc") ?? "";
+    expect(doc.endsWith("<h1>Status</h1>")).toBe(true);
+    expect(doc).toContain("Content-Security-Policy");
+    expect(doc).toContain("default-src 'none'");
   });
 
   it("deletes with CSRF only after confirming", async () => {
@@ -140,5 +190,13 @@ describe("Marketplace → Forged", () => {
     server.use(http.get("/v1/console/forge-creator/plugins", () => HttpResponse.json({ plugins: [], count: 0 })));
     wrap(<ForgedTab />);
     expect(await screen.findByTestId("forged-empty")).toBeTruthy();
+  });
+});
+
+describe("previewDocument", () => {
+  it("keeps a leading doctype first so the preview stays in standards mode", async () => {
+    const { previewDocument } = await import("@/lib/api/forge-creator");
+    const out = previewDocument("<!doctype html><html><body>x</body></html>");
+    expect(out.startsWith("<!doctype html><meta")).toBe(true);
   });
 });

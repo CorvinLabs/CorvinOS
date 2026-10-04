@@ -42,9 +42,10 @@ PANEL_HTML = ("<!doctype html><html><head><title>Status</title><style>body{font:
               "</body></html>")
 
 
-def tool_plan(impl: str, name: str = "Word Count") -> str:
+def tool_plan(impl: str, name: str = "Word Count", cases=None) -> str:
     return json.dumps({"name": name, "description": "Counts the words in a text.",
-                       "input_schema": SCHEMA, "impl": impl, "test_cases": CASES})
+                       "input_schema": SCHEMA, "impl": impl,
+                       "test_cases": CASES if cases is None else cases})
 
 
 PLUGIN_PLAN = json.dumps({
@@ -76,7 +77,10 @@ class ScriptedEngine:
         self.prompts.append(prompt)
         if "reviewer focused on" in prompt:
             dim = prompt.split("reviewer focused on ", 1)[1].split(".", 1)[0].lower()
-            return _Reply(self.script.get(f"review_{dim}", "VERDICT: REFUTED"))
+            reply = self.script.get(f"review_{dim}", "VERDICT: REFUTED")
+            if reply == "RAISE":
+                raise RuntimeError("reviewer crashed")
+            return _Reply(reply)
         if "Design a small, single-purpose tool" in prompt:
             return _Reply(self.script.get("tool_plan", tool_plan(GOOD_IMPL)))
         if "violates its contract" in prompt:
@@ -91,12 +95,14 @@ class ScriptedEngine:
 
 
 @contextmanager
-def console(tmp_path: Path, engine, *, tier: str | None = "member", tenant: str = "_default"):
+def console(tmp_path: Path, engine, *, tier: str | None = "member", tenant: str = "_default",
+            process_tenant: str | None = None):
     home = tmp_path / "corvin_home"
-    for sub in ("auth", "forge", "console/sessions"):
-        (home / "tenants" / tenant / "global" / sub).mkdir(parents=True, exist_ok=True)
+    for tid in {tenant, process_tenant or tenant}:
+        for sub in ("auth", "forge", "console/sessions"):
+            (home / "tenants" / tid / "global" / sub).mkdir(parents=True, exist_ok=True)
     prev = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_TENANT_ID", "CORVIN_PROJECT_ROOT")}
-    os.environ.update({"CORVIN_HOME": str(home), "CORVIN_TENANT_ID": tenant,
+    os.environ.update({"CORVIN_HOME": str(home), "CORVIN_TENANT_ID": process_tenant or tenant,
                        "CORVIN_PROJECT_ROOT": str(home)})
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -152,8 +158,8 @@ def start(client, kind: str, request: str, **extra) -> str:
     return resp.json()["run_id"]
 
 
-def chain_actions(client) -> list[str]:
-    chain = client.home / "tenants" / client.tenant / "global" / "forge" / "audit.jsonl"
+def chain_actions(client, tenant: str | None = None) -> list[str]:
+    chain = client.home / "tenants" / (tenant or client.tenant) / "global" / "forge" / "audit.jsonl"
     out = []
     if chain.exists():
         for line in chain.read_text().splitlines():
@@ -184,8 +190,12 @@ def test_tool_run_registers_a_sandbox_tested_tool(tmp_path):
         tool = body["tool"]
         assert tool["name"] == "assistant.word_count"
         assert tool["tests"]["passed"] == tool["tests"]["total"] == 2
+        assert tool["sandbox"] == ["bwrap"]
         assert "assistant.word_count" in listed_tools(client)
-        assert "tool.generated_created" in chain_actions(client)
+        actions = chain_actions(client)
+        assert "tool.generated_created" in actions
+        # Each execution of generated code is on the TENANT chain.
+        assert actions.count("forge.tool_executed") == 2
 
 
 def test_tool_that_fails_its_sandbox_tests_is_not_registered(tmp_path):
@@ -194,6 +204,8 @@ def test_tool_that_fails_its_sandbox_tests_is_not_registered(tmp_path):
         body = poll(client, start(client, "tool", "count the words in a text"))
         assert body["status"] == "failed"
         assert "sandbox test case" in body["message"]
+        # The operator sees which cases failed, not only that it failed.
+        assert body["tool"]["tests"]["passed"] < body["tool"]["tests"]["total"]
         assert "assistant.word_count" not in listed_tools(client)
         assert "tool.generated_creation_failed" in chain_actions(client)
 
@@ -217,6 +229,82 @@ def test_confirmed_security_finding_blocks_registration(tmp_path):
         assert "assistant.word_count" not in listed_tools(client)
 
 
+def test_no_bwrap_means_no_execution_and_no_registration(tmp_path, monkeypatch):
+    engine = ScriptedEngine()
+    with console(tmp_path, engine) as client:
+        from forge import sandbox
+        monkeypatch.setattr(sandbox, "have_bwrap", lambda: False)
+        body = poll(client, start(client, "tool", "count the words in a text"))
+        assert body["status"] == "failed"
+        assert "bubblewrap" in body["message"]
+        assert "forge.tool_executed" not in chain_actions(client)
+        assert "assistant.word_count" not in listed_tools(client)
+
+
+@pytest.mark.parametrize("reply", ["RAISE", "I refuse to answer in that format."])
+def test_security_review_that_did_not_complete_blocks_registration(tmp_path, reply):
+    engine = ScriptedEngine(review_security=reply)
+    with console(tmp_path, engine) as client:
+        body = poll(client, start(client, "tool", "count the words in a text"))
+        assert body["status"] == "failed"
+        assert "security review did not complete" in body["message"]
+        assert "assistant.word_count" not in listed_tools(client)
+
+
+def test_test_cases_without_expectations_are_refused(tmp_path):
+    empty = [{"input": {"text": "a b"}, "expect": {}}, {"input": {"text": ""}, "expect": {}}]
+    engine = ScriptedEngine(tool_plan=tool_plan(BROKEN_IMPL, cases=empty),
+                            tool_repair=tool_plan(BROKEN_IMPL, cases=empty))
+    with console(tmp_path, engine) as client:
+        body = poll(client, start(client, "tool", "count the words in a text"))
+        assert body["status"] == "failed"
+        assert "expect" in body["message"]
+        assert "assistant.word_count" not in listed_tools(client)
+
+
+def test_a_fix_cannot_rewrite_the_cases_that_judge_it(tmp_path):
+    rigged = [{"input": {"text": "a b c"}, "expect": {"words": 42}},
+              {"input": {"text": ""}, "expect": {"words": 42}}]
+    engine = ScriptedEngine(tool_plan=tool_plan(BROKEN_IMPL),
+                            tool_fix=tool_plan(BROKEN_IMPL, cases=rigged))
+    with console(tmp_path, engine) as client:
+        body = poll(client, start(client, "tool", "count the words in a text"))
+        assert body["status"] == "failed"
+        assert "assistant.word_count" not in listed_tools(client)
+
+
+def test_a_second_tool_with_the_same_name_is_refused_before_running(tmp_path):
+    engine = ScriptedEngine()
+    with console(tmp_path, engine) as client:
+        assert poll(client, start(client, "tool", "count the words in a text"))["status"] == "success"
+        body = poll(client, start(client, "tool", "count the words in a text again"))
+        assert body["status"] == "failed"
+        assert "already exists" in body["message"]
+        assert chain_actions(client).count("forge.tool_executed") == 2  # only the first run executed
+
+
+def test_the_registry_licence_gate_asks_for_the_session_tenant(tmp_path, monkeypatch):
+    """ADR-0703: the G1 gate inside Registry.create is decided for the SESSION's
+    tenant, not the process's. (The audit chokepoint itself binds a console process
+    to one tenant context — F-A6 — so the records are not asserted here.)"""
+    engine = ScriptedEngine()
+    with console(tmp_path, engine, tenant="acme", process_tenant="_default") as client:
+        from corvin_operator.license import capability_api
+        asked = []
+        real = capability_api.require_capability
+
+        def spy(capability, **kw):
+            if capability == "forge.create" and str(kw.get("entry_point", "")).startswith("forge:registry"):
+                asked.append(kw.get("tenant_id"))
+            return real(capability, **kw)
+
+        monkeypatch.setattr(capability_api, "require_capability", spy)
+        body = poll(client, start(client, "tool", "count the words in a text"))
+        assert body["status"] == "success", body
+        assert asked and set(asked) == {"acme"}
+        assert (client.home / "tenants" / "acme" / "forge" / "registry.json").exists()
+
+
 # ── Plugin Forge ────────────────────────────────────────────────────────────
 
 def test_plugin_run_stages_with_panel_and_shows_in_marketplace(tmp_path):
@@ -236,13 +324,19 @@ def test_plugin_run_stages_with_panel_and_shows_in_marketplace(tmp_path):
 
         detail = client.get(f"/v1/console/forge-creator/plugins/{plugin['dirname']}").json()
         assert detail["panel_html"] == PANEL_HTML
-        assert detail["panel"]["sandbox"] == ["allow-scripts"]
         surface = next(f for f in detail["files"] if f["path"] == "panel/surface.yaml")
-        assert json.loads(surface["content"])["sandbox"] == ["allow-scripts"]
+        # The plugin names its entry; sandbox tokens are never self-declared (ADR-2189 D2).
+        assert json.loads(surface["content"]) == {
+            "kind": "web_surface", "id": plugin["plugin_id"].replace(".", "-"),
+            "title": "Weather Digest", "entry": "index.html"}
+        prov = json.loads(next(f for f in detail["files"] if f["path"] == "FORGE_PROVENANCE.json")["content"])
+        assert prov["generator"] == "plugin_builder" and prov["surface"] == "plugin_forge"
+        assert "request" not in prov and prov["request_chars"] == len("a plugin that summarises the daily weather")
+        assert detail["request_chars"] == prov["request_chars"]
 
-        # The Builder index behind Settings → Plugins (/plugins/scaffolded, flag-gated).
+        # One reader per concept: forged plugins are listed by Forged only, not the Builder index.
         from plugin_builder import index_store
-        assert [r["plugin_id"] for r in index_store.list_scaffolds(client.tenant)] == [plugin["plugin_id"]]
+        assert index_store.list_scaffolds(client.tenant) == []
         assert "plugin.forged_staged" in chain_actions(client)
 
         # Not installed: the tenant plugin registry never heard of it.
@@ -252,7 +346,6 @@ def test_plugin_run_stages_with_panel_and_shows_in_marketplace(tmp_path):
         resp = client.delete(f"/v1/console/forge-creator/plugins/{plugin['dirname']}")
         assert resp.status_code == 200, resp.text
         assert client.get("/v1/console/forge-creator/plugins").json()["count"] == 0
-        assert index_store.list_scaffolds(client.tenant) == []
         assert "plugin.forged_deleted" in chain_actions(client)
 
 
@@ -326,3 +419,66 @@ def test_unknown_kind_and_bad_dirname_are_rejected(tmp_path):
         resp = client.post("/v1/console/forge-creator/tool/generate",
                            json={"user_request": "count the words in a text", "panel_request": "x"})
         assert resp.status_code == 400
+
+
+def test_a_lapsed_member_can_still_delete_a_forged_plugin(tmp_path):
+    with console(tmp_path, ScriptedEngine()) as client:
+        plugin = poll(client, start(client, "plugin", "a plugin that summarises the daily weather"))["plugin"]
+        from license import validator as _validator
+        _validator._set_active_license(None)  # free tier now
+        assert client.post("/v1/console/forge-creator/plugin/generate",
+                           json={"user_request": "another plugin for the weather"}).status_code == 402
+        resp = client.delete(f"/v1/console/forge-creator/plugins/{plugin['dirname']}")
+        assert resp.status_code == 200, resp.text
+
+
+def test_an_existing_directory_blocks_the_name_and_is_left_alone(tmp_path):
+    with console(tmp_path, ScriptedEngine()) as client:
+        squatter = client.home / "tenants" / client.tenant / "plugin-builder" / "community_weather_digest"
+        squatter.mkdir(parents=True)
+        (squatter / "keep.txt").write_text("chat builder scaffold")
+        body = poll(client, start(client, "plugin", "a plugin that summarises the daily weather"))
+        assert body["status"] == "failed" and "already exists" in body["message"]
+        assert (squatter / "keep.txt").read_text() == "chat builder scaffold"
+
+
+def test_compile_check_reports_a_syntax_error(tmp_path):
+    from skill_creator.plugin_creator import PluginCreatorOrchestrator
+    (tmp_path / "plugin.py").write_text("def broken(:\n    pass\n")
+    (tmp_path / "ok.py").write_text("x = 1\n")
+    problems = PluginCreatorOrchestrator.compile_check(tmp_path)
+    assert len(problems) == 1 and problems[0].startswith("plugin.py")
+    assert not list(tmp_path.glob("*.forgecheck"))
+
+
+def test_a_refine_gates_the_base_skill_body_too(tmp_path, monkeypatch):
+    with console(tmp_path, ScriptedEngine()) as client:
+        body = "# assistant.notes_helper\n\nSECRET-BASE-BODY-MARKER keeps meeting notes tidy and short.\n"
+        resp = client.post("/v1/console/skills/manual", json={"name": "assistant.notes_helper", "body": body})
+        assert resp.status_code in (200, 201), resp.text
+        seen = []
+        from corvin_console import _spawn_gates
+        monkeypatch.setattr(_spawn_gates, "check_console_spawn_or_refusal",
+                            lambda prompt, **k: seen.append(prompt) or "refused for the test")
+        resp = client.post("/v1/console/skill-creator/generate",
+                           json={"user_request": "make it shorter please", "base_skill": "assistant.notes_helper"})
+        assert resp.status_code == 403
+        assert "SECRET-BASE-BODY-MARKER" in seen[0]
+
+
+def test_too_many_runs_in_flight_is_429(tmp_path, monkeypatch):
+    with console(tmp_path, ScriptedEngine()) as client:
+        from corvin_console import forge_runs
+        monkeypatch.setattr(forge_runs, "MAX_RUNNING_PER_TENANT", 0)
+        resp = client.post("/v1/console/forge-creator/tool/generate",
+                           json={"user_request": "count the words in a text"})
+        assert resp.status_code == 429, resp.text
+
+
+def test_task_board_labels_forge_runs_by_kind(tmp_path):
+    with console(tmp_path, ScriptedEngine()) as client:
+        poll(client, start(client, "plugin", "a plugin that summarises the daily weather"))
+        from corvin_console import task_sources
+        import time as _t
+        rows = list(task_sources._skill_creator(client.home / "tenants" / client.tenant, _t.time()))
+        assert [r["subtype"] for r in rows] == ["plugin"]

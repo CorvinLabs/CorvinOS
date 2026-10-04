@@ -25,12 +25,19 @@ runs_lock = threading.Lock()
 #: A finished run stays pollable; the oldest finished ones go first once the
 #: store holds this many records, so a long-lived console cannot grow it forever.
 MAX_RUNS = 500
+#: Engine runs are minutes long and spawn several `claude -p` calls each; a
+#: tenant gets this many in flight at once, the next POST is answered 429.
+MAX_RUNNING_PER_TENANT = 2
 
 ProgressCb = Callable[[str, int, str], None]
 
 
 class GenerationRefused(Exception):
     """A console pre-spawn gate refused the engine spawn; ``str()`` is user-facing."""
+
+
+class GenerationBusy(Exception):
+    """The tenant already has ``MAX_RUNNING_PER_TENANT`` runs in flight (or the store is full)."""
 
 
 def check_spawn_gates(prompt: str, *, tenant_id: str, sid_fingerprint: str,
@@ -76,7 +83,14 @@ def new_run(*, tenant_id: str, kind: str, phases: tuple[str, ...],
     }
     record.update(extra)
     with runs_lock:
+        running = sum(1 for r in runs.values()
+                      if r.get("tenant_id") == tenant_id and r.get("status") == "running")
+        if running >= MAX_RUNNING_PER_TENANT:
+            raise GenerationBusy(
+                f"{running} generation runs are already in progress — wait for one to finish.")
         _evict_locked()
+        if len(runs) >= MAX_RUNS:
+            raise GenerationBusy("The console's run store is full — try again shortly.")
         runs[run_id] = record
     return run_id
 
@@ -110,11 +124,14 @@ def get_run(run_id: str, tenant_id: str, kind: Optional[str] = None) -> Optional
 def spawn(*, run_id: str, kind: str, tenant_id: str, sid_fingerprint: Optional[str],
           work: Callable[[ProgressCb], Dict[str, Any]],
           success_action: str, failure_action: str,
-          hint: Callable[[Exception], str] = str) -> None:
+          hint: Callable[[Exception], str] = str,
+          failure_target_id: str = "new") -> None:
     """Run ``work(progress_cb)`` on a daemon thread and fold its result into the record.
 
     ``work`` returns the fields to merge on success; it must include
     ``target_id`` (the artifact name, for the audit record) and ``message``.
+    An exception may carry ``result_fields`` (a dict) to merge into the failed
+    record — e.g. the test results that made a tool run fail.
     ``tenant_id`` is captured from the authenticated request: a worker thread
     has no session, and reading an env var there is the console tenant-routing
     violation CLAUDE.md forbids.
@@ -139,8 +156,10 @@ def spawn(*, run_id: str, kind: str, tenant_id: str, sid_fingerprint: Optional[s
                 console_audit.action_failed(
                     tenant_id=tenant_id, sid_fingerprint=sid_fingerprint,
                     action=failure_action, target_kind=f"generated_{kind}",
-                    target_id="new", reason="async_task_failed",
+                    target_id=failure_target_id, reason="async_task_failed",
                 )
-            update_run(run_id, status="failed", error=str(exc), message=hint(exc))
+            extra = getattr(exc, "result_fields", None)
+            update_run(run_id, status="failed", error=str(exc), message=hint(exc),
+                       **(extra if isinstance(extra, dict) else {}))
 
     threading.Thread(target=run_task, name=f"forge-{kind}-{run_id}", daemon=True).start()

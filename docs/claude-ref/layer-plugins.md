@@ -781,44 +781,62 @@ ONE mechanism. Load this when touching `forge_runs.py`, `routes/forge_creator.py
 worker thread, the success/failure audit and the four console pre-spawn gates
 (`_spawn_gates.check_console_spawn_or_refusal`: L44, ADR-0141, L34, L35). Every
 kind passes those gates BEFORE an engine is spawned; a refusal is 403 + a
-`forge.generation_refused` record. Skill generation skipped them until ADR-2217.
-`skill_creator_api._generation_runs` / `_runs_lock` are aliases of the shared store.
+`forge.generation_refused` record. Skill generation skipped them until ADR-2217; a skill
+REFINE gates the base skill's body together with the request. At most
+`MAX_RUNNING_PER_TENANT` (2) runs are in flight per tenant — the next POST is 429.
+`skill_creator_api._generation_runs` / `_runs_lock` are aliases of the shared store; the Tasks
+board lists every run as "Forge generation" with the kind as subtype.
 
 **One engine and one review.** Tool and plugin runs resolve the engine through
 `skill_creator.skill_creator.resolve_llm_client` (patch that one attribute to
 script an engine in tests) and review with `skill_creator/artifact_review.py`:
 three dimensions (correctness, **security**, scope) parsed by the shared
-`parse_review_findings` and scored by `score_quality`.
+`parse_review_findings` and scored by `score_quality`. `run_reviewers` is the ONE
+reviewer loop — the Skill-Creator's phase 4 calls it too (`on_error="drop"`); tools and
+plugins use `on_error="flag"`, which turns a crashed reviewer, a reply without a verdict or
+a truncated artifact into a synthetic finding (`<dim>-error`, `<dim>-noverdict`,
+`artifact-truncated`) — `unreviewed()` lists them for fail-closed gates.
 
 **Tool Forge is fail-closed.** Validation runs the MCP path's own gates as
 primitives (`Policy.name_allowed`, `Policy.namespace_check("assistant", …)`,
-`static_check.check_imports`) plus schema checks of every test input. The test
-loop registers the draft in a throw-away `Registry` in a temp dir (never the
-tenant store) and runs each case in the sandbox; each run is audited as
-`forge.tool_executed`. The tool reaches `MultiRegistry(tenant).create(scope="user")`
-only when every case passed and no reviewer CONFIRMED a security finding. No
-engine → the run fails; Tool Forge never fabricates code. A passing case proves
-execution + schema + the stated outputs — the cases are engine-written, so it
-does not prove semantic correctness.
+`static_check.check_imports`) plus 2–5 test cases, each with a non-empty `expect` and a
+schema-valid input, and a free name. The test loop registers the draft in a throw-away
+`Registry` in a temp dir (never the tenant store) and runs each case **only inside
+bubblewrap**: no `bwrap` → the run refuses before executing anything; a case not labelled
+`bwrap*` fails. Each execution is a `forge.tool_executed` record on the TENANT chain
+(written by `tool_creator._audit_execution`; the runner's own record still goes to the
+legacy global chain — known follow-up). A fix may not rename the tool or rewrite its test
+cases. The tool reaches `MultiRegistry(tenant).create(scope="user")` only when every case
+passed, the security review completed and confirmed nothing; the registry's licence gate is
+decided for the multi-registry's tenant (`Registry.create(tenant_id=…)`). A failed run
+carries its test results to the UI. No engine → the run fails; Tool Forge never fabricates
+code. A passing case proves execution + schema + the stated outputs — the cases are
+engine-written, so it does not prove semantic correctness.
 
 **Plugin Forge stages, never installs (ADR-0244, ADR-2186).** The engine maps the
 request onto the Builder's `PluginIdea`; without an engine the Builder's own
 deterministic extraction runs and the review is reported as skipped (quality
 `null`, never a fabricated score). `classifier.classify` + `write_artifacts`
 write docs + scaffold; an optional panel is written as `panel/index.html` +
-`panel/surface.yaml` (ADR-2189 shape, `sandbox: [allow-scripts]`). A failed check
-removes the half-written directory. `FORGE_PROVENANCE.json` (`generator:
-plugin_forge`, `installed: false`, `origin_on_install: community`) marks the
-directories the Forged routes manage; chat `/plugin-builder` scaffolds (no
-provenance) are not listed there. Nothing writes `registry.yaml` or loads code.
+`panel/surface.yaml` (ADR-2189 shape `{kind, id, title, entry}` — no self-declared
+sandbox tokens; the panel is a preview until ADR-2189's loader exists). The target directory
+is computed first: an existing one blocks the name and is left alone; any failure after
+creation removes it. `FORGE_PROVENANCE.json` (`generator: plugin_builder`, `surface:
+plugin_forge`, `installed: false`, `origin_on_install: community`, the request only as
+`request_sha256` + `request_chars`) marks the directories the Forged routes manage; chat
+`/plugin-builder` scaffolds (no such provenance) are not listed there, and forged plugins
+are not added to the Builder index. Nothing writes `registry.yaml` or loads code.
 
 **Marketplace → Forged** lists forged plugins as *not installed · unsigned ·
 community*, shows files, findings and egress hosts, and previews the panel in
-`<iframe sandbox="allow-scripts" srcdoc>` — never `allow-same-origin`. Forged
-plugins never appear in Browse (the real index only, ADR-0892).
+`<iframe sandbox="allow-scripts" srcdoc>` — never `allow-same-origin` — with a CSP meta
+(`default-src 'none'`, inline script/style only) prepended by `previewDocument()`; the
+generation-time HTML lint is advisory. Forged plugins never appear in Browse (the real
+index only, ADR-0892).
 
-**Licence.** Tool and Plugin Forge are `forge.create` (member) at the route —
-`require_forge_capability`; only skills have the free-tier quota (ADR-2095).
+**Licence.** Generating tools and plugins is `forge.create` (member) at the route —
+`require_forge_capability`; only skills have the free-tier quota (ADR-2095). Deleting a
+forged plugin needs CSRF only (ADR-0701 G3: delete is not generation).
 
 **Audit** (all through `console.action_performed` / `console.action_failed`, no
 new event type): `tool.generated_created`, `tool.generated_creation_failed`,

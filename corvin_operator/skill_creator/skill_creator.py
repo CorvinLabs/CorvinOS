@@ -1305,32 +1305,14 @@ class AdversarialReviewer:
             return []
 
         try:
-            # Run 3 reviewers in parallel
-            tasks = [
-                self._run_review_dimension(dimension, review_fn, spec)
-                for dimension, review_fn in self.reviewers
-            ]
-            findings_by_dimension = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # Flatten and filter
-            all_findings = []
-            for findings in findings_by_dimension:
-                if isinstance(findings, Exception):
-                    logger.error(f"Review failed: {findings}")
-                    continue
-                all_findings.extend(findings)
-
+            from .artifact_review import run_reviewers  # noqa: PLC0415 — shared loop, lazy (cycle)
+            fns = {dimension: (lambda fn=review_fn: fn(spec)) for dimension, review_fn in self.reviewers}
+            all_findings = await run_reviewers(fns, on_error="drop")
             logger.info(f"Review complete: {len(all_findings)} findings")
             return all_findings
 
         except Exception as e:
             raise ReviewError(f"Review process failed: {e}") from e
-
-    async def _run_review_dimension(self, dimension: str,
-                                    review_fn, spec: SkillSpec) -> List[ReviewFinding]:
-        """Run one review dimension and parse findings."""
-        findings_text = await review_fn(spec)
-        return self._parse_findings(findings_text, dimension)
 
     async def _review_correctness(self, spec: SkillSpec) -> str:
         """Dimension 1: Correctness."""

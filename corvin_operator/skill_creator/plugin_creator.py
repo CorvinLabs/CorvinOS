@@ -14,13 +14,13 @@ Staged means: not installed, not loaded, not in any plugin registry. ADR-0244
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import py_compile
 import re
 import shutil
 import time
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -30,10 +30,12 @@ logger = logging.getLogger(__name__)
 
 PLUGIN_PHASES = ("planning", "classification", "generation", "checks", "review", "staging")
 PROVENANCE_FILE = "FORGE_PROVENANCE.json"
+#: ADR-0701 vocabulary: a Builder-generated plugin carries ``provenance.generator:
+#: plugin_builder``; ``surface`` says which Builder entry point produced it.
+PROVENANCE_GENERATOR = "plugin_builder"
+PROVENANCE_SURFACE = "plugin_forge"
 PANEL_DIR = "panel"
 MAX_PANEL_BYTES = 256 * 1024
-#: The only sandbox token a generated (community) panel may ever ask for (ADR-2189 D2).
-PANEL_SANDBOX = ("allow-scripts",)
 
 _EXTERNAL_SCRIPT = re.compile(r"<script[^>]*\bsrc\s*=\s*[\"']?\s*(?:https?:)?//", re.IGNORECASE)
 _BASE_TAG = re.compile(r"<base\b", re.IGNORECASE)
@@ -103,14 +105,14 @@ def _extract_html(reply: str) -> str:
 
 
 def _surface_yaml(plugin_id: str, title: str) -> str:
-    # ADR-2189 shape: one fail-closed sandboxed iframe. JSON is valid YAML,
-    # so the file needs no YAML dependency to write or to read back.
+    # ADR-2189 shape: the plugin names its entry; it declares NO sandbox tokens —
+    # those are derived from the trust verdict at mount time (ADR-2189 D2).
+    # JSON is valid YAML, so writing and reading it needs no YAML dependency.
     return json.dumps({
         "kind": "web_surface",
         "id": plugin_id.replace(".", "-"),
         "title": title,
         "entry": "index.html",
-        "sandbox": list(PANEL_SANDBOX),
     }, indent=2) + "\n"
 
 
@@ -213,18 +215,21 @@ class PluginCreatorOrchestrator:
         classification = classify(idea)
 
         self._progress("generation", 40, "Writing docs and scaffold…")
+        from plugin_builder.generators.scaffold import _dirname, slugify_plugin_id  # noqa: PLC0415
         output = self.output_root()
+        dest = output / _dirname(slugify_plugin_id(idea.plugin_name))
+        if dest.exists():
+            raise PluginCreatorError(
+                f"A plugin directory '{dest.name}' already exists (from Plugin Forge or the chat "
+                "Plugin Builder). Delete it or describe the plugin under another name.")
         try:
             result = await asyncio.to_thread(write_artifacts, idea, classification, output)
-        except FileExistsError as exc:
-            raise PluginCreatorError(
-                f"A forged plugin named '{idea.plugin_name}' already exists — delete it in "
-                f"Marketplace → Forged first ({exc}).") from exc
-        dest = Path(result.dest)
-        try:
+            if Path(result.dest).resolve() != dest.resolve():
+                raise PluginCreatorError("the Plugin Builder wrote somewhere unexpected")
             return await self._finish(dest, result, idea, classification, user_request, panel_request)
         except Exception:
-            # A half-finished plugin must not sit in the listing as if it were staged.
+            # Nothing half-written may stay behind: a directory without provenance
+            # would be unmanageable from Marketplace → Forged and block the name.
             shutil.rmtree(dest, ignore_errors=True)
             raise
 
@@ -256,8 +261,7 @@ class PluginCreatorOrchestrator:
                 (panel_dir / "index.html").write_text(html, encoding="utf-8")
                 (panel_dir / "surface.yaml").write_text(
                     _surface_yaml(result.plugin_id, idea.plugin_name), encoding="utf-8")
-                panel = {"title": idea.plugin_name, "entry": f"{PANEL_DIR}/index.html",
-                         "sandbox": list(PANEL_SANDBOX)}
+                panel = {"title": idea.plugin_name, "entry": f"{PANEL_DIR}/index.html"}
 
         self._progress("checks", 60, "Compiling the generated code…")
         problems.extend(await asyncio.to_thread(self.compile_check, dest))
@@ -277,13 +281,17 @@ class PluginCreatorOrchestrator:
 
         self._progress("staging", 90, f"Staging '{result.plugin_id}' (not installed)…")
         provenance = {
-            "generator": "plugin_forge",
+            "generator": PROVENANCE_GENERATOR,
+            "surface": PROVENANCE_SURFACE,
             "engine": self.engine_id,
             "review_skipped": self.client is None,
             "created_at": time.time(),
             "plugin_id": result.plugin_id,
             "display_name": idea.plugin_name,
-            "request": user_request[:2000],
+            # The request is free text that may name people: only a fingerprint is kept
+            # (the generated docs restate the problem, as the chat Builder's always have).
+            "request_sha256": hashlib.sha256(user_request.encode("utf-8")).hexdigest(),
+            "request_chars": len(user_request),
             "kind": classification.kind.value,
             "tier": classification.tier.value,
             "plugin_type": classification.plugin_type,
@@ -297,12 +305,6 @@ class PluginCreatorOrchestrator:
             "origin_on_install": "community",
         }
         (dest / PROVENANCE_FILE).write_text(json.dumps(provenance, indent=2), encoding="utf-8")
-        try:
-            from plugin_builder import index_store  # noqa: PLC0415
-            index_store.record(self.tenant_id, idea, replace(result, dest=dest))
-        except Exception as exc:  # noqa: BLE001 — the listing is best-effort (index_store contract)
-            logger.warning("plugin forge: index record failed: %s", exc)
-
         return {
             "plugin_id": result.plugin_id,
             "dirname": dest.name,
