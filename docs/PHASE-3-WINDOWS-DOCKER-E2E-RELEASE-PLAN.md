@@ -137,7 +137,8 @@ gh release create v1.0.0 \
 ## 📦 Installation
 
 ```bash
-curl -fsSL https://corvin-labs.com/install.sh | sh
+git clone https://github.com/CorvinLabs/CorvinOS.git
+cd CorvinOS && ./install.sh
 ```
 
 ## 🧪 Quality

@@ -12,15 +12,17 @@ CorvinOS is now fully supported on Windows 10/11 with native PowerShell installe
 
 ### Native Windows (PowerShell)
 
-```powershell
-irm https://corvin-labs.com/install.ps1 | iex
-```
-
-Or download and run locally:
+CorvinOS is installed only from a local clone of the repository — there is no
+`irm … | iex` one-liner. Clone it, then run the installer from the checkout:
 
 ```powershell
+git clone https://github.com/CorvinLabs/CorvinOS.git
+cd CorvinOS
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
+
+`install.ps1` refuses to run outside a CorvinOS checkout (no `.corvin_repo` /
+`pyproject.toml`) and prints these clone steps instead.
 
 ### Development Install (Editable)
 
@@ -273,10 +275,10 @@ Get-Content "$env:USERPROFILE\.corvin\logs\console-supervisor.log" -Tail 50
 corvinos-serve
 ```
 
-**Re-run installer:**
+**Re-run installer** (from your CorvinOS checkout):
 
 ```powershell
-irm https://corvin-labs.com/install.ps1 | iex
+powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 ### "PATH not found" or Commands Not Working
@@ -410,6 +412,6 @@ python scripts/generate-docs.py windows-installation
 For issues specific to Windows installation:
 
 1. **Check logs:** `$env:CORVIN_HOME\logs\console-supervisor.log`
-2. **Re-run installer:** `irm https://corvin-labs.com/install.ps1 | iex`
+2. **Re-run installer:** `powershell -ExecutionPolicy Bypass -File install.ps1` from your CorvinOS checkout
 3. **Report issue:** Include OS version, Python version, and logs
 4. **Manual start:** `corvinos-serve --no-browser` to debug in terminal

@@ -149,7 +149,7 @@ def test_already_onboarded_but_unhealthy_falls_through_to_restore_then_install(m
     flag = tmp_path / ".corvin_setup_complete"
     flag.touch()
     monkeypatch.setattr(cic, "onboarding_flag_path", lambda: flag)
-    monkeypatch.setattr(cic, "find_corvin_installer", lambda: "/usr/bin/corvin-installer")
+    monkeypatch.setattr(cic, "find_corvin_restore", lambda: "/usr/bin/corvin-restore")
 
     health_results = iter([
         (False, "no healthy response within 30s (last: connection refused)"),  # initial check
@@ -166,7 +166,7 @@ def test_already_onboarded_but_unhealthy_falls_through_to_restore_then_install(m
 
     assert rc == 0
     # restore was attempted
-    restore_calls = [c for c in subprocess_run_mock.call_args_list if c.args[0][:2] == ["/usr/bin/corvin-installer", "restore"]]
+    restore_calls = [c for c in subprocess_run_mock.call_args_list if c.args[0] == ["/usr/bin/corvin-restore"]]
     assert len(restore_calls) == 1
     # full install ran because restore didn't recover it
     run_installer_mock.assert_called_once()
@@ -177,7 +177,7 @@ def test_already_onboarded_but_unhealthy_falls_through_to_restore_then_install(m
 def test_install_failure_never_opens_browser_and_returns_nonzero(monkeypatch, tmp_path):
     flag = tmp_path / ".corvin_setup_complete"  # does not exist -> fresh install path
     monkeypatch.setattr(cic, "onboarding_flag_path", lambda: flag)
-    monkeypatch.setattr(cic, "run_installer", lambda **kw: (False, "corvin-install exited 1 — see its output above"))
+    monkeypatch.setattr(cic, "run_installer", lambda **kw: (False, "the installer exited 1 — see its output above"))
     open_browser_mock = MagicMock()
     monkeypatch.setattr(cic, "open_console_browser", open_browser_mock)
     wait_mock = MagicMock()
@@ -202,6 +202,71 @@ def test_console_never_healthy_after_successful_install_is_still_a_failure(monke
 
     assert rc == 2
     open_browser_mock.assert_not_called()
+
+
+# ── repo-only: the checkout's own installer, never a download ───────────────
+
+def _fake_checkout(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    for name in (".corvin_repo", "pyproject.toml", "install.sh"):
+        (root / name).write_text("")
+    return root
+
+
+def test_find_checkout_walks_up_from_a_nested_start(tmp_path):
+    checkout = _fake_checkout(tmp_path / "CorvinOS")
+    nested = checkout / "corvin_operator" / "corvin" / "scripts"
+    nested.mkdir(parents=True)
+    assert cic.find_checkout([nested]) == checkout
+
+
+def test_find_checkout_requires_the_repo_marker(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("")
+    (tmp_path / "install.sh").write_text("")
+    assert cic.find_checkout([tmp_path]) is None
+
+
+def test_no_checkout_fails_with_clone_steps_and_runs_nothing(monkeypatch):
+    monkeypatch.setattr(cic, "find_checkout", lambda *a, **k: None)
+    runner = MagicMock()
+    ok, detail = cic.run_installer(subprocess_run=runner)
+    assert ok is False
+    assert "git clone https://github.com/CorvinLabs/CorvinOS.git" in detail
+    assert "corvin-labs" not in detail
+    runner.assert_not_called()
+
+
+def test_run_installer_runs_the_checkouts_own_installer_in_the_checkout(tmp_path, monkeypatch):
+    checkout = _fake_checkout(tmp_path / "CorvinOS")
+    monkeypatch.setattr(cic.sys, "platform", "linux")
+    runner = MagicMock(return_value=MagicMock(returncode=0))
+    ok, _ = cic.run_installer(subprocess_run=runner, checkout=checkout)
+    assert ok is True
+    (cmd,), kwargs = runner.call_args
+    assert cmd == ["sh", str(checkout / "install.sh")]
+    assert kwargs["cwd"] == str(checkout)
+    assert "--yes" not in cmd  # install.sh has no --yes flag; passing one dies
+
+
+def test_installer_command_on_windows_uses_install_ps1(tmp_path, monkeypatch):
+    monkeypatch.setattr(cic.sys, "platform", "win32")
+    cmd = cic.installer_command(tmp_path)
+    assert cmd[0] == "powershell" and cmd[-1] == str(tmp_path / "install.ps1")
+
+
+def test_installer_flags_are_ones_install_sh_accepts():
+    """Positive control for the --yes regression: whatever run_installer
+    passes must survive install.sh's own argument parser."""
+    repo = Path(__file__).resolve().parents[3]
+    cmd = cic.installer_command(repo)
+    extra = cmd[2:]
+    result = subprocess.run(
+        ["/bin/sh", str(repo / "install.sh"), *extra, "--definitely-unknown"],
+        capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL,
+        env={"PATH": "", "TMPDIR": str(Path(__file__).parent)},
+    )
+    # Only OUR sentinel may be rejected — never a flag run_installer adds.
+    assert "Unknown argument: --definitely-unknown" in result.stderr
 
 
 # ── 4. real call-site / wiring proof ────────────────────────────────────────

@@ -4,14 +4,20 @@ The CorvinOS universal installer is a **cross-platform, self-contained** Python 
 
 ## Installation
 
-### From PyPI
+CorvinOS is installed only from a local clone of the repository (installing from PyPI is no
+longer supported).
+
+### From the checkout (recommended)
 
 ```bash
-pip install corvinOS
-corvin-install
+git clone https://github.com/CorvinLabs/CorvinOS.git
+cd CorvinOS
+./install.sh            # Windows: powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-### From Source
+The installer bootstraps its own runtime and runs `corvin-install --yes` for you.
+
+### Manual editable install (development)
 
 ```bash
 git clone https://github.com/CorvinLabs/CorvinOS.git
@@ -165,8 +171,8 @@ schtasks /run /tn "CorvinOS\adapter"
 Get-WinEvent -LogName Application | Where-Object { $_.ProviderName -like "*Corvin*" }
 ```
 
-> **Note:** the standalone one-liner installer (`install.ps1`, `irm
-> https://corvin-labs.com/install.ps1 | iex`) registers a *different*,
+> **Note:** the standalone PowerShell installer (`install.ps1`, run from a
+> CorvinOS checkout) registers a *different*,
 > flat-named autostart task, `CorvinOS-Console` (not the `CorvinOS\*` folder
 > scheme above, which belongs to the `corvin-install` Python installer flow).
 > `corvin-uninstall` removes both: the `CorvinOS\*` folder-scoped tasks via

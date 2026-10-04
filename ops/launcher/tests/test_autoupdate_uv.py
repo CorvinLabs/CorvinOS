@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 _THIS = Path(__file__).resolve()
@@ -19,6 +20,44 @@ _LAUNCHER = _THIS.parents[1]          # ops/launcher
 sys.path.insert(0, str(_LAUNCHER))
 
 from corvin import serve_backend as sb  # noqa: E402
+
+
+_REAL_IS_EDITABLE = sb._is_editable_checkout_install
+
+
+def setUpModule() -> None:
+    # These tests model a PyPI / uv-tool install. The repo venv itself has
+    # corvinos installed editable, which would short-circuit the updater.
+    sb._is_editable_checkout_install = lambda: False
+
+
+def tearDownModule() -> None:
+    sb._is_editable_checkout_install = _REAL_IS_EDITABLE
+
+
+class EditableCheckoutSkipTests(unittest.TestCase):
+    """CorvinOS installs only from a local checkout (editable). Its code is
+    the checkout, so the start-up PyPI check must not run at all."""
+
+    def test_editable_install_never_contacts_pypi(self) -> None:
+        with mock.patch.object(sb, "_is_editable_checkout_install", return_value=True), \
+             mock.patch.dict("os.environ", {"CORVIN_SUPERVISED": ""}), \
+             mock.patch("urllib.request.urlopen") as urlopen, \
+             mock.patch.object(sb.subprocess, "run") as run:
+            self.assertFalse(sb.maybe_pypi_autoupdate(relaunch_argv=["corvin-serve"]))
+        urlopen.assert_not_called()
+        run.assert_not_called()
+
+    def test_detection_reads_the_real_direct_url(self) -> None:
+        dist = mock.Mock()
+        dist.read_text.return_value = '{"url":"file:///src/CorvinOS","dir_info":{"editable":true}}'
+        with mock.patch("importlib.metadata.distribution", return_value=dist):
+            self.assertTrue(_REAL_IS_EDITABLE())
+        dist.read_text.return_value = '{"url":"https://files.pythonhosted.org/x.whl","archive_info":{}}'
+        with mock.patch("importlib.metadata.distribution", return_value=dist):
+            self.assertFalse(_REAL_IS_EDITABLE())
+        with mock.patch("importlib.metadata.distribution", side_effect=Exception("missing")):
+            self.assertFalse(_REAL_IS_EDITABLE())
 
 
 class UpgradeCommandTests(unittest.TestCase):

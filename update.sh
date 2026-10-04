@@ -8,11 +8,10 @@
 #   sh update.sh --rebuild-only   # no download: reinstall + rebuild + restart current code
 #   sh update.sh --no-restart     # stage everything, leave the running console alone
 #   sh update.sh --no-rollback    # keep the new code even if verification fails
-#   curl -fsSL https://raw.githubusercontent.com/CorvinLabs/CorvinOS/main/update.sh | sh
 #
 # Self-contained: needs only sh + curl/wget. It bootstraps uv and Node.js when
-# they are missing, repairs a broken tool venv, and when no install exists at
-# all it hands over to install.sh (so "update" on a wiped machine installs).
+# they are missing and repairs a broken tool venv. It never INSTALLS: with no
+# install present it stops and names the clone + ./install.sh steps.
 #
 # Which source gets updated:
 #   * installer-managed tree (has .corvin-managed): reset to origin/main —
@@ -22,7 +21,7 @@
 #     and local changes as a git stash before resetting — nothing is lost.
 #   * a developer checkout on another branch: code left alone (warned),
 #     but deps, frontend and services are still refreshed.
-#   * a PyPI install: PyPI lags main, so it is converted to a managed tree.
+#   * a PyPI install: refused — CorvinOS installs only from a local checkout.
 #
 # Exit: 0 updated + verified · 1 failed, rolled back (old version running)
 #       2 failed and rollback failed too (details printed) · 3 lock held
@@ -179,16 +178,14 @@ if [ -n "$SRC" ] && [ -f "$SRC/pyproject.toml" ]; then
 elif [ -f "$MANAGED_SRC/pyproject.toml" ]; then
     SRC="$MANAGED_SRC"; KIND=managed
 elif [ -f "$RECEIPT" ]; then
-    SRC="$MANAGED_SRC"; KIND=pypi
+    die "this CorvinOS was installed from PyPI, which is no longer supported.
+    Install from a local checkout instead:
+      git clone ${REPO_URL}.git && cd CorvinOS && ./install.sh"
 else
     # Nothing installed (or the venv is gone): an update cannot restore what is
-    # not there — install instead, from main.
-    warn "no CorvinOS install found — running the installer instead"
-    _inst="$(mktemp "${TMPDIR:-/tmp}/corvinos-install.XXXXXX")" || die "mktemp failed"
-    _retry 3 _download "https://raw.githubusercontent.com/CorvinLabs/CorvinOS/${BRANCH}/install.sh" "$_inst" \
-        || die "could not download install.sh"
-    rm -rf "$LOCK_DIR"; trap - EXIT INT TERM
-    exec sh "$_inst"
+    # not there, and installs come only from a local checkout.
+    die "no CorvinOS install found. Install from a local checkout:
+      git clone ${REPO_URL}.git && cd CorvinOS && ./install.sh"
 fi
 step "[2/6] Source ($KIND): $SRC"
 
@@ -272,7 +269,7 @@ if [ "$REBUILD_ONLY" = 1 ]; then
     ok "code unchanged (--rebuild-only)"
 else
     case "$KIND" in
-        managed|pypi) _quiet "fetching $BRANCH" fetch_managed || die "could not download the update — nothing changed (see $LOG)" ;;
+        managed) _quiet "fetching $BRANCH" fetch_managed || die "could not download the update — nothing changed (see $LOG)" ;;
         checkout) fetch_checkout || die "git update failed — nothing changed (see $LOG)" ;;
     esac
     NEW_REV="$(_git rev-parse HEAD 2>/dev/null || echo tarball)"

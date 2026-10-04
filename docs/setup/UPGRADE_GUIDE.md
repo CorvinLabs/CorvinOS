@@ -25,8 +25,7 @@ shipped CLI (`corvinos --help`); nothing here is aspirational.
 1. **Know which version you run.**
    ```bash
    curl -s http://localhost:8765/v1/console/healthz     # {"ok":…,"version":"1.0.0",…}
-   uv tool list | grep corvinos                          # one-liner / uv installs
-   pip show corvinos                                     # plain pip installs
+   git -C /path/to/CorvinOS log -1 --oneline             # revision of your checkout
    ```
    (`corvinos` has no `--version` flag; the console health endpoint is the
    authoritative answer for a running instance.)
@@ -62,29 +61,29 @@ shipped CLI (`corvinos --help`); nothing here is aspirational.
 
 ## Upgrade
 
-Pick the row that matches how CorvinOS was installed.
+CorvinOS is installed only from a local clone of the repository, and is
+upgraded from that clone.
 
 | Installed via | Upgrade command |
 |---|---|
-| one-liner (`install.sh` / `install.ps1`) or `uv tool install corvinos` | `uv tool upgrade corvinos --reinstall-package corvinos` |
-| `pip install corvinos` | `pip install -U corvinos` |
-| editable checkout (`pip install -e .` / `install.sh --editable`) | `git pull` in the checkout, then `pip install -e .` (or re-run the installer with `--editable`) |
+| `./install.sh` / `install.ps1` from a checkout (or `--editable` / `-Editable`) | `sh update.sh` (Windows: `update.ps1`) in the checkout |
+| manual editable checkout (`pip install -e .`) | `git pull` in the checkout, then `pip install -e .` (or switch to `sh update.sh`) |
+| legacy PyPI install (`pip install corvinos` / `uv tool install corvinos`) | no longer supported — `update.sh` / `update.ps1` refuse it; clone the repository and run `./install.sh` |
 
 Notes:
 
-- The `--reinstall-package corvinos` on the `uv` row is deliberate: without it
-  `uv tool upgrade` can resolve against a cached index and report "Nothing to
-  upgrade" while PyPI already has a newer release.
-- The one-liners install `corvinos[browser]` with a version **floor**, never an
-  exact pin, precisely so that `uv tool upgrade` keeps working (script header,
-  INST-1). If you pinned manually (`uv tool install corvinos==1.0.0`), `uv tool
-  upgrade` will honour that pin forever — re-run `uv tool install --force
-  corvinos[browser]` to unpin.
-- Auto-update: `corvinos-serve` checks PyPI at start-up and, when
-  `auto_update` is enabled in `~/.config/corvin-launcher/config.json`, runs the
-  same upgrade command itself. The Windows supervisor installed by
-  `install.ps1` does the same once per logon.
-- Re-running the one-liner is also a valid upgrade path; it is idempotent.
+- `update.sh` fast-forwards a checkout on `main`, reinstalls it, rebuilds the
+  console, restarts and verifies the new build is served — and rolls back if
+  it is not. On a checkout on another branch it leaves the code alone and
+  only refreshes dependencies, frontend and services.
+- If you already ran `git pull` yourself, `sh update.sh --rebuild-only`
+  reinstalls, rebuilds and restarts the current code without fetching.
+- Legacy installer-managed trees (from the former download mode) are still
+  updated by `update.sh` / `update.ps1`.
+- With nothing installed, `update.sh` / `update.ps1` do not install anything;
+  they print the clone + `./install.sh` steps.
+- Re-running `./install.sh` from the checkout is also a valid upgrade path; it
+  is idempotent.
 
 Then start again:
 
@@ -194,21 +193,20 @@ corvinos tenant import ./tenant-_default.tar.gz --tenant-id _default   # --force
 
 ## Rollback
 
-Rolling back the **package** is a normal downgrade of the Python package; the
-**data directory** is untouched by that, so restore it from your backup only
-if the newer release changed something you need reverted.
+Rolling back the **code** means checking out an older revision of your
+checkout and rebuilding; the **data directory** is untouched by that, so
+restore it from your backup only if the newer release changed something you
+need reverted. (`update.sh` / `update.ps1` already roll back automatically
+when the new build fails verification.)
 
 ```bash
-# uv-managed install
-uv tool install --force "corvinos[browser]==1.0.0"     # exact version you want back
-# plain pip
-pip install "corvinos==1.0.0"
-# editable checkout
-git checkout <tag-or-commit> && pip install -e .
+cd /path/to/CorvinOS
+git checkout <tag-or-commit>
+sh update.sh --rebuild-only        # Windows: .\update.ps1 -RebuildOnly
 ```
 
-Remember to unpin afterwards (`uv tool install --force corvinos[browser]`), or
-`uv tool upgrade` will stay frozen on the pinned version.
+Return to `main` (`git checkout main`) before the next `sh update.sh`; on
+another branch the updater leaves the code alone.
 
 To restore data:
 
@@ -226,9 +224,9 @@ hash-chained and a manual edit breaks verification permanently.
 
 ## Troubleshooting
 
-**`uv tool upgrade corvinos` says "Nothing to upgrade" although PyPI is newer**
-— add `--reinstall-package corvinos`, or your receipt carries an exact pin
-(see [Upgrade](#upgrade)).
+**`update.sh` says this CorvinOS was installed from PyPI** — PyPI installs
+are no longer supported. Clone the repository and run `./install.sh` from the
+checkout (your data in `~/.corvin/` is kept).
 
 **`corvinos-serve` / `corvinos` not found after upgrading** — the tool
 environment was rebuilt; open a new terminal so PATH is re-read, or run `uv

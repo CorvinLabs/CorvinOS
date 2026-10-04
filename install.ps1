@@ -6,14 +6,14 @@
 .DESCRIPTION
     Bootstraps uv (which brings its own Python), a local Node.js runtime, and
     installs the corvinos package. Mirrors install.sh (Linux/macOS) semantics.
-    Where the code comes from is decided once:
-      * -Editable PATH, or this script sits in a CorvinOS checkout (.corvin_repo)
-        -> install from that tree.
-      * -PyPI -> the published wheel (lags main; kept for pinned deployments).
-      * otherwise -> fetch main from GitHub (git, or the codeload zip when git is
-        missing or blocked) into %LOCALAPPDATA%\corvinos\src, marked as ours with
-        .corvin-managed, and install that. update.ps1 keeps it current and
-        uninstall.ps1 removes it. Re-running is safe (non-persistent VDI).
+    Installs ONLY from a local CorvinOS checkout -- there is no download mode:
+      * -Editable PATH -> install from that checkout, or
+      * this script sits in a CorvinOS checkout (.corvin_repo) -> install from it.
+    Anything else stops with the clone instructions:
+      git clone https://github.com/CorvinLabs/CorvinOS.git
+      cd CorvinOS
+      powershell -ExecutionPolicy Bypass -File install.ps1
+    Re-running is safe (non-persistent VDI).
 
     ASCII-ONLY BY CONTRACT. Windows PowerShell 5.1 decodes a BOM-less script as
     ANSI (cp1252), where the UTF-8 bytes of characters like U+2713 and U+2551
@@ -23,11 +23,7 @@
     Enforced by .github/workflows/install-test.yml.
 
 .PARAMETER Editable
-    Install from this local clone (developer install).
-
-.PARAMETER PyPI
-    Install the published wheel from PyPI (corvinos >= the version floor)
-    instead of fetching main from GitHub.
+    Install from this local clone instead of the checkout the script sits in.
 
 .PARAMETER DryRun
     Report every action without changing anything.
@@ -62,7 +58,7 @@
     (default 180).
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File install.ps1 -Editable .
+    powershell -ExecutionPolicy Bypass -File install.ps1
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File install.ps1 -DryRun -Verbose
@@ -79,7 +75,7 @@
       2 = Prerequisites missing/failed
       3 = Installed, but the console is not serving. The package is fine; the
           summary names the reason and prints the server's own last lines.
-      4 = Configuration error (editable path invalid)
+      4 = Configuration error (not run from / pointed at a CorvinOS checkout)
 #>
 
 [CmdletBinding()]
@@ -88,7 +84,6 @@ param(
     [Alias("e")]
     [string]$Editable = "",
 
-    [switch]$PyPI,
     [switch]$DryRun,
     [switch]$NoClaudeCode,
     [switch]$Lan,
@@ -142,15 +137,9 @@ if ($ExecutionContext.SessionState.LanguageMode -ne "FullLanguage") {
 if (-not $env:UV_NATIVE_TLS)      { $env:UV_NATIVE_TLS = "1" }
 if (-not $env:NODE_USE_SYSTEM_CA) { $env:NODE_USE_SYSTEM_CA = "1" }
 
-# Source of a default (non -PyPI, non -Editable) install: main, fetched into an
-# installer-managed tree. Same variables as install.sh / update.sh.
-$CorvinBranch  = if ($env:CORVIN_BRANCH)   { $env:CORVIN_BRANCH }   else { "main" }
-$CorvinRepoUrl = if ($env:CORVIN_REPO_URL) { $env:CORVIN_REPO_URL.TrimEnd('/') } else { "https://github.com/CorvinLabs/CorvinOS" }
-$ManagedSrc    = if ($env:CORVIN_SRC_DIR)  { $env:CORVIN_SRC_DIR }  else { Join-Path $env:LOCALAPPDATA "corvinos\src" }
-$script:SourceChanged = $false
+$CorvinRepoUrl = "https://github.com/CorvinLabs/CorvinOS"
 
 $PackageName      = if ($env:CORVIN_PKG) { $env:CORVIN_PKG } else { "corvinos" }
-$CorvinMinVersion = "2.0.0"
 $UvVersion        = "0.12.9"
 $UvInstallerUrl   = "https://github.com/astral-sh/uv/releases/download/$UvVersion/uv-installer.ps1"
 $UvInstallerSha256 = "69de475bf929f1ac248efb5a85189177a45517e2346cd68762bde453fec10a6b"
@@ -961,68 +950,45 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
 Write-Header "Phase 2: Path Validation"
 
 Write-Step "Resolving repository path"
-# Decided once, in the order install.sh uses (see .DESCRIPTION):
-#   -Editable PATH  >  this script's own checkout  >  -PyPI  >  managed main.
-# PyPI is no longer the default: its newest corvinos lags main by major
-# versions and does not satisfy the >= $CorvinMinVersion floor at all, so a
-# default PyPI install could only fail.
+# The source is always a local checkout (see .DESCRIPTION): -Editable PATH,
+# else the checkout this script sits in. There is no download mode and no
+# index mode; anything else stops here, before anything is downloaded.
+$CloneHint = "CorvinOS installs only from a local clone of the repository:`n" +
+    "  git clone $CorvinRepoUrl.git`n" +
+    "  cd CorvinOS`n" +
+    "  powershell -ExecutionPolicy Bypass -File install.ps1"
 $EditableMode = -not [string]::IsNullOrWhiteSpace($Editable)
-$ManagedMode  = $false
-if ($EditableMode -and $PyPI) {
-    Stop-WithError "-Editable and -PyPI exclude each other -- pass one of them" 4 "FAILED (conflicting parameters)"
-}
-if (-not $EditableMode -and -not $PyPI -and $PSScriptRoot -and
-    (Test-Path -LiteralPath (Join-Path $PSScriptRoot ".corvin_repo")) -and
-    (Test-Path -LiteralPath (Join-Path $PSScriptRoot "pyproject.toml"))) {
-    $Editable = $PSScriptRoot
-    $EditableMode = $true
-    Write-Log -Message "Source: this checkout ($PSScriptRoot)" -Level "Info"
-}
-if (-not $EditableMode -and -not $PyPI) {
-    # Fetched in Phase 5b, after stale processes are stopped -- a running
-    # console inside the old tree would block the swap.
-    $ManagedMode  = $true
-    $EditableMode = $true
-    $RepoPath = [System.IO.Path]::GetFullPath($ManagedSrc)
-    if ($RepoPath.Length -gt 3) { $RepoPath = $RepoPath.TrimEnd('\', '/') }
-    Write-Log -Message "Repository path: $RepoPath (installer-managed)" -Level "Success"
-    Write-Log -Message "Mode: MANAGED SOURCE ($CorvinBranch from $CorvinRepoUrl)" -Level "Info"
-} else {
-    # PyPI still reads .nvmrc from a checkout next to this script when there is
-    # one; piped (irm | iex) there is no script root, so the current directory.
-    $RepoCandidate = if ($EditableMode) { $Editable } elseif ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).ProviderPath }
-
-    if (-not (Test-Path -LiteralPath $RepoCandidate -PathType Container)) {
-        Stop-WithError "Repository path does not exist: $RepoCandidate" 4 "FAILED (bad -Editable path)"
-    }
-
-    # Trailing separators must go: uv is handed "<path>[browser]" and
-    # "C:\repo\[browser]" is not a valid requirement specifier.
-    $RepoPath = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $RepoCandidate).ProviderPath)
-    if ($RepoPath.Length -gt 3) { $RepoPath = $RepoPath.TrimEnd('\', '/') }
-    Write-Log -Message "Repository path: $RepoPath" -Level "Success"
-    if ($EditableMode) {
-        Write-Log -Message "Mode: EDITABLE (local clone)" -Level "Info"
+if (-not $EditableMode) {
+    if ($PSScriptRoot -and
+        (Test-Path -LiteralPath (Join-Path $PSScriptRoot ".corvin_repo")) -and
+        (Test-Path -LiteralPath (Join-Path $PSScriptRoot "pyproject.toml"))) {
+        $Editable = $PSScriptRoot
+        $EditableMode = $true
+        Write-Log -Message "Source: this checkout ($PSScriptRoot)" -Level "Info"
     } else {
-        Write-Log -Message "Mode: PyPI ($PackageName >= $CorvinMinVersion)" -Level "Info"
+        Stop-WithError ("install.ps1 must be run from inside a CorvinOS checkout (or pass -Editable <checkout>).`n" + $CloneHint) 4 "FAILED (not a checkout)"
     }
 }
+if (-not (Test-Path -LiteralPath $Editable -PathType Container)) {
+    Stop-WithError ("Repository path does not exist: $Editable`n" + $CloneHint) 4 "FAILED (bad -Editable path)"
+}
+
+# Trailing separators must go: uv is handed "<path>[browser]" and
+# "C:\repo\[browser]" is not a valid requirement specifier.
+$RepoPath = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $Editable).ProviderPath)
+if ($RepoPath.Length -gt 3) { $RepoPath = $RepoPath.TrimEnd('\', '/') }
+Write-Log -Message "Repository path: $RepoPath" -Level "Success"
+Write-Log -Message "Mode: EDITABLE (local clone)" -Level "Info"
 
 Write-Step "Verifying CorvinOS repository structure"
-$requiredFiles = @("install.ps1", "install.sh", "pyproject.toml", "package.json")
+$requiredFiles = @(".corvin_repo", "install.ps1", "install.sh", "pyproject.toml", "package.json")
 $missingFiles = @($requiredFiles | Where-Object {
     -not (Test-Path -LiteralPath (Join-Path $RepoPath $_))
 })
-if ($ManagedMode) {
-    Write-Log -Message "Checked after the source is fetched (Phase 5b)" -Level "Info"
-} elseif ($missingFiles.Count -gt 0) {
-    if ($EditableMode) {
-        Stop-WithError "Not a CorvinOS clone -- missing: $($missingFiles -join ', ')" 4 "FAILED (bad -Editable path)"
-    }
-    Write-Log -Message "Repository files missing ($($missingFiles -join ', ')); component bootstrap will be skipped" -Level "Warn"
-} else {
-    Write-Log -Message "Repository structure verified" -Level "Success"
+if ($missingFiles.Count -gt 0) {
+    Stop-WithError ("Not a CorvinOS checkout -- missing: $($missingFiles -join ', ')`n" + $CloneHint) 4 "FAILED (bad -Editable path)"
 }
+Write-Log -Message "Repository structure verified" -Level "Success"
 
 # -----------------------------------------------------------------------------
 # Phase 3: System requirements
@@ -1225,149 +1191,6 @@ if (Get-Command pip -ErrorAction SilentlyContinue) {
 }
 
 # -----------------------------------------------------------------------------
-# Phase 5b: Fetch the CorvinOS source (managed mode only)
-# -----------------------------------------------------------------------------
-#
-# Mirrors fetch_source in install.sh. git when it is present and works (cheap
-# updates, exact commit); otherwise the codeload zip, which needs nothing but
-# HTTPS -- and is also the FALLBACK when git fails, because Git for Windows'
-# OpenSSL backend does not trust a corporate TLS-inspection root that
-# curl.exe/Schannel (the zip download) does. Generated state inside the tree
-# (.corvin\, web-next\node_modules) is carried across a zip swap.
-
-function Invoke-GitQuiet {
-    param([string[]]$Arguments)
-    $previousPreference = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        $output = & git @Arguments 2>&1
-        $code = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $previousPreference
-    }
-    foreach ($line in @($output)) { Write-Log -Message ([string]$line) -Level "Debug" }
-    return $code
-}
-
-function Get-GitHead {
-    param([string]$Dir)
-    # Same stderr trap as Invoke-GitQuiet: under "Stop", 5.1 turns even a
-    # redirected stderr line into a terminating error.
-    $previousPreference = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        return [string](& git -C $Dir rev-parse HEAD 2>$null | Select-Object -First 1)
-    } finally {
-        $ErrorActionPreference = $previousPreference
-    }
-}
-
-function Update-SourceFromZip {
-    param([string]$Dest)
-    $zipUrl = ($CorvinRepoUrl -replace '^https://github\.com/', 'https://codeload.github.com/') + "/zip/refs/heads/$CorvinBranch"
-    $zip    = Join-Path $env:TEMP "corvinos-src-$InstallTimestamp.zip"
-    $stage  = "$Dest.new"
-    try {
-        Write-Log -Message "Downloading $zipUrl ..." -Level "Info"
-        Invoke-DownloadWithRetry -Uri $zipUrl -OutFile $zip -TimeoutSeconds 600
-        if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction Stop }
-        $null = New-Item -ItemType Directory -Path $stage -Force -ErrorAction Stop
-        try {
-            Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force -ErrorAction Stop
-        } catch {
-            # Expand-Archive (5.1) fails on some long/odd entry names; bsdtar
-            # (System32\tar.exe, Windows 10 1803+) reads zips too.
-            $tar = Join-Path $env:SystemRoot "System32\tar.exe"
-            if (-not (Test-Path -LiteralPath $tar)) { throw }
-            Write-Log -Message "Expand-Archive failed ($($_.Exception.Message)) -- extracting with tar.exe" -Level "Warn"
-            $null = Invoke-Native -FilePath $tar -Arguments @("-xf", $zip, "-C", $stage)
-        }
-        $top = @(Get-ChildItem -LiteralPath $stage -Directory -Force)
-        if ($top.Count -ne 1 -or -not (Test-Path -LiteralPath (Join-Path $top[0].FullName "pyproject.toml"))) {
-            throw "unexpected archive layout in $zipUrl"
-        }
-        if (Test-Path -LiteralPath $Dest) {
-            foreach ($keep in @(".corvin", "core\console\corvin_console\web-next\node_modules")) {
-                $from = Join-Path $Dest $keep
-                if (-not (Test-Path -LiteralPath $from)) { continue }
-                $to = Join-Path $top[0].FullName $keep
-                $null = New-Item -ItemType Directory -Path (Split-Path -Parent $to) -Force
-                Move-Item -LiteralPath $from -Destination $to -Force -ErrorAction Stop
-            }
-            if (Test-Path -LiteralPath "$Dest.prev") { Remove-Item -LiteralPath "$Dest.prev" -Recurse -Force -ErrorAction Stop }
-            Move-Item -LiteralPath $Dest -Destination "$Dest.prev" -ErrorAction Stop
-        }
-        Move-Item -LiteralPath $top[0].FullName -Destination $Dest -ErrorAction Stop
-        Remove-Item -LiteralPath "$Dest.prev" -Recurse -Force -ErrorAction SilentlyContinue
-    } finally {
-        Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Update-ManagedSource {
-    param([string]$Dest)
-    $parent = Split-Path -Parent $Dest
-    if ($parent -and -not (Test-Path -LiteralPath $parent)) { $null = New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop }
-    $haveGit = [bool](Get-Command git -ErrorAction SilentlyContinue)
-    $before = ""
-    $done = $false
-    if ($haveGit -and (Test-Path -LiteralPath (Join-Path $Dest ".git"))) {
-        $before = Get-GitHead $Dest
-        for ($i = 1; $i -le 3 -and -not $done; $i++) {
-            if ((Invoke-GitQuiet @("-C", $Dest, "fetch", "--depth", "1", "origin", $CorvinBranch)) -eq 0) {
-                # Installer-managed tree: local edits are not ours to keep -- reset.
-                $done = ((Invoke-GitQuiet @("-C", $Dest, "reset", "--hard", "-q", "FETCH_HEAD")) -eq 0)
-            }
-            if (-not $done -and $i -lt 3) { Start-Sleep -Seconds (2 * $i) }
-        }
-    } elseif ($haveGit -and -not (Test-Path -LiteralPath $Dest)) {
-        for ($i = 1; $i -le 3 -and -not $done; $i++) {
-            Remove-Item -LiteralPath "$Dest.tmp" -Recurse -Force -ErrorAction SilentlyContinue
-            if ((Invoke-GitQuiet @("clone", "-q", "--depth", "1", "--branch", $CorvinBranch, "$CorvinRepoUrl.git", "$Dest.tmp")) -eq 0) {
-                Move-Item -LiteralPath "$Dest.tmp" -Destination $Dest -ErrorAction Stop
-                $done = $true
-            } elseif ($i -lt 3) { Start-Sleep -Seconds (2 * $i) }
-        }
-        Remove-Item -LiteralPath "$Dest.tmp" -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    if (-not $done) {
-        if ($haveGit) { Write-Log -Message "git could not fetch $CorvinRepoUrl -- falling back to the zip download" -Level "Warn" }
-        $null = Update-SourceFromZip -Dest $Dest
-    }
-    $null = New-Item -ItemType File -Path (Join-Path $Dest ".corvin-managed") -Force -ErrorAction Stop
-    $after = ""
-    if ($haveGit -and (Test-Path -LiteralPath (Join-Path $Dest ".git"))) {
-        $after = Get-GitHead $Dest
-    }
-    # A zip carries no revision: treat it as changed so the SPA is rebuilt.
-    $script:SourceChanged = (-not $after) -or ($after -ne $before)
-    return $(if ($after) { $after.Substring(0, [math]::Min(8, $after.Length)) } else { "zip" })
-}
-
-if ($ManagedMode) {
-    Write-Header "Phase 5b: Fetch the CorvinOS Source"
-    Write-Step "Fetching CorvinOS $CorvinBranch"
-    if ($DryRun) {
-        Write-Log -Message "[DRY RUN] Would fetch $CorvinBranch of $CorvinRepoUrl into $RepoPath (git, else the codeload zip)" -Level "Info"
-    } else {
-        try {
-            $rev = Update-ManagedSource -Dest $RepoPath
-        } catch {
-            Stop-WithError ("Could not download the CorvinOS source: $($_.Exception.Message)`n" +
-                "  Behind a proxy set HTTPS_PROXY (and, for git, git config --global http.proxy) and re-run," +
-                " or install the published package with -PyPI.") 1 "FAILED (source download)"
-        }
-        foreach ($f in $requiredFiles) {
-            if (-not (Test-Path -LiteralPath (Join-Path $RepoPath $f))) {
-                Stop-WithError "The fetched source at $RepoPath is incomplete (missing $f)" 1 "FAILED (source download)"
-            }
-        }
-        Write-Log -Message "Source: $RepoPath ($rev)" -Level "Success"
-    }
-}
-
-# -----------------------------------------------------------------------------
 # Phase 6: Bootstrap uv
 # -----------------------------------------------------------------------------
 
@@ -1510,12 +1333,7 @@ Write-Step "Installing corvinos via uv"
 # Invoke-Expression "uv tool install --force corvinos>=2.0.0", where PowerShell
 # parses '>' as a redirection operator and wrote uv's output into a file named
 # '=2.0.0' -- so the version floor was silently dropped.
-$uvArgs = @("tool", "install", "--force")
-if ($EditableMode) {
-    $uvArgs += @("--editable", ("{0}[browser]" -f $RepoPath))
-} else {
-    $uvArgs += @("--refresh", ("{0}[browser]>={1}" -f $PackageName, $CorvinMinVersion))
-}
+$uvArgs = @("tool", "install", "--force", "--editable", ("{0}[browser]" -f $RepoPath))
 
 if ($DryRun) {
     Write-Log -Message "[DRY RUN] Would run: uv $($uvArgs -join ' ')" -Level "Info"
@@ -1548,9 +1366,6 @@ if ($DryRun) {
             }
             if ($isLock) {
                 Write-Log -Message "$UvToolDir is still locked. Close every CorvinOS process and any terminal running one, then re-run." -Level "Error"
-            }
-            if (-not $EditableMode) {
-                $failure += "`n  (PyPI may not carry $PackageName >= $CorvinMinVersion yet -- re-run without -PyPI to install main from GitHub)"
             }
             Stop-WithError ("corvinos installation failed: $failure" + (Get-PolicyBlockHint $failure)) 1
         }
@@ -1600,8 +1415,7 @@ if ($componentScripts.Count -gt 0) {
 # THE CONSOLE UI DOES NOT EXIST UNTIL THIS RUNS. web-next/dist is gitignored and
 # is not tracked, so a fresh clone installed with -Editable has no SPA at all:
 # mount_static() then registers the 503 "build failed" fallback instead of the
-# SPA mount and decides that ONCE, at boot. A wheel from PyPI ships a pre-built
-# dist (sdist force-include), which is why only the editable path was affected.
+# SPA mount and decides that ONCE, at boot.
 #
 # Until 2026-09-18 this phase did not exist and the only build path was the
 # auto-build inside the server's own lifespan: capture_output=True, a 300s cap
@@ -1614,21 +1428,15 @@ Write-Header "Phase 10b: Build the Console SPA"
 
 Write-Step "Building the console frontend"
 
-# The directory the RUNNING console will serve from. In editable mode that is
-# the clone; a PyPI install serves the copy inside the installed package, which
-# already carries dist/ -- so there is normally nothing to do there.
+# The directory the RUNNING console will serve from: the clone (editable install).
 $WebNextDir = Join-Path $RepoPath "core\console\corvin_console\web-next"
 $WebDistIndex = Join-Path $WebNextDir "dist\index.html"
 
-if (-not $EditableMode) {
-    Write-Log -Message "PyPI mode: the wheel ships a pre-built SPA -- nothing to build" -Level "Info"
-} elseif ($DryRun) {
+if ($DryRun) {
     Write-Log -Message "[DRY RUN] Would run npm install + npm run build in $WebNextDir" -Level "Info"
 } elseif (-not (Test-Path -LiteralPath (Join-Path $WebNextDir "package.json"))) {
     Write-Log -Message "No web-next/package.json under $RepoPath -- skipping the SPA build" -Level "Warn"
-} elseif ((Test-Path -LiteralPath $WebDistIndex) -and -not $RebuildWeb -and -not $script:SourceChanged) {
-    # (A managed tree that was just updated is always rebuilt: its dist\ -- kept
-    # across a git reset, since it is gitignored -- belongs to the OLD code.)
+} elseif ((Test-Path -LiteralPath $WebDistIndex) -and -not $RebuildWeb) {
     Write-Log -Message "SPA already built ($WebDistIndex) -- re-run with -RebuildWeb to force" -Level "Success"
 } else {
     # npm.cmd sits at the ROOT of the Windows Node archive, next to node.exe.
@@ -2155,7 +1963,7 @@ Write-Host ""
 Write-Host "Installation details:" -ForegroundColor Green
 Write-Host "   CORVIN_HOME: $CorvinHome" -ForegroundColor White
 Write-Host "   Repository:  $RepoPath" -ForegroundColor White
-Write-Host "   Mode:        $(if ($ManagedMode) { "managed source ($CorvinBranch; update with update.ps1)" } elseif ($EditableMode) { 'editable (local clone)' } else { "PyPI ($PackageName)" })" -ForegroundColor White
+Write-Host "   Mode:        editable (local clone)" -ForegroundColor White
 Write-Host "   Logs:        $LogDir" -ForegroundColor White
 Write-Host ""
 if ($script:ConsoleReady) {

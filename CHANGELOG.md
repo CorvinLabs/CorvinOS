@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Changed — CorvinOS installs only from a local clone of the repository
+- `install.sh` / `install.ps1` install only the checkout they sit in (or the one
+  passed with `--editable` / `-Editable`, which must carry `.corvin_repo` +
+  `pyproject.toml`). The no-checkout download mode (`curl … | sh`, `irm … | iex`,
+  which fetched `main` into an installer-managed tree) and `--pypi` / `-PyPI`
+  are removed; anything else stops before the first download with the
+  `git clone` steps. corvinos is always installed `--editable`, never from an index.
+- `update.sh` / `update.ps1` never install: with nothing installed, or with a
+  legacy PyPI install, they stop with the clone steps instead of downloading an
+  installer. Existing checkouts and legacy installer-managed trees still update.
+- The launcher's start-up PyPI check (`maybe_pypi_autoupdate`) is skipped for an
+  editable checkout install — its code is the checkout.
+- `/corvin:install` (Claude Code plugin) runs the checkout's own installer and
+  never downloads one; it also no longer passes `--yes` to `install.sh` (which
+  rejected it) and calls the real `corvin-restore` entry point.
+- README "Quick Start" and the install / upgrade / Windows docs describe the
+  clone-based install only. The Corvin-Website repo replaces the published
+  `install.sh` / `install.ps1` with stubs that install nothing and print the
+  clone steps (live once the site is redeployed).
+
 ### Added — automatic, persisted whole-session voice summary; chat header decluttered
 - Every chat now gets a spoken recap generated automatically in the background
   as the conversation progresses, independent of whether any browser tab is

@@ -153,14 +153,18 @@ def _pyproject_version() -> str:
     return m.group(1)
 
 
-def test_installer_version_floor_matches_pyproject() -> None:
-    """install.sh / install.ps1 install `corvinos>=<floor>`; the floor must be
-    this release's version or the one-liners silently accept an older index."""
-    version = _pyproject_version()
-    sh = re.search(r'^CORVIN_MIN_VERSION="([^"]+)"', (_REPO / "install.sh").read_text(encoding="utf-8"), re.M)
-    ps1 = re.search(r'^\$CorvinMinVersion\s*=\s*"([^"]+)"', (_REPO / "install.ps1").read_text(encoding="utf-8"), re.M)
-    assert sh and sh.group(1) == version, f"install.sh CORVIN_MIN_VERSION {sh and sh.group(1)!r} != pyproject {version!r}"
-    assert ps1 and ps1.group(1) == version, f"install.ps1 $CorvinMinVersion {ps1 and ps1.group(1)!r} != pyproject {version!r}"
+def test_installers_install_only_the_local_checkout() -> None:
+    """CorvinOS installs only from a local clone: install.sh / install.ps1
+    must `uv tool install --editable <checkout>` and never resolve corvinos
+    from a package index (no version floor, no --pypi / -PyPI mode)."""
+    sh = (_REPO / "install.sh").read_text(encoding="utf-8")
+    ps1 = (_REPO / "install.ps1").read_text(encoding="utf-8")
+    assert re.search(r'uv tool install --force --editable "\$\{EDITABLE\}\[browser\]"', sh)
+    assert re.search(r'@\("tool", "install", "--force", "--editable", \("\{0\}\[browser\]" -f \$RepoPath\)\)', ps1)
+    for text, name in ((sh, "install.sh"), (ps1, "install.ps1")):
+        assert "CORVIN_MIN_VERSION" not in text and "CorvinMinVersion" not in text, name
+        assert "--pypi" not in text.lower().replace("no --pypi", ""), name
+        assert not re.search(r'\[browser\]>=', text), f"{name} still installs corvinos from an index"
 
 
 def test_uv_installer_pin_is_checksummed() -> None:

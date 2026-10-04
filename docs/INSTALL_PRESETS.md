@@ -5,10 +5,14 @@ When installing CorvinOS, you can choose an **installation preset** that determi
 ## Usage
 
 ```bash
-# Install with a specific preset
-curl -fsSL https://corvin-labs.com/install.sh | sh -- --preset standard
+# CorvinOS installs only from a local clone of the repository
+git clone https://github.com/CorvinLabs/CorvinOS.git
+cd CorvinOS
 
-# From a local clone (development)
+# Install with a specific preset
+./install.sh --preset standard
+
+# Advanced preset
 sh ./install.sh --preset advanced
 
 # Without --preset (defaults to "standard" for new installs)
@@ -65,7 +69,9 @@ corvinos-serve &
 
 ### Fresh Installation (Standard Preset)
 ```bash
-curl -fsSL https://corvin-labs.com/install.sh | sh
+git clone https://github.com/CorvinLabs/CorvinOS.git
+cd CorvinOS
+./install.sh
 ```
 
 ### Development Installation (Advanced Preset)

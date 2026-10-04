@@ -109,6 +109,19 @@ def _is_uv_tool_install() -> bool:
     return "/uv/tools/" in probe or probe.rstrip("/").endswith("/tools/corvinos")
 
 
+def _is_editable_checkout_install() -> bool:
+    """True when corvinos is installed editable from a local checkout — the
+    only supported way to install it. Its code IS the checkout, so a newer
+    PyPI release says nothing about it; `update.sh` / `update.ps1` update it."""
+    import importlib.metadata as _meta  # noqa: PLC0415
+    import json as _json  # noqa: PLC0415
+    try:
+        raw = _meta.distribution("corvinos").read_text("direct_url.json")
+        return bool(raw) and bool(_json.loads(raw).get("dir_info", {}).get("editable"))
+    except Exception:  # noqa: BLE001 — not installed / unreadable → not a checkout install
+        return False
+
+
 def _pip_available() -> bool:
     return importlib.util.find_spec("pip") is not None
 
@@ -600,6 +613,9 @@ def maybe_pypi_autoupdate(relaunch_argv: list[str] | None = None) -> bool:
     # locked venv within 5s — so the handoff merely burns restart budget and can
     # loop. Defer entirely to the supervisor's single per-logon upgrade.
     if os.environ.get("CORVIN_SUPERVISED") == "1":
+        return False
+
+    if _is_editable_checkout_install():
         return False
 
     print("  Checking for updates …", end=" ", flush=True)

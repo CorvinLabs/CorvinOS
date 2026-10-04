@@ -17,8 +17,9 @@
         as a git stash before resetting -- nothing is lost.
       * a developer checkout on another branch: code left alone (warned), but
         dependencies, frontend and the console are still refreshed.
-      * a PyPI install: PyPI lags main, so it is converted to a managed tree.
-      * nothing installed: install.ps1 is run instead.
+      * a PyPI install: refused -- CorvinOS installs only from a local checkout.
+      * nothing installed: refused with the clone + install.ps1 steps (update
+        never installs).
 
     Order differs from update.sh in one place, on purpose: Windows cannot
     replace a file a running process holds, so the console is stopped BEFORE
@@ -453,17 +454,14 @@ if ($Src -and (Test-Path -LiteralPath (Join-Path $Src "pyproject.toml"))) {
 } elseif (Test-Path -LiteralPath (Join-Path $ManagedSrc "pyproject.toml")) {
     $Src = $ManagedSrc; $Kind = "managed"
 } elseif (Test-Path -LiteralPath $Receipt) {
-    $Src = $ManagedSrc; $Kind = "pypi"
+    Stop-Update ("this CorvinOS was installed from PyPI, which is no longer supported. Install from a local checkout:`n" +
+        "  git clone $RepoUrl.git`n  cd CorvinOS`n  powershell -ExecutionPolicy Bypass -File install.ps1")
 } else {
     # Nothing installed (or the venv is gone, e.g. a non-persistent VDI profile
-    # reset): an update cannot restore what is not there -- install instead.
-    Write-Warn "no CorvinOS install found -- running the installer instead"
-    $installer = Join-Path $LogDir "install.ps1"
-    $rawUrl = ($RepoUrl -replace '^https://github\.com/', 'https://raw.githubusercontent.com/') + "/$Branch/install.ps1"
-    if (-not (Invoke-Retry 3 { Invoke-Download -Uri $rawUrl -OutFile $installer })) { Stop-Update "could not download install.ps1" }
-    Exit-SetupLock
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer
-    exit $LASTEXITCODE
+    # reset): an update cannot restore what is not there, and installs come
+    # only from a local checkout.
+    Stop-Update ("no CorvinOS install found. Install from a local checkout:`n" +
+        "  git clone $RepoUrl.git`n  cd CorvinOS`n  powershell -ExecutionPolicy Bypass -File install.ps1")
 }
 # Port: explicit, else the console task's own --port, else the env, else 8765.
 $ConsoleTask = Get-ConsoleTask

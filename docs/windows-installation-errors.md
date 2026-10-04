@@ -355,6 +355,7 @@ If errors persist after following these steps:
    rm -r "$env:USERPROFILE\.corvin"
    rm -r "$env:USERPROFILE\.config\corvin-voice"
    
-   # Reinstall
-   irm https://corvin-labs.com/install.ps1 | iex
+   # Reinstall from your CorvinOS checkout (clone it first if you have none:
+   #   git clone https://github.com/CorvinLabs/CorvinOS.git; cd CorvinOS)
+   powershell -ExecutionPolicy Bypass -File install.ps1
    ```

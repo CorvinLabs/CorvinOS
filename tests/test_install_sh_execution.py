@@ -121,6 +121,50 @@ def test_editable_path_that_does_not_exist_dies() -> None:
     assert "Editable path does not exist" in result.stderr
 
 
+# ── local-checkout-only: no download mode, no PyPI mode ────────────────────
+
+
+def test_editable_path_that_is_not_a_checkout_dies(tmp_path) -> None:
+    result = _run(["--editable", str(tmp_path)])
+    assert result.returncode == 1
+    assert "Not a CorvinOS checkout" in result.stderr
+    assert "git clone https://github.com/CorvinLabs/CorvinOS.git" in result.stderr
+
+
+def test_run_outside_a_checkout_dies_before_any_download(tmp_path) -> None:
+    """The former `curl … | sh` mode fetched main into a managed tree. It is
+    gone: a copy of install.sh that does not sit in a checkout must refuse
+    immediately — with PATH empty, so reaching any download step would fail
+    with a different message."""
+    stray = tmp_path / "install.sh"
+    shutil.copy(_INSTALL_SH, stray)
+    result = subprocess.run(
+        ["/bin/sh", str(stray)], capture_output=True, text=True, timeout=20,
+        env={"PATH": "", "TMPDIR": str(tmp_path)},
+    )
+    assert result.returncode == 1
+    assert "must be run from inside a CorvinOS checkout" in result.stderr
+    assert "git clone https://github.com/CorvinLabs/CorvinOS.git" in result.stderr
+    assert "curl or wget" not in result.stderr
+
+
+def test_piped_stdin_mode_is_refused(tmp_path) -> None:
+    """`curl … | sh` runs the script from stdin: $0 is `sh`, not a path."""
+    result = subprocess.run(
+        ["/bin/sh"], input=_INSTALL_SH.read_text(encoding="utf-8"),
+        capture_output=True, text=True, timeout=20,
+        env={"PATH": "", "TMPDIR": str(tmp_path)}, cwd=str(tmp_path),
+    )
+    assert result.returncode == 1
+    assert "must be run from inside a CorvinOS checkout" in result.stderr
+
+
+def test_pypi_flag_is_gone() -> None:
+    result = _run(["--pypi"])
+    assert result.returncode == 1
+    assert "Unknown argument: --pypi" in result.stderr
+
+
 # ── network bootstrap: die() when neither curl nor wget is available ───────
 
 
@@ -193,6 +237,9 @@ exit 1
 
     editable_dir = tmp_path / "editable-target"
     editable_dir.mkdir()
+    # install.sh only accepts a real CorvinOS checkout as --editable target.
+    (editable_dir / ".corvin_repo").write_text("")
+    (editable_dir / "pyproject.toml").write_text("[project]\nname = \"corvinos\"\n")
 
     env = {
         "PATH": f"{fakebin}:/usr/bin:/bin",

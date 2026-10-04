@@ -13,7 +13,7 @@ This guide walks you through installing Corvin from scratch using the Python ins
 | Linux (Ubuntu 22.04 LTS or later, Debian 12+, Fedora 38+, Arch) | Full |
 | macOS 13 Ventura or later | Full (voice output from Claude not supported; messenger voice notes still work) |
 | WSL2 on Windows 11 | Full (systemd optional; `fg` mode always works) |
-| Windows 11 native | Full via `pip install corvinOS` — PATH is auto-configured; voice via edge-tts (no OpenAI key required) |
+| Windows 11 native | Full via `install.ps1` from a local clone — PATH is auto-configured; voice via edge-tts (no OpenAI key required) |
 
 ### Claude Code CLI
 
@@ -71,21 +71,28 @@ pip install -e ".[all]"
 corvin-install
 ```
 
+The primary install path is the bundled installer, run from the same checkout:
+`./install.sh` (Linux/macOS/WSL) or `powershell -ExecutionPolicy Bypass -File install.ps1`
+(Windows) — it bootstraps `uv`, Node.js and Claude Code itself and runs `corvin-install --yes`
+for you (see the README's Quick Start). CorvinOS is installed only from a local clone; there is no
+one-liner download and no PyPI install. The manual `pip install -e` flow above is the
+developer path and runs the wizard interactively.
+
 The installer runs interactively. Here is what each stage does.
 
 ### Alternative: as a Claude Code plugin
 
 CorvinOS ships its own `.claude-plugin/marketplace.json` (`./corvin_operator/corvin`).
-Add it to Claude Code (`/plugin marketplace add <path-to-this-checkout>`,
-then `/plugin install corvin`) and run `/corvin:install` instead of the
-commands above. It drives this same `corvin-install` CLI (or `install.sh`
-from a local checkout if `corvin-install` isn't on PATH yet) non-interactively,
-then — unlike `corvin-install` itself — polls the Web Console with real HTTP
-requests (not just "is the port open") until it genuinely serves the SPA, and
-opens it in the browser. Idempotent: re-running it on an already-complete,
-healthy install just re-verifies and reopens the browser instead of
-reinstalling; on a flagged-complete-but-unhealthy install it tries
-`corvin-installer restore` before falling back to a full reinstall. See
+With the clone in place, add it to Claude Code (`/plugin marketplace add
+<path-to-this-checkout>`, then `/plugin install corvin`) and run
+`/corvin:install` from Claude Code started inside the clone. It runs the
+checkout's own `install.sh` (Windows: `install.ps1`) — nothing is downloaded;
+without a checkout it stops and prints the `git clone` steps — then polls the
+Web Console with real HTTP requests (not just "is the port open") until it
+genuinely serves the SPA. The installer opens the browser itself. Idempotent:
+re-running it on an already-complete, healthy install only re-verifies and
+reopens the browser; on a flagged-complete-but-unhealthy install it tries
+`corvin-restore` before falling back to a full reinstall. See
 `corvin_operator/corvin/scripts/corvin_install_command.py`.
 
 ### Stage 1 — OS detection
@@ -434,7 +441,7 @@ bash corvin_operator/bridges/bridge.sh fg
 | **Linux** | Full support. Systemd user services are created automatically by `corvin-install` (and by `bridge.sh up` for dev checkouts), which also runs `loginctl enable-linger $USER` for you so the service survives a reboot even without logging back in — no manual step needed. |
 | **macOS** | Full support except voice output (TTS playback) from within Claude — messenger voice notes are still generated and sent. `corvin-install` automatically creates and loads a launchd `LaunchAgent` (`~/Library/LaunchAgents/com.corvin.*.plist`), so services start at login and restart on crash with no manual setup; use `bridge.sh fg` only if you want to run in the foreground instead. Homebrew must be installed for system dependencies. |
 | **WSL2** | Systemd is optional (requires `systemd=true` in `/etc/wsl.conf`). Without systemd, use `bridge.sh fg`. Run `wsl --update` if you encounter WSL2 kernel version warnings. |
-| **Windows native** | `pip install corvinOS` → open a new PowerShell → `corvin serve`. The installer auto-adds the Scripts directory to PATH. Voice works via edge-tts (no API key needed). The `install.ps1` one-liner registers a per-user Scheduled Task so the console starts automatically at login and restarts itself on crash/reboot; on accounts where the Task Scheduler store denies that (some managed/family/education Windows images) it automatically falls back to a Startup-folder shortcut instead — still no admin rights needed either way. A `CorvinOS.lnk` Desktop shortcut is also created so you can start the console by hand. |
+| **Windows native** | Clone the repository → run `install.ps1` from the checkout → open a new PowerShell → `corvin serve`. The installer auto-adds its tool directory to PATH. Voice works via edge-tts (no API key needed). `install.ps1` registers a per-user Scheduled Task so the console starts automatically at login and restarts itself on crash/reboot; on accounts where the Task Scheduler store denies that (some managed/family/education Windows images) it automatically falls back to a Startup-folder shortcut instead — still no admin rights needed either way. A `CorvinOS.lnk` Desktop shortcut is also created so you can start the console by hand. |
 
 Run **`corvin stop`** to shut Corvin down cleanly on any platform — it stops the
 login-autostart process (Windows Scheduled Task / macOS LaunchAgent / Linux
@@ -468,12 +475,11 @@ start-at-login afterwards. On Windows the always-on service now starts
 immediately after registration — no reboot needed, and it runs with no
 visible terminal window at every subsequent boot either.
 
-The piped installers also accept `--autostart` (registers the normal
-start-at-login setup even when piped, e.g. `curl ... | sh -s -- --autostart`)
-and `--always-on` (also runs `corvin-service install` for you, Linux/macOS
-only for now — pass it in the same one-liner, e.g.
-`curl ... | sh -s -- --always-on`). Neither is on by default: a piped
-install intentionally stays lightweight unless you ask for more.
+`install.sh` also accepts `--autostart` (registers the normal start-at-login
+setup, e.g. `./install.sh --autostart`) and `--always-on` (also runs
+`corvin-service install` for you, Linux/macOS only for now, e.g.
+`./install.sh --always-on`). Neither is on by default: the install
+intentionally stays lightweight unless you ask for more.
 
 ---
 

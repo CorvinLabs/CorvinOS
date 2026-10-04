@@ -2,9 +2,12 @@
 # install.sh — CorvinOS installer for Linux and macOS.
 # Includes auto-detection and installation of Claude Code.
 #
+# Installs ONLY from a local CorvinOS checkout — there is no download mode.
+#
 # Usage:
-#   curl -fsSL https://corvin-labs.com/install.sh | sh
-#   sh install.sh --editable /path/to/CorvinOS    # dev install from a local clone
+#   git clone https://github.com/CorvinLabs/CorvinOS.git && cd CorvinOS
+#   ./install.sh                                  # install from this checkout
+#   sh install.sh --editable /path/to/CorvinOS    # install from another checkout
 #   sh install.sh --no-claude-code                # skip Claude Code installation
 #
 # POSIX sh, ZERO prerequisites: it bootstraps `uv` (a single static binary that
@@ -17,17 +20,12 @@
 #             against UV_INSTALLER_SHA256 below BEFORE it runs, and that script
 #             in turn verifies the uv binary it downloads against its own
 #             embedded checksums. No `curl | sh` of a moving target.
-#   * corvinos — a version FLOOR (`corvinos>=CORVIN_MIN_VERSION`), not an exact
-#             pin, on purpose (INST-1): `uv tool install corvinos==X` writes X
-#             into the uv receipt and `uv tool upgrade corvinos` (the console's
-#             auto-update path) then honours it forever — silently freezing
-#             updates. The floor rejects a downgraded/stale index while keeping
-#             the receipt upgradeable.
+#   * corvinos — installed EDITABLE from the local checkout; never fetched
+#             from an index.
 #   * claude — OPTIONAL. Auto-installs via official installer if available.
 set -eu
 
 PKG="${CORVIN_PKG:-corvinos}"
-CORVIN_MIN_VERSION="2.0.0"
 UV_PIN_VERSION="0.12.9"
 UV_INSTALLER_URL="https://github.com/astral-sh/uv/releases/download/${UV_PIN_VERSION}/uv-installer.sh"
 UV_INSTALLER_SHA256="222e006c0fe4a0d793031833e469b21df72311f4e3526ffecca0e19e6dfabc32"
@@ -39,13 +37,7 @@ SKIP_CLAUDE=0
 FORCE_AUTOSTART=0
 ALWAYS_ON=0
 PRESET=""
-USE_PYPI=0
-# Where the source comes from when this script is NOT run from a checkout
-# (`curl … | sh`). PyPI lags main by months, so the default is main itself,
-# kept as an installer-managed tree that update.sh refreshes in place.
-CORVIN_REPO_URL="${CORVIN_REPO_URL:-https://github.com/CorvinLabs/CorvinOS}"
-CORVIN_BRANCH="${CORVIN_BRANCH:-main}"
-MANAGED_SRC="${CORVIN_SRC_DIR:-${XDG_DATA_HOME:-${HOME:-}/.local/share}/corvinos/src}"
+CORVIN_REPO_URL="https://github.com/CorvinLabs/CorvinOS"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Styling utilities
@@ -94,17 +86,42 @@ while [ $# -gt 0 ]; do
             OPEN_LAN=1; shift ;;
         --no-claude-code)
             SKIP_CLAUDE=1; shift ;;
-        --pypi)
-            USE_PYPI=1; shift ;;
         *)
             die "Unknown argument: $1
-Usage: $0 [--editable|-e <path>] [--pypi] [--autostart] [--always-on] [--lan] [--preset {minimal|standard|advanced}] [--no-claude-code]" ;;
+Usage: $0 [--editable|-e <path>] [--autostart] [--always-on] [--lan] [--preset {minimal|standard|advanced}] [--no-claude-code]" ;;
     esac
 done
 
 if [ -n "$EDITABLE" ]; then
     [ -d "$EDITABLE" ] || die "Editable path does not exist: $EDITABLE"
     EDITABLE="$(cd "$EDITABLE" && pwd)"
+fi
+
+# The source is always a local checkout: --editable PATH, else the checkout
+# this script sits in. Decided before anything is downloaded, so a run outside
+# a checkout fails in the first second instead of after the uv/Node bootstrap.
+_is_checkout() { [ -f "$1/.corvin_repo" ] && [ -f "$1/pyproject.toml" ]; }
+_not_a_checkout() {
+    die "$1
+CorvinOS installs only from a local clone of the repository:
+  git clone ${CORVIN_REPO_URL}.git
+  cd CorvinOS
+  ./install.sh"
+}
+if [ -n "$EDITABLE" ]; then
+    _is_checkout "$EDITABLE" || _not_a_checkout "Not a CorvinOS checkout (missing .corvin_repo or pyproject.toml): $EDITABLE"
+else
+    _script_dir=""
+    # Parameter expansion, not dirname: this runs before PATH is set up.
+    case "$0" in
+        */install.sh) _script_dir="$(cd "${0%/*}" 2>/dev/null && pwd || true)" ;;
+        install.sh)   _script_dir="$(pwd)" ;;
+    esac
+    if [ -n "$_script_dir" ] && _is_checkout "$_script_dir"; then
+        EDITABLE="$_script_dir"
+    else
+        _not_a_checkout "install.sh must be run from inside a CorvinOS checkout (or pass --editable <checkout>)."
+    fi
 fi
 
 if [ -n "$PRESET" ]; then
@@ -224,12 +241,8 @@ if [ "$SKIP_CLAUDE" != "1" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 1a: Resolve the source tree
+# Phase 1a: Source tree — the local checkout resolved right after arg parsing
 # ─────────────────────────────────────────────────────────────────────────────
-# Three cases, decided once:
-#   * --editable PATH, or this script sits in a checkout → install from it.
-#   * --pypi → the published wheel (lags main; kept for pinned deployments).
-#   * otherwise (`curl … | sh`) → fetch main into MANAGED_SRC and install that.
 _retry() {  # _retry N cmd… — exponential backoff 2,4,8 s
     _rt_n="$1"; shift; _rt_i=1; _rt_wait=2
     while :; do
@@ -240,67 +253,8 @@ _retry() {  # _retry N cmd… — exponential backoff 2,4,8 s
     done
 }
 
-_download() {  # _download URL FILE
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --connect-timeout 20 --max-time 600 -o "$2" "$1"
-    else
-        wget -q -T 60 -O "$2" "$1"
-    fi
-}
-
-# fetch_source DEST — make DEST a current copy of $CORVIN_BRANCH. Git when
-# available (cheap updates, exact commit); a tarball otherwise (Citrix and
-# locked-down desktops often have no git). Generated state inside the tree
-# (.corvin/, web-next/node_modules) is carried across a tarball swap.
-fetch_source() {
-    _fs_dest="$1"
-    mkdir -p "$(dirname "$_fs_dest")" || return 1
-    if [ -d "$_fs_dest/.git" ] && command -v git >/dev/null 2>&1; then
-        # Installer-managed tree: local edits are not ours to keep — reset.
-        _retry 3 git -C "$_fs_dest" fetch --depth 1 origin "$CORVIN_BRANCH" >>"$INSTALL_LOG" 2>&1 || return 1
-        git -C "$_fs_dest" reset --hard -q FETCH_HEAD >>"$INSTALL_LOG" 2>&1 || return 1
-    elif command -v git >/dev/null 2>&1 && [ ! -e "$_fs_dest" ]; then
-        rm -rf "$_fs_dest.tmp"
-        _retry 3 git clone -q --depth 1 --branch "$CORVIN_BRANCH" "$CORVIN_REPO_URL.git" "$_fs_dest.tmp" >>"$INSTALL_LOG" 2>&1 \
-            || { rm -rf "$_fs_dest.tmp"; return 1; }
-        mv "$_fs_dest.tmp" "$_fs_dest" || return 1
-    else
-        _fs_tgz="$(mktemp "${TMPDIR:-/tmp}/corvinos-src.XXXXXX")" || return 1
-        _fs_url="$(printf '%s' "$CORVIN_REPO_URL" | sed 's#^https://github.com/#https://codeload.github.com/#')/tar.gz/refs/heads/$CORVIN_BRANCH"
-        _retry 3 _download "$_fs_url" "$_fs_tgz" || { rm -f "$_fs_tgz"; return 1; }
-        rm -rf "$_fs_dest.new"; mkdir -p "$_fs_dest.new"
-        tar -xzf "$_fs_tgz" -C "$_fs_dest.new" --strip-components=1 || { rm -rf "$_fs_tgz" "$_fs_dest.new"; return 1; }
-        rm -f "$_fs_tgz"
-        [ -f "$_fs_dest.new/pyproject.toml" ] || { rm -rf "$_fs_dest.new"; return 1; }
-        if [ -d "$_fs_dest" ]; then
-            for _keep in .corvin core/console/corvin_console/web-next/node_modules; do
-                [ -e "$_fs_dest/$_keep" ] && mkdir -p "$(dirname "$_fs_dest.new/$_keep")" && mv "$_fs_dest/$_keep" "$_fs_dest.new/$_keep"
-            done
-            rm -rf "$_fs_dest.prev"; mv "$_fs_dest" "$_fs_dest.prev"
-        fi
-        mv "$_fs_dest.new" "$_fs_dest" || return 1
-        rm -rf "$_fs_dest.prev"
-    fi
-    : >"$_fs_dest/.corvin-managed"
-}
-
-_script_dir=""
-case "$0" in
-    */install.sh|install.sh) _script_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)" ;;
-esac
-if [ -z "$EDITABLE" ] && [ "$USE_PYPI" != "1" ] && [ -n "$_script_dir" ] \
-   && [ -f "$_script_dir/.corvin_repo" ] && [ -f "$_script_dir/pyproject.toml" ]; then
-    EDITABLE="$_script_dir"
-    echo "  Source: this checkout ($EDITABLE)"
-fi
-if [ -z "$EDITABLE" ] && [ "$USE_PYPI" != "1" ]; then
-    printf '  Fetching CorvinOS %s from %s ...\n' "$CORVIN_BRANCH" "$CORVIN_REPO_URL"
-    fetch_source "$MANAGED_SRC" \
-        || die "could not download the CorvinOS source (network/proxy?) — details: $INSTALL_LOG. Behind a proxy set HTTPS_PROXY and re-run."
-    EDITABLE="$MANAGED_SRC"
-    echo "  Source: $EDITABLE ($(git -C "$EDITABLE" rev-parse --short HEAD 2>/dev/null || echo tarball)) — $(_green OK)"
-fi
-REPO_DIR="${EDITABLE:-$(pwd)}"
+echo "  Source: local checkout ($EDITABLE)"
+REPO_DIR="$EDITABLE"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 1b: Bootstrap local Node.js runtime (self-contained, no sudo)
@@ -342,13 +296,7 @@ fi
 # makes every later `uv tool install` fail on the broken receipt — the second
 # attempt removes the venv first; the third also drops uv's cache.
 _uv_install() {
-    if [ -n "$EDITABLE" ]; then
-        uv tool install --force --editable "${EDITABLE}[browser]"
-    elif [ "$PKG" = "corvinos" ]; then
-        uv tool install --force --refresh "${PKG}[browser]>=${CORVIN_MIN_VERSION}"
-    else
-        uv tool install --force --refresh "${PKG}[browser]"
-    fi
+    uv tool install --force --editable "${EDITABLE}[browser]"
 }
 _uv_install_healing() {
     _uv_install && return 0
@@ -359,13 +307,8 @@ _uv_install_healing() {
     uv cache clean "$PKG" >/dev/null 2>&1 || true
     _uv_install
 }
-if [ -n "$EDITABLE" ]; then
-    _await "Installing CorvinOS from $EDITABLE" _uv_install_healing \
-        || die "uv tool install failed — details: $INSTALL_LOG"
-else
-    _await "Installing ${PKG} from PyPI" _uv_install_healing \
-        || die "uv tool install failed (PyPI may not carry >=${CORVIN_MIN_VERSION} yet — re-run without --pypi) — details: $INSTALL_LOG"
-fi
+_await "Installing CorvinOS from $EDITABLE" _uv_install_healing \
+    || die "uv tool install failed — details: $INSTALL_LOG"
 uv tool update-shell >/dev/null 2>&1 || true
 export PATH="$(uv tool dir --bin 2>/dev/null || echo "$HOME/.local/bin"):$PATH"
 
@@ -403,11 +346,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "  Setting up watchdog service (health monitoring) ..."
-if [ -n "$EDITABLE" ]; then
-    SETUP_SCRIPT="${EDITABLE}/scripts/setup.sh"
-else
-    SETUP_SCRIPT="${REPO_DIR}/scripts/setup.sh"
-fi
+SETUP_SCRIPT="${REPO_DIR}/scripts/setup.sh"
 
 if [ -f "$SETUP_SCRIPT" ]; then
     # Started now, not "at next login": it stands down while this script holds

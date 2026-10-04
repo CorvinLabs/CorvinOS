@@ -94,8 +94,8 @@ This ensures the installer is **fail-graceful**, not fail-hard.
 ```
 uv (single static binary)
   → manages its own Python (no system Python needed)
-  → runs `uv tool install corvinos`
-  → installs CorvinOS to user home
+  → runs `uv tool install --editable <checkout>`
+  → installs the local CorvinOS checkout into a user-home tool env
 ```
 
 **Node.js Pattern (new, mirrors uv):**

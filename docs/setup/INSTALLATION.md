@@ -16,62 +16,59 @@
 
 ### Install
 
-**Linux / macOS — one-liner (recommended):**
+CorvinOS is installed **only from a local clone of the repository**. There is no `curl … | sh` /
+`irm … | iex` one-liner, no download mode and no PyPI install (`pip install corvinos` /
+`uv tool install corvinos` from the index are no longer supported). The installer refuses to run
+unless it sits in (or is pointed at) a CorvinOS checkout (`.corvin_repo` + `pyproject.toml`), and it
+installs that checkout in editable mode.
+
+**1. Clone the repository** (requires `git`):
 ```bash
-curl -fsSL https://corvin-labs.com/install.sh | sh
+git clone https://github.com/CorvinLabs/CorvinOS.git
+cd CorvinOS
 ```
 
-(`install.sh` is POSIX `sh`; piping it into `bash` works too, but `sh` is what the script is
-written and tested for. To review before running: `curl -fsSL https://corvin-labs.com/install.sh
--o install.sh && less install.sh && sh install.sh`.)
+**2. Run the installer from the checkout.**
 
-**Windows — PowerShell one-liner:**
+Linux / macOS / WSL:
+```bash
+./install.sh
+```
+
+(`install.sh` is POSIX `sh`; `sh install.sh` works the same way. It is plain text in your checkout —
+review it before running if you like.)
+
+Windows (PowerShell, from the CorvinOS directory):
 ```powershell
-irm https://corvin-labs.com/install.ps1 | iex
+powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-> **DNS error?** If PowerShell reports `irm : The remote name could not be
-> resolved: 'corvin-labs.com'`, the domain itself is up — this is a local DNS
-> resolution issue on your machine (a stale negative-cache entry, VPN/corporate
-> DNS, or a flaky resolver). Try, in order:
-> 1. Flush the local DNS cache and retry: `ipconfig /flushdns`
-> 2. If it still fails, use the GitHub-hosted copy of the same script instead
->    (identical content, different domain):
->    ```powershell
->    irm https://raw.githubusercontent.com/CorvinLabs/CorvinOS/main/install.ps1 | iex
->    ```
-> 3. Still failing? Your resolver may be blocking/mis-resolving both domains —
->    temporarily switch your network adapter's DNS to `1.1.1.1` (Cloudflare)
->    or `8.8.8.8` (Google) and retry.
+To install a checkout that lives somewhere else, pass it explicitly:
+`sh install.sh --editable /path/to/CorvinOS` or `install.ps1 -Editable C:\path\to\CorvinOS`.
+A path that is not a CorvinOS checkout is refused before anything is downloaded.
 
-Both one-liners bootstrap the `uv` runtime (which brings its own Python — no system Python, pip, or
-package manager needed), then `uv tool install corvinos` into an isolated tool environment and add
-it to your PATH. They also install the Claude Code CLI (skip with `--no-claude-code`) and provision
-the voice (STT + TTS) models so the install is voice-ready out of the box. No local LLM model is
+The installer bootstraps the `uv` runtime (which brings its own Python — no system Python, pip, or
+package manager needed) and a local Node.js runtime, then installs your checkout with
+`uv tool install --editable` into an isolated tool environment and adds it to your PATH. It also
+installs the Claude Code CLI (skip with `--no-claude-code` / `-NoClaudeCode`) and provisions the
+voice (STT + TTS) models so the install is voice-ready out of the box. No local LLM model is
 downloaded — local Ollama inference was removed in ADR-2091.
 
-What the one-liners download, and how it is verified:
+Because the install is editable, the code that runs **is** your checkout: `git pull` +
+`sh update.sh` (or `update.ps1`) is all an update takes — see [UPGRADE_GUIDE.md](UPGRADE_GUIDE.md).
+
+What the installer downloads, and how it is verified:
 
 | Download | Pinned? | Verification |
 |---|---|---|
 | `uv` installer | yes — exact version, immutable GitHub release asset | SHA-256 of the installer script is checked before it runs; the script then verifies the `uv` binary against its embedded checksums |
-| `corvinos` (PyPI) | version **floor** (`corvinos>=<this release>`), deliberately not an exact pin | an exact pin would land in the uv receipt and freeze `uv tool upgrade` (the console's auto-update) — see the script header (INST-1) |
+| CorvinOS itself | not downloaded — it is your checkout | whatever revision you cloned / pulled |
 
 `sudo` is used in exactly two places on Linux: to `apt-get`/`yum install curl` when neither curl nor
 wget exists, and for `--always-on` (system-level service, ADR-0184 Stufe 2). Nothing else elevates.
 The firewall is never touched unless you pass `--lan` (Linux `ufw`) / `-Lan` (Windows Defender) —
 the console listens on `127.0.0.1` by default, so no inbound rule is needed until you enable A2A
 LAN pairing.
-
-Equivalent to doing it manually if you already have `uv`:
-
-```bash
-uv tool install corvinos
-corvinos-serve          # opens http://localhost:8765
-```
-
-(With a system Python + pip you can also `pip install corvinos`, but the `uv` path above is what the
-one-liners use and needs no pre-installed Python.)
 
 **AI engine:** the default engine is Claude Code. Log in once with `claude` (or configure an API key /
 cloud platform in the console's Settings → AI Engines). If Claude Code is missing or not logged in,
@@ -81,26 +78,27 @@ a chat turn answers with an error that points at Setup — there is no automatic
 
 ## Installation Methods
 
-### Method 1: From PyPI (Recommended)
+### Method 1: Installer from the checkout (recommended)
 ```bash
-pip install corvinos
-corvinos-serve          # web console at http://localhost:8765
+git clone https://github.com/CorvinLabs/CorvinOS.git
+cd CorvinOS
+./install.sh            # Windows: powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-> **Note:** `corvinos-serve` (web console) and `corvin-install` (voice model
-> provisioning, API keys, login autostart, messaging-bridge daemons + their system services) both
-> work from the pip wheel — the one-liners run `corvin-install` from the `uv tool install`, no
-> checkout involved. The bridge daemons are vendored inside the wheel
-> (`corvin_core/_vendor/corvin_operator/bridges/`) and need Node.js 20+ at runtime. A git checkout
-> (Method 2) is only needed to develop CorvinOS or rebuild the console frontend.
+`corvinos-serve` (web console) and `corvin-install` (voice model provisioning, API keys, login
+autostart, messaging-bridge daemons + their system services) are both installed by this step; the
+installer runs `corvin-install --yes` for you. The bridge daemons need Node.js 20+ at runtime.
 
-### Method 2: From Source (development)
+### Method 2: Manual editable install (development)
 ```bash
 git clone https://github.com/CorvinLabs/CorvinOS.git
 cd CorvinOS
 pip install -e .
 corvin-install
 ```
+
+This is the same checkout-based install without the installer's bootstrap (you supply Python 3.10+
+and Node.js yourself). Prefer `./install.sh` unless you are developing CorvinOS.
 
 **Developer note — wheel vs. checkout.** The wheel remaps several `core/<area>/<pkg>` packages to
 top-level names (`corvin_console`, `corvin_core`, `corvin_gateway`, `corvin_license`,
@@ -232,29 +230,28 @@ launchctl start com.corvin.adapter
 
 **Supported:** Windows 10 build 19041 (May 2020 Update) and Windows 11.
 
-**What works natively (pip install, no WSL2):**
+**What works natively (no WSL2):**
 
 | Feature | Status |
 |---|---|
-| `pip install corvinos` | ✅ Supported |
+| `install.ps1` from a checkout | ✅ Supported |
+| `pip install corvinos` from PyPI | ❌ No longer supported — install from a clone |
 | `corvinos-serve` (web console) | ✅ Opens browser at http://localhost:8765 |
 | Bridges (Discord / WhatsApp / Telegram / …) | ⚠️ Requires WSL2 — see below |
 
 **Quick start (native):**
 ```powershell
-pip install corvinos
-corvinos-serve
+git clone https://github.com/CorvinLabs/CorvinOS.git
+cd CorvinOS
+powershell -ExecutionPolicy Bypass -File install.ps1
 # Console opens at http://localhost:8765
 ```
 
-> **PATH note:** With a system-wide Python install, pip places `corvin*` scripts in the
-> user Scripts folder (`%APPDATA%\Python\Python3xx\Scripts`), which is not on PATH by default.
-> Either add it to PATH, or use the fallback:
+> **PATH note:** `install.ps1` puts the `corvin*` commands on your user PATH; open a new terminal
+> after the install so it picks them up. If a command is still not found, use the fallback:
 > ```powershell
 > py -m ops.launcher.corvin.serve_entry --no-browser
 > ```
-> The one-liner installer (`irm https://corvin-labs.com/install.ps1 | iex`) handles PATH
-> setup automatically.
 
 **Bridges on Windows → WSL2:**
 
@@ -265,8 +262,9 @@ WSL2 + Ubuntu:
 # One-time setup (Admin PowerShell):
 wsl --install
 # Then inside Ubuntu:
-pip install corvinos
-corvin-install
+git clone https://github.com/CorvinLabs/CorvinOS.git
+cd CorvinOS
+./install.sh
 ```
 
 **Health check:**
@@ -398,6 +396,9 @@ eventvwr.msc                                    # Windows → Application log
 
 ### Python not found or wrong version
 
+The installer does not need a system Python (`uv` brings its own). This only matters for the
+manual `pip install -e .` path (Method 2):
+
 ```bash
 python --version    # must be 3.10+
 python3 --version
@@ -405,12 +406,18 @@ python3 --version
 
 If missing: download from https://www.python.org/downloads/ (check "Add to PATH" on Windows).
 
-### pip install fails
+### Install fails
+
+Re-run the installer from your checkout — it is idempotent and reinstalls the editable package:
 
 ```bash
-pip install --upgrade pip
-pip install corvinos --force-reinstall
+cd CorvinOS
+git pull
+./install.sh            # Windows: powershell -ExecutionPolicy Bypass -File install.ps1
 ```
+
+If it says it is not inside a CorvinOS checkout, you are running a stray copy of the script: clone
+the repository (see [Install](#install)) and run it from there.
 
 ### Services not starting
 
@@ -476,10 +483,10 @@ Useful after pulling source changes that include frontend updates, or when the c
 corvin-uninstall   # removes services; prompts whether to keep ~/.corvin/ data
 ```
 
-To reinstall later with existing data:
+To reinstall later with existing data, run the installer from your checkout again:
 ```bash
-pip install corvinos
-corvin-install     # detects existing data automatically
+cd CorvinOS
+./install.sh       # corvin-install detects existing data automatically
 ```
 
 ---
@@ -504,7 +511,7 @@ corvin-install
 2. **Test connections** → send a test message to each bridge
 3. **Check logs** → `journalctl --user -u corvin-adapter -f` (Linux) or the console Logs page
 4. **Backup** → back up `~/.corvin/` and `~/.config/corvin-voice/` periodically
-5. **Updates** → `uv tool upgrade corvinos` (one-liner installs) or `pip install -U corvinos`; see [UPGRADE_GUIDE.md](UPGRADE_GUIDE.md)
+5. **Updates** → `sh update.sh` (Windows: `update.ps1`) from your checkout; see [UPGRADE_GUIDE.md](UPGRADE_GUIDE.md)
 
 ---
 

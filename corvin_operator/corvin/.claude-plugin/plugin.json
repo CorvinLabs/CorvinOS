@@ -1,6 +1,6 @@
 {
   "name": "corvin",
-  "description": "CorvinOS setup entry point for Claude Code. Provides /corvin:install, which drives the existing corvin-install CLI to a verified, stable end-state (real console health check, not just 'port open') and opens the Web Console in the browser. Idempotent — safe to re-run on a partial or already-complete install.",
+  "description": "CorvinOS setup entry point for Claude Code. /corvin:install runs the installer of your local CorvinOS clone (repo-only — nothing is downloaded), verifies the console really serves the app (not just an open port) and opens it in the browser. Idempotent — safe to re-run on a partial or already-complete install.",
   "version": "0.1.0",
   "author": {
     "name": "silvio",

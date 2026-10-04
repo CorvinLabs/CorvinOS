@@ -158,3 +158,45 @@ def test_clean_rollback_tail_still_restores_everything(tmp_path):
     assert dist_marker == "old\n"
     assert "reinstall" in called or "quiet" in called, called
     assert "Rolled back" in out.stdout, out
+
+
+# ── no install / PyPI install: update never installs (local-checkout-only) ──
+
+
+def _source_resolution_block() -> str:
+    text = UPDATE_SH.read_text()
+    m = re.search(r'^SRC=""; KIND=""\n(.*?)^step "\[2/6\]', text, re.S | re.M)
+    assert m, "source-resolution block not found in update.sh"
+    return m.group(1)
+
+
+def _run_resolution(tmp_path: Path, *, receipt: bool) -> subprocess.CompletedProcess:
+    receipt_file = tmp_path / "uv-receipt.toml"
+    if receipt:
+        receipt_file.write_text('[tool]\nrequirements = [{ name = "corvinos" }]\n')
+    script = (
+        'die() { printf "%s\\n" "$*" >&2; exit 1; }\n'
+        'warn() { printf "%s\\n" "$*" >&2; }\n'
+        'SERVED_SRC=""; REPO_URL="https://github.com/CorvinLabs/CorvinOS"\n'
+        f'RECEIPT="{receipt_file}"; MANAGED_SRC="{tmp_path}/no-managed-src"\n'
+        'SRC=""; KIND=""\n'
+        + _source_resolution_block()
+        + 'echo "REACHED KIND=$KIND"\n'
+    )
+    return subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=20)
+
+
+def test_no_install_is_refused_with_clone_steps_and_downloads_nothing(tmp_path):
+    out = _run_resolution(tmp_path, receipt=False)
+    assert out.returncode == 1
+    assert "no CorvinOS install found" in out.stderr
+    assert "git clone https://github.com/CorvinLabs/CorvinOS.git" in out.stderr
+    assert "REACHED" not in out.stdout
+
+
+def test_pypi_install_is_refused_not_converted(tmp_path):
+    out = _run_resolution(tmp_path, receipt=True)
+    assert out.returncode == 1
+    assert "installed from PyPI" in out.stderr
+    assert "./install.sh" in out.stderr
+    assert "REACHED" not in out.stdout

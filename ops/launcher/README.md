@@ -1,25 +1,18 @@
 # corvin-launcher
 
-Thin CLI launcher for [CorvinOS](https://github.com/CorvinLabs/CorvinOS) — standalone
-setup via `pip install corvinos`.
+Thin CLI launcher for [CorvinOS](https://github.com/CorvinLabs/CorvinOS). It ships as part of
+CorvinOS and is installed together with it.
 
 ## Install
 
-**Linux / macOS — one-liner:**
-```bash
-curl -fsSL https://corvin-labs.com/install.sh | bash
-```
+CorvinOS is installed only from a local clone of the repository (no `curl … | sh` /
+`irm … | iex` one-liner and no PyPI install — `pip install corvinos` is no longer supported):
 
-**Windows — PowerShell:**
-```powershell
-irm https://corvin-labs.com/install.ps1 | iex
-```
-
-**All platforms — pip:**
 ```bash
-pip install corvinos
-# or
-uv pip install corvinos
+git clone https://github.com/CorvinLabs/CorvinOS.git
+cd CorvinOS
+./install.sh                                          # Linux / macOS / WSL
+powershell -ExecutionPolicy Bypass -File install.ps1  # Windows, from the checkout
 ```
 
 ## Usage
@@ -37,9 +30,9 @@ corvin open                          # open the web console in your browser
 corvin status                        # show running state
 ```
 
-**Typical first-run flow:**
+**Typical first-run flow** (after `./install.sh` from the checkout):
 ```bash
-pip install corvinos && corvin start
+corvin start
 ```
 
 ## Requirements
