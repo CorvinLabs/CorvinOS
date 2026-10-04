@@ -12,7 +12,7 @@ longer supported).
 ```bash
 git clone https://github.com/CorvinLabs/CorvinOS.git
 cd CorvinOS
-./install.sh            # Windows: powershell -ExecutionPolicy Bypass -File install.ps1
+./install.sh            # Windows: .\install.ps1
 ```
 
 The installer bootstraps its own runtime and runs `corvin-install --yes` for you.
@@ -91,7 +91,7 @@ pulling updates that include UI changes, or to recover a 503 console page.
 sh update.sh                # Linux / macOS / WSL
 ```
 ```powershell
-powershell -ExecutionPolicy Bypass -File update.ps1   # Windows
+.\update.ps1   # Windows
 ```
 
 Fetches `main`, reinstalls the package (repairing a broken tool venv on the
@@ -109,7 +109,7 @@ it runs. Exit codes: 0 updated, 1 failed and rolled back, 2 rollback failed,
 bash uninstall.sh           # or: corvin-uninstall (same script on Linux/macOS)
 ```
 ```powershell
-powershell -ExecutionPolicy Bypass -File uninstall.ps1   # Windows
+.\uninstall.ps1   # Windows
 ```
 
 This will, in order:

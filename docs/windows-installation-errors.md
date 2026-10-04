@@ -357,5 +357,5 @@ If errors persist after following these steps:
    
    # Reinstall from your CorvinOS checkout (clone it first if you have none:
    #   git clone https://github.com/CorvinLabs/CorvinOS.git; cd CorvinOS)
-   powershell -ExecutionPolicy Bypass -File install.ps1
+   .\install.ps1
    ```

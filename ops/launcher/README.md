@@ -12,7 +12,7 @@ CorvinOS is installed only from a local clone of the repository (no `curl … | 
 git clone https://github.com/CorvinLabs/CorvinOS.git
 cd CorvinOS
 ./install.sh                                          # Linux / macOS / WSL
-powershell -ExecutionPolicy Bypass -File install.ps1  # Windows, from the checkout
+.\install.ps1  # Windows, from the checkout
 ```
 
 ## Usage

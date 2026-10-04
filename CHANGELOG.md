@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Changed — install.ps1 / update.ps1 run directly in an already-open PowerShell session
+- Every documented and printed invocation dropped the
+  `powershell -ExecutionPolicy Bypass -File <script>.ps1` wrapper in favour of
+  `.\<script>.ps1` — `install.ps1`, `update.ps1`, `uninstall.ps1`,
+  `scripts/update-and-deploy.ps1`, `scripts/install_repair.ps1`, README and the
+  Windows install docs. If the session's execution policy blocks local scripts
+  ("running scripts is disabled on this system"), the docs now name the actual
+  one-time fix (`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or
+  `-Scope Process Bypass -Force` for just that window) instead of baking a
+  Bypass flag into every invocation. The corvin-labs.com install.ps1 stub and
+  the Claude Code `/corvin:install` command's subprocess invocation (no
+  interactive session to inherit a policy from) are unaffected.
+
 ### Changed — CorvinOS installs only from a local clone of the repository
 - `install.sh` / `install.ps1` install only the checkout they sit in (or the one
   passed with `--editable` / `-Editable`, which must carry `.corvin_repo` +

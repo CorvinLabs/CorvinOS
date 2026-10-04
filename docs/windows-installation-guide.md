@@ -18,8 +18,14 @@ CorvinOS is installed only from a local clone of the repository — there is no
 ```powershell
 git clone https://github.com/CorvinLabs/CorvinOS.git
 cd CorvinOS
-powershell -ExecutionPolicy Bypass -File install.ps1
+.\install.ps1
 ```
+
+Runs directly — no `powershell -ExecutionPolicy Bypass -File` wrapper. If it
+refuses with "running scripts is disabled on this system", allow local scripts
+once (`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`) or just for this
+window (`Set-ExecutionPolicy -Scope Process Bypass -Force`), then re-run
+`.\install.ps1`.
 
 `install.ps1` refuses to run outside a CorvinOS checkout (no `.corvin_repo` /
 `pyproject.toml`) and prints these clone steps instead.
@@ -278,7 +284,7 @@ corvinos-serve
 **Re-run installer** (from your CorvinOS checkout):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1
+.\install.ps1
 ```
 
 ### "PATH not found" or Commands Not Working
@@ -412,6 +418,6 @@ python scripts/generate-docs.py windows-installation
 For issues specific to Windows installation:
 
 1. **Check logs:** `$env:CORVIN_HOME\logs\console-supervisor.log`
-2. **Re-run installer:** `powershell -ExecutionPolicy Bypass -File install.ps1` from your CorvinOS checkout
+2. **Re-run installer:** `.\install.ps1` from your CorvinOS checkout
 3. **Report issue:** Include OS version, Python version, and logs
 4. **Manual start:** `corvinos-serve --no-browser` to debug in terminal

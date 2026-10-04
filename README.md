@@ -38,8 +38,14 @@ cd CorvinOS
 
 ```powershell
 # Windows (PowerShell, from the CorvinOS directory)
-powershell -ExecutionPolicy Bypass -File install.ps1
+.\install.ps1
 ```
+
+Runs directly in an already-open PowerShell session — no
+`powershell -ExecutionPolicy Bypass -File` wrapper. If PowerShell refuses with
+"running scripts is disabled on this system", allow local scripts once
+(`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`) or just for this window
+(`Set-ExecutionPolicy -Scope Process Bypass -Force`), then re-run `.\install.ps1`.
 
 The checkout is detected automatically. To install a checkout that lives
 somewhere else, pass it explicitly: `sh install.sh --editable /path/to/CorvinOS`
@@ -108,7 +114,7 @@ sh update.sh --rebuild-only   # no pull: rebuild + restart the code you have
 ```
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File update.ps1
+.\update.ps1
 ```
 
 The update is proven, not assumed: it restarts the services, waits until the
@@ -132,7 +138,7 @@ bash uninstall.sh --verify-only
 ```
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File uninstall.ps1
+.\uninstall.ps1
 ```
 
 Services are stopped first. Then everything you cannot re-download (secrets,
@@ -174,10 +180,10 @@ bash scripts/update-and-deploy.sh --verbose      # print each command
 
 ```powershell
 # Windows (PowerShell)
-powershell -ExecutionPolicy Bypass -File scripts\update-and-deploy.ps1
-powershell -ExecutionPolicy Bypass -File scripts\update-and-deploy.ps1 -DryRun
-powershell -ExecutionPolicy Bypass -File scripts\update-and-deploy.ps1 -SkipTests
-powershell -ExecutionPolicy Bypass -File scripts\update-and-deploy.ps1 -VerboseOutput
+.\scripts\update-and-deploy.ps1
+.\scripts\update-and-deploy.ps1 -DryRun
+.\scripts\update-and-deploy.ps1 -SkipTests
+.\scripts\update-and-deploy.ps1 -VerboseOutput
 ```
 
 Exit codes: `0` success (pushed) · `1` git/build/test failure · `2` repo-state

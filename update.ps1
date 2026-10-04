@@ -59,10 +59,10 @@
     Update this source tree instead of the one the uv receipt names.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File update.ps1
+    .\update.ps1
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File update.ps1 -ConsoleOnly
+    .\update.ps1 -ConsoleOnly
 
 .NOTES
     Exit codes (same as update.sh):
@@ -455,13 +455,13 @@ if ($Src -and (Test-Path -LiteralPath (Join-Path $Src "pyproject.toml"))) {
     $Src = $ManagedSrc; $Kind = "managed"
 } elseif (Test-Path -LiteralPath $Receipt) {
     Stop-Update ("this CorvinOS was installed from PyPI, which is no longer supported. Install from a local checkout:`n" +
-        "  git clone $RepoUrl.git`n  cd CorvinOS`n  powershell -ExecutionPolicy Bypass -File install.ps1")
+        "  git clone $RepoUrl.git`n  cd CorvinOS`n  .\install.ps1")
 } else {
     # Nothing installed (or the venv is gone, e.g. a non-persistent VDI profile
     # reset): an update cannot restore what is not there, and installs come
     # only from a local checkout.
     Stop-Update ("no CorvinOS install found. Install from a local checkout:`n" +
-        "  git clone $RepoUrl.git`n  cd CorvinOS`n  powershell -ExecutionPolicy Bypass -File install.ps1")
+        "  git clone $RepoUrl.git`n  cd CorvinOS`n  .\install.ps1")
 }
 # Port: explicit, else the console task's own --port, else the env, else 8765.
 $ConsoleTask = Get-ConsoleTask
@@ -1051,6 +1051,6 @@ if ($rb -and (Wait-Live 180)) {
     Exit-SetupLock
     exit 1
 }
-Write-Host "  Rollback failed too. Repair: powershell -ExecutionPolicy Bypass -File install.ps1   Log: $LogFile" -ForegroundColor Red
+Write-Host "  Rollback failed too. Repair: .\install.ps1   Log: $LogFile" -ForegroundColor Red
 Exit-SetupLock
 exit 2

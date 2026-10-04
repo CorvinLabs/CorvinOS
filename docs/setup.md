@@ -72,7 +72,7 @@ corvin-install
 ```
 
 The primary install path is the bundled installer, run from the same checkout:
-`./install.sh` (Linux/macOS/WSL) or `powershell -ExecutionPolicy Bypass -File install.ps1`
+`./install.sh` (Linux/macOS/WSL) or `.\install.ps1`
 (Windows) — it bootstraps `uv`, Node.js and Claude Code itself and runs `corvin-install --yes`
 for you (see the README's Quick Start). CorvinOS is installed only from a local clone; there is no
 one-liner download and no PyPI install. The manual `pip install -e` flow above is the

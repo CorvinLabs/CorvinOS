@@ -12,8 +12,14 @@
     Anything else stops with the clone instructions:
       git clone https://github.com/CorvinLabs/CorvinOS.git
       cd CorvinOS
-      powershell -ExecutionPolicy Bypass -File install.ps1
-    Re-running is safe (non-persistent VDI).
+      .\install.ps1
+    Runs directly in an already-open PowerShell session -- no
+    "powershell -ExecutionPolicy Bypass -File" wrapper needed. If PowerShell
+    refuses with "running scripts is disabled on this system", your execution
+    policy blocks local scripts; allow it once (`Set-ExecutionPolicy -Scope
+    CurrentUser RemoteSigned`) or just for this window (`Set-ExecutionPolicy
+    -Scope Process Bypass -Force`), then re-run `.\install.ps1`. Re-running is
+    safe (non-persistent VDI).
 
     ASCII-ONLY BY CONTRACT. Windows PowerShell 5.1 decodes a BOM-less script as
     ANSI (cp1252), where the UTF-8 bytes of characters like U+2713 and U+2551
@@ -58,13 +64,13 @@
     (default 180).
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File install.ps1
+    .\install.ps1
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File install.ps1 -DryRun -Verbose
+    .\install.ps1 -DryRun -Verbose
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File install.ps1 -Editable . -Port 8790 -NoBrowser
+    .\install.ps1 -Editable . -Port 8790 -NoBrowser
 
 .NOTES
     Exit codes:
@@ -956,7 +962,7 @@ Write-Step "Resolving repository path"
 $CloneHint = "CorvinOS installs only from a local clone of the repository:`n" +
     "  git clone $CorvinRepoUrl.git`n" +
     "  cd CorvinOS`n" +
-    "  powershell -ExecutionPolicy Bypass -File install.ps1"
+    "  .\install.ps1"
 $EditableMode = -not [string]::IsNullOrWhiteSpace($Editable)
 if (-not $EditableMode) {
     if ($PSScriptRoot -and

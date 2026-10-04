@@ -40,7 +40,7 @@ review it before running if you like.)
 
 Windows (PowerShell, from the CorvinOS directory):
 ```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1
+.\install.ps1
 ```
 
 To install a checkout that lives somewhere else, pass it explicitly:
@@ -82,7 +82,7 @@ a chat turn answers with an error that points at Setup — there is no automatic
 ```bash
 git clone https://github.com/CorvinLabs/CorvinOS.git
 cd CorvinOS
-./install.sh            # Windows: powershell -ExecutionPolicy Bypass -File install.ps1
+./install.sh            # Windows: .\install.ps1
 ```
 
 `corvinos-serve` (web console) and `corvin-install` (voice model provisioning, API keys, login
@@ -243,7 +243,7 @@ launchctl start com.corvin.adapter
 ```powershell
 git clone https://github.com/CorvinLabs/CorvinOS.git
 cd CorvinOS
-powershell -ExecutionPolicy Bypass -File install.ps1
+.\install.ps1
 # Console opens at http://localhost:8765
 ```
 
@@ -413,7 +413,7 @@ Re-run the installer from your checkout — it is idempotent and reinstalls the 
 ```bash
 cd CorvinOS
 git pull
-./install.sh            # Windows: powershell -ExecutionPolicy Bypass -File install.ps1
+./install.sh            # Windows: .\install.ps1
 ```
 
 If it says it is not inside a CorvinOS checkout, you are running a stray copy of the script: clone

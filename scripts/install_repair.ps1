@@ -7,18 +7,20 @@
 #   - Permission issues (ACL vs POSIX modes)
 #   - Long filename cache (.gitdir issues)
 #
-# Usage (from PowerShell 5.1+):
-#   powershell -ExecutionPolicy Bypass -File cross_platform_install_repair.ps1 -Diagnose
-#   powershell -ExecutionPolicy Bypass -File cross_platform_install_repair.ps1 -Repair
-#   powershell -ExecutionPolicy Bypass -File cross_platform_install_repair.ps1 -Repair -Force
+# Usage (from an already-open PowerShell 5.1+ session):
+#   .\cross_platform_install_repair.ps1 -Diagnose
+#   .\cross_platform_install_repair.ps1 -Repair
+#   .\cross_platform_install_repair.ps1 -Repair -Force
+# If PowerShell refuses to run it ("running scripts is disabled on this
+# system"), allow local scripts once: Set-ExecutionPolicy -Scope CurrentUser
+# RemoteSigned (or, just for this window: Set-ExecutionPolicy -Scope Process
+# Bypass -Force), then re-run the command above.
 #
 # Constraints:
 #   - PowerShell 5.1+ (Windows 10/11, Server 2016+)
 #   - Requires git (checked at startup)
 #   - Idempotent: safe to re-run
 #   - Fail-closed: errors block installation
-#
-# Requires: -ExecutionPolicy Bypass (or signed script)
 
 param(
   [switch]$Diagnose = $false,

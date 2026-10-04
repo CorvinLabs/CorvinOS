@@ -24,10 +24,10 @@
     Path to the CorvinOS repository (default: parent of this script).
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File scripts\update-and-deploy.ps1
+    .\scripts\update-and-deploy.ps1
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File scripts\update-and-deploy.ps1 -DryRun -VerboseOutput
+    .\scripts\update-and-deploy.ps1 -DryRun -VerboseOutput
 
 .NOTES
     Exit codes:

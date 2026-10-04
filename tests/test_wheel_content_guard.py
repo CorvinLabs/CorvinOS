@@ -167,6 +167,31 @@ def test_installers_install_only_the_local_checkout() -> None:
         assert not re.search(r'\[browser\]>=', text), f"{name} still installs corvinos from an index"
 
 
+def test_windows_docs_never_tell_the_user_to_wrap_ps1_in_a_subshell() -> None:
+    """install.ps1 / update.ps1 / uninstall.ps1 run directly in an
+    already-open PowerShell session. `powershell -ExecutionPolicy Bypass
+    -File ...` is the wrapper invocation this is NOT allowed to regress to —
+    it spawns a subshell instead of running in the session the user already
+    has open. The scheduled-task spawn in bridge.ps1 (Install-AutostartTask)
+    is a different consumer (no interactive session to inherit a policy
+    from) and is exempt."""
+    # Only the REAL invocation shape: "-File <name>.ps1" with an actual
+    # filename. The explanatory prose this change adds ("no `...Bypass
+    # -File` wrapper") mentions the same words but never followed by a
+    # filename, so it does not trip this guard.
+    pattern = re.compile(r"-File\s+\S*\.ps1")
+    offenders = []
+    for rel in ("install.ps1", "update.ps1", "uninstall.ps1",
+                "scripts/update-and-deploy.ps1", "scripts/install_repair.ps1",
+                "README.md", "docs/setup.md", "docs/setup/INSTALLATION.md",
+                "docs/INSTALL-UNIVERSAL.md", "docs/windows-installation-guide.md",
+                "docs/windows-installation-errors.md", "ops/launcher/README.md"):
+        text = (_REPO / rel).read_text(encoding="utf-8")
+        if pattern.search(text):
+            offenders.append(rel)
+    assert not offenders, f"wrapper invocation regressed in: {offenders}"
+
+
 def test_uv_installer_pin_is_checksummed() -> None:
     """Both one-liners must pin the uv installer to a version AND a SHA-256;
     a bare `curl https://astral.sh/uv/install.sh | sh` is not allowed."""

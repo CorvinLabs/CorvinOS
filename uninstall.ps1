@@ -66,10 +66,10 @@
     else 8765).
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File uninstall.ps1
+    .\uninstall.ps1
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File uninstall.ps1 -Yes -NoBackup
+    .\uninstall.ps1 -Yes -NoBackup
 
 .NOTES
     Exit codes:
@@ -665,7 +665,7 @@ if (-not $Yes) {
         $answer = Read-Host "  Remove CorvinOS completely${suffix}? [y/N]"
     } catch {
         Write-Host "  Not interactive and -Yes not given -- refusing to uninstall unattended." -ForegroundColor Yellow
-        Write-Host "  Re-run with: powershell -ExecutionPolicy Bypass -File uninstall.ps1 -Yes"
+        Write-Host "  Re-run with: .\uninstall.ps1 -Yes"
         exit 2
     }
     if ($answer -notmatch '^(y|yes|j|ja)$') {
