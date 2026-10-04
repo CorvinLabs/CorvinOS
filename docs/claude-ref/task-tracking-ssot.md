@@ -195,8 +195,11 @@ label `kb`. One way only: nothing reads a status back into the KB.
   `task_completion_registry.py` + its timer + `task_completion_verifier.py`. The 37 live
   `initiatives.json#…` items were archived with "moved into the knowledge base: <id>".
 - **Periodic loop (ADR-2208, every `PERIODIC_S` = 600 s, never per tick):** `kb guidance run`
-  (learning loop) → `kb sweep --create-tasks` (G6: a BUILT decision's `paths:`/`commits:` and done
-  tasks' `done_evidence` — what vanished becomes a NEW task with `regresses:`, which turns the done
+  (learning loop; the review loop and `kb orchestrate` are NOT run here — they are manual,
+  CLI-only) → `kb sweep --create-tasks` (G6: a BUILT decision's `paths:`/`commits:` and done
+  tasks' `done_evidence`, judged against COMMITTED trees — the KB's HEAD and each sibling's
+  `origin/main`, never a working tree; a sibling that is not checked out leaves its paths
+  `unswept`, not drifted — what vanished becomes a NEW task with `regresses:`, which turns the done
   card back to open on the board; the area is paused for agents) → the **SkillForge bridge**
   (`guidance_bridge`): each active guidance file becomes a `learned-experience` skill
   `assistant.kb_guidance_<class>` in the tenant registry (user scope), graded once with the capped

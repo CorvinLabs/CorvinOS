@@ -291,7 +291,9 @@ WARNINGS: they derive `implementation_ready` (the board's ready badge) and never
 `kb review open --title … --reviews ADR-…` → rounds `kb review calibrate <REVIEW> --lead-question …
 --reviewer … --reviewer-cmd "<cmd>"` (seeds a known defect into a copy; a missed seed voids the
 round) → `kb review close` sets `addressed` ONLY for three calibrated zero rounds under different
-lead questions by a reviewer ≠ the ADR's author (`kb orchestrate` drives this one step at a time).
+lead questions by a reviewer ≠ the ADR's author (`kb orchestrate` drives this one step at a time —
+**manual, CLI-only**: nothing schedules the review loop or the orchestrator; only the sweep and the
+guidance pass below run on their own).
 A **code task** (it or its epic implements a decision) is done only with `kb task <T> done --evidence
 call_site=<production code file> --evidence e2e_test=<test file> --evidence exit_code=0 --evidence
 commit=<sha on origin/main, not older than the task's start> [--evidence repo=CorvinOS]` (G5) — push
