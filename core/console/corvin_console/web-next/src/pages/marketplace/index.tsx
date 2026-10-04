@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MarketplaceHeader } from "./header";
 import { DEFAULT_TAB, TAB_IDS, TAB_LABEL, isTabId, type TabId } from "./tabs";
 import { BrowseTab } from "./tabs/browse";
+import { ForgedTab } from "./tabs/forged";
 import { InstalledTab } from "./tabs/installed";
 import { PackagesTab } from "./tabs/packages";
 import { SkillsTab } from "./tabs/skills";
@@ -55,6 +56,7 @@ export function MarketplacePage() {
 
         <TabsContent value="browse" className="mt-6"><BrowseTab onGoTo={goTo} /></TabsContent>
         <TabsContent value="installed" className="mt-6"><InstalledTab onGoTo={goTo} /></TabsContent>
+        <TabsContent value="forged" className="mt-6"><ForgedTab /></TabsContent>
         <TabsContent value="skills" className="mt-6"><SkillsTab onGoTo={goTo} /></TabsContent>
         <TabsContent value="packages" className="mt-6"><PackagesTab /></TabsContent>
         <TabsContent value="tools" className="mt-6"><ToolsTab /></TabsContent>

@@ -47,6 +47,7 @@ from skill_creator.skill_creator import (
     shorten_purpose,
     shorten_method,
     _extract_json_object,
+    parse_review_findings,
 )
 
 
@@ -854,6 +855,40 @@ class TestQualityScore:
 
     def test_refuted_findings_are_not_penalised(self):
         assert score_quality([_finding("correctness", ReviewVerdict.REFUTED)]) == 1.0
+
+
+# ============================================================================
+# REVIEW-FINDING PARSER (round-2 refutation: markdown-decorated verdicts)
+# ============================================================================
+
+class TestParseReviewFindings:
+    def test_plain_verdict_parses(self):
+        findings = parse_review_findings(
+            "FINDING: the gate is bypassed on the sync path VERDICT: CONFIRMED",
+            "correctness")
+        assert len(findings) == 1
+        assert findings[0].verdict == ReviewVerdict.CONFIRMED
+
+    def test_bold_markdown_verdict_still_parses(self):
+        """The refuted fix: a reviewer answering in markdown — "**FINDING:**
+        ... **VERDICT:** CONFIRMED" — used to match zero findings with the old
+        rigid regex, silently downgrading a real CONFIRMED to "nothing found"."""
+        findings = parse_review_findings(
+            "**FINDING:** the panel can navigate itself to an external host\n"
+            "**VERDICT:** CONFIRMED",
+            "security")
+        assert len(findings) == 1
+        assert findings[0].verdict == ReviewVerdict.CONFIRMED
+
+    def test_heading_and_backtick_decorated_verdict_parses(self):
+        findings = parse_review_findings(
+            "### FINDING: race in the concurrency gate\n`VERDICT:` CONFIRMED",
+            "correctness")
+        assert len(findings) == 1
+        assert findings[0].verdict == ReviewVerdict.CONFIRMED
+
+    def test_clean_refutation_still_yields_no_findings(self):
+        assert parse_review_findings("VERDICT: REFUTED", "correctness") == []
 
     def test_score_stays_in_range(self):
         worst = score_quality(

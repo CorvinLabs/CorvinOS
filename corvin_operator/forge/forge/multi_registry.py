@@ -84,6 +84,7 @@ class MultiRegistry:
             scope=permission_scope,
             overwrite=overwrite,
             meta=meta,
+            tenant_id=self.tenant_id,
         )
 
     def get(self, name: str) -> ToolSpec | None:

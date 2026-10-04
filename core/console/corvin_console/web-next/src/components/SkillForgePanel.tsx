@@ -177,7 +177,7 @@ export const SkillForgePanel: React.FC = () => {
   // ── Mutations ───────────────────────────────────────────────────────────
   const generate = useMutation({
     mutationFn: async ({ request, base }: { request: string; base: string | null }) =>
-      startSkillGeneration(request, base),
+      startSkillGeneration(request, base, session?.csrf_token ?? ""),
     onSuccess: (data) => {
       setRunId(data.run_id);
       setUserRequest("");

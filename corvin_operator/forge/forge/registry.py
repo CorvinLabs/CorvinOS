@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-def _require_forge_create(entry_point: str) -> None:
+def _require_forge_create(entry_point: str, tenant_id: str | None = None) -> None:
     """ADR-0701 G1 licence gate for ``forge.create`` — FAIL-CLOSED.
 
     Raises ``PermissionError("forge.create denied: …")`` unless the licensing
@@ -39,7 +39,9 @@ def _require_forge_create(entry_point: str) -> None:
       and RETURNED as a non-allow verdict that nothing inspected — so the free
       tier forged freely. The registry has no session; the tenant is the
       process's (``current_tenant()``: ``CORVIN_TENANT_ID`` → ``_default``,
-      validated).
+      validated) unless the caller knows the real one — a tenant-aware
+      ``MultiRegistry`` passes its own, so a console session is gated on ITS
+      tenant, never on the process's (ADR-0703).
     """
     try:
         try:
@@ -58,7 +60,7 @@ def _require_forge_create(entry_point: str) -> None:
             "forge.create denied: licensing module unavailable (fail-closed)"
         ) from exc
     try:
-        tenant_id = current_tenant()
+        tenant_id = tenant_id or current_tenant()
         decision = require_capability(
             "forge.create", requested=1, tenant_id=tenant_id,
             entry_point=entry_point,
@@ -179,9 +181,10 @@ class Registry:
         scope: str = "session",
         overwrite: bool = False,
         meta: dict[str, Any] | None = None,
+        tenant_id: str | None = None,
     ) -> ToolSpec:
         # ADR-0701 G1: License gate — forge.create is member-only
-        _require_forge_create("forge:registry.create")
+        _require_forge_create("forge:registry.create", tenant_id)
 
         # Allow alphanumerics plus _ and . (the dot enables AWP-style
         # namespacing like "csv.count" / "stats.median"). Reject path

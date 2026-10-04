@@ -99,6 +99,7 @@ from .routes import (
     initiatives as initiatives_route,
     task_tracking as task_tracking_route,
     skill_creator_api as skill_creator_route,
+    forge_creator as forge_creator_route,
     chat as chat_route,
     chat_groups as chat_groups_route,
     voice as voice_route,
@@ -369,6 +370,8 @@ router.include_router(initiatives_route.router, tags=["console-initiatives"])
 router.include_router(task_tracking_route.router, tags=["console-task-tracking"])
 # Skill-Creator (autonomous 6-phase skill builder) — main quality subsystem.
 router.include_router(skill_creator_route.router, tags=["console-skill-creator"])
+# ADR-2217 — Tool Forge + Plugin Forge on the shared Skill-Creator run pipeline.
+router.include_router(forge_creator_route.router, tags=["console-forge-creator"])
 # ADR-0695 — Video Producer Skill 2.0 (Phase 4b console UI + orchestration)
 router.include_router(video_producer_route.router, tags=["console-video-producer"])
 # ADR-0695 Phase 2 — Video Quality Metrics Dashboard & Learning Integration

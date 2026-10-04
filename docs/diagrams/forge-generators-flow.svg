@@ -1,0 +1,86 @@
+<svg viewBox="0 0 960 560" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#555"/>
+    </marker>
+  </defs>
+  <text x="480" y="30" font-size="20" font-weight="bold" text-anchor="middle" fill="#333">
+    Console Forge generators — one run mechanism, three artifact kinds (ADR-2217)
+  </text>
+
+  <!-- Forge panel tabs -->
+  <rect x="30" y="60" width="170" height="44" fill="#e8f4f8" stroke="#2c5aa0" stroke-width="2"/>
+  <text x="115" y="80" font-size="13" text-anchor="middle" fill="#2c5aa0">Forge → Skill Forge</text>
+  <text x="115" y="96" font-size="10" text-anchor="middle" fill="#555">POST /skill-creator/generate</text>
+  <rect x="30" y="120" width="170" height="44" fill="#e8f4f8" stroke="#2c5aa0" stroke-width="2"/>
+  <text x="115" y="140" font-size="13" text-anchor="middle" fill="#2c5aa0">Forge → Tool Forge</text>
+  <text x="115" y="156" font-size="10" text-anchor="middle" fill="#555">POST /forge-creator/tool/generate</text>
+  <rect x="30" y="180" width="170" height="44" fill="#e8f4f8" stroke="#2c5aa0" stroke-width="2"/>
+  <text x="115" y="200" font-size="13" text-anchor="middle" fill="#2c5aa0">Forge → Plugin Forge</text>
+  <text x="115" y="216" font-size="10" text-anchor="middle" fill="#555">POST /forge-creator/plugin/generate</text>
+
+  <line x1="200" y1="82" x2="232" y2="132" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="200" y1="142" x2="232" y2="142" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="200" y1="202" x2="232" y2="152" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Gates -->
+  <rect x="234" y="100" width="250" height="84" fill="#fdecea" stroke="#a02c2c" stroke-width="2"/>
+  <text x="359" y="122" font-size="13" font-weight="bold" text-anchor="middle" fill="#a02c2c">Route gates</text>
+  <text x="359" y="140" font-size="10" text-anchor="middle" fill="#333">session + CSRF · forge.create (tool, plugin)</text>
+  <text x="359" y="156" font-size="10" text-anchor="middle" fill="#333">pre-spawn: L44 · ADR-0141 · L34 · L35</text>
+  <text x="359" y="172" font-size="10" text-anchor="middle" fill="#a02c2c">refused → 403 + forge.generation_refused</text>
+
+  <line x1="484" y1="142" x2="508" y2="142" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Shared run store -->
+  <rect x="510" y="92" width="210" height="100" fill="#fff3cd" stroke="#b8860b" stroke-width="2"/>
+  <text x="615" y="114" font-size="13" font-weight="bold" text-anchor="middle" fill="#8a6100">forge_runs (shared)</text>
+  <text x="615" y="132" font-size="10" text-anchor="middle" fill="#333">tenant- and kind-bound run record</text>
+  <text x="615" y="148" font-size="10" text-anchor="middle" fill="#333">worker thread · progress callback</text>
+  <text x="615" y="164" font-size="10" text-anchor="middle" fill="#333">success/failure audit</text>
+  <text x="615" y="180" font-size="10" text-anchor="middle" fill="#555">GET …/status/{run_id} ← panel polls</text>
+
+  <line x1="615" y1="192" x2="615" y2="232" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Phase contract -->
+  <rect x="120" y="236" width="720" height="56" fill="#eef7ee" stroke="#2c7a3a" stroke-width="2"/>
+  <text x="480" y="257" font-size="13" font-weight="bold" text-anchor="middle" fill="#2c7a3a">
+    Shared phase contract: plan → validate (+1 repair) → test → adversarial review → keep
+  </text>
+  <text x="480" y="277" font-size="10" text-anchor="middle" fill="#333">
+    one engine (resolve_llm_client) · one review (correctness / security / scope, parse_review_findings, score_quality)
+  </text>
+
+  <!-- Three kinds -->
+  <rect x="40" y="320" width="270" height="130" fill="#f5f5f5" stroke="#555" stroke-width="1.5"/>
+  <text x="175" y="342" font-size="13" font-weight="bold" text-anchor="middle" fill="#333">Skill</text>
+  <text x="175" y="362" font-size="10" text-anchor="middle" fill="#333">test: engine-graded LDD rubric</text>
+  <text x="175" y="380" font-size="10" text-anchor="middle" fill="#333">keep: SkillForge registry</text>
+
+  <rect x="345" y="320" width="270" height="130" fill="#f5f5f5" stroke="#555" stroke-width="1.5"/>
+  <text x="480" y="342" font-size="13" font-weight="bold" text-anchor="middle" fill="#333">Tool</text>
+  <text x="480" y="362" font-size="10" text-anchor="middle" fill="#333">validate: name policy · persona namespace · AST imports</text>
+  <text x="480" y="380" font-size="10" text-anchor="middle" fill="#333">test: cases RUN only in bwrap (mandatory, temp bench)</text>
+  <text x="480" y="398" font-size="10" text-anchor="middle" fill="#a02c2c">keep only if all pass + security review complete &amp; clean</text>
+  <text x="480" y="416" font-size="10" text-anchor="middle" fill="#333">→ MultiRegistry user scope (tool.created)</text>
+
+  <rect x="650" y="320" width="270" height="130" fill="#f5f5f5" stroke="#555" stroke-width="1.5"/>
+  <text x="785" y="342" font-size="13" font-weight="bold" text-anchor="middle" fill="#333">Plugin</text>
+  <text x="785" y="362" font-size="10" text-anchor="middle" fill="#333">plan → Builder classify + write_artifacts</text>
+  <text x="785" y="380" font-size="10" text-anchor="middle" fill="#333">optional panel/ (surface.yaml) — preview only</text>
+  <text x="785" y="398" font-size="10" text-anchor="middle" fill="#333">test: py_compile + panel lint</text>
+  <text x="785" y="416" font-size="10" text-anchor="middle" fill="#a02c2c">keep: STAGED + provenance — never installed</text>
+
+  <line x1="175" y1="292" x2="175" y2="318" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="480" y1="292" x2="480" y2="318" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="785" y1="292" x2="785" y2="318" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Visibility -->
+  <rect x="345" y="480" width="270" height="44" fill="#e8f4f8" stroke="#2c5aa0" stroke-width="2"/>
+  <text x="480" y="507" font-size="12" text-anchor="middle" fill="#2c5aa0">Forge → Tools (listing)</text>
+  <rect x="650" y="480" width="270" height="44" fill="#e8f4f8" stroke="#2c5aa0" stroke-width="2"/>
+  <text x="785" y="500" font-size="12" text-anchor="middle" fill="#2c5aa0">Marketplace → Forged</text>
+  <text x="785" y="515" font-size="10" text-anchor="middle" fill="#555">not installed · unsigned · community</text>
+  <line x1="480" y1="450" x2="480" y2="478" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="785" y1="450" x2="785" y2="478" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+</svg>

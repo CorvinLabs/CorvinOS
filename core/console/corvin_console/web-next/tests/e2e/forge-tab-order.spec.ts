@@ -21,7 +21,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 /** The tab bar, left to right, as the page declares it. */
-const EXPECTED_ORDER = ['Skill Forge', 'Tools', 'Skills', 'OS-Skills', 'Graph', 'Audit'];
+const EXPECTED_ORDER = ['Skill Forge', 'Tool Forge', 'Plugin Forge', 'Autonomous', 'Tools', 'Skills', 'OS-Skills', 'Graph', 'Audit'];
 
 async function tabLabels(page: Page): Promise<string[]> {
   // Scoped to the PAGE's tab bar. Scoping matters: a composer or sub-widget

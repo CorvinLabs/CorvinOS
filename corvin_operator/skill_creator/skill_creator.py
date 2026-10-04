@@ -1305,32 +1305,14 @@ class AdversarialReviewer:
             return []
 
         try:
-            # Run 3 reviewers in parallel
-            tasks = [
-                self._run_review_dimension(dimension, review_fn, spec)
-                for dimension, review_fn in self.reviewers
-            ]
-            findings_by_dimension = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # Flatten and filter
-            all_findings = []
-            for findings in findings_by_dimension:
-                if isinstance(findings, Exception):
-                    logger.error(f"Review failed: {findings}")
-                    continue
-                all_findings.extend(findings)
-
+            from .artifact_review import run_reviewers  # noqa: PLC0415 — shared loop, lazy (cycle)
+            fns = {dimension: (lambda fn=review_fn: fn(spec)) for dimension, review_fn in self.reviewers}
+            all_findings = await run_reviewers(fns, on_error="drop")
             logger.info(f"Review complete: {len(all_findings)} findings")
             return all_findings
 
         except Exception as e:
             raise ReviewError(f"Review process failed: {e}") from e
-
-    async def _run_review_dimension(self, dimension: str,
-                                    review_fn, spec: SkillSpec) -> List[ReviewFinding]:
-        """Run one review dimension and parse findings."""
-        findings_text = await review_fn(spec)
-        return self._parse_findings(findings_text, dimension)
 
     async def _review_correctness(self, spec: SkillSpec) -> str:
         """Dimension 1: Correctness."""
@@ -1402,34 +1384,34 @@ If no findings, output: VERDICT: REFUTED"""
 
     def _parse_findings(self, review_text: str, dimension: str) -> List[ReviewFinding]:
         """Parse findings from review text."""
-        findings = []
+        return parse_review_findings(review_text, dimension)
 
-        # Simple parsing: look for FINDING: ... VERDICT: ...
-        finding_pattern = r"FINDING:\s*(.+?)\s+VERDICT:\s*(CONFIRMED|PLAUSIBLE|REFUTED)"
-        matches = re.finditer(finding_pattern, review_text, re.IGNORECASE | re.DOTALL)
 
-        for match in matches:
-            summary = match.group(1).strip()[:100]  # Truncate to 100 chars
-            verdict_str = match.group(2).upper()
-
-            try:
-                verdict = ReviewVerdict(verdict_str.lower())
-            except ValueError:
-                verdict = ReviewVerdict.PLAUSIBLE
-
-            findings.append(ReviewFinding(
-                finding_id=str(uuid4()),
-                dimension=dimension,
-                summary=summary,
-                verdict=verdict,
-                reasoning=summary,
-            ))
-
-        # If no findings parsed, assume REFUTED (null finding)
-        if not findings:
-            logger.debug(f"No explicit findings in {dimension} review; assuming REFUTED")
-
-        return findings
+def parse_review_findings(review_text: str, dimension: str) -> List[ReviewFinding]:
+    """Parse ``FINDING: … VERDICT: …`` blocks — shared by every Forge kind's review."""
+    findings = []
+    # Strip markdown emphasis/heading/bullet decoration around the keywords so
+    # "**FINDING:**" / "### VERDICT:" / "`VERDICT:`" still match — a reviewer
+    # replying in markdown used to parse as zero findings (silently REFUTED).
+    cleaned = re.sub(r"[*_`#]+\s*(FINDING|VERDICT)\s*[*_`]*:", r"\1:",
+                      review_text or "", flags=re.IGNORECASE)
+    finding_pattern = r"FINDING:\s*(.+?)\s+VERDICT:\s*[*_`\s]*(CONFIRMED|PLAUSIBLE|REFUTED)"
+    for match in re.finditer(finding_pattern, cleaned, re.IGNORECASE | re.DOTALL):
+        summary = match.group(1).strip()[:100]
+        try:
+            verdict = ReviewVerdict(match.group(2).lower())
+        except ValueError:
+            verdict = ReviewVerdict.PLAUSIBLE
+        findings.append(ReviewFinding(
+            finding_id=str(uuid4()),
+            dimension=dimension,
+            summary=summary,
+            verdict=verdict,
+            reasoning=summary,
+        ))
+    if not findings:
+        logger.debug(f"No explicit findings in {dimension} review; assuming REFUTED")
+    return findings
 
 
 def score_quality(findings: List[ReviewFinding], *, converged: bool = True,
