@@ -131,7 +131,7 @@ post-commit hook and nothing listens on the endpoint:
 
 ### Verified Status (2026-09-26 — replaces the 2026-09-25 "go-live" list, which overstated it)
 
-✅ ADRs centralised in Corvin-Knowledge (1062 files in `decisions/`)  
+✅ ADRs centralised in Corvin-Knowledge (1017 files in `decisions/`, 2026-10-04)  
 ✅ Knowledge Graph: `kb/graph/{entities,relations}.jsonl`, rebuilt by the projector (2026-10-03)  
 ⚠️ ADR-0264 frontmatter: 5 files broken; 11 numbers carried by two files (2026-10-04; `kb.py check` measures it, `kb/_meta/baseline.json` lists them)
 ❌ Auto-sync webhooks: no post-commit hook in any repo, endpoint not listening  

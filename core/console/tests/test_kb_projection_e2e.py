@@ -441,7 +441,8 @@ class KbReadyBadgeE2E(unittest.TestCase):
             "    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b).get_opcodes():\n"
             "        if tag != 'equal': out.append(dict(file=rel, line=j1 + 1, repro='diff', observed=tag))\n"
             "print(json.dumps(dict(findings=out, claims_checked=['decision consistent'])))\n")
-        rev = _kb(kb, "review", "open", "--title", "Review", "--reviews", self.adr["id"])
+        rev = _kb(kb, "review", "open", "--title", "Review", "--reviews", self.adr["id"],
+                  "--reviews", self.epic["id"])                       # G4: the decision AND its plan
         for q in ("correctness", "failure paths", "docs versus code"):
             rnd = _kb(kb, "review", "calibrate", rev["id"], "--lead-question", q, "--reviewer", "agent:rev",
                       "--reviewer-cmd", f"{sys.executable} {oracle}")
@@ -537,7 +538,7 @@ class KbPeriodicLoopE2E(unittest.TestCase):
         t = _kb(kb, "new", "task", "--title", "Implement it", "--epic", e["id"], "--dod", "feature() works")
         oracle = self.tmp / "oracle.py"
         oracle.write_text(_ORACLE)
-        rv = _kb(kb, "review", "open", "--title", "Review", "--reviews", d["id"])
+        rv = _kb(kb, "review", "open", "--title", "Review", "--reviews", d["id"], "--reviews", e["id"])
         for q in ("correctness", "failure paths", "docs versus code"):
             _kb(kb, "review", "calibrate", rv["id"], "--lead-question", q, "--reviewer", "agent:rev",
                 "--reviewer-cmd", f"{sys.executable} {oracle} {kb}")
