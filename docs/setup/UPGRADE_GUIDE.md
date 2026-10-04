@@ -67,6 +67,7 @@ upgraded from that clone.
 | Installed via | Upgrade command |
 |---|---|
 | `./install.sh` / `install.ps1` from a checkout (or `--editable` / `-Editable`) | `sh update.sh` (Windows: `update.ps1`) in the checkout |
+| the Claude Code `corvin` plugin | `/corvin:update` (`/corvin:update --check` only reports what is new) |
 | manual editable checkout (`pip install -e .`) | `git pull` in the checkout, then `pip install -e .` (or switch to `sh update.sh`) |
 | legacy PyPI install (`pip install corvinos` / `uv tool install corvinos`) | no longer supported — `update.sh` / `update.ps1` refuse it; clone the repository and run `./install.sh` |
 

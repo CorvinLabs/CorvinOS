@@ -95,6 +95,13 @@ reopens the browser; on a flagged-complete-but-unhealthy install it tries
 `corvin-restore` before falling back to a full reinstall. See
 `corvin_operator/corvin/scripts/corvin_install_command.py`.
 
+`/corvin:update` is its counterpart for updates: `--check` fetches `origin/main` and
+reports commits and versions behind without changing anything (exit 4 when an update is
+available); without it, the checkout's own `update.sh` / `update.ps1` runs when the
+checkout is behind (`--force`: always), its exit code is passed through (1 rolled back,
+2 rollback failed, 3 another install/update holds the lock) and the console is re-checked
+over HTTP. See `corvin_operator/corvin/scripts/corvin_update_command.py`.
+
 ### Stage 1 — OS detection
 
 The installer detects your platform automatically. No input needed. It prints a summary

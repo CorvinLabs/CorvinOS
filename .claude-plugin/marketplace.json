@@ -9,8 +9,8 @@
     {
       "name": "corvin",
       "source": "./corvin_operator/corvin",
-      "description": "CorvinOS setup entry point for Claude Code. /corvin:install runs the installer of your local CorvinOS clone (repo-only — nothing is downloaded), verifies the console really serves the app (not just an open port) and opens it in the browser. Idempotent — safe to re-run on a partial or already-complete install.",
-      "version": "0.1.0",
+      "description": "CorvinOS install and update from Claude Code. /corvin:install runs the installer of your local CorvinOS clone (repo-only — nothing is downloaded) and verifies the console really serves the app; /corvin:update checks origin/main for a newer version, runs the clone's updater (with automatic rollback) and re-verifies. Both are safe to re-run.",
+      "version": "0.2.0",
       "license": "MIT",
       "keywords": [
         "install",

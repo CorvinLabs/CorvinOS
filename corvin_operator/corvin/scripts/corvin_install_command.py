@@ -25,6 +25,7 @@ a fresh install this command does not open a second tab.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -50,7 +51,9 @@ except ImportError:
     _voice_config_dir = None
 
 CONSOLE_HOST = "127.0.0.1"
-CONSOLE_PORT = 8765
+# Same variable update.sh / update.ps1 / uninstall read, so all of them probe
+# the same console.
+CONSOLE_PORT = int(os.environ.get("CORVIN_CONSOLE_PORT") or 8765)
 CONSOLE_URL = f"http://{CONSOLE_HOST}:{CONSOLE_PORT}/console/"
 
 # Generous on purpose: the operator asked for "runs to the stable end-state,

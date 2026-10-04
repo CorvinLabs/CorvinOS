@@ -6,149 +6,101 @@
 
 ## ⚡ Quick Start
 
-### Installation
+**TL;DR** — you need `git`; the installer brings everything else (Python via `uv`, Node.js, Claude Code).
+Everything runs from your clone of this repository: there is no download installer and no PyPI package.
 
-CorvinOS is installed **only from a local clone of this repository**. There is
-no `curl … | sh` / `irm … | iex` one-liner, no download mode and no PyPI
-install: the installer refuses to run unless it sits in (or is pointed at) a
-CorvinOS checkout, and it installs that checkout in editable mode.
+| | Linux · macOS · WSL | Windows (PowerShell) | Claude Code |
+|---|---|---|---|
+| **Install** | `git clone https://github.com/CorvinLabs/CorvinOS.git && cd CorvinOS && ./install.sh` | `git clone https://github.com/CorvinLabs/CorvinOS.git; cd CorvinOS; .\install.ps1` | `/corvin:install` |
+| **Update** | `sh update.sh` | `.\update.ps1` | `/corvin:update` |
+| **Uninstall** | `bash uninstall.sh` | `.\uninstall.ps1` | — |
 
-**Prerequisites**
+The console opens at **http://127.0.0.1:8765/console/** once it really serves the app.
+Install and update are safe to re-run. Your data and configuration (`.corvin/` inside the clone —
+git-ignored — and `~/.config/corvin-voice`) are never touched by an update.
 
-| | Linux / macOS / WSL | Windows |
-|---|---|---|
-| Required | `git`, `curl` or `wget` | `git`, Windows PowerShell 5.1+ |
-| Bootstrapped by the installer | `uv` (brings its own Python), Node.js, Claude Code | same |
+<details>
+<summary><b>Install — what it does and its options</b></summary>
 
-No system Python, no `pip`, no global Node.js is needed.
+1. Refuses to run outside a CorvinOS clone (no `.corvin_repo` / `pyproject.toml`) — before anything is downloaded.
+2. Bootstraps `uv` (pinned, checksum-verified) and a local Node.js; installs your clone with `uv tool install --editable`, plus the offline voice models.
+3. Installs Claude Code if it is missing.
+4. Builds and starts the console, waits for an HTTP 200 with the app shell **and** a working local login, then opens the browser. If that proof does not come it says why instead of reporting success ([Windows errors](docs/windows-installation-errors.md)).
 
-**1. Clone the repository**
-
-```bash
-git clone https://github.com/CorvinLabs/CorvinOS.git
-cd CorvinOS
-```
-
-**2. Run the installer from the checkout**
+Because the install is editable, the code that runs **is** your clone.
 
 ```bash
-# Linux / macOS / WSL
-./install.sh
+./install.sh --editable /path/to/CorvinOS   # install another clone
+./install.sh --lan                          # allow pairing over LAN
+./install.sh --no-claude-code               # skip Claude Code
+./install.sh --preset minimal               # console only
+./install.sh --autostart                    # start the console at login
+./install.sh --always-on                    # run as a service that survives reboot
 ```
 
 ```powershell
-# Windows (PowerShell, from the CorvinOS directory)
-.\install.ps1
+.\install.ps1 -Editable C:\path\to\CorvinOS   # install another clone
+.\install.ps1 -Port 8790                     # different port (URL is always 127.0.0.1)
+.\install.ps1 -RebuildWeb                    # force a console rebuild
+.\install.ps1 -NoStart                       # install only, start nothing
+.\install.ps1 -DryRun                        # report every step, change nothing
 ```
 
-Runs directly in an already-open PowerShell session — no
-`powershell -ExecutionPolicy Bypass -File` wrapper. If PowerShell refuses with
-"running scripts is disabled on this system", allow local scripts once
-(`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`) or just for this window
-(`Set-ExecutionPolicy -Scope Process Bypass -Force`), then re-run `.\install.ps1`.
+**Windows:** if PowerShell answers "running scripts is disabled on this system", allow local scripts once
+(`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or only for this window:
+`Set-ExecutionPolicy -Scope Process Bypass -Force`) and run `.\install.ps1` again.
+Full reference: [docs/setup/INSTALLATION.md](docs/setup/INSTALLATION.md) ·
+[docs/windows-installation-guide.md](docs/windows-installation-guide.md)
 
-The checkout is detected automatically. To install a checkout that lives
-somewhere else, pass it explicitly: `sh install.sh --editable /path/to/CorvinOS`
-or `install.ps1 -Editable C:\path\to\CorvinOS`. A path that is not a CorvinOS
-checkout (no `.corvin_repo` / `pyproject.toml`) is refused before anything is
-downloaded, with the clone steps above.
+</details>
 
-**What happens**
+<details>
+<summary><b>Update — what it does and its options</b></summary>
 
-1. Bootstraps `uv` (pinned + checksum-verified) and a local Node.js runtime
-2. Installs CorvinOS from your checkout (`uv tool install --editable`) plus the offline voice models (STT + TTS)
-3. Detects Claude Code and installs it if it is missing (`--no-claude-code` / `-NoClaudeCode` skips this)
-4. Builds the console, starts it and opens `http://127.0.0.1:8765/console/` in your browser
-5. Ready to use — no onboarding, no setup screens
-
-Step 4 is verified, not assumed: the installer waits for an HTTP 200 carrying
-the app shell and for a local login to issue a session cookie before it opens
-your browser. If that proof does not come, the Windows installer exits 3 with
-the server's own error and a diagnosis instead of reporting success — see
-[docs/windows-installation-errors.md](docs/windows-installation-errors.md).
-
-Because the install is editable, the code that runs **is** your checkout:
-`git pull` + `sh update.sh` is all an update takes (see below).
-
-**Options**
+`update.sh` / `update.ps1` pull `main` into your clone, reinstall, rebuild the console, restart, and prove
+the new build is served (`scripts/verify_install.py`). If not, they **roll back** automatically.
+Local changes are stashed and re-applied; a force-pushed `main` leaves your old HEAD as branch
+`corvin-update-backup-<timestamp>`. Reload open console tabs with Ctrl+Shift+R afterwards.
 
 ```bash
-./install.sh --lan                   # Allow pairing over LAN
-./install.sh --no-claude-code        # Skip Claude Code installation
-./install.sh --preset minimal        # Lightweight setup (console only)
-./install.sh --autostart             # Start the console at login
-./install.sh --always-on             # Run as a service that survives reboot
+sh update.sh --rebuild-only   # no pull: rebuild + restart the code you have
+sh update.sh --no-rollback    # keep the new code even if verification fails
 ```
 
-```powershell
-.\install.ps1 -Port 8790             # Different port (URL is always 127.0.0.1)
-.\install.ps1 -RebuildWeb            # Force a console SPA rebuild
-.\install.ps1 -NoStart               # Install only, start nothing
-.\install.ps1 -DryRun                # Report every step, change nothing
-```
+Exit codes: `0` updated · `1` failed, rolled back · `2` rollback failed too · `3` another install/update runs.
+Update never installs: with nothing installed (or a legacy PyPI install) it prints the install steps above.
+More: [docs/setup/UPGRADE_GUIDE.md](docs/setup/UPGRADE_GUIDE.md)
 
-Full Windows reference: [docs/windows-installation-guide.md](docs/windows-installation-guide.md)
+</details>
 
-**Alternative: from inside Claude Code**
+<details>
+<summary><b>From inside Claude Code — <code>/corvin:install</code> and <code>/corvin:update</code></b></summary>
 
-This repository is also a Claude Code plugin marketplace
-(`.claude-plugin/marketplace.json`). With the clone in place:
+This repository is a Claude Code plugin marketplace. Once, from Claude Code started inside your clone:
 
 ```text
 /plugin marketplace add /path/to/CorvinOS
 /plugin install corvin
-/corvin:install
 ```
 
-`/corvin:install` runs the same installer from your checkout non-interactively,
-waits until the console really serves the app (not just an open port) and opens
-it in the browser. It is idempotent: on a healthy install it only re-verifies.
+- `/corvin:install` runs the clone's installer and waits until the console really serves the app. On a
+  healthy install it only re-verifies.
+- `/corvin:update --check` fetches `origin/main` and reports commits and versions behind — changes nothing.
+- `/corvin:update` runs the clone's updater when it is behind (`--force`: always), then re-checks the
+  console. Afterwards refresh the plugin itself with the `/plugin marketplace update …` line it prints.
 
-### Update
+</details>
 
-Run from your checkout:
+<details>
+<summary><b>Uninstall</b></summary>
 
-```bash
-sh update.sh                  # pull main → reinstall → clean console build → restart → verify
-sh update.sh --rebuild-only   # no pull: rebuild + restart the code you have
-```
+`uninstall.sh` / `uninstall.ps1` stop the services, archive everything you cannot re-download (secrets,
+bridge pairings, the audit chain, sessions, voice models) to `~/corvin-backup-<timestamp>.tar.gz`
+(mode 600; restore with `tar -xzf <file> -C /`), remove the rest, and exit 1 if a leftover scan finds
+anything. Your clone is kept. `--dry-run` shows what would go, `--verify-only` only scans.
+`corvin-uninstall` runs the same script.
 
-```powershell
-.\update.ps1
-```
-
-The update is proven, not assumed: it restarts the services, waits until the
-console serves the bundle it just built, logs in and checks the API
-(`scripts/verify_install.py`). If that fails it rolls back to the previous
-code and build automatically (exit 1 = rolled back, 2 = rollback failed too).
-Your checkout never loses work: local changes are stashed and re-applied, and
-if `main` was force-pushed the old HEAD is kept as branch
-`corvin-update-backup-<timestamp>`. After an update, reload the console tab
-with Ctrl+Shift+R.
-
-`update.sh` / `update.ps1` never install: with no CorvinOS present, or with a
-legacy PyPI install, they stop and print the clone + install steps above.
-
-### Uninstall
-
-```bash
-bash uninstall.sh             # asks once, backs up, removes everything, verifies
-bash uninstall.sh --dry-run   # show what would be removed
-bash uninstall.sh --verify-only
-```
-
-```powershell
-.\uninstall.ps1
-```
-
-Services are stopped first. Then everything you cannot re-download (secrets,
-bridge pairings, the audit chain, sessions, voice models) is archived to
-`~/corvin-backup-<timestamp>.tar.gz` (mode 600; restore with
-`tar -xzf <file> -C /`) before anything is deleted. Docker deployments export
-each container's data before their volumes are removed. The run ends with a
-leftover scan and exits 1 if anything remains. Your git checkout is kept (only
-its generated state directory is removed). `corvin-uninstall` runs the same
-script.
+</details>
 
 ### Voice languages
 

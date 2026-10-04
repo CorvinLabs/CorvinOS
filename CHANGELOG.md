@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added — `/corvin:update` and a one-screen README quick start
+- The Claude Code `corvin` plugin (0.2.0) gains `/corvin:update`: `--check` fetches
+  `origin/main` and reports the checkout's commit and version against it without
+  changing anything (exit 4 = update available); without it the checkout's own
+  `update.sh` / `update.ps1` runs when the checkout is behind (`--force`: always), its
+  exit code is passed through (1 rolled back, 2 rollback failed, 3 lock held), and the
+  console is re-checked over HTTP. Data and configuration (`.corvin/`, git-ignored, and
+  `~/.config/corvin-voice`) are not touched.
+- README "Quick Start" is now a TL;DR table (install / update / uninstall per platform
+  and from Claude Code) with the details in collapsed sections; install and update no
+  longer repeat each other.
+- `/corvin:install` honours `CORVIN_CONSOLE_PORT`, like `update.sh`.
+
 ### Changed — install.ps1 / update.ps1 run directly in an already-open PowerShell session
 - Every documented and printed invocation dropped the
   `powershell -ExecutionPolicy Bypass -File <script>.ps1` wrapper in favour of
