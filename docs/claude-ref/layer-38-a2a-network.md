@@ -382,11 +382,28 @@ append). Routing an `a2a_peer` participant's OUTBOUND group message over
 `RemoteTriggerSender`, and routing an INBOUND reply back into the right
 group, is a real extension to the A2A envelope/receive path and is
 deliberately deferred past this ADR's first commit — today's inbound
-handler has nowhere to put a `group_id` even if one arrived. Frontend
-rendering (chat.tsx: token card, "Annehmen" button, groups sidebar tab) is
-also not yet wired — the backend is proven end-to-end
-(`tests/e2e/a2a/test_a2a_friendship_token_chat_e2e.py`,
-`tests/e2e/a2a/test_chat_groups_e2e.py`) but has no UI surface yet.
+handler has nowhere to put a `group_id` even if one arrived.
+
+**Frontend (shipped 2026-10-04):** a dedicated `/app/chat-groups` panel
+(`web-next/src/pages/chat-groups.tsx`), NOT inline inside `chat.tsx`'s
+message stream — `chat_runtime.py`'s WebSocket protocol streams a
+`tool_use` event but never the matching result, so there is today no live
+signal to render an inline confirm card from inside a chat bubble; building
+that is a separate, larger streaming-protocol change. The panel instead
+polls two new list endpoints (`GET /a2a/feed/send/pending`,
+`GET /remote-trigger/pair/friendship-token/pending` — list variants of the
+existing peek-by-id routes, since no other discovery surface existed for a
+chat-staged `pending_id`) and renders Confirm buttons; group creation,
+participant management (including the `a2a_peer` live-friendship-gated
+add) and messaging are full CRUD against the routes above. A direct (non-
+chat) "create token" / "paste token to accept" pair reuses the pre-existing
+`friendship/create` and `friendship/import` routes unchanged. Registered in
+both `panels/registry.tsx` (PANELS) and `components/layout.tsx` (NAV_GROUPS
+"primary", right after Chat) per the Console Frontend dual-registration
+rule. Verified live: `scripts/console-deploy.sh --marker 'Gruppenchats'`
+and a `corvin-webui` restart (new backend routes need the process restart,
+not just the frontend rebuild — adding a route to an already-imported
+module is invisible until the Python process reloads it).
 
 ---
 

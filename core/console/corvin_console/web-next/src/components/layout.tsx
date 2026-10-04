@@ -34,6 +34,7 @@ import {
   Sparkles,
   Menu,
   TrendingUp,
+  Users,
   Video,
   Workflow,
   X,
@@ -147,6 +148,7 @@ const _ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Workflow,               // workflows
   Blocks,                 // marketplace-hub
   Activity,               // sync-monitor
+  Users,                  // chat-groups
 };
 
 // Legacy hardcoded NAV_GROUPS for now (fallback while panels are being migrated)
@@ -163,6 +165,10 @@ const NAV_GROUPS: NavGroup[] = [
       // no PANELS counterpart is fine here and was removed once (2026-09-19) on
       // the mistaken assumption that it had to be one.
       { to: "/app/chat", label: "Chat", icon: MessagesSquare },
+      // ADR-2216 — group chat (human/agent/a2a_peer) + chat-native
+      // friendship tokens. A real PANELS entry (registry.tsx), so
+      // panel-nav-wiring.test.ts's walk covers this one normally.
+      { to: "/app/chat-groups", label: "Gruppenchats", icon: Users },
       { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
       // Vibe Engineering dashboard (ADR-0400): unified 3-column learnings view.
       // A panel needs BOTH registrations: panelRoutes() mounts /app/<route> from PANELS,

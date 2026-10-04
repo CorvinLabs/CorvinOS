@@ -29,6 +29,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -230,20 +231,49 @@ class A2ASendConfirmRouteTests(_Sandbox):
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["text"], "preview me")
 
+    def test_list_pending_without_session_is_401(self):
+        self._stage()
+        r = self._client(tenant=None).get("/v1/console/a2a/feed/send/pending")
+        self.assertEqual(r.status_code, 401)
+
+    def test_list_pending_returns_staged_items_newest_first(self):
+        first = self._stage(peer_id="peer-1", text="older")
+        second = self._stage(peer_id="peer-2", text="newer")
+        r = self._client().get("/v1/console/a2a/feed/send/pending")
+        self.assertEqual(r.status_code, 200, r.text)
+        ids = [item["pending_id"] for item in r.json()["pending"]]
+        self.assertEqual(ids, [second, first])
+
+    def test_list_pending_excludes_confirmed_item(self):
+        self._register_peer("peer-1")
+        pending_id = self._stage(peer_id="peer-1", text="go")
+        with patch.object(self.R, "_send_in_background", lambda *a: None):
+            self._client().post(f"/v1/console/a2a/feed/send/confirm/{pending_id}")
+        r = self._client().get("/v1/console/a2a/feed/send/pending")
+        self.assertEqual(r.json()["pending"], [])
+
     def test_confirm_with_real_session_sends_exactly_once(self):
         self._register_peer("peer-1")
         pending_id = self._stage(peer_id="peer-1", text="go")
 
         sent: list[tuple] = []
+        # _SEND_POOL is a module-level ThreadPoolExecutor shared by every
+        # test in this process (a2a_feed is imported once). Shutting it
+        # down here (the old approach) permanently breaks every later test
+        # that submits to it ("cannot schedule new futures after shutdown")
+        # — a primitive-level bug, not specific to this test. Wait on an
+        # Event the background call sets instead; the shared pool stays
+        # usable for the rest of the suite.
+        done = threading.Event()
 
         def _fake_send_in_background(peer_id, text, atts, timeout_s):
             sent.append((peer_id, text))
+            done.set()
 
         with patch.object(self.R, "_send_in_background", _fake_send_in_background):
             r1 = self._client().post(f"/v1/console/a2a/feed/send/confirm/{pending_id}")
             self.assertEqual(r1.status_code, 202, r1.text)
-            # give the thread pool a moment to run the submitted callable
-            self.R._SEND_POOL.shutdown(wait=True, cancel_futures=False)
+            self.assertTrue(done.wait(timeout=5), "background send never ran")
 
         self.assertEqual(sent, [("peer-1", "go")],
                           "confirm route must trigger exactly one send with the staged text")

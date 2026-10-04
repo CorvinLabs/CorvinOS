@@ -17,7 +17,7 @@ import {
   DashboardPage, SettingsPage,
   ComputePage, BridgesPage, DiscoveryPage, VoicePage, VoiceSummariesPage, ForgePage,
   LddPage, CompliancePage, FilesPage, MemoryPage,
-  AgentHubPage, SkillManagerPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
+  AgentHubPage, ChatGroupsPage, SkillManagerPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
   MarketplacePage,
   GitHubPage, SyncMonitorPage,
@@ -51,6 +51,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   FilesPage,
   MemoryPage,
   AgentHubPage,
+  ChatGroupsPage,
   SkillManagerPage,
   ConnectorsPage,
   ApiKeysPage,
@@ -128,6 +129,11 @@ export const PANELS: ConsolePanel[] = [
   // REMOVED 2026-09-15: "space" panel (superseded by modern UI, no nav entry)
   rc("memory", "Memory", MemoryPage, { nav: { label: "Memory", icon: "BookOpen", group: "intelligence" } }),
   rc("agent-hub", "Agent Hub", AgentHubPage, { nav: { label: "Agent Hub", icon: "Globe2", group: "network" } }),
+  // ADR-2216 — group chat with human/agent/a2a_peer participants + chat-
+  // native friendship tokens. NAV_GROUPS entry in layout.tsx "primary"
+  // group, right after Chat (both registrations required, CLAUDE.md
+  // Console Frontend rule).
+  rc("chat-groups", "Gruppenchats", ChatGroupsPage, { nav: { label: "Gruppenchats", icon: "Users", group: "primary" } }),
   rc("skill-manager", "Skills", SkillManagerPage, { nav: { label: "Skills", icon: "Zap", group: "build" } }),
   rc("connectors", "Connectors", ConnectorsPage, { nav: { label: "Connectors", icon: "Plug", group: "network" } }),
   rc("api-keys", "API Keys", ApiKeysPage, { nav: { label: "API Keys", icon: "KeyRound", group: "system" } }),

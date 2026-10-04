@@ -121,6 +121,22 @@ def pop_pending_token_request(tenant_global_dir: Path, pending_id: str) -> dict[
     return rec
 
 
+def list_pending_token_requests(tenant_global_dir: Path) -> list[dict[str, Any]]:
+    """All non-expired pending token requests for this tenant, newest first.
+
+    Same rationale as ``a2a_chat_pending_send.list_pending_sends``: no
+    tool_result streaming exists, so this is how a console UI discovers
+    what a chat turn staged.
+    """
+    d = _pending_dir(tenant_global_dir)
+    out: list[dict[str, Any]] = []
+    for p in d.glob("*.json"):
+        rec = _read_valid(p)
+        if rec is not None:
+            out.append(rec)
+    return sorted(out, key=lambda r: r.get("created_at", 0), reverse=True)
+
+
 def sweep_expired(tenant_global_dir: Path) -> int:
     """Delete expired pending requests. Returns the count removed.
 

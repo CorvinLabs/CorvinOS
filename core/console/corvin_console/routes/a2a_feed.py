@@ -243,6 +243,19 @@ def a2a_feed_send(rec: Session, body: _SendBody) -> dict[str, Any]:
 import a2a_chat_pending_send as _pending  # type: ignore[import-not-found]  # noqa: E402
 
 
+@router.get("/a2a/feed/send/pending")
+def a2a_feed_send_pending_list(rec: Session) -> dict[str, Any]:
+    """List every non-expired chat-staged pending send for this tenant.
+
+    The console has no other way to discover a pending_id a chat turn just
+    staged — no tool_result event is streamed today (ADR-2216 scope note).
+    This is the "Pending confirmations" surface's data source.
+    """
+    tenant_id = _a2a_tenant(rec)
+    tenant_dir = _forge_paths.tenant_global_dir(tenant_id)
+    return {"pending": _pending.list_pending_sends(tenant_dir)}
+
+
 @router.get("/a2a/feed/send/pending/{pending_id}")
 def a2a_feed_send_pending_peek(rec: Session, pending_id: str) -> dict[str, Any]:
     """Preview a staged send so the UI can render a confirm dialog."""

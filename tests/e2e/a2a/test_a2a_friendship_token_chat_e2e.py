@@ -221,6 +221,25 @@ class FriendshipTokenConfirmRouteTests(_Sandbox):
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["label"], "preview-friend")
 
+    def test_list_pending_without_session_is_401(self):
+        self._stage()
+        r = self._client(tenant=None).get("/v1/console/remote-trigger/pair/friendship-token/pending")
+        self.assertEqual(r.status_code, 401)
+
+    def test_list_pending_returns_staged_items_newest_first(self):
+        first = self._stage(label="older")
+        second = self._stage(label="newer")
+        r = self._client().get("/v1/console/remote-trigger/pair/friendship-token/pending")
+        self.assertEqual(r.status_code, 200, r.text)
+        ids = [item["pending_id"] for item in r.json()]
+        self.assertEqual(ids, [second, first])
+
+    def test_list_pending_excludes_confirmed_item(self):
+        pending_id = self._stage(label="once")
+        self._client().post(f"/v1/console/remote-trigger/pair/friendship-token/confirm/{pending_id}")
+        r = self._client().get("/v1/console/remote-trigger/pair/friendship-token/pending")
+        self.assertEqual(r.json(), [])
+
     def test_confirm_with_real_session_mints_a_real_verifiable_token(self):
         pending_id = self._stage(label="go-friend", ttl_hours=24)
         r = self._client().post(

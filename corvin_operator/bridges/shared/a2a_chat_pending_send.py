@@ -123,6 +123,23 @@ def pop_pending_send(tenant_global_dir: Path, pending_id: str) -> dict[str, Any]
     return rec
 
 
+def list_pending_sends(tenant_global_dir: Path) -> list[dict[str, Any]]:
+    """All non-expired pending sends for this tenant, newest first.
+
+    The console has no other way to discover a chat-staged pending_id — the
+    backend streams no tool_result event today, so the operator's only
+    signal is the assistant's own text echoing the id. This list is what
+    lets a "Pending confirmations" UI exist without that streaming change.
+    """
+    d = _pending_dir(tenant_global_dir)
+    out: list[dict[str, Any]] = []
+    for p in d.glob("*.json"):
+        rec = _read_valid(p)
+        if rec is not None:
+            out.append(rec)
+    return sorted(out, key=lambda r: r.get("created_at", 0), reverse=True)
+
+
 def sweep_expired(tenant_global_dir: Path) -> int:
     """Delete expired pending records. Returns the count removed.
 

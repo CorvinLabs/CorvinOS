@@ -1248,6 +1248,24 @@ class FriendshipTokenConfirmResponse(BaseModel):
     label: str | None
 
 
+@router.get("/remote-trigger/pair/friendship-token/pending")
+def friendship_token_pending_list(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> list[FriendshipTokenPendingPreview]:
+    """List every non-expired chat-staged token request for this tenant —
+    same discovery-surface rationale as a2a_feed's pending-send list."""
+    tenant_dir = _a2a_paths.tenant_global_dir(rec.tenant_id)
+    records = _pending_ft.list_pending_token_requests(tenant_dir)
+    return [
+        FriendshipTokenPendingPreview(
+            pending_id=r["pending_id"], label=r.get("label"),
+            ttl_hours=r.get("ttl_hours", 720.0), personas=r.get("personas", []),
+            created_at=r["created_at"],
+        )
+        for r in records
+    ]
+
+
 @router.get("/remote-trigger/pair/friendship-token/pending/{pending_id}")
 def friendship_token_pending_peek(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],

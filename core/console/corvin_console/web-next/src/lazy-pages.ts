@@ -61,6 +61,10 @@ export const ChatPage = React.lazy(() =>
   import("@/pages/chat").then((m) => ({ default: m.ChatPage }))
 );
 
+export const ChatGroupsPage = React.lazy(() =>
+  import("@/pages/chat-groups").then((m) => ({ default: m.ChatGroupsPage }))
+);
+
 export const WorkflowsListPage = React.lazy(() =>
   import("@/pages/workflows").then((m) => ({ default: m.WorkflowsListPage }))
 );
