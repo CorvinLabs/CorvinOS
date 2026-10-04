@@ -441,7 +441,8 @@ class KbReadyBadgeE2E(unittest.TestCase):
             "    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b).get_opcodes():\n"
             "        if tag != 'equal': out.append(dict(file=rel, line=j1 + 1, repro='diff', observed=tag))\n"
             "print(json.dumps(dict(findings=out, claims_checked=['decision consistent'])))\n")
-        rev = _kb(kb, "review", "open", "--title", "Review", "--reviews", self.adr["id"])
+        rev = _kb(kb, "review", "open", "--title", "Review", "--reviews", self.adr["id"],
+                  "--reviews", self.epic["id"])                       # G4: the decision AND its plan
         for q in ("correctness", "failure paths", "docs versus code"):
             rnd = _kb(kb, "review", "calibrate", rev["id"], "--lead-question", q, "--reviewer", "agent:rev",
                       "--reviewer-cmd", f"{sys.executable} {oracle}")
@@ -537,7 +538,7 @@ class KbPeriodicLoopE2E(unittest.TestCase):
         t = _kb(kb, "new", "task", "--title", "Implement it", "--epic", e["id"], "--dod", "feature() works")
         oracle = self.tmp / "oracle.py"
         oracle.write_text(_ORACLE)
-        rv = _kb(kb, "review", "open", "--title", "Review", "--reviews", d["id"])
+        rv = _kb(kb, "review", "open", "--title", "Review", "--reviews", d["id"], "--reviews", e["id"])
         for q in ("correctness", "failure paths", "docs versus code"):
             _kb(kb, "review", "calibrate", rv["id"], "--lead-question", q, "--reviewer", "agent:rev",
                 "--reviewer-cmd", f"{sys.executable} {oracle} {kb}")
@@ -568,6 +569,20 @@ class KbPeriodicLoopE2E(unittest.TestCase):
             self.assertNotEqual(items[f"kb:{t['uid']}"]["status"], "complete")   # regressed on the board
             self.assertTrue(any(i["title"].startswith(out["sweep"]["created"][0]) for i in items.values()))
             self.assertIn("periodic", client.get(f"{_URL}/kb/status").json())
+
+    def test_periodic_skips_a_kb_checkout_that_lags_behind_origin(self):
+        kb = self.kb
+        self._push()
+        (kb / "src" / "late.py").write_text("x = 1\n")
+        self._commit("a commit the checkout will not have")
+        self._push()
+        _sh("git", "reset", "-q", "--hard", "HEAD~1", cwd=kb)          # the checkout lags behind origin/main
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            from corvin_console import kb_projection as kp
+            out = kp.periodic("_default", force=True)
+            self.assertIn("skipped", out, out)
+            self.assertIn("pull", out["skipped"])
+            self.assertEqual(client.get(f"{_URL}/kb/status").json()["periodic"]["skipped"], out["skipped"])
 
     def test_guidance_is_minted_as_a_bootstrap_graded_skill_and_acknowledged(self):
         kb = self.kb

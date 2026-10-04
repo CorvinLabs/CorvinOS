@@ -707,31 +707,35 @@ _ORCHESTRATION_BRIEF = (
     "under Settings -> Workflows by its workflow_id (code/merge/route/"
     "ask_human nodes all supported). A run may pause at an ask_human node; "
     "resume it with the human's reply once you have it.\n"
-    "- `mcp__corvin_orchestration__a2a_send` / `a2a_list_endpoints` — send "
-    "a signed task instruction to an already-paired CorvinOS instance. "
-    "List endpoints first to see what's configured; this tool does not "
-    "pair new instances (console-managed).\n"
     "- `mcp__corvin_orchestration__acs_delegate` — hand an open-ended task "
     "to the Autonomous Compute Shell's manager/worker loop (ADR-0104), "
     "distinct from workflow_run's fixed DAG. Spends compute quota unless "
     "dry_run=true.\n"
-    "- All three groups carry a wall-clock watchdog (budget_s) — a call "
+    "- A2A send is moved to `mcp__forge__a2a_send` (ADR-2099 Phase 2), "
+    "gated by `a2a_send_from_chat` flag, with a two-step confirm gate "
+    "(stage pending via MCP tool, confirm with real browser session + CSRF).\n"
+    "- All groups carry a wall-clock watchdog (budget_s) — a call "
     "that exceeds it returns a typed timeout, it does not hang your turn."
 )
 
 
 def _inject_orchestration_capability(merged: dict, persona_name: str) -> dict:
-    """ADR-0190 M4/M5/M6 — inject workflow_run/resume/list_paused,
-    a2a_send/list_endpoints, and acs_delegate MCP tools when persona has
-    orchestration_enabled=True. Mirror of _inject_delegate_capability.
+    """ADR-0190 M4/M5/M6 — inject workflow_run/resume/list_paused and
+    acs_delegate MCP tools when persona has orchestration_enabled=True.
+    Mirror of _inject_delegate_capability.
 
-    Deliberately a SEPARATE flag from forge_enabled/delegate_enabled — A2A
-    send (network egress to another org's paired instance, consuming their
-    quota) and ACS delegation (recursive, potentially expensive autonomous
-    compute) carry materially higher blast radius than tool-forging or
-    worker delegation, so they must not silently piggyback onto a flag
-    that's already broadly granted (ADR-0190 "don't silently expand blast
-    radius", same principle as capability_aware in M1).
+    A2A send has been moved to the forge.mcp_server (gated by
+    a2a_send_from_chat flag, ADR-2099 Phase 2) to enforce a two-step
+    confirm gate: the MCP tool only stages a pending record; a real
+    browser session + CSRF token confirms it. This prevents the LLM from
+    sending directly to a real peer without operator action.
+
+    Deliberately a SEPARATE flag from forge_enabled/delegate_enabled — ACS
+    delegation (recursive, potentially expensive autonomous compute) carries
+    materially higher blast radius than tool-forging or worker delegation,
+    so it must not silently piggyback onto a flag that's already broadly
+    granted (ADR-0190 "don't silently expand blast radius", same principle
+    as capability_aware in M1).
     """
     if not persona_name:
         return merged
@@ -746,8 +750,6 @@ def _inject_orchestration_capability(merged: dict, persona_name: str) -> dict:
         "mcp__corvin_orchestration__workflow_run",
         "mcp__corvin_orchestration__workflow_resume",
         "mcp__corvin_orchestration__workflow_list_paused",
-        "mcp__corvin_orchestration__a2a_send",
-        "mcp__corvin_orchestration__a2a_list_endpoints",
         "mcp__corvin_orchestration__acs_delegate",
     ):
         if t not in allowed:

@@ -281,11 +281,15 @@ def guidance_bridge(tenant_id: str, repo: Path) -> dict[str, Any]:
     for m in pend.get("mint") or []:
         name = guidance_skill_name(m["finding_class"])
         try:
-            if reg.get(name) is None:
-                reg.create(scope="user", name=name, type="learned-experience", body_md=m["body_md"],
-                           description=f"Corvin-Knowledge guidance for the recurring finding class "
-                                       f"{m['finding_class']} (advisory, retired when it shows no effect)",
-                           created_by="kb-guidance")
+            spec = reg.get(name)
+            if spec is None:
+                spec = reg.create(scope="user", name=name, type="learned-experience", body_md=m["body_md"],
+                                  description=f"Corvin-Knowledge guidance for the recurring finding class "
+                                              f"{m['finding_class']} (advisory, retired when it shows no effect)",
+                                  created_by="kb-guidance")
+            if not list(getattr(spec, "grades", None) or []):
+                # graded whenever it has no grade yet — not only right after create: a grade that
+                # failed once left an ungraded (never injected) skill acked as minted
                 reg.grade(name, run_id=f"kb-guidance-bootstrap:{m['finding_class']}", score=0.3,
                           notes="bootstrap seed minted from KB guidance — not earned usage", organic=False)
         except Exception as exc:  # noqa: BLE001 — one bad entry must not stop the others
@@ -316,6 +320,17 @@ def periodic(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
         return {}
     _last_periodic[tenant_id] = now
     out: dict[str, Any] = {}
+    # The slow loops create tasks and trip breakers: they run only on a KB checkout that
+    # contains origin/main. A checkout that lags behind runs OLD kb.py with OLD data (review
+    # R2-C1: a stale checkout's first sweep regressed six tasks and tripped stop-all).
+    behind = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", "refs/remotes/origin/main", "HEAD"],
+                            capture_output=True, env=_env("sync:kb"))
+    has_origin = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "-q", "refs/remotes/origin/main"],
+                                capture_output=True, env=_env("sync:kb")).returncode == 0
+    if has_origin and behind.returncode != 0:
+        _periodic_out[tenant_id] = {"skipped": "the KB checkout does not contain origin/main — pull it", "at": now}
+        _save(tenant_id, dict(_state.get(tenant_id) or status(tenant_id)))
+        return _periodic_out[tenant_id]
     with _lock:
         rc, g = _run(repo, "guidance", "run", actor="kb-guidance")
         out["guidance"] = g if rc == 0 else {"error": str(g.get("error") or g)[:300]}
@@ -355,6 +370,9 @@ def start(tenant_id: Optional[str] = None) -> bool:
     if kb_repo() is None or t in _started:
         return False
     _started.add(t)
+    # the slow loops start PERIODIC_S after boot: the first ticks belong to the projection
+    # (a periodic run holds _lock for its subprocesses and would delay the first sync)
+    _last_periodic.setdefault(t, time.time())
     _stops[t] = threading.Event()
     threading.Thread(target=_loop, args=(t, _stops[t]), name=f"kb-projection-{t}", daemon=True).start()
     log.info("kb projection started for tenant %s from %s", t, kb_repo())

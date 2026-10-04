@@ -58,11 +58,12 @@ unchanged, so every `corvin_decisions/decisions/ADR-XXXX-*.md` reference still r
 **Status:** 🟡 **PARTIAL — the single-source RULE and the KB graph are live; the hand-work backlog is not cleared** (verified 2026-10-03)
 
 Verified on this host 2026-10-03: the centralisation is done (`docs/decisions/` holds only
-a README, `corvin_decisions/` is the submodule; 1012 files in `decisions/`). The graph is
+a README, `corvin_decisions/` is the submodule; 1017 files in `decisions/`). The graph is
 `Corvin-Knowledge/kb/graph/` (entities + relations), rebuilt by the console projector after
 every KB change (ADR-2205/2206); the webhook/dashboard design (`:8000`, `:3000`) is retired.
-Hand work left, held in `kb/_meta/baseline.json` (shrink-only): 11 numbers carried by two
-files, 7 broken frontmatters, 75 legacy status spellings — ADR-0516 stays PROPOSED.
+Hand work left, held in `kb/_meta/baseline.json` (shrink-only, 158 entries on 2026-10-04): 11 numbers
+carried by two files, 5 broken frontmatters, 63 legacy/missing statuses, 67 dangling legacy links —
+ADR-0516 stays PROPOSED.
 
 **Canonical Location:** `/home/shumway/projects/Corvin-Knowledge/decisions/` (SINGLE SOURCE OF TRUTH)
 
@@ -130,9 +131,9 @@ post-commit hook and nothing listens on the endpoint:
 
 ### Verified Status (2026-09-26 — replaces the 2026-09-25 "go-live" list, which overstated it)
 
-✅ ADRs centralised in Corvin-Knowledge (1062 files in `decisions/`)  
+✅ ADRs centralised in Corvin-Knowledge (1017 files in `decisions/`, 2026-10-04)  
 ✅ Knowledge Graph: `kb/graph/{entities,relations}.jsonl`, rebuilt by the projector (2026-10-03)  
-⚠️ ADR-0264 frontmatter: 7 files broken; 11 numbers carried by two files (2026-10-03; `kb.py check` measures it, `kb/_meta/baseline.json` lists them)
+⚠️ ADR-0264 frontmatter: 5 files broken; 11 numbers carried by two files (2026-10-04; `kb.py check` measures it, `kb/_meta/baseline.json` lists them)
 ❌ Auto-sync webhooks: no post-commit hook in any repo, endpoint not listening  
 ❌ Dashboard at http://localhost:3000: not running  
 ✅ SINGLE SOURCE OF TRUTH rule: in force (this is the load-bearing part)
@@ -291,9 +292,10 @@ WARNINGS: they derive `implementation_ready` (the board's ready badge) and never
 --reviewer … --reviewer-cmd "<cmd>"` (seeds a known defect into a copy; a missed seed voids the
 round) → `kb review close` sets `addressed` ONLY for three calibrated zero rounds under different
 lead questions by a reviewer ≠ the ADR's author (`kb orchestrate` drives this one step at a time).
-A **code task** (its epic implements a decision) is done only with `kb task <T> done --evidence
-call_site=<prod file> --evidence e2e_test=<path> --evidence exit_code=0 --evidence commit=<sha on
-origin/main> [--evidence repo=CorvinOS]` (G5) — push first. The projector runs `kb sweep` every
+A **code task** (it or its epic implements a decision) is done only with `kb task <T> done --evidence
+call_site=<production code file> --evidence e2e_test=<test file> --evidence exit_code=0 --evidence
+commit=<sha on origin/main, not older than the task's start> [--evidence repo=CorvinOS]` (G5) — push
+first. G4 counts only a review closed by `kb review close` (audited); hand-edited verdicts never pass. The projector runs `kb sweep` every
 10 min (G6: vanished paths/evidence → a `regresses:` task) and mints recurring finding classes as
 SkillForge guidance skills (`kb learn`, `kb guidance`). Agents (`--actor agent:*`) are held to
 `kb/_meta/autonomy.yaml` (A1 drafts, A2 only ready + not human-required — a missing `risk:` IS
