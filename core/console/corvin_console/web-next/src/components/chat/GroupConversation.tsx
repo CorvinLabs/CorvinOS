@@ -1,6 +1,13 @@
 /**
  * Group conversation in the chat's main area (ADR-2216, ADR-2218).
  *
+ * Visual language mirrors the Agent Hub relay panel
+ * (components/agent-hub/live-feed.tsx) — tucked-corner bubbles, initials
+ * avatars, radial-gradient message canvas, pill composer — and the
+ * single-session chat pane (pages/chat.tsx::ChatPane), which was reskinned
+ * to the same language. See components/chat/PeerConversation.tsx for the
+ * same treatment applied to a direct A2A thread.
+ *
  * A message posted here is stored locally AND delivered by the backend to
  * every A2A peer in the group (routes/chat_groups.py::send_message fan-out);
  * the peer's instance files it under the same group_id. Peer replies arrive
@@ -20,6 +27,7 @@ import {
   type ChatGroup, type GroupMessage,
 } from "@/lib/api/chat-groups";
 import { getA2AFeed } from "@/lib/api/a2a";
+import { ChatAvatar } from "./ChatAvatar";
 import { MembersSection } from "./MembersSection";
 
 const MESSAGES_REFETCH_MS = 4_000;
@@ -80,20 +88,24 @@ function AddPeerQuick({ group, csrf, onAdded }: { group: ChatGroup; csrf: string
 function GroupMessageRow({ m, group, selfId }: { m: GroupMessage; group: ChatGroup; selfId: string }) {
   const sender = group.participants.find((p) => p.participant_id === m.sender_participant_id);
   const mine = m.sender_participant_id === selfId;
+  const name = sender?.display_name || m.sender_participant_id;
   const isPeer = sender?.kind === "a2a_peer";
   return (
-    <div className={cn("flex", mine ? "justify-end" : "justify-start")}>
-      <div className={cn(
-        "max-w-[75%] rounded-2xl px-4 py-2 text-sm",
-        mine ? "bg-accent/15" : isPeer ? "border border-sky-500/30 bg-sky-500/5" : "bg-muted/60",
-      )}>
-        <div className="mb-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-          {isPeer && <Globe2 className="h-3 w-3" />}
-          <span className="font-medium">{mine ? "You" : sender?.display_name || m.sender_participant_id}</span>
+    <div className={cn("flex gap-3", mine ? "justify-end" : "justify-start")}>
+      {!mine && <div className="mt-5"><ChatAvatar label={name} icon={isPeer ? Globe2 : undefined} /></div>}
+      <div className={cn("flex min-w-0 max-w-[85%] flex-col", mine ? "items-end" : "items-start")}>
+        <div className="mb-1 flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
+          <span className="font-medium text-foreground/80">{mine ? "You" : name}</span>
+          <span>·</span>
           <span>{fmtTime(m.ts)}</span>
           {m.delivery === "fanout" && <span title="Delivered to the group's A2A peers">· sent to peers</span>}
         </div>
-        <div className="whitespace-pre-wrap break-words">{m.text}</div>
+        <div className={cn(
+          "w-fit max-w-full rounded-2xl px-4 py-3 text-sm leading-relaxed",
+          mine ? "rounded-tr-md bg-accent/15 text-foreground" : "rounded-tl-md border border-border bg-card text-card-foreground shadow-sm",
+        )}>
+          <div className="whitespace-pre-wrap break-words">{m.text}</div>
+        </div>
       </div>
     </div>
   );
@@ -168,17 +180,18 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="group-conversation">
-      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-        <div className="min-w-0">
-          <h2 className="truncate font-serif text-lg">{g.title}</h2>
-          <p className="text-[11px] text-muted-foreground">
-            {plural(g.participants.length, "member")}{peerCount > 0 ? ` · ${peerCount} via A2A` : ""}
-          </p>
+      <header className="flex items-center gap-3 border-b border-border px-4 py-3">
+        <ChatAvatar label={g.title} icon={Users} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-serif text-lg font-light leading-tight">{g.title}</div>
+          <div className="truncate text-[11px] text-muted-foreground">
+            {plural(g.participants.length, "member")}{peerCount > 0 ? ` · ${plural(peerCount, "agent")} via A2A` : ""}
+          </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <Button size="sm" variant={membersOpen ? "accent" : "outline"} className="gap-1.5"
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant={membersOpen ? "accent" : "ghost"} size="sm"
             onClick={() => setMembersOpen((v) => !v)} aria-expanded={membersOpen}>
-            <Users className="h-3.5 w-3.5" /> Members
+            <Users className="h-4 w-4" /> Members
           </Button>
           {confirmDelete ? (
             <>
@@ -186,13 +199,13 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
               <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(false)}>Cancel</Button>
             </>
           ) : (
-            <Button size="sm" variant="ghost" className="h-8 w-8 p-0" aria-label="Delete group"
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" aria-label="Delete group"
               title="Delete this group on this instance" onClick={() => setConfirmDelete(true)}>
-              <Trash2 className="h-3.5 w-3.5" />
+              <Trash2 className="h-4 w-4" />
             </Button>
           )}
         </div>
-      </div>
+      </header>
 
       {membersOpen && (
         <div className="max-h-72 overflow-y-auto border-b border-border bg-card/40">
@@ -201,33 +214,44 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
         </div>
       )}
 
-      <div className="flex-1 space-y-2 overflow-y-auto px-4 py-4">
-        {count === 0 && (
-          <p className="pt-10 text-center text-sm text-muted-foreground">
-            No messages yet.{peerCount === 0 ? " Add a connected agent under Members to chat across instances." : ""}
-          </p>
-        )}
-        {(messages.data ?? []).map((m) => <GroupMessageRow key={m.id} m={m} group={g} selfId={selfId} />)}
-        <div ref={endRef} />
+      <div className="relative min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(ellipse_at_top,hsl(var(--accent)/0.06),transparent_60%)] px-4 py-5 md:px-6">
+        <div className="mx-auto flex w-full max-w-4xl flex-col space-y-4">
+          {count === 0 && (
+            <p className="pt-10 text-center text-sm text-muted-foreground">
+              No messages yet.{peerCount === 0 ? " Add a connected agent under Members to chat across instances." : ""}
+            </p>
+          )}
+          {(messages.data ?? []).map((m) => <GroupMessageRow key={m.id} m={m} group={g} selfId={selfId} />)}
+          {error && (
+            <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {error}
+            </p>
+          )}
+          <div ref={endRef} />
+        </div>
       </div>
 
-      <div className="border-t border-border p-3">
-        <div className="flex gap-2">
-          <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={1}
-            placeholder={`Message ${g.title}…`} className="min-h-[40px] resize-none"
-            aria-label="Group message"
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
-          <Button disabled={busy || !text.trim()} onClick={handleSend} aria-label="Send">
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </Button>
+      <footer className="border-t border-border bg-background/60 px-4 py-3 backdrop-blur md:px-6">
+        <div className="mx-auto w-full max-w-4xl space-y-1.5">
+          {peerCount > 0 && (
+            <Badge variant="outline" className="text-[10px]">
+              <Globe2 className="mr-1 h-3 w-3" /> Messages are delivered to {plural(peerCount, "external agent")}
+            </Badge>
+          )}
+          <div className="flex items-end gap-2 rounded-2xl border border-border bg-card px-2 py-1.5 shadow-sm transition-colors focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/15">
+            <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={1}
+              placeholder={`Message ${g.title}…`}
+              className="min-h-[2rem] flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+              aria-label="Group message"
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
+            <Button variant="accent" size="icon" className="h-8 w-8 shrink-0 rounded-full"
+              disabled={busy || !text.trim()} onClick={handleSend} aria-label="Send">
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </Button>
+          </div>
+          <p className="px-2 text-[10px] text-muted-foreground">Enter to send, Shift+Enter for a new line</p>
         </div>
-        {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
-        {peerCount > 0 && (
-          <Badge variant="outline" className="mt-2 text-[10px]">
-            <Globe2 className="mr-1 h-3 w-3" /> Messages are delivered to {peerCount} external agent{peerCount > 1 ? "s" : ""}
-          </Badge>
-        )}
-      </div>
+      </footer>
     </div>
   );
 }

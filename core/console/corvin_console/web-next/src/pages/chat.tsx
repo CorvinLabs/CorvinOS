@@ -34,7 +34,6 @@ import { DualTrackAuditPanel } from "@/components/DualTrackAuditPanel";
 import { TdeAuditGraphPanel } from "@/components/TdeAuditGraphPanel";
 import { AudioPlayer } from "@/components/AudioPlayer";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -89,6 +88,7 @@ import {
 } from "@/lib/streaming-state";
 import { useVoicePlayback, type VoiceState } from "@/lib/useVoicePlayback";
 import { AgentLiveFeed } from "@/components/agent-hub/live-feed";
+import { ChatAvatar } from "@/components/chat/ChatAvatar";
 import { ChatContextSidebar, usePendingCount } from "@/components/chat/ChatContextSidebar";
 import { GroupConversation } from "@/components/chat/GroupConversation";
 import { PeerConversation } from "@/components/chat/PeerConversation";
@@ -1677,14 +1677,12 @@ function ChatPane({
 
   return (
     <>
-      <header className="flex items-center justify-between gap-2 border-b border-border bg-background/80 px-4 py-2 backdrop-blur">
-        <div className="min-w-0">
-          <div className="truncate font-medium">{meta?.title || "New Chat"}</div>
-          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-            <Badge variant="outline" className="font-mono">
-              web:{sid.slice(0, 10)}
-            </Badge>
-            <span>{meta?.turn_count ?? 0} turns</span>
+      <header className="flex items-center gap-3 border-b border-border px-4 py-3">
+        <ChatAvatar label="Corvin" icon={Sparkles} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-serif text-lg font-light leading-tight">{meta?.title || "New Chat"}</div>
+          <div className="truncate text-[11px] text-muted-foreground">
+            web:{sid.slice(0, 10)} · {meta?.turn_count ?? 0} turns
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -1895,9 +1893,15 @@ function ChatPane({
         </div>
       )}
 
-      <div ref={scrollRef} className={cn("relative min-h-0 overflow-y-auto px-8 py-8", (auditOpen || relayOpen) ? "hidden" : "flex-1")}>
+      <div
+        ref={scrollRef}
+        className={cn(
+          "relative min-h-0 overflow-y-auto bg-[radial-gradient(ellipse_at_top,hsl(var(--accent)/0.06),transparent_60%)] px-4 py-5 md:px-6",
+          (auditOpen || relayOpen) ? "hidden" : "flex-1",
+        )}
+      >
         {recording && <RecordingOverlay onStop={stopRecording} />}
-        <div className="mx-auto w-full max-w-4xl space-y-6">
+        <div className="mx-auto flex w-full max-w-4xl flex-col space-y-4">
           {persistedTasks.length > 0 && (
             <>
               {/* Task update status indicator */}
@@ -1988,8 +1992,8 @@ function ChatPane({
 
       {/* Hidden, not unmounted, while the relay panel is open: one composer
           at a time, and the chat draft survives. */}
-      <footer className={cn("bg-background/95 px-8 py-4", relayOpen && "hidden")}>
-        <div className="mx-auto w-full max-w-4xl space-y-2">
+      <footer className={cn("border-t border-border bg-background/60 px-4 py-3 backdrop-blur md:px-6", relayOpen && "hidden")}>
+        <div className="mx-auto w-full max-w-4xl space-y-1.5">
           {/* Hidden file input */}
           <input
             ref={fileInputRef}
@@ -2025,9 +2029,36 @@ function ChatPane({
               Detected as <span className="font-semibold text-accent-foreground">{cccEntityHint}</span> — the matching tab updates once sent
             </p>
           )}
-          {/* Main input row */}
-          <div className="flex items-end gap-2">
-            <div className="relative flex-1">
+          {/* Main input row — one pill card, same shape as the Agent Hub
+              relay composer (components/agent-hub/live-feed.tsx), so the
+              three conversation surfaces (session, group, peer) and the
+              relay panel all share one input language. */}
+          <div className="flex items-end gap-2 rounded-2xl border border-border bg-card px-2 py-1.5 shadow-sm transition-colors focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/15">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0 text-muted-foreground"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={streaming || uploading}
+              title="Attach files (CSV, PDF, images, …)"
+              data-testid="attach-button"
+            >
+              {uploading
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <Paperclip className="h-4 w-4" />
+              }
+            </Button>
+            <Button
+              variant={recording ? "destructive" : "ghost"}
+              size="icon"
+              className={cn("h-8 w-8 shrink-0", !recording && "text-muted-foreground")}
+              onClick={recording ? stopRecording : startRecording}
+              disabled={streaming}
+              title={recording ? "Stop recording (or release Space)" : "Start recording (or hold Space)"}
+            >
+              {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+            </Button>
+            <div className="relative min-w-0 flex-1">
               <CommandPalette
                 matches={paletteMatches}
                 selected={Math.min(paletteSel, Math.max(0, paletteMatches.length - 1))}
@@ -2084,56 +2115,37 @@ function ChatPane({
                 }}
                 placeholder={recording ? "Listening — release Space to send" : "Message Corvin… (hold Space to speak)"}
                 disabled={streaming || recording}
-                className="min-h-[10rem] resize-y font-sans text-sm leading-relaxed"
-                rows={5}
+                className="min-h-[2rem] resize-none border-0 bg-transparent px-1 py-1 font-sans text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                rows={1}
               />
             </div>
-            <div className="flex flex-col gap-1">
+            {streaming ? (
               <Button
-                variant="ghost"
+                variant="destructive"
                 size="icon"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={streaming || uploading}
-                title="Attach files (CSV, PDF, images, …)"
-                data-testid="attach-button"
+                className="h-8 w-8 shrink-0 rounded-full"
+                onClick={cancelTurn}
+                title="Stop generation"
               >
-                {uploading
-                  ? <Loader2 className="h-4 w-4 animate-spin" />
-                  : <Paperclip className="h-4 w-4" />
-                }
+                <Square className="h-4 w-4" />
               </Button>
+            ) : (
               <Button
-                variant={recording ? "destructive" : "ghost"}
+                variant="accent"
                 size="icon"
-                onClick={recording ? stopRecording : startRecording}
-                disabled={streaming}
-                title={recording ? "Stop recording (or release Space)" : "Start recording (or hold Space)"}
+                className="h-8 w-8 shrink-0 rounded-full"
+                onClick={() => sendUser(input)}
+                disabled={!input.trim() && pendingAttachments.length === 0}
+                title="Send (Enter · Shift+Enter for newline)"
+                data-testid="send-button"
               >
-                {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                <Send className="h-4 w-4" />
               </Button>
-              {streaming ? (
-                <Button
-                  variant="destructive"
-                  size="icon"
-                  onClick={cancelTurn}
-                  title="Stop generation"
-                >
-                  <Square className="h-4 w-4" />
-                </Button>
-              ) : (
-                <Button
-                  variant="accent"
-                  size="icon"
-                  onClick={() => sendUser(input)}
-                  disabled={!input.trim() && pendingAttachments.length === 0}
-                  title="Send (Enter · Shift+Enter for newline)"
-                  data-testid="send-button"
-                >
-                  <Send className="h-4 w-4" />
-                </Button>
-              )}
-            </div>
+            )}
           </div>
+          <p className="px-2 text-[10px] text-muted-foreground">
+            Enter to send, Shift+Enter for a new line · hold Space to speak
+          </p>
         </div>
       </footer>
     </>
@@ -2142,7 +2154,7 @@ function ChatPane({
 
 function RecordingOverlay({ onStop }: { onStop: () => void }) {
   return (
-    <div className="pointer-events-none sticky top-0 z-10 -mx-8 -mt-8 mb-8 flex justify-center px-8 pt-3">
+    <div className="pointer-events-none sticky top-0 z-10 -mx-4 -mt-5 mb-5 flex justify-center px-4 pt-3 md:-mx-6 md:px-6">
       <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-destructive/40 bg-destructive/10 px-4 py-2 text-sm shadow-lg backdrop-blur">
         <span className="relative flex h-2.5 w-2.5">
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive opacity-75" />
@@ -2305,19 +2317,17 @@ const MessageBubble = React.memo(function MessageBubble({
   const isUser = m.role === "user";
   return (
     <div className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>
-      {!isUser && (
-        <div className="mt-1 h-8 w-8 shrink-0 rounded-full bg-accent/20 text-accent">
-          <Sparkles className="m-2 h-4 w-4" />
-        </div>
-      )}
-      <div
-        className={cn(
-          "rounded-2xl px-4 py-3 text-sm leading-relaxed",
-          isUser
-            ? "max-w-[80%] bg-accent/15 text-foreground"
-            : "max-w-[85%] border border-border bg-card text-card-foreground",
-        )}
-      >
+      {!isUser && <div className="mt-5"><ChatAvatar label="Corvin" icon={Sparkles} /></div>}
+      <div className={cn("flex min-w-0 max-w-[85%] flex-col", isUser ? "items-end" : "items-start")}>
+        <div className="mb-1 px-1 text-[11px] text-muted-foreground">{isUser ? "You" : "Corvin"}</div>
+        <div
+          className={cn(
+            "w-fit max-w-full rounded-2xl px-4 py-3 text-sm leading-relaxed",
+            isUser
+              ? "rounded-tr-md bg-accent/15 text-foreground"
+              : "rounded-tl-md border border-border bg-card text-card-foreground shadow-sm",
+          )}
+        >
         {m.parts.length === 0 && m.streaming && (
           <span className="inline-flex items-center gap-1 text-muted-foreground">
             <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-accent" />
@@ -2376,12 +2386,9 @@ const MessageBubble = React.memo(function MessageBubble({
             </p>
           )
         )}
-      </div>
-      {isUser && (
-        <div className="mt-1 h-8 w-8 shrink-0 rounded-full bg-muted text-muted-foreground">
-          <User className="m-2 h-4 w-4" />
         </div>
-      )}
+      </div>
+      {isUser && <div className="mt-5"><ChatAvatar label="You" icon={User} /></div>}
     </div>
   );
 });

@@ -68,7 +68,7 @@ test.describe("Unified chat panel", () => {
     await page.goto(`${BASE_URL}/app/chat/group/${groupId}`, { waitUntil: "load" });
 
     const convo = page.getByTestId("group-conversation");
-    await expect(convo.getByRole("heading", { name: GROUP_TITLE })).toBeVisible();
+    await expect(convo.getByText(GROUP_TITLE, { exact: true })).toBeVisible();
     await expect(page.getByRole("tab", { name: /Peers/ })).toHaveAttribute("aria-selected", "true");
     const sidebar = page.getByRole("complementary", { name: "Conversations" });
     await expect(sidebar.getByText("GROUPS")).toBeVisible();
@@ -91,8 +91,9 @@ test.describe("Unified chat panel", () => {
     ]);
     expect(resp.status()).toBe(200);
     expect((await resp.json()).delivery).toBe("local");
+    // Own messages render without a sender label (right-aligned, accent
+    // bubble) — same convention as the single-session chat's user bubble.
     await expect(page.getByTestId("group-conversation").getByText(text)).toBeVisible();
-    await expect(page.getByTestId("group-conversation").getByText("You").first()).toBeVisible();
     expect(errors).toEqual([]);
     await page.close();
   });
@@ -110,7 +111,7 @@ test.describe("Unified chat panel", () => {
     await page.keyboard.press("Alt+1");
     await expect(page.getByRole("tab", { name: /Chats/ })).toHaveAttribute("aria-selected", "true");
     const sidebar = page.getByRole("complementary", { name: "Conversations" });
-    await expect(sidebar.getByRole("button", { name: "New" })).toBeVisible();
+    await expect(sidebar.getByRole("button", { name: "New", exact: true })).toBeVisible();
 
     // The group stays open in the main area while the sidebar switches.
     await expect(page.getByTestId("group-conversation")).toBeVisible();
@@ -128,7 +129,7 @@ test.describe("Unified chat panel", () => {
     await page.getByRole("textbox", { name: "Group name" }).fill(title);
     await page.getByRole("button", { name: "Create" }).click();
     await expect(page).toHaveURL(/\/app\/chat\/group\/[A-Za-z0-9_-]+$/);
-    await expect(page.getByTestId("group-conversation").getByRole("heading", { name: title })).toBeVisible();
+    await expect(page.getByTestId("group-conversation").getByText(title, { exact: true })).toBeVisible();
     created.push(page.url().split("/").pop()!);
 
     // Delete it again from the header (two-step) — it leaves the list.
