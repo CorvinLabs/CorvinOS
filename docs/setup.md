@@ -73,6 +73,21 @@ corvin-install
 
 The installer runs interactively. Here is what each stage does.
 
+### Alternative: as a Claude Code plugin
+
+CorvinOS ships its own `.claude-plugin/marketplace.json` (`./corvin_operator/corvin`).
+Add it to Claude Code (`/plugin marketplace add <path-to-this-checkout>`,
+then `/plugin install corvin`) and run `/corvin:install` instead of the
+commands above. It drives this same `corvin-install` CLI (or `install.sh`
+from a local checkout if `corvin-install` isn't on PATH yet) non-interactively,
+then — unlike `corvin-install` itself — polls the Web Console with real HTTP
+requests (not just "is the port open") until it genuinely serves the SPA, and
+opens it in the browser. Idempotent: re-running it on an already-complete,
+healthy install just re-verifies and reopens the browser instead of
+reinstalling; on a flagged-complete-but-unhealthy install it tries
+`corvin-installer restore` before falling back to a full reinstall. See
+`corvin_operator/corvin/scripts/corvin_install_command.py`.
+
 ### Stage 1 — OS detection
 
 The installer detects your platform automatically. No input needed. It prints a summary

@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import re
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -244,6 +245,31 @@ def test_plugin_registered_in_marketplace():
     )
     entry = next(p for p in data["plugins"] if p["name"] == "corvin")
     assert (_PLUGIN_ROOT.parents[1] / entry["source"].lstrip("./")).resolve() == _PLUGIN_ROOT.resolve()
+
+
+# ── 5. real E2E: actual subprocess, actual HTTP probe, real transport boundary ──
+
+def test_check_mode_real_subprocess_against_the_real_console():
+    """Not a call to cic.main() in-process — a genuine subprocess invocation
+    of the script, exactly like Claude Code's Bash tool invokes
+    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/corvin_install_command.py"`. Read-
+    only: --check never touches the installer or a browser, only a GET
+    against 127.0.0.1:8765/console/ — safe to run against whatever this host
+    actually has listening right now, mutates nothing."""
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT_PATH), "--check"],
+        capture_output=True, text=True, timeout=30,
+    )
+    # This host's own console may or may not be up at test time — either
+    # outcome is a valid proof of real wiring; a hang, a traceback, or any
+    # OTHER exit code would not be.
+    assert result.returncode in (0, 3), (
+        f"unexpected exit {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    if result.returncode == 0:
+        assert "console is live" in result.stdout
+    else:
+        assert "not yet healthy" in result.stdout
 
 
 if __name__ == "__main__":

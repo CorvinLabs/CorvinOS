@@ -231,7 +231,25 @@ def _report_open(opened: bool, url: str = CONSOLE_URL) -> None:
         print(f"  open this yourself: {url}")
 
 
-def main(subprocess_run=subprocess.run) -> int:
+def main(subprocess_run=subprocess.run, argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+
+    if "--check" in argv:
+        # Read-only preview: a single short-budget probe of the console that
+        # is ALREADY there (or isn't), never touches the installer and never
+        # opens a browser. Exists so the real entry point (this script,
+        # invoked as a subprocess exactly like Claude Code invokes it) can be
+        # exercised end-to-end in a test without ever triggering a real
+        # install. Exit codes: 0 = console is live right now, 3 = it is not
+        # (distinct from the 1/2 failure codes of a real install run, so a
+        # caller can tell "nothing to do" apart from "something broke").
+        ok, detail = wait_for_real_console(total_budget_s=5.0)
+        if ok:
+            print(f"✓ console is live ({detail})")
+            return 0
+        print(f"… console not yet healthy: {detail}")
+        return 3
+
     print("CorvinOS setup (/corvin:install)")
     print("=" * 60)
 
