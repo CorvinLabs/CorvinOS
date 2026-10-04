@@ -100,6 +100,7 @@ from .routes import (
     task_tracking as task_tracking_route,
     skill_creator_api as skill_creator_route,
     chat as chat_route,
+    chat_groups as chat_groups_route,
     voice as voice_route,
     voice_summary as voice_summary_route,
     remediation_routes,
@@ -374,6 +375,8 @@ router.include_router(video_producer_route.router, tags=["console-video-producer
 router.include_router(video_learning_api_route.router, tags=["console-video-learning"])
 # ADR-0037 (web-next) — web-bridge chat + voice (Iter 3a/b).
 router.include_router(chat_route.router, tags=["console-chat"])
+# ADR-2216 — Group chat (human/agent/a2a_peer participants).
+router.include_router(chat_groups_route.router, tags=["console-chat-groups"])
 router.include_router(voice_route.router, tags=["console-voice"])
 # Phase 1: Voice Summary (Opt-In, Graceful Degradation)
 router.include_router(voice_summary_route.router, tags=["console-voice-summary"])

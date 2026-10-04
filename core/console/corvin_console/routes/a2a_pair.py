@@ -920,6 +920,8 @@ def revoke_invite(
 # once a URL is known.
 
 import a2a_friendship as _ft  # type: ignore[import-not-found]
+import a2a_chat_friendship_token as _pending_ft  # type: ignore[import-not-found]  # ADR-2216
+import paths as _a2a_paths  # type: ignore[import-not-found]  # ADR-2216
 
 import logging
 _log = logging.getLogger(__name__)
@@ -1222,6 +1224,93 @@ def friendship_create(
         target_id=token.kid,
     )
     return FriendshipCreateResponse(token=token_str, kid=token.kid, expires=token.expires)
+
+
+# ── chat-native friendship-token staging (ADR-2216) ─────────────────────
+# Two-step gate, same structural shape as a2a_feed.py's a2a_send confirm:
+# the MCP tool (a2a_friendship_token_create) stages a REQUEST with no key
+# material; only THIS route, gated by the same require_csrf dependency a
+# subprocess cannot satisfy, actually calls create_friendship_token() and
+# mints the shared key.
+
+class FriendshipTokenPendingPreview(BaseModel):
+    pending_id: str
+    label: str | None
+    ttl_hours: float
+    personas: list[str]
+    created_at: float
+
+
+class FriendshipTokenConfirmResponse(BaseModel):
+    token: str
+    kid: str
+    expires: float | None
+    label: str | None
+
+
+@router.get("/remote-trigger/pair/friendship-token/pending/{pending_id}")
+def friendship_token_pending_peek(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    pending_id: str,
+) -> FriendshipTokenPendingPreview:
+    """Preview a chat-staged friendship-token request so the UI can render
+    a confirm dialog before any key material exists."""
+    tenant_dir = _a2a_paths.tenant_global_dir(rec.tenant_id)
+    record = _pending_ft.peek_pending_token_request(tenant_dir, pending_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="pending friendship-token request not found or expired")
+    return FriendshipTokenPendingPreview(
+        pending_id=record["pending_id"],
+        label=record.get("label"),
+        ttl_hours=record.get("ttl_hours", 720.0),
+        personas=record.get("personas", []),
+        created_at=record["created_at"],
+    )
+
+
+@router.post("/remote-trigger/pair/friendship-token/confirm/{pending_id}")
+def friendship_token_confirm(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    pending_id: str,
+) -> FriendshipTokenConfirmResponse:
+    """Turn a chat-staged friendship-token request into a real token.
+
+    This is the ONLY code path that can mint a chat-requested friendship
+    token — it requires the same session+CSRF dependency as
+    ``friendship_create`` above, which a tool call from the MCP subprocess
+    cannot provide. One-time use: the pending request is consumed on read.
+    """
+    tenant_dir = _a2a_paths.tenant_global_dir(rec.tenant_id)
+    record = _pending_ft.pop_pending_token_request(tenant_dir, pending_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="pending friendship-token request not found, expired, or already confirmed")
+    ttl: float | None = record["ttl_hours"] * 3600 if record["ttl_hours"] > 0 else None
+    url_val = _ft.get_my_url()
+    relay_for_token = _ft.get_my_relay_url()
+    try:
+        token, token_str = _ft.create_friendship_token(
+            url=url_val,
+            label=record.get("label"),
+            ttl_seconds=ttl,
+            personas=record.get("personas") or None,
+            relay_url=relay_for_token,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="could not create token") from exc
+    try:
+        _ft.save_pending_friendship(token, pending_dir=_pending_friendships_dir())
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="could not persist pending friendship") from exc
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="chat.friendship_token.sent",
+        target_kind="a2a_friendship",
+        target_id=token.kid,
+    )
+    return FriendshipTokenConfirmResponse(
+        token=token_str, kid=token.kid, expires=token.expires, label=record.get("label"),
+    )
 
 
 # ── POST /remote-trigger/pair/friendship/import ───────────────────────

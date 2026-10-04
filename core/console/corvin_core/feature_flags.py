@@ -647,6 +647,28 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("a2a", "chat"),
     ),
     FeatureFlag(
+        id="a2a_friendship_token_from_chat",
+        label="A2A friendship-token generation from console chat (MCP tool)",
+        description=(
+            "Off (default): the console chat's MCP tool list does not "
+            "include `a2a_friendship_token_create` at all. On: the chat may "
+            "stage a friendship-token REQUEST (label/ttl/personas only, no "
+            "key material), rendered as a pending card in chat. Only a real "
+            "browser session with a valid CSRF token, via POST "
+            "/a2a/feed/friendship-token/confirm/{id}, actually mints the "
+            "token (calls the same a2a_friendship.create_friendship_token "
+            "the Settings -> A2A 'Create friendship token' button uses) and "
+            "returns it to render as a shareable card. Gated the same way "
+            "as a2a_send_from_chat: a friendship token IS a credential (a "
+            "256-bit shared key), so minting one from an LLM-reachable tool "
+            "without operator confirmation would let injected chat content "
+            "exfiltrate pairing capability. ADR-2216."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("a2a", "chat"),
+    ),
+    FeatureFlag(
         id="headless_api_mode",
         label="Headless API-only boot",
         description=(

@@ -345,6 +345,51 @@ confirms the send, preventing LLM-steered sends without operator action.
 
 ---
 
+## Chat-native friendship tokens + group chat with foreign A2A agents (ADR-2216)
+
+**Friendship tokens from chat (same two-step gate shape as `a2a_send`):**
+`mcp__forge__a2a_friendship_token_create` (`forge.mcp_server`, gated by
+`a2a_friendship_token_from_chat`, dark by default) stages a REQUEST only —
+`label`/`ttl_hours`/`personas`, no key material. A real browser session +
+CSRF token via `POST /remote-trigger/pair/friendship-token/confirm/{id}`
+(`core/console/corvin_console/routes/a2a_pair.py`) is the only path that
+actually calls `a2a_friendship.create_friendship_token()` and mints the
+256-bit shared key, returned as a shareable card (the operator copies/sends
+it outside chat — e.g. by email — to whoever they want to pair with). A
+pasted-in token (`corvin-a2a:ft1:...`) is accepted via the pre-existing
+`POST /remote-trigger/pair/friendship/import` route, unchanged. Preview:
+`GET /remote-trigger/pair/friendship-token/pending/{id}`.
+
+**Group chat (`core/console/corvin_console/chat_group_store.py` +
+`routes/chat_groups.py`), the first group-conversation backend in
+CorvinOS.** A group's `Participant.kind` is `human | agent | a2a_peer` from
+the first commit. Two-layer authorization: the group's own participant
+list gates who sees the conversation; `require_friendship_active(peer_id)`
+(reuses `a2a_feed._peers()`) is re-checked LIVE on every `a2a_peer` admit
+*and* every message send — never cached — so a friendship revoked (peer
+endpoint disabled) after a peer joined immediately blocks the next message,
+not just future joins.
+
+Routes (`/v1/console/chat/groups...`): `GET/POST /chat/groups`,
+`GET /chat/groups/{id}`, `POST /chat/groups/{id}/participants`,
+`DELETE /chat/groups/{id}/participants/{pid}`,
+`GET/POST /chat/groups/{id}/messages`.
+
+**Scope boundary (stated, not hidden):** a foreign peer's message INSIDE a
+group does not yet travel the A2A wire protocol with a `group_id` tag —
+sending to a human/agent participant is local-only (`chat_group_store`
+append). Routing an `a2a_peer` participant's OUTBOUND group message over
+`RemoteTriggerSender`, and routing an INBOUND reply back into the right
+group, is a real extension to the A2A envelope/receive path and is
+deliberately deferred past this ADR's first commit — today's inbound
+handler has nowhere to put a `group_id` even if one arrived. Frontend
+rendering (chat.tsx: token card, "Annehmen" button, groups sidebar tab) is
+also not yet wired — the backend is proven end-to-end
+(`tests/e2e/a2a/test_a2a_friendship_token_chat_e2e.py`,
+`tests/e2e/a2a/test_chat_groups_e2e.py`) but has no UI surface yet.
+
+---
+
 ## Proactive Reconnect (ADR-0198, dynamic-IP peers)
 
 **Problem:** an instance behind a dynamic-IP connection (e.g. an LTE router)

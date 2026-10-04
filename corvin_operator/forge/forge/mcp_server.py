@@ -826,6 +826,49 @@ class MCPServer:
                     "required": ["peer_id", "text"],
                 },
             })
+        # ADR-2216 — a2a_friendship_token_create, gated by
+        # a2a_friendship_token_from_chat (dark by default). Same two-step
+        # shape as a2a_send above: the tool stages a REQUEST only, never
+        # mints the actual token (which carries key material) itself.
+        if self._is_a2a_friendship_token_from_chat_enabled():
+            tools.append({
+                "name": "a2a_friendship_token_create",
+                "description": (
+                    "Stage a friendship-token request (a WhatsApp-style "
+                    "'friend request' for pairing with another CorvinOS "
+                    "instance) for the OPERATOR to confirm. This does NOT "
+                    "create a token — it only stages a pending request that "
+                    "appears in the console chat, where the user must "
+                    "explicitly confirm before the token (and its key "
+                    "material) is actually generated. Once confirmed, the "
+                    "token is rendered as a shareable card the operator can "
+                    "copy and send to whoever they want to pair with "
+                    "(outside this chat — e.g. via email or another "
+                    "messenger). The pending request expires in 10 minutes "
+                    "if not confirmed. Always tell the user you are staging "
+                    "a friendship-token request and that they must confirm "
+                    "it in the UI — never claim a token was created."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "label": {
+                            "type": "string",
+                            "description": "Optional display label for this connection (max 64 chars).",
+                        },
+                        "ttl_hours": {
+                            "type": "number",
+                            "description": "Token validity in hours. 0 = no expiry. Default 720 (30 days).",
+                        },
+                        "personas": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional list of personas the peer may address.",
+                        },
+                    },
+                    "required": [],
+                },
+            })
         # ADR-0190 M3 — General Availability datasource_connect. Unlike the
         # Fabric datasource_* tools above (Enterprise-only, routed through the
         # worker socket), this calls DataSourceRegistry.register() in-process
@@ -1032,6 +1075,11 @@ class MCPServer:
         # ADR-2099 Phase 2 — a2a_send (stages a pending confirm, never sends).
         if name == "a2a_send":
             self._call_a2a_send(msgid, args)
+            return
+        # ADR-2216 — a2a_friendship_token_create (stages a pending request,
+        # never mints the token itself).
+        if name == "a2a_friendship_token_create":
+            self._call_a2a_friendship_token_create(msgid, args)
             return
         # ADR-0116 M2 — Worker Audit Gateway
         if name == "audit.write_event":
@@ -1445,6 +1493,70 @@ class MCPServer:
                     "Not sent. Tell the user you have staged this message "
                     "and that they must confirm it in the console chat's "
                     "Relay panel within 10 minutes, or it expires unsent."
+                ),
+            }),
+        )
+
+    def _is_a2a_friendship_token_from_chat_enabled(self) -> bool:
+        """ADR-2216 gate. Fail-closed: any import/read error means the tool
+        is NOT advertised — the structural default is dark, same pattern as
+        ``_is_a2a_send_from_chat_enabled``."""
+        try:
+            tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
+            from corvin_core.feature_flags import is_enabled as _is_enabled  # type: ignore
+            return bool(_is_enabled("a2a_friendship_token_from_chat", tenant_id=tenant_id))
+        except Exception:
+            return False
+
+    def _call_a2a_friendship_token_create(self, msgid: Any, args: dict) -> None:
+        """Stage a pending friendship-token REQUEST. NEVER mints the actual
+        token (no key material is generated here) — see
+        ``a2a_chat_friendship_token`` module docstring for why. Fail-closed:
+        if the gate re-check fails, return a typed error, never fall
+        through to minting."""
+        if not self._is_a2a_friendship_token_from_chat_enabled():
+            self._tool_error(msgid, "a2a_friendship_token_create is disabled for this tenant")
+            return
+        label = args.get("label")
+        ttl_hours = args.get("ttl_hours", 720.0)
+        personas = args.get("personas")
+        if label is not None and not isinstance(label, str):
+            self._error(msgid, INVALID_PARAMS, "label must be a string")
+            return
+        try:
+            ttl_hours = float(ttl_hours)
+        except (TypeError, ValueError):
+            self._error(msgid, INVALID_PARAMS, "ttl_hours must be a number")
+            return
+        if personas is not None and not isinstance(personas, list):
+            self._error(msgid, INVALID_PARAMS, "personas must be a list of strings")
+            return
+        try:
+            import a2a_chat_friendship_token as _pending_ft  # type: ignore[import-not-found]
+            from .paths import tenant_global_dir as _tenant_global_dir
+            tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
+            record = _pending_ft.create_pending_token_request(
+                _tenant_global_dir(tenant_id),
+                label=label,
+                ttl_hours=ttl_hours,
+                personas=personas,
+                requested_by="chat_mcp_tool",
+            )
+        except Exception as exc:
+            self._tool_error(msgid, f"could not stage friendship-token request: {exc}")
+            return
+        self._tool_success(
+            msgid,
+            json.dumps({
+                "staged": True,
+                "pending_id": record["pending_id"],
+                "label": record["label"],
+                "expires_in_s": 600,
+                "note": (
+                    "No token created yet. Tell the user you have staged a "
+                    "friendship-token request and that they must confirm it "
+                    "in the console chat within 10 minutes to actually "
+                    "generate the token, or the request expires unminted."
                 ),
             }),
         )
