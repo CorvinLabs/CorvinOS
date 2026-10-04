@@ -233,6 +233,61 @@ def a2a_feed_send(rec: Session, body: _SendBody) -> dict[str, Any]:
     return {"accepted": True, "peer_id": body.peer_id}
 
 
+# ── chat-staged pending sends (ADR-2099 Phase 2) ───────────────────────────
+# The a2a_send MCP tool (corvin_operator/forge/forge/mcp_server.py,
+# a2a_chat_pending_send.py) stages a pending record but never sends. These
+# two routes are the ONLY way a pending record becomes a real send — both
+# require the real browser session this router already depends on
+# (require_session_csrf_on_mutation), which the MCP subprocess cannot
+# satisfy. That is the structural half of the gate; this file is the other.
+import a2a_chat_pending_send as _pending  # type: ignore[import-not-found]  # noqa: E402
+
+
+@router.get("/a2a/feed/send/pending/{pending_id}")
+def a2a_feed_send_pending_peek(rec: Session, pending_id: str) -> dict[str, Any]:
+    """Preview a staged send so the UI can render a confirm dialog."""
+    tenant_id = _a2a_tenant(rec)
+    tenant_dir = _forge_paths.tenant_global_dir(tenant_id)
+    record = _pending.peek_pending_send(tenant_dir, pending_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="pending send not found or expired")
+    return {
+        "pending_id": record["pending_id"],
+        "peer_id": record["peer_id"],
+        "text": record["text"],
+        "created_at": record["created_at"],
+    }
+
+
+@router.post("/a2a/feed/send/confirm/{pending_id}", status_code=202)
+def a2a_feed_send_confirm(rec: Session, pending_id: str) -> dict[str, Any]:
+    """Turn a chat-staged pending send into a real send. One-time use.
+
+    This is the ONLY code path that can fire a chat-staged a2a_send — it
+    requires the same session+CSRF dependency as every other mutation on
+    this router, which a tool call from the MCP subprocess cannot provide.
+    """
+    tenant_id = _a2a_tenant(rec)
+    tenant_dir = _forge_paths.tenant_global_dir(tenant_id)
+    record = _pending.pop_pending_send(tenant_dir, pending_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="pending send not found, expired, or already confirmed")
+    peer = next((p for p in _peers() if p["peer_id"] == record["peer_id"]), None)
+    if peer is None or not peer["can_send"]:
+        raise HTTPException(status_code=404, detail="no enabled endpoint for this peer")
+    try:
+        from forge.security_events import write_event  # type: ignore[import-not-found]
+        write_event(
+            _forge_paths.tenant_audit_chain(tenant_id), "A2A.chat_staged_send_confirmed",
+            severity="INFO",
+            details={"peer_id": record["peer_id"], "pending_id": pending_id},
+        )
+    except Exception:
+        raise HTTPException(status_code=503, detail="audit chain unavailable — send not confirmed")
+    _SEND_POOL.submit(_send_in_background, record["peer_id"], record["text"], [], None)
+    return {"accepted": True, "peer_id": record["peer_id"]}
+
+
 # ── erase ─────────────────────────────────────────────────────────────────
 
 @router.delete("/a2a/feed")

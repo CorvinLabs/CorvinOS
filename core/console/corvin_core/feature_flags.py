@@ -623,6 +623,30 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("a2a", "network"),
     ),
     FeatureFlag(
+        id="a2a_send_from_chat",
+        label="A2A send from console chat (MCP tool)",
+        description=(
+            "Off (default): the console chat's MCP tool list does not "
+            "include `a2a_send` at all — the LLM has no code path that "
+            "reaches an outbound A2A send, structurally, not by prompt "
+            "convention. On: the chat may call `a2a_send`, but the tool "
+            "itself never sends — it only stages a pending record "
+            "(corvin_operator/bridges/shared/a2a_chat_pending_send.py) that "
+            "expires in 10 minutes. Only a real browser session with a "
+            "valid CSRF token, via POST /a2a/feed/send/confirm/{id}, can "
+            "turn a pending record into an actual send. This two-step gate "
+            "exists because a chat turn can be steered by injected content "
+            "(a fetched page, an attachment, a relayed A2A message already "
+            "in context) and an outbound send to a real peer is "
+            "irreversible — unlike the read-only A2A Relay feed panel, "
+            "which ships unconditionally. ADR-2099 Phase 2; depends on the "
+            "Phase 1 require_ibc writer (ADR-2099 P0 Fact 3)."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("a2a", "chat"),
+    ),
+    FeatureFlag(
         id="headless_api_mode",
         label="Headless API-only boot",
         description=(

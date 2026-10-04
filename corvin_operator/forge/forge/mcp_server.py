@@ -792,6 +792,40 @@ class MCPServer:
                     tools.extend(_FABRIC_TOOL_DEFS)
             except Exception:
                 pass
+        # ADR-2099 Phase 2 — a2a_send, gated by a2a_send_from_chat (dark by
+        # default). Advertised ONLY when the flag is on for this tenant; an
+        # LLM running with the flag off has no tool named a2a_send in its
+        # tools/list at all, so it has no way to even attempt the call.
+        # When on, the tool still never sends — see _call_a2a_send.
+        if self._is_a2a_send_from_chat_enabled():
+            tools.append({
+                "name": "a2a_send",
+                "description": (
+                    "Stage a message to an A2A peer (another CorvinOS "
+                    "instance) for the OPERATOR to confirm. This does NOT "
+                    "send anything — it only creates a pending request that "
+                    "appears in the console chat's Relay panel, where the "
+                    "user must explicitly confirm before it is actually "
+                    "sent. The pending request expires in 10 minutes if not "
+                    "confirmed. Always tell the user what you are staging "
+                    "and ask them to confirm it in the UI — never claim the "
+                    "message was sent."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "peer_id": {
+                            "type": "string",
+                            "description": "The A2A peer's origin_id to send to.",
+                        },
+                        "text": {
+                            "type": "string",
+                            "description": "Message text to stage for the peer.",
+                        },
+                    },
+                    "required": ["peer_id", "text"],
+                },
+            })
         # ADR-0190 M3 — General Availability datasource_connect. Unlike the
         # Fabric datasource_* tools above (Enterprise-only, routed through the
         # worker socket), this calls DataSourceRegistry.register() in-process
@@ -994,6 +1028,10 @@ class MCPServer:
         # ADR-0190 M3 — General Availability datasource registration.
         if name == "datasource_connect":
             self._call_datasource_connect(msgid, args)
+            return
+        # ADR-2099 Phase 2 — a2a_send (stages a pending confirm, never sends).
+        if name == "a2a_send":
+            self._call_a2a_send(msgid, args)
             return
         # ADR-0116 M2 — Worker Audit Gateway
         if name == "audit.write_event":
@@ -1355,6 +1393,61 @@ class MCPServer:
             except Exception:
                 return False
         return False
+
+    def _is_a2a_send_from_chat_enabled(self) -> bool:
+        """ADR-2099 Phase 2 gate. Fail-closed: any import/read error means
+        the tool is NOT advertised — the structural default is dark."""
+        try:
+            tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
+            from corvin_core.feature_flags import is_enabled as _is_enabled  # type: ignore
+            return bool(_is_enabled("a2a_send_from_chat", tenant_id=tenant_id))
+        except Exception:
+            return False
+
+    def _call_a2a_send(self, msgid: Any, args: dict) -> None:
+        """Stage a pending A2A send. NEVER calls the network — see
+        ``a2a_chat_pending_send`` module docstring for why. Fail-closed: if
+        the gate re-check fails (flag flipped off mid-session, module
+        unavailable, tenant dir unresolvable), return a typed error, never
+        fall through to a send."""
+        if not self._is_a2a_send_from_chat_enabled():
+            self._tool_error(msgid, "a2a_send is disabled for this tenant")
+            return
+        peer_id = args.get("peer_id")
+        text = args.get("text")
+        if not isinstance(peer_id, str) or not peer_id.strip():
+            self._error(msgid, INVALID_PARAMS, "peer_id is required")
+            return
+        if not isinstance(text, str) or not text.strip():
+            self._error(msgid, INVALID_PARAMS, "text is required")
+            return
+        try:
+            import a2a_chat_pending_send as _pending  # type: ignore[import-not-found]
+            from .paths import tenant_global_dir as _tenant_global_dir
+            tenant_id = os.environ.get("CORVIN_TENANT_ID", "_default")
+            record = _pending.create_pending_send(
+                _tenant_global_dir(tenant_id),
+                peer_id=peer_id.strip(),
+                text=text,
+                requested_by="chat_mcp_tool",
+            )
+        except Exception as exc:
+            self._tool_error(msgid, f"could not stage pending send: {exc}")
+            return
+        self._tool_success(
+            msgid,
+            json.dumps({
+                "staged": True,
+                "pending_id": record["pending_id"],
+                "peer_id": record["peer_id"],
+                "expires_in_s": 600,
+                "note": (
+                    "Not sent. Tell the user you have staged this message "
+                    "and that they must confirm it in the console chat's "
+                    "Relay panel within 10 minutes, or it expires unsent."
+                ),
+            }),
+        )
 
     def _call_datasource_connect(self, msgid: Any, args: dict) -> None:
         """ADR-0190 M3 — General Availability datasource registration.
