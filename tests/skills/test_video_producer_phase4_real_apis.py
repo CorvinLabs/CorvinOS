@@ -34,7 +34,7 @@ class TestVoiceSynthesizerPhase4:
         """Test worker initialization"""
         worker = VoiceSynthesizerWorker(tts_provider="edge-tts")
         assert worker.name == "voice_synthesizer"
-        assert worker.version == "4.0.0"
+        assert worker.version == "4.1.0"  # ADR-2211: OpenAI TTS default + fallback chain
         assert worker.tts_provider == "edge-tts"
 
     def test_execute_returns_voice_result(self):

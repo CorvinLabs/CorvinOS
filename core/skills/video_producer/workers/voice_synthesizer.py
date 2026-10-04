@@ -2,7 +2,8 @@
 
 Synthesizes voice narration from text using real TTS APIs:
 1. Split narration into scenes
-2. Synthesize each scene to MP3/WAV using edge-tts (no API key needed)
+2. Synthesize each scene to MP3 via OpenAI TTS (ADR-2211 default), falling
+   back to edge-tts, then piper-tts, then a mock, in that order
 3. Apply loudness normalization (-23 LUFS for broadcast standard)
 4. Concatenate audio files
 """
@@ -14,7 +15,18 @@ import os
 import asyncio
 import subprocess
 import tempfile
+import urllib.request
+import urllib.error
 from pathlib import Path
+
+# ADR-2211: OpenAI TTS is the default narration backend for every video this
+# worker produces. "onyx" is OpenAI's calm, low male voice; speed is slowed
+# slightly (platform default is 1.0) so narration reads as composed rather
+# than rushed. Override via VoiceSynthesizerWorker(voice=...) / tts_provider=
+# for a specific job, but these are the values every caller gets by default.
+OPENAI_TTS_MODEL = "tts-1"
+OPENAI_TTS_DEFAULT_VOICE = "onyx"
+OPENAI_TTS_DEFAULT_SPEED = 0.92
 
 
 @dataclass
@@ -25,25 +37,36 @@ class VoiceResult:
     loudness_lufs: float  # Target: -23 LUFS (broadcast standard)
     confidence: float
     success: bool = True
+    provider_used: str = "unknown"  # "openai-tts" | "edge-tts" | "piper-tts" | "mock"
 
 
 class VoiceSynthesizerWorker:
     """Worker Skill: Generate voice narration from text
 
-    Phase 4: Real TTS using edge-tts (no API key required)
-    Supports:
-    - edge-tts (free, no key) - PRIMARY
-    - Fallback to piper-tts if edge-tts unavailable
-    - Per-scene synthesis with metadata
-    - LUFS-based loudness normalization via FFmpeg
-    - Confidence scoring
+    Phase 4 / ADR-2211: Real TTS, OpenAI first.
+    Fallback chain per scene:
+    - OpenAI TTS (tts-1, voice=onyx) - PRIMARY, needs OPENAI_API_KEY
+    - edge-tts (free, no key) - fallback if no key or the API call fails
+    - piper-tts - fallback if edge-tts unavailable
+    - mock (JSON stand-in) - last resort, keeps the pipeline from hard-failing
+    Plus: LUFS-based loudness normalization via FFmpeg, confidence scoring.
     """
 
-    def __init__(self, tts_provider: str = "edge-tts", voice: str = "en-US-AvaMultilingualNeural"):
+    def __init__(
+        self,
+        tts_provider: str = "openai-tts",
+        voice: str = OPENAI_TTS_DEFAULT_VOICE,
+        speed: float = OPENAI_TTS_DEFAULT_SPEED,
+        fallback_voice: str = "en-US-AvaMultilingualNeural",
+    ):
         self.name = "voice_synthesizer"
-        self.version = "4.0.0"  # Phase 4
+        self.version = "4.1.0"  # ADR-2211: OpenAI TTS default + fallback chain
         self.tts_provider = tts_provider
-        self.voice = voice  # Microsoft voices: en-US-AvaMultilingualNeural, en-US-AriaNeural, etc.
+        self.voice = voice
+        self.speed = speed
+        # Used only if we fall back to edge-tts (OpenAI and edge-tts voice
+        # catalogues don't overlap — "onyx" means nothing to edge-tts).
+        self.fallback_voice = fallback_voice
 
     def execute(self, job) -> VoiceResult:
         """Execute voice synthesis phase with REAL TTS
@@ -57,13 +80,15 @@ class VoiceSynthesizerWorker:
 
         audio_files = []
         total_duration = 0.0
+        providers_used = set()
 
         for i, scene_narration in enumerate(job.narration):
-            # Synthesize scene to audio (REAL TTS)
-            audio_path = self._synthesize_scene_real(
+            # Synthesize scene to audio (REAL TTS, OpenAI first — ADR-2211)
+            audio_path, provider = self._synthesize_scene_real(
                 scene_narration, job_id=job.job_id, scene_index=i
             )
             audio_files.append(audio_path)
+            providers_used.add(provider)
 
             # Track duration (via ffprobe)
             duration = self._get_audio_duration_ffprobe(audio_path)
@@ -72,20 +97,62 @@ class VoiceSynthesizerWorker:
         # Normalize loudness to broadcast standard (-23 LUFS) using FFmpeg
         self._normalize_loudness_ffmpeg(audio_files, target_lufs=-23)
 
+        # If every scene used the same backend, report it; a mixed job (some
+        # scenes fell back, some didn't) reports "mixed" rather than picking
+        # one misleadingly.
+        provider_used = providers_used.pop() if len(providers_used) == 1 else "mixed"
+
         return VoiceResult(
             audio_files=audio_files,
             total_duration_seconds=total_duration,
             loudness_lufs=-23.0,
             confidence=0.94,
+            provider_used=provider_used,
         )
+
+    def _synthesize_scene_openai(self, narration_text: str, output_path: str) -> bool:
+        """Try OpenAI TTS for one scene. Returns True on success (writes
+        output_path), False if no API key is configured or the call fails —
+        callers fall back to edge-tts/piper/mock on False, they never raise.
+        """
+        api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("CORVIN_TTS_OPENAI_KEY")
+        if not api_key:
+            return False
+
+        try:
+            payload = json.dumps(
+                {
+                    "model": OPENAI_TTS_MODEL,
+                    "voice": self.voice,
+                    "speed": self.speed,
+                    "input": narration_text,
+                }
+            ).encode("utf-8")
+            request = urllib.request.Request(
+                "https://api.openai.com/v1/audio/speech",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=30) as response:
+                if response.status != 200:
+                    return False
+                with open(output_path, "wb") as f:
+                    f.write(response.read())
+            return True
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
+            return False
 
     def _synthesize_scene_real(
         self, narration_text: str, job_id: str, scene_index: int
-    ) -> str:
-        """Synthesize a single scene using REAL edge-tts
+    ) -> tuple[str, str]:
+        """Synthesize a single scene, OpenAI TTS first (ADR-2211).
 
-        Phase 4: Use edge-tts library for free TTS without API key
-        Falls back to piper-tts if edge-tts unavailable
+        Fallback chain: OpenAI TTS -> edge-tts -> piper-tts -> mock. Each
+        step only runs if the previous one declined (no key) or failed.
 
         Args:
             narration_text: Text to synthesize
@@ -93,13 +160,16 @@ class VoiceSynthesizerWorker:
             scene_index: Scene index
 
         Returns:
-            Path to output MP3 audio file
+            (path to output MP3 audio file, provider name actually used)
         """
 
         output_path = f"/tmp/{job_id}_scene_{scene_index}.mp3"
 
+        if self._synthesize_scene_openai(narration_text, output_path):
+            return output_path, "openai-tts"
+
         try:
-            # Try edge-tts first (free, no API key)
+            # Fallback: edge-tts (free, no API key)
             import edge_tts
 
             # Run async TTS in sync context
@@ -110,7 +180,7 @@ class VoiceSynthesizerWorker:
                     # Create TTS communication object
                     communicate = edge_tts.Communicate(
                         text=narration_text,
-                        voice=self.voice,  # Natural-sounding voice
+                        voice=self.fallback_voice,  # edge-tts voice, NOT self.voice (that's OpenAI's catalogue)
                         rate=0.0,  # Normal speed
                     )
                     # Save to MP3
@@ -120,7 +190,7 @@ class VoiceSynthesizerWorker:
             finally:
                 loop.close()
 
-            return output_path
+            return output_path, "edge-tts"
 
         except ImportError:
             # Fallback to piper-tts if edge-tts not available
@@ -143,11 +213,11 @@ class VoiceSynthesizerWorker:
                 )
                 os.remove(wav_path)
 
-                return output_path
+                return output_path, "piper-tts"
             except Exception as e:
                 # Fallback: create mock audio with duration estimation
                 print(f"TTS failed: {e}, using mock")
-                return self._synthesize_scene_mock(narration_text, job_id, scene_index)
+                return self._synthesize_scene_mock(narration_text, job_id, scene_index), "mock"
 
     def _synthesize_scene_mock(
         self, narration_text: str, job_id: str, scene_index: int
