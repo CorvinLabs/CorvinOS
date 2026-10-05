@@ -16,7 +16,7 @@
  */
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe2, Loader2, Send, Trash2, UserPlus, Users, Paperclip, Mic, MicOff } from "lucide-react";
+import { Globe2, Loader2, Send, Trash2, UserPlus, Users, Paperclip, Mic, MicOff, FolderUp } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -31,7 +31,8 @@ import { ChatAvatar } from "./ChatAvatar";
 import { MembersSection } from "./MembersSection";
 import { AttachmentChip } from "./AttachmentChip";
 import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
-import { useFileDrop } from "@/hooks/use-file-drop";
+import { useFileDrop, supportsDirectoryDrop, MAX_DROPPED_FILES } from "@/hooks/use-file-drop";
+import { DropOverlay } from "./DropOverlay";
 
 const MESSAGES_REFETCH_MS = 4_000;
 
@@ -136,6 +137,8 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
   const mediaRef = React.useRef<MediaRecorder | null>(null);
   const chunksRef = React.useRef<Blob[]>([]);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const folderInputRef = React.useRef<HTMLInputElement>(null);
+  const [dropTruncated, setDropTruncated] = React.useState<number | null>(null);
   const {
     pendingAttachments, uploading, uploadError, addFiles,
     removeAttachment, onFileInputChange,
@@ -150,9 +153,9 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
     },
     disabled: busy,
   });
-  const { isDragging: composerDragging, dropHandlers: composerDropHandlers } = useFileDrop(
-    (files) => { void addFiles(files); },
-    { disabled: busy || uploading },
+  const { isDragging: paneDragging, dropHandlers: paneDropHandlers } = useFileDrop(
+    (files) => { setDropTruncated(null); void addFiles(files); },
+    { disabled: busy || uploading, onTruncated: setDropTruncated },
   );
 
   const count = messages.data?.length ?? 0;
@@ -235,7 +238,12 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
   const peerCount = g.participants.filter((p) => p.kind === "a2a_peer").length;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="group-conversation">
+    <div
+      className="relative flex min-h-0 flex-1 flex-col"
+      data-testid="group-conversation"
+      {...paneDropHandlers}
+    >
+      <DropOverlay active={paneDragging} folders={supportsDirectoryDrop} />
       <header className="flex items-center gap-3 border-b border-border px-4 py-3">
         <ChatAvatar label={g.title} icon={Users} />
         <div className="min-w-0 flex-1">
@@ -288,19 +296,7 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
       </div>
 
       <footer className="px-4 py-3 md:px-6">
-        <div
-          className={cn(
-            "mx-auto w-full max-w-4xl space-y-1.5 rounded-2xl transition-colors",
-            composerDragging && "ring-2 ring-accent/60 ring-offset-2 ring-offset-background",
-          )}
-          data-testid="composer-dropzone"
-          {...composerDropHandlers}
-        >
-          {composerDragging && (
-            <p className="rounded-md border border-dashed border-accent/50 bg-accent/5 px-3 py-2 text-center text-xs text-accent-foreground">
-              Drop files to attach
-            </p>
-          )}
+        <div className="mx-auto w-full max-w-4xl space-y-1.5 rounded-2xl" data-testid="composer-dropzone">
           {/* Hidden file input */}
           <input
             ref={fileInputRef}
@@ -311,6 +307,30 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
             onChange={onFileInputChange}
             data-testid="file-input"
           />
+          {/* Hidden folder input — only wired to a visible button where the
+              browser supports webkitdirectory (Chromium/Firefox, not Safari). */}
+          <input
+            ref={folderInputRef}
+            type="file"
+            multiple
+            // @ts-expect-error -- webkitdirectory has no TS lib.dom typing
+            webkitdirectory=""
+            directory=""
+            className="sr-only"
+            aria-label="Attach a folder"
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []).slice(0, MAX_DROPPED_FILES);
+              if (e.target.files && e.target.files.length > MAX_DROPPED_FILES) setDropTruncated(MAX_DROPPED_FILES);
+              e.target.value = "";
+              if (files.length > 0) void addFiles(files);
+            }}
+            data-testid="folder-input"
+          />
+          {dropTruncated != null && (
+            <p className="text-xs text-amber-600 dark:text-amber-400" data-testid="drop-truncated-notice">
+              Only the first {dropTruncated} files were attached — drop fewer at once for the rest.
+            </p>
+          )}
           {/* Pending-attachment chips */}
           {pendingAttachments.length > 0 && (
             <div className="flex flex-wrap gap-1.5" data-testid="attachment-preview-bar">
@@ -347,6 +367,19 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
                 : <Paperclip className="h-4 w-4" />
               }
             </Button>
+            {supportsDirectoryDrop && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0 text-muted-foreground"
+                onClick={() => folderInputRef.current?.click()}
+                disabled={busy || uploading}
+                title="Attach a folder"
+                data-testid="attach-folder-button"
+              >
+                <FolderUp className="h-4 w-4" />
+              </Button>
+            )}
             <Button
               variant={recording ? "destructive" : "ghost"}
               size="icon"

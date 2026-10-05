@@ -160,7 +160,15 @@ export interface AttachmentMeta {
   path: string; // relative to workdir, e.g. "attachments/report.csv"
 }
 
-export async function uploadAttachments(
+// Mirrors attachments_common.py::ATTACH_MAX_FILES — the server rejects a
+// request carrying more files than this with a 400 before storing any of
+// them. A folder drop (up to MAX_DROPPED_FILES=200, see use-file-drop.ts)
+// routinely exceeds it, so this batches into server-sized chunks instead of
+// raising the server cap (which exists as a request-size guard, not a UX
+// one — see that module's docstring).
+const UPLOAD_BATCH_SIZE = 10;
+
+async function uploadAttachmentBatch(
   sid: string,
   files: File[],
   csrf: string,
@@ -186,6 +194,22 @@ export async function uploadAttachments(
   }
   const data = await res.json() as { attachments: AttachmentMeta[] };
   return data.attachments;
+}
+
+export async function uploadAttachments(
+  sid: string,
+  files: File[],
+  csrf: string,
+): Promise<AttachmentMeta[]> {
+  const out: AttachmentMeta[] = [];
+  for (let i = 0; i < files.length; i += UPLOAD_BATCH_SIZE) {
+    // Sequential, not parallel: a folder drop can carry hundreds of files,
+    // and firing 20 concurrent multipart requests at a single-operator
+    // console would be a self-inflicted thundering herd for no benefit.
+    const batch = files.slice(i, i + UPLOAD_BATCH_SIZE);
+    out.push(...await uploadAttachmentBatch(sid, batch, csrf));
+  }
+  return out;
 }
 
 export async function openSessionWorkdir(

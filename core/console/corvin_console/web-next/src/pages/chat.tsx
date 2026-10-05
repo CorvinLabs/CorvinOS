@@ -25,6 +25,7 @@ import {
   VolumeX,
   X,
   BookOpenText,
+  FolderUp,
 } from "lucide-react";
 import { Markdown } from "@/components/markdown";
 import { WdatAuditPanel } from "@/components/WdatAuditPanel";
@@ -93,7 +94,8 @@ import { AttachmentChip } from "@/components/chat/AttachmentChip";
 import { RecordingOverlay } from "@/components/chat/RecordingOverlay";
 import { useVoiceInput as _useVoiceInput } from "@/hooks/use-voice-input";
 import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
-import { useFileDrop } from "@/hooks/use-file-drop";
+import { useFileDrop, supportsDirectoryDrop, MAX_DROPPED_FILES } from "@/hooks/use-file-drop";
+import { DropOverlay } from "@/components/chat/DropOverlay";
 import { PanelRight } from "lucide-react";
 
 // ── Web Speech API minimal surface (not in lib.dom.d.ts) ───────────────────
@@ -772,9 +774,11 @@ function ChatPane({
     uploadFn: (files) => uploadAttachments(sid, files, csrf),
     disabled: streaming,
   });
-  const { isDragging: composerDragging, dropHandlers: composerDropHandlers } = useFileDrop(
-    (files) => { void addFiles(files); },
-    { disabled: streaming || uploading },
+  const [dropTruncated, setDropTruncated] = React.useState<number | null>(null);
+  const folderInputRef = React.useRef<HTMLInputElement>(null);
+  const { isDragging: paneDragging, dropHandlers: paneDropHandlers } = useFileDrop(
+    (files) => { setDropTruncated(null); void addFiles(files); },
+    { disabled: streaming || uploading, onTruncated: setDropTruncated },
   );
   const [persistedTasks, setPersistedTasks] = React.useState<Task[]>([]);
   const [cccActions, setCccActions] = React.useState<StreamEvent[]>([]);
@@ -1590,8 +1594,13 @@ function ChatPane({
   }, [setVoiceOut, stopVoice]);
 
   return (
-    <>
-      <header className="flex items-center gap-3 border-b border-border px-4 py-3">
+    <div
+      className="relative flex min-h-0 flex-1 flex-col"
+      data-testid="chat-dropzone"
+      {...paneDropHandlers}
+    >
+      <DropOverlay active={paneDragging} folders={supportsDirectoryDrop} />
+      <header className="flex items-center gap-3 border-b border-border px-4 py-3" data-testid="chat-header">
         <ChatAvatar label="Corvin" icon={Sparkles} />
         <div className="min-w-0 flex-1">
           <div className="truncate font-serif text-lg font-light leading-tight">{meta?.title || "New Chat"}</div>
@@ -1855,19 +1864,7 @@ function ChatPane({
       </div>
 
       <footer className="px-4 py-3 md:px-6">
-        <div
-          className={cn(
-            "mx-auto w-full max-w-4xl space-y-1.5 rounded-2xl transition-colors",
-            composerDragging && "ring-2 ring-accent/60 ring-offset-2 ring-offset-background",
-          )}
-          data-testid="composer-dropzone"
-          {...composerDropHandlers}
-        >
-          {composerDragging && (
-            <p className="rounded-md border border-dashed border-accent/50 bg-accent/5 px-3 py-2 text-center text-xs text-accent-foreground">
-              Drop files to attach
-            </p>
-          )}
+        <div className="mx-auto w-full max-w-4xl space-y-1.5 rounded-2xl" data-testid="composer-dropzone">
           {/* Hidden file input */}
           <input
             ref={fileInputRef}
@@ -1878,6 +1875,26 @@ function ChatPane({
             aria-label="Attach files"
             onChange={onFileInputChange}
             data-testid="file-input"
+          />
+          {/* Hidden folder input — webkitdirectory is Chromium/Firefox-only
+              (no Safari support); the button next to Attach is only rendered
+              when the browser advertises it. */}
+          <input
+            ref={folderInputRef}
+            type="file"
+            multiple
+            // @ts-expect-error -- webkitdirectory has no TS lib.dom typing
+            webkitdirectory=""
+            directory=""
+            className="sr-only"
+            aria-label="Attach a folder"
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []).slice(0, MAX_DROPPED_FILES);
+              if (e.target.files && e.target.files.length > MAX_DROPPED_FILES) setDropTruncated(MAX_DROPPED_FILES);
+              e.target.value = "";
+              if (files.length > 0) void addFiles(files);
+            }}
+            data-testid="folder-input"
           />
           {/* Pending-attachment chips */}
           {pendingAttachments.length > 0 && (
@@ -1894,6 +1911,11 @@ function ChatPane({
           {/* Upload error */}
           {uploadError && (
             <p className="text-xs text-destructive" data-testid="upload-error">{uploadError}</p>
+          )}
+          {dropTruncated != null && (
+            <p className="text-xs text-amber-600 dark:text-amber-400" data-testid="drop-truncated-notice">
+              Only the first {dropTruncated} files were attached — drop fewer at once for the rest.
+            </p>
           )}
           {/* CCC M6 — entity hint (shown when NLP detects a domain keyword) */}
           {cccEntityHint && !paletteOpen && (
@@ -1920,6 +1942,19 @@ function ChatPane({
                 : <Paperclip className="h-4 w-4" />
               }
             </Button>
+            {supportsDirectoryDrop && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0 text-muted-foreground"
+                onClick={() => folderInputRef.current?.click()}
+                disabled={streaming || uploading}
+                title="Attach a folder"
+                data-testid="attach-folder-button"
+              >
+                <FolderUp className="h-4 w-4" />
+              </Button>
+            )}
             <Button
               variant={recording ? "destructive" : "ghost"}
               size="icon"
@@ -2017,7 +2052,7 @@ function ChatPane({
           </div>
         </div>
       </footer>
-    </>
+    </div>
   );
 }
 

@@ -20,6 +20,9 @@ import {
   type Page,
   type BrowserContext,
 } from "@playwright/test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 
 const BASE_URL = "http://localhost:5173";
 const API_BASE = "http://localhost:8765/v1/console";
@@ -518,4 +521,66 @@ test("UI: real drag-and-drop onto the composer uploads the file", async () => {
   await page.screenshot({ path: `${SCREENSHOT_DIR}/attach-08-drag-drop.png` });
   expect(errors).toHaveLength(0);
   await page.close();
+});
+
+test("UI: drag-and-drop onto the HEADER (outside the old composer-only zone) still uploads", async () => {
+  // Operator request 2026-10-05: expand the drop target from the composer
+  // strip to the whole chat pane. Dropping on `chat-header` — a sibling
+  // far from the composer, never inside the old `composer-dropzone` div —
+  // is the regression guard that the zone really grew; before this change
+  // no handler existed above the footer and this drop would do nothing.
+  const page = await sharedContext.newPage();
+  const errors = collectJsErrors(page);
+  await navigateToSession(page, testSid);
+
+  await expect(page.getByTestId("chat-header")).toBeVisible();
+
+  await dispatchFileDrop(page, "chat-header", {
+    name: "dropped-on-header.csv",
+    type: "text/csv",
+    content: "a,b\n5,6\n",
+  });
+
+  const chip = page.getByTestId("attachment-chip").first();
+  await expect(chip).toBeVisible({ timeout: 8000 });
+  await expect(chip).toContainText("dropped-on-header.csv");
+
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/attach-09-drag-drop-header.png` });
+  expect(errors).toHaveLength(0);
+  await page.close();
+});
+
+test("UI: folder picker button is offered and uploads every file in the selected folder", async () => {
+  // A real OS folder-drag can't be forged through Playwright (browsers only
+  // populate FileSystemEntry from an actual filesystem drag — see
+  // tests/unit/hooks/useFileDrop.test.ts for that recursion/flattening logic
+  // proven against FileSystemEntry-shaped doubles). This instead proves the
+  // PICKER path end to end through the real OS boundary a `webkitdirectory`
+  // input actually uses: Playwright's setInputFiles on such an input only
+  // accepts a real directory path (it refuses an array of in-memory
+  // buffers), so this writes one to disk and selects it exactly like an
+  // operator choosing a folder in the native file dialog would.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "corvin-folder-drop-"));
+  try {
+    await fs.writeFile(path.join(dir, "a.txt"), "one");
+    await fs.writeFile(path.join(dir, "b.txt"), "two");
+
+    const page = await sharedContext.newPage();
+    const errors = collectJsErrors(page);
+    await navigateToSession(page, testSid);
+
+    const folderBtn = page.getByTestId("attach-folder-button");
+    await expect(folderBtn).toBeVisible();
+
+    const folderInput = page.getByTestId("folder-input");
+    await folderInput.setInputFiles(dir);
+
+    await expect(page.getByTestId("attachment-chip")).toHaveCount(2, { timeout: 10000 });
+
+    await page.screenshot({ path: `${SCREENSHOT_DIR}/attach-10-folder-picker.png` });
+    expect(errors).toHaveLength(0);
+    await page.close();
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
