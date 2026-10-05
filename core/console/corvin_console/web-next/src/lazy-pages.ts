@@ -31,10 +31,6 @@ export const BridgesPage = React.lazy(() =>
   import("@/pages/bridges").then((m) => ({ default: m.BridgesPage }))
 );
 
-export const DiscoveryPage = React.lazy(() =>
-  import("@/pages/discovery").then((m) => ({ default: m.DiscoveryPanel }))
-);
-
 export const VoicePage = React.lazy(() =>
   import("@/pages/voice").then((m) => ({ default: m.VoicePage }))
 );

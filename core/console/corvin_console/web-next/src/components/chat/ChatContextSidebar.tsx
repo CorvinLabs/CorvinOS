@@ -12,13 +12,13 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Activity, Globe2, Loader2, MessageSquare, Plus, Users } from "lucide-react";
+import { Activity, Globe2, Loader2, MessageSquare, Plus, Radar, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { PREF_KEYS, usePersistedString } from "@/lib/preferences";
 import { createGroup, listGroups } from "@/lib/api/chat-groups";
-import { getA2AFeed, type A2AFeedMessage } from "@/lib/api/a2a";
+import { getA2AFeed, listDiscoveryPeers, type A2AFeedMessage } from "@/lib/api/a2a";
 import { listPendingSends, listPendingTokenRequests } from "@/lib/api/pending-actions";
 import { PendingConfirmations } from "./PendingConfirmations";
 import { TokensSection } from "./TokensSection";
@@ -182,6 +182,45 @@ function PeersSection({ activePeerId }: { activePeerId?: string }) {
   );
 }
 
+/**
+ * Discovered-but-unpaired peers (ADR: Discovery folded into the chat sidebar
+ * — the standalone /app/discovery page is retired, this is now its only UI).
+ * "Add" doesn't pair directly (listDiscoveryPeers has no pairing endpoint,
+ * discovery is LAN/mDNS visibility only) — it opens the Tokens section,
+ * which is the actual pairing mechanism (generate a friendship token, send
+ * it to the peer out-of-band).
+ */
+function DiscoverySection({ connectedPeerIds, onAdd }: { connectedPeerIds: Set<string>; onAdd: () => void }) {
+  const discovery = useQuery({
+    queryKey: ["a2a", "discovery", "peers"],
+    queryFn: ({ signal }) => listDiscoveryPeers(signal),
+    refetchInterval: 30_000,
+  });
+  const unpaired = (discovery.data?.peers ?? []).filter((p) => !connectedPeerIds.has(p.peer_id));
+  if (discovery.isLoading || unpaired.length === 0) return null;
+  return (
+    <div>
+      <SectionTitle icon={Radar}>DISCOVERED</SectionTitle>
+      <div className="space-y-0.5 px-2">
+        {unpaired.map((p) => (
+          <div key={p.peer_id}
+            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm">
+            <span aria-hidden className={cn("h-2 w-2 shrink-0 rounded-full",
+              p.status === "online" ? "bg-sky-500" : "bg-muted-foreground/40")} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium">{p.name}</span>
+              <span className="block text-[10px] text-muted-foreground">{p.status}{p.region ? ` · ${p.region}` : ""}</span>
+            </span>
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px] gap-1 shrink-0" onClick={onAdd}>
+              <Plus className="h-3 w-3" /> Add
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ActivityRow({ m }: { m: A2AFeedMessage }) {
   const navigate = useNavigate();
   const failed = Boolean(m.error) || ["rejected", "timeout", "error"].includes(m.status);
@@ -248,6 +287,13 @@ export function ChatContextSidebar({
   const [stored, setStored] = usePersistedString(PREF_KEYS.chatSidebarMode, "chats");
   const mode: SidebarMode = (MODES as string[]).includes(stored) ? (stored as SidebarMode) : "chats";
   const pending = usePendingCount();
+  const [tokensOpen, setTokensOpen] = React.useState(false);
+  const connectedFeed = useQuery({
+    queryKey: ["a2a", "peers"],
+    queryFn: ({ signal }) => getA2AFeed({ limit: 1 }, signal),
+    select: (r) => new Set(r.peers.map((p) => p.peer_id)),
+    enabled: mode === "peers",
+  });
 
   // Auto-navigate when clicking a tab if a group/peer is active
   const handleTabClick = React.useCallback((m: SidebarMode) => {
@@ -320,7 +366,10 @@ export function ChatContextSidebar({
         <div className="flex-1 overflow-y-auto pb-2" role="tabpanel" aria-label="Peers">
           <GroupsSection csrf={csrf} activeGroupId={activeGroupId} />
           <PeersSection activePeerId={activePeerId} />
-          <div className="mt-3"><TokensSection csrf={csrf} /></div>
+          <DiscoverySection connectedPeerIds={connectedFeed.data ?? new Set()} onAdd={() => setTokensOpen(true)} />
+          <div className="mt-3">
+            <TokensSection csrf={csrf} open={tokensOpen} onOpenChange={setTokensOpen} />
+          </div>
         </div>
       )}
 

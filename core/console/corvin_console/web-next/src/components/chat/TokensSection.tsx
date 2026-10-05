@@ -41,8 +41,19 @@ export function TokenResultCard({ result }: { result: FriendshipTokenResult }) {
   );
 }
 
-export function TokensSection({ csrf }: { csrf: string }) {
-  const [expanded, setExpanded] = React.useState(false);
+export function TokensSection({ csrf, open, onOpenChange }: {
+  csrf: string;
+  /** Controlled expand state (e.g. DiscoverySection opens this on "Add"). Omit for standalone use. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
+  const [internalExpanded, setInternalExpanded] = React.useState(false);
+  const expanded = open ?? internalExpanded;
+  const setExpanded = React.useCallback((v: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof v === "function" ? v(expanded) : v;
+    onOpenChange?.(next);
+    setInternalExpanded(next);
+  }, [expanded, onOpenChange]);
   const [label, setLabel] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");

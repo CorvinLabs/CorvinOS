@@ -155,6 +155,9 @@ export default function App() {
             <Route path="chat/peer/:peerId" element={<ChatPage />} />
             {/* Group chats moved into the chat page; keep old bookmarks working. */}
             <Route path="chat-groups" element={<Navigate to="/app/chat" replace />} />
+            {/* Discovery folded into the chat sidebar's Peers tab (DiscoverySection
+                in ChatContextSidebar.tsx) — the standalone page is retired. */}
+            <Route path="discovery" element={<Navigate to="/app/chat" replace />} />
             {/* ADR-0561 Phase 2: panels render from backend manifest + fallback registry.
                 Manifest provides dynamic panels (plugin, skill, ai-generated); registry
                 provides fallback core panels if manifest unavailable.
