@@ -217,16 +217,15 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       const voiceControls = page.locator('button').filter({ hasText: /record|voice|audio/i });
       expect(await voiceControls.count()).toBeGreaterThanOrEqual(0);
 
-      // Step 2: Agent Hub (dependent on voice configuration)
+      // Step 2: Agent management — /app/agent-hub redirects to the unified
+      // chat (Console navigation refactor, Phase 4); peer permissions,
+      // invite codes and connections now live in its Peers tab.
       await page.goto('/console/app/agent-hub');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
+      expect(page.url()).toContain('/app/chat');
       content = await page.content();
       expect(content.length).toBeGreaterThan(100);
-
-      // Look for agent listing and configuration
-      const agentList = page.locator('[class*="agent"], [role="list"]');
-      expect(await agentList.count()).toBeGreaterThanOrEqual(0);
     });
   });
 

@@ -158,6 +158,11 @@ export default function App() {
             {/* Discovery folded into the chat sidebar's Peers tab (DiscoverySection
                 in ChatContextSidebar.tsx) — the standalone page is retired. */}
             <Route path="discovery" element={<Navigate to="/app/chat" replace />} />
+            {/* Agent Hub deleted 2026-10-05 (Console navigation refactor, Phase 4) —
+                permissions/invites/connections moved into PeerManagementDialog
+                (chat sidebar), instance URL into Settings, audit trail into
+                Compliance. */}
+            <Route path="agent-hub" element={<Navigate to="/app/chat" replace />} />
             {/* ADR-0561 Phase 2: panels render from backend manifest + fallback registry.
                 Manifest provides dynamic panels (plugin, skill, ai-generated); registry
                 provides fallback core panels if manifest unavailable.

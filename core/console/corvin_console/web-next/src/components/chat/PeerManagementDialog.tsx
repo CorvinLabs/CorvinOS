@@ -63,6 +63,7 @@ import {
   type FriendshipConnection,
   type FriendshipImportResponse,
   type FriendshipCreateResponse,
+  clearA2AFeed,
   getA2AOrigins,
   getA2AEndpoints,
   getA2APairMyInfo,
@@ -1076,6 +1077,54 @@ function PeersTab() {
           <p className="mt-1 text-xs">Open the <strong>Connect</strong> tab to pair this instance with another Corvin agent.</p>
         </div>
       )}
+
+      <ClearA2ADataSection csrf={csrf} />
+    </div>
+  );
+}
+
+/**
+ * Deletes every stored A2A message + attachment on this instance, across
+ * all peers (was AgentLiveFeed's clearAll() in agent-hub.tsx — the only
+ * place this existed before the Console navigation refactor, Phase 4).
+ * Does not touch the audit trail (A2AAuditTrail / Compliance) or the
+ * origin/endpoint/friendship records themselves — only the message content
+ * store that PeerConversation/GroupConversation read from.
+ */
+function ClearA2ADataSection({ csrf }: { csrf: string }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
+
+  async function handleClear() {
+    if (!window.confirm("Delete every stored A2A message and attachment on this instance? The audit trail is not affected.")) return;
+    setBusy(true); setError("");
+    try {
+      await clearA2AFeed(csrf);
+      await qc.invalidateQueries({ queryKey: ["a2a", "feed"] });
+      await qc.invalidateQueries({ queryKey: ["a2a", "peers"] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Clear failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-destructive">Clear A2A message data</p>
+          <p className="text-xs text-muted-foreground">
+            Deletes every stored message &amp; attachment across all peers. Connections and the audit trail are kept.
+          </p>
+        </div>
+        <Button variant="outline" size="sm" className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10"
+          disabled={busy} onClick={handleClear}>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+        </Button>
+      </div>
+      {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
     </div>
   );
 }

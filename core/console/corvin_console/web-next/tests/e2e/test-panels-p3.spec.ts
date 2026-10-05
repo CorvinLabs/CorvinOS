@@ -189,7 +189,7 @@ const connectorsTest = new ConsolePanelTest({
   id: 'connectors',
   title: 'Connectors',
   priority: 'P3',
-  group: 'network',
+  group: 'intelligence',
 });
 
 test.describe('P3: Connectors Panel (External Integrations)', () => {

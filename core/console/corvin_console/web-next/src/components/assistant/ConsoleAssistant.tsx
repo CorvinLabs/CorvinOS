@@ -160,7 +160,10 @@ const PAGE_CHIPS: Record<string, Record<UiLang, { label: string; prompt: string 
       { label: "Filter events", prompt: "How do I filter audit events by type?" },
     ],
   },
-  "/app/agent-hub": {
+  // Was "/app/agent-hub" — moved here 2026-10-05 when Agent Hub was deleted
+  // (Console navigation refactor, Phase 4); peer connections now live in
+  // the chat's Peers tab (PeerManagementDialog).
+  "/app/chat": {
     en: [
       { label: "Connect agent", prompt: "How do I connect a remote agent?" },
       { label: "Explain A2A", prompt: "What is the A2A protocol?" },

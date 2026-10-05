@@ -78,10 +78,6 @@ export const FilesPage = React.lazy(() =>
   import("@/pages/files").then((m) => ({ default: m.FilesPage }))
 );
 
-export const AgentHubPage = React.lazy(() =>
-  import("@/pages/agent-hub").then((m) => ({ default: m.AgentHubPage }))
-);
-
 export const SkillManagerPage = React.lazy(() =>
   import("@/pages/admin/skill-manager").then((m) => ({ default: m.SkillManager }))
 );

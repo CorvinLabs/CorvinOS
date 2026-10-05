@@ -17,7 +17,7 @@ import {
   DashboardPage, SettingsPage,
   ComputePage, BridgesPage, VoicePage, VoiceSummariesPage, ForgePage,
   LddPage, CompliancePage, FilesPage, MemoryPage,
-  AgentHubPage, SkillManagerPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
+  SkillManagerPage, ConnectorsPage, ApiKeysPage, OrgsPage, PeoplePage, LicensePage,
   RAGPage, RAGHubPage, CustomProviderPage, DataSourcesPage, FlowsPage,
   MarketplacePage,
   GitHubPage, SyncMonitorPage,
@@ -49,7 +49,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   CompliancePage,
   FilesPage,
   MemoryPage,
-  AgentHubPage,
   SkillManagerPage,
   ConnectorsPage,
   ApiKeysPage,
@@ -127,13 +126,16 @@ export const PANELS: ConsolePanel[] = [
   rc("files", "Files", FilesPage, { nav: { label: "Files", icon: "FolderOpen", group: "intelligence" } }),
   // REMOVED 2026-09-15: "space" panel (superseded by modern UI, no nav entry)
   rc("memory", "Memory", MemoryPage, { nav: { label: "Memory", icon: "BookOpen", group: "intelligence" } }),
-  rc("agent-hub", "Agent Hub", AgentHubPage, { nav: { label: "Agent Hub", icon: "Globe2", group: "network" } }),
+  // Agent Hub removed 2026-10-05 (Console navigation refactor, Phase 4) —
+  // its 7 functions migrated to the chat sidebar (PeerManagementDialog),
+  // Settings (A2AInstanceUrlCard) and Compliance (A2AAuditTrail).
+  // /app/agent-hub now redirects to /app/chat, see App.tsx.
   // ADR-2216 — group chat with human/agent/a2a_peer participants + chat-
   // native friendship tokens. NAV_GROUPS entry in layout.tsx "primary"
   // group, right after Chat (both registrations required, CLAUDE.md
   // Console Frontend rule).
   rc("skill-manager", "Skills", SkillManagerPage, { nav: { label: "Skills", icon: "Zap", group: "build" } }),
-  rc("connectors", "Connectors", ConnectorsPage, { nav: { label: "Connectors", icon: "Plug", group: "network" } }),
+  rc("connectors", "Connectors", ConnectorsPage, { nav: { label: "Connectors", icon: "Plug", group: "intelligence" } }),
   rc("api-keys", "API Keys", ApiKeysPage, { nav: { label: "API Keys", icon: "KeyRound", group: "system" } }),
   rc("orgs", "Orgs", OrgsPage, { nav: { label: "Orgs", icon: "" } }), // hidden from nav (for future)
   rc("people", "People", PeoplePage, { nav: { label: "People", icon: "" } }), // hidden from nav (for future)

@@ -1925,10 +1925,10 @@ function ChatPane({
               Detected as <span className="font-semibold text-accent-foreground">{cccEntityHint}</span> — the matching tab updates once sent
             </p>
           )}
-          {/* Main input row — one pill card, same shape as the Agent Hub
-              relay composer (components/agent-hub/live-feed.tsx), so the
-              three conversation surfaces (session, group, peer) and the
-              relay panel all share one input language. */}
+          {/* Main input row — one pill card, same shape across the three
+              conversation surfaces (session, group, peer) so they share
+              one input language (originally matched to the now-deleted
+              Agent Hub relay composer). */}
           <div className="flex items-end gap-2 rounded-2xl border border-border bg-card px-2 py-1.5 shadow-sm transition-colors focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/15">
             <Button
               variant="ghost"

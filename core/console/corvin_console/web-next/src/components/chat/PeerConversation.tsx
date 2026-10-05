@@ -2,7 +2,7 @@
  * Direct A2A thread with one peer, in the chat's main area.
  *
  * Visual language mirrors the Agent Hub relay panel
- * (components/agent-hub/live-feed.tsx) — tucked-corner bubbles, initials
+ * (the now-deleted Agent Hub relay panel) — tucked-corner bubbles, initials
  * avatars, radial-gradient message canvas, pill composer — see
  * GroupConversation.tsx's header comment for why.
  *

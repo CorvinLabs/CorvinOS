@@ -138,7 +138,7 @@ const _ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Boxes,                  // ldd
   ShieldCheck,            // compliance
   FolderOpen,             // files
-  Globe2,                 // agent-hub, rag-hub
+  Globe2,                 // rag-hub
   Plug,                   // connectors, custom-provider
   KeyRound,               // api-keys
   Lock,                   // license, licensing-audit
@@ -248,17 +248,10 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/skill-manager", label: "Skill Packages", icon: Package, requiredTier: ["owner", "admin"] },
     ],
   },
-  {
-    id: "network",
-    label: "Network",
-    collapsible: true,
-    defaultOpen: true,
-    items: [
-      { to: "/app/agent-hub",  label: "Agent Hub",     icon: Globe2 },
-      // Discovery folded into the chat sidebar's Peers tab 2026-10-05
-      // (DiscoverySection in ChatContextSidebar.tsx); /app/discovery redirects.
-    ],
-  },
+  // "network" group dissolved 2026-10-05 (Console navigation refactor,
+  // Phase 5): Agent Hub deleted (its functions migrated — see
+  // PeerManagementDialog/A2AInstanceUrlCard/A2AAuditTrail), Discovery
+  // folded into the chat sidebar, Connectors moved to "intelligence".
   {
     id: "knowledge",
     label: "Data",

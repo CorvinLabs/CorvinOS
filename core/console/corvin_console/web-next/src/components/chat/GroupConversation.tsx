@@ -2,7 +2,7 @@
  * Group conversation in the chat's main area (ADR-2216, ADR-2218).
  *
  * Visual language mirrors the Agent Hub relay panel
- * (components/agent-hub/live-feed.tsx) — tucked-corner bubbles, initials
+ * (the now-deleted Agent Hub relay panel) — tucked-corner bubbles, initials
  * avatars, radial-gradient message canvas, pill composer — and the
  * single-session chat pane (pages/chat.tsx::ChatPane), which was reskinned
  * to the same language. See components/chat/PeerConversation.tsx for the

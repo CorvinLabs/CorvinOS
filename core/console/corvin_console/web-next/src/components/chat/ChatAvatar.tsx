@@ -1,8 +1,8 @@
 /**
  * Small circular identity marker — initials by default, or an icon.
  * Visual language shared by every conversation surface: the single-session
- * chat, group chat, direct A2A thread, and the Agent Hub relay panel this
- * mirrors (components/agent-hub/live-feed.tsx::PeerAvatar).
+ * chat, group chat, and direct A2A thread (mirrors the now-deleted Agent
+ * Hub relay panel's PeerAvatar).
  */
 import * as React from "react";
 import { cn } from "@/lib/utils";

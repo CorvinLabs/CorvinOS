@@ -92,26 +92,37 @@ test.describe("Comprehensive License Gates — Free Tier", () => {
 
   // ── 3. a2a_peers_max — UI shows badge with count/max ──────────────────────
 
-  test("3. a2a_peers_max — Agent Hub Peers tab shows peer count badge", async () => {
-    await page.goto(`${BASE_URL}/app/agent-hub`, { waitUntil: "load" });
-    await page.waitForTimeout(2000);
+  test("3. a2a_peers_max — peer management dialog shows peer count badge", async () => {
+    // Peer management moved from the standalone Agent Hub page into the
+    // chat sidebar's Peers tab (Console navigation refactor, Phase 3+4) —
+    // /app/agent-hub now redirects here.
+    await page.goto(`${BASE_URL}/app/chat`, { waitUntil: "load" });
+    await page.waitForTimeout(1500);
 
-    // Click Peers tab — use count() to detect presence without viewport constraint
+    // Switch the sidebar to the Peers tab, then open the management dialog
+    // via its gear-icon button (aria-label="Manage peer permissions").
     const peersTab = page.getByRole("tab", { name: /peers/i });
     const peersTabCount = await peersTab.count();
+    let dialogOpened = false;
     if (peersTabCount > 0) {
-      await peersTab.first().scrollIntoViewIfNeeded().catch(() => {});
       await peersTab.first().click({ force: true });
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(500);
+      const manageButton = page.getByRole("button", { name: /manage peer permissions/i });
+      if (await manageButton.count() > 0) {
+        await manageButton.first().click({ force: true });
+        await page.waitForTimeout(1500);
+        dialogOpened = true;
+      }
     }
 
     await page.screenshot({ path: `${OUTDIR}/lic-gate-03-a2a-peers-badge.png` });
 
     // Badge shows X/1 peers — either 0/1 (no peers) or 1/1 (at limit).
-    // Only assert body text if the tab exists (on layouts without a tab bar the
-    // peer count may be surfaced differently or not at all on this screen size).
+    // Only assert body text if the dialog actually opened (on layouts
+    // without a tab bar or gear button the peer count may be surfaced
+    // differently or not at all on this screen size).
     const bodyText = await page.textContent("body");
-    if (peersTabCount > 0) {
+    if (dialogOpened) {
       expect(bodyText).toMatch(/\d\/1 peer/);
     } else {
       // Tab not present — verify via API instead
