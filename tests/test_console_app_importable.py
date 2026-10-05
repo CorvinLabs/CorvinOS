@@ -59,8 +59,18 @@ MUST = ["/auth/local-login", "/capabilities/manifest",
         "/v1/engine/analytics", "/v1/engine/config",
         # ADR-2032, mounted 2026-10-05 (data-security audit) — previously a
         # Flask Blueprint this FastAPI app could never include_router().
-        "/v1/console/flow/policy", "/v1/console/flow/feedback",
-        "/v1/console/flow/audit"]
+        # Bare here (not "/v1/console/flow/..."): this probe imports
+        # corvin_console.app directly, one level short of the live shape —
+        # the gateway wraps _console_app.router under ANOTHER "/v1/console"
+        # (corvin_gateway/app.py), so the real client-visible path is
+        # "/v1/console" + this router's own prefix. A first port attempt
+        # baked "/v1/console/flow" into the router itself, passed THIS
+        # test unchanged, and still 404'd on the real running service
+        # (double-prefixed) — only a curl against the live port 8765 caught
+        # it. This probe cannot see that class of bug; it only proves the
+        # route exists in corvin_console.app's own router, not at its real
+        # external path.
+        "/flow/policy", "/flow/feedback", "/flow/audit"]
 ABSENT = "/definitely-not-a-console-route-xyzzy"
 
 paths = sorted(capp.app.openapi().get("paths", {}))

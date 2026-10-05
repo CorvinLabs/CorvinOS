@@ -30,7 +30,7 @@ from ..deps import require_session, require_session_csrf_on_mutation
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/console/flow", tags=["flow-guard"])
+router = APIRouter(prefix="/flow", tags=["flow-guard"])
 
 ReadSession = Annotated[session_auth.SessionRecord, Depends(require_session)]
 WriteSession = Annotated[session_auth.SessionRecord, Depends(require_session_csrf_on_mutation)]
