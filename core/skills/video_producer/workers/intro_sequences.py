@@ -214,7 +214,12 @@ def render_intro(
     mp4_path = str(out_dir_path / f"intro_{variant.id}.mp4")
     try:
         result = subprocess.run(
-            ["ffmpeg", "-y", "-i", webm_path, "-c:v", "libx264", "-preset", "medium",
+            # The recording starts BEFORE goto() and runs until close(), so
+            # it is duration_s plus page-load time — more under CPU load
+            # (measured 4.52 s for a 2 s request). The animation starts at
+            # load, so keep exactly the LAST duration_s seconds.
+            ["ffmpeg", "-y", "-sseof", f"-{duration_s:.3f}", "-i", webm_path, "-t", f"{duration_s:.3f}",
+             "-c:v", "libx264", "-preset", "medium",
              "-crf", "18", "-pix_fmt", "yuv420p", "-an", mp4_path],
             capture_output=True, text=True, timeout=60,
         )
@@ -269,7 +274,14 @@ def prepend_intro_with_fade(
         "-movflags", "+faststart",
         output_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    # Re-encodes the WHOLE main video: a fixed 120 s timeout killed this on
+    # any video longer than a few minutes. Budget scales with its length.
+    main_duration = _probe_duration(main_video_path)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                timeout=max(120.0, 3.0 * main_duration + 60.0))
+    except subprocess.TimeoutExpired as e:
+        raise IntroRenderError(f"intro+main crossfade timed out: {e}") from e
     if result.returncode != 0:
         raise IntroRenderError(f"intro+main crossfade failed: {result.stderr}")
     return output_path

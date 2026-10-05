@@ -263,10 +263,18 @@ def public_rejection_reason(reason: str) -> str | None:
     """Map an internal rejection reason to the closed set a signed rejection
     may carry to the (authenticated) sender. None = keep it generic."""
     r = str(reason or "")
+    # Revocation first: "identity_required" ("this instance has none") would
+    # send the operator after a certificate it already has (review R4).
+    if r.endswith("_revoked") and (r.startswith("network_attestation")
+                                   or r.startswith("instance_attestation")):
+        return "identity_revoked"
+    if r == "network_attestation_time_window":
+        return "clock_skew"
     if (r.startswith("instance_attestation") or r == "ibc_library_unavailable"
             or r.startswith("network_attestation") or r in ("attestation_required", "ca_not_configured")):
         return "identity_required"
-    if r == "rate_limited":
+    # A full nonce budget is load, not a replay — the message is new.
+    if r in ("rate_limited", "nonce_origin_quota_exceeded", "nonce_store_full"):
         return "rate_limited"
     if r == "replay" or r.startswith("nonce_"):
         return "replay"
@@ -1419,7 +1427,19 @@ class RemoteTriggerReceiver:
         # Operators who need these tools must explicitly opt in per-origin.
         _a2a_allowed: list[str] | None = origin_config.get("allowed_tools")
         _base_disallowed: list[str] = list(origin_config.get("disallowed_tools") or [])
-        if not origin_config.get("allow_bash"):
+        # A shell IS network access (curl, ssh, a loopback call to this
+        # console): allow_bash without allow_network made "no network" a
+        # label, not a restriction (review R4). Bash therefore only runs when
+        # network is granted too; the combination is refused, fail-closed.
+        _bash_granted = bool(origin_config.get("allow_bash"))
+        if _bash_granted and not origin_config.get("allow_network"):
+            _bash_granted = False
+            self._audit_best_effort(
+                "A2A.bash_denied_without_network", "WARNING",
+                {"task_id": env.task_id, "origin_id": env.origin_id,
+                 "reason": "allow_bash_requires_allow_network"},
+            )
+        if not _bash_granted:
             # "Bash" alone is not the shell capability. Verified against the
             # installed Claude Code binary (2.1.282, tool defs carrying
             # enablesCodeExecution) on 2026-09-25: Monitor (runs a command and

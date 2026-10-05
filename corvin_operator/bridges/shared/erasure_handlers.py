@@ -2043,6 +2043,23 @@ class ChatGroupHandler:
             import a2a_friendship as _ft  # noqa: PLC0415
             for gdir in sorted(p for p in root.iterdir() if p.is_dir()):
                 with _ft.config_file_lock(gdir):
+                    meta_p = gdir / "meta.json"
+                    meta = _load_json(meta_p) if meta_p.exists() else None
+                    parts = meta.get("participants") if isinstance(meta, dict) else None
+                    parts = parts if isinstance(parts, list) else []
+                    # Every id the subject posts under here: the subject itself
+                    # and any member whose participant_id OR peer_endpoint_id is
+                    # the subject (review R4: erasing by endpoint id removed the
+                    # membership and left every message).
+                    mine = [p for p in parts if isinstance(p, dict) and (
+                        p.get("participant_id") == subject_id
+                        or p.get("peer_endpoint_id") == subject_id)]
+                    ids = {subject_id} | {str(p.get("participant_id")) for p in mine}
+                    # A hub relays a member's words as "[<name>] text" under its
+                    # own id; a mirror can only attribute those by that prefix.
+                    names = {subject_id} | {str(p.get("display_name") or "") for p in mine} - {""}
+                    relay_prefixes = tuple(f"[{n}] " for n in names)
+                    local_uploader = any(p.get("kind") != "a2a_peer" for p in mine) or not mine
                     msgs = gdir / "messages.jsonl"
                     if msgs.exists():
                         lines = msgs.read_text(encoding="utf-8").splitlines()
@@ -2053,33 +2070,49 @@ class ChatGroupHandler:
                             except json.JSONDecodeError:
                                 kept.append(line)
                                 continue
-                            if isinstance(rec, dict) and rec.get("sender_participant_id") == subject_id:
+                            text = str(rec.get("text") or "") if isinstance(rec, dict) else ""
+                            if isinstance(rec, dict) and (
+                                    rec.get("sender_participant_id") in ids
+                                    or text.startswith(relay_prefixes)):
                                 removed += 1
-                                dropped_files.update(_GROUP_ATTACH_RE.findall(str(rec.get("text") or "")))
+                                if rec.get("sender_participant_id") in ids:
+                                    dropped_files.update(_GROUP_ATTACH_RE.findall(text))
                             else:
                                 kept.append(line)
                         if len(kept) != len(lines):
                             _atomic_replace_text(msgs, "\n".join(kept) + ("\n" if kept else ""))
+                        # Files only where the subject could have uploaded them
+                        # (a local member — a peer's files never land here) and
+                        # no remaining message still references them: a quoted
+                        # "- attachments/x" line is free text anyone can type.
+                        still_used = set()
+                        for line in kept:
+                            try:
+                                still_used.update(_GROUP_ATTACH_RE.findall(str(json.loads(line).get("text") or "")))
+                            except (json.JSONDecodeError, AttributeError):
+                                continue
                         att_dir = gdir / "attachments"
-                        for name in dropped_files:
+                        for name in (dropped_files - still_used) if local_uploader else set():
                             f = att_dir / name
                             if (f.is_file() and not f.is_symlink()
                                     and f.resolve().parent == att_dir.resolve()):
                                 f.unlink()
                                 removed += 1
-                    meta_p = gdir / "meta.json"
-                    meta = _load_json(meta_p) if meta_p.exists() else None
-                    if isinstance(meta, dict) and isinstance(meta.get("participants"), list):
-                        parts = meta["participants"]
-                        left = [p for p in parts if not (isinstance(p, dict) and (
-                            p.get("participant_id") == subject_id
-                            or p.get("peer_endpoint_id") == subject_id))]
-                        if len(left) != len(parts):
-                            removed += len(parts) - len(left)
-                            meta["participants"] = left
-                            _atomic_replace_text(meta_p, json.dumps(meta, ensure_ascii=False) + "\n")
-            # The documented generic rule as well (subject-named entries,
-            # identity-keyed records).
+                    if mine:
+                        left = [p for p in parts if p not in mine]
+                        removed += len(parts) - len(left)
+                        meta["participants"] = left
+                        _atomic_replace_text(meta_p, json.dumps(meta, ensure_ascii=False) + "\n")
+                    # The generic rule inside this group's lock as well.
+                    removed += _purge_path(gdir, subject_id)
+            # Subject-named group directories (the generic rule's dir route).
+            for gdir in sorted(p for p in root.iterdir() if p.is_dir()):
+                if _name_names_subject(gdir.name, subject_id):
+                    import shutil  # noqa: PLC0415
+                    shutil.rmtree(gdir, ignore_errors=True)
+                    removed += 1
+            # The documented generic rule for everything else at this level
+            # (subject-named files, identity-keyed records).
             removed += _purge_path(root, subject_id)
         except Exception as exc:  # noqa: BLE001
             return ErasureLayerResult(

@@ -782,10 +782,22 @@ def activate_connection(
             _atomic_write(path, cfg)
 
 
+_STALE_PROBE_WINDOW_S = 120.0
+
+
 def stamp_probe(cfg: dict[str, Any], reachable: bool, now: float) -> None:
     """Record one reachability probe on a connection record — the fields
     ``a2a_connectivity.presence`` reads. Every path that probes a peer writes
-    through here, so none can update ``state`` and leave presence stale."""
+    through here, so none can update ``state`` and leave presence stale.
+
+    A probe that finishes after a newer one already landed (a slow manual
+    recheck overlapping the presence loop) must not roll presence back:
+    a result older than the stored check by up to ``_STALE_PROBE_WINDOW_S``
+    is ignored. A larger gap is a corrected clock, not a race, and is taken."""
+    last = cfg.get("_last_check_at")
+    if (isinstance(last, (int, float)) and not isinstance(last, bool)
+            and 0 < last - now <= _STALE_PROBE_WINDOW_S):
+        return
     cfg["_last_check_at"] = now
     if reachable:
         cfg["_last_ok_at"] = now
@@ -979,6 +991,28 @@ def _previous_host_is_lan(previous_url: str) -> bool:
     return classes == {"private"}
 
 
+def _url_shape_rejection(parts: Any, prefix: str, raw: str = "") -> str | None:
+    """Peer-supplied A2A base URLs may carry a plain path prefix (a reverse
+    proxy at https://host/corvin) and nothing else. Every caller appends a
+    fixed suffix (/v1/a2a/receive, /ping, /friendship-ack) by concatenation;
+    a query or fragment swallowed that suffix and let a paired peer aim our
+    signed POSTs at any path on any LAN host it picked (review R4 SSRF:
+    "http://10.0.0.5:9000/admin/reset?x=" → POST /admin/reset?x=/v1/a2a/ping).
+    ``raw`` is the unparsed string: urlsplit drops an EMPTY query or fragment
+    ("http://h/a#"), which still swallows the suffix once concatenated.
+    """
+    if parts.username is not None or parts.password is not None:
+        return f"{prefix}_userinfo"
+    if parts.query or parts.fragment or "?" in raw or "#" in raw:
+        return f"{prefix}_query_or_fragment"
+    path = parts.path or ""
+    if "%" in path or ";" in path or "\\" in path:
+        return f"{prefix}_bad_path"
+    if any(seg in (".", "..") for seg in path.split("/")):
+        return f"{prefix}_bad_path"
+    return None
+
+
 def _reconnect_url_rejection_reason(new_url: str, previous_url: str) -> str | None:
     """ADR-0198 hardening (2026-07-19 redesign): SSRF / redirect-primitive gate.
 
@@ -1015,6 +1049,9 @@ def _reconnect_url_rejection_reason(new_url: str, previous_url: str) -> str | No
     scheme = (parts.scheme or "").lower()
     if scheme not in ("http", "https"):
         return "reconnect_url_bad_scheme"
+    shape = _url_shape_rejection(parts, "reconnect_url", new_url)
+    if shape is not None:
+        return shape
     if scheme == "http":
         prev_scheme = ""
         if previous_url:
@@ -1765,6 +1802,9 @@ def _ack_url_rejection_reason(url: str) -> str | None:
         return "ack_url_unparseable"
     if (parts.scheme or "").lower() not in ("http", "https"):
         return "ack_url_bad_scheme"
+    shape = _url_shape_rejection(parts, "ack_url", url)
+    if shape is not None:
+        return shape
     try:
         host = parts.hostname
     except ValueError:

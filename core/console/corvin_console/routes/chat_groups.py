@@ -28,6 +28,7 @@ participation even though the two facts live in different stores.
 from __future__ import annotations
 
 import logging
+import time
 import mimetypes
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -89,13 +90,18 @@ def _deliver_to_peers(
     ``rejected``), else ``failed:<n>`` — the UI showed "sent to peers" for
     messages that never arrived."""
     failed = 0
+    unconfirmed = 0
     for ep in endpoint_ids:
         try:
             result = RemoteTriggerSender().send(ep, text, purpose_id="group_message", group_id=group_id)
             ok = bool(result.ok)
+            maybe = (not ok) and bool(getattr(result, "maybe_delivered", False))
         except Exception:  # noqa: BLE001 — a failing peer must not stop the others
-            ok = False
-        failed += 0 if ok else 1
+            ok, maybe = False, False
+        if maybe:
+            unconfirmed += 1  # may have arrived — not the same as "not delivered"
+        elif not ok:
+            failed += 1
         try:
             console_audit.action_performed(
                 tenant_id=tenant_id, sid_fingerprint=f"a2a:{ep}",
@@ -105,22 +111,26 @@ def _deliver_to_peers(
         except Exception:  # noqa: BLE001
             pass
     if message_id:
-        try:
-            tenant_dir = _a2a_paths.tenant_global_dir(tenant_id)
-            _store.set_delivery(tenant_dir, group_id, message_id,
-                                "delivered" if failed == 0 else f"failed:{failed}")
-        except Exception:  # noqa: BLE001 — the outcome is audited either way
-            pass
+        outcome = (f"failed:{failed}" if failed else
+                   f"unconfirmed:{unconfirmed}" if unconfirmed else "delivered")
+        tenant_dir = _a2a_paths.tenant_global_dir(tenant_id)
+        for attempt in range(3):  # a busy group lock must not strand "pending"
+            try:
+                _store.set_delivery(tenant_dir, group_id, message_id, outcome)
+                break
+            except _store.ChatGroupBusy:
+                time.sleep(0.5 * (attempt + 1))
+            except Exception:  # noqa: BLE001 — the outcome is audited either way
+                break
 
 
 def _append_or_503(tenant_dir: Path, group_id: str, **kw: Any) -> dict[str, Any]:
     """append_message for a request handler: a busy log lock is a retryable
     503 (as in the A2A pairing routes), a group deleted meanwhile a 404 —
     neither a 500."""
-    import a2a_friendship as _ft  # type: ignore[import-not-found]  # noqa: PLC0415
     try:
         return _store.append_message(tenant_dir, group_id, **kw)
-    except _ft.FriendshipLockBusy:
+    except _store.ChatGroupBusy:
         raise HTTPException(status_code=503, detail="group is busy — try again") from None
     except _store.ChatGroupError:
         raise HTTPException(status_code=404, detail="group not found") from None
@@ -238,7 +248,10 @@ def delete_group(rec: Session, group_id: str) -> dict[str, Any]:
         tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
         action="chat.group.deleted", target_kind="chat_group", target_id=group_id,
     )
-    _store.delete_group(tenant_dir, group_id)
+    try:
+        _store.delete_group(tenant_dir, group_id)
+    except _store.ChatGroupBusy:
+        raise HTTPException(status_code=503, detail="group is busy — try again") from None
     return {"deleted": True, "group_id": group_id}
 
 
@@ -266,6 +279,8 @@ def add_participant(rec: Session, group_id: str, body: AddParticipantRequest) ->
             added_by=rec.sid_fingerprint,
             peer_endpoint_id=body.peer_endpoint_id,
         )
+    except _store.ChatGroupBusy:
+        raise HTTPException(status_code=503, detail="group is busy — try again") from None
     except _store.ChatGroupError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -284,6 +299,8 @@ def remove_participant(rec: Session, group_id: str, participant_id: str) -> Grou
         raise HTTPException(status_code=404, detail="group not found")
     try:
         rec_out = _store.remove_participant(tenant_dir, group_id, participant_id)
+    except _store.ChatGroupBusy:
+        raise HTTPException(status_code=503, detail="group is busy — try again") from None
     except _store.ChatGroupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     console_audit.action_performed(

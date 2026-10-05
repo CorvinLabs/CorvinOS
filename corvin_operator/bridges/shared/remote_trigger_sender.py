@@ -668,6 +668,7 @@ _ERROR_DETAIL_TEMPLATES = frozenset({
 # fixed texts _PUBLIC_REJECTION_TEXT maps them to are templates like the rest.
 _ERROR_DETAIL_TEMPLATES = frozenset(_ERROR_DETAIL_TEMPLATES) | frozenset({
     "The peer only accepts verified CorvinOS instances (Corvin Labs identity certificate) and this instance has none",
+    "The peer reports this instance's identity or pairing as revoked - pair again",
     "The peer is rate-limiting this connection - try again shortly",
     "The peer saw this message before (replay protection)",
     "The clocks of the two instances differ too much - check the system time on both",
@@ -2461,6 +2462,7 @@ def _relay_round_trip(
 _PUBLIC_REJECTION_TEXT: dict[str, str] = {
     "identity_required": "The peer only accepts verified CorvinOS instances "
                          "(Corvin Labs identity certificate) and this instance has none",
+    "identity_revoked": "The peer reports this instance's identity or pairing as revoked - pair again",
     "rate_limited": "The peer is rate-limiting this connection - try again shortly",
     "replay": "The peer saw this message before (replay protection)",
     "clock_skew": "The clocks of the two instances differ too much - check the system time on both",

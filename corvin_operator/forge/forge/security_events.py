@@ -580,6 +580,7 @@ EVENT_SEVERITY: dict[str, str] = {
     # an anomaly. Never carries message text, only peer_id + pending_id.
     "A2A.chat_staged_send_confirmed": "INFO",
     "A2A.chat_staged_send_discarded": "INFO",
+    "A2A.bash_denied_without_network": "WARNING",
     "a2a.group_message_received": "INFO",
     "A2A.reconnect_applied": "INFO",
     "A2A.reconnect_rejected": "WARNING",
@@ -3071,6 +3072,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "A2A.feed_cleared": frozenset({"messages_removed", "blobs_removed", "reason"}),
     "A2A.chat_staged_send_confirmed": frozenset({"peer_id", "pending_id"}),
     "A2A.chat_staged_send_discarded": frozenset({"peer_id", "pending_id"}),
+    "A2A.bash_denied_without_network": frozenset({"task_id", "origin_id", "reason"}),
     "a2a.group_message_received": frozenset({"task_id", "origin_id", "group_id", "status", "duration_ms"}),
     "A2A.reconnect_applied": frozenset({"task_id", "origin_id", "reason", "status", "duration_ms"}),
     "A2A.reconnect_rejected": frozenset({"task_id", "origin_id", "reason", "status", "duration_ms"}),

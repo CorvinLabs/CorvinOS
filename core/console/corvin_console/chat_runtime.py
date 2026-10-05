@@ -1244,7 +1244,9 @@ def _read_meta(path: Path) -> dict[str, Any] | None:
 
 def _write_meta(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    # Unique per writer: two writers sharing "<sid>.json.tmp" interleaved
+    # bytes into one file and left invalid JSON behind (review R4).
+    tmp = path.with_name(f"{path.name}.{secrets.token_hex(6)}.tmp")
     # Open with 0o600 before writing so the file is never world-readable.
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
@@ -1404,12 +1406,13 @@ def _cancel_live_turns(tenant_id: str, sid: str) -> None:
 
 def delete_session(tenant_id: str, sid: str) -> bool:
     path = _meta_path(tenant_id, sid)
-    if not path.exists():
-        return False
-    try:
-        path.unlink()
-    except OSError:
-        return False
+    with _meta_update_lock_for(tenant_id):
+        if not path.exists():
+            return False
+        try:
+            path.unlink()
+        except OSError:
+            return False
     _cancel_live_turns(tenant_id, sid)
     wd = _workdir(tenant_id, sid)
     if wd.exists():
@@ -1446,7 +1449,27 @@ def delete_session(tenant_id: str, sid: str) -> bool:
     return True
 
 
-_meta_update_lock = threading.Lock()
+_meta_thread_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def _meta_update_lock_for(tenant_id: str):
+    """Serialise chat-metadata read-modify-writes across THREADS and across
+    the two host processes (gateway + standalone console) on one home: the
+    thread lock alone let two processes interleave a touch and a rename into
+    an unreadable meta file, and a delete land between a read and a write
+    (review R4). POSIX flock; the Windows fcntl shim makes it a no-op, where
+    the console is documented single-process."""
+    import fcntl  # noqa: PLC0415
+    d = _store_dir(tenant_id)
+    d.mkdir(parents=True, exist_ok=True)
+    with _meta_thread_lock:
+        with open(d / ".meta.lock", "a+") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 def _save(sess: WebChatSession) -> None:
@@ -1471,7 +1494,7 @@ def _update_meta(sess: WebChatSession, **fields: Any) -> bool:
     mid-turn (review R2). A deleted session (metadata gone) is never
     recreated — returns False."""
     path = _meta_path(sess.tenant_id, sess.sid)
-    with _meta_update_lock:
+    with _meta_update_lock_for(sess.tenant_id):
         meta = _read_meta(path) if path.exists() else None
         if not isinstance(meta, dict):
             return False
@@ -1484,7 +1507,7 @@ def _update_meta(sess: WebChatSession, **fields: Any) -> bool:
 
 def touch(sess: WebChatSession, *, increment_turn: bool = False) -> None:
     path = _meta_path(sess.tenant_id, sess.sid)
-    with _meta_update_lock:
+    with _meta_update_lock_for(sess.tenant_id):
         meta = _read_meta(path) if path.exists() else None
         if not isinstance(meta, dict):
             return  # deleted while the turn ran: stays deleted
@@ -3905,11 +3928,6 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
     Best-effort: a failed write does not break the stream — the user
     message is still in the WebSocket history client-side, and the
     assistant's reply was already streamed back."""
-    if not _meta_path(sess.tenant_id, sess.sid).exists():
-        # Deleted while a turn ran (or a cancel handler fired after the
-        # delete): writing here would recreate the turn log of a chat whose
-        # deletion is an erasure path — its text would survive on disk.
-        return
     path = _turns_path(sess.tenant_id, sess.sid)
     payload = {"role": role, "ts": time.time(), "parts": parts}
     # ADR-0650 Phase 4 — attach the turn's resolved language to EVERY persisted
@@ -3943,9 +3961,15 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
         payload["v"] = 2
         payload["cli_spawned"] = bool(cli_spawned)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        # Under the meta lock delete_session takes too: a chat deleted while
+        # a turn ran (or a cancel handler firing after the delete) must not
+        # get its turn log recreated — deletion is an erasure path.
+        with _meta_update_lock_for(sess.tenant_id):
+            if not _meta_path(sess.tenant_id, sess.sid).exists():
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
     except OSError:
         pass
 

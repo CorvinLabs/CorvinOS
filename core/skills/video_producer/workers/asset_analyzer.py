@@ -12,6 +12,8 @@ from typing import List, Dict, Optional
 import re
 from enum import Enum
 
+from ..hedges import find_hedge
+
 
 class AnalysisStatus(Enum):
     """Analysis result status"""
@@ -129,24 +131,9 @@ class AssetAnalyzerWorker:
             True if all facts appear sourced, False otherwise
         """
 
-        unsourced_phrases = [
-            "i believe",
-            "i think",
-            "i guess",
-            "probably",
-            "maybe",
-            "allegedly",
-            "supposedly",
-            "it seems",
-            "might be",
-            "could be",
-        ]
-
         for fact in facts:
-            fact_lower = fact.lower()
-            for phrase in unsourced_phrases:
-                if phrase in fact_lower:
-                    return False
+            if find_hedge(fact):
+                return False
 
         return True
 

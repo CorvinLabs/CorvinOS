@@ -1251,9 +1251,10 @@ def friendship_create(
 # ── chat-native friendship-token staging (ADR-2216) ─────────────────────
 # Two-step gate, same structural shape as a2a_feed.py's a2a_send confirm:
 # the MCP tool (a2a_friendship_token_create) stages a REQUEST with no key
-# material; only THIS route, gated by the same require_csrf dependency a
-# subprocess cannot satisfy, actually calls create_friendship_token() and
-# mints the shared key.
+# material; only THIS route, gated by the same require_csrf dependency the
+# MCP tool call cannot satisfy, actually calls create_friendship_token() and
+# mints the shared key. (A worker with Bash on the same OS user can log in on
+# loopback itself — the stated OS-isolation limit, layer-38 "Honest limits".)
 
 class FriendshipTokenPendingPreview(BaseModel):
     pending_id: str

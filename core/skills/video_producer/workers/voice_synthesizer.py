@@ -36,7 +36,7 @@ class VoiceResult:
     """Voice synthesis result"""
     audio_files: List[str]
     total_duration_seconds: float
-    loudness_lufs: float  # Target: -23 LUFS (broadcast standard)
+    loudness_lufs: Optional[float]  # -23.0 when every scene was normalised, None otherwise
     confidence: float
     success: bool = True
     provider_used: str = "unknown"  # "openai-tts" | "edge-tts" | "piper-tts" | "mock"
@@ -91,11 +91,11 @@ class VoiceSynthesizerWorker:
             audio_files.append(audio_path)
             providers.append(provider)
 
-        if "mock" in providers:
+        if "mock" in providers or not all(self._is_real_audio(a) for a in audio_files):
             # A mock "audio" file is JSON. Reporting success let the job run on
             # until ASSEMBLY died on it; stop here and say which scenes failed.
             return VoiceResult(
-                audio_files=audio_files, total_duration_seconds=0.0, loudness_lufs=0.0,
+                audio_files=audio_files, total_duration_seconds=0.0, loudness_lufs=None,
                 confidence=0.0, success=False, provider_used=",".join(providers),
             )
 
@@ -111,10 +111,32 @@ class VoiceSynthesizerWorker:
         return VoiceResult(
             audio_files=audio_files,
             total_duration_seconds=total_duration,
-            loudness_lufs=-23.0 if normalized else 0.0,
+            loudness_lufs=-23.0 if normalized else None,
             confidence=0.94,
             provider_used=provider_used,
         )
+
+    def _is_real_audio(self, path: str) -> bool:
+        """An audio stream ffprobe can read with a positive duration. A 200
+        response carrying JSON, an empty body or a mock file all fail this —
+        the provider label alone proved nothing (review round 2)."""
+        try:
+            r = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+                 "stream=codec_type:format=duration", "-of", "default=noprint_wrappers=1", path],
+                capture_output=True, text=True, timeout=10,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+        if r.returncode != 0 or "codec_type=audio" not in r.stdout:
+            return False
+        for line in r.stdout.splitlines():
+            if line.startswith("duration="):
+                try:
+                    return float(line.split("=", 1)[1]) > 0
+                except ValueError:
+                    return False
+        return False
 
     def _synthesize_scene_openai(self, narration_text: str, output_path: str) -> bool:
         """Try OpenAI TTS for one scene. Returns True on success (writes
@@ -148,8 +170,8 @@ class VoiceSynthesizerWorker:
                     return False
                 with open(output_path, "wb") as f:
                     f.write(response.read())
-            return True
-        except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
+            return self._is_real_audio(output_path)
+        except Exception:  # URLError, IncompleteRead, timeouts ... -> next provider
             return False
 
     def _synthesize_scene_real(
@@ -196,7 +218,7 @@ class VoiceSynthesizerWorker:
             finally:
                 loop.close()
 
-            if self._get_audio_duration_ffprobe(output_path) <= 0:
+            if not self._is_real_audio(output_path):
                 raise RuntimeError("edge-tts wrote no playable audio")
             return output_path, "edge-tts"
 
@@ -220,6 +242,8 @@ class VoiceSynthesizerWorker:
                     capture_output=True,
                 )
                 os.remove(wav_path)
+                if not self._is_real_audio(output_path):
+                    raise RuntimeError("piper wrote no playable audio")
 
                 return output_path, "piper-tts"
             except Exception as e:
@@ -322,14 +346,9 @@ class VoiceSynthesizerWorker:
         all_ok = True
         for audio_file in audio_files:
             try:
-                # Skip if it's a mock JSON file
-                if not audio_file.endswith(".mp3") or os.path.getsize(audio_file) < 1000:
-                    try:
-                        with open(audio_file, "r") as f:
-                            json.load(f)
-                            continue  # Skip mock files
-                    except (json.JSONDecodeError, ValueError):
-                        pass
+                if not self._is_real_audio(audio_file):
+                    all_ok = False  # nothing to normalise is not "normalised"
+                    continue
 
                 # Normalize loudness using FFmpeg loudnorm filter
                 # loudnorm=I=-23:TP=-1.5:LRA=7 (EBU R128 standard)

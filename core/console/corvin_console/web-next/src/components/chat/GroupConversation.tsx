@@ -104,7 +104,7 @@ function GroupMessageRow({ m, group, selfId }: { m: GroupMessage; group: ChatGro
           <span className="font-medium text-foreground/80">{mine ? "You" : name}</span>
           <span>·</span>
           <span>{fmtTime(m.ts)}</span>
-          <DeliveryNote delivery={m.delivery} />
+          <DeliveryNote delivery={m.delivery} ts={m.ts} />
         </div>
         <div className={cn(
           "w-fit max-w-full rounded-2xl px-4 py-3 text-sm leading-relaxed",
@@ -130,9 +130,20 @@ function GroupMessageRow({ m, group, selfId }: { m: GroupMessage; group: ChatGro
 /** Outbound delivery to the group's A2A peers, as the backend recorded it.
  * "fanout" is the pre-2026-10-05 value, written before any send happened —
  * it proves nothing, so it is shown as unconfirmed, never as delivered. */
-function DeliveryNote({ delivery }: { delivery: string }) {
+// A fan-out runs in the host process; a restart drops it and leaves the
+// stored state "pending". Past this age nothing can still be sending it.
+const PENDING_STALE_S = 15 * 60;
+
+function DeliveryNote({ delivery, ts }: { delivery: string; ts: number }) {
   if (delivery === "delivered") return <span title="Every A2A peer in the group accepted it">· delivered to peers</span>;
+  if (delivery === "pending" && Date.now() / 1000 - ts > PENDING_STALE_S)
+    return <span className="text-amber-700 dark:text-amber-400" title="Sending was interrupted (e.g. a restart) — it may or may not have reached the peers">· delivery interrupted</span>;
   if (delivery === "pending") return <span title="Sending to the group's A2A peers">· sending to peers…</span>;
+  if (delivery.startsWith("unconfirmed")) {
+    const n = Number(delivery.split(":")[1]) || 1;
+    return <span className="text-amber-700 dark:text-amber-400"
+      title="The peer may have received it but did not confirm — check before resending">· delivery unconfirmed for {n} peer{n === 1 ? "" : "s"}</span>;
+  }
   if (delivery.startsWith("failed")) {
     const n = Number(delivery.split(":")[1]) || 1;
     return <span className="text-destructive" data-testid="delivery-failed"

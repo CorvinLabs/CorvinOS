@@ -330,7 +330,10 @@ def a2a_feed_send_confirm(rec: Session, pending_id: str) -> dict[str, Any]:
 
     This is the ONLY code path that can fire a chat-staged a2a_send — it
     requires the same session+CSRF dependency as every other mutation on
-    this router, which a tool call from the MCP subprocess cannot provide.
+    this router, which the MCP tool call itself cannot provide. Limit: the
+    console's loopback login is credential-less, so a worker running Bash as
+    the same OS user can obtain a session; that needs OS isolation of the
+    worker (ADR-0241/0238), see layer-38 "Honest limits".
     The record is checked first and claimed (atomically, see
     ``a2a_pending_claim``) only right before the send, so a refusal leaves
     it confirmable and of two racing confirms only one sends.
@@ -359,8 +362,16 @@ def a2a_feed_send_confirm(rec: Session, pending_id: str) -> dict[str, Any]:
         )
     except Exception:
         raise HTTPException(status_code=503, detail="audit chain unavailable — send not confirmed")
-    _SEND_POOL.submit(_send_in_background, record["peer_id"], record["text"], [], None)
-    return {"accepted": True, "peer_id": record["peer_id"]}
+    # Same "queued" record as a direct send (review R4): the confirmed message
+    # is visible at once and, if the job is lost to a restart, shows as
+    # interrupted instead of never having existed.
+    import uuid as _uuid  # noqa: PLC0415
+    task_id = str(_uuid.uuid4())
+    _feed.record(direction="out", kind="task", peer_id=record["peer_id"], task_id=task_id,
+                 text=record["text"], status="queued",
+                 peer_label=peer.get("label"), tenant_id=tenant_id)
+    _SEND_POOL.submit(_send_in_background, record["peer_id"], record["text"], [], None, task_id)
+    return {"accepted": True, "peer_id": record["peer_id"], "task_id": task_id}
 
 
 @router.post("/a2a/feed/send/discard/{pending_id}")

@@ -142,7 +142,10 @@ def _write_atomic(path: Path, data: bytes) -> None:
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.write(fd, data)
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        os.fsync(fd)  # a power loss must not leave a zero-length seq/store
     finally:
         os.close(fd)
     os.replace(tmp, path)
@@ -202,11 +205,16 @@ def _next_seq(root: Path) -> int:
     clear (never reused, never lowered), so a client cursor stays valid.
     """
     path = root / "seq"
+    readable = True
     try:
-        cur = int(path.read_text(encoding="ascii").strip() or 0)
+        raw = path.read_text(encoding="ascii").strip()
+        cur = int(raw)
     except (OSError, ValueError):
-        cur = 0
-    if not path.exists():
+        cur, readable = 0, False
+    if not readable:
+        # Missing, empty or corrupt (review R4: an empty seq restarted at 0
+        # and a client's live cursor after=N saw nothing until N was passed
+        # again): continue above every seq already handed out.
         # First allocation on a store that predates seq: continue above any
         # seq already present (and above ids handed out via overrides).
         cur = max([cur] + [int(r.get("seq") or 0) for r in _iter_records(root / "messages.jsonl")]
@@ -525,7 +533,7 @@ def compact(root: Path) -> tuple[int, int]:
 
 def erase_peer(subject_id: str, tenant_id: str | None = None) -> tuple[int, int]:
     """GDPR Art. 17 for this store: drop every message exchanged with the
-    subject — the peer id it is filed under, or the exact peer label — and
+    subject — the peer id it is filed under — and
     every attachment blob only those messages referenced. Returns
     (messages, blobs) removed. Same lock as every writer and compaction."""
     if not subject_id:
@@ -537,8 +545,9 @@ def erase_peer(subject_id: str, tenant_id: str | None = None) -> tuple[int, int]
     with _store_lock(root):
         overrides = _load_overrides(root)
         records = _apply_overrides(list(_iter_records(path)), overrides)
-        keep = [r for r in records
-                if r.get("peer_id") != subject_id and r.get("peer_label") != subject_id]
+        # By peer id only: a label ("Laptop") is not an identity and matching
+        # it wiped every peer that happened to share it (review R4).
+        keep = [r for r in records if r.get("peer_id") != subject_id]
         removed = len(records) - len(keep)
         if not removed:
             return 0, 0

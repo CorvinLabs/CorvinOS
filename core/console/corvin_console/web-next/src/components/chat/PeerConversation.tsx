@@ -45,12 +45,17 @@ function responseText(m: A2AFeedMessage): string {
   return keys.length ? JSON.stringify(m.data, null, 2) : "";
 }
 
+const QUEUED_STALE_S = 3600 + 120; // max send timeout + slack
+
 function PeerMessageRow({ m, label, answered }: { m: A2AFeedMessage; label: string; answered: boolean }) {
   const mine = m.direction === "out";
   // "unconfirmed": the request may have reached the peer — not a failure to
   // resend (a resend runs it twice). "queued": accepted, waiting to be sent.
   const unconfirmed = m.status === "unconfirmed";
   const failed = !unconfirmed && (Boolean(m.error) || ["rejected", "timeout", "error"].includes(m.status));
+  // A queued send lives in the host process's pool; after a restart nothing
+  // sends it. Past the longest send timeout it is reported as not sent.
+  const staleQueued = m.status === "queued" && !answered && Date.now() / 1000 - m.ts > QUEUED_STALE_S;
   const showStatus = m.status && m.status !== "ok" && m.status !== "received" && m.status !== "sent"
     && !(m.status === "queued" && answered);
   const body = m.kind === "response" ? responseText(m) : m.text;
@@ -67,7 +72,7 @@ function PeerMessageRow({ m, label, answered }: { m: A2AFeedMessage; label: stri
           {showStatus && (
             <Badge variant={failed ? "danger" : "outline"} data-testid="peer-message-status"
               className={cn("px-1.5 py-0 text-[9px]", unconfirmed && "border-amber-500/50 text-amber-700 dark:text-amber-400")}>
-              {unconfirmed ? "delivery unconfirmed" : m.status}
+              {unconfirmed ? "delivery unconfirmed" : staleQueued ? "not sent (interrupted)" : m.status}
             </Badge>
           )}
         </div>

@@ -12,6 +12,8 @@ from enum import Enum
 from typing import Dict, List, Optional, Any
 import json
 import re
+
+from .hedges import find_hedge
 from datetime import datetime
 import uuid
 
@@ -87,6 +89,9 @@ class VideoJob:
     research_queries: Optional[Dict[str, Any]] = None
     research_result: Optional[Any] = None
     analysis_result: Optional[Dict] = None
+    # The narration ANALYSIS approved. Every later gate compares against it:
+    # replacing job.narration after analysis must not reach the voice.
+    analyzed_narration: Optional[tuple] = None
     voice_result: Optional[Dict] = None
     screenshots_result: Optional[Dict] = None
     video_result: Optional[Dict] = None
@@ -230,6 +235,10 @@ class MaestroOrchestrator:
         job = self.jobs.get(job_id)
         if not job:
             raise ValueError(f"Job {job_id} not found")
+        # Workers build paths from job.job_id; the field is mutable, so the
+        # check made at creation is repeated before every dispatch.
+        if not isinstance(job.job_id, str) or not JOB_ID_RE.match(job.job_id) or job.job_id != job_id:
+            raise RuntimeError(f"job id of {job_id!r} was changed or is unsafe; refusing to dispatch")
 
         # Enforce phase gates (preconditions)
         gate_check = self.phase_gates.get(job.current_phase)
@@ -256,6 +265,7 @@ class MaestroOrchestrator:
         phase_name = job.current_phase.name.lower()
         if phase_name == "analysis":
             job.analysis_result = result
+            job.analyzed_narration = tuple(job.narration)
         elif phase_name == "voice":
             job.voice_result = result
         elif phase_name == "image_research":
@@ -407,26 +417,15 @@ class MaestroOrchestrator:
         if not narration:
             return False
 
-        # Check for basic hallucination indicators
-        bad_phrases = [
-            "I believe",
-            "probably",
-            "maybe",
-            "I think",
-            "I guess",
-            "allegedly",
-        ]
-
         for scene in narration:
             if not isinstance(scene, str) or not scene.strip():
                 return False
-            for phrase in bad_phrases:
-                if phrase.lower() in scene.lower():
-                    return False
+            if find_hedge(scene):
+                return False
 
         return True
 
-    def validate_content_presence(self, narration: List[str]) -> None:
+    def validate_content_presence(self, narration: List[str], emit: bool = True) -> None:
         """GATE 1: Content-Presence Gate — Fail-Closed Validation (ADR-0720)
 
         Rejects jobs with empty or insufficient narration BEFORE any worker dispatch.
@@ -463,7 +462,8 @@ class MaestroOrchestrator:
             )
 
         # Emit audit event: content validation passed
-        self._audit("content_presence_validated", "pre-job-creation", {
+        if emit:
+          self._audit("content_presence_validated", "pre-job-creation", {
             "num_scenes": len(narration),
             "total_length_chars": total_content_length,
             "status": "passed",
@@ -476,7 +476,7 @@ class MaestroOrchestrator:
         job after create_job(), and blank scenes must not reach analysis.
         """
         try:
-            self.validate_content_presence(job.narration)
+            self.validate_content_presence(job.narration, emit=False)
         except (ValueError, AttributeError, TypeError):
             return False
         return True
@@ -484,9 +484,13 @@ class MaestroOrchestrator:
     def _validate_voice_phase(self, job: VideoJob) -> bool:
         """Validate preconditions for Voice phase
 
-        Requires: Asset Analyzer must have completed successfully
+        Requires: Asset Analyzer completed, and the narration is still the
+        text it approved (the job is mutable; an edit after analysis would
+        otherwise be spoken unchecked).
         """
-        return job.analysis_result is not None
+        return (job.analysis_result is not None
+                and job.analyzed_narration is not None
+                and tuple(job.narration) == job.analyzed_narration)
 
     def _validate_screenshots_phase(self, job: VideoJob) -> bool:
         """Validate preconditions for Screenshots phase

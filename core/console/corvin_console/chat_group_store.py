@@ -24,6 +24,7 @@ Callers MUST re-check ``require_friendship_active`` before admitting an
 from __future__ import annotations
 
 import contextlib
+import sys
 import json
 import os
 import re
@@ -84,7 +85,9 @@ def attachments_dir(tenant_global_dir: Path, group_id: str) -> Path | None:
 
 def _atomic_write(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    # Unique per writer: a shared "meta.json.tmp" let two writers interleave
+    # bytes into one temp file before either renamed it (review R4).
+    tmp = path.with_name(f"{path.name}.{secrets.token_hex(6)}.tmp")
     with tmp.open("w", encoding="utf-8") as fh:
         json.dump(data, fh)
     os.chmod(tmp, 0o600)
@@ -188,20 +191,26 @@ def add_participant(
     d = _group_dir(tenant_global_dir, group_id)
     if d is None or not (d / "meta.json").exists():
         raise ChatGroupError("group not found")
-    rec = get_group(tenant_global_dir, group_id)
-    if rec is None:
-        raise ChatGroupError("group not found")
-    if any(p["participant_id"] == participant_id for p in rec["participants"]):
-        raise ChatGroupError("participant already in group")
-    rec["participants"].append({
-        "participant_id": participant_id,
-        "kind": kind,
-        "display_name": str(display_name)[:_MAX_DISPLAY_NAME_LEN],
-        "peer_endpoint_id": peer_endpoint_id,
-        "added_at": time.time(),
-        "added_by": added_by,
-    })
-    _atomic_write(d / "meta.json", rec)
+    # Read-modify-write under the group lock (shared with appends, delete
+    # and erasure): unlocked, a concurrent add re-admitted a just-removed
+    # member and recreated a deleted group (review R4).
+    with _messages_lock(d):
+        if not (d / "meta.json").exists():
+            raise ChatGroupError("group not found")
+        rec = get_group(tenant_global_dir, group_id)
+        if rec is None:
+            raise ChatGroupError("group not found")
+        if any(p["participant_id"] == participant_id for p in rec["participants"]):
+            raise ChatGroupError("participant already in group")
+        rec["participants"].append({
+            "participant_id": participant_id,
+            "kind": kind,
+            "display_name": str(display_name)[:_MAX_DISPLAY_NAME_LEN],
+            "peer_endpoint_id": peer_endpoint_id,
+            "added_at": time.time(),
+            "added_by": added_by,
+        })
+        _atomic_write(d / "meta.json", rec)
     return rec
 
 
@@ -211,14 +220,20 @@ def remove_participant(
     d = _group_dir(tenant_global_dir, group_id)
     if d is None or not (d / "meta.json").exists():
         raise ChatGroupError("group not found")
-    rec = get_group(tenant_global_dir, group_id)
-    if rec is None:
-        raise ChatGroupError("group not found")
-    before = len(rec["participants"])
-    rec["participants"] = [p for p in rec["participants"] if p["participant_id"] != participant_id]
-    if len(rec["participants"]) == before:
-        raise ChatGroupError("participant not in group")
-    _atomic_write(d / "meta.json", rec)
+    # Read-modify-write under the group lock (shared with appends, delete
+    # and erasure): unlocked, a concurrent add re-admitted a just-removed
+    # member and recreated a deleted group (review R4).
+    with _messages_lock(d):
+        if not (d / "meta.json").exists():
+            raise ChatGroupError("group not found")
+        rec = get_group(tenant_global_dir, group_id)
+        if rec is None:
+            raise ChatGroupError("group not found")
+        before = len(rec["participants"])
+        rec["participants"] = [p for p in rec["participants"] if p["participant_id"] != participant_id]
+        if len(rec["participants"]) == before:
+            raise ChatGroupError("participant not in group")
+        _atomic_write(d / "meta.json", rec)
     return rec
 
 
@@ -250,13 +265,27 @@ def is_participant(tenant_global_dir: Path, group_id: str, participant_id: str) 
     return any(p["participant_id"] == participant_id for p in rec["participants"])
 
 
+class ChatGroupBusy(Exception):
+    """The group's lock is held by another writer — retryable (503)."""
+
+
 @contextlib.contextmanager
 def _messages_lock(d: Path):
-    """Cross-process lock for one group's message log (appends, trims and
-    delivery updates are read-modify-write on the same file)."""
+    """Cross-process lock for one group's files (message log, meta.json).
+    A busy lock surfaces as ChatGroupBusy, never as a foreign exception type."""
     import a2a_friendship as _ft  # type: ignore[import-not-found]  # noqa: PLC0415
-    with _ft.config_file_lock(d):
+    try:
+        cm = _ft.config_file_lock(d)
+        cm.__enter__()
+    except _ft.FriendshipLockBusy:
+        raise ChatGroupBusy("group is busy") from None
+    try:
         yield
+    except BaseException:
+        if not cm.__exit__(*sys.exc_info()):
+            raise
+    else:
+        cm.__exit__(None, None, None)
 
 
 def count_groups(tenant_global_dir: Path, *, created_by: str | None = None) -> int:

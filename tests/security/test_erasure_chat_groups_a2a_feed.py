@@ -69,14 +69,53 @@ class ErasureChatGroupsA2AFeedTests(unittest.TestCase):
                              text="[Attached files — stored with this group]\n"
                                   "- attachments/their file.txt (0.1 KB, text/plain)\n\nsecret")
         store.append_message(self.gdir, gid, sender_participant_id="operator", text="hello all")
+        # A relayed line naming the subject is attributed by its prefix.
+        store.append_message(self.gdir, gid, sender_participant_id="hub-relay",
+                             text="[Subject] relayed words")
         res = eh.ChatGroupHandler().purge("peer-subject", "req-2")
-        self.assertEqual(res.count, 3)  # message + file + membership
+        self.assertEqual(res.count, 3)  # own message + relayed line + membership
         msgs = [m["text"] for m in store.list_messages(self.gdir, gid)]
         self.assertEqual(msgs, ["hello all"])
-        self.assertFalse((att_dir / "their file.txt").exists())
+        # Only the local console uploads into a group's attachments directory;
+        # a peer's message that NAMES a file there is free text and must not
+        # delete the operator's file (review R4).
+        self.assertTrue((att_dir / "their file.txt").exists())
         self.assertTrue((att_dir / "mine.txt").exists())
         parts = [p["participant_id"] for p in store.get_group(self.gdir, gid)["participants"]]
         self.assertNotIn("peer-subject", parts)
+
+    def test_subject_found_by_endpoint_id_loses_messages_too(self):
+        from corvin_console import chat_group_store as store
+        import erasure_handlers as eh
+        g = store.create_group(self.gdir, tenant_id="_default", title="G",
+                               created_by_participant_id="operator")
+        gid = g["group_id"]
+        store.add_participant(self.gdir, gid, participant_id="p-local-handle", kind="a2a_peer",
+                              display_name="Bob", peer_endpoint_id="endpoint-bob",
+                              added_by="operator")
+        store.append_message(self.gdir, gid, sender_participant_id="p-local-handle", text="bob says")
+        store.append_message(self.gdir, gid, sender_participant_id="operator", text="kept")
+        eh.ChatGroupHandler().purge("endpoint-bob", "req-3")
+        self.assertEqual([m["text"] for m in store.list_messages(self.gdir, gid)], ["kept"])
+        self.assertEqual(store.get_group(self.gdir, gid)["participants"][0]["participant_id"], "operator")
+
+    def test_still_referenced_file_survives_a_local_subject(self):
+        from corvin_console import chat_group_store as store
+        import erasure_handlers as eh
+        g = store.create_group(self.gdir, tenant_id="_default", title="G",
+                               created_by_participant_id="operator")
+        gid = g["group_id"]
+        att_dir = store.attachments_dir(self.gdir, gid)
+        att_dir.mkdir(parents=True, exist_ok=True)
+        (att_dir / "a.txt").write_text("x")
+        (att_dir / "b.txt").write_text("y")
+        ref = "[Attached files — stored with this group]\n- attachments/{} (0.1 KB, text/plain)"
+        store.append_message(self.gdir, gid, sender_participant_id="web:me", text=ref.format("a.txt"))
+        store.append_message(self.gdir, gid, sender_participant_id="web:me", text=ref.format("b.txt"))
+        store.append_message(self.gdir, gid, sender_participant_id="operator", text=ref.format("b.txt"))
+        eh.ChatGroupHandler().purge("web:me", "req-4")
+        self.assertFalse((att_dir / "a.txt").exists())
+        self.assertTrue((att_dir / "b.txt").exists())  # still referenced by another member
 
     def test_both_handlers_are_in_the_real_chain_and_claimed(self):
         import erasure_handlers as eh

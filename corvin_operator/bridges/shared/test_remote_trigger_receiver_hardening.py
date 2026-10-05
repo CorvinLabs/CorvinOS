@@ -283,6 +283,15 @@ class TestWorkerToolDenyList(_Base):
         for tool in ("Bash", "Monitor", "PowerShell"):
             self.assertNotIn(tool, d)
 
+    def test_bash_without_network_is_refused_and_audited(self):
+        # Review R4: a shell is network access (curl, a loopback call to the
+        # console) — allow_bash without allow_network must not grant Bash.
+        d = self._disallowed({"allow_bash": True, "allow_network": False})
+        for tool in ("Bash", "Monitor", "PowerShell", "WebFetch"):
+            self.assertIn(tool, d)
+        self.assertIn("A2A.bash_denied_without_network",
+                      [e for e, _ in self.se.events])
+
     def test_subagent_deny_names_agent_and_legacy_task(self):
         d = self._disallowed({"allow_bash": False})
         self.assertIn("Agent", d)

@@ -267,6 +267,24 @@ advisory (prompt text), not a security boundary.
 
 **Honest limits of the checkbox model (2026-07-20):**
 
+- **`allow_bash` requires `allow_network` (2026-10-05).** A shell is network
+  access (`curl`, `ssh`, a loopback call to this console). The receiver now
+  refuses Bash (and every other shell tool) for an origin that grants bash but
+  not network, audited as `A2A.bash_denied_without_network`.
+- **`allow_read_files` / `allow_write_files` are NOT confined to the A2A
+  workspace.** The worker runs `claude` with `--dangerously-skip-permissions`;
+  `--add-dir <workspace>` adds a directory, it confines nothing. A read grant
+  can read anything the OS user can (other origins' keys, `~/.config`), a write
+  grant can write anything (shell rc files → code execution later). Real
+  confinement needs path-scoped permission rules or OS isolation of the worker
+  (ADR-0241/0238) — not built. Grant these only to peers you would give a shell.
+- **The console's confirm gate holds against the MCP tool path, not against a
+  shell.** A chat-staged `a2a_send` / token request becomes real only through a
+  session+CSRF route — but the console's local login is credential-less on
+  loopback, so a worker that can run Bash as the same OS user can obtain such a
+  session itself. Same boundary as the session ledger and the audit chain:
+  integrity against a same-user worker needs OS-level isolation.
+
 - `allow_subagents=true` unblocks the Task tool, and the engine does **not**
   contractually guarantee that the other per-connection denies bind inside
   subagent workers: claude-CLI subagents inherit the parent session's
