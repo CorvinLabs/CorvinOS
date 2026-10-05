@@ -44,7 +44,7 @@ on its own: redirecting billing must be a deliberate act.
 |---|---|---|
 | `CORVIN_SKILL_CREATOR_ENGINE` | `claude_code` | `claude_code` · `api` · `local` |
 | `CORVIN_SKILL_CREATOR_MODEL` | `claude-opus-5` | model passed to `--model` |
-| `CORVIN_SKILL_CREATOR_TIMEOUT_S` | `180` | per-call CLI timeout |
+| `CORVIN_SKILL_CREATOR_TIMEOUT_S` | `600` | per-call CLI timeout (ADR-2094: raised 180→300→600 — the Tool-Forge fix loop resends the full draft on every retry and `max_tokens` is not enforced on the CLI path, so duration scales with draft size) |
 | `CORVIN_CLAUDE_BIN` | resolved from PATH | absolute path to the `claude` binary |
 
 The orchestrator resolves the client **once** and injects it into all four

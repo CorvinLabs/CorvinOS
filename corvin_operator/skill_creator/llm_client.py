@@ -74,7 +74,14 @@ MODEL_ENV = "CORVIN_SKILL_CREATOR_MODEL"
 TIMEOUT_ENV = "CORVIN_SKILL_CREATOR_TIMEOUT_S"
 
 DEFAULT_MODEL = "claude-opus-5"
-DEFAULT_TIMEOUT_S = 300.0
+# ADR-2094: raised 180 -> 300 (refine calls on long skills exceeded 180s).
+# Raised again 300 -> 600 (2026-10-05): the Tool-Forge fix loop resends the
+# full draft (impl up to MAX_IMPL_CHARS=64KiB) on every retry and `max_tokens`
+# is not enforced on the Claude Code CLI path, so a single call's duration
+# scales with draft size, not request complexity. Still an env override, not
+# a cap on generation time — see ADR-2094 Amendments for the open structural
+# follow-up (diff-based fixes instead of full-draft regeneration).
+DEFAULT_TIMEOUT_S = 600.0
 
 _BIN_FALLBACKS = (
     "/home/linuxbrew/.linuxbrew/bin/claude",

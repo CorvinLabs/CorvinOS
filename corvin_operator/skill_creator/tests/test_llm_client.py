@@ -16,6 +16,7 @@ if str(_OPERATOR_DIR) not in sys.path:
     sys.path.insert(0, str(_OPERATOR_DIR))
 
 from skill_creator.llm_client import (  # noqa: E402
+    DEFAULT_TIMEOUT_S,
     ClaudeCodeClient,
     ClaudeCodeUnavailable,
     engine_id_of,
@@ -110,6 +111,41 @@ class TestMessagesCreate:
                             {"type": "text", "text": "block two"}],
             }])
         assert "block one\nblock two" in run.call_args[0][0][2]
+
+
+class TestTimeout:
+    """ADR-2094: the CLI's `timeout` kwarg is the only backstop against a
+    stuck `claude -p` call, so the value actually reaching subprocess.run
+    matters more than the env-var plumbing in isolation."""
+
+    def test_default_timeout_is_600s(self, monkeypatch):
+        monkeypatch.delenv("CORVIN_SKILL_CREATOR_TIMEOUT_S", raising=False)
+        assert DEFAULT_TIMEOUT_S == 600.0
+        client = _client()
+        assert client.timeout_s == 600.0
+
+    def test_env_override_reaches_subprocess_run(self, monkeypatch):
+        monkeypatch.setenv("CORVIN_SKILL_CREATOR_TIMEOUT_S", "900")
+        client = _client()
+        assert client.timeout_s == 900.0
+
+        completed = MagicMock(returncode=0, stdout=SUCCESS_ENVELOPE, stderr="")
+        with patch("skill_creator.llm_client.subprocess.run", return_value=completed) as run:
+            client.messages.create(messages=[{"role": "user", "content": "ping"}])
+        assert run.call_args.kwargs["timeout"] == 900.0
+
+    def test_invalid_env_value_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("CORVIN_SKILL_CREATOR_TIMEOUT_S", "not-a-number")
+        client = _client()
+        assert client.timeout_s == DEFAULT_TIMEOUT_S
+
+    def test_timeout_expired_raises_claude_code_unavailable_with_actual_value(self, monkeypatch):
+        monkeypatch.setenv("CORVIN_SKILL_CREATOR_TIMEOUT_S", "12")
+        client = _client()
+        with patch("skill_creator.llm_client.subprocess.run",
+                   side_effect=__import__("subprocess").TimeoutExpired(cmd="claude", timeout=12)):
+            with pytest.raises(ClaudeCodeUnavailable, match="12"):
+                client.messages.create(messages=[{"role": "user", "content": "ping"}])
 
 
 class TestResolution:
