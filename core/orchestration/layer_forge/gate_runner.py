@@ -4,6 +4,7 @@ gate so a crashing test can never take down the orchestrator process.
 """
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -24,7 +25,12 @@ class QualityGateRunner:
         self.timeout_s = timeout_s
 
     def run_gate(self, gate_id: str, test_path: str) -> QualityGateVerdict:
-        full_path = self.repo_root / test_path
+        if importlib.util.find_spec("pytest") is None:
+            return QualityGateVerdict(gate_id, "ERROR", test_path, "pytest not installed for this interpreter")
+        tests_root = (self.repo_root / "tests").resolve()
+        full_path = (self.repo_root / test_path).resolve()
+        if not full_path.is_relative_to(tests_root):
+            return QualityGateVerdict(gate_id, "ERROR", test_path, "test_path outside tests/")
         if not full_path.exists():
             return QualityGateVerdict(gate_id, "ERROR", test_path, "test_path does not exist")
         try:
@@ -41,7 +47,10 @@ class QualityGateRunner:
         tail = "\n".join(result.stdout.strip().splitlines()[-5:])
         if result.returncode == 0:
             return QualityGateVerdict(gate_id, "PASS", test_path, tail)
-        return QualityGateVerdict(gate_id, "FAIL", test_path, tail)
+        if result.returncode == 1:
+            return QualityGateVerdict(gate_id, "FAIL", test_path, tail)
+        # pytest 2..5: interrupted, internal/usage error, no tests collected — the gate never ran
+        return QualityGateVerdict(gate_id, "ERROR", test_path, f"pytest exit {result.returncode}")
 
     def run_all_gates(self, manifest: dict) -> list[QualityGateVerdict]:
         verdicts = []

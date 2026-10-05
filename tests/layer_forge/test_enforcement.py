@@ -49,3 +49,13 @@ def test_cross_check_without_runtime_host_is_skipped_not_passed(tmp_path):
     verdict = checker.check_host_awareness(manifest)
     assert verdict.status == "SKIPPED"
     assert verdict.detail == "skipped_no_runtime_host"
+
+
+def test_gate_with_no_collected_tests_is_error_not_pass(tmp_path):
+    from core.orchestration.layer_forge.gate_runner import QualityGateRunner
+
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_empty.py").write_text("x = 1\n")
+    verdict = QualityGateRunner(tmp_path).run_gate("g", "tests/test_empty.py")
+    assert verdict.status == "ERROR"
+    assert verdict.detail == "pytest exit 5"

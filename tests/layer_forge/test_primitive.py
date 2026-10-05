@@ -1,50 +1,64 @@
-"""Unit tests for LayerPrimitive — proves race-conditions are structurally
-excluded (ADR-2222 D4), not just 'usually fine'."""
+"""LayerPrimitive — the lock every registry read-modify-write runs under (ADR-2222 D4)."""
 import concurrent.futures
+import json
+import threading
 
-from core.orchestration.layer_forge.primitive import LayerPrimitive
+import pytest
 
-
-def test_write_then_read_roundtrip(tmp_path):
-    prim = LayerPrimitive("L34", tmp_path)
-    prim.write_state({"value": 42})
-    assert prim.read_state() == {"value": 42}
-
-
-def test_read_before_any_write_returns_empty(tmp_path):
-    prim = LayerPrimitive("L34", tmp_path)
-    assert prim.read_state() == {}
+from core.orchestration.layer_forge.primitive import (
+    LayerPrimitive,
+    LockTimeoutError,
+    atomic_write_json,
+)
 
 
-def test_concurrent_writers_no_corruption(tmp_path):
-    """10 threads write concurrently; every read-back must be valid, parseable
-    JSON matching exactly one of the writes — never a half-written / corrupted
-    blend of two writes (the race LayerPrimitive exists to prevent)."""
-    prim = LayerPrimitive("L34", tmp_path)
+def test_atomic_write_roundtrip_leaves_no_temp_files(tmp_path):
+    target = tmp_path / "x.json"
+    atomic_write_json(target, {"value": 42})
+    assert json.loads(target.read_text()) == {"value": 42}
+    assert [p.name for p in tmp_path.iterdir()] == ["x.json"]
 
-    def writer(i):
-        prim.write_state({"value": i, "marker": f"writer-{i}"})
-        state = prim.read_state()
-        # Whatever is currently on disk must be internally consistent:
-        # marker must match value, never a torn mix of two different writes.
-        assert state["marker"] == f"writer-{state['value']}"
-        return state
+
+def test_read_modify_write_under_lock_loses_no_update(tmp_path):
+    """40 concurrent increments of one counter file: the final value is exactly 40.
+    Without mutual exclusion two writers read the same value and one increment is lost."""
+    counter = tmp_path / "counter.json"
+    atomic_write_json(counter, {"n": 0})
+    prim = LayerPrimitive("entry", tmp_path / "locks")
+
+    def bump(_):
+        with prim.locked():
+            n = json.loads(counter.read_text())["n"]
+            atomic_write_json(counter, {"n": n + 1})
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
-        results = list(ex.map(writer, range(10)))
+        list(ex.map(bump, range(40)))
 
-    # Every single read observed a fully-formed write, never a partial one.
-    for r in results:
-        assert r["marker"] == f"writer-{r['value']}"
-
-    final = prim.read_state()
-    assert final["marker"] == f"writer-{final['value']}"
+    assert json.loads(counter.read_text())["n"] == 40
 
 
-def test_two_primitives_different_layer_ids_independent(tmp_path):
-    a = LayerPrimitive("L34", tmp_path)
-    b = LayerPrimitive("L10", tmp_path)
-    a.write_state({"owner": "a"})
-    b.write_state({"owner": "b"})
-    assert a.read_state() == {"owner": "a"}
-    assert b.read_state() == {"owner": "b"}
+def test_lock_is_exclusive_while_held(tmp_path):
+    prim = LayerPrimitive("entry", tmp_path)
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with prim.locked():
+            held.set()
+            release.wait(5)
+
+    t = threading.Thread(target=holder)
+    t.start()
+    held.wait(5)
+    with pytest.raises(LockTimeoutError):
+        with LayerPrimitive("entry", tmp_path).locked(timeout_s=0.2):
+            pass
+    release.set()
+    t.join()
+    with prim.locked(timeout_s=1):
+        pass  # released again
+
+
+def test_different_entry_ids_do_not_block_each_other(tmp_path):
+    with LayerPrimitive("a", tmp_path).locked():
+        with LayerPrimitive("b", tmp_path).locked(timeout_s=0.2):
+            pass

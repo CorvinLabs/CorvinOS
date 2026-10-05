@@ -57,31 +57,30 @@ class _FileLock:
         return False
 
 
-class LayerPrimitive:
-    """Atomic read/write of one layer's state, keyed by layer_id.
+def atomic_write_json(path: Path, data: dict) -> None:
+    """Write JSON so a reader sees the old or the new file, never a torn one."""
+    path = Path(path)
+    tmp = path.parent / f".{path.name}.{os.getpid()}.{time.monotonic_ns()}.tmp"
+    try:
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
-    write_state: temp-file + os.replace (atomic rename on POSIX) under the lock.
-    read_state: plain read under the same lock (consistent-read guarantee).
+
+class LayerPrimitive:
+    """Mutual exclusion for one registry entry id.
+
+    Every read-modify-write of an entry's state (create, status transition, and
+    the audit record that precedes it) runs inside ``locked()``; files are
+    replaced with ``atomic_write_json``. The lock is not re-entrant.
     """
 
-    def __init__(self, layer_id: str, state_dir: Path):
+    def __init__(self, layer_id: str, lock_dir: Path):
         self.layer_id = layer_id
-        self.state_dir = Path(state_dir)
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        self._lock_path = self.state_dir / f".{layer_id}.lock"
-        self._state_path = self.state_dir / f"{layer_id}.json"
+        self.lock_dir = Path(lock_dir)
+        self.lock_dir.mkdir(parents=True, exist_ok=True)
+        self._lock_path = self.lock_dir / f".{layer_id}.lock"
 
-    def _lock(self, timeout_s: float = 30.0) -> _FileLock:
+    def locked(self, timeout_s: float = 30.0) -> _FileLock:
         return _FileLock(self._lock_path, timeout_s=timeout_s)
-
-    def write_state(self, state: dict, *, timeout_s: float = 30.0) -> None:
-        with self._lock(timeout_s=timeout_s):
-            tmp = self.state_dir / f".{self.layer_id}.{os.getpid()}.{time.monotonic_ns()}.tmp"
-            tmp.write_text(json.dumps(state, indent=2, sort_keys=True))
-            os.replace(tmp, self._state_path)
-
-    def read_state(self, *, timeout_s: float = 30.0) -> dict:
-        with self._lock(timeout_s=timeout_s):
-            if not self._state_path.exists():
-                return {}
-            return json.loads(self._state_path.read_text())

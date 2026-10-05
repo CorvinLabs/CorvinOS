@@ -921,6 +921,14 @@ EVENT_SEVERITY: dict[str, str] = {
     "plugin.initialization_failed":     "WARNING", # L4: plugin boot error
     "plugin.execution_timeout":         "WARNING", # L4: plugin execution timeout
     "plugin.health_check_failed":       "WARNING", # L4: plugin health check failed (ADR-0923)
+    # Layer Forge (ADR-2222, core/orchestration/layer_forge/audit.py)
+    # Metadata only: ids, versions, counts, statuses, exception class names.
+    # NEVER: manifest bodies, gate output, file contents, exception messages.
+    "layer_forge.definition_proposed":     "INFO",
+    "layer_forge.definition_rejected":     "WARNING",
+    "layer_forge.quality_gate_evaluated":  "INFO",
+    "layer_forge.enforcement_evaluated":   "INFO",
+    "layer_forge.definition_transitioned": "INFO",
     # Video Producer — Blender render path (core/skills/os_skills/video_producer/audit.py)
     # Metadata only: file paths, resolution/codec/frame/duration numbers, error_class.
     # NEVER: subprocess stdout/stderr, exception message text.
@@ -3805,6 +3813,23 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "plugin.execution_timeout": frozenset({
         "plugin_id", "boot_layer", "timeout_ms", "tenant_id",
+    }),
+    # Layer Forge (ADR-2222) — mirrored in core/orchestration/layer_forge/audit.py::ALLOWED_FIELDS.
+    "layer_forge.definition_proposed": frozenset({
+        "entry_id", "version", "target_layers", "gate_count", "rule_count",
+        "gates_skipped", "actor", "tenant_id",
+    }),
+    "layer_forge.definition_rejected": frozenset({
+        "entry_id", "version", "phase", "error_class", "failing_gates", "actor", "tenant_id",
+    }),
+    "layer_forge.quality_gate_evaluated": frozenset({
+        "entry_id", "version", "gate_id", "status", "tenant_id",
+    }),
+    "layer_forge.enforcement_evaluated": frozenset({
+        "entry_id", "version", "rule_id", "status", "tenant_id",
+    }),
+    "layer_forge.definition_transitioned": frozenset({
+        "entry_id", "version", "from_status", "to_status", "actor", "tenant_id",
     }),
     # Video Producer — Blender render path (mirrored in
     # core/skills/os_skills/video_producer/audit.py::_ALLOWED_FIELDS).

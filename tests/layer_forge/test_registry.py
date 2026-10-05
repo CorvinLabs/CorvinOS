@@ -71,3 +71,19 @@ def test_dependency_on_unknown_entry_rejected(tmp_path):
     from core.orchestration.layer_forge.schema import LayerDependencyDAGError
     with pytest.raises(LayerDependencyDAGError):
         reg.create(_manifest(dependencies=[{"id": "ghost.rule", "type": "layer_definition"}]))
+
+
+def test_latest_version_is_semver_not_lexical(tmp_path):
+    reg = LayerRegistry(tmp_path)
+    reg.create(_manifest(version="0.9.0"))
+    reg.create(_manifest(version="0.10.0"))
+    assert reg.get("test.rule")["version"] == "0.10.0"
+
+
+@pytest.mark.parametrize("entry_id", ["../x", "*", "a/b", "x\n"])
+def test_unsafe_ids_are_not_found_never_path_resolved(tmp_path, entry_id):
+    reg = LayerRegistry(tmp_path)
+    with pytest.raises(LayerNotFoundError):
+        reg.get(entry_id)
+    with pytest.raises(LayerNotFoundError):
+        reg.promote(entry_id, "0.1.0", "accepted")

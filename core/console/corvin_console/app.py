@@ -151,6 +151,8 @@ from .routes import (
     method_discovery_api as method_discovery_api_route,
     # Consent self-service (grant/revoke the caller's own consent scopes)
     consent as consent_route,
+    # Layer Forge (ADR-2222) — layer-definition pipeline
+    layer_forge as layer_forge_route,
     l5_metrics_api as l5_metrics_route,
     vibe as vibe_route,
     admin as admin_route,
@@ -306,6 +308,7 @@ router.include_router(world_map_route.router, tags=["console-world-map"])
 router.include_router(infinite_session_route.router, tags=["console-infinite-session"])
 router.include_router(method_discovery_api_route.router, tags=["console-method-discovery"])
 router.include_router(consent_route.router, tags=["console-consent"])
+router.include_router(layer_forge_route.router, tags=["console-layer-forge"])
 router.include_router(l5_metrics_route.router, tags=["console-l5-metrics"])
 router.include_router(vibe_route.router, tags=["console-vibe"])
 router.include_router(api_vibe_maturity_route.router, tags=["console-vibe-maturity"])

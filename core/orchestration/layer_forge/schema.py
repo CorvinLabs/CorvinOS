@@ -7,6 +7,9 @@ the source tree and a deployed runtime.
 """
 from __future__ import annotations
 
+import re
+from pathlib import PurePosixPath
+
 import hashlib
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -142,32 +145,83 @@ class LayerRegistryEntry:
         return d
 
 
+def _check_repo_relpath(value, *, field_name: str, required_prefix: str | None = None) -> None:
+    """A manifest path must stay inside the repo: relative, no ``..``, no NUL.
+
+    Quality-gate test paths are executed as pytest and host-awareness paths are
+    read and hashed, so an absolute or ``..`` path would let a manifest submitted
+    over the console reach any file the console's OS user can read or run.
+    """
+    if not isinstance(value, str) or not value or "\x00" in value or "\\" in value:
+        raise LayerSchemaValidationError(f"{field_name}: invalid path")
+    pure = PurePosixPath(value)
+    if pure.is_absolute() or ".." in pure.parts:
+        raise LayerSchemaValidationError(f"{field_name}: path must be repo-relative without '..'")
+    if required_prefix and (not pure.parts or pure.parts[0] != required_prefix):
+        raise LayerSchemaValidationError(f"{field_name}: path must be under {required_prefix}/")
+
+
+def _list_of_dicts(manifest: dict, key: str) -> list:
+    value = manifest.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(x, dict) for x in value):
+        raise LayerSchemaValidationError(f"{key} must be a list of objects")
+    return value
+
+
 def validate_manifest(manifest: dict) -> None:
     """Minimal structural validation against JSON_SCHEMA (no external jsonschema
     dependency required — hand-rolled checks for the fields the MVP needs)."""
+    if not isinstance(manifest, dict):
+        raise LayerSchemaValidationError("manifest must be an object")
     for key in JSON_SCHEMA["required"]:
         if key not in manifest:
             raise LayerSchemaValidationError(f"missing required field: {key}")
 
-    if not isinstance(manifest["targets"], list) or not manifest["targets"]:
+    if not isinstance(manifest["id"], str) or not re.fullmatch(
+        JSON_SCHEMA["properties"]["id"]["pattern"], manifest["id"]
+    ):
+        raise LayerSchemaValidationError("invalid id format")
+    if not isinstance(manifest["version"], str) or not re.fullmatch(
+        JSON_SCHEMA["properties"]["version"]["pattern"], manifest["version"]
+    ):
+        raise LayerSchemaValidationError("invalid version (need semver)")
+
+    targets = manifest["targets"]
+    if not isinstance(targets, list) or not targets:
         raise LayerSchemaValidationError("targets must be a non-empty list")
-    for t in manifest["targets"]:
-        if "layer_id" not in t:
+    for t in targets:
+        if not isinstance(t, dict) or not isinstance(t.get("layer_id"), str):
             raise LayerSchemaValidationError("each target needs layer_id")
 
-    import re
-    if not re.match(JSON_SCHEMA["properties"]["id"]["pattern"], manifest["id"]):
-        raise LayerSchemaValidationError(f"invalid id format: {manifest['id']}")
-    if not re.match(JSON_SCHEMA["properties"]["version"]["pattern"], manifest["version"]):
-        raise LayerSchemaValidationError(f"invalid version (need semver): {manifest['version']}")
+    for dep in _list_of_dicts(manifest, "dependencies"):
+        if not isinstance(dep.get("id"), str) or not re.fullmatch(
+            JSON_SCHEMA["properties"]["id"]["pattern"], dep["id"]
+        ):
+            raise LayerSchemaValidationError("dependency needs a valid id")
 
-    for gate in manifest.get("quality_gates", []):
-        if "gate_id" not in gate or "test_path" not in gate:
+    for gate in _list_of_dicts(manifest, "quality_gates"):
+        if not isinstance(gate.get("gate_id"), str) or "test_path" not in gate:
             raise LayerSchemaValidationError("quality_gate needs gate_id + test_path")
+        _check_repo_relpath(gate["test_path"], field_name="quality_gate.test_path",
+                            required_prefix="tests")
 
-    for rule in manifest.get("enforcement_rules", []):
+    for rule in _list_of_dicts(manifest, "enforcement_rules"):
         if rule.get("type") not in ("compile_time", "boot_time"):
-            raise LayerSchemaValidationError(f"enforcement_rule type invalid: {rule.get('type')}")
+            raise LayerSchemaValidationError("enforcement_rule type invalid")
+
+    ha = manifest.get("host_awareness")
+    if ha is not None:
+        if not isinstance(ha, dict):
+            raise LayerSchemaValidationError("host_awareness must be an object")
+        if ha.get("cross_check", "none") not in ("sha256_match_or_fail", "none"):
+            raise LayerSchemaValidationError("host_awareness.cross_check invalid")
+        for side in ("source_tree", "runtime"):
+            block = ha.get(side, {})
+            paths = block.get("paths", []) if isinstance(block, dict) else None
+            if not isinstance(paths, list):
+                raise LayerSchemaValidationError(f"host_awareness.{side}.paths must be a list")
+            for p in paths:
+                _check_repo_relpath(p, field_name=f"host_awareness.{side}.paths")
 
 
 def validate_dependency_dag(entry_id: str, dependencies: list, registry_lookup) -> None:

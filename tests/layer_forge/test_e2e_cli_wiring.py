@@ -1,128 +1,194 @@
-"""E2E wiring proof for Layer Forge (ADR-2222 D5).
+"""E2E wiring proof for Layer Forge through its CLI (ADR-2222 D5/D6).
 
-This test drives scripts/layer_forge_cli.py as a REAL SUBPROCESS — not a
-direct Python import-and-call of the orchestrator. That is the distinction
-the feedback-dead-mechanism-needs-call-site-test memory and the
-e2e-wiring-proof skill both require: a unit test proves the orchestrator
-returns the right value when called; this test proves there is a real,
-external entry point that reaches it at all.
+Drives scripts/layer_forge_cli.py as a REAL SUBPROCESS against a sandboxed
+CORVIN_HOME, then checks the side effects independently of the CLI's stdout:
+the registry file on disk and the tenant's hash-chained audit log (verified
+with ``forge.security_events.verify_chain``).
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CLI = REPO_ROOT / "scripts" / "layer_forge_cli.py"
+TENANT = "_default"
 
 
-def _run_cli(*args, tenant_root: Path):
-    cmd = [sys.executable, str(CLI), *args, "--tenant-root", str(tenant_root)]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+@pytest.fixture
+def home(tmp_path):
+    return tmp_path / "corvin_home"
 
 
-def test_cli_entry_point_exists_and_is_executable():
-    assert CLI.exists(), "layer_forge_cli.py must exist as the real entry point"
-    assert CLI.stat().st_size > 0
+def _run_cli(home: Path, *args):
+    env = dict(os.environ, CORVIN_HOME=str(home), FORGE_ROOT=str(home / "forge_root"))
+    env.pop("CORVIN_TENANT_ID", None)
+    return subprocess.run([sys.executable, str(CLI), "--tenant", TENANT, *args],
+                          capture_output=True, text=True, timeout=120, env=env)
 
 
-def test_e2e_create_via_real_subprocess_cli(tmp_path):
-    """Full pipeline through the REAL entry point: write a manifest to disk,
-    invoke the CLI as a subprocess, assert it reaches VALIDATE -> ENFORCE ->
-    PROMOTE and the registry file lands on disk — all without the test ever
-    importing LayerForgeOrchestrator directly."""
-    manifest = {
-        "id": "e2e.test-rule",
-        "version": "0.1.0",
+def _manifest(tmp_path: Path, manifest: dict) -> str:
+    p = tmp_path / f"{manifest.get('id', 'm')}-{manifest.get('version', 'v')}.json"
+    p.write_text(json.dumps(manifest))
+    return str(p)
+
+
+def _chain(home: Path) -> Path:
+    return home / "tenants" / TENANT / "global" / "forge" / "audit.jsonl"
+
+
+def _lf_events(home: Path) -> list[dict]:
+    chain = _chain(home)
+    if not chain.exists():
+        return []
+    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    return [r for r in recs if str(r.get("event_type", r.get("event", ""))).startswith("layer_forge.")]
+
+
+def _etype(r: dict) -> str:
+    return r.get("event_type") or r.get("event")
+
+
+def _details(r: dict) -> dict:
+    return r.get("details") or {}
+
+
+def _verify_chain(home: Path) -> None:
+    sys.path.insert(0, str(REPO_ROOT / "corvin_operator" / "forge"))
+    from forge.security_events import verify_chain
+
+    ok, problems = verify_chain(_chain(home))
+    assert ok, problems
+
+
+def _registry_file(home: Path, key: str) -> Path:
+    return home / "tenants" / TENANT / "global" / "layer_forge" / "registry" / f"{key}.json"
+
+
+def test_create_lands_in_registry_and_hash_chain(tmp_path, home):
+    m = {
+        "id": "e2e.test-rule", "version": "0.1.0",
         "targets": [{"layer_id": "L34", "layer_name": "Data Flow Guard"}],
-        "host_awareness": {
-            "source_tree": {"paths": ["scripts/layer_forge_cli.py"]},
-            "cross_check": "none",
-        },
+        "host_awareness": {"source_tree": {"paths": ["scripts/layer_forge_cli.py"]},
+                           "cross_check": "none"},
     }
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest))
+    result = _run_cli(home, "create", _manifest(tmp_path, m), "--skip-gates")
 
-    result = _run_cli("create", str(manifest_path), "--skip-gates", tenant_root=tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = json.loads(result.stdout)
+    assert out["status"] == "SUCCESS" and out["registry_key"] == "e2e.test-rule@0.1.0"
+    assert json.loads(_registry_file(home, "e2e.test-rule@0.1.0").read_text())["status"] == "accepted"
 
-    assert result.returncode == 0, f"CLI failed: stdout={result.stdout} stderr={result.stderr}"
-    output = json.loads(result.stdout)
-    assert output["status"] == "SUCCESS"
-    assert output["registry_key"] == "e2e.test-rule@0.1.0"
-
-    # Prove the real side effect landed on disk, independent of the CLI's own
-    # stdout claim — the registry file must actually exist.
-    registry_file = tmp_path / "layer_forge" / "registry" / "e2e.test-rule@0.1.0.json"
-    assert registry_file.exists()
-    on_disk = json.loads(registry_file.read_text())
-    assert on_disk["status"] == "accepted"  # orchestrator promotes proposed->accepted on success
-
-    # Prove the audit trail was written (ADR-2222 D6).
-    audit_file = tmp_path / "layer_forge" / "layer_forge_audit.jsonl"
-    assert audit_file.exists()
-    audit_lines = [json.loads(l) for l in audit_file.read_text().splitlines()]
-    event_types = [e["event_type"] for e in audit_lines]
-    assert "layer_forge.definition_created" in event_types
-    assert "layer_forge.definition_promoted" in event_types
-
-
-def test_e2e_get_via_real_subprocess_cli(tmp_path):
-    manifest = {"id": "e2e.get-rule", "version": "0.1.0", "targets": [{"layer_id": "L10"}]}
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest))
-    create_result = _run_cli("create", str(manifest_path), "--skip-gates", tenant_root=tmp_path)
-    assert create_result.returncode == 0
-
-    get_result = _run_cli("get", "e2e.get-rule", tenant_root=tmp_path)
-    assert get_result.returncode == 0
-    entry = json.loads(get_result.stdout)
-    assert entry["id"] == "e2e.get-rule"
-    assert entry["status"] == "accepted"
+    events = _lf_events(home)
+    types = [_etype(e) for e in events]
+    assert types == [
+        "layer_forge.enforcement_evaluated",
+        "layer_forge.definition_proposed",
+        "layer_forge.definition_transitioned",
+    ]
+    proposed = _details(events[1])
+    assert proposed["entry_id"] == "e2e.test-rule"
+    assert proposed["gates_skipped"] is True
+    assert proposed["actor"] == "cli"
+    assert proposed["tenant_id"] == TENANT
+    assert _details(events[2])["from_status"] == "proposed"
+    assert _details(events[2])["to_status"] == "accepted"
+    assert all(e.get("hash") and "prev_hash" in e for e in events)
+    _verify_chain(home)
 
 
-def test_e2e_invalid_manifest_fails_closed_through_real_cli(tmp_path):
-    """A schema-invalid manifest must be rejected by the REAL entry point with
-    a non-zero exit code — proving the fail-closed path is reachable end-to-end,
-    not just correct inside a unit test."""
-    manifest_path = tmp_path / "bad_manifest.json"
-    manifest_path.write_text(json.dumps({"id": "bad id with spaces", "version": "nope"}))
+def test_real_quality_gate_runs_and_is_audited(tmp_path, home):
+    m = {"id": "e2e.gated", "version": "0.1.0", "targets": [{"layer_id": "L34"}],
+         "quality_gates": [{"gate_id": "schema-suite", "test_path": "tests/layer_forge/test_schema.py"}]}
+    result = _run_cli(home, "create", _manifest(tmp_path, m))
 
-    result = _run_cli("create", str(manifest_path), "--skip-gates", tenant_root=tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["gate_verdicts"][0]["status"] == "PASS"
+    gate = [e for e in _lf_events(home) if _etype(e) == "layer_forge.quality_gate_evaluated"]
+    assert [(_details(e)["gate_id"], _details(e)["status"]) for e in gate] == [("schema-suite", "PASS")]
+    proposed = [e for e in _lf_events(home) if _etype(e) == "layer_forge.definition_proposed"]
+    assert _details(proposed[0])["gates_skipped"] is False
+
+
+def test_failing_gate_is_rejected_without_registry_entry(tmp_path, home):
+    m = {"id": "e2e.ghost-gate", "version": "0.1.0", "targets": [{"layer_id": "L34"}],
+         "quality_gates": [{"gate_id": "ghost", "test_path": "tests/layer_forge/does_not_exist.py"}]}
+    result = _run_cli(home, "create", _manifest(tmp_path, m))
 
     assert result.returncode == 1
-    output = json.loads(result.stdout)
-    assert output["status"] == "FAILED"
-    assert "validation failed" in output["error"]
+    out = json.loads(result.stdout)
+    assert out["status"] == "FAILED" and out["phase"] == "test"
+    assert not _registry_file(home, "e2e.ghost-gate@0.1.0").exists()
+    rejected = [e for e in _lf_events(home) if _etype(e) == "layer_forge.definition_rejected"]
+    assert len(rejected) == 1
+    assert _details(rejected[0])["phase"] == "test"
+    assert _details(rejected[0])["failing_gates"] == ["ghost"]
+    assert not [e for e in _lf_events(home) if _etype(e) == "layer_forge.definition_proposed"]
+    _verify_chain(home)
 
-    # And nothing was written to the registry (fail-closed, no partial state).
-    registry_dir = tmp_path / "layer_forge" / "registry"
-    assert not registry_dir.exists() or list(registry_dir.glob("*.json")) == []
+
+def test_path_traversal_gate_is_refused_at_validation(tmp_path, home):
+    m = {"id": "e2e.escape", "version": "0.1.0", "targets": [{"layer_id": "L34"}],
+         "quality_gates": [{"gate_id": "evil", "test_path": "tests/../../../etc/passwd"}]}
+    result = _run_cli(home, "create", _manifest(tmp_path, m))
+
+    assert result.returncode == 1
+    out = json.loads(result.stdout)
+    assert out["phase"] == "validate"
+    assert not [e for e in _lf_events(home) if _etype(e) == "layer_forge.quality_gate_evaluated"]
 
 
-def test_e2e_duplicate_version_fails_closed_through_real_cli(tmp_path):
-    manifest = {"id": "e2e.dup-rule", "version": "0.1.0", "targets": [{"layer_id": "L34"}]}
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest))
+def test_invalid_manifest_rejected_and_invalid_id_never_reaches_the_chain(tmp_path, home):
+    bad = {"id": "bad id with spaces", "version": "nope", "targets": [{"layer_id": "L34"}]}
+    result = _run_cli(home, "create", _manifest(tmp_path, bad))
 
-    first = _run_cli("create", str(manifest_path), "--skip-gates", tenant_root=tmp_path)
-    assert first.returncode == 0
+    assert result.returncode == 1
+    out = json.loads(result.stdout)
+    assert out["status"] == "FAILED" and "validation failed" in out["error"]
+    registry_dir = home / "tenants" / TENANT / "global" / "layer_forge" / "registry"
+    assert not registry_dir.exists() or not list(registry_dir.glob("*.json"))
+    rejected = [e for e in _lf_events(home) if _etype(e) == "layer_forge.definition_rejected"]
+    assert len(rejected) == 1
+    d = _details(rejected[0])
+    assert d["error_class"] == "LayerSchemaValidationError"
+    assert "entry_id" not in d
+    assert "bad id with spaces" not in _chain(home).read_text()
 
-    second = _run_cli("create", str(manifest_path), "--skip-gates", tenant_root=tmp_path)
+
+def test_duplicate_version_refused(tmp_path, home):
+    path = _manifest(tmp_path, {"id": "e2e.dup", "version": "0.1.0", "targets": [{"layer_id": "L34"}]})
+    assert _run_cli(home, "create", path, "--skip-gates").returncode == 0
+    second = _run_cli(home, "create", path, "--skip-gates")
     assert second.returncode == 1
-    output = json.loads(second.stdout)
-    assert output["status"] == "FAILED"
+    assert "already exists" in json.loads(second.stdout)["error"]
 
 
-def test_e2e_promote_full_lifecycle_through_real_cli(tmp_path):
-    manifest = {"id": "e2e.lifecycle-rule", "version": "0.1.0", "targets": [{"layer_id": "L34"}]}
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest))
+def test_promote_get_list_through_cli_are_audited(tmp_path, home):
+    path = _manifest(tmp_path, {"id": "e2e.life", "version": "0.1.0", "targets": [{"layer_id": "L34"}]})
+    assert _run_cli(home, "create", path, "--skip-gates").returncode == 0
 
-    create = _run_cli("create", str(manifest_path), "--skip-gates", tenant_root=tmp_path)
-    assert create.returncode == 0
-    # create_layer_definition already promotes proposed -> accepted on success.
+    promote = _run_cli(home, "promote", "e2e.life", "0.1.0", "deployed")
+    assert promote.returncode == 0, promote.stdout + promote.stderr
+    assert json.loads(promote.stdout)["status"] == "deployed"
 
-    promote = _run_cli("promote", "e2e.lifecycle-rule", "0.1.0", "deployed", tenant_root=tmp_path)
-    assert promote.returncode == 0
-    record = json.loads(promote.stdout)
-    assert record["status"] == "deployed"
+    illegal = _run_cli(home, "promote", "e2e.life", "0.1.0", "proposed")
+    assert illegal.returncode == 1
+
+    got = _run_cli(home, "get", "e2e.life")
+    assert json.loads(got.stdout)["status"] == "deployed"
+    listed = _run_cli(home, "list")
+    assert [e["id"] for e in json.loads(listed.stdout)] == ["e2e.life"]
+
+    transitions = [(_details(e)["from_status"], _details(e)["to_status"])
+                   for e in _lf_events(home) if _etype(e) == "layer_forge.definition_transitioned"]
+    assert transitions == [("proposed", "accepted"), ("accepted", "deployed")]
+    _verify_chain(home)
+
+
+def test_get_with_traversal_id_is_not_found(home):
+    result = _run_cli(home, "get", "../../etc/passwd")
+    assert result.returncode == 1
+    assert "not found" in json.loads(result.stdout)["error"]
