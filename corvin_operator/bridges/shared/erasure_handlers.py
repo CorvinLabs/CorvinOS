@@ -2105,14 +2105,13 @@ class ChatGroupHandler:
                         _atomic_replace_text(meta_p, json.dumps(meta, ensure_ascii=False) + "\n")
                     # The generic rule inside this group's lock as well.
                     removed += _purge_path(gdir, subject_id)
-            # Subject-named group directories (the generic rule's dir route).
-            for gdir in sorted(p for p in root.iterdir() if p.is_dir()):
-                if _name_names_subject(gdir.name, subject_id):
-                    import shutil  # noqa: PLC0415
-                    shutil.rmtree(gdir, ignore_errors=True)
-                    removed += 1
-            # The documented generic rule for everything else at this level
-            # (subject-named files, identity-keyed records).
+            # The documented generic rule for everything else at this level —
+            # a subject-named GROUP DIRECTORY (review R5: an explicit
+            # "rmtree(ignore_errors=True)" loop here duplicated this exact
+            # route and silently counted a partially-failed rmtree as
+            # removed; _purge_path's own recursive dir-name match already
+            # reaches a top-level gdir, without swallowing an OSError) and
+            # subject-named files / identity-keyed records.
             removed += _purge_path(root, subject_id)
         except Exception as exc:  # noqa: BLE001
             return ErasureLayerResult(

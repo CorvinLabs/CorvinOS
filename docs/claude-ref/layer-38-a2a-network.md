@@ -284,6 +284,17 @@ advisory (prompt text), not a security boundary.
   loopback, so a worker that can run Bash as the same OS user can obtain such a
   session itself. Same boundary as the session ledger and the audit chain:
   integrity against a same-user worker needs OS-level isolation.
+- **Group erasure for a REMOVED member guesses "local uploader" (2026-10-05).**
+  `ChatGroupHandler` deletes a departed sender's referenced attachment files
+  only when at least one matching CURRENT participant record is not
+  `kind=a2a_peer`. Once a member is removed from `meta.json` (left, or kicked)
+  their `kind` is gone, and the handler falls back to treating them as a local
+  uploader (not a peer) — correct for the common case (a web/console sender
+  that was never added as a formal participant), but it means a REMOVED peer's
+  historical message that happens to name a real attachment filename in its
+  text can trigger a delete it would not have triggered while still a member.
+  Fixing this needs persisting `kind` per message (or per removed-participant
+  tombstone), not attempted here.
 
 - `allow_subagents=true` unblocks the Task tool, and the engine does **not**
   contractually guarantee that the other per-connection denies bind inside
