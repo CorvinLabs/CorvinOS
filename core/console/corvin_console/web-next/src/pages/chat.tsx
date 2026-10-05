@@ -92,7 +92,6 @@ import { GroupConversation } from "@/components/chat/GroupConversation";
 import { PeerConversation } from "@/components/chat/PeerConversation";
 import { AttachmentChip } from "@/components/chat/AttachmentChip";
 import { RecordingOverlay } from "@/components/chat/RecordingOverlay";
-import { useVoiceInput as _useVoiceInput } from "@/hooks/use-voice-input";
 import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
 import { useFileDrop, supportsDirectoryDrop, MAX_DROPPED_FILES } from "@/hooks/use-file-drop";
 import { useAutosizeTextarea } from "@/hooks/use-autosize-textarea";
@@ -1218,10 +1217,31 @@ function ChatPane({
   const sendUser = (text: string) => {
     const hasText = text.trim().length > 0;
     const hasAttachments = pendingAttachments.length > 0;
-    if ((!hasText && !hasAttachments) || streaming) return;
+    if (!hasText && !hasAttachments) return;
+    // A message sent while files are still uploading would go out without
+    // them and drag them into the NEXT message instead.
+    if (uploading) {
+      setError("Wait for the attachments to finish uploading");
+      return;
+    }
+    const trimmed = text.trim();
+    if (streaming) {
+      // /btw exists to steer the RUNNING turn (ADR-2220), so it — and /stop —
+      // must be reachable while streaming; the composer stays enabled for
+      // exactly that. Any other message waits for the reply.
+      if (/^\/(stop|cancel|halt)\s*$/i.test(trimmed)) {
+        setInput("");
+        cancelTurn();
+        return;
+      }
+      if (!trimmed.startsWith("/btw ")) {
+        setError("A reply is still streaming — wait for it, or send /btw <note> to steer it");
+        return;
+      }
+    }
 
     // Handle /btw command (midstream steering)
-    if (hasText && text.trim().startsWith("/btw ")) {
+    if (hasText && trimmed.startsWith("/btw ")) {
       const instruction = text.trim().substring(5); // Remove "/btw "
       if (instruction.trim().length === 0) {
         setError("Please provide a note for /btw");
@@ -1389,6 +1409,7 @@ function ChatPane({
       };
       mr.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
+        if (voiceUnmountedRef.current) return;
         const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
         try {
           const r = await transcribeAudio(blob, csrf);
@@ -1410,6 +1431,22 @@ function ChatPane({
       setError(e instanceof Error ? e.message : "microphone access denied");
     }
   };
+
+  // Release the microphone when this pane unmounts mid-recording (switching
+  // conversation remounts the keyed pane): see use-voice-input.ts.
+  const voiceUnmountedRef = React.useRef(false);
+  React.useEffect(() => () => {
+    voiceUnmountedRef.current = true;
+    sttStoppingRef.current = true;
+    try { recognitionRef.current?.stop(); } catch (_e) { /* already ended */ }
+    recognitionRef.current = null;
+    const mr = mediaRef.current;
+    mediaRef.current = null;
+    if (mr) {
+      try { if (mr.state !== "inactive") mr.stop(); } catch (_e) { /* already stopped */ }
+      mr.stream.getTracks().forEach((t) => t.stop());
+    }
+  }, []);
 
   const stopRecording = () => {
     if (recognitionRef.current) {
@@ -2017,13 +2054,19 @@ function ChatPane({
                     }
                   }
                   if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+                    // IME candidate confirmation (CJK) is not a send.
+                    if (e.nativeEvent.isComposing) return;
                     e.preventDefault();
                     setPaletteOpen(false);
                     sendUser(input);
                   }
                 }}
-                placeholder={recording ? "Listening — release Space to send" : "Message Corvin… (hold Space to speak)"}
-                disabled={streaming || recording}
+                placeholder={recording
+                  ? "Listening — release Space to send"
+                  : streaming
+                    ? "Reply streaming — /btw <note> steers it, /stop ends it"
+                    : "Message Corvin… (hold Space to speak)"}
+                disabled={recording}
                 className="min-h-[2rem] resize-none border-0 bg-transparent px-1 py-1 font-sans text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                 rows={1}
               />
@@ -2044,7 +2087,7 @@ function ChatPane({
                 size="icon"
                 className="h-8 w-8 shrink-0 rounded-full"
                 onClick={() => sendUser(input)}
-                disabled={!input.trim() && pendingAttachments.length === 0}
+                disabled={uploading || (!input.trim() && pendingAttachments.length === 0)}
                 title="Send (Enter · Shift+Enter for newline)"
                 data-testid="send-button"
               >

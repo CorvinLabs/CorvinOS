@@ -86,6 +86,24 @@ def _wait_http(url: str, timeout: float = 30) -> None:
     raise RuntimeError(f"{url} did not come up")
 
 
+
+def _record_ibc_exception(root: Path) -> None:
+    """Mark every connection under ``root`` as an operator exception
+    (``require_ibc: false``). Since ADR-2099 P0 fact 3 (operator decision,
+    Option B) a NEW pairing requires a Corvin Labs IBC on every inbound
+    envelope; these test hosts have none, so without the exception the
+    receiver rightly answers ``instance_attestation_required_but_absent``.
+    This suite tests pairing/transport convergence, not that policy —
+    enforcement is covered by tests/e2e/a2a/test_a2a_require_ibc_enforcement_e2e.py.
+    """
+    for f in (root / "origins").glob("*.json"):
+        cfg = json.loads(f.read_text())
+        cfg["require_ibc"] = False
+        tmp = f.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cfg))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, f)
+
 class _Host:
     """One Corvin instance process."""
 
@@ -224,6 +242,8 @@ class TestZeroConfigPairing(unittest.TestCase):
     def test_1_token_only_pairs_both_directions_over_relay(self):
         kid = self._pair()
         self._await_linked(kid)
+        for host in (self.issuer, self.redeemer):
+            _record_ibc_exception(host.root)
         ic, rc = self.issuer.connection(kid), self.redeemer.connection(kid)
         self.assertEqual(ic["via"], "relay")
         self.assertEqual(rc["via"], "relay")

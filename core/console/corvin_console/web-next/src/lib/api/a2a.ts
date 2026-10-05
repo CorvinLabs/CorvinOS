@@ -298,6 +298,10 @@ export interface FriendshipConnection {
   // ("direct" | "relay"), or null if never successfully reached yet.
   // Sticky across a failed recheck (last known-good path).
   via: "direct" | "relay" | null;
+  /** Measured reachability — the same rule as A2AFeedPeer.presence. */
+  presence?: A2APresence;
+  last_check_at?: number | null;
+  last_ok_at?: number | null;
 }
 
 export interface FriendshipConnectionsResponse {
@@ -572,7 +576,7 @@ export interface A2AFeedPeer {
   last_ok_at?: number | null;
 }
 
-export type A2APresence = "online" | "offline" | "unknown" | "pending" | "disabled";
+export type A2APresence = "online" | "offline" | "unknown" | "pending" | "disabled" | "removed";
 
 export interface A2AFeedResponse {
   tenant_id: string;
@@ -586,10 +590,11 @@ export interface A2AFeedResponse {
 }
 
 export async function getA2AFeed(
-  params: { after?: number; before?: number; limit?: number; peer_id?: string } = {},
+  params: { after?: number; before?: number; limit?: number; peer_id?: string; include_former?: boolean } = {},
   signal?: AbortSignal,
 ): Promise<A2AFeedResponse> {
   const q = new URLSearchParams();
+  if (params.include_former) q.set("include_former", "true");
   if (params.after !== undefined) q.set("after", String(params.after));
   if (params.before !== undefined) q.set("before", String(params.before));
   if (params.limit) q.set("limit", String(params.limit));

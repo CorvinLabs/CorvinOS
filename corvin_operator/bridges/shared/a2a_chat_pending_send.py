@@ -30,7 +30,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+import a2a_pending_claim as _claim
+
 _PENDING_TTL_SECONDS = 600  # 10 minutes — unconfirmed pendings expire, never auto-fire
+_MAX_TEXT_BYTES = 16 * 1024  # the receiving agent's cap, in bytes
 _PENDING_SUBDIR = ("remote_trigger", "pending_chat_sends")
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -66,11 +69,17 @@ def create_pending_send(
     (the MCP tool handler) can hand it back to the chat turn as a summary the
     user must explicitly confirm in the console UI.
     """
+    text = str(text)
+    if len(text.encode("utf-8")) > _MAX_TEXT_BYTES:
+        # Refused here, not silently cut: the operator would otherwise
+        # confirm a message the receiving instance then rejects (its cap is
+        # in bytes), or one whose tail was dropped without anyone seeing it.
+        raise ValueError(f"text exceeds {_MAX_TEXT_BYTES} bytes")
     pending_id = secrets.token_urlsafe(16)
     record: dict[str, Any] = {
         "pending_id": pending_id,
         "peer_id": str(peer_id)[:128],
-        "text": str(text)[:16 * 1024],
+        "text": text,
         "attachments": attachments or [],
         "created_at": time.time(),
         "requested_by": requested_by,
@@ -110,17 +119,14 @@ def peek_pending_send(tenant_global_dir: Path, pending_id: str) -> dict[str, Any
 
 
 def pop_pending_send(tenant_global_dir: Path, pending_id: str) -> dict[str, Any] | None:
-    """Read + delete atomically — one-time use, no replay of a confirm click."""
+    """Claim atomically — one-time use: of two racing confirms only one
+    gets the record (see ``a2a_pending_claim``)."""
     safe = _safe_id(pending_id)
     if safe is None:
         return None
-    path = _pending_dir(tenant_global_dir) / f"{safe}.json"
-    rec = _read_valid(path)
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        pass
-    return rec
+    d = _pending_dir(tenant_global_dir)
+    _claim.sweep_stale_claims(d)
+    return _claim.claim(d / f"{safe}.json", _PENDING_TTL_SECONDS)
 
 
 def list_pending_sends(tenant_global_dir: Path) -> list[dict[str, Any]]:

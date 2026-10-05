@@ -101,6 +101,61 @@ class BtwInjectRouteE2E(unittest.TestCase):
             finally:
                 chat_runtime._unregister_stdin_web(sess.chat_key)
 
+    def test_gate_refusal_blocks_the_write_and_is_recorded_withheld(self):
+        """Review R1 (2026-10-05): /btw reached the model without the L44 /
+        L34 / L35 pre-spawn gates every console spawn passes."""
+        from unittest import mock
+        with _sandbox(Path(self._tmp)) as (client, home, tenant_id, emitter, chain):
+            from corvin_console import chat_runtime, _spawn_gates
+            from session_ledger import records_from_turn_log
+
+            sid = client.post("/v1/console/chat/sessions", json={"title": "btw gate"}).json()["session"]["sid"]
+            sess = chat_runtime.get_session(tenant_id, sid)
+            fake = _FakeStdin()
+            chat_runtime._register_stdin_web(sess.chat_key, fake)
+            try:
+                with mock.patch.object(_spawn_gates, "check_console_spawn_or_refusal",
+                                       return_value="[house-rules] refused"):
+                    r = client.post(f"/v1/console/chat/sessions/{sid}/btw",
+                                    json={"instruction": "forbidden note"})
+                self.assertEqual(r.json(), {"ok": True, "status": "refused"})
+                self.assertEqual(fake.writes, [])
+                turns = chat_runtime.read_turns(tenant_id, sid)
+                self.assertEqual(turns[-1].get("gate_refused"), "btw")
+                self.assertTrue(turns[-1].get("btw"))
+                # never re-supplied to the worker
+                folded = records_from_turn_log(
+                    [{"role": "user", "parts": [{"kind": "text", "text": "q"}]}] + turns
+                    + [{"role": "assistant", "v": 2, "cli_spawned": True,
+                        "parts": [{"kind": "text", "text": "a"}]}])
+                self.assertNotIn("forbidden note", json.dumps(folded))
+            finally:
+                chat_runtime._unregister_stdin_web(sess.chat_key)
+
+    def test_injected_note_is_folded_into_the_running_turn_in_the_ledger(self):
+        with _sandbox(Path(self._tmp)) as (client, home, tenant_id, emitter, chain):
+            from corvin_console import chat_runtime
+            from session_ledger import records_from_turn_log
+
+            sid = client.post("/v1/console/chat/sessions", json={"title": "btw ledger"}).json()["session"]["sid"]
+            sess = chat_runtime.get_session(tenant_id, sid)
+            chat_runtime._append_turn(sess, "user", [{"kind": "text", "text": "main question"}])
+            fake = _FakeStdin()
+            chat_runtime._register_stdin_web(sess.chat_key, fake)
+            try:
+                r = client.post(f"/v1/console/chat/sessions/{sid}/btw",
+                                json={"instruction": "say BANANA"})
+                self.assertEqual(r.json()["status"], "injected")
+            finally:
+                chat_runtime._unregister_stdin_web(sess.chat_key)
+            chat_runtime._append_turn(sess, "assistant", [{"kind": "text", "text": "answer BANANA"}],
+                                      cli_spawned=True)
+            recs = records_from_turn_log(chat_runtime.read_turns(tenant_id, sid))
+            self.assertEqual(len(recs), 1)
+            self.assertIn("main question", recs[0]["user"])
+            self.assertIn("/btw say BANANA", recs[0]["user"])
+            self.assertEqual(recs[0]["assistant"], "answer BANANA")
+
     def test_guard_neutralises_a_leading_slash_and_an_at_reference(self):
         """Security proof: an injected note starting with `/` or containing
         an `@<path>` must never reach the live CLI able to be parsed as a

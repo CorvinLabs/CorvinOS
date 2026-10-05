@@ -20,10 +20,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
   a2aFeedBlobUrl, encodeFilesForA2A, getA2AFeed, sendA2AFeedMessage,
-  A2AAttachmentLimitError, type A2AFeedMessage,
+  A2AAttachmentLimitError, A2A_MAX_ATTACHMENTS_COUNT, A2A_MAX_ATTACHMENTS_TOTAL_BYTES,
+  type A2AFeedMessage,
 } from "@/lib/api/a2a";
 import { mediaKind } from "@/lib/a2a-feed";
 import { presenceView } from "@/lib/a2a-presence";
+import { useVoiceInput } from "@/hooks/use-voice-input";
 import { ChatAvatar } from "./ChatAvatar";
 import { AttachmentChip } from "./AttachmentChip";
 import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
@@ -48,7 +50,7 @@ function PeerMessageRow({ m, label }: { m: A2AFeedMessage; label: string }) {
   const failed = Boolean(m.error) || ["rejected", "timeout", "error"].includes(m.status);
   const body = m.kind === "response" ? responseText(m) : m.text;
   return (
-    <div className={cn("flex gap-3", mine ? "justify-end" : "justify-start")}>
+    <div data-testid="peer-message" className={cn("flex gap-3", mine ? "justify-end" : "justify-start")}>
       {!mine && <div className="mt-5"><ChatAvatar label={label} icon={Globe2} /></div>}
       <div className={cn("flex min-w-0 max-w-[85%] flex-col", mine ? "items-end" : "items-start")}>
         <div className="mb-1 flex flex-wrap items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
@@ -108,16 +110,13 @@ function PeerMessageRow({ m, label }: { m: A2AFeedMessage; label: string }) {
 export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: string }) {
   const feed = useQuery({
     queryKey: ["a2a", "feed", "peer", peerId],
-    queryFn: ({ signal }) => getA2AFeed({ peer_id: peerId, limit: 200 }, signal),
+    queryFn: ({ signal }) => getA2AFeed({ peer_id: peerId, limit: 200, include_former: true }, signal),
     refetchInterval: FEED_REFETCH_MS,
   });
   const [text, setText] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
-  const [recording, setRecording] = React.useState(false);
   const endRef = React.useRef<HTMLDivElement>(null);
-  const mediaRef = React.useRef<MediaRecorder | null>(null);
-  const chunksRef = React.useRef<Blob[]>([]);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const folderInputRef = React.useRef<HTMLInputElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -127,10 +126,30 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
     pendingAttachments, uploading, uploadError, addFiles,
     removeAttachment, clearAttachments, onFileInputChange,
   } = useAttachmentUpload({
-    uploadFn: encodeFilesForA2A,
+    // The A2A envelope caps (count + total bytes) apply to the whole message,
+    // not to one pick: check what is already staged plus the new files.
+    uploadFn: (files) => {
+      const staged = stagedRef.current;
+      if (staged.length + files.length > A2A_MAX_ATTACHMENTS_COUNT) {
+        return Promise.reject(new A2AAttachmentLimitError(
+          `Too many files for a peer message — max ${A2A_MAX_ATTACHMENTS_COUNT} (A2A envelope cap)`));
+      }
+      const total = staged.reduce((n, a) => n + a.size, 0) + files.reduce((n, f) => n + f.size, 0);
+      if (total > A2A_MAX_ATTACHMENTS_TOTAL_BYTES) {
+        return Promise.reject(new A2AAttachmentLimitError(
+          `Attachments too large for a peer message — max ${(A2A_MAX_ATTACHMENTS_TOTAL_BYTES / 1024).toFixed(0)} KiB total (A2A envelope cap)`));
+      }
+      return encodeFilesForA2A(files);
+    },
     disabled: busy,
     formatError: (e) => e instanceof A2AAttachmentLimitError ? e.message
       : e instanceof Error ? e.message : "Upload failed",
+  });
+  const stagedRef = React.useRef(pendingAttachments);
+  stagedRef.current = pendingAttachments;
+  const { recording, startRecording, stopRecording } = useVoiceInput({
+    value: text, onChange: setText, csrf, disabled: busy || feed.data?.peers.find((p) => p.peer_id === peerId)?.can_send === false,
+    onError: setError,
   });
   const { isDragging: paneDragging, dropHandlers: paneDropHandlers } = useFileDrop(
     (files) => { setDropTruncated(null); void addFiles(files); },
@@ -144,40 +163,9 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
     endRef.current?.scrollIntoView({ block: "end" });
   }, [msgs.length]);
 
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      chunksRef.current = [];
-      const mr = new MediaRecorder(stream);
-      mr.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      mr.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        // Peer messages don't transcribe audio yet; just append a placeholder
-        try {
-          setText((prev) => prev ? `${prev} [audio]` : "[audio]");
-        } catch {
-          setError("Audio processing failed");
-        }
-      };
-      mr.start();
-      mediaRef.current = mr;
-      setRecording(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "microphone access denied");
-    }
-  };
-
-  const stopRecording = () => {
-    mediaRef.current?.stop();
-    mediaRef.current = null;
-    setRecording(false);
-  };
-
   async function handleSend() {
     const body = text.trim();
-    if (!body && pendingAttachments.length === 0) return;
+    if ((!body && pendingAttachments.length === 0) || uploading) return;
     setBusy(true); setError("");
     try {
       await sendA2AFeedMessage({
@@ -335,13 +323,19 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
               {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
             </Button>
             <Textarea ref={textareaRef} value={text} onChange={(e) => setText(e.target.value)} rows={1}
-              placeholder={peer?.can_send === false ? "Sending to this agent is disabled" : `Message ${label}…`}
+              placeholder={peer?.presence === "removed"
+                ? "Pairing removed — this conversation is read-only"
+                : peer?.can_send === false ? "Sending to this agent is disabled" : `Message ${label}…`}
               disabled={peer?.can_send === false || recording || busy}
               className="min-h-[2rem] flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
               aria-label="Message to agent"
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+                e.preventDefault();
+                handleSend();
+              }} />
             <Button variant="accent" size="icon" className="h-8 w-8 shrink-0 rounded-full"
-              disabled={busy || (!text.trim() && pendingAttachments.length === 0) || peer?.can_send === false}
+              disabled={busy || uploading || (!text.trim() && pendingAttachments.length === 0) || peer?.can_send === false}
               onClick={handleSend} aria-label="Send">
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </Button>

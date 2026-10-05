@@ -28,6 +28,7 @@ const DOT: Record<A2APresence, string> = {
   pending: "bg-amber-500",
   unknown: "bg-muted-foreground/40",
   disabled: "bg-muted-foreground/20",
+  removed: "bg-transparent ring-1 ring-muted-foreground/40",
 };
 
 const LABEL: Record<A2APresence, string> = {
@@ -36,6 +37,7 @@ const LABEL: Record<A2APresence, string> = {
   pending: "pairing pending",
   unknown: "status unknown",
   disabled: "disabled",
+  removed: "connection removed",
 };
 
 export function presenceView(
@@ -50,6 +52,7 @@ export function presenceView(
   else if (presence === "offline") title = seen ? `Not reachable — last seen ${seen}` : "Not reachable — never seen";
   else if (presence === "unknown") title = checked ? `No recent check (last ${checked})` : "Not checked yet";
   else if (presence === "pending") title = "Waiting for the peer to complete pairing";
+  else if (presence === "removed") title = seen ? `Pairing removed — history kept, last message ${seen}` : "Pairing removed — history kept";
   else title = "Connection disabled";
   const label = presence === "offline" && seen ? `offline · seen ${seen}` : LABEL[presence];
   return { presence, label, dotClass: DOT[presence], title };

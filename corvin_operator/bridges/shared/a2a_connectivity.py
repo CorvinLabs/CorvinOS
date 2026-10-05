@@ -44,6 +44,7 @@ import json
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,7 @@ PRESENCE_INTERVAL_S = 60.0
 # A check older than this no longer says anything about the peer: two missed
 # intervals plus one tick and the ping timeout.
 PRESENCE_FRESH_S = 2 * PRESENCE_INTERVAL_S + TICK_S + 25.0
+PROBE_WORKERS = 8
 _CONSOLE_PORT = 8765
 
 
@@ -120,13 +122,15 @@ class _Schedule:
     last_result: dict[str, Any] = field(default_factory=dict)
 
 
-def _ping_peer(kid: str, endpoints_dir: Path) -> tuple[bool, str | None]:
-    """Signed ADR-0199 ping (direct, else relay). (reachable, via)."""
+def _ping_peer(kid: str, endpoints_dir: Path, *, audit: bool = True) -> tuple[bool, str | None]:
+    """Signed ADR-0199 ping (direct, else relay). (reachable, via).
+
+    Callers must record the outcome with ``ft.stamp_probe``."""
     try:
         from remote_trigger_sender import (  # type: ignore[import-not-found]  # noqa: PLC0415
             RemoteEndpointRegistry as _RER, RemoteTriggerSender as _RTS,
         )
-        result = _RTS(endpoints_dir, _RER(endpoints_dir)).ping(kid, timeout_s=5)
+        result = _RTS(endpoints_dir, _RER(endpoints_dir)).ping(kid, timeout_s=5, audit=audit)
         reachable = bool(result.reachable)
         return reachable, (getattr(result, "via", None) if reachable else None)
     except Exception:  # noqa: BLE001 — reachability check is best-effort
@@ -196,7 +200,7 @@ def refresh_friendship(
     # The hello may have completed a PENDING connection or rewritten the
     # peer URL on the other side; our own endpoint file only changes when
     # the PEER's hello reaches us, so re-read before pinging.
-    reachable, via = _ping_peer(kid, endpoints_dir)
+    reachable, via = _ping_peer(kid, endpoints_dir, audit=hello)
     if not reachable and hello_via is not None:
         # A verified hello response is itself a reachability proof (the ping
         # can still fail on the peer's rate limit or a transient relay hop).
@@ -233,6 +237,21 @@ def refresh_friendship(
     }
 
 
+# A probe timestamp further than this in the future was written while the
+# clock ran fast; trusting it would pin a dead peer "online" until the clock
+# caught up with it.
+PRESENCE_CLOCK_SKEW_S = 60.0
+
+
+def _probe_ts(value: Any, now: float) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    v = float(value)
+    if v != v or v in (float("inf"), float("-inf")) or v > now + PRESENCE_CLOCK_SKEW_S:
+        return None
+    return v
+
+
 def presence(cfgs: list[dict[str, Any]], now: float | None = None) -> dict[str, Any]:
     """The one answer to "is this peer online right now", for every reader.
 
@@ -244,10 +263,10 @@ def presence(cfgs: list[dict[str, Any]], now: float | None = None) -> dict[str, 
     it is written by more paths than the probe and is never aged.
     """
     now = time.time() if now is None else now
-    last_check = max((float(c["_last_check_at"]) for c in cfgs
-                      if isinstance(c.get("_last_check_at"), (int, float))), default=None)
-    last_ok = max((float(c["_last_ok_at"]) for c in cfgs
-                   if isinstance(c.get("_last_ok_at"), (int, float))), default=None)
+    last_check = max((t for c in cfgs if (t := _probe_ts(c.get("_last_check_at"), now)) is not None),
+                     default=None)
+    last_ok = max((t for c in cfgs if (t := _probe_ts(c.get("_last_ok_at"), now)) is not None),
+                  default=None)
     if not cfgs or any(c.get("_operator_disabled") for c in cfgs) \
             or not any(c.get("enabled") for c in cfgs) and not any(
                 c.get("state") == "PENDING" for c in cfgs):
@@ -265,12 +284,14 @@ def presence(cfgs: list[dict[str, Any]], now: float | None = None) -> dict[str, 
 
 def _probe_plain_endpoint(kid: str, endpoints_dir: Path) -> None:
     """Presence for a non-friendship endpoint (invite-code pairing): ping and
-    record only the check timestamps — its ``state`` belongs to other code."""
+    record only the check timestamps — its ``state`` belongs to other code.
+    Only a change of reachability is audited (the ping itself is not)."""
     path = endpoints_dir / f"{kid}.json"
     cfg = _read_json(path)
     if cfg is None or not cfg.get("enabled") or cfg.get("_operator_disabled"):
         return
-    reachable, _via = _ping_peer(kid, endpoints_dir)
+    before = presence([cfg])["presence"]
+    reachable, via = _ping_peer(kid, endpoints_dir, audit=False)
     now = time.time()
     with ft.config_file_lock(endpoints_dir):
         cfg = _read_json(path)
@@ -278,6 +299,11 @@ def _probe_plain_endpoint(kid: str, endpoints_dir: Path) -> None:
             return
         ft.stamp_probe(cfg, reachable, now)
         ft._atomic_write(path, cfg)
+    after = "online" if reachable else "offline"
+    if before != after:
+        _audit("A2A.connection_state", "INFO" if reachable else "WARNING",
+               endpoint_id=kid, reason="active" if reachable else "unreachable",
+               source=str(via or "none"), reachable=reachable)
 
 
 def _healthy(summary: dict[str, Any]) -> bool:
@@ -487,44 +513,61 @@ class ConnectivityManager:
         return sorted(p.stem for p in self._endpoints_dir.glob("*.json"))
 
     def _maintain_friendships(self) -> None:
+        """One upkeep pass. Due connections are probed concurrently: a probe
+        can take ~10 s (direct timeout + relay retry), so a serial pass over
+        a few dead peers pushed a live peer's next check past
+        PRESENCE_FRESH_S and its presence flickered to "unknown"."""
         now = time.time()
+        due: list[tuple[str, bool]] = []
         for kid in self._connection_ids():
             with self._sched_lock:
                 sch = self._schedules.setdefault(kid, _Schedule())
                 hello_due = sch.next_due <= now
-                ping_due = sch.next_ping_due <= now
-            if not (hello_due or ping_due):
-                continue
-            summary = refresh_friendship(
-                kid, origins_dir=self._origins_dir, endpoints_dir=self._endpoints_dir,
-                hello=hello_due)
-            if summary.get("error") == "not_found":
-                _probe_plain_endpoint(kid, self._endpoints_dir)
+                if hello_due or sch.next_ping_due <= now:
+                    due.append((kid, hello_due))
+        if not due:
+            return
+        with ThreadPoolExecutor(max_workers=min(PROBE_WORKERS, len(due)),
+                                thread_name_prefix="a2a-probe") as pool:
+            for fut in [pool.submit(self._upkeep_one, kid, hello_due) for kid, hello_due in due]:
+                try:
+                    fut.result()
+                except Exception:  # noqa: BLE001 — one connection must not stop the pass
+                    _log.exception("a2a upkeep failed for one connection")
+
+    def _upkeep_one(self, kid: str, hello_due: bool) -> None:
+        summary = refresh_friendship(
+            kid, origins_dir=self._origins_dir, endpoints_dir=self._endpoints_dir,
+            hello=hello_due)
+        if summary.get("error") == "not_found":
+            _probe_plain_endpoint(kid, self._endpoints_dir)
+        done = time.time()
+        with self._sched_lock:
+            sch = self._schedules.setdefault(kid, _Schedule())
+            sch.next_ping_due = done + PRESENCE_INTERVAL_S
             if summary.get("error") in ("not_found", "disabled"):
-                with self._sched_lock:
-                    sch.next_due = now + HEALTHY_INTERVAL_S
-                    sch.next_ping_due = time.time() + PRESENCE_INTERVAL_S
-                continue
-            with self._sched_lock:
-                sch.next_ping_due = time.time() + PRESENCE_INTERVAL_S
                 if hello_due:
-                    sch.last_result = summary
-                    if _healthy(summary):
-                        sch.backoff = RETRY_MIN_S
-                        sch.next_due = time.time() + HEALTHY_INTERVAL_S
-                    else:
-                        sch.next_due = time.time() + sch.backoff
-                        sch.backoff = min(RETRY_MAX_S, sch.backoff * 2)
-            self._audit_transition(kid, summary)
+                    sch.next_due = done + HEALTHY_INTERVAL_S
+                return
+            if hello_due:
+                sch.last_result = summary
+                if _healthy(summary):
+                    sch.backoff = RETRY_MIN_S
+                    sch.next_due = done + HEALTHY_INTERVAL_S
+                else:
+                    sch.next_due = done + sch.backoff
+                    sch.backoff = min(RETRY_MAX_S, sch.backoff * 2)
+        self._audit_transition(kid, summary)
 
     def _audit_transition(self, kid: str, summary: dict[str, Any]) -> None:
         state = ("active" if _healthy(summary)
                  else "one_way" if summary.get("reachable") or summary.get("peer_knows_us")
                  else "unreachable")
         token = f"{state}:{summary.get('via') or 'none'}"
-        if self._known_states.get(kid) == token:
-            return
-        self._known_states[kid] = token
+        with self._sched_lock:
+            if self._known_states.get(kid) == token:
+                return
+            self._known_states[kid] = token
         _log.warning("A2A connection %s… is %s (via %s)", kid[:8], state,
                      summary.get("via") or "-")
         _audit("A2A.connection_state", "INFO" if state == "active" else "WARNING",

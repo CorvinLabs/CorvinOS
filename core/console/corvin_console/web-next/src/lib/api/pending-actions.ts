@@ -34,6 +34,14 @@ export async function confirmSend(pendingId: string, csrf: string): Promise<{ ac
   return api(`/a2a/feed/send/confirm/${encodeURIComponent(pendingId)}`, { method: "POST", csrf });
 }
 
+export async function discardSend(pendingId: string, csrf: string): Promise<{ discarded: boolean }> {
+  return api(`/a2a/feed/send/discard/${encodeURIComponent(pendingId)}`, { method: "POST", csrf });
+}
+
+export async function discardTokenRequest(pendingId: string, csrf: string): Promise<{ discarded: boolean }> {
+  return api(`/remote-trigger/pair/friendship-token/discard/${encodeURIComponent(pendingId)}`, { method: "POST", csrf });
+}
+
 export async function listPendingTokenRequests(signal?: AbortSignal): Promise<PendingTokenRequest[]> {
   return api<PendingTokenRequest[]>("/remote-trigger/pair/friendship-token/pending", { signal });
 }

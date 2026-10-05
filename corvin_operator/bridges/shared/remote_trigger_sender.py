@@ -1467,7 +1467,7 @@ class RemoteTriggerSender:
         )
         return True
 
-    def ping(self, endpoint_id: str, timeout_s: float | None = None) -> PingResult:
+    def ping(self, endpoint_id: str, timeout_s: float | None = None, *, audit: bool = True) -> PingResult:
         """ADR-0199: Lightweight peer-liveness check (a2a_ping).
 
         Signed network probe with ±30s freshness window (no nonce store).
@@ -1482,7 +1482,10 @@ class RemoteTriggerSender:
         Returns PingResult with reachable (bool), source ("network_probe"),
         error_category/error_detail (ADR-0197) if reachable=False.
         One ``A2A.ping_result`` audit event is emitted per call (closed
-        enum values only — same safe audit path as send()).
+        enum values only — same safe audit path as send()). ``audit=False``
+        is for the connectivity manager's routine presence probe (one per
+        connection per minute): it audits reachability TRANSITIONS itself
+        (``A2A.connection_state``) instead of every unchanged outcome.
         """
         start = time.time()
 
@@ -1495,7 +1498,7 @@ class RemoteTriggerSender:
         # Network probe: signed request + signed-response verification
         try:
             ok, error_cat, error_det, via = self._http_ping_probe(
-                endpoint_id, timeout_s=timeout_s
+                endpoint_id, timeout_s=timeout_s, audit=audit
             )
             result = PingResult(
                 reachable=ok,
@@ -1520,6 +1523,8 @@ class RemoteTriggerSender:
         # ADR-0199: one audit event per ping outcome. endpoint_id is the
         # pairing kid (pseudonym), consistent with the other A2A events;
         # every value is a closed enum / bool / int — backstop-validated.
+        if not audit:
+            return result
         self._audit_best_effort(
             "A2A.ping_result",
             "INFO" if result.reachable else "WARNING",
@@ -1533,7 +1538,7 @@ class RemoteTriggerSender:
         return result
 
     def _http_ping_probe(
-        self, endpoint_id: str, timeout_s: float = 5
+        self, endpoint_id: str, timeout_s: float = 5, audit: bool = True
     ) -> tuple[bool, str | None, str | None, str]:
         """ADR-0199: Signed ping request-response (network probe).
 
@@ -1602,11 +1607,12 @@ class RemoteTriggerSender:
                 relay_cfg = dict(cfg, _sender_instance_id=self._instance_id)
                 raw = self._relay_ping(relay_cfg, endpoint_id, ping_request, timeout_s)
                 via = "relay"
-                self._audit_best_effort(
-                    "A2A.relay_fallback_used", "INFO",
-                    {"endpoint_id": endpoint_id, "reason": direct_exc.reason,
-                     "source": "ping", "via": "relay"},
-                )
+                if audit:
+                    self._audit_best_effort(
+                        "A2A.relay_fallback_used", "INFO",
+                        {"endpoint_id": endpoint_id, "reason": direct_exc.reason,
+                         "source": "ping", "via": "relay"},
+                    )
             except TransportError as exc:
                 error_cat, error_det = self._categorize_transport_error(direct_exc)
                 return False, error_cat, error_det, "direct"

@@ -20,6 +20,7 @@ auto-confirmed — a stale request is simply gone, never silently minted.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import secrets
@@ -27,10 +28,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+import a2a_pending_claim as _claim
+
 _PENDING_TTL_SECONDS = 600  # 10 minutes — same window as a2a_chat_pending_send
 _PENDING_SUBDIR = ("remote_trigger", "pending_chat_friendship_tokens")
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MAX_LABEL_LEN = 64
+_MAX_TTL_HOURS = 24 * 365.0
 
 
 def _pending_dir(tenant_global_dir: Path) -> Path:
@@ -64,11 +68,18 @@ def create_pending_token_request(
     Carries no key material — only the parameters the eventual token would
     use. The real token is minted only on confirm (see module docstring).
     """
+    ttl = float(ttl_hours)
+    if not math.isfinite(ttl) or ttl <= 0 or ttl > _MAX_TTL_HOURS:
+        # A chat turn may not stage a never-expiring token (ttl 0 meant "no
+        # expiry" at confirm time, and NaN collapsed to 0): that is a choice
+        # only the operator makes, in the token dialog, not via a staged
+        # request the confirm card summarises.
+        raise ValueError(f"ttl_hours must be > 0 and <= {_MAX_TTL_HOURS}")
     pending_id = secrets.token_urlsafe(16)
     record: dict[str, Any] = {
         "pending_id": pending_id,
         "label": (str(label)[:_MAX_LABEL_LEN] if label else None),
-        "ttl_hours": max(0.0, float(ttl_hours)),
+        "ttl_hours": ttl,
         "personas": [str(p)[:64] for p in (personas or [])][:16],
         "created_at": time.time(),
         "requested_by": requested_by,
@@ -108,17 +119,14 @@ def peek_pending_token_request(tenant_global_dir: Path, pending_id: str) -> dict
 
 
 def pop_pending_token_request(tenant_global_dir: Path, pending_id: str) -> dict[str, Any] | None:
-    """Read + delete atomically — one-time use, no replay of a confirm click."""
+    """Claim atomically — one-time use: of two racing confirms only one
+    gets the record (see ``a2a_pending_claim``)."""
     safe = _safe_id(pending_id)
     if safe is None:
         return None
-    path = _pending_dir(tenant_global_dir) / f"{safe}.json"
-    rec = _read_valid(path)
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        pass
-    return rec
+    d = _pending_dir(tenant_global_dir)
+    _claim.sweep_stale_claims(d)
+    return _claim.claim(d / f"{safe}.json", _PENDING_TTL_SECONDS)
 
 
 def list_pending_token_requests(tenant_global_dir: Path) -> list[dict[str, Any]]:

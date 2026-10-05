@@ -140,6 +140,24 @@ def _wait_http(url: str, timeout: float = 90) -> None:
     raise RuntimeError(f"{url} did not come up")
 
 
+
+def _record_ibc_exception(root: Path) -> None:
+    """Mark every connection under ``root`` as an operator exception
+    (``require_ibc: false``). Since ADR-2099 P0 fact 3 (operator decision,
+    Option B) a NEW pairing requires a Corvin Labs IBC on every inbound
+    envelope; these test hosts have none, so without the exception the
+    receiver rightly answers ``instance_attestation_required_but_absent``.
+    This suite tests pairing/transport convergence, not that policy —
+    enforcement is covered by tests/e2e/a2a/test_a2a_require_ibc_enforcement_e2e.py.
+    """
+    for f in (root / "origins").glob("*.json"):
+        cfg = json.loads(f.read_text())
+        cfg["require_ibc"] = False
+        tmp = f.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cfg))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, f)
+
 class _Proc:
     def __init__(self, root: Path, name: str) -> None:
         self.root = root / name
@@ -373,6 +391,8 @@ class TestHubTenPeers(unittest.TestCase):
             return all(_linked(hub.get(k)) for k in self.kids.values()) and all(
                 _linked(a.connection(self.kids[a.name])) for a in self.agents)
         self._await(all_linked, f"all {2 * N_PEERS} connection ends ACTIVE + bidirectional")
+        for p in [self.hub, *self.agents]:
+            _record_ibc_exception(p.root)
         hub = self._hub_connections()
         for a in self.agents:
             self.assertEqual(hub[self.kids[a.name]]["label"], a.name)
@@ -720,20 +740,24 @@ const p = await (await b.newContext({ viewport: { width: 1440, height: 1000 } })
 const errors = [];
 p.on("pageerror", (e) => errors.push(String(e)));
 await p.goto(`${base}/v1/console/auth/local-login`);
-await p.goto(`${base}/console/app/agent-hub`);
-// The Live Feed need not be the default tab — open it explicitly.
-await p.getByRole('tab', { name: 'Live Feed' }).click({ timeout: 30000 });
-await p.waitForSelector('[data-testid="a2a-feed-peer"]', { timeout: 30000 });
+// The Agent Hub page was folded into the chat (2026-10-05): peers live in the
+// chat sidebar's Peers tab, each conversation in the main pane.
+await p.goto(`${base}/console/app/chat`);
+await p.getByRole('tab', { name: /Peers/ }).click({ timeout: 30000 });
+await p.waitForSelector('[data-testid="peer-row"]', { timeout: 30000 });
 await p.waitForTimeout(3000);
-const peers = await p.locator('[data-testid="a2a-feed-peer"]').count();
-const rail = await p.locator('[data-testid="a2a-feed-peer"]').allInnerTexts();
-await p.locator('[data-testid="a2a-feed-peer"]').first().click();
+const rows = p.locator('[data-testid="peer-row"]');
+const peers = await rows.count();
+const rail = await rows.allInnerTexts();
+const presences = await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-presence')));
+await p.locator('[data-testid="peer-row"]:not([data-presence="removed"])').first().click();
+await p.waitForSelector('[data-testid="peer-message"]', { timeout: 30000 });
 await p.waitForTimeout(2500);
-const msgs = await p.locator('[data-testid="a2a-feed-message"]').count();
-const imgs = await p.$$eval('[data-testid="a2a-feed-scroll"] img',
+const msgs = await p.locator('[data-testid="peer-message"]').count();
+const imgs = await p.$$eval('[data-testid="peer-conversation"] img',
   (els) => els.map((e) => [e.complete, e.naturalWidth]));
 await p.screenshot({ path: shot });
-console.log(JSON.stringify({ peers, msgs, imgs, errors, rail }));
+console.log(JSON.stringify({ peers, msgs, imgs, errors, rail, presences }));
 await b.close();
 """)
         shot = self.tmp / "feed.png"
@@ -746,13 +770,17 @@ await b.close();
         res = json.loads(out.stdout.strip().splitlines()[-1])
         self.assertEqual(res["errors"], [])
         self.assertEqual(res["peers"], N_PEERS, res)
-        # Distinguishable avatars (first line of each rail entry is the initials).
-        avatars = [t.splitlines()[0] for t in res["rail"]]
-        self.assertEqual(len(set(avatars)), len(avatars), f"indistinguishable avatars: {avatars}")
+        # Every agent is listed under its own name.
+        names = [t.splitlines()[0] for t in res["rail"]]
+        self.assertEqual(len(set(names)), len(names), f"indistinguishable rail entries: {names}")
         # The revoked agent stays readable under its name, marked as removed.
         victim = self.agents[-1].name
-        self.assertTrue(any(victim in t and "Connection removed" in t for t in res["rail"]),
+        self.assertTrue(any(victim in t and "connection removed" in t for t in res["rail"]),
                         f"revoked {victim} not shown as removed: {res['rail']}")
+        # Presence is measured: every live agent was just probed, so none of
+        # them may read "unknown", and only the revoked one reads "removed".
+        self.assertEqual(res["presences"].count("removed"), 1, res["presences"])
+        self.assertNotIn("unknown", res["presences"], res["presences"])
         self.assertFalse(any("**" in t for t in res["rail"]), "raw Markdown in the rail preview")
         self.assertGreaterEqual(res["msgs"], 4, res)
         self.assertTrue(res["imgs"] and all(c and w > 0 for c, w in res["imgs"]),
@@ -786,7 +814,12 @@ await b.close();
                             "from forge.security_events import verify_chain; "
                             "ok, probs = verify_chain(Path(sys.argv[1])); "
                             "print(json.dumps([ok, probs[:3]]))", str(chain)],
-                env={**os.environ, "PYTHONPATH": _AGENT_PYTHONPATH, "CORVIN_HOME": str(p.root / "home"),
+                # Verify as the instance itself would: drop the runner's
+                # CORVIN_*/VOICE_* sandbox (its CORVIN_AUDIT_ANCHOR_KEY is not
+                # the key this instance signed with — base_env drops it too).
+                env={**{k: v for k, v in os.environ.items()
+                        if not k.startswith(("CORVIN_", "REMOTE_", "VOICE_", "FORGE_"))},
+                     "PYTHONPATH": _AGENT_PYTHONPATH, "CORVIN_HOME": str(p.root / "home"),
                      "VOICE_AUDIT_PATH": str(chain)},
                 capture_output=True, text=True, timeout=120)
             ok, probs = json.loads(out.stdout.strip().splitlines()[-1])

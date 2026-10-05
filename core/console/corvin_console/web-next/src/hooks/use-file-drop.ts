@@ -133,6 +133,11 @@ export const supportsDirectoryDrop =
   typeof DataTransferItem !== "undefined" &&
   "webkitGetAsEntry" in DataTransferItem.prototype;
 
+function isFileDrag(e: React.DragEvent): boolean {
+  const types = e.dataTransfer?.types;
+  return !!types && Array.from(types).includes("Files");
+}
+
 export function useFileDrop(
   onDropFiles: (files: File[]) => void,
   opts?: { disabled?: boolean; onTruncated?: (limit: number) => void },
@@ -142,15 +147,25 @@ export function useFileDrop(
   const [isDragging, setIsDragging] = React.useState(false);
   const counterRef = React.useRef(0);
 
+  // While disabled (streaming/uploading) a file drag must still be
+  // prevented: an un-prevented dragover means no `drop` event reaches us and
+  // the browser performs its default — opening the file, navigating the tab
+  // away from the console. "none" shows the not-allowed cursor instead.
+  const refuse = (e: React.DragEvent) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+  };
+
   const onDragEnter = React.useCallback((e: React.DragEvent) => {
-    if (disabled) return;
+    if (disabled) { refuse(e); return; }
     e.preventDefault();
     counterRef.current += 1;
     setIsDragging(true);
   }, [disabled]);
 
   const onDragOver = React.useCallback((e: React.DragEvent) => {
-    if (disabled) return;
+    if (disabled) { refuse(e); return; }
     // Required: a browser only fires `drop` if `dragover` was prevented.
     e.preventDefault();
   }, [disabled]);

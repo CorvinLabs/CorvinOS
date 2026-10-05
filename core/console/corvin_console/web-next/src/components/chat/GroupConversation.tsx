@@ -23,9 +23,10 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
-  addParticipant, deleteGroup, getGroup, listMessages, sendMessage,
-  type ChatGroup, type GroupMessage,
+  addParticipant, deleteGroup, getGroup, groupAttachmentUrl, listMessages, sendMessage,
+  uploadGroupAttachments, type ChatGroup, type GroupMessage,
 } from "@/lib/api/chat-groups";
+import { useVoiceInput } from "@/hooks/use-voice-input";
 import { getA2AFeed } from "@/lib/api/a2a";
 import { ChatAvatar } from "./ChatAvatar";
 import { MembersSection } from "./MembersSection";
@@ -110,10 +111,34 @@ function GroupMessageRow({ m, group, selfId }: { m: GroupMessage; group: ChatGro
           mine ? "rounded-tr-md bg-accent/15 text-foreground" : "rounded-tl-md border border-border bg-card text-card-foreground shadow-sm",
         )}>
           <div className="whitespace-pre-wrap break-words">{m.text}</div>
+          {attachmentNames(m.text).length > 0 && (
+            <div className="mt-1.5 flex flex-col gap-0.5" data-testid="group-message-attachments">
+              {attachmentNames(m.text).map((n) => (
+                <a key={n} href={groupAttachmentUrl(group.group_id, n)} target="_blank" rel="noreferrer"
+                  className="flex items-center gap-1 text-[11px] text-sky-600 hover:underline dark:text-sky-400">
+                  <Paperclip className="h-3 w-3" /> {n}
+                </a>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
+}
+
+const ATTACH_HEADER = "[Attached files — stored with this group]";
+
+/** Stored-file names a message references through the attach header lines. */
+export function attachmentNames(text: string): string[] {
+  if (!text.startsWith(ATTACH_HEADER)) return [];
+  const out: string[] = [];
+  for (const line of text.split("\n").slice(1)) {
+    const m = /^- attachments\/([^\s/\\]+) \(/.exec(line);
+    if (!m) break;
+    out.push(m[1]);
+  }
+  return out;
 }
 
 export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: string }) {
@@ -132,11 +157,8 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
   const [error, setError] = React.useState("");
   const [membersOpen, setMembersOpen] = React.useState(false);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
-  const [recording, setRecording] = React.useState(false);
   const navigate = useNavigate();
   const endRef = React.useRef<HTMLDivElement>(null);
-  const mediaRef = React.useRef<MediaRecorder | null>(null);
-  const chunksRef = React.useRef<Blob[]>([]);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const folderInputRef = React.useRef<HTMLInputElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -144,17 +166,13 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
   const [dropTruncated, setDropTruncated] = React.useState<number | null>(null);
   const {
     pendingAttachments, uploading, uploadError, addFiles,
-    removeAttachment, onFileInputChange,
+    removeAttachment, clearAttachments, onFileInputChange,
   } = useAttachmentUpload({
-    uploadFn: async (files) => {
-      /* group messages don't support attachments yet, but track them locally */
-      return files.map((f) => ({
-        name: f.name,
-        size: f.size,
-        mime: f.type,
-      }));
-    },
+    uploadFn: (files) => uploadGroupAttachments(groupId, files, csrf),
     disabled: busy,
+  });
+  const { recording, startRecording, stopRecording } = useVoiceInput({
+    value: text, onChange: setText, csrf, disabled: busy, onError: setError,
   });
   const { isDragging: paneDragging, dropHandlers: paneDropHandlers } = useFileDrop(
     (files) => { setDropTruncated(null); void addFiles(files); },
@@ -173,44 +191,21 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
     qc.invalidateQueries({ queryKey: ["chat-groups"] });
   };
 
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      chunksRef.current = [];
-      const mr = new MediaRecorder(stream);
-      mr.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      mr.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        // Group messages don't transcribe audio yet; just append a placeholder
-        try {
-          setText((prev) => prev ? `${prev} [audio]` : "[audio]");
-        } catch {
-          setError("Audio processing failed");
-        }
-      };
-      mr.start();
-      mediaRef.current = mr;
-      setRecording(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "microphone access denied");
-    }
-  };
-
-  const stopRecording = () => {
-    mediaRef.current?.stop();
-    mediaRef.current = null;
-    setRecording(false);
-  };
-
   async function handleSend() {
     const body = text.trim();
-    if (!body || !selfId) return;
+    if ((!body && pendingAttachments.length === 0) || !selfId || uploading) return;
+    // Same contract as session chat: the stored files are referenced by path
+    // in the message text (peers in the group receive that text only).
+    const full = pendingAttachments.length === 0 ? body : [
+      ATTACH_HEADER,
+      ...pendingAttachments.map((a) => `- ${a.path} (${(a.size / 1024).toFixed(1)} KB, ${a.mime})`),
+      ...(body ? ["", body] : []),
+    ].join("\n");
     setBusy(true); setError("");
     try {
-      await sendMessage(groupId, body, selfId, csrf);
+      await sendMessage(groupId, full, selfId, csrf);
       setText("");
+      clearAttachments();
       messages.refetch();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -398,9 +393,14 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
               disabled={recording || busy}
               className="min-h-[2rem] flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
               aria-label="Group message"
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+                e.preventDefault();
+                handleSend();
+              }} />
             <Button variant="accent" size="icon" className="h-8 w-8 shrink-0 rounded-full"
-              disabled={busy || !text.trim()} onClick={handleSend} aria-label="Send">
+              disabled={busy || uploading || (!text.trim() && pendingAttachments.length === 0)}
+              onClick={handleSend} aria-label="Send">
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </Button>
           </div>

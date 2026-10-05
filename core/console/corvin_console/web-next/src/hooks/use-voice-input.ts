@@ -94,6 +94,7 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
   const sttAccumRef = React.useRef("");
   const pttBaseRef = React.useRef("");
   const sttStoppingRef = React.useRef(false);
+  const unmountedRef = React.useRef(false);
   const pttPendingRef = React.useRef(false);
   const recordingRef = React.useRef(false);
   const disabledRef = React.useRef(disabled);
@@ -166,6 +167,7 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
       };
       mr.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
+        if (unmountedRef.current) return;
         const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
         try {
           const r = await transcribeAudio(blob, csrf);
@@ -197,6 +199,24 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
       mediaRef.current = null;
     }
     setRecording(false);
+  }, []);
+
+  // Leaving the conversation while recording (the panes are keyed, so a
+  // switch unmounts this one) must release the microphone: the recognizer
+  // auto-restarts on `onend` until told to stop, and a MediaRecorder keeps
+  // its stream tracks — the browser's mic indicator stayed on until the tab
+  // closed. Nothing is transcribed into a composer that no longer exists.
+  React.useEffect(() => () => {
+    unmountedRef.current = true;
+    sttStoppingRef.current = true;
+    try { recognitionRef.current?.stop(); } catch { /* already ended */ }
+    recognitionRef.current = null;
+    const mr = mediaRef.current;
+    mediaRef.current = null;
+    if (mr) {
+      try { if (mr.state !== "inactive") mr.stop(); } catch { /* already stopped */ }
+      mr.stream.getTracks().forEach((t) => t.stop());
+    }
   }, []);
 
   const startRecRef = React.useRef(startRecording);

@@ -152,6 +152,28 @@ def _conn_wake(kid: str | None = None) -> None:
         pass
 
 
+def _conn_presence(cfgs: list[dict[str, Any]], now: float) -> dict[str, Any]:
+    import a2a_connectivity as _conn  # type: ignore[import-not-found]  # noqa: PLC0415
+    return _conn.presence(cfgs, now)
+
+
+def _host_tenant(rec: session_auth.SessionRecord) -> str:
+    """A2A is host-scoped (one identity, one key set per instance): chat
+    turns stage token requests in the HOST tenant's directory
+    (mcp_server uses CORVIN_TENANT_ID). A session of another tenant must
+    neither see nor confirm them — same rule as a2a_feed._a2a_tenant."""
+    host = (os.environ.get("CORVIN_TENANT_ID") or "_default").strip() or "_default"
+    if rec.tenant_id != host:
+        raise HTTPException(status_code=403, detail=f"A2A on this instance belongs to tenant {host!r}")
+    return host
+
+
+def _staged_ttl_ok(value: Any) -> bool:
+    import math  # noqa: PLC0415
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and value > 0)
+
+
 def _advertised_port() -> int:
     try:
         import a2a_connectivity as _conn  # type: ignore[import-not-found]
@@ -1260,7 +1282,7 @@ def friendship_token_pending_list(
 ) -> list[FriendshipTokenPendingPreview]:
     """List every non-expired chat-staged token request for this tenant —
     same discovery-surface rationale as a2a_feed's pending-send list."""
-    tenant_dir = _a2a_paths.tenant_global_dir(rec.tenant_id)
+    tenant_dir = _a2a_paths.tenant_global_dir(_host_tenant(rec))
     records = _pending_ft.list_pending_token_requests(tenant_dir)
     return [
         FriendshipTokenPendingPreview(
@@ -1279,7 +1301,7 @@ def friendship_token_pending_peek(
 ) -> FriendshipTokenPendingPreview:
     """Preview a chat-staged friendship-token request so the UI can render
     a confirm dialog before any key material exists."""
-    tenant_dir = _a2a_paths.tenant_global_dir(rec.tenant_id)
+    tenant_dir = _a2a_paths.tenant_global_dir(_host_tenant(rec))
     record = _pending_ft.peek_pending_token_request(tenant_dir, pending_id)
     if record is None:
         raise HTTPException(status_code=404, detail="pending friendship-token request not found or expired")
@@ -1304,11 +1326,18 @@ def friendship_token_confirm(
     ``friendship_create`` above, which a tool call from the MCP subprocess
     cannot provide. One-time use: the pending request is consumed on read.
     """
-    tenant_dir = _a2a_paths.tenant_global_dir(rec.tenant_id)
+    tenant_dir = _a2a_paths.tenant_global_dir(_host_tenant(rec))
+    preview = _pending_ft.peek_pending_token_request(tenant_dir, pending_id)
+    if preview is None:
+        raise HTTPException(status_code=404, detail="pending friendship-token request not found, expired, or already confirmed")
+    if not _staged_ttl_ok(preview.get("ttl_hours")):
+        # Staged before staging refused it: ttl 0 would mint a token that
+        # never expires from a card that never said so.
+        raise HTTPException(status_code=422, detail="staged request has no valid expiry — create the token in the token dialog instead")
     record = _pending_ft.pop_pending_token_request(tenant_dir, pending_id)
     if record is None:
         raise HTTPException(status_code=404, detail="pending friendship-token request not found, expired, or already confirmed")
-    ttl: float | None = record["ttl_hours"] * 3600 if record["ttl_hours"] > 0 else None
+    ttl: float = float(record["ttl_hours"]) * 3600
     url_val = _ft.get_my_url()
     relay_for_token = _ft.get_my_relay_url()
     try:
@@ -1335,6 +1364,23 @@ def friendship_token_confirm(
     return FriendshipTokenConfirmResponse(
         token=token_str, kid=token.kid, expires=token.expires, label=record.get("label"),
     )
+
+
+@router.post("/remote-trigger/pair/friendship-token/discard/{pending_id}")
+def friendship_token_discard(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    pending_id: str,
+) -> dict[str, Any]:
+    """Reject a chat-staged token request (nothing is minted)."""
+    tenant_dir = _a2a_paths.tenant_global_dir(_host_tenant(rec))
+    if _pending_ft.pop_pending_token_request(tenant_dir, pending_id) is None:
+        raise HTTPException(status_code=404, detail="pending friendship-token request not found, expired, or already handled")
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+        action="chat.friendship_token.discarded", target_kind="a2a_friendship",
+        target_id=pending_id,
+    )
+    return {"discarded": True}
 
 
 # ── POST /remote-trigger/pair/friendship/import ───────────────────────
@@ -1499,7 +1545,7 @@ def friendship_import(
                 # The issuer refused on ITS licence (a2a_peers_max): it will
                 # never hold a record of us, so this is not a pairing — do not
                 # answer ok:true over a one-way import (2026-09-25, finding 9).
-                with _pair_lock:
+                with _pair_write_lock():
                     for p, blob in previous.items():
                         try:
                             if blob is None:
@@ -1540,7 +1586,7 @@ def friendship_import(
             # a one-way import. Do not claim ACTIVE on url-presence alone.
             state = "UNREACHABLE"
 
-        with _pair_lock:
+        with _pair_write_lock():
             for p in (origin_path, endpoint_path):
                 if not p.exists():
                     continue
@@ -1549,7 +1595,10 @@ def friendship_import(
                 cfg["_peer_knows_us"] = peer_knows_us
                 cfg["_peer_reports_reachable"] = peer_reports_reachable
                 if state != "PENDING":
-                    _ft.stamp_probe(cfg, state == "ACTIVE", time.time())
+                    # The verified ack round trip is the probe: it proves WE
+                    # reach the issuer (peer_reports_reachable is the other
+                    # direction and does not decide our presence of them).
+                    _ft.stamp_probe(cfg, peer_knows_us, time.time())
                 _write_secure(p, cfg)
 
     console_audit.action_performed(
@@ -1687,6 +1736,7 @@ def friendship_connections(
     """List all friendship connections (PENDING + ACTIVE)."""
     _ = rec
     seen: dict[str, dict[str, Any]] = {}
+    cfgs_by_kid: dict[str, list[dict[str, Any]]] = {}
 
     for path in sorted(_origins_dir().glob("*.json")):
         try:
@@ -1696,9 +1746,10 @@ def friendship_connections(
         if not cfg.get("_friendship"):
             continue
         kid = path.stem
+        cfgs_by_kid.setdefault(kid, []).append(cfg)
         seen[kid] = {
             "kid": kid,
-            "state": cfg.get("state", "ACTIVE"),
+            "state": cfg.get("state") or "PENDING",
             # A4-RESIDUAL: sanitize the on-disk label on the way OUT too — a
             # pre-existing record (or one written before the sanitizer existed)
             # could carry a bidi override (U+202E) / ANSI escape that would
@@ -1723,13 +1774,14 @@ def friendship_connections(
         if not cfg.get("_friendship"):
             continue
         kid = path.stem
+        cfgs_by_kid.setdefault(kid, []).append(cfg)
         url = cfg.get("url") or None
         if kid in seen:
             seen[kid]["url"] = url
         else:
             seen[kid] = {
                 "kid": kid,
-                "state": cfg.get("state", "ACTIVE"),
+                "state": cfg.get("state") or "PENDING",
                 # A4-RESIDUAL: sanitize on the way out (see above).
                 "label": _clean_label(cfg.get("label") or "") or None,
                 "personas": [],
@@ -1740,6 +1792,12 @@ def friendship_connections(
                 "via": cfg.get("_last_via"),
             }
 
+    # ``state`` is what the last writer claimed; ``presence`` is the measured,
+    # aged answer the UI must use for online/offline (one rule, shared with
+    # GET /a2a/feed). A missing state is no longer reported as ACTIVE.
+    now = time.time()
+    for kid, conn in seen.items():
+        conn.update(_conn_presence(cfgs_by_kid.get(kid, []), now))
     connections = sorted(seen.values(), key=lambda c: c["kid"])
     return {"connections": connections, "count": len(connections)}
 
@@ -1764,6 +1822,16 @@ def _recheck_connection(kid: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail="unreadable connection") from exc
     if not cfg.get("_friendship"):
         raise HTTPException(status_code=404, detail="not found")
+    origin_path = _conn_path(_origins_dir(), kid)
+    try:
+        ocfg = json.loads(origin_path.read_text("utf-8")) if origin_path.exists() else {}
+    except Exception:  # noqa: BLE001 — an unreadable origin cannot vouch for anything
+        ocfg = {}
+    if cfg.get("_operator_disabled") or ocfg.get("_operator_disabled"):
+        # Switched off by the operator: no hello, no ping, no state write —
+        # the same rule the connectivity manager follows.
+        return {"ok": True, "kid": kid, "state": "DISABLED", "reachable": False,
+                "peer_knows_us": bool(cfg.get("_peer_knows_us", False)), "via": None}
     if not cfg.get("url"):
         return {"ok": True, "kid": kid, "state": "PENDING", "reachable": False, "via": None}
 
@@ -1807,7 +1875,7 @@ def _recheck_connection(kid: str) -> dict[str, Any]:
     # not folded into `state` itself.
     new_state = "ACTIVE" if reachable else "UNREACHABLE"
     probed_at = time.time()
-    with _pair_lock:
+    with _pair_write_lock():
         for p in (_conn_path(_origins_dir(), kid), endpoint_path):
             if not p.exists():
                 continue

@@ -1049,6 +1049,13 @@ def records_from_turn_log(turns: list[dict[str, Any]],
 
     for t in turns:
         role = t.get("role")
+        if role == "user" and t.get("btw"):
+            # A /btw note sent while a turn streamed (console): part of that
+            # turn, whose reply answers it. A note a gate refused is never
+            # re-supplied — not even folded in.
+            if pending is not None and not t.get("gate_refused"):
+                pending["user"] = (pending["user"] + "\n" + _text(t)).strip()
+            continue
         if role == "user":
             if pending is not None:
                 # A user message with no text answer (cancelled, failed,

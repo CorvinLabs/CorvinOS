@@ -789,6 +789,12 @@ def stamp_probe(cfg: dict[str, Any], reachable: bool, now: float) -> None:
     cfg["_last_check_at"] = now
     if reachable:
         cfg["_last_ok_at"] = now
+    else:
+        ok = cfg.get("_last_ok_at")
+        if isinstance(ok, (int, float)) and not isinstance(ok, bool) and ok > now:
+            # Stamped while the clock ran fast: it must not outrank this
+            # failed check once the clock is corrected.
+            cfg.pop("_last_ok_at", None)
 
 
 def _atomic_write(path: Path, data: dict[str, Any]) -> None:
@@ -2722,6 +2728,7 @@ def _ack_ping_back_and_respond(
     # 2026-09-24 only the redeemer ever set it, so the issuer showed "peer
     # can't reach you back" forever (bug #5).
     new_state = "ACTIVE" if reachable else "UNREACHABLE"
+    probed_at = time.time()
     with config_file_lock(origins_dir, endpoints_dir):
         for p in (origin_path, endpoint_path):
             if not p.exists():
@@ -2733,15 +2740,13 @@ def _ack_ping_back_and_respond(
             # The transport that answered is recorded with the state it
             # proves — otherwise the issuer showed an ACTIVE connection with no
             # "via" until the connectivity manager's next ping.
-            via_stale = via is not None and cfg.get("_last_via") != via
-            if (cfg.get("state") != new_state or not cfg.get("_peer_knows_us")
-                    or not cfg.get("_peer_reports_reachable") or via_stale):
-                cfg["state"] = new_state
-                cfg["_peer_knows_us"] = True
-                cfg["_peer_reports_reachable"] = True
-                if via is not None:
-                    cfg["_last_via"] = via
-                _atomic_write(p, cfg)
+            cfg["state"] = new_state
+            cfg["_peer_knows_us"] = True
+            cfg["_peer_reports_reachable"] = True
+            if via is not None:
+                cfg["_last_via"] = via
+            stamp_probe(cfg, reachable, probed_at)
+            _atomic_write(p, cfg)
 
     iid = _local_instance_id()
 

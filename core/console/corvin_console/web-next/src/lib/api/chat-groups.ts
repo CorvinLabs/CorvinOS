@@ -86,6 +86,11 @@ export async function sendMessage(
 // limit, no extension whitelist; stored under the group's own
 // attachments/ directory, see routes/chat_groups.py::upload_group_attachments) ──
 
+/** URL the console serves a stored group attachment from (inline when safe). */
+export function groupAttachmentUrl(groupId: string, name: string): string {
+  return `${BASE}/chat/groups/${encodeURIComponent(groupId)}/attachments/${encodeURIComponent(name)}`;
+}
+
 export async function uploadGroupAttachments(
   groupId: string,
   files: File[],

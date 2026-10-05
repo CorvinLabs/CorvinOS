@@ -139,8 +139,8 @@ function GroupsSection({ csrf, activeGroupId }: { csrf: string; activeGroupId?: 
 function PeersSection({ activePeerId }: { activePeerId?: string }) {
   const navigate = useNavigate();
   const feed = useQuery({
-    queryKey: ["a2a", "peers"],
-    queryFn: ({ signal }) => getA2AFeed({ limit: 1 }, signal),
+    queryKey: ["a2a", "peers", "with-former"],
+    queryFn: ({ signal }) => getA2AFeed({ limit: 1, include_former: true }, signal),
     select: (r) => r.peers,
     refetchInterval: 30_000,
   });
@@ -177,12 +177,13 @@ function PeersSection({ activePeerId }: { activePeerId?: string }) {
               className={cn(
                 "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/60",
                 activePeerId === p.peer_id && "bg-muted",
+                pv.presence === "removed" && "opacity-60",
               )}>
               <span aria-hidden data-testid="presence-dot" className={cn("h-2 w-2 shrink-0 rounded-full", pv.dotClass)} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium">{p.label || p.peer_id}</span>
                 <span className="block text-[10px] text-muted-foreground">
-                  {pv.label}{direction && pv.presence !== "disabled" ? ` · ${direction}` : ""}
+                  {pv.label}{direction && pv.presence !== "disabled" && pv.presence !== "removed" ? ` · ${direction}` : ""}
                 </span>
               </span>
             </button>

@@ -102,6 +102,33 @@ def _peers() -> list[dict[str, Any]]:
     return sorted(peers.values(), key=lambda p: (p["label"] or p["peer_id"]).lower())
 
 
+def _former_peers(tenant_id: str, configured: set[str]) -> list[dict[str, Any]]:
+    """Peers the history still holds messages for whose connection was
+    removed (revoked / deleted). Their conversation stays readable under
+    their last known label, marked ``presence: "removed"`` — the deleted
+    Agent Hub feed showed them; the chat sidebar must too, or the record of
+    what was exchanged becomes unreachable in the UI the moment a pairing
+    ends. Read-only: nothing can be sent to them."""
+    seen: dict[str, dict[str, Any]] = {}
+    path = _feed.feed_dir(tenant_id) / "messages.jsonl"
+    for r in _feed._iter_records(path):
+        pid = str(r.get("peer_id") or "")
+        if not pid or pid in configured:
+            continue
+        e = seen.setdefault(pid, {"peer_id": pid, "label": None, "last_ts": 0.0})
+        if r.get("peer_label"):
+            e["label"] = _rtl._sanitize_label(str(r["peer_label"]), max_len=80) or e["label"]
+        ts = r.get("ts")
+        if isinstance(ts, (int, float)) and not isinstance(ts, bool):
+            e["last_ts"] = max(e["last_ts"], float(ts))
+    return [
+        {"peer_id": e["peer_id"], "label": e["label"], "state": None,
+         "can_send": False, "can_receive": False, "enabled": False,
+         "presence": "removed", "last_check_at": None, "last_ok_at": e["last_ts"] or None}
+        for e in sorted(seen.values(), key=lambda e: -e["last_ts"])
+    ]
+
+
 # ── read ──────────────────────────────────────────────────────────────────
 
 def _a2a_tenant(rec: session_auth.SessionRecord) -> str:
@@ -131,6 +158,7 @@ def a2a_feed(
     since: float | None = Query(default=None, ge=0, description="legacy wall-clock filter"),
     limit: int = Query(default=200, ge=1, le=1000),
     peer_id: str | None = Query(default=None, max_length=128),
+    include_former: bool = Query(default=False, description="also list peers that only exist in the history"),
 ) -> dict[str, Any]:
     tid = _a2a_tenant(rec)
     if since is not None and after is None and before is None:
@@ -138,6 +166,9 @@ def a2a_feed(
     else:
         msgs, more = _feed.read_page(after=after, before=before, limit=limit,
                                      peer_id=peer_id, tenant_id=tid)
+    peers = _peers()
+    if include_former:
+        peers = peers + _former_peers(tid, {p["peer_id"] for p in peers})
     return {
         "tenant_id": tid,
         "ts": time.time(),
@@ -145,7 +176,7 @@ def a2a_feed(
         "messages": msgs,
         "has_more": more,
         "last_seq": max((int(m.get("seq") or 0) for m in msgs), default=after or 0),
-        "peers": _peers(),
+        "peers": peers,
     }
 
 
@@ -290,15 +321,21 @@ def a2a_feed_send_confirm(rec: Session, pending_id: str) -> dict[str, Any]:
     This is the ONLY code path that can fire a chat-staged a2a_send — it
     requires the same session+CSRF dependency as every other mutation on
     this router, which a tool call from the MCP subprocess cannot provide.
+    The record is checked first and claimed (atomically, see
+    ``a2a_pending_claim``) only right before the send, so a refusal leaves
+    it confirmable and of two racing confirms only one sends.
     """
     tenant_id = _a2a_tenant(rec)
     tenant_dir = _forge_paths.tenant_global_dir(tenant_id)
+    preview = _pending.peek_pending_send(tenant_dir, pending_id)
+    if preview is None:
+        raise HTTPException(status_code=404, detail="pending send not found, expired, or already confirmed")
+    peer = next((p for p in _peers() if p["peer_id"] == preview["peer_id"]), None)
+    if peer is None or not peer["can_send"]:
+        raise HTTPException(status_code=404, detail="no enabled endpoint for this peer")
     record = _pending.pop_pending_send(tenant_dir, pending_id)
     if record is None:
         raise HTTPException(status_code=404, detail="pending send not found, expired, or already confirmed")
-    peer = next((p for p in _peers() if p["peer_id"] == record["peer_id"]), None)
-    if peer is None or not peer["can_send"]:
-        raise HTTPException(status_code=404, detail="no enabled endpoint for this peer")
     try:
         from forge.security_events import write_event  # type: ignore[import-not-found]
         write_event(
@@ -310,6 +347,27 @@ def a2a_feed_send_confirm(rec: Session, pending_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="audit chain unavailable — send not confirmed")
     _SEND_POOL.submit(_send_in_background, record["peer_id"], record["text"], [], None)
     return {"accepted": True, "peer_id": record["peer_id"]}
+
+
+@router.post("/a2a/feed/send/discard/{pending_id}")
+def a2a_feed_send_discard(rec: Session, pending_id: str) -> dict[str, Any]:
+    """Reject a chat-staged send. Without this the operator could only wait
+    ten minutes for it to expire while it sat in the confirm list."""
+    tenant_id = _a2a_tenant(rec)
+    tenant_dir = _forge_paths.tenant_global_dir(tenant_id)
+    record = _pending.pop_pending_send(tenant_dir, pending_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="pending send not found, expired, or already handled")
+    try:
+        from forge.security_events import write_event  # type: ignore[import-not-found]
+        write_event(
+            _forge_paths.tenant_audit_chain(tenant_id), "A2A.chat_staged_send_discarded",
+            severity="INFO",
+            details={"peer_id": record["peer_id"], "pending_id": pending_id},
+        )
+    except Exception:  # noqa: BLE001 — nothing was sent; the discard stands
+        pass
+    return {"discarded": True}
 
 
 # ── erase ─────────────────────────────────────────────────────────────────

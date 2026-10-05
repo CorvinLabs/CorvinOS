@@ -579,6 +579,7 @@ EVENT_SEVERITY: dict[str, str] = {
     # record (a2a_chat_pending_send.py). INFO: a deliberate human click, not
     # an anomaly. Never carries message text, only peer_id + pending_id.
     "A2A.chat_staged_send_confirmed": "INFO",
+    "A2A.chat_staged_send_discarded": "INFO",
     # 2026-09-25 A2A adversarial review — events added by the fixes.
     "A2A.instance_pinned":            "INFO",     # TOFU pin of the peer instance id
     "A2A.friendship_paired":          "INFO",     # issuer completed a pairing (audit-first)
@@ -3062,6 +3063,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "A2A.my_url_updated": frozenset({"reason", "source"}),
     "A2A.feed_cleared": frozenset({"messages_removed", "blobs_removed", "reason"}),
     "A2A.chat_staged_send_confirmed": frozenset({"peer_id", "pending_id"}),
+    "A2A.chat_staged_send_discarded": frozenset({"peer_id", "pending_id"}),
     # CLI pairing events (corvin_a2a.py, round 7: their fields were dropped).
     "a2a.friendship.imported": frozenset({"endpoint_id", "reason", "source"}),
     "a2a.relay.enabled_for_pairing": frozenset({"reason", "source"}),

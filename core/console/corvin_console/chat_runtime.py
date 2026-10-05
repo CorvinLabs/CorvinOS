@@ -1109,7 +1109,7 @@ def _unregister_stdin_web(chat_key: str) -> None:
         _running_stdins_web.pop(chat_key, None)
 
 
-async def inject_btw_web(chat_key: str, text: str) -> str:
+async def inject_btw_web(sess: "WebChatSession", text: str) -> str:
     """Inject a `/btw <text>` user-message into the live console chat turn.
 
     Returns ``"injected"`` / ``"no_active_stream"`` / ``"refused"`` — the
@@ -1129,6 +1129,7 @@ async def inject_btw_web(chat_key: str, text: str) -> str:
     a real feature. If the console ever drives a second OS engine, buffered
     queuing belongs here too.
     """
+    chat_key = sess.chat_key
     text = (text or "").strip()
     if not text:
         return "refused"
@@ -1136,6 +1137,20 @@ async def inject_btw_web(chat_key: str, text: str) -> str:
         stdin = _running_stdins_web.get(chat_key)
     if stdin is None:
         return "no_active_stream"
+    # A note reaches the model exactly like a turn does, so it passes the same
+    # fail-closed pre-spawn gates (L44 house rules, capabilities, L34, L35) —
+    # the bridge gates /btw too. Without this a note bypassed all four.
+    try:
+        refusal = await asyncio.to_thread(
+            _spawn_gates.check_console_spawn_or_refusal, text,
+            tenant_id=sess.tenant_id, persona="assistant", channel=CHANNEL,
+            chat_key=chat_key, engine_id=_configured_os_engine(sess.tenant_id))
+    except Exception:  # noqa: BLE001 — fail closed
+        refusal = "gate unavailable"
+    note_parts = [{"kind": "text", "text": f"/btw {text}"}]
+    if refusal is not None:
+        _append_turn(sess, "user", note_parts, gate_refused="btw", btw=True)
+        return "refused"
     # ADR-0648 amendment 2: frame the JSONL user message ourselves (same as
     # the bridge's raw-stdin branch) so `guard_prompt_head` runs on the
     # EXACT bytes the CLI will parse as this message's content — a leading
@@ -1156,6 +1171,9 @@ async def inject_btw_web(chat_key: str, text: str) -> str:
         _log.info("inject_btw_web: write failed (stream likely just ended) for chat=%s: %s",
                    chat_key, e)
         return "no_active_stream"
+    # Session ledger (ADR-2102): the note's answer arrives inside the running
+    # turn's reply, so the note is folded into that turn, not a turn of its own.
+    _append_turn(sess, "user", note_parts, btw=True)
     return "injected"
 
 
@@ -3796,7 +3814,8 @@ def record_side_turn(sess: "WebChatSession", prompt: str, reply: str) -> None:
 def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
                  voice_key_hint: str | None = None, tde_progress: dict[str, Any] | None = None,
                  execution_context: dict[str, Any] | None = None,
-                 gate_refused: str | None = None, cli_spawned: bool = False) -> None:
+                 gate_refused: str | None = None, cli_spawned: bool = False,
+                 btw: bool = False) -> None:
     """Append one turn (user or assistant) to the session's turns log.
 
     ``voice_key_hint`` (ADR-0194 Phase 1) pins the voice_key of the text this
@@ -3832,6 +3851,10 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
         payload["tde_progress"] = tde_progress
     if execution_context:
         payload["execution_context"] = execution_context
+    if btw:
+        # A mid-turn /btw note: session_ledger.records_from_turn_log folds it
+        # into the turn it was sent during instead of starting a new one.
+        payload["btw"] = True
     if gate_refused:
         # A pre-spawn gate answered: the session ledger re-supplies this turn
         # with the user's text WITHHELD, never past the gate (ADR-2102).

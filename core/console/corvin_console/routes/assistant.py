@@ -76,7 +76,7 @@ a comparison or overview.
 | /app/personas | Personas | AI personality profiles — system prompt, MCP servers, LDD layers |
 | /app/workflows | Workflows | Multi-step background tasks: create, edit, trigger, inspect runs |
 | /app/connectors | Connectors | External data source and API connector configuration |
-| /app/agent-hub | Agent Hub | Connect remote A2A agents for task delegation |
+| /app/chat | Chat | Conversations with Corvin, group chats and A2A agents. Sidebar "Peers" tab: connected agents with live online status, discovered agents, friendship tokens; the gear icon opens permissions, invite codes and connections. (Agent Hub was folded in here.) |
 | /app/engines | Engines | AI engine settings: ClaudeCode, Copilot, OpenCode |
 | /app/skills | Skills | Forge skills: create, grade, promote, purge |
 | /app/tools | Tools | Forge tools: create, test, promote |

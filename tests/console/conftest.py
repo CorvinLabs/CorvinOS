@@ -40,7 +40,6 @@ SECONDARY_PANELS = [
     {"route": "quality", "name": "Quality Gates", "priority": "P2", "type": "table"},
     {"route": "compliance", "name": "Compliance / Audit", "priority": "P2", "type": "table"},
     {"route": "api-keys", "name": "API Keys", "priority": "P2", "type": "list"},
-    {"route": "agent-hub", "name": "Agent Hub", "priority": "P2", "type": "list"},
 ]
 
 ALL_PANELS = CRITICAL_PANELS + SECONDARY_PANELS + [

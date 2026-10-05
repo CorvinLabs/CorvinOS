@@ -17,6 +17,7 @@ import json
 import os
 import secrets
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -1448,6 +1449,9 @@ def _cmd_import_token(args: argparse.Namespace) -> int:
                 cfg["state"] = state
                 cfg["_peer_knows_us"] = peer_knows_us
                 cfg["_peer_reports_reachable"] = peer_reports_reachable
+                if state != "PENDING":
+                    # A verified ack round trip proves we reach the issuer.
+                    _friendship.stamp_probe(cfg, peer_knows_us, time.time())
                 _atomic_write(p, cfg)
 
     _audit_a2a(

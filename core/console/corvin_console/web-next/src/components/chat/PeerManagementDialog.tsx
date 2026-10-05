@@ -88,6 +88,7 @@ import {
   type LicenseInfo,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { presenceView } from "@/lib/a2a-presence";
 
 // ── helpers ────────────────────────────────────────────────────────
 
@@ -110,6 +111,16 @@ function CopyChip({ value, short }: { value: string; short?: string }) {
         ? <CheckCircle2 className="h-2.5 w-2.5 flex-none text-emerald-500" />
         : <Copy className="h-2.5 w-2.5 flex-none opacity-0 group-hover:opacity-60" />}
     </button>
+  );
+}
+
+function PresenceBadge({ connection }: { connection: FriendshipConnection }) {
+  const pv = presenceView(connection);
+  return (
+    <span data-testid="connection-presence" data-presence={pv.presence} title={pv.title}
+      className="inline-flex items-center gap-1 rounded-full border border-border/60 px-2 py-0.5 text-[10px]">
+      <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", pv.dotClass)} /> {pv.label}
+    </span>
   );
 }
 
@@ -758,7 +769,7 @@ function EndpointRow({
       <div className="flex items-start gap-3">
         <div className={cn(
           "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-xs font-bold",
-          endpoint.enabled ? "bg-emerald-500/15 text-emerald-500" : "bg-muted text-muted-foreground",
+          endpoint.enabled ? "bg-accent/15 text-accent" : "bg-muted text-muted-foreground",
         )}>
           {initials}
         </div>
@@ -786,12 +797,12 @@ function EndpointRow({
               → outbound
             </Badge>
             {endpoint.enabled ? (
-              <span className="flex items-center gap-0.5 text-[10px] text-emerald-600 dark:text-emerald-400">
-                <CheckCircle2 className="h-2.5 w-2.5" /> active
+              <span className="flex items-center gap-0.5 text-[10px] text-muted-foreground" title="Sending to this peer is allowed — whether it is reachable is shown in the chat sidebar">
+                <CheckCircle2 className="h-2.5 w-2.5" /> enabled
               </span>
             ) : (
               <span className="flex items-center gap-0.5 text-[10px] text-muted-foreground">
-                <XCircle className="h-2.5 w-2.5" /> inactive
+                <XCircle className="h-2.5 w-2.5" /> disabled
               </span>
             )}
             {endpoint.instance_id_pin && (
@@ -1201,28 +1212,11 @@ function FriendshipConnectionsList() {
   const [deleteError, setDeleteError] = React.useState("");
   const [rechecking, setRechecking] = React.useState<string | null>(null);
 
-  // Self-healing recheck (2026-08-03): a peer that comes back reachable
-  // (roaming device reconnects, relay was just enabled, DNS/IP settles)
-  // used to require a manual "Recheck" click to notice — the 15s query
-  // refetch above only re-reads the LAST stored state, it never re-pings.
-  // Poll UNREACHABLE connections on a slower cadence than the read-only
-  // refetch (a live network probe is much more expensive than a file read,
-  // and every relay-fallback attempt is real traffic through a third party).
-  const connectionsRef = React.useRef<FriendshipConnection[]>([]);
-  connectionsRef.current = conns.data?.connections ?? [];
-
-  React.useEffect(() => {
-    const interval = setInterval(() => {
-      const unreachable = connectionsRef.current.filter(c => c.state === "UNREACHABLE");
-      if (unreachable.length === 0) return;
-      void Promise.all(
-        unreachable.map(c => recheckFriendshipConnection(c.kid, csrf).catch(() => null)),
-      ).then(() => {
-        void qc.invalidateQueries({ queryKey: ["a2a", "friendship-connections"] });
-      });
-    }, 60_000);
-    return () => clearInterval(interval);
-  }, [csrf, qc]);
+  // No client-side re-ping loop: the connectivity manager probes every
+  // connection server-side each minute (a2a_connectivity.PRESENCE_INTERVAL_S)
+  // and the 15 s refetch above reads the result. The old loop re-pinged
+  // UNREACHABLE peers from every open browser tab and also sent hellos to
+  // connections the operator had switched off.
 
   async function handleRecheck(kid: string) {
     setRechecking(kid);
@@ -1297,7 +1291,7 @@ function FriendshipConnectionsList() {
             {connections.map((c: FriendshipConnection) => (
               <div key={c.kid} className="px-4 py-3 text-sm">
                 <div className="flex items-center gap-3 flex-wrap">
-                  <StateBadge state={c.state} />
+                  <PresenceBadge connection={c} />
                   {c.label && (
                     <span className="font-medium text-sm">{c.label}</span>
                   )}
@@ -1312,7 +1306,7 @@ function FriendshipConnectionsList() {
                   <ViaBadge via={c.via} />
                   <PeerKnowsUsHint state={c.state} peerKnowsUs={c.peer_knows_us} />
                   <div className="ml-auto flex gap-1.5 shrink-0">
-                    {c.state === "UNREACHABLE" && (
+                    {c.presence === "offline" && (
                       <EnableRelayPrompt
                         kid={c.kid}
                         csrf={csrf}

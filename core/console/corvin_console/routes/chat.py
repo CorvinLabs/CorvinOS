@@ -41,7 +41,7 @@ import time
 from pathlib import Path
 from typing import Annotated, Any, AsyncIterator, Literal
 
-from fastapi import APIRouter, Cookie, Depends, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status as http_status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status as http_status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -237,7 +237,7 @@ async def send_btw_note(
     sess = chat_runtime.get_session(rec.tenant_id, sid)
     if sess is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "session not found")
-    status_ = await chat_runtime.inject_btw_web(sess.chat_key, body.instruction)
+    status_ = await chat_runtime.inject_btw_web(sess, body.instruction)
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
@@ -384,14 +384,15 @@ def get_workdir_file(
     # restriction regardless of how the URL was reached — a JS-disabling,
     # same-origin-denying sandbox with no exceptions, matching the iframe's
     # own attribute.
-    headers: dict[str, str] | None = None
-    if mime in ("text/html", "image/svg+xml"):
-        headers = {"Content-Security-Policy": "sandbox"}
+    # Review R1 (2026-10-05): with the upload type whitelist gone, xhtml/xml
+    # uploads were served inline, same-origin, with no sandbox — and no
+    # nosniff anywhere. attachments_common.serve_headers decides per type.
+    disposition, headers = _attachments.serve_headers(mime)
     return FileResponse(
         path=str(fpath),
         media_type=mime or "application/octet-stream",
         filename=filename,
-        content_disposition_type="inline",
+        content_disposition_type=disposition,
         headers=headers,
     )
 
@@ -451,7 +452,7 @@ def get_session_workdir_path(
 @router.post("/chat/sessions/{sid}/attachments")
 async def upload_attachments(
     sid: str,
-    files: Annotated[list[UploadFile], File(description="One or more files to attach")],
+    request: Request,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> JSONResponse:
     """Upload one or more files into the session workdir/attachments/ directory.
@@ -469,7 +470,11 @@ async def upload_attachments(
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "session not found")
 
     attach_dir = sess.workdir / "attachments"
-    results = await _attachments.receive_uploaded_files(files, attach_dir)
+    files, form = await _attachments.read_upload_form(request)
+    try:
+        results = await _attachments.receive_uploaded_files(files, attach_dir)
+    finally:
+        await form.close()
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,

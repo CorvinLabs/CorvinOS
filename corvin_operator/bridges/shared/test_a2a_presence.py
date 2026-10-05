@@ -103,7 +103,7 @@ class PresenceCadenceTests(unittest.TestCase):
             calls.append("hello")
             return {"ok": True, "reachable": True, "via": "direct"}
 
-        def fake_ping(kid, endpoints_dir):
+        def fake_ping(kid, endpoints_dir, audit=True):
             calls.append("ping")
             return reachable["v"], ("direct" if reachable["v"] else None)
 

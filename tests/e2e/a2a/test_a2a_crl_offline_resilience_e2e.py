@@ -5,8 +5,26 @@ so offline hosts do not pay a 15s timeout on every envelope. The cache is
 refreshed out-of-band by ``corvin-id maintain`` (corvin-ibc-maintain.timer).
 """
 import json
+import sys
 import time
 from pathlib import Path
+
+import pytest
+
+_SHARED = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
+
+
+@pytest.fixture
+def temp_corvin_home(monkeypatch, tmp_path):
+    """A private CORVIN_HOME for the CRL cache. The tests referenced this
+    fixture without it existing anywhere, so all three errored at setup and
+    the cache-only receive guarantee (ADR-2099 P0 fact 4) was never run."""
+    home = tmp_path / "corvin-home"
+    home.mkdir()
+    monkeypatch.setenv("CORVIN_HOME", str(home))
+    if str(_SHARED) not in sys.path:
+        sys.path.insert(0, str(_SHARED))
+    return home
 
 
 def test_receive_crl_check_uses_cache_only_not_network(
@@ -14,8 +32,6 @@ def test_receive_crl_check_uses_cache_only_not_network(
     monkeypatch,
 ):
     """E2E: receive() calls peer_ibc_revoked which reads cache only (no network)."""
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "corvin_operator" / "bridges" / "shared"))
     
     from instance_identity import peer_ibc_revoked, _crl_cache_path
     import instance_identity
@@ -59,8 +75,6 @@ def test_offline_grace_period_serves_stale_cache(
     temp_corvin_home,
 ):
     """E2E: CRL cache older than 24h but <7d is still served (offline tolerance)."""
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "corvin_operator" / "bridges" / "shared"))
     
     from instance_identity import fetch_revocation_list, _crl_cache_path
     import time
@@ -89,13 +103,15 @@ def test_offline_grace_period_serves_stale_cache(
     urllib.request.urlopen = counting_blocked
     
     try:
-        # 3. Fetch without force_refresh — should serve stale cache, not retry network
+        # 3. Past the 24 h TTL the non-receive fetch (operator / maintain
+        #    path) tries ONE refresh and, offline, serves the stale cache.
+        #    The receive path never fetches at all — that is test 1
+        #    (peer_ibc_revoked is cache-only).
         result = fetch_revocation_list(force_refresh=False)
-        
+
         assert "old-revoked-jti" in result, f"Expected stale cache data, got {result}"
-        assert call_count[0] == 0, (
-            f"Expected NO network calls for cached (non-force) fetch, "
-            f"but urlopen was called {call_count[0]} times"
+        assert call_count[0] == 1, (
+            f"Expected exactly one refresh attempt past the TTL, got {call_count[0]}"
         )
     finally:
         urllib.request.urlopen = original_urlopen
@@ -105,8 +121,6 @@ def test_crl_cache_beyond_grace_period_returns_empty_safely(
     temp_corvin_home,
 ):
     """E2E: CRL cache older than 7d returns empty (fail-open, not stale revocation)."""
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "corvin_operator" / "bridges" / "shared"))
     
     from instance_identity import peer_ibc_revoked, _crl_cache_path
     import time

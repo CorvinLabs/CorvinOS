@@ -242,8 +242,9 @@ meets or exceeds the licence limit.
 Pairing is bidirectional (each side stores an inbound *origin* and an outbound
 *endpoint*), and **each side owns its own inbound policy**: what a peer may do
 here is decided exclusively by the local origin file — the peer has no say in
-it, and every field can be changed retroactively from the console (Agent Hub →
-Peers → Edit connection) via `PATCH /v1/console/remote-trigger/origins/{id}`.
+it, and every field can be changed retroactively from the console (Chat →
+sidebar **Peers** tab → gear icon → *Peers & Permissions*, i.e.
+`PeerManagementDialog`) via `PATCH /v1/console/remote-trigger/origins/{id}`.
 
 Editable per-connection fields (`OriginPatchRequest`, `a2a_pair.py`):
 
@@ -897,6 +898,39 @@ Tests: `test_a2a_friendship_handshake.py::TestRepeatAck` (real HTTP, two instanc
 server on a socket, two real listeners, redeemer registering last — red on the old
 relay), `core/console/tests/test_a2a_relay_config.py::TestRecheckAckDeadlock`.
 
+## Peer presence — measured, aged, one rule (2026-10-05)
+
+"Online" in the console is **measured reachability**, never a permission.
+Before 2026-10-05 the chat sidebar painted a peer green whenever
+`can_send`/`can_receive` was true; live, a peer last reachable 7.5 days
+earlier showed as "two-way" online.
+
+| Piece | Rule | Where |
+|---|---|---|
+| Probe record | Every probe of a peer writes `_last_check_at`, and on success `_last_ok_at` with the same timestamp, through **one** writer. A failed check drops an `_last_ok_at` that lies in the future (clock stepped back). | `a2a_friendship.stamp_probe` — called by the connectivity manager, `_probe_plain_endpoint`, the manual `/recheck`, the console + CLI import, and the inbound-hello ping-back |
+| Presence | `online` = newest check fresh (≤ `PRESENCE_FRESH_S`, 150 s) **and** it succeeded; `offline` = fresh and failed; `unknown` = no fresh check; `pending` / `disabled` overlay; `removed` = only in the history. `state` is not trusted on its own (more paths write it, nothing ages it). Timestamps that are bool, NaN/inf or > 60 s in the future are ignored. | `a2a_connectivity.presence()` — the only reader rule, used by `GET /a2a/feed` and `GET …/friendship/connections` |
+| Cadence | The manager pings every connection every `PRESENCE_INTERVAL_S` (60 s, no hello); hellos keep their healthy (600 s) / backoff schedule. Due connections are probed concurrently (`PROBE_WORKERS`), so a few dead peers cannot push a live one past the freshness window. Invite-code (non-friendship) endpoints get a plain ping that records only the timestamps. | `ConnectivityManager._maintain_friendships` / `_upkeep_one` |
+| Audit | Routine presence pings are not audited one by one (`RemoteTriggerSender.ping(audit=False)`); every **change** of reachability is (`A2A.connection_state`). Manual rechecks and hello passes still audit each ping. | `a2a_connectivity._audit_transition`, `_probe_plain_endpoint` |
+| UI | Dot + words from `presenceView()` (green online, red offline with "seen N d ago", grey unknown, amber pending). A missing field reads as `unknown`, never online. | `web-next/src/lib/a2a-presence.ts` |
+
+The client no longer re-pings from the browser: the old Agent Hub loop sent
+hellos from every open tab, also to connections the operator had disabled.
+`_recheck_connection` now refuses operator-disabled connections without any
+network call or write, and it and the import write under the cross-process
+`_pair_write_lock`. Tests: `test_a2a_presence.py`, the HTTP test in
+`core/console/tests/test_agent_hub_feed_real_data.py`, the sidebar render test
+`web-next/tests/unit/a2a-presence.test.tsx`, and step 8 of
+`test_a2a_hub_ten_peers_e2e.py` (real browser: no live agent may read
+`unknown`, the revoked one reads `removed`).
+
+Since ADR-2099 P0 fact 3 (operator decision, Option B) a **new** pairing
+requires a Corvin Labs IBC on every inbound envelope (`require_ibc: true`).
+An instance without an IBC therefore cannot exchange tasks over a new pairing
+— it reads as online (the ping is not IBC-gated) while its tasks are
+`rejected` with `instance_attestation_required_but_absent`. Transport tests
+that pair IBC-less hosts record an explicit operator exception
+(`require_ibc: false`) for that reason.
+
 ## Zero-config connectivity — the token is the only input (ADR-2059, 2026-09-24)
 
 Builds on ADR-2057. Operator requirement: a user enters the friendship token and
@@ -918,14 +952,22 @@ Tests: `test_a2a_ingress.py` (peer gate, config, rate limit),
 token-only pairing in both directions, issuer offline during import, address
 change, revocation.
 
-## Agent Hub live feed — A2A messages with media (ADR-2063, 2026-09-25)
+## A2A feed — messages with media, read in the chat (ADR-2063, 2026-09-25; moved 2026-10-05)
 
 The audit chain stays metadata-only for A2A (instruction text, worker output
-and attachment bytes never enter it). The Agent Hub's **Live Feed** tab
-(`/console/app/agent-hub`, now the default tab) is the readable view of the
-same exchanges: a chat of every task this instance sent or received, the
-peer's reply, and the attachments, rendered inline (images, audio, video,
-PDF, text previews). The old metadata list moved to the **Audit trail** tab.
+and attachment bytes never enter it). The readable view of the same
+exchanges is the console **chat**: the sidebar's **Peers** tab lists every
+peer (with measured presence, see below), and a peer opens its conversation
+(`/console/app/chat/peer/<id>`) with the tasks this instance sent or
+received, the peer's replies and the attachments, rendered inline (images,
+audio, video; other files as links). The standalone Agent Hub page was
+removed 2026-10-05; `/app/agent-hub` redirects to `/app/chat`. Its pieces
+moved: permissions, invite codes, friendship connections and the licence
+limit → `PeerManagementDialog` (gear icon in the Peers tab), the
+instance's own A2A URL → Settings, the A2A audit trail → Compliance, the
+"clear all A2A messages" action → the dialog's danger zone. A peer whose
+pairing was removed stays listed as *connection removed*, its history
+read-only (`GET /a2a/feed?include_former=true`).
 
 | Piece | What it does | Where |
 |---|---|---|
@@ -934,23 +976,11 @@ PDF, text previews). The old metadata list moved to the **Audit trail** tab.
 | Inbound hook | Records the task only AFTER HMAC, nonce, TTL, consent and the CLAG chain gate passed — an unauthenticated sender can never write into the store — then the signed response (including the injection-rejection path). | `remote_trigger_receiver.py::receive`, `_feed_record` |
 | Console API | `GET /v1/console/a2a/feed?after=<seq>` or `?before=<seq>&limit=` (append-ordered page + `has_more` + `last_seq` + peer directory; `since=` kept as a legacy ts filter), `GET /a2a/feed/blob/{sha256}`, `POST /a2a/feed/send` (202; runs on a bounded send pool, result lands in the feed; > 16 KiB after NFKC → 422), `DELETE /a2a/feed` (audit-FIRST `A2A.feed_cleared`, counts only; no chain record → 503, nothing deleted). Router-level session + CSRF guard. | `core/console/corvin_console/routes/a2a_feed.py` |
 | Blob serving | Only passive media types are served inline; SVG/HTML and every unknown type go out as `application/octet-stream` attachments. Always `nosniff` + `Content-Security-Policy: sandbox`. | `routes/a2a_feed.py::_INLINE_MIME` |
-| UI | Agent rail with state dots + last message, chat bubbles (this instance right, peers left), reply quotes the task, typing indicator for tasks without a response, composer with attach / drag-drop / paste (1 MiB, 16 files — the protocol caps), 2 s polling with a `seq` cursor (`after`, drained while `has_more`), per-agent history via `before`. A detail-less `rejected` is explained, never shown as "delivered". | `web-next/src/components/agent-hub/live-feed.tsx`, logic in `src/lib/a2a-feed.ts` |
+| UI | Peers tab with presence dots, per-peer conversation (this instance right, peers left), composer with attach / folder / drag-drop (1 MiB, 16 files per message — the protocol caps, checked across picks), voice input, 4 s polling. | `web-next/src/components/chat/{ChatContextSidebar,PeerConversation}.tsx`, logic in `src/lib/a2a-feed.ts`, `src/lib/a2a-presence.ts` |
 
 A rejection's reason stays on the answering side by protocol design (the
 signed `rejected` response carries no reason); the feed says so instead of
 guessing.
-
-**Console chat embedding (2026-10-01).** The chat page's status bar has a
-**Relay** toggle that mounts the same `AgentLiveFeed` component as a panel in
-place of the message list (`web-next/src/pages/chat.tsx`, mutually exclusive
-with the audit panel). It is composition, not a merge: feed records carry
-`peer_id`/`task_id` but no chat session id, so the panel shows the host
-tenant's whole feed and never writes into chat history. No new endpoint, no
-flag. `AgentLiveFeed` takes a `className` the chat uses to make it a flex
-item (`h-auto min-h-0 flex-1`) instead of its page-sized
-`h-[calc(100vh-15rem)] min-h-[34rem]`. While the panel is open the chat's own
-composer is hidden (not unmounted, the draft survives) and Space does not
-trigger push-to-talk, so exactly one input is on screen.
 
 **Layout invariant of the feed grid** (fixed 2026-10-01, Agent Hub too): both
 axes must be `minmax(0,1fr)` — `grid-rows-[minmax(0,1fr)]` and

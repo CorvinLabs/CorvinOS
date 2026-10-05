@@ -27,12 +27,14 @@ participation even though the two facts live in different stores.
 """
 from __future__ import annotations
 
+import mimetypes
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .. import attachments_common as _attachments
@@ -397,7 +399,7 @@ def send_message(rec: Session, group_id: str, body: SendMessageRequest) -> Messa
 async def upload_group_attachments(
     rec: Session,
     group_id: str,
-    files: Annotated[list[UploadFile], File(description="One or more files to attach")],
+    request: Request,
 ) -> dict[str, Any]:
     """Upload one or more files into the group's own ``attachments/`` directory.
 
@@ -418,13 +420,43 @@ async def upload_group_attachments(
     if attach_dir is None:
         raise HTTPException(status_code=404, detail="group not found")
 
-    results = await _attachments.receive_uploaded_files(files, attach_dir)
+    files, form = await _attachments.read_upload_form(request)
+    try:
+        results = await _attachments.receive_uploaded_files(files, attach_dir)
+    finally:
+        await form.close()
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
         action="upload", target_kind="chat_attachment", target_id=group_id,
     )
     return {"attachments": results}
+
+
+@router.get("/chat/groups/{group_id}/attachments/{name}")
+def get_group_attachment(rec: Session, group_id: str, name: str) -> FileResponse:
+    """Serve one stored group attachment to a session of the group's tenant.
+
+    Uploads existed without a way to read them back, so the paths a group
+    message references pointed nowhere in the UI. ``name`` must be exactly a
+    stored name (``safe_attach_name`` round-trips), the resolved file must
+    sit directly in the group's attachments dir and must not be a symlink;
+    the response uses the same per-type disposition/CSP as session chat.
+    """
+    tenant_dir = _a2a_paths.tenant_global_dir(rec.tenant_id)
+    g = _store.get_group(tenant_dir, group_id)
+    if g is None or g.get("tenant_id") != rec.tenant_id:
+        raise HTTPException(status_code=404, detail="group not found")
+    attach_dir = _store.attachments_dir(tenant_dir, group_id)
+    if attach_dir is None or name != _attachments.safe_attach_name(name) or name in (".", ".."):
+        raise HTTPException(status_code=404, detail="attachment not found")
+    path = attach_dir / name
+    if path.is_symlink() or not path.is_file() or path.resolve().parent != attach_dir.resolve():
+        raise HTTPException(status_code=404, detail="attachment not found")
+    mime = mimetypes.guess_type(name)[0]
+    disposition, headers = _attachments.serve_headers(mime)
+    return FileResponse(path=str(path), media_type=mime or "application/octet-stream",
+                        filename=name, content_disposition_type=disposition, headers=headers)
 
 
 # ── A2A inbound group routing (ADR-2218 Phase 3.5) ─────────────────────────
