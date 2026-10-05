@@ -214,6 +214,75 @@ def integrate_feedback_outcome(
         return False
 
 
+def emit_layer_forge_outcome(
+    *,
+    tenant_id: Optional[str],
+    entry_id: str,
+    version: str,
+    phase: str,
+    success: bool,
+    emitter: Optional[Any] = None,
+) -> bool:
+    """Record Layer Forge decision outcome as a learning event.
+
+    Called from Layer Forge orchestrator when a definition transitions
+    (promoted) or is rejected. This closes the learning loop for Layer Forge
+    decisions (gate/enforcement confidence scores) with outcome feedback.
+
+    Args:
+        tenant_id: The definition's tenant (GDPR Art. 6, 32).
+        entry_id: Layer definition ID (uuid-like, not PII).
+        version: Layer definition version.
+        phase: Where the outcome occurred (validate|test|enforce|deployed|retired).
+        success: Whether the definition progressed (True) or was rejected (False).
+        emitter: Explicit EventEmitter (tests); default is booted registry's.
+
+    Returns:
+        True when the event was queued for the audit-first store.
+    """
+    if not tenant_id or not isinstance(tenant_id, str):
+        logger.debug("layer forge outcome dropped: no tenant_id (entry %s)", entry_id)
+        return False
+
+    em = emitter if emitter is not None else learning_emitter()
+    if em is None:
+        logger.debug("layer forge outcome dropped: no learning emitter booted (entry %s)", entry_id)
+        return False
+
+    try:
+        from core.learning.learning_events import EventType, LearningEvent  # noqa: PLC0415
+
+        # Map phase to a semantic outcome label
+        phase_labels = {
+            "validate": "validation_pass" if success else "validation_fail",
+            "test": "gates_pass" if success else "gates_fail",
+            "enforce": "enforcement_pass" if success else "enforcement_fail",
+            "deployed": "now_live",
+            "retired": "lifecycle_end",
+        }
+
+        signal: dict[str, Any] = {
+            "entry_id": entry_id,
+            "version": version,
+            "phase": phase,
+            "success": success,
+            "phase_label": phase_labels.get(phase, "unknown"),
+            "source": "layer_forge_orchestrator",
+        }
+
+        event = LearningEvent.create(
+            event_type=EventType.OUTCOME,
+            skill_id="os.layer_forge",
+            tenant_id=tenant_id,
+            signal=signal,
+            lom="core/learning/outcome_sink.py:emit_layer_forge_outcome",
+        )
+        return bool(em.emit(event))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("layer forge outcome not recorded (%s/%s): %s", entry_id, version, type(exc).__name__)
+        return False
+
+
 _learning_emitter = learning_emitter  # compat alias
 
 __all__ = [
@@ -222,4 +291,5 @@ __all__ = [
     "learning_emitter",
     "OUTCOME_SKILL_ID",
     "integrate_feedback_outcome",
+    "emit_layer_forge_outcome",
 ]
