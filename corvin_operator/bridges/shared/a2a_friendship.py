@@ -782,6 +782,15 @@ def activate_connection(
             _atomic_write(path, cfg)
 
 
+def stamp_probe(cfg: dict[str, Any], reachable: bool, now: float) -> None:
+    """Record one reachability probe on a connection record — the fields
+    ``a2a_connectivity.presence`` reads. Every path that probes a peer writes
+    through here, so none can update ``state`` and leave presence stale."""
+    cfg["_last_check_at"] = now
+    if reachable:
+        cfg["_last_ok_at"] = now
+
+
 def _atomic_write(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")

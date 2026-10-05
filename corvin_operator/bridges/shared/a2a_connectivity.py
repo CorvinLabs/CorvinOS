@@ -59,6 +59,13 @@ HEALTHY_INTERVAL_S = 600.0     # keepalive / address re-announce when all is wel
 RETRY_MIN_S = 10.0             # first retry after a failure
 RETRY_MAX_S = 300.0            # backoff ceiling while unhealthy
 MESH_DETECT_INTERVAL_S = 120.0
+# Presence: every connection gets a cheap signed ping (no hello) this often,
+# independent of the hello schedule above, so "online" in the UI is never
+# older than one interval. The peer's receiver allows 60 pings/min/origin.
+PRESENCE_INTERVAL_S = 60.0
+# A check older than this no longer says anything about the peer: two missed
+# intervals plus one tick and the ping timeout.
+PRESENCE_FRESH_S = 2 * PRESENCE_INTERVAL_S + TICK_S + 25.0
 _CONSOLE_PORT = 8765
 
 
@@ -107,7 +114,8 @@ def _is_auto_managed_url(url: str, ports: set[int]) -> bool:
 
 @dataclass
 class _Schedule:
-    next_due: float = 0.0
+    next_due: float = 0.0          # next hello/ack + ping
+    next_ping_due: float = 0.0     # next presence ping (no hello)
     backoff: float = RETRY_MIN_S
     last_result: dict[str, Any] = field(default_factory=dict)
 
@@ -212,9 +220,7 @@ def refresh_friendship(
             cfg["_peer_reports_reachable"] = peer_reports_reachable
             if via is not None:
                 cfg["_last_via"] = via
-            if reachable:
-                cfg["_last_ok_at"] = now
-            cfg["_last_check_at"] = now
+            ft.stamp_probe(cfg, reachable, now)
             ft._atomic_write(p, cfg)
 
     return {
@@ -225,6 +231,53 @@ def refresh_friendship(
         "peer_reports_reachable": peer_reports_reachable,
         "hello_error": hello_error,
     }
+
+
+def presence(cfgs: list[dict[str, Any]], now: float | None = None) -> dict[str, Any]:
+    """The one answer to "is this peer online right now", for every reader.
+
+    ``cfgs`` are the peer's config files (origin and/or endpoint). Online is
+    decided by the newest check only — a successful check writes
+    ``_last_ok_at`` and ``_last_check_at`` with the same timestamp, a failed
+    one only ``_last_check_at`` — and only while that check is fresh: an old
+    "ok" is not presence. ``state`` is deliberately not trusted on its own;
+    it is written by more paths than the probe and is never aged.
+    """
+    now = time.time() if now is None else now
+    last_check = max((float(c["_last_check_at"]) for c in cfgs
+                      if isinstance(c.get("_last_check_at"), (int, float))), default=None)
+    last_ok = max((float(c["_last_ok_at"]) for c in cfgs
+                   if isinstance(c.get("_last_ok_at"), (int, float))), default=None)
+    if not cfgs or any(c.get("_operator_disabled") for c in cfgs) \
+            or not any(c.get("enabled") for c in cfgs) and not any(
+                c.get("state") == "PENDING" for c in cfgs):
+        status = "disabled"
+    elif last_check is None or now - last_check > PRESENCE_FRESH_S:
+        status = "pending" if any(c.get("state") == "PENDING" for c in cfgs) else "unknown"
+    elif last_ok is not None and last_ok >= last_check:
+        status = "online"
+    elif any(c.get("state") == "PENDING" for c in cfgs):
+        status = "pending"
+    else:
+        status = "offline"
+    return {"presence": status, "last_check_at": last_check, "last_ok_at": last_ok}
+
+
+def _probe_plain_endpoint(kid: str, endpoints_dir: Path) -> None:
+    """Presence for a non-friendship endpoint (invite-code pairing): ping and
+    record only the check timestamps — its ``state`` belongs to other code."""
+    path = endpoints_dir / f"{kid}.json"
+    cfg = _read_json(path)
+    if cfg is None or not cfg.get("enabled") or cfg.get("_operator_disabled"):
+        return
+    reachable, _via = _ping_peer(kid, endpoints_dir)
+    now = time.time()
+    with ft.config_file_lock(endpoints_dir):
+        cfg = _read_json(path)
+        if cfg is None:
+            return
+        ft.stamp_probe(cfg, reachable, now)
+        ft._atomic_write(path, cfg)
 
 
 def _healthy(summary: dict[str, Any]) -> bool:
@@ -280,11 +333,12 @@ class ConnectivityManager:
         connection due immediately (called right after import/create)."""
         if kid:
             with self._sched_lock:
-                self._schedules.setdefault(kid, _Schedule()).next_due = 0.0
+                sch = self._schedules.setdefault(kid, _Schedule())
+                sch.next_due = sch.next_ping_due = 0.0
         else:
             with self._sched_lock:
                 for sch in self._schedules.values():
-                    sch.next_due = 0.0
+                    sch.next_due = sch.next_ping_due = 0.0
         try:
             import a2a_relay  # noqa: PLC0415
             a2a_relay.nudge_listeners()
@@ -437,22 +491,30 @@ class ConnectivityManager:
         for kid in self._connection_ids():
             with self._sched_lock:
                 sch = self._schedules.setdefault(kid, _Schedule())
-                if sch.next_due > now:
-                    continue
+                hello_due = sch.next_due <= now
+                ping_due = sch.next_ping_due <= now
+            if not (hello_due or ping_due):
+                continue
             summary = refresh_friendship(
-                kid, origins_dir=self._origins_dir, endpoints_dir=self._endpoints_dir)
+                kid, origins_dir=self._origins_dir, endpoints_dir=self._endpoints_dir,
+                hello=hello_due)
+            if summary.get("error") == "not_found":
+                _probe_plain_endpoint(kid, self._endpoints_dir)
             if summary.get("error") in ("not_found", "disabled"):
                 with self._sched_lock:
                     sch.next_due = now + HEALTHY_INTERVAL_S
+                    sch.next_ping_due = time.time() + PRESENCE_INTERVAL_S
                 continue
             with self._sched_lock:
-                sch.last_result = summary
-                if _healthy(summary):
-                    sch.backoff = RETRY_MIN_S
-                    sch.next_due = time.time() + HEALTHY_INTERVAL_S
-                else:
-                    sch.next_due = time.time() + sch.backoff
-                    sch.backoff = min(RETRY_MAX_S, sch.backoff * 2)
+                sch.next_ping_due = time.time() + PRESENCE_INTERVAL_S
+                if hello_due:
+                    sch.last_result = summary
+                    if _healthy(summary):
+                        sch.backoff = RETRY_MIN_S
+                        sch.next_due = time.time() + HEALTHY_INTERVAL_S
+                    else:
+                        sch.next_due = time.time() + sch.backoff
+                        sch.backoff = min(RETRY_MAX_S, sch.backoff * 2)
             self._audit_transition(kid, summary)
 
     def _audit_transition(self, kid: str, summary: dict[str, Any]) -> None:
@@ -540,6 +602,6 @@ def wake(kid: str | None = None) -> None:
 
 
 __all__ = [
-    "ConnectivityManager", "get_manager", "refresh_friendship",
+    "ConnectivityManager", "get_manager", "presence", "refresh_friendship",
     "start_manager", "stop_manager", "wake",
 ]

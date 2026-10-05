@@ -565,7 +565,14 @@ export interface A2AFeedPeer {
   can_receive: boolean;
   enabled: boolean;
   spawn_worker?: boolean;
+  /** Measured reachability (a2a_connectivity.presence) — NOT can_send/can_receive. */
+  presence?: A2APresence;
+  /** Unix seconds of the newest probe / newest successful probe. */
+  last_check_at?: number | null;
+  last_ok_at?: number | null;
 }
+
+export type A2APresence = "online" | "offline" | "unknown" | "pending" | "disabled";
 
 export interface A2AFeedResponse {
   tenant_id: string;

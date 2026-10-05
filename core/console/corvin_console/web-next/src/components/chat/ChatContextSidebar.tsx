@@ -24,6 +24,7 @@ import { PendingConfirmations } from "./PendingConfirmations";
 import { TokensSection } from "./TokensSection";
 import { PeerManagementDialog } from "./PeerManagementDialog";
 import { plural } from "./GroupConversation";
+import { presenceView } from "@/lib/a2a-presence";
 
 export type SidebarMode = "chats" | "peers" | "a2a";
 const MODES: SidebarMode[] = ["chats", "peers", "a2a"];
@@ -166,20 +167,22 @@ function PeersSection({ activePeerId }: { activePeerId?: string }) {
           </p>
         )}
         {feed.data?.map((p) => {
-          const active = p.can_send || p.can_receive;
+          const pv = presenceView(p);
+          const direction = p.can_send && p.can_receive ? "two-way" : p.can_send ? "send only" : p.can_receive ? "receive only" : null;
           return (
             <button key={p.peer_id}
               onClick={() => navigate(`/app/chat/peer/${encodeURIComponent(p.peer_id)}`)}
+              data-testid="peer-row" data-presence={pv.presence}
+              title={pv.title}
               className={cn(
                 "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/60",
                 activePeerId === p.peer_id && "bg-muted",
               )}>
-              <span aria-hidden className={cn("h-2 w-2 shrink-0 rounded-full",
-                active ? "bg-emerald-500" : "bg-muted-foreground/40")} />
+              <span aria-hidden data-testid="presence-dot" className={cn("h-2 w-2 shrink-0 rounded-full", pv.dotClass)} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium">{p.label || p.peer_id}</span>
                 <span className="block text-[10px] text-muted-foreground">
-                  {p.can_send && p.can_receive ? "two-way" : p.can_send ? "send only" : p.can_receive ? "receive only" : "disabled"}
+                  {pv.label}{direction && pv.presence !== "disabled" ? ` · ${direction}` : ""}
                 </span>
               </span>
             </button>

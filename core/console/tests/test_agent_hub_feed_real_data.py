@@ -121,6 +121,27 @@ class AgentHubFeedRealDataTests(unittest.TestCase):
         self.assertEqual(r.status_code, 403)
         self.assertNotIn("private", r.text)
 
+    def test_peer_presence_is_measured_not_derived_from_permissions(self):
+        """Live-bug shape (2026-10-05): enabled both ways but last reachable
+        a week ago must come back offline, a fresh ok probe online, a peer
+        never probed unknown — over the real route."""
+        import json
+        import time
+        now = time.time()
+        def put(kind, pid, **cfg):
+            key = "origin_id" if kind == "origins" else "endpoint_id"
+            (self.home / kind / f"{pid}.json").write_text(json.dumps({key: pid, "enabled": True, **cfg}))
+        for kind in ("origins", "endpoints"):
+            put(kind, "stale-peer", state="UNREACHABLE", _last_check_at=now - 30, _last_ok_at=now - 650_000)
+            put(kind, "live-peer", state="ACTIVE", _last_check_at=now - 20, _last_ok_at=now - 20)
+            put(kind, "never-peer", state="ACTIVE")
+        peers = {p["peer_id"]: p for p in self._client().get("/v1/console/a2a/feed").json()["peers"]}
+        self.assertEqual(peers["stale-peer"]["presence"], "offline")
+        self.assertTrue(peers["stale-peer"]["can_send"] and peers["stale-peer"]["can_receive"])
+        self.assertEqual(peers["live-peer"]["presence"], "online")
+        self.assertEqual(peers["never-peer"]["presence"], "unknown")
+        self.assertAlmostEqual(peers["stale-peer"]["last_ok_at"], now - 650_000, delta=1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1548,6 +1548,8 @@ def friendship_import(
                 cfg["state"] = state
                 cfg["_peer_knows_us"] = peer_knows_us
                 cfg["_peer_reports_reachable"] = peer_reports_reachable
+                if state != "PENDING":
+                    _ft.stamp_probe(cfg, state == "ACTIVE", time.time())
                 _write_secure(p, cfg)
 
     console_audit.action_performed(
@@ -1804,6 +1806,7 @@ def _recheck_connection(kid: str) -> dict[str, Any]:
     # frontend's PeerKnowsUsHint renders, refreshed above but intentionally
     # not folded into `state` itself.
     new_state = "ACTIVE" if reachable else "UNREACHABLE"
+    probed_at = time.time()
     with _pair_lock:
         for p in (_conn_path(_origins_dir(), kid), endpoint_path):
             if not p.exists():
@@ -1815,6 +1818,7 @@ def _recheck_connection(kid: str) -> dict[str, Any]:
             pcfg["state"] = new_state
             pcfg["_peer_knows_us"] = peer_knows_us
             pcfg["_peer_reports_reachable"] = peer_reports_reachable
+            _ft.stamp_probe(pcfg, reachable, probed_at)
             # Sticky: only overwritten on a reachable check (a failed check
             # has no transport to report), so the UI can still show "last
             # seen via relay" immediately after a connection drops.

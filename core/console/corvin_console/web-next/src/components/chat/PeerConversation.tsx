@@ -23,6 +23,7 @@ import {
   A2AAttachmentLimitError, type A2AFeedMessage,
 } from "@/lib/api/a2a";
 import { mediaKind } from "@/lib/a2a-feed";
+import { presenceView } from "@/lib/a2a-presence";
 import { ChatAvatar } from "./ChatAvatar";
 import { AttachmentChip } from "./AttachmentChip";
 import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
@@ -205,9 +206,19 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
         <ChatAvatar label={label} icon={Globe2} />
         <div className="min-w-0 flex-1">
           <div className="truncate font-serif text-lg font-light leading-tight">{label}</div>
-          <div className="truncate text-[11px] text-muted-foreground">
-            Direct A2A conversation
-            {peer ? ` · ${peer.can_send ? "can send" : "send disabled"} · ${peer.can_receive ? "accepts their tasks" : "their tasks blocked"}` : ""}
+          <div className="flex items-center gap-1.5 truncate text-[11px] text-muted-foreground">
+            {peer && (() => {
+              const pv = presenceView(peer);
+              return (
+                <span className="inline-flex items-center gap-1" title={pv.title} data-testid="peer-presence" data-presence={pv.presence}>
+                  <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", pv.dotClass)} /> {pv.label} ·
+                </span>
+              );
+            })()}
+            <span className="truncate">
+              Direct A2A conversation
+              {peer ? ` · ${peer.can_send ? "can send" : "send disabled"} · ${peer.can_receive ? "accepts their tasks" : "their tasks blocked"}` : ""}
+            </span>
           </div>
         </div>
       </header>

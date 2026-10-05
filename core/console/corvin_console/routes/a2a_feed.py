@@ -39,6 +39,7 @@ import os as _os
 _forge_paths = _rtl._forge_paths
 
 import a2a_feed as _feed  # type: ignore[import-not-found]  # noqa: E402
+import a2a_connectivity as _conn  # type: ignore[import-not-found]  # noqa: E402
 
 router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)])
 
@@ -67,8 +68,14 @@ def _read_json(path) -> dict:
 
 
 def _peers() -> list[dict[str, Any]]:
-    """Known A2A peers — endpoints (we can send) merged with origins (they send)."""
+    """Known A2A peers — endpoints (we can send) merged with origins (they send).
+
+    ``presence`` (online/offline/unknown/pending/disabled) comes from the one
+    shared rule, ``a2a_connectivity.presence`` — never from ``can_send`` /
+    ``can_receive``, which are permissions, not reachability.
+    """
     peers: dict[str, dict[str, Any]] = {}
+    cfgs_by_peer: dict[str, list[dict[str, Any]]] = {}
     for kind, d in (("endpoint", _rtl._endpoints_dir()), ("origin", _rtl._origins_dir())):
         if not d.is_dir():
             continue
@@ -76,6 +83,7 @@ def _peers() -> list[dict[str, Any]]:
             cfg = _read_json(f)
             pid = cfg.get("endpoint_id") if kind == "endpoint" else cfg.get("origin_id")
             pid = str(pid or f.stem)
+            cfgs_by_peer.setdefault(pid, []).append(cfg)
             p = peers.setdefault(pid, {
                 "peer_id": pid, "label": None, "state": None,
                 "can_send": False, "can_receive": False, "enabled": False,
@@ -88,6 +96,9 @@ def _peers() -> list[dict[str, Any]]:
             else:
                 p["can_receive"] = bool(cfg.get("enabled", False))
                 p["spawn_worker"] = bool(cfg.get("spawn_worker", False))
+    now = time.time()
+    for pid, p in peers.items():
+        p.update(_conn.presence(cfgs_by_peer[pid], now))
     return sorted(peers.values(), key=lambda p: (p["label"] or p["peer_id"]).lower())
 
 
