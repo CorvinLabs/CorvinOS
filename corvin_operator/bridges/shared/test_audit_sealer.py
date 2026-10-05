@@ -125,7 +125,26 @@ class TestPolicyFromTenant(unittest.TestCase):
         p = policy_from_tenant_config(None)
         self.assertEqual(p.rotation.max_age_days, 30)
         self.assertEqual(p.encryption.enabled, False)
+        # Operator decision 2026-10-05: default retention is 90 days, not the
+        # earlier unreviewed 7-year figure (GDPR Art. 5(1)(e) storage
+        # limitation favours the shorter window).
+        self.assertAlmostEqual(p.retention.effective_retention_days, 90.0)
+        self.assertAlmostEqual(p.retention.retention_years, 90.0 / 365.25)
+
+    def test_retention_days_config_wins_over_default(self):
+        p = policy_from_tenant_config({"spec": {"audit": {"retention_days": 30.0}}})
+        self.assertAlmostEqual(p.retention.retention_years, 30.0 / 365.25)
+
+    def test_legacy_retention_years_still_accepted_when_days_absent(self):
+        # An existing tenant config that already set retention_years must not
+        # be silently overridden by the new 90-day default.
+        p = policy_from_tenant_config({"spec": {"audit": {"retention_years": 7.0}}})
         self.assertEqual(p.retention.retention_years, 7.0)
+
+    def test_retention_days_wins_when_both_given(self):
+        p = policy_from_tenant_config(
+            {"spec": {"audit": {"retention_days": 30.0, "retention_years": 7.0}}})
+        self.assertAlmostEqual(p.retention.retention_years, 30.0 / 365.25)
 
     def test_full_config(self):
         cfg = {

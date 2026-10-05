@@ -293,5 +293,75 @@ class ConsentStoreTypeConfusionTests(unittest.TestCase):
             consent.is_granted(channel, chat_key, uid)
 
 
+class ConsentAuditRegistrationTests(unittest.TestCase):
+    """Data-security audit 2026-10-05: ``consent.granted``/``revoked`` etc.
+    had no ``_EVENT_ALLOWLIST`` entry. Honest limit of this test class: every
+    field these 7 events emit already happens to be on the generic
+    vocabulary floor (``_AUDIT_KNOWN_KEYS``), so NONE of them were actually
+    being dropped before this registration either — these tests pass
+    unchanged against the pre-registration registry too (checked). They are
+    a real-call-path regression lock for the field *names* (a typo in the
+    new allowlist entries would still show up as a dropped field here), not
+    proof that this registration fixed an active leak. The one event in this
+    audit round with an active, provably-red-before leak is
+    ``audit.chain_anchor_stale`` — see
+    ``test_clag.py::test_stale_anchor_emits_tail_and_count_details_not_dropped``."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp(prefix="consent-audit-test-")
+        os.environ["CORVIN_HOME"] = self._tmp
+        os.environ.pop("CORVIN_TENANT_ID", None)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self._tmp, ignore_errors=True)
+        os.environ.pop("CORVIN_HOME", None)
+
+    def _read_chain(self) -> list[dict]:
+        path = Path(self._tmp) / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+    def _last(self, event_type: str) -> dict:
+        matches = [r for r in self._read_chain() if r.get("event_type") == event_type]
+        self.assertTrue(matches, f"no {event_type} record written")
+        return matches[-1]
+
+    def test_grant_reaches_the_chain_with_every_field_intact(self):
+        consent.grant("discord", "chat-1", "user-a", via="slash")
+        rec = self._last("consent.granted")
+        self.assertNotIn("_dropped_fields", rec.get("details", {}))
+        details = rec["details"]
+        self.assertEqual(details["mode"], "durable")
+        self.assertEqual(details["granted_via"], "slash")
+        self.assertIn("uid_hash", details)
+        self.assertNotIn("uid", details)  # never the raw identifier
+
+    def test_revoke_reaches_the_chain_with_every_field_intact(self):
+        consent.grant("discord", "chat-1", "user-b", via="slash")
+        consent.revoke("discord", "chat-1", "user-b", via="slash")
+        rec = self._last("consent.revoked")
+        self.assertNotIn("_dropped_fields", rec.get("details", {}))
+        self.assertEqual(rec["details"]["granted_via"], "slash")
+
+    def test_observer_dropped_and_share_admitted_reach_the_chain_intact(self):
+        consent.admit_observer_drop("discord", "chat-1", "user-c", msg_id="m1", text_len=42)
+        rec = self._last("consent.observer_dropped")
+        self.assertNotIn("_dropped_fields", rec.get("details", {}))
+        self.assertEqual(rec["details"]["msg_id"], "m1")
+        self.assertEqual(rec["details"]["text_len"], 42)
+
+        consent.admit_share_one_shot("discord", "chat-1", "user-d", msg_id="m2", text_len=7)
+        rec = self._last("consent.share_admitted")
+        self.assertNotIn("_dropped_fields", rec.get("details", {}))
+        self.assertEqual(rec["details"]["via"], "share-prefix")
+
+    def test_consume_drift_reaches_the_chain_intact(self):
+        consent.consume_buffer_drift("discord", "chat-1", "user-e", text_len=5)
+        rec = self._last("consent.consume_drift")
+        self.assertNotIn("_dropped_fields", rec.get("details", {}))
+        self.assertEqual(rec["details"]["reason"], "consent-drift-at-consume")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

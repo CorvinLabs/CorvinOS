@@ -56,7 +56,11 @@ import corvin_console.app as capp
 from fastapi.testclient import TestClient
 
 MUST = ["/auth/local-login", "/capabilities/manifest",
-        "/v1/engine/analytics", "/v1/engine/config"]
+        "/v1/engine/analytics", "/v1/engine/config",
+        # ADR-2032, mounted 2026-10-05 (data-security audit) — previously a
+        # Flask Blueprint this FastAPI app could never include_router().
+        "/v1/console/flow/policy", "/v1/console/flow/feedback",
+        "/v1/console/flow/audit"]
 ABSENT = "/definitely-not-a-console-route-xyzzy"
 
 paths = sorted(capp.app.openapi().get("paths", {}))

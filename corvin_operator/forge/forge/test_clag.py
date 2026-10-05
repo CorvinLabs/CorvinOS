@@ -525,6 +525,33 @@ def test_stale_anchor_benign_growth_is_ok_not_critical(audit_path: Path, tmp_pat
     assert status == "ok", detail
 
 
+def test_stale_anchor_emits_tail_and_count_details_not_dropped(
+    audit_path: Path, tmp_path: Path,
+) -> None:
+    """Data-security audit 2026-10-05: ``audit.chain_anchor_stale`` had no
+    ``_EVENT_ALLOWLIST`` entry and none of its 4 fields are on the generic
+    vocabulary floor — every real emission dropped all of them, so the one
+    event meant to say "chain grew past a stale anchor, tail X→Y, count A→B"
+    recorded nothing. Unlike the consent.* registrations (whose fields all
+    happened to already be on the generic floor), this field set is NOT on
+    it — proved red against the pre-registration registry before this test
+    was added (memory: dead-mechanism-needs-call-site-test)."""
+    seed = derive_seed_free()
+    anchor_path = tmp_path / "chain_anchor.json"
+    _seed_chain(audit_path, n=3)
+    write_chain_anchor(audit_path, anchor_path, dna_seed=seed)
+    _seed_chain(audit_path, n=4)
+    status, _ = verify_chain_anchor(audit_path, anchor_path, dna_seed=seed, emit=True)
+    assert status == "ok"
+    records = [json.loads(line) for line in audit_path.read_text().splitlines() if line.strip()]
+    stale = [r for r in records if r.get("event_type") == "audit.chain_anchor_stale"]
+    assert stale, "no audit.chain_anchor_stale record written"
+    details = stale[-1].get("details", {})
+    assert "_dropped_fields" not in details, details.get("_dropped_fields")
+    for field in ("anchored_tail", "current_tail", "anchored_count", "current_count"):
+        assert field in details, f"{field} missing from {details}"
+
+
 def test_forked_history_still_fails_closed(audit_path: Path, tmp_path: Path) -> None:
     """A non-ancestor tail (pre-anchor history rewritten/replaced) must STAY a
     CRITICAL failure even though the event count did not shrink."""

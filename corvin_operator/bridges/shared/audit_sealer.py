@@ -27,8 +27,9 @@ Lifecycle of an audit segment:
      Sealed segment chmod-444; chmod-444 enforced after the rename
      to prevent silent edits.
 
-  5. **Retention.** Sealed segments older than ``retention_years``
-     are removed by :func:`enforce_retention`. Default 7 years; the
+  5. **Retention.** Sealed segments older than the retention window
+     are removed by :func:`enforce_retention`. Default 90 days
+     (``spec.audit.retention_days``, operator decision 2026-10-05); the
      audit chain's ``audit.segment_retired`` event records the
      deletion intent before the file leaves disk.
 
@@ -61,7 +62,7 @@ Tenant configuration::
 
     spec:
       audit:
-        retention_years: 7
+        retention_days: 90       # retention_years: 7 still accepted (legacy)
         encryption_at_rest:
           enabled: true
           recipient: "age1xyz..."   # or a gpg key id
@@ -150,12 +151,32 @@ class EncryptionConfig:
             )
 
 
+_DEFAULT_RETENTION_DAYS = 90.0  # operator decision 2026-10-05: GDPR Art. 5(1)(e)
+# storage limitation favours the shorter window; the 7-year figure this
+# replaced was never a legal floor here, just an earlier, unreviewed default.
+
+
 @dataclass(frozen=True)
 class RetentionPolicy:
-    """How long are sealed segments kept?"""
-    retention_years: float = 7.0
+    """How long are sealed segments kept?
+
+    ``retention_days`` is the operator-facing unit (``spec.audit.
+    retention_days`` in tenant config) and wins when given. ``retention_years``
+    stays the single internal field everything else (``retention_seconds``,
+    the two human-readable log lines in ``audit_rotate.py``/``self_test.py``)
+    reads, now carrying a days-derived value by default — changing its unit
+    would have meant hunting every print site instead of converting once
+    here."""
+    retention_years: float = _DEFAULT_RETENTION_DAYS / 365.25
+    retention_days: float | None = None
 
     def __post_init__(self) -> None:
+        if self.retention_days is not None:
+            if self.retention_days < 0:
+                raise ValueError(
+                    f"retention_days must be >= 0, got {self.retention_days}"
+                )
+            object.__setattr__(self, "retention_years", self.retention_days / 365.25)
         if self.retention_years < 0:
             raise ValueError(
                 f"retention_years must be >= 0, got {self.retention_years}"
@@ -165,8 +186,16 @@ class RetentionPolicy:
     def retention_seconds(self) -> float:
         # 365.25 days/year — matches civil-calendar averaging used by
         # most DPAs (DSGVO regulators don't quibble about leap-year
-        # boundaries on 7-year retention).
+        # boundaries on a multi-month retention window).
         return self.retention_years * 365.25 * 86400.0
+
+    @property
+    def effective_retention_days(self) -> float:
+        """The configured window in days, always derived from the single
+        canonical ``retention_years`` field — ``retention_days`` on the
+        instance stays ``None`` unless it was the constructor argument used,
+        so callers that want "how many days" read this, not the raw field."""
+        return self.retention_years * 365.25
 
 
 @dataclass(frozen=True)
@@ -234,12 +263,21 @@ def policy_from_tenant_config(
         except ValueError as e:
             raise ValueError(f"audit.encryption_at_rest: {e}") from e
 
-    # retention
-    retention_years = raw.get("retention_years", 7.0)
+    # retention — retention_days is the current operator-facing field
+    # (default 90, 2026-10-05); retention_years is accepted for any existing
+    # tenant config that already set it, and wins only when retention_days is
+    # absent, so an old install's explicit choice is not silently overridden.
+    retention_days = raw.get("retention_days")
+    retention_years = raw.get("retention_years")
     try:
-        retention = RetentionPolicy(retention_years=float(retention_years))
+        if retention_days is not None:
+            retention = RetentionPolicy(retention_days=float(retention_days))
+        elif retention_years is not None:
+            retention = RetentionPolicy(retention_years=float(retention_years))
+        else:
+            retention = RetentionPolicy()
     except (ValueError, TypeError) as e:
-        raise ValueError(f"audit.retention_years: {e}") from e
+        raise ValueError(f"audit.retention_days/retention_years: {e}") from e
 
     return AuditPolicy(rotation, encryption, retention)
 

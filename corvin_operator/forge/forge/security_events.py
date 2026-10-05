@@ -519,6 +519,26 @@ EVENT_SEVERITY: dict[str, str] = {
     "audit.disk_full_blocked":              "CRITICAL",
     # ADR-0052 F4 — consent TOCTOU drop
     "consent.toctou_drop":                  "WARNING",
+    # L16 consent gate (consent.py) — the other 7 consent events. Routine
+    # grant/revoke/expiry lifecycle is INFO; a corrupted store is CRITICAL
+    # (data-security audit 2026-10-05: registered for the positive allowlist
+    # below — every field these 7 already emit happened to pass the generic
+    # vocabulary floor, so this closes a FUTURE field-drop risk, not an
+    # active one; audit.chain_anchor_stale below is the active one).
+    "consent.granted":                      "INFO",
+    "consent.revoked":                      "INFO",
+    "consent.expired":                      "INFO",
+    "consent.store_corrupted":              "CRITICAL",
+    "consent.observer_dropped":             "INFO",
+    "consent.share_admitted":               "INFO",
+    "consent.consume_drift":                "WARNING",
+    # ADR-0044 (L37) — the audit chain's own self-monitoring events.
+    # chain_anchor_stale's 4 fields are NOT on the generic vocabulary floor —
+    # every emission today drops them all, so the one event meant to say
+    # "chain grew past a stale anchor, tail X→Y, count A→B" currently says
+    # nothing (data-security audit 2026-10-05).
+    "audit.chain_anchor_stale":             "INFO",
+    "audit.chain_gap_detected":             "CRITICAL",
     # ADR-0052 F5 — worker memory path escape
     "worker_memory.path_escape":            "CRITICAL",
     # ADR-0052 F8 — forge sandbox bwrap failures
@@ -3473,6 +3493,34 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "supply_chain.cve_check_skipped": frozenset({"plugin_name", "reason"}),
     "supply_chain.capability_drift": frozenset({
         "plugin_name", "undeclared_imports", "unused_declared",
+    }),
+    # ── Data-security audit 2026-10-05: L16 consent gate + L37 audit
+    # self-monitoring. ``channel``/``chat_key``/``uid_hash`` are on every
+    # consent.* event (consent.py's shared ``_audit()`` wrapper always adds
+    # them; raw ``uid`` is hashed before it reaches this dict, never listed
+    # here or in any allowlist). ────────────────────────────────────────────
+    "consent.granted": frozenset({
+        "channel", "chat_key", "uid_hash", "mode", "ttl_s", "granted_via",
+    }),
+    "consent.revoked": frozenset({"channel", "chat_key", "uid_hash", "granted_via"}),
+    "consent.expired": frozenset({"channel", "chat_key", "uid_hash", "reason"}),
+    "consent.store_corrupted": frozenset({
+        "channel", "chat_key", "uid_hash", "reason", "action",
+    }),
+    "consent.observer_dropped": frozenset({
+        "channel", "chat_key", "uid_hash", "msg_id", "text_len", "reason",
+    }),
+    "consent.share_admitted": frozenset({
+        "channel", "chat_key", "uid_hash", "msg_id", "text_len", "via",
+    }),
+    "consent.consume_drift": frozenset({
+        "channel", "chat_key", "uid_hash", "text_len", "reason",
+    }),
+    "audit.chain_anchor_stale": frozenset({
+        "anchored_tail", "current_tail", "anchored_count", "current_count",
+    }),
+    "audit.chain_gap_detected": frozenset({
+        "problem_count", "issue", "reason", "first_problems",
     }),
     # ── R4-B: HAC coordinator (L25 compute), console setup, A2A manifest ─────
     # Numeric/identifier telemetry that landed with an empty body.

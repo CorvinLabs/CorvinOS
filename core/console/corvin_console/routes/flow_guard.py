@@ -1,400 +1,213 @@
-"""
-Flow Guard Console Routes (ADR-2032)
+"""Flow Guard console routes (ADR-2032).
 
 HTTP endpoints for:
-  - GET /v1/console/flow/policy — Current flow policy
-  - POST /v1/console/flow/feedback — Record operator feedback
-  - GET /v1/console/flow/audit — Flow decision audit trail
+  - GET  /v1/console/flow/policy   — current flow policy
+  - POST /v1/console/flow/feedback — record operator/outcome feedback
+  - GET  /v1/console/flow/audit    — flow decision feedback trail
 
-All routes protected by consent gates + tenant isolation.
+Data-security audit 2026-10-05: this module was written as a Flask
+Blueprint, but the console is a FastAPI app (``app.py``) — ``app.include_
+router()`` cannot mount a Flask Blueprint, so this route was never
+reachable from any live request (confirmed: no import of this module
+anywhere in ``app.py`` or its router list). Rewritten natively in FastAPI
+and mounted below. The Flask version also read ``tenant_id`` from an
+UNAUTHENTICATED query parameter (``request.args.get("tenant_id", ...)``)
+— any caller could have read or fed feedback into ANY OTHER tenant's flow
+policy just by changing that string. That gap never shipped because the
+route was dead; this port takes the tenant from the authenticated session
+instead, like every sibling route in this console.
 """
+from __future__ import annotations
 
-from flask import Blueprint, request, jsonify
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
 import logging
+from typing import Annotated, Any
 
-# Import Flow Guard
-try:
-    from core.skills.os_skills.flow_guard import FlowGuard
-    from core.skills.os_skills.flow_guard.learning_integration import LearningIntegration
-except ImportError:
-    # Graceful degradation if Flow Guard not available
-    FlowGuard = None
-    LearningIntegration = None
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+
+from .. import auth as session_auth
+from ..deps import require_session, require_session_csrf_on_mutation
 
 logger = logging.getLogger(__name__)
 
-flow_guard_bp = Blueprint("flow_guard", __name__, url_prefix="/v1/console/flow")
+router = APIRouter(prefix="/v1/console/flow", tags=["flow-guard"])
 
-# Global Flow Guard instance (per tenant, cached)
-_flow_guard_instances: Dict[str, FlowGuard] = {}
-_learning_integrations: Dict[str, LearningIntegration] = {}
+ReadSession = Annotated[session_auth.SessionRecord, Depends(require_session)]
+WriteSession = Annotated[session_auth.SessionRecord, Depends(require_session_csrf_on_mutation)]
+
+try:
+    from core.skills.os_skills.flow_guard import FlowGuard  # type: ignore[import-not-found]
+    from core.skills.os_skills.flow_guard.learning_integration import (  # type: ignore[import-not-found]
+        LearningIntegration,
+    )
+except ImportError:  # pragma: no cover — graceful degradation, as the original intended
+    FlowGuard = None  # type: ignore[assignment,misc]
+    LearningIntegration = None  # type: ignore[assignment,misc]
+
+_flow_guard_instances: dict[str, Any] = {}
+_learning_integrations: dict[str, Any] = {}
 
 
-def get_flow_guard(tenant_id: str) -> Optional[FlowGuard]:
-    """Get or create FlowGuard instance for tenant."""
-    if not FlowGuard:
+def _tenant_of(rec: session_auth.SessionRecord) -> str:
+    return rec.tenant_id or "_default"
+
+
+def _get_flow_guard(tenant_id: str) -> Any | None:
+    if FlowGuard is None:
         return None
-
     if tenant_id not in _flow_guard_instances:
         try:
             _flow_guard_instances[tenant_id] = FlowGuard(
-                tenant_id=tenant_id,
-                confidence_threshold=0.7,
-                allow_uncertain_flows=False,
+                tenant_id=tenant_id, confidence_threshold=0.7, allow_uncertain_flows=False,
             )
-        except Exception as e:
-            logger.error(f"Failed to create FlowGuard for tenant {tenant_id}: {e}")
+        except Exception:
+            logger.exception("Failed to create FlowGuard for tenant %s", tenant_id)
             return None
-
     return _flow_guard_instances[tenant_id]
 
 
-def get_learning_integration(tenant_id: str) -> Optional[LearningIntegration]:
-    """Get or create LearningIntegration for tenant."""
-    if not LearningIntegration:
+def _get_learning(tenant_id: str) -> Any | None:
+    if LearningIntegration is None:
         return None
-
     if tenant_id not in _learning_integrations:
-        try:
-            flow_guard = get_flow_guard(tenant_id)
-            if not flow_guard:
-                return None
-
-            _learning_integrations[tenant_id] = LearningIntegration(
-                tenant_id=tenant_id,
-                flow_guard=flow_guard,
-                audit_backend=None,  # Will be wired to real audit backend in production
-            )
-        except Exception as e:
-            logger.error(f"Failed to create LearningIntegration for tenant {tenant_id}: {e}")
+        flow_guard = _get_flow_guard(tenant_id)
+        if flow_guard is None:
             return None
-
+        try:
+            _learning_integrations[tenant_id] = LearningIntegration(
+                tenant_id=tenant_id, flow_guard=flow_guard, audit_backend=None,
+            )
+        except Exception:
+            logger.exception("Failed to create LearningIntegration for tenant %s", tenant_id)
+            return None
     return _learning_integrations[tenant_id]
 
 
-# ============================================================================
-# Route 1: GET /v1/console/flow/policy
-# ============================================================================
-
-@flow_guard_bp.route("/policy", methods=["GET"])
-def get_flow_policy():
-    """
-    Get current flow policy for tenant.
-
-    Response:
-    {
-      "tenant_id": "default",
-      "rules": [
-        {
-          "data_class": "personal_email",
-          "destination_engine": "anthropic/claude-opus-5",
-          "decision": "allow" | "deny" | "uncertain",
-          "confidence": 0.88,
-          "feedback_count": 42
+@router.get("/policy")
+def get_flow_policy(rec: ReadSession) -> dict[str, Any]:
+    """Current flow policy for the session's own tenant."""
+    tenant_id = _tenant_of(rec)
+    flow_guard = _get_flow_guard(tenant_id)
+    if flow_guard is None:
+        raise HTTPException(status_code=503, detail="flow guard not available")
+    policy = flow_guard.get_policy()
+    rules = [{
+        "data_class": r.data_class,
+        "destination_engine": r.destination_engine,
+        "decision": r.decision.value,
+        "confidence": r.confidence,
+        "feedback_count": getattr(r, "feedback_count", 0),
+    } for r in policy.rules]
+    allow_count = sum(1 for r in policy.rules if r.decision.value == "allow")
+    deny_count = sum(1 for r in policy.rules if r.decision.value == "deny")
+    avg_confidence = (sum(r.confidence for r in policy.rules) / len(policy.rules)
+                      if policy.rules else 0.0)
+    return {
+        "tenant_id": tenant_id,
+        "rules": rules,
+        "summary": {
+            "total_rules": len(policy.rules),
+            "allow_rules": allow_count,
+            "deny_rules": deny_count,
+            "avg_confidence": round(avg_confidence, 3),
         },
-        ...
-      ],
-      "timestamp": "2026-09-22T18:30:45Z",
-      "summary": {
-        "total_rules": 15,
-        "allow_rules": 10,
-        "deny_rules": 5,
-        "avg_confidence": 0.87
-      }
     }
-    """
-    # Extract tenant_id from request (normally from session/auth)
-    # For now, use '_default' — in production, extract from SessionRecord
-    tenant_id = request.args.get("tenant_id", "_default")
 
-    try:
-        flow_guard = get_flow_guard(tenant_id)
-        if not flow_guard:
-            return jsonify({"error": "Flow Guard not available"}), 503
 
-        policy = flow_guard.get_policy()
+class FlowFeedbackBody(BaseModel):
+    data_class: str = Field(min_length=1)
+    destination_engine: str = Field(min_length=1)
+    result: str = Field(min_length=1)
+    reasoning: str = ""
 
-        # Build response
-        rules_list = []
-        for rule in policy.rules:
-            rules_list.append({
-                "data_class": rule.data_class,
-                "destination_engine": rule.destination_engine,
-                "decision": rule.decision.value,
-                "confidence": rule.confidence,
-                "feedback_count": getattr(rule, "feedback_count", 0),
-            })
 
-        # Summary stats
-        allow_count = sum(1 for r in policy.rules if r.decision.value == "allow")
-        deny_count = sum(1 for r in policy.rules if r.decision.value == "deny")
-        avg_confidence = (
-            sum(r.confidence for r in policy.rules) / len(policy.rules)
-            if policy.rules else 0.0
+@router.post("/feedback", status_code=201)
+def post_flow_feedback(body: FlowFeedbackBody, rec: WriteSession) -> dict[str, Any]:
+    """Record operator or outcome feedback on a flow decision, for the
+    session's own tenant."""
+    tenant_id = _tenant_of(rec)
+    flow_guard = _get_flow_guard(tenant_id)
+    learning = _get_learning(tenant_id)
+    if flow_guard is None or learning is None:
+        raise HTTPException(status_code=503, detail="flow guard not available")
+
+    if body.result in ("approved", "rejected"):
+        event = learning.process_operator_feedback(
+            data_class=body.data_class, destination_engine=body.destination_engine,
+            approval=(body.result == "approved"), reasoning=body.reasoning,
         )
-
-        return jsonify({
-            "tenant_id": tenant_id,
-            "rules": rules_list,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "summary": {
-                "total_rules": len(policy.rules),
-                "allow_rules": allow_count,
-                "deny_rules": deny_count,
-                "avg_confidence": round(avg_confidence, 3),
-            }
-        }), 200
-
-    except Exception as e:
-        logger.error(f"Error fetching flow policy: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-
-# ============================================================================
-# Route 2: POST /v1/console/flow/feedback
-# ============================================================================
-
-@flow_guard_bp.route("/feedback", methods=["POST"])
-def post_flow_feedback():
-    """
-    Record operator feedback on a flow decision.
-
-    Request body:
-    {
-      "data_class": "personal_email",
-      "destination_engine": "anthropic/claude-opus-5",
-      "feedback_type": "outcome_success" | "outcome_leak_detected" | "operator_approval" | "operator_rejection",
-      "result": "success" | "pii_leak_detected" | "error" | "approved" | "rejected",
-      "reasoning": "Operator feedback reason"
-    }
-
-    Response:
-    {
-      "event_id": "uuid",
-      "status": "recorded",
-      "confidence_before": 0.70,
-      "confidence_after": 0.88,
-      "message": "Feedback recorded and policy updated"
-    }
-    """
-    tenant_id = request.args.get("tenant_id", "_default")
-    data = request.get_json() or {}
-
-    try:
-        # Validate input
-        required_fields = ["data_class", "destination_engine", "result"]
-        missing = [f for f in required_fields if not data.get(f)]
-        if missing:
-            return jsonify({
-                "error": f"Missing required fields: {', '.join(missing)}"
-            }), 400
-
-        flow_guard = get_flow_guard(tenant_id)
-        learning = get_learning_integration(tenant_id)
-
-        if not flow_guard or not learning:
-            return jsonify({"error": "Flow Guard not available"}), 503
-
-        result = data["result"]
-        reasoning = data.get("reasoning", "")
-
-        # Process feedback based on result type
-        if result in ["approved", "rejected"]:
-            # Operator feedback
-            approval = result == "approved"
-            event = learning.process_operator_feedback(
-                data_class=data["data_class"],
-                destination_engine=data["destination_engine"],
-                approval=approval,
-                reasoning=reasoning,
-            )
-        else:
-            # Outcome feedback
-            dummy_eval = type('obj', (object,), {
-                'data_class': data["data_class"],
-                'destination_engine': data["destination_engine"],
-                'policy_confidence': 0.5,
-            })()
-
+    else:
+        # process_flow_outcome only reads these 3 attributes off `evaluation`
+        # (same minimal shim the pre-port Flask code used — constructing a
+        # real FlowEvaluation needs a FlowDecision this endpoint never has).
+        dummy_eval = type("obj", (object,), {
+            "data_class": body.data_class,
+            "destination_engine": body.destination_engine,
+            "policy_confidence": 0.5,
+        })()
+        try:
             event = learning.process_flow_outcome(
-                evaluation=dummy_eval,
-                outcome_result=result,
-                reasoning=reasoning,
+                evaluation=dummy_eval, outcome_result=body.result, reasoning=body.reasoning,
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
-        return jsonify({
-            "event_id": event.event_id,
-            "status": "recorded",
-            "confidence_before": event.confidence_before,
-            "confidence_after": event.confidence_after,
-            "message": "Feedback recorded and policy updated",
-            "timestamp": event.timestamp,
-        }), 201
-
-    except Exception as e:
-        logger.error(f"Error recording flow feedback: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-
-# ============================================================================
-# Route 3: GET /v1/console/flow/audit
-# ============================================================================
-
-@flow_guard_bp.route("/audit", methods=["GET"])
-def get_flow_audit():
-    """
-    Get flow decision audit trail (immutable, hash-chained).
-
-    Query parameters:
-      - limit: max results (default 100)
-      - data_class: filter by data class
-      - destination_engine: filter by engine
-      - decision: filter by decision (allow|deny|uncertain)
-
-    Response:
-    {
-      "tenant_id": "default",
-      "audit_events": [
-        {
-          "event_id": "uuid",
-          "timestamp": "2026-09-22T18:30:45Z",
-          "data_class": "personal_email",
-          "destination_engine": "anthropic/claude-opus-5",
-          "decision": "allow",
-          "confidence": 0.88,
-          "reasoning": "...",
-          "lom": "flow_guard.FlowGuard.evaluate_flow:L155",
-          "hash": "sha256(...)",
-          "prev_hash": "sha256(...)"
-        },
-        ...
-      ],
-      "summary": {
-        "total_events": 1242,
-        "allow_count": 1100,
-        "deny_count": 142,
-        "uncertain_count": 0,
-        "avg_confidence": 0.86
-      }
+    return {
+        "event_id": event.event_id,
+        "status": "recorded",
+        "confidence_before": event.confidence_before,
+        "confidence_after": event.confidence_after,
+        "timestamp": event.timestamp,
     }
-    """
-    tenant_id = request.args.get("tenant_id", "_default")
-    limit = int(request.args.get("limit", 100))
-    data_class_filter = request.args.get("data_class")
-    engine_filter = request.args.get("destination_engine")
-    decision_filter = request.args.get("decision")
-
-    try:
-        learning = get_learning_integrations(tenant_id)
-        if not learning:
-            return jsonify({"error": "Flow Guard not available"}), 503
-
-        # Get feedback history (acts as audit trail)
-        events = learning.get_feedback_history()
-
-        # Apply filters
-        filtered_events = events
-        if data_class_filter:
-            filtered_events = [e for e in filtered_events if e.data_class == data_class_filter]
-        if engine_filter:
-            filtered_events = [e for e in filtered_events if e.destination_engine == engine_filter]
-        # decision_filter would apply to result field
-        if decision_filter:
-            filtered_events = [e for e in filtered_events if decision_filter in e.result]
-
-        # Limit results
-        audit_events = [
-            {
-                "event_id": e.event_id,
-                "timestamp": e.timestamp,
-                "data_class": e.data_class,
-                "destination_engine": e.destination_engine,
-                "result": e.result,
-                "confidence_before": e.confidence_before,
-                "confidence_after": e.confidence_after,
-                "reasoning": e.reasoning,
-                "feedback_type": e.feedback_type.value,
-                "lom": e.lom,
-                # Hash chain fields (in production)
-                "hash": f"sha256_{e.event_id[:16]}",  # Placeholder
-                "prev_hash": f"sha256_{filtered_events[max(0, len(filtered_events)-2)].event_id[:16] if len(filtered_events) > 1 else 'genesis'}",
-            }
-            for e in filtered_events[-limit:]
-        ]
-
-        # Summary stats
-        result_counts = {}
-        for e in filtered_events:
-            result_counts[e.result] = result_counts.get(e.result, 0) + 1
-
-        avg_confidence_after = (
-            sum(e.confidence_after for e in filtered_events) / len(filtered_events)
-            if filtered_events else 0.0
-        )
-
-        return jsonify({
-            "tenant_id": tenant_id,
-            "audit_events": audit_events,
-            "summary": {
-                "total_events": len(filtered_events),
-                "result_distribution": result_counts,
-                "avg_confidence_after": round(avg_confidence_after, 3),
-                "results_shown": len(audit_events),
-            }
-        }), 200
-
-    except Exception as e:
-        logger.error(f"Error fetching flow audit: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
 
 
-def get_learning_integrations(tenant_id: str) -> Optional[LearningIntegration]:
-    """Typo fix: should be get_learning_integration (singular)."""
-    return get_learning_integration(tenant_id)
+@router.get("/audit")
+def get_flow_audit(
+    rec: ReadSession,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+    data_class: str | None = None,
+    destination_engine: str | None = None,
+    result: str | None = None,
+) -> dict[str, Any]:
+    """Flow-decision feedback trail for the session's own tenant."""
+    tenant_id = _tenant_of(rec)
+    learning = _get_learning(tenant_id)
+    if learning is None:
+        raise HTTPException(status_code=503, detail="flow guard not available")
 
+    events = learning.get_feedback_history()
+    if data_class:
+        events = [e for e in events if e.data_class == data_class]
+    if destination_engine:
+        events = [e for e in events if e.destination_engine == destination_engine]
+    if result:
+        events = [e for e in events if result in e.result]
 
-# ============================================================================
-# Health check / Info route
-# ============================================================================
-
-@flow_guard_bp.route("/info", methods=["GET"])
-def get_flow_guard_info():
-    """Get Flow Guard service info and status."""
-    tenant_id = request.args.get("tenant_id", "_default")
-
-    if not FlowGuard:
-        return jsonify({
-            "status": "unavailable",
-            "message": "Flow Guard module not available",
-        }), 503
-
-    try:
-        flow_guard = get_flow_guard(tenant_id)
-        learning = get_learning_integration(tenant_id)
-
-        confidence = learning.compute_confidence_score() if learning else {}
-
-        return jsonify({
-            "status": "operational",
-            "tenant_id": tenant_id,
-            "flow_guard_available": flow_guard is not None,
-            "learning_available": learning is not None,
-            "confidence_score": confidence,
-            "version": "1.0",
-            "adrs": ["ADR-2032", "ADR-0314", "ADR-0232", "ADR-0233"],
-        }), 200
-
-    except Exception as e:
-        logger.error(f"Error in Flow Guard info: {e}", exc_info=True)
-        return jsonify({
-            "status": "error",
-            "message": str(e),
-        }), 500
-
-
-def register_flow_guard_routes(app):
-    """Register Flow Guard routes with Flask app."""
-    app.register_blueprint(flow_guard_bp)
-    logger.info("Flow Guard console routes registered: /v1/console/flow/*")
+    shown = events[-limit:]
+    audit_events = [{
+        "event_id": e.event_id,
+        "timestamp": e.timestamp,
+        "data_class": e.data_class,
+        "destination_engine": e.destination_engine,
+        "result": e.result,
+        "confidence_before": e.confidence_before,
+        "confidence_after": e.confidence_after,
+        "reasoning": e.reasoning,
+        "feedback_type": e.feedback_type.value,
+        "lom": e.lom,
+    } for e in shown]
+    result_counts: dict[str, int] = {}
+    for e in events:
+        result_counts[e.result] = result_counts.get(e.result, 0) + 1
+    avg_confidence_after = (sum(e.confidence_after for e in events) / len(events)
+                            if events else 0.0)
+    return {
+        "tenant_id": tenant_id,
+        "audit_events": audit_events,
+        "summary": {
+            "total_events": len(events),
+            "result_distribution": result_counts,
+            "avg_confidence_after": round(avg_confidence_after, 3),
+            "results_shown": len(audit_events),
+        },
+    }

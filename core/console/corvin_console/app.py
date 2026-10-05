@@ -116,6 +116,7 @@ from .routes import (
     remote_trigger_log as remote_trigger_log_route,
     a2a_feed as a2a_feed_route,
     a2a_pair as a2a_pair_route,
+    flow_guard as flow_guard_route,
     a2a_discovery as a2a_discovery_route,
     files as files_route,
     space as space_route,
@@ -255,6 +256,9 @@ router.include_router(audit_tail.router, tags=["console-audit"])
 router.include_router(chain_dual_track_route.router, tags=["console-audit"])
 router.include_router(remote_trigger_log_route.router, tags=["console-a2a"])
 router.include_router(a2a_feed_route.router, tags=["console-a2a"])
+# ADR-2032, mounted 2026-10-05 (data-security audit) — was a Flask Blueprint,
+# unreachable from this FastAPI app since it was written; see flow_guard.py.
+router.include_router(flow_guard_route.router, tags=["flow-guard"])
 router.include_router(a2a_pair_route.router, tags=["console-a2a-pair"])
 router.include_router(a2a_discovery_route.router, tags=["console-a2a-discovery"])
 router.include_router(runs.router, tags=["console-runs"])
