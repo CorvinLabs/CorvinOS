@@ -49,7 +49,7 @@ def test_diagram_render_phase_reachable_through_maestro():
         topic="E2E DIAGRAM_RENDER Wiring Test",
         duration=10,
         audience="technical",
-        narration=["This sentence proves the dedicated diagram render phase runs through Maestro."],
+        narration=["This sentence proves the dedicated diagram render phase runs through Maestro, long enough that the assembled video clears the five second minimum every time."],
         job_id="test_maestro_diagram_render_phase",
     )
     job = maestro.jobs[job_id]

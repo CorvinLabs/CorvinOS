@@ -77,6 +77,30 @@ The plugin's code lives entirely in the Marketplace (`plugins/contributor/media/
 | YouTube upload | **NOT BUILT** — answers 501 | `POST /jobs/{id}/youtube` |
 | Blender / Three.js / Manim tiers, screenshot capture, asset analysis | **NOT BUILT** — removed by ADR-0953 | — |
 
+## Scripted pipeline (Maestro)
+
+Separate from the plugin above, `core/skills/video_producer/maestro.py` is a
+phase-gated pipeline driven from Python scripts (e.g.
+`scripts/produce_production_video.py`, the projects under `Corvin-Videos/`).
+The console routes do **not** call it. A failed phase stops the job where it
+is; nothing downstream runs on a missing result.
+
+| Phase | Worker | Notes |
+|---|---|---|
+| `ANALYSIS` | `AssetAnalyzerWorker` | every narration claim needs a source (ADR-0693) |
+| `VOICE` | `VoiceSynthesizerWorker` | OpenAI TTS first, edge-tts fallback, loudness-normalised |
+| `IMAGE_RESEARCH` | `ImageResearchWorker` | optional — only when the job has `research_queries`. Fetches from Wikimedia Commons and the NASA Image Library only, rejects anything without an allowed licence, re-checks every redirect hop (ADR-2221) |
+| `DIAGRAM_RENDER` or `SCREENSHOTS` | `DiagramRendererWorker` / `ScreenshotCapturerWorker` | diagram specs (`box`, `arrow`, `grid`, `brace`, `highlight`, `text`, `image`) render with JavaScript off and all network blocked |
+| `ASSEMBLY` | `VideoAssemblerWorker` | ffmpeg, CBR 600 kbps, refuses videos under 5 s |
+
+An `image` element accepts only `src: "research:<ref>"` — never a path or
+URL — and the compiler draws the citation caption from the research result,
+so a spec cannot drop or rewrite the attribution. A spec that names a
+reference the job never researched fails the render. On an EU_PRODUCTION
+tenant the image hosts (`commons.wikimedia.org`, `upload.wikimedia.org`,
+`thumb.wikimedia.org`, `images-api.nasa.gov`, `images-assets.nasa.gov`) must
+be added to `spec.egress.allowed_hosts` before the phase can run.
+
 ## Try it
 
 1. Install the system tools: `ffmpeg`, plus Python packages `gTTS` and `Pillow` (the plugin's `requirements.txt` lists them). For the default storyboard, run [Ollama](https://ollama.com) locally and pull `qwen3:1.7b`.

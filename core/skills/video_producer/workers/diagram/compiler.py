@@ -34,6 +34,18 @@ documented in assistant_didactic_slide_video/SKILL.md):
         type: highlight
         target: maestro             # id of the box to draw attention to
         style: ring                 # ring (dashed outline) | glow (soft shadow)
+      - id: title
+        type: text
+        at: [120, 80]
+        lines: ["Heading", "second line"]
+        style: title                # title | body | bullets
+      - id: photo
+        type: image
+        src: "research:graph"       # ONLY research:<ref> — resolved from the
+        at: [1100, 260]             # job's IMAGE_RESEARCH result, never a path
+        size: [640, 480]            # or URL; the citation caption is drawn
+                                    # from research metadata and cannot be
+                                    # omitted or overridden by the spec
     steps:                         # optional; omit for a static diagram
       - [maestro]
       - [maestro, worker1, arrow1]
@@ -369,6 +381,52 @@ def _render_arrows_svg(
     return marker + "\n".join(paths) + "\n".join(labels)
 
 
+def _render_texts_html(texts: list[dict], theme: dict[str, str], visible: set[str]) -> str:
+    out = []
+    sizes = {"title": (56, 800, theme["text"]), "body": (30, 400, theme["text"]),
+             "bullets": (30, 400, theme["text"])}
+    for t in texts:
+        if t["id"] not in visible:
+            continue
+        size, weight, color = sizes[t["style"]]
+        x, y = t["at"]
+        width = f"width:{t['width']}px;" if t.get("width") else ""
+        rows = []
+        for i, line in enumerate(t["lines"]):
+            if t["style"] == "bullets":
+                rows.append(f'<div class="t-row"><span style="color:{theme["accent"]}">&#9679;</span>&nbsp;&nbsp;{escape(line)}</div>')
+            elif t["style"] == "title" and i > 0:
+                rows.append(f'<div class="t-row" style="font-size:{int(size * 0.55)}px;font-weight:400;'
+                            f'color:{theme["text_muted"]}">{escape(line)}</div>')
+            else:
+                rows.append(f'<div class="t-row">{escape(line)}</div>')
+        out.append(
+            f'<div class="text fade-in" style="left:{x}px;top:{y}px;{width}font-size:{size}px;'
+            f'font-weight:{weight};color:{color};">' + "".join(rows) + "</div>"
+        )
+    return "\n".join(out)
+
+
+def _render_images_html(images: list[dict], resolved: dict, theme: dict[str, str], visible: set[str]) -> str:
+    out = []
+    for im in images:
+        if im["id"] not in visible:
+            continue
+        ref = im["src"].split(":", 1)[1]
+        asset = resolved[ref]
+        x, y = im["at"]
+        w, h = im["size"]
+        caption_h = 34
+        out.append(
+            f'<div class="image fade-in" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px;'
+            f'border-color:{theme["surface_border"]};background:{theme["surface"]};">'
+            f'<img src="{asset["data_uri"]}" style="width:100%;height:{h - caption_h}px;object-fit:{im["fit"]};">'
+            f'<div class="caption" style="height:{caption_h}px;color:{theme["text_muted"]};">'
+            f'{escape(asset["citation"])}</div></div>'
+        )
+    return "\n".join(out)
+
+
 def _page_shell(theme: dict[str, str], canvas_w: int, canvas_h: int, body: str) -> str:
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
@@ -386,6 +444,13 @@ def _page_shell(theme: dict[str, str], canvas_w: int, canvas_h: int, body: str) 
   .fade-in {{ opacity: 1; }}
   .highlight-ring {{ position: absolute; border: 3px dashed; border-radius: 20px; pointer-events: none; }}
   .highlight-glow {{ position: absolute; pointer-events: none; }}
+  .text {{ position: absolute; line-height: 1.35; }}
+  .text .t-row {{ margin-bottom: 10px; }}
+  .image {{ position: absolute; border: 2px solid; border-radius: 12px; overflow: hidden;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.35); }}
+  .image img {{ display: block; }}
+  .image .caption {{ font-size: 13px; padding: 8px 12px; white-space: nowrap; overflow: hidden;
+                     text-overflow: ellipsis; }}
 </style></head>
 <body><div class="canvas">
 {body}
@@ -400,7 +465,9 @@ def _page_shell(theme: dict[str, str], canvas_w: int, canvas_h: int, body: str) 
 # charset, numbers to finite floats in a range, colours against #RRGGBB, enums
 # against their sets. Downstream code only ever interpolates normalised values.
 
-ELEMENT_TYPES = frozenset({"box", "arrow", "grid", "brace", "highlight"})
+ELEMENT_TYPES = frozenset({"box", "arrow", "grid", "brace", "highlight", "text", "image"})
+_RESEARCH_SRC_RE = re.compile(r"^research:[A-Za-z0-9_-]{1,64}$")
+MAX_TEXT_LINES = 12
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 MAX_ELEMENTS = 400
@@ -517,6 +584,23 @@ def normalize_spec(spec) -> dict:
             n["spans"] = [_ref(x, f"spans of {eid!r}") for x in spans]
             n["side"] = _choice(el.get("side", "bottom"), {"top", "bottom", "left", "right"}, f"side of {eid!r}")
             n["depth"] = _num(el.get("depth", 26), 4, 200, f"depth of {eid!r}")
+        elif etype == "text":
+            n["at"] = _pair(el.get("at"), -span, 2 * span, f"at of {eid!r}")
+            lines = el.get("lines")
+            if not isinstance(lines, list) or not lines or len(lines) > MAX_TEXT_LINES:
+                raise SpecError(f"text {eid!r} needs 'lines' (1-{MAX_TEXT_LINES} strings)")
+            n["lines"] = [_text(x, f"line of {eid!r}") for x in lines]
+            n["style"] = _choice(el.get("style", "body"), {"title", "body", "bullets"}, f"style of {eid!r}")
+            if "width" in el:
+                n["width"] = _num(el["width"], 1, 2 * span, f"width of {eid!r}")
+        elif etype == "image":
+            src = el.get("src")
+            if not isinstance(src, str) or not _RESEARCH_SRC_RE.match(src):
+                raise SpecError(f"image {eid!r} src must be 'research:<ref>' — paths and URLs are not accepted")
+            n["src"] = src
+            n["at"] = _pair(el.get("at"), -span, 2 * span, f"at of {eid!r}")
+            n["size"] = _pair(el.get("size"), 64, 2 * span, f"size of {eid!r}")
+            n["fit"] = _choice(el.get("fit", "contain"), {"contain", "cover"}, f"fit of {eid!r}")
         else:  # highlight
             n["target"] = _ref(el.get("target"), f"target of {eid!r}")
             n["style"] = _choice(el.get("style", "ring"), {"ring", "glow"}, f"style of {eid!r}")
@@ -554,8 +638,12 @@ def normalize_spec(spec) -> dict:
     return {"theme": theme, "canvas": {"w": cw, "h": ch}, "elements": out_elements, "steps": steps}
 
 
-def compile_spec(spec: dict) -> Compiled:
+def compile_spec(spec: dict, images: dict | None = None) -> Compiled:
+    """images: {ref: {"data_uri": "data:image/png;base64,...", "citation": str}},
+    built by the caller from the job's IMAGE_RESEARCH result. Every
+    `research:<ref>` an image element names must be present, else SpecError."""
     spec = normalize_spec(spec)
+    images = images or {}
     theme = get_theme(spec["theme"])
     canvas = spec["canvas"]
     elements = spec["elements"]
@@ -566,6 +654,14 @@ def compile_spec(spec: dict) -> Compiled:
     grids = [el for el in elements if el.get("type") == "grid"]
     braces = [el for el in elements if el.get("type") == "brace"]
     highlights = [el for el in elements if el.get("type") == "highlight"]
+    texts = [el for el in elements if el.get("type") == "text"]
+    image_els = [el for el in elements if el.get("type") == "image"]
+    for im in image_els:
+        ref = im["src"].split(":", 1)[1]
+        asset = images.get(ref)
+        if not asset or not str(asset.get("data_uri", "")).startswith("data:image/") or not asset.get("citation"):
+            raise SpecError(f"image {im['id']!r} references research:{ref}, which this job did not research "
+                            f"(or which has no citation)")
     for group, kind in ((arrows, "arrow"), (grids, "grid"), (braces, "brace"), (highlights, "highlight")):
         for el in group:
             if "id" not in el:
@@ -574,6 +670,7 @@ def compile_spec(spec: dict) -> Compiled:
     all_ids = (
         list(boxes) + [a["id"] for a in arrows] + [g["id"] for g in grids]
         + [b["id"] for b in braces] + [h["id"] for h in highlights]
+        + [t["id"] for t in texts] + [i["id"] for i in image_els]
     )
     steps = spec.get("steps") or [all_ids]  # no steps -> one static frame showing everything
 
@@ -588,8 +685,11 @@ def compile_spec(spec: dict) -> Compiled:
         highlights_html = _render_highlights_html(highlights, boxes, theme, visible)
         arrows_svg = _render_arrows_svg(arrows, boxes, theme, visible)
         braces_svg = _render_braces_svg(braces, boxes, theme, visible)
+        texts_html = _render_texts_html(texts, theme, visible)
+        images_html = _render_images_html(image_els, images, theme, visible)
         body = (
             f'<svg class="overlay">{grid_svg}</svg>'
+            + images_html + texts_html
             + boxes_html + highlights_html
             + f'<svg class="overlay">{arrows_svg}{braces_svg}</svg>'
         )

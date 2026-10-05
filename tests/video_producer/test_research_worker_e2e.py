@@ -52,6 +52,7 @@ class TestHostGate:
         assert ALLOWED_IMAGE_HOSTS == frozenset({
             "commons.wikimedia.org",
             "upload.wikimedia.org",
+            "thumb.wikimedia.org",
             "images-api.nasa.gov",
             "images-assets.nasa.gov",
         })
@@ -94,7 +95,7 @@ class TestWikimediaCommonsLive:
         assert isinstance(results, list)
         for r in results:
             assert r.license in ALLOWED_LICENSES
-            assert r.source_url.startswith("https://upload.wikimedia.org/")
+            assert r.source_url.startswith(("https://upload.wikimedia.org/", "https://thumb.wikimedia.org/"))
 
     def test_search_and_download_real_image(self, tmp_path):
         results = search_wikimedia_commons("knowledge graph", limit=3)

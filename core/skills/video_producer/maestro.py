@@ -20,7 +20,8 @@ class VideoJobPhase(Enum):
 
     SCREENSHOTS and DIAGRAM_RENDER are alternatives for the same slot (both
     populate job.screenshots_result with the visual frames ASSEMBLY consumes)
-    — never both for one job. _next_phase() picks between them; see its
+    — never both for one job. IMAGE_RESEARCH is optional and runs between
+    VOICE and that visual slot. _next_phase() picks the route; see its
     docstring for the selection rule. Every other transition is strictly
     sequential.
     """
@@ -31,6 +32,11 @@ class VideoJobPhase(Enum):
     ASSEMBLY = 5           # Video Assembler Worker
     YOUTUBE = 6            # YouTube Uploader Worker
     COMPLETE = 7
+    # ADR-2221. Value 8, not inserted between VOICE and the visual phases:
+    # renumbering would change every persisted/serialized phase value, and
+    # _next_phase() routes it explicitly, so its position in the value order
+    # carries no meaning.
+    IMAGE_RESEARCH = 8     # Image Research Worker (licensed image fetch)
 
 
 @dataclass(frozen=True)
@@ -63,6 +69,11 @@ class VideoJob:
     # still works exactly as before (ADR-2212, unchanged for backward compat).
     # {scene_index: spec}, same vocabulary as diagram/compiler.py.
     diagram_specs: Optional[Dict[int, dict]] = None
+    # ADR-2221: {ref: query} or {ref: {"query": str, "sources": [...]}}.
+    # A diagram spec embeds the result as an image element with
+    # src "research:<ref>"; the citation is drawn from research_result.
+    research_queries: Optional[Dict[str, Any]] = None
+    research_result: Optional[Any] = None
     analysis_result: Optional[Dict] = None
     voice_result: Optional[Dict] = None
     screenshots_result: Optional[Dict] = None
@@ -104,6 +115,7 @@ class MaestroOrchestrator:
             VideoJobPhase.VOICE: self._validate_voice_phase,
             VideoJobPhase.SCREENSHOTS: self._validate_screenshots_phase,
             VideoJobPhase.DIAGRAM_RENDER: self._validate_diagram_render_phase,
+            VideoJobPhase.IMAGE_RESEARCH: self._validate_image_research_phase,
             VideoJobPhase.ASSEMBLY: self._validate_assembly_phase,
             VideoJobPhase.YOUTUBE: self._validate_youtube_phase,
         }
@@ -230,6 +242,8 @@ class MaestroOrchestrator:
             job.analysis_result = result
         elif phase_name == "voice":
             job.voice_result = result
+        elif phase_name == "image_research":
+            job.research_result = result
         elif phase_name in ("screenshots", "diagram_render"):
             job.screenshots_result = result
         elif phase_name == "assembly":
@@ -274,6 +288,13 @@ class MaestroOrchestrator:
     def _next_phase(self, current: "VideoJobPhase", job: VideoJob) -> Optional["VideoJobPhase"]:
         """Determine the phase after `current` for this job.
 
+        IMAGE_RESEARCH (ADR-2221) runs right after VOICE when the job carries
+        research_queries AND an IMAGE_RESEARCH worker is registered; it then
+        continues into the same visual fork VOICE would have taken. A job
+        with research_queries but no registered worker skips the phase —
+        any diagram spec that embeds research:<ref> then fails closed in
+        DIAGRAM_RENDER (unresolved image), it is never rendered with a hole.
+
         Linear for every phase except the VOICE -> {SCREENSHOTS, DIAGRAM_RENDER}
         fork: DIAGRAM_RENDER runs instead of SCREENSHOTS only when the job
         carries diagram_specs AND a DIAGRAM_RENDER worker is registered —
@@ -283,9 +304,11 @@ class MaestroOrchestrator:
         ASSEMBLY, which only ever reads job.screenshots_result.
         """
         if current == VideoJobPhase.VOICE:
-            if job.diagram_specs and VideoJobPhase.DIAGRAM_RENDER in self.worker_registry:
-                return VideoJobPhase.DIAGRAM_RENDER
-            return VideoJobPhase.SCREENSHOTS
+            if job.research_queries and VideoJobPhase.IMAGE_RESEARCH in self.worker_registry:
+                return VideoJobPhase.IMAGE_RESEARCH
+            return self._visual_phase(job)
+        if current == VideoJobPhase.IMAGE_RESEARCH:
+            return self._visual_phase(job)
         if current in (VideoJobPhase.SCREENSHOTS, VideoJobPhase.DIAGRAM_RENDER):
             return VideoJobPhase.ASSEMBLY
         next_value = current.value + 1
@@ -293,6 +316,11 @@ class MaestroOrchestrator:
             if phase.value == next_value:
                 return phase
         return None
+
+    def _visual_phase(self, job: VideoJob) -> "VideoJobPhase":
+        if job.diagram_specs and VideoJobPhase.DIAGRAM_RENDER in self.worker_registry:
+            return VideoJobPhase.DIAGRAM_RENDER
+        return VideoJobPhase.SCREENSHOTS
 
     def record_feedback(
         self,
@@ -452,6 +480,13 @@ class MaestroOrchestrator:
         instead of after).
         """
         return job.voice_result is not None and bool(job.diagram_specs)
+
+    def _validate_image_research_phase(self, job: VideoJob) -> bool:
+        """Validate preconditions for Image Research phase (ADR-2221)
+
+        Requires: Voice Synthesizer completed and the job names queries.
+        """
+        return job.voice_result is not None and bool(job.research_queries)
 
     def _validate_assembly_phase(self, job: VideoJob) -> bool:
         """Validate preconditions for Assembly phase

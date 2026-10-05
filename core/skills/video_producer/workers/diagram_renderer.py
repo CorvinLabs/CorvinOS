@@ -30,6 +30,41 @@ from .diagram.compiler import SpecError, compile_spec, normalize_spec
 from .diagram.raster import MIN_UNIQUE_COLORS, DiagramRenderError, render_compiled
 
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+MAX_EMBED_EDGE = 1600
+
+
+def _research_images_for(job) -> Dict[str, dict]:
+    """ADR-2221: turn the job's IMAGE_RESEARCH result into data URIs for the
+    compiler. Every file is decoded and RE-ENCODED to PNG here, so only pixels
+    reach the frame — a research_result pointing at a non-image file fails
+    instead of being embedded."""
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    research = getattr(job, "research_result", None)
+    if research is None:
+        return {}
+    records = research.get("images") if isinstance(research, dict) else getattr(research, "images", None)
+    out: Dict[str, dict] = {}
+    for ref, rec in (records or {}).items():
+        path, citation = rec.get("local_path"), rec.get("citation")
+        if not path or not citation:
+            raise SpecError(f"research image {ref!r} has no local file or no citation")
+        try:
+            with Image.open(path) as im:
+                im = im.convert("RGB")
+                im.thumbnail((MAX_EMBED_EDGE, MAX_EMBED_EDGE))
+                buf = BytesIO()
+                im.save(buf, format="PNG")
+        except Exception as e:
+            raise SpecError(f"research image {ref!r} is not a decodable image: {e}") from e
+        out[ref] = {
+            "data_uri": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii"),
+            "citation": citation,
+        }
+    return out
 
 
 @dataclass
@@ -83,12 +118,13 @@ class DiagramRendererWorker:
         # Validate and compile EVERY scene before rendering any of them.
         compiled = []
         try:
+            research_images = _research_images_for(job)
             for raw_key, spec in specs.items():
                 key = int(raw_key) if isinstance(raw_key, str) and raw_key.isdigit() else raw_key
                 if isinstance(key, bool) or not isinstance(key, int) or not 0 <= key < 1000:
                     raise SpecError(f"scene key {raw_key!r} is not a scene index 0-999")
                 norm = normalize_spec(spec)
-                compiled.append((key, norm["canvas"], compile_spec(spec)))
+                compiled.append((key, norm["canvas"], compile_spec(spec, images=research_images)))
         except SpecError as e:
             return _failed(f"invalid diagram spec: {e}")
         compiled.sort(key=lambda t: t[0])
