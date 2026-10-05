@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Layer Forge CLI (ADR-2222).
+"""Layer Forge CLI (ADR-2222, ADR-2225 Phase 1).
 
 Storage and audit resolve through the tenant resolver: the registry lives at
 ``<corvin_home>/tenants/<tid>/global/layer_forge/`` and every decision lands in
 the tenant's hash-chained audit log. ``CORVIN_HOME`` selects the root.
 
 Usage:
+    layer_forge_cli.py plan <layer_id> <intent> [--tenant TID]
     layer_forge_cli.py create <manifest.json> [--tenant TID] [--skip-gates]
     layer_forge_cli.py get <id> [--version V] [--tenant TID]
     layer_forge_cli.py list [--tenant TID]
@@ -56,12 +57,24 @@ def main(argv: list[str] | None = None) -> int:
     p_promote.add_argument("version")
     p_promote.add_argument("to_status")
 
+    p_plan = sub.add_parser("plan")
+    p_plan.add_argument("layer_id")
+    p_plan.add_argument("intent")
+
     args = parser.parse_args(argv)
     try:
         orch = LayerForgeOrchestrator(args.tenant, actor="cli")
     except ValueError as e:  # invalid tenant id
         _print({"error": f"invalid tenant: {e}"})
         return 2
+
+    if args.command == "plan":
+        manifest, result = orch.plan_layer_definition(args.layer_id, args.intent)
+        body = result.to_dict()
+        if manifest:
+            body["manifest"] = manifest
+        _print(body)
+        return 0 if result.status == "SUCCESS" else 1
 
     if args.command == "create":
         try:

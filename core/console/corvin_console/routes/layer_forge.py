@@ -1,9 +1,10 @@
-"""Layer Forge console routes (ADR-2222).
+"""Layer Forge console routes (ADR-2222, ADR-2225 Phase 1).
 
     GET  /layer-forge/definitions                          list (session)
     GET  /layer-forge/definitions/{entry_id}[?version=]    one entry (session)
     POST /layer-forge/definitions                          run the pipeline (session + CSRF)
     POST /layer-forge/definitions/{entry_id}/{version}/transition   status change (session + CSRF)
+    POST /layer-forge/plan                                  LLM plan (session + CSRF)
 
 Tenant is ALWAYS the authenticated session's ``rec.tenant_id``. Every decision is
 written audit-first into that tenant's hash chain by the orchestrator; a chain
@@ -57,6 +58,35 @@ def get_definition(
     except LayerNotFoundError:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND,
                             detail="layer definition not found") from None
+
+
+@router.post("/layer-forge/plan")
+def plan_definition(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    layer_id: Annotated[str, Body(embed=True)],
+    intent: Annotated[str, Body(embed=True)],
+) -> dict[str, Any]:
+    """Generate a layer-definition manifest via LLM.
+
+    Input:
+        layer_id: Layer identifier (e.g., 'L34')
+        intent: What the layer should do (e.g., 'audit L10 + enforce bounds')
+
+    Output (success):
+        {status: 'SUCCESS', manifest: {...}, registry_key: null}
+
+    Output (failure):
+        {status: 'FAILED', error: '...', phase: 'plan'}
+    """
+    manifest, result = _orchestrator(rec.tenant_id).plan_layer_definition(layer_id, intent)
+    body = result.to_dict()
+    if manifest:
+        body["manifest"] = manifest
+    if result.status == "SUCCESS":
+        return body
+    if result.phase == "audit":
+        raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE, detail=body)
+    raise HTTPException(status_code=422, detail=body)
 
 
 @router.post("/layer-forge/definitions")

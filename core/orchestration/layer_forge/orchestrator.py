@@ -1,5 +1,5 @@
-"""LayerForgeOrchestrator — the pipeline (ADR-2222 D1):
-VALIDATE -> TEST (quality gates) -> ENFORCE (host-awareness) -> AUDIT+CREATE -> AUDIT+PROMOTE.
+"""LayerForgeOrchestrator — the pipeline (ADR-2222 D1, ADR-2225 Phase 1):
+PLAN (LLM) -> VALIDATE -> TEST (quality gates) -> ENFORCE (host-awareness) -> AUDIT+CREATE -> AUDIT+PROMOTE.
 
 Every check runs before anything is written, so a rejected definition leaves no
 registry entry — only a ``layer_forge.definition_rejected`` audit record. Every
@@ -7,8 +7,9 @@ state change is audit-first under the entry's ``LayerPrimitive`` lock: the chain
 record commits, then the registry file is replaced; a failed chain write
 aborts the change (``LayerForgeAuditError``).
 
-PLAN is deterministic (the caller supplies the manifest); LLM planning and the
-adversarial REVIEW phase are deferred (ADR-2222 Consequences).
+PLAN phase (ADR-2225): LLM generates a manifest from layer_id + intent.
+Output is JSON-validated fail-closed. The adversarial REVIEW phase is deferred
+(ADR-2222 Consequences).
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from pathlib import Path
 from . import audit
 from .enforcement import EnforcementChecker, EnforcementVerdict
 from .gate_runner import QualityGateRunner, QualityGateVerdict
+from .llm_plan import LLMPlanError, plan_layer_definition
 from .primitive import LayerPrimitive
 from .registry import LayerPromotionError, LayerRegistry
 from .schema import LayerDependencyDAGError, LayerSchemaValidationError
@@ -160,3 +162,47 @@ class LayerForgeOrchestrator:
 
     def list_definitions(self) -> list[dict]:
         return self.registry.list_all()
+
+    def plan_layer_definition(self, layer_id: str, intent: str) -> tuple[dict | None, LayerForgeResult]:
+        """Phase 0: LLM planning. Generate a manifest from layer_id + intent.
+
+        Output is JSON-validated but NOT schema-validated; the caller should
+        run create_layer_definition() to validate and persist.
+
+        Audit: plan attempts are recorded. Success logs the generated manifest;
+        failure logs the error + LLM output (truncated).
+
+        Args:
+            layer_id: Layer identifier (e.g., 'L34')
+            intent: What the layer should do
+
+        Returns:
+            A tuple (manifest_dict | None, LayerForgeResult).
+            On success: (manifest, LayerForgeResult(SUCCESS))
+            On failure: (None, LayerForgeResult(FAILED))
+        """
+        try:
+            manifest = plan_layer_definition(layer_id, intent)
+        except LLMPlanError as e:
+            try:
+                self._audit("layer_forge.plan_failed", layer_id=layer_id, intent=intent,
+                            error=str(e)[:200], actor=self.actor)
+            except audit.LayerForgeAuditError:
+                pass  # Audit failure doesn't override plan failure
+            return None, self._reject("plan", f"LLM planning failed: {e}",
+                                      error_class="LLMPlanError")
+
+        # Audit success
+        try:
+            self._audit("layer_forge.plan_generated", layer_id=layer_id, intent=intent,
+                        manifest_id=manifest.get("id"), manifest_version=manifest.get("version"),
+                        actor=self.actor)
+        except audit.LayerForgeAuditError as exc:
+            return None, LayerForgeResult("FAILED", error=f"audit failed: {exc}", phase="audit")
+
+        return manifest, LayerForgeResult(
+            "SUCCESS",
+            registry_key=None,  # Not created yet; caller should validate + create
+            gate_verdicts=[],
+            enforcement_verdicts=[],
+        )
