@@ -32,6 +32,9 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "layer_forge.definition_transitioned": frozenset({
         "entry_id", "version", "from_status", "to_status", "actor", "tenant_id",
     }),
+    "layer_forge.review_evaluated": frozenset({
+        "entry_id", "version", "verdict", "flags", "tenant_id",
+    }),
 }
 
 SEVERITY: dict[str, str] = {
@@ -40,6 +43,7 @@ SEVERITY: dict[str, str] = {
     "layer_forge.quality_gate_evaluated": "INFO",
     "layer_forge.enforcement_evaluated": "INFO",
     "layer_forge.definition_transitioned": "INFO",
+    "layer_forge.review_evaluated": "INFO",
 }
 
 
