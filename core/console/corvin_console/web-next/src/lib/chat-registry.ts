@@ -868,6 +868,13 @@ export function closeSession(sid: string): void {
     _persistFlushTimers.delete(sid);
   }
   clearPersistedMessages(sid);
+  // The debug log (session title, errors, artifact names) is chat content
+  // too — it must not outlive the chat's deletion.
+  const dbgTimer = _dbgFlushTimers.get(sid);
+  if (dbgTimer) clearTimeout(dbgTimer);
+  _dbgFlushTimers.delete(sid);
+  _dbgBuffers.delete(sid);
+  try { sessionStorage.removeItem(`corvin_dbg_${sid}`); } catch { /* storage unavailable */ }
   // Remove listeners BEFORE closing the WS so that the close event's
   // notifyState call (which fires synchronously in some environments) does
   // not reach already-deregistered subscribers.

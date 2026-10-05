@@ -228,10 +228,12 @@ class _SendBody(BaseModel):
 _SEND_POOL = ThreadPoolExecutor(max_workers=16, thread_name_prefix="a2a-feed-send")
 
 
-def _send_in_background(peer_id: str, text: str, atts: list[dict], timeout_s: int | None) -> None:
+def _send_in_background(peer_id: str, text: str, atts: list[dict], timeout_s: int | None,
+                        task_id: str | None = None) -> None:
     try:
         from remote_trigger_sender import RemoteTriggerSender  # type: ignore[import-not-found]
-        RemoteTriggerSender().send(peer_id, text, attachments=atts or None, timeout_s=timeout_s)
+        RemoteTriggerSender().send(peer_id, text, attachments=atts or None, timeout_s=timeout_s,
+                                   task_id=task_id, feed_task_recorded=task_id is not None)
     except Exception:
         # send() records its own failure in the feed and the audit chain; an
         # exception here means the sender could not even be built.
@@ -271,8 +273,16 @@ def a2a_feed_send(rec: Session, body: _SendBody) -> dict[str, Any]:
         except AttachmentError as exc:
             raise HTTPException(status_code=422, detail=f"attachment rejected: {exc}")
 
-    _SEND_POOL.submit(_send_in_background, body.peer_id, body.text, atts, body.timeout_s)
-    return {"accepted": True, "peer_id": body.peer_id}
+    # Recorded as "queued" before the job waits for a pool worker, so the
+    # operator sees it at once (and, after a restart that dropped the job,
+    # sees it was never answered) — review R3.
+    import uuid as _uuid  # noqa: PLC0415
+    task_id = str(_uuid.uuid4())
+    _feed.record(direction="out", kind="task", peer_id=body.peer_id, task_id=task_id,
+                 text=body.text, status="queued", attachments=atts or None,
+                 peer_label=peer.get("label"), tenant_id=_a2a_tenant(rec))
+    _SEND_POOL.submit(_send_in_background, body.peer_id, body.text, atts, body.timeout_s, task_id)
+    return {"accepted": True, "peer_id": body.peer_id, "task_id": task_id}
 
 
 # ── chat-staged pending sends (ADR-2099 Phase 2) ───────────────────────────

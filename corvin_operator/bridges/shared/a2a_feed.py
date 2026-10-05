@@ -523,6 +523,45 @@ def compact(root: Path) -> tuple[int, int]:
     return removed, blobs_removed
 
 
+def erase_peer(subject_id: str, tenant_id: str | None = None) -> tuple[int, int]:
+    """GDPR Art. 17 for this store: drop every message exchanged with the
+    subject — the peer id it is filed under, or the exact peer label — and
+    every attachment blob only those messages referenced. Returns
+    (messages, blobs) removed. Same lock as every writer and compaction."""
+    if not subject_id:
+        return 0, 0
+    root = feed_dir(tenant_id)
+    path = root / "messages.jsonl"
+    if not path.exists():
+        return 0, 0
+    with _store_lock(root):
+        overrides = _load_overrides(root)
+        records = _apply_overrides(list(_iter_records(path)), overrides)
+        keep = [r for r in records
+                if r.get("peer_id") != subject_id and r.get("peer_label") != subject_id]
+        removed = len(records) - len(keep)
+        if not removed:
+            return 0, 0
+        _write_atomic(path, "".join(
+            json.dumps(r, ensure_ascii=False) + "\n" for r in keep).encode("utf-8"))
+        if overrides:
+            _write_atomic(root / "seq_overrides.json", b"{}")
+        referenced = {a.get("sha256") for r in keep for a in r.get("attachments") or []}
+        blobs_removed = 0
+        blob_dir = root / "blobs"
+        if blob_dir.is_dir():
+            for b in blob_dir.iterdir():
+                if b.name.startswith(".") or b.name in referenced:
+                    continue
+                try:
+                    b.unlink()
+                    blobs_removed += 1
+                except OSError:
+                    pass
+        _blob_estimate.pop(str(root), None)
+    return removed, blobs_removed
+
+
 def clear(tenant_id: str | None = None) -> tuple[int, int]:
     """Remove every stored message and blob. Returns (msgs, blobs) removed."""
     root = feed_dir(tenant_id)

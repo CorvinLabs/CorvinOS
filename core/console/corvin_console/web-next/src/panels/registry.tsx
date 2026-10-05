@@ -108,8 +108,8 @@ export const PANELS: ConsolePanel[] = [
   rc("settings", "Settings", SettingsPage, { nav: { label: "Settings", icon: "Settings", group: "system" } }),
   rc("compute", "Compute", ComputePage, { nav: { label: "Compute", icon: "Gauge", group: "build" } }),
   rc("bridges", "Bridges", BridgesPage, { nav: { label: "Channels", icon: "Network", group: "messaging" } }),
-  // Discovery folded into the chat sidebar (DiscoverySection in
-  // ChatContextSidebar.tsx); /app/discovery now redirects, see App.tsx.
+  // Discovery page retired 2026-10-05 (its backend lists only paired origins,
+  // already shown in the chat's Peers tab); /app/discovery redirects, see App.tsx.
   rc("voice", "Voice", VoicePage, { nav: { label: "Voice", icon: "AudioLines", group: "messaging" } }),
   rc("voice-summaries", "Voice Summaries", VoiceSummariesPage, { nav: { label: "Voice Summaries", icon: "Headphones", group: "messaging" } }),
   rc("forge", "Forge", ForgePage, { nav: { label: "Forge", icon: "Hammer", group: "build" } }),

@@ -70,7 +70,7 @@ export type StatusTone = "ok" | "warn" | "error" | "neutral";
 
 export function statusTone(status: string): StatusTone {
   if (status === "ok" || status === "sent" || status === "received") return "ok";
-  if (status === "filtered") return "warn";
+  if (status === "filtered" || status === "unconfirmed" || status === "queued") return "warn";
   if (["rejected", "timeout", "error"].includes(status)) return "error";
   return "neutral";
 }

@@ -737,6 +737,7 @@ async def chat_stream(
                 # against the next receive_text() so we can react to "cancel"
                 # while the generator is running.
                 _stream_task = asyncio.create_task(_run_turn(prompt))
+                _user_cancelled = False
                 try:
                     while not _stream_task.done():
                         recv_task = asyncio.create_task(websocket.receive_text())
@@ -760,6 +761,7 @@ async def chat_stream(
                             except json.JSONDecodeError:
                                 side_msg = {}
                             if side_msg.get("type") == "cancel":
+                                _user_cancelled = True
                                 _stream_task.cancel()
                                 with contextlib.suppress(asyncio.CancelledError):
                                     await _stream_task
@@ -788,14 +790,15 @@ async def chat_stream(
                             recv_task.cancel()
                             with contextlib.suppress(asyncio.CancelledError):
                                 await recv_task
-                    if _stream_task.cancelled():
+                    if _stream_task.cancelled() and not _user_cancelled:
                         # Cancelled from outside this socket (the chat was
                         # deleted in another request): close the turn for the
                         # client too, or its UI stays "streaming" forever.
+                        # A user cancel already answered "done" above.
                         with contextlib.suppress(Exception):
                             await websocket.send_json({"type": "error", "message": "This chat was deleted."})
                             await websocket.send_json({"type": "done"})
-                    else:
+                    elif not _stream_task.cancelled():
                         # Propagate any exception from the turn task.
                         _stream_task.result()
                 except asyncio.CancelledError:

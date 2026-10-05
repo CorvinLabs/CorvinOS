@@ -117,7 +117,8 @@ def _open_exclusive(attach_dir: Path, safe_name: str) -> tuple[int, str]:
     """
     base, dot_ext = (safe_name.rsplit(".", 1) if "." in safe_name.lstrip(".")
                      else (safe_name, ""))
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_BINARY", 0))  # Windows: no CRLF translation of uploads
     candidates = [safe_name] + [
         f"{base}_{i}.{dot_ext}" if dot_ext else f"{base}_{i}" for i in range(1, 100)
     ]

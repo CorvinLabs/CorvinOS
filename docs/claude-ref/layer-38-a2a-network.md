@@ -947,6 +947,36 @@ network call or write, and it and the import write under the cross-process
   `A2A.attestation_disabled_bypass` and `a2a.manifest_required_unavailable`
   now have severity + allowlist entries (their fields were being floored).
 
+**Failure truth (2026-10-05 review, round 3).** What the operator sees on a
+failure must be what happened:
+- A send the console accepted is recorded **`queued`** in the feed before the
+  job waits for a send-pool worker (`POST /a2a/feed/send` returns its
+  `task_id`; `RemoteTriggerSender.send(task_id=…, feed_task_recorded=True)`),
+  so a message behind a hung peer is visible and, after a restart, visibly
+  unanswered.
+- A failure where the request may have reached the peer (read timeout after
+  send, 5xx, relay "delivered, no answer") is `SendResult.maybe_delivered` and
+  recorded **`unconfirmed`** with a "do not resend blindly" note — not `error`.
+- A **signed** rejection carries a closed public reason
+  (`remote_trigger_receiver.public_rejection_reason`: `identity_required`,
+  `rate_limited`, `replay`, `clock_skew`, `purpose_not_allowed`, `disabled`,
+  `peer_limit`, `integrity_required`, plus `busy`, `group_message_refused`);
+  the sender turns only those tokens into fixed text
+  (`_PUBLIC_REJECTION_TEXT`, all in `_ERROR_DETAIL_TEMPLATES`). The peer pane
+  shows the reason and flags "last message refused" next to the presence.
+- The ping freshness window is the task window (`_PING_WINDOW_S` ==
+  `_TIME_WINDOW_S` = 300 s; `_ping_seen` TTL > 2 windows), so presence and
+  deliverability agree under clock skew.
+- Group messages are stored only in the group store — never in the 1:1 feed,
+  inbound only once the group handler accepted them.
+- GDPR Art. 17 covers the feed (`L-a2a-feed`: `a2a_feed.erase_peer`, records by
+  `peer_id`/exact `peer_label` + orphaned blobs) and group chats
+  (`L-chat-groups`: the subject's messages, the files they attached, the
+  membership), each plus the generic attribution rule.
+- The standalone Discovery page/section is gone: its backend
+  (`routes/a2a_discovery.py`) lists only already-paired origins — there is no
+  LAN/mDNS discovery — and those are the Peers tab already.
+
 Since ADR-2099 P0 fact 3 (operator decision, Option B) a **new** pairing
 requires a Corvin Labs IBC on every inbound envelope (`require_ibc: true`).
 An instance without an IBC therefore cannot exchange tasks over a new pairing

@@ -1982,6 +1982,116 @@ class CELAnchorHandler:
                        applied_reason="removed {n} CEL anchor store(s) for subject")
 
 
+@dataclass
+class A2AFeedHandler:
+    """GDPR Art. 17 for the A2A message store (``global/a2a_feed``): message
+    text and attachment blobs exchanged with a peer. Attribution is the
+    record's ``peer_id`` (the pairing id the operator sees) or its exact
+    ``peer_label``; the store's own primitive does the rewrite and the blob
+    GC under the writers' lock (review R3 2026-10-05: no handler existed)."""
+    tenant_id: str = "_default"
+    layer_id: str = "L-a2a-feed"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        root = _tenant_global(self.tenant_id) / "a2a_feed"
+        if not root.is_dir():
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="A2A message store absent",
+                           empty_reason="", applied_reason="")
+        try:
+            import a2a_feed as _feed  # noqa: PLC0415
+            msgs, blobs = _feed.erase_peer(subject_id, tenant_id=self.tenant_id)
+            # Plus the documented generic rule every covered store honours
+            # (subject-named files, identity-keyed records), under the
+            # store's own lock.
+            with _feed._store_lock(root):
+                msgs += _purge_path(root, subject_id)
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=0,
+                reason=f"A2A feed purge error: {type(exc).__name__}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000))
+        return _result(self.layer_id, t0, msgs + blobs, absent=False, absent_reason="",
+                       empty_reason="no A2A message named the subject",
+                       applied_reason="removed {n} A2A message(s)/attachment(s)")
+
+
+_GROUP_ATTACH_RE = re.compile(r"^- attachments/([^/\\\n]+?) \(\d", re.M)
+
+
+@dataclass
+class ChatGroupHandler:
+    """GDPR Art. 17 for group chats (``global/chat_groups/<id>/``): the
+    subject's messages (``sender_participant_id``), the files those messages
+    attached, and the subject's participant entry (``participant_id`` or, for
+    an A2A peer, ``peer_endpoint_id``). Other members' messages stay — the
+    group is not the subject's record. Under the group store's own lock."""
+    tenant_id: str = "_default"
+    layer_id: str = "L-chat-groups"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        root = _tenant_global(self.tenant_id) / "chat_groups"
+        if not root.is_dir():
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="group chat store absent",
+                           empty_reason="", applied_reason="")
+        removed = 0
+        try:
+            import a2a_friendship as _ft  # noqa: PLC0415
+            for gdir in sorted(p for p in root.iterdir() if p.is_dir()):
+                with _ft.config_file_lock(gdir):
+                    msgs = gdir / "messages.jsonl"
+                    if msgs.exists():
+                        lines = msgs.read_text(encoding="utf-8").splitlines()
+                        kept, dropped_files = [], set()
+                        for line in lines:
+                            try:
+                                rec = json.loads(line)
+                            except json.JSONDecodeError:
+                                kept.append(line)
+                                continue
+                            if isinstance(rec, dict) and rec.get("sender_participant_id") == subject_id:
+                                removed += 1
+                                dropped_files.update(_GROUP_ATTACH_RE.findall(str(rec.get("text") or "")))
+                            else:
+                                kept.append(line)
+                        if len(kept) != len(lines):
+                            _atomic_replace_text(msgs, "\n".join(kept) + ("\n" if kept else ""))
+                        att_dir = gdir / "attachments"
+                        for name in dropped_files:
+                            f = att_dir / name
+                            if (f.is_file() and not f.is_symlink()
+                                    and f.resolve().parent == att_dir.resolve()):
+                                f.unlink()
+                                removed += 1
+                    meta_p = gdir / "meta.json"
+                    meta = _load_json(meta_p) if meta_p.exists() else None
+                    if isinstance(meta, dict) and isinstance(meta.get("participants"), list):
+                        parts = meta["participants"]
+                        left = [p for p in parts if not (isinstance(p, dict) and (
+                            p.get("participant_id") == subject_id
+                            or p.get("peer_endpoint_id") == subject_id))]
+                        if len(left) != len(parts):
+                            removed += len(parts) - len(left)
+                            meta["participants"] = left
+                            _atomic_replace_text(meta_p, json.dumps(meta, ensure_ascii=False) + "\n")
+            # The documented generic rule as well (subject-named entries,
+            # identity-keyed records).
+            removed += _purge_path(root, subject_id)
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
+                reason=f"group chat purge error: {type(exc).__name__}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000))
+        return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
+                       empty_reason="no group message or member named the subject",
+                       applied_reason="removed {n} group message(s)/file(s)/membership(s)")
+
+
 def _purge_ledger_file(f: Path, subject_id: str) -> int:
     """Record-wise erasure of one session ledger. A record attributed to the
     subject (chat key, sender, …) is removed. A record that names the subject
@@ -2343,6 +2453,9 @@ COVERED_DIRS: dict[str, frozenset[str]] = {
     "L-incidents":           frozenset({"global/incidents"}),
     "L-identity-directory":  frozenset({"global/scim"}),
     "L-activity-log":        frozenset({"global/chat_activity.jsonl"}),
+    # 2026-10-05 review R3 — stores with no Art. 17 path until then.
+    "L-a2a-feed":            frozenset({"global/a2a_feed"}),
+    "L-chat-groups":         frozenset({"global/chat_groups"}),
     "L-voice":               frozenset({"voice"}),
     # R4-F1/F4: the format-specific handlers above own the sqlite tables and the
     # file shapes they were written for; this layer runs the generic attribution
@@ -2376,6 +2489,7 @@ NON_PERSONAL_DIRS: dict[str, str] = {
     "global/audit.jsonl": "tenant hash chain — content-free, immutable",
     "keys":            "instance/crypto key material, no subject data",
     "global/agent":    "BYOK instance keypair, no subject data",
+    "global/a2a_master_key": "A2A instance master key material (random bytes), no subject data",
     "global/erasure":  "erasure trail files (0600) — the record OF erasure",
     "forge":           "generated tools (code), no subject data",
     "plugins":         "plugin state/config, no subject data",
@@ -2482,6 +2596,8 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         CELAnchorHandler(tenant_id=tenant_id),              # cel_anchors/
         SessionLedgerHandler(tenant_id=tenant_id),          # session_ledger/** (+ legacy .corvin-ledger/)
         ACSGlobalIndexHandler(tenant_id=tenant_id),         # global/acs/runs/
+        A2AFeedHandler(tenant_id=tenant_id),                # global/a2a_feed/
+        ChatGroupHandler(tenant_id=tenant_id),              # global/chat_groups/
         IdentityMappingHandlerBase(),
     ]
     # R4-F1: the remaining live tenant-home stores, all erased by the same

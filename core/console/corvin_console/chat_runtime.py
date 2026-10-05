@@ -1305,9 +1305,15 @@ def get_session(tenant_id: str, sid: str) -> WebChatSession | None:
 def create_session(tenant_id: str, title: str = "") -> WebChatSession:
     existing = list_sessions(tenant_id)
     if len(existing) >= _MAX_SESSIONS_PER_TENANT:
-        # Drop the oldest to keep the working set bounded.
-        oldest = min(existing, key=lambda s: s.last_active_at)
-        delete_session(tenant_id, oldest.sid)
+        # Drop the oldest to keep the working set bounded — never a chat with
+        # a turn running right now (its last_active_at only moves when the
+        # turn ends, so a long first turn looked "oldest").
+        with _live_turns_guard:
+            busy = {sid_ for (tid_, sid_) in _live_turns if tid_ == tenant_id}
+        idle = [s for s in existing if s.sid not in busy]
+        if idle:
+            oldest = min(idle, key=lambda s: s.last_active_at)
+            delete_session(tenant_id, oldest.sid)
     sid = secrets.token_urlsafe(_SID_BYTES)
     now = time.time()
     wd = _workdir(tenant_id, sid)
@@ -1334,8 +1340,10 @@ def rename_session(tenant_id: str, sid: str, title: str) -> WebChatSession | Non
     sess = get_session(tenant_id, sid)
     if sess is None:
         return None
-    sess.title = (title or "").strip()[:_TITLE_MAX_CHARS]
-    _save(sess)
+    # Field-wise on the current metadata: a full save of this copy undid a
+    # turn-count increment made meanwhile, or recreated a just-deleted chat.
+    if not _update_meta(sess, title=(title or "").strip()[:_TITLE_MAX_CHARS]):
+        return None
     return sess
 
 

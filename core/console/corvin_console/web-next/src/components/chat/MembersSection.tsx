@@ -30,7 +30,10 @@ function AddParticipantDialog({
   groupId, csrf, onAdded,
 }: { groupId: string; csrf: string; onAdded: () => void }) {
   const [open, setOpen] = React.useState(false);
-  const [kind, setKind] = React.useState<ParticipantKind>("human");
+  // Only A2A peers: "human" / "agent" members had no consumer — no second
+  // local login could read the group and no group turn ever ran an agent
+  // (review R3), so offering them added members that never did anything.
+  const [kind, setKind] = React.useState<ParticipantKind>("a2a_peer");
   const [participantId, setParticipantId] = React.useState("");
   const [displayName, setDisplayName] = React.useState("");
   const [peerEndpointId, setPeerEndpointId] = React.useState("");
@@ -67,8 +70,6 @@ function AddParticipantDialog({
         <DialogHeader><DialogTitle>Add member</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <Select value={kind} onChange={(e) => setKind(e.target.value as ParticipantKind)}>
-            <SelectItem value="human">Human (internal)</SelectItem>
-            <SelectItem value="agent">Agent (internal)</SelectItem>
             <SelectItem value="a2a_peer">A2A peer (external agent — needs an active friendship)</SelectItem>
           </Select>
           <Input placeholder={kind === "a2a_peer" ? "Peer endpoint ID" : "Member ID"}

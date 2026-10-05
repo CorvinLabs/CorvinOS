@@ -155,8 +155,8 @@ export default function App() {
             <Route path="chat/peer/:peerId" element={<ChatPage />} />
             {/* Group chats moved into the chat page; keep old bookmarks working. */}
             <Route path="chat-groups" element={<Navigate to="/app/chat" replace />} />
-            {/* Discovery folded into the chat sidebar's Peers tab (DiscoverySection
-                in ChatContextSidebar.tsx) — the standalone page is retired. */}
+            {/* Discovery page retired 2026-10-05: its backend lists only already-paired
+                origins (no LAN discovery), which the chat's Peers tab shows already. */}
             <Route path="discovery" element={<Navigate to="/app/chat" replace />} />
             {/* Agent Hub deleted 2026-10-05 (Console navigation refactor, Phase 4) —
                 permissions/invites/connections moved into PeerManagementDialog

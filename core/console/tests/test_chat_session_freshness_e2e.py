@@ -96,6 +96,36 @@ class ChatSessionFreshnessE2E(unittest.TestCase):
         self.assertFalse(self.cr._turns_path(self.tid, sid).exists(),
                          "the deleted chat's turn log was recreated")
 
+    def test_d_user_cancel_is_not_reported_as_a_deletion(self):
+        """Review R3: the delete-cancel branch also fired for a user cancel,
+        so every Stop showed "This chat was deleted." and a second done."""
+        self.delay = 2.0
+        sid = self.c.post("/v1/console/chat/sessions", json={"title": "Keep"}).json()["session"]["sid"]
+        with self.c.websocket_connect(f"/v1/console/chat/sessions/{sid}/stream") as ws:
+            ws.receive_json()
+            ws.send_json({"type": "user", "text": "long"})
+            time.sleep(0.2)
+            ws.send_json({"type": "cancel"})
+            self.assertEqual(ws.receive_json(), {"type": "done"})
+            ws.send_json({"type": "ping"})
+            self.assertEqual(ws.receive_json()["type"], "pong")
+        self.assertEqual(self._titles(sid), ["Keep"])
+
+    def test_e_cap_eviction_never_picks_a_chat_with_a_running_turn(self):
+        with patch.object(self.cr, "_MAX_SESSIONS_PER_TENANT", 2):
+            a = self.cr.create_session(self.tid, title="running")
+            time.sleep(0.01)
+            b = self.cr.create_session(self.tid, title="idle")
+            # a is the oldest, but its turn is live
+            task = object()
+            self.cr.register_live_turn(self.tid, a.sid, None, task)
+            try:
+                self.cr.create_session(self.tid, title="new")
+            finally:
+                self.cr.unregister_live_turn(self.tid, a.sid, None, task)
+            self.assertIsNotNone(self.cr.get_session(self.tid, a.sid))
+            self.assertIsNone(self.cr.get_session(self.tid, b.sid))
+
     def test_c_two_tabs_share_the_chat_state(self):
         sid = self.c.post("/v1/console/chat/sessions", json={}).json()["session"]["sid"]
         with self.c.websocket_connect(f"/v1/console/chat/sessions/{sid}/stream") as a, \

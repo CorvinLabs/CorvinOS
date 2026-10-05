@@ -31,12 +31,18 @@ class GroupReceiveStatusE2E(_WithAuditMock):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
         self.servers = []
+        self._feed = os.environ.get("CORVIN_A2A_FEED_DIR")
+        os.environ["CORVIN_A2A_FEED_DIR"] = str(self.tmp / "feed")
 
     def tearDown(self):
         for srv in self.servers:
             srv.shutdown()
             srv.server_close()
         self._tmp.cleanup()
+        if self._feed is None:
+            os.environ.pop("CORVIN_A2A_FEED_DIR", None)
+        else:
+            os.environ["CORVIN_A2A_FEED_DIR"] = self._feed
         if self._att is None:
             os.environ.pop("CORVIN_A2A_ATTESTATION_DISABLED", None)
         else:
@@ -71,6 +77,15 @@ class GroupReceiveStatusE2E(_WithAuditMock):
         res = self._send_group(lambda **kw: {"status": "accepted", "message_id": "m-1"})
         self.assertTrue(res.ok, res.status)
         self.assertEqual(res.status, "ok")
+
+    def test_group_messages_stay_out_of_the_one_to_one_feed(self):
+        """Review R3: every group message was also written to the 1:1 A2A
+        feed (shown as a direct message, kept after the group was deleted),
+        inbound even when the group refused it."""
+        self._send_group(lambda **kw: {"status": "accepted", "message_id": "m-1"})
+        self._send_group(lambda **kw: {"status": "error", "reason": "x"})
+        store = self.tmp / "feed" / "messages.jsonl"
+        self.assertFalse(store.exists() and "hello group" in store.read_text())
 
     def test_refused_message_is_rejected(self):
         res = self._send_group(lambda **kw: {"status": "error", "reason": "sender_not_a_group_participant"})

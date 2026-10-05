@@ -20,8 +20,25 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
 _GATES = ("check_l44", "HouseRulesGate", "_house_rules_classifier", "check_console_spawn_or_refusal",
-          "check_house_rules", "_check_house_rules_or_fail", "data_flow_guard", "egress")
+          "check_house_rules", "_check_house_rules_or_fail", "data_flow_guard", "egress",
+          # The audit writer behind fail-closed audit-first checks (review R3):
+          # a module-level mock made _audit_strict succeed process-wide.
+          "_forge_se", "write_event", "tripwire", "_clag_gate")
 _SKIP = {"node_modules", ".venv", "venv", ".git", "dist", "build", "__pycache__"}
+
+
+def _module_statements(body):
+    """Module-level statements, descending into module-level if/try/with
+    blocks (they run at import exactly like top-level code)."""
+    for node in body:
+        if isinstance(node, (ast.If, ast.Try, ast.With)):
+            yield from _module_statements(getattr(node, "body", []))
+            yield from _module_statements(getattr(node, "orelse", []))
+            yield from _module_statements(getattr(node, "finalbody", []))
+            for h in getattr(node, "handlers", []):
+                yield from _module_statements(h.body)
+        else:
+            yield node
 
 
 def _module_level_gate_starts(path: Path) -> list[int]:
@@ -31,13 +48,26 @@ def _module_level_gate_starts(path: Path) -> list[int]:
         return []
     patch_vars = {}
     hits = []
-    for node in tree.body:  # module level only
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
-            src = ast.unparse(node.value)
-            if any(g in src for g in _GATES):
-                for t in node.targets:
-                    if isinstance(t, ast.Name):
-                        patch_vars[t.id] = node.lineno
+    modules = set()  # names bound to IMPORTED modules at module level
+    for node in _module_statements(tree.body):
+        if isinstance(node, ast.Import):
+            modules.update((al.asname or al.name.split(".")[0]) for al in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            modules.update((al.asname or al.name) for al in node.names)
+    for node in _module_statements(tree.body):
+        if isinstance(node, ast.Assign):
+            # spawn_gates.check_l44 = <anything> — a gate replaced outright on
+            # an imported module (a local mock's attribute is not a gate).
+            for t in node.targets:
+                if (isinstance(t, ast.Attribute) and t.attr in _GATES
+                        and isinstance(t.value, ast.Name) and t.value.id in modules):
+                    hits.append(node.lineno)
+            if isinstance(node.value, ast.Call):
+                src = ast.unparse(node.value)
+                if any(g in src for g in _GATES):
+                    for t in node.targets:
+                        if isinstance(t, ast.Name):
+                            patch_vars[t.id] = node.lineno
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
             call = node.value
             if isinstance(call.func, ast.Attribute) and call.func.attr == "start":
@@ -52,11 +82,11 @@ def _test_files():
     """Tracked test modules only (worktrees and vendored copies are not
     this repo's tests)."""
     import subprocess  # noqa: PLC0415
-    out = subprocess.run(["git", "-C", str(_REPO), "ls-files", "*test_*.py"],
-                         capture_output=True, text=True, check=True).stdout
-    for rel in out.splitlines():
+    out = subprocess.run(["git", "-C", str(_REPO), "ls-files", "*test_*.py", "*conftest.py",
+                          "*_test.py"], capture_output=True, text=True, check=True).stdout
+    for rel in sorted(set(out.splitlines())):
         p = _REPO / rel
-        if p.name.startswith("test_") and not _SKIP.intersection(p.parts) and p.is_file():
+        if not _SKIP.intersection(p.parts) and p.is_file():
             yield p
 
 
@@ -79,6 +109,13 @@ class NoImportTimeGatePatchTests(unittest.TestCase):
         p = Path(tempfile.mkdtemp()) / "test_x.py"
         p.write_text(src)
         self.assertEqual(_module_level_gate_starts(p), [3, 5])
+        src2 = ('import spawn_gates, remote_trigger_receiver as r\n'
+                'try:\n    from unittest import mock\n'
+                '    mock.patch.object(r, "_forge_se", None).start()\nexcept ImportError:\n    pass\n'
+                'spawn_gates.check_l44 = lambda *a, **k: None\n')
+        p2 = p.with_name("test_y.py")
+        p2.write_text(src2)
+        self.assertEqual(_module_level_gate_starts(p2), [4, 7])
 
 
 if __name__ == "__main__":

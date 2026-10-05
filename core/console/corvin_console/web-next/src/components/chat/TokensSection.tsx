@@ -43,7 +43,7 @@ export function TokenResultCard({ result }: { result: FriendshipTokenResult }) {
 
 export function TokensSection({ csrf, open, onOpenChange }: {
   csrf: string;
-  /** Controlled expand state (e.g. DiscoverySection opens this on "Add"). Omit for standalone use. */
+  /** Controlled expand state (a parent may open it). Omit for standalone use. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {

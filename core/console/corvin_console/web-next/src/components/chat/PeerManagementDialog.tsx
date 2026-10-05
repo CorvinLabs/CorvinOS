@@ -1209,6 +1209,7 @@ function FriendshipConnectionsList() {
   const [urlSaving, setUrlSaving] = React.useState(false);
   const [deletePendingKid, setDeletePendingKid] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState(false);
+  const [actionError, setActionError] = React.useState("");
   const [deleteError, setDeleteError] = React.useState("");
   const [rechecking, setRechecking] = React.useState<string | null>(null);
 
@@ -1220,9 +1221,12 @@ function FriendshipConnectionsList() {
 
   async function handleRecheck(kid: string) {
     setRechecking(kid);
+    setActionError("");
     try {
       await recheckFriendshipConnection(kid, csrf);
       void qc.invalidateQueries({ queryKey: ["a2a", "friendship-connections"] });
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setRechecking(null);
     }
@@ -1230,12 +1234,15 @@ function FriendshipConnectionsList() {
 
   async function handleSetUrl(kid: string) {
     setUrlSaving(true);
+    setActionError("");
     try {
       await setFriendshipUrl(kid, urlInput.trim(), csrf);
       void qc.invalidateQueries({ queryKey: ["a2a", "friendship-connections"] });
       void qc.invalidateQueries({ queryKey: ["a2a", "endpoints"] });
       setSetUrlKid(null);
       setUrlInput("");
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setUrlSaving(false);
     }
@@ -1281,6 +1288,11 @@ function FriendshipConnectionsList() {
         </div>
       </CardHeader>
       <CardContent className="p-0">
+        {actionError && (
+          <p className="mx-4 my-2 rounded bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="connection-action-error">
+            {actionError}
+          </p>
+        )}
         {connections.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-8 text-muted-foreground">
             <UserPlus className="h-6 w-6 opacity-20" />

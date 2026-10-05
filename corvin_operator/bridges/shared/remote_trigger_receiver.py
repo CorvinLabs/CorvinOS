@@ -259,6 +259,30 @@ class AuditWriteError(A2AError):
     """Raised when the L16 audit write fails; blocks the entire request."""
 
 
+def public_rejection_reason(reason: str) -> str | None:
+    """Map an internal rejection reason to the closed set a signed rejection
+    may carry to the (authenticated) sender. None = keep it generic."""
+    r = str(reason or "")
+    if (r.startswith("instance_attestation") or r == "ibc_library_unavailable"
+            or r.startswith("network_attestation") or r in ("attestation_required", "ca_not_configured")):
+        return "identity_required"
+    if r == "rate_limited":
+        return "rate_limited"
+    if r == "replay" or r.startswith("nonce_"):
+        return "replay"
+    if r in ("time_window", "issued_at_not_finite", "ttl_exceeded", "ttl_too_small"):
+        return "clock_skew"
+    if r in ("purpose_not_allowed", "purpose_id_required"):
+        return "purpose_not_allowed"
+    if r == "origin_disabled":
+        return "disabled"
+    if r == "a2a_peers_max_exceeded":
+        return "peer_limit"
+    if r.startswith("layer_integrity") or r == "a2a_manifest_required_unavailable":
+        return "integrity_required"
+    return None
+
+
 class ValidationError(A2AError):
     """Raised for any envelope validation failure. reason is audit-only.
 
@@ -911,7 +935,13 @@ class RemoteTriggerReceiver:
         except ValidationError as exc:
             # C-5: use exc.recv_key (set after HMAC verification) to sign
             # the rejection. Pre-HMAC failures have recv_key=None → unsigned.
-            resp = self._rejected_response(task_id, origin_id, exc.recv_key)
+            # A signed rejection carries a CLOSED public reason (review R3:
+            # every refusal read as a bare "rejected", so an operator could
+            # not tell "the peer requires a verified CorvinOS identity" from
+            # "you sent too fast"); the precise reason stays in our audit.
+            resp = self._rejected_response(
+                task_id, origin_id, exc.recv_key,
+                reason=public_rejection_reason(exc.reason) if exc.recv_key else None)
             self._audit_best_effort(
                 "A2A.request_rejected", "WARNING",
                 {"task_id": task_id, "origin_id": origin_id,
@@ -1180,14 +1210,17 @@ class RemoteTriggerReceiver:
         # A2A feed (a2a_feed.py): the envelope is now authenticated, consented
         # and chain-gated — only from here on may its content be stored for
         # the operator's Agent Hub view. Best-effort, never raises.
-        _feed_record(
-            direction="in", kind="task", peer_id=env.origin_id, peer_label=origin_config.get("label"),
-            task_id=env.task_id, text=env.instruction, status="received",
-            attachments=env.attachments,
-        )
-
         # ADR-2218: if group_id is present, route to group instead of spawning worker.
         group_id = getattr(env, "group_id", None)
+        if not group_id:
+            # Group messages are stored by the group handler (only when it
+            # admits them) — never in the 1:1 feed, where they showed up as
+            # direct messages, refused ones included.
+            _feed_record(
+                direction="in", kind="task", peer_id=env.origin_id, peer_label=origin_config.get("label"),
+                task_id=env.task_id, text=env.instruction, status="received",
+                attachments=env.attachments,
+            )
         spawn_worker = False
         if group_id:
             try:
@@ -1219,12 +1252,6 @@ class RemoteTriggerReceiver:
                         {"task_id": env.task_id, "origin_id": env.origin_id,
                          "reason": f"group_message_refused:{reason or 'unknown'}",
                          "status": "rejected", "duration_ms": _ms(start)},
-                    )
-                    _feed_record(
-                        direction="out", kind="response", peer_id=env.origin_id,
-                        peer_label=origin_config.get("label"), task_id=env.task_id,
-                        status="rejected", duration_ms=_ms(start),
-                        data={"reason": "group_message_refused"},
                     )
                     return resp
                 worker_status = "ok"
@@ -1337,11 +1364,12 @@ class RemoteTriggerReceiver:
              "status": resp.status, "duration_ms": _ms(start),
              **_out_audit},
         )
-        _feed_record(
-            direction="out", kind="response", peer_id=env.origin_id, peer_label=origin_config.get("label"),
-            task_id=env.task_id, data=worker_data, status=resp.status,
-            attachments=worker_attachments, duration_ms=_ms(start),
-        )
+        if not group_id:
+            _feed_record(
+                direction="out", kind="response", peer_id=env.origin_id, peer_label=origin_config.get("label"),
+                task_id=env.task_id, data=worker_data, status=resp.status,
+                attachments=worker_attachments, duration_ms=_ms(start),
+            )
         return resp
 
     # ── M2 worker spawn + filter ──────────────────────────────────────

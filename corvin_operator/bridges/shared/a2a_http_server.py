@@ -167,7 +167,8 @@ _PING_FLOOD_CEILING_RPM = 6000.0
 
 _PING_SEEN: "collections.OrderedDict[tuple[str, str], float]" = collections.OrderedDict()
 _PING_SEEN_MAX = 4096
-_PING_SEEN_TTL_S = 90.0
+_PING_WINDOW_S = 300  # == remote_trigger_receiver._TIME_WINDOW_S (pinned by a test)
+_PING_SEEN_TTL_S = 2 * _PING_WINDOW_S + 30.0
 
 
 def _ping_seen(origin_id: str, ping_id: str) -> bool:
@@ -332,11 +333,14 @@ def process_ping_request(
     if not _hmac.compare_digest(signature.lower(), expected_sig):
         return 403, {"reason": "ping_rejected"}
 
-    # Verify freshness (±30s window) — authenticated callers only, so the
-    # distinct reason is safe and aids clock-skew diagnostics. BEFORE the
-    # budget (round 7): a replayed stale ping must not cost a token.
+    # Verify freshness — the SAME window as a task envelope (review R3,
+    # 2026-10-05): with ±30 s here and ±300 s for tasks, two hosts 60 s apart
+    # showed each other "offline" while every message went through. A
+    # replayed ping only re-earns a pong; _ping_seen (TTL > 2 windows) keeps
+    # it from costing budget. Authenticated callers only, so the distinct
+    # reason is safe and aids clock-skew diagnostics.
     now = int(_time_module.time())
-    if abs(now - issued_at) > 30:
+    if abs(now - issued_at) > _PING_WINDOW_S:
         return 400, {"reason": "stale_ping"}
 
     # Post-auth per-origin budget — only the key holder can spend it, and a

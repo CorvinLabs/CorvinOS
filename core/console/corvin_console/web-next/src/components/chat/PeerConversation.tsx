@@ -45,9 +45,14 @@ function responseText(m: A2AFeedMessage): string {
   return keys.length ? JSON.stringify(m.data, null, 2) : "";
 }
 
-function PeerMessageRow({ m, label }: { m: A2AFeedMessage; label: string }) {
+function PeerMessageRow({ m, label, answered }: { m: A2AFeedMessage; label: string; answered: boolean }) {
   const mine = m.direction === "out";
-  const failed = Boolean(m.error) || ["rejected", "timeout", "error"].includes(m.status);
+  // "unconfirmed": the request may have reached the peer — not a failure to
+  // resend (a resend runs it twice). "queued": accepted, waiting to be sent.
+  const unconfirmed = m.status === "unconfirmed";
+  const failed = !unconfirmed && (Boolean(m.error) || ["rejected", "timeout", "error"].includes(m.status));
+  const showStatus = m.status && m.status !== "ok" && m.status !== "received" && m.status !== "sent"
+    && !(m.status === "queued" && answered);
   const body = m.kind === "response" ? responseText(m) : m.text;
   return (
     <div data-testid="peer-message" className={cn("flex gap-3", mine ? "justify-end" : "justify-start")}>
@@ -59,8 +64,11 @@ function PeerMessageRow({ m, label }: { m: A2AFeedMessage; label: string }) {
           <span>{m.kind === "task" ? "message" : "reply"}</span>
           <span>·</span>
           <span>{fmtTime(m.ts)}</span>
-          {m.status && m.status !== "ok" && m.status !== "received" && (
-            <Badge variant={failed ? "danger" : "outline"} className="px-1.5 py-0 text-[9px]">{m.status}</Badge>
+          {showStatus && (
+            <Badge variant={failed ? "danger" : "outline"} data-testid="peer-message-status"
+              className={cn("px-1.5 py-0 text-[9px]", unconfirmed && "border-amber-500/50 text-amber-700 dark:text-amber-400")}>
+              {unconfirmed ? "delivery unconfirmed" : m.status}
+            </Badge>
           )}
         </div>
         <div className={cn(
@@ -70,7 +78,7 @@ function PeerMessageRow({ m, label }: { m: A2AFeedMessage; label: string }) {
         )}>
           {body && <div className="whitespace-pre-wrap break-words">{body}</div>}
           {m.error && (
-            <p className="mt-1 flex items-start gap-1 text-[11px] text-destructive">
+            <p className={cn("mt-1 flex items-start gap-1 text-[11px]", unconfirmed ? "text-amber-700 dark:text-amber-400" : "text-destructive")}>
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> {m.error}
             </p>
           )}
@@ -158,7 +166,18 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
 
   const peer = feed.data?.peers.find((p) => p.peer_id === peerId);
   const label = peer?.label || peerId;
-  const msgs = feed.data?.messages ?? [];
+  const msgs = React.useMemo(() => feed.data?.messages ?? [], [feed.data]);
+  const answeredTasks = React.useMemo(
+    () => new Set(msgs.filter((m) => m.kind === "response").map((m) => m.task_id)), [msgs]);
+  // Reachable is not the same as accepting: a peer can answer pings while
+  // refusing every task (e.g. it requires a verified CorvinOS identity).
+  const lastReply = React.useMemo(() => {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.kind === "response" && m.direction === "in") return m;
+    }
+    return null;
+  }, [msgs]);
   React.useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [msgs.length]);
@@ -203,6 +222,12 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
                 </span>
               );
             })()}
+            {lastReply?.status === "rejected" && (
+              <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
+                data-testid="peer-last-rejected" title={lastReply.error ?? "The peer refused the last message"}>
+                <AlertTriangle className="h-3 w-3" /> last message refused ·
+              </span>
+            )}
             <span className="truncate">
               Direct A2A conversation
               {peer ? ` · ${peer.can_send ? "can send" : "send disabled"} · ${peer.can_receive ? "accepts their tasks" : "their tasks blocked"}` : ""}
@@ -222,7 +247,8 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
           {feed.data && msgs.length === 0 && (
             <p className="pt-10 text-center text-sm text-muted-foreground">No messages with this agent yet.</p>
           )}
-          {msgs.map((m) => <PeerMessageRow key={m.id} m={m} label={label} />)}
+          {msgs.map((m) => <PeerMessageRow key={m.id} m={m} label={label}
+            answered={m.kind === "task" && answeredTasks.has(m.task_id)} />)}
           {error && (
             <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {error}

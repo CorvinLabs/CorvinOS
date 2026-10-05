@@ -23,7 +23,18 @@ for _p in (_here, _forge_inner):
 # Mock forge_se before importing rtr
 _mock_se = MagicMock()
 _mock_se.write_event = MagicMock(return_value={"hash": "abc"})
-patch("remote_trigger_receiver._forge_se", _mock_se).start()
+_FORGE_SE_PATCH_1 = patch("remote_trigger_receiver._forge_se", _mock_se)  # started in setUpModule (never at import)
+
+
+def setUpModule() -> None:
+    # The audit-writer mocks are module-scoped: started at import they
+    # replaced remote_trigger_receiver._forge_se for EVERY test collected
+    # in the same pytest session (review R3, 2026-10-05).
+    _FORGE_SE_PATCH_1.start()
+
+
+def tearDownModule() -> None:
+    _FORGE_SE_PATCH_1.stop()
 
 import remote_trigger_receiver as rtr  # noqa: E402
 

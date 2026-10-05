@@ -113,6 +113,19 @@ def _deliver_to_peers(
             pass
 
 
+def _append_or_503(tenant_dir: Path, group_id: str, **kw: Any) -> dict[str, Any]:
+    """append_message for a request handler: a busy log lock is a retryable
+    503 (as in the A2A pairing routes), a group deleted meanwhile a 404 —
+    neither a 500."""
+    import a2a_friendship as _ft  # type: ignore[import-not-found]  # noqa: PLC0415
+    try:
+        return _store.append_message(tenant_dir, group_id, **kw)
+    except _ft.FriendshipLockBusy:
+        raise HTTPException(status_code=503, detail="group is busy — try again") from None
+    except _store.ChatGroupError:
+        raise HTTPException(status_code=404, detail="group not found") from None
+
+
 def _schedule_delivery(
     *, tenant_id: str, group: dict[str, Any], text: str, exclude: str | None = None,
     message_id: str | None = None,
@@ -333,7 +346,7 @@ def send_message_to_peer(rec: Session, group_id: str, body: SendToPeerRequest) -
     require_friendship_active(peer_endpoint_id)
 
     # Append the message locally first (delivery="remote" to indicate cross-instance).
-    msg = _store.append_message(
+    msg = _append_or_503(
         tenant_dir, group_id,
         sender_participant_id=body.sender_participant_id,
         text=body.text,
@@ -395,7 +408,7 @@ def send_message(rec: Session, group_id: str, body: SendMessageRequest) -> Messa
             require_friendship_active(p["peer_endpoint_id"])
 
     has_peers = any(p["kind"] == "a2a_peer" and p.get("peer_endpoint_id") for p in g["participants"])
-    msg = _store.append_message(
+    msg = _append_or_503(
         tenant_dir, group_id,
         sender_participant_id=body.sender_participant_id,
         text=body.text,

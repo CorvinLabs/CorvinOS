@@ -111,7 +111,7 @@ function GroupMessageRow({ m, group, selfId }: { m: GroupMessage; group: ChatGro
           mine ? "rounded-tr-md bg-accent/15 text-foreground" : "rounded-tl-md border border-border bg-card text-card-foreground shadow-sm",
         )}>
           <div className="whitespace-pre-wrap break-words">{m.text}</div>
-          {attachmentNames(m.text).length > 0 && (
+          {!isPeer && attachmentNames(m.text).length > 0 && (
             <div className="mt-1.5 flex flex-col gap-0.5" data-testid="group-message-attachments">
               {attachmentNames(m.text).map((n) => (
                 <a key={n} href={groupAttachmentUrl(group.group_id, n)} target="_blank" rel="noreferrer"

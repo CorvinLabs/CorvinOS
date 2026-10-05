@@ -228,7 +228,18 @@ def delete_group(tenant_global_dir: Path, group_id: str) -> bool:
     d = _group_dir(tenant_global_dir, group_id)
     if d is None or not (d / "meta.json").exists():
         return False
-    shutil.rmtree(d)
+    # Under the log lock: an append that checked meta.json before the delete
+    # must not recreate the directory (its lock file + the message) after it.
+    with _messages_lock(d):
+        (d / "meta.json").unlink(missing_ok=True)
+        for child in list(d.iterdir()):
+            if child.name == ".a2a_config.lock":
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink(missing_ok=True)
+    shutil.rmtree(d, ignore_errors=True)
     return True
 
 
@@ -269,11 +280,23 @@ def count_groups(tenant_global_dir: Path, *, created_by: str | None = None) -> i
 
 
 def _trim(path: Path) -> None:
+    """Keep the newest messages, at most _MAX_MESSAGES_KEPT of them AND at most
+    half of _TRIM_AT_BYTES — trimming by count alone left a log of large
+    messages above the threshold, so every later append re-read and rewrote
+    it under the lock (review R3)."""
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    if len(lines) <= _MAX_MESSAGES_KEPT:
+    kept: list[str] = []
+    size = 0
+    for line in reversed(lines[-_MAX_MESSAGES_KEPT:]):
+        size += len(line.encode("utf-8"))
+        if size > _TRIM_AT_BYTES // 2 and kept:
+            break
+        kept.append(line)
+    kept.reverse()
+    if len(kept) == len(lines):
         return
     tmp = path.with_suffix(".jsonl.tmp")
-    tmp.write_text("".join(lines[-_MAX_MESSAGES_KEPT:]), encoding="utf-8")
+    tmp.write_text("".join(kept), encoding="utf-8")
     os.chmod(tmp, 0o600)
     os.replace(tmp, path)
 
@@ -333,6 +356,8 @@ def append_message(
     }
     path = d / "messages.jsonl"
     with _messages_lock(d):
+        if not (d / "meta.json").exists():
+            raise ChatGroupError("group not found")  # deleted meanwhile
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(msg) + "\n")
         os.chmod(path, 0o600)

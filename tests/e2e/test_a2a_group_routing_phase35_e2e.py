@@ -345,3 +345,23 @@ class TestRound2GroupLimitsAndDelivery:
             store.append_message(tenant_dir, group_id, sender_participant_id="human-1", text=f"m{i}")
         msgs = store.list_messages(tenant_dir, group_id, limit=0)
         assert len(msgs) <= 30 and msgs[-1]["text"] == "m59"
+
+
+class TestRound3GroupStore:
+    def test_trim_bounds_bytes_not_only_count(self, group_with_peer, monkeypatch):
+        cg, store, tenant_dir, group_id = group_with_peer
+        monkeypatch.setattr(store, "_TRIM_AT_BYTES", 4000)
+        for i in range(40):
+            store.append_message(tenant_dir, group_id, sender_participant_id="human-1", text="x" * 500 + str(i))
+        path = store._group_dir(tenant_dir, group_id) / "messages.jsonl"
+        assert path.stat().st_size <= 4000 + 700  # one message over, never unbounded
+        assert store.list_messages(tenant_dir, group_id)[-1]["text"].endswith("39")
+
+    def test_append_after_delete_never_recreates_the_group(self, group_with_peer):
+        cg, store, tenant_dir, group_id = group_with_peer
+        d = store._group_dir(tenant_dir, group_id)
+        assert store.delete_group(tenant_dir, group_id)
+        import pytest as _pytest
+        with _pytest.raises(store.ChatGroupError):
+            store.append_message(tenant_dir, group_id, sender_participant_id="human-1", text="late")
+        assert not (d / "messages.jsonl").exists()

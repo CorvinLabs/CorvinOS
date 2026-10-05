@@ -21,7 +21,7 @@ if str(_here) not in sys.path:
 
 _mock_se = mock.MagicMock()
 _mock_se.write_event = mock.MagicMock(return_value={"hash": "abc"})
-mock.patch("remote_trigger_receiver._forge_se", _mock_se).start()
+_FORGE_SE_PATCH_1 = mock.patch("remote_trigger_receiver._forge_se", _mock_se)  # started in setUpModule (never at import)
 
 # NOTE: the license compute-quota module is poisoned in setUpModule()/
 # tearDownModule() below (test-execution time), not here at collection/
@@ -62,6 +62,7 @@ def setUpModule() -> None:
     quota gate as absent (ImportError → fail-open path) — see the note near
     the imports above for why this must not happen at module-import/
     collection time."""
+    _FORGE_SE_PATCH_1.start()
     for name in ("license.compute_quota", "license.limits"):
         _SAVED_LICENSE_MODULES[name] = sys.modules.get(name)
         sys.modules[name] = None  # type: ignore[assignment]
@@ -69,6 +70,7 @@ def setUpModule() -> None:
 
 
 def tearDownModule() -> None:
+    _FORGE_SE_PATCH_1.stop()
     _L44_PATCH.stop()
     for name, mod in _SAVED_LICENSE_MODULES.items():
         if mod is None:

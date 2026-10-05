@@ -30,7 +30,18 @@ _mock_se.write_event = mock.MagicMock(return_value={"hash": "abc"})
 _patch_forge = mock.patch(
     "remote_trigger_receiver._forge_se", _mock_se,
 )
-_patch_forge.start()
+# _patch_forge is started in setUpModule, not at import time
+
+
+def setUpModule() -> None:
+    # The audit-writer mocks are module-scoped: started at import they
+    # replaced remote_trigger_receiver._forge_se for EVERY test collected
+    # in the same pytest session (review R3, 2026-10-05).
+    _patch_forge.start()
+
+
+def tearDownModule() -> None:
+    _patch_forge.stop()
 
 import remote_trigger_receiver as rtr  # noqa: E402
 

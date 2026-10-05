@@ -597,6 +597,10 @@ class SendResult:
     duration_ms: int
     error_category: str | None = None
     error_detail: str | None = None
+    # The request may have reached the peer (read timeout after send, 5xx,
+    # relay "delivered, no answer"): the peer may be running the task. Not a
+    # failure to retry blindly — a resend runs it a second time.
+    maybe_delivered: bool = False
 
 
 @dataclass
@@ -659,6 +663,20 @@ _ERROR_DETAIL_TEMPLATES = frozenset({
     "Relay response timeout",
     "Relay transport error",
     _ERROR_DETAIL_GENERIC,
+})
+# Closed rejection reasons a signed "rejected" may carry (review R3) — the
+# fixed texts _PUBLIC_REJECTION_TEXT maps them to are templates like the rest.
+_ERROR_DETAIL_TEMPLATES = frozenset(_ERROR_DETAIL_TEMPLATES) | frozenset({
+    "The peer only accepts verified CorvinOS instances (Corvin Labs identity certificate) and this instance has none",
+    "The peer is rate-limiting this connection - try again shortly",
+    "The peer saw this message before (replay protection)",
+    "The clocks of the two instances differ too much - check the system time on both",
+    "The peer does not allow this kind of request on this connection",
+    "The peer has disabled this connection",
+    "The peer's licence allows no more A2A connections",
+    "The peer requires a verified build this instance cannot provide",
+    "The peer is busy with other tasks - try again in a moment",
+    "The peer did not accept this group message (not a member there, or the group is unknown to it)",
 })
 
 # ADR-0197 §2: the only non-template content ever emitted as error_detail is
@@ -963,8 +981,16 @@ class RemoteTriggerSender:
         purpose_id: str | None = None,
         attestation: dict | None = None,
         group_id: str | None = None,
+        task_id: str | None = None,
+        feed_task_recorded: bool = False,
     ) -> SendResult:
         """Send a signed TaskEnvelope and record the exchange in the A2A feed.
+
+        ``task_id`` + ``feed_task_recorded``: the console records the outbound
+        message ("queued") the moment it accepts it, before the job waits for
+        a send-pool worker — otherwise a message queued behind a hung peer
+        was invisible and lost on restart (review R3). It then passes the same
+        task_id here so the reply joins that record.
 
         See :meth:`_send_impl` for the protocol. The feed write (a2a_feed.py)
         happens after the send on EVERY return path and is best-effort: it can
@@ -991,14 +1017,19 @@ class RemoteTriggerSender:
         # as an empty "filtered" response. An explicit schema (even {}) wins.
         if result_schema is None:
             result_schema = CHAT_RESULT_SCHEMA
-        task_id = str(uuid.uuid4())
+        task_id = task_id or str(uuid.uuid4())
         # The connection name travels with every feed record, so a
         # conversation stays readable after the connection is revoked.
         try:
             peer_label = (self._registry.load(endpoint_id) or {}).get("label")
         except Exception:  # noqa: BLE001 — unknown/disabled endpoint: no label
             peer_label = None
-        _record_feed_task(endpoint_id, task_id, instruction, attachments, peer_label)
+        # A group message lives in the group's own store (chat_group_store);
+        # copying it into the 1:1 A2A feed showed group text in the peer's
+        # direct conversation and kept it there after the group was deleted.
+        in_feed = group_id is None
+        if in_feed and not feed_task_recorded:
+            _record_feed_task(endpoint_id, task_id, instruction, attachments, peer_label)
         # Files without text: send a stand-in instruction so a receiver that
         # predates the worker-side substitution does not refuse it as an
         # empty-instruction injection (round 8). The feed keeps what was typed.
@@ -1011,7 +1042,8 @@ class RemoteTriggerSender:
             attachments=attachments, purpose_id=purpose_id,
             attestation=attestation, task_id=task_id, group_id=group_id,
         )
-        _record_feed_response(endpoint_id, result, peer_label)
+        if in_feed:
+            _record_feed_response(endpoint_id, result, peer_label)
         return result
 
     def _send_impl(
@@ -1231,6 +1263,7 @@ class RemoteTriggerSender:
                     attachments=[], duration_ms=_ms(start),
                     error_category=error_cat,
                     error_detail=error_det,
+                    maybe_delivered=bool(getattr(failure, "maybe_delivered", False)),
                 )
 
         # 4) Verify response signature + task_id binding
@@ -1360,6 +1393,13 @@ class RemoteTriggerSender:
 
         # ADR-0197: Map response status to error_category
         error_cat, error_det, is_ok = self._categorize_response_status(status)
+        if status == "rejected":
+            # A signed rejection may name a CLOSED reason (receiver:
+            # public_rejection_reason). Only known tokens map, to fixed text —
+            # a peer-supplied string is never shown or audited verbatim.
+            reason_text = _PUBLIC_REJECTION_TEXT.get(str(data.get("reason") or ""))
+            if reason_text:
+                error_det = self._sanitize_error(reason_text)
         return SendResult(
             ok=is_ok,
             status=status,
@@ -2418,6 +2458,22 @@ def _relay_round_trip(
         raise TransportError("relay_response_invalid", maybe_delivered=True) from exc
 
 
+_PUBLIC_REJECTION_TEXT: dict[str, str] = {
+    "identity_required": "The peer only accepts verified CorvinOS instances "
+                         "(Corvin Labs identity certificate) and this instance has none",
+    "rate_limited": "The peer is rate-limiting this connection - try again shortly",
+    "replay": "The peer saw this message before (replay protection)",
+    "clock_skew": "The clocks of the two instances differ too much - check the system time on both",
+    "purpose_not_allowed": "The peer does not allow this kind of request on this connection",
+    "disabled": "The peer has disabled this connection",
+    "peer_limit": "The peer's licence allows no more A2A connections",
+    "integrity_required": "The peer requires a verified build this instance cannot provide",
+    "busy": "The peer is busy with other tasks - try again in a moment",
+    "group_message_refused": "The peer did not accept this group message "
+                             "(not a member there, or the group is unknown to it)",
+}
+
+
 def _record_feed_task(
     endpoint_id: str, task_id: str, instruction: str, attachments: list | None,
     peer_label: str | None = None,
@@ -2440,11 +2496,16 @@ def _record_feed_response(endpoint_id: str, result: "SendResult",
     """Write the peer's response (or the failure) into the A2A feed."""
     try:
         import a2a_feed  # type: ignore[import-not-found]
+        unconfirmed = not result.ok and getattr(result, "maybe_delivered", False)
         a2a_feed.record(
             direction="in", kind="response", peer_id=endpoint_id,
-            task_id=result.task_id, data=result.data, status=result.status,
+            task_id=result.task_id, data=result.data,
+            # "unconfirmed", not "error": the peer may have run it (review R3).
+            status="unconfirmed" if unconfirmed else result.status,
             attachments=result.attachments, duration_ms=result.duration_ms,
-            error=(result.error_detail if not result.ok else None),
+            error=(("Delivery unconfirmed — the peer may have received and run it. "
+                    "Check with the peer before sending it again.")
+                   if unconfirmed else (result.error_detail if not result.ok else None)),
             peer_label=peer_label,
         )
     except Exception:
