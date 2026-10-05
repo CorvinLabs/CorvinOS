@@ -13,8 +13,18 @@ from typing import List, Dict, Optional
 import subprocess
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
+
+from .job_tmp import job_scoped_dir
+
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _concat_line(path: str) -> str:
+    # ffconcat quoting: a single quote inside a quoted path is written '\''
+    return "file '" + str(path).replace("'", "'\\''") + "'\n"
 
 
 @dataclass
@@ -67,7 +77,11 @@ class VideoAssemblerWorker:
             VideoResult with video path and metadata
         """
 
-        output_path = f"/tmp/{job.job_id}_final.mp4"
+        if not isinstance(job.job_id, str) or not _JOB_ID_RE.match(job.job_id):
+            raise ValueError("job_id must match [A-Za-z0-9_-]{1,64}")
+        # Per (job, process) directory, not a fixed /tmp/<id>_final.mp4 two
+        # runs of the same job id would overwrite.
+        output_path = os.path.join(job_scoped_dir(job.job_id), "final.mp4")
 
         # Get components from job results (fallback if not passed)
         if voice_result is None:
@@ -85,44 +99,49 @@ class VideoAssemblerWorker:
 
         if isinstance(screenshot_result, dict):
             screenshot_files = screenshot_result.get("screenshots", [])
+            frames_by_scene = screenshot_result.get("frames_by_scene")
         else:
             screenshot_files = screenshot_result.screenshots if screenshot_result else []
+            frames_by_scene = getattr(screenshot_result, "frames_by_scene", None)
 
-        # Try real FFmpeg assembly
+        if not screenshot_files:
+            # An audio-only .mp4 is not a video — refuse instead of passing it on.
+            return VideoResult(video_path="", duration_seconds=0.0, bitrate_kbps=0,
+                               codec=self.codec, quality_score=0.0, success=False)
+
         success = self._assemble_with_ffmpeg_real(
             audio_files=audio_files,
             screenshot_files=screenshot_files,
             output_path=output_path,
             duration_seconds=voice_duration,
+            frames_by_scene=frames_by_scene,
         )
-
         if not success:
-            # Fallback to mock
-            with open(output_path, "w") as f:
-                json.dump(
-                    {
-                        "video_path": output_path,
-                        "duration": voice_duration,
-                        "codec": self.codec,
-                        "bitrate_kbps": 2500,
-                    },
-                    f,
-                )
+            # No mock fallback: it used to write JSON over the previous run's
+            # real video at the same path and then fail the size gate anyway.
+            return VideoResult(video_path="", duration_seconds=0.0, bitrate_kbps=0,
+                               codec=self.codec, quality_score=0.0, success=False)
 
-        # Get actual bitrate
-        actual_bitrate = self._get_video_bitrate(output_path) if os.path.exists(output_path) else 2500
+        actual_bitrate = self._get_video_bitrate(output_path)
+        measured_duration = self._get_audio_duration_ffprobe(output_path)
 
-        # QUALITY GATE: Validate video (fail-closed)
+        # QUALITY GATE (fail-closed) on what the FILE says, not on what the
+        # voice phase reported.
         self._validate_video_quality(
             output_path=output_path,
             bitrate_kbps=actual_bitrate,
-            duration_seconds=voice_duration,
+            duration_seconds=measured_duration,
             codec=self.codec,
         )
+        if voice_duration and abs(measured_duration - voice_duration) > max(1.0, 0.05 * voice_duration):
+            raise ValueError(
+                f"Final-Validation Gate FAILED: video runs {measured_duration:.2f}s but the "
+                f"narration is {voice_duration:.2f}s — picture and sound would drift apart."
+            )
 
         return VideoResult(
             video_path=output_path,
-            duration_seconds=voice_duration,
+            duration_seconds=measured_duration,
             bitrate_kbps=actual_bitrate,
             codec=self.codec,
             quality_score=self._calculate_quality_score(actual_bitrate),
@@ -134,6 +153,7 @@ class VideoAssemblerWorker:
         screenshot_files: List[str],
         output_path: str,
         duration_seconds: float,
+        frames_by_scene: Optional[List[List[str]]] = None,
     ) -> bool:
         """Assemble video using REAL FFmpeg
 
@@ -158,7 +178,7 @@ class VideoAssemblerWorker:
             with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
                 # Create FFmpeg concat demuxer file
                 for audio_file in audio_files:
-                    f.write(f"file '{audio_file}'\n")
+                    f.write(_concat_line(audio_file))
                 concat_file = f.name
 
             try:
@@ -189,7 +209,9 @@ class VideoAssemblerWorker:
                 # previous loop-the-only-image behavior.
                 if screenshot_files:
                     audio_duration = self._get_audio_duration_ffprobe(concat_audio_path)
-                    per_frame = max(audio_duration / len(screenshot_files), 0.1)
+                    frame_durations = self._frame_durations(
+                        screenshot_files, frames_by_scene, audio_files, audio_duration
+                    )
 
                     width, height = self.resolution_map.get(self.resolution, (1920, 1080))
 
@@ -217,8 +239,8 @@ class VideoAssemblerWorker:
                     # and 598 kbps (not <1 kbps) on the same 2-frame/5s-each
                     # case both broken approaches failed differently.
                     cmd_mux = ["ffmpeg", "-y"]
-                    for frame in screenshot_files:
-                        cmd_mux.extend(["-loop", "1", "-t", f"{per_frame}", "-i", frame])
+                    for frame, frame_t in zip(screenshot_files, frame_durations):
+                        cmd_mux.extend(["-loop", "1", "-t", f"{frame_t:.3f}", "-i", frame])
                     audio_input_index = len(screenshot_files)
                     cmd_mux.extend(["-i", concat_audio_path])
 
@@ -292,6 +314,27 @@ class VideoAssemblerWorker:
         except Exception as e:
             print(f"FFmpeg assembly error: {e}")
             return False
+
+    def _frame_durations(self, screenshot_files, frames_by_scene, audio_files, audio_duration):
+        """On-screen time per frame.
+
+        When the visual phase says which frames belong to which scene and
+        there is one audio file per scene, each scene's frames share THAT
+        scene's narration time — so scene 2's picture appears when scene 2's
+        voice starts. Spreading every frame evenly over the whole track (the
+        old behaviour, kept as the fallback) put a 10 s scene boundary 10 s
+        away from where its voice began.
+        """
+        flat = [f for group in (frames_by_scene or []) for f in group]
+        if (frames_by_scene and len(frames_by_scene) == len(audio_files)
+                and flat == list(screenshot_files) and all(frames_by_scene)):
+            durations = []
+            for group, audio in zip(frames_by_scene, audio_files):
+                scene_t = self._get_audio_duration_ffprobe(audio)
+                durations.extend([max(scene_t / len(group), 0.1)] * len(group))
+            return durations
+        per_frame = max(audio_duration / len(screenshot_files), 0.1)
+        return [per_frame] * len(screenshot_files)
 
     def _build_ffmpeg_command(
         self,
@@ -506,7 +549,9 @@ class VideoAssemblerWorker:
             video_path: Path to video file
 
         Returns:
-            int: Bitrate in kbps (or 2500 default if unable to determine)
+            int: Bitrate in kbps, 0 when there is no video stream or ffprobe
+            cannot tell (0 fails the gate; the old 2500 default passed an
+            audio-only file as a 2.5 Mbps video).
         """
         try:
             cmd = [
@@ -528,7 +573,7 @@ class VideoAssemblerWorker:
         except Exception as e:
             print(f"Unable to determine bitrate: {e}")
 
-        return 2500  # Default fallback
+        return 0
 
     def _calculate_quality_score(self, bitrate_kbps: int) -> float:
         """Calculate quality score (0.0-1.0) based on bitrate

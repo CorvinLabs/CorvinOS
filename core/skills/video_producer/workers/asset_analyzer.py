@@ -9,6 +9,7 @@ Validates narration and assets for production readiness:
 
 from dataclasses import dataclass
 from typing import List, Dict, Optional
+import re
 from enum import Enum
 
 
@@ -68,6 +69,7 @@ class AssetAnalyzerWorker:
 
         # Phase 4: Gate enforcement
         if not sources_verified and len(job.narration) > 0:
+            # FAIL blocks: Maestro reads `success`, never `status`.
             return AnalysisResult(
                 status=AnalysisStatus.FAIL,
                 facts_extracted=facts,
@@ -75,7 +77,12 @@ class AssetAnalyzerWorker:
                 contradictions=contradictions,
                 recommendations=["Verify all claims are sourced before proceeding"],
                 confidence=0.3,
+                success=False,
             )
+
+        # WARN is advisory, not a gate: the detector below is a word-pair
+        # heuristic ("enabled" in one sentence, "disabled" in another), not a
+        # semantic check, so blocking on it would stop correct narration.
 
         if contradictions:
             return AnalysisResult(
@@ -185,10 +192,15 @@ class AssetAnalyzerWorker:
             "required": "optional",
         }
 
+        def has(word: str, text: str) -> bool:
+            # Whole words only: substring matching made "on"/"off" fire on
+            # "Console"/"offen" and flagged nearly every pair of sentences.
+            return re.search(rf"\b{re.escape(word)}\b", text) is not None
+
         for word, opposite in opposites.items():
-            if word in claim1_lower and opposite in claim2_lower:
+            if has(word, claim1_lower) and has(opposite, claim2_lower):
                 return True
-            if opposite in claim1_lower and word in claim2_lower:
+            if has(opposite, claim1_lower) and has(word, claim2_lower):
                 return True
 
         return False

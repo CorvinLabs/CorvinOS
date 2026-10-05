@@ -1,7 +1,11 @@
 """Image research worker for Video Producer (ADR-2221).
 
-Fetches images from a fixed, keyless, license-clear host allowlist —
-Wikimedia Commons and the NASA Image Library — never a generic web search.
+Fetches images from a fixed, keyless host allowlist — Wikimedia Commons only —
+never a generic web search. Commons attaches a machine-readable licence to
+every file. The NASA Image Library was dropped (adversarial review
+2026-10-05): its API carries no licence field, and the library holds
+copyrighted and ESA (CC BY) images that the worker had labelled
+"Public Domain" across the board.
 This is the image half of ADR-2221's two-mechanism design: text/fact
 research happens upstream (agent-driven WebSearch, written to a
 research_findings.json asset consumed by AssetAnalyzerWorker per
@@ -22,6 +26,7 @@ accepted.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import urllib.parse
@@ -39,9 +44,8 @@ ALLOWED_IMAGE_HOSTS = frozenset({
     "commons.wikimedia.org",
     "upload.wikimedia.org",
     "thumb.wikimedia.org",   # Commons serves iiurlwidth thumbnails from here
-    "images-api.nasa.gov",
-    "images-assets.nasa.gov",
 })
+SOURCES = frozenset({"commons"})
 
 ALLOWED_LICENSES = frozenset({
     "CC0",
@@ -59,6 +63,10 @@ ALLOWED_LICENSES = frozenset({
 
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_IMAGE_BYTES = 15 * 1024 * 1024
+# Decoded-size cap. Commons accepts user uploads; a 163 KB PNG of
+# 12500x13500 px passed Pillow's default limit and cost ~900 MB to convert.
+MAX_IMAGE_PIXELS = 24_000_000
+MAX_ATTRIBUTION = 160
 THUMB_WIDTH = 1280
 
 _USER_AGENT = "CorvinOS-VideoProducer-ResearchWorker/1.1 (ADR-2221)"
@@ -126,7 +134,11 @@ def _normalize_commons_license(license_short_name: str) -> str:
 
 
 def _strip_html(value: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", value or "")).strip()
+    """Plain text from extmetadata HTML: drop tags (also an unclosed one),
+    then decode entities once so "&amp;" does not reach the frame as text.
+    The compiler escapes the result again for HTML."""
+    no_tags = re.sub(r"<[^>]*(>|$)", "", value or "")
+    return re.sub(r"\s+", " ", html.unescape(no_tags)).strip()
 
 
 def search_wikimedia_commons(query: str, limit: int = 5) -> list[ResearchedImage]:
@@ -159,43 +171,16 @@ def search_wikimedia_commons(query: str, limit: int = 5) -> list[ResearchedImage
         if license_norm not in ALLOWED_LICENSES:
             continue
         artist = _strip_html(extmeta.get("Artist", {}).get("value", "")) or "Unknown"
+        if len(artist) > MAX_ATTRIBUTION:
+            continue  # never shorten a credit line; take another candidate
         title = page.get("title", "").removeprefix("File:")
         results.append(ResearchedImage(
             title=title,
             source_url=url,
             license=license_norm,
-            attribution_text=artist[:120],
+            attribution_text=artist,
             fetched_at=now,
             page_url=imageinfo.get("descriptionurl"),
-        ))
-    return results
-
-
-def search_nasa_images(query: str, limit: int = 5) -> list[ResearchedImage]:
-    """Search NASA Image Library (U.S. government work, public domain)."""
-    search_url = "https://images-api.nasa.gov/search?" + urllib.parse.urlencode({
-        "q": query, "media_type": "image",
-    })
-    data = _http_get_json(search_url)
-    items = data.get("collection", {}).get("items", [])[:limit]
-    now = datetime.now(timezone.utc).isoformat()
-    results: list[ResearchedImage] = []
-    for item in items:
-        links = item.get("links") or []
-        href = next((l["href"] for l in links if l.get("rel") == "preview"), None)
-        if not href:
-            continue
-        data_meta = (item.get("data") or [{}])[0]
-        title = (data_meta.get("title") or "NASA Image")[:120]
-        center = data_meta.get("center", "NASA")
-        nasa_id = data_meta.get("nasa_id")
-        results.append(ResearchedImage(
-            title=title,
-            source_url=href,
-            license="Public Domain",
-            attribution_text=f"NASA / {center}",
-            fetched_at=now,
-            page_url=f"https://images.nasa.gov/details/{urllib.parse.quote(nasa_id)}" if nasa_id else None,
         ))
     return results
 
@@ -210,7 +195,10 @@ def download_image(img: ResearchedImage, dest_dir: str) -> ResearchedImage:
     data = _http_get_bytes(img.source_url, MAX_IMAGE_BYTES, timeout=30.0)
     try:
         with Image.open(BytesIO(data)) as im:
-            im.verify()
+            w, h = im.size
+            if w * h > MAX_IMAGE_PIXELS:
+                raise ValueError(f"{w}x{h} px exceeds {MAX_IMAGE_PIXELS} px")
+            im.load()  # full decode: verify() skips JPEG pixel data, a truncated file passed it
     except Exception as e:
         raise ValueError(f"research_worker: {img.title!r} is not a decodable image: {e}") from e
 
@@ -226,20 +214,18 @@ def download_image(img: ResearchedImage, dest_dir: str) -> ResearchedImage:
 
 
 def research_images(query: str, limit: int = 5, sources: Optional[List[str]] = None) -> list[ResearchedImage]:
-    """Search the allowed sources (default: both), merge results. License-filtered
-    at the per-source level. One source being unreachable never fails the query."""
-    sources = sources or ["commons", "nasa"]
+    """Search the allowed sources (today: Commons only). License-filtered at
+    the per-source level. An unreachable source yields no candidates (the
+    worker then fails the ref); an unknown source name is an error."""
+    sources = sources or sorted(SOURCES)
+    unknown = sorted(set(sources) - SOURCES)
+    if unknown:
+        raise ValueError(f"research_worker: unknown image source(s) {unknown}; allowed: {sorted(SOURCES)}")
     results: list[ResearchedImage] = []
-    if "commons" in sources:
-        try:
-            results.extend(search_wikimedia_commons(query, limit=limit))
-        except Exception:
-            pass
-    if "nasa" in sources:
-        try:
-            results.extend(search_nasa_images(query, limit=limit))
-        except Exception:
-            pass
+    try:
+        results.extend(search_wikimedia_commons(query, limit=limit))
+    except Exception:
+        pass
     return results[:limit]
 
 
@@ -255,7 +241,7 @@ class ImageResearchWorker:
     """Maestro worker for VideoJobPhase.IMAGE_RESEARCH.
 
     Reads job.research_queries: {ref: query} or {ref: {"query": str,
-    "sources": ["commons"|"nasa"]}}. For every ref it downloads the first
+    "sources": ["commons"]}}. For every ref it downloads the first
     license-clean, decodable image. Fail-closed: if ANY ref ends up with no
     image, the phase fails — a diagram spec that references `research:<ref>`
     must never be rendered with a hole where the image should be.
@@ -283,7 +269,11 @@ class ImageResearchWorker:
                 return ImageResearchResult({}, [], success=False, error=f"research ref {ref!r} has no query")
 
             chosen = None
-            for candidate in research_images(query, limit=self.candidates_per_query, sources=sources):
+            try:
+                candidates = research_images(query, limit=self.candidates_per_query, sources=sources)
+            except ValueError as e:
+                return ImageResearchResult({}, [], success=False, error=str(e))
+            for candidate in candidates:
                 try:
                     chosen = download_image(candidate, str(dest / ref))
                     break

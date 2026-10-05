@@ -1,7 +1,7 @@
 """E2E tests for the ADR-2221 image research worker.
 
 Deterministic gate tests (host allowlist, license allowlist) run always.
-The live-network tests hit the real Wikimedia Commons / NASA APIs — they
+The live-network tests hit the real Wikimedia Commons API — they
 are the actual reachability + functional proof (ADR-2221's whole point is
 that a license gate and a host gate hold against real API responses, not
 canned fixtures) and are skipped only if the network is unavailable.
@@ -21,7 +21,6 @@ from core.skills.video_producer.workers.research_worker import (
     download_image,
     format_citation,
     research_images,
-    search_nasa_images,
     search_wikimedia_commons,
 )
 
@@ -41,7 +40,6 @@ class TestHostGate:
     def test_allowed_host_passes(self):
         _assert_allowed_host("https://commons.wikimedia.org/w/api.php")
         _assert_allowed_host("https://upload.wikimedia.org/wikipedia/commons/x.png")
-        _assert_allowed_host("https://images-api.nasa.gov/search")
 
     def test_off_allowlist_host_rejected(self):
         with pytest.raises(ValueError, match="not in ALLOWED_IMAGE_HOSTS"):
@@ -53,8 +51,6 @@ class TestHostGate:
             "commons.wikimedia.org",
             "upload.wikimedia.org",
             "thumb.wikimedia.org",
-            "images-api.nasa.gov",
-            "images-assets.nasa.gov",
         })
 
 
@@ -107,16 +103,6 @@ class TestWikimediaCommonsLive:
         assert os.path.getsize(downloaded.local_path) > 0
 
 
-@pytest.mark.skipif(not NETWORK, reason="no network access to images-api.nasa.gov")
-class TestNasaImagesLive:
-    def test_search_returns_public_domain_results(self):
-        results = search_nasa_images("network", limit=3)
-        assert isinstance(results, list)
-        for r in results:
-            assert r.license == "Public Domain"
-            assert r.source_url.startswith("https://images-assets.nasa.gov/")
-
-
 @pytest.mark.skipif(not NETWORK, reason="no network access")
 class TestResearchImagesMerged:
     def test_merges_both_sources_and_respects_limit(self):
@@ -125,13 +111,53 @@ class TestResearchImagesMerged:
         for r in results:
             assert r.license in ALLOWED_LICENSES
 
-    def test_one_source_failing_does_not_fail_the_whole_query(self, monkeypatch):
+    def test_unreachable_source_yields_no_candidates(self, monkeypatch):
         import core.skills.video_producer.workers.research_worker as rw
 
         def _boom(*a, **kw):
             raise RuntimeError("simulated API outage")
 
-        monkeypatch.setattr(rw, "search_nasa_images", _boom)
-        results = rw.research_images("graph database", limit=3)
-        # Commons alone should still produce results despite NASA "outage".
-        assert isinstance(results, list)
+        monkeypatch.setattr(rw, "search_wikimedia_commons", _boom)
+        # An unreachable source yields no candidates — never an exception.
+        assert rw.research_images("graph database", limit=3) == []
+
+
+class TestHardening:
+    def test_nasa_is_not_a_source(self):
+        import core.skills.video_producer.workers.research_worker as rw
+        assert not any("nasa" in h for h in rw.ALLOWED_IMAGE_HOSTS)
+        with pytest.raises(ValueError, match="unknown image source"):
+            rw.research_images("x", sources=["nasa"])
+
+    def _fake_fetch(self, monkeypatch, data):
+        import core.skills.video_producer.workers.research_worker as rw
+        monkeypatch.setattr(rw, "_http_get_bytes", lambda url, max_bytes, timeout: data)
+        return rw
+
+    def _img(self):
+        return ResearchedImage(title="t", source_url="https://upload.wikimedia.org/x.jpg",
+                               license="CC0", attribution_text="a", fetched_at="now")
+
+    def test_truncated_jpeg_is_rejected(self, monkeypatch, tmp_path):
+        from io import BytesIO
+        from PIL import Image
+        buf = BytesIO()
+        Image.new("RGB", (400, 300), (10, 200, 30)).save(buf, "JPEG", quality=95)
+        data = buf.getvalue()[: len(buf.getvalue()) // 3]
+        rw = self._fake_fetch(monkeypatch, data)
+        with pytest.raises(ValueError, match="not a decodable image"):
+            rw.download_image(self._img(), str(tmp_path))
+
+    def test_pixel_bomb_is_rejected(self, monkeypatch, tmp_path):
+        from io import BytesIO
+        from PIL import Image
+        buf = BytesIO()
+        Image.new("1", (6000, 5000)).save(buf, "PNG")
+        rw = self._fake_fetch(monkeypatch, buf.getvalue())
+        with pytest.raises(ValueError, match="exceeds"):
+            rw.download_image(self._img(), str(tmp_path))
+
+    def test_attribution_entities_are_decoded_and_tags_dropped(self):
+        from core.skills.video_producer.workers.research_worker import _strip_html
+        assert _strip_html('<a href="x">Foo &amp; Bar</a>') == "Foo & Bar"
+        assert _strip_html("Jane <img src=x onerror=alert(1)") == "Jane"

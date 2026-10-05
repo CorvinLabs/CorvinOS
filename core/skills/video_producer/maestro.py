@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Any
 import json
+import re
 from datetime import datetime
 import uuid
 
@@ -49,9 +50,20 @@ class FeedbackEvent:
     notes: Optional[str] = None
 
 
+# A job id becomes part of file paths in several workers (/tmp/<id>_final.mp4,
+# per-job directories), so it is restricted at the one place every job is
+# built rather than at each call site: "../tmp/x" escaped /tmp before this.
+JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
 @dataclass
 class VideoJob:
-    """Immutable video job specification"""
+    """Video job specification.
+
+    Mutable on purpose: callers attach diagram_specs / research_queries after
+    create_job(). Anything a gate relies on is therefore re-checked when the
+    gate runs (see _validate_analysis_phase), not only at creation.
+    """
     job_id: str
     topic: str
     duration_seconds: int
@@ -84,6 +96,8 @@ class VideoJob:
         """Validate job invariants"""
         if not self.job_id:
             self.job_id = f"video_{uuid.uuid4().hex[:12]}"
+        if not isinstance(self.job_id, str) or not JOB_ID_RE.match(self.job_id):
+            raise ValueError("job_id must match [A-Za-z0-9_-]{1,64}")
         if not self.topic:
             raise ValueError("Topic is required")
         if self.duration_seconds <= 0:
@@ -163,6 +177,8 @@ class MaestroOrchestrator:
                 "pass to Asset Analyzer for deep validation"
             )
 
+        if job.job_id in self.jobs:
+            raise ValueError(f"job {job.job_id} already exists; pick a new job_id")
         self.jobs[job.job_id] = job
 
         # Emit audit event
@@ -251,13 +267,13 @@ class MaestroOrchestrator:
         elif phase_name == "youtube":
             job.youtube_result = result
 
-        # Emit audit event
-        # Handle both dict and dataclass results
-        success = True
+        # A result has to SAY it succeeded. None, a dict without "success" or
+        # an object without the attribute used to count as success — and an
+        # AnalysisResult with status FAIL advanced the job that way.
         if isinstance(result, dict):
-            success = result.get("success", True)
+            success = result.get("success") is True
         else:
-            success = getattr(result, "success", True)
+            success = getattr(result, "success", None) is True
 
         self._audit(
             "phase_executed",
@@ -454,8 +470,16 @@ class MaestroOrchestrator:
         })
 
     def _validate_analysis_phase(self, job: VideoJob) -> bool:
-        """Validate preconditions for Analysis phase"""
-        return len(job.narration) > 0
+        """Validate preconditions for Analysis phase.
+
+        Re-runs the content-presence gate: narration can be replaced on the
+        job after create_job(), and blank scenes must not reach analysis.
+        """
+        try:
+            self.validate_content_presence(job.narration)
+        except (ValueError, AttributeError, TypeError):
+            return False
+        return True
 
     def _validate_voice_phase(self, job: VideoJob) -> bool:
         """Validate preconditions for Voice phase
@@ -491,9 +515,14 @@ class MaestroOrchestrator:
     def _validate_assembly_phase(self, job: VideoJob) -> bool:
         """Validate preconditions for Assembly phase
 
-        Requires: Screenshots must have been captured
+        Requires: at least one visual frame. With no frames the assembler
+        would produce an audio-only .mp4 and call it a video.
         """
-        return job.screenshots_result is not None
+        r = job.screenshots_result
+        if r is None:
+            return False
+        frames = r.get("screenshots") if isinstance(r, dict) else getattr(r, "screenshots", None)
+        return bool(frames)
 
     def _validate_youtube_phase(self, job: VideoJob) -> bool:
         """Validate preconditions for YouTube phase
@@ -546,9 +575,10 @@ class MaestroOrchestrator:
                     raise ValueError(f"Engagement score must be 0-100, got {value}")
 
     def _audit(self, event_type: str, job_id: str, details: Dict):
-        """Emit audit event (hash-chained, immutable)
+        """Record a pipeline event in this orchestrator's IN-MEMORY log.
 
-        In production: write to audit_backend.write_event()
+        Not hash-chained and not on the tenant audit chain — nothing here
+        reaches security_events. Do not cite it as the audit trail.
         """
         event = {
             "timestamp": datetime.now().isoformat(),

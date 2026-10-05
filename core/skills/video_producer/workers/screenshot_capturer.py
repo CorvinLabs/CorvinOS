@@ -32,6 +32,9 @@ class ScreenshotResult:
     num_captured: int
     confidence: float
     success: bool = True
+    # One list per scene, set only when every scene got exactly one frame —
+    # lets the assembler time each frame to its own scene's narration.
+    frames_by_scene: Optional[List[List[str]]] = None
 
 
 class ScreenshotCapturerWorker:
@@ -94,6 +97,7 @@ class ScreenshotCapturerWorker:
             total_duration_seconds=total_duration,
             num_captured=len(screenshots),
             confidence=0.91,
+            frames_by_scene=[[f] for f in screenshots] if len(screenshots) == len(job.narration) else None,
         )
 
     async def _execute_async(self, job) -> List[str]:
@@ -142,8 +146,8 @@ class ScreenshotCapturerWorker:
                                 pass  # Timeout is OK, page might be fully loaded
 
                             # Capture screenshot
-                            screenshot_path = f"/tmp/{job.job_id}_screenshot_{i}.png"
-                            await page.screenshot(path=screenshot_path, full_page=True)
+                            screenshot_path = scene_path(job.job_id, "screenshot", i, ".png")
+                            await page.screenshot(path=screenshot_path, full_page=False)  # 16:9 viewport; a full page was squashed to 1080p
 
                             screenshots.append(screenshot_path)
 
@@ -209,7 +213,7 @@ class ScreenshotCapturerWorker:
             "plugins": "http://localhost:8765/console/plugins",
             "audit": "http://localhost:8765/console/audit",
             "learning": "http://localhost:8765/console/learning",
-            "video": "http://localhost:8765/console/video-producer",
+            "video": "http://localhost:8765/console/app/video-producer",
         }
 
         for keyword, url in url_map.items():

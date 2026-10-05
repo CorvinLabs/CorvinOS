@@ -407,27 +407,50 @@ def _render_texts_html(texts: list[dict], theme: dict[str, str], visible: set[st
     return "\n".join(out)
 
 
+CAPTION_FONT_PX = 14
+CAPTION_LINE_PX = 18
+CAPTION_CHAR_PX = 7.5   # conservative average glyph width at 14 px
+CAPTION_MAX_LINES = 4
+
+
+def _caption_lines(citation: str, width: float) -> int:
+    per_line = max(1, int((width - 24) // CAPTION_CHAR_PX))
+    return max(1, math.ceil(len(citation) / per_line))
+
+
+def _image_css(images: list[dict], resolved: dict) -> str:
+    """One CSS rule per researched image, so each data URI appears once per
+    document no matter how many elements show it."""
+    refs = sorted({im["src"].split(":", 1)[1] for im in images})
+    return "\n".join(
+        f'.rimg-{ref} {{ background-image: url("{resolved[ref]["data_uri"]}"); }}' for ref in refs
+    )
+
+
 def _render_images_html(images: list[dict], resolved: dict, theme: dict[str, str], visible: set[str]) -> str:
+    """Drawn LAST, above every other element: the citation caption must never
+    be covered. Its text wraps (never ellipsised) and its height is reserved
+    from the image box, which normalize/compile keep fully on the canvas."""
     out = []
     for im in images:
         if im["id"] not in visible:
             continue
         ref = im["src"].split(":", 1)[1]
-        asset = resolved[ref]
+        citation = resolved[ref]["citation"]
         x, y = im["at"]
         w, h = im["size"]
-        caption_h = 34
+        caption_h = _caption_lines(citation, w) * CAPTION_LINE_PX + 16
         out.append(
             f'<div class="image fade-in" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px;'
-            f'border-color:{theme["surface_border"]};background:{theme["surface"]};">'
-            f'<img src="{asset["data_uri"]}" style="width:100%;height:{h - caption_h}px;object-fit:{im["fit"]};">'
-            f'<div class="caption" style="height:{caption_h}px;color:{theme["text_muted"]};">'
-            f'{escape(asset["citation"])}</div></div>'
+            f'border-color:{theme["surface_border"]};background-color:{theme["surface"]};">'
+            f'<div class="rimg rimg-{ref}" style="height:{h - caption_h}px;background-size:{im["fit"]};"></div>'
+            f'<div class="caption" style="height:{caption_h}px;color:{theme["text_muted"]};'
+            f'background-color:{theme["surface"]};">{escape(citation)}</div></div>'
         )
     return "\n".join(out)
 
 
-def _page_shell(theme: dict[str, str], canvas_w: int, canvas_h: int, body: str) -> str:
+def _page_shell(theme: dict[str, str], canvas_w: int, canvas_h: int, body: str, extra_css: str = "") -> str:
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -444,13 +467,14 @@ def _page_shell(theme: dict[str, str], canvas_w: int, canvas_h: int, body: str) 
   .fade-in {{ opacity: 1; }}
   .highlight-ring {{ position: absolute; border: 3px dashed; border-radius: 20px; pointer-events: none; }}
   .highlight-glow {{ position: absolute; pointer-events: none; }}
+{extra_css}
   .text {{ position: absolute; line-height: 1.35; }}
   .text .t-row {{ margin-bottom: 10px; }}
   .image {{ position: absolute; border: 2px solid; border-radius: 12px; overflow: hidden;
             box-shadow: 0 8px 24px rgba(0,0,0,0.35); }}
-  .image img {{ display: block; }}
-  .image .caption {{ font-size: 13px; padding: 8px 12px; white-space: nowrap; overflow: hidden;
-                     text-overflow: ellipsis; }}
+  .image .rimg {{ background-repeat: no-repeat; background-position: center; }}
+  .image .caption {{ font-size: 14px; line-height: 18px; padding: 8px 12px;
+                     white-space: normal; overflow-wrap: anywhere; }}
 </style></head>
 <body><div class="canvas">
 {body}
@@ -468,6 +492,10 @@ def _page_shell(theme: dict[str, str], canvas_w: int, canvas_h: int, body: str) 
 ELEMENT_TYPES = frozenset({"box", "arrow", "grid", "brace", "highlight", "text", "image"})
 _RESEARCH_SRC_RE = re.compile(r"^research:[A-Za-z0-9_-]{1,64}$")
 MAX_TEXT_LINES = 12
+MAX_IMAGE_ELEMENTS = 12
+MIN_IMAGE_W = 320
+MIN_IMAGE_AREA_H = 80
+MAX_IMAGE_HTML_BYTES = 256 * 1024 * 1024  # all steps together
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 MAX_ELEMENTS = 400
@@ -598,8 +626,13 @@ def normalize_spec(spec) -> dict:
             if not isinstance(src, str) or not _RESEARCH_SRC_RE.match(src):
                 raise SpecError(f"image {eid!r} src must be 'research:<ref>' — paths and URLs are not accepted")
             n["src"] = src
-            n["at"] = _pair(el.get("at"), -span, 2 * span, f"at of {eid!r}")
-            n["size"] = _pair(el.get("size"), 64, 2 * span, f"size of {eid!r}")
+            n["at"] = _pair(el.get("at"), 0, span, f"at of {eid!r}")
+            n["size"] = _pair(el.get("size"), MIN_IMAGE_AREA_H, span, f"size of {eid!r}")
+            (ix, iy), (iw, ih) = n["at"], n["size"]
+            if iw < MIN_IMAGE_W:
+                raise SpecError(f"image {eid!r} must be at least {MIN_IMAGE_W}px wide to carry its citation")
+            if ix + iw > cw or iy + ih > ch:
+                raise SpecError(f"image {eid!r} must lie fully on the canvas (its citation would be cut off)")
             n["fit"] = _choice(el.get("fit", "contain"), {"contain", "cover"}, f"fit of {eid!r}")
         else:  # highlight
             n["target"] = _ref(el.get("target"), f"target of {eid!r}")
@@ -610,6 +643,9 @@ def normalize_spec(spec) -> dict:
                     raise SpecError(f"color of {eid!r} must be #RRGGBB")
                 n["color"] = c
         out_elements.append(n)
+
+    if sum(1 for e in out_elements if e["type"] == "image") > MAX_IMAGE_ELEMENTS:
+        raise SpecError(f"more than {MAX_IMAGE_ELEMENTS} image elements")
 
     box_ids = {e["id"] for e in out_elements if e["type"] == "box"}
     for e in out_elements:  # references are checked for EVERY element, visible or not
@@ -662,6 +698,11 @@ def compile_spec(spec: dict, images: dict | None = None) -> Compiled:
         if not asset or not str(asset.get("data_uri", "")).startswith("data:image/") or not asset.get("citation"):
             raise SpecError(f"image {im['id']!r} references research:{ref}, which this job did not research "
                             f"(or which has no citation)")
+        lines = _caption_lines(asset["citation"], im["size"][0])
+        if lines > CAPTION_MAX_LINES:
+            raise SpecError(f"image {im['id']!r} is too narrow for its citation ({lines} lines > {CAPTION_MAX_LINES})")
+        if im["size"][1] - (lines * CAPTION_LINE_PX + 16) < MIN_IMAGE_AREA_H:
+            raise SpecError(f"image {im['id']!r} is too short to show the picture above its citation")
     for group, kind in ((arrows, "arrow"), (grids, "grid"), (braces, "brace"), (highlights, "highlight")):
         for el in group:
             if "id" not in el:
@@ -673,6 +714,9 @@ def compile_spec(spec: dict, images: dict | None = None) -> Compiled:
         + [t["id"] for t in texts] + [i["id"] for i in image_els]
     )
     steps = spec.get("steps") or [all_ids]  # no steps -> one static frame showing everything
+    image_css = _image_css(image_els, images) if image_els else ""
+    if len(image_css) * len(steps) > MAX_IMAGE_HTML_BYTES:
+        raise SpecError(f"embedded images x steps exceed {MAX_IMAGE_HTML_BYTES // (1024 * 1024)} MB of HTML")
 
     html_by_step = []
     for step_ids in steps:
@@ -689,10 +733,12 @@ def compile_spec(spec: dict, images: dict | None = None) -> Compiled:
         images_html = _render_images_html(image_els, images, theme, visible)
         body = (
             f'<svg class="overlay">{grid_svg}</svg>'
-            + images_html + texts_html
+            + texts_html
             + boxes_html + highlights_html
             + f'<svg class="overlay">{arrows_svg}{braces_svg}</svg>'
+            + images_html
         )
-        html_by_step.append(_page_shell(theme, canvas["w"], canvas["h"], body))
+        step_css = image_css if images_html else ""
+        html_by_step.append(_page_shell(theme, canvas["w"], canvas["h"], body, step_css))
 
     return Compiled(html_by_step=html_by_step, step_count=len(html_by_step), layout_warnings=layout_warnings)

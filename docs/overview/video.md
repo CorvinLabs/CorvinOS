@@ -75,31 +75,42 @@ The plugin's code lives entirely in the Marketplace (`plugins/contributor/media/
 | Sidebar entry | **LIVE** when the plugin is installed and enabled | console manifest |
 | Video Quality panel | **GATED** — flag `video_producer_enabled` | console |
 | YouTube upload | **NOT BUILT** — answers 501 | `POST /jobs/{id}/youtube` |
-| Blender / Three.js / Manim tiers, screenshot capture, asset analysis | **NOT BUILT** — removed by ADR-0953 | — |
+| Blender / Three.js / Manim tiers, screenshot capture, asset analysis in the **plugin** | **NOT BUILT** — removed from the plugin by its plugin-local ADR-0953 (Marketplace `video_producer/docs/`) | — (the scripted Maestro pipeline below still has Blender, screenshots and analysis) |
 
 ## Scripted pipeline (Maestro)
 
 Separate from the plugin above, `core/skills/video_producer/maestro.py` is a
-phase-gated pipeline driven from Python scripts (e.g.
-`scripts/produce_production_video.py`, the projects under `Corvin-Videos/`).
-The console routes do **not** call it. A failed phase stops the job where it
-is; nothing downstream runs on a missing result.
+phase-gated pipeline driven from Python render scripts (the projects under
+`Corvin-Videos/*/source/`). The console routes do **not** call it, and
+neither does `scripts/produce_production_video.py` (that script imports the
+workers but never runs them). A phase counts as passed only when its result
+says `success: true` explicitly; anything else stops the job where it is.
 
 | Phase | Worker | Notes |
 |---|---|---|
-| `ANALYSIS` | `AssetAnalyzerWorker` | every narration claim needs a source (ADR-0693) |
-| `VOICE` | `VoiceSynthesizerWorker` | OpenAI TTS first, edge-tts fallback, loudness-normalised |
-| `IMAGE_RESEARCH` | `ImageResearchWorker` | optional — only when the job has `research_queries`. Fetches from Wikimedia Commons and the NASA Image Library only, rejects anything without an allowed licence, re-checks every redirect hop (ADR-2221) |
-| `DIAGRAM_RENDER` or `SCREENSHOTS` | `DiagramRendererWorker` / `ScreenshotCapturerWorker` | diagram specs (`box`, `arrow`, `grid`, `brace`, `highlight`, `text`, `image`) render with JavaScript off and all network blocked |
-| `ASSEMBLY` | `VideoAssemblerWorker` | ffmpeg, CBR 600 kbps, refuses videos under 5 s |
+| `ANALYSIS` | `AssetAnalyzerWorker` | heuristic: hedge phrases (English) block the job; opposite word pairs in two sentences only warn |
+| `VOICE` | `VoiceSynthesizerWorker` | OpenAI TTS, then edge-tts, then piper; a scene that only got the mock fails the phase; loudness-normalised to -23 LUFS |
+| `IMAGE_RESEARCH` | `ImageResearchWorker` | optional — only when the job has `research_queries`. Wikimedia Commons only (machine-readable licence on every file), licence allowlist, every redirect hop re-checked, full pixel decode, 24 MP cap (ADR-2221) |
+| `DIAGRAM_RENDER` or `SCREENSHOTS` | `DiagramRendererWorker` / `ScreenshotCapturerWorker` | diagram specs (`box`, `arrow`, `grid`, `brace`, `highlight`, `text`, `image`) render with JavaScript off and all network blocked; screenshots are 1920x1080 viewport captures of the local console |
+| `ASSEMBLY` | `VideoAssemblerWorker` | ffmpeg, CBR 600 kbps; each scene's frames share that scene's narration time; refuses a video with no frames, under 5 s, or whose measured length differs from the narration |
+| `YOUTUBE` | `YouTubeUploaderWorker` | **NOT BUILT** — prepares metadata, then fails the phase |
 
 An `image` element accepts only `src: "research:<ref>"` — never a path or
-URL — and the compiler draws the citation caption from the research result,
-so a spec cannot drop or rewrite the attribution. A spec that names a
-reference the job never researched fails the render. On an EU_PRODUCTION
-tenant the image hosts (`commons.wikimedia.org`, `upload.wikimedia.org`,
-`thumb.wikimedia.org`, `images-api.nasa.gov`, `images-assets.nasa.gov`) must
-be added to `spec.egress.allowed_hosts` before the phase can run.
+URL — must lie fully on the canvas and be at least 320 px wide. The compiler
+draws the citation caption from the research result, wraps it (never
+truncates) and paints the image above every other element, so a spec cannot
+drop, cover or cut the attribution. A spec that names a reference the job
+never researched fails the render. On an EU_PRODUCTION tenant
+`commons.wikimedia.org`, `upload.wikimedia.org` and `thumb.wikimedia.org`
+must be added to `spec.egress.allowed_hosts` before the phase can run.
+
+Scenes are joined with `transitions.build_av_crossfade_chain`, which fades
+picture and voice at the same offsets and pads each join with a held frame
+and silence — the older `build_crossfade_chain` fades the picture only, and
+muxing concatenated audio onto it drifts by one transition per join.
+
+The pipeline's events go to an in-memory list on the orchestrator; they are
+**not** written to the tenant audit chain.
 
 ## Try it
 
@@ -121,7 +132,7 @@ curl -s -b "$COOKIE" -o video.mp4 http://127.0.0.1:8765/v1/console/video/videos/
 ## Honest limits
 
 - **Narration goes to Google.** gTTS calls Google's TTS endpoint on every job. Do not put confidential text into a task unless that egress is acceptable; the L34/L35 gates exist precisely to refuse it where it is not.
-- **Slides, not footage.** Output is narrated still slides. The 3D and animation tiers (Blender, Three.js, Manim), screenshot capture and asset analysis were removed (ADR-0953) — they had no working path.
+- **Slides, not footage.** The plugin's output is narrated still slides. Its 3D and animation tiers (Blender, Three.js, Manim), screenshot capture and asset analysis were removed by the plugin-local ADR-0953 in the Marketplace repo — they had no working path there. The separate scripted Maestro pipeline (below) is not affected by that removal.
 - **No publishing.** YouTube upload answers 501.
 - **Small storyboards.** At most six scenes; the default local model is chosen for CPU-only hosts, not for prose quality.
 - **Console-only API.** The routes sit behind the single-operator console session; there is no separate public video API.
@@ -131,5 +142,5 @@ curl -s -b "$COOKIE" -o video.mp4 http://127.0.0.1:8765/v1/console/video/videos/
 - Host routes: `core/console/corvin_console/routes/video_producer_api.py`; spawn gates `core/console/corvin_console/_spawn_gates.py`.
 - Plugin source: `Corvin-Marketplace/plugins/contributor/media/video_producer/` (`src/skill.py` storyboard + pipeline, `src/async_runner.py`, `src/storage.py`, `panel/`).
 - `core/skills/video_producer/` in CorvinOS is maintainer tooling, not the shipped plugin.
-- ADRs (Corvin-Knowledge): ADR-0953 (removal of the dead render tiers).
+- ADRs: plugin-local ADR-0953 in `Corvin-Marketplace/plugins/contributor/media/video_producer/docs/` (removal of the dead render tiers — not Corvin-Knowledge ADR-0953, which is an unrelated console decision); Corvin-Knowledge ADR-2219 (diagram phase), ADR-2221 (image research).
 - Related: [Marketplace &amp; plugins](marketplace.md) · [CorvinOS as an OS](operating-system.md) · [Extensibility](extensibility.md)

@@ -31,6 +31,7 @@ from .diagram.raster import MIN_UNIQUE_COLORS, DiagramRenderError, render_compil
 
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MAX_EMBED_EDGE = 1600
+MAX_EMBED_SOURCE_PIXELS = 24_000_000
 
 
 def _research_images_for(job) -> Dict[str, dict]:
@@ -54,8 +55,12 @@ def _research_images_for(job) -> Dict[str, dict]:
             raise SpecError(f"research image {ref!r} has no local file or no citation")
         try:
             with Image.open(path) as im:
+                w, h = im.size
+                if w * h > MAX_EMBED_SOURCE_PIXELS:
+                    raise ValueError(f"{w}x{h} px exceeds {MAX_EMBED_SOURCE_PIXELS} px")
+                im.draft("RGB", (MAX_EMBED_EDGE, MAX_EMBED_EDGE))  # JPEG: decode at reduced size
+                im.thumbnail((MAX_EMBED_EDGE, MAX_EMBED_EDGE))      # shrink BEFORE the RGB copy
                 im = im.convert("RGB")
-                im.thumbnail((MAX_EMBED_EDGE, MAX_EMBED_EDGE))
                 buf = BytesIO()
                 im.save(buf, format="PNG")
         except Exception as e:
@@ -76,6 +81,9 @@ class DiagramRenderResult:
     confidence: float  # share of requested scenes rendered and gate-passed: 1.0 or 0.0
     success: bool = True
     error: Optional[str] = None
+    # Frames grouped per scene in scene order — the assembler times each
+    # group to its own scene's narration instead of spreading all evenly.
+    frames_by_scene: Optional[List[List[str]]] = None
 
 
 def _failed(reason: str) -> DiagramRenderResult:
@@ -140,13 +148,16 @@ class DiagramRendererWorker:
         staging.mkdir()
         try:
             frames: List[Path] = []
+            groups: List[List[Path]] = []
             with sync_playwright() as p:
                 browser = p.chromium.launch()
                 try:
                     for key, canvas, comp in compiled:
                         scene_dir = staging / f"scene_{key:02d}"
                         scene_dir.mkdir()
-                        frames.extend(render_compiled(browser, comp, canvas, scene_dir, self.min_unique_colors))
+                        scene_frames = render_compiled(browser, comp, canvas, scene_dir, self.min_unique_colors)
+                        groups.append(scene_frames)
+                        frames.extend(scene_frames)
                 finally:
                     browser.close()
         except (DiagramRenderError, PlaywrightError, OSError) as e:
@@ -159,9 +170,16 @@ class DiagramRendererWorker:
             shutil.rmtree(final_dir)
         staging.rename(final_dir)
         rendered = [str(final_dir / f.relative_to(staging)) for f in frames]
+        by_scene = [[str(final_dir / f.relative_to(staging)) for f in g] for g in groups]
+        # Only a job whose scenes are 0..n-1 with a spec each maps 1:1 onto
+        # the narration scenes; otherwise leave timing to the even spread.
+        keys = [k for k, _, _ in compiled]
+        narration = getattr(job, "narration", None) or []
+        aligned = keys == list(range(len(narration)))
         return DiagramRenderResult(
             screenshots=rendered,
             total_duration_seconds=0.0,  # frames, not timed capture — the assembler assigns durations
             num_captured=len(rendered),
             confidence=1.0,
+            frames_by_scene=by_scene if aligned else None,
         )

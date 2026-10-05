@@ -168,8 +168,11 @@ def test_invalid_spec_stops_the_pipeline_and_writes_nothing(tmp_path):
 def test_job_id_cannot_escape_out_dir(tmp_path, bad_id):
     out = tmp_path / "out"
     w = DiagramRendererWorker(diagram_specs={0: _spec()}, out_dir=str(out))
-    m, jid = _maestro_at_screenshots(w, job_id=bad_id)
-    with pytest.raises(RuntimeError):
+    # Maestro now refuses the id when the job is built (VideoJob.JOB_ID_RE);
+    # before that the renderer refused it at execute time. Either is fine —
+    # what matters is that nothing is written outside out_dir.
+    with pytest.raises((ValueError, RuntimeError)):
+        m, jid = _maestro_at_screenshots(w, job_id=bad_id)
         m.execute_phase(jid)
     assert not (tmp_path / "escaped_dir").exists()
     assert not Path("/tmp/abs_escape").exists()
@@ -206,3 +209,13 @@ def test_json_style_string_scene_keys_are_accepted(tmp_path):
     r = w.execute(_J())
     assert r.success, r.error
     assert r.num_captured == 1
+
+
+@pytest.mark.parametrize("bad_id", ["../escaped_dir", "/tmp/abs_escape2", "a/b"])
+def test_renderer_itself_refuses_unsafe_job_id(tmp_path, bad_id):
+    """The worker keeps its own guard for callers that bypass Maestro."""
+    from types import SimpleNamespace
+    w = DiagramRendererWorker(diagram_specs={0: _spec()}, out_dir=str(tmp_path / "out"))
+    result = w.execute(SimpleNamespace(job_id=bad_id, diagram_specs=None))
+    assert not result.success and "safe directory name" in result.error
+    assert not (tmp_path / "escaped_dir").exists()

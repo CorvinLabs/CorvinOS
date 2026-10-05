@@ -28,6 +28,7 @@ class UploadResult:
     published: bool
     upload_duration_seconds: float
     success: bool = True
+    error: Optional[str] = None
 
 
 class YouTubeUploaderWorker:
@@ -84,11 +85,11 @@ class YouTubeUploaderWorker:
         else:
             video_path = getattr(video_result, "video_path", "")
 
-        # Phase 4: Realistic metadata + simulated upload
-        # Generate a YouTube-style video ID
-        video_id = self._generate_youtube_video_id()
+        # No YouTube API client exists in this worker. It used to invent a
+        # video id and URL and report published=True — a fabricated result.
+        # It now prepares the upload metadata and fails honestly.
+        video_id = ""
 
-        # Save upload metadata to file (for real YouTube integration)
         if self.save_metadata:
             metadata_path = self._save_upload_metadata(
                 job_id=job.job_id,
@@ -100,16 +101,13 @@ class YouTubeUploaderWorker:
                 visibility=self.visibility,
             )
 
-        # Simulate upload time (100-500ms for metadata processing)
-        time.sleep(0.2)
-
-        upload_duration = time.time() - start_time
-
         return UploadResult(
-            video_id=video_id,
-            url=f"https://youtube.com/watch?v={video_id}",
-            published=(self.visibility == "public"),
-            upload_duration_seconds=upload_duration,
+            video_id="",
+            url="",
+            published=False,
+            upload_duration_seconds=time.time() - start_time,
+            success=False,
+            error="YouTube upload is not implemented; metadata was prepared, nothing was uploaded",
         )
 
     def _generate_title(self, job) -> str:

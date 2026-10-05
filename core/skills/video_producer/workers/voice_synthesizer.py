@@ -81,8 +81,7 @@ class VoiceSynthesizerWorker:
         """
 
         audio_files = []
-        total_duration = 0.0
-        providers_used = set()
+        providers = []
 
         for i, scene_narration in enumerate(job.narration):
             # Synthesize scene to audio (REAL TTS, OpenAI first — ADR-2211)
@@ -90,24 +89,29 @@ class VoiceSynthesizerWorker:
                 scene_narration, job_id=job.job_id, scene_index=i
             )
             audio_files.append(audio_path)
-            providers_used.add(provider)
+            providers.append(provider)
 
-            # Track duration (via ffprobe)
-            duration = self._get_audio_duration_ffprobe(audio_path)
-            total_duration += duration
+        if "mock" in providers:
+            # A mock "audio" file is JSON. Reporting success let the job run on
+            # until ASSEMBLY died on it; stop here and say which scenes failed.
+            return VoiceResult(
+                audio_files=audio_files, total_duration_seconds=0.0, loudness_lufs=0.0,
+                confidence=0.0, success=False, provider_used=",".join(providers),
+            )
 
-        # Normalize loudness to broadcast standard (-23 LUFS) using FFmpeg
-        self._normalize_loudness_ffmpeg(audio_files, target_lufs=-23)
+        normalized = self._normalize_loudness_ffmpeg(audio_files, target_lufs=-23)
 
-        # If every scene used the same backend, report it; a mixed job (some
-        # scenes fell back, some didn't) reports "mixed" rather than picking
-        # one misleadingly.
-        provider_used = providers_used.pop() if len(providers_used) == 1 else "mixed"
+        # Durations AFTER normalization — that is the audio the video uses.
+        total_duration = sum(self._get_audio_duration_ffprobe(a) for a in audio_files)
+
+        # One provider -> its name; several -> the per-scene list, so a scene
+        # that fell back is visible instead of hidden behind "mixed".
+        provider_used = providers[0] if len(set(providers)) == 1 else ",".join(providers)
 
         return VoiceResult(
             audio_files=audio_files,
             total_duration_seconds=total_duration,
-            loudness_lufs=-23.0,
+            loudness_lufs=-23.0 if normalized else 0.0,
             confidence=0.94,
             provider_used=provider_used,
         )
@@ -183,7 +187,7 @@ class VoiceSynthesizerWorker:
                     communicate = edge_tts.Communicate(
                         text=narration_text,
                         voice=self.fallback_voice,  # edge-tts voice, NOT self.voice (that's OpenAI's catalogue)
-                        rate=0.0,  # Normal speed
+                        rate="+0%",  # edge-tts wants a signed percent string; 0.0 raised TypeError
                     )
                     # Save to MP3
                     await communicate.save(output_path)
@@ -192,9 +196,11 @@ class VoiceSynthesizerWorker:
             finally:
                 loop.close()
 
+            if self._get_audio_duration_ffprobe(output_path) <= 0:
+                raise RuntimeError("edge-tts wrote no playable audio")
             return output_path, "edge-tts"
 
-        except ImportError:
+        except Exception:
             # Fallback to piper-tts if edge-tts not available
             try:
                 from piper.voice import PiperVoice
@@ -209,7 +215,7 @@ class VoiceSynthesizerWorker:
 
                 # Convert WAV to MP3 using ffmpeg
                 subprocess.run(
-                    ["ffmpeg", "-i", wav_path, "-q:a", "9", "-n", output_path],
+                    ["ffmpeg", "-y", "-i", wav_path, "-b:a", "192k", output_path],
                     check=True,
                     capture_output=True,
                 )
@@ -308,8 +314,12 @@ class VoiceSynthesizerWorker:
         Args:
             audio_files: List of audio file paths
             target_lufs: Target loudness in LUFS
+
+        Returns:
+            True only if every file was normalized.
         """
 
+        all_ok = True
         for audio_file in audio_files:
             try:
                 # Skip if it's a mock JSON file
@@ -329,18 +339,19 @@ class VoiceSynthesizerWorker:
                     "ffmpeg",
                     "-i", audio_file,
                     "-af", f"loudnorm=I={target_lufs}:TP=-1.5",
-                    "-q:a", "9",  # High quality
-                    "-n",  # Don't overwrite
+                    "-b:a", "192k",  # was -q:a 9: the LOWEST VBR quality (160 -> 41 kbps)
+                    "-y",
                     output_normalized,
                 ]
 
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
                 if result.returncode == 0:
-                    # Replace original with normalized version
-                    os.remove(audio_file)
-                    os.rename(output_normalized, audio_file)
+                    os.replace(output_normalized, audio_file)
+                else:
+                    all_ok = False
 
             except Exception as e:
-                # Silent fail for mock files or if FFmpeg not available
+                all_ok = False
                 print(f"Loudness normalization failed for {audio_file}: {e}")
+        return all_ok
