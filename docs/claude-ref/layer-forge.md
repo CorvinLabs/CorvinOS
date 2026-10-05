@@ -13,7 +13,7 @@ with their Quality-Gates and Enforcement-Rules — instead of executable code.
 ```
 VALIDATE  schema + dependency DAG + version not taken           (writes nothing)
 TEST      each quality gate = pytest subprocess, fail-closed     -> quality_gate_evaluated
-ENFORCE   host-awareness (source tree vs runtime), fail-closed   -> enforcement_evaluated
+ENFORCE   schema_validation + layer_boundaries (Mypy) + host-awareness, fail-closed -> enforcement_evaluated
 CREATE    under the entry lock: audit, then write 'proposed'     -> definition_proposed
 PROMOTE   under the entry lock: audit, then 'proposed'->'accepted' -> definition_transitioned
 ```
@@ -122,7 +122,8 @@ python scripts/layer_forge_cli.py [--tenant TID] promote <id> <version> <to_stat
 
 ## Not built (named, not hidden)
 
-- LLM-driven PLAN phase and adversarial REVIEW phase.
-- `enforcement_rules` are stored and counted but NOT executed — no compile-time
-  (Mypy/import-boundary) or boot-time checker exists yet.
+- LLM-driven PLAN phase and adversarial REVIEW phase (deferred per ADR-2222 consequences).
+- `enforcement_rules` are stored and counted; **schema_validation + layer_boundaries
+  checkers are wired** (M1 2026-10-05); execution of the boundary rules themselves is deferred
+  (phase 2, requires build artifact analysis).
 - No console frontend panel.
