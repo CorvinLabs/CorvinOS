@@ -170,7 +170,12 @@ def search_wikimedia_commons(query: str, limit: int = 5) -> list[ResearchedImage
         license_norm = _normalize_commons_license(extmeta.get("LicenseShortName", {}).get("value", ""))
         if license_norm not in ALLOWED_LICENSES:
             continue
-        artist = _strip_html(extmeta.get("Artist", {}).get("value", "")) or "Unknown"
+        artist = _strip_html(extmeta.get("Artist", {}).get("value", ""))
+        attribution_required = str(extmeta.get("AttributionRequired", {}).get("value", "")).lower() == "true"
+        if not artist:
+            if attribution_required:
+                continue  # the licence demands a name the file does not give
+            artist = "Unknown"
         if len(artist) > MAX_ATTRIBUTION:
             continue  # never shorten a credit line; take another candidate
         title = page.get("title", "").removeprefix("File:")

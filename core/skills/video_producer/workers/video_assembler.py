@@ -104,6 +104,12 @@ class VideoAssemblerWorker:
             screenshot_files = screenshot_result.screenshots if screenshot_result else []
             frames_by_scene = getattr(screenshot_result, "frames_by_scene", None)
 
+        if not voice_duration or voice_duration <= 0:
+            # Zero narration is not a video either; the drift gate below would
+            # be skipped for it.
+            return VideoResult(video_path="", duration_seconds=0.0, bitrate_kbps=0,
+                               codec=self.codec, quality_score=0.0, success=False)
+
         if not screenshot_files:
             # An audio-only .mp4 is not a video — refuse instead of passing it on.
             return VideoResult(video_path="", duration_seconds=0.0, bitrate_kbps=0,
@@ -133,7 +139,9 @@ class VideoAssemblerWorker:
             duration_seconds=measured_duration,
             codec=self.codec,
         )
-        if voice_duration and abs(measured_duration - voice_duration) > max(1.0, 0.05 * voice_duration):
+        # 0.5 s absolute: the mux ends on -shortest, so container and narration
+        # agree to a frame or two; a percentage allowed 30 s on a 10-minute video.
+        if voice_duration and abs(measured_duration - voice_duration) > 0.5:
             raise ValueError(
                 f"Final-Validation Gate FAILED: video runs {measured_duration:.2f}s but the "
                 f"narration is {voice_duration:.2f}s — picture and sound would drift apart."

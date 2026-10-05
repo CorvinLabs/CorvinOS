@@ -59,8 +59,16 @@ def _research_images_for(job) -> Dict[str, dict]:
                 if w * h > MAX_EMBED_SOURCE_PIXELS:
                     raise ValueError(f"{w}x{h} px exceeds {MAX_EMBED_SOURCE_PIXELS} px")
                 im.draft("RGB", (MAX_EMBED_EDGE, MAX_EMBED_EDGE))  # JPEG: decode at reduced size
-                im.thumbnail((MAX_EMBED_EDGE, MAX_EMBED_EDGE))      # shrink BEFORE the RGB copy
-                im = im.convert("RGB")
+                # Palette / 1-bit / grey images resample by nearest neighbour,
+                # which turned 1 px line diagrams into moiré: go to full colour
+                # FIRST (bounded by the pixel cap above), then shrink.
+                if im.mode not in ("RGB", "RGBA"):
+                    im = im.convert("RGBA" if "transparency" in im.info or im.mode in ("LA", "PA") else "RGB")
+                im.thumbnail((MAX_EMBED_EDGE, MAX_EMBED_EDGE))
+                if im.mode == "RGBA":  # transparent areas on white, not on black
+                    flat = Image.new("RGB", im.size, (255, 255, 255))
+                    flat.paste(im, mask=im.getchannel("A"))
+                    im = flat
                 buf = BytesIO()
                 im.save(buf, format="PNG")
         except Exception as e:

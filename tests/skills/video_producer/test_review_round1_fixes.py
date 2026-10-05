@@ -40,10 +40,16 @@ def _maestro(analysis=AssetAnalyzerWorker, voice=None):
 
 # ── Maestro ─────────────────────────────────────────────────────────────────
 
+class _UnsourcedAnalyzer(AssetAnalyzerWorker):
+    """The real analyzer with a source check that fails, so status is FAIL."""
+
+    def _verify_sources(self, facts):
+        return False
+
+
 def test_analysis_fail_stops_the_job():
-    m = _maestro()
-    jid = m.create_job("t", 10, "technical", ["It seems the pipeline renders every scene correctly on this host."],
-                       job_id="rv_analysis_fail")
+    m = _maestro(analysis=_UnsourcedAnalyzer)
+    jid = m.create_job("t", 10, "technical", GOOD, job_id="rv_analysis_fail")
     with pytest.raises(RuntimeError, match="ANALYSIS failed"):
         m.execute_phase(jid)
     assert m.jobs[jid].current_phase == VideoJobPhase.ANALYSIS

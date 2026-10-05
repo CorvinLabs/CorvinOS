@@ -88,17 +88,19 @@ says `success: true` explicitly; anything else stops the job where it is.
 
 | Phase | Worker | Notes |
 |---|---|---|
-| `ANALYSIS` | `AssetAnalyzerWorker` | heuristic: hedge phrases (English) block the job; opposite word pairs in two sentences only warn |
-| `VOICE` | `VoiceSynthesizerWorker` | OpenAI TTS, then edge-tts, then piper; a scene that only got the mock fails the phase; loudness-normalised to -23 LUFS |
-| `IMAGE_RESEARCH` | `ImageResearchWorker` | optional — only when the job has `research_queries`. Wikimedia Commons only (machine-readable licence on every file), licence allowlist, every redirect hop re-checked, full pixel decode, 24 MP cap (ADR-2221) |
+| `ANALYSIS` | `AssetAnalyzerWorker` | heuristic: whole-word hedge phrases (English and German, `hedges.py`) block the job; opposite word pairs in two sentences only warn. The approved narration is frozen — editing `job.narration` afterwards fails the VOICE gate |
+| `VOICE` | `VoiceSynthesizerWorker` | OpenAI TTS, then edge-tts, then piper; every scene must be a readable audio stream (ffprobe), whatever the provider claims, or the phase fails; loudness-normalised to -23 LUFS (`None` when any scene was not normalised) |
+| `IMAGE_RESEARCH` | `ImageResearchWorker` | optional — only when the job has `research_queries`. Wikimedia Commons only (machine-readable licence on every file), licence allowlist, files whose licence requires attribution but name no author are skipped, every redirect hop re-checked, full pixel decode, 24 MP cap (ADR-2221) |
 | `DIAGRAM_RENDER` or `SCREENSHOTS` | `DiagramRendererWorker` / `ScreenshotCapturerWorker` | diagram specs (`box`, `arrow`, `grid`, `brace`, `highlight`, `text`, `image`) render with JavaScript off and all network blocked; screenshots are 1920x1080 viewport captures of the local console |
-| `ASSEMBLY` | `VideoAssemblerWorker` | ffmpeg, CBR 600 kbps; each scene's frames share that scene's narration time; refuses a video with no frames, under 5 s, or whose measured length differs from the narration |
+| `ASSEMBLY` | `VideoAssemblerWorker` | ffmpeg, CBR 600 kbps; each scene's frames share that scene's narration time; refuses a video with no frames, no narration, under 5 s, or whose measured length is more than 0.5 s off the narration |
 | `YOUTUBE` | `YouTubeUploaderWorker` | **NOT BUILT** — prepares metadata, then fails the phase |
 
 An `image` element accepts only `src: "research:<ref>"` — never a path or
-URL — must lie fully on the canvas and be at least 320 px wide. The compiler
-draws the citation caption from the research result, wraps it (never
-truncates) and paints the image above every other element, so a spec cannot
+URL — must lie fully on the canvas, be at least 320 px wide, may not overlap
+another image, and must be tall enough for its citation at the widest glyph
+(CJK counted double). The compiler draws the caption from the research
+result in a flex layout (the caption takes its real height, the picture
+shrinks) and paints images above every other element, so a spec cannot
 drop, cover or cut the attribution. A spec that names a reference the job
 never researched fails the render. On an EU_PRODUCTION tenant
 `commons.wikimedia.org`, `upload.wikimedia.org` and `thumb.wikimedia.org`

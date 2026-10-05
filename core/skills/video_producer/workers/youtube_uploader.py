@@ -19,6 +19,8 @@ import time
 import uuid
 import os
 
+from .job_tmp import job_scoped_dir
+
 
 @dataclass
 class UploadResult:
@@ -206,7 +208,7 @@ This video was generated using the Video Producer Skill 2.0
             "size": "1280x720",
         }
 
-        thumbnail_path = f"/tmp/{job.job_id}_thumbnail.json"
+        thumbnail_path = os.path.join(job_scoped_dir(job.job_id), "thumbnail.json")
         try:
             with open(thumbnail_path, "w") as f:
                 json.dump(thumbnail_data, f)
@@ -274,7 +276,7 @@ This video was generated using the Video Producer Skill 2.0
             "note": "Real YouTube upload requires OAuth2 credentials from Google Cloud Console",
         }
 
-        metadata_path = f"/tmp/{job_id}_upload_metadata.json"
+        metadata_path = os.path.join(job_scoped_dir(job_id), "upload_metadata.json")
         try:
             with open(metadata_path, "w") as f:
                 json.dump(metadata, f, indent=2)

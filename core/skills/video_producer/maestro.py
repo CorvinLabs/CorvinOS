@@ -463,11 +463,11 @@ class MaestroOrchestrator:
 
         # Emit audit event: content validation passed
         if emit:
-          self._audit("content_presence_validated", "pre-job-creation", {
-            "num_scenes": len(narration),
-            "total_length_chars": total_content_length,
-            "status": "passed",
-        })
+            self._audit("content_presence_validated", "pre-job-creation", {
+                "num_scenes": len(narration),
+                "total_length_chars": total_content_length,
+                "status": "passed",
+            })
 
     def _validate_analysis_phase(self, job: VideoJob) -> bool:
         """Validate preconditions for Analysis phase.

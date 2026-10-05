@@ -409,13 +409,23 @@ def _render_texts_html(texts: list[dict], theme: dict[str, str], visible: set[st
 
 CAPTION_FONT_PX = 14
 CAPTION_LINE_PX = 18
-CAPTION_CHAR_PX = 7.5   # conservative average glyph width at 14 px
-CAPTION_MAX_LINES = 4
+# Widest glyph at 14 px (a "W" is ~13 px; CJK counts double below). The
+# space check uses this WORST case: an average-width estimate let "WWWW",
+# CJK and long URLs need more lines than were reserved (review round 2).
+CAPTION_WORST_CHAR_PX = 13.5
+CAPTION_MAX_LINES = 8
+MIN_PICTURE_H = 60
 
 
 def _caption_lines(citation: str, width: float) -> int:
-    per_line = max(1, int((width - 24) // CAPTION_CHAR_PX))
-    return max(1, math.ceil(len(citation) / per_line))
+    import unicodedata
+    units = sum(2.0 if unicodedata.east_asian_width(c) in ("W", "F") else 1.0 for c in citation)
+    per_line = max(1.0, (width - 24) / CAPTION_WORST_CHAR_PX)
+    return max(1, math.ceil(units / per_line))
+
+
+def _caption_height(citation: str, width: float) -> int:
+    return _caption_lines(citation, width) * CAPTION_LINE_PX + 16
 
 
 def _image_css(images: list[dict], resolved: dict) -> str:
@@ -428,9 +438,11 @@ def _image_css(images: list[dict], resolved: dict) -> str:
 
 
 def _render_images_html(images: list[dict], resolved: dict, theme: dict[str, str], visible: set[str]) -> str:
-    """Drawn LAST, above every other element: the citation caption must never
-    be covered. Its text wraps (never ellipsised) and its height is reserved
-    from the image box, which normalize/compile keep fully on the canvas."""
+    """Drawn LAST, above every other element, and images may not overlap each
+    other: nothing can cover a caption. The box is a flex column — the
+    caption takes its real rendered height and the picture shrinks above it,
+    so the text is never clipped as long as the worst-case height checked in
+    compile_spec fits (it is, or the spec is refused)."""
     out = []
     for im in images:
         if im["id"] not in visible:
@@ -439,12 +451,11 @@ def _render_images_html(images: list[dict], resolved: dict, theme: dict[str, str
         citation = resolved[ref]["citation"]
         x, y = im["at"]
         w, h = im["size"]
-        caption_h = _caption_lines(citation, w) * CAPTION_LINE_PX + 16
         out.append(
             f'<div class="image fade-in" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px;'
             f'border-color:{theme["surface_border"]};background-color:{theme["surface"]};">'
-            f'<div class="rimg rimg-{ref}" style="height:{h - caption_h}px;background-size:{im["fit"]};"></div>'
-            f'<div class="caption" style="height:{caption_h}px;color:{theme["text_muted"]};'
+            f'<div class="rimg rimg-{ref}" style="background-size:{im["fit"]};"></div>'
+            f'<div class="caption" style="color:{theme["text_muted"]};'
             f'background-color:{theme["surface"]};">{escape(citation)}</div></div>'
         )
     return "\n".join(out)
@@ -471,10 +482,10 @@ def _page_shell(theme: dict[str, str], canvas_w: int, canvas_h: int, body: str, 
   .text {{ position: absolute; line-height: 1.35; }}
   .text .t-row {{ margin-bottom: 10px; }}
   .image {{ position: absolute; border: 2px solid; border-radius: 12px; overflow: hidden;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.35); }}
-  .image .rimg {{ background-repeat: no-repeat; background-position: center; }}
-  .image .caption {{ font-size: 14px; line-height: 18px; padding: 8px 12px;
-                     white-space: normal; overflow-wrap: anywhere; }}
+            box-shadow: 0 8px 24px rgba(0,0,0,0.35); display: flex; flex-direction: column; }}
+  .image .rimg {{ background-repeat: no-repeat; background-position: center; flex: 1 1 auto; min-height: 0; }}
+  .image .caption {{ flex: 0 0 auto; font-size: 14px; line-height: 18px; padding: 8px 12px;
+                     white-space: normal; overflow-wrap: anywhere; word-break: break-word; }}
 </style></head>
 <body><div class="canvas">
 {body}
@@ -701,8 +712,14 @@ def compile_spec(spec: dict, images: dict | None = None) -> Compiled:
         lines = _caption_lines(asset["citation"], im["size"][0])
         if lines > CAPTION_MAX_LINES:
             raise SpecError(f"image {im['id']!r} is too narrow for its citation ({lines} lines > {CAPTION_MAX_LINES})")
-        if im["size"][1] - (lines * CAPTION_LINE_PX + 16) < MIN_IMAGE_AREA_H:
+        if im["size"][1] - _caption_height(asset["citation"], im["size"][0]) < MIN_PICTURE_H:
             raise SpecError(f"image {im['id']!r} is too short to show the picture above its citation")
+    for i, a in enumerate(image_els):
+        for b in image_els[i + 1:]:
+            (ax, ay), (aw, ah) = a["at"], a["size"]
+            (bx, by), (bw, bh) = b["at"], b["size"]
+            if ax < bx + bw and bx < ax + aw and ay < by + bh and by < ay + ah:
+                raise SpecError(f"images {a['id']!r} and {b['id']!r} overlap — one would cover the other's citation")
     for group, kind in ((arrows, "arrow"), (grids, "grid"), (braces, "brace"), (highlights, "highlight")):
         for el in group:
             if "id" not in el:

@@ -17,8 +17,13 @@ two DIFFERENT directories; one process reusing the same job_id across calls
 keeps reusing its own directory, so a job's own phases still share one place.
 """
 
+import re
 import tempfile
 import threading
+
+# The id becomes part of a path; validated HERE so every caller is covered,
+# including workers called directly with a SimpleNamespace job.
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 _lock = threading.Lock()
 _job_dirs: dict[str, str] = {}
@@ -30,6 +35,8 @@ def job_scoped_dir(job_id: str) -> str:
     Same job_id, same process, repeated calls -> same directory.
     Same job_id, different process -> a different directory (the fix).
     """
+    if not isinstance(job_id, str) or not _JOB_ID_RE.match(job_id):
+        raise ValueError(f"unsafe job id {job_id!r}: must match [A-Za-z0-9_-]{{1,64}}")
     with _lock:
         existing = _job_dirs.get(job_id)
         if existing is not None:

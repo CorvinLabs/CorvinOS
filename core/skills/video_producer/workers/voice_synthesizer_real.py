@@ -8,6 +8,8 @@ import os
 from dataclasses import dataclass
 from typing import List
 
+from .job_tmp import scene_path
+
 
 @dataclass
 class VoiceResult:
@@ -88,8 +90,8 @@ class VoiceSynthesizerWorkerReal:
     def _synthesize_with_espeak(self, text: str, job_id: str, scene_idx: int) -> str:
         """Synthesize using espeak-ng to WAV, then convert to MP3"""
 
-        wav_path = f"/tmp/{job_id}_scene_{scene_idx}.wav"
-        mp3_path = f"/tmp/{job_id}_scene_{scene_idx}.mp3"
+        wav_path = scene_path(job_id, "scene", scene_idx, ".wav")
+        mp3_path = scene_path(job_id, "scene", scene_idx, ".mp3")
 
         # Generate WAV with espeak-ng
         cmd = [

@@ -127,7 +127,7 @@ class OpenAITTSWorker:
                 )
 
                 # Save MP3 to disk
-                audio_path = f"/tmp/{job.job_id}_narration_{i}.mp3"
+                audio_path = scene_path(job.job_id, "narration", i, ".mp3")
                 with open(audio_path, "wb") as f:
                     f.write(response.content)
 

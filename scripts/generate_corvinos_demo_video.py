@@ -11,7 +11,6 @@ Execution:
 Output:
     - /tmp/video_<jobid>_final.mp4 (the actual video)
     - /outputs/demo_video_corvinOS_90sec.mp4 (final output)
-    - /tmp/<jobid>_upload_metadata.json (YouTube metadata)
 """
 
 import sys
@@ -27,7 +26,6 @@ from core.skills.video_producer.workers.asset_analyzer import AssetAnalyzerWorke
 from core.skills.video_producer.workers.voice_synthesizer import VoiceSynthesizerWorker
 from core.skills.video_producer.workers.screenshot_capturer import ScreenshotCapturerWorker
 from core.skills.video_producer.workers.video_assembler import VideoAssemblerWorker
-from core.skills.video_producer.workers.youtube_uploader import YouTubeUploaderWorker
 import shutil
 
 
@@ -88,7 +86,8 @@ def main():
     maestro.register_worker(VideoJobPhase.VOICE, VoiceSynthesizerWorker(tts_provider="edge-tts"))
     maestro.register_worker(VideoJobPhase.SCREENSHOTS, ScreenshotCapturerWorker())
     maestro.register_worker(VideoJobPhase.ASSEMBLY, VideoAssemblerWorker(codec="h264", preset="medium"))
-    maestro.register_worker(VideoJobPhase.YOUTUBE, YouTubeUploaderWorker(visibility="unlisted"))
+    # No YOUTUBE registration: the uploader is not implemented and fails the
+    # phase by design (it used to invent a video id and URL).
     print("✓ All workers registered")
     print()
 
@@ -98,7 +97,6 @@ def main():
         ("VOICE", "Voice narration synthesis (TTS)"),
         ("SCREENSHOTS", "Screenshot capture (Playwright)"),
         ("ASSEMBLY", "Video assembly (FFmpeg)"),
-        ("YOUTUBE", "YouTube metadata generation"),
     ]
 
     for idx, (phase_name, description) in enumerate(phases, 1):
