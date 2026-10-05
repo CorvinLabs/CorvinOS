@@ -12,7 +12,7 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Activity, Globe2, Loader2, MessageSquare, Plus, Radar, Users } from "lucide-react";
+import { Activity, Globe2, Loader2, MessageSquare, Plus, Radar, Settings2, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -22,6 +22,7 @@ import { getA2AFeed, listDiscoveryPeers, type A2AFeedMessage } from "@/lib/api/a
 import { listPendingSends, listPendingTokenRequests } from "@/lib/api/pending-actions";
 import { PendingConfirmations } from "./PendingConfirmations";
 import { TokensSection } from "./TokensSection";
+import { PeerManagementDialog } from "./PeerManagementDialog";
 import { plural } from "./GroupConversation";
 
 export type SidebarMode = "chats" | "peers" | "a2a";
@@ -144,7 +145,14 @@ function PeersSection({ activePeerId }: { activePeerId?: string }) {
   });
   return (
     <div>
-      <SectionTitle icon={Globe2}>CONNECTED AGENTS</SectionTitle>
+      <SectionTitle icon={Globe2} action={
+        <PeerManagementDialog trigger={
+          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" aria-label="Manage peer permissions"
+            title="Manage peer permissions, invite codes & connections">
+            <Settings2 className="h-3.5 w-3.5" />
+          </Button>
+        } />
+      }>CONNECTED AGENTS</SectionTitle>
       <div className="space-y-0.5 px-2">
         {feed.isLoading && <Loader2 className="mx-auto h-4 w-4 animate-spin" />}
         {feed.error && (
