@@ -233,5 +233,10 @@ export const LayerForgePage = React.lazy(() =>
   import("@/pages/layer-forge").then((m) => ({ default: m.LayerForgePage }))
 );
 
+// Layer Forge Analytics Dashboard (Phase 3B)
+export const LayerForgeAnalyticsPage = React.lazy(() =>
+  import("@/pages/layer-forge-analytics").then((m) => ({ default: m.LayerForgeAnalyticsPage }))
+);
+
 // Vibe Engineering panels (ADR-0400 dashboard + secondary views)
 
