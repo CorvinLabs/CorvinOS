@@ -19,8 +19,10 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
-  a2aFeedBlobUrl, getA2AFeed, sendA2AFeedMessage, type A2AFeedMessage,
+  a2aFeedBlobUrl, encodeFilesForA2A, getA2AFeed, sendA2AFeedMessage,
+  A2AAttachmentLimitError, type A2AFeedMessage,
 } from "@/lib/api/a2a";
+import { mediaKind } from "@/lib/a2a-feed";
 import { ChatAvatar } from "./ChatAvatar";
 import { AttachmentChip } from "./AttachmentChip";
 import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
@@ -70,13 +72,30 @@ function PeerMessageRow({ m, label }: { m: A2AFeedMessage; label: string }) {
             </p>
           )}
           {m.attachments.length > 0 && (
-            <div className="mt-1.5 space-y-0.5">
-              {m.attachments.map((a) => (
-                <a key={a.sha256} href={a2aFeedBlobUrl(a)} target="_blank" rel="noreferrer"
-                  className="flex items-center gap-1 text-[11px] text-sky-600 hover:underline dark:text-sky-400">
-                  <Paperclip className="h-3 w-3" /> {a.name}
-                </a>
-              ))}
+            <div className="mt-1.5 space-y-1.5">
+              {m.attachments.map((a) => {
+                const kind = mediaKind(a);
+                const url = a2aFeedBlobUrl(a);
+                if (kind === "image") {
+                  return (
+                    <a key={a.sha256} href={url} target="_blank" rel="noreferrer" className="block">
+                      <img src={url} alt={a.name} className="max-h-60 max-w-full rounded-lg border border-border/40" />
+                    </a>
+                  );
+                }
+                if (kind === "audio") {
+                  return <audio key={a.sha256} controls preload="metadata" src={url} className="h-8 w-full" />;
+                }
+                if (kind === "video") {
+                  return <video key={a.sha256} controls preload="metadata" src={url} className="max-h-60 w-full rounded-lg border border-border/40 bg-black" />;
+                }
+                return (
+                  <a key={a.sha256} href={url} target="_blank" rel="noreferrer"
+                    className="flex items-center gap-1 text-[11px] text-sky-600 hover:underline dark:text-sky-400">
+                    <Paperclip className="h-3 w-3" /> {a.name}
+                  </a>
+                );
+              })}
             </div>
           )}
         </div>
@@ -105,17 +124,12 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
   const [dropTruncated, setDropTruncated] = React.useState<number | null>(null);
   const {
     pendingAttachments, uploading, uploadError, addFiles,
-    removeAttachment, onFileInputChange,
+    removeAttachment, clearAttachments, onFileInputChange,
   } = useAttachmentUpload({
-    uploadFn: async (files) => {
-      /* peer messages don't support attachments yet, but track them locally */
-      return files.map((f) => ({
-        name: f.name,
-        size: f.size,
-        mime: f.type,
-      }));
-    },
+    uploadFn: encodeFilesForA2A,
     disabled: busy,
+    formatError: (e) => e instanceof A2AAttachmentLimitError ? e.message
+      : e instanceof Error ? e.message : "Upload failed",
   });
   const { isDragging: paneDragging, dropHandlers: paneDropHandlers } = useFileDrop(
     (files) => { setDropTruncated(null); void addFiles(files); },
@@ -162,11 +176,16 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
 
   async function handleSend() {
     const body = text.trim();
-    if (!body) return;
+    if (!body && pendingAttachments.length === 0) return;
     setBusy(true); setError("");
     try {
-      await sendA2AFeedMessage({ peer_id: peerId, text: body, attachments: [] }, csrf);
+      await sendA2AFeedMessage({
+        peer_id: peerId,
+        text: body,
+        attachments: pendingAttachments.map((a) => ({ name: a.name, mime: a.mime, content_b64: a.content_b64 })),
+      }, csrf);
       setText("");
+      clearAttachments();
       feed.refetch();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -311,7 +330,8 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
               aria-label="Message to agent"
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }} />
             <Button variant="accent" size="icon" className="h-8 w-8 shrink-0 rounded-full"
-              disabled={busy || !text.trim() || peer?.can_send === false} onClick={handleSend} aria-label="Send">
+              disabled={busy || (!text.trim() && pendingAttachments.length === 0) || peer?.can_send === false}
+              onClick={handleSend} aria-label="Send">
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </Button>
           </div>
