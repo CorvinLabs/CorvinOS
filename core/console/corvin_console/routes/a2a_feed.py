@@ -336,6 +336,10 @@ def a2a_feed_send_confirm(rec: Session, pending_id: str) -> dict[str, Any]:
     record = _pending.pop_pending_send(tenant_dir, pending_id)
     if record is None:
         raise HTTPException(status_code=404, detail="pending send not found, expired, or already confirmed")
+    if (record.get("peer_id"), record.get("text")) != (preview.get("peer_id"), preview.get("text")):
+        # Rewritten between the check and the claim: send nothing that was
+        # not what the peer check (and the operator's card) covered.
+        raise HTTPException(status_code=409, detail="pending send changed while confirming — not sent")
     try:
         from forge.security_events import write_event  # type: ignore[import-not-found]
         write_event(

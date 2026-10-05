@@ -48,7 +48,10 @@ import a2a_worker as w  # noqa: E402
 # compliance, so permit-by-default here the same way the compute-quota gate
 # above is poisoned to absent.
 import spawn_gates  # noqa: E402
-mock.patch.object(spawn_gates, "check_l44", lambda *a, **kw: None).start()
+# Started in setUpModule, stopped in tearDownModule — never at import time,
+# which disabled the fail-closed L44 gate for every later test in a combined
+# pytest session (review 2026-10-05).
+_L44_PATCH = mock.patch.object(spawn_gates, "check_l44", lambda *a, **kw: None)
 
 
 _SAVED_LICENSE_MODULES: dict[str, object | None] = {}
@@ -62,9 +65,11 @@ def setUpModule() -> None:
     for name in ("license.compute_quota", "license.limits"):
         _SAVED_LICENSE_MODULES[name] = sys.modules.get(name)
         sys.modules[name] = None  # type: ignore[assignment]
+    _L44_PATCH.start()
 
 
 def tearDownModule() -> None:
+    _L44_PATCH.stop()
     for name, mod in _SAVED_LICENSE_MODULES.items():
         if mod is None:
             sys.modules.pop(name, None)

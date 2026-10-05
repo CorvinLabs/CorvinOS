@@ -104,7 +104,7 @@ function GroupMessageRow({ m, group, selfId }: { m: GroupMessage; group: ChatGro
           <span className="font-medium text-foreground/80">{mine ? "You" : name}</span>
           <span>·</span>
           <span>{fmtTime(m.ts)}</span>
-          {m.delivery === "fanout" && <span title="Delivered to the group's A2A peers">· sent to peers</span>}
+          <DeliveryNote delivery={m.delivery} />
         </div>
         <div className={cn(
           "w-fit max-w-full rounded-2xl px-4 py-3 text-sm leading-relaxed",
@@ -127,6 +127,21 @@ function GroupMessageRow({ m, group, selfId }: { m: GroupMessage; group: ChatGro
   );
 }
 
+/** Outbound delivery to the group's A2A peers, as the backend recorded it.
+ * "fanout" is the pre-2026-10-05 value, written before any send happened —
+ * it proves nothing, so it is shown as unconfirmed, never as delivered. */
+function DeliveryNote({ delivery }: { delivery: string }) {
+  if (delivery === "delivered") return <span title="Every A2A peer in the group accepted it">· delivered to peers</span>;
+  if (delivery === "pending") return <span title="Sending to the group's A2A peers">· sending to peers…</span>;
+  if (delivery.startsWith("failed")) {
+    const n = Number(delivery.split(":")[1]) || 1;
+    return <span className="text-destructive" data-testid="delivery-failed"
+      title="At least one A2A peer did not accept this message">· not delivered to {n} peer{n === 1 ? "" : "s"}</span>;
+  }
+  if (delivery === "fanout") return <span title="Sent before delivery was tracked — not confirmed">· delivery unconfirmed</span>;
+  return null;
+}
+
 const ATTACH_HEADER = "[Attached files — stored with this group]";
 
 /** Stored-file names a message references through the attach header lines. */
@@ -134,7 +149,7 @@ export function attachmentNames(text: string): string[] {
   if (!text.startsWith(ATTACH_HEADER)) return [];
   const out: string[] = [];
   for (const line of text.split("\n").slice(1)) {
-    const m = /^- attachments\/([^\s/\\]+) \(/.exec(line);
+    const m = /^- attachments\/([^/\\\n]+?) \(\d/.exec(line);
     if (!m) break;
     out.push(m[1]);
   }

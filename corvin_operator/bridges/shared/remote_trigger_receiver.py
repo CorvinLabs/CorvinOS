@@ -34,6 +34,7 @@ import hmac as _hmac
 import json
 import math
 import os
+import re
 import secrets
 import stat
 import sys
@@ -1187,6 +1188,7 @@ class RemoteTriggerReceiver:
 
         # ADR-2218: if group_id is present, route to group instead of spawning worker.
         group_id = getattr(env, "group_id", None)
+        spawn_worker = False
         if group_id:
             try:
                 # Handle group message: store in group's message store, emit audit event.
@@ -1197,16 +1199,38 @@ class RemoteTriggerReceiver:
                     task_id=env.task_id,
                     start=start,
                 )
-                worker_status = group_msg_status
-                worker_data = group_msg_data
-                worker_attachments = []
                 self._audit_best_effort(
                     "a2a.group_message_received", "INFO",
                     {"task_id": env.task_id, "origin_id": env.origin_id,
-                     "group_id": group_id, "status": worker_status,
+                     "group_id": group_id, "status": group_msg_status,
                      "duration_ms": int((time.time() - start) * 1000)},
                 )
-                spawn_worker = False
+                if group_msg_status != "accepted":
+                    # Not stored (not a participant, revoked friendship, no
+                    # handler on this host, handler error): the sender must
+                    # hear "rejected", not the M1 path's signed "ok" — that
+                    # told it a refused message had been delivered.
+                    reason = re.sub(r"[^a-z_]", "", str(
+                        (group_msg_data or {}).get("reason") or group_msg_status).lower())[:40]
+                    resp = self._rejected_response(env.task_id, env.origin_id, recv_key_bytes,
+                                                   reason="group_message_refused")
+                    self._audit_best_effort(
+                        "A2A.request_rejected", "WARNING",
+                        {"task_id": env.task_id, "origin_id": env.origin_id,
+                         "reason": f"group_message_refused:{reason or 'unknown'}",
+                         "status": "rejected", "duration_ms": _ms(start)},
+                    )
+                    _feed_record(
+                        direction="out", kind="response", peer_id=env.origin_id,
+                        peer_label=origin_config.get("label"), task_id=env.task_id,
+                        status="rejected", duration_ms=_ms(start),
+                        data={"reason": "group_message_refused"},
+                    )
+                    return resp
+                worker_status = "ok"
+                worker_data = {"group_id": group_id,
+                               "message_id": str((group_msg_data or {}).get("message_id") or "")[:64]}
+                worker_attachments = []
             except Exception as group_exc:
                 # Group message handling failed — return error response.
                 resp = self._rejected_response(env.task_id, env.origin_id, recv_key_bytes)
@@ -1271,7 +1295,7 @@ class RemoteTriggerReceiver:
                     duration_ms=_ms(start), error="injection_attempt",
                 )
                 return resp
-        else:
+        elif not group_id:
             # M1 fallback / opt-out: no spawn, empty data.
             self._audit_best_effort(
                 "A2A.engine_spawned", "INFO",
@@ -1420,7 +1444,7 @@ class RemoteTriggerReceiver:
             or not origin_config.get("allow_write_files")
         ):
             self._audit_best_effort(
-                "A2A.subagents_force_restricted", "WARN",
+                "A2A.subagents_force_restricted", "WARNING",
                 {"task_id": env.task_id, "origin_id": env.origin_id,
                  "reason": "dangerous_capability_denied"},
             )

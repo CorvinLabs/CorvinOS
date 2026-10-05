@@ -189,7 +189,7 @@ class _StreamTurnE2EBase(unittest.TestCase):
     @staticmethod
     def _took_acs(events: list[dict]) -> bool:
         return any(e.get("type") == "delta"
-                   and "ACS-Worker gestartet" in (e.get("text") or "")
+                   and "Delegated to ACS workers" in (e.get("text") or "")
                    for e in events)
 
     def _assert_direct_with_directive(self, prompt: str, primitive: str):

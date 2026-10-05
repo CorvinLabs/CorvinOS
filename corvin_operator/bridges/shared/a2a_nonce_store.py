@@ -426,7 +426,21 @@ def default_nonce_store(tenant_home: Path | str | None = None) -> PersistentNonc
     if tenant_home is None:
         tenant_home = Path(os.environ.get("CORVIN_HOME", Path.home() / ".corvin"))
     db_path = Path(tenant_home) / "global" / "nonces" / "a2a_nonces.db"
-    return PersistentNonceStore(db_path)
+    # PersistentNonceStore degrades to memory instead of raising, which made
+    # the receiver's fail-closed gate (refuse to start unless
+    # CORVIN_A2A_ALLOW_EPHEMERAL_NONCE=1, audit the fallback) unreachable:
+    # a corrupt DB or read-only path silently gave per-process replay
+    # protection. The production default raises so that gate decides.
+    # Two retries absorb a "database is locked" while gateway and console
+    # start together.
+    for attempt in range(3):
+        store = PersistentNonceStore(db_path)
+        if store._fallback is None:
+            return store
+        if attempt < 2:
+            import time as _t  # noqa: PLC0415
+            _t.sleep(0.5 * (attempt + 1))
+    raise RuntimeError(f"persistent nonce store at {db_path} could not be opened")
 
 
 __all__ = [

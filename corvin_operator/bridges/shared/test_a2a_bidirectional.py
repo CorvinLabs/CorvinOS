@@ -65,8 +65,12 @@ import a2a_http_server  # noqa: E402
 # engine factory is invoked — these tests are about A2A wire-protocol
 # mechanics, not L44 compliance, so permit-by-default here like the
 # compute-quota gate above.
+# Applied in setUpModule / undone in tearDownModule — NOT at import time: a
+# started-and-never-stopped patch here disabled the fail-closed L44 gate for
+# every test collected in the same session (review 2026-10-05: the console's
+# house-rules gate test saw a DENY verdict and a spawn anyway).
 import spawn_gates  # noqa: E402
-mock.patch.object(spawn_gates, "check_l44", lambda *a, **kw: None).start()
+_L44_PATCH = mock.patch.object(spawn_gates, "check_l44", lambda *a, **kw: None)
 
 
 _SAVED_LICENSE_MODULES: dict[str, object | None] = {}
@@ -83,9 +87,11 @@ def setUpModule() -> None:
     for name in ("license.compute_quota", "license.limits"):
         _SAVED_LICENSE_MODULES[name] = sys.modules.get(name)
         sys.modules[name] = None  # type: ignore[assignment]
+    _L44_PATCH.start()
 
 
 def tearDownModule() -> None:
+    _L44_PATCH.stop()
     for name, mod in _SAVED_LICENSE_MODULES.items():
         if mod is None:
             sys.modules.pop(name, None)

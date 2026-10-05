@@ -923,6 +923,30 @@ network call or write, and it and the import write under the cross-process
 `test_a2a_hub_ten_peers_e2e.py` (real browser: no live agent may read
 `unknown`, the revoked one reads `removed`).
 
+**Hardening from the 2026-10-05 review (round 2).**
+- *Group messages:* the receiver answers a group message it did not store
+  (sender not a participant, revoked friendship, handler error, host without
+  group support) with a signed `rejected` (`group_message_refused`, audited
+  with the reason) — it used to fall through to the M1 path and answer `ok`.
+  An outbound group message is stored `pending` and ends `delivered` or
+  `failed:<n>` per peer outcome (`chat_group_store.set_delivery`); the UI
+  shows exactly that. Mirror groups an inbound message may create are capped
+  (`MAX_MIRROR_GROUPS_PER_PEER` 20, `MAX_GROUPS_TOTAL` 500), each group's log
+  is trimmed to its newest 2 000 messages past 2 MiB, all under the
+  cross-process `config_file_lock`.
+- *Nonce store:* `a2a_nonce_store.default_nonce_store` raises when the SQLite
+  store cannot be opened (after two retries) instead of silently degrading to
+  memory, so the receiver's fail-closed gate (`CORVIN_A2A_ALLOW_EPHEMERAL_NONCE`)
+  and its audit actually fire.
+- *Attachment names:* Windows device stems (`CON`, `NUL`, `COM1`…, any
+  extension) and a trailing dot are refused; duplicate names are compared
+  case-insensitively. The console's encoder applies the same rules before
+  sending (prefix `_`, strip the dot, `_2` suffix).
+- *Audit registry:* `a2a.group_message_received`, `A2A.reconnect_applied|
+  rejected|failed`, `A2A.subagents_force_restricted`,
+  `A2A.attestation_disabled_bypass` and `a2a.manifest_required_unavailable`
+  now have severity + allowlist entries (their fields were being floored).
+
 Since ADR-2099 P0 fact 3 (operator decision, Option B) a **new** pairing
 requires a Corvin Labs IBC on every inbound envelope (`require_ibc: true`).
 An instance without an IBC therefore cannot exchange tasks over a new pairing

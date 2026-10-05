@@ -56,7 +56,18 @@ class _AllowGate:
         return _allow
 
 
-mock.patch.object(_hr, "HouseRulesGate", _AllowGate).start()
+# Scoped to this module's tests (pytest: setup_module/teardown_module; script
+# mode: the __main__ block) — a patch started at import time replaced the
+# house-rules gate for every later test in a combined pytest session.
+_HR_PATCH = mock.patch.object(_hr, "HouseRulesGate", _AllowGate)
+
+
+def setup_module(module=None) -> None:
+    _HR_PATCH.start()
+
+
+def teardown_module(module=None) -> None:
+    _HR_PATCH.stop()
 
 
 def _section(title: str) -> None:
@@ -242,6 +253,7 @@ def test_inject_btw_on_engine_without_mid_stream_inject_returns_false() -> None:
 
 
 if __name__ == "__main__":
+    setup_module()
     failures = 0
     for case in (
         test_opencode_dispatch_runs_fake_binary,

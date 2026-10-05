@@ -580,6 +580,13 @@ EVENT_SEVERITY: dict[str, str] = {
     # an anomaly. Never carries message text, only peer_id + pending_id.
     "A2A.chat_staged_send_confirmed": "INFO",
     "A2A.chat_staged_send_discarded": "INFO",
+    "a2a.group_message_received": "INFO",
+    "A2A.reconnect_applied": "INFO",
+    "A2A.reconnect_rejected": "WARNING",
+    "A2A.reconnect_failed": "WARNING",
+    "A2A.subagents_force_restricted": "WARNING",
+    "A2A.attestation_disabled_bypass": "WARNING",
+    "a2a.manifest_required_unavailable": "WARNING",
     # 2026-09-25 A2A adversarial review — events added by the fixes.
     "A2A.instance_pinned":            "INFO",     # TOFU pin of the peer instance id
     "A2A.friendship_paired":          "INFO",     # issuer completed a pairing (audit-first)
@@ -3064,6 +3071,13 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "A2A.feed_cleared": frozenset({"messages_removed", "blobs_removed", "reason"}),
     "A2A.chat_staged_send_confirmed": frozenset({"peer_id", "pending_id"}),
     "A2A.chat_staged_send_discarded": frozenset({"peer_id", "pending_id"}),
+    "a2a.group_message_received": frozenset({"task_id", "origin_id", "group_id", "status", "duration_ms"}),
+    "A2A.reconnect_applied": frozenset({"task_id", "origin_id", "reason", "status", "duration_ms"}),
+    "A2A.reconnect_rejected": frozenset({"task_id", "origin_id", "reason", "status", "duration_ms"}),
+    "A2A.reconnect_failed": frozenset({"task_id", "origin_id", "reason", "status", "duration_ms"}),
+    "A2A.subagents_force_restricted": frozenset({"task_id", "origin_id", "reason"}),
+    "A2A.attestation_disabled_bypass": frozenset({"origin_id", "reason"}),
+    "a2a.manifest_required_unavailable": frozenset({"origin_id", "reason"}),
     # CLI pairing events (corvin_a2a.py, round 7: their fields were dropped).
     "a2a.friendship.imported": frozenset({"endpoint_id", "reason", "source"}),
     "a2a.relay.enabled_for_pairing": frozenset({"reason", "source"}),

@@ -559,13 +559,28 @@ async def chat_stream(
         # error+done event so the chat shows the failure and the socket stays
         # open for the next turn. Only CancelledError (genuine cancel /
         # client disconnect) propagates to the outer handler for cleanup.
+        _task = asyncio.current_task()
+        _loop = asyncio.get_running_loop()
         try:
             async with _session_turn_lock(rec.tenant_id, sid):
-                async with contextlib.aclosing(
-                    chat_runtime.stream_turn(sess, prompt, sid_fingerprint=rec.sid_fingerprint)
-                ) as gen:
-                    async for event in gen:
-                        await websocket.send_json(event)
+                # The socket's session object is as old as the connection;
+                # another tab, a rename or a delete may have changed the chat
+                # since. Each turn runs on what is on disk now (resume decision,
+                # title), and a deleted chat runs nothing.
+                fresh = chat_runtime.get_session(rec.tenant_id, sid)
+                if fresh is None:
+                    await websocket.send_json({"type": "error", "message": "This chat was deleted."})
+                    await websocket.send_json({"type": "done"})
+                    return
+                chat_runtime.register_live_turn(rec.tenant_id, sid, _loop, _task)
+                try:
+                    async with contextlib.aclosing(
+                        chat_runtime.stream_turn(fresh, prompt, sid_fingerprint=rec.sid_fingerprint)
+                    ) as gen:
+                        async for event in gen:
+                            await websocket.send_json(event)
+                finally:
+                    chat_runtime.unregister_live_turn(rec.tenant_id, sid, _loop, _task)
         except asyncio.CancelledError:
             raise
         except Exception as _exc:  # noqa: BLE001 — never let a turn kill the socket
@@ -773,7 +788,14 @@ async def chat_stream(
                             recv_task.cancel()
                             with contextlib.suppress(asyncio.CancelledError):
                                 await recv_task
-                    if not _stream_task.cancelled():
+                    if _stream_task.cancelled():
+                        # Cancelled from outside this socket (the chat was
+                        # deleted in another request): close the turn for the
+                        # client too, or its UI stays "streaming" forever.
+                        with contextlib.suppress(Exception):
+                            await websocket.send_json({"type": "error", "message": "This chat was deleted."})
+                            await websocket.send_json({"type": "done"})
+                    else:
                         # Propagate any exception from the turn task.
                         _stream_task.result()
                 except asyncio.CancelledError:

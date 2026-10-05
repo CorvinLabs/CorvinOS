@@ -216,7 +216,9 @@ class ChatGroupsE2ETests(unittest.TestCase):
 
     def test_group_message_fans_out_to_every_a2a_peer(self):
         """ADR-2218: a message posted to a group reaches each A2A peer in it,
-        tagged with the group's id, and is stored as delivery="fanout"."""
+        tagged with the group's id. The message is stored "pending" and ends
+        "delivered" once every peer accepted it (review R2 2026-10-05: the old
+        "fanout" was written before any send and proved nothing)."""
         self._enable_peer_endpoint("friend-peer")
         client = self._client()
         group = client.post("/v1/console/chat/groups", json={"title": "G"}).json()
@@ -245,8 +247,11 @@ class ChatGroupsE2ETests(unittest.TestCase):
                 json={"text": "hello everyone", "sender_participant_id": "fp-human-1"},
             )
         self.assertEqual(r.status_code, 200, r.text)
-        self.assertEqual(r.json()["delivery"], "fanout")
+        self.assertEqual(r.json()["delivery"], "pending")
         self.assertEqual(sent, [("friend-peer", "hello everyone", group["group_id"])])
+        msgs = client.get(f"/v1/console/chat/groups/{group['group_id']}/messages").json()
+        msgs = msgs.get("messages", msgs) if isinstance(msgs, dict) else msgs
+        self.assertEqual([m["delivery"] for m in msgs], ["delivered"])
 
     def test_group_without_peers_stays_local(self):
         client = self._client()

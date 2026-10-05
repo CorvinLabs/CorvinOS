@@ -25,6 +25,13 @@ def claim(path: Path, ttl_s: float) -> dict[str, Any] | None:
     except OSError:
         return None
     try:
+        # rename keeps the staged mtime; without this a record staged more
+        # than a minute ago looked like a crash leftover the instant it was
+        # claimed, and a concurrent sweep deleted it before it was read.
+        os.utime(claimed)
+    except OSError:
+        pass
+    try:
         rec = json.loads(claimed.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         rec = None

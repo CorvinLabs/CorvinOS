@@ -1278,7 +1278,7 @@ function ChatPane({
         (a) => `- ${a.path} (${(a.size / 1024).toFixed(1)} KB, ${a.mime})`,
       );
       const header = [
-        "[Dateien im Session-Workdir — mit dem Read-Tool oder Bash-Tool zugreifen]",
+        "[Files in the session workdir — read them with the Read or Bash tool]",
         ...lines,
       ].join("\n");
       fullText = hasText ? `${header}\n\n${text}` : header;

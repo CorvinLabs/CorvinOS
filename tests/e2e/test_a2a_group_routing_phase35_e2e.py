@@ -297,3 +297,51 @@ class TestDelivery:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestRound2GroupLimitsAndDelivery:
+    """Review R2 (2026-10-05): inbound messages could mint unlimited mirror
+    groups, and a fan-out message showed "sent to peers" before (and
+    regardless of whether) any peer accepted it."""
+
+    def test_mirror_groups_per_peer_are_capped(self, group_with_peer, monkeypatch):
+        cg, store, tenant_dir, _gid = group_with_peer
+        monkeypatch.setattr(store, "MAX_MIRROR_GROUPS_PER_PEER", 3)
+        monkeypatch.setattr(cg, "_peer_label", lambda pid: "Peer")
+        results = [cg.handle_inbound_group_message(
+            group_id=f"mirror-{i}", sender_origin_id="peer-x", instruction="hi", task_id=f"t{i}")
+            for i in range(5)]
+        assert [r["status"] for r in results[:3]] == ["accepted"] * 3
+        assert [r.get("reason") for r in results[3:]] == ["group_limit_reached"] * 2
+        assert store.count_groups(tenant_dir, created_by="a2a:peer-x") == 3
+
+    def test_fanout_delivery_is_recorded_per_outcome(self, group_with_peer, monkeypatch):
+        cg, store, tenant_dir, group_id = group_with_peer
+
+        class _Sender:
+            def __init__(self, ok):
+                self.ok = ok
+
+            def __call__(self, *a, **k):
+                return self
+
+            def send(self, *a, **k):
+                return type("R", (), {"ok": self.ok})()
+
+        for ok, expected in ((True, "delivered"), (False, "failed:1")):
+            msg = store.append_message(tenant_dir, group_id, sender_participant_id="human-1",
+                                       text="x", delivery="pending")
+            monkeypatch.setattr(cg, "RemoteTriggerSender", _Sender(ok))
+            cg._deliver_to_peers(tenant_id="_default", group_id=group_id,
+                                 endpoint_ids=["peer-1"], text="x", message_id=msg["id"])
+            stored = next(m for m in store.list_messages(tenant_dir, group_id) if m["id"] == msg["id"])
+            assert stored["delivery"] == expected
+
+    def test_message_log_is_trimmed(self, group_with_peer, monkeypatch):
+        cg, store, tenant_dir, group_id = group_with_peer
+        monkeypatch.setattr(store, "_TRIM_AT_BYTES", 2000)
+        monkeypatch.setattr(store, "_MAX_MESSAGES_KEPT", 10)
+        for i in range(60):
+            store.append_message(tenant_dir, group_id, sender_participant_id="human-1", text=f"m{i}")
+        msgs = store.list_messages(tenant_dir, group_id, limit=0)
+        assert len(msgs) <= 30 and msgs[-1]["text"] == "m59"

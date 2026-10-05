@@ -151,10 +151,16 @@ class BtwInjectRouteE2E(unittest.TestCase):
             chat_runtime._append_turn(sess, "assistant", [{"kind": "text", "text": "answer BANANA"}],
                                       cli_spawned=True)
             recs = records_from_turn_log(chat_runtime.read_turns(tenant_id, sid))
-            self.assertEqual(len(recs), 1)
-            self.assertIn("main question", recs[0]["user"])
-            self.assertIn("/btw say BANANA", recs[0]["user"])
-            self.assertEqual(recs[0]["assistant"], "answer BANANA")
+            # Bridge shape: the note is its own never-spawned record before
+            # the turn it steered; the turn keeps its own text and answer.
+            self.assertEqual([r["user"] for r in recs], ["/btw say BANANA", "main question"])
+            self.assertIs(recs[0]["spawned"], False)
+            self.assertEqual(recs[1]["assistant"], "answer BANANA")
+            # Coverage: a transcript holding the question and the note
+            # covers the turn (folding the note into the turn broke this).
+            from session_ledger import uncovered_turns
+            left = uncovered_turns(recs, ["main question", "say BANANA"])
+            self.assertNotIn("main question", [r["user"] for r in left])
 
     def test_guard_neutralises_a_leading_slash_and_an_at_reference(self):
         """Security proof: an injected note starting with `/` or containing

@@ -139,7 +139,7 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
         return Promise.reject(new A2AAttachmentLimitError(
           `Attachments too large for a peer message — max ${(A2A_MAX_ATTACHMENTS_TOTAL_BYTES / 1024).toFixed(0)} KiB total (A2A envelope cap)`));
       }
-      return encodeFilesForA2A(files);
+      return encodeFilesForA2A(files, staged.map((a) => a.name));
     },
     disabled: busy,
     formatError: (e) => e instanceof A2AAttachmentLimitError ? e.message

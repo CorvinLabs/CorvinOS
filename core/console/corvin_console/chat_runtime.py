@@ -1362,6 +1362,38 @@ def _derive_auto_title(prompt: str) -> str:
     return ""
 
 
+# Live turns per chat, so deleting a chat (or evicting it at the 50-chat cap)
+# stops its running subprocess instead of letting the turn finish into a
+# removed workdir. Entries are (event loop, task); delete_session may run in
+# a worker thread, so cancellation goes through the loop.
+_live_turns: dict[tuple[str, str], set[tuple[Any, Any]]] = {}
+_live_turns_guard = threading.Lock()
+
+
+def register_live_turn(tenant_id: str, sid: str, loop: Any, task: Any) -> None:
+    with _live_turns_guard:
+        _live_turns.setdefault((tenant_id, sid), set()).add((loop, task))
+
+
+def unregister_live_turn(tenant_id: str, sid: str, loop: Any, task: Any) -> None:
+    with _live_turns_guard:
+        entries = _live_turns.get((tenant_id, sid))
+        if entries is not None:
+            entries.discard((loop, task))
+            if not entries:
+                _live_turns.pop((tenant_id, sid), None)
+
+
+def _cancel_live_turns(tenant_id: str, sid: str) -> None:
+    with _live_turns_guard:
+        entries = list(_live_turns.pop((tenant_id, sid), set()))
+    for loop, task in entries:
+        try:
+            loop.call_soon_threadsafe(task.cancel)
+        except RuntimeError:  # loop already closed
+            pass
+
+
 def delete_session(tenant_id: str, sid: str) -> bool:
     path = _meta_path(tenant_id, sid)
     if not path.exists():
@@ -1370,6 +1402,7 @@ def delete_session(tenant_id: str, sid: str) -> bool:
         path.unlink()
     except OSError:
         return False
+    _cancel_live_turns(tenant_id, sid)
     wd = _workdir(tenant_id, sid)
     if wd.exists():
         try:
@@ -1405,6 +1438,9 @@ def delete_session(tenant_id: str, sid: str) -> bool:
     return True
 
 
+_meta_update_lock = threading.Lock()
+
+
 def _save(sess: WebChatSession) -> None:
     payload = {
         "sid":             sess.sid,
@@ -1418,11 +1454,38 @@ def _save(sess: WebChatSession) -> None:
     _write_meta(_meta_path(sess.tenant_id, sess.sid), payload)
 
 
+def _update_meta(sess: WebChatSession, **fields: Any) -> bool:
+    """Write ``fields`` onto the CURRENT on-disk metadata, never a stale copy.
+
+    The chat WebSocket loads its session once per connection, and a tab keeps
+    that socket open for its whole life: saving that copy at the end of a
+    turn undid a rename made meanwhile and resurrected a chat deleted
+    mid-turn (review R2). A deleted session (metadata gone) is never
+    recreated — returns False."""
+    path = _meta_path(sess.tenant_id, sess.sid)
+    with _meta_update_lock:
+        meta = _read_meta(path) if path.exists() else None
+        if not isinstance(meta, dict):
+            return False
+        meta.update(fields)
+        _write_meta(path, meta)
+    for k, v in fields.items():
+        setattr(sess, k, v)
+    return True
+
+
 def touch(sess: WebChatSession, *, increment_turn: bool = False) -> None:
-    sess.last_active_at = time.time()
-    if increment_turn:
-        sess.turn_count += 1
-    _save(sess)
+    path = _meta_path(sess.tenant_id, sess.sid)
+    with _meta_update_lock:
+        meta = _read_meta(path) if path.exists() else None
+        if not isinstance(meta, dict):
+            return  # deleted while the turn ran: stays deleted
+        turn_count = int(meta.get("turn_count") or 0) + (1 if increment_turn else 0)
+        meta.update(last_active_at=time.time(), turn_count=turn_count)
+        _write_meta(path, meta)
+    sess.last_active_at = meta["last_active_at"]
+    sess.turn_count = turn_count
+    sess.title = str(meta.get("title") or sess.title)
 
 
 # ── Subprocess streaming ──────────────────────────────────────────────
@@ -3834,6 +3897,11 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
     Best-effort: a failed write does not break the stream — the user
     message is still in the WebSocket history client-side, and the
     assistant's reply was already streamed back."""
+    if not _meta_path(sess.tenant_id, sess.sid).exists():
+        # Deleted while a turn ran (or a cancel handler fired after the
+        # delete): writing here would recreate the turn log of a chat whose
+        # deletion is an erasure path — its text would survive on disk.
+        return
     path = _turns_path(sess.tenant_id, sess.sid)
     payload = {"role": role, "ts": time.time(), "parts": parts}
     # ADR-0650 Phase 4 — attach the turn's resolved language to EVERY persisted
@@ -4346,8 +4414,8 @@ def upgrade_session_title(tenant_id: str, sid: str) -> str:
     fresh = get_session(tenant_id, sid)
     if fresh is None or fresh.title != sess.title:
         return ""
-    fresh.title = title[:_TITLE_MAX_CHARS]
-    _save(fresh)
+    if not _update_meta(fresh, title=title[:_TITLE_MAX_CHARS]):
+        return ""
     _audit_emit(fresh, "web.session_title_generated", title_chars=len(fresh.title))
     return fresh.title
 
@@ -4563,8 +4631,8 @@ async def _stream_tde_turn(
         yield {"type": "engine", "engine": "tiered_delegation",
                "label": "TDE (Tiered Delegation Engine)", "tde_run_id": run_id}
         yield {"type": "delta",
-               "text": "⚙ TDE (Tiered Delegation Engine, ADR-0214) gestartet — "
-                       "Initial-Analyse läuft…\n"}
+               "text": "⚙ Tiered Delegation Engine started — "
+                       "running the initial analysis…\n"}
 
         # orchestration dir → sys.path (repo-relative pattern, bridges/shared)
         _orch = Path(__file__).resolve().parents[3] / "corvin_operator" / "orchestration"
@@ -5558,9 +5626,7 @@ async def _stream_turn_impl(
     title_event: dict[str, Any] | None = None
     if not resume and not sess.title.strip():
         auto = _derive_auto_title(_task_text)
-        if auto:
-            sess.title = auto
-            _save(sess)
+        if auto and _update_meta(sess, title=auto):
             title_event = {"type": "session_title", "title": auto}
 
     if title_event:
@@ -6002,24 +6068,24 @@ async def _stream_turn_impl(
                 _task_text, _dbg_ctx, _dbg_analysis,
             )
             _dbg_lines = [
-                f"**Engine-Auswahl (Debug):** `{_dbg_engine}` "
-                f"({_dbg_conf:.1%} Konfidenz)",
-                f"- Task-Typ: `{_dbg_analysis.classification.task_type}` "
-                f"/ Komplexität: `{_dbg_analysis.classification.complexity}`",
-                "- Signale:",
+                f"**Engine selection (debug):** `{_dbg_engine}` "
+                f"({_dbg_conf:.1%} confidence)",
+                f"- Task type: `{_dbg_analysis.classification.task_type}` "
+                f"/ complexity: `{_dbg_analysis.classification.complexity}`",
+                "- Signals:",
             ]
             for _sig_k, _sig_v in _dbg_signals.items():
                 _dbg_lines.append(f"  - `{_sig_k}`: {_sig_v}")
             _dbg_lines.append(
-                "\n_Kein Engine wurde ausgeführt — nur die Auswahl-Signale "
-                "wurden berechnet. Mit `/use-engine <name> <task>` erzwingen._"
+                "\n_No engine was run — only the selection signals were "
+                "computed. Force one with `/use-engine <name> <task>`._"
             )
             _dbg_msg = "\n".join(_dbg_lines)
         except ImportError as _dbg_imp_err:
-            _dbg_msg = f"TDE ist auf dieser Installation nicht verfügbar (Modul fehlt: {_dbg_imp_err})."
+            _dbg_msg = f"TDE is not available on this installation (missing module: {_dbg_imp_err})."
         except Exception as _dbg_err:  # noqa: BLE001 — debug command must never 500 the turn
             _log.warning("[/debug-engine] Analyse fehlgeschlagen: %s", _dbg_err)
-            _dbg_msg = f"Engine-Debug-Analyse fehlgeschlagen: {_dbg_err}"
+            _dbg_msg = f"Engine debug analysis failed ({type(_dbg_err).__name__})."
 
         tm.record_event(task_id, {"event": "task.completed", "exit_code": 0})
         _audit_emit(sess, "web.turn.completed", rc=0,
@@ -6041,11 +6107,11 @@ async def _stream_turn_impl(
     # switched off would make the setting a lie. Say so instead of routing.
     if _tde_force and _worker_mode != "tde":
         _tde_off = (
-            "TDE (Tiered Delegation Engine) ist auf dieser Installation "
-            f"abgeschaltet — aktive Worker-Engine: `{_worker_mode}`.\n\n"
-            "Einschalten in der Console unter **Settings → Worker Engine** "
-            "(Auswahl `tde`). Der Task läuft jetzt regulär über die aktive "
-            "Engine weiter — schick ihn einfach ohne `/use-engine` nochmal.\n"
+            "The Tiered Delegation Engine is switched off on this installation "
+            f"— active worker engine: `{_worker_mode}`.\n\n"
+            "Turn it on in **Settings → Worker Engine** (choose `tde`), or "
+            "send the task again without `/use-engine` to run it on the "
+            "active engine.\n"
         )
         _os_audit("os_turn.started", {"model": _os_model_used})
         tm.record_event(task_id, {
@@ -6434,7 +6500,7 @@ async def _stream_turn_impl(
             yield {"type": "engine", "engine": "acs",
                    "label": "ACS (Agentic Compute Fan-out)"}
             yield {"type": "delta",
-                   "text": f"⚙ Delegation an ACS-Worker gestartet (run {run_id})…\n"}
+                   "text": f"⚙ Delegated to ACS workers (run {run_id})…\n"}
 
             run_task = asyncio.create_task(runtime.run(spec_dict, run_id=run_id))
             seen_traces: set[str] = set()
@@ -6529,13 +6595,13 @@ async def _stream_turn_impl(
                     await asyncio.sleep(2.0)
                     for worker in _new_worker_traces():
                         yield {"type": "delta",
-                               "text": f"✓ Worker {worker} abgeschlossen\n"}
+                               "text": f"✓ Worker {worker} finished\n"}
                     for _la in _new_live_artifacts():
                         yield _la
                 # Final poll — catch workers/artifacts that landed in the last window.
                 for worker in _new_worker_traces():
                     yield {"type": "delta",
-                           "text": f"✓ Worker {worker} abgeschlossen\n"}
+                           "text": f"✓ Worker {worker} finished\n"}
                 for _la in _new_live_artifacts():
                     yield _la
                 # Await the result — may raise if ACSRuntime encountered an error

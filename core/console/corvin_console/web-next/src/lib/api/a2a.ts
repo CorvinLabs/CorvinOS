@@ -650,11 +650,32 @@ export class A2AAttachmentLimitError extends Error {}
 /** Mirrors a2a_attachments.py::_NAME_RE — alnum/dot/underscore/hyphen only,
  * no leading dot, no spaces (unlike session/group attachment names, which
  * keep spaces via chat.py::_safe_attach_name). */
+const WINDOWS_RESERVED = new Set([
+  "CON", "PRN", "AUX", "NUL",
+  ...Array.from({ length: 9 }, (_, i) => `COM${i + 1}`),
+  ...Array.from({ length: 9 }, (_, i) => `LPT${i + 1}`),
+]);
+
+/** Mirrors a2a_attachments.validate_attachment_name (incl. the Windows
+ * rules: no reserved device stems, no trailing dot). */
 function sanitizeA2AAttachmentName(raw: string, index: number): string {
   const base = raw.replace(/^.*[/\\]/, ""); // strip any path components
-  let clean = base.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[.]+/, "");
+  let clean = base.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[.]+/, "").replace(/\.+$/, "");
   if (!clean) clean = `file_${index}`;
+  if (WINDOWS_RESERVED.has(clean.split(".")[0].toUpperCase())) clean = `_${clean}`;
   return clean.slice(0, 128);
+}
+
+/** The receiver refuses names that differ only in case (one file on
+ * NTFS/APFS) — make them unique before sending. */
+function uniqueCaseInsensitive(name: string, taken: Set<string>): string {
+  let candidate = name;
+  for (let n = 2; taken.has(candidate.toLowerCase()); n++) {
+    const dot = name.lastIndexOf(".");
+    candidate = dot > 0 ? `${name.slice(0, dot)}_${n}${name.slice(dot)}` : `${name}_${n}`;
+  }
+  taken.add(candidate.toLowerCase());
+  return candidate;
 }
 
 function readFileAsBase64(file: File): Promise<string> {
@@ -681,7 +702,9 @@ function readFileAsBase64(file: File): Promise<string> {
  */
 export async function encodeFilesForA2A(
   files: File[],
+  alreadyStaged: string[] = [],
 ): Promise<{ name: string; mime: string; size: number; content_b64: string }[]> {
+  const taken = new Set(alreadyStaged.map((n) => n.toLowerCase()));
   if (files.length > A2A_MAX_ATTACHMENTS_COUNT) {
     throw new A2AAttachmentLimitError(
       `Too many files for a peer message — max ${A2A_MAX_ATTACHMENTS_COUNT} (A2A envelope cap)`,
@@ -699,7 +722,7 @@ export async function encodeFilesForA2A(
     }
     const content_b64 = await readFileAsBase64(f);
     out.push({
-      name: sanitizeA2AAttachmentName(f.name, i),
+      name: uniqueCaseInsensitive(sanitizeA2AAttachmentName(f.name, i), taken),
       mime: f.type || "application/octet-stream",
       size: f.size,
       content_b64,

@@ -107,3 +107,51 @@ class EveryProbeIsStampedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Round2RegressionTests(unittest.TestCase):
+    def test_claimed_record_survives_a_concurrent_sweep(self):
+        """rename kept the staged mtime: a record staged > 60 s ago looked like
+        a crash leftover the moment it was claimed and a sweep deleted it."""
+        import os
+        import time as _t
+        from unittest import mock
+        import a2a_pending_claim as claim_mod
+        d = Path(tempfile.mkdtemp())
+        rec = ps.create_pending_send(d, peer_id="p", text="hi")
+        pdir = ps._pending_dir(d)
+        staged = pdir / f"{rec['pending_id']}.json"
+        old = _t.time() - 300
+        os.utime(staged, (old, old))
+        real_read = Path.read_text
+
+        def read_after_sweep(self, *a, **k):
+            if self.suffix == ".claimed":
+                claim_mod.sweep_stale_claims(pdir)   # another confirm's sweep, mid-claim
+            return real_read(self, *a, **k)
+
+        with mock.patch.object(Path, "read_text", read_after_sweep):
+            got = ps.pop_pending_send(d, rec["pending_id"])
+        self.assertIsNotNone(got, "an in-flight claim was swept away")
+
+    def test_default_nonce_store_refuses_to_degrade(self):
+        import a2a_nonce_store as ns
+        home = Path(tempfile.mkdtemp())
+        (home / "global").mkdir()
+        (home / "global" / "nonces").write_text("not a directory")
+        with self.assertRaises(RuntimeError):
+            ns.default_nonce_store(home)
+
+    def test_attachment_names_safe_on_windows(self):
+        from a2a_attachments import AttachmentError, validate_attachment_name, validate_attachments
+        import base64, hashlib
+        for bad in ("CON", "nul.txt", "COM1.log", "lpt9", "report."):
+            with self.assertRaises(AttachmentError, msg=bad):
+                validate_attachment_name(bad)
+        validate_attachment_name("console.txt")
+        def att(name):
+            data = b"x"
+            return {"name": name, "mime": "text/plain", "content_b64": base64.b64encode(data).decode(),
+                    "sha256": hashlib.sha256(data).hexdigest(), "size": 1}
+        with self.assertRaises(AttachmentError):
+            validate_attachments([att("a.txt"), att("A.TXT")])

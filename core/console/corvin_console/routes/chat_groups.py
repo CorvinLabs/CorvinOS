@@ -27,6 +27,7 @@ participation even though the two facts live in different stores.
 """
 from __future__ import annotations
 
+import logging
 import mimetypes
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -59,6 +60,8 @@ Session = Annotated[session_auth.SessionRecord, Depends(require_session_csrf_on_
 
 ParticipantKind = Literal["human", "agent", "a2a_peer"]
 
+logger = logging.getLogger(__name__)
+
 # Outbound group delivery runs off the request thread: a peer send blocks for
 # up to its timeout, and a group message must not hold the HTTP response.
 _FANOUT_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="group-fanout")
@@ -77,15 +80,22 @@ def _peer_label(peer_endpoint_id: str) -> str:
 
 def _deliver_to_peers(
     *, tenant_id: str, group_id: str, endpoint_ids: list[str], text: str,
+    message_id: str | None = None,
 ) -> None:
     """Send one group message to each peer endpoint, carrying ``group_id``.
-    Never raises; every outcome is audited."""
+    Never raises; every outcome is audited, and the stored message's
+    ``delivery`` ends as ``delivered`` only when every peer accepted it
+    (a peer that refuses — not a participant, revoked — now answers
+    ``rejected``), else ``failed:<n>`` — the UI showed "sent to peers" for
+    messages that never arrived."""
+    failed = 0
     for ep in endpoint_ids:
         try:
             result = RemoteTriggerSender().send(ep, text, purpose_id="group_message", group_id=group_id)
             ok = bool(result.ok)
         except Exception:  # noqa: BLE001 — a failing peer must not stop the others
             ok = False
+        failed += 0 if ok else 1
         try:
             console_audit.action_performed(
                 tenant_id=tenant_id, sid_fingerprint=f"a2a:{ep}",
@@ -94,10 +104,18 @@ def _deliver_to_peers(
             )
         except Exception:  # noqa: BLE001
             pass
+    if message_id:
+        try:
+            tenant_dir = _a2a_paths.tenant_global_dir(tenant_id)
+            _store.set_delivery(tenant_dir, group_id, message_id,
+                                "delivered" if failed == 0 else f"failed:{failed}")
+        except Exception:  # noqa: BLE001 — the outcome is audited either way
+            pass
 
 
 def _schedule_delivery(
     *, tenant_id: str, group: dict[str, Any], text: str, exclude: str | None = None,
+    message_id: str | None = None,
 ) -> list[str]:
     endpoint_ids = [
         p["peer_endpoint_id"] for p in group["participants"]
@@ -106,7 +124,7 @@ def _schedule_delivery(
     if endpoint_ids:
         _FANOUT_POOL.submit(
             _deliver_to_peers, tenant_id=tenant_id, group_id=group["group_id"],
-            endpoint_ids=endpoint_ids, text=text,
+            endpoint_ids=endpoint_ids, text=text, message_id=message_id,
         )
     return endpoint_ids
 
@@ -353,7 +371,8 @@ def send_message_to_peer(rec: Session, group_id: str, body: SendToPeerRequest) -
             tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
             action="chat.group.message_send_to_peer_failed", target_kind="chat_group", target_id=group_id,
         )
-        raise HTTPException(status_code=500, detail=f"Failed to send to peer: {str(e)}") from e
+        logger.warning("group send to peer failed for group=%s", group_id, exc_info=True)
+        raise HTTPException(status_code=502, detail="Failed to send to peer") from e
 
     return SendToPeerResponse(message_id=msg["id"], status="sent_pending")
 
@@ -380,7 +399,7 @@ def send_message(rec: Session, group_id: str, body: SendMessageRequest) -> Messa
         tenant_dir, group_id,
         sender_participant_id=body.sender_participant_id,
         text=body.text,
-        delivery="fanout" if has_peers else "local",
+        delivery="pending" if has_peers else "local",
     )
     console_audit.action_performed(
         tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
@@ -391,7 +410,7 @@ def send_message(rec: Session, group_id: str, body: SendMessageRequest) -> Messa
     # ``text`` alone, no attachments) — an uploaded file below is visible to
     # local participants of this group only, same as any other local-first
     # chat surface without an A2A workdir to share.
-    _schedule_delivery(tenant_id=rec.tenant_id, group=g, text=body.text)
+    _schedule_delivery(tenant_id=rec.tenant_id, group=g, text=body.text, message_id=msg["id"])
     return MessageOut(**msg)
 
 
@@ -499,6 +518,11 @@ def handle_inbound_group_message(
             # Only an ACTIVE friend may open one — the same gate that lets it
             # send us anything at all.
             require_friendship_active(sender_origin_id)
+            creator = f"{_MIRROR_CREATOR_PREFIX}{sender_origin_id}"
+            if (_store.count_groups(tenant_dir) >= _store.MAX_GROUPS_TOTAL
+                    or _store.count_groups(tenant_dir, created_by=creator)
+                    >= _store.MAX_MIRROR_GROUPS_PER_PEER):
+                return {"status": "error", "reason": "group_limit_reached"}
             label = _peer_label(sender_origin_id)
             try:
                 _store.create_group(

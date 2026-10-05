@@ -70,6 +70,10 @@ MAX_ATTACHMENT_NAME_LEN = 128
 # Allowed name pattern: alnum + dot + underscore + hyphen, no leading
 # dot, no path separators. Rejects "..", "../foo", ".ssh", etc.
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$")
+_WINDOWS_RESERVED = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
+)
 
 
 # ── Exceptions ────────────────────────────────────────────────────────────
@@ -199,6 +203,13 @@ def validate_attachment_name(name: str) -> str:
     if ".." in name:
         # _NAME_RE already excludes "..", but defence-in-depth.
         raise AttachmentError("attachment_name_dotdot")
+    if name.endswith("."):
+        # Windows strips a trailing dot: "a." and "a" are one file there.
+        raise AttachmentError("attachment_name_trailing_dot")
+    if name.split(".", 1)[0].upper() in _WINDOWS_RESERVED:
+        # On a Windows receiver CON/NUL/COM1… are devices, not files: the
+        # worker's input would be swallowed or written to the console.
+        raise AttachmentError("attachment_name_reserved")
     return name
 
 
@@ -222,9 +233,9 @@ def validate_attachments(attachments: list) -> list[Attachment]:
             raise AttachmentError("attachment_not_object")
         att = Attachment.from_dict(raw)
         validate_attachment_name(att.name)
-        if att.name in seen_names:
+        if att.name.casefold() in seen_names:
             raise AttachmentError("attachment_duplicate_name")
-        seen_names.add(att.name)
+        seen_names.add(att.name.casefold())
 
         # Pre-check estimated size before decoding to prevent CPU/memory
         # exhaustion via 16 × 62.5 KiB base64 payloads (ADR-0099 iter-2

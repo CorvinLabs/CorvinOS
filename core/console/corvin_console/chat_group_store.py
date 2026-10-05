@@ -23,6 +23,7 @@ Callers MUST re-check ``require_friendship_active`` before admitting an
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -38,6 +39,15 @@ _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MAX_TITLE_LEN = 128
 _MAX_DISPLAY_NAME_LEN = 64
 _MAX_MESSAGE_LEN = 16 * 1024
+# A group's message log is trimmed to its newest _MAX_MESSAGES_KEPT entries
+# once it passes _TRIM_AT_BYTES — inbound A2A messages arrive without an
+# operator action, and the log had no bound at all.
+_MAX_MESSAGES_KEPT = 2000
+_TRIM_AT_BYTES = 2 * 1024 * 1024
+# Groups a peer can make this instance create by messaging into an unknown
+# group_id (mirror groups), per peer and in total.
+MAX_MIRROR_GROUPS_PER_PEER = 20
+MAX_GROUPS_TOTAL = 500
 
 
 class ChatGroupError(Exception):
@@ -229,6 +239,74 @@ def is_participant(tenant_global_dir: Path, group_id: str, participant_id: str) 
     return any(p["participant_id"] == participant_id for p in rec["participants"])
 
 
+@contextlib.contextmanager
+def _messages_lock(d: Path):
+    """Cross-process lock for one group's message log (appends, trims and
+    delivery updates are read-modify-write on the same file)."""
+    import a2a_friendship as _ft  # type: ignore[import-not-found]  # noqa: PLC0415
+    with _ft.config_file_lock(d):
+        yield
+
+
+def count_groups(tenant_global_dir: Path, *, created_by: str | None = None) -> int:
+    gdir = _groups_dir(tenant_global_dir)
+    if not gdir.is_dir():
+        return 0
+    n = 0
+    for child in gdir.iterdir():
+        meta = child / "meta.json"
+        if not meta.exists():
+            continue
+        if created_by is None:
+            n += 1
+            continue
+        try:
+            if json.loads(meta.read_text(encoding="utf-8")).get("created_by") == created_by:
+                n += 1
+        except Exception:  # noqa: BLE001
+            continue
+    return n
+
+
+def _trim(path: Path) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    if len(lines) <= _MAX_MESSAGES_KEPT:
+        return
+    tmp = path.with_suffix(".jsonl.tmp")
+    tmp.write_text("".join(lines[-_MAX_MESSAGES_KEPT:]), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def set_delivery(tenant_global_dir: Path, group_id: str, message_id: str, delivery: str) -> bool:
+    """Record a message's outbound delivery outcome (pending → delivered /
+    failed). Returns False when the message is gone (trimmed / group deleted)."""
+    d = _group_dir(tenant_global_dir, group_id)
+    if d is None or not (d / "messages.jsonl").exists():
+        return False
+    path = d / "messages.jsonl"
+    with _messages_lock(d):
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        found = False
+        for i, line in enumerate(lines):
+            try:
+                rec = json.loads(line)
+            except Exception:  # noqa: BLE001
+                continue
+            if rec.get("id") == message_id:
+                rec["delivery"] = delivery
+                lines[i] = json.dumps(rec) + "\n"
+                found = True
+                break
+        if not found:
+            return False
+        tmp = path.with_suffix(".jsonl.tmp")
+        tmp.write_text("".join(lines), encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    return True
+
+
 def append_message(
     tenant_global_dir: Path,
     group_id: str,
@@ -254,9 +332,12 @@ def append_message(
         "delivery": delivery,
     }
     path = d / "messages.jsonl"
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(msg) + "\n")
-    os.chmod(path, 0o600)
+    with _messages_lock(d):
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(msg) + "\n")
+        os.chmod(path, 0o600)
+        if path.stat().st_size > _TRIM_AT_BYTES:
+            _trim(path)
     return msg
 
 

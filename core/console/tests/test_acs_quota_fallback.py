@@ -216,11 +216,11 @@ class ACSQuotaFallbackTest(unittest.TestCase):
 
         # (D) ACS runtime's run() was NOT called with a full ACS fan-out
         # (The fake spawn was called instead — the direct OS turn path)
-        # We verify indirectly: no "⚙ Delegation an ACS-Worker gestartet" delta
+        # We verify indirectly: no "⚙ Delegated to ACS workers" delta
         delegation_start_deltas = [
             e for e in events
             if e.get("type") == "delta"
-            and "ACS-Worker gestartet" in (e.get("text") or "")
+            and "Delegated to ACS workers" in (e.get("text") or "")
         ]
         self.assertFalse(delegation_start_deltas,
                          "ACS delegation start delta must NOT appear on quota fallback")
@@ -260,7 +260,7 @@ class ACSQuotaFallbackTest(unittest.TestCase):
         delegation_deltas = [
             e for e in events
             if e.get("type") == "delta"
-            and "ACS-Worker gestartet" in (e.get("text") or "")
+            and "Delegated to ACS workers" in (e.get("text") or "")
         ]
         self.assertTrue(
             delegation_deltas,

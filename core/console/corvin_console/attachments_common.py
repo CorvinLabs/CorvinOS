@@ -158,41 +158,59 @@ async def receive_uploaded_files(
         )
     if attach_dir.is_symlink():
         raise HTTPException(http_status.HTTP_409_CONFLICT, "attachments directory is a symlink")
-    payloads: list[tuple[UploadFile, bytes]] = []
+    # Sizes first, from the spooled parts, so a refused batch writes nothing.
+    # Content is then streamed to disk in chunks — never the whole batch in
+    # RAM (10 × 50 MB per request held in memory otherwise).
     for upload in files:
-        if upload.size is not None and upload.size > max_bytes:
+        size = upload.size
+        if size is None:
+            upload.file.seek(0, os.SEEK_END)
+            size = upload.file.tell()
+            upload.file.seek(0)
+        if size > max_bytes:
             raise HTTPException(
                 http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 f"File exceeds 50 MB limit: {upload.filename!r}",
             )
-    for upload in files:
-        data = await upload.read(max_bytes + 1)
-        if len(data) > max_bytes:
-            raise HTTPException(
-                http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                f"File exceeds 50 MB limit: {upload.filename!r}",
-            )
-        payloads.append((upload, data))
 
     attach_dir.mkdir(parents=True, exist_ok=True)
     if attach_dir.is_symlink():
         raise HTTPException(http_status.HTTP_409_CONFLICT, "attachments directory is a symlink")
     results: list[dict[str, Any]] = []
-    for upload, data in payloads:
-        fd, safe_name = _open_exclusive(attach_dir, safe_attach_name(upload.filename or "file"))
-        try:
-            view = memoryview(data)
-            while view:
-                view = view[os.write(fd, view):]
-        finally:
-            os.close(fd)
-        mime = upload.content_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
-        results.append({
-            "name": safe_name,
-            "size": len(data),
-            "mime": mime,
-            "path": f"{path_prefix}/{safe_name}",
-        })
+    written: list[Path] = []
+    try:
+        for upload in files:
+            fd, safe_name = _open_exclusive(attach_dir, safe_attach_name(upload.filename or "file"))
+            written.append(attach_dir / safe_name)
+            size = 0
+            try:
+                await upload.seek(0)
+                while chunk := await upload.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise HTTPException(
+                            http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            f"File exceeds 50 MB limit: {upload.filename!r}",
+                        )
+                    view = memoryview(chunk)
+                    while view:
+                        view = view[os.write(fd, view):]
+            finally:
+                os.close(fd)
+            mime = upload.content_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+            results.append({
+                "name": safe_name,
+                "size": size,
+                "mime": mime,
+                "path": f"{path_prefix}/{safe_name}",
+            })
+    except BaseException:
+        for p in written:  # a refused batch leaves nothing behind
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        raise
     return results
 
 

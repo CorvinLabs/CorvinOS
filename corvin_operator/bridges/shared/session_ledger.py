@@ -1050,11 +1050,18 @@ def records_from_turn_log(turns: list[dict[str, Any]],
     for t in turns:
         role = t.get("role")
         if role == "user" and t.get("btw"):
-            # A /btw note sent while a turn streamed (console): part of that
-            # turn, whose reply answers it. A note a gate refused is never
-            # re-supplied — not even folded in.
-            if pending is not None and not t.get("gate_refused"):
-                pending["user"] = (pending["user"] + "\n" + _text(t)).strip()
+            # A /btw note sent while a turn streamed (console) gets the
+            # bridge's shape: its own "/btw …" record, never spawned, placed
+            # BEFORE the turn it was injected into (that turn is emitted when
+            # its answer closes it). uncovered_turns steps over the note's
+            # transcript entry by exactly this shape; folding the note into
+            # the turn's user text made the turn unmatchable and every later
+            # spawn re-supplied the whole chat (review R2). A note a gate
+            # refused is never re-supplied at all.
+            if not t.get("gate_refused"):
+                out.append({"kind": "turn", "ts": t.get("ts", 0), "user": _text(t),
+                            "assistant": "(note delivered into the running turn)",
+                            "spawned": False})
             continue
         if role == "user":
             if pending is not None:
