@@ -740,19 +740,149 @@ def _bundled_bridge_declarations(
 _BUILTIN_ROOT: Path = Path(__file__).resolve().parents[1] / "buildin"
 
 
+def _marketplace_sibling_dir() -> Path:
+    # bootstrap.py is core/plugins/corvin_plugins/ → parents[3] is the CorvinOS repo root;
+    # its sibling is the Corvin-Marketplace checkout.
+    return Path(__file__).resolve().parents[3].parent / "Corvin-Marketplace" / "plugins" / "buildin"
+
+
+def _corvin_home() -> Path:
+    """Same resolution ``awpkg.installer._resolve_corvin_home`` uses: an explicit
+    ``CORVIN_HOME``, else ``~/.corvin`` (the directory a running install's
+    tenants/sessions already live under)."""
+    import os
+    env = os.environ.get("CORVIN_HOME")
+    if env:
+        return Path(os.path.expanduser(os.path.expandvars(env)))
+    return Path.home() / ".corvin"
+
+
+def _marketplace_cache_dir() -> Path:
+    """Where :func:`ensure_marketplace_source` caches a GitHub-downloaded copy of
+    the Corvin-Marketplace repo when no sibling checkout exists (fresh install).
+    Its ``plugins/buildin`` is what :func:`_marketplace_root` falls back to."""
+    return _corvin_home() / "marketplace-cache" / "Corvin-Marketplace"
+
+
+#: Public repo the marketplace's plugin SOURCE lives in — the same one
+#: routes/marketplace.py's ``_IndexManager.get_index`` already falls back to
+#: for the index's metadata JSON when it has no local copy either.
+_MARKETPLACE_GITHUB_TARBALL = "https://api.github.com/repos/CorvinLabs/Corvin-Marketplace/tarball/main"
+
+#: Re-check GitHub at most this often once a sync has succeeded, so a
+#: nonexistent plugin id (typo, not-yet-published) does not re-download the
+#: whole repo on every resolve call — but an operator who just published a
+#: new plugin still sees it within a bounded wait, not "forever until restart".
+_MARKETPLACE_SYNC_TTL_S = 6 * 60 * 60
+
+
 def _marketplace_root() -> Path:
     """Root of plugins whose SOURCE lives in the Corvin-Marketplace repo, not in
     CorvinOS (operator rule — keep the CorvinOS codebase small; plugin source is owned
     by the marketplace, CorvinOS only loads it). Resolved from ``CORVIN_MARKETPLACE_ROOT``
     if set, else a sibling ``../Corvin-Marketplace/plugins/buildin`` checkout next to the
-    CorvinOS repo. A missing path scans to ``[]`` (behaviour-neutral)."""
+    CorvinOS repo, else (fresh install, no sibling checkout) the GitHub-synced cache
+    :func:`ensure_marketplace_source` populates under ``_marketplace_cache_dir()``. A
+    missing path scans to ``[]`` (behaviour-neutral)."""
     import os
     env = os.environ.get("CORVIN_MARKETPLACE_ROOT")
     if env:
         return Path(env)
-    # bootstrap.py is core/plugins/corvin_plugins/ → parents[3] is the CorvinOS repo root;
-    # its sibling is the Corvin-Marketplace checkout.
-    return Path(__file__).resolve().parents[3].parent / "Corvin-Marketplace" / "plugins" / "buildin"
+    sibling = _marketplace_sibling_dir()
+    if sibling.is_dir():
+        return sibling
+    cached = _marketplace_cache_dir() / "plugins" / "buildin"
+    if cached.is_dir():
+        return cached
+    return sibling
+
+
+def ensure_marketplace_source(*, force: bool = False) -> None:
+    """Download the Corvin-Marketplace repo from GitHub into the cache dir when
+    no local checkout is usable yet.
+
+    A fresh install has no sibling ``git clone`` of Corvin-Marketplace next to
+    CorvinOS (plugin source is deliberately kept out of this repo — see
+    :func:`_marketplace_root`), so every builtin/contributor install used to
+    fail with "no local source for ..." until an operator cloned it there by
+    hand. This mirrors, for the plugin SOURCE tree, the GitHub fallback
+    ``routes/marketplace.py``'s ``_IndexManager.get_index`` already has for the
+    index's metadata JSON alone.
+
+    A set ``CORVIN_MARKETPLACE_ROOT`` or an existing sibling checkout is
+    operator-managed and never touched here. Best-effort: a network or
+    extraction failure is logged and swallowed, leaving the caller's own "no
+    local source" error to surface with its specific, actionable message.
+    """
+    import os
+    import time
+
+    if os.environ.get("CORVIN_MARKETPLACE_ROOT"):
+        return
+    if not force and _marketplace_sibling_dir().is_dir():
+        return
+    cache_root = _marketplace_cache_dir()
+    marker = cache_root.parent / ".synced_at"
+    if not force and marker.is_file() and (cache_root / "plugins").is_dir():
+        try:
+            age = time.time() - float(marker.read_text().strip())
+            if age < _MARKETPLACE_SYNC_TTL_S:
+                return
+        except (OSError, ValueError):
+            pass
+    try:
+        _download_and_extract_marketplace(cache_root)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(time.time()))
+        log.info("marketplace source synced from GitHub into %s", cache_root)
+    except Exception:  # noqa: BLE001 - best-effort fallback, not a hard dependency
+        log.warning("marketplace source auto-sync from GitHub failed", exc_info=True)
+
+
+def _download_and_extract_marketplace(dest_root: Path) -> None:
+    """Download+extract the Corvin-Marketplace tarball into *dest_root* so it
+    becomes that repo's root (``dest_root/plugins/buildin/...``). Tarball member
+    paths are validated the same way ``mcp_manager.installer._extract_tarball``
+    already does for GitHub downloads elsewhere in this codebase: no absolute
+    paths, no ``..`` traversal, no symlink/hardlink escaping the extraction root.
+    """
+    import shutil
+    import tarfile
+    import tempfile
+    import urllib.request
+
+    req = urllib.request.Request(
+        _MARKETPLACE_GITHUB_TARBALL, headers={"User-Agent": "CorvinOS-marketplace-sync/1.0"}
+    )
+    with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - fixed https URL, not operator input
+            shutil.copyfileobj(resp, tmp)
+    try:
+        with tarfile.open(tmp_path, "r:gz") as tf:
+            for member in tf.getmembers():
+                if member.name.startswith("/") or ".." in member.name.split("/"):
+                    raise ValueError(f"Unsafe path in marketplace tarball: {member.name!r}")
+                if (member.issym() or member.islnk()) and member.linkname:
+                    link = member.linkname
+                    if link.startswith("/") or ".." in link.replace("\\", "/").split("/"):
+                        raise ValueError(
+                            f"Unsafe symlink/hardlink target in marketplace tarball: {link!r}"
+                            f" (member: {member.name!r})"
+                        )
+            names = tf.getnames()
+            # GitHub's tarball API nests everything under one "<owner>-<repo>-<sha>/"
+            # directory; extract to a scratch dir first and flatten it into
+            # dest_root so callers see dest_root AS the repo root.
+            with tempfile.TemporaryDirectory() as scratch:
+                tf.extractall(scratch)
+                top = names[0].split("/")[0] if names else ""
+                extracted = Path(scratch) / top if top else Path(scratch)
+                if dest_root.exists():
+                    shutil.rmtree(dest_root)
+                shutil.move(str(extracted), str(dest_root))
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def origin_for_plugin_dir(plugin_dir: Path) -> tuple[str, str]:

@@ -121,15 +121,32 @@ def resolve_builtin_dir(index_id: str) -> Path:
             f"{index_id!r} is tier {tier!r}; only {sorted(_LOCAL_TIERS)} install from "
             f"the marketplace checkout (remote download is out of scope)"
         )
-    for root in _plugins_roots():
-        resolved_root = root.resolve(strict=False)
-        candidate = (root / tier / category / name)
-        resolved = candidate.resolve(strict=False)
-        # Containment guard: even a crafted category/name may not escape the root.
-        if resolved_root not in resolved.parents:
-            continue
-        if (resolved / "plugin.yaml").is_file():
-            return resolved
+
+    def _find() -> Path | None:
+        for root in _plugins_roots():
+            resolved_root = root.resolve(strict=False)
+            candidate = (root / tier / category / name)
+            resolved = candidate.resolve(strict=False)
+            # Containment guard: even a crafted category/name may not escape the root.
+            if resolved_root not in resolved.parents:
+                continue
+            if (resolved / "plugin.yaml").is_file():
+                return resolved
+        return None
+
+    found = _find()
+    if found is not None:
+        return found
+    # A fresh install has no sibling Corvin-Marketplace checkout yet (operator
+    # rule: plugin source lives there, not in CorvinOS) — try a one-shot GitHub
+    # sync (bootstrap.ensure_marketplace_source) before giving up, the same way
+    # routes/marketplace.py's index loader already falls back to GitHub for the
+    # metadata JSON. A no-op if a checkout/override already exists or a sync
+    # already ran recently.
+    _bootstrap.ensure_marketplace_source()
+    found = _find()
+    if found is not None:
+        return found
     raise MarketplaceResolveError(
         # Name the tier the id actually carries. This message said "buildin"
         # unconditionally, so a contributor plugin missing its plugin.yaml sent
