@@ -20,12 +20,24 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/lib/auth";
+import { ApiError } from "@/lib/api/client";
 import {
   getForgeRunStatus,
   startForgeGeneration,
   type ForgeKind,
   type ForgeRunStatus,
 } from "@/lib/api/forge-creator";
+
+/** A run poll can 401 mid-generation — the session merely idled past its
+ *  timeout (ADR-0037's 8h absolute / 1h idle window), it is not that the run
+ *  itself is gone. AuthProvider (lib/auth.tsx) renews the session silently and
+ *  invalidates every non-auth query on success, which resumes this poll on its
+ *  own. Treating a 401 as terminal here raced that renewal: it gave up on a
+ *  live, multi-minute run and told the operator to start over before the
+ *  silent renewal (often <1s) ever got a chance. */
+function isSessionExpiry(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 401;
+}
 
 const PHASE_LABELS: Record<string, string> = {
   planning: "Planning",
@@ -116,16 +128,20 @@ export default function ForgeCreatorPanel({
     queryFn: ({ signal }) => getForgeRunStatus(runId!, signal),
     enabled: !!runId,
     refetchInterval: (query) => {
-      if (query.state.error) return false;
+      // A 401 keeps polling through it — see isSessionExpiry — everything
+      // else (the run finished, or a real "not found") stops it.
+      if (query.state.error && !isSessionExpiry(query.state.error)) return false;
       const s = query.state.data?.status;
       return s === "success" || s === "failed" ? false : 1000;
     },
   });
 
   // Runs live in the console's memory: after a restart the status route
-  // answers 404. Say so and free the form instead of spinning forever.
+  // answers 404. Say so and free the form instead of spinning forever. A 401
+  // is a session hiccup, not a dead run (see isSessionExpiry) — leave it be
+  // so the silent renewal's query invalidation can resume this poll.
   useEffect(() => {
-    if (!run.error || !runId) return;
+    if (!run.error || !runId || isSessionExpiry(run.error)) return;
     setError("This run is no longer known to the console (it may have restarted). Start a new one.");
     setRunId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -146,7 +162,10 @@ export default function ForgeCreatorPanel({
     onError: (e: Error) => setError(e.message),
   });
 
-  const isRunning = !!runId && !run.error && (!run.data || run.data.status === "running");
+  // A 401 still counts as running — see isSessionExpiry — otherwise the form
+  // re-enabled mid-renewal and a second "Generate" click raced the first run.
+  const isRunning =
+    !!runId && (isSessionExpiry(run.error) || (!run.error && (!run.data || run.data.status === "running")));
   const status = runId ? run.data : undefined;
 
   return (

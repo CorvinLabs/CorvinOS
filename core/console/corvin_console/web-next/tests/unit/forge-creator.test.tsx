@@ -137,6 +137,25 @@ describe("Tool Forge", () => {
     expect(window.sessionStorage.getItem("forge-creator-run:tool")).toBeNull();
   });
 
+  it("rides out a transient 401 instead of abandoning a live run", async () => {
+    window.sessionStorage.setItem("forge-creator-run:tool", "run-401");
+    let calls = 0;
+    server.use(http.get("/v1/console/forge-creator/status/run-401", () => {
+      calls += 1;
+      if (calls === 1) return HttpResponse.json({ detail: "Not authenticated" }, { status: 401 });
+      return HttpResponse.json({
+        run_id: "run-401", kind: "tool", status: "running", phase: "generation",
+        phases: ["planning", "validation", "sandbox_test", "review", "promotion"], progress: 40,
+        message: "Still generating…", engine: "claude_code", error: null, tool: null, plugin: null,
+      });
+    }));
+    wrap(<ForgeCreatorPanel kind="tool" />);
+    expect(await screen.findByText("Still generating…", {}, { timeout: 3000 })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect((screen.getByTestId("tool-submit") as HTMLButtonElement).disabled).toBe(true);
+    expect(window.sessionStorage.getItem("forge-creator-run:tool")).toBe("run-401");
+  });
+
   it("re-attaches to a run after the tab was left and re-entered", async () => {
     window.sessionStorage.setItem("forge-creator-run:plugin", "run-9");
     server.use(http.get("/v1/console/forge-creator/status/run-9", () => HttpResponse.json({
