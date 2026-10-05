@@ -5,7 +5,6 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   CheckCircle2,
-  Clock,
   Copy,
   Globe2,
   Key,
@@ -36,7 +35,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  type A2AEvent,
   type A2AOrigin,
   type A2AEndpoint,
   type A2ARedeemResponse,
@@ -44,7 +42,6 @@ import {
   type FriendshipConnection,
   type FriendshipImportResponse,
   type FriendshipCreateResponse,
-  getA2ALog,
   getA2AOrigins,
   getA2AEndpoints,
   getA2APairMyInfo,
@@ -53,7 +50,6 @@ import {
   listA2AInvites,
   revokeA2AInvite,
   getMyA2AUrl,
-  setMyA2AUrl,
   createFriendshipToken,
   importFriendshipToken,
   setFriendshipUrl,
@@ -71,47 +67,11 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { AgentLiveFeed } from "@/components/agent-hub/live-feed";
+// Audit trail now lives on Compliance (A2AAuditTrail) — Console navigation
+// refactor, Phase 3. Re-used here until Agent Hub itself is removed (Phase 4).
+import { A2AAuditTrail } from "@/components/compliance/A2AAuditTrail";
 
 // ── helpers ────────────────────────────────────────────────────────
-
-function fmtTs(ts: number | null): string {
-  if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleTimeString();
-}
-
-function fmtDuration(ms: number | null): string {
-  if (ms === null) return "—";
-  if (ms < 1000) return `${Math.round(ms)} ms`;
-  return `${(ms / 1000).toFixed(1)} s`;
-}
-
-function SeverityDot({ severity }: { severity: string }) {
-  if (severity === "CRITICAL")
-    return <span className="inline-block h-2 w-2 rounded-full bg-destructive" />;
-  if (severity === "WARNING")
-    return <span className="inline-block h-2 w-2 rounded-full bg-amber-400" />;
-  return <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" />;
-}
-
-function EventTypeBadge({ type }: { type: string }) {
-  const short = type.replace("A2A.", "");
-  const isRejected = short.includes("rejected");
-  const isSpawned = short.includes("spawned") || short.includes("sent");
-  return (
-    <Badge
-      variant="outline"
-      className={
-        isRejected
-          ? "border-destructive/40 text-destructive font-mono text-[10px]"
-          : isSpawned
-            ? "border-emerald-500/40 text-emerald-700 dark:text-emerald-400 font-mono text-[10px]"
-            : "font-mono text-[10px]"
-      }
-    >
-      {short}
-    </Badge>
-  );
-}
 
 function CopyChip({ value, short }: { value: string; short?: string }) {
   const [copied, setCopied] = React.useState(false);
@@ -1103,245 +1063,6 @@ function PeersTab() {
   );
 }
 
-// ── Live Feed tab ──────────────────────────────────────────────────
-
-function LiveFeedTab() {
-  const [autoRefresh, setAutoRefresh] = React.useState(true);
-
-  const log = useQuery({
-    queryKey: ["a2a", "log"],
-    queryFn: ({ signal }) => getA2ALog({ limit: 100 }, signal),
-    refetchInterval: autoRefresh ? 5_000 : false,
-  });
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          Last 100 A2A audit events (metadata only) — newest first.
-          {log.data && (
-            <span className="ml-2 font-mono text-xs">
-              {log.data.count} event{log.data.count !== 1 ? "s" : ""}
-            </span>
-          )}
-        </p>
-        <Button
-          variant={autoRefresh ? "secondary" : "outline"}
-          size="sm"
-          onClick={() => setAutoRefresh((v) => !v)}
-          className="gap-1.5"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${autoRefresh ? "animate-spin" : ""}`} style={autoRefresh ? { animationDuration: "3s" } : {}} />
-          {autoRefresh ? "Live" : "Paused"}
-        </Button>
-      </div>
-
-      <Card>
-        <CardContent className="p-0">
-          {log.isLoading && (
-            <div className="space-y-px p-4">
-              {[1, 2, 3, 4, 5].map((n) => <Skeleton key={n} className="h-10 rounded" />)}
-            </div>
-          )}
-          {log.isError && (
-            <p className="p-4 text-sm text-destructive">Failed to load events.</p>
-          )}
-          {log.data && log.data.events.length === 0 && (
-            <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
-              <Clock className="h-8 w-8 opacity-30" />
-              <p className="text-sm">No A2A events yet.</p>
-            </div>
-          )}
-          {log.data && log.data.events.length > 0 && (
-            <div className="divide-y divide-border">
-              {log.data.events.map((ev, i) => (
-                <EventRow key={i} event={ev} />
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function EventRow({ event: ev }: { event: A2AEvent }) {
-  const peer = ev.origin_id ?? ev.endpoint_id ?? "?";
-  return (
-    <div className="flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-muted/40">
-      <SeverityDot severity={ev.severity} />
-      <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">
-        {fmtTs(ev.ts)}
-      </span>
-      <EventTypeBadge type={ev.event_type} />
-      <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-        {peer}
-      </span>
-      {ev.status && (
-        <Badge
-          variant="outline"
-          className={`shrink-0 text-[10px] ${ev.status === "ok" ? "text-emerald-600" : "text-destructive"}`}
-        >
-          {ev.status}
-        </Badge>
-      )}
-      <span className="shrink-0 text-xs text-muted-foreground">
-        {fmtDuration(ev.duration_ms)}
-      </span>
-    </div>
-  );
-}
-
-// ── My URL banner ──────────────────────────────────────────────────
-
-function MyUrlBanner() {
-  const { session } = useAuth();
-  const csrf = session?.csrf_token ?? "";
-  const qc = useQueryClient();
-
-  const myUrl = useQuery({
-    queryKey: ["a2a", "my-url"],
-    queryFn: ({ signal }) => getMyA2AUrl(signal),
-    staleTime: 60_000,
-  });
-
-  const [editing, setEditing] = React.useState(false);
-  const [urlInput, setUrlInput] = React.useState("");
-  const [saving, setSaving] = React.useState(false);
-  const [copied, setCopied] = React.useState(false);
-
-  const url = myUrl.data?.url ?? null;
-  const suggested = myUrl.data?.suggested ?? null;
-
-  function isPrivateUrl(u: string | null): boolean {
-    if (!u) return false;
-    return /^https?:\/\/(localhost|127\.|::1|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/i.test(u);
-  }
-
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      await setMyA2AUrl(urlInput.trim(), csrf);
-      void qc.invalidateQueries({ queryKey: ["a2a", "my-url"] });
-      setEditing(false);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleAcceptSuggested() {
-    if (!suggested) return;
-    setSaving(true);
-    try {
-      await setMyA2AUrl(suggested, csrf);
-      void qc.invalidateQueries({ queryKey: ["a2a", "my-url"] });
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="rounded-md border border-border bg-muted/30 px-4 py-3">
-      <div className="flex items-center gap-2 mb-1.5">
-        <Globe2 className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-          My A2A URL
-        </span>
-      </div>
-
-      {!editing ? (
-        <div className="flex items-center gap-2 flex-wrap">
-          {url ? (
-            <>
-              <code className="text-sm font-mono flex-1 truncate min-w-0">{url}</code>
-              <Button size="sm" variant="ghost" className="h-7 px-2 gap-1 text-xs shrink-0"
-                onClick={() => {
-                  void navigator.clipboard.writeText(url).then(() => {
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 2000);
-                  });
-                }}>
-                <Copy className="h-3 w-3" />
-                {copied ? "Copied!" : "Copy"}
-              </Button>
-              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs shrink-0"
-                onClick={() => { setUrlInput(url); setEditing(true); }}>
-                Edit
-              </Button>
-            </>
-          ) : (
-            <div className="flex-1 space-y-2">
-              {suggested ? (
-                <>
-                  <div className={cn(
-                    "flex items-center gap-2 rounded-md border px-3 py-2",
-                    isPrivateUrl(suggested)
-                      ? "border-amber-500/40 bg-amber-500/5"
-                      : "border-accent/30 bg-accent/5"
-                  )}>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[11px] text-muted-foreground mb-0.5">
-                        Detected IP of this instance:
-                      </p>
-                      <code className="text-sm font-mono">{suggested}</code>
-                      {isPrivateUrl(suggested) && (
-                        <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
-                          ⓘ Local network address — works for pairing with
-                          other devices on this same Wi-Fi/network. For a
-                          peer outside this network, use a VPN (e.g.
-                          Tailscale) or a public domain instead.
-                        </p>
-                      )}
-                    </div>
-                    <Button size="sm" disabled={saving} className="h-7 px-3 text-xs shrink-0"
-                      onClick={handleAcceptSuggested}>
-                      {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Use this URL"}
-                    </Button>
-                  </div>
-                  <Button size="sm" variant="ghost" className="h-6 px-2 text-xs text-muted-foreground"
-                    onClick={() => { setUrlInput(suggested); setEditing(true); }}>
-                    Enter a different URL…
-                  </Button>
-                </>
-              ) : (
-                <Button size="sm" variant="outline" className="h-7 px-3 text-xs"
-                  onClick={() => { setUrlInput(""); setEditing(true); }}>
-                  Enter URL
-                </Button>
-              )}
-            </div>
-          )}
-        </div>
-      ) : (
-        <form onSubmit={handleSave} className="flex gap-2 mt-1">
-          <Input
-            autoFocus
-            placeholder="https://my-corvin.example.com"
-            value={urlInput}
-            onChange={e => setUrlInput(e.target.value)}
-            className="h-8 text-sm flex-1"
-            required
-          />
-          <Button type="submit" size="sm" disabled={saving} className="h-8 px-3 shrink-0">
-            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save"}
-          </Button>
-          <Button type="button" size="sm" variant="ghost" className="h-8 px-3 shrink-0"
-            onClick={() => setEditing(false)}>
-            ✕
-          </Button>
-        </form>
-      )}
-
-      <p className="mt-2 text-[11px] text-muted-foreground">
-        The A2A receiver runs on the same server as this console
-        (<code className="rounded bg-muted px-1">/v1/a2a/receive</code>).
-        Share this URL — the peer enters it when importing the token.
-      </p>
-    </div>
-  );
-}
-
 // ── Permission selector used in pairing forms ──────────────────────
 
 function PermissionSelector({
@@ -1738,7 +1459,10 @@ function TokenConnectSection() {
 
   return (
     <div className="space-y-6">
-      <MyUrlBanner />
+      {/* My A2A URL now lives in Settings (A2AInstanceUrlCard) — Console
+          navigation refactor, Phase 3. The create-token call above still
+          defaults to it via storedMyUrl; the backend falls back to the same
+          saved value when genUrl is left blank either way. */}
 
       <div className="rounded-md border border-accent/20 bg-accent/5 px-4 py-3 text-sm text-muted-foreground">
         <strong className="text-foreground">How it works:</strong>{" "}
@@ -2236,7 +1960,7 @@ export function AgentHubPage() {
         </TabsContent>
 
         <TabsContent value="audit" className="mt-4">
-          <LiveFeedTab />
+          <A2AAuditTrail />
         </TabsContent>
       </Tabs>
     </div>

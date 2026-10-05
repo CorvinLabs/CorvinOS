@@ -41,6 +41,7 @@ import {
 } from "@/lib/api";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { A2AAuditTrail } from "@/components/compliance/A2AAuditTrail";
 
 export function CompliancePage() {
   return (
@@ -57,6 +58,7 @@ export function CompliancePage() {
         <RolesCard />
       </div>
       <AuditTailCard />
+      <A2AAuditTrail />
       <LearningEventsCard />
       <CustomAuditLayersSection />
       <WebhookChannelsSection />

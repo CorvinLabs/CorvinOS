@@ -18,6 +18,7 @@ import { useNavigate } from "react-router-dom";
 import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getServiceTier, setServiceTier, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, type DelegationBudgetResponse, type HealingConfigResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
+import { A2AInstanceUrlCard } from "@/components/settings/A2AInstanceUrlCard";
 
 interface SettingsFile {
   label: string;
@@ -792,6 +793,11 @@ export function SettingsPage() {
       <div className="space-y-2">
         <h2 className="text-sm font-semibold text-foreground">Agentic Compute</h2>
         <DelegationBudgetCard csrf={session!.csrf_token} />
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-sm font-semibold text-foreground">A2A Instance URL</h2>
+        <A2AInstanceUrlCard />
       </div>
 
       {data && (
