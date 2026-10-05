@@ -1,56 +1,28 @@
 /**
- * Unit test for /btw command handler
- *
- * Tests that:
- * 1. The /btw command is recognized
- * 2. The instruction text is correctly extracted
- * 3. The sendBtwNote API function exists and has the correct signature
+ * sendBtwNote must target the per-session console route (where the live
+ * subprocess stdin is registered), never the old /v1/console/btw stub.
  */
-
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sendBtwNote } from '@/lib/api/chat';
 
-describe('sendBtwNote API function', () => {
-  it('should export sendBtwNote function', () => {
-    expect(typeof sendBtwNote).toBe('function');
-  });
+describe('sendBtwNote', () => {
+  afterEach(() => vi.unstubAllGlobals());
 
-  it('should accept chatId, instruction, and csrf parameters', () => {
-    const sig = sendBtwNote.toString();
-    expect(sig).toContain('chatId');
-    expect(sig).toContain('instruction');
-    expect(sig).toContain('csrf');
-  });
-});
+  it('POSTs the bare instruction to /chat/sessions/<sid>/btw', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, status: 'injected' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
 
-describe('/btw command handler logic', () => {
-  it('should recognize /btw prefix', () => {
-    const text = "/btw use Opus instead";
-    const match = text.trim().startsWith("/btw ");
-    expect(match).toBe(true);
-  });
+    const res = await sendBtwNote('abc/def', 'say BANANA', 'tok');
 
-  it('should extract instruction after /btw', () => {
-    const text = "/btw use Opus instead";
-    const instruction = text.trim().substring(5);
-    expect(instruction).toBe("use Opus instead");
-  });
-
-  it('should handle /btw with multiple words', () => {
-    const text = "/btw switch to Claude Opus and increase timeout to 60 seconds";
-    const instruction = text.trim().substring(5);
-    expect(instruction).toBe("switch to Claude Opus and increase timeout to 60 seconds");
-  });
-
-  it('should reject /btw with empty instruction', () => {
-    const text = "/btw ";
-    const instruction = text.trim().substring(5);
-    expect(instruction.trim().length).toBe(0);
-  });
-
-  it('should not match /btw without space', () => {
-    const text = "/btwtest";
-    const match = text.trim().startsWith("/btw ");
-    expect(match).toBe(false);
+    expect(res.status).toBe('injected');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toMatch(/\/v1\/console\/chat\/sessions\/abc%2Fdef\/btw$/);
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ instruction: 'say BANANA' });
   });
 });

@@ -1,8 +1,24 @@
-"""Routes for /btw Midstream Steering (ADR-0846, PRODUCTION READY)
+"""Routes for /btw Midstream Steering (ADR-0846).
 
-k=3 Complete Implementation:
-✅ L3: POST /v1/console/btw endpoint + capability gating + audit
-✅ L4: E2E tests prove guidance flow
+Status correction (ADR-2220, 2026-10-05): this module is NOT mounted into
+any running app (`grep -rn "btw_routes" --include='*.py'` outside tests
+finds no import of this module anywhere — the former "PRODUCTION READY"
+claim above was never true in the way it reads). Even if it were mounted,
+the handler below never touches a running `claude` subprocess — it is a
+TODO stub (no capability gate, no audit, no Hub publish) that returns a
+canned acknowledgement. ADR-0846's vision (a `BtwAdvisor` subsystem +
+Hub events + LoopEngineer strategy steering for long-running orchestration
+tasks) was never built either.
+
+The web console's `/btw` now works for real, through a completely
+different and much narrower mechanism: `POST /v1/console/chat/sessions/
+{sid}/btw` (`core/console/corvin_console/routes/chat.py::send_btw_note`)
+writes straight into the live per-turn `claude` subprocess's stdin
+(`chat_runtime.inject_btw_web`), mirroring the bridge adapter's
+`inject_btw` raw-stdin fallback (`corvin_operator/bridges/shared/
+adapter.py`, ADR-0069 M4/M6, ADR-0648). See ADR-2220 for the design and
+why this module was left in place (its own tests still reference it;
+deleting it is a separate, unrelated cleanup).
 """
 
 from fastapi import APIRouter, HTTPException, Depends

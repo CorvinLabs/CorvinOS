@@ -68,7 +68,19 @@ What is NOT in v1
   emitted into the canonical L16 chain per turn (EU AI Act Art. 12/13
   traceability — metadata only, mirrors the bridge adapter's event
   family, consumed by the console `/os-turns` route)
-* mid-stream /btw inject (single-shot per request)
+
+Mid-stream /btw inject (ADR-2220, landed after the note above was written)
+----------------------------------------------------------------------------
+The per-turn subprocess now runs `-p --input-format stream-json
+--output-format stream-json`, feeds the first user message as a framed
+stdin line, and keeps stdin open+registered (`_register_stdin_web`) until
+the first `result` event instead of closing it right after the write. See
+`inject_btw_web` below — it is the raw-stdin-fallback third of the bridge
+adapter's three-stage `inject_btw` (no ClaudeCodeEngine / ECI
+command_manifest layer exists on this path, so stages 1–2 do not apply),
+guarded by the SAME `agents.claude_code.guard_prompt_head` neutraliser the
+bridge's stdin branch uses. `routes/chat.py::send_btw_note` is the HTTP
+entry point (`POST /chat/sessions/{sid}/btw`).
 
 Engine routing
 --------------
@@ -1059,6 +1071,92 @@ def publish_voice_event(sid: str, path: Path, label: str) -> None:
             q.put_nowait(event)
         except asyncio.QueueFull:
             continue
+
+
+# ── /btw mid-stream injection (ADR-2220) ─────────────────────────────────
+# Mirrors corvin_operator/bridges/shared/adapter.py's `_running_stdins` /
+# `inject_btw` registry+helper pair (ADR-0069 M4/M6, ADR-0648 amendment 2) —
+# see that module's docstrings before changing anything here, the pattern is
+# deliberately replicated, not reinvented.
+#
+# The console's per-turn subprocess has no ClaudeCodeEngine abstraction
+# (_build_args / _stream_turn_impl below build the argv and write stdin
+# directly), so there is no `engine.inject()` / ECI `command_manifest` layer
+# to route through first — only the bridge's "stage 3 / _running_stdins
+# fallback" shape applies here. Maps chat_key -> the live asyncio stdin
+# StreamWriter of the currently-streaming turn. Registered right after the
+# FIRST framed user message is written (see _stream_turn_impl's spawn site),
+# unregistered the moment the first `result` event arrives — then stdin is
+# closed so `claude` can EOF; any /btw arriving after that race gets
+# "no_active_stream", exactly like the bridge's documented race outcome.
+_running_stdins_web: dict[str, asyncio.StreamWriter] = {}
+_running_stdins_web_guard = threading.Lock()
+
+
+def _register_stdin_web(chat_key: str, stdin: asyncio.StreamWriter) -> None:
+    """Register the writable stdin of a streaming console turn so that
+    `/btw` can inject an extra framed user-message into the live
+    `--input-format stream-json` stdin. Idempotent: a later register for the
+    same chat_key replaces the previous pointer."""
+    with _running_stdins_web_guard:
+        _running_stdins_web[chat_key] = stdin
+
+
+def _unregister_stdin_web(chat_key: str) -> None:
+    """Drop the per-chat stdin pointer. Idempotent — safe to call from both
+    the normal-completion and the abnormal-exit (cancel/kill) paths."""
+    with _running_stdins_web_guard:
+        _running_stdins_web.pop(chat_key, None)
+
+
+async def inject_btw_web(chat_key: str, text: str) -> str:
+    """Inject a `/btw <text>` user-message into the live console chat turn.
+
+    Returns ``"injected"`` / ``"no_active_stream"`` / ``"refused"`` — the
+    route handler (``routes/chat.py::send_btw_note``) maps this straight onto
+    the HTTP response ``status`` field.
+
+    Honesty note (operator instruction, 2026-10-05): this is deliberately
+    ONLY the bridge's raw-stdin fallback ("stage 3" of `inject_btw`). The
+    bridge's stages 1–2 (ECI CommandDispatcher / `engine.capabilities
+    mid_stream_inject` / buffered-mode queueing for engines that cannot
+    accept stdin at all) exist because the bridge drives OpenCode and Codex
+    engines too, which have no live stdin to write to. The console drives
+    `claude_code` only (`_engine_unavailable_message` in `_stream_turn_impl`
+    refuses every other configured engine before a subprocess is even
+    spawned) — so there is exactly one live transport here, and inventing a
+    buffered queue nobody would ever drain would be dishonest plumbing, not
+    a real feature. If the console ever drives a second OS engine, buffered
+    queuing belongs here too.
+    """
+    text = (text or "").strip()
+    if not text:
+        return "refused"
+    with _running_stdins_web_guard:
+        stdin = _running_stdins_web.get(chat_key)
+    if stdin is None:
+        return "no_active_stream"
+    # ADR-0648 amendment 2: frame the JSONL user message ourselves (same as
+    # the bridge's raw-stdin branch) so `guard_prompt_head` runs on the
+    # EXACT bytes the CLI will parse as this message's content — a leading
+    # "/cmd" or an "@<path>" anywhere in an un-guarded /btw text is a
+    # client-side slash-command / file-read inside the live CLI, not inert
+    # chat text (measured live over --input-format stream-json).
+    from agents.claude_code import guard_prompt_head as _guard_prompt_head  # noqa: PLC0415
+    try:
+        guarded = _guard_prompt_head(text)
+    except Exception as e:  # noqa: BLE001 — guard unavailable ⇒ refuse, never raw-write
+        _log.warning("inject_btw_web: prompt guard unavailable for chat=%s: %s", chat_key, e)
+        return "refused"
+    try:
+        payload = {"type": "user", "message": {"role": "user", "content": guarded}}
+        stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
+        await stdin.drain()
+    except (BrokenPipeError, ConnectionResetError, RuntimeError, OSError) as e:
+        _log.info("inject_btw_web: write failed (stream likely just ended) for chat=%s: %s",
+                   chat_key, e)
+        return "no_active_stream"
+    return "injected"
 
 
 def _turn_text(turn: dict[str, Any]) -> str:
@@ -2396,7 +2494,16 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
             args.append("--continue")
         return args
 
+    # ADR-2220: --input-format stream-json keeps stdin open for a second
+    # (and third, ...) framed user message while the turn is streaming — the
+    # same transport the bridge adapter's ClaudeCodeEngine uses for live
+    # `/btw` injection (`agents.claude_code._build_args`,
+    # `prompt_via_stdin=True`). Without it `claude -p` reads stdin as one
+    # opaque prompt and EOFs the moment the caller closes the pipe, so a
+    # mid-stream write can never reach the running turn — which is exactly
+    # why the web console's /btw never did anything before this ADR.
     args += ["-p",
+             "--input-format", "stream-json",
              "--output-format", "stream-json",
              "--verbose",
              "--append-system-prompt-file",
@@ -6871,8 +6978,16 @@ async def _stream_turn_impl(
     yield {"type": "engine", "engine": _os_engine or "claude_code",
            "label": "Claude Code (OS-Engine)"}
 
-    # Feed the prompt + close stdin so claude knows we're done.
+    # Feed the prompt as the FIRST framed `--input-format stream-json` user
+    # message, and — ADR-2220 — leave stdin OPEN and registered for `/btw`
+    # instead of closing it immediately: closing here is exactly what made
+    # mid-stream `/btw` impossible in the web console before this change
+    # (chat_runtime.py's own docstring used to list it under "What is NOT in
+    # v1"). The pipe is unregistered + closed the moment the first `result`
+    # event arrives below, or on any abnormal exit (see the CancelledError
+    # handler and the `finally` block) — never left open past the turn.
     assert proc.stdin is not None
+    _btw_stdin_registered = False
     try:
         # ADR-0395: when cache-stable CEL is on, the volatile context rides here (in the
         # user message), not in the cached system prompt. Prefix it to the real prompt.
@@ -6883,9 +6998,15 @@ async def _stream_turn_impl(
         from agents.claude_code import guard_prompt_head as _guard_prompt_head  # noqa: PLC0415
         _worker_prompt = _guard_prompt_head((_volatile_user_prefix + "\n\n" + prompt)
                                             if _volatile_user_prefix else prompt)
-        proc.stdin.write(_worker_prompt.encode("utf-8"))
+        _init_payload = {"type": "user", "message": {"role": "user", "content": _worker_prompt}}
+        proc.stdin.write((json.dumps(_init_payload, ensure_ascii=False) + "\n").encode("utf-8"))
         await proc.stdin.drain()
-        proc.stdin.close()
+        # Registered AFTER the initial write+drain succeeds — a racing /btw
+        # can never land ahead of the turn's own first message (mirrors
+        # ClaudeCodeEngine.spawn()'s "feed the initial user message before
+        # yielding any events" ordering).
+        _register_stdin_web(sess.chat_key, proc.stdin)
+        _btw_stdin_registered = True
     except (OSError, BrokenPipeError):
         pass
 
@@ -6968,7 +7089,24 @@ async def _stream_turn_impl(
                                 "input": safe_input,
                             }
             elif etype == "result":
-                result_text = evt.get("result") or "".join(final_text_parts)
+                # ADR-2220: unregister + close stdin the moment the first
+                # `result` event arrives — mirrors the bridge adapter's
+                # `_unregister_stdin` call at the identical point. A /btw
+                # racing in after this gets "no_active_stream" (checked via
+                # the registry, which is now empty) rather than writing into
+                # a pipe whose reader is about to exit.
+                if _btw_stdin_registered:
+                    _unregister_stdin_web(sess.chat_key)
+                    _btw_stdin_registered = False
+                    with contextlib.suppress(OSError, BrokenPipeError, RuntimeError):
+                        proc.stdin.close()
+                # An injected /btw yields a SECOND result after the turn's own
+                # one; accumulate so TTS and the ledger keep the main answer.
+                _this_result = evt.get("result") or ""
+                if result_text and _this_result:
+                    result_text = result_text + "\n\n" + _this_result
+                else:
+                    result_text = result_text or _this_result or "".join(final_text_parts)
                 last_usage = evt.get("usage") or {}
                 # Phase 2a: Extract token usage from stream-json result event
                 _exec_ctx_builder.set_usage(last_usage)
@@ -7008,6 +7146,18 @@ async def _stream_turn_impl(
                 pass
         raise
     finally:
+        # ADR-2220: idempotent safety net — covers CancelledError/
+        # GeneratorExit, any other exception, AND the (rare) normal-
+        # completion path where the subprocess exited with no `result`
+        # event at all (e.g. error-before-first-token). Without this a
+        # killed/aborted turn would leave a stale, now-dead stdin pointer
+        # registered, and the NEXT turn for the same chat_key would silently
+        # inherit it until overwritten by its own _register_stdin_web call —
+        # harmless in practice (stale pipe write just fails closed →
+        # "no_active_stream"), but leaving it unregistered immediately is
+        # the honest invariant to keep.
+        if _btw_stdin_registered:
+            _unregister_stdin_web(sess.chat_key)
         if not _stdout_drained_normally:
             # Abnormal exit (CancelledError, GeneratorExit from aclose(), or
             # any other exception). Kill the subprocess so it does not become

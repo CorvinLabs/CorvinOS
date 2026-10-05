@@ -8,6 +8,7 @@ Endpoints
   GET    /v1/console/chat/sessions                 → list sessions
   POST   /v1/console/chat/sessions                 → create session
   DELETE /v1/console/chat/sessions/{sid}           → delete session
+  POST   /v1/console/chat/sessions/{sid}/btw       → mid-stream /btw inject (ADR-2220)
   WS     /v1/console/chat/sessions/{sid}/stream    → bidirectional turn stream
 
 WebSocket protocol
@@ -201,6 +202,51 @@ def rename_chat_session(
         target_id=sid,
     )
     return {"ok": True, "session": _project(sess)}
+
+class BtwNoteRequest(BaseModel):
+    instruction: str = Field(..., min_length=1, max_length=4000)
+    model_config = {"extra": "forbid"}
+
+@router.post("/chat/sessions/{sid}/btw")
+async def send_btw_note(
+    sid: str,
+    body: BtwNoteRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """ADR-2220 — real mid-stream `/btw` injection for the web console.
+
+    Writes ``body.instruction`` into the live ``claude`` subprocess's stdin
+    for THIS session's currently-streaming turn, if any — the same
+    raw-stdin-fallback + ``guard_prompt_head`` neutraliser path the bridge
+    adapter uses for Discord/WhatsApp/Telegram (``inject_btw`` in
+    ``corvin_operator/bridges/shared/adapter.py``). Replaces the old
+    ``POST /v1/console/btw`` gateway stub, which accepted the request,
+    audited nothing and never touched a running subprocess at all — the
+    console's per-turn subprocess state lives in THIS process
+    (``corvin_console``), not the gateway's, so the handler has to live here
+    (see ``chat_runtime.inject_btw_web`` for the registry it reads).
+
+    Response ``status``:
+      * ``"injected"``         — written into the live turn's stdin now
+      * ``"no_active_stream"`` — no turn is currently streaming for this
+        chat, including the race where the turn's own ``result`` event just
+        closed the pipe
+      * ``"refused"``          — empty instruction, or the prompt-guard
+        helper was unavailable (fail-closed — never a raw unguarded write)
+    """
+    sess = chat_runtime.get_session(rec.tenant_id, sid)
+    if sess is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "session not found")
+    status_ = await chat_runtime.inject_btw_web(sess.chat_key, body.instruction)
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="chat.btw.sent",
+        target_kind="chat",
+        target_id=sid,
+        trigger=status_,
+    )
+    return {"ok": True, "status": status_}
 
 @router.get("/chat/sessions/{sid}/turns")
 def get_chat_turns(

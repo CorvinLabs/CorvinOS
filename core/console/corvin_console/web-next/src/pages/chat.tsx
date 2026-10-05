@@ -1225,11 +1225,17 @@ function ChatPane({
 
       void (async () => {
         try {
-          await sendBtwNote(sid, `/btw ${instruction}`, csrf);
+          const res = await sendBtwNote(sid, instruction, csrf);
           setInput("");
           setError(null);
-          // Flash a success message
-          setError("Note sent to active stream");
+          // ADR-2220: the backend now reports whether the note actually
+          // reached a live stream, so the flash message says which.
+          const flash = res.status === "injected"
+            ? "Note sent to active stream"
+            : res.status === "no_active_stream"
+              ? "No active stream right now — note was not sent"
+              : "Note was refused";
+          setError(flash);
           setTimeout(() => setError(null), 3_000);
         } catch (err) {
           const msg = err instanceof ApiError

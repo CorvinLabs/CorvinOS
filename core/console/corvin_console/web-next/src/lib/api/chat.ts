@@ -292,26 +292,26 @@ export function deleteUloObjective(
 }
 
 
-// ── /btw Midstream Steering (ADR-0846) ─────────────────────────────────
+// ── /btw mid-stream injection (ADR-2220) ────────────────────────────────
+// Writes straight into the live `claude` subprocess stdin for this chat's
+// currently-streaming turn — NOT the old `/v1/console/btw` gateway stub
+// (ADR-0846), which accepted the request and did nothing with the running
+// turn. The handler lives in corvin_console (routes/chat.py), where the
+// per-turn subprocess state actually is.
 
 export interface BtwResponse {
   ok: true;
-  status: "guidance_queued" | "error";
-  instruction: string;
-  chat_id: string;
+  status: "injected" | "no_active_stream" | "refused";
 }
 
 export async function sendBtwNote(
-  chatId: string,
+  sid: string,
   instruction: string,
   csrf: string,
 ): Promise<BtwResponse> {
-  return api<BtwResponse>("/btw", {
+  return api<BtwResponse>(`/chat/sessions/${encodeURIComponent(sid)}/btw`, {
     method: "POST",
     csrf,
-    body: {
-      chat_id: chatId,
-      instruction,
-    },
+    body: { instruction },
   });
 }
