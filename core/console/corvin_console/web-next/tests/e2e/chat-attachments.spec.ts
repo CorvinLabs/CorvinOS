@@ -188,7 +188,9 @@ test("API: multiple files via sequential uploads accumulate in workdir", async (
   expect(f2.status()).toBe(200);
 });
 
-test("API: disallowed extension returns 422", async () => {
+test("API: any file extension is accepted (operator decision: no type whitelist)", async () => {
+  // attachments_common.py dropped the extension whitelist on purpose — only
+  // the filename is sanitised (no path traversal), the type is not gated.
   const resp = await sharedContext.request.post(
     `${API_BASE}/chat/sessions/${testSid}/attachments`,
     {
@@ -202,7 +204,9 @@ test("API: disallowed extension returns 422", async () => {
       },
     },
   );
-  expect(resp.status()).toBe(422);
+  expect(resp.status()).toBe(200);
+  const body = await resp.json();
+  expect(body.attachments[0].name).toBe("evil.exe");
 });
 
 test("API: file without CSRF is rejected", async () => {
@@ -428,7 +432,7 @@ test("UI: send with attachment → chips clear and user message bubble appears",
 
   // The attachment path must appear in a user bubble in the DOM
   // (chat registry adds the message optimistically as a local turn)
-  const chatArea = page.locator('[class*="space-y-6"]');
+  const chatArea = page.locator('[class*="space-y-4"]');
   await expect(chatArea).toContainText("attachments/analysis.csv", { timeout: 5000 });
 
   expect(errors).toHaveLength(0);
@@ -457,6 +461,61 @@ test("UI: send-only-attachment (no text) is enabled when file attached", async (
   // Now send button should be enabled even without typed text
   await expect(sendBtn).toBeEnabled();
 
+  expect(errors).toHaveLength(0);
+  await page.close();
+});
+
+// ── Real drag-and-drop (no file-input involved) ────────────────────────────
+//
+// Regression guard: `useFileDrop`'s dropHandlers were being destructured and
+// then thrown away (renamed to `_composerDropHandlers`, never spread onto
+// any element) in all three chat surfaces — isDragging/the handlers existed,
+// compiled, and passed lint, but a real OS drag-drop never attached anything,
+// because `onDrop` was never wired to the DOM at all. `setInputFiles` above
+// exercises the picker path only and could not have caught this. This test
+// dispatches real DragEvents carrying a real DataTransfer with a File in it
+// at the actual dropzone element, so it fails the same way a human dragging
+// a file into the browser would.
+async function dispatchFileDrop(
+  page: Page,
+  testId: string,
+  file: { name: string; type: string; content: string },
+): Promise<void> {
+  const handle = await page.getByTestId(testId).elementHandle();
+  if (!handle) throw new Error(`dropzone [data-testid="${testId}"] not found`);
+  await page.evaluate(
+    ([el, f]: [Element, typeof file]) => {
+      const dt = new DataTransfer();
+      const file = new File([f.content], f.name, { type: f.type });
+      dt.items.add(file);
+      for (const type of ["dragenter", "dragover", "drop"]) {
+        el.dispatchEvent(
+          new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }),
+        );
+      }
+    },
+    [handle, file] as unknown as [Element, typeof file],
+  );
+}
+
+test("UI: real drag-and-drop onto the composer uploads the file", async () => {
+  const page = await sharedContext.newPage();
+  const errors = collectJsErrors(page);
+  await navigateToSession(page, testSid);
+
+  await expect(page.getByTestId("composer-dropzone")).toBeVisible();
+
+  await dispatchFileDrop(page, "composer-dropzone", {
+    name: "dropped.csv",
+    type: "text/csv",
+    content: "a,b\n1,2\n",
+  });
+
+  const chip = page.getByTestId("attachment-chip").first();
+  await expect(chip).toBeVisible({ timeout: 8000 });
+  await expect(chip).toContainText("dropped.csv");
+
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/attach-08-drag-drop.png` });
   expect(errors).toHaveLength(0);
   await page.close();
 });

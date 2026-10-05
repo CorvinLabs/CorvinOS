@@ -168,4 +168,34 @@ test.describe("Unified chat panel", () => {
     expect(errors).toEqual([]);
     await page.close();
   });
+
+  // Regression guard — same bug class as chat-attachments.spec.ts's drag-
+  // drop test: GroupConversation.tsx destructured useFileDrop's result into
+  // `_composerDropHandlers` (never spread onto any element) in the same
+  // commit as the main chat. Covered separately per surface because each
+  // is an independent JSX tree — a fix in one file says nothing about
+  // whether the others were actually wired the same way.
+  test("drag-and-drop onto the group composer uploads the file", async () => {
+    const page = await ctx.newPage();
+    const errors = collectErrors(page);
+    await page.goto(`${BASE_URL}/app/chat/group/${groupId}`, { waitUntil: "load" });
+
+    const dropzone = page.getByTestId("composer-dropzone");
+    await expect(dropzone).toBeVisible();
+
+    const handle = await dropzone.elementHandle();
+    await page.evaluate(([el]: [Element]) => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(["a,b\n1,2\n"], "group-drop.csv", { type: "text/csv" }));
+      for (const type of ["dragenter", "dragover", "drop"]) {
+        el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
+      }
+    }, [handle] as unknown as [Element]);
+
+    const chip = page.getByTestId("attachment-chip").first();
+    await expect(chip).toBeVisible({ timeout: 8000 });
+    await expect(chip).toContainText("group-drop.csv");
+    expect(errors).toEqual([]);
+    await page.close();
+  });
 });

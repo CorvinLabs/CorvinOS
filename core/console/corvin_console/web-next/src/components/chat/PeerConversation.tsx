@@ -111,7 +111,7 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
     },
     disabled: busy,
   });
-  const { isDragging: _composerDragging, dropHandlers: _composerDropHandlers } = useFileDrop(
+  const { isDragging: composerDragging, dropHandlers: composerDropHandlers } = useFileDrop(
     (files) => { void addFiles(files); },
     { disabled: busy || uploading },
   );
@@ -204,7 +204,19 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
       </div>
 
       <footer className="px-4 py-3 md:px-6">
-        <div className="mx-auto w-full max-w-4xl space-y-1.5">
+        <div
+          className={cn(
+            "mx-auto w-full max-w-4xl space-y-1.5 rounded-2xl transition-colors",
+            composerDragging && "ring-2 ring-accent/60 ring-offset-2 ring-offset-background",
+          )}
+          data-testid="composer-dropzone"
+          {...composerDropHandlers}
+        >
+          {composerDragging && (
+            <p className="rounded-md border border-dashed border-accent/50 bg-accent/5 px-3 py-2 text-center text-xs text-accent-foreground">
+              Drop files to attach
+            </p>
+          )}
           {/* Hidden file input */}
           <input
             ref={fileInputRef}
