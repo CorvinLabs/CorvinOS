@@ -95,6 +95,7 @@ import { RecordingOverlay } from "@/components/chat/RecordingOverlay";
 import { useVoiceInput as _useVoiceInput } from "@/hooks/use-voice-input";
 import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
 import { useFileDrop, supportsDirectoryDrop, MAX_DROPPED_FILES } from "@/hooks/use-file-drop";
+import { useAutosizeTextarea } from "@/hooks/use-autosize-textarea";
 import { DropOverlay } from "@/components/chat/DropOverlay";
 import { PanelRight } from "lucide-react";
 
@@ -1447,6 +1448,7 @@ function ChatPane({
   const setInputRef = React.useRef(setInput);
   const sendUserRef = React.useRef(sendUser);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  useAutosizeTextarea(textareaRef, input);
   React.useEffect(() => {
     recordingRef.current = recording;
     if (recording) pttPendingRef.current = false; // recording confirmed — clear pending

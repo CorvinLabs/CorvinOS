@@ -32,6 +32,7 @@ import { MembersSection } from "./MembersSection";
 import { AttachmentChip } from "./AttachmentChip";
 import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
 import { useFileDrop, supportsDirectoryDrop, MAX_DROPPED_FILES } from "@/hooks/use-file-drop";
+import { useAutosizeTextarea } from "@/hooks/use-autosize-textarea";
 import { DropOverlay } from "./DropOverlay";
 
 const MESSAGES_REFETCH_MS = 4_000;
@@ -138,6 +139,8 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
   const chunksRef = React.useRef<Blob[]>([]);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const folderInputRef = React.useRef<HTMLInputElement>(null);
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  useAutosizeTextarea(textareaRef, text);
   const [dropTruncated, setDropTruncated] = React.useState<number | null>(null);
   const {
     pendingAttachments, uploading, uploadError, addFiles,
@@ -390,7 +393,7 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
             >
               {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
             </Button>
-            <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={1}
+            <Textarea ref={textareaRef} value={text} onChange={(e) => setText(e.target.value)} rows={1}
               placeholder={`Message ${g.title}…`}
               disabled={recording || busy}
               className="min-h-[2rem] flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
