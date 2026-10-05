@@ -228,5 +228,10 @@ export const ControlSnapshotsPage = React.lazy(() =>
   import("@/pages/control-plane-snapshots").then((m) => ({ default: m.default }))
 );
 
+// Layer Forge panel (ADR-2222 Layer Forge + ADR-2224 enforcement phases)
+export const LayerForgePage = React.lazy(() =>
+  import("@/pages/layer-forge").then((m) => ({ default: m.LayerForgePage }))
+);
+
 // Vibe Engineering panels (ADR-0400 dashboard + secondary views)
 

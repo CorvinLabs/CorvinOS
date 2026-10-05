@@ -25,6 +25,7 @@ import {
   DataHubUnifiedPage,
   OTELTelemetryPage, VibeEngineeringPage, InitiativesPage, ModelsPage,
   ControlIntentRouterPage, ControlPlanePluginsPage, ControlSubsystemsPage, ControlOverridesPage, ControlSnapshotsPage,
+  LayerForgePage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -74,6 +75,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   ControlSubsystemsPage,
   ControlOverridesPage,
   ControlSnapshotsPage,
+  LayerForgePage,
   // The backend manifest names the Learning dashboard after its component
   // (routes/capabilities.py); it is the same page the registry mounts.
   VibeDashboard: VibeEngineeringPage as unknown as ComponentType,
@@ -199,6 +201,9 @@ export const PANELS: ConsolePanel[] = [
   rc("control-plane-subsystems", "Subsystems", ControlSubsystemsPage, { nav: { label: "Subsystems", icon: "Layers", group: "system" } }),
   rc("control-plane-overrides", "Overrides", ControlOverridesPage, { nav: { label: "Overrides", icon: "Lock", group: "system" } }),
   rc("control-plane-snapshots", "Snapshots", ControlSnapshotsPage, { nav: { label: "Snapshots", icon: "Archive", group: "system" } }),
+  // Layer Forge panel (ADR-2222 Phase 2–3) — layer definition creation, quality gates,
+  // enforcement checks, and status transitions (proposed → accepted → deployed).
+  rc("layer-forge", "Layer Forge", LayerForgePage, { nav: { label: "Layer Forge", icon: "Layers", group: "system" } }),
 ];
 
 export function getPanel(id: string): ConsolePanel | undefined {
