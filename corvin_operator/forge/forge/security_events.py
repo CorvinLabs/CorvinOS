@@ -999,6 +999,10 @@ EVENT_SEVERITY: dict[str, str] = {
     "context.snapshot_taken":           "INFO",    # L10: context snapshot captured (Phase 3 GAP-1)
     "context.adapted":                  "INFO",    # L10: context adapted for task/agent (Phase 3 GAP-1)
     "context.duplicate_memory_merged":  "INFO",    # ADR-2098: CSPR collapsed same-topic memory matches
+    "goal_drift.alert_raised":          "WARNING", # PLAN-0931/ADR-2101 P3: GoalAlignmentMonitor fired
+    "context_bridge.snapshot_created":  "INFO",    # PLAN-0932/ADR-2101 P4: task/goal state snapshotted
+    "context_bridge.restored":          "INFO",    # PLAN-0932/ADR-2101 P4: snapshot restored into a new session
+    "context_bridge.restore_failed":    "WARNING", # PLAN-0932/ADR-2101 P4: missing/corrupt snapshot
     "context.cache_flushed":            "INFO",    # L10: context cache cleared (Phase 3 GAP-1)
     "context.audit_validated":          "INFO",    # L10: context audit trail validated (Phase 3 GAP-1)
     # Layer 22 — Compute Fabric Safety Audit (core/compute/compute_runtime.py)
@@ -3732,6 +3736,18 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "context.duplicate_memory_merged": frozenset({
         "context_id", "tenant_id", "topic_key", "kept_filename", "merged_count",
+    }),
+    "goal_drift.alert_raised": frozenset({
+        "tenant_id", "session_key_fingerprint", "similarity_score", "consecutive_low_count",
+    }),
+    "context_bridge.snapshot_created": frozenset({
+        "tenant_id", "task_id", "session_id",
+    }),
+    "context_bridge.restored": frozenset({
+        "tenant_id", "task_id", "session_id",
+    }),
+    "context_bridge.restore_failed": frozenset({
+        "tenant_id", "task_id", "reason",
     }),
     "context.cache_flushed": frozenset({
         "context_id", "tenant_id", "reason", "retention_days_before_flush",

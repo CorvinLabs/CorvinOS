@@ -1152,6 +1152,45 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         release_tier="alpha",
     ),
     FeatureFlag(
+        id="goal_drift_monitor_enabled",
+        label="Goal Drift Monitor (session goal-alignment alert)",
+        description=(
+            "Compare each turn's work against the session's anchored goal fact "
+            "(PLAN-0931, ADR-2101 P3) using the existing GoalAlignmentMonitor "
+            "cosine-over-bag-of-words similarity; after 3 consecutive turns below "
+            "the 0.6 threshold, emit a hash-chained goal_drift.alert_raised audit "
+            "event (WARNING). Off (default) = no comparison runs, no event is "
+            "ever written. On = alert-only — never blocks or alters a turn. "
+            "DEPENDS on cel_load_bearing_anchor being ON for the same tenant: "
+            "without it, anchor.load_facts() returns nothing usable and this "
+            "flag degrades to a silent no-op (documented, not a bug)."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("vibe-engineering", "context-engineering", "learning"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
+        id="session_context_bridge_enabled",
+        label="Session Context Bridge (task/goal state across session boundaries)",
+        description=(
+            "Snapshot a session's task/goal state (PLAN-0932, ADR-2101 P4 task/goal "
+            "half, ADR-0865) when it resets or is deleted, keyed by task_id, and "
+            "restore it as an anchor fact when a NEW session carries the same "
+            "task_id. Off (default) = no snapshot is ever written, no restore ever "
+            "read — zero behavior change. On = a stale or wrong restored context can "
+            "actively confuse a turn (unlike P3's alert-only risk), so this one "
+            "defaults off until trialed, mirroring the ADR-0407 anchor's own rollout "
+            "caution. Depends on cel_load_bearing_anchor being on for the same "
+            "tenant (restore is delivered as an anchor fact); without it the restore "
+            "half degrades to a silent no-op."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("vibe-engineering", "context-engineering", "learning"),
+        release_tier="alpha",
+    ),
+    FeatureFlag(
         id="cross_device_sync",
         label="Cross-device tenant sync",
         description=(

@@ -7362,6 +7362,20 @@ async def _stream_turn_impl(
             _cel_capture_decision(combined_text, sess.tenant_id, sess, answered_task=prompt)
         except Exception:  # noqa: BLE001 — never break a turn on the way out
             pass
+        # PLAN-0931 / ADR-2101 P3 — goal-drift alert. Mirrors the bridge call
+        # site in adapter.py: ship-dark behind goal_drift_monitor_enabled
+        # (re-checked inside the hook), reuses the SAME (tenant, session_key)
+        # the anchor capture above just wrote to. Only an answered turn
+        # (combined_text non-empty) has real "current work" worth comparing,
+        # same discipline as the decision capture it is nested beside. Never
+        # raises, never consumes a turn.
+        try:
+            from goal_drift_hook import maybe_check_goal_drift  # noqa: PLC0415
+            maybe_check_goal_drift(
+                sess.tenant_id, str(getattr(sess, "sid", "") or ""), str(task_id), prompt,
+            )
+        except Exception:  # noqa: BLE001 — never break a turn on the way out
+            pass
     # ADR-0194 Phase 1: the exact string the client will hand to /voice/tts —
     # i.e. the text of the LAST `result` event yielded above. It is NOT
     # combined_text: `result_text` is the CLI's final assistant message, while

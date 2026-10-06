@@ -12437,6 +12437,20 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                                         sender=str(sender or ""))
         except Exception:  # noqa: BLE001 — never break a turn on the way out
             pass
+        # PLAN-0931 / ADR-2101 P3 — goal-drift alert. Ship-dark behind
+        # goal_drift_monitor_enabled (re-checked inside the hook); reuses the
+        # SAME (tenant, session_key) the anchor capture above just wrote to.
+        # Never raises, never consumes a turn: the hook's own return value is
+        # advisory only (v1 surfaces purely via the audit chain / Vibe trace).
+        try:
+            from goal_drift_hook import maybe_check_goal_drift  # noqa: PLC0415
+            _gd_sess = _cel_session(channel, chat_key)
+            maybe_check_goal_drift(
+                _cdp_tid, str(getattr(_gd_sess, "sid", "") or ""), str(msg_id or ""),
+                _split_observer_block(prompt)[1],
+            )
+        except Exception:  # noqa: BLE001 — never break a turn on the way out
+            pass
 
     # ADR-0551 C1-B — mid-turn background heartbeat (ship-dark, default OFF).
     # Registration (⟦bgtask⟧), step (⟦bgstep⟧) and done (⟦bgdone⟧) handling is
