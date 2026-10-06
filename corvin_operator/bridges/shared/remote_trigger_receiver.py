@@ -219,6 +219,11 @@ _REMOTE_ENDPOINTS_DEFAULT = _default_repo_relative("cowork", "remote_endpoints")
 # A2A URLs (see a2a_friendship.set_my_url) — bounded length, http(s) only.
 _MAX_RECONNECT_URL_LEN = 512
 
+# Worker persona when an origin carries no persona restriction (empty
+# allowed_personas = the console's "Full Executor" preset). Same default as a
+# friendship pairing writes (a2a_friendship._allowed_personas).
+_DEFAULT_A2A_PERSONA = "assistant"
+
 # Validation time window: ±300 s
 _TIME_WINDOW_S: float = 300.0
 
@@ -1410,11 +1415,15 @@ class RemoteTriggerReceiver:
             )
 
         # Resolve persona — allowed_personas[0] is the active persona for
-        # this origin. Empty list → operator misconfiguration; reject.
+        # this origin. An EMPTY list is what the console's "Full Executor"
+        # preset stores ("no persona restriction"), so it resolves to the same
+        # default a friendship pairing writes (a2a_friendship._allowed_personas).
+        # It used to be rejected as "injection_attempt:no_allowed_personas":
+        # every task to a Full-Executor origin failed, labelled as an attack.
+        # The persona is the worker's role label only — the tool grant comes
+        # from the allow_* flags below, so the fallback widens nothing.
         allowed_personas = origin_config.get("allowed_personas") or []
-        if not allowed_personas:
-            raise _InjectionRejected("no_allowed_personas")
-        persona = str(allowed_personas[0])
+        persona = str(allowed_personas[0]) if allowed_personas else _DEFAULT_A2A_PERSONA
 
         # ADR-0144 B5/C7/C8/FC4: derive tool policy from origin config.
         # Defaults (structural defence against credential exfiltration):

@@ -239,14 +239,38 @@ class TestM2Spawn(unittest.TestCase):
         self.assertEqual(resp.status, "rejected")
         self.assertEqual(invoked, [])
 
-    def test_empty_allowed_personas_rejected(self):
+    def test_empty_allowed_personas_runs_as_default_persona(self):
+        """Empty allowed_personas = console "Full Executor" (no restriction).
+
+        It was rejected as ``injection_attempt:no_allowed_personas``, so every
+        task to such an origin failed and the chat showed an attack that never
+        happened. It must run, as the default persona.
+        """
         _write_origin(self.tmpdir, spawn_worker=True, allowed_personas=[])
+        invoked = []
+        def factory():
+            invoked.append(True)
+            return _FakeEngine(output='{"summary": "hello"}')
         recv = rtr.RemoteTriggerReceiver(
-            origins_dir=self.tmpdir, engine_factory=lambda: _FakeEngine(),
+            origins_dir=self.tmpdir, engine_factory=factory,
         )
-        env = _build_envelope(instruction="task")
+        audited = []
+        _orig = recv._audit_best_effort
+        def _spy(event, sev, details):
+            audited.append((event, dict(details)))
+            return _orig(event, sev, details)
+        recv._audit_best_effort = _spy
+        env = _build_envelope(
+            instruction="hallo",
+            result_schema={"properties": {"summary": {"type": "string"}}},
+        )
         resp = recv.receive(env)
-        self.assertEqual(resp.status, "rejected")
+        self.assertEqual(resp.status, "ok")
+        self.assertEqual(resp.data, {"summary": "hello"})
+        self.assertTrue(invoked)
+        spawned = [d for e, d in audited if e == "A2A.engine_spawned"]
+        self.assertEqual(spawned and spawned[0]["persona"], rtr._DEFAULT_A2A_PERSONA)
+        self.assertFalse([d for e, d in audited if e == "A2A.request_rejected"])
 
 
 # ── M2 default-off ────────────────────────────────────────────────────────

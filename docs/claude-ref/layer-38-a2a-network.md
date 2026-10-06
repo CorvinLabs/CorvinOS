@@ -252,7 +252,7 @@ Editable per-connection fields (`OriginPatchRequest`, `a2a_pair.py`):
 |---|---|
 | `enabled` | connection on/off |
 | `spawn_worker` | Observer (validate-only) vs Executor (M2 worker runs the instruction) |
-| `allowed_personas` | persona allow-list; `[0]` is the active persona |
+| `allowed_personas` | persona allow-list; `[0]` is the active persona. Empty (the console's "Full Executor" preset) runs as `assistant` — it was rejected as `injection_attempt:no_allowed_personas` until 2026-10-06. The persona is a role label only; tools come from the `allow_*` flags |
 | `max_ttl_s` | cap on envelope TTL (10–86400 s) |
 | `label` | human-readable connection name (≤80 chars, control chars stripped) |
 | `allow_bash` / `allow_network` / `allow_read_files` / `allow_write_files` / `allow_subagents` | M2 tool policy opt-ins — **deny-by-default** (ADR-0144); enforced in `remote_trigger_receiver._spawn_and_filter()` |
