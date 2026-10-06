@@ -17,6 +17,9 @@ import AuditTab from '@/components/forge/AuditTab';
 import AutonomousForgePanel from '@/components/forge/AutonomousForgePanel';
 import ForgeCreatorPanel from '@/components/forge/ForgeCreatorPanel';
 import { SkillForgePanel } from '@/components/SkillForgePanel';
+import ExportDialog from '@/components/forge/ExportDialog';
+import ImportPreviewDialog from '@/components/forge/ImportPreviewDialog';
+import QuarantinePanel from '@/components/forge/QuarantinePanel';
 import {
   ForgeTool,
   ForgeSkill,
@@ -53,7 +56,7 @@ import {
  *  protocol matches; forging a layer is a single synchronous plan→create
  *  call, not a polled run, and needs none of the engine machinery the other
  *  three sub-tabs share — it only lives in the same tab group as them. */
-const FORGE_TABS = ['generator', 'autonomous-forge', 'tools', 'skills', 'os-skills', 'layers', 'graph', 'audit'] as const;
+const FORGE_TABS = ['generator', 'autonomous-forge', 'tools', 'skills', 'os-skills', 'layers', 'graph', 'audit', 'export', 'import', 'review'] as const;
 type ForgeTab = (typeof FORGE_TABS)[number];
 
 const DEFAULT_TAB: ForgeTab = 'generator';
@@ -154,6 +157,10 @@ export default function ForgePage() {
   const [dependencies, setDependencies] = useState<ForgeDependency[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Forge Bundle Dialogs (ADR-2229 Phase 4)
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
 
   // Fetch all data on mount. Uses the shared `api()` client (not raw
   // `fetch`) so this page gets the same request timeout and 401-session-
@@ -292,6 +299,9 @@ export default function ForgePage() {
           <TabsTrigger value="layers">Layers</TabsTrigger>
           <TabsTrigger value="graph">Graph</TabsTrigger>
           <TabsTrigger value="audit">Audit</TabsTrigger>
+          <TabsTrigger value="export">Export</TabsTrigger>
+          <TabsTrigger value="import">Import</TabsTrigger>
+          <TabsTrigger value="review">Review &amp; Accept</TabsTrigger>
         </TabsList>
 
         <TabsContent value="generator" className="flex-1 overflow-y-auto">
@@ -373,7 +383,68 @@ export default function ForgePage() {
         <TabsContent value="audit" className="flex-1 overflow-y-auto">
           <AuditTab searchQuery={searchQuery} filterType={filterType} />
         </TabsContent>
+
+        <TabsContent value="export" className="flex-1 overflow-y-auto">
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold mb-2">Export Forge Bundle</h2>
+              <p className="text-sm text-muted-foreground mb-4">
+                Package your tools, skills, and plugins into a reusable bundle for distribution.
+              </p>
+              <button
+                onClick={() => setExportDialogOpen(true)}
+                className="inline-flex items-center justify-center rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:bg-primary/90"
+              >
+                Create Export
+              </button>
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="import" className="flex-1 overflow-y-auto">
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold mb-2">Import Forge Bundle</h2>
+              <p className="text-sm text-muted-foreground mb-4">
+                Upload and validate a Forge Bundle for integration into your system.
+              </p>
+              <button
+                onClick={() => setImportDialogOpen(true)}
+                className="inline-flex items-center justify-center rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:bg-primary/90"
+              >
+                Start Import
+              </button>
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="review" className="flex-1 overflow-y-auto">
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold mb-2">Review &amp; Accept</h2>
+              <p className="text-sm text-muted-foreground mb-4">
+                Review artifacts from imported bundles before they are integrated.
+              </p>
+            </div>
+            <QuarantinePanel />
+          </div>
+        </TabsContent>
       </Tabs>
+
+      {/* Forge Bundle Dialogs */}
+      <ExportDialog
+        isOpen={exportDialogOpen}
+        onClose={() => setExportDialogOpen(false)}
+        tools={tools}
+        skills={skills}
+        osSkills={osSkills}
+      />
+
+      <ImportPreviewDialog
+        isOpen={importDialogOpen}
+        onClose={() => setImportDialogOpen(false)}
+        onImportComplete={() => goToTab('review')}
+      />
     </div>
   );
 }
