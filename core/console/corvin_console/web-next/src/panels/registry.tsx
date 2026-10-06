@@ -25,7 +25,7 @@ import {
   DataHubUnifiedPage,
   OTELTelemetryPage, VibeEngineeringPage, InitiativesPage, ModelsPage,
   ControlIntentRouterPage, ControlPlanePluginsPage, ControlSubsystemsPage, ControlOverridesPage, ControlSnapshotsPage,
-  LayerForgeAnalyticsPage,
+  LayerForgeAnalyticsPage, AgentConversationsPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -127,6 +127,7 @@ export const PANELS: ConsolePanel[] = [
   // Console-native pages removed 2026-09-27 in favor of plugin-based UI.
   rc("files", "Files", FilesPage, { nav: { label: "Files", icon: "FolderOpen", group: "intelligence" } }),
   // REMOVED 2026-09-15: "space" panel (superseded by modern UI, no nav entry)
+  rc("agent-conversations", "Agent conversations", AgentConversationsPage, { nav: { label: "Agent conversations", icon: "Users", group: "intelligence" } }),
   rc("memory", "Memory", MemoryPage, { nav: { label: "Memory", icon: "BookOpen", group: "intelligence" } }),
   // Agent Hub removed 2026-10-05 (Console navigation refactor, Phase 4) —
   // its 7 functions migrated to the chat sidebar (PeerManagementDialog),

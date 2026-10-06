@@ -211,6 +211,7 @@ const NAV_GROUPS: NavGroup[] = [
       // (replaced Engine Config + Model Cost Optimizer + Model Selection, 2026-09-18).
       { to: "/app/models",   label: "Models",    icon: Brain },
       { to: "/app/memory",   label: "Memory",    icon: BookOpen },
+      { to: "/app/agent-conversations", label: "Agent conversations", icon: Users },
       { to: "/app/files",    label: "Files",     icon: FolderOpen },
       { to: "/app/connectors", label: "Connectors", icon: Plug },
     ],

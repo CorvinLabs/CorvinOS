@@ -1429,3 +1429,46 @@ chain is ever queried); agent-initiated multi-hop is carried on the wire
 Tests: `tests/federation/test_federation_cross_peer_e2e.py` (two instances,
 real HTTP + signatures), `tests/federation/test_federation_routes_e2e.py`
 (real console login/CSRF, REST + slash over the chat WebSocket).
+
+### Agent-to-agent conversations (ADR-2234, 2026-10-06)
+
+One local agent (`LocalAgentRegistry`, `claude_code` only, need not be `federable`)
+and one peer agent from a fresh catalog take turns on a topic the operator opens.
+**This installation moderates** (`core/federation/conversation.py`): one daemon
+thread per conversation owns the turn order, the transcript and the stop flag;
+`max_turns` ≤ 12, ≤ 3 running per process, stop takes effect between turns.
+
+- **Peer turn** = an ordinary federated task (`delegation.delegate`,
+  `parent_task_id` = conversation id, `origin_agent_id` = the local agent), so
+  `GET /federation/tasks/<conversation_id>/trace` is the hop tree of the whole
+  exchange with both chain anchors per hop. Nothing new on the wire.
+- **Local turn** runs through `a2a_worker.spawn_a2a_worker` (sanitizer, L34, L35,
+  L44, A2A framing) with the agent's model — its prompt carries the peer agent's
+  words, which are untrusted input here exactly as on the receiving side. A peer
+  reply that tries to close the framing block ends the conversation
+  (`local_turn_refused`) before the local agent is spawned.
+- **Transcript** `<tenant>/global/federation/conversations/<id>.jsonl` — append-only,
+  single writer, strictly increasing `seq`, `0600`; only `start()` creates it
+  (`O_EXCL`), so an erased transcript is never re-created mid-run. 50 per tenant,
+  oldest finished ones dropped. Each prompt carries the newest turns that fit 9 000
+  characters (16 KB A2A cap).
+- **Audit** (metadata only, never text): `federation.conversation_started`
+  (audit-first: no record → 503, nothing sent), `.conversation_turn` (seq, speaker,
+  agent, task_id, status, length), `.conversation_ended` (closed reason:
+  `max_turns`, `operator_stop`, `local_turn_failed`, `local_turn_refused`,
+  `peer_turn_failed`, `empty_reply`, `audit_failed`, `internal_error`).
+- **Console**: `POST/GET /v1/console/federation/conversations`,
+  `GET …/{id}?after_seq=N` (poll; `status` `running` while the thread is alive,
+  `interrupted` if the console restarted mid-run), `POST …/{id}/stop`,
+  `DELETE …/{id}`. Page `/app/agent-conversations` (sidebar: Assistant →
+  Agent conversations) polls the transcript every second while it runs.
+- **Art. 17**: erasure layer `L-federation-conversations` removes every transcript
+  held with the subject's pairing id (`peer.endpoint_id`, same subject id as
+  `L-a2a-feed`) and stops a running one.
+
+Peer turns also appear in the 1:1 A2A feed of that peer (a federated task does,
+by ADR-2232), including the full prompt each turn sends.
+
+Tests: `tests/federation/test_agent_conversation_e2e.py` (console login/CSRF →
+real gated local worker + real signed A2A to a second instance; ordering,
+exchange, live read, stop, refusal, framing escape, audit-first, erasure).

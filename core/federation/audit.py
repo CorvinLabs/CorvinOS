@@ -39,6 +39,19 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
         "task_id", "endpoint_id", "peer_instance_id", "agent_id", "status",
         "duration_ms", "our_chain_tail", "peer_chain_tail", "tenant_id",
     }),
+    # Agent-to-agent conversation (ADR-2234). Metadata only: the turn TEXT
+    # lives in the tenant-local transcript, never in the chain.
+    "federation.conversation_started": frozenset({
+        "conversation_id", "local_agent_id", "endpoint_id", "peer_instance_id",
+        "peer_agent_id", "max_turns", "tenant_id",
+    }),
+    "federation.conversation_turn": frozenset({
+        "conversation_id", "seq", "speaker", "agent_id", "task_id", "status",
+        "duration_ms", "text_chars", "tenant_id",
+    }),
+    "federation.conversation_ended": frozenset({
+        "conversation_id", "status", "reason", "turns", "tenant_id",
+    }),
 }
 
 SEVERITY: dict[str, str] = {
@@ -48,6 +61,9 @@ SEVERITY: dict[str, str] = {
     "federation.catalog_fetched": "INFO",
     "federation.task_delegated": "INFO",
     "federation.task_result_received": "INFO",
+    "federation.conversation_started": "INFO",
+    "federation.conversation_turn": "INFO",
+    "federation.conversation_ended": "INFO",
 }
 
 

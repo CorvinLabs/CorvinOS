@@ -972,6 +972,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "federation.task_completed": "INFO",
     "federation.task_delegated": "INFO",
     "federation.task_result_received": "INFO",
+    "federation.conversation_started": "INFO",
+    "federation.conversation_turn": "INFO",
+    "federation.conversation_ended": "INFO",
     # Video Producer — Blender render path (core/skills/os_skills/video_producer/audit.py)
     # Metadata only: file paths, resolution/codec/frame/duration numbers, error_class.
     # NEVER: subprocess stdout/stderr, exception message text.
@@ -3991,6 +3994,17 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "federation.task_result_received": frozenset({
         "task_id", "endpoint_id", "peer_instance_id", "agent_id", "status",
         "duration_ms", "our_chain_tail", "peer_chain_tail", "tenant_id",
+    }),
+    "federation.conversation_started": frozenset({
+        "conversation_id", "local_agent_id", "endpoint_id", "peer_instance_id",
+        "peer_agent_id", "max_turns", "tenant_id",
+    }),
+    "federation.conversation_turn": frozenset({
+        "conversation_id", "seq", "speaker", "agent_id", "task_id", "status",
+        "duration_ms", "text_chars", "tenant_id",
+    }),
+    "federation.conversation_ended": frozenset({
+        "conversation_id", "status", "reason", "turns", "tenant_id",
     }),
     # Video Producer — Blender render path (mirrored in
     # core/skills/os_skills/video_producer/audit.py::_ALLOWED_FIELDS).

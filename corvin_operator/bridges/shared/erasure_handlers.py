@@ -34,6 +34,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -2018,6 +2019,41 @@ class A2AFeedHandler:
                        applied_reason="removed {n} A2A message(s)/attachment(s)")
 
 
+@dataclass
+class FederationConversationHandler:
+    """GDPR Art. 17 for agent-to-agent conversation transcripts
+    (``global/federation/conversations``, ADR-2234): the peer agent's words
+    and the operator's topic. Attribution is the pairing id the transcript was
+    held with (``peer.endpoint_id``) — the same subject id ``L-a2a-feed`` uses.
+    A running conversation with that peer is stopped and its file removed."""
+    tenant_id: str = "_default"
+    layer_id: str = "L-federation-conversations"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        root = _tenant_global(self.tenant_id) / "federation" / "conversations"
+        if not root.is_dir():
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="conversation store absent",
+                           empty_reason="", applied_reason="")
+        try:
+            repo = Path(__file__).resolve().parents[3]
+            if str(repo) not in sys.path:
+                sys.path.insert(0, str(repo))
+            from core.federation import conversation as _conv  # noqa: PLC0415
+            n = _conv.erase_endpoint(self.tenant_id, subject_id)
+            n += _purge_path(root, subject_id)
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=0,
+                reason=f"conversation purge error: {type(exc).__name__}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000))
+        return _result(self.layer_id, t0, n, absent=False, absent_reason="",
+                       empty_reason="no conversation was held with the subject",
+                       applied_reason="removed {n} conversation transcript(s)")
+
+
 _GROUP_ATTACH_RE = re.compile(r"^- attachments/([^/\\\n]+?) \(\d", re.M)
 
 
@@ -2488,6 +2524,7 @@ COVERED_DIRS: dict[str, frozenset[str]] = {
     # 2026-10-05 review R3 — stores with no Art. 17 path until then.
     "L-a2a-feed":            frozenset({"global/a2a_feed"}),
     "L-chat-groups":         frozenset({"global/chat_groups"}),
+    "L-federation-conversations": frozenset({"global/federation/conversations"}),
     "L-voice":               frozenset({"voice"}),
     # R4-F1/F4: the format-specific handlers above own the sqlite tables and the
     # file shapes they were written for; this layer runs the generic attribution
@@ -2630,6 +2667,7 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         ACSGlobalIndexHandler(tenant_id=tenant_id),         # global/acs/runs/
         A2AFeedHandler(tenant_id=tenant_id),                # global/a2a_feed/
         ChatGroupHandler(tenant_id=tenant_id),              # global/chat_groups/
+        FederationConversationHandler(tenant_id=tenant_id), # global/federation/conversations/
         IdentityMappingHandlerBase(),
     ]
     # R4-F1: the remaining live tenant-home stores, all erased by the same

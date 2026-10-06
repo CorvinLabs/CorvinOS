@@ -269,3 +269,82 @@ async def trace_federated_task(task_id: str, session: Any = Depends(require_sess
         return await asyncio.to_thread(trace, tenant_id, task_id)
     except DelegationError as exc:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+# ── Agent-to-agent conversations (ADR-2234) ──────────────────────────────
+
+class StartConversationRequest(BaseModel):
+    local_agent_id: str = Field(..., min_length=1, max_length=128)
+    endpoint_id: str = Field(..., min_length=1, max_length=128)
+    peer_agent_id: str = Field(..., min_length=1, max_length=128)
+    opener: str = Field(..., min_length=1, max_length=2000)
+    max_turns: int = Field(default=6, ge=1, le=12)
+    first_speaker: str = Field(default="local", pattern="^(local|peer)$")
+
+
+def _conversation_or_404(fn: Any, *args: Any, **kw: Any) -> Any:
+    from core.federation import conversation as conv
+    try:
+        return fn(*args, **kw)
+    except conv.ConversationError as exc:
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND,
+                            detail="conversation not found") from exc
+
+
+@router.post("/conversations", status_code=http_status.HTTP_202_ACCEPTED)
+async def start_agent_conversation(
+    body: StartConversationRequest, session: Any = Depends(require_session_csrf_on_mutation),
+) -> dict[str, Any]:
+    """Start a moderated conversation between a local and a peer agent."""
+    from core.federation import conversation as conv
+    tenant_id = _tenant_of(session)
+    endpoint_id = _check_endpoint_id(body.endpoint_id)
+    try:
+        return await asyncio.to_thread(
+            _conversation_or_404, conv.start, tenant_id, local_agent_id=body.local_agent_id,
+            endpoint_id=endpoint_id, peer_agent_id=body.peer_agent_id, opener=body.opener,
+            max_turns=body.max_turns, first_speaker=body.first_speaker)
+    except FederationAuditError as exc:
+        raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail=f"conversation could not be recorded, nothing was sent: {exc}") from exc
+
+
+@router.get("/conversations")
+async def list_agent_conversations(session: Any = Depends(require_session)) -> dict[str, Any]:
+    from core.federation import conversation as conv
+    tenant_id = _tenant_of(session)
+    return {"conversations": await asyncio.to_thread(conv.list_conversations, tenant_id)}
+
+
+@router.get("/conversations/{conversation_id}")
+async def get_agent_conversation(
+    conversation_id: str, after_seq: int = -1, session: Any = Depends(require_session),
+) -> dict[str, Any]:
+    """Transcript (``messages`` with ``seq > after_seq``) plus live status — poll this."""
+    from core.federation import conversation as conv
+    tenant_id = _tenant_of(session)
+    return await asyncio.to_thread(_conversation_or_404, conv.get, tenant_id,
+                                   conversation_id, after_seq=after_seq)
+
+
+@router.post("/conversations/{conversation_id}/stop")
+async def stop_agent_conversation(
+    conversation_id: str, session: Any = Depends(require_session_csrf_on_mutation),
+) -> dict[str, Any]:
+    from core.federation import conversation as conv
+    tenant_id = _tenant_of(session)
+    stopping = await asyncio.to_thread(_conversation_or_404, conv.stop, tenant_id, conversation_id)
+    return {"conversation_id": conversation_id, "stopping": stopping}
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_agent_conversation(
+    conversation_id: str, session: Any = Depends(require_session_csrf_on_mutation),
+) -> dict[str, Any]:
+    from core.federation import conversation as conv
+    tenant_id = _tenant_of(session)
+    if not await asyncio.to_thread(_conversation_or_404, conv.delete, tenant_id, conversation_id):
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="conversation not found")
+    return {"deleted": conversation_id}
