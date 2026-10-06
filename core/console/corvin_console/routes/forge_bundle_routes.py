@@ -16,7 +16,6 @@ from core.forge_bundle.validate import BundleRejected, validate_bundle
 from core.forge_bundle.audit import ForgeBundleAuditError, emit as emit_audit_event
 from core.forge_bundle.tool_quarantine import ToolQuarantineWorkflow, QuarantineError
 from core.forge_bundle.export import build_bundle, Selection, ExportError
-from core.orchestration.tool_forge.registry import ToolRegistry
 
 from .. import auth as session_auth
 from ..deps import require_session, require_session_csrf_on_mutation
@@ -155,6 +154,19 @@ async def accept_quarantined_tool(
         raise HTTPException(
             status_code=http_status.HTTP_401_UNAUTHORIZED,
             detail="tenant_id missing",
+        )
+
+    # Imported here, not at module level: the module does not exist on this
+    # build, and a module-level ImportError unmounted /console and every
+    # /v1/console/* route (2026-10-06). Checked BEFORE the quarantine is
+    # touched and before "quarantine_accepted" is audited, so a refusal
+    # leaves the tool in quarantine and the trail claims nothing.
+    try:
+        from core.orchestration.tool_forge.registry import ToolRegistry  # type: ignore[import-not-found]
+    except ImportError:
+        raise HTTPException(
+            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Tool registry is not available on this build; the tool stays in quarantine.",
         )
 
     try:
