@@ -78,6 +78,12 @@ describe("a2a-feed Markdown helpers", () => {
     expect(md).not.toContain('"output"');
   });
 
+  it("does not repeat a refusal's reason as JSON when its error line explains it", () => {
+    expect(messageMarkdown({ text: "", data: { reason: "identity_required" }, error: "The peer only accepts…" })).toBe("");
+    // Without an error line the reason is the only information — keep it.
+    expect(messageMarkdown({ text: "", data: { reason: "busy" } })).toContain('"reason": "busy"');
+  });
+
   it("returns only the prose when nothing else is left", () => {
     expect(messageMarkdown({ text: "", data: { output: "Hallo!" } })).toBe("Hallo!");
   });

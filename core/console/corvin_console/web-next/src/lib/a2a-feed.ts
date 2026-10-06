@@ -57,8 +57,11 @@ export function messageBody(m: Pick<A2AFeedMessage, "text" | "data">): {
  * fenced JSON block, so nothing the peer returned is hidden. The fence is
  * longer than any backtick run inside the JSON, so a value cannot close it.
  */
-export function messageMarkdown(m: Pick<A2AFeedMessage, "text" | "data">): string {
+export function messageMarkdown(m: Pick<A2AFeedMessage, "text" | "data"> & { error?: string | null }): string {
   const { text, rest } = messageBody(m);
+  // A refusal's machine reason ({"reason": "identity_required"}) is already
+  // shown as its plain-language error line — don't repeat it as a JSON block.
+  if (m.error && typeof rest.reason === "string") delete rest.reason;
   if (Object.keys(rest).length === 0) return text;
   const json = JSON.stringify(rest, null, 2);
   const longestRun = Math.max(0, ...(json.match(/`+/g) ?? []).map((r) => r.length));

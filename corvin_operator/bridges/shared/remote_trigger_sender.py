@@ -667,7 +667,9 @@ _ERROR_DETAIL_TEMPLATES = frozenset({
 # Closed rejection reasons a signed "rejected" may carry (review R3) — the
 # fixed texts _PUBLIC_REJECTION_TEXT maps them to are templates like the rest.
 _ERROR_DETAIL_TEMPLATES = frozenset(_ERROR_DETAIL_TEMPLATES) | frozenset({
-    "The peer only accepts verified CorvinOS instances (Corvin Labs identity certificate) and this instance has none",
+    "The peer only accepts verified CorvinOS instances (Corvin Labs identity certificate) and this "
+    "instance has none - without a licence, the peer's operator has to allow this connection by "
+    "setting require_ibc to false on their side",
     "The peer reports this instance's identity or pairing as revoked - pair again",
     "The peer is rate-limiting this connection - try again shortly",
     "The peer saw this message before (replay protection)",
@@ -2460,8 +2462,13 @@ def _relay_round_trip(
 
 
 _PUBLIC_REJECTION_TEXT: dict[str, str] = {
+    # The fix is on the PEER's side (its origin file for this connection), so
+    # the text says who acts — "this instance has none" alone sent operators
+    # after a licence they do not need (2026-10-06).
     "identity_required": "The peer only accepts verified CorvinOS instances "
-                         "(Corvin Labs identity certificate) and this instance has none",
+                         "(Corvin Labs identity certificate) and this instance has none - "
+                         "without a licence, the peer's operator has to allow this connection "
+                         "by setting require_ibc to false on their side",
     "identity_revoked": "The peer reports this instance's identity or pairing as revoked - pair again",
     "rate_limited": "The peer is rate-limiting this connection - try again shortly",
     "replay": "The peer saw this message before (replay protection)",
