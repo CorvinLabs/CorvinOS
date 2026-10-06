@@ -951,6 +951,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "layer_forge.definition_transitioned": "INFO",
     # Forge Bundle (ADR-2229) — mirrored in core/forge_bundle/audit.py::SEVERITY.
     "forge_bundle.exported": "INFO",
+    "forge_bundle.import_validated": "INFO",
+    "forge_bundle.import_rejected": "WARNING",
+    "forge_bundle.artifact_staged": "INFO",
     # Video Producer — Blender render path (core/skills/os_skills/video_producer/audit.py)
     # Metadata only: file paths, resolution/codec/frame/duration numbers, error_class.
     # NEVER: subprocess stdout/stderr, exception message text.
@@ -3891,6 +3894,17 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # Forge Bundle (ADR-2229) — mirrored in core/forge_bundle/audit.py::ALLOWED_FIELDS.
     "forge_bundle.exported": frozenset({
         "bundle_id", "bundle_version", "artifact_count", "total_bytes", "tenant_id",
+    }),
+    "forge_bundle.import_validated": frozenset({
+        "bundle_id", "bundle_version", "artifact_count", "total_uncompressed_bytes",
+        "tenant_id", "user_id", "validation_passed", "validation_stages",
+    }),
+    "forge_bundle.import_rejected": frozenset({
+        "bundle_id", "rejected_stage", "rejected_reason", "tenant_id", "user_id",
+    }),
+    "forge_bundle.artifact_staged": frozenset({
+        "bundle_id", "artifact_kind", "artifact_id", "artifact_version",
+        "quarantine_id", "status", "tenant_id", "user_id",
     }),
     # Video Producer — Blender render path (mirrored in
     # core/skills/os_skills/video_producer/audit.py::_ALLOWED_FIELDS).

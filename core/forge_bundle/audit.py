@@ -23,10 +23,24 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "forge_bundle.exported": frozenset({
         "bundle_id", "bundle_version", "artifact_count", "total_bytes", "tenant_id",
     }),
+    "forge_bundle.import_validated": frozenset({
+        "bundle_id", "bundle_version", "artifact_count", "total_uncompressed_bytes",
+        "tenant_id", "user_id", "validation_passed", "validation_stages",
+    }),
+    "forge_bundle.import_rejected": frozenset({
+        "bundle_id", "rejected_stage", "rejected_reason", "tenant_id", "user_id",
+    }),
+    "forge_bundle.artifact_staged": frozenset({
+        "bundle_id", "artifact_kind", "artifact_id", "artifact_version",
+        "quarantine_id", "status", "tenant_id", "user_id",
+    }),
 }
 
 SEVERITY: dict[str, str] = {
     "forge_bundle.exported": "INFO",
+    "forge_bundle.import_validated": "INFO",
+    "forge_bundle.import_rejected": "WARNING",
+    "forge_bundle.artifact_staged": "INFO",
 }
 
 
