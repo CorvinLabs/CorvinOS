@@ -244,6 +244,8 @@ from .routes import (
     plugin_upload as plugin_upload_route,
     # ADR-0721/0722/0723 — Definition-of-Done Verifier Skill Dashboard (Wave 3)
     dod_verifier_dashboard as dod_verifier_dashboard_route,
+    # ADR-2229 Phase 3 — Forge Bundle Import Routes
+    forge_bundle_routes as forge_bundle_route,
 )
 
 
@@ -287,6 +289,8 @@ router.include_router(monitoring_route.router, prefix="/monitoring", tags=["cons
 router.include_router(skills.router, tags=["console-skills"])
 # Unified Forge panel (consolidates tools, skills, os-skills, graph, audit)
 router.include_router(forge_unified_route.router, prefix="/forge", tags=["console-forge-unified"])
+# ADR-2229 Phase 3 — Forge Bundle import endpoint
+router.include_router(forge_bundle_route.router, tags=["console-forge-bundles"])
 # ADR-0681 Phase 5 — Console Skill Manager (install, list, uninstall)
 router.include_router(skill_manager_route.router, prefix="/skills-manager", tags=["console-skill-manager"])
 # ADR-0682 — skill catalogue, the Marketplace's "Skills" tab (read-only; lists
