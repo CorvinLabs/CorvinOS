@@ -36,6 +36,7 @@ const QUEUE = {
     quarantine_id: "a".repeat(32), kind: "tool", tool_id: "csv.count", version: "0.2.0",
     bundle_id: "acme", bundle_version: "2.0.0", staged_at: "2026-10-06T12:00:00Z",
     runtime: "python", description: "count", impl_sha256: "0".repeat(64), origin_verified: false,
+    requirements: ["numpy>=1.26"], secrets: ["openai_api_key"],
   }],
   count: 1,
 };
@@ -103,7 +104,7 @@ describe("ForgeBundlesPanel", () => {
         return HttpResponse.json({
           valid: true, bundle_id: "acme", bundle_version: "2.0.0", description: null, created_at: null,
           artifacts: [{ kind: "tool", id: "csv.count", version: "0.2.0", file_count: 2, requires: [] }],
-          total_uncompressed_bytes: 10, unscanned_files: [], origin_verified: false,
+          total_uncompressed_bytes: 10, origin_verified: false,
         });
       }),
       http.post(`${B}/import`, async ({ request }) => {
@@ -111,7 +112,7 @@ describe("ForgeBundlesPanel", () => {
         return HttpResponse.json({
           bundle_id: "acme", bundle_version: "2.0.0", artifact_count: 1, failed_count: 0,
           outcomes: [{ kind: "tool", id: "csv.count", version: "0.2.0", status: "quarantined", detail: "a".repeat(32) }],
-          unscanned_files: [], origin_verified: false,
+          origin_verified: false,
         });
       }),
     );
@@ -147,5 +148,59 @@ describe("ForgeBundlesPanel", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Accept/ }));
     await waitFor(() => expect(seen.some((s) => s.path.endsWith("/accept"))).toBe(true));
     expect(seen.find((s) => s.path.endsWith("/accept"))!.csrf).toBe("csrf-test");
+  });
+
+  it("C1: a late validation answer for an earlier file never replaces the current preview", async () => {
+    base({ items: [], count: 0 });
+    let releaseA: () => void = () => {};
+    server.use(http.post(`${B}/validate`, async ({ request }) => {
+      const form = await request.formData();
+      const name = (form.get("file") as File).name;
+      if (name === "a.zip") await new Promise<void>((r) => { releaseA = r; });
+      return HttpResponse.json({
+        valid: true, bundle_id: name === "a.zip" ? "bundle-a" : "bundle-b", bundle_version: "1.0.0",
+        description: null, created_at: null, artifacts: [], total_uncompressed_bytes: 1, origin_verified: false,
+      });
+    }));
+    wrap();
+    const input = screen.getByLabelText("bundle file");
+    fireEvent.change(input, { target: { files: [new File(["a"], "a.zip")] } });
+    fireEvent.change(input, { target: { files: [new File(["b"], "b.zip")] } });
+    expect(await screen.findByText("bundle-b@1.0.0")).toBeInTheDocument();
+    releaseA();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText("bundle-a@1.0.0")).toBeNull();
+    expect(screen.getByText("bundle-b@1.0.0")).toBeInTheDocument();
+  });
+
+  it("shows what landed when the import stops mid-way (503 with outcomes)", async () => {
+    base({ items: [], count: 0 });
+    server.use(
+      http.post(`${B}/validate`, () => HttpResponse.json({
+        valid: true, bundle_id: "acme", bundle_version: "2.0.0", description: null, created_at: null,
+        artifacts: [{ kind: "tool", id: "csv.count", version: "0.2.0", file_count: 2, requires: [] },
+                    { kind: "layer", id: "acme.l34", version: "1.0.0", file_count: 1, requires: [] }],
+        total_uncompressed_bytes: 10, origin_verified: false,
+      })),
+      http.post(`${B}/import`, () => HttpResponse.json({ detail: {
+        message: "audit chain unavailable; the import stopped — see which artifacts landed",
+        bundle_id: "acme", bundle_version: "2.0.0", artifact_count: 2, failed_count: 0, origin_verified: false,
+        outcomes: [{ kind: "tool", id: "csv.count", version: "0.2.0", status: "quarantined", detail: "a".repeat(32) },
+                   { kind: "layer", id: "acme.l34", version: "1.0.0", status: "not_attempted", detail: "" }],
+      } }, { status: 503 })),
+    );
+    wrap();
+    fireEvent.change(screen.getByLabelText("bundle file"), { target: { files: [new File(["x"], "b.zip")] } });
+    fireEvent.click(await screen.findByRole("button", { name: /Import 2 artifacts/ }));
+    expect(await screen.findByText("Not attempted")).toBeInTheDocument();
+    expect(screen.getByText("Awaiting review below")).toBeInTheDocument();
+    expect(screen.getByText(/Import stopped/)).toBeInTheDocument();
+  });
+
+  it("shows the packages and secrets an imported tool would get before Accept", async () => {
+    base();
+    wrap();
+    expect(await screen.findByText("Installs packages: numpy>=1.26")).toBeInTheDocument();
+    expect(screen.getByText("Requests secrets: openai_api_key")).toBeInTheDocument();
   });
 });

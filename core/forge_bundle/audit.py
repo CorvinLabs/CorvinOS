@@ -24,10 +24,14 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     }),
     "forge_bundle.import_validated": frozenset({
         "bundle_id", "bundle_version", "artifact_count", "total_uncompressed_bytes",
-        "unscanned_files_count", "actor", "tenant_id",
+        "actor", "tenant_id",
     }),
     "forge_bundle.import_rejected": frozenset({
         "rejected_stage", "actor", "tenant_id",
+    }),
+    "forge_bundle.artifact_intake_started": frozenset({
+        "bundle_id", "artifact_kind", "artifact_id", "artifact_version", "status",
+        "actor", "tenant_id",
     }),
     "forge_bundle.artifact_staged": frozenset({
         "bundle_id", "artifact_kind", "artifact_id", "artifact_version", "status",
@@ -45,16 +49,22 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
         "bundle_id", "artifact_kind", "artifact_id", "artifact_version", "quarantine_id",
         "actor", "tenant_id",
     }),
+    "forge_bundle.artifact_created": frozenset({
+        "bundle_id", "artifact_kind", "artifact_id", "artifact_version", "quarantine_id",
+        "actor", "tenant_id",
+    }),
 }
 
 SEVERITY: dict[str, str] = {
     "forge_bundle.exported": "INFO",
     "forge_bundle.import_validated": "INFO",
     "forge_bundle.import_rejected": "WARNING",
+    "forge_bundle.artifact_intake_started": "INFO",
     "forge_bundle.artifact_staged": "INFO",
     "forge_bundle.artifact_failed": "WARNING",
     "forge_bundle.quarantine_accepted": "INFO",
     "forge_bundle.quarantine_rejected": "INFO",
+    "forge_bundle.artifact_created": "INFO",
 }
 
 

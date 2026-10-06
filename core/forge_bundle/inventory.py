@@ -19,6 +19,10 @@ from pathlib import Path
 from typing import Any
 
 
+class InventoryUnavailable(RuntimeError):
+    """A store of this install could not be read — callers must refuse, not guess."""
+
+
 class AnyVersion:
     """A version collection that contains every version."""
 
@@ -50,18 +54,26 @@ def _forged_skills() -> list[dict[str, Any]]:
                 data = json.loads(manifest.read_text())
             except (OSError, ValueError):
                 continue
+            if not isinstance(data, dict):
+                continue
             sid, ver = data.get("skill_id"), data.get("version")
-            if isinstance(sid, str) and isinstance(ver, str):
+            # Export looks a skill up by folder name; a folder that disagrees
+            # with its manifest cannot be exported, so it is not offered.
+            if isinstance(sid, str) and isinstance(ver, str) and sid == folder.name:
                 out.append({"id": sid, "version": ver, "description": str(data.get("description", ""))[:200]})
     return out
 
 
 def _installed_skills() -> dict[str, list[str]]:
     reg = _corvin_home() / "skills_installed" / "skills_registry.json"
+    if not reg.exists():
+        return {}
     try:
         data = json.loads(reg.read_text())
     except (OSError, ValueError):
-        return {}
+        raise InventoryUnavailable("the installed-skill registry is unreadable") from None
+    if not isinstance(data, dict):
+        raise InventoryUnavailable("the installed-skill registry is malformed")
     return {sid: [e.get("version") for e in entries if isinstance(e, dict)]
             for sid, entries in data.items() if isinstance(entries, list)}
 
@@ -85,6 +97,16 @@ def _layers(tenant_id: str) -> list[dict[str, Any]]:
 
 
 def known(tenant_id: str) -> dict[str, dict[str, Any]]:
+    """Raises :class:`InventoryUnavailable` if any store cannot be read."""
+    try:
+        return _known(tenant_id)
+    except InventoryUnavailable:
+        raise
+    except Exception as exc:  # noqa: BLE001 — an unreadable store must refuse, never pass
+        raise InventoryUnavailable(f"this install's inventory could not be read ({type(exc).__name__})") from None
+
+
+def _known(tenant_id: str) -> dict[str, dict[str, Any]]:
     skills: dict[str, set[str]] = {}
     for s in _forged_skills():
         skills.setdefault(s["id"], set()).add(s["version"])
@@ -103,9 +125,11 @@ def known(tenant_id: str) -> dict[str, dict[str, Any]]:
     }
 
 
-def exportable(tenant_id: str) -> dict[str, list[dict[str, Any]]]:
+def exportable(tenant_id: str, *, include_skills: bool) -> dict[str, list[dict[str, Any]]]:
+    """``include_skills``: forged skills live in a host-wide store, so only an
+    owner/admin session may see or export them."""
     return {
-        "skills": _forged_skills(),
+        "skills": _forged_skills() if include_skills else [],
         "tools": _tools(tenant_id),
         "layers": _layers(tenant_id),
         "plugins": [],

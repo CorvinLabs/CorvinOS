@@ -4,16 +4,22 @@
 into a Forge Bundle ZIP. Each kind reuses that forge's OWN packaging rather
 than a new one:
 
-  skill  -> ``core.skills.skill_packager.SkillPackager`` (ADR-0674), same
-            ``skills_gen`` / ``skills_packages`` roots the console's
-            ``/v1/skill-forge/package`` route already writes to
-  tool   -> ``forge.multi_registry.MultiRegistry.get()`` + the impl file on disk
+  skill  -> ``core.skills.skill_packager.SkillPackager`` (ADR-0674), packaged
+            FRESH from the ``skills_gen`` folder into a temporary directory on
+            every export — a cached ZIP could be older than the folder. The
+            packager refreshes the folder's own ``.forge/`` metadata; nothing
+            else is written.
+  tool   -> ``forge.multi_registry.MultiRegistry.get()`` + the impl file on disk,
+            plus the behavioural subset of ``meta`` (requirements, secret key
+            names, budget, deterministic) — see ``tool_quarantine.clean_tool_meta``
   layer  -> ``core.orchestration.layer_forge.registry.LayerRegistry.get()``,
-            with registry-only fields (``status``, ``_created_at``, ``_promoted_at``)
-            stripped before export (ADR-2229 D5: status never travels)
-  plugin -> a wheel the operator already built (Plugin Builder, ADR-0262);
-            export never triggers a build — a build is its own audited
-            mutation, and export is read-only
+            with this install's registry state (status, review flags, ``_*``
+            keys) stripped (ADR-2229 D5: status never travels)
+  plugin -> an ADR-0511 plugin package the operator already has on disk
+            (``manifest.json`` with name/version/author) — the shape the
+            importing side's StagingManager accepts; anything else, e.g. a bare
+            wheel, is refused here instead of producing a bundle that cannot
+            be imported
 
 Tool Forge tools carry no version of their own (``ToolSpec`` has no
 ``version`` field) — the version in a :class:`ToolSelection` is supplied by
@@ -77,11 +83,6 @@ def _skills_gen_root() -> Path:
     return _forge_paths.corvin_home() / "skills_gen"
 
 
-def _skills_packages_root() -> Path:
-    from forge import paths as _forge_paths
-    return _forge_paths.corvin_home() / "skills_packages"
-
-
 @dataclass(frozen=True)
 class SkillSelection:
     skill_id: str
@@ -97,27 +98,30 @@ class SkillSelection:
         return self.skill_id
 
     def collect(self, tenant_id: str) -> dict[str, bytes]:
+        import tempfile
+
         from core.skills.manifest_v2 import SkillManifestV2
         from core.skills.skill_packager import SkillPackager
 
         skill_folder = (_skills_gen_root() / self.skill_id).resolve()
-        _require(skill_folder.exists(), f"skill not found: {self.skill_id} (looked in {skill_folder})")
+        _require(skill_folder.is_dir(), f"skill not found: {self.skill_id}")
         manifest_file = skill_folder / "skill.json"
         _require(manifest_file.exists(), f"skill {self.skill_id}: missing skill.json")
-        manifest = SkillManifestV2.from_dict(json.loads(manifest_file.read_text()))
+        try:
+            manifest = SkillManifestV2.from_dict(json.loads(manifest_file.read_text()))
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ExportError(f"skill {self.skill_id}: skill.json is invalid ({type(exc).__name__})") from None
         _require(
             manifest.version == self.version,
             f"skill {self.skill_id}: on-disk version {manifest.version!r} != requested {self.version!r}",
         )
-
-        packages_root = _skills_packages_root()
-        zip_path = packages_root / f"{self.skill_id}_{self.version}.zip"
-        if not zip_path.exists():
-            packager = SkillPackager(packages_root)
-            zip_path, _zip_hash, _metadata = packager.package(skill_folder, manifest)
-
-        prefix = f"artifacts/skill/{self.skill_id}@{self.version}/"
-        return {prefix + zip_path.name: zip_path.read_bytes()}
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                zip_path, _zip_hash, _metadata = SkillPackager(Path(tmp)).package(skill_folder, manifest)
+            except (ValueError, OSError) as exc:
+                raise ExportError(f"skill {self.skill_id}: cannot be packaged ({str(exc).split(':')[0][:120]})") from None
+            prefix = f"artifacts/skill/{self.skill_id}@{self.version}/"
+            return {prefix + zip_path.name: zip_path.read_bytes()}
 
 
 @dataclass(frozen=True)
@@ -137,10 +141,17 @@ class ToolSelection:
     def collect(self, tenant_id: str) -> dict[str, bytes]:
         from forge.multi_registry import MultiRegistry
 
+        from .tool_quarantine import QuarantineError, clean_tool_meta
+
         spec = MultiRegistry(tenant_id=tenant_id).get(self.name)
         _require(spec is not None, f"tool not found in any scope: {self.name}")
         impl_path = Path(spec.impl_path)
-        _require(impl_path.exists(), f"tool {self.name}: impl file missing ({impl_path})")
+        _require(impl_path.is_file(), f"tool {self.name}: implementation file missing")
+        try:
+            meta = clean_tool_meta({k: spec.meta.get(k) for k in ("requirements", "secrets", "budget", "deterministic")}
+                                   if isinstance(spec.meta, dict) else None)
+        except QuarantineError as exc:
+            raise ExportError(f"tool {self.name}: {exc}") from None
 
         # Registry-only state (scope, call_count, promoted, created_at, meta)
         # never travels — ADR-2229 D5. A spec.json carries only what re-creates
@@ -155,6 +166,7 @@ class ToolSelection:
             "runtime": spec.runtime,
             "version": self.version,
             "impl_filename": impl_path.name,
+            "meta": meta,
         }, indent=2).encode("utf-8")
         return {
             prefix + "spec.json": spec_json,
@@ -186,9 +198,9 @@ class LayerSelection:
         except LayerNotFoundError:
             raise ExportError(f"layer not found: {self.entry_id}@{self.version}") from None
 
-        # Registry-only fields never travel (ADR-2229 D5): status and the
-        # lifecycle timestamps are this install's state, not the definition.
-        clean = {k: v for k, v in manifest.items() if k not in {"status", "_created_at", "_promoted_at"}}
+        from .import_module import clean_layer_manifest
+
+        clean = clean_layer_manifest(manifest)
         prefix = f"artifacts/layer/{self.entry_id}@{self.version}/"
         return {prefix + "manifest.json": json.dumps(clean, indent=2).encode("utf-8")}
 
@@ -197,14 +209,13 @@ class LayerSelection:
 class PluginSelection:
     plugin_id: str
     version: str
-    wheel_path: Path
+    package_path: Path
     requires: tuple[Requirement, ...] = ()
     kind: str = "plugin"
 
     def __post_init__(self) -> None:
         _validate_selection_shape(self.kind, self.plugin_id, self.version, self.requires)
-        _require(self.wheel_path.exists() and self.wheel_path.is_file(),
-                  f"plugin {self.plugin_id}: wheel not found ({self.wheel_path})")
+        _require(self.package_path.is_file(), f"plugin {self.plugin_id}: package file not found")
 
     @property
     def id(self) -> str:
@@ -213,9 +224,15 @@ class PluginSelection:
     def collect(self, tenant_id: str) -> dict[str, bytes]:
         # No build is triggered here: building is its own audited, mutating
         # operation (Plugin Builder, ADR-0262). Export only reads what the
-        # operator already built.
+        # operator already built — and refuses what the target could not stage.
+        from core.plugins.staging import StagingManager
+
+        ok, manifest, _errors = StagingManager(tenant_id).validate_zip_file(self.package_path)
+        _require(ok, f"plugin {self.plugin_id}: not a plugin package (it needs a manifest.json with name, version and author)")
+        _require(manifest.get("name") == self.plugin_id and manifest.get("version") == self.version,
+                 f"plugin {self.plugin_id}: package manifest names {manifest.get('name')!r}@{manifest.get('version')!r}")
         prefix = f"artifacts/plugin/{self.plugin_id}@{self.version}/"
-        return {prefix + self.wheel_path.name: self.wheel_path.read_bytes()}
+        return {prefix + self.package_path.name: self.package_path.read_bytes()}
 
 
 Selection = SkillSelection | ToolSelection | LayerSelection | PluginSelection
@@ -262,7 +279,12 @@ def build_bundle(
         # Every file path is prefixed with this selection's (kind, id, version);
         # the (kind, id) dedup above already makes two selections collide
         # before file collection, so no later path can ever repeat here.
-        files = sel.collect(tenant_id)
+        try:
+            files = sel.collect(tenant_id)
+        except ExportError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a forge's own error must not surface as a bare 500
+            raise ExportError(f"{sel.kind} {sel.id}: could not be collected ({type(exc).__name__})") from None
         entries.update(files)
 
         artifact_manifests.append({

@@ -178,3 +178,62 @@ def test_no_route_in_the_module_carries_an_absolute_prefix():
     assert forge_bundle_routes.router.prefix == ""
     for route in forge_bundle_routes.router.routes:
         assert route.path.startswith("/forge-bundles/"), route.path
+
+
+def _client_for(tenant: str):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from corvin_console import auth
+    from corvin_console.app import router
+
+    rec = auth.create_session(tenant_id=tenant, token_fingerprint="test-fp-2")
+    app = FastAPI()
+    app.include_router(router, prefix="/v1/console")
+    client = TestClient(app, raise_server_exceptions=False)
+    client.cookies.set("corvin_console_sid", rec.sid)
+    return client, auth.derive_csrf_token(rec.csrf_secret, rec.sid)
+
+
+def test_another_tenant_never_sees_or_exports_host_wide_skills(tmp_corvin_home, make_skill):
+    make_skill("summarize", "1.0.0")
+    client, csrf = _client_for("acme")
+    assert client.get(f"{BASE}/exportable").json()["skills"] == []
+    r = _export(client, csrf, [{"kind": "skill", "id": "summarize", "version": "1.0.0"}])
+    assert r.status_code == 403 and "install owner" in r.json()["detail"]
+
+
+def test_an_audit_outage_mid_import_answers_503_with_what_landed(console_client, make_tool, make_layer, monkeypatch):
+    client, csrf = console_client
+    make_tool("csv.count")
+    make_layer("acme.audit-l34", "1.0.0")
+    bundle = _export(client, csrf, [{"kind": "tool", "id": "csv.count", "version": "0.2.0"},
+                                    {"kind": "layer", "id": "acme.audit-l34", "version": "1.0.0"}]).content
+    _drop_originals()
+
+    from core.forge_bundle import import_module
+    from core.forge_bundle.audit import ForgeBundleAuditError
+    real, n = import_module.emit, {"started": 0}
+
+    def flaky(event, **kw):
+        if event == "forge_bundle.artifact_intake_started":
+            n["started"] += 1
+            if n["started"] == 2:
+                raise ForgeBundleAuditError(event)
+        return real(event, **kw)
+
+    monkeypatch.setattr(import_module, "emit", flaky)
+    r = _upload(client, csrf, "import", bundle)
+    assert r.status_code == 503
+    detail = r.json()["detail"]
+    assert "stopped" in detail["message"]
+    assert [o["status"] for o in detail["outcomes"]][1:] == ["not_attempted"]
+    assert detail["outcomes"][0]["status"] != "not_attempted"
+
+
+def test_cli_refuses_a_missing_output_directory_before_recording(cli_runner, make_tool, chain_events, tmp_path):
+    make_tool("csv.count")
+    proc = cli_runner(["export", "--id", "b", "--version", "1.0.0",
+                       "--output", str(tmp_path / "missing" / "b.zip"), "--tool", "csv.count@0.2.0"])
+    assert proc.returncode == 2 and "does not exist" in proc.stderr
+    assert "forge_bundle.exported" not in [e["event_type"] for e in chain_events()]

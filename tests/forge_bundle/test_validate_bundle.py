@@ -120,7 +120,6 @@ def test_valid_bundle_passes():
     assert report.origin_verified is False
     # No inventory given: the one requirement outside the bundle is reported, not silently passed.
     assert [(r.kind, r.id) for r in report.unchecked_references] == [("layer", "base.rule")]
-    assert report.unscanned_files == ()
     assert report.total_uncompressed_bytes > 0
 
 
@@ -327,7 +326,7 @@ def test_zip_nested_two_deep_is_rejected():
     inner = _zip({"deeper.zip": _zip({"x.txt": b"x"})})
     art = _artifact("plugin", "acme-audit-sink", "0.5.0", {"plugin.zip": inner}, [{"kind": "tool", "id": "csv.count"}])
     arts[3] = (art, {art["files"][0]["path"]: inner})
-    _rejected(make_bundle(artifacts=arts), "secrets", match="nested deeper")
+    _rejected(make_bundle(artifacts=arts), "container", match="nested deeper")
 
 
 def test_unsafe_name_inside_nested_zip():
@@ -335,17 +334,52 @@ def test_unsafe_name_inside_nested_zip():
     inner = _zip({"../../evil.py": b"x"})
     art = _artifact("plugin", "acme-audit-sink", "0.5.0", {"plugin.zip": inner}, [{"kind": "tool", "id": "csv.count"}])
     arts[3] = (art, {art["files"][0]["path"]: inner})
-    _rejected(make_bundle(artifacts=arts), "secrets", match="path traversal")
+    _rejected(make_bundle(artifacts=arts), "container", match="path traversal")
 
 
-def test_binary_payload_is_reported_unscanned_not_silently_clean():
+def _tool_with_extra(name: str, blob: bytes):
     arts = _default_artifacts()
-    blob = bytes(range(256)) * 4
-    art = _artifact("tool", "csv.count", "0.2.0", {"spec.json": b"{}", "icon.png": blob},
+    art = _artifact("tool", "csv.count", "0.2.0", {"spec.json": b"{}", name: blob},
                     [{"kind": "skill", "id": "summarize", "version": "1.0.0"}])
     arts[1] = (art, {f["path"]: (b"{}" if f["path"].endswith("spec.json") else blob) for f in art["files"]})
-    report = validate_bundle(make_bundle(artifacts=arts))
-    assert report.unscanned_files == ("artifacts/tool/csv.count@0.2.0/icon.png",)
+    return make_bundle(artifacts=arts)
+
+
+def test_binary_payload_without_credentials_passes():
+    validate_bundle(_tool_with_extra("icon.png", bytes(range(256)) * 4))
+
+
+AWS = b"AKIAABCDEFGHIJKLMNOP"
+
+
+@pytest.mark.parametrize("name,blob", [
+    ("blob.bin", b"\xff\xfe junk " + AWS + b" \x00\x81"),           # one invalid UTF-8 byte
+    ("notes.txt", ("x " + AWS.decode()).encode("utf-16")),        # UTF-16 hides ASCII
+    ("cfg.json", b'{"k": "\\u0041KIAABCDEFGHIJKLMNOP"}'),          # JSON escape
+])
+def test_credentials_are_found_in_any_encoding(name, blob):
+    _rejected(_tool_with_extra(name, blob), "secrets", match="aws_access_key")
+
+
+def test_deeply_nested_json_is_refused_not_skipped():
+    _rejected(_tool_with_extra("deep.json", b"[" * 100000 + b"]" * 100000), "secrets", match="too deeply")
+
+
+def test_an_archive_is_recognised_by_content_not_by_name():
+    # A ZIP named .whl/.bin is still opened and scanned.
+    inner = _zip({"pkg/secret.py": b"KEY = '" + AWS + b"'\n"})
+    _rejected(_tool_with_extra("payload.whl", inner), "secrets", match="aws_access_key")
+
+
+def test_nested_archives_share_one_uncompressed_budget(monkeypatch):
+    import core.forge_bundle.validate as v
+    monkeypatch.setattr(v, "LIMITS", {**v.LIMITS, "max_uncompressed_bytes": 600_000})
+    inner = _zip({f"f{i}.txt": b"0" * 100_000 for i in range(4)})  # 400 kB each: under the per-archive limit
+    arts = _default_artifacts()
+    art = _artifact("tool", "csv.count", "0.2.0", {"spec.json": b"{}", "a.bin": inner, "b.bin": inner},
+                    [{"kind": "skill", "id": "summarize", "version": "1.0.0"}])
+    arts[1] = (art, {f["path"]: (b"{}" if f["path"].endswith("spec.json") else inner) for f in art["files"]})
+    _rejected(make_bundle(artifacts=arts), "container", match="budget")
 
 
 # ── remaining defensive branches ─────────────────────────────────────────────
@@ -436,9 +470,11 @@ def test_secret_scan_failure_is_treated_as_sensitive(monkeypatch):
     _rejected(make_bundle(), "secrets", match="scan failed")
 
 
-def test_declared_zip_that_is_not_a_zip():
+def test_a_zip_named_payload_that_is_not_a_zip_is_scanned_as_bytes():
+    # The NAME no longer decides anything: non-archive content is scanned as bytes.
     arts = _default_artifacts()
     art = _artifact("plugin", "acme-audit-sink", "0.5.0", {"plugin.zip": b"not a zip at all"},
                     [{"kind": "tool", "id": "csv.count"}])
     arts[3] = (art, {art["files"][0]["path"]: b"not a zip at all"})
-    _rejected(make_bundle(artifacts=arts), "secrets", match="not a readable ZIP")
+    validate_bundle(make_bundle(artifacts=arts))
+

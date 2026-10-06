@@ -9,7 +9,7 @@ Usage:
     forge_bundle_cli.py export --id ID --version VERSION --output FILE.zip
         [--tenant TID] [--description TEXT]
         [--skill NAME@VERSION ...] [--tool NAME@VERSION ...]
-        [--layer ID@VERSION ...] [--plugin ID@VERSION:WHEEL_PATH ...]
+        [--layer ID@VERSION ...] [--plugin ID@VERSION:PACKAGE_PATH ...]
 
 ``requires`` (cross-artifact dependencies) are not expressible from the CLI
 yet — use ``core.forge_bundle.export.build_bundle`` directly for that; the
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -57,7 +58,7 @@ def _split_at_version(spec: str, flag: str) -> tuple[str, str]:
 def _parse_plugin(spec: str) -> tuple[str, str, Path]:
     name_version, _, wheel = spec.partition(":")
     if not wheel:
-        raise ValueError(f"--plugin {spec!r}: expected ID@VERSION:WHEEL_PATH")
+        raise ValueError(f"--plugin {spec!r}: expected ID@VERSION:PACKAGE_PATH")
     name, version = _split_at_version(name_version, "--plugin")
     return name, version, Path(wheel)
 
@@ -75,7 +76,7 @@ def _build_parser() -> argparse.ArgumentParser:
     export.add_argument("--skill", action="append", default=[], metavar="NAME@VERSION")
     export.add_argument("--tool", action="append", default=[], metavar="NAME@VERSION")
     export.add_argument("--layer", action="append", default=[], metavar="ID@VERSION")
-    export.add_argument("--plugin", action="append", default=[], metavar="ID@VERSION:WHEEL_PATH")
+    export.add_argument("--plugin", action="append", default=[], metavar="ID@VERSION:PACKAGE_PATH")
     return parser
 
 
@@ -96,13 +97,19 @@ def _cmd_export(args: argparse.Namespace) -> int:
             selections.append(LayerSelection(entry_id=name, version=version))
         for spec in args.plugin:
             name, version, wheel = _parse_plugin(spec)
-            selections.append(PluginSelection(plugin_id=name, version=version, wheel_path=wheel))
+            selections.append(PluginSelection(plugin_id=name, version=version, package_path=wheel))
     except ValueError as exc:
         print(f"usage error: {exc}", file=sys.stderr)
         return 2
 
     if not selections:
         print("usage error: at least one --skill/--tool/--layer/--plugin is required", file=sys.stderr)
+        return 2
+
+    output = Path(args.output)
+    # Checked BEFORE the build: the build records the export in the audit chain.
+    if not output.parent.is_dir() or not os.access(output.parent, os.W_OK):
+        print(f"usage error: --output directory {str(output.parent)!r} does not exist or is not writable", file=sys.stderr)
         return 2
 
     try:
@@ -117,8 +124,14 @@ def _cmd_export(args: argparse.Namespace) -> int:
         _print({"status": "FAILED", "error": str(exc), "error_class": type(exc).__name__})
         return 1
 
-    output = Path(args.output)
-    output.write_bytes(result.data)
+    try:
+        tmp = output.with_name(f".{output.name}.tmp")
+        tmp.write_bytes(result.data)
+        tmp.replace(output)
+    except OSError as exc:
+        _print({"status": "FAILED", "error": "the bundle was built and recorded, but the output file could not be written",
+                "error_class": type(exc).__name__, "audit_hash": result.audit_hash})
+        return 1
     _print({
         "status": "SUCCESS",
         "bundle_id": result.bundle_id,

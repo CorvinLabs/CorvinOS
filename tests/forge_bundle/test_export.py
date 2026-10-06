@@ -28,12 +28,12 @@ from core.forge_bundle.export import build_bundle
 
 
 def test_export_all_four_kinds_round_trips_through_validate(
-    make_skill, make_tool, make_layer, make_plugin_wheel,
+    make_skill, make_tool, make_layer, make_plugin_package,
 ):
     make_skill("summarize", "1.0.0")
     make_tool("csv.count")
     make_layer("acme.audit-l34", "1.0.0")
-    wheel = make_plugin_wheel("acme-audit-sink", "0.5.0")
+    wheel = make_plugin_package("acme-audit-sink", "0.5.0")
 
     result = build_bundle(
         bundle_id="acme-automation",
@@ -44,7 +44,7 @@ def test_export_all_four_kinds_round_trips_through_validate(
             SkillSelection(skill_id="summarize", version="1.0.0"),
             ToolSelection(name="csv.count", version="0.2.0"),
             LayerSelection(entry_id="acme.audit-l34", version="1.0.0"),
-            PluginSelection(plugin_id="acme-audit-sink", version="0.5.0", wheel_path=wheel),
+            PluginSelection(plugin_id="acme-audit-sink", version="0.5.0", package_path=wheel),
         ],
     )
     assert isinstance(result, BundleResult)
@@ -53,10 +53,6 @@ def test_export_all_four_kinds_round_trips_through_validate(
 
     report = validate_bundle(result.data)
     assert {a.kind for a in report.envelope.artifacts} == {"skill", "tool", "layer", "plugin"}
-    # The .whl is a binary zip that doesn't decode as UTF-8 text and isn't
-    # named *.zip, so Phase 1's scanner reports it unscanned rather than
-    # silently calling it clean — see test_binary_payload_is_... in Phase 1.
-    assert report.unscanned_files == ("artifacts/plugin/acme-audit-sink@0.5.0/acme-audit-sink-0.5.0-py3-none-any.whl",)
 
 
 def test_skill_zip_payload_matches_skill_packager_output(make_skill):
@@ -83,8 +79,9 @@ def test_tool_export_excludes_registry_only_state(make_tool):
     )
     with zipfile.ZipFile(BytesIO(result.data)) as zf:
         spec = json.loads(zf.read("artifacts/tool/csv.count@0.2.0/spec.json"))
-    assert set(spec) == {"name", "description", "input_schema", "runtime", "version", "impl_filename"}
+    assert set(spec) == {"name", "description", "input_schema", "runtime", "version", "impl_filename", "meta"}
     assert spec["version"] == "0.2.0"  # caller-supplied, not derived (ToolSpec has no version)
+    assert spec["meta"] == {}
 
 
 def test_layer_export_strips_registry_status(make_layer):
@@ -100,8 +97,8 @@ def test_layer_export_strips_registry_status(make_layer):
     assert manifest["id"] == "acme.audit-l34"
 
 
-def test_plugin_export_never_triggers_a_build(make_plugin_wheel, monkeypatch):
-    wheel = make_plugin_wheel("acme-audit-sink", "0.5.0")
+def test_plugin_export_never_triggers_a_build(make_plugin_package, monkeypatch):
+    wheel = make_plugin_package("acme-audit-sink", "0.5.0")
     # If export imported the builder at all this would fail the test session
     # (module not installed in this fixture's sys.path); its absence proves
     # collect() for plugin never reaches for it.
@@ -109,7 +106,7 @@ def test_plugin_export_never_triggers_a_build(make_plugin_wheel, monkeypatch):
     assert "core.plugins.plugin_builder.build_system.builder" not in sys.modules
     build_bundle(
         bundle_id="b", bundle_version="1.0.0", tenant_id="_default",
-        selections=[PluginSelection(plugin_id="acme-audit-sink", version="0.5.0", wheel_path=wheel)],
+        selections=[PluginSelection(plugin_id="acme-audit-sink", version="0.5.0", package_path=wheel)],
     )
     assert "core.plugins.plugin_builder.build_system.builder" not in sys.modules
 
@@ -167,9 +164,9 @@ def test_missing_layer_raises():
         )
 
 
-def test_missing_wheel_raises_at_selection_construction(tmp_path):
-    with pytest.raises(ExportError, match="wheel not found"):
-        PluginSelection(plugin_id="x", version="1.0.0", wheel_path=tmp_path / "missing.whl")
+def test_missing_package_raises_at_selection_construction(tmp_path):
+    with pytest.raises(ExportError, match="package file not found"):
+        PluginSelection(plugin_id="x", version="1.0.0", package_path=tmp_path / "missing.whl")
 
 
 def test_no_selections_raises():
@@ -228,22 +225,67 @@ def test_declared_requires_travel_into_the_envelope(make_skill, make_tool):
     assert tool_art.requires == (Requirement(kind="skill", id="summarize", version="1.0.0"),)
 
 
-def test_exporting_the_same_skill_twice_reuses_the_existing_package(make_skill):
-    make_skill("summarize", "1.0.0")
-    first = build_bundle(
-        bundle_id="b", bundle_version="1.0.0", tenant_id="_default",
-        selections=[SkillSelection(skill_id="summarize", version="1.0.0")],
-    )
-    second = build_bundle(
-        bundle_id="b", bundle_version="1.0.1", tenant_id="_default",
-        selections=[SkillSelection(skill_id="summarize", version="1.0.0")],
-    )
-    with zipfile.ZipFile(BytesIO(first.data)) as zf:
-        first_inner = zf.read(next(n for n in zf.namelist() if n.startswith("artifacts/skill/")))
+def test_export_packages_the_skill_folder_as_it_is_now(make_skill, tmp_corvin_home):
+    # A cached package ZIP must never ship code older than the folder.
+    folder = make_skill("summarize", "1.0.0")
+    build_bundle(bundle_id="b", bundle_version="1.0.0", tenant_id="_default",
+                 selections=[SkillSelection(skill_id="summarize", version="1.0.0")])
+    (folder / "src" / "skill.py").write_text("def run(text):\n    return 'NEW CODE'\n")
+    second = build_bundle(bundle_id="b", bundle_version="1.0.1", tenant_id="_default",
+                          selections=[SkillSelection(skill_id="summarize", version="1.0.0")])
     with zipfile.ZipFile(BytesIO(second.data)) as zf:
-        second_inner = zf.read(next(n for n in zf.namelist() if n.startswith("artifacts/skill/")))
-    assert first_inner == second_inner  # SkillPackager.package() would raise FileExistsError if re-run
+        inner = zf.read(next(n for n in zf.namelist() if n.startswith("artifacts/skill/")))
+    with zipfile.ZipFile(BytesIO(inner)) as zi:
+        assert b"NEW CODE" in zi.read("summarize/src/skill.py")
+    assert not (tmp_corvin_home / "skills_packages" / "summarize_1.0.0.zip").exists()
 
+
+def test_a_wheel_is_refused_at_export_not_at_import(make_plugin_wheel):
+    wheel = make_plugin_wheel("acme-audit-sink", "0.5.0")
+    with pytest.raises(ExportError, match="not a plugin package"):
+        build_bundle(bundle_id="b", bundle_version="1.0.0", tenant_id="_default",
+                     selections=[PluginSelection("acme-audit-sink", "0.5.0", package_path=wheel)])
+
+
+def test_tool_meta_travels_as_its_behavioural_subset(tmp_corvin_home):
+    from forge.multi_registry import MultiRegistry
+
+    MultiRegistry(tenant_id="_default").create(
+        scope="user", name="stats.mean", description="d", input_schema={"type": "object"},
+        impl="def run(r):\n    return 0\n",
+        meta={"requirements": ["numpy>=1.26"], "budget": {"cpu_seconds": 5}, "deterministic": True,
+              "internal_note": "never exported"},
+    )
+    result = build_bundle(bundle_id="b", bundle_version="1.0.0", tenant_id="_default",
+                          selections=[ToolSelection("stats.mean", "1.0.0")])
+    with zipfile.ZipFile(BytesIO(result.data)) as zf:
+        spec = json.loads(zf.read("artifacts/tool/stats.mean@1.0.0/spec.json"))
+    assert spec["meta"] == {"requirements": ["numpy>=1.26"], "budget": {"cpu_seconds": 5}, "deterministic": True}
+
+
+def test_layer_review_flags_never_travel(make_layer):
+    from core.orchestration.layer_forge.orchestrator import layer_forge_home
+
+    make_layer("acme.audit-l34", "1.0.0")
+    path = layer_forge_home("_default") / "registry" / "acme.audit-l34@1.0.0.json"
+    stored = json.loads(path.read_text())
+    stored.update(review_flagged=True, review_flags=["x"], _promoted_at="t")
+    path.write_text(json.dumps(stored))
+    result = build_bundle(bundle_id="b", bundle_version="1.0.0", tenant_id="_default",
+                          selections=[LayerSelection("acme.audit-l34", "1.0.0")])
+    with zipfile.ZipFile(BytesIO(result.data)) as zf:
+        manifest = json.loads(zf.read("artifacts/layer/acme.audit-l34@1.0.0/manifest.json"))
+    assert not {"review_flagged", "review_flags", "_promoted_at", "status"} & set(manifest)
+
+
+def test_a_forge_internal_error_becomes_an_export_error(make_skill):
+    folder = make_skill("summarize", "1.0.0")
+    import shutil
+    shutil.rmtree(folder / "hooks")  # SkillPackager raises ValueError
+    with pytest.raises(ExportError, match="cannot be packaged") as exc:
+        build_bundle(bundle_id="b", bundle_version="1.0.0", tenant_id="_default",
+                     selections=[SkillSelection(skill_id="summarize", version="1.0.0")])
+    assert "/" not in str(exc.value).split("(")[-1]  # no host path in the message
 
 def test_requirement_without_version_accepts_any(make_skill, make_tool):
     from core.forge_bundle.envelope import Requirement

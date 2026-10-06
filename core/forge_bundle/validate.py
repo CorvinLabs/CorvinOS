@@ -10,7 +10,15 @@ staleness stage is injected by the caller.
   integrity  → every listed file exists with its size + sha256; nothing unlisted
   references → intra-bundle requirements resolve and form no cycle
   staleness  → requirements outside the bundle exist on the target
-  secrets    → no credential-shaped string in any text payload
+  secrets    → no credential-shaped string in any payload, at any nesting level
+
+Every payload is scanned, binary or not: as raw bytes (latin-1, so one invalid
+UTF-8 byte cannot switch the scan off), with NUL bytes removed (ASCII inside
+UTF-16), and — when it parses as JSON — after unescaping (``\u0041KIA…``).
+A payload that IS a ZIP archive (decided by its content, never by its name: a
+wheel, a renamed ``.bin``) is opened and held to the container rules, and all
+nested archives together share the bundle's uncompressed-size budget — they are
+what SkillInstaller / StagingManager will later unpack.
 """
 from __future__ import annotations
 
@@ -70,8 +78,6 @@ class BundleReport:
     total_uncompressed_bytes: int
     # Requirements outside the bundle that could not be checked (no inventory given).
     unchecked_references: tuple[Requirement, ...]
-    # Payload files that are not UTF-8 text and were therefore not secret-scanned.
-    unscanned_files: tuple[str, ...]
     # ADR-2229 D4: format v1 carries no origin proof. Always False; render it.
     origin_verified: bool = False
 
@@ -243,30 +249,44 @@ def _scan_text(text: str, where: str) -> None:
         raise _reject("secrets", f"{where}: credential-shaped content ({', '.join(sorted(hits))})")
 
 
-def _scan_payload(data: bytes, where: str, depth: int, unscanned: list[str]) -> None:
-    if where.lower().endswith(".zip"):
-        if depth >= LIMITS["max_nested_zip_depth"]:
-            raise _reject("secrets", f"{where}: archive nested deeper than {LIMITS['max_nested_zip_depth']}")
-        try:
-            inner = zipfile.ZipFile(io.BytesIO(data))
-        except zipfile.BadZipFile as exc:
-            raise _reject("secrets", f"{where}: declared .zip is not a readable ZIP") from exc
-        with inner:
-            # The inner archive gets the same container rules: it is the payload
-            # the per-forge installer will later unpack.
-            try:
-                inner_files = _check_container(inner, where=where)
-            except BundleRejected as exc:
-                raise _reject("secrets", exc.reason) from exc
-            for info in inner_files:
-                _scan_payload(_read(inner, info.filename, "secrets"), f"{where}!{info.filename}", depth + 1, unscanned)
-        return
+class _Budget:
+    """Uncompressed bytes left for every nested archive of one bundle together."""
+
+    def __init__(self, left: int) -> None:
+        self.left = left
+
+    def spend(self, n: int, where: str) -> None:
+        self.left -= n
+        if self.left < 0:
+            raise _reject("container", f"{where}: nested archives exceed the bundle's "
+                                       f"{LIMITS['max_uncompressed_bytes']}-byte uncompressed budget")
+
+
+def _scan_bytes(data: bytes, where: str) -> None:
+    _scan_text(data.decode("latin-1"), where)
+    if b"\x00" in data:
+        _scan_text(data.replace(b"\x00", b"").decode("latin-1"), where)
     try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        unscanned.append(where)
+        decoded = json.dumps(json.loads(data), ensure_ascii=False)
+    except ValueError:
         return
-    _scan_text(text, where)
+    except RecursionError:
+        raise _reject("secrets", f"{where}: JSON nested too deeply to scan") from None
+    _scan_text(decoded, where)
+
+
+def _scan_payload(data: bytes, where: str, depth: int, budget: _Budget) -> None:
+    if zipfile.is_zipfile(io.BytesIO(data)):
+        if depth >= LIMITS["max_nested_zip_depth"]:
+            raise _reject("container", f"{where}: archive nested deeper than {LIMITS['max_nested_zip_depth']}")
+        inner = _open_zip(data, where=where)
+        with inner:
+            inner_files = _check_container(inner, where=where)
+            budget.spend(sum(i.file_size for i in inner_files), where)
+            for info in inner_files:
+                _scan_payload(_read(inner, info.filename, "secrets"), f"{where}!{info.filename}", depth + 1, budget)
+        return
+    _scan_bytes(data, where)
 
 
 def validate_bundle(data: bytes, *, known: Known | None = None) -> BundleReport:
@@ -295,15 +315,15 @@ def validate_bundle(data: bytes, *, known: Known | None = None) -> BundleReport:
         if known is not None:
             _check_staleness(external, known)
 
-        unscanned: list[str] = []
-        _scan_text(_read(zf, ENVELOPE_NAME, "secrets").decode("utf-8"), ENVELOPE_NAME)
+        total = sum(i.file_size for i in file_infos)
+        budget = _Budget(LIMITS["max_uncompressed_bytes"] - total)
+        _scan_bytes(_read(zf, ENVELOPE_NAME, "secrets"), ENVELOPE_NAME)
         for art in envelope.artifacts:
             for f in art.files:
-                _scan_payload(_read(zf, f.path, "secrets"), f.path, 0, unscanned)
+                _scan_payload(_read(zf, f.path, "secrets"), f.path, 0, budget)
 
         return BundleReport(
             envelope=envelope,
-            total_uncompressed_bytes=sum(i.file_size for i in file_infos),
+            total_uncompressed_bytes=total,
             unchecked_references=tuple(external) if known is None else (),
-            unscanned_files=tuple(unscanned),
         )

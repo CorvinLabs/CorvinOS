@@ -7,10 +7,13 @@ explicit accept calls ``MultiRegistry.create``.
 Layout (tenant-scoped, outside every registry root, so nothing can load it)::
 
     <tenant_home>/global/forge_bundle/quarantine/tools/<qid>/meta.json
-    <tenant_home>/global/forge_bundle/quarantine/tools/<qid>/<impl file>
+    <tenant_home>/global/forge_bundle/quarantine/tools/<qid>/impl.py | impl.sh
 
-``qid`` is a random 32-hex token. It is the ONLY handle the console accepts,
-and it is checked against ``QID_RE`` before any path is built from it.
+``qid`` is a random 32-hex token, the ONLY handle the console accepts, checked
+against ``QID_RE`` before any path is built from it. A decision first CLAIMS
+the entry by renaming ``<qid>`` to ``.claimed-<qid>`` — one atomic rename, so
+two concurrent decisions cannot both proceed and a decided entry can never be
+listed, accepted or rejected again, even if deleting it afterwards fails.
 """
 from __future__ import annotations
 
@@ -21,7 +24,7 @@ import re
 import shutil
 import tempfile
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,8 +33,16 @@ from .envelope import is_safe_id, is_semver
 from .validate import BundleRejected, _scan_text
 
 QID_RE = re.compile(r"^[0-9a-f]{32}$")
-RUNTIMES = {"python": ".py", "bash": ".sh"}
+RUNTIMES = {"python": "impl.py", "bash": "impl.sh"}
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_.]{1,128}$")
+# A pip requirement by NAME only: no URLs, paths, VCS refs or options — those
+# would let a bundle choose where code is downloaded from.
+_REQUIREMENT_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(\[[A-Za-z0-9._,-]{1,100}\])?"
+    r"(\s*(==|>=|<=|~=|!=|<|>)\s*[A-Za-z0-9.*+!_-]{1,50}(\s*,\s*(==|>=|<=|~=|!=|<|>)\s*[A-Za-z0-9.*+!_-]{1,50})*)?$"
+)
+_BUDGET_KEYS = frozenset({"cpu_seconds", "wall_seconds", "artifact_bytes", "output_bytes", "memory_mb"})
+MAX_REQUIREMENTS = 32
 
 
 class QuarantineError(RuntimeError):
@@ -44,6 +55,55 @@ class QuarantineNotFound(QuarantineError):
 
 class QuarantineConflict(QuarantineError):
     pass
+
+
+class QuarantineForbidden(QuarantineError):
+    pass
+
+
+class OutcomeNotRecorded(QuarantineError):
+    """The decision was carried out, but its outcome record did not commit."""
+
+
+def clean_tool_meta(meta: Any) -> dict[str, Any]:
+    """The behavioural subset of ``ToolSpec.meta`` that may travel, validated.
+
+    ``requirements`` (pip names), ``secrets`` (vault key NAMES, never values),
+    ``budget`` (clamped by policy at run time anyway) and ``deterministic``.
+    Anything else is registry state of the exporting install and is dropped.
+    """
+    if meta is None:
+        return {}
+    if not isinstance(meta, dict):
+        raise QuarantineError("tool meta must be an object")
+    out: dict[str, Any] = {}
+    reqs = meta.get("requirements")
+    if reqs is not None:
+        if (not isinstance(reqs, list) or len(reqs) > MAX_REQUIREMENTS
+                or not all(isinstance(r, str) and _REQUIREMENT_RE.match(r.strip()) for r in reqs)):
+            raise QuarantineError("tool requirements must be up to 32 plain package specifiers (no URLs or paths)")
+        if reqs:
+            out["requirements"] = [r.strip() for r in reqs]
+    if meta.get("secrets") is not None:
+        from forge.secret_vault import SecretRefError, validate_secret_refs
+
+        try:
+            refs = validate_secret_refs(meta.get("secrets"))
+        except SecretRefError as exc:
+            raise QuarantineError(f"tool secret references invalid: {exc}") from None
+        if refs:
+            out["secrets"] = refs
+    budget = meta.get("budget")
+    if budget is not None:
+        if (not isinstance(budget, dict) or not set(budget) <= _BUDGET_KEYS
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 for v in budget.values())):
+            raise QuarantineError("tool budget must map known limits to positive numbers")
+        out["budget"] = dict(budget)
+    if meta.get("deterministic") is not None:
+        if not isinstance(meta["deterministic"], bool):
+            raise QuarantineError("tool deterministic flag must be a boolean")
+        out["deterministic"] = meta["deterministic"]
+    return out
 
 
 @dataclass(frozen=True)
@@ -59,6 +119,7 @@ class QuarantinedTool:
     input_schema: dict[str, Any]
     impl_filename: str
     impl_sha256: str
+    meta: dict[str, Any] = field(default_factory=dict)
 
     def to_public(self) -> dict[str, Any]:
         return {
@@ -72,6 +133,8 @@ class QuarantinedTool:
             "runtime": self.runtime,
             "description": self.description,
             "impl_sha256": self.impl_sha256,
+            "requirements": list(self.meta.get("requirements", [])),
+            "secrets": list(self.meta.get("secrets", [])),
             "origin_verified": False,
         }
 
@@ -101,6 +164,25 @@ def _scan(text: str, where: str) -> None:
         raise QuarantineError(exc.reason) from None
 
 
+def _registry(tenant_id: str):
+    from forge.multi_registry import MultiRegistry
+
+    return MultiRegistry(tenant_id=tenant_id)
+
+
+def _load_meta(entry_dir: Path, qid: str) -> QuarantinedTool:
+    try:
+        meta = json.loads((entry_dir / "meta.json").read_text())
+        entry = QuarantinedTool(**meta)
+    except FileNotFoundError:
+        raise QuarantineNotFound("unknown quarantine id") from None
+    except (OSError, ValueError, TypeError):
+        raise QuarantineError("quarantine entry is unreadable") from None
+    if entry.quarantine_id != qid or RUNTIMES.get(entry.runtime) != entry.impl_filename:
+        raise QuarantineError("quarantine entry metadata is inconsistent")
+    return entry
+
+
 class ToolQuarantine:
     def __init__(self, tenant_id: str) -> None:
         self.tenant_id = tenant_id
@@ -110,7 +192,9 @@ class ToolQuarantine:
     def stage(
         self, *, tool_id: str, version: str, bundle_id: str, bundle_version: str,
         spec: dict[str, Any], impl_bytes: bytes,
-    ) -> QuarantinedTool:
+    ) -> tuple[QuarantinedTool, bool]:
+        """Stage a tool; returns (entry, created). ``created`` is False when an
+        identical entry (same tool, same code, same meta) is already waiting."""
         _validate_tool_name(tool_id)
         if spec.get("name") != tool_id:
             raise QuarantineError(f"spec.json names {spec.get('name')!r}, envelope names {tool_id!r}")
@@ -122,56 +206,48 @@ class ToolQuarantine:
         input_schema = spec.get("input_schema", {})
         if not isinstance(input_schema, dict):
             raise QuarantineError("input_schema must be an object")
+        meta = clean_tool_meta(spec.get("meta"))
         try:
             impl_text = impl_bytes.decode("utf-8")
         except UnicodeDecodeError:
             raise QuarantineError("tool implementation is not UTF-8 text") from None
         _scan(impl_text, f"tool {tool_id} implementation")
-        _scan(json.dumps(spec), f"tool {tool_id} spec")
+        _scan(json.dumps(spec, ensure_ascii=False), f"tool {tool_id} spec")
+
+        if _registry(self.tenant_id).get(tool_id) is not None:
+            raise QuarantineConflict(f"a tool named {tool_id!r} already exists on this install")
+        impl_sha = hashlib.sha256(impl_bytes).hexdigest()
+        for existing in self.list():
+            if existing.tool_id == tool_id and existing.impl_sha256 == impl_sha and existing.meta == meta:
+                return existing, False
 
         qid = uuid.uuid4().hex
-        impl_filename = "impl" + RUNTIMES[runtime]
         entry = QuarantinedTool(
             quarantine_id=qid, tool_id=tool_id, version=version,
             bundle_id=bundle_id, bundle_version=bundle_version,
             staged_at=datetime.now(timezone.utc).isoformat(),
             runtime=runtime, description=str(spec.get("description", ""))[:2000],
-            input_schema=input_schema, impl_filename=impl_filename,
-            impl_sha256=hashlib.sha256(impl_bytes).hexdigest(),
+            input_schema=input_schema, impl_filename=RUNTIMES[runtime],
+            impl_sha256=impl_sha, meta=meta,
         )
-        meta = {k: v for k, v in entry.__dict__.items()}
-
         self.root.mkdir(parents=True, exist_ok=True)
         tmp = Path(tempfile.mkdtemp(prefix=".staging-", dir=self.root))
         try:
             os.chmod(tmp, 0o700)
-            (tmp / impl_filename).write_bytes(impl_bytes)
-            (tmp / "meta.json").write_text(json.dumps(meta, indent=2))
+            (tmp / entry.impl_filename).write_bytes(impl_bytes)
+            (tmp / "meta.json").write_text(json.dumps(entry.__dict__, indent=2))
             for p in tmp.iterdir():
                 os.chmod(p, 0o600)
             tmp.rename(self.root / qid)
         except OSError as exc:
             shutil.rmtree(tmp, ignore_errors=True)
             raise QuarantineError(f"could not stage tool {tool_id}: {type(exc).__name__}") from exc
-        return entry
+        return entry, True
 
     # ── reading ──────────────────────────────────────────────────────────
     def get(self, qid: str) -> QuarantinedTool:
         _check_qid(qid)
-        meta_path = self.root / qid / "meta.json"
-        try:
-            meta = json.loads(meta_path.read_text())
-            return QuarantinedTool(**meta)
-        except FileNotFoundError:
-            raise QuarantineNotFound("unknown quarantine id") from None
-        except (OSError, ValueError, TypeError) as exc:
-            raise QuarantineError(f"quarantine entry {qid} is unreadable") from exc
-
-    def read_impl(self, entry: QuarantinedTool) -> str:
-        data = (self.root / entry.quarantine_id / entry.impl_filename).read_bytes()
-        if hashlib.sha256(data).hexdigest() != entry.impl_sha256:
-            raise QuarantineError("quarantined implementation changed on disk since staging")
-        return data.decode("utf-8")
+        return _load_meta(self.root / qid, qid)
 
     def list(self) -> list[QuarantinedTool]:
         if not self.root.is_dir():
@@ -185,48 +261,93 @@ class ToolQuarantine:
                     continue
         return sorted(out, key=lambda e: e.staged_at, reverse=True)
 
-    def remove(self, qid: str) -> None:
+    # ── deciding ─────────────────────────────────────────────────────────
+    def claim(self, qid: str) -> tuple[QuarantinedTool, Path]:
+        """Atomically take an entry out of the queue. Only one caller wins."""
         _check_qid(qid)
-        shutil.rmtree(self.root / qid, ignore_errors=False)
+        claimed = self.root / f".claimed-{qid}"
+        try:
+            (self.root / qid).rename(claimed)
+        except FileNotFoundError:
+            raise QuarantineNotFound("unknown quarantine id") from None
+        except OSError as exc:
+            raise QuarantineError(f"could not claim quarantine entry: {type(exc).__name__}") from None
+        try:
+            return _load_meta(claimed, qid), claimed
+        except QuarantineError:
+            self.release(qid, claimed)
+            raise
+
+    def release(self, qid: str, claimed: Path) -> None:
+        """Put a claimed entry back into the queue (the decision did not happen)."""
+        try:
+            claimed.rename(self.root / qid)
+        except OSError:
+            pass  # stays claimed: invisible, never decided twice
+
+    @staticmethod
+    def discard(claimed: Path) -> None:
+        shutil.rmtree(claimed, ignore_errors=True)
+
+    def read_impl(self, entry: QuarantinedTool, entry_dir: Path) -> str:
+        try:
+            data = (entry_dir / entry.impl_filename).read_bytes()
+        except OSError:
+            raise QuarantineError("quarantined implementation is unreadable") from None
+        if hashlib.sha256(data).hexdigest() != entry.impl_sha256:
+            raise QuarantineError("quarantined implementation changed on disk since staging")
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            raise QuarantineError("quarantined implementation is not UTF-8 text") from None
 
 
 def accept(tenant_id: str, qid: str, *, actor: str) -> QuarantinedTool:
-    """Operator approval: re-scan, audit, then create the tool in the user scope.
+    """Operator approval. Claim → checks → decision record → create → outcome record.
 
-    Audit-first: ``forge_bundle.quarantine_accepted`` commits before the
-    registry write; if the write then fails, ``forge_bundle.artifact_failed``
-    records it and the entry stays in quarantine.
+    The decision (``quarantine_accepted``) commits before the registry write;
+    the outcome is ``artifact_created`` or ``artifact_failed``. If the create
+    fails the entry goes back into the queue. If the chain cannot take the
+    decision, nothing is created and the entry goes back.
     """
-    from forge.multi_registry import MultiRegistry
-
     from .audit import emit
 
     q = ToolQuarantine(tenant_id)
-    entry = q.get(qid)
-    impl = q.read_impl(entry)
-    _scan(impl, f"tool {entry.tool_id} implementation")
-
-    registry = MultiRegistry(tenant_id=tenant_id)
-    if registry.get(entry.tool_id) is not None:
-        raise QuarantineConflict(f"a tool named {entry.tool_id!r} already exists")
-
-    emit("forge_bundle.quarantine_accepted", tenant_id=tenant_id,
-         artifact_kind="tool", artifact_id=entry.tool_id, artifact_version=entry.version,
-         quarantine_id=qid, bundle_id=entry.bundle_id, actor=actor)
+    entry, claimed = q.claim(qid)
+    try:
+        impl = q.read_impl(entry, claimed)
+        _scan(impl, f"tool {entry.tool_id} implementation")
+        registry = _registry(tenant_id)
+        if registry.get(entry.tool_id) is not None:
+            raise QuarantineConflict(f"a tool named {entry.tool_id!r} already exists on this install")
+        common = dict(tenant_id=tenant_id, artifact_kind="tool", artifact_id=entry.tool_id,
+                      artifact_version=entry.version, quarantine_id=qid,
+                      bundle_id=entry.bundle_id, actor=actor)
+        emit("forge_bundle.quarantine_accepted", **common)
+    except BaseException:
+        q.release(qid, claimed)
+        raise
     try:
         registry.create(
             scope="user", name=entry.tool_id, description=entry.description,
             input_schema=entry.input_schema, impl=impl, runtime=entry.runtime,
-            meta={"origin": "forge_bundle", "bundle_id": entry.bundle_id,
+            meta={**entry.meta, "origin": "forge_bundle", "bundle_id": entry.bundle_id,
                   "bundle_version": entry.bundle_version, "bundle_tool_version": entry.version,
                   "origin_verified": False},
         )
-    except Exception as exc:
-        emit("forge_bundle.artifact_failed", tenant_id=tenant_id,
-             artifact_kind="tool", artifact_id=entry.tool_id, artifact_version=entry.version,
-             bundle_id=entry.bundle_id, phase="accept", error_class=type(exc).__name__, actor=actor)
+    except BaseException as exc:
+        q.release(qid, claimed)
+        emit("forge_bundle.artifact_failed", phase="accept", error_class=type(exc).__name__,
+             **{k: v for k, v in common.items() if k != "quarantine_id"})
+        if isinstance(exc, PermissionError):
+            raise QuarantineForbidden("this licence tier may not create tools") from None
         raise
-    q.remove(qid)
+    q.discard(claimed)
+    try:
+        emit("forge_bundle.artifact_created", **common)
+    except Exception:
+        raise OutcomeNotRecorded(
+            f"tool {entry.tool_id!r} was created, but the audit chain did not record the outcome") from None
     return entry
 
 
@@ -234,9 +355,13 @@ def reject(tenant_id: str, qid: str, *, actor: str) -> QuarantinedTool:
     from .audit import emit
 
     q = ToolQuarantine(tenant_id)
-    entry = q.get(qid)
-    emit("forge_bundle.quarantine_rejected", tenant_id=tenant_id,
-         artifact_kind="tool", artifact_id=entry.tool_id, artifact_version=entry.version,
-         quarantine_id=qid, bundle_id=entry.bundle_id, actor=actor)
-    q.remove(qid)
+    entry, claimed = q.claim(qid)
+    try:
+        emit("forge_bundle.quarantine_rejected", tenant_id=tenant_id,
+             artifact_kind="tool", artifact_id=entry.tool_id, artifact_version=entry.version,
+             quarantine_id=qid, bundle_id=entry.bundle_id, actor=actor)
+    except BaseException:
+        q.release(qid, claimed)
+        raise
+    q.discard(claimed)
     return entry

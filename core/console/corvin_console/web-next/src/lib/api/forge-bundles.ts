@@ -4,7 +4,7 @@
  * JSON calls go through api(); uploads and the ZIP download use fetch with the
  * same BASE and an explicit CSRF header.
  */
-import { api, ApiError, BASE } from "./client";
+import { api, ApiError, BASE, isCsrfError, notifyCsrfError } from "./client";
 
 export type BundleKind = "skill" | "tool" | "layer" | "plugin";
 
@@ -30,7 +30,6 @@ export interface ValidationOk {
   artifacts: { kind: BundleKind; id: string; version: string; file_count: number;
                requires: { kind: BundleKind; id: string; version: string | null }[] }[];
   total_uncompressed_bytes: number;
-  unscanned_files: string[];
   origin_verified: false;
 }
 
@@ -47,7 +46,7 @@ export interface ArtifactOutcome {
   kind: BundleKind;
   id: string;
   version: string;
-  status: "installed" | "forged" | "pending_approval" | "quarantined" | "failed";
+  status: "installed" | "forged" | "pending_approval" | "quarantined" | "failed" | "not_attempted";
   detail: string;
 }
 
@@ -57,7 +56,6 @@ export interface ImportResult {
   artifact_count: number;
   failed_count: number;
   outcomes: ArtifactOutcome[];
-  unscanned_files: string[];
   origin_verified: false;
 }
 
@@ -72,6 +70,8 @@ export interface QuarantineItem {
   runtime: string;
   description: string;
   impl_sha256: string;
+  requirements: string[];
+  secrets: string[];
   origin_verified: false;
 }
 
@@ -84,6 +84,8 @@ async function failure(res: Response): Promise<ApiError> {
   } catch {
     /* non-JSON body */
   }
+  // Same stale-session recovery api() performs for its own requests.
+  if (isCsrfError(res.status, payload)) notifyCsrfError();
   return new ApiError(res.status, payload);
 }
 

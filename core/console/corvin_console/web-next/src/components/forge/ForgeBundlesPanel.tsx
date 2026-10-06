@@ -6,7 +6,7 @@
  * gates, plugins wait for approval under Plugins, tools wait in the review
  * queue below). Nothing here can activate a tool without an explicit Accept.
  */
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Download, Loader2, Upload, X } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/lib/auth";
+import { ApiError } from "@/lib/api/client";
 import {
   decideQuarantine, exportBundle, fetchExportable, fetchQuarantine, importBundle, validateBundle,
   type ArtifactOutcome, type ImportResult, type Selection, type ValidationResult,
@@ -34,6 +35,7 @@ const STATUS_TEXT: Record<ArtifactOutcome["status"], string> = {
   pending_approval: "Awaiting approval under Plugins",
   quarantined: "Awaiting review below",
   failed: "Failed",
+  not_attempted: "Not attempted",
 };
 
 function message(err: unknown): string {
@@ -73,13 +75,15 @@ function ExportSection({ csrf }: { csrf: string }) {
     },
   });
 
-  const toggle = (s: Selection) =>
+  const toggle = (s: Selection) => {
+    run.reset();
     setPicked((prev) => {
       const next = { ...prev };
       if (next[selKey(s)]) delete next[selKey(s)];
       else next[selKey(s)] = s;
       return next;
     });
+  };
 
   const row = (s: Selection, label: string, extra?: string) => (
     <label key={selKey(s)} className="flex items-center gap-2 py-1 text-sm">
@@ -127,16 +131,16 @@ function ExportSection({ csrf }: { csrf: string }) {
         <div className="grid gap-3 md:grid-cols-2">
           <div>
             <Label htmlFor="fb-id">Bundle id</Label>
-            <Input id="fb-id" value={bundleId} onChange={(e) => setBundleId(e.target.value)} placeholder="acme-automation" />
+            <Input id="fb-id" value={bundleId} onChange={(e) => { run.reset(); setBundleId(e.target.value); }} placeholder="acme-automation" />
           </div>
           <div>
             <Label htmlFor="fb-version">Bundle version</Label>
-            <Input id="fb-version" value={bundleVersion} onChange={(e) => setBundleVersion(e.target.value)} />
+            <Input id="fb-version" value={bundleVersion} onChange={(e) => { run.reset(); setBundleVersion(e.target.value); }} />
           </div>
         </div>
         <div>
           <Label htmlFor="fb-desc">Description (optional)</Label>
-          <Textarea id="fb-desc" value={description} maxLength={2000} onChange={(e) => setDescription(e.target.value)} />
+          <Textarea id="fb-desc" value={description} maxLength={2000} onChange={(e) => { run.reset(); setDescription(e.target.value); }} />
         </div>
         {run.error && <p className="text-sm text-destructive">Export refused: {message(run.error)}</p>}
         {run.isSuccess && <p className="text-sm text-emerald-700 dark:text-emerald-300">Bundle downloaded.</p>}
@@ -149,32 +153,66 @@ function ExportSection({ csrf }: { csrf: string }) {
   );
 }
 
+function partialResult(err: unknown): ImportResult | null {
+  // A 503 mid-import carries what already landed (BundleImportAborted).
+  if (err instanceof ApiError && err.status === 503 && err.detail && typeof err.detail === "object") {
+    const d = (err.detail as { detail?: unknown }).detail;
+    if (d && typeof d === "object" && Array.isArray((d as ImportResult).outcomes)) return d as ImportResult;
+  }
+  return null;
+}
+
 function ImportSection({ csrf }: { csrf: string }) {
   const qc = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [report, setReport] = useState<ValidationResult | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"checking" | "importing" | null>(null);
+  // Every pick starts a new generation; a late answer for an older file is dropped.
+  const generation = useRef(0);
 
-  const check = useMutation({
-    mutationFn: (f: File) => validateBundle(f, csrf),
-    onSuccess: setReport,
-  });
-  const run = useMutation({
-    mutationFn: (f: File) => importBundle(f, csrf),
-    onSuccess: (r) => {
-      setResult(r);
-      void qc.invalidateQueries({ queryKey: QUARANTINE_KEY });
-      void qc.invalidateQueries({ queryKey: ["forge-bundles", "exportable"] });
-    },
-  });
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: QUARANTINE_KEY });
+    void qc.invalidateQueries({ queryKey: ["forge-bundles", "exportable"] });
+  };
 
-  const pick = (f: File | null) => {
+  const pick = async (f: File | null) => {
+    const gen = ++generation.current;
     setFile(f);
     setReport(null);
     setResult(null);
-    check.reset();
-    run.reset();
-    if (f) check.mutate(f);
+    setError(null);
+    if (!f) { setBusy(null); return; }
+    setBusy("checking");
+    try {
+      const r = await validateBundle(f, csrf);
+      if (gen === generation.current) setReport(r);
+    } catch (err) {
+      if (gen === generation.current) setError(`Could not check the bundle: ${message(err)}`);
+    } finally {
+      if (gen === generation.current) setBusy(null);
+    }
+  };
+
+  const runImport = async () => {
+    if (!file) return;
+    const gen = generation.current;
+    setBusy("importing");
+    setError(null);
+    try {
+      const r = await importBundle(file, csrf);
+      if (gen === generation.current) setResult(r);
+    } catch (err) {
+      if (gen === generation.current) {
+        const partial = partialResult(err);
+        if (partial) setResult(partial);
+        setError(`Import ${partial ? "stopped" : "refused"}: ${message(err)}`);
+      }
+    } finally {
+      refresh();
+      if (gen === generation.current) setBusy(null);
+    }
   };
 
   return (
@@ -187,10 +225,10 @@ function ImportSection({ csrf }: { csrf: string }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Input type="file" accept=".zip,application/zip" aria-label="bundle file"
-               onChange={(e) => pick(e.target.files?.[0] ?? null)} />
-        {check.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-        {check.error && <p className="text-sm text-destructive">Could not check the bundle: {message(check.error)}</p>}
+        <Input type="file" accept=".zip,application/zip" aria-label="bundle file" disabled={busy === "importing"}
+               onChange={(e) => void pick(e.target.files?.[0] ?? null)} />
+        {busy === "checking" && <Loader2 className="h-4 w-4 animate-spin" aria-label="checking" />}
+        {error && <p className="text-sm text-destructive">{error}</p>}
         {report && report.valid === false && (
           <p className="text-sm text-destructive">Rejected at stage “{report.stage}”: {report.reason}</p>
         )}
@@ -208,14 +246,8 @@ function ImportSection({ csrf }: { csrf: string }) {
                 </li>
               ))}
             </ul>
-            {report.unscanned_files.length > 0 && (
-              <p className="text-xs text-amber-700 dark:text-amber-300">
-                Not scanned for credentials (binary): {report.unscanned_files.join(", ")}
-              </p>
-            )}
-            {run.error && <p className="text-sm text-destructive">Import refused: {message(run.error)}</p>}
-            <Button onClick={() => file && run.mutate(file)} disabled={!file || run.isPending}>
-              {run.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+            <Button onClick={() => void runImport()} disabled={busy !== null}>
+              {busy === "importing" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
               Import {report.artifacts.length} artifact{report.artifacts.length === 1 ? "" : "s"}
             </Button>
           </div>
@@ -223,15 +255,20 @@ function ImportSection({ csrf }: { csrf: string }) {
         {result && (
           <div className="space-y-1">
             <p className="text-sm">
-              Imported {result.bundle_id}@{result.bundle_version}: {result.artifact_count - result.failed_count} of{" "}
+              {result.bundle_id}@{result.bundle_version}:{" "}
+              {result.outcomes.filter((o) => o.status !== "failed" && o.status !== "not_attempted").length} of{" "}
               {result.artifact_count} artifacts proposed.
             </p>
             <ul className="text-sm">
               {result.outcomes.map((o) => (
                 <li key={`${o.kind}:${o.id}`} className="flex flex-wrap items-center gap-2">
-                  <Badge variant={o.status === "failed" ? "danger" : "ok"}>{STATUS_TEXT[o.status]}</Badge>
+                  <Badge variant={o.status === "failed" ? "danger" : o.status === "not_attempted" ? "warn" : "ok"}>
+                    {STATUS_TEXT[o.status]}
+                  </Badge>
                   <span className="font-mono">{o.kind} {o.id}@{o.version}</span>
-                  {o.status === "failed" && <span className="text-xs text-destructive">{o.detail}</span>}
+                  {(o.status === "failed" || (o.status === "forged" && o.detail.includes("("))) && (
+                    <span className="text-xs text-muted-foreground">{o.detail}</span>
+                  )}
                 </li>
               ))}
             </ul>
@@ -270,6 +307,16 @@ function ReviewSection({ csrf }: { csrf: string }) {
             <Badge variant="outline">{it.runtime}</Badge>
             <span className="text-xs text-muted-foreground">from {it.bundle_id}@{it.bundle_version}</span>
             <UnverifiedOriginBadge />
+            {it.requirements.length > 0 && (
+              <span className="w-full text-xs text-amber-700 dark:text-amber-300">
+                Installs packages: {it.requirements.join(", ")}
+              </span>
+            )}
+            {it.secrets.length > 0 && (
+              <span className="w-full text-xs text-amber-700 dark:text-amber-300">
+                Requests secrets: {it.secrets.join(", ")}
+              </span>
+            )}
             <span className="ml-auto flex gap-2">
               <Button size="sm" variant="outline" disabled={decide.isPending}
                       onClick={() => decide.mutate({ qid: it.quarantine_id, action: "reject" })}>
