@@ -41,7 +41,7 @@ vi.mock("@/lib/auth", () => ({
   }),
 }));
 
-import LayersTab, { MARKER_LAYER_FORGE } from "@/components/forge/LayersTab";
+import LayersTab, { MARKER_LAYER_FORGE, ForgeLayerPanel } from "@/components/forge/LayersTab";
 
 interface Seen { method: string; path: string; csrf: string | null; body: unknown }
 const seen: Seen[] = [];
@@ -118,13 +118,16 @@ describe("LayersTab", () => {
 });
 
 /**
- * "Forge a Layer" (ADR-2224/2225 LLM-PLAN phase) — this is the input field
- * that was missing from the Layers tab entirely: the backend has supported
- * POST /layer-forge/plan since those ADRs landed, but the tab only ever
- * listed/viewed definitions created via the CLI. These tests prove the real
- * two-step flow against the ACTUAL resolved routes (same onUnhandledRequest:
- * 'error' discipline as the BASE-path regression test above): plan() must
- * hit /v1/console/layer-forge/plan with a CSRF header, and create() must hit
+ * "Forge a Layer" (ADR-2224/2225 LLM-PLAN phase) — the input field that was
+ * missing entirely: the backend has supported POST /layer-forge/plan since
+ * those ADRs landed, but nothing in the console ever called it. Lives in
+ * Generator as a fourth sub-tab next to Skill/Tool/Plugin Forge (2026-10-06,
+ * operator request) — see forge.tsx's GENERATOR_SUBTABS — rendered directly
+ * here rather than through <LayersTab/>, which went back to a pure browse
+ * surface once this moved out. These tests prove the real two-step flow
+ * against the ACTUAL resolved routes (same onUnhandledRequest: 'error'
+ * discipline as the BASE-path regression test above): plan() must hit
+ * /v1/console/layer-forge/plan with a CSRF header, and create() must hit
  * /v1/console/layer-forge/definitions with the manifest plan() returned —
  * never a mock of api() itself, which would pass on a wrong path too.
  */
@@ -135,8 +138,8 @@ describe("ForgeLayerPanel", () => {
   };
 
   it("plans a layer, previews the manifest, then creates it via the real routes", async () => {
+    const onCreated = vi.fn();
     server.use(
-      http.get("/v1/console/layer-forge/definitions", () => HttpResponse.json({ items: [], count: 0 })),
       http.post("/v1/console/layer-forge/plan", async ({ request }) => {
         await record(request);
         return HttpResponse.json({ status: "SUCCESS", manifest });
@@ -147,8 +150,7 @@ describe("ForgeLayerPanel", () => {
       }),
     );
 
-    wrap(<LayersTab />);
-    await screen.findByText("No layer definitions yet.");
+    wrap(<ForgeLayerPanel onCreated={onCreated} />);
 
     fireEvent.change(screen.getByTestId("layer-id-input"), { target: { value: "L34" } });
     fireEvent.change(screen.getByTestId("layer-intent-input"), {
@@ -163,6 +165,7 @@ describe("ForgeLayerPanel", () => {
     });
     // The preview renders the generated manifest — nothing persisted yet.
     expect(screen.getByText(/"id": "L34"/)).toBeInTheDocument();
+    expect(onCreated).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("create-layer-button"));
 
@@ -171,18 +174,19 @@ describe("ForgeLayerPanel", () => {
       method: "POST", path: "/v1/console/layer-forge/definitions", csrf: "csrf-test", body: { manifest },
     });
     expect(screen.getByTestId("create-layer-success").textContent).toContain("L34@1.0.0");
+    // onCreated fires AFTER a real create, not on plan — Generator uses this
+    // to jump the operator to the Layers tab to see the new entry.
+    expect(onCreated).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces a plan failure without creating anything", async () => {
     server.use(
-      http.get("/v1/console/layer-forge/definitions", () => HttpResponse.json({ items: [], count: 0 })),
       http.post("/v1/console/layer-forge/plan", () =>
         HttpResponse.json({ status: "FAILED", error: "intent too vague", phase: "plan" }, { status: 422 }),
       ),
     );
 
-    wrap(<LayersTab />);
-    await screen.findByText("No layer definitions yet.");
+    wrap(<ForgeLayerPanel />);
 
     fireEvent.change(screen.getByTestId("layer-id-input"), { target: { value: "L34" } });
     fireEvent.change(screen.getByTestId("layer-intent-input"), { target: { value: "do something" } });

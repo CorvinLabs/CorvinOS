@@ -11,7 +11,7 @@ import { api } from '@/lib/api';
 import ToolsTab from '@/components/forge/ToolsTab';
 import SkillsTab from '@/components/forge/SkillsTab';
 import OSSkillsTab from '@/components/forge/OSSkillsTab';
-import LayersTab from '@/components/forge/LayersTab';
+import LayersTab, { ForgeLayerPanel } from '@/components/forge/LayersTab';
 import GraphTab from '@/components/forge/GraphTab';
 import AuditTab from '@/components/forge/AuditTab';
 import AutonomousForgePanel from '@/components/forge/AutonomousForgePanel';
@@ -43,10 +43,16 @@ import {
  *  tools/skills/os-skills (the other "what has this operator's Forge
  *  generated/registered" surfaces) rather than next to graph/audit (which
  *  are cross-cutting views over all of them). Old links redirect — see
- *  App.tsx's `layer-forge` <Route>. Unlike Generator's sub-tabs, Layer Forge
- *  does NOT share the run/poll/phase protocol — it has its own List+Detail
- *  UI and its own backend (/v1/console/layer-forge/*, untouched by this
- *  move) — so it is a sibling top-level tab, not a Generator sub-tab. */
+ *  App.tsx's `layer-forge` <Route>. It still has its own List+Detail UI and
+ *  its own backend (/v1/console/layer-forge/*, untouched by this move) — it
+ *  does NOT share Generator's run/poll/phase protocol (ADR-2217/ADR-0672),
+ *  so it stays a sibling top-level tab for BROWSING, same as Tools/Skills/
+ *  OS-Skills. CREATING one, though, followed those three into Generator the
+ *  same day (see GENERATOR_SUBTABS below) — "the one place to create
+ *  something" applies to the action regardless of whether its backend
+ *  protocol matches; forging a layer is a single synchronous plan→create
+ *  call, not a polled run, and needs none of the engine machinery the other
+ *  three sub-tabs share — it only lives in the same tab group as them. */
 const FORGE_TABS = ['generator', 'autonomous-forge', 'tools', 'skills', 'os-skills', 'layers', 'graph', 'audit'] as const;
 type ForgeTab = (typeof FORGE_TABS)[number];
 
@@ -73,8 +79,10 @@ function resolveTab(requested: string | null): ForgeTab {
 }
 
 /** Generator's own sub-tabs — Skill Forge leads here for the same reason it
- *  used to lead the whole page. */
-const GENERATOR_SUBTABS = ['skill', 'tool', 'plugin'] as const;
+ *  used to lead the whole page. 'layer' joined on 2026-10-06 (operator
+ *  request) — see the FORGE_TABS comment above for why it's grouped here
+ *  despite not sharing skill/tool/plugin's run/poll engine protocol. */
+const GENERATOR_SUBTABS = ['skill', 'tool', 'plugin', 'layer'] as const;
 type GeneratorSubTab = (typeof GENERATOR_SUBTABS)[number];
 const DEFAULT_GENERATOR_SUB: GeneratorSubTab = 'skill';
 
@@ -292,6 +300,7 @@ export default function ForgePage() {
               <TabsTrigger value="skill">Skill Forge</TabsTrigger>
               <TabsTrigger value="tool">Tool Forge</TabsTrigger>
               <TabsTrigger value="plugin">Plugin Forge</TabsTrigger>
+              <TabsTrigger value="layer">Layer Forge</TabsTrigger>
             </TabsList>
 
             <TabsContent value="skill" className="flex-1 overflow-y-auto">
@@ -308,6 +317,10 @@ export default function ForgePage() {
 
             <TabsContent value="plugin" className="flex-1 overflow-y-auto">
               <ForgeCreatorPanel kind="plugin" />
+            </TabsContent>
+
+            <TabsContent value="layer" className="flex-1 overflow-y-auto">
+              <ForgeLayerPanel onCreated={() => goToTab('layers')} />
             </TabsContent>
           </Tabs>
         </TabsContent>

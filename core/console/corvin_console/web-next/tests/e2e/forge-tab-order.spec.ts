@@ -20,10 +20,14 @@
  *      land on Generator with the right sub-tab open (TAB_ALIASES +
  *      GENERATOR_SUB_ALIASES)
  *   5. 'layers' (Layer Forge, ADR-2222) was folded in on 2026-10-06 as a
- *      sibling top-level tab (not a Generator sub-tab — it doesn't share the
- *      run/poll/phase protocol), placed next to Tools/Skills/OS-Skills. The
- *      old /app/layer-forge panel redirects onto it — see
- *      panel-layer-forge.spec.ts.
+ *      sibling top-level tab for BROWSING existing definitions (not a
+ *      Generator sub-tab — it doesn't share the run/poll/phase protocol),
+ *      placed next to Tools/Skills/OS-Skills. The old /app/layer-forge panel
+ *      redirects onto it — see panel-layer-forge.spec.ts.
+ *   6. CREATING a layer, though, joined Generator as a fourth sub-tab the
+ *      same day (operator request) — "Layer Forge", alongside Skill/Tool/
+ *      Plugin Forge, even though its plan→create flow is a single
+ *      synchronous call rather than a polled run. See EXPECTED_SUB_ORDER.
  *
  * (4) is the one worth a browser: an alias that quietly stops resolving does
  * not error — it opens the default tab and looks like it worked. Asserting it
@@ -38,7 +42,7 @@ import { test, expect, type Page } from '@playwright/test';
 const EXPECTED_ORDER = ['Generator', 'Autonomous', 'Tools', 'Skills', 'OS-Skills', 'Layers', 'Graph', 'Audit'];
 
 /** Generator's own sub-tab bar, left to right. */
-const EXPECTED_SUB_ORDER = ['Skill Forge', 'Tool Forge', 'Plugin Forge'];
+const EXPECTED_SUB_ORDER = ['Skill Forge', 'Tool Forge', 'Plugin Forge', 'Layer Forge'];
 
 async function tabLabels(page: Page): Promise<string[]> {
   // Scoped to the PAGE's tab bar. Scoping matters: a composer or sub-widget
@@ -88,9 +92,23 @@ test.describe('Forge — tab bar', () => {
     expect(await tabLabels(page)).toEqual(EXPECTED_ORDER);
   });
 
-  test('Generator\'s sub-tabs are Skill Forge, Tool Forge, Plugin Forge, in order', async ({ page }) => {
+  test('Generator\'s sub-tabs are Skill Forge, Tool Forge, Plugin Forge, Layer Forge, in order', async ({ page }) => {
     await page.goto('/console/app/forge', { waitUntil: 'domcontentloaded' });
     expect(await subTabLabels(page)).toEqual(EXPECTED_SUB_ORDER);
+  });
+
+  test('Generator → Layer Forge renders the "Forge a Layer" form', async ({ page }) => {
+    await page.goto('/console/app/forge?tab=generator&sub=layer', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('tab', { name: /^Layer Forge/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+      { timeout: 20000 },
+    );
+    await expect(page.getByRole('heading', { name: 'Forge a Layer', exact: true })).toBeVisible({
+      timeout: 20000,
+    });
+    await expect(page.getByTestId('layer-id-input')).toBeVisible();
+    await expect(page.getByTestId('layer-intent-input')).toBeVisible();
   });
 
   test('the page opens on Generator → Skill Forge, not on Tools', async ({ page }) => {

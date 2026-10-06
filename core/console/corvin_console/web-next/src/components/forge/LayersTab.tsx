@@ -120,19 +120,27 @@ interface CreateResponse {
   phase?: string;
 }
 
-/** "Forge a Layer" — the LLM-PLAN entry point (ADR-2224/2225) the Layers tab
- *  was missing: the backend has supported POST /layer-forge/plan since that
- *  ADR landed, but nothing in this UI ever called it — the tab only listed
- *  and viewed definitions a human had already created via the CLI. Two-step
- *  flow, not the run/poll Generator protocol (ADR-2217/ADR-0672) Skill/Tool/
- *  Plugin Forge use: plan() is a single synchronous LLM call, not a polled
- *  background job, so it needs none of that machinery. Step 1 (plan) only
- *  generates a manifest preview — nothing is persisted or audited as a
+/** "Forge a Layer" — the LLM-PLAN entry point (ADR-2224/2225) that was
+ *  missing entirely: the backend has supported POST /layer-forge/plan since
+ *  that ADR landed, but nothing in the console ever called it. Lives in
+ *  Generator as a fourth sub-tab (2026-10-06, operator request) alongside
+ *  Skill/Tool/Plugin Forge — "the one place to create something" (see the
+ *  comment in forge.tsx) — rather than inside this file's own LayersTab,
+ *  which stays a pure browse surface like Tools/Skills/OS-Skills. Two-step
+ *  flow, deliberately NOT the run/poll Generator protocol (ADR-2217/
+ *  ADR-0672) Skill/Tool/Plugin Forge share: plan() is a single synchronous
+ *  LLM call, not a polled background job, so it needs none of that
+ *  machinery — it only happens to live in the same tab group. Step 1 (plan)
+ *  only generates a manifest preview — nothing is persisted or audited as a
  *  registry entry yet. Step 2 (create) submits that manifest through the
  *  real pipeline (validate → test → enforce → review → audit → write),
- *  which is where it actually lands in the tenant's audit chain. */
-function ForgeLayerPanel({ onCreated }: { onCreated: () => void }) {
+ *  which is where it actually lands in the tenant's audit chain. Invalidates
+ *  the shared `["layer-forge","definitions"]` query on success so the
+ *  Layers tab shows the new entry whenever it's next viewed, regardless of
+ *  where in the app this panel is rendered. */
+export function ForgeLayerPanel({ onCreated }: { onCreated?: () => void }) {
   const { session } = useAuth();
+  const qc = useQueryClient();
   const [layerId, setLayerId] = useState("");
   const [intent, setIntent] = useState("");
   const [manifest, setManifest] = useState<Record<string, unknown> | null>(null);
@@ -165,7 +173,8 @@ function ForgeLayerPanel({ onCreated }: { onCreated: () => void }) {
       setManifest(null);
       setLayerId("");
       setIntent("");
-      onCreated();
+      void qc.invalidateQueries({ queryKey: ["layer-forge", "definitions"] });
+      onCreated?.();
     },
   });
 
@@ -264,8 +273,11 @@ function ForgeLayerPanel({ onCreated }: { onCreated: () => void }) {
 
         {created && (
           <p className="text-sm text-muted-foreground" data-testid="create-layer-success">
-            Created {created.id}@{created.version} as <Badge variant="outline">proposed</Badge>. It now
-            appears below.
+            Created {created.id}@{created.version} as <Badge variant="outline">proposed</Badge>. See the{" "}
+            <Link to="/app/forge?tab=layers" className="text-primary hover:underline">
+              Layers tab
+            </Link>
+            .
           </p>
         )}
       </CardContent>
@@ -447,7 +459,6 @@ export const MARKER_LAYER_FORGE =
   "Layer Forge is now a Forge tab — layer definitions with quality gates and enforcement rules.";
 
 export default function LayersTab() {
-  const qc = useQueryClient();
   const [selectedDef, setSelectedDef] = useState<LayerDefinition | null>(null);
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["layer-forge", "definitions"],
@@ -455,7 +466,6 @@ export default function LayersTab() {
     refetchInterval: 60_000,
     retry: false,
   });
-  const refetchDefinitions = () => void qc.invalidateQueries({ queryKey: ["layer-forge", "definitions"] });
 
   if (isLoading) {
     return (
@@ -484,35 +494,42 @@ export default function LayersTab() {
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4">
         <p className="text-muted-foreground text-sm">{MARKER_LAYER_FORGE}</p>
-        {/* Phase 3B analytics dashboard stayed a standalone panel (own route,
-            own charts, no shared List+Detail surface with this tab) — linked
-            from here so it stays reachable now that it has no sidebar entry
-            of its own either. */}
-        <Link
-          to="/app/layer-forge-analytics"
-          className="text-xs text-primary hover:underline whitespace-nowrap shrink-0"
-        >
-          View Analytics →
-        </Link>
+        {/* Forging a new layer lives in Generator (2026-10-06) — "the one
+            place to create something" — next to Skill/Tool/Plugin Forge;
+            this tab stays a pure browse surface like Tools/Skills/OS-Skills.
+            Phase 3B analytics stayed a standalone panel (own route, own
+            charts, no shared List+Detail surface) — both linked here for
+            discoverability since neither has a sidebar entry of its own. */}
+        <div className="flex items-center gap-3 shrink-0">
+          <Link
+            to="/app/forge?tab=generator&sub=layer"
+            className="text-xs text-primary hover:underline whitespace-nowrap"
+          >
+            Forge a Layer →
+          </Link>
+          <Link
+            to="/app/layer-forge-analytics"
+            className="text-xs text-primary hover:underline whitespace-nowrap"
+          >
+            View Analytics →
+          </Link>
+        </div>
       </div>
 
       {selectedDef ? (
         <DetailView definition={selectedDef} onBack={() => setSelectedDef(null)} />
       ) : (
-        <>
-          <ForgeLayerPanel onCreated={refetchDefinitions} />
-          <Card>
-            <CardHeader>
-              <CardTitle>Definitions</CardTitle>
-              <CardDescription>
-                {data.count} layer definition{data.count === 1 ? "" : "s"} across all versions and statuses
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ListView definitions={data.items} onSelect={setSelectedDef} />
-            </CardContent>
-          </Card>
-        </>
+        <Card>
+          <CardHeader>
+            <CardTitle>Definitions</CardTitle>
+            <CardDescription>
+              {data.count} layer definition{data.count === 1 ? "" : "s"} across all versions and statuses
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ListView definitions={data.items} onSelect={setSelectedDef} />
+          </CardContent>
+        </Card>
       )}
     </div>
   );
