@@ -263,7 +263,7 @@ def test_C4_a_layer_lands_after_the_layer_it_depends_on(make_layer):
 # ── imported layers (C5 / S6 / A7) ───────────────────────────────────────────
 
 
-def _layer_bundle(make_layer, mutate) -> bytes:
+def _layer_bundle(make_layer, mutate, raw: bytes | None = None) -> bytes:
     from core.orchestration.layer_forge.orchestrator import layer_forge_home
 
     make_layer("acme.audit-l34", "1.0.0")
@@ -275,7 +275,7 @@ def _layer_bundle(make_layer, mutate) -> bytes:
     path = "artifacts/layer/acme.audit-l34@1.0.0/manifest.json"
     manifest = json.loads(src.read(path))
     mutate(manifest)
-    body = json.dumps(manifest).encode()
+    body = raw if raw is not None else json.dumps(manifest).encode()
     import hashlib
     for f in env["artifacts"][0]["files"]:
         f.update(sha256=hashlib.sha256(body).hexdigest(), size=len(body))
@@ -484,24 +484,40 @@ def test_R2B_2_a_dependency_without_type_still_orders(make_layer):
     assert [o.id for o in _import(data).outcomes] == ["acme.base", "acme.child"]
 
 
-def test_R2B_3_a_dependent_fails_when_its_bundled_dependency_did_not_land(make_layer, monkeypatch):
+def _two_layers(base_gates=()):
+    """acme.base@1.0.0 and acme.child@1.0.0 (depends on acme.base) in the registry."""
     from core.orchestration.layer_forge.orchestrator import layer_forge_home
     from core.orchestration.layer_forge.registry import LayerRegistry
-    from core.forge_bundle import import_module
 
-    make_layer("acme.base", "1.0.0")
-    LayerRegistry(layer_forge_home(T) / "registry").create({
-        "id": "acme.child", "version": "1.0.0", "targets": [{"layer_id": "L34"}],
-        "dependencies": [{"id": "acme.base", "type": "layer_definition"}],
-        "quality_gates": [], "enforcement_rules": []})
+    reg = LayerRegistry(layer_forge_home(T) / "registry")
+    reg.create({"id": "acme.base", "version": "1.0.0", "targets": [{"layer_id": "L34"}],
+                "quality_gates": list(base_gates), "enforcement_rules": []})
+    reg.create({"id": "acme.child", "version": "1.0.0", "targets": [{"layer_id": "L34"}],
+                "dependencies": [{"id": "acme.base", "type": "layer_definition"}],
+                "quality_gates": [], "enforcement_rules": []})
+    return reg
+
+
+def test_R2B_3_a_dependent_fails_when_its_bundled_dependency_did_not_land(tmp_corvin_home):
+    reg = _two_layers(base_gates=[{"gate_id": "g1", "test_path": "tests"}])  # refused at import
     data = build_bundle(bundle_id="b", bundle_version="1.0.0", tenant_id=T, selections=[
         LayerSelection("acme.base", "1.0.0"), LayerSelection("acme.child", "1.0.0")]).data
-    _remove_originals(tool=None, layers=(("acme.child", "1.0.0"),))  # an OLD base stays installed
-    result = _import(data)  # base fails: it already exists here
-    by_id = {o.id: o for o in result.outcomes}
+    _remove_originals(tool=None, layers=(("acme.base", "1.0.0"), ("acme.child", "1.0.0")))
+    reg.create({"id": "acme.base", "version": "0.9.0", "targets": [{"layer_id": "L34"}],
+                "quality_gates": [], "enforcement_rules": []})  # an OLDER base on the host
+    by_id = {o.id: o for o in _import(data).outcomes}
     assert by_id["acme.base"].status == "failed"
     assert by_id["acme.child"].status == "failed" and "did not import" in by_id["acme.child"].detail
 
+
+def test_R3A_10_a_dependency_the_host_already_has_at_that_version_satisfies(tmp_corvin_home):
+    _two_layers()
+    data = build_bundle(bundle_id="b", bundle_version="1.0.0", tenant_id=T, selections=[
+        LayerSelection("acme.base", "1.0.0"), LayerSelection("acme.child", "1.0.0")]).data
+    _remove_originals(tool=None, layers=(("acme.child", "1.0.0"),))  # base@1.0.0 stays
+    by_id = {o.id: o for o in _import(data).outcomes}
+    assert by_id["acme.base"].status == "failed"   # already there
+    assert by_id["acme.child"].status == "forged"  # its requirement is met on the host
 
 def test_R2B_1_a_layer_written_before_layer_forges_audit_failed_counts_as_landed(make_layer, monkeypatch):
     from core.orchestration.layer_forge import orchestrator as orch_mod
@@ -581,3 +597,98 @@ def test_R2A_12_stale_claim_leftovers_are_swept(tool_bundle):
     os.utime(stale, (old, old))
     assert [e.quarantine_id for e in q.list()] == [qid]
     assert not stale.exists()
+
+
+# ── adversarial round 3 ──────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("req", ["x.tbz", "x.txz", "x.tlz", "x.tar.lz", "x.tar.lzma", "x.tar.zst"])
+def test_R3A_7_every_pip_archive_extension_is_refused(req):
+    with pytest.raises(QuarantineError, match="plain package"):
+        tq.clean_tool_meta({"requirements": [req]})
+
+
+def test_R3A_8_a_huge_integer_budget_is_a_clean_refusal():
+    with pytest.raises(QuarantineError, match="budget"):
+        tq.clean_tool_meta({"budget": {"cpu_seconds": 10 ** 400}})
+
+
+def test_R3A_6_a_claim_is_aged_from_the_claim_not_the_staging(tool_bundle, monkeypatch):
+    import os
+    import time as _t
+    qid = _qid(_import(tool_bundle))
+    q = ToolQuarantine(T)
+    old = _t.time() - 7200
+    os.utime(q.root / qid, (old, old))               # staged two hours ago
+    entry, claimed = q.claim(qid)
+    q._sweep()                                        # a concurrent list() during the accept
+    assert claimed.exists()
+    q.release(qid, claimed)
+    assert [e.quarantine_id for e in q.list()] == [qid]
+
+
+def test_R3A_9_a_concurrent_writers_layer_is_not_reported_as_ours(make_layer, monkeypatch):
+    from core.orchestration.layer_forge import orchestrator as orch_mod
+
+    data = _layer_bundle(make_layer, lambda m: None)
+
+    def someone_else_wins(self, entry_id, version, to_status):
+        path = self.registry._path_for(entry_id, version)
+        stored = json.loads(path.read_text())
+        stored["targets"] = [{"layer_id": "L99"}]      # different content under the same key
+        path.write_text(json.dumps(stored))
+        raise orch_mod.audit.LayerForgeAuditError("chain down")
+
+    monkeypatch.setattr(orch_mod.LayerForgeOrchestrator, "_transition_locked", someone_else_wins)
+    assert _import(data).outcomes[0].status == "failed"
+
+
+def test_R3B_2_3_unusable_layer_manifests_are_failures_not_500s(make_layer):
+    deep_body = (b'{"id": "acme.audit-l34", "version": "1.0.0", "targets": [{"layer_id": "L34"}], "x": '
+                 + b"[" * 100000 + b"]" * 100000 + b"}")
+    deep = _layer_bundle(make_layer, lambda m: None, raw=deep_body)
+    outcome = _import(deep).outcomes[0]              # no RecursionError escapes as a 500
+    assert outcome.status == "failed" and "usable JSON" in outcome.detail
+
+    from core.orchestration.layer_forge.orchestrator import layer_forge_home
+    p = layer_forge_home(T) / "registry" / "acme.audit-l34@1.0.0.json"
+    p.unlink(missing_ok=True)
+    listy = _layer_bundle(make_layer, lambda m: m.update(dependencies=[{"id": ["a", "b"]}]))
+    outcome = _import(listy).outcomes[0]
+    assert outcome.status == "failed" and "dependency ids" in outcome.detail
+
+
+def test_R3A_11_a_symlinked_skill_folder_is_neither_offered_nor_exported(tmp_corvin_home, make_skill, tmp_path):
+    from core.forge_bundle import ExportError
+    from core.forge_bundle.inventory import exportable
+
+    real = make_skill("summarize", "1.0.0")
+    elsewhere = tmp_path / "elsewhere"
+    real.rename(elsewhere)
+    (tmp_corvin_home / "skills_gen" / "summarize").symlink_to(elsewhere)
+    assert exportable(T, include_skills=True)["skills"] == []
+    with pytest.raises(ExportError, match="symbolic link"):
+        build_bundle(bundle_id="b", bundle_version="1.0.0", tenant_id=T,
+                     selections=[SkillSelection("summarize", "1.0.0")])
+
+
+def test_R2A_8_a_failed_failure_record_never_masks_the_original_error(tool_bundle, monkeypatch):
+    qid = _qid(_import(tool_bundle))
+    from forge.multi_registry import MultiRegistry
+    from core.forge_bundle import audit
+
+    def denied(self, **_k):
+        raise PermissionError("forge.create denied: free tier")
+
+    real_emit = audit.emit
+
+    def failure_record_down(event, **kw):
+        if event == "forge_bundle.artifact_failed":
+            raise ForgeBundleAuditError(event)
+        return real_emit(event, **kw)
+
+    monkeypatch.setattr(MultiRegistry, "create", denied)
+    monkeypatch.setattr(audit, "emit", failure_record_down)
+    with pytest.raises(tq.QuarantineForbidden):
+        tq.accept(T, qid, actor="test")
+    assert [e.quarantine_id for e in ToolQuarantine(T).list()] == [qid]

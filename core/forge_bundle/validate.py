@@ -22,6 +22,7 @@ what SkillInstaller / StagingManager will later unpack.
 """
 from __future__ import annotations
 
+import bisect
 import bz2
 import hashlib
 import io
@@ -158,12 +159,14 @@ def _load_envelope(zf: zipfile.ZipFile, names: set[str]) -> BundleEnvelope:
     raw = _read(zf, ENVELOPE_NAME, "envelope")
     try:
         decoded = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise _reject("envelope", f"{ENVELOPE_NAME} is not UTF-8 JSON ({type(exc).__name__})") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise _reject("envelope", f"{ENVELOPE_NAME} is not UTF-8 JSON ({type(exc).__name__})") from None
     try:
         return parse_envelope(decoded)
     except EnvelopeError as exc:
         raise _reject("envelope", str(exc)) from exc
+    except (RecursionError, TypeError, ValueError) as exc:
+        raise _reject("envelope", f"{ENVELOPE_NAME} has an unexpected shape ({type(exc).__name__})") from None
 
 
 def _check_integrity(zf: zipfile.ZipFile, envelope: BundleEnvelope, file_infos: list[zipfile.ZipInfo]) -> None:
@@ -243,11 +246,52 @@ def _check_staleness(external: list[Requirement], known: Known) -> None:
         raise _reject("staleness", f"requires what the target install does not have: {stale[:10]}")
 
 
+# The regex detectors of core.pii.sensitive, minus "jwt": its pattern backtracks
+# quadratically on input such as "eyJ-eyJ-…" (a 999-byte upload cost 43 s).
+# JWT shapes are found by the linear _has_jwt below instead.
+_REGEX_SECRET_TYPES = _SECRET_TYPES - {"jwt"}
+_JWT_RUN = re.compile(r"[A-Za-z0-9_\-]+")
+_WORD = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+
+
+def _has_jwt(text: str) -> bool:
+    """Linear check for ``eyJ<seg>.<seg>.<seg>`` (base64url segments of >= 10
+    chars, the first counted after ``eyJ``) starting at a word boundary.
+    Slightly broader than the regex (no trailing boundary) — it can only
+    reject more, never less."""
+    starts: list[int] = []
+    ends: list[int] = []
+    for m in _JWT_RUN.finditer(text):
+        starts.append(m.start())
+        ends.append(m.end())
+
+    def end_of_run(i: int) -> int:
+        k = bisect.bisect_right(starts, i) - 1
+        return ends[k] if k >= 0 and i < ends[k] else i
+
+    n = len(text)
+    pos = text.find("eyJ")
+    while pos != -1:
+        if pos == 0 or text[pos - 1] not in _WORD:
+            a = end_of_run(pos)
+            if a - pos >= 13 and a < n and text[a] == ".":
+                b = end_of_run(a + 1)
+                if b - (a + 1) >= 10 and b < n and text[b] == ".":
+                    if end_of_run(b + 1) - (b + 1) >= 10:
+                        return True
+        pos = text.find("eyJ", pos + 1)
+    return False
+
+
 def _scan_text(text: str, where: str) -> None:
     try:
-        hits = set(detect_named_types(text, _SECRET_TYPES))
+        hits = set(detect_named_types(text, _REGEX_SECRET_TYPES))
+        if _has_jwt(text):
+            hits.add("jwt")
     except PIIDetectionFailedClosed as exc:
         raise _reject("secrets", f"{where}: scan failed, treated as sensitive") from exc
+    except Exception as exc:  # noqa: BLE001 — a scan that cannot finish must refuse
+        raise _reject("secrets", f"{where}: scan failed ({type(exc).__name__}), treated as sensitive") from None
     if hits:
         # Names the detector class only — never the matched value.
         raise _reject("secrets", f"{where}: credential-shaped content ({', '.join(sorted(hits))})")
@@ -255,26 +299,48 @@ def _scan_text(text: str, where: str) -> None:
 
 # bytes -> printable ASCII; every other byte (NUL, high bytes, controls but \t\n) becomes a space.
 _ASCII = bytes(b if 0x20 <= b <= 0x7E or b in (0x09, 0x0A) else 0x20 for b in range(256))
-_ESCAPE_RE = re.compile(r"\\(?:u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8})|x([0-9a-fA-F]{2}))")
+_ESCAPE_RE = re.compile(
+    r"\\(?:u\{([0-9a-fA-F]{1,6})\}|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8})|x([0-9a-fA-F]{2})"
+    r"|N\{([A-Za-z0-9 \-]{1,80})\}|([0-7]{1,3}))"
+)
 
 
 def _unescape(text: str) -> str:
+    import unicodedata
+
     def sub(m: re.Match) -> str:
-        cp = int(m.group(1) or m.group(2) or m.group(3), 16)
+        if m.group(5):
+            try:
+                return unicodedata.lookup(m.group(5))
+            except KeyError:
+                return " "
+        if m.group(6):
+            return chr(int(m.group(6), 8))
+        cp = int(m.group(1) or m.group(2) or m.group(3) or m.group(4), 16)
         return chr(cp) if cp < 0x110000 else " "
     return _ESCAPE_RE.sub(sub, text)
 
 
-def _looks_utf16(data: bytes) -> bool:
-    return data[:2] in (b"\xff\xfe", b"\xfe\xff") or data.count(b"\x00") * 4 >= len(data) > 0
+def _ascii_view(text: str) -> str:
+    return text.encode("ascii", errors="replace").translate(_ASCII).decode("ascii")
 
 
 def _text_views(data: bytes) -> Iterator[str]:
     views = [data.translate(_ASCII).decode("ascii")]
-    if _looks_utf16(data):
-        for codec in ("utf-16-le", "utf-16-be"):
-            text = data.decode(codec, errors="replace")
-            views.append(text.encode("ascii", errors="replace").translate(_ASCII).decode("ascii"))
+    nuls = data.count(b"\x00")
+    bom = data[:2] in (b"\xff\xfe", b"\xfe\xff")
+    if bom or nuls * 50 >= len(data) > 0:
+        # UTF-16/32 text is >= 2 % NUL bytes even when mostly CJK without a BOM
+        # (~6 %); random binary is ~0.4 %. UTF-32 carries >= 2 NULs per BMP char.
+        codecs = ["utf-16-le", "utf-16-be"]
+        if nuls * 5 >= len(data) * 2 or data[:4] in (b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff"):
+            codecs += ["utf-32-le", "utf-32-be"]
+        for codec in codecs:
+            unit = 4 if codec.startswith("utf-32") else 2
+            for shift in range(unit):  # every alignment: a window may start mid-character
+                chunk = data[shift:]
+                chunk = chunk[: len(chunk) - len(chunk) % unit]
+                views.append(_ascii_view(chunk.decode(codec, errors="replace")))
     for view in views:
         yield view
         if "\\" in view:
@@ -283,9 +349,26 @@ def _text_views(data: bytes) -> Iterator[str]:
                 yield resolved
 
 
+_WINDOW = 1 << 20
+_OVERLAP = 64 << 10   # longer than any credential shape the detectors know
+
+
 def _scan_bytes(data: bytes, where: str) -> None:
-    for view in _text_views(data):
-        _scan_text(view, where)
+    """Scan in overlapping 1 MiB windows: memory stays flat on a 200 MiB payload."""
+    step = _WINDOW - _OVERLAP
+    for off in range(0, max(len(data), 1), step):
+        window = data[off: off + _WINDOW]
+        for view in _text_views(window):
+            _scan_text(view, where)
+        if off + _WINDOW >= len(data):
+            break
+
+
+def _check_ratio(packed: int, unpacked: int, where: str) -> None:
+    """The container rule (<= 100:1 beyond 1 MiB) for a whole nested archive or stream:
+    caps how much scanning a small upload can buy."""
+    if unpacked >= LIMITS["ratio_check_min_bytes"] and unpacked > LIMITS["max_compression_ratio"] * max(packed, 1):
+        raise _reject("container", f"{where}: expands more than {LIMITS['max_compression_ratio']}:1")
 
 
 class _Budget:
@@ -303,37 +386,52 @@ class _Budget:
 
 def _decompressor(data: bytes):
     if data[:2] == b"\x1f\x8b":
-        return zlib.decompressobj(16 + zlib.MAX_WBITS), "gzip"
+        return (lambda: zlib.decompressobj(16 + zlib.MAX_WBITS)), "gzip"
     if data[:3] == b"BZh":
-        return bz2.BZ2Decompressor(), "bz2"
+        return bz2.BZ2Decompressor, "bz2"
     if data[:6] == b"\xfd7zXZ\x00":
-        return lzma.LZMADecompressor(), "xz"
+        return lzma.LZMADecompressor, "xz"
     return None, None
 
 
 def _inflate(data: bytes, where: str, budget: _Budget) -> bytes | None:
-    """Decompress a gzip/bz2/xz stream within the budget; None if it is not one."""
-    dec, kind = _decompressor(data)
-    if dec is None:
+    """Decompress EVERY member of a gzip/bz2/xz stream within the budget; None if it is not one."""
+    make, kind = _decompressor(data)
+    if make is None:
         return None
     out = bytearray()
+    rest = data
     try:
-        if kind == "gzip":
-            chunk = dec.decompress(data, 1 << 20)
-            while True:
-                budget.spend(len(chunk), where)
-                out += chunk
-                if not dec.unconsumed_tail:
+        while rest:
+            dec = make()
+            if kind == "gzip":
+                chunk = dec.decompress(rest, 1 << 20)
+                while True:
+                    budget.spend(len(chunk), where)
+                    out += chunk
+                    _check_ratio(len(data), len(out), where)
+                    if not dec.unconsumed_tail:
+                        break
+                    chunk = dec.decompress(dec.unconsumed_tail, 1 << 20)
+                if not dec.eof:
                     break
-                chunk = dec.decompress(dec.unconsumed_tail, 1 << 20)
-        else:
-            chunk = dec.decompress(data, max_length=1 << 20)
-            while True:
-                budget.spend(len(chunk), where)
-                out += chunk
-                if dec.eof or (not chunk and dec.needs_input):
+                rest = dec.unused_data
+            else:
+                chunk = dec.decompress(rest, max_length=1 << 20)
+                while True:
+                    budget.spend(len(chunk), where)
+                    out += chunk
+                    _check_ratio(len(data), len(out), where)
+                    if dec.eof or (not chunk and dec.needs_input):
+                        break
+                    chunk = dec.decompress(b"", max_length=1 << 20)
+                if not dec.eof:
                     break
-                chunk = dec.decompress(b"", max_length=1 << 20)
+                rest = dec.unused_data
+            # Concatenated members/streams (and trailing bytes) — the raw view of
+            # the whole payload already covers non-stream trailing data.
+            if rest and _decompressor(rest)[0] is None:
+                break
     except BundleRejected:
         raise
     except (zlib.error, OSError, EOFError, lzma.LZMAError, ValueError) as exc:
@@ -341,20 +439,48 @@ def _inflate(data: bytes, where: str, budget: _Budget) -> bytes | None:
     return bytes(out)
 
 
+def _is_tar(data: bytes) -> bool:
+    return len(data) >= 265 and data[257:262] == b"ustar"
+
+
+def _scan_tar(data: bytes, where: str, depth: int, budget: _Budget) -> None:
+    import tarfile
+
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as tf:
+            members = [m for m in tf.getmembers() if m.isfile()]
+            if len(members) > LIMITS["max_entries"]:
+                raise _reject("container", f"{where}: more than {LIMITS['max_entries']} entries")
+            budget.spend(sum(m.size for m in members), where)
+            for m in members:
+                fh = tf.extractfile(m)
+                if fh is not None:
+                    _scan_payload(fh.read(), f"{where}!{m.name}", depth + 1, budget)
+    except BundleRejected:
+        raise
+    except (tarfile.TarError, OSError, EOFError) as exc:
+        raise _reject("container", f"{where}: unreadable tar archive ({type(exc).__name__})") from None
+
+
 def _scan_payload(data: bytes, where: str, depth: int, budget: _Budget) -> None:
     _scan_bytes(data, where)  # raw view: also covers bytes around/between archive members
-    if _decompressor(data)[0] is not None and depth > LIMITS["max_nested_zip_depth"]:
-        raise _reject("container", f"{where}: compressed stream nested too deeply to scan")
-    inflated = _inflate(data, where, budget)
+    is_stream = _decompressor(data)[0] is not None
+    is_archive = zipfile.is_zipfile(io.BytesIO(data)) or _is_tar(data)
+    limit = LIMITS["max_nested_zip_depth"]
+    if (is_archive and depth >= limit) or (is_stream and depth > limit):
+        raise _reject("container", f"{where}: archive or compressed stream nested deeper than {limit}")
+    inflated = _inflate(data, where, budget) if is_stream else None
     if inflated is not None:
         _scan_payload(inflated, f"{where}!decompressed", depth + 1, budget)
         return
+    if _is_tar(data):
+        _scan_tar(data, where, depth, budget)
+        return
     if zipfile.is_zipfile(io.BytesIO(data)):
-        if depth >= LIMITS["max_nested_zip_depth"]:
-            raise _reject("container", f"{where}: archive nested deeper than {LIMITS['max_nested_zip_depth']}")
         inner = _open_zip(data, where=where)
         with inner:
             inner_files = _check_container(inner, where=where)
+            _check_ratio(len(data), sum(i.file_size for i in inner_files), where)
             budget.spend(sum(i.file_size for i in inner_files), where)
             for info in inner_files:
                 _scan_payload(_read(inner, info.filename, "secrets"), f"{where}!{info.filename}", depth + 1, budget)

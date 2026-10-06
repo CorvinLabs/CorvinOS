@@ -139,9 +139,11 @@ def import_bundle(data: bytes, *, tenant_id: str, actor: str, may_install_skills
     outcomes: list[ArtifactOutcome] = []
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         ordered, edges = _dependency_order(env, zf)
+        version_of = {a.key: a.version for a in env.artifacts}
         landed: set[tuple[str, str]] = set()
         for i, art in enumerate(ordered):
-            missing = [f"{k} {d}" for k, d in sorted(edges[art.key]) if (k, d) not in landed]
+            missing = [f"{k} {d}" for k, d in sorted(edges[art.key])
+                       if (k, d) not in landed and not _host_has(tenant_id, k, d, version_of[(k, d)])]
             try:
                 outcome = _stage_one(art, env, zf, tenant_id=tenant_id, actor=actor,
                                      may_install_skills=may_install_skills, missing_deps=missing)
@@ -164,6 +166,18 @@ class _Aborted(Exception):
         self.outcome = outcome
 
 
+def _host_has(tenant_id: str, kind: str, aid: str, version: str) -> bool:
+    """This install already holds exactly ``aid@version`` — a bundled copy that
+    failed only because it is already there still satisfies its dependents."""
+    from .inventory import InventoryUnavailable, known
+
+    try:
+        versions = known(tenant_id).get(kind, {}).get(aid)
+    except InventoryUnavailable:
+        return False
+    return versions is not None and version in versions
+
+
 def _count_layer_gates(env: BundleEnvelope, data: bytes) -> int:
     total = 0
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
@@ -174,7 +188,7 @@ def _count_layer_gates(env: BundleEnvelope, data: bytes) -> int:
                 manifest = json.loads(zf.read(f"{a.prefix}manifest.json"))
                 gates = manifest.get("quality_gates", []) if isinstance(manifest, dict) else []
                 total += len(gates) if isinstance(gates, list) else 0
-            except (KeyError, ValueError):
+            except (KeyError, ValueError, RecursionError):
                 pass  # the layer intake reports the broken manifest
     return total
 
@@ -195,10 +209,11 @@ def _dependency_order(env: BundleEnvelope, zf: zipfile.ZipFile) -> tuple[list[Ar
                 deps = manifest.get("dependencies", []) if isinstance(manifest, dict) else []
                 for d in deps if isinstance(deps, list) else []:
                     # Layer Forge resolves a dependency by id; a missing "type" still binds.
-                    if (isinstance(d, dict) and d.get("type") in (None, "layer_definition")
-                            and ("layer", d.get("id")) in by_key):
+                    if (isinstance(d, dict) and isinstance(d.get("id"), str)
+                            and d.get("type") in (None, "layer_definition")
+                            and ("layer", d["id"]) in by_key):
                         edges[a.key].add(("layer", d["id"]))
-            except (KeyError, ValueError):
+            except (KeyError, ValueError, RecursionError):
                 pass  # the layer intake reports the broken manifest
     order: list[ArtifactEntry] = []
     state: dict[tuple[str, str], int] = {}
@@ -320,8 +335,8 @@ def _intake_layer(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, 
         raise _IntakeFailed("layer payload must be exactly manifest.json")
     try:
         manifest = json.loads(files["manifest.json"])
-    except ValueError:
-        raise _IntakeFailed("layer manifest.json is not JSON") from None
+    except (ValueError, RecursionError):
+        raise _IntakeFailed("layer manifest.json is not usable JSON") from None
     if not isinstance(manifest, dict):
         raise _IntakeFailed("layer manifest.json must be an object")
     if manifest.get("id") != art.id or manifest.get("version") != art.version:
@@ -331,7 +346,7 @@ def _intake_layer(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, 
     orch = LayerForgeOrchestrator(tenant_id, actor="bundle_import")
     result = orch.create_layer_definition(manifest)
     if result.status != "SUCCESS":
-        if result.phase == "audit" and _layer_exists(orch, art.id, art.version):
+        if result.phase == "audit" and _stored_layer_matches(orch, manifest):
             # Written, then Layer Forge's own record failed: report what is on disk (R2B-1).
             return "forged", f"{art.id}@{art.version} (Layer Forge could not record every step)"
         raise _IntakeFailed(f"layer forge refused at the {result.phase} phase")
@@ -341,14 +356,15 @@ def _intake_layer(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, 
     return "forged", detail
 
 
-def _layer_exists(orch, entry_id: str, version: str) -> bool:
+def _stored_layer_matches(orch, manifest: dict) -> bool:
+    """The registry holds THIS bundle's definition (not one a concurrent writer put there)."""
     from core.orchestration.layer_forge.registry import LayerNotFoundError
 
     try:
-        orch.registry.get(entry_id, version)
-        return True
+        stored = orch.registry.get(manifest["id"], manifest["version"])
     except LayerNotFoundError:
         return False
+    return clean_layer_manifest(stored) == manifest
 
 
 def _intake_plugin(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, tenant_id: str) -> tuple[str, str]:
@@ -384,8 +400,8 @@ def _intake_tool(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, t
         raise _IntakeFailed("tool payload must be spec.json plus exactly one implementation file")
     try:
         spec = json.loads(files.pop("spec.json"))
-    except ValueError:
-        raise _IntakeFailed("tool spec.json is not JSON") from None
+    except (ValueError, RecursionError):
+        raise _IntakeFailed("tool spec.json is not usable JSON") from None
     if not isinstance(spec, dict):
         raise _IntakeFailed("tool spec.json must be an object")
     (_impl_name, impl_bytes), = files.items()

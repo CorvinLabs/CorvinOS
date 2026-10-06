@@ -104,7 +104,9 @@ class SkillSelection:
         from core.skills.manifest_v2 import SkillManifestV2
         from core.skills.skill_packager import SkillPackager
 
-        skill_folder = (_skills_gen_root() / self.skill_id).resolve()
+        unresolved = _skills_gen_root() / self.skill_id
+        _require(not unresolved.is_symlink(), f"skill {self.skill_id}: the skill folder is a symbolic link; export refuses to follow it")
+        skill_folder = unresolved.resolve()
         _require(skill_folder.is_dir(), f"skill not found: {self.skill_id}")
         manifest_file = skill_folder / "skill.json"
         _require(manifest_file.exists(), f"skill {self.skill_id}: missing skill.json")

@@ -280,3 +280,46 @@ def test_R2B_13_export_leaves_the_skill_folder_untouched(console_client, make_sk
     assert r.status_code == 200, r.text
     after = {p.relative_to(folder): p.read_bytes() for p in folder.rglob("*") if p.is_file()}
     assert after == before
+
+
+def test_R3B_1_2_3_hostile_json_never_answers_500(console_client, make_layer):
+    import io
+    import json as _json
+    import zipfile as _zf
+    client, csrf = console_client
+    deep = io.BytesIO()
+    with _zf.ZipFile(deep, "w") as zf:
+        zf.writestr("forge-bundle.json", b"[" * 100000 + b"]" * 100000)
+    for path in ("validate", "import"):
+        r = _upload(client, csrf, path, deep.getvalue())
+        assert r.status_code in (200, 422), (path, r.status_code, r.text[:200])
+    assert _upload(client, csrf, "validate", deep.getvalue()).json()["stage"] == "envelope"
+
+
+def test_R3B_7_a_reject_outage_says_reject_not_create(console_client, make_tool, monkeypatch):
+    client, csrf = console_client
+    make_tool("csv.count")
+    bundle = _export(client, csrf, [{"kind": "tool", "id": "csv.count", "version": "0.2.0"}]).content
+    from forge.multi_registry import MultiRegistry
+    MultiRegistry(tenant_id=T).delete("csv.count")
+    _upload(client, csrf, "import", bundle)
+    qid = client.get(f"{BASE}/quarantine").json()["items"][0]["quarantine_id"]
+
+    from core.forge_bundle import audit
+    def down(event, **_k):
+        raise audit.ForgeBundleAuditError(event)
+    monkeypatch.setattr(audit, "emit", down)
+    r = client.post(f"{BASE}/quarantine/{qid}/reject", headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 503 and "not rejected" in r.json()["detail"]
+
+
+def test_R3B_6_inventory_refusal_has_one_shape_on_both_routes(console_client, tmp_corvin_home, make_tool):
+    client, csrf = console_client
+    make_tool("csv.count")
+    bundle = _export(client, csrf, [{"kind": "tool", "id": "csv.count", "version": "0.2.0"}]).content
+    reg = tmp_corvin_home / "skills_installed" / "skills_registry.json"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    reg.write_text("[]")
+    for path in ("validate", "import"):
+        r = _upload(client, csrf, path, bundle)
+        assert r.status_code == 503 and r.json()["detail"]["stage"] == "inventory", (path, r.text)

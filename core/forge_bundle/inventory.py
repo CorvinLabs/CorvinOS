@@ -49,6 +49,8 @@ def _forged_skills(*, strict: bool = False) -> list[dict[str, Any]]:
     root = _corvin_home() / "skills_gen"
     if root.is_dir():
         for folder in sorted(root.iterdir()):
+            if folder.is_symlink():
+                continue  # export refuses symlinked skill folders; never offer one
             manifest = folder / "skill.json"
             if not manifest.is_file():
                 continue

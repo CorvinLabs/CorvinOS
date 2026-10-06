@@ -19,8 +19,12 @@ hand through the same forge.
 | 3 | Import → per-forge intake, incl. the tool quarantine | **built** — `import_module.py`, `tool_quarantine.py`, `inventory.py` |
 | 4 | Console UI | **built** — Forge → **Bundles** tab (`/app/forge?tab=bundles`) |
 
-Hardened by a three-round adversarial review on 2026-10-06; every finding has a
-named test (`tests/forge_bundle/test_import.py` test names carry the finding id).
+Hardened by a three-round adversarial review on 2026-10-06 (commits c2f151880,
+1659428f9 and the round-3 fix commit; 36 + 31 + 19 findings). Proven findings
+have regression tests in `tests/forge_bundle/` and the console's
+`tests/unit/forge-bundles-panel.test.tsx`; most test names carry the finding id
+(C…, A…, S… round 1; R2A/R2B round 2; R3A/R3B round 3). The round-3 fixes were
+verified by those tests, not by a fourth review round.
 
 ## Export (Phase 2) — `core/forge_bundle/export.py`
 
@@ -35,7 +39,7 @@ it packages), so nothing outside a temp dir is written.
 
 | Selection | Reads via | Note |
 |---|---|---|
-| `SkillSelection(skill_id, version)` | `SkillPackager` over a temp copy of `<corvin_home>/skills_gen/<id>/`, packaged FRESH on every export | a cached package could be older than the folder; the version must match `skill.json`; a folder containing a symlink is refused |
+| `SkillSelection(skill_id, version)` | `SkillPackager` over a temp copy of `<corvin_home>/skills_gen/<id>/`, packaged FRESH on every export | a cached package could be older than the folder; the version must match `skill.json`; a skill folder that is, or contains, a symlink is refused (and not offered) |
 | `ToolSelection(name, version)` | `MultiRegistry.get()` + the impl file | **`version` is caller-supplied** — `ToolSpec` has none. `spec.json` = `name`/`description`/`input_schema`/`runtime`/`version`/`impl_filename` + `meta` limited to `requirements`/`secrets` (key names)/`budget`/`deterministic` (`tool_quarantine.clean_tool_meta`); never scope, call counts, promotion |
 | `LayerSelection(entry_id, version)` | `LayerRegistry.get()` | registry state (`status`, `review_flagged`, `review_flags`, every `_*` key) stripped (`import_module.clean_layer_manifest`) |
 | `PluginSelection(plugin_id, version, package_path)` | an ADR-0511 plugin package on disk | must be a ZIP with `manifest.json` naming this id + version and an `author` — the shape the importing StagingManager accepts. A bare wheel is refused HERE, not at import. Export never builds a plugin |
@@ -77,7 +81,9 @@ refused/failed (JSON on stdout), 2 usage error.
    layer manifest's own `dependencies` on layers in the same bundle, with or
    without `type`). An artifact whose in-bundle dependency did not land fails
    ("depends on … which did not import") instead of binding to whatever older
-   version this install has.
+   version this install has — unless this install already holds that exact
+   `id@version` (then the requirement is met). Unusable JSON in a manifest or
+   spec (including nesting too deep to parse) is a failed artifact, never a 500.
 4. Per artifact: `artifact_intake_started` (the intent) commits BEFORE the
    intake; then `artifact_staged` (the actual outcome) or `artifact_failed`
    (`phase`, `error_class`). One artifact failing does not stop the others.
@@ -89,7 +95,7 @@ refused/failed (JSON on stdout), 2 usage error.
 | Kind | Intake | Outcome |
 |---|---|---|
 | skill | `SkillInstaller(<corvin_home>/skills_installed)`, checksum = the envelope's sha256. That store is HOST-WIDE, so only the install owner (owner/admin session of the process tenant) may import a skill — same as the manual skill upload | `installed` |
-| layer | `LayerForgeOrchestrator(actor="bundle_import").create_layer_definition` — every gate, enforcement rule and the review run on THIS install. Before that: travelled state dropped, ≤ 16 gates, gate/rule/target/dependency ids short identifiers (they reach Layer Forge's audit records), each gate names ONE test file under `tests/` (no `::node`) | `forged`; detail notes a FLAGGED review on this install, or that Layer Forge wrote the layer but could not record its last step |
+| layer | `LayerForgeOrchestrator(actor="bundle_import").create_layer_definition` — every gate, enforcement rule and the review run on THIS install. Before that: travelled state dropped, ≤ 16 gates, gate/rule/target/dependency ids short identifiers (they reach Layer Forge's audit records), each gate names ONE test file under `tests/` (no `::node`) | `forged`; detail notes a FLAGGED review on this install, or that Layer Forge wrote the layer but could not record its last step (only when the stored definition equals the bundle's, so a concurrent writer's layer is never reported as ours) |
 | plugin | `StagingManager.validate_zip_file` + `store_staged_upload` as `<id>-<version>.zip`; an identical package already pending is reported, not re-staged | `pending_approval` — approve at `/plugin-uploads/{id}/approve` |
 | tool | `ToolQuarantine.stage` — a name that already exists here (case-insensitively) is refused (`failed`, "already exists"); an entry identical in EVERYTHING the operator reviews (version, description, schema, runtime, code, meta, bundle) is reused, anything else is a new entry | `quarantined` |
 
@@ -102,12 +108,14 @@ the one its runtime implies, so a tampered `meta.json` cannot redirect a read.
 Staging refuses: spec naming another tool, runtime other than `python`/`bash`,
 an invalid Tool Forge name, non-UTF-8 code, a credential-shaped string, invalid
 travelling meta (requirements must be plain package specifiers — no URLs,
-paths, options or names pip would read as an archive file such as `x.whl`;
+paths, options or names ending in any archive extension pip reads as a local
+file — `.whl .zip .tar .gz .tgz .bz2 .tbz .xz .txz .lz .tlz .lzma .zst …`;
 secret refs through the vault validator; budget = known limits → finite
-positive numbers ≤ 10⁹). Claim/staging leftovers older than an hour are swept.
+positive numbers ≤ 10⁹, compared before any float conversion). Claim/staging leftovers older than an hour are swept.
 
 A decision first **claims** the entry: one atomic rename `<qid>` →
-`.claimed-<qid>`. Of two concurrent decisions exactly one proceeds; a decided
+`.claimed-<qid>` (and the claim's mtime is reset, so the sweep ages the claim,
+not the staging). Of two concurrent decisions exactly one proceeds; a decided
 entry is never listed or decidable again even if deleting it fails.
 `accept`: claim → hash + credential re-check → name still free → record
 `quarantine_accepted` → `MultiRegistry.create(scope="user", meta={…travelled
@@ -151,11 +159,11 @@ gateway does and checks both the real and the doubled path.
 |---|---|---|
 | `GET /forge-bundles/exportable` | session | `{skills, tools, layers, plugins: []}` · 503 a store unreadable |
 | `POST /forge-bundles/export` | session + CSRF | ZIP · 400 plugin selection · 403 skill for a non-owner · 422 `ExportError` · 503 audit down |
-| `POST /forge-bundles/validate` (multipart `file`) | session + CSRF | `{valid: true, …report}` / `{valid: false, stage, reason}` · 503 inventory unreadable — writes nothing |
+| `POST /forge-bundles/validate` (multipart `file`) | session + CSRF | `{valid: true, …report}` / `{valid: false, stage, reason}` · 503 `{stage: "inventory", reason}` — writes nothing |
 | `POST /forge-bundles/import` (multipart `file`) | session + CSRF | `ImportResult.to_dict()` · 413 > 50 MiB · 422 `{stage, reason}` · 503 `{message, …outcomes}` when stopped mid-way · 503 inventory/audit |
 | `GET /forge-bundles/quarantine` | session | `{items, count}`; each item lists `requirements` and `secrets` it would get |
 | `POST /forge-bundles/quarantine/{qid}/accept` | session + CSRF | 404 unknown/already decided · 409 name taken · 403 licence gate · 422 changed/unsafe · 503 audit (entry back in queue) / outcome unrecorded · 500 never echoes exception text |
-| `POST /forge-bundles/quarantine/{qid}/reject` | session + CSRF | 404 · 503 audit |
+| `POST /forge-bundles/quarantine/{qid}/reject` | session + CSRF | 404 · 503 audit ("the tool was not rejected and is still in the review queue") |
 
 UI: `web-next/src/components/forge/ForgeBundlesPanel.tsx` (API in
 `src/lib/api/forge-bundles.ts`) — export picker, import (validate → preview with
@@ -164,8 +172,11 @@ when an import stopped), review queue with the packages and secrets each tool
 would get. A late answer for a previously picked file is dropped (generation
 counter); a failed check offers "Check again" and the same file can be picked
 again; a running export locks the form; a refusal names its stage; a decision
-refreshes both the queue and the export list; uploads trigger the same
-stale-CSRF recovery as `api()`.
+refreshes both the queue and the export list and removes the decided row at
+once with a confirmation; a layer's versions are alternatives (one per bundle);
+an unreadable install inventory (503 stage `inventory`) is shown as the
+install's problem, not the bundle's; uploads trigger the same stale-CSRF
+recovery as `api()`.
 
 ## Audit events
 
@@ -229,27 +240,35 @@ Six stages, in order, fail-closed. The first defect raises
 
 | Stage | Rejects |
 |---|---|
-| `container` | unreadable ZIP · > 50 MiB compressed / > 200 MiB uncompressed / > 2 000 entries · absolute, `..`, empty-segment, backslash, `:` or control-char names · symlink and encrypted entries · names equal up to case · compression ratio > 100:1 on files ≥ 1 MiB · any file outside `artifacts/` except the envelope · the same rules for every nested archive, an archive nested two levels deep, and nested archives together exceeding the 200 MiB budget |
-| `envelope` | missing / > 1 MiB / non-UTF-8-JSON envelope · any schema defect above |
+| `container` | unreadable ZIP · > 50 MiB compressed / > 200 MiB uncompressed / > 2 000 entries · absolute, `..`, empty-segment, backslash, `:` or control-char names · symlink and encrypted entries · names equal up to case · compression ratio > 100:1 on files ≥ 1 MiB · any file outside `artifacts/` except the envelope · the same rules for every nested archive · a nested archive or gzip/bz2/xz stream expanding > 100:1 as a WHOLE (beyond 1 MiB) · an archive nested two levels deep (incl. inside a tar or a compressed stream) · all nested content together exceeding the 200 MiB budget |
+| `envelope` | missing / > 1 MiB / non-UTF-8-JSON envelope (incl. nesting too deep to parse) · any schema defect above |
 | `integrity` | a declared file missing, an undeclared file present, size or sha256 mismatch, CRC failure |
 | `references` | an in-bundle requirement on the wrong version · any dependency cycle |
 | `staleness` | (only with `known`) a requirement outside the bundle that the target does not have |
-| `secrets` | a credential-shaped string (private key, AWS/GitHub/Slack/Google/`sk-` keys, JWT) anywhere: the envelope and every payload at every nesting level, inside gzip/bz2/xz streams, and in the raw bytes around archive members |
+| `secrets` | a credential-shaped string (private key, AWS/GitHub/Slack/Google/`sk-` keys, JWT) anywhere: the envelope and every payload at every nesting level, inside every member of a gzip/bz2/xz stream, inside tar archives, and in the raw bytes around archive members |
 
 A nested archive is recognised by its CONTENT (`zipfile.is_zipfile`), never by
 its name — a wheel or a renamed `.bin` is opened like a `.zip`; its raw bytes
-are scanned too (leading data, comment, stored entries). A gzip/bz2/xz stream is
-decompressed within the budget and scanned. Every payload is scanned through
-three views: its bytes projected to printable ASCII (every other byte becomes a
-space, so a length prefix or a high byte can never glue onto a key), its UTF-16
-decodings when it looks like UTF-16 (BOM or ≥ 25 % NUL bytes), and — wherever a
-backslash occurs — the text with `\uXXXX` / `\UXXXXXXXX` / `\xXX` escapes
-resolved (JSON, JSON Lines, YAML, Python, JS). Deliberate obfuscation (base64,
-string splitting) is out of scope for any pattern scanner. Only the credential
-detectors run (`core.pii.sensitive.detect_named_types`, fail-closed) — the prose
-and entropy detectors fire on ordinary source code and cost far more on
-megabytes (≈ 6 s per 40 MiB of random binary, ≈ 2 s per 40 MiB of text). A
-rejection names the detector, never the matched value.
+are scanned too (leading data, comment, stored entries). A tar archive (`ustar`)
+is opened like a ZIP. Every member of a gzip/bz2/xz stream is decompressed
+within the budget and the ratio rule and scanned. Each payload is scanned in
+overlapping 1 MiB windows (64 KiB overlap — memory stays flat) through several
+views: the bytes projected to printable ASCII (every other byte becomes a
+space, so a length prefix or a high byte can never glue onto a key); when a
+window is at least 2 % NUL bytes or carries a BOM — which every UTF-16/32 text
+does, CJK without a BOM included, while random binary is ~0.4 % — its UTF-16
+decodings (both byte orders, both alignments) and, from 40 % NULs, its UTF-32
+decodings; and wherever a backslash occurs, the text with `\uXXXX`,
+`\u{X…}`, `\UXXXXXXXX`, `\xXX`, octal `\NNN` and `\N{NAME}` escapes resolved
+(JSON, JSON Lines, YAML, Python, JS). Deliberate obfuscation (base64, string
+splitting, ROT13) is out of scope for any pattern scanner. The regex
+credential detectors run through `core.pii.sensitive.detect_named_types`
+(fail-closed); JWT shapes are found by a LINEAR check (`_has_jwt`), because the
+shared JWT regex backtracks quadratically on input like `eyJ-eyJ-…` (a 999-byte
+upload cost 43 s) — the linear check is slightly broader, so it can only reject
+more. Measured: ≈ 9 s per 40 MiB of random binary, ≈ 4 s per 40 MiB of text,
+≈ 14 s per 40 MiB of NUL-heavy text; the ratio rule caps what a small upload
+can expand to (100×). A rejection names the detector, never the matched value.
 
 `known` is the target install's inventory, `{kind: {id: versions}}`. Without it,
 requirements that point outside the bundle come back in

@@ -76,7 +76,7 @@ describe("ForgeBundlesPanel", () => {
     wrap();
     fireEvent.click(await screen.findByLabelText("select skill summarize"));
     fireEvent.click(screen.getByLabelText("select tool csv.count"));
-    fireEvent.click(screen.getByLabelText("select layer acme.l34"));
+    fireEvent.click(screen.getByLabelText("select layer acme.l34@1.0.0"));
     fireEvent.change(screen.getByLabelText("Bundle id"), { target: { value: "acme" } });
     fireEvent.change(screen.getByLabelText("Bundle version"), { target: { value: "2.0.0" } });
     fireEvent.click(screen.getByRole("button", { name: /Export 3 artifacts/ }));
@@ -266,5 +266,44 @@ describe("ForgeBundlesPanel", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
     expect(await screen.findByText("acme@2.0.0")).toBeInTheDocument();
     expect(calls).toBe(2);
+  });
+
+  it("R3B-4: two versions of one layer are alternatives, not one shared checkbox", async () => {
+    server.use(
+      http.get(`${B}/exportable`, () => HttpResponse.json({
+        skills: [], tools: [], plugins: [],
+        layers: [{ id: "acme.l34", version: "1.0.0", status: "accepted" }, { id: "acme.l34", version: "2.0.0", status: "accepted" }],
+      })),
+      http.get(`${B}/quarantine`, () => HttpResponse.json({ items: [], count: 0 })),
+    );
+    wrap();
+    const v1 = await screen.findByLabelText("select layer acme.l34@1.0.0");
+    const v2 = screen.getByLabelText("select layer acme.l34@2.0.0");
+    fireEvent.click(v2);
+    expect(v2).toBeChecked();
+    expect(v1).not.toBeChecked();
+    fireEvent.click(v1);
+    expect(v1).toBeChecked();
+    expect(v2).not.toBeChecked();
+  });
+
+  it("R3B-5: an accepted row leaves at once and success is said", async () => {
+    base();
+    server.use(http.post(`${B}/quarantine/${"a".repeat(32)}/accept`, () =>
+      HttpResponse.json({ status: "accepted", tool_id: "csv.count" })));
+    wrap();
+    fireEvent.click(await screen.findByRole("button", { name: /Accept/ }));
+    expect(await screen.findByText("Accepted csv.count — it can be called now.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Accept/ })).toBeNull();
+  });
+
+  it("R3B-6: an unreadable install inventory is not blamed on the bundle", async () => {
+    base({ items: [], count: 0 });
+    server.use(http.post(`${B}/validate`, () => HttpResponse.json(
+      { detail: { stage: "inventory", reason: "the installed-skill registry is unreadable" } }, { status: 503 })));
+    wrap();
+    fireEvent.change(screen.getByLabelText("bundle file"), { target: { files: [new File(["x"], "b.zip")] } });
+    expect(await screen.findByText(/the bundle was not judged; try again later/)).toBeInTheDocument();
+    expect(screen.queryByText(/rejected at stage/)).toBeNull();
   });
 });

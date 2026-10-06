@@ -164,7 +164,7 @@ def validate_upload(
         report = check_bundle(data, tenant_id=rec.tenant_id)
     except BundleRejected as exc:
         if exc.stage == "inventory":
-            raise HTTPException(status_code=503, detail=exc.reason) from None
+            raise HTTPException(status_code=503, detail={"stage": exc.stage, "reason": exc.reason}) from None
         return {"valid": False, "stage": exc.stage, "reason": exc.reason, "origin_verified": False}
     return {"valid": True, **_report_dict(report)}
 
@@ -218,11 +218,12 @@ def _decide(qid: str, rec: session_auth.SessionRecord, action: str) -> dict[str,
     except tq.QuarantineError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     except ForgeBundleAuditError:
+        outcome = ("the tool was not created" if action == "accept" else "the tool was not rejected")
         raise HTTPException(status_code=503,
-                            detail="audit chain unavailable; the tool was not created and is back in the review queue") from None
+                            detail=f"audit chain unavailable; {outcome} and is still in the review queue") from None
     except Exception as exc:  # noqa: BLE001 — never echo raw exception text to the client
         raise HTTPException(status_code=500,
-                            detail=f"the decision failed ({type(exc).__name__}); the tool is back in the review queue") from None
+                            detail=f"the decision failed ({type(exc).__name__}); the tool is still in the review queue") from None
     return {"status": "accepted" if action == "accept" else "rejected",
             "tool_id": entry.tool_id, "version": entry.version, "quarantine_id": qid}
 

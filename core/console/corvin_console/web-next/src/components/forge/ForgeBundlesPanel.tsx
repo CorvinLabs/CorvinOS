@@ -85,15 +85,16 @@ function ExportSection({ csrf }: { csrf: string }) {
     clearSettled();
     setPicked((prev) => {
       const next = { ...prev };
-      if (next[selKey(s)]) delete next[selKey(s)];
+      // One version per artifact: ticking another version of a layer replaces it.
+      if (next[selKey(s)]?.version === s.version) delete next[selKey(s)];
       else next[selKey(s)] = s;
       return next;
     });
   };
 
   const row = (s: Selection, label: string, extra?: string) => (
-    <label key={selKey(s)} className="flex items-center gap-2 py-1 text-sm">
-      <input type="checkbox" checked={!!picked[selKey(s)]} disabled={locked} onChange={() => toggle(s)} aria-label={`select ${s.kind} ${s.id}`} />
+    <label key={`${selKey(s)}@${s.version}`} className="flex items-center gap-2 py-1 text-sm">
+      <input type="checkbox" checked={picked[selKey(s)]?.version === s.version} disabled={locked} onChange={() => toggle(s)} aria-label={`select ${s.kind} ${s.id}${s.kind === "layer" ? `@${s.version}` : ""}`} />
       <span className="font-mono">{label}</span>
       {extra && <span className="text-xs text-muted-foreground">{extra}</span>}
     </label>
@@ -160,6 +161,12 @@ function ExportSection({ csrf }: { csrf: string }) {
 }
 
 function refusal(err: unknown): string {
+  if (err instanceof ApiError && err.status === 503) {
+    const d = (err.detail as { detail?: { stage?: unknown } } | null)?.detail;
+    if (d && typeof d === "object" && d.stage === "inventory") {
+      return "this install's own inventory could not be read — the bundle was not judged; try again later";
+    }
+  }
   // A 422 import refusal carries {stage, reason}; name the stage like the preview does.
   if (err instanceof ApiError && err.detail && typeof err.detail === "object") {
     const d = (err.detail as { detail?: unknown }).detail as { stage?: unknown; reason?: unknown } | undefined;
@@ -204,7 +211,7 @@ function ImportSection({ csrf }: { csrf: string }) {
       const r = await validateBundle(f, csrf);
       if (gen === generation.current) setReport(r);
     } catch (err) {
-      if (gen === generation.current) setError(`Could not check the bundle: ${message(err)}`);
+      if (gen === generation.current) setError(`Could not check the bundle: ${refusal(err)}`);
     } finally {
       if (gen === generation.current) setBusy(null);
     }
@@ -309,14 +316,19 @@ function ImportSection({ csrf }: { csrf: string }) {
 function ReviewSection({ csrf }: { csrf: string }) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: QUARANTINE_KEY, queryFn: fetchQuarantine });
+  const [decided, setDecided] = useState<Record<string, string>>({});
   const decide = useMutation({
     mutationFn: ({ qid, action }: { qid: string; action: "accept" | "reject" }) => decideQuarantine(qid, action, csrf),
+    onSuccess: (r, { qid, action }) => setDecided((prev) => ({
+      ...prev,
+      [qid]: action === "accept" ? `Accepted ${r.tool_id} — it can be called now.` : `Rejected ${r.tool_id} — it was deleted.`,
+    })),
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: QUARANTINE_KEY });
       void qc.invalidateQueries({ queryKey: ["forge-bundles", "exportable"] });
     },
   });
-  const items = useMemo(() => q.data?.items ?? [], [q.data]);
+  const items = useMemo(() => (q.data?.items ?? []).filter((it) => !(it.quarantine_id in decided)), [q.data, decided]);
 
   return (
     <Card>
@@ -329,8 +341,11 @@ function ReviewSection({ csrf }: { csrf: string }) {
       <CardContent className="space-y-2">
         {q.isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
         {q.error && <p className="text-sm text-destructive">Could not load the review queue: {message(q.error)}</p>}
-        {q.data && items.length === 0 && <p className="text-sm text-muted-foreground">Nothing awaiting review.</p>}
+        {q.data && items.length === 0 && Object.keys(decided).length === 0 && <p className="text-sm text-muted-foreground">Nothing awaiting review.</p>}
         {decide.error && <p className="text-sm text-destructive">{message(decide.error)}</p>}
+        {Object.entries(decided).map(([qid, text]) => (
+          <p key={qid} className="text-sm text-emerald-700 dark:text-emerald-300">{text}</p>
+        ))}
         {items.map((it) => (
           <div key={it.quarantine_id} className="flex flex-wrap items-center gap-2 rounded border border-border p-2 text-sm">
             <span className="font-mono">{it.tool_id}</span>

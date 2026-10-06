@@ -386,12 +386,22 @@ def test_R2A_5_credentials_inside_compressed_streams(compress):
     _rejected(_tool_with_extra("data.bin", mod.compress(b"x = '" + AWS + b"'\n")), "secrets", match="aws_access_key")
 
 
-def test_R2A_5_a_compression_bomb_spends_the_budget(monkeypatch):
+def test_R3A_1_a_compression_bomb_trips_the_ratio_rule():
     import gzip
-    import core.forge_bundle.validate as v
-    monkeypatch.setattr(v, "LIMITS", {**v.LIMITS, "max_uncompressed_bytes": 2_000_000})
-    _rejected(_tool_with_extra("bomb.gz", gzip.compress(b"0" * 5_000_000)), "container", match="budget")
+    _rejected(_tool_with_extra("bomb.gz", gzip.compress(b"0" * 5_000_000)), "container", match="expands more than")
 
+
+def test_R2A_5_decompressed_streams_spend_the_budget(monkeypatch):
+    import gzip
+    import os
+    import core.forge_bundle.validate as v
+    monkeypatch.setattr(v, "LIMITS", {**v.LIMITS, "max_uncompressed_bytes": 5_000_000})  # 4 MB top level, 1 MB left for streams
+    noise = gzip.compress(os.urandom(2_000_000))  # incompressible: ratio ~1, passes the ratio rule
+    arts = _default_artifacts()
+    art = _artifact("tool", "csv.count", "0.2.0", {"spec.json": b"{}", "a.gz": noise, "b.gz": noise},
+                    [{"kind": "skill", "id": "summarize", "version": "1.0.0"}])
+    arts[1] = (art, {f["path"]: (b"{}" if f["path"].endswith("spec.json") else noise) for f in art["files"]})
+    _rejected(make_bundle(artifacts=arts), "container", match="budget")
 
 def test_R2A_6_bytes_around_an_archive_are_scanned():
     inner = _zip({"pkg/ok.py": b"x = 1\n"})
@@ -528,3 +538,69 @@ def test_detect_named_types_fails_closed_on_an_unknown_detector():
     with pytest.raises(PIIDetectionFailedClosed):
         detect_named_types("anything", {"no_such_detector"})
     assert detect_named_types("x = 'AKIAABCDEFGHIJKLMNOP'", {"aws_access_key"}) == ["aws_access_key"]
+
+
+# ── adversarial round 3 ──────────────────────────────────────────────────────
+
+
+def test_R3A_1_jwt_detection_is_linear():
+    import time
+    import core.forge_bundle.validate as v
+    t = time.monotonic()
+    v._scan_bytes(b"eyJ-" * (1 << 18), "pad.txt")  # 1 MiB; the regex needed minutes for this
+    assert time.monotonic() - t < 5
+
+
+def test_R3A_1_the_linear_jwt_check_still_finds_a_jwt():
+    _rejected(_tool_with_extra("t.txt", b"token: " + JWT + b"\n"), "secrets", match="jwt")
+
+
+@pytest.mark.parametrize("compress", ["gzip", "bz2"])
+def test_R3A_2_every_member_of_a_concatenated_stream_is_scanned(compress):
+    import importlib
+    mod = importlib.import_module(compress)
+    blob = mod.compress(b"harmless\n") + mod.compress(b"k = '" + AWS + b"'\n")
+    _rejected(_tool_with_extra("data.bin", blob), "secrets", match="aws_access_key")
+
+
+@pytest.mark.parametrize("codec", ["utf-32", "utf-32-le", "utf-16-le"])
+def test_R3A_3_utf32_and_bomless_cjk_utf16(codec):
+    text = "日本語のテキスト　" * 3 + AWS.decode() + "　です"
+    _rejected(_tool_with_extra("notes.txt", text.encode(codec)), "secrets", match="aws_access_key")
+
+
+@pytest.mark.parametrize("src", [
+    b'const k = "\\u{41}KIAABCDEFGHIJKLMNOP";',           # JS code-point escape
+    b"k = '\\101KIAABCDEFGHIJKLMNOP'",                      # Python octal escape
+    b"k = '\\N{LATIN CAPITAL LETTER A}KIAABCDEFGHIJKLMNOP'",  # Python named escape
+])
+def test_R3A_4_more_string_escapes(src):
+    _rejected(_tool_with_extra("x.js", src), "secrets", match="aws_access_key")
+
+
+def _tar(members: dict) -> bytes:
+    import io as _io
+    import tarfile
+    buf = _io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:") as tf:
+        for name, data in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tf.addfile(info, _io.BytesIO(data))
+    return buf.getvalue()
+
+
+def test_R3A_5_a_tar_archive_is_opened_and_scanned():
+    _rejected(_tool_with_extra("payload.tar", _tar({"conf/k.py": b"KEY = '" + AWS + b"'\n"})),
+              "secrets", match="aws_access_key")
+
+
+def test_R3A_5_an_archive_inside_a_tar_is_refused_not_skipped():
+    inner = _zip({"pkg/ok.py": b"x = 1\n"})
+    _rejected(_tool_with_extra("payload.tar", _tar({"dist/pkg-1.0-py3-none-any.whl": inner})),
+              "container", match="nested deeper")
+
+def test_R3B_1_a_deeply_nested_envelope_is_an_envelope_rejection():
+    envelope = b"[" * 100000 + b"]" * 100000
+    data = _zip({"forge-bundle.json": envelope})
+    _rejected(data, "envelope")

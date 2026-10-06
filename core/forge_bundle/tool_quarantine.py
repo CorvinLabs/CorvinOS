@@ -44,7 +44,9 @@ _REQUIREMENT_RE = re.compile(
     r"(\s*(==|>=|<=|~=|!=|<|>)\s*[A-Za-z0-9.*+!_-]{1,50}(\s*,\s*(==|>=|<=|~=|!=|<|>)\s*[A-Za-z0-9.*+!_-]{1,50})*)?$"
 )
 # pip treats an argument that looks like an archive as a local FILE to install.
-_ARCHIVE_SUFFIXES = (".whl", ".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".egg")
+# pip's archive extensions (ZIP/BZ2/XZ/TAR lists in pip._internal.utils.filetypes) + a margin.
+_ARCHIVE_SUFFIXES = (".whl", ".zip", ".tar", ".gz", ".tgz", ".bz2", ".tbz", ".tbz2", ".xz", ".txz",
+                     ".lz", ".tlz", ".lzma", ".zst", ".egg", ".7z", ".rar")
 _MAX_BUDGET_VALUE = 10 ** 9
 _STALE_SECONDS = 3600
 _BUDGET_KEYS = frozenset({"cpu_seconds", "wall_seconds", "artifact_bytes", "output_bytes", "memory_mb"})
@@ -69,6 +71,14 @@ class QuarantineForbidden(QuarantineError):
 
 class OutcomeNotRecorded(QuarantineError):
     """The decision was carried out, but its outcome record did not commit."""
+
+
+def _is_budget_value(v: Any) -> bool:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return False
+    if isinstance(v, float) and not math.isfinite(v):
+        return False
+    return 0 < v <= _MAX_BUDGET_VALUE  # compared before any float() — 10**400 is just "too big"
 
 
 def _is_plain_requirement(req: Any) -> bool:
@@ -112,8 +122,7 @@ def clean_tool_meta(meta: Any) -> dict[str, Any]:
     budget = meta.get("budget")
     if budget is not None:
         if (not isinstance(budget, dict) or not set(budget) <= _BUDGET_KEYS
-                or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
-                           and math.isfinite(v) and 0 < v <= _MAX_BUDGET_VALUE for v in budget.values())):
+                or not all(_is_budget_value(v) for v in budget.values())):
             raise QuarantineError("tool budget must map known limits to positive numbers")
         out["budget"] = dict(budget)
     if meta.get("deterministic") is not None:
@@ -313,6 +322,10 @@ class ToolQuarantine:
             raise QuarantineNotFound("unknown quarantine id") from None
         except OSError as exc:
             raise QuarantineError(f"could not claim quarantine entry: {type(exc).__name__}") from None
+        try:
+            os.utime(claimed)  # rename keeps the staging mtime; the sweep must age the CLAIM
+        except OSError:
+            pass
         try:
             return _load_meta(claimed, qid), claimed
         except QuarantineError:
