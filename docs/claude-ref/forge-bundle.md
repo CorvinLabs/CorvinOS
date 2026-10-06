@@ -12,10 +12,51 @@ it passes the same gates as a locally forged one.
 
 | Phase | What | State |
 |---|---|---|
-| 1 | Envelope schema + fail-closed validator | **built** — pure library, **no entry point yet** (no route, no CLI) |
-| 2 | Export (console route + CLI, reuses `SkillPackager`) | not built |
+| 1 | Envelope schema + fail-closed validator | **built** — pure library, no entry point |
+| 2 | Export | **built** — CLI only (`scripts/forge_bundle_cli.py export`); no console route yet |
 | 3 | Import → per-forge intake, incl. a new tool quarantine | not built |
 | 4 | Console UI in the Forge panel | not built |
+
+## Export (Phase 2) — `core/forge_bundle/export.py`
+
+`build_bundle(*, bundle_id, bundle_version, selections, tenant_id, description=None) -> BundleResult`
+collects each selection through that forge's own storage, assembles the
+envelope, and — before returning anything — **round-trips the built ZIP
+through `validate_bundle`** (no `known`, since export doesn't know a future
+target's inventory). A bundle this process could not later import is never
+handed out; this is also the only thing standing between a selection and a
+credential-shaped string reaching disk (`test_self_validation_rejects_a_secret_leaking_tool`).
+Export is read-only: nothing is written to any registry.
+
+| Selection | Reads via | Note |
+|---|---|---|
+| `SkillSelection(skill_id, version)` | `core.skills.skill_packager.SkillPackager`, the same `skills_gen`/`skills_packages` roots `/v1/skill-forge/package` already writes | idempotent — re-exporting reuses the existing package ZIP rather than re-running `package()` (which raises `FileExistsError` on a second call) |
+| `ToolSelection(name, version)` | `forge.multi_registry.MultiRegistry.get()` + the impl file on disk | **`version` is caller-supplied** — `ToolSpec` has no version field; `spec.json` carries only `name`/`description`/`input_schema`/`runtime`/`version`/`impl_filename`, never `scope`/`call_count`/`promoted`/`meta` |
+| `LayerSelection(entry_id, version)` | `core.orchestration.layer_forge.registry.LayerRegistry.get()` | `status`/`_created_at`/`_promoted_at` are stripped before export (D5: registry state never travels) |
+| `PluginSelection(plugin_id, version, wheel_path)` | a wheel the operator already built via Plugin Builder (ADR-0262) | export never calls the builder — building is its own audited, mutating operation; `collect()` only reads the given path |
+
+`requires` (cross-artifact dependencies) are declared per selection by the
+caller, not auto-resolved from the registries — nothing in Skill/Tool/Layer
+exposes a uniform dependency list to walk. The CLI does not expose `requires`
+yet; use `build_bundle` directly for that.
+
+Audits exactly one event, after a successful build: `forge_bundle.exported`
+(`bundle_id`, `bundle_version`, `artifact_count`, `total_bytes`, `tenant_id`).
+A rejected export (self-validation failure, missing artifact) is reported to
+the caller but not separately audited in Phase 2.
+
+### CLI
+
+```bash
+python scripts/forge_bundle_cli.py export \
+  --id acme-automation --version 2.0.0 --output bundle.zip \
+  --skill summarize@1.0.0 --tool csv.count@0.2.0 \
+  --layer acme.audit-l34@1.0.0 \
+  --plugin acme-audit-sink@0.5.0:/path/to/wheel.whl \
+  [--tenant TID] [--description TEXT]
+```
+
+Exit codes: 0 success, 1 refused/failed, 2 usage error.
 
 ## Archive layout
 

@@ -5,6 +5,15 @@ given, writes nothing, touches no registry. Export/import entry points come in
 later phases and hand each artifact to its own forge's intake.
 """
 from .envelope import ARTIFACT_KINDS, FORMAT, FORMAT_VERSION, LIMITS, ArtifactEntry, BundleEnvelope
+from .export import (
+    BundleResult,
+    ExportError,
+    LayerSelection,
+    PluginSelection,
+    SkillSelection,
+    ToolSelection,
+    build_bundle,
+)
 from .validate import BundleReport, BundleRejected, validate_bundle
 
 __all__ = [
@@ -16,5 +25,12 @@ __all__ = [
     "BundleEnvelope",
     "BundleReport",
     "BundleRejected",
+    "BundleResult",
+    "ExportError",
+    "LayerSelection",
+    "PluginSelection",
+    "SkillSelection",
+    "ToolSelection",
+    "build_bundle",
     "validate_bundle",
 ]
