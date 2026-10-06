@@ -35,6 +35,7 @@ import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
 import { useFileDrop, supportsDirectoryDrop, MAX_DROPPED_FILES } from "@/hooks/use-file-drop";
 import { useAutosizeTextarea } from "@/hooks/use-autosize-textarea";
 import { DropOverlay } from "./DropOverlay";
+import { Markdown } from "@/components/markdown";
 
 const MESSAGES_REFETCH_MS = 4_000;
 
@@ -110,7 +111,9 @@ function GroupMessageRow({ m, group, selfId }: { m: GroupMessage; group: ChatGro
           "w-fit max-w-full rounded-2xl px-4 py-3 text-sm leading-relaxed",
           mine ? "rounded-tr-md bg-accent/15 text-foreground" : "rounded-tl-md border border-border bg-card text-card-foreground shadow-sm",
         )}>
-          <div className="whitespace-pre-wrap break-words">{m.text}</div>
+          {/* Same renderer as the chat; text from any member is treated as
+              remote-authored, so it never makes the browser fetch a URL. */}
+          <Markdown text={m.text} compact blockRemoteImages className="break-words" />
           {!isPeer && attachmentNames(m.text).length > 0 && (
             <div className="mt-1.5 flex flex-col gap-0.5" data-testid="group-message-attachments">
               {attachmentNames(m.text).map((n) => (

@@ -50,6 +50,51 @@ export function messageBody(m: Pick<A2AFeedMessage, "text" | "data">): {
   return { text: "", rest: data };
 }
 
+/**
+ * The Markdown a feed message renders as — the same renderer as the chat.
+ * The prose comes from {@link messageBody} (a worker's reply usually sits
+ * under `output`/`summary`/…); any structured fields left over follow as a
+ * fenced JSON block, so nothing the peer returned is hidden. The fence is
+ * longer than any backtick run inside the JSON, so a value cannot close it.
+ */
+export function messageMarkdown(m: Pick<A2AFeedMessage, "text" | "data">): string {
+  const { text, rest } = messageBody(m);
+  if (Object.keys(rest).length === 0) return text;
+  const json = JSON.stringify(rest, null, 2);
+  const longestRun = Math.max(0, ...(json.match(/`+/g) ?? []).map((r) => r.length));
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  const block = `${fence}json\n${json}\n${fence}`;
+  return text ? `${text}\n\n${block}` : block;
+}
+
+/**
+ * The attachment a Markdown image reference names, if any: `![chart](chart.png)`
+ * in a reply that carries `chart.png` as an image attachment. Only a bare
+ * attachment name matches — never a path or URL — so the image is served from
+ * this console's own content-addressed blob store, not from anything the peer
+ * chose (a peer-chosen URL stays a link, see Markdown's blockRemoteImages).
+ */
+export function referencedImageAttachment<A extends Pick<A2AFeedAttachment, "name" | "mime">>(
+  src: string,
+  attachments: A[],
+): A | null {
+  let name = src.trim();
+  try { name = decodeURIComponent(name); } catch { /* keep raw */ }
+  if (!name || /[/\\:?#]/.test(name)) return null;
+  const att = attachments.find((a) => a.name === name);
+  return att && mediaKind(att) === "image" ? att : null;
+}
+
+/** Names of image attachments the Markdown body already shows inline. */
+export function inlineImageNames(markdown: string, attachments: Pick<A2AFeedAttachment, "name" | "mime">[]): Set<string> {
+  const names = new Set<string>();
+  for (const m of markdown.matchAll(/!\[[^\]]*\]\(\s*<?([^)\s>]+)>?[^)]*\)/g)) {
+    const att = referencedImageAttachment(m[1], attachments);
+    if (att) names.add(att.name);
+  }
+  return names;
+}
+
 /** Task ids that were sent (by either side) and have no response yet. */
 export function pendingTaskIds(messages: A2AFeedMessage[]): Set<string> {
   const answered = new Set(messages.filter((m) => m.kind === "response").map((m) => m.task_id));

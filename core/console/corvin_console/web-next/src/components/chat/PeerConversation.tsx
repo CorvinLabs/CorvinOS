@@ -23,7 +23,8 @@ import {
   A2AAttachmentLimitError, A2A_MAX_ATTACHMENTS_COUNT, A2A_MAX_ATTACHMENTS_TOTAL_BYTES,
   type A2AFeedMessage,
 } from "@/lib/api/a2a";
-import { mediaKind } from "@/lib/a2a-feed";
+import { inlineImageNames, mediaKind, messageMarkdown, referencedImageAttachment } from "@/lib/a2a-feed";
+import { Markdown } from "@/components/markdown";
 import { presenceView } from "@/lib/a2a-presence";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import { ChatAvatar } from "./ChatAvatar";
@@ -39,12 +40,6 @@ function fmtTime(ts: number): string {
   return new Date(ts * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-function responseText(m: A2AFeedMessage): string {
-  if (m.text) return m.text;
-  const keys = Object.keys(m.data ?? {});
-  return keys.length ? JSON.stringify(m.data, null, 2) : "";
-}
-
 const QUEUED_STALE_S = 3600 + 120; // max send timeout + slack
 
 function PeerMessageRow({ m, label, answered }: { m: A2AFeedMessage; label: string; answered: boolean }) {
@@ -58,7 +53,16 @@ function PeerMessageRow({ m, label, answered }: { m: A2AFeedMessage; label: stri
   const staleQueued = m.status === "queued" && !answered && Date.now() / 1000 - m.ts > QUEUED_STALE_S;
   const showStatus = m.status && m.status !== "ok" && m.status !== "received" && m.status !== "sent"
     && !(m.status === "queued" && answered);
-  const body = m.kind === "response" ? responseText(m) : m.text;
+  // Same Markdown renderer as the chat. Peer-authored text never loads a URL
+  // it chose (blockRemoteImages); an image it names by attachment filename is
+  // shown inline from this console's own blob store and not listed twice.
+  const body = m.kind === "response" ? messageMarkdown(m) : m.text;
+  const inlined = inlineImageNames(body, m.attachments);
+  const listed = m.attachments.filter((a) => !inlined.has(a.name));
+  const resolveImageSrc = React.useCallback((src: string) => {
+    const att = referencedImageAttachment(src, m.attachments);
+    return att ? a2aFeedBlobUrl(att) : null;
+  }, [m.attachments]);
   return (
     <div data-testid="peer-message" className={cn("flex gap-3", mine ? "justify-end" : "justify-start")}>
       {!mine && <div className="mt-5"><ChatAvatar label={label} icon={Globe2} /></div>}
@@ -81,15 +85,18 @@ function PeerMessageRow({ m, label, answered }: { m: A2AFeedMessage; label: stri
           mine ? "rounded-tr-md bg-accent/15 text-foreground" : "rounded-tl-md border border-border bg-card text-card-foreground shadow-sm",
           failed && "border border-destructive/40",
         )}>
-          {body && <div className="whitespace-pre-wrap break-words">{body}</div>}
+          {body && (
+            <Markdown text={body} compact blockRemoteImages resolveImageSrc={resolveImageSrc}
+              className="break-words" />
+          )}
           {m.error && (
             <p className={cn("mt-1 flex items-start gap-1 text-[11px]", unconfirmed ? "text-amber-700 dark:text-amber-400" : "text-destructive")}>
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> {m.error}
             </p>
           )}
-          {m.attachments.length > 0 && (
+          {listed.length > 0 && (
             <div className="mt-1.5 space-y-1.5">
-              {m.attachments.map((a) => {
+              {listed.map((a) => {
                 const kind = mediaKind(a);
                 const url = a2aFeedBlobUrl(a);
                 if (kind === "image") {

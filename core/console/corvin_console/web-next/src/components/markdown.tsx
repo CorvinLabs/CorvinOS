@@ -66,6 +66,11 @@ interface MarkdownProps {
    *  ``![x](/v1/console/auth/local-login)`` minted a new session on every
    *  render (2026-09-25, round 3). A peer has no legitimate same-origin image. */
   blockRemoteImages?: boolean;
+  /** Maps an image ``src`` to a URL this console serves itself (e.g. an A2A
+   *  attachment's content-addressed blob), or null. A resolved image renders
+   *  inline even under ``blockRemoteImages`` — the URL is ours, not the
+   *  author's; anything unresolved keeps the normal rule. */
+  resolveImageSrc?: (src: string) => string | null;
 }
 
 /**
@@ -80,7 +85,7 @@ interface MarkdownProps {
  *   the Corvin palette via Tailwind classes (NOT @tailwindcss/typography
  *   so we keep full control over spacing and colour).
  */
-export function Markdown({ text, compact, className, blockRemoteImages }: MarkdownProps) {
+export function Markdown({ text, compact, className, blockRemoteImages, resolveImageSrc }: MarkdownProps) {
   const components: Components = React.useMemo(
     () => ({
       h1: ({ children }) => (
@@ -153,9 +158,11 @@ export function Markdown({ text, compact, className, blockRemoteImages }: Markdo
         );
       },
       img: ({ src, alt }) => {
-        const s = typeof src === "string" ? src : "";
-        if (!s) return null;
-        if (blockRemoteImages && !isInlineImageUrl(s)) {
+        const raw = typeof src === "string" ? src : "";
+        if (!raw) return null;
+        const resolved = resolveImageSrc?.(raw) ?? null;
+        const s = resolved ?? raw;
+        if (blockRemoteImages && !resolved && !isInlineImageUrl(s)) {
           return (
             <a href={s} target="_blank" rel="noreferrer noopener" className="text-accent underline underline-offset-2">
               [image: {alt || s}]
@@ -210,7 +217,7 @@ export function Markdown({ text, compact, className, blockRemoteImages }: Markdo
         return <CodeBlock code={code} lang={lang}>{children}</CodeBlock>;
       },
     }),
-    [compact, blockRemoteImages],
+    [compact, blockRemoteImages, resolveImageSrc],
   );
 
   return (
