@@ -11,17 +11,20 @@ with their Quality-Gates and Enforcement-Rules — instead of executable code.
 ## Pipeline
 
 ```
+PLAN      (optional) LLM drafts a manifest from {layer_id, intent}      -> no write, preview only
 VALIDATE  schema + dependency DAG + version not taken           (writes nothing)
 TEST      each quality gate = pytest subprocess, fail-closed     -> quality_gate_evaluated
 ENFORCE   schema_validation + layer_boundaries (Mypy) + host-awareness, fail-closed -> enforcement_evaluated
+REVIEW    adversarial LLM pass argues against acceptance; FLAGGED needs an
+          explicit operator override to promote past 'accepted', never auto-rejects -> review_evaluated
 CREATE    under the entry lock: audit, then write 'proposed'     -> definition_proposed
 PROMOTE   under the entry lock: audit, then 'proposed'->'accepted' -> definition_transitioned
 ```
 
-A run that fails at any step writes **no registry entry**, only one
-`layer_forge.definition_rejected` record naming the `phase`
-(`validate`/`test`/`enforce`). PLAN is deterministic (the caller supplies the
-manifest); LLM planning and adversarial REVIEW are deferred.
+A run that fails VALIDATE/TEST/ENFORCE writes **no registry entry**, only one
+`layer_forge.definition_rejected` record naming the `phase`. The caller may
+always supply a hand-written manifest directly to CREATE, skipping PLAN
+entirely — PLAN only exists to draft one from an intent description.
 
 ## Audit (ADR-2222 D6)
 
@@ -82,12 +85,32 @@ the runtime half is `SKIPPED` (`skipped_no_runtime_host`) — never a silent PAS
 |---|---|---|
 | GET | `/layer-forge/definitions` | `{items, count}` |
 | GET | `/layer-forge/definitions/{entry_id}[?version=]` | entry, 404 if unknown |
+| POST | `/layer-forge/plan` `{layer_id, intent}` | 200 `{status: SUCCESS, manifest}` · 422 `{status: FAILED, error, phase}` · 503 audit failed — generates a manifest preview via LLM; nothing is persisted yet (ADR-2224/2225) |
 | POST | `/layer-forge/definitions` (body = manifest) | 200 SUCCESS · 409 version exists · 422 rejected (`detail.phase`) · 503 audit failed |
 | POST | `/layer-forge/definitions/{entry_id}/{version}/transition` `{to_status}` | 200 · 404 · 409 illegal transition · 503 |
+| POST | `/layer-forge/gate-thresholds/analyze` `{gate_id, lookback_days}` | correlation suggestion, never auto-applied |
+| POST | `/layer-forge/gate-thresholds/apply` `{gate_id, new_threshold, reason}` | operator-explicit apply, audited |
+| GET | `/layer-forge/analytics[?since=&until=]` | decisions/confidence/flags/convergence metrics |
 
 Quality gates cannot be skipped from the console. Handlers are sync `def`
 (the pipeline runs pytest subprocesses in FastAPI's threadpool, not on the
-event loop). No frontend panel yet — the routes are API-only.
+event loop).
+
+## Console frontend
+
+Reachable at `/app/forge?tab=layers` (`core/console/corvin_console/web-next/src/components/forge/LayersTab.tsx`) —
+a sibling top-level tab in the Forge panel, not a Generator sub-tab (it
+doesn't share the run/poll/phase engine protocol Skill/Tool/Plugin Forge use,
+ADR-2217/ADR-0672; `plan()` is a single synchronous LLM call). Consolidated
+from a standalone `/app/layer-forge` panel on 2026-10-06 — that URL now
+redirects here. The "Forge a Layer" form (layer ID + intent) calls `POST
+.../plan` for a manifest preview, then `POST .../definitions` to run it
+through the real pipeline on confirm; nothing is created between those two
+steps. The Definitions list/detail view below it is unchanged. The analytics
+dashboard (`/app/layer-forge-analytics`) stayed a separate standalone panel
+(own charts, no shared list+detail surface) — linked from the tab for
+discoverability, since it has no sidebar entry of its own either. Transition
+buttons in the detail view are still `disabled` stubs (see Not built).
 
 ## CLI
 
@@ -122,8 +145,10 @@ python scripts/layer_forge_cli.py [--tenant TID] promote <id> <version> <to_stat
 
 ## Not built (named, not hidden)
 
-- LLM-driven PLAN phase and adversarial REVIEW phase (deferred per ADR-2222 consequences).
 - `enforcement_rules` are stored and counted; **schema_validation + layer_boundaries
   checkers are wired** (M1 2026-10-05); execution of the boundary rules themselves is deferred
   (phase 2, requires build artifact analysis).
-- No console frontend panel.
+- The Definitions detail view's transition buttons (Accept/Deploy/Supersede) are
+  rendered `disabled` with a note pointing at the real transition endpoint — a
+  human runs transitions via the CLI (`layer_forge_cli.py promote`) or a direct
+  `POST .../transition` call today, not by clicking in the console.

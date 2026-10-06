@@ -27,15 +27,31 @@
  * component just rendering an empty/error state that happens to look like
  * "no data yet".
  */
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
 import { server } from "../fixtures/server";
+
+vi.mock("@/lib/auth", () => ({
+  useAuth: () => ({
+    session: { tenant_id: "_default", csrf_token: "csrf-test", tier: "owner" },
+    loading: false, refresh: vi.fn(), logout: vi.fn(),
+  }),
+}));
+
 import LayersTab, { MARKER_LAYER_FORGE } from "@/components/forge/LayersTab";
 
-afterEach(() => cleanup());
+interface Seen { method: string; path: string; csrf: string | null; body: unknown }
+const seen: Seen[] = [];
+const record = async (request: Request) => {
+  let body: unknown = null;
+  try { body = await request.clone().json(); } catch { /* empty */ }
+  seen.push({ method: request.method, path: new URL(request.url).pathname, csrf: request.headers.get("x-csrf-token"), body });
+};
+
+afterEach(() => { cleanup(); seen.length = 0; });
 
 function wrap(ui: React.ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -98,5 +114,81 @@ describe("LayersTab", () => {
     await screen.findByText("No layer definitions yet.");
     const link = screen.getByRole("link", { name: /View Analytics/i });
     expect(link).toHaveAttribute("href", "/app/layer-forge-analytics");
+  });
+});
+
+/**
+ * "Forge a Layer" (ADR-2224/2225 LLM-PLAN phase) — this is the input field
+ * that was missing from the Layers tab entirely: the backend has supported
+ * POST /layer-forge/plan since those ADRs landed, but the tab only ever
+ * listed/viewed definitions created via the CLI. These tests prove the real
+ * two-step flow against the ACTUAL resolved routes (same onUnhandledRequest:
+ * 'error' discipline as the BASE-path regression test above): plan() must
+ * hit /v1/console/layer-forge/plan with a CSRF header, and create() must hit
+ * /v1/console/layer-forge/definitions with the manifest plan() returned —
+ * never a mock of api() itself, which would pass on a wrong path too.
+ */
+describe("ForgeLayerPanel", () => {
+  const manifest = {
+    id: "L34", version: "1.0.0",
+    targets: [{ layer_id: "L10" }], quality_gates: [{ gate_id: "G1" }], enforcement_rules: [],
+  };
+
+  it("plans a layer, previews the manifest, then creates it via the real routes", async () => {
+    server.use(
+      http.get("/v1/console/layer-forge/definitions", () => HttpResponse.json({ items: [], count: 0 })),
+      http.post("/v1/console/layer-forge/plan", async ({ request }) => {
+        await record(request);
+        return HttpResponse.json({ status: "SUCCESS", manifest });
+      }),
+      http.post("/v1/console/layer-forge/definitions", async ({ request }) => {
+        await record(request);
+        return HttpResponse.json({ status: "SUCCESS" });
+      }),
+    );
+
+    wrap(<LayersTab />);
+    await screen.findByText("No layer definitions yet.");
+
+    fireEvent.change(screen.getByTestId("layer-id-input"), { target: { value: "L34" } });
+    fireEvent.change(screen.getByTestId("layer-intent-input"), {
+      target: { value: "audit downstream of L10 and enforce the boundary at build time" },
+    });
+    fireEvent.click(screen.getByTestId("plan-layer-button"));
+
+    await waitFor(() => expect(screen.getByTestId("create-layer-button")).toBeTruthy());
+    expect(seen[0]).toMatchObject({
+      method: "POST", path: "/v1/console/layer-forge/plan", csrf: "csrf-test",
+      body: { layer_id: "L34", intent: "audit downstream of L10 and enforce the boundary at build time" },
+    });
+    // The preview renders the generated manifest — nothing persisted yet.
+    expect(screen.getByText(/"id": "L34"/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("create-layer-button"));
+
+    await waitFor(() => expect(screen.getByTestId("create-layer-success")).toBeTruthy());
+    expect(seen[1]).toMatchObject({
+      method: "POST", path: "/v1/console/layer-forge/definitions", csrf: "csrf-test", body: { manifest },
+    });
+    expect(screen.getByTestId("create-layer-success").textContent).toContain("L34@1.0.0");
+  });
+
+  it("surfaces a plan failure without creating anything", async () => {
+    server.use(
+      http.get("/v1/console/layer-forge/definitions", () => HttpResponse.json({ items: [], count: 0 })),
+      http.post("/v1/console/layer-forge/plan", () =>
+        HttpResponse.json({ status: "FAILED", error: "intent too vague", phase: "plan" }, { status: 422 }),
+      ),
+    );
+
+    wrap(<LayersTab />);
+    await screen.findByText("No layer definitions yet.");
+
+    fireEvent.change(screen.getByTestId("layer-id-input"), { target: { value: "L34" } });
+    fireEvent.change(screen.getByTestId("layer-intent-input"), { target: { value: "do something" } });
+    fireEvent.click(screen.getByTestId("plan-layer-button"));
+
+    await waitFor(() => expect(screen.getByTestId("plan-layer-error")).toBeTruthy());
+    expect(screen.queryByTestId("create-layer-button")).toBeNull();
   });
 });

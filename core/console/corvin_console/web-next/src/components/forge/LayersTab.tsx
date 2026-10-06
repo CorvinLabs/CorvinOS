@@ -47,13 +47,17 @@
  * Detail view: manifest, all verdicts (gates, enforcement), transition buttons
  */
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Loader2, AlertCircle, ChevronRight } from "lucide-react";
+import { Loader2, AlertCircle, ChevronRight, Sparkles } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { api, ApiError } from "@/lib/api/client";
+import { useAuth } from "@/lib/auth";
 
 // api() already prepends "/v1/console" — see the file-level comment above.
 const BASE = "/layer-forge";
@@ -101,6 +105,172 @@ function formatDate(timestamp?: number): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+interface PlanResponse {
+  status: "SUCCESS" | "FAILED";
+  manifest?: Record<string, unknown>;
+  error?: string;
+  phase?: string;
+}
+
+interface CreateResponse {
+  status: "SUCCESS" | "FAILED";
+  error?: string;
+  phase?: string;
+}
+
+/** "Forge a Layer" — the LLM-PLAN entry point (ADR-2224/2225) the Layers tab
+ *  was missing: the backend has supported POST /layer-forge/plan since that
+ *  ADR landed, but nothing in this UI ever called it — the tab only listed
+ *  and viewed definitions a human had already created via the CLI. Two-step
+ *  flow, not the run/poll Generator protocol (ADR-2217/ADR-0672) Skill/Tool/
+ *  Plugin Forge use: plan() is a single synchronous LLM call, not a polled
+ *  background job, so it needs none of that machinery. Step 1 (plan) only
+ *  generates a manifest preview — nothing is persisted or audited as a
+ *  registry entry yet. Step 2 (create) submits that manifest through the
+ *  real pipeline (validate → test → enforce → review → audit → write),
+ *  which is where it actually lands in the tenant's audit chain. */
+function ForgeLayerPanel({ onCreated }: { onCreated: () => void }) {
+  const { session } = useAuth();
+  const [layerId, setLayerId] = useState("");
+  const [intent, setIntent] = useState("");
+  const [manifest, setManifest] = useState<Record<string, unknown> | null>(null);
+  const [created, setCreated] = useState<{ id: string; version: string } | null>(null);
+
+  const plan = useMutation({
+    mutationFn: () =>
+      api<PlanResponse>(`${BASE}/plan`, {
+        method: "POST",
+        body: { layer_id: layerId.trim(), intent: intent.trim() },
+        csrf: session?.csrf_token ?? "",
+      }),
+    onSuccess: (data) => {
+      setCreated(null);
+      setManifest(data.manifest ?? null);
+    },
+    onError: () => setManifest(null),
+  });
+
+  const create = useMutation({
+    mutationFn: () =>
+      api<CreateResponse>(`${BASE}/definitions`, {
+        method: "POST",
+        body: { manifest },
+        csrf: session?.csrf_token ?? "",
+      }),
+    onSuccess: () => {
+      const m = manifest as { id?: string; version?: string } | null;
+      setCreated({ id: String(m?.id ?? layerId), version: String(m?.version ?? "") });
+      setManifest(null);
+      setLayerId("");
+      setIntent("");
+      onCreated();
+    },
+  });
+
+  const canPlan = layerId.trim().length > 0 && intent.trim().length > 0 && !plan.isPending;
+
+  return (
+    <Card data-testid="forge-layer-panel">
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-5 w-5 text-accent" />
+          <CardTitle className="text-base">Forge a Layer</CardTitle>
+        </div>
+        <CardDescription>
+          Describe what the new layer should do. An LLM drafts the manifest (targets,
+          quality gates, enforcement rules) for review before anything is created.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-[160px_1fr] gap-3 items-start">
+          <div className="space-y-1.5">
+            <Label htmlFor="layer-id">Layer ID</Label>
+            <Input
+              id="layer-id"
+              data-testid="layer-id-input"
+              placeholder="L34"
+              value={layerId}
+              onChange={(e) => setLayerId(e.target.value)}
+              disabled={plan.isPending || create.isPending}
+              className="font-mono text-sm"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="layer-intent">Intent</Label>
+            <Textarea
+              id="layer-intent"
+              data-testid="layer-intent-input"
+              placeholder="Audit downstream of L10 and enforce the boundary at build time"
+              value={intent}
+              onChange={(e) => setIntent(e.target.value)}
+              disabled={plan.isPending || create.isPending}
+              rows={2}
+              className="text-sm"
+            />
+          </div>
+        </div>
+
+        <Button
+          size="sm"
+          disabled={!canPlan}
+          onClick={() => plan.mutate()}
+          data-testid="plan-layer-button"
+        >
+          {plan.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+          Plan
+        </Button>
+
+        {plan.isError && (
+          <p className="text-sm text-destructive" data-testid="plan-layer-error">
+            {plan.error instanceof Error ? plan.error.message : "Plan request failed."}
+          </p>
+        )}
+
+        {manifest && (
+          <Card className="bg-muted/50">
+            <CardHeader>
+              <CardTitle className="text-sm">Manifest preview</CardTitle>
+              <CardDescription>Nothing is created yet — review, then confirm.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <pre className="text-xs font-mono whitespace-pre-wrap bg-background border rounded p-3 max-h-64 overflow-auto">
+                {JSON.stringify(manifest, null, 2)}
+              </pre>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="default"
+                  disabled={create.isPending}
+                  onClick={() => create.mutate()}
+                  data-testid="create-layer-button"
+                >
+                  {create.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                  Create
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setManifest(null)} disabled={create.isPending}>
+                  Discard
+                </Button>
+              </div>
+              {create.isError && (
+                <p className="text-sm text-destructive" data-testid="create-layer-error">
+                  {create.error instanceof Error ? create.error.message : "Create request failed."}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {created && (
+          <p className="text-sm text-muted-foreground" data-testid="create-layer-success">
+            Created {created.id}@{created.version} as <Badge variant="outline">proposed</Badge>. It now
+            appears below.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 function ListView({ definitions, onSelect }: { definitions: LayerDefinition[]; onSelect: (d: LayerDefinition) => void }) {
@@ -277,6 +447,7 @@ export const MARKER_LAYER_FORGE =
   "Layer Forge is now a Forge tab — layer definitions with quality gates and enforcement rules.";
 
 export default function LayersTab() {
+  const qc = useQueryClient();
   const [selectedDef, setSelectedDef] = useState<LayerDefinition | null>(null);
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["layer-forge", "definitions"],
@@ -284,6 +455,7 @@ export default function LayersTab() {
     refetchInterval: 60_000,
     retry: false,
   });
+  const refetchDefinitions = () => void qc.invalidateQueries({ queryKey: ["layer-forge", "definitions"] });
 
   if (isLoading) {
     return (
@@ -327,17 +499,20 @@ export default function LayersTab() {
       {selectedDef ? (
         <DetailView definition={selectedDef} onBack={() => setSelectedDef(null)} />
       ) : (
-        <Card>
-          <CardHeader>
-            <CardTitle>Definitions</CardTitle>
-            <CardDescription>
-              {data.count} layer definition{data.count === 1 ? "" : "s"} across all versions and statuses
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ListView definitions={data.items} onSelect={setSelectedDef} />
-          </CardContent>
-        </Card>
+        <>
+          <ForgeLayerPanel onCreated={refetchDefinitions} />
+          <Card>
+            <CardHeader>
+              <CardTitle>Definitions</CardTitle>
+              <CardDescription>
+                {data.count} layer definition{data.count === 1 ? "" : "s"} across all versions and statuses
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ListView definitions={data.items} onSelect={setSelectedDef} />
+            </CardContent>
+          </Card>
+        </>
       )}
     </div>
   );
