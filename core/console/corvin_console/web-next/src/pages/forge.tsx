@@ -11,6 +11,7 @@ import { api } from '@/lib/api';
 import ToolsTab from '@/components/forge/ToolsTab';
 import SkillsTab from '@/components/forge/SkillsTab';
 import OSSkillsTab from '@/components/forge/OSSkillsTab';
+import LayersTab from '@/components/forge/LayersTab';
 import GraphTab from '@/components/forge/GraphTab';
 import AuditTab from '@/components/forge/AuditTab';
 import AutonomousForgePanel from '@/components/forge/AutonomousForgePanel';
@@ -34,8 +35,19 @@ import {
  *  level tabs; they are now one "Generator" tab with the three as sub-tabs
  *  (operator request, 2026-10-05) — the engine run/poll/phase protocol is the
  *  one Skill Forge uses for all three (ADR-2217), so one door to it reads
- *  better than three. See GENERATOR_SUBTABS below. */
-const FORGE_TABS = ['generator', 'autonomous-forge', 'tools', 'skills', 'os-skills', 'graph', 'audit'] as const;
+ *  better than three. See GENERATOR_SUBTABS below.
+ *
+ *  'layers' (Layer Forge, ADR-2222) was folded in the same way on 2026-10-06
+ *  (operator request): it used to be its own top-level nav entry
+ *  (/app/layer-forge) with its own page; it's now a tab here, placed next to
+ *  tools/skills/os-skills (the other "what has this operator's Forge
+ *  generated/registered" surfaces) rather than next to graph/audit (which
+ *  are cross-cutting views over all of them). Old links redirect — see
+ *  App.tsx's `layer-forge` <Route>. Unlike Generator's sub-tabs, Layer Forge
+ *  does NOT share the run/poll/phase protocol — it has its own List+Detail
+ *  UI and its own backend (/v1/console/layer-forge/*, untouched by this
+ *  move) — so it is a sibling top-level tab, not a Generator sub-tab. */
+const FORGE_TABS = ['generator', 'autonomous-forge', 'tools', 'skills', 'os-skills', 'layers', 'graph', 'audit'] as const;
 type ForgeTab = (typeof FORGE_TABS)[number];
 
 const DEFAULT_TAB: ForgeTab = 'generator';
@@ -269,6 +281,7 @@ export default function ForgePage() {
               {osSkills.length}
             </span>
           </TabsTrigger>
+          <TabsTrigger value="layers">Layers</TabsTrigger>
           <TabsTrigger value="graph">Graph</TabsTrigger>
           <TabsTrigger value="audit">Audit</TabsTrigger>
         </TabsList>
@@ -329,6 +342,10 @@ export default function ForgePage() {
             searchQuery={searchQuery}
             filterStatus={filterStatus}
           />
+        </TabsContent>
+
+        <TabsContent value="layers" className="flex-1 overflow-y-auto">
+          <LayersTab />
         </TabsContent>
 
         <TabsContent value="graph" className="flex-1 overflow-y-auto">

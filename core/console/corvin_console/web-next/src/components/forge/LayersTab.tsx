@@ -1,20 +1,62 @@
 /**
- * Layer Forge Panel (ADR-2222, ADR-2224 Phase 2–3) — UI for layer definition
+ * Layers tab (ADR-2222, ADR-2224 Phase 2–3) — UI for layer definition
  * lifecycle: create via LLM, run quality gates + enforcement, transition through
  * proposed → accepted → deployed.
+ *
+ * Consolidated into Forge as a tab on 2026-10-06 (operator request): Layer
+ * Forge used to be its own top-level nav entry (/app/layer-forge) and its own
+ * page component (pages/layer-forge.tsx). It now lives here as one more
+ * Forge sub-surface, next to Tools/Skills/OS-Skills — reachable at
+ * /app/forge?tab=layers. The old /app/layer-forge URL still works: App.tsx
+ * redirects it here (see the `layer-forge` <Route> there). The backend API
+ * (/v1/console/layer-forge/*) is unchanged — this is a frontend-only move.
+ *
+ * API client note: this file imports `api`/`ApiError` from `@/lib/api/client`
+ * (the same import the original pages/layer-forge.tsx used), while forge.tsx
+ * imports `api` from `@/lib/api`. These are NOT two different clients —
+ * `@/lib/api` (src/lib/api.ts) is a barrel that re-exports `api`/`ApiError`
+ * from `./api/client`, i.e. the exact same module as `@/lib/api/client`
+ * (src/lib/api/client.ts). Both paths resolve to one singleton fetch
+ * wrapper with the same auth/CSRF/timeout handling; several other
+ * components/forge/* files already import from one path or the other
+ * (e.g. AutonomousForgePanel.tsx uses `@/lib/api/client` directly). Kept as
+ * the direct `/client` import here to minimize the diff from the moved file.
+ *
+ * BASE path bug found + fixed during this move (live-browser 404 report,
+ * 2026-10-06): `api()` already prepends its own `BASE = "/v1/console"`
+ * (lib/api/client.ts) to every path passed to it — forge.tsx's calls are all
+ * `api('/forge/...')`, never `api('/v1/console/forge/...')`. The original
+ * pages/layer-forge.tsx instead declared a LOCAL `const BASE =
+ * "/api/layer-forge"` and called `api(\`${BASE}/definitions\`)`, which
+ * concatenated to `/v1/console` + `/api/layer-forge/definitions` — a path
+ * nothing serves (the backend router, core/console/corvin_console/routes/
+ * layer_forge.py, is mounted with NO extra prefix under `/v1/console` and its
+ * own decorators already say `/layer-forge/...`, so the real path is
+ * `/v1/console/layer-forge/definitions`). This 404'd from the day the panel
+ * shipped (58c267f86) — the list view silently rendered its 404 empty/error
+ * state, never a crash, so it read as "working, just no data yet". Fixed
+ * here by dropping the stray local BASE/`/api` segment entirely; see
+ * tests/unit/layers-tab.test.tsx for the regression test (asserts the actual
+ * resolved fetch URL, not a mocked function call — a mock of `api()` itself
+ * would not have caught this). pages/layer-forge-analytics.tsx has the same
+ * defect (worse: it bypasses `api()` with a raw `fetch` missing `/v1/console`
+ * entirely) and was fixed in the same commit, though that page's
+ * redesign/consolidation is out of this task's scope.
  *
  * List view: table of all definitions with status, gate count, versions
  * Detail view: manifest, all verdicts (gates, enforcement), transition buttons
  */
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { Loader2, AlertCircle, ChevronRight } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { api, ApiError } from "@/lib/api/client";
 
-const BASE = "/api/layer-forge";
+// api() already prepends "/v1/console" — see the file-level comment above.
+const BASE = "/layer-forge";
 
 export interface LayerDefinition {
   id: string;
@@ -33,11 +75,10 @@ export interface LayerForgeListResponse {
   count: number;
 }
 
-export interface LayerForgeDetailResponse extends LayerDefinition {
-  // Additional fields from the detail endpoint
-}
+// Additional fields from the detail endpoint, if any — currently identical.
+export type LayerForgeDetailResponse = LayerDefinition;
 
-const statusColors: Record<string, string> = {
+const statusColors: Record<string, "outline" | "secondary" | "ok" | "default"> = {
   proposed: "outline",
   accepted: "secondary",
   deployed: "ok",
@@ -84,7 +125,7 @@ function ListView({ definitions, onSelect }: { definitions: LayerDefinition[]; o
               <div className="flex items-center gap-2 mb-1">
                 <span className="font-mono text-sm font-semibold">{def.id}</span>
                 <span className="text-muted-foreground text-xs">v{def.version}</span>
-                <Badge variant={statusColors[def.status] as any}>
+                <Badge variant={statusColors[def.status]}>
                   {statusLabels[def.status]}
                 </Badge>
               </div>
@@ -129,7 +170,7 @@ function DetailView({ definition, onBack }: { definition: LayerDefinition | null
               <CardTitle className="font-mono">{definition.id}@{definition.version}</CardTitle>
               <CardDescription>Layer definition manifest</CardDescription>
             </div>
-            <Badge variant={statusColors[definition.status] as any}>
+            <Badge variant={statusColors[definition.status]}>
               {statusLabels[definition.status]}
             </Badge>
           </div>
@@ -230,10 +271,12 @@ function DetailView({ definition, onBack }: { definition: LayerDefinition | null
   );
 }
 
-/** Rendered caption — also the deploy marker (a string literal). */
-export const MARKER_LAYER_FORGE = "Layer Forge panel showing layer definitions with quality gates and enforcement rules.";
+/** Rendered caption — also the deploy marker (a string literal) proving the
+ *  consolidated bundle (not the old standalone page) is what's live. */
+export const MARKER_LAYER_FORGE =
+  "Layer Forge is now a Forge tab — layer definitions with quality gates and enforcement rules.";
 
-export function LayerForgePage() {
+export default function LayersTab() {
   const [selectedDef, setSelectedDef] = useState<LayerDefinition | null>(null);
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["layer-forge", "definitions"],
@@ -253,7 +296,7 @@ export function LayerForgePage() {
   if (isError) {
     const off = error instanceof ApiError && error.status === 404;
     return (
-      <div className="max-w-7xl mx-auto p-6">
+      <div className="max-w-5xl">
         <Card className="border-destructive/30 bg-destructive/10">
           <CardContent className="py-6 flex items-center gap-2 text-destructive text-sm">
             <AlertCircle size={18} /> {off ? "Layer Forge is not available on this build." : "Failed to load layer definitions."}
@@ -266,12 +309,19 @@ export function LayerForgePage() {
   if (!data) return null;
 
   return (
-    <div className="max-w-7xl mx-auto p-6">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold mb-2">Layer Forge</h1>
-        <p className="text-muted-foreground text-sm">
-          {MARKER_LAYER_FORGE}
-        </p>
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <p className="text-muted-foreground text-sm">{MARKER_LAYER_FORGE}</p>
+        {/* Phase 3B analytics dashboard stayed a standalone panel (own route,
+            own charts, no shared List+Detail surface with this tab) — linked
+            from here so it stays reachable now that it has no sidebar entry
+            of its own either. */}
+        <Link
+          to="/app/layer-forge-analytics"
+          className="text-xs text-primary hover:underline whitespace-nowrap shrink-0"
+        >
+          View Analytics →
+        </Link>
       </div>
 
       {selectedDef ? (

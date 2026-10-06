@@ -19,6 +19,11 @@
  *      between the 2026-09-20 merge and the 2026-10-05 sub-tab fold — still
  *      land on Generator with the right sub-tab open (TAB_ALIASES +
  *      GENERATOR_SUB_ALIASES)
+ *   5. 'layers' (Layer Forge, ADR-2222) was folded in on 2026-10-06 as a
+ *      sibling top-level tab (not a Generator sub-tab — it doesn't share the
+ *      run/poll/phase protocol), placed next to Tools/Skills/OS-Skills. The
+ *      old /app/layer-forge panel redirects onto it — see
+ *      panel-layer-forge.spec.ts.
  *
  * (4) is the one worth a browser: an alias that quietly stops resolving does
  * not error — it opens the default tab and looks like it worked. Asserting it
@@ -30,7 +35,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 /** The top-level tab bar, left to right, as the page declares it. */
-const EXPECTED_ORDER = ['Generator', 'Autonomous', 'Tools', 'Skills', 'OS-Skills', 'Graph', 'Audit'];
+const EXPECTED_ORDER = ['Generator', 'Autonomous', 'Tools', 'Skills', 'OS-Skills', 'Layers', 'Graph', 'Audit'];
 
 /** Generator's own sub-tab bar, left to right. */
 const EXPECTED_SUB_ORDER = ['Skill Forge', 'Tool Forge', 'Plugin Forge'];
@@ -153,6 +158,17 @@ test.describe('Forge — tab bar', () => {
       'aria-selected',
       'true',
     );
+  });
+
+  test('Layers is reachable and lists layer definitions', async ({ page }) => {
+    await page.goto('/console/app/forge?tab=layers', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('tab', { name: /^Layers/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect(page.getByText(/Layer Forge is now a Forge tab/i)).toBeVisible({
+      timeout: 20000,
+    });
   });
 
   test('the retired generator page redirects onto this tab', async ({ page }) => {

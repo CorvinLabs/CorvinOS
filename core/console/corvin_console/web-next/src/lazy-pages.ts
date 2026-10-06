@@ -228,12 +228,15 @@ export const ControlSnapshotsPage = React.lazy(() =>
   import("@/pages/control-plane-snapshots").then((m) => ({ default: m.default }))
 );
 
-// Layer Forge panel (ADR-2222 Layer Forge + ADR-2224 enforcement phases)
-export const LayerForgePage = React.lazy(() =>
-  import("@/pages/layer-forge").then((m) => ({ default: m.LayerForgePage }))
-);
+// Layer Forge (ADR-2222 Layer Forge + ADR-2224 enforcement phases) was its
+// own page/panel/nav entry here until 2026-10-06, when it was folded into
+// Forge as the "Layers" tab (components/forge/LayersTab.tsx, imported
+// directly by pages/forge.tsx — not lazy-loaded separately, since it now
+// shares Forge's single lazy chunk). /app/layer-forge redirects to
+// /app/forge?tab=layers (see App.tsx).
 
-// Layer Forge Analytics Dashboard (Phase 3B)
+// Layer Forge Analytics Dashboard (Phase 3B) — stayed a standalone page;
+// see components/forge/LayersTab.tsx for why.
 export const LayerForgeAnalyticsPage = React.lazy(() =>
   import("@/pages/layer-forge-analytics").then((m) => ({ default: m.LayerForgeAnalyticsPage }))
 );

@@ -19,7 +19,6 @@ import {
   Hammer,
   Headphones,
   KeyRound,
-  Layers,
   LayoutDashboard,
   ListChecks,
   Lock,
@@ -284,9 +283,9 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/ldd",            label: "Quality",            icon: Boxes },
       // Ex-"Observability" group, moved here so it sits directly above Settings.
       { to: "/app/quality",        label: "Quality Gates",      icon: CheckCircle },
-      // Layer Forge panel (ADR-2222): layer definition lifecycle management, quality
-      // gates, enforcement checks, and status transitions.
-      { to: "/app/layer-forge",    label: "Layer Forge",        icon: Layers },
+      // Layer Forge (ADR-2222) is no longer its own nav entry (2026-10-06):
+      // it's now the "Layers" tab inside Forge (/app/forge?tab=layers,
+      // see pages/forge.tsx). /app/layer-forge still redirects there.
       { to: "/app/sync-monitor",   label: "Sync Monitor",       icon: Activity },
       { to: "/app/otel-telemetry", label: "OTEL Telemetry",     icon: Gauge },
       { to: "/app/settings",       label: "Settings",           icon: Settings },

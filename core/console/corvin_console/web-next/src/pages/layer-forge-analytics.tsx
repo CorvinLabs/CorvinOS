@@ -9,6 +9,17 @@
  *
  * Follows dataviz skill: categorical colors for series, small multiples for
  * multiple measures, fail-closed on no data (no sample data shipped).
+ *
+ * BASE path bug fixed 2026-10-06 (found alongside the same defect in
+ * pages/layer-forge.tsx, now components/forge/LayersTab.tsx, during the
+ * Layer-Forge-into-Forge consolidation): this page builds its request with a
+ * raw `fetch` + a hand-built absolute URL, bypassing the `api()` client
+ * entirely (unlike LayersTab, which calls `api()` and therefore must NOT
+ * include "/v1/console" itself — api() prepends it). This file's fetch adds
+ * no prefix at all, so BASE must carry the full "/v1/console/layer-forge"
+ * path, not the former "/api/layer-forge" (which 404'd — nothing is served
+ * under /api/layer-forge; the real route, core/console/corvin_console/
+ * routes/layer_forge.py, is mounted at /v1/console/layer-forge/*).
  */
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -33,7 +44,8 @@ import { Badge } from "@/components/ui/badge";
 import { AlertCircle, Download } from "lucide-react";
 import { api, ApiError } from "@/lib/api/client";
 
-const BASE = "/api/layer-forge";
+// Raw `fetch` below, not api() — this file builds the full path itself.
+const BASE = "/v1/console/layer-forge";
 
 interface AnalyticsData {
   decisions_accepted: number;

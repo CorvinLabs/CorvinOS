@@ -224,6 +224,17 @@ export default function App() {
               element={<Navigate to="/app/forge?tab=skill-forge" replace />}
             />
             <Route path="licensing-audit" element={<Navigate to="/app/compliance" replace />} />
+            {/* Layer Forge (ADR-2222) was its own panel until 2026-10-06, when it
+                was folded into Forge as the "Layers" tab (components/forge/
+                LayersTab.tsx) — same reasoning as the Generator sub-tab fold on
+                2026-10-05: one more "what has this operator's Forge produced"
+                surface belongs next to Tools/Skills/OS-Skills rather than as a
+                separate top-level nav entry. The backend API
+                (/v1/console/layer-forge/*) is unchanged. This route is no
+                longer in PANELS (registry.tsx) — only this redirect remains,
+                so it must stay ahead of nothing and behind nothing: no other
+                route produces path "layer-forge". */}
+            <Route path="layer-forge" element={<Navigate to="/app/forge?tab=layers" replace />} />
             {/* learning-loops → the Learnings dashboard's "Learning Loops" tab
                 (ADR-0908, retired 2026-09-21). The standalone panel and the tab
                 mounted the SAME LearningLoopsView, so the panel was a second

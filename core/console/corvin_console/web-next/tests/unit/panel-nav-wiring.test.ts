@@ -81,6 +81,14 @@ const NAV_EXEMPT = new Set<string>([
   "control-plane-subsystems",
   "control-plane-overrides",
   "control-plane-snapshots",
+  // Layer Forge Analytics (Phase 3B) has never had a NAV_GROUPS entry (it was
+  // added to PANELS with a `nav` object but that was never wired into
+  // layout.tsx — same shape as the corvin-knowledge panel pre-2026-10-05).
+  // It stayed its own panel through the 2026-10-06 Layer-Forge-into-Forge
+  // consolidation (own charts, no shared List+Detail surface with the new
+  // Layers tab) rather than gaining a sidebar entry; reachable via the
+  // "View Analytics" link on Forge's Layers tab (components/forge/LayersTab.tsx).
+  "layer-forge-analytics",
 ]);
 
 describe("panel wiring: registry route <-> sidebar nav", () => {

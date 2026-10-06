@@ -25,7 +25,7 @@ import {
   DataHubUnifiedPage,
   OTELTelemetryPage, VibeEngineeringPage, InitiativesPage, ModelsPage,
   ControlIntentRouterPage, ControlPlanePluginsPage, ControlSubsystemsPage, ControlOverridesPage, ControlSnapshotsPage,
-  LayerForgePage, LayerForgeAnalyticsPage,
+  LayerForgeAnalyticsPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -75,7 +75,6 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   ControlSubsystemsPage,
   ControlOverridesPage,
   ControlSnapshotsPage,
-  LayerForgePage,
   LayerForgeAnalyticsPage,
   // The backend manifest names the Learning dashboard after its component
   // (routes/capabilities.py); it is the same page the registry mounts.
@@ -202,11 +201,14 @@ export const PANELS: ConsolePanel[] = [
   rc("control-plane-subsystems", "Subsystems", ControlSubsystemsPage, { nav: { label: "Subsystems", icon: "Layers", group: "system" } }),
   rc("control-plane-overrides", "Overrides", ControlOverridesPage, { nav: { label: "Overrides", icon: "Lock", group: "system" } }),
   rc("control-plane-snapshots", "Snapshots", ControlSnapshotsPage, { nav: { label: "Snapshots", icon: "Archive", group: "system" } }),
-  // Layer Forge panel (ADR-2222 Phase 2–3) — layer definition creation, quality gates,
-  // enforcement checks, and status transitions (proposed → accepted → deployed).
-  rc("layer-forge", "Layer Forge", LayerForgePage, { nav: { label: "Layer Forge", icon: "Layers", group: "system" } }),
+  // Layer Forge (ADR-2222 Phase 2–3) is no longer a panel of its own
+  // (2026-10-06, consolidated into Forge as the "Layers" tab — see
+  // pages/forge.tsx and components/forge/LayersTab.tsx). App.tsx redirects
+  // /app/layer-forge to /app/forge?tab=layers.
   // Layer Forge Analytics Dashboard (Phase 3B) — operator dashboard with four charts
   // (decisions over time, confidence trends, review flags, learning convergence).
+  // Stayed a standalone panel through the Layers-tab consolidation — see
+  // components/forge/LayersTab.tsx for why.
   rc("layer-forge-analytics", "Layer Forge Analytics", LayerForgeAnalyticsPage, { nav: { label: "Analytics", icon: "BarChart3", group: "system" } }),
 ];
 
