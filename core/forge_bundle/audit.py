@@ -34,6 +34,18 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
         "bundle_id", "artifact_kind", "artifact_id", "artifact_version",
         "quarantine_id", "status", "tenant_id", "user_id",
     }),
+    "forge_bundle.quarantine_accepted": frozenset({
+        "artifact_kind", "artifact_id", "artifact_version", "quarantine_id",
+        "tenant_id", "user_id",
+    }),
+    "forge_bundle.quarantine_rejected": frozenset({
+        "artifact_kind", "artifact_id", "artifact_version", "quarantine_id",
+        "tenant_id", "user_id",
+    }),
+    "forge_bundle.validated": frozenset({
+        "bundle_id", "origin_verified", "unchecked_references_count",
+        "unscanned_files_count", "total_uncompressed_bytes", "tenant_id", "user_id",
+    }),
 }
 
 SEVERITY: dict[str, str] = {
@@ -41,6 +53,9 @@ SEVERITY: dict[str, str] = {
     "forge_bundle.import_validated": "INFO",
     "forge_bundle.import_rejected": "WARNING",
     "forge_bundle.artifact_staged": "INFO",
+    "forge_bundle.quarantine_accepted": "INFO",
+    "forge_bundle.quarantine_rejected": "INFO",
+    "forge_bundle.validated": "INFO",
 }
 
 
