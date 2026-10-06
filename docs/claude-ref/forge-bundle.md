@@ -20,7 +20,7 @@ hand through the same forge.
 | 4 | Console UI | **built** — Forge → **Bundles** tab (`/app/forge?tab=bundles`) |
 
 Hardened by a three-round adversarial review on 2026-10-06 (commits c2f151880,
-1659428f9 and the round-3 fix commit; 36 + 31 + 19 findings). Proven findings
+1659428f9, eb31b1772; 36 + 31 + 19 findings). Proven findings
 have regression tests in `tests/forge_bundle/` and the console's
 `tests/unit/forge-bundles-panel.test.tsx`; most test names carry the finding id
 (C…, A…, S… round 1; R2A/R2B round 2; R3A/R3B round 3). The round-3 fixes were
