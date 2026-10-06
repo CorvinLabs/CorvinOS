@@ -75,8 +75,14 @@ function ExportSection({ csrf }: { csrf: string }) {
     },
   });
 
+  // Editing clears a SETTLED result; while an export runs the form is locked,
+  // so a reset can never re-enable the button or swallow the pending answer.
+  const clearSettled = () => { if (!run.isPending) run.reset(); };
+  const locked = run.isPending;
+
   const toggle = (s: Selection) => {
-    run.reset();
+    if (locked) return;
+    clearSettled();
     setPicked((prev) => {
       const next = { ...prev };
       if (next[selKey(s)]) delete next[selKey(s)];
@@ -87,7 +93,7 @@ function ExportSection({ csrf }: { csrf: string }) {
 
   const row = (s: Selection, label: string, extra?: string) => (
     <label key={selKey(s)} className="flex items-center gap-2 py-1 text-sm">
-      <input type="checkbox" checked={!!picked[selKey(s)]} onChange={() => toggle(s)} aria-label={`select ${s.kind} ${s.id}`} />
+      <input type="checkbox" checked={!!picked[selKey(s)]} disabled={locked} onChange={() => toggle(s)} aria-label={`select ${s.kind} ${s.id}`} />
       <span className="font-mono">{label}</span>
       {extra && <span className="text-xs text-muted-foreground">{extra}</span>}
     </label>
@@ -131,16 +137,16 @@ function ExportSection({ csrf }: { csrf: string }) {
         <div className="grid gap-3 md:grid-cols-2">
           <div>
             <Label htmlFor="fb-id">Bundle id</Label>
-            <Input id="fb-id" value={bundleId} onChange={(e) => { run.reset(); setBundleId(e.target.value); }} placeholder="acme-automation" />
+            <Input id="fb-id" value={bundleId} disabled={locked} onChange={(e) => { clearSettled(); setBundleId(e.target.value); }} placeholder="acme-automation" />
           </div>
           <div>
             <Label htmlFor="fb-version">Bundle version</Label>
-            <Input id="fb-version" value={bundleVersion} onChange={(e) => { run.reset(); setBundleVersion(e.target.value); }} />
+            <Input id="fb-version" value={bundleVersion} disabled={locked} onChange={(e) => { clearSettled(); setBundleVersion(e.target.value); }} />
           </div>
         </div>
         <div>
           <Label htmlFor="fb-desc">Description (optional)</Label>
-          <Textarea id="fb-desc" value={description} maxLength={2000} onChange={(e) => { run.reset(); setDescription(e.target.value); }} />
+          <Textarea id="fb-desc" value={description} maxLength={2000} disabled={locked} onChange={(e) => { clearSettled(); setDescription(e.target.value); }} />
         </div>
         {run.error && <p className="text-sm text-destructive">Export refused: {message(run.error)}</p>}
         {run.isSuccess && <p className="text-sm text-emerald-700 dark:text-emerald-300">Bundle downloaded.</p>}
@@ -151,6 +157,15 @@ function ExportSection({ csrf }: { csrf: string }) {
       </CardContent>
     </Card>
   );
+}
+
+function refusal(err: unknown): string {
+  // A 422 import refusal carries {stage, reason}; name the stage like the preview does.
+  if (err instanceof ApiError && err.detail && typeof err.detail === "object") {
+    const d = (err.detail as { detail?: unknown }).detail as { stage?: unknown; reason?: unknown } | undefined;
+    if (d && typeof d.stage === "string" && typeof d.reason === "string") return `rejected at stage “${d.stage}”: ${d.reason}`;
+  }
+  return message(err);
 }
 
 function partialResult(err: unknown): ImportResult | null {
@@ -207,7 +222,7 @@ function ImportSection({ csrf }: { csrf: string }) {
       if (gen === generation.current) {
         const partial = partialResult(err);
         if (partial) setResult(partial);
-        setError(`Import ${partial ? "stopped" : "refused"}: ${message(err)}`);
+        setError(`Import ${partial ? "stopped" : "refused"}: ${refusal(err)}`);
       }
     } finally {
       refresh();
@@ -226,9 +241,21 @@ function ImportSection({ csrf }: { csrf: string }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <Input type="file" accept=".zip,application/zip" aria-label="bundle file" disabled={busy === "importing"}
-               onChange={(e) => void pick(e.target.files?.[0] ?? null)} />
+               onChange={(e) => {
+                 const f = e.target.files?.[0] ?? null;
+                 e.target.value = "";  // picking the same file again must fire a new check
+                 void pick(f);
+               }} />
+        {file && <p className="text-xs text-muted-foreground">Selected: {file.name}</p>}
         {busy === "checking" && <Loader2 className="h-4 w-4 animate-spin" aria-label="checking" />}
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && (
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm text-destructive">{error}</p>
+            {file && !report && busy === null && (
+              <Button size="sm" variant="outline" onClick={() => void pick(file)}>Check again</Button>
+            )}
+          </div>
+        )}
         {report && report.valid === false && (
           <p className="text-sm text-destructive">Rejected at stage “{report.stage}”: {report.reason}</p>
         )}
@@ -284,7 +311,10 @@ function ReviewSection({ csrf }: { csrf: string }) {
   const q = useQuery({ queryKey: QUARANTINE_KEY, queryFn: fetchQuarantine });
   const decide = useMutation({
     mutationFn: ({ qid, action }: { qid: string; action: "accept" | "reject" }) => decideQuarantine(qid, action, csrf),
-    onSettled: () => void qc.invalidateQueries({ queryKey: QUARANTINE_KEY }),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: QUARANTINE_KEY });
+      void qc.invalidateQueries({ queryKey: ["forge-bundles", "exportable"] });
+    },
   });
   const items = useMemo(() => q.data?.items ?? [], [q.data]);
 

@@ -203,4 +203,68 @@ describe("ForgeBundlesPanel", () => {
     expect(await screen.findByText("Installs packages: numpy>=1.26")).toBeInTheDocument();
     expect(screen.getByText("Requests secrets: openai_api_key")).toBeInTheDocument();
   });
+
+  it("R2B-15/16: a running export locks the form, so it cannot be restarted or lose its answer", async () => {
+    base();
+    let release: () => void = () => {};
+    server.use(http.post(`${B}/export`, async () => {
+      await new Promise<void>((r) => { release = r; });
+      return HttpResponse.json({ detail: "skill summarize: credential-shaped content" }, { status: 422 });
+    }));
+    wrap();
+    fireEvent.click(await screen.findByLabelText("select skill summarize"));
+    fireEvent.change(screen.getByLabelText("Bundle id"), { target: { value: "acme" } });
+    fireEvent.click(screen.getByRole("button", { name: /Export 1 artifact/ }));
+    await waitFor(() => expect(screen.getByLabelText("Bundle id")).toBeDisabled());
+    expect(screen.getByLabelText("select tool csv.count")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Export 1 artifact/ })).toBeDisabled();
+    release();
+    expect(await screen.findByText(/Export refused: skill summarize: credential-shaped content/)).toBeInTheDocument();
+  });
+
+  it("R2B-17: a decision refreshes the export list too", async () => {
+    let exportableCalls = 0;
+    server.use(
+      http.get(`${B}/exportable`, () => { exportableCalls += 1; return HttpResponse.json({ skills: [], tools: [], layers: [], plugins: [] }); }),
+      http.get(`${B}/quarantine`, () => HttpResponse.json(QUEUE)),
+      http.post(`${B}/quarantine/${"a".repeat(32)}/accept`, () => HttpResponse.json({ status: "accepted", tool_id: "csv.count" })),
+    );
+    wrap();
+    fireEvent.click(await screen.findByRole("button", { name: /Accept/ }));
+    await waitFor(() => expect(exportableCalls).toBeGreaterThanOrEqual(2));
+  });
+
+  it("R2B-18: an import refusal names its stage", async () => {
+    base({ items: [], count: 0 });
+    server.use(
+      http.post(`${B}/validate`, () => HttpResponse.json({
+        valid: true, bundle_id: "acme", bundle_version: "2.0.0", description: null, created_at: null,
+        artifacts: [{ kind: "tool", id: "csv.count", version: "0.2.0", file_count: 2, requires: [] }],
+        total_uncompressed_bytes: 10, origin_verified: false,
+      })),
+      http.post(`${B}/import`, () => HttpResponse.json({ detail: { stage: "integrity", reason: "file changed" } }, { status: 422 })),
+    );
+    wrap();
+    fireEvent.change(screen.getByLabelText("bundle file"), { target: { files: [new File(["x"], "b.zip")] } });
+    fireEvent.click(await screen.findByRole("button", { name: /Import 1 artifact/ }));
+    expect(await screen.findByText(/Import refused: rejected at stage “integrity”: file changed/)).toBeInTheDocument();
+  });
+
+  it("R2B-19: a failed check can be retried for the same file", async () => {
+    base({ items: [], count: 0 });
+    let calls = 0;
+    server.use(http.post(`${B}/validate`, () => {
+      calls += 1;
+      if (calls === 1) return HttpResponse.json({ detail: "invalid CSRF token" }, { status: 403 });
+      return HttpResponse.json({
+        valid: true, bundle_id: "acme", bundle_version: "2.0.0", description: null, created_at: null,
+        artifacts: [], total_uncompressed_bytes: 1, origin_verified: false,
+      });
+    }));
+    wrap();
+    fireEvent.change(screen.getByLabelText("bundle file"), { target: { files: [new File(["x"], "b.zip")] } });
+    fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
+    expect(await screen.findByText("acme@2.0.0")).toBeInTheDocument();
+    expect(calls).toBe(2);
+  });
 });

@@ -361,9 +361,51 @@ def test_credentials_are_found_in_any_encoding(name, blob):
     _rejected(_tool_with_extra(name, blob), "secrets", match="aws_access_key")
 
 
-def test_deeply_nested_json_is_refused_not_skipped():
-    _rejected(_tool_with_extra("deep.json", b"[" * 100000 + b"]" * 100000), "secrets", match="too deeply")
+def test_escapes_are_resolved_however_deep_the_json_is():
+    deep = b"[" * 100000 + b'"\\u0041KIAABCDEFGHIJKLMNOP"' + b"]" * 100000
+    _rejected(_tool_with_extra("deep.json", deep), "secrets", match="aws_access_key")
 
+
+JWT = b"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+
+
+@pytest.mark.parametrize("name,blob,detector", [
+    ("cache.pkl", b"\x80\x04\x95" + bytes([0xC4]) + JWT + b"\x94.", "jwt"),          # R2A-2: length byte glued on
+    ("notes.txt", ("\u3000" + AWS.decode() + "\u3000").encode("utf-16-le"), "aws_access_key"),  # R2A-3
+    ("rows.jsonl", b'{"a": 1}\n{"k": "\\u0041KIAABCDEFGHIJKLMNOP"}\n', "aws_access_key"),  # R2A-4: JSON Lines
+    ("conf.py", b'KEY = "\\x41KIAABCDEFGHIJKLMNOP"\n', "aws_access_key"),  # R2A-4: Python escape
+])
+def test_R2A_credentials_in_binary_and_escaped_text(name, blob, detector):
+    _rejected(_tool_with_extra(name, blob), "secrets", match=detector)
+
+
+@pytest.mark.parametrize("compress", ["gzip", "bz2", "lzma"])
+def test_R2A_5_credentials_inside_compressed_streams(compress):
+    import importlib
+    mod = importlib.import_module(compress)
+    _rejected(_tool_with_extra("data.bin", mod.compress(b"x = '" + AWS + b"'\n")), "secrets", match="aws_access_key")
+
+
+def test_R2A_5_a_compression_bomb_spends_the_budget(monkeypatch):
+    import gzip
+    import core.forge_bundle.validate as v
+    monkeypatch.setattr(v, "LIMITS", {**v.LIMITS, "max_uncompressed_bytes": 2_000_000})
+    _rejected(_tool_with_extra("bomb.gz", gzip.compress(b"0" * 5_000_000)), "container", match="budget")
+
+
+def test_R2A_6_bytes_around_an_archive_are_scanned():
+    inner = _zip({"pkg/ok.py": b"x = 1\n"})
+    prefixed = b"KEY=" + AWS + b"\n" + inner
+    _rejected(_tool_with_extra("payload.whl", prefixed), "secrets", match="aws_access_key")
+
+
+def test_R2A_13_scanning_stays_fast_on_large_binary():
+    import os
+    import time
+    blob = os.urandom(8 * 1024 * 1024)
+    t = time.monotonic()
+    validate_bundle(_tool_with_extra("big.bin", blob))
+    assert time.monotonic() - t < 15  # 17.5 s for 40 MiB before: prose + entropy detectors on every byte
 
 def test_an_archive_is_recognised_by_content_not_by_name():
     # A ZIP named .whl/.bin is still opened and scanned.
@@ -464,9 +506,9 @@ def test_diamond_dependency_is_not_a_cycle():
 def test_secret_scan_failure_is_treated_as_sensitive(monkeypatch):
     from core.pii.sensitive import PIIDetectionFailedClosed
 
-    def boom(_text):
+    def boom(_text, _names):
         raise PIIDetectionFailedClosed("regex engine error")
-    monkeypatch.setattr(validate_mod, "detect_sensitive_types", boom)
+    monkeypatch.setattr(validate_mod, "detect_named_types", boom)
     _rejected(make_bundle(), "secrets", match="scan failed")
 
 
@@ -478,3 +520,11 @@ def test_a_zip_named_payload_that_is_not_a_zip_is_scanned_as_bytes():
     arts[3] = (art, {art["files"][0]["path"]: b"not a zip at all"})
     validate_bundle(make_bundle(artifacts=arts))
 
+
+
+def test_detect_named_types_fails_closed_on_an_unknown_detector():
+    from core.pii.sensitive import PIIDetectionFailedClosed, detect_named_types
+
+    with pytest.raises(PIIDetectionFailedClosed):
+        detect_named_types("anything", {"no_such_detector"})
+    assert detect_named_types("x = 'AKIAABCDEFGHIJKLMNOP'", {"aws_access_key"}) == ["aws_access_key"]

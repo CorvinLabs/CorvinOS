@@ -5,10 +5,10 @@ into a Forge Bundle ZIP. Each kind reuses that forge's OWN packaging rather
 than a new one:
 
   skill  -> ``core.skills.skill_packager.SkillPackager`` (ADR-0674), packaged
-            FRESH from the ``skills_gen`` folder into a temporary directory on
-            every export — a cached ZIP could be older than the folder. The
-            packager refreshes the folder's own ``.forge/`` metadata; nothing
-            else is written.
+            FRESH on every export from a temporary COPY of the ``skills_gen``
+            folder — a cached ZIP could be older than the folder, and the
+            packager writes ``.forge/`` metadata into what it packages. Export
+            writes nothing outside a temp dir.
   tool   -> ``forge.multi_registry.MultiRegistry.get()`` + the impl file on disk,
             plus the behavioural subset of ``meta`` (requirements, secret key
             names, budget, deterministic) — see ``tool_quarantine.clean_tool_meta``
@@ -98,6 +98,7 @@ class SkillSelection:
         return self.skill_id
 
     def collect(self, tenant_id: str) -> dict[str, bytes]:
+        import shutil
         import tempfile
 
         from core.skills.manifest_v2 import SkillManifestV2
@@ -116,10 +117,16 @@ class SkillSelection:
             f"skill {self.skill_id}: on-disk version {manifest.version!r} != requested {self.version!r}",
         )
         with tempfile.TemporaryDirectory() as tmp:
+            # Packaged from a COPY: SkillPackager writes .forge/ metadata into the
+            # folder it packages, and export must leave the forge's store untouched.
+            work = Path(tmp) / "src" / self.skill_id
+            _require(not any(p.is_symlink() for p in skill_folder.rglob("*")),
+                     f"skill {self.skill_id}: contains a symbolic link; export refuses to follow it")
             try:
-                zip_path, _zip_hash, _metadata = SkillPackager(Path(tmp)).package(skill_folder, manifest)
-            except (ValueError, OSError) as exc:
-                raise ExportError(f"skill {self.skill_id}: cannot be packaged ({str(exc).split(':')[0][:120]})") from None
+                shutil.copytree(skill_folder, work, symlinks=False)
+                zip_path, _zip_hash, _metadata = SkillPackager(Path(tmp) / "out").package(work, manifest)
+            except (ValueError, OSError, shutil.Error) as exc:
+                raise ExportError(f"skill {self.skill_id}: cannot be packaged ({type(exc).__name__})") from None
             prefix = f"artifacts/skill/{self.skill_id}@{self.version}/"
             return {prefix + zip_path.name: zip_path.read_bytes()}
 

@@ -209,6 +209,30 @@ def detect_sensitive_types(text: str) -> list[str]:
     return found
 
 
+def detect_named_types(text: str, names: "frozenset[str] | set[str]") -> list[str]:
+    """Run ONLY the named detectors of :data:`_SENSITIVE_DETECTORS`.
+
+    For callers that scan large payloads for one class (e.g. credentials in a
+    Forge Bundle) and must not pay for — or be tripped by — the prose and
+    entropy detectors. Same fail-closed contract as
+    :func:`detect_sensitive_types`; an unknown name is an error, not a no-op.
+    """
+    if not isinstance(text, str):
+        raise PIIDetectionFailedClosed(f"detect_named_types requires str, got {type(text).__name__}")
+    known = {d.name for d in _SENSITIVE_DETECTORS}
+    unknown = set(names) - known
+    if unknown:
+        raise PIIDetectionFailedClosed(f"unknown detector(s): {sorted(unknown)}")
+    found: list[str] = []
+    try:
+        for det in _SENSITIVE_DETECTORS:
+            if det.name in names and det.pattern.search(text):
+                found.append(det.name)
+    except Exception as exc:  # noqa: BLE001 — fail closed on ANY scan failure
+        raise PIIDetectionFailedClosed(f"sensitive-content scan failed: {type(exc).__name__}") from exc
+    return found
+
+
 def has_sensitive(text: Optional[str]) -> bool:
     """Fail-closed gate: does ``text`` contain any sensitive content?
 

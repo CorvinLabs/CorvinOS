@@ -22,15 +22,19 @@ what SkillInstaller / StagingManager will later unpack.
 """
 from __future__ import annotations
 
+import bz2
 import hashlib
 import io
 import json
+import lzma
+import re
 import stat
 import zipfile
+import zlib
 from dataclasses import dataclass
 from typing import Collection, Iterator, Mapping
 
-from core.pii.sensitive import PIIDetectionFailedClosed, detect_sensitive_types
+from core.pii.sensitive import PIIDetectionFailedClosed, detect_named_types
 
 from .envelope import (
     ARTIFACTS_PREFIX,
@@ -241,7 +245,7 @@ def _check_staleness(external: list[Requirement], known: Known) -> None:
 
 def _scan_text(text: str, where: str) -> None:
     try:
-        hits = set(detect_sensitive_types(text)) & _SECRET_TYPES
+        hits = set(detect_named_types(text, _SECRET_TYPES))
     except PIIDetectionFailedClosed as exc:
         raise _reject("secrets", f"{where}: scan failed, treated as sensitive") from exc
     if hits:
@@ -249,8 +253,43 @@ def _scan_text(text: str, where: str) -> None:
         raise _reject("secrets", f"{where}: credential-shaped content ({', '.join(sorted(hits))})")
 
 
+# bytes -> printable ASCII; every other byte (NUL, high bytes, controls but \t\n) becomes a space.
+_ASCII = bytes(b if 0x20 <= b <= 0x7E or b in (0x09, 0x0A) else 0x20 for b in range(256))
+_ESCAPE_RE = re.compile(r"\\(?:u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8})|x([0-9a-fA-F]{2}))")
+
+
+def _unescape(text: str) -> str:
+    def sub(m: re.Match) -> str:
+        cp = int(m.group(1) or m.group(2) or m.group(3), 16)
+        return chr(cp) if cp < 0x110000 else " "
+    return _ESCAPE_RE.sub(sub, text)
+
+
+def _looks_utf16(data: bytes) -> bool:
+    return data[:2] in (b"\xff\xfe", b"\xfe\xff") or data.count(b"\x00") * 4 >= len(data) > 0
+
+
+def _text_views(data: bytes) -> Iterator[str]:
+    views = [data.translate(_ASCII).decode("ascii")]
+    if _looks_utf16(data):
+        for codec in ("utf-16-le", "utf-16-be"):
+            text = data.decode(codec, errors="replace")
+            views.append(text.encode("ascii", errors="replace").translate(_ASCII).decode("ascii"))
+    for view in views:
+        yield view
+        if "\\" in view:
+            resolved = _unescape(view)
+            if resolved != view:
+                yield resolved
+
+
+def _scan_bytes(data: bytes, where: str) -> None:
+    for view in _text_views(data):
+        _scan_text(view, where)
+
+
 class _Budget:
-    """Uncompressed bytes left for every nested archive of one bundle together."""
+    """Uncompressed bytes left for every nested archive / stream of one bundle together."""
 
     def __init__(self, left: int) -> None:
         self.left = left
@@ -258,24 +297,58 @@ class _Budget:
     def spend(self, n: int, where: str) -> None:
         self.left -= n
         if self.left < 0:
-            raise _reject("container", f"{where}: nested archives exceed the bundle's "
+            raise _reject("container", f"{where}: nested content exceeds the bundle's "
                                        f"{LIMITS['max_uncompressed_bytes']}-byte uncompressed budget")
 
 
-def _scan_bytes(data: bytes, where: str) -> None:
-    _scan_text(data.decode("latin-1"), where)
-    if b"\x00" in data:
-        _scan_text(data.replace(b"\x00", b"").decode("latin-1"), where)
+def _decompressor(data: bytes):
+    if data[:2] == b"\x1f\x8b":
+        return zlib.decompressobj(16 + zlib.MAX_WBITS), "gzip"
+    if data[:3] == b"BZh":
+        return bz2.BZ2Decompressor(), "bz2"
+    if data[:6] == b"\xfd7zXZ\x00":
+        return lzma.LZMADecompressor(), "xz"
+    return None, None
+
+
+def _inflate(data: bytes, where: str, budget: _Budget) -> bytes | None:
+    """Decompress a gzip/bz2/xz stream within the budget; None if it is not one."""
+    dec, kind = _decompressor(data)
+    if dec is None:
+        return None
+    out = bytearray()
     try:
-        decoded = json.dumps(json.loads(data), ensure_ascii=False)
-    except ValueError:
-        return
-    except RecursionError:
-        raise _reject("secrets", f"{where}: JSON nested too deeply to scan") from None
-    _scan_text(decoded, where)
+        if kind == "gzip":
+            chunk = dec.decompress(data, 1 << 20)
+            while True:
+                budget.spend(len(chunk), where)
+                out += chunk
+                if not dec.unconsumed_tail:
+                    break
+                chunk = dec.decompress(dec.unconsumed_tail, 1 << 20)
+        else:
+            chunk = dec.decompress(data, max_length=1 << 20)
+            while True:
+                budget.spend(len(chunk), where)
+                out += chunk
+                if dec.eof or (not chunk and dec.needs_input):
+                    break
+                chunk = dec.decompress(b"", max_length=1 << 20)
+    except BundleRejected:
+        raise
+    except (zlib.error, OSError, EOFError, lzma.LZMAError, ValueError) as exc:
+        raise _reject("container", f"{where}: unreadable {kind} stream ({type(exc).__name__})") from None
+    return bytes(out)
 
 
 def _scan_payload(data: bytes, where: str, depth: int, budget: _Budget) -> None:
+    _scan_bytes(data, where)  # raw view: also covers bytes around/between archive members
+    if _decompressor(data)[0] is not None and depth > LIMITS["max_nested_zip_depth"]:
+        raise _reject("container", f"{where}: compressed stream nested too deeply to scan")
+    inflated = _inflate(data, where, budget)
+    if inflated is not None:
+        _scan_payload(inflated, f"{where}!decompressed", depth + 1, budget)
+        return
     if zipfile.is_zipfile(io.BytesIO(data)):
         if depth >= LIMITS["max_nested_zip_depth"]:
             raise _reject("container", f"{where}: archive nested deeper than {LIMITS['max_nested_zip_depth']}")
@@ -285,8 +358,6 @@ def _scan_payload(data: bytes, where: str, depth: int, budget: _Budget) -> None:
             budget.spend(sum(i.file_size for i in inner_files), where)
             for info in inner_files:
                 _scan_payload(_read(inner, info.filename, "secrets"), f"{where}!{info.filename}", depth + 1, budget)
-        return
-    _scan_bytes(data, where)
 
 
 def validate_bundle(data: bytes, *, known: Known | None = None) -> BundleReport:

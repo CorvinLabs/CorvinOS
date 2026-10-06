@@ -195,12 +195,26 @@ def _client_for(tenant: str):
     return client, auth.derive_csrf_token(rec.csrf_secret, rec.sid)
 
 
-def test_another_tenant_never_sees_or_exports_host_wide_skills(tmp_corvin_home, make_skill):
+def test_R2B_6_7_another_tenant_is_refused_on_every_route(tmp_corvin_home, make_skill, make_tool):
     make_skill("summarize", "1.0.0")
+    make_tool("csv.count")
     client, csrf = _client_for("acme")
-    assert client.get(f"{BASE}/exportable").json()["skills"] == []
-    r = _export(client, csrf, [{"kind": "skill", "id": "summarize", "version": "1.0.0"}])
-    assert r.status_code == 403 and "install owner" in r.json()["detail"]
+    for r in (client.get(f"{BASE}/exportable"), client.get(f"{BASE}/quarantine"),
+              _upload(client, csrf, "validate", b"x"), _upload(client, csrf, "import", b"x"),
+              _export(client, csrf, [{"kind": "tool", "id": "csv.count", "version": "0.2.0"}])):
+        assert r.status_code == 403 and "owner's tenant" in r.json()["detail"], r.text
+        assert "summarize" not in r.text and "csv.count" not in r.text
+
+
+def test_R2B_5_a_corrupt_store_answers_503_not_500(console_client, tmp_corvin_home):
+    client, _csrf = console_client
+    broken = tmp_corvin_home / "skills_gen" / "broken"
+    broken.mkdir(parents=True)
+    (broken / "skill.json").write_text("[]")
+    from core.orchestration.layer_forge.orchestrator import layer_forge_home
+    (layer_forge_home(T) / "registry" / "x@1.0.0.json").write_text("{not json")
+    r = client.get(f"{BASE}/exportable")
+    assert r.status_code == 503
 
 
 def test_an_audit_outage_mid_import_answers_503_with_what_landed(console_client, make_tool, make_layer, monkeypatch):
@@ -237,3 +251,32 @@ def test_cli_refuses_a_missing_output_directory_before_recording(cli_runner, mak
                        "--output", str(tmp_path / "missing" / "b.zip"), "--tool", "csv.count@0.2.0"])
     assert proc.returncode == 2 and "does not exist" in proc.stderr
     assert "forge_bundle.exported" not in [e["event_type"] for e in chain_events()]
+
+
+def test_R2B_11_cli_refuses_a_directory_as_output(cli_runner, make_tool, chain_events, tmp_path):
+    make_tool("csv.count")
+    proc = cli_runner(["export", "--id", "b", "--version", "1.0.0", "--output", str(tmp_path), "--tool", "csv.count@0.2.0"])
+    assert proc.returncode == 2 and "is a directory" in proc.stderr
+    assert "forge_bundle.exported" not in [e["event_type"] for e in chain_events()]
+
+
+def test_R2B_12_cli_never_follows_a_planted_temp_symlink(cli_runner, make_tool, tmp_path):
+    make_tool("csv.count")
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me")
+    (tmp_path / ".b.zip.tmp").symlink_to(victim)
+    proc = cli_runner(["export", "--id", "b", "--version", "1.0.0",
+                       "--output", str(tmp_path / "b.zip"), "--tool", "csv.count@0.2.0"])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert victim.read_text() == "keep me"
+    assert (tmp_path / "b.zip").read_bytes()[:2] == b"PK"
+
+
+def test_R2B_13_export_leaves_the_skill_folder_untouched(console_client, make_skill):
+    client, csrf = console_client
+    folder = make_skill("summarize", "1.0.0")
+    before = {p.relative_to(folder): p.read_bytes() for p in folder.rglob("*") if p.is_file()}
+    r = _export(client, csrf, [{"kind": "skill", "id": "summarize", "version": "1.0.0"}])
+    assert r.status_code == 200, r.text
+    after = {p.relative_to(folder): p.read_bytes() for p in folder.rglob("*") if p.is_file()}
+    assert after == before

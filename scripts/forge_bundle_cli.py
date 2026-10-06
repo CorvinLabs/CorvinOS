@@ -111,6 +111,9 @@ def _cmd_export(args: argparse.Namespace) -> int:
     if not output.parent.is_dir() or not os.access(output.parent, os.W_OK):
         print(f"usage error: --output directory {str(output.parent)!r} does not exist or is not writable", file=sys.stderr)
         return 2
+    if output.is_dir():
+        print(f"usage error: --output {str(output)!r} is a directory; name the .zip file", file=sys.stderr)
+        return 2
 
     try:
         result = build_bundle(
@@ -125,9 +128,17 @@ def _cmd_export(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        tmp = output.with_name(f".{output.name}.tmp")
-        tmp.write_bytes(result.data)
-        tmp.replace(output)
+        import tempfile
+
+        # mkstemp: O_EXCL with a random name — never follows a planted symlink.
+        fd, tmp_name = tempfile.mkstemp(dir=output.parent, prefix=f".{output.name}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(result.data)
+            os.replace(tmp_name, output)
+        except BaseException:
+            Path(tmp_name).unlink(missing_ok=True)
+            raise
     except OSError as exc:
         _print({"status": "FAILED", "error": "the bundle was built and recorded, but the output file could not be written",
                 "error_class": type(exc).__name__, "audit_hash": result.audit_hash})

@@ -42,7 +42,9 @@ def _corvin_home() -> Path:
     return _forge_paths.corvin_home()
 
 
-def _forged_skills() -> list[dict[str, Any]]:
+def _forged_skills(*, strict: bool = False) -> list[dict[str, Any]]:
+    """``strict``: an unreadable skill.json raises instead of being skipped —
+    the staleness check must not mistake "unreadable" for "absent"."""
     out = []
     root = _corvin_home() / "skills_gen"
     if root.is_dir():
@@ -53,8 +55,12 @@ def _forged_skills() -> list[dict[str, Any]]:
             try:
                 data = json.loads(manifest.read_text())
             except (OSError, ValueError):
+                if strict:
+                    raise InventoryUnavailable("a forged skill's skill.json is unreadable") from None
                 continue
             if not isinstance(data, dict):
+                if strict:
+                    raise InventoryUnavailable("a forged skill's skill.json is malformed")
                 continue
             sid, ver = data.get("skill_id"), data.get("version")
             # Export looks a skill up by folder name; a folder that disagrees
@@ -108,7 +114,7 @@ def known(tenant_id: str) -> dict[str, dict[str, Any]]:
 
 def _known(tenant_id: str) -> dict[str, dict[str, Any]]:
     skills: dict[str, set[str]] = {}
-    for s in _forged_skills():
+    for s in _forged_skills(strict=True):
         skills.setdefault(s["id"], set()).add(s["version"])
     for sid, versions in _installed_skills().items():
         skills.setdefault(sid, set()).update(v for v in versions if isinstance(v, str))
@@ -127,7 +133,16 @@ def _known(tenant_id: str) -> dict[str, dict[str, Any]]:
 
 def exportable(tenant_id: str, *, include_skills: bool) -> dict[str, list[dict[str, Any]]]:
     """``include_skills``: forged skills live in a host-wide store, so only an
-    owner/admin session may see or export them."""
+    owner/admin session may see or export them. Raises InventoryUnavailable."""
+    try:
+        return _exportable(tenant_id, include_skills=include_skills)
+    except InventoryUnavailable:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise InventoryUnavailable(f"this install's inventory could not be read ({type(exc).__name__})") from None
+
+
+def _exportable(tenant_id: str, *, include_skills: bool) -> dict[str, list[dict[str, Any]]]:
     return {
         "skills": _forged_skills() if include_skills else [],
         "tools": _tools(tenant_id),

@@ -29,13 +29,13 @@ collects each selection through that forge's own storage, assembles the
 envelope, and — before returning anything — **round-trips the built ZIP
 through `validate_bundle`**. A bundle this process could not later import is
 never handed out, and a credential-shaped string never reaches the caller.
-Export changes no registry or active state. The one write it causes:
-`SkillPackager` refreshes the skill folder's own `.forge/` metadata while
-packaging.
+Export changes no registry, store or active state: a skill is packaged from a
+temporary COPY of its folder (the packager writes `.forge/` metadata into what
+it packages), so nothing outside a temp dir is written.
 
 | Selection | Reads via | Note |
 |---|---|---|
-| `SkillSelection(skill_id, version)` | `SkillPackager` over `<corvin_home>/skills_gen/<id>/`, packaged FRESH into a temp dir on every export | a cached package could be older than the folder; the version must match `skill.json` |
+| `SkillSelection(skill_id, version)` | `SkillPackager` over a temp copy of `<corvin_home>/skills_gen/<id>/`, packaged FRESH on every export | a cached package could be older than the folder; the version must match `skill.json`; a folder containing a symlink is refused |
 | `ToolSelection(name, version)` | `MultiRegistry.get()` + the impl file | **`version` is caller-supplied** — `ToolSpec` has none. `spec.json` = `name`/`description`/`input_schema`/`runtime`/`version`/`impl_filename` + `meta` limited to `requirements`/`secrets` (key names)/`budget`/`deterministic` (`tool_quarantine.clean_tool_meta`); never scope, call counts, promotion |
 | `LayerSelection(entry_id, version)` | `LayerRegistry.get()` | registry state (`status`, `review_flagged`, `review_flags`, every `_*` key) stripped (`import_module.clean_layer_manifest`) |
 | `PluginSelection(plugin_id, version, package_path)` | an ADR-0511 plugin package on disk | must be a ZIP with `manifest.json` naming this id + version and an `author` — the shape the importing StagingManager accepts. A bare wheel is refused HERE, not at import. Export never builds a plugin |
@@ -57,8 +57,9 @@ python scripts/forge_bundle_cli.py export \
   [--tenant TID] [--description TEXT]
 ```
 
-The output directory is checked BEFORE the build (the build records the export),
-and the file is written via a temp file + rename. Exit codes: 0 success, 1
+The output directory is checked BEFORE the build (the build records the export);
+`--output` naming a directory is a usage error; the file is written through
+`mkstemp` (O_EXCL, never follows a planted symlink) + `os.replace`. Exit codes: 0 success, 1
 refused/failed (JSON on stdout), 2 usage error.
 
 ## Import (Phase 3) — `core/forge_bundle/import_module.py`
@@ -69,9 +70,14 @@ refused/failed (JSON on stdout), 2 usage error.
    A refusal is recorded (`import_rejected`, stage only) and raised as
    `BundleImportError(stage, reason)`. An inventory that cannot be read is the
    refusal stage `inventory` (console: 503), never a pass.
-2. `import_validated` is recorded.
+2. Limits: all layers of one bundle together may declare at most 16 quality
+   gates (each is a pytest run inside the request) — otherwise refusal stage
+   `limits`. Then `import_validated` is recorded.
 3. Artifacts are staged in **dependency order** (declared `requires` plus a
-   layer manifest's own `dependencies` on layers in the same bundle).
+   layer manifest's own `dependencies` on layers in the same bundle, with or
+   without `type`). An artifact whose in-bundle dependency did not land fails
+   ("depends on … which did not import") instead of binding to whatever older
+   version this install has.
 4. Per artifact: `artifact_intake_started` (the intent) commits BEFORE the
    intake; then `artifact_staged` (the actual outcome) or `artifact_failed`
    (`phase`, `error_class`). One artifact failing does not stop the others.
@@ -83,9 +89,9 @@ refused/failed (JSON on stdout), 2 usage error.
 | Kind | Intake | Outcome |
 |---|---|---|
 | skill | `SkillInstaller(<corvin_home>/skills_installed)`, checksum = the envelope's sha256. That store is HOST-WIDE, so only the install owner (owner/admin session of the process tenant) may import a skill — same as the manual skill upload | `installed` |
-| layer | `LayerForgeOrchestrator(actor="bundle_import").create_layer_definition` — every gate, enforcement rule and the review run on THIS install. Before that: travelled state dropped, ≤ 16 gates, gate/rule ids short identifiers, each gate names ONE test file under `tests/` | `forged`; detail notes a FLAGGED review on this install |
+| layer | `LayerForgeOrchestrator(actor="bundle_import").create_layer_definition` — every gate, enforcement rule and the review run on THIS install. Before that: travelled state dropped, ≤ 16 gates, gate/rule/target/dependency ids short identifiers (they reach Layer Forge's audit records), each gate names ONE test file under `tests/` (no `::node`) | `forged`; detail notes a FLAGGED review on this install, or that Layer Forge wrote the layer but could not record its last step |
 | plugin | `StagingManager.validate_zip_file` + `store_staged_upload` as `<id>-<version>.zip`; an identical package already pending is reported, not re-staged | `pending_approval` — approve at `/plugin-uploads/{id}/approve` |
-| tool | `ToolQuarantine.stage` — a name that already exists here is refused (`failed`, "already exists"); an identical entry already queued is reused | `quarantined` |
+| tool | `ToolQuarantine.stage` — a name that already exists here (case-insensitively) is refused (`failed`, "already exists"); an entry identical in EVERYTHING the operator reviews (version, description, schema, runtime, code, meta, bundle) is reused, anything else is a new entry | `quarantined` |
 
 ### Tool quarantine — `core/forge_bundle/tool_quarantine.py`
 
@@ -96,8 +102,9 @@ the one its runtime implies, so a tampered `meta.json` cannot redirect a read.
 Staging refuses: spec naming another tool, runtime other than `python`/`bash`,
 an invalid Tool Forge name, non-UTF-8 code, a credential-shaped string, invalid
 travelling meta (requirements must be plain package specifiers — no URLs,
-paths or options; secret refs through the vault validator; budget = known limits
-→ positive numbers).
+paths, options or names pip would read as an archive file such as `x.whl`;
+secret refs through the vault validator; budget = known limits → finite
+positive numbers ≤ 10⁹). Claim/staging leftovers older than an hour are swept.
 
 A decision first **claims** the entry: one atomic rename `<qid>` →
 `.claimed-<qid>`. Of two concurrent decisions exactly one proceeds; a decided
@@ -106,9 +113,12 @@ entry is never listed or decidable again even if deleting it fails.
 `quarantine_accepted` → `MultiRegistry.create(scope="user", meta={…travelled
 meta, "origin": "forge_bundle", "bundle_id", "bundle_version",
 "bundle_tool_version", "origin_verified": False})` → record `artifact_created`.
-A failed create puts the entry back and records `artifact_failed`
-(`phase="accept"`); the licence gate's `PermissionError` becomes
-`QuarantineForbidden` (403). If `artifact_created` cannot commit after the tool
+`Registry.create` writes the tool before its own audit record, so after any
+create error `accept` looks at the registry: a tool carrying this
+`quarantine_id` in its meta exists → it counts as created. Otherwise the entry
+goes back and `artifact_failed` (`phase="accept"`) is recorded — if even that
+record fails, the ORIGINAL error is reported; the licence gate's
+`PermissionError` becomes `QuarantineForbidden` (403). If `artifact_created` cannot commit after the tool
 was created, `OutcomeNotRecorded` says exactly that (503). `reject`: claim →
 record `quarantine_rejected` → delete.
 
@@ -116,7 +126,7 @@ record `quarantine_rejected` → delete.
 
 `known()` reads skills (`skills_gen/*/skill.json` + the installed-skill registry),
 tools (`MultiRegistry.list()`), layers (Layer Forge registry); any unreadable
-store raises `InventoryUnavailable`. Tools carry no version, so an existing tool
+store (including an unreadable forged `skill.json`) raises `InventoryUnavailable`. Tools carry no version, so an existing tool
 satisfies a requirement on ANY version (`AnyVersion`). Installed plugins are not
 enumerated: a bundle requiring a plugin outside itself is refused as stale.
 `exportable(tenant_id, include_skills=)` feeds the export picker; skills only
@@ -125,6 +135,13 @@ not offered; no plugins (CLI only).
 
 ## Console routes (Phase 4) — `routes/forge_bundle_routes.py`
 
+Every route belongs to the install's OWN tenant (router dependency: the session
+tenant must equal the process tenant, else 403 "available to the install owner's
+tenant only"). The audit chokepoint accepts records only for the process tenant
+(ADR-0562 D2) and the skill and project-scope tool stores are host-wide, so
+another tenant could neither complete an import nor be kept out of host-wide
+data (inventory oracle via `/validate`, owner's tools via `/exportable`).
+
 Paths are RELATIVE (`/forge-bundles/...`): the console router is mounted under
 `/v1/console` by the gateway, so a router-level `/v1/console` prefix doubles it.
 `tests/forge_bundle/test_console_routes_e2e.py` mounts the router exactly as the
@@ -132,7 +149,7 @@ gateway does and checks both the real and the doubled path.
 
 | Route | Auth | Answers |
 |---|---|---|
-| `GET /forge-bundles/exportable` | session | `{skills, tools, layers, plugins: []}` |
+| `GET /forge-bundles/exportable` | session | `{skills, tools, layers, plugins: []}` · 503 a store unreadable |
 | `POST /forge-bundles/export` | session + CSRF | ZIP · 400 plugin selection · 403 skill for a non-owner · 422 `ExportError` · 503 audit down |
 | `POST /forge-bundles/validate` (multipart `file`) | session + CSRF | `{valid: true, …report}` / `{valid: false, stage, reason}` · 503 inventory unreadable — writes nothing |
 | `POST /forge-bundles/import` (multipart `file`) | session + CSRF | `ImportResult.to_dict()` · 413 > 50 MiB · 422 `{stage, reason}` · 503 `{message, …outcomes}` when stopped mid-way · 503 inventory/audit |
@@ -140,18 +157,15 @@ gateway does and checks both the real and the doubled path.
 | `POST /forge-bundles/quarantine/{qid}/accept` | session + CSRF | 404 unknown/already decided · 409 name taken · 403 licence gate · 422 changed/unsafe · 503 audit (entry back in queue) / outcome unrecorded · 500 never echoes exception text |
 | `POST /forge-bundles/quarantine/{qid}/reject` | session + CSRF | 404 · 503 audit |
 
-Platform constraint, not a bundle rule: the audit chokepoint
-(`security_events.write_event`, ADR-0562 D2) refuses a record tagged with a
-tenant other than the process tenant. A session of another tenant therefore
-cannot complete any audited forge-bundle mutation (503, nothing written) — the
-same as every other audited console mutation.
-
 UI: `web-next/src/components/forge/ForgeBundlesPanel.tsx` (API in
 `src/lib/api/forge-bundles.ts`) — export picker, import (validate → preview with
 **Unverified origin** → import → per-artifact outcome, including what landed
 when an import stopped), review queue with the packages and secrets each tool
 would get. A late answer for a previously picked file is dropped (generation
-counter); uploads trigger the same stale-CSRF recovery as `api()`.
+counter); a failed check offers "Check again" and the same file can be picked
+again; a running export locks the form; a refusal names its stage; a decision
+refreshes both the queue and the export list; uploads trigger the same
+stale-CSRF recovery as `api()`.
 
 ## Audit events
 
@@ -220,15 +234,21 @@ Six stages, in order, fail-closed. The first defect raises
 | `integrity` | a declared file missing, an undeclared file present, size or sha256 mismatch, CRC failure |
 | `references` | an in-bundle requirement on the wrong version · any dependency cycle |
 | `staleness` | (only with `known`) a requirement outside the bundle that the target does not have |
-| `secrets` | a credential-shaped string (private key, AWS/GitHub/Slack/Google/`sk-` keys, JWT) anywhere: the envelope and every payload at every nesting level · JSON too deeply nested to scan |
+| `secrets` | a credential-shaped string (private key, AWS/GitHub/Slack/Google/`sk-` keys, JWT) anywhere: the envelope and every payload at every nesting level, inside gzip/bz2/xz streams, and in the raw bytes around archive members |
 
 A nested archive is recognised by its CONTENT (`zipfile.is_zipfile`), never by
-its name — a wheel or a renamed `.bin` is opened like a `.zip`. Every payload is
-scanned whatever its encoding: as raw bytes (latin-1, so one invalid UTF-8 byte
-cannot switch the scan off), with NUL bytes removed (ASCII inside UTF-16), and,
-when it parses as JSON, after unescaping (`AKIA…`). The scan reuses
-`core.pii.sensitive.detect_sensitive_types` (a scan error rejects) but only its
-**credential** detectors — its prose detectors fire on ordinary source code. A
+its name — a wheel or a renamed `.bin` is opened like a `.zip`; its raw bytes
+are scanned too (leading data, comment, stored entries). A gzip/bz2/xz stream is
+decompressed within the budget and scanned. Every payload is scanned through
+three views: its bytes projected to printable ASCII (every other byte becomes a
+space, so a length prefix or a high byte can never glue onto a key), its UTF-16
+decodings when it looks like UTF-16 (BOM or ≥ 25 % NUL bytes), and — wherever a
+backslash occurs — the text with `\uXXXX` / `\UXXXXXXXX` / `\xXX` escapes
+resolved (JSON, JSON Lines, YAML, Python, JS). Deliberate obfuscation (base64,
+string splitting) is out of scope for any pattern scanner. Only the credential
+detectors run (`core.pii.sensitive.detect_named_types`, fail-closed) — the prose
+and entropy detectors fire on ordinary source code and cost far more on
+megabytes (≈ 6 s per 40 MiB of random binary, ≈ 2 s per 40 MiB of text). A
 rejection names the detector, never the matched value.
 
 `known` is the target install's inventory, `{kind: {id: versions}}`. Without it,

@@ -28,7 +28,23 @@ from pydantic import BaseModel, Field
 from .. import auth as session_auth
 from ..deps import require_csrf, require_session
 
-router = APIRouter()
+def _host_tenant_session(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> session_auth.SessionRecord:
+    """Every forge-bundle route belongs to the install's own tenant.
+
+    The audit chokepoint accepts records only for the process tenant
+    (ADR-0562 D2), and the skill and project-scope tool stores are host-wide,
+    so another tenant could neither complete an import nor be kept out of
+    host-wide data. Refused up front, with the real reason."""
+    from forge.tenants import current_tenant
+
+    if rec.tenant_id != current_tenant():
+        raise HTTPException(status_code=403, detail="Forge Bundles are available to the install owner's tenant only")
+    return rec
+
+
+router = APIRouter(dependencies=[Depends(_host_tenant_session)])
 
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _ACTOR = "console"
@@ -41,9 +57,8 @@ _HOST_SKILL_TIERS = frozenset({"owner", "admin"})
 
 
 def _may_touch_host_skills(rec: session_auth.SessionRecord) -> bool:
-    from forge.tenants import current_tenant
-
-    return getattr(rec, "tier", None) in _HOST_SKILL_TIERS and rec.tenant_id == current_tenant()
+    # The router dependency already pinned the session to the install's tenant.
+    return getattr(rec, "tier", None) in _HOST_SKILL_TIERS
 
 
 class ArtifactSelection(BaseModel):
@@ -92,9 +107,12 @@ def _report_dict(report) -> dict[str, Any]:
 
 @router.get("/forge-bundles/exportable")
 def exportable(rec: Annotated[session_auth.SessionRecord, Depends(require_session)]) -> dict[str, Any]:
-    from core.forge_bundle.inventory import exportable as _exportable
+    from core.forge_bundle.inventory import InventoryUnavailable, exportable as _exportable
 
-    return _exportable(rec.tenant_id, include_skills=_may_touch_host_skills(rec))
+    try:
+        return _exportable(rec.tenant_id, include_skills=_may_touch_host_skills(rec))
+    except InventoryUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
 
 
 @router.post("/forge-bundles/export")

@@ -43,9 +43,10 @@ INTENDED_STATUS = {
 }
 # Registry state of the exporting install that must never become this install's state.
 LAYER_STATE_KEYS = frozenset({"status", "review_flagged", "review_flags"})
-MAX_IMPORTED_GATES = 16
+MAX_IMPORTED_GATES = 16             # per layer
+MAX_IMPORTED_GATES_PER_BUNDLE = 16  # all layers together: every gate is a pytest run in the request
 _GATE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
-_TEST_FILE_RE = re.compile(r"^tests/[A-Za-z0-9_./-]+\.py(::[A-Za-z0-9_\[\]-]+)?$")
+_TEST_FILE_RE = re.compile(r"^tests/[A-Za-z0-9_./-]+\.py$")
 
 
 class BundleImportError(RuntimeError):
@@ -126,17 +127,27 @@ def import_bundle(data: bytes, *, tenant_id: str, actor: str, may_install_skills
         raise BundleImportError(exc.stage, exc.reason) from None
 
     env = report.envelope
+    total_gates = _count_layer_gates(env, data)
+    if total_gates > MAX_IMPORTED_GATES_PER_BUNDLE:
+        emit("forge_bundle.import_rejected", tenant_id=tenant_id, rejected_stage="limits", actor=actor)
+        raise BundleImportError("limits", f"the bundle's layers declare {total_gates} quality gates; "
+                                          f"at most {MAX_IMPORTED_GATES_PER_BUNDLE} run per import")
     emit("forge_bundle.import_validated", tenant_id=tenant_id,
          bundle_id=env.id, bundle_version=env.version, artifact_count=len(env.artifacts),
          total_uncompressed_bytes=report.total_uncompressed_bytes, actor=actor)
 
     outcomes: list[ArtifactOutcome] = []
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        ordered = _dependency_order(env, zf)
+        ordered, edges = _dependency_order(env, zf)
+        landed: set[tuple[str, str]] = set()
         for i, art in enumerate(ordered):
+            missing = [f"{k} {d}" for k, d in sorted(edges[art.key]) if (k, d) not in landed]
             try:
-                outcomes.append(_stage_one(art, env, zf, tenant_id=tenant_id, actor=actor,
-                                           may_install_skills=may_install_skills))
+                outcome = _stage_one(art, env, zf, tenant_id=tenant_id, actor=actor,
+                                     may_install_skills=may_install_skills, missing_deps=missing)
+                outcomes.append(outcome)
+                if outcome.status not in ("failed", "not_attempted"):
+                    landed.add(art.key)
             except _Aborted as abort:
                 if abort.outcome is not None:
                     outcomes.append(abort.outcome)
@@ -153,7 +164,22 @@ class _Aborted(Exception):
         self.outcome = outcome
 
 
-def _dependency_order(env: BundleEnvelope, zf: zipfile.ZipFile) -> list[ArtifactEntry]:
+def _count_layer_gates(env: BundleEnvelope, data: bytes) -> int:
+    total = 0
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for a in env.artifacts:
+            if a.kind != "layer":
+                continue
+            try:
+                manifest = json.loads(zf.read(f"{a.prefix}manifest.json"))
+                gates = manifest.get("quality_gates", []) if isinstance(manifest, dict) else []
+                total += len(gates) if isinstance(gates, list) else 0
+            except (KeyError, ValueError):
+                pass  # the layer intake reports the broken manifest
+    return total
+
+
+def _dependency_order(env: BundleEnvelope, zf: zipfile.ZipFile) -> tuple[list[ArtifactEntry], dict]:
     """Requirements first. Edges: declared ``requires`` plus, for layers, the
     manifest's own ``dependencies`` on other layers in the same bundle (the
     validator already refused cycles among declared requires)."""
@@ -168,7 +194,9 @@ def _dependency_order(env: BundleEnvelope, zf: zipfile.ZipFile) -> list[Artifact
                 manifest = json.loads(zf.read(f"{a.prefix}manifest.json"))
                 deps = manifest.get("dependencies", []) if isinstance(manifest, dict) else []
                 for d in deps if isinstance(deps, list) else []:
-                    if isinstance(d, dict) and d.get("type") == "layer_definition" and ("layer", d.get("id")) in by_key:
+                    # Layer Forge resolves a dependency by id; a missing "type" still binds.
+                    if (isinstance(d, dict) and d.get("type") in (None, "layer_definition")
+                            and ("layer", d.get("id")) in by_key):
                         edges[a.key].add(("layer", d["id"]))
             except (KeyError, ValueError):
                 pass  # the layer intake reports the broken manifest
@@ -188,11 +216,12 @@ def _dependency_order(env: BundleEnvelope, zf: zipfile.ZipFile) -> list[Artifact
 
     for a in env.artifacts:
         visit(a.key)
-    return order
+    return order, edges
 
 
 def _stage_one(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, *,
-               tenant_id: str, actor: str, may_install_skills: bool) -> ArtifactOutcome:
+               tenant_id: str, actor: str, may_install_skills: bool,
+               missing_deps: list[str]) -> ArtifactOutcome:
     common = dict(tenant_id=tenant_id, bundle_id=env.id, artifact_kind=art.kind,
                   artifact_id=art.id, artifact_version=art.version, actor=actor)
     try:
@@ -200,6 +229,8 @@ def _stage_one(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, *,
     except ForgeBundleAuditError:
         raise _Aborted(None) from None
     try:
+        if missing_deps:
+            raise _IntakeFailed(f"depends on {', '.join(missing_deps)} from this bundle, which did not import")
         if art.kind == "skill" and not may_install_skills:
             raise _IntakeFailed("installing a skill changes the host-wide skill store; only the install owner may do that")
         status, detail = _INTAKES[art.kind](art, env, zf, tenant_id)
@@ -270,6 +301,15 @@ def _check_imported_layer(manifest: dict) -> None:
     for r in rules:
         if not isinstance(r, dict) or not _GATE_ID_RE.match(str(r.get("rule_id", ""))):
             raise _IntakeFailed("layer rule ids must be short identifiers")
+    # Every value Layer Forge writes into the audit chain is an identifier (R2B-8).
+    targets = manifest.get("targets", [])
+    if not isinstance(targets, list) or not all(
+            isinstance(t, dict) and _GATE_ID_RE.match(str(t.get("layer_id", ""))) for t in targets):
+        raise _IntakeFailed("layer target ids must be short identifiers")
+    deps = manifest.get("dependencies", [])
+    if not isinstance(deps, list) or not all(
+            isinstance(d, dict) and _GATE_ID_RE.match(str(d.get("id", ""))) for d in deps):
+        raise _IntakeFailed("layer dependency ids must be short identifiers")
 
 
 def _intake_layer(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, tenant_id: str) -> tuple[str, str]:
@@ -291,11 +331,24 @@ def _intake_layer(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, 
     orch = LayerForgeOrchestrator(tenant_id, actor="bundle_import")
     result = orch.create_layer_definition(manifest)
     if result.status != "SUCCESS":
+        if result.phase == "audit" and _layer_exists(orch, art.id, art.version):
+            # Written, then Layer Forge's own record failed: report what is on disk (R2B-1).
+            return "forged", f"{art.id}@{art.version} (Layer Forge could not record every step)"
         raise _IntakeFailed(f"layer forge refused at the {result.phase} phase")
     detail = result.registry_key or f"{art.id}@{art.version}"
     if result.review_verdict is not None and result.review_verdict.status == "FLAGGED":
         detail += " (this install's review flagged it; promoting needs an override)"
     return "forged", detail
+
+
+def _layer_exists(orch, entry_id: str, version: str) -> bool:
+    from core.orchestration.layer_forge.registry import LayerNotFoundError
+
+    try:
+        orch.registry.get(entry_id, version)
+        return True
+    except LayerNotFoundError:
+        return False
 
 
 def _intake_plugin(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, tenant_id: str) -> tuple[str, str]:
