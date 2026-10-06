@@ -954,6 +954,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "forge_bundle.import_validated": "INFO",
     "forge_bundle.import_rejected": "WARNING",
     "forge_bundle.artifact_staged": "INFO",
+    "forge_bundle.artifact_failed": "WARNING",
+    "forge_bundle.quarantine_accepted": "INFO",
+    "forge_bundle.quarantine_rejected": "INFO",
     # Video Producer — Blender render path (core/skills/os_skills/video_producer/audit.py)
     # Metadata only: file paths, resolution/codec/frame/duration numbers, error_class.
     # NEVER: subprocess stdout/stderr, exception message text.
@@ -3913,14 +3916,26 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "forge_bundle.import_validated": frozenset({
         "bundle_id", "bundle_version", "artifact_count", "total_uncompressed_bytes",
-        "tenant_id", "user_id", "validation_passed", "validation_stages",
+        "unscanned_files_count", "actor", "tenant_id",
     }),
     "forge_bundle.import_rejected": frozenset({
-        "bundle_id", "rejected_stage", "rejected_reason", "tenant_id", "user_id",
+        "rejected_stage", "actor", "tenant_id",
     }),
     "forge_bundle.artifact_staged": frozenset({
-        "bundle_id", "artifact_kind", "artifact_id", "artifact_version",
-        "quarantine_id", "status", "tenant_id", "user_id",
+        "bundle_id", "artifact_kind", "artifact_id", "artifact_version", "status",
+        "actor", "tenant_id",
+    }),
+    "forge_bundle.artifact_failed": frozenset({
+        "bundle_id", "artifact_kind", "artifact_id", "artifact_version", "phase",
+        "error_class", "actor", "tenant_id",
+    }),
+    "forge_bundle.quarantine_accepted": frozenset({
+        "bundle_id", "artifact_kind", "artifact_id", "artifact_version", "quarantine_id",
+        "actor", "tenant_id",
+    }),
+    "forge_bundle.quarantine_rejected": frozenset({
+        "bundle_id", "artifact_kind", "artifact_id", "artifact_version", "quarantine_id",
+        "actor", "tenant_id",
     }),
     # Video Producer — Blender render path (mirrored in
     # core/skills/os_skills/video_producer/audit.py::_ALLOWED_FIELDS).

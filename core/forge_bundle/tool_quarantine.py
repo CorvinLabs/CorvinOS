@@ -1,314 +1,242 @@
-"""Tool Quarantine Workflow — staged tool import (ADR-2229 Phase 3).
+"""Tool quarantine for Forge Bundle imports (ADR-2229 D2, Phase 3).
 
-Tool Forge (core/orchestration/tool_forge/registry.py) has no review state:
-``ToolRegistry.create`` writes executable code straight into the registry. To
-prevent bundles from bypassing operator review, imports stage tools in a
-quarantine directory before the operator approves them into the active registry.
+Tool Forge has no review state: ``Registry.create`` makes a tool callable at
+once. An imported tool therefore lands here first, and only an operator's
+explicit accept calls ``MultiRegistry.create``.
 
-Quarantine storage: ``~/.corvin/tenants/{TENANT_ID}/global/forge/quarantine/tools/``
-Each quarantined tool is stored as:
-  - ``{tool_id}__{bundle_id}__{timestamp}.json`` — the ToolSpec
-  - ``{tool_id}__{bundle_id}__{timestamp}.{sh,py,js}`` — the implementation file
+Layout (tenant-scoped, outside every registry root, so nothing can load it)::
 
-Lifecycle:
-  1. extract_tool_from_bundle() → QuarantinedTool (stored on disk)
-  2. operator reviews quarantine + accepts or rejects
-  3. accept_quarantined_tool() → ToolRegistry.create() called (on approval)
-  4. tool is now active, quarantine entry cleaned up
+    <tenant_home>/global/forge_bundle/quarantine/tools/<qid>/meta.json
+    <tenant_home>/global/forge_bundle/quarantine/tools/<qid>/<impl file>
+
+``qid`` is a random 32-hex token. It is the ONLY handle the console accepts,
+and it is checked against ``QID_RE`` before any path is built from it.
 """
 from __future__ import annotations
 
+import hashlib
 import json
-import time
+import os
+import re
+import shutil
+import tempfile
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.paths import tenant_home
-from core.pii.sensitive import PIIDetectionFailedClosed, detect_sensitive_types
+from .envelope import is_safe_id, is_semver
+from .validate import BundleRejected, _scan_text
+
+QID_RE = re.compile(r"^[0-9a-f]{32}$")
+RUNTIMES = {"python": ".py", "bash": ".sh"}
+_TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_.]{1,128}$")
 
 
 class QuarantineError(RuntimeError):
-    """Tool quarantine operation failed."""
+    """A quarantine entry could not be staged, read, accepted or rejected."""
+
+
+class QuarantineNotFound(QuarantineError):
+    pass
+
+
+class QuarantineConflict(QuarantineError):
+    pass
 
 
 @dataclass(frozen=True)
 class QuarantinedTool:
-    """A tool staged in quarantine, awaiting operator approval."""
-
+    quarantine_id: str
     tool_id: str
-    bundle_id: str
-    timestamp: float
     version: str
-    spec_json: dict[str, Any]  # The ToolSpec
-    impl_data: bytes  # The implementation file (sh, py, js, etc.)
-    impl_ext: str  # File extension: sh, py, js, etc.
+    bundle_id: str
+    bundle_version: str
+    staged_at: str
+    runtime: str
+    description: str
+    input_schema: dict[str, Any]
+    impl_filename: str
+    impl_sha256: str
 
-    @property
-    def quarantine_id(self) -> str:
-        """Unique ID for this quarantine entry."""
-        return f"{self.tool_id}__{self.bundle_id}__{int(self.timestamp)}"
+    def to_public(self) -> dict[str, Any]:
+        return {
+            "quarantine_id": self.quarantine_id,
+            "kind": "tool",
+            "tool_id": self.tool_id,
+            "version": self.version,
+            "bundle_id": self.bundle_id,
+            "bundle_version": self.bundle_version,
+            "staged_at": self.staged_at,
+            "runtime": self.runtime,
+            "description": self.description,
+            "impl_sha256": self.impl_sha256,
+            "origin_verified": False,
+        }
 
-    @property
-    def spec_file(self) -> str:
-        """Filename for the ToolSpec JSON."""
-        return f"{self.quarantine_id}.json"
 
-    @property
-    def impl_file(self) -> str:
-        """Filename for the implementation file."""
-        return f"{self.quarantine_id}.{self.impl_ext}"
+def quarantine_root(tenant_id: str) -> Path:
+    from core.paths import tenant_home
+
+    return tenant_home(tenant_id) / "global" / "forge_bundle" / "quarantine" / "tools"
 
 
-class ToolQuarantineWorkflow:
-    """Manage tool quarantine staging + approval."""
+def _check_qid(qid: str) -> None:
+    if not isinstance(qid, str) or not QID_RE.match(qid):
+        raise QuarantineNotFound("unknown quarantine id")
 
-    def __init__(self, tenant_id: str):
+
+def _validate_tool_name(name: str) -> None:
+    # Same rules Registry.create enforces — refused at staging, not at accept,
+    # so an entry the operator sees can actually be accepted.
+    if not _TOOL_NAME_RE.match(name or "") or ".." in name or name.startswith(".") or name.endswith("."):
+        raise QuarantineError(f"tool name {name!r} is not a valid Tool Forge name")
+
+
+def _scan(text: str, where: str) -> None:
+    try:
+        _scan_text(text, where)
+    except BundleRejected as exc:
+        raise QuarantineError(exc.reason) from None
+
+
+class ToolQuarantine:
+    def __init__(self, tenant_id: str) -> None:
         self.tenant_id = tenant_id
-        self._quarantine_dir = self._get_quarantine_dir()
+        self.root = quarantine_root(tenant_id)
 
-    def _get_quarantine_dir(self) -> Path:
-        """Get the quarantine directory for this tenant, creating it if needed."""
-        home = tenant_home(self.tenant_id)
-        quarantine_dir = home / "global" / "forge" / "quarantine" / "tools"
-        quarantine_dir.mkdir(parents=True, exist_ok=True)
-        return quarantine_dir
-
-    def stage_tool_from_bundle(
-        self,
-        tool_id: str,
-        bundle_id: str,
-        version: str,
-        spec: dict[str, Any],
-        impl_bytes: bytes,
-        impl_ext: str,
-        user_id: str,
+    # ── staging ──────────────────────────────────────────────────────────
+    def stage(
+        self, *, tool_id: str, version: str, bundle_id: str, bundle_version: str,
+        spec: dict[str, Any], impl_bytes: bytes,
     ) -> QuarantinedTool:
-        """Stage a tool from a bundle into quarantine.
+        _validate_tool_name(tool_id)
+        if spec.get("name") != tool_id:
+            raise QuarantineError(f"spec.json names {spec.get('name')!r}, envelope names {tool_id!r}")
+        runtime = spec.get("runtime", "python")
+        if runtime not in RUNTIMES:
+            raise QuarantineError(f"unsupported tool runtime {runtime!r}")
+        if not (is_safe_id(bundle_id) and is_semver(bundle_version) and is_semver(version)):
+            raise QuarantineError("bundle id/version or tool version malformed")
+        input_schema = spec.get("input_schema", {})
+        if not isinstance(input_schema, dict):
+            raise QuarantineError("input_schema must be an object")
+        try:
+            impl_text = impl_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            raise QuarantineError("tool implementation is not UTF-8 text") from None
+        _scan(impl_text, f"tool {tool_id} implementation")
+        _scan(json.dumps(spec), f"tool {tool_id} spec")
 
-        Args:
-            tool_id: The tool's ID (validated by bundle import)
-            bundle_id: The source bundle's ID
-            version: The tool's version
-            spec: The ToolSpec (dict with id, version, description, etc.)
-            impl_bytes: The implementation file bytes (shell, python, etc.)
-            impl_ext: Extension of the implementation file (sh, py, js)
-            user_id: The user staging the tool
-
-        Returns:
-            QuarantinedTool with all details for operator review
-
-        Raises:
-            QuarantineError if the tool contains secrets or storage fails
-        """
-        # Audit-First: check for secrets BEFORE writing anything
-        self._scan_for_secrets(spec, impl_bytes, tool_id)
-
-        timestamp = time.time()
-        quarantined = QuarantinedTool(
-            tool_id=tool_id,
-            bundle_id=bundle_id,
-            timestamp=timestamp,
-            version=version,
-            spec_json=spec,
-            impl_data=impl_bytes,
-            impl_ext=impl_ext,
+        qid = uuid.uuid4().hex
+        impl_filename = "impl" + RUNTIMES[runtime]
+        entry = QuarantinedTool(
+            quarantine_id=qid, tool_id=tool_id, version=version,
+            bundle_id=bundle_id, bundle_version=bundle_version,
+            staged_at=datetime.now(timezone.utc).isoformat(),
+            runtime=runtime, description=str(spec.get("description", ""))[:2000],
+            input_schema=input_schema, impl_filename=impl_filename,
+            impl_sha256=hashlib.sha256(impl_bytes).hexdigest(),
         )
+        meta = {k: v for k, v in entry.__dict__.items()}
 
-        # Write to quarantine directory (atomic: temp file + rename)
-        spec_file = self._quarantine_dir / quarantined.spec_file
-        impl_file = self._quarantine_dir / quarantined.impl_file
-
+        self.root.mkdir(parents=True, exist_ok=True)
+        tmp = Path(tempfile.mkdtemp(prefix=".staging-", dir=self.root))
         try:
-            # Write spec as JSON
-            spec_temp = self._quarantine_dir / f".{quarantined.spec_file}.tmp"
-            spec_temp.write_text(json.dumps(spec, indent=2))
-            spec_temp.replace(spec_file)
-
-            # Write implementation
-            impl_temp = self._quarantine_dir / f".{quarantined.impl_file}.tmp"
-            impl_temp.write_bytes(impl_bytes)
-            impl_temp.replace(impl_file)
-
-            # Make implementation readable only by owner (security)
-            impl_file.chmod(0o600)
-            spec_file.chmod(0o600)
-
-        except (OSError, IOError) as exc:
-            # Clean up any partial writes
-            spec_file.unlink(missing_ok=True)
-            impl_file.unlink(missing_ok=True)
-            raise QuarantineError(
-                f"failed to stage {tool_id} to quarantine: {type(exc).__name__}"
-            ) from exc
-
-        return quarantined
-
-    def accept_quarantined_tool(
-        self, quarantine_id: str, user_id: str
-    ) -> dict[str, Any]:
-        """Promote a quarantined tool to the active registry.
-
-        The caller must then call ``ToolRegistry.create(spec, impl_bytes)`` to
-        activate the tool. This method only handles quarantine cleanup; the
-        actual registry write is the caller's responsibility.
-
-        Args:
-            quarantine_id: The tool's quarantine ID (from QuarantinedTool.quarantine_id)
-            user_id: The operator approving the tool
-
-        Returns:
-            A dict with the spec and impl bytes for registry creation
-
-        Raises:
-            QuarantineError if the quarantine entry is missing or unreadable
-        """
-        # Parse quarantine_id to find the files
-        spec_file = self._quarantine_dir / f"{quarantine_id}.json"
-        # We don't know the impl extension without reading the spec, so scan for it
-        impl_files = list(self._quarantine_dir.glob(f"{quarantine_id}.*"))
-        impl_files = [f for f in impl_files if f.suffix != ".json"]
-
-        if not spec_file.exists():
-            raise QuarantineError(f"quarantine entry not found: {quarantine_id}")
-        if not impl_files:
-            raise QuarantineError(
-                f"implementation file not found for quarantine {quarantine_id}"
-            )
-        if len(impl_files) > 1:
-            raise QuarantineError(
-                f"multiple implementation files for quarantine {quarantine_id}"
-            )
-
-        impl_file = impl_files[0]
-
-        try:
-            spec = json.loads(spec_file.read_text())
-            impl_bytes = impl_file.read_bytes()
-        except (OSError, IOError, json.JSONDecodeError) as exc:
-            raise QuarantineError(
-                f"failed to read quarantine {quarantine_id}: {type(exc).__name__}"
-            ) from exc
-
-        return {"spec": spec, "impl_bytes": impl_bytes}
-
-    def cleanup_quarantine_entry(self, quarantine_id: str) -> None:
-        """Delete a quarantine entry (after acceptance or rejection).
-
-        Args:
-            quarantine_id: The tool's quarantine ID
-
-        Raises:
-            QuarantineError if cleanup fails
-        """
-        spec_file = self._quarantine_dir / f"{quarantine_id}.json"
-        impl_files = list(self._quarantine_dir.glob(f"{quarantine_id}.*"))
-        impl_files = [f for f in impl_files if f.suffix != ".json"]
-
-        try:
-            spec_file.unlink(missing_ok=True)
-            for impl_file in impl_files:
-                impl_file.unlink(missing_ok=True)
+            os.chmod(tmp, 0o700)
+            (tmp / impl_filename).write_bytes(impl_bytes)
+            (tmp / "meta.json").write_text(json.dumps(meta, indent=2))
+            for p in tmp.iterdir():
+                os.chmod(p, 0o600)
+            tmp.rename(self.root / qid)
         except OSError as exc:
-            raise QuarantineError(
-                f"failed to clean up quarantine {quarantine_id}: {type(exc).__name__}"
-            ) from exc
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise QuarantineError(f"could not stage tool {tool_id}: {type(exc).__name__}") from exc
+        return entry
 
-    def list_quarantined_tools(self) -> list[QuarantinedTool]:
-        """List all currently quarantined tools."""
-        quarantined = []
-        for spec_file in self._quarantine_dir.glob("*.json"):
-            try:
-                spec = json.loads(spec_file.read_text())
-                # Parse quarantine_id from filename
-                name_parts = spec_file.stem.split("__")
-                if len(name_parts) < 3:
-                    continue  # Malformed filename
-                tool_id = name_parts[0]
-                bundle_id = name_parts[1]
-                timestamp = float(name_parts[2])
+    # ── reading ──────────────────────────────────────────────────────────
+    def get(self, qid: str) -> QuarantinedTool:
+        _check_qid(qid)
+        meta_path = self.root / qid / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text())
+            return QuarantinedTool(**meta)
+        except FileNotFoundError:
+            raise QuarantineNotFound("unknown quarantine id") from None
+        except (OSError, ValueError, TypeError) as exc:
+            raise QuarantineError(f"quarantine entry {qid} is unreadable") from exc
 
-                # Find implementation file
-                impl_files = list(
-                    self._quarantine_dir.glob(f"{spec_file.stem}.*")
-                )
-                impl_files = [f for f in impl_files if f.suffix != ".json"]
-                if not impl_files:
+    def read_impl(self, entry: QuarantinedTool) -> str:
+        data = (self.root / entry.quarantine_id / entry.impl_filename).read_bytes()
+        if hashlib.sha256(data).hexdigest() != entry.impl_sha256:
+            raise QuarantineError("quarantined implementation changed on disk since staging")
+        return data.decode("utf-8")
+
+    def list(self) -> list[QuarantinedTool]:
+        if not self.root.is_dir():
+            return []
+        out = []
+        for d in self.root.iterdir():
+            if d.is_dir() and QID_RE.match(d.name):
+                try:
+                    out.append(self.get(d.name))
+                except QuarantineError:
                     continue
+        return sorted(out, key=lambda e: e.staged_at, reverse=True)
 
-                impl_file = impl_files[0]
-                impl_bytes = impl_file.read_bytes()
-                impl_ext = impl_file.suffix.lstrip(".")
+    def remove(self, qid: str) -> None:
+        _check_qid(qid)
+        shutil.rmtree(self.root / qid, ignore_errors=False)
 
-                version = spec.get("version", "unknown")
-                quarantined.append(
-                    QuarantinedTool(
-                        tool_id=tool_id,
-                        bundle_id=bundle_id,
-                        timestamp=timestamp,
-                        version=version,
-                        spec_json=spec,
-                        impl_data=impl_bytes,
-                        impl_ext=impl_ext,
-                    )
-                )
-            except (OSError, IOError, json.JSONDecodeError, ValueError):
-                # Skip malformed entries
-                continue
 
-        return sorted(quarantined, key=lambda t: t.timestamp, reverse=True)
+def accept(tenant_id: str, qid: str, *, actor: str) -> QuarantinedTool:
+    """Operator approval: re-scan, audit, then create the tool in the user scope.
 
-    def _scan_for_secrets(
-        self, spec: dict[str, Any], impl_bytes: bytes, tool_id: str
-    ) -> None:
-        """Scan the tool for credential-shaped strings (ADR-0297-style gate).
+    Audit-first: ``forge_bundle.quarantine_accepted`` commits before the
+    registry write; if the write then fails, ``forge_bundle.artifact_failed``
+    records it and the entry stays in quarantine.
+    """
+    from forge.multi_registry import MultiRegistry
 
-        This is fail-closed: any credential shape in the spec or implementation
-        causes the import to be rejected. Never scrub or allow it through.
+    from .audit import emit
 
-        Raises:
-            QuarantineError if a secret shape is detected
-        """
-        # Credential detector types to check for (subset from ADR-0297)
-        secret_types = frozenset(
-            {
-                "private_key_block",
-                "aws_access_key",
-                "aws_secret_key",
-                "github_token",
-                "github_pat",
-                "slack_token",
-                "google_api_key",
-                "prefixed_secret_key",
-                "jwt",
-            }
+    q = ToolQuarantine(tenant_id)
+    entry = q.get(qid)
+    impl = q.read_impl(entry)
+    _scan(impl, f"tool {entry.tool_id} implementation")
+
+    registry = MultiRegistry(tenant_id=tenant_id)
+    if registry.get(entry.tool_id) is not None:
+        raise QuarantineConflict(f"a tool named {entry.tool_id!r} already exists")
+
+    emit("forge_bundle.quarantine_accepted", tenant_id=tenant_id,
+         artifact_kind="tool", artifact_id=entry.tool_id, artifact_version=entry.version,
+         quarantine_id=qid, bundle_id=entry.bundle_id, actor=actor)
+    try:
+        registry.create(
+            scope="user", name=entry.tool_id, description=entry.description,
+            input_schema=entry.input_schema, impl=impl, runtime=entry.runtime,
+            meta={"origin": "forge_bundle", "bundle_id": entry.bundle_id,
+                  "bundle_version": entry.bundle_version, "bundle_tool_version": entry.version,
+                  "origin_verified": False},
         )
+    except Exception as exc:
+        emit("forge_bundle.artifact_failed", tenant_id=tenant_id,
+             artifact_kind="tool", artifact_id=entry.tool_id, artifact_version=entry.version,
+             bundle_id=entry.bundle_id, phase="accept", error_class=type(exc).__name__, actor=actor)
+        raise
+    q.remove(qid)
+    return entry
 
-        # Scan spec JSON (as string)
-        spec_str = json.dumps(spec)
-        try:
-            findings = detect_sensitive_types(spec_str)
-            # Filter for credential types only (ignore other PII like emails)
-            for finding_name in findings:
-                if any(st in finding_name for st in secret_types):
-                    raise QuarantineError(
-                        f"tool {tool_id}: credential shape detected in spec ({finding_name})"
-                    )
-        except PIIDetectionFailedClosed as exc:
-            raise QuarantineError(
-                f"tool {tool_id}: PII detector error during spec scan"
-            ) from exc
 
-        # Scan implementation (try to decode as UTF-8, skip if binary)
-        try:
-            impl_str = impl_bytes.decode("utf-8", errors="ignore")
-            findings = detect_sensitive_types(impl_str)
-            for finding_name in findings:
-                if any(st in finding_name for st in secret_types):
-                    raise QuarantineError(
-                        f"tool {tool_id}: credential shape detected in implementation ({finding_name})"
-                    )
-        except PIIDetectionFailedClosed as exc:
-            raise QuarantineError(
-                f"tool {tool_id}: PII detector error during implementation scan"
-            ) from exc
+def reject(tenant_id: str, qid: str, *, actor: str) -> QuarantinedTool:
+    from .audit import emit
+
+    q = ToolQuarantine(tenant_id)
+    entry = q.get(qid)
+    emit("forge_bundle.quarantine_rejected", tenant_id=tenant_id,
+         artifact_kind="tool", artifact_id=entry.tool_id, artifact_version=entry.version,
+         quarantine_id=qid, bundle_id=entry.bundle_id, actor=actor)
+    q.remove(qid)
+    return entry

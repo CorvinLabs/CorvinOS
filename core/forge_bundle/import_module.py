@@ -1,526 +1,232 @@
-"""Forge Bundle Import — staged per-forge intake (ADR-2229 Phase 3).
+"""Forge Bundle import — staged per-forge intake (ADR-2229 D2/D3, Phase 3).
 
-Import never writes a registry directly. Each artifact type travels through
-its own forge's native intake:
-  - Skill → SkillInstaller (ADR-0674)
-  - Layer → LayerForgeOrchestrator.create_layer_definition (all gates run, lands proposed)
-  - Plugin → StagingManager (operator approval)
-  - Tool → ToolQuarantineWorkflow (quarantine pending approval)
+Import never writes a registry directly. After the whole bundle passes
+``validate_bundle`` (with this install's inventory as ``known``), each artifact
+enters through its own forge's existing intake:
 
-Audit-First Pattern:
-  1. Validate bundle (no writes)
-  2. Emit forge_bundle.import_validated or import_rejected (audit commit FIRST)
-  3. If rejected, raise ImportError
-  4. If approved, stage each artifact
-  5. Emit forge_bundle.artifact_staged for each
+  skill  -> ``SkillInstaller`` (ADR-0674/0680), checksum = the envelope's sha256
+  layer  -> ``LayerForgeOrchestrator.create_layer_definition`` — every gate runs,
+            the result is the same state a locally forged layer reaches
+  plugin -> ``StagingManager`` (ADR-0511): staged ``pending_approval``; the
+            operator approves it under the existing plugin-upload routes
+  tool   -> :mod:`.tool_quarantine` — nothing is callable until an operator
+            accepts it
+
+Audit-first and fail-closed: ``import_rejected`` / ``import_validated`` commit
+before anything is written; for every artifact ``artifact_staged`` commits
+BEFORE its intake runs, and an intake that then fails is recorded as
+``artifact_failed``. A chain write that does not commit raises
+:class:`ForgeBundleAuditError` and stops the import at that point.
 """
 from __future__ import annotations
 
 import io
 import json
+import os
 import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
 
-from core.forge_bundle.audit import emit as emit_audit_event, ForgeBundleAuditError
-from core.forge_bundle.envelope import ArtifactEntry, BundleEnvelope, ARTIFACTS_PREFIX
-from core.forge_bundle.validate import BundleRejected, BundleReport, validate_bundle
-from core.forge_bundle.tool_quarantine import ToolQuarantineWorkflow, QuarantineError
+from .audit import ForgeBundleAuditError, emit
+from .envelope import ArtifactEntry, BundleEnvelope
+from .validate import BundleRejected, BundleReport, validate_bundle
+
+INTENDED_STATUS = {
+    "skill": "installed",
+    "layer": "forged",
+    "plugin": "pending_approval",
+    "tool": "quarantined",
+}
 
 
-class ImportError(RuntimeError):
-    """Bundle import failed."""
+class BundleImportError(RuntimeError):
+    """The bundle was refused before any artifact was staged."""
+
+    def __init__(self, stage: str, reason: str):
+        super().__init__(f"[{stage}] {reason}")
+        self.stage = stage
+        self.reason = reason
+
+
+class _IntakeFailed(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class ArtifactOutcome:
+    kind: str
+    id: str
+    version: str
+    status: str            # installed | forged | pending_approval | quarantined | failed
+    detail: str = ""       # quarantine id, plugin upload id, layer key, or failure reason
+
+    def to_dict(self) -> dict:
+        return dict(self.__dict__)
 
 
 @dataclass(frozen=True)
 class ImportResult:
-    """Outcome of importing a bundle."""
-
     bundle_id: str
     bundle_version: str
-    success: bool
-    artifacts_staged: int
-    artifacts_failed: int
-    errors: list[str]  # One error per failed artifact
+    outcomes: tuple[ArtifactOutcome, ...]
+    unscanned_files: tuple[str, ...]
+    origin_verified: bool = False
+
+    @property
+    def failed(self) -> int:
+        return sum(1 for o in self.outcomes if o.status == "failed")
+
+    def to_dict(self) -> dict:
+        return {
+            "bundle_id": self.bundle_id,
+            "bundle_version": self.bundle_version,
+            "artifact_count": len(self.outcomes),
+            "failed_count": self.failed,
+            "outcomes": [o.to_dict() for o in self.outcomes],
+            "unscanned_files": list(self.unscanned_files),
+            "origin_verified": self.origin_verified,
+        }
 
 
-def extract_bundle(
-    data: bytes, *, known: dict[str, dict[str, list[str]]] | None = None
-) -> tuple[BundleEnvelope, zipfile.ZipFile]:
-    """Extract and validate a bundle from raw ZIP bytes.
+def check_bundle(data: bytes, *, tenant_id: str) -> BundleReport:
+    """Validate against this install's inventory. Pure: writes nothing."""
+    from .inventory import known
 
-    This is the pure validation layer — reads bytes, writes nothing,
-    touches no registry. Validation stages run in order; the first
-    defect rejects the whole bundle.
+    return validate_bundle(data, known=known(tenant_id))
 
-    Args:
-        data: Raw ZIP bytes
-        known: Optional inventory of the target install
-               {kind: {id: [version1, version2, ...]}}
 
-    Returns:
-        (BundleEnvelope, ZipFile) — both live for the duration of the caller's
-        use; the ZipFile is open and must be closed by the caller.
-
-    Raises:
-        BundleRejected if validation fails at any stage
-        ImportError if the ZIP cannot be read at all
-    """
+def import_bundle(data: bytes, *, tenant_id: str, actor: str) -> ImportResult:
     try:
-        zf = zipfile.ZipFile(io.BytesIO(data), "r")
-    except (zipfile.BadZipFile, OSError) as exc:
-        raise ImportError(f"invalid ZIP: {type(exc).__name__}") from exc
-
-    # validate_bundle is pure: it reads the given bytes (via the ZipFile),
-    # returns a report, and raises BundleRejected at the first defect.
-    report = validate_bundle(data, known=known)
-    return report.envelope, zf
-
-
-def import_bundle(
-    data: bytes,
-    *,
-    tenant_id: str,
-    user_id: str,
-    staging_only: bool = False,
-) -> ImportResult:
-    """Import a bundle into the target install.
-
-    Audit-First: validation report is emitted BEFORE staging begins. If
-    validation fails, forge_bundle.import_rejected is emitted and ImportError
-    is raised.
-
-    Each artifact type reuses its own forge's intake (no new write paths):
-    - Skill: SkillInstaller (ADR-0674)
-    - Layer: create_layer_definition (all gates run, lands proposed) (ADR-2222)
-    - Plugin: StagingManager (operator approval) (ADR-0511)
-    - Tool: ToolQuarantineWorkflow (quarantine pending) (ADR-2229 Phase 3)
-
-    Args:
-        data: Raw ZIP bytes
-        tenant_id: The target tenant
-        user_id: The operator performing the import
-        staging_only: If True, stage everything without calling the final
-                      intake (for testing/preview). Default False.
-
-    Returns:
-        ImportResult with artifact counts and any per-artifact errors
-
-    Raises:
-        ImportError if validation fails or audit write fails
-        ForgeBundleAuditError if audit chain write does not commit
-    """
-    # Step 1: Extract and validate (pure, no writes)
-    known = _build_known_inventory(tenant_id)
-    try:
-        envelope, zf = extract_bundle(data, known=known)
+        report = check_bundle(data, tenant_id=tenant_id)
     except BundleRejected as exc:
-        # Emit rejection to audit chain FIRST
-        try:
-            emit_audit_event(
-                "forge_bundle.import_rejected",
-                tenant_id=tenant_id,
-                bundle_id="unknown",  # May not be parseable
-                rejected_stage=exc.stage,
-                rejected_reason=exc.reason,
-                user_id=user_id,
-            )
-        except ForgeBundleAuditError:
-            # Audit write failed — operation is blocked (fail-closed)
-            raise ImportError("audit chain write failed (bundle import rejected)") from None
-        raise ImportError(f"bundle validation failed: [{exc.stage}] {exc.reason}") from exc
-    except ImportError as exc:
-        # ZIP read error — cannot reach audit
-        raise ImportError(f"cannot read bundle: {str(exc)}") from exc
+        emit("forge_bundle.import_rejected", tenant_id=tenant_id,
+             rejected_stage=exc.stage, actor=actor)
+        raise BundleImportError(exc.stage, exc.reason) from None
 
-    # Step 2: Emit validation success to audit chain (BEFORE staging)
+    env = report.envelope
+    emit("forge_bundle.import_validated", tenant_id=tenant_id,
+         bundle_id=env.id, bundle_version=env.version,
+         artifact_count=len(env.artifacts),
+         total_uncompressed_bytes=report.total_uncompressed_bytes,
+         unscanned_files_count=len(report.unscanned_files), actor=actor)
+
+    outcomes: list[ArtifactOutcome] = []
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for art in env.artifacts:
+            outcomes.append(_stage_one(art, env, zf, tenant_id=tenant_id, actor=actor))
+
+    return ImportResult(env.id, env.version, tuple(outcomes), report.unscanned_files)
+
+
+def _stage_one(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, *,
+               tenant_id: str, actor: str) -> ArtifactOutcome:
+    common = dict(tenant_id=tenant_id, bundle_id=env.id, artifact_kind=art.kind,
+                  artifact_id=art.id, artifact_version=art.version, actor=actor)
+    emit("forge_bundle.artifact_staged", status=INTENDED_STATUS[art.kind], **common)
     try:
-        emit_audit_event(
-            "forge_bundle.import_validated",
-            tenant_id=tenant_id,
-            bundle_id=envelope.id,
-            bundle_version=envelope.version,
-            artifact_count=len(envelope.artifacts),
-            total_uncompressed_bytes=0,  # Computed from artifacts
-            user_id=user_id,
-            validation_passed=True,
-            validation_stages=",".join(["container", "envelope", "integrity", "references", "staleness", "secrets"]),
-        )
-    except ForgeBundleAuditError as exc:
-        raise ImportError(
-            "audit chain write failed (bundle import validated)"
-        ) from exc
-
-    # Step 3: Stage each artifact through its forge's intake
-    result = ImportResult(
-        bundle_id=envelope.id,
-        bundle_version=envelope.version,
-        success=True,
-        artifacts_staged=0,
-        artifacts_failed=0,
-        errors=[],
-    )
-
-    for artifact in envelope.artifacts:
-        try:
-            _stage_artifact(
-                artifact,
-                zf,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                staging_only=staging_only,
-            )
-            result.artifacts_staged += 1
-        except (ImportError, QuarantineError, Exception) as exc:
-            result.artifacts_failed += 1
-            result.errors.append(
-                f"{artifact.kind}/{artifact.id}@{artifact.version}: {type(exc).__name__}"
-            )
-            # Continue staging others (don't stop on first failure)
-
-    result.success = result.artifacts_failed == 0
-    zf.close()
-    return result
+        detail = _INTAKES[art.kind](art, env, zf, tenant_id)
+    except ForgeBundleAuditError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — any intake failure is recorded, then reported
+        emit("forge_bundle.artifact_failed", phase="intake",
+             error_class=type(exc).__name__, **common)
+        reason = str(exc) if isinstance(exc, _IntakeFailed) else type(exc).__name__
+        return ArtifactOutcome(art.kind, art.id, art.version, "failed", reason[:500])
+    return ArtifactOutcome(art.kind, art.id, art.version, INTENDED_STATUS[art.kind], detail)
 
 
-def _stage_artifact(
-    artifact: ArtifactEntry,
-    zf: zipfile.ZipFile,
-    *,
-    tenant_id: str,
-    user_id: str,
-    staging_only: bool = False,
-) -> None:
-    """Stage one artifact from the bundle through its forge's intake.
-
-    Raises:
-        ImportError if staging fails
-    """
-    if artifact.kind == "skill":
-        _intake_skill(artifact, zf, tenant_id=tenant_id, user_id=user_id)
-    elif artifact.kind == "layer":
-        _intake_layer(
-            artifact, zf, tenant_id=tenant_id, user_id=user_id, staging_only=staging_only
-        )
-    elif artifact.kind == "plugin":
-        _intake_plugin(artifact, zf, tenant_id=tenant_id, user_id=user_id)
-    elif artifact.kind == "tool":
-        _intake_tool(artifact, zf, tenant_id=tenant_id, user_id=user_id)
-    else:
-        raise ImportError(f"unknown artifact kind: {artifact.kind}")
+def _files(art: ArtifactEntry, zf: zipfile.ZipFile) -> dict[str, bytes]:
+    """Payload files keyed by their name relative to the artifact's prefix."""
+    return {f.path[len(art.prefix):]: zf.read(f.path) for f in art.files}
 
 
-def _intake_skill(
-    artifact: ArtifactEntry,
-    zf: zipfile.ZipFile,
-    *,
-    tenant_id: str,
-    user_id: str,
-) -> None:
-    """Intake a skill artifact through SkillInstaller (ADR-0674).
+def _single(art: ArtifactEntry, zf: zipfile.ZipFile) -> tuple[str, bytes]:
+    files = _files(art, zf)
+    if len(files) != 1:
+        raise _IntakeFailed(f"{art.kind} payload must be exactly one file, got {len(files)}")
+    return next(iter(files.items()))
 
-    The skill payload is a ZIP in ADR-0674 format under artifacts/skill/<id>@<version>/.
-    SkillInstaller handles checksum verification, dependency resolution, and atomic
-    installation.
 
-    Raises:
-        ImportError if intake fails
-    """
+def _intake_skill(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, tenant_id: str) -> str:
+    from forge import paths as _forge_paths
+
     from core.skills.skill_installer import SkillInstaller
 
-    # Extract the skill ZIP from the bundle
-    skill_prefix = artifact.prefix
-    skill_zip_path = None
-    for file_entry in artifact.files:
-        if file_entry.path.startswith(skill_prefix):
-            file_path = file_entry.path
-            skill_zip_path = Path(file_path)
-            break
-
-    if not skill_zip_path:
-        raise ImportError(
-            f"skill {artifact.id}: no files in bundle (corrupt artifact)"
-        )
-
-    # Extract the skill ZIP bytes from the bundle
-    try:
-        skill_zip_bytes = zf.read(str(skill_zip_path))
-    except KeyError as exc:
-        raise ImportError(
-            f"skill {artifact.id}: missing file in bundle: {skill_zip_path}"
-        ) from exc
-
-    # Write to temp file for SkillInstaller (it expects a file path)
-    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-        tmp.write(skill_zip_bytes)
-        tmp_path = Path(tmp.name)
-
-    try:
-        installer = SkillInstaller()
-        metadata = {
-            "skill_id": artifact.id,
-            "version": artifact.version,
-            "dependencies": [],
-        }
-        success, message = installer.install_skill(tmp_path, "", metadata)
-        if not success:
-            raise ImportError(f"skill {artifact.id}: {message}")
-    finally:
-        tmp_path.unlink(missing_ok=True)
-
-    # Emit audit event for the staged skill
-    try:
-        emit_audit_event(
-            "forge_bundle.artifact_staged",
-            tenant_id=tenant_id,
-            bundle_id=artifact.key[1],  # This is not ideal; ideally we'd pass bundle_id
-            artifact_kind="skill",
-            artifact_id=artifact.id,
-            artifact_version=artifact.version,
-            quarantine_id="",
-            status="installed",
-            user_id=user_id,
-        )
-    except ForgeBundleAuditError:
-        # Audit write failed after successful install — log and continue
-        pass
+    name, payload = _single(art, zf)
+    sha = next(f.sha256 for f in art.files)
+    with tempfile.TemporaryDirectory() as tmp:
+        zip_path = Path(tmp) / Path(name).name
+        zip_path.write_bytes(payload)
+        installer = SkillInstaller(_forge_paths.corvin_home() / "skills_installed")
+        ok, message = installer.install_skill(
+            zip_path, sha, {"skill_id": art.id, "version": art.version, "dependencies": []})
+    if not ok:
+        raise _IntakeFailed(f"skill installer refused: {message}")
+    return f"{art.id}@{art.version}"
 
 
-def _intake_layer(
-    artifact: ArtifactEntry,
-    zf: zipfile.ZipFile,
-    *,
-    tenant_id: str,
-    user_id: str,
-    staging_only: bool = False,
-) -> None:
-    """Intake a layer artifact through LayerForgeOrchestrator (ADR-2222).
-
-    The layer payload is a manifest JSON under artifacts/layer/<id>@<version>/.
-    create_layer_definition runs all quality gates and lands the definition in
-    proposed state (not active).
-
-    Raises:
-        ImportError if intake fails
-    """
+def _intake_layer(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, tenant_id: str) -> str:
     from core.orchestration.layer_forge.orchestrator import LayerForgeOrchestrator
 
-    # Find the manifest file in the artifact
-    layer_prefix = artifact.prefix
-    manifest_path = None
-    for file_entry in artifact.files:
-        if file_entry.path.endswith("manifest.json"):
-            manifest_path = file_entry.path
-            break
-
-    if not manifest_path:
-        raise ImportError(
-            f"layer {artifact.id}: no manifest.json in bundle"
-        )
-
-    # Extract manifest bytes
+    files = _files(art, zf)
+    if "manifest.json" not in files:
+        raise _IntakeFailed("layer payload has no manifest.json")
     try:
-        manifest_bytes = zf.read(str(manifest_path))
-        manifest = json.loads(manifest_bytes)
-    except (KeyError, json.JSONDecodeError) as exc:
-        raise ImportError(
-            f"layer {artifact.id}: invalid manifest: {type(exc).__name__}"
-        ) from exc
-
-    if not staging_only:
-        # Call LayerForgeOrchestrator to create the layer definition
-        # (This will run all quality gates and land it in proposed state)
-        try:
-            orchestrator = LayerForgeOrchestrator(tenant_id)
-            layer_def = orchestrator.create_layer_definition(
-                manifest, user_id=user_id, source="bundle_import"
-            )
-            status = "proposed"
-        except Exception as exc:
-            raise ImportError(
-                f"layer {artifact.id}: creation failed: {type(exc).__name__}"
-            ) from exc
-    else:
-        status = "staged"
-
-    # Emit audit event
-    try:
-        emit_audit_event(
-            "forge_bundle.artifact_staged",
-            tenant_id=tenant_id,
-            bundle_id=artifact.key[1],
-            artifact_kind="layer",
-            artifact_id=artifact.id,
-            artifact_version=artifact.version,
-            quarantine_id="",
-            status=status,
-            user_id=user_id,
-        )
-    except ForgeBundleAuditError:
-        pass
+        manifest = json.loads(files["manifest.json"])
+    except ValueError:
+        raise _IntakeFailed("layer manifest.json is not JSON") from None
+    if manifest.get("id") != art.id or manifest.get("version") != art.version:
+        raise _IntakeFailed("layer manifest id/version differ from the envelope")
+    result = LayerForgeOrchestrator(tenant_id, actor="bundle_import").create_layer_definition(manifest)
+    if result.status != "SUCCESS":
+        raise _IntakeFailed(f"layer forge refused at {result.phase}: {result.error}")
+    return result.registry_key or f"{art.id}@{art.version}"
 
 
-def _intake_plugin(
-    artifact: ArtifactEntry,
-    zf: zipfile.ZipFile,
-    *,
-    tenant_id: str,
-    user_id: str,
-) -> None:
-    """Intake a plugin artifact through StagingManager (ADR-0511).
-
-    The plugin payload is a ZIP in ADR-0511 format. StagingManager stages it
-    and requires operator approval before it becomes active.
-
-    Raises:
-        ImportError if intake fails
-    """
+def _intake_plugin(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, tenant_id: str) -> str:
     from core.plugins.staging import StagingManager
 
-    # Find the plugin ZIP in the artifact
-    plugin_prefix = artifact.prefix
-    plugin_zip_path = None
-    for file_entry in artifact.files:
-        if file_entry.path.startswith(plugin_prefix):
-            plugin_zip_path = file_entry.path
-            break
-
-    if not plugin_zip_path:
-        raise ImportError(
-            f"plugin {artifact.id}: no files in bundle"
-        )
-
-    # Extract the plugin ZIP bytes
+    _name, payload = _single(art, zf)
+    manager = StagingManager(tenant_id)
+    fd, tmp_name = tempfile.mkstemp(dir=manager.staging_root, prefix="bundle.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
     try:
-        plugin_zip_bytes = zf.read(str(plugin_zip_path))
-    except KeyError as exc:
-        raise ImportError(
-            f"plugin {artifact.id}: missing file in bundle: {plugin_zip_path}"
-        ) from exc
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(payload)
+        ok, manifest, errors = manager.validate_zip_file(tmp_path)
+        if not ok:
+            raise _IntakeFailed("not an ADR-0511 plugin package: " + "; ".join(errors[:5]))
+        upload_id = manager.compute_file_hash(tmp_path)[:16]
+        manager.store_staged_upload(upload_id, tmp_path, manifest)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return upload_id
 
-    # Stage through StagingManager
+
+def _intake_tool(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, tenant_id: str) -> str:
+    from .tool_quarantine import QuarantineError, ToolQuarantine
+
+    files = _files(art, zf)
+    if "spec.json" not in files or len(files) != 2:
+        raise _IntakeFailed("tool payload must be spec.json plus exactly one implementation file")
     try:
-        staging_manager = StagingManager(tenant_id)
-        staged_id = staging_manager.stage_plugin_from_bytes(
-            plugin_zip_bytes,
-            plugin_id=artifact.id,
-            version=artifact.version,
-            source="bundle_import",
-        )
-    except Exception as exc:
-        raise ImportError(
-            f"plugin {artifact.id}: staging failed: {type(exc).__name__}"
-        ) from exc
-
-    # Emit audit event
+        spec = json.loads(files.pop("spec.json"))
+    except ValueError:
+        raise _IntakeFailed("tool spec.json is not JSON") from None
+    (_impl_name, impl_bytes), = files.items()
     try:
-        emit_audit_event(
-            "forge_bundle.artifact_staged",
-            tenant_id=tenant_id,
-            bundle_id=artifact.key[1],
-            artifact_kind="plugin",
-            artifact_id=artifact.id,
-            artifact_version=artifact.version,
-            quarantine_id="",
-            status="staged",
-            user_id=user_id,
-        )
-    except ForgeBundleAuditError:
-        pass
-
-
-def _intake_tool(
-    artifact: ArtifactEntry,
-    zf: zipfile.ZipFile,
-    *,
-    tenant_id: str,
-    user_id: str,
-) -> None:
-    """Intake a tool artifact through ToolQuarantineWorkflow (ADR-2229 Phase 3).
-
-    The tool payload is spec.json + an implementation file (shell, python, js, etc.).
-    Tools are quarantined and require operator approval before activation.
-
-    Raises:
-        ImportError if intake fails
-    """
-    # Find spec.json and implementation file in the artifact
-    tool_prefix = artifact.prefix
-    spec_path = None
-    impl_path = None
-
-    for file_entry in artifact.files:
-        if file_entry.path == f"{tool_prefix}spec.json":
-            spec_path = file_entry.path
-        elif file_entry.path.startswith(tool_prefix) and file_entry.path != f"{tool_prefix}spec.json":
-            impl_path = file_entry.path
-
-    if not spec_path or not impl_path:
-        raise ImportError(
-            f"tool {artifact.id}: missing spec.json or implementation file"
-        )
-
-    # Extract spec and implementation
-    try:
-        spec_bytes = zf.read(str(spec_path))
-        spec = json.loads(spec_bytes)
-        impl_bytes = zf.read(str(impl_path))
-    except (KeyError, json.JSONDecodeError) as exc:
-        raise ImportError(
-            f"tool {artifact.id}: invalid spec: {type(exc).__name__}"
-        ) from exc
-
-    # Determine implementation file extension
-    impl_ext = impl_path.split(".")[-1] if "." in impl_path else "bin"
-
-    # Stage through ToolQuarantineWorkflow
-    try:
-        quarantine = ToolQuarantineWorkflow(tenant_id)
-        quarantined_tool = quarantine.stage_tool_from_bundle(
-            tool_id=artifact.id,
-            bundle_id=artifact.key[1],
-            version=artifact.version,
-            spec=spec,
-            impl_bytes=impl_bytes,
-            impl_ext=impl_ext,
-            user_id=user_id,
-        )
+        entry = ToolQuarantine(tenant_id).stage(
+            tool_id=art.id, version=art.version, bundle_id=env.id, bundle_version=env.version,
+            spec=spec, impl_bytes=impl_bytes)
     except QuarantineError as exc:
-        raise ImportError(f"tool {artifact.id}: quarantine failed: {str(exc)}") from exc
-
-    # Emit audit event with quarantine_id
-    try:
-        emit_audit_event(
-            "forge_bundle.artifact_staged",
-            tenant_id=tenant_id,
-            bundle_id=artifact.key[1],
-            artifact_kind="tool",
-            artifact_id=artifact.id,
-            artifact_version=artifact.version,
-            quarantine_id=quarantined_tool.quarantine_id,
-            status="quarantined",
-            user_id=user_id,
-        )
-    except ForgeBundleAuditError:
-        pass
+        raise _IntakeFailed(f"tool quarantine refused: {exc}") from None
+    return entry.quarantine_id
 
 
-def _build_known_inventory(tenant_id: str) -> dict[str, dict[str, list[str]]]:
-    """Build an inventory of currently available artifacts in the target install.
-
-    This is used by the staleness validation stage to check that all artifact
-    references can be satisfied.
-
-    Returns:
-        {kind: {id: [version1, version2, ...]}}
-
-    Implementation is a stub for now; a complete version would query:
-    - Skills: SkillInstaller registry
-    - Layers: LayerForgeOrchestrator registry
-    - Plugins: plugin registry
-    - Tools: ToolRegistry
-    """
-    # TODO: Implement full inventory discovery
-    return {"skill": {}, "layer": {}, "plugin": {}, "tool": {}}
+_INTAKES = {
+    "skill": _intake_skill,
+    "layer": _intake_layer,
+    "plugin": _intake_plugin,
+    "tool": _intake_tool,
+}

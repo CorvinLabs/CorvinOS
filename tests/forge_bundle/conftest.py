@@ -152,3 +152,55 @@ def cli_runner(tmp_corvin_home: Path) -> Callable[[list[str]], subprocess.Comple
             env={**os.environ},
         )
     return _run
+
+
+@pytest.fixture
+def make_plugin_package(tmp_path: Path) -> Callable[..., Path]:
+    """An ADR-0511 plugin ZIP (manifest.json with name/version/author) — what StagingManager accepts."""
+    def _make(plugin_id: str = "acme-audit-sink", version: str = "0.5.0") -> Path:
+        pkg = tmp_path / f"{plugin_id}-{version}.zip"
+        with zipfile.ZipFile(pkg, "w") as zf:
+            zf.writestr("manifest.json", json.dumps({"name": plugin_id, "version": version, "author": "acme"}))
+            zf.writestr("src/plugin.py", "def setup():\n    return None\n")
+        return pkg
+    return _make
+
+
+@pytest.fixture(autouse=True)
+def _layer_review_passes(monkeypatch):
+    """Layer Forge's REVIEW phase calls the Anthropic API — the one external
+    boundary these tests replace. Every other gate runs for real."""
+    from core.orchestration.layer_forge import orchestrator
+    from core.orchestration.layer_forge.review import ReviewVerdict
+
+    monkeypatch.setattr(orchestrator, "review_layer_definition",
+                        lambda manifest, enforcement, **_k: ReviewVerdict("PASS", flags=[]))
+
+
+@pytest.fixture
+def chain_events(tmp_corvin_home: Path) -> Callable[[], list[dict]]:
+    def _read() -> list[dict]:
+        chain = tmp_corvin_home / "tenants" / TENANT_ID / "global" / "forge" / "audit.jsonl"
+        if not chain.exists():
+            return []
+        return [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+    return _read
+
+
+@pytest.fixture
+def console_client(tmp_corvin_home: Path):
+    """The console router mounted EXACTLY as corvin_gateway/app.py mounts it
+    (``prefix="/v1/console"``), with a real session cookie + CSRF token."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from corvin_console import auth
+    from corvin_console.app import router
+
+    rec = auth.create_session(tenant_id=TENANT_ID, token_fingerprint="test-fp")
+    csrf = auth.derive_csrf_token(rec.csrf_secret, rec.sid)
+    app = FastAPI()
+    app.include_router(router, prefix="/v1/console")
+    client = TestClient(app, raise_server_exceptions=False)
+    client.cookies.set("corvin_console_sid", rec.sid)
+    return client, csrf

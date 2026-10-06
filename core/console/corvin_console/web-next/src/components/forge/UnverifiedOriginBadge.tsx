@@ -1,26 +1,15 @@
-import React from 'react';
-import { AlertCircle } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
+import { AlertCircle } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 
-/**
- * UnverifiedOriginBadge — reusable badge for externally-imported artifacts
- *
- * Shows a warning that an artifact was imported from an external bundle
- * and has not been cryptographically verified. Always visible in import
- * preview and quarantine panels.
- *
- * ADR-2229 Phase 4: All imported artifacts carry this badge until reviewed.
- */
-export const UnverifiedOriginBadge: React.FC = () => {
+/** Bundle format v1 carries no origin proof: checksums show the archive was not
+ *  altered in transit, not who made it. Every imported artifact shows this. */
+export function UnverifiedOriginBadge() {
   return (
-    <Badge
-      variant="outline"
-      className="bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-700 gap-1"
-    >
-      <AlertCircle className="w-3 h-3" />
+    <Badge variant="warn" className="gap-1" title="Checksums prove integrity in transit, not who built this bundle.">
+      <AlertCircle className="h-3 w-3" />
       Unverified origin
     </Badge>
   );
-};
+}
 
 export default UnverifiedOriginBadge;

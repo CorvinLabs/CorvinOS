@@ -291,21 +291,14 @@ router.include_router(monitoring_route.router, prefix="/monitoring", tags=["cons
 router.include_router(skills.router, tags=["console-skills"])
 # Unified Forge panel (consolidates tools, skills, os-skills, graph, audit)
 router.include_router(forge_unified_route.router, prefix="/forge", tags=["console-forge-unified"])
-# ADR-2229 Phase 3 — Forge Bundle import endpoint
+# ADR-2229 Phase 3/4 — Forge Bundle export/import/quarantine. Paths are
+# relative ("/forge-bundles/..."): this console router is wrapped in ANOTHER
+# "/v1/console" prefix in corvin_gateway/app.py, so a router-level
+# "/v1/console/..." prefix doubles it (the state until 2026-10-06).
 router.include_router(forge_bundle_route.router, tags=["console-forge-bundles"])
 # CONCEPT-0097 Phase 1 — Federation local-agent registry (A2A cross-peer
 # discovery/delegation deliberately out of scope; see the Phase 1 ADR).
-# federation_routes.router's own prefix is "/federation" (relative) — NOT
-# "/v1/console/federation" — because this console router gets wrapped in
-# ANOTHER "/v1/console" prefix one level up, in corvin_gateway/app.py
-# (``app.include_router(_console_app.router, prefix="/v1/console")``).
-# forge_bundle_routes.py two lines up gets this wrong (bakes the full
-# "/v1/console/forge-bundles" into its own router prefix), which double-
-# prefixes it to "/v1/console/v1/console/forge-bundles/..." and makes every
-# forge-bundles endpoint unreachable in production — confirmed 2026-10-06
-# against a live side-port instance of the real app; flagged separately,
-# not fixed here (out of this change's scope, pre-existing, not introduced
-# by this router).
+# federation_routes.router's own prefix is "/federation" (relative), same rule.
 router.include_router(federation_route.router, tags=["console-federation"])
 # ADR-0681 Phase 5 — Console Skill Manager (install, list, uninstall)
 router.include_router(skill_manager_route.router, prefix="/skills-manager", tags=["console-skill-manager"])

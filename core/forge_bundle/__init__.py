@@ -1,10 +1,9 @@
 """Forge Bundle — cross-forge ZIP envelope (ADR-2229).
 
-Phase 1: envelope schema + fail-closed validator. Pure: reads the bytes it is
-given, writes nothing, touches no registry. Export/import entry points come in
-later phases and hand each artifact to its own forge's intake.
-
-Phase 3: import logic + tool quarantine workflow.
+Phase 1 ``validate``: envelope schema + fail-closed validator (pure).
+Phase 2 ``export``: read-only collection through each forge's own store.
+Phase 3 ``import_module`` + ``tool_quarantine``: staged per-forge intake.
+Phase 4: console routes in ``corvin_console/routes/forge_bundle_routes.py``.
 """
 from .envelope import ARTIFACT_KINDS, FORMAT, FORMAT_VERSION, LIMITS, ArtifactEntry, BundleEnvelope
 from .export import (
@@ -16,18 +15,9 @@ from .export import (
     ToolSelection,
     build_bundle,
 )
-from .validate import BundleReport, BundleRejected, validate_bundle
-from .import_module import (
-    ImportError,
-    ImportResult,
-    extract_bundle,
-    import_bundle,
-)
-from .tool_quarantine import (
-    QuarantineError,
-    QuarantinedTool,
-    ToolQuarantineWorkflow,
-)
+from .import_module import ArtifactOutcome, BundleImportError, ImportResult, check_bundle, import_bundle
+from .tool_quarantine import QuarantineConflict, QuarantinedTool, QuarantineError, QuarantineNotFound, ToolQuarantine
+from .validate import BundleRejected, BundleReport, validate_bundle
 
 __all__ = [
     "ARTIFACT_KINDS",
@@ -35,22 +25,25 @@ __all__ = [
     "FORMAT_VERSION",
     "LIMITS",
     "ArtifactEntry",
+    "ArtifactOutcome",
     "BundleEnvelope",
+    "BundleImportError",
     "BundleReport",
     "BundleRejected",
     "BundleResult",
     "ExportError",
-    "ImportError",
     "ImportResult",
     "LayerSelection",
     "PluginSelection",
+    "QuarantineConflict",
     "QuarantineError",
+    "QuarantineNotFound",
     "QuarantinedTool",
     "SkillSelection",
+    "ToolQuarantine",
     "ToolSelection",
-    "ToolQuarantineWorkflow",
     "build_bundle",
-    "extract_bundle",
+    "check_bundle",
     "import_bundle",
     "validate_bundle",
 ]

@@ -12,10 +12,10 @@ it passes the same gates as a locally forged one.
 
 | Phase | What | State |
 |---|---|---|
-| 1 | Envelope schema + fail-closed validator | **built** — pure library, no entry point |
-| 2 | Export | **built** — CLI only (`scripts/forge_bundle_cli.py export`); no console route yet |
-| 3 | Import → per-forge intake, incl. a new tool quarantine | not built |
-| 4 | Console UI in the Forge panel | not built |
+| 1 | Envelope schema + fail-closed validator | **built** |
+| 2 | Export | **built** — CLI (`scripts/forge_bundle_cli.py export`) + console route |
+| 3 | Import → per-forge intake, incl. the tool quarantine | **built** — `import_module.py`, `tool_quarantine.py`, `inventory.py` |
+| 4 | Console UI | **built** — Forge → **Bundles** tab (`/app/forge?tab=bundles`) |
 
 ## Export (Phase 2) — `core/forge_bundle/export.py`
 
@@ -40,10 +40,9 @@ caller, not auto-resolved from the registries — nothing in Skill/Tool/Layer
 exposes a uniform dependency list to walk. The CLI does not expose `requires`
 yet; use `build_bundle` directly for that.
 
-Audits exactly one event, after a successful build: `forge_bundle.exported`
-(`bundle_id`, `bundle_version`, `artifact_count`, `total_bytes`, `tenant_id`).
-A rejected export (self-validation failure, missing artifact) is reported to
-the caller but not separately audited in Phase 2.
+Audits exactly one event, after a successful build: `forge_bundle.exported`.
+A refused export (self-validation failure, missing artifact) is reported to
+the caller but not audited — nothing changed.
 
 ### CLI
 
@@ -57,6 +56,102 @@ python scripts/forge_bundle_cli.py export \
 ```
 
 Exit codes: 0 success, 1 refused/failed, 2 usage error.
+
+## Import (Phase 3) — `core/forge_bundle/import_module.py`
+
+`import_bundle(data, *, tenant_id, actor) -> ImportResult` first runs
+`validate_bundle(data, known=inventory.known(tenant_id))` — the staleness stage
+always runs on import. A rejected bundle writes nothing except
+`forge_bundle.import_rejected` (stage only, never the reason text) and raises
+`BundleImportError(stage, reason)`.
+
+A valid bundle is recorded (`forge_bundle.import_validated`), then each artifact
+goes through its OWN forge. For every artifact `forge_bundle.artifact_staged`
+commits BEFORE the intake runs; an intake that then fails is recorded as
+`forge_bundle.artifact_failed` (`phase`, `error_class`) and reported in that
+artifact's outcome — the other artifacts still land. A chain write that does
+not commit raises `ForgeBundleAuditError` and stops the import there.
+
+| Kind | Intake | Outcome status |
+|---|---|---|
+| skill | `SkillInstaller(<corvin_home>/skills_installed)`, checksum = the envelope's sha256 | `installed` |
+| layer | `LayerForgeOrchestrator(actor="bundle_import").create_layer_definition` — every gate, enforcement and the review run | `forged` (same registry state as a locally forged layer) |
+| plugin | `StagingManager.validate_zip_file` + `store_staged_upload` — the plugin-upload store | `pending_approval` — approve at `/plugin-uploads/{id}/approve` |
+| tool | `ToolQuarantine.stage` | `quarantined` — accept/reject below |
+
+A plugin payload must be an ADR-0511 package (`manifest.json` with
+`name`/`version`/`author`). A bare wheel — which `PluginSelection` will happily
+export — fails at intake with that reason; it is not converted.
+
+### Tool quarantine — `core/forge_bundle/tool_quarantine.py`
+
+`<tenant_home>/global/forge_bundle/quarantine/tools/<qid>/{meta.json, impl.py|impl.sh}`,
+dir `0700`, files `0600`, written to a temp dir and renamed. `qid` is a random
+32-hex token and the only handle accepted (`QID_RE`) — no path or glob is built
+from caller input. Staging refuses: a spec naming a different tool than the
+envelope, a runtime other than `python`/`bash`, an invalid Tool Forge name,
+non-UTF-8 code, and a credential-shaped string (the validator's credential
+detectors).
+
+`accept(tenant_id, qid, actor=)` re-hashes the implementation (refuses if it
+changed on disk), re-scans it, refuses if a tool of that name already exists
+(`QuarantineConflict`, never overwrites), audits
+`forge_bundle.quarantine_accepted`, THEN calls `MultiRegistry.create(scope="user",
+meta={"origin": "forge_bundle", "bundle_id", "bundle_version", "bundle_tool_version",
+"origin_verified": False})` and removes the entry. A create that fails after the
+record (e.g. the ADR-0701 licence gate → `PermissionError`) is recorded as
+`artifact_failed` (`phase="accept"`) and the entry stays. `reject` audits
+`forge_bundle.quarantine_rejected` and deletes the entry.
+
+### Inventory — `core/forge_bundle/inventory.py`
+
+`known()` reads skills (`skills_gen/*/skill.json` + `skills_installed` registry),
+tools (`MultiRegistry.list()`), layers (Layer Forge registry). Tools carry no
+version, so an existing tool satisfies a requirement on ANY version
+(`AnyVersion`). Installed plugins are not enumerated yet: a bundle requiring a
+plugin outside itself is refused as stale. `exportable()` feeds the console's
+export picker; it lists no plugins (a plugin export needs a package path on
+disk — CLI only).
+
+## Console routes (Phase 4) — `routes/forge_bundle_routes.py`
+
+Paths are RELATIVE (`/forge-bundles/...`): the console router is mounted under
+`/v1/console` by the gateway, so a router-level `/v1/console` prefix doubles it.
+Until 2026-10-06 every route here lived at `/v1/console/v1/console/forge-bundles/...`
+and answered 404 at every path the UI called;
+`tests/forge_bundle/test_console_routes_e2e.py` now mounts the router exactly
+as the gateway does and checks both the real and the doubled path.
+
+| Route | Auth | Answers |
+|---|---|---|
+| `GET /forge-bundles/exportable` | session | `{skills, tools, layers, plugins: []}` |
+| `POST /forge-bundles/export` | session + CSRF | ZIP download · 400 plugin selection · 422 `ExportError` · 503 audit down |
+| `POST /forge-bundles/validate` (multipart `file`) | session + CSRF | `{valid: true, …report}` or `{valid: false, stage, reason}` — writes nothing, audits nothing |
+| `POST /forge-bundles/import` (multipart `file`) | session + CSRF | `ImportResult.to_dict()` · 413 > 50 MiB · 422 `{stage, reason}` · 503 audit down |
+| `GET /forge-bundles/quarantine` | session | `{items, count}` |
+| `POST /forge-bundles/quarantine/{qid}/accept` | session + CSRF | 404 unknown id · 409 name taken · 403 licence gate · 422 changed/unsafe · 503 audit down |
+| `POST /forge-bundles/quarantine/{qid}/reject` | session + CSRF | 404 unknown id · 503 audit down |
+
+UI: `web-next/src/components/forge/ForgeBundlesPanel.tsx` (API in
+`src/lib/api/forge-bundles.ts`) — Export picker, Import (validate → preview with
+**Unverified origin** → import → per-artifact outcome), review queue with
+Accept/Reject.
+
+## Audit events
+
+| Event | Severity | When | Fields |
+|---|---|---|---|
+| `forge_bundle.exported` | INFO | after a successful build | bundle_id, bundle_version, artifact_count, total_bytes |
+| `forge_bundle.import_rejected` | WARNING | bundle failed validation | rejected_stage, actor |
+| `forge_bundle.import_validated` | INFO | before any intake | bundle_id, bundle_version, artifact_count, total_uncompressed_bytes, unscanned_files_count, actor |
+| `forge_bundle.artifact_staged` | INFO | before each intake | bundle_id, artifact_kind/id/version, status (intended), actor |
+| `forge_bundle.artifact_failed` | WARNING | intake or accept failed after its record | … , phase, error_class |
+| `forge_bundle.quarantine_accepted` | INFO | before the registry write | … , quarantine_id |
+| `forge_bundle.quarantine_rejected` | INFO | before the entry is deleted | … , quarantine_id |
+
+All carry `tenant_id`; registered in `core/forge_bundle/audit.py` and
+`forge/security_events.py` (`test_module_allowlist_matches_the_central_registry`).
+Metadata only — never manifest bodies, code, or free-text reasons.
 
 ## Archive layout
 

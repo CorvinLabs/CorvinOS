@@ -5,11 +5,10 @@ through ``core.paths.tenant_audit_chain(tenant_id)`` via
 ``forge.security_events.audit_write_or_die``. Metadata only — ids, versions,
 counts. Never manifest bodies, file contents or exception messages.
 
-Export is read-only (it writes a ZIP to the caller, not a registry), so this
-is not audit-first the way Layer Forge's registry writes are — there is
-nothing to roll back. If the chain write itself fails, the error still
-propagates: an export that could not be recorded is reported as failed, not
-silently handed back as if it had been.
+Export is read-only, so ``exported`` is written after the build; a chain
+write that fails still fails the export. Import and quarantine decisions are
+audit-first: the record commits before the state change it describes, and a
+record that does not commit stops the operation.
 """
 from __future__ import annotations
 
@@ -25,26 +24,26 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     }),
     "forge_bundle.import_validated": frozenset({
         "bundle_id", "bundle_version", "artifact_count", "total_uncompressed_bytes",
-        "tenant_id", "user_id", "validation_passed", "validation_stages",
+        "unscanned_files_count", "actor", "tenant_id",
     }),
     "forge_bundle.import_rejected": frozenset({
-        "bundle_id", "rejected_stage", "rejected_reason", "tenant_id", "user_id",
+        "rejected_stage", "actor", "tenant_id",
     }),
     "forge_bundle.artifact_staged": frozenset({
-        "bundle_id", "artifact_kind", "artifact_id", "artifact_version",
-        "quarantine_id", "status", "tenant_id", "user_id",
+        "bundle_id", "artifact_kind", "artifact_id", "artifact_version", "status",
+        "actor", "tenant_id",
+    }),
+    "forge_bundle.artifact_failed": frozenset({
+        "bundle_id", "artifact_kind", "artifact_id", "artifact_version", "phase",
+        "error_class", "actor", "tenant_id",
     }),
     "forge_bundle.quarantine_accepted": frozenset({
-        "artifact_kind", "artifact_id", "artifact_version", "quarantine_id",
-        "tenant_id", "user_id",
+        "bundle_id", "artifact_kind", "artifact_id", "artifact_version", "quarantine_id",
+        "actor", "tenant_id",
     }),
     "forge_bundle.quarantine_rejected": frozenset({
-        "artifact_kind", "artifact_id", "artifact_version", "quarantine_id",
-        "tenant_id", "user_id",
-    }),
-    "forge_bundle.validated": frozenset({
-        "bundle_id", "origin_verified", "unchecked_references_count",
-        "unscanned_files_count", "total_uncompressed_bytes", "tenant_id", "user_id",
+        "bundle_id", "artifact_kind", "artifact_id", "artifact_version", "quarantine_id",
+        "actor", "tenant_id",
     }),
 }
 
@@ -53,9 +52,9 @@ SEVERITY: dict[str, str] = {
     "forge_bundle.import_validated": "INFO",
     "forge_bundle.import_rejected": "WARNING",
     "forge_bundle.artifact_staged": "INFO",
+    "forge_bundle.artifact_failed": "WARNING",
     "forge_bundle.quarantine_accepted": "INFO",
     "forge_bundle.quarantine_rejected": "INFO",
-    "forge_bundle.validated": "INFO",
 }
 
 
