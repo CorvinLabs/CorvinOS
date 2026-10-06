@@ -957,6 +957,21 @@ EVENT_SEVERITY: dict[str, str] = {
     "forge_bundle.artifact_failed": "WARNING",
     "forge_bundle.quarantine_accepted": "INFO",
     "forge_bundle.quarantine_rejected": "INFO",
+    # Federation Local Agent Registry (CONCEPT-0097 Phase 1) — mirrored in
+    # core/federation/audit.py::SEVERITY.
+    "federation.local_agent_registered": "INFO",
+    "federation.local_agent_deregistered": "INFO",
+    "federation.local_agent_registration_rejected": "WARNING",
+    # Federation cross-peer (ADR-2232, CONCEPT-0097 Phases 2-4) — mirrored in
+    # core/federation/audit.py::SEVERITY and a2a_federation.py (receiver side).
+    "federation.catalog_served": "INFO",
+    "federation.catalog_refused": "WARNING",
+    "federation.catalog_fetched": "INFO",
+    "federation.task_received": "INFO",
+    "federation.task_rejected": "WARNING",
+    "federation.task_completed": "INFO",
+    "federation.task_delegated": "INFO",
+    "federation.task_result_received": "INFO",
     # Video Producer — Blender render path (core/skills/os_skills/video_producer/audit.py)
     # Metadata only: file paths, resolution/codec/frame/duration numbers, error_class.
     # NEVER: subprocess stdout/stderr, exception message text.
@@ -3936,6 +3951,46 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "forge_bundle.quarantine_rejected": frozenset({
         "bundle_id", "artifact_kind", "artifact_id", "artifact_version", "quarantine_id",
         "actor", "tenant_id",
+    }),
+    # Federation Local Agent Registry (CONCEPT-0097 Phase 1) — mirrored in
+    # core/federation/audit.py::ALLOWED_FIELDS.
+    "federation.local_agent_registered": frozenset({
+        "agent_id", "engine_type", "capabilities", "model", "federable", "tenant_id",
+    }),
+    "federation.local_agent_deregistered": frozenset({
+        "agent_id", "tenant_id",
+    }),
+    "federation.local_agent_registration_rejected": frozenset({
+        "reason", "tenant_id",
+    }),
+    # Federation cross-peer (ADR-2232) — metadata only: ids, counts, status,
+    # chain-anchor hashes. Never instructions, prompts or worker output.
+    "federation.catalog_served": frozenset({
+        "task_id", "origin_id", "agent_count", "tenant_id",
+    }),
+    "federation.catalog_refused": frozenset({
+        "task_id", "origin_id", "reason", "tenant_id",
+    }),
+    "federation.catalog_fetched": frozenset({
+        "endpoint_id", "peer_instance_id", "agent_count", "status", "tenant_id",
+    }),
+    "federation.task_received": frozenset({
+        "task_id", "origin_id", "agent_id", "capability", "hop",
+        "parent_task_id", "tenant_id",
+    }),
+    "federation.task_rejected": frozenset({
+        "task_id", "origin_id", "reason", "tenant_id",
+    }),
+    "federation.task_completed": frozenset({
+        "task_id", "origin_id", "agent_id", "status", "duration_ms", "tenant_id",
+    }),
+    "federation.task_delegated": frozenset({
+        "task_id", "endpoint_id", "peer_instance_id", "agent_id", "capability",
+        "hop", "parent_task_id", "tenant_id",
+    }),
+    "federation.task_result_received": frozenset({
+        "task_id", "endpoint_id", "peer_instance_id", "agent_id", "status",
+        "duration_ms", "our_chain_tail", "peer_chain_tail", "tenant_id",
     }),
     # Video Producer — Blender render path (mirrored in
     # core/skills/os_skills/video_producer/audit.py::_ALLOWED_FIELDS).

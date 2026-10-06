@@ -16,6 +16,7 @@ single JSON file in place.
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -31,6 +32,9 @@ _LEDGER_RELATIVE_PATH = "global/federation/local_agents.jsonl"
 _VALID_CAPABILITIES = frozenset({
     "code_execution", "analysis", "inference", "vision", "classification",
 })
+
+
+_AGENT_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
 
 
 class LocalAgentError(ValueError):
@@ -50,6 +54,9 @@ class LocalAgent:
     cost_per_task_usd: float = 0.0
     registered_at: float = field(default_factory=time.time)
     deregistered: bool = False
+    # ADR-2232: offered to paired A2A peers only after this explicit opt-in.
+    # Default False — registering an agent never exposes it to peers by itself.
+    federable: bool = False
 
     def to_json_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -68,6 +75,7 @@ class LocalAgent:
             cost_per_task_usd=d.get("cost_per_task_usd", 0.0),
             registered_at=d.get("registered_at", 0.0),
             deregistered=d.get("deregistered", False),
+            federable=bool(d.get("federable", False)),
         )
 
 
@@ -77,8 +85,10 @@ def _validate_agent_id(agent_id: str) -> str:
         raise LocalAgentError("agent_id must not be empty")
     if len(agent_id) > 128:
         raise LocalAgentError("agent_id must be <= 128 characters")
-    if not all(c.isalnum() or c in "-_." for c in agent_id):
-        raise LocalAgentError("agent_id may only contain alnum, '-', '_', '.'")
+    # ASCII only: the A2A federation layer addresses agents with this exact
+    # charset; a Unicode-alnum id would register but be unaddressable.
+    if not all(c in _AGENT_ID_CHARS for c in agent_id):
+        raise LocalAgentError("agent_id may only contain A-Z, a-z, 0-9, '-', '_', '.'")
     return agent_id
 
 
@@ -144,6 +154,7 @@ class LocalAgentRegistry:
         model: str,
         max_concurrent: int = 1,
         cost_per_task_usd: float = 0.0,
+        federable: bool = False,
     ) -> LocalAgent:
         agent_id = _validate_agent_id(agent_id)
         caps = _validate_capabilities(capabilities)
@@ -153,8 +164,8 @@ class LocalAgentRegistry:
             raise LocalAgentError("model must not be empty")
         if max_concurrent < 1:
             raise LocalAgentError("max_concurrent must be >= 1")
-        if cost_per_task_usd < 0:
-            raise LocalAgentError("cost_per_task_usd must be >= 0")
+        if not math.isfinite(cost_per_task_usd) or cost_per_task_usd < 0:
+            raise LocalAgentError("cost_per_task_usd must be a finite number >= 0")
 
         agent = LocalAgent(
             agent_id=agent_id,
@@ -166,6 +177,7 @@ class LocalAgentRegistry:
             cost_per_task_usd=cost_per_task_usd,
             registered_at=time.time(),
             deregistered=False,
+            federable=bool(federable),
         )
         from core.federation import audit as federation_audit
 
@@ -176,6 +188,7 @@ class LocalAgentRegistry:
             engine_type=agent.engine_type,
             capabilities=sorted(agent.capabilities),
             model=agent.model,
+            federable=agent.federable,
         )
         self._append(agent)
         return agent
@@ -195,6 +208,7 @@ class LocalAgentRegistry:
             cost_per_task_usd=current.cost_per_task_usd,
             registered_at=current.registered_at,
             deregistered=True,
+            federable=current.federable,
         )
         from core.federation import audit as federation_audit
 

@@ -550,6 +550,28 @@ async def chat_stream(
     # calls gen.aclose() and the subprocess is terminated cleanly.
     _stream_task: asyncio.Task[None] | None = None
 
+    # PLAN-0932 / ADR-2101 P4 task half: the task_id a /resume command scoped
+    # THIS connection to, if any. WebChatSession.task_id (ADR-0649) is
+    # deliberately transient and never round-tripped through the session
+    # meta file (see its field comment in chat_runtime.py) — "set by the web
+    # API" never had a real setter anywhere in this codebase until /resume
+    # below. Kept as a local here (not on `sess`) because this closure, not
+    # the dataclass, is the thing both the setter (/resume) and the user
+    # (the disconnect snapshot further down) can actually share.
+    _active_task_id: str | None = None
+
+    async def _maybe_snapshot_active_task() -> None:
+        if not _active_task_id:
+            return
+        try:
+            from core.session_manager.context_bridge import maybe_snapshot_context  # noqa: PLC0415
+            maybe_snapshot_context(
+                rec.tenant_id, _active_task_id, sid,
+                task_state={"title": sess.title, "turn_count": sess.turn_count},
+            )
+        except Exception:  # noqa: BLE001 — never let a snapshot break teardown
+            logger.exception("context_bridge: snapshot-on-disconnect failed (sid=%s)", sid)
+
     async def _run_turn(prompt: str) -> None:
         # Robustness contract: a turn failure must NEVER drop the WebSocket.
         # stream_turn yields its own {"error"}/{"done"} on handled failures,
@@ -634,6 +656,7 @@ async def chat_stream(
                     with contextlib.suppress(asyncio.CancelledError):
                         await _stream_task
                 await _cleanup_voice_forward()
+                await _maybe_snapshot_active_task()
                 return
             try:
                 msg = json.loads(raw)
@@ -652,6 +675,41 @@ async def chat_stream(
                 prompt = str(msg.get("text") or "").strip()
                 if not prompt:
                     await websocket.send_json({"type": "error", "message": "empty user text"})
+                    continue
+                # PLAN-0932 / ADR-2101 P4 task half: /resume <task_id> is the
+                # production setter WebChatSession.task_id never had (see the
+                # field's comment in chat_runtime.py — "set by the web API"
+                # was aspirational). Handled HERE, not in slash_commands.py:
+                # that dispatcher is a pure function of its arguments with no
+                # access to this connection's live state, and the task_id a
+                # restore/snapshot needs to track is exactly that — per-
+                # connection, not persisted session metadata (ADR-0649
+                # documents task_id as transient by design). Tries a restore
+                # immediately so a returning user sees their prior snapshot
+                # the same turn they resume.
+                _resume_head, _, _resume_arg = prompt.partition(" ")
+                if _resume_head.lower() == "/resume":
+                    _resume_task_id = _resume_arg.strip()
+                    if not _resume_task_id:
+                        _sc_reply = ("Usage: `/resume <task_id>` — scopes this chat to a task "
+                                     "and restores its saved context, if any.")
+                    else:
+                        try:
+                            from core.session_manager.context_bridge import maybe_restore_context  # noqa: PLC0415, E501
+                            _snap = maybe_restore_context(rec.tenant_id, _resume_task_id)
+                        except Exception:  # noqa: BLE001 — a broken bridge must never break chat
+                            logger.exception("context_bridge: restore failed (sid=%s)", sid)
+                            _snap = None
+                        _active_task_id = _resume_task_id
+                        if _snap is not None:
+                            _sc_reply = (f"Resumed task `{_resume_task_id}` — restored a snapshot "
+                                         f"from {_snap.snapshot_timestamp}.")
+                        else:
+                            _sc_reply = (f"This chat is now scoped to task `{_resume_task_id}` "
+                                         "(no prior snapshot found — starting fresh).")
+                    chat_runtime.record_side_turn(sess, prompt, _sc_reply)
+                    await websocket.send_json({"type": "delta", "text": _sc_reply})
+                    await websocket.send_json({"type": "done"})
                     continue
                 # ADR-0193: no more pre-turn browser classification/routing here.
                 # The native corvin-browser MCP tool is available to the model's
@@ -753,6 +811,7 @@ async def chat_stream(
                                 with contextlib.suppress(asyncio.CancelledError):
                                     await _stream_task
                                 await _cleanup_voice_forward()
+                                await _maybe_snapshot_active_task()
                                 return
                             try:
                                 side_msg = json.loads(side_raw)
@@ -826,6 +885,7 @@ async def chat_stream(
                 target_id=sid,
             )
         await _cleanup_voice_forward()
+        await _maybe_snapshot_active_task()
         return
 
 # ── Task API (ADR-0080 M1) ──────────────────────────────────────────────

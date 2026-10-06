@@ -390,6 +390,16 @@ class TaskEnvelope:
     # Included in HMAC payload so it cannot be stripped or swapped in transit.
     # Pre-ADR-2218 receivers do not recognize this field and treat it as 1:1.
     group_id: str | None = None
+    # ADR-2232 — optional federation control field (additive, HMAC-covered,
+    # does not bump PROTOCOL_VERSION — same compat posture as ``reconnect``:
+    # a pre-ADR-2232 receiver omits the unknown key from its canonical
+    # payload, the HMAC no longer matches and it rejects with bad_signature,
+    # i.e. an old peer never half-applies a federation request). Shape and
+    # semantics are validated AFTER the HMAC, in a2a_federation.py; here it
+    # is only size-capped. {"v": 1, "op": "catalog"} or
+    # {"v": 1, "op": "task", "target_agent_id"?, "capability"?, "hop",
+    #  "parent_task_id"?, "origin_agent_id"?}.
+    federation: dict | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "TaskEnvelope":
@@ -409,6 +419,7 @@ class TaskEnvelope:
             corvin_id_jwt_raw = d.get("corvin_id_jwt")
             reconnect_raw = d.get("reconnect")
             group_id_raw = d.get("group_id")
+            federation_raw = d.get("federation")
             issued_at_val = float(d["issued_at"])
             if not math.isfinite(issued_at_val):
                 raise ValidationError("issued_at_not_finite")
@@ -460,6 +471,14 @@ class TaskEnvelope:
             group_id_val: str | None = None
             if isinstance(group_id_raw, str) and group_id_raw:
                 group_id_val = str(group_id_raw)[:256]
+            # ADR-2232: federation field — dict only, size-capped pre-HMAC.
+            federation_val: dict | None = None
+            if federation_raw is not None:
+                if not isinstance(federation_raw, dict):
+                    raise ValidationError("federation_not_object")
+                if len(_json.dumps(federation_raw)) > 4096:
+                    raise ValidationError("federation_too_large")
+                federation_val = dict(federation_raw)
             return cls(
                 task_id=task_id_val,
                 nonce=nonce_val,
@@ -480,6 +499,7 @@ class TaskEnvelope:
                 corvin_id_jwt=str(corvin_id_jwt_raw)[:8192] if isinstance(corvin_id_jwt_raw, str) else None,
                 reconnect=dict(reconnect_raw) if isinstance(reconnect_raw, dict) else None,
                 group_id=group_id_val,
+                federation=federation_val,
             )
         except (TypeError, ValueError, AttributeError, OverflowError,
                 RecursionError) as exc:
@@ -519,6 +539,10 @@ class TaskEnvelope:
         # ADR-2218: omit group_id when None (backward compat with pre-ADR-2218 senders).
         if d.get("group_id") is None:
             d.pop("group_id", None)
+        # ADR-2232: omit federation when None (byte-identical with
+        # pre-ADR-2232 senders for every non-federation envelope).
+        if d.get("federation") is None:
+            d.pop("federation", None)
         return json.dumps(
             d, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode()
@@ -975,6 +999,60 @@ class RemoteTriggerReceiver:
         if env.reconnect is not None:
             return self._handle_reconnect(env, recv_key_bytes, start)
 
+        # ADR-2232: federation. "catalog" is control-plane and short-circuits
+        # here like reconnect (no worker). "task" selects a local agent, then
+        # runs the UNCHANGED task path below with that agent's model; the
+        # agent slot is released and the outcome audited on every return path.
+        if env.federation is not None:
+            return self._receive_federated(env, origin_config, recv_key_bytes, start)
+        return self._receive_task(env, origin_config, recv_key_bytes, start)
+
+    def _receive_federated(
+        self, env: TaskEnvelope, origin_config: dict, recv_key_bytes: bytes,
+        start: float,
+    ) -> ResponseEnvelope:
+        try:
+            import a2a_federation as _fed  # type: ignore[import-not-found]
+        except ImportError:
+            _shared = Path(__file__).resolve().parent
+            if str(_shared) not in sys.path:
+                sys.path.insert(0, str(_shared))
+            import a2a_federation as _fed  # type: ignore[import-not-found]
+        tenant_id = self._tenant_id or _resolve_tenant_id()
+        outcome = _fed.preflight(
+            env, origin_config, tenant_id=tenant_id,
+            worker_enabled=(not self._force_m1_only
+                            and bool(origin_config.get("spawn_worker", False))),
+            audit_strict=self._audit_strict, audit_best_effort=self._audit_best_effort,
+        )
+        if outcome.reject_reason is not None:
+            if outcome.rollback_nonce:
+                self._nonce_rollback(env)
+            return self._rejected_response(
+                env.task_id, env.origin_id, recv_key_bytes,
+                reason=outcome.reject_reason)
+        if outcome.data is not None:
+            # catalog answer (control plane — no worker)
+            return self._build_response(
+                env.task_id, env.origin_id, outcome.status, outcome.data,
+                recv_key_bytes, attachments=[])
+        ctx = outcome.ctx
+        resp: ResponseEnvelope | None = None
+        try:
+            resp = self._receive_task(
+                env, origin_config, recv_key_bytes, start, model=ctx.model,
+                on_engine_spawn=ctx.mark_spawned)
+            return resp
+        finally:
+            _fed.finish(
+                env, ctx, resp, tenant_id=tenant_id, duration_ms=_ms(start),
+                audit_best_effort=self._audit_best_effort)
+
+    def _receive_task(
+        self, env: TaskEnvelope, origin_config: dict, recv_key_bytes: bytes,
+        start: float, *, model: str | None = None,
+        on_engine_spawn: Any = None,
+    ) -> ResponseEnvelope:
         # Step 7: Audit-first (strict — failure blocks the request)
         # Inbound attachment counts go into the audit details (no content).
         # Attachments were already validated inside _validate() (step 6.75).
@@ -1315,6 +1393,7 @@ class RemoteTriggerReceiver:
                         self._spawn_and_filter(
                             env=env, origin_config=origin_config,
                             start=start, inbound_attachments=_inbound_atts,
+                            model=model, on_engine_spawn=on_engine_spawn,
                         )
                     )
                 finally:
@@ -1394,6 +1473,8 @@ class RemoteTriggerReceiver:
         origin_config: dict,
         start: float,
         inbound_attachments: list,
+        model: str | None = None,
+        on_engine_spawn: Any = None,
     ) -> tuple[str, dict, list]:
         """Spawn the worker, apply the result filter, return
         (status, data, out_attachments).
@@ -1526,6 +1607,9 @@ class RemoteTriggerReceiver:
                 result_schema=env.result_schema,
                 allowed_tools=_a2a_allowed,
                 disallowed_tools=_a2a_disallowed,
+                # ADR-2232: a federated task runs on the selected agent's model.
+                **({"model": model} if model else {}),
+                **({"on_engine_spawn": on_engine_spawn} if on_engine_spawn else {}),
             )
         except InjectionAttempt as exc:
             raise _InjectionRejected(exc.reason) from exc

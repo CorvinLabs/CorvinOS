@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 760" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Corvin A2A — Agent Federation (ADR-2231 / ADR-2232)</title>
+  <desc>Sequence of a federated exchange between two paired CorvinOS installations: a catalog
+  request (control plane, no worker) and a federated task (normal A2A task path run by one
+  selected local agent of the peer), with both audit-chain anchors recorded per hop.</desc>
+
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1e40af"/>
+    </marker>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/>
+    </marker>
+  </defs>
+
+  <rect width="1080" height="760" fill="#f8fafc"/>
+  <text x="540" y="36" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Agent federation over signed A2A</text>
+  <text x="540" y="58" text-anchor="middle" font-size="13" fill="#475569">One optional HMAC-covered envelope field: federation = {"v":1, "op": "catalog" | "task", ...}</text>
+
+  <!-- lifelines -->
+  <rect x="80" y="80" width="250" height="52" rx="8" fill="#dbeafe" stroke="#1e40af"/>
+  <text x="205" y="102" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Installation A (origin)</text>
+  <text x="205" y="121" text-anchor="middle" font-size="12" fill="#475569">core/federation · RemoteTriggerSender</text>
+  <rect x="750" y="80" width="250" height="52" rx="8" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="875" y="102" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Installation B (peer)</text>
+  <text x="875" y="121" text-anchor="middle" font-size="12" fill="#475569">RemoteTriggerReceiver · a2a_federation</text>
+  <line x1="205" y1="132" x2="205" y2="730" stroke="#94a3b8" stroke-dasharray="5 5"/>
+  <line x1="875" y1="132" x2="875" y2="730" stroke="#94a3b8" stroke-dasharray="5 5"/>
+
+  <!-- catalog -->
+  <text x="40" y="168" font-size="13" font-weight="700" fill="#1e40af">1 · Discovery (control plane)</text>
+  <line x1="205" y1="190" x2="868" y2="190" stroke="#1e40af" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="540" y="182" text-anchor="middle" font-size="12" fill="#0f172a">TaskEnvelope + federation {op: "catalog"} — HMAC, nonce, instance pin</text>
+  <rect x="890" y="200" width="170" height="58" rx="6" fill="#ffffff" stroke="#16a34a"/>
+  <text x="975" y="220" text-anchor="middle" font-size="11" fill="#0f172a">validate → short-circuit</text>
+  <text x="975" y="236" text-anchor="middle" font-size="11" fill="#0f172a">no worker spawned</text>
+  <text x="975" y="252" text-anchor="middle" font-size="11" fill="#475569">claude_code agents only</text>
+  <line x1="868" y1="276" x2="212" y2="276" stroke="#16a34a" stroke-width="2" marker-end="url(#arr-green)"/>
+  <text x="540" y="268" text-anchor="middle" font-size="12" fill="#0f172a">signed response: agents [agent_id, capabilities, model, cost]</text>
+  <rect x="20" y="288" width="170" height="58" rx="6" fill="#ffffff" stroke="#1e40af"/>
+  <text x="105" y="308" text-anchor="middle" font-size="11" fill="#0f172a">sanitise (untrusted)</text>
+  <text x="105" y="324" text-anchor="middle" font-size="11" fill="#0f172a">peer_agents.jsonl</text>
+  <text x="105" y="340" text-anchor="middle" font-size="11" fill="#475569">agent://&lt;iid_B&gt;/&lt;agent_id&gt;</text>
+
+  <!-- task -->
+  <text x="40" y="384" font-size="13" font-weight="700" fill="#1e40af">2 · Selection + delegation</text>
+  <rect x="20" y="396" width="170" height="58" rx="6" fill="#ffffff" stroke="#1e40af"/>
+  <text x="105" y="416" text-anchor="middle" font-size="11" fill="#0f172a">rank local + peer agents</text>
+  <text x="105" y="432" text-anchor="middle" font-size="11" fill="#0f172a">audit-first:</text>
+  <text x="105" y="448" text-anchor="middle" font-size="11" fill="#475569">federation.task_delegated</text>
+  <line x1="205" y1="476" x2="868" y2="476" stroke="#1e40af" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="540" y="468" text-anchor="middle" font-size="12" fill="#0f172a">TaskEnvelope + federation {op: "task", target_agent_id | capability, hop ≤ 3} + sender_chain_tail</text>
+  <rect x="890" y="486" width="170" height="122" rx="6" fill="#ffffff" stroke="#16a34a"/>
+  <text x="975" y="506" text-anchor="middle" font-size="11" fill="#0f172a">select agent · reserve slot</text>
+  <text x="975" y="522" text-anchor="middle" font-size="11" fill="#475569">federation.task_received</text>
+  <text x="975" y="540" text-anchor="middle" font-size="11" fill="#0f172a">UNCHANGED task path:</text>
+  <text x="975" y="556" text-anchor="middle" font-size="11" fill="#0f172a">audit-first, L34/L35/L44,</text>
+  <text x="975" y="572" text-anchor="middle" font-size="11" fill="#0f172a">tool policy, result filter</text>
+  <text x="975" y="588" text-anchor="middle" font-size="11" fill="#475569">worker runs on agent's model</text>
+  <line x1="868" y1="630" x2="212" y2="630" stroke="#16a34a" stroke-width="2" marker-end="url(#arr-green)"/>
+  <text x="540" y="622" text-anchor="middle" font-size="12" fill="#0f172a">signed response + receiver_chain_tail · slot released · federation.task_completed</text>
+
+  <!-- trace -->
+  <text x="40" y="668" font-size="13" font-weight="700" fill="#1e40af">3 · Cross-peer trace</text>
+  <rect x="20" y="680" width="520" height="44" rx="6" fill="#ffffff" stroke="#1e40af"/>
+  <text x="280" y="698" text-anchor="middle" font-size="11" fill="#0f172a">delegations.jsonl: task_id · parent_task_id · agent address · status</text>
+  <text x="280" y="714" text-anchor="middle" font-size="11" fill="#475569">our_chain_tail + peer_chain_tail → each hop cited in BOTH audit chains</text>
+  <text x="810" y="706" text-anchor="middle" font-size="11" fill="#475569">Old peers reject the field (bad_signature) — never half-apply.</text>
+</svg>

@@ -17,7 +17,7 @@ from typing import Any, Callable
 # (see test_federation_audit_allowlist_matches_central_registry).
 ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "federation.local_agent_registered": frozenset({
-        "agent_id", "engine_type", "capabilities", "model", "tenant_id",
+        "agent_id", "engine_type", "capabilities", "model", "federable", "tenant_id",
     }),
     "federation.local_agent_deregistered": frozenset({
         "agent_id", "tenant_id",
@@ -25,12 +25,29 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "federation.local_agent_registration_rejected": frozenset({
         "reason", "tenant_id",
     }),
+    # Origin side of a cross-peer exchange (ADR-2232). The receiver side
+    # (catalog_served, task_received, ...) is written by the A2A receiver's
+    # own writer — see corvin_operator/bridges/shared/a2a_federation.py.
+    "federation.catalog_fetched": frozenset({
+        "endpoint_id", "peer_instance_id", "agent_count", "status", "tenant_id",
+    }),
+    "federation.task_delegated": frozenset({
+        "task_id", "endpoint_id", "peer_instance_id", "agent_id", "capability",
+        "hop", "parent_task_id", "tenant_id",
+    }),
+    "federation.task_result_received": frozenset({
+        "task_id", "endpoint_id", "peer_instance_id", "agent_id", "status",
+        "duration_ms", "our_chain_tail", "peer_chain_tail", "tenant_id",
+    }),
 }
 
 SEVERITY: dict[str, str] = {
     "federation.local_agent_registered": "INFO",
     "federation.local_agent_deregistered": "INFO",
     "federation.local_agent_registration_rejected": "WARNING",
+    "federation.catalog_fetched": "INFO",
+    "federation.task_delegated": "INFO",
+    "federation.task_result_received": "INFO",
 }
 
 

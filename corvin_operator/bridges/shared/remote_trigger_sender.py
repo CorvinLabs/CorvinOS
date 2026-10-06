@@ -601,6 +601,11 @@ class SendResult:
     # relay "delivered, no answer"): the peer may be running the task. Not a
     # failure to retry blindly — a resend runs it a second time.
     maybe_delivered: bool = False
+    # ADR-0116 anchors of this exchange (ADR-2232 exposes them to callers):
+    # our chain tail sent in the envelope, the peer's tail from its signed
+    # response. "" = unavailable. Lets a cross-peer trace cite both chains.
+    our_chain_tail: str = ""
+    peer_chain_tail: str = ""
 
 
 @dataclass
@@ -986,6 +991,7 @@ class RemoteTriggerSender:
         group_id: str | None = None,
         task_id: str | None = None,
         feed_task_recorded: bool = False,
+        federation: dict | None = None,
     ) -> SendResult:
         """Send a signed TaskEnvelope and record the exchange in the A2A feed.
 
@@ -1030,7 +1036,10 @@ class RemoteTriggerSender:
         # A group message lives in the group's own store (chat_group_store);
         # copying it into the 1:1 A2A feed showed group text in the peer's
         # direct conversation and kept it there after the group was deleted.
-        in_feed = group_id is None
+        # ADR-2232: a federation catalog request is control-plane, not a
+        # conversation — it never enters the 1:1 feed. A federated TASK does.
+        in_feed = group_id is None and not (
+            isinstance(federation, dict) and federation.get("op") == "catalog")
         if in_feed and not feed_task_recorded:
             _record_feed_task(endpoint_id, task_id, instruction, attachments, peer_label)
         # Files without text: send a stand-in instruction so a receiver that
@@ -1044,6 +1053,7 @@ class RemoteTriggerSender:
             result_schema=result_schema, ttl_s=ttl_s, timeout_s=timeout_s,
             attachments=attachments, purpose_id=purpose_id,
             attestation=attestation, task_id=task_id, group_id=group_id,
+            federation=federation,
         )
         if in_feed:
             _record_feed_response(endpoint_id, result, peer_label)
@@ -1062,6 +1072,7 @@ class RemoteTriggerSender:
         attestation: dict | None = None,
         task_id: str | None = None,
         group_id: str | None = None,
+        federation: dict | None = None,
     ) -> SendResult:
         """Send a signed TaskEnvelope to a registered endpoint.
 
@@ -1190,6 +1201,7 @@ class RemoteTriggerSender:
             sender_chain_tail=sender_chain_tail,
             sender_genesis_hash=sender_genesis_hash,
             group_id=group_id,
+            federation=federation,
         )
 
         # 2) Audit envelope_sent (before HTTP); include chain_anchor_sent.
@@ -1414,6 +1426,8 @@ class RemoteTriggerSender:
             duration_ms=_ms(start),
             error_category=error_cat,
             error_detail=error_det,
+            our_chain_tail=sender_chain_tail or "",
+            peer_chain_tail=_receiver_tail if isinstance(_receiver_tail, str) else "",
         )
 
     def send_reconnect(self, endpoint_id: str, new_url: str, *,
@@ -1912,6 +1926,7 @@ class RemoteTriggerSender:
         sender_genesis_hash: str | None = None,
         reconnect: dict | None = None,
         group_id: str | None = None,
+        federation: dict | None = None,
     ) -> dict:
         env: dict = {
             "task_id": task_id,
@@ -1967,6 +1982,10 @@ class RemoteTriggerSender:
         # backward-compatible read — canonical_payload() omits it when None).
         if group_id is not None and isinstance(group_id, str):
             env["group_id"] = group_id[:256]
+        # ADR-2232: federation control field — HMAC-covered like reconnect.
+        # A pre-ADR-2232 receiver rejects it (bad_signature), never half-applies.
+        if federation is not None and isinstance(federation, dict):
+            env["federation"] = dict(federation)
         # IBC concept (Protocol v7): instance_attestation — binds this envelope to
         # the sender's Instance Binding Certificate (IBC).  Included in HMAC when
         # present so it cannot be stripped or swapped in transit.  Receivers that

@@ -1353,3 +1353,79 @@ this session (fact 4, pre-existing). The receiver's M2 gate enforces
 it shipped without the P1 exception path and locked unlicensed pairs out
 in both directions; writers store `false` again until P1. Still open from P0:
 fact 9 (email field removal), fact 10 (second trust-ring key), and auto-renew.
+
+## Agent federation — catalog + task over the `federation` field (ADR-2231/2232, 2026-10-06)
+
+Diagram: `docs/diagrams/30-a2a-agent-federation.svg`.
+
+**What it is.** A paired installation can list a peer's agents and run one
+task on one of them. Not a new protocol: one optional, HMAC-covered
+TaskEnvelope field, `federation`, added exactly like `reconnect`/`group_id`
+(omitted from the canonical payload when `None`, so every other envelope is
+byte-identical). Size-capped (4 KiB) and type-checked pre-HMAC; semantics are
+validated only after the HMAC (`a2a_federation.parse_request`).
+
+| `op` | Receiver behaviour |
+|---|---|
+| `catalog` | Control plane: short-circuits after `_validate()` like `reconnect`, strict-audits `federation.catalog_served`, answers with its federable agents in the signed response `data`. No worker, no 1:1 feed record. |
+| `task` | Selects one local agent (`target_agent_id`, else the cheapest offering `capability`), reserves one of its `max_concurrent` slots, strict-audits `federation.task_received`, then runs `_receive_task` — the former task-path body, unchanged — with that agent's model; `finish()` releases the slot and audits `federation.task_completed` on every return path. |
+
+**Who is offered.** An agent is federable only if the operator opted it in
+(`LocalAgent.federable`, `POST /v1/console/federation/agents` with
+`"federable": true`; default false) AND it runs on `claude_code`. Only an
+origin that may run workers (`spawn_worker`, not `CORVIN_A2A_M1_ONLY`) gets a
+catalog or a run — the no-worker path would answer a signed `ok` for a task
+that never ran. `federation` together with `group_id` is refused.
+
+**Identity (ADR-2231).** `agent://<instance_id>/<agent_id>`. The instance
+comes from the signed, pinned response; `agent_id` is a name, not a
+credential. A peer's catalog is attributed, never verified, and re-validated
+on receipt (`core.federation.peer_catalog.sanitize_catalog`).
+
+**Refusals** carry a closed signed reason (`a2a_federation.PUBLIC_REASONS`):
+`federation_unsupported_version`, `_bad_request`, `_disabled` (origin config
+`allow_federation: false`), `_no_worker`, `_unknown_agent`,
+`_agent_not_federable`, `_capability_mismatch`, `_no_agent`, `_agent_busy`,
+`_duplicate_task`, `_hop_limit` (`hop` > 3), `_audit_unavailable`. No worker
+spawns on any of them. The vocabulary lives in `core/federation/protocol.py`;
+the origin records a peer's status/reason only if it is in that closed set.
+
+**At-most-once.** `(tenant, origin_id, task_id)` is claimed in memory (1 h)
+the moment a task is ACCEPTED. Any repeat — still running or finished, same
+or different payload — is refused `federation_duplicate_task` and never runs
+again; the answer is NOT re-sent from a cache (a re-send would skip the
+audit-first write, the consent re-check and the chain gate — review
+2026-10-06). `_agent_busy` releases the claim (the task never started) but
+consumes the nonce, so a captured envelope cannot be replayed later.
+
+**Compatibility.** A pre-ADR-2232 receiver omits the unknown key from its
+canonical payload → HMAC mismatch → `bad_signature`. It never half-applies.
+
+**Model.** `spawn_a2a_worker(model=...)` — claude_code engine only, normalised
+by `model_selector.normalise_pin`. A non-federated task passes no model.
+
+**Origin side.** `core/federation/peer_catalog.py` (`PeerCatalog.refresh`,
+`peer_agents.jsonl`, 300 s freshness), `core/federation/delegation.py`
+(`rank_candidates`, audit-first `delegate` → `federation.task_delegated`
+before the envelope leaves, `delegations.jsonl` with `our_chain_tail` +
+`peer_chain_tail` per hop, `trace`). `SendResult` exposes both ADR-0116
+anchors. Console: `GET /v1/console/federation/peers`,
+`POST …/peers/{endpoint_id}/refresh`, `GET …/peer-agents`, `POST …/select`,
+`POST …/delegate`, `GET …/tasks/{task_id}/trace`; read-only
+`/federation [capability]` slash command (disk only).
+
+**Audit events** (metadata only, registered in `EVENT_SEVERITY` +
+`_EVENT_ALLOWLIST`): receiver — `federation.catalog_served`,
+`.catalog_refused`, `.task_received`, `.task_rejected`, `.task_completed`;
+origin — `federation.catalog_fetched`, `.task_delegated`,
+`.task_result_received`.
+
+**Limits.** Only opted-in claude_code agents federate; slots and the
+at-most-once claims are per process (a restart forgets claims — the nonce
+store still blocks exact replays); hops between two other peers are invisible here (no remote
+chain is ever queried); agent-initiated multi-hop is carried on the wire
+(`hop`, `parent_task_id`) but not wired from inside a worker.
+
+Tests: `tests/federation/test_federation_cross_peer_e2e.py` (two instances,
+real HTTP + signatures), `tests/federation/test_federation_routes_e2e.py`
+(real console login/CSRF, REST + slash over the chat WebSocket).

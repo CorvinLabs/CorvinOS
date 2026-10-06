@@ -20,7 +20,16 @@ tenant-wide, not per-web-chat): /engine <name>, /dialectic-*, /skills,
 /memory. Honest "not in the console" for bridge-only runtime commands
 (/go, /propose, /btw, /share, /forget). Client-side actions (/stop, /new, /clear,
 /reset) are performed by the frontend; if one still reaches the server we return
-a short pointer rather than the model. /plugin-builder (ADR-0253, behind the
+a short pointer rather than the model.
+
+NOT handled here: /resume <task_id> (PLAN-0932/ADR-2101 P4) is intercepted
+directly in routes/chat.py's websocket loop, BEFORE this dispatcher ever
+runs — it needs the live per-connection task_id state (set by the command,
+read again on disconnect to snapshot) that this module, a pure function of
+its arguments, has no way to hold. Listed in _HELP below for discoverability
+only; `handle()` never sees it.
+
+/plugin-builder (ADR-0253, behind the
 plugin_builder_enabled flag) is the one STATEFUL command: it runs a multi-turn
 interview via plugin_builder.session_store, so plain-text turns are checked
 against an active session before the non-slash fallthrough below. That
@@ -96,8 +105,42 @@ _HELP = (
     "- `/debug-engine <task>` — show engine-selection signals for this turn\n"
     "- `/plugin-builder` — interview-driven plugin design (Idea/Architecture/ADR"
     "/Plan + scaffold), `/plugin-builder status|cancel` — check or stop it\n"
+    "- `/federation [capability]` — your local agents and the agents your A2A "
+    "peers advertise (delegate via the Federation API)\n"
+    "- `/resume <task_id>` — scope this chat to a task and restore its saved "
+    "context, if any (handled before this dispatcher — see routes/chat.py)\n"
     "- `/stop` (Stop button), `/new`, `/clear`, `/reset` — session controls\n"
 )
+
+
+def _federation_overview(tenant_id: str, capability: str) -> str:
+    """Read-only, disk-only: never touches the network on the chat path."""
+    try:
+        from core.federation.local_agent import LocalAgentRegistry
+        from core.federation.peer_catalog import PeerCatalog
+    except Exception:  # noqa: BLE001
+        return "Federation is not available on this build."
+    try:
+        local = LocalAgentRegistry(tenant_id).list_agents()
+        peers = PeerCatalog(tenant_id).agents()
+    except Exception as exc:  # noqa: BLE001
+        return f"Federation registry could not be read ({type(exc).__name__})."
+    if capability:
+        local = [a for a in local if capability in a.capabilities]
+        peers = [a for a in peers if capability in a.capabilities]
+
+    def _md(text: str) -> str:
+        # A peer's model string is attributed, untrusted text: render it inert.
+        return "".join(c for c in str(text) if c.isalnum() or c in " .-_:/")[:80]
+
+    lines = ["**Local agents**"]
+    lines += [f"- `{a.agent_id}` — {_md(a.model)}, {', '.join(sorted(a.capabilities))}"
+              f"{' (offered to peers)' if getattr(a, 'federable', False) else ''}"
+              for a in local] or ["- none registered"]
+    lines.append("**Peer agents** (fresh catalogs only)")
+    lines += [f"- `{_md(a.address)}` — {_md(a.model)}, {', '.join(sorted(a.capabilities))}"
+              for a in peers] or ["- none — refresh a peer catalog first"]
+    return "\n".join(lines)
 
 
 # ── /plugin-builder (ADR-0253) ───────────────────────────────────────────────
@@ -271,6 +314,9 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
 
     if cmd == "/help":
         return _HELP
+
+    if cmd == "/federation":
+        return _federation_overview(tenant_id, arg)
 
     if cmd in ("/whoami", "/role"):
         role = "owner"  # console sessions are owner-authenticated (whitelist)

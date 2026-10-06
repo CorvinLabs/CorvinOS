@@ -572,6 +572,13 @@ def spawn_a2a_worker(
     pin_session: bool = False,
     scope_label: str = "",
     session_home: Path | None = None,
+    # ADR-2232 — model of the federated agent the receiver selected. None =
+    # the engine's own default (every non-federated A2A task, unchanged).
+    model: str | None = None,
+    # ADR-2232 — called once, immediately before the engine actually starts
+    # (after every pre-spawn gate). Lets the federation layer tell "refused
+    # before running" from "ran". Exceptions from it are swallowed.
+    on_engine_spawn: Callable[[], None] | None = None,
 ) -> WorkerResult:
     """Spawn a single A2A worker turn under the safety framing.
 
@@ -929,9 +936,24 @@ def spawn_a2a_worker(
     # claude-CLI-specific); other engines keep their own MCP posture.
     if engine_name == "claude_code":
         _spawn_kwargs["extra_args"] = ["--strict-mcp-config"]
+        # ADR-2232: a federated agent's model, normalised like every pin
+        # (a provider-qualified id would 404 at the CLI — ADR-0952).
+        if model:
+            try:
+                from model_selector import normalise_pin  # type: ignore[import-not-found]
+                _norm = normalise_pin(model, "claude_code")
+            except Exception:  # noqa: BLE001 — selector unavailable: strip prefix only
+                _norm = model.split("/", 1)[-1]
+            if _norm:
+                _spawn_kwargs["model"] = _norm
     if can_pin and resume_sid:
         _spawn_kwargs["resume_session_id"] = resume_sid
 
+    if on_engine_spawn is not None:
+        try:
+            on_engine_spawn()
+        except Exception:  # noqa: BLE001
+            pass
     # ADR-0171 — engine.span.start (role=worker); paired at every return below.
     _emit_a2a_engine_span("start", task_id=task_id, engine_id=engine_name)
 
