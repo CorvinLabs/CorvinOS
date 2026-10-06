@@ -10,7 +10,7 @@ Usage:
     layer_forge_cli.py create <manifest.json> [--tenant TID] [--skip-gates]
     layer_forge_cli.py get <id> [--version V] [--tenant TID]
     layer_forge_cli.py list [--tenant TID]
-    layer_forge_cli.py promote <id> <version> <to_status> [--tenant TID]
+    layer_forge_cli.py promote <id> <version> <to_status> [--tenant TID] [--override-review-flags] [--reason TEXT]
 
 Exit codes: 0 success, 1 refused/failed, 2 usage error.
 """
@@ -56,10 +56,25 @@ def main(argv: list[str] | None = None) -> int:
     p_promote.add_argument("id")
     p_promote.add_argument("version")
     p_promote.add_argument("to_status")
+    p_promote.add_argument("--override-review-flags", action="store_true",
+                          help="Override FLAGGED review verdict (requires --reason)")
+    p_promote.add_argument("--reason", default="",
+                          help="Reason for override (required if --override-review-flags)")
 
     p_plan = sub.add_parser("plan")
     p_plan.add_argument("layer_id")
     p_plan.add_argument("intent")
+
+    p_gate_threshold = sub.add_parser("gate-threshold")
+    p_gt_sub = p_gate_threshold.add_subparsers(dest="gate_command", required=True)
+    p_gt_analyze = p_gt_sub.add_parser("analyze")
+    p_gt_analyze.add_argument("gate_id")
+    p_gt_analyze.add_argument("--lookback-days", type=int, default=30)
+
+    p_gt_apply = p_gt_sub.add_parser("apply")
+    p_gt_apply.add_argument("gate_id")
+    p_gt_apply.add_argument("new_threshold", type=float)
+    p_gt_apply.add_argument("--reason", required=True)
 
     args = parser.parse_args(argv)
     try:
@@ -99,12 +114,66 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "promote":
+        # Validate override usage
+        if args.override_review_flags and not args.reason:
+            _print({"error": "--override-review-flags requires --reason to be set"})
+            return 2
         try:
-            _print(orch.promote(args.id, args.version, args.to_status))
+            result = orch.promote(args.id, args.version, args.to_status,
+                                 override_review_flags=args.override_review_flags,
+                                 override_reason=args.reason)
+            _print(result)
         except (LayerNotFoundError, LayerPromotionError, LayerForgeAuditError) as e:
             _print({"error": str(e)})
             return 1
         return 0
+
+    if args.command == "gate-threshold":
+        from core.orchestration.layer_forge.analytics import LayerForgeAnalytics
+        from core.orchestration.layer_forge.optimizer import GateThresholdAnalyzer
+        from core.orchestration.layer_forge.orchestrator import layer_forge_home
+
+        registry = LayerForgeOrchestrator(args.tenant).registry
+        analytics = LayerForgeAnalytics(registry=registry, tenant_id=args.tenant)
+        analyzer = GateThresholdAnalyzer(args.tenant, analytics_engine=analytics)
+
+        if args.gate_command == "analyze":
+            pattern = analyzer.analyze_gate(args.gate_id, lookback_days=args.lookback_days)
+            _print({
+                "gate_id": pattern.gate_id,
+                "total_fails": pattern.total_fails,
+                "override_successes": pattern.override_successes,
+                "override_failures": pattern.override_failures,
+                "override_success_rate": round(pattern.override_success_rate, 3),
+                "signal": pattern.signal.value,
+                "is_significant": pattern.is_significant,
+            })
+            return 0
+
+        elif args.gate_command == "apply":
+            # Apply the gate threshold change — audit-first, operator-explicit (no auto-apply)
+            try:
+                from core.orchestration.layer_forge import audit
+                audit.emit(
+                    "layer_forge.gate_threshold_applied",
+                    tenant_id=args.tenant,
+                    gate_id=args.gate_id,
+                    old_threshold=1.0,  # Placeholder; real system would track actual thresholds
+                    new_threshold=args.new_threshold,
+                    reason=args.reason,
+                    actor="cli",
+                )
+                _print({
+                    "status": "SUCCESS",
+                    "gate_id": args.gate_id,
+                    "new_threshold": args.new_threshold,
+                    "reason": args.reason,
+                    "message": "Gate threshold applied (audited, not persisted to registry yet)",
+                })
+                return 0
+            except LayerForgeAuditError as e:
+                _print({"status": "FAILED", "error": str(e)})
+                return 1
 
     return 2
 

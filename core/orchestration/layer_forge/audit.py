@@ -33,7 +33,27 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
         "entry_id", "version", "from_status", "to_status", "actor", "tenant_id",
     }),
     "layer_forge.review_evaluated": frozenset({
-        "entry_id", "version", "verdict", "flags", "tenant_id",
+        "entry_id", "version", "verdict", "flags", "tenant_id", "prompt_version",
+    }),
+    "layer_forge.review_override_applied": frozenset({
+        "entry_id", "version", "override_reason", "overridden_flags", "actor", "tenant_id",
+    }),
+    "layer_forge.definition_outcome_feedback": frozenset({
+        "entry_id", "version", "outcome", "phase", "actor", "tenant_id",
+    }),
+    "layer_forge.gate_threshold_suggested": frozenset({
+        "gate_id", "old_threshold", "new_threshold", "reason", "signal",
+        "override_success_rate", "total_overrides", "actor", "tenant_id",
+    }),
+    "layer_forge.gate_threshold_applied": frozenset({
+        "gate_id", "old_threshold", "new_threshold", "reason", "actor", "tenant_id",
+    }),
+    "layer_forge.canary_rollout_assigned": frozenset({
+        "entry_id", "version", "prompt_version", "rollout_percentage", "tenant_id",
+    }),
+    "layer_forge.canary_rollback": frozenset({
+        "canary_version", "parent_version", "reason", "canary_success_rate",
+        "parent_success_rate", "tenant_id",
     }),
 }
 
@@ -44,6 +64,12 @@ SEVERITY: dict[str, str] = {
     "layer_forge.enforcement_evaluated": "INFO",
     "layer_forge.definition_transitioned": "INFO",
     "layer_forge.review_evaluated": "INFO",
+    "layer_forge.review_override_applied": "WARNING",
+    "layer_forge.definition_outcome_feedback": "INFO",
+    "layer_forge.gate_threshold_suggested": "INFO",
+    "layer_forge.gate_threshold_applied": "INFO",
+    "layer_forge.canary_rollout_assigned": "INFO",
+    "layer_forge.canary_rollback": "WARNING",
 }
 
 

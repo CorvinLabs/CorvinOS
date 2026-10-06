@@ -165,12 +165,36 @@ class LayerForgeOrchestrator:
                                 entry_id=entry_id, version=version, gates=gates,
                                 enforcement=enforcement)
 
-        # REVIEW: Adversarial review phase (M4, ADR-2227)
+        # REVIEW: Adversarial review phase (M4, ADR-2227, Phase 4 A2: Canary sampling)
         review_verdict = review_layer_definition(manifest, enforcement)
         try:
             flags_list = [f.value for f in review_verdict.flags] if review_verdict.flags else []
             self._audit("layer_forge.review_evaluated", entry_id=entry_id, version=version,
-                        verdict=review_verdict.status, flags=flags_list)
+                        verdict=review_verdict.status, flags=flags_list, prompt_version=review_verdict.prompt_version)
+
+            # Phase 4 A2: Audit the canary rollout assignment
+            try:
+                from .optimizer import ReviewPromptVersions
+                from core.paths import tenant_home
+                versions = ReviewPromptVersions(tenant_home(self.tenant_id) / "global" / "layer_forge" / "prompt_versions.json")
+                assigned_version = versions.get_version(review_verdict.prompt_version)
+                if assigned_version:
+                    self._audit("layer_forge.canary_rollout_assigned", entry_id=entry_id, version=version,
+                                prompt_version=review_verdict.prompt_version,
+                                rollout_percentage=assigned_version.rollout_percentage)
+            except Exception:
+                pass  # Audit failure doesn't block create; continue
+
+            # Emit learning event: confidence score based on review result (Phase 3 C)
+            from .learning_integration import emit_review_confidence
+            emit_review_confidence(
+                tenant_id=self.tenant_id,
+                entry_id=entry_id,
+                definition_version=version,
+                review_verdict=review_verdict.status,
+                flags_count=len(review_verdict.flags or []),
+                prompt_version=review_verdict.prompt_version,
+            )
         except audit.LayerForgeAuditError as exc:
             return LayerForgeResult("FAILED", error=str(exc), phase="audit",
                                     gate_verdicts=gates, enforcement_verdicts=enforcement,
@@ -228,11 +252,55 @@ class LayerForgeOrchestrator:
         )
         return self.registry.promote(entry_id, version, to_status)
 
-    def promote(self, entry_id: str, version: str, to_status: str) -> dict:
-        """Audited status transition. Raises LayerNotFoundError / LayerPromotionError /
-        LayerForgeAuditError; nothing changes unless the audit record committed."""
+    def promote(self, entry_id: str, version: str, to_status: str, *,
+                override_review_flags: bool = False, override_reason: str = "") -> dict:
+        """Audited status transition with optional override of FLAGGED review verdicts (Phase 3A).
+
+        Args:
+            entry_id: Layer definition ID
+            version: Layer definition version
+            to_status: Target status (accepted | deployed | superseded | proposed)
+            override_review_flags: Set to True to override FLAGGED review verdict
+            override_reason: Human-readable reason for override (not stored for privacy)
+
+        Raises:
+            LayerNotFoundError: definition not found
+            LayerPromotionError: definition already transitioned, or FLAGGED without override
+            LayerForgeAuditError: audit chain write failed; nothing changed
+        """
         self.registry._check_key(entry_id, version)
+
+        # Check if this definition is FLAGGED and override is required
+        definition = self.registry.get(entry_id, version)
+        is_flagged = definition.get("review_flagged", False)
+        flagged_list = definition.get("review_flags", [])
+
+        if is_flagged and not override_review_flags:
+            raise LayerPromotionError(
+                f"definition {entry_id}:{version} has FLAGGED review verdict; "
+                f"override required (use --override-review-flags)"
+            )
+
         with LayerPrimitive(entry_id, self._lock_dir).locked():
+            # If override is being applied, audit it
+            if is_flagged and override_review_flags:
+                try:
+                    self._audit("layer_forge.review_override_applied",
+                                entry_id=entry_id, version=version,
+                                override_reason=override_reason if override_reason else "N/A",
+                                overridden_flags=flagged_list, actor=self.actor)
+                    # Emit learning outcome event for override
+                    from .learning_integration import emit_override_outcome
+                    emit_override_outcome(
+                        tenant_id=self.tenant_id,
+                        entry_id=entry_id,
+                        version=version,
+                        override_reason=override_reason,
+                        overridden_flags=flagged_list,
+                    )
+                except audit.LayerForgeAuditError:
+                    raise  # propagate audit failures
+
             return self._transition_locked(entry_id, version, to_status)
 
     def get(self, entry_id: str, version: str | None = None) -> dict:

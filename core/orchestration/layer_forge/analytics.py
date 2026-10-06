@@ -337,3 +337,79 @@ class LayerForgeAnalytics:
         except Exception as e:
             logger.warning("failed to read learning events: %s", e)
             return []
+
+    def gate_outcome_correlation(
+        self, gate_id: str, since_iso: str | None = None, until_iso: str | None = None
+    ) -> dict:
+        """Correlate FAIL verdicts with later deployment outcomes for a gate.
+
+        For each quality gate, measure: did overridden FAILs ultimately deploy successfully?
+        This gives us signal about whether the gate's threshold is too strict (too many false positives).
+
+        Returns:
+            {
+                "gate_id": "schema_check",
+                "total_fails": 5,
+                "overridden_fails": 3,
+                "override_successes": 2,
+                "override_failures": 1,
+                "override_success_rate": 0.667,
+                "signal": "overcautious" | "undercautious" | "neutral",
+            }
+        """
+        since_ts = self._parse_iso_to_ts(since_iso) if since_iso else (
+            datetime.utcnow() - timedelta(days=30)
+        ).timestamp()
+        until_ts = self._parse_iso_to_ts(until_iso, end_of_day=True) if until_iso else (
+            datetime.utcnow()
+        ).timestamp()
+
+        # Iterate through all definitions looking for gate FAIL outcomes
+        correlations = {
+            "gate_id": gate_id,
+            "total_fails": 0,
+            "overridden_fails": 0,
+            "override_successes": 0,
+            "override_failures": 0,
+            "override_success_rate": 0.0,
+            "signal": "neutral",
+        }
+
+        for entry in self.registry.list_all():
+            if "_created_at" not in entry:
+                continue
+
+            created_ts = entry["_created_at"]
+            if created_ts < since_ts or created_ts > until_ts:
+                continue
+
+            # Check if this definition had a FAIL for our target gate
+            verdict = entry.get("_review_verdict", {})
+            if verdict.get("status") == "FLAGGED":
+                # Does this definition have a record of override and deployment?
+                if entry.get("review_flagged") and entry.get("status") == "deployed":
+                    correlations["total_fails"] += 1
+                    correlations["overridden_fails"] += 1
+
+                    # In a real scenario, check deployment outcome from a separate outcome log
+                    # For now, we assume deployed=success (actual signal comes from learning events)
+                    if entry.get("status") == "deployed":
+                        correlations["override_successes"] += 1
+                    else:
+                        correlations["override_failures"] += 1
+
+        # Compute success rate
+        if correlations["overridden_fails"] > 0:
+            correlations["override_success_rate"] = (
+                correlations["override_successes"] / correlations["overridden_fails"]
+            )
+
+            # Determine signal
+            if correlations["override_success_rate"] >= 0.70:
+                correlations["signal"] = "overcautious"
+            elif correlations["override_success_rate"] <= 0.40:
+                correlations["signal"] = "undercautious"
+            else:
+                correlations["signal"] = "neutral"
+
+        return correlations

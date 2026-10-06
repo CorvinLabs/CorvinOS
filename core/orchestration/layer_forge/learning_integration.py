@@ -243,6 +243,78 @@ def emit_transition_outcome(
         return False
 
 
+def emit_review_confidence(
+    *,
+    tenant_id: str,
+    entry_id: str,
+    definition_version: str,
+    review_verdict: str,
+    flags_count: int,
+    prompt_version: str,
+    emitter: Optional = None,
+) -> bool:
+    """Emit confidence score based on adversarial review result (Phase 3 C).
+
+    The review phase's adversarial nature means:
+    - PASS verdict: review found no concerns (high confidence in definition)
+    - FLAGGED verdict: review raised concerns but doesn't block (moderate confidence)
+    - ERROR verdict: review LLM failed (low confidence, blocks creation)
+
+    Args:
+        tenant_id: Tenant scope
+        entry_id: Layer definition ID
+        definition_version: Layer definition version
+        review_verdict: Review status (PASS | FLAGGED | ERROR)
+        flags_count: Number of flags raised (for FLAGGED)
+        prompt_version: Which review prompt version was used (Phase 3 C)
+        emitter: Explicit EventEmitter (tests); default is booted registry's
+
+    Returns:
+        True when the event was queued
+    """
+    if not tenant_id or not isinstance(tenant_id, str):
+        logger.debug("review confidence dropped: no tenant_id (entry %s)", entry_id)
+        return False
+
+    em = emitter if emitter is not None else learning_emitter()
+    if em is None:
+        logger.debug("review confidence dropped: no learning emitter booted (entry %s)", entry_id)
+        return False
+
+    try:
+        from core.learning.learning_events import EventType, LearningEvent  # noqa: PLC0415
+
+        # Map review verdict to confidence delta
+        confidence_map = {
+            "PASS": 0.20,       # Strong positive: adversarial review found no concerns
+            "FLAGGED": -0.10,   # Mild negative: review raised concerns but doesn't block
+            "ERROR": -0.35,     # Strong negative: review failed (blocks creation)
+        }
+        confidence_delta = confidence_map.get(review_verdict, 0.0)
+
+        signal: dict = {
+            "entry_id": entry_id,
+            "definition_version": definition_version,
+            "review_verdict": review_verdict,
+            "flags_count": flags_count,
+            "confidence_delta": confidence_delta,
+            "decision_type": "adversarial_review",
+            "prompt_version": prompt_version,  # Phase 3 C: track which prompt was used
+        }
+
+        event = LearningEvent.create(
+            event_type=EventType.CONFIDENCE,
+            skill_id=LAYER_FORGE_SKILL_ID,
+            tenant_id=tenant_id,
+            signal=signal,
+            lom="core/orchestration/layer_forge/learning_integration.py:emit_review_confidence",
+        )
+        return bool(em.emit(event))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("review confidence not recorded (%s): %s", entry_id, type(exc).__name__)
+        return False
+
+
 def emit_rejection_outcome(
     *,
     tenant_id: str,
@@ -317,11 +389,134 @@ def emit_rejection_outcome(
         return False
 
 
+def emit_override_outcome(
+    *,
+    tenant_id: str,
+    entry_id: str,
+    version: str,
+    override_reason: str,
+    overridden_flags: list[str],
+    emitter: Optional = None,
+) -> bool:
+    """Emit outcome feedback on operator override of FLAGGED review verdict (Phase 3A).
+
+    An override means the operator decided to proceed despite review flags. The outcome
+    signal depends on whether the override was ultimately successful or failed in deployment.
+
+    Args:
+        tenant_id: Tenant scope
+        entry_id: Layer definition ID
+        version: Layer definition version
+        override_reason: Why the operator overrode (human-readable, not stored for privacy)
+        overridden_flags: List of flag IDs that were overridden
+        emitter: Explicit EventEmitter (tests); default is booted registry's
+
+    Returns:
+        True when the event was queued
+    """
+    if not tenant_id or not isinstance(tenant_id, str):
+        logger.debug("override outcome dropped: no tenant_id (entry %s)", entry_id)
+        return False
+
+    em = emitter if emitter is not None else learning_emitter()
+    if em is None:
+        logger.debug("override outcome dropped: no emitter (entry %s)", entry_id)
+        return False
+
+    try:
+        from core.learning.learning_events import EventType, LearningEvent  # noqa: PLC0415
+
+        signal: dict = {
+            "entry_id": entry_id,
+            "version": version,
+            "override_flags_count": len(overridden_flags or []),
+            "outcome_type": "review_override",
+            # NOTE: override_reason NOT stored for GDPR (content-free by construction)
+        }
+
+        event = LearningEvent.create(
+            event_type=EventType.OUTCOME,
+            skill_id=LAYER_FORGE_SKILL_ID,
+            tenant_id=tenant_id,
+            signal=signal,
+            lom="core/orchestration/layer_forge/learning_integration.py:emit_override_outcome",
+        )
+        return bool(em.emit(event))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("override outcome not recorded (%s/%s): %s", entry_id, version, type(exc).__name__)
+        return False
+
+
+def emit_deployment_outcome(
+    *,
+    tenant_id: str,
+    entry_id: str,
+    version: str,
+    success: bool,
+    phase: str = "deployed",
+    emitter: Optional = None,
+) -> bool:
+    """Emit outcome feedback on deployment success/failure (Phase 3A).
+
+    Used to close the learning loop: after an override, the operator reports whether
+    the deployment succeeded or failed. This feedback signal updates confidence.
+
+    Args:
+        tenant_id: Tenant scope
+        entry_id: Layer definition ID
+        version: Layer definition version
+        success: True if deployment succeeded, False if failed
+        phase: Where in deployment it succeeded/failed (deployed | partial | failed)
+        emitter: Explicit EventEmitter (tests); default is booted registry's
+
+    Returns:
+        True when the event was queued
+    """
+    if not tenant_id or not isinstance(tenant_id, str):
+        logger.debug("deployment outcome dropped: no tenant_id (entry %s)", entry_id)
+        return False
+
+    em = emitter if emitter is not None else learning_emitter()
+    if em is None:
+        logger.debug("deployment outcome dropped: no emitter (entry %s)", entry_id)
+        return False
+
+    try:
+        from core.learning.learning_events import EventType, LearningEvent  # noqa: PLC0415
+
+        # Map success to confidence boost/penalty
+        confidence_delta = 0.25 if success else -0.35
+
+        signal: dict = {
+            "entry_id": entry_id,
+            "version": version,
+            "success": success,
+            "phase": phase,
+            "outcome_type": "deployment",
+            "confidence_delta": confidence_delta,
+        }
+
+        event = LearningEvent.create(
+            event_type=EventType.OUTCOME,
+            skill_id=LAYER_FORGE_SKILL_ID,
+            tenant_id=tenant_id,
+            signal=signal,
+            lom="core/orchestration/layer_forge/learning_integration.py:emit_deployment_outcome",
+        )
+        return bool(em.emit(event))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("deployment outcome not recorded (%s/%s): %s", entry_id, version, type(exc).__name__)
+        return False
+
+
 __all__ = [
     "emit_gate_confidence",
     "emit_enforcement_confidence",
+    "emit_review_confidence",
     "emit_transition_outcome",
     "emit_rejection_outcome",
+    "emit_override_outcome",
+    "emit_deployment_outcome",
     "learning_emitter",
     "LAYER_FORGE_SKILL_ID",
 ]

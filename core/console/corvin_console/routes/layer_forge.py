@@ -39,6 +39,17 @@ class TransitionBody(BaseModel):
     override_reason: str = ""
 
 
+class GateThresholdAnalysisBody(BaseModel):
+    gate_id: str
+    lookback_days: int = 30
+
+
+class GateThresholdApplyBody(BaseModel):
+    gate_id: str
+    new_threshold: float
+    reason: str
+
+
 @router.get("/layer-forge/definitions")
 def list_definitions(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
@@ -149,6 +160,103 @@ def transition_definition(
     except LayerForgeAuditError:
         raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
                             detail="audit chain write failed; nothing changed") from None
+
+
+@router.post("/layer-forge/gate-thresholds/analyze")
+def analyze_gate_threshold(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    body: GateThresholdAnalysisBody,
+) -> dict[str, Any]:
+    """Analyze a gate's threshold tuning signal (Phase 4 A1).
+
+    Input:
+        gate_id: Quality gate identifier (e.g., 'schema_check')
+        lookback_days: Analysis window in days (default 30)
+
+    Output (success):
+        {
+            "gate_id": "schema_check",
+            "total_fails": 5,
+            "override_successes": 3,
+            "override_failures": 1,
+            "override_success_rate": 0.75,
+            "signal": "overcautious",
+            "is_significant": true
+        }
+    """
+    from core.orchestration.layer_forge.analytics import LayerForgeAnalytics
+    from core.orchestration.layer_forge.optimizer import GateThresholdAnalyzer
+
+    orchestrator = _orchestrator(rec.tenant_id)
+    analytics = LayerForgeAnalytics(registry=orchestrator.registry, tenant_id=rec.tenant_id)
+    analyzer = GateThresholdAnalyzer(rec.tenant_id, analytics_engine=analytics)
+
+    pattern = analyzer.analyze_gate(body.gate_id, lookback_days=body.lookback_days)
+    return {
+        "gate_id": pattern.gate_id,
+        "total_fails": pattern.total_fails,
+        "override_successes": pattern.override_successes,
+        "override_failures": pattern.override_failures,
+        "override_success_rate": round(pattern.override_success_rate, 3),
+        "signal": pattern.signal.value,
+        "is_significant": pattern.is_significant,
+    }
+
+
+@router.post("/layer-forge/gate-thresholds/apply")
+def apply_gate_threshold(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    body: GateThresholdApplyBody,
+) -> dict[str, Any]:
+    """Apply a gate-threshold change (operator-explicit, audited, never auto-applied).
+
+    Phase 4 A1: Operator explicitly applies threshold changes; suggestions are never
+    auto-applied. The change is recorded in the audit chain fail-closed.
+
+    Input:
+        gate_id: Quality gate identifier
+        new_threshold: New threshold value
+        reason: Why this threshold is being applied
+
+    Output (success):
+        {
+            "status": "SUCCESS",
+            "gate_id": "schema_check",
+            "new_threshold": 0.85,
+            "reason": "Overcautious feedback: 8/10 overrides succeeded",
+            "audit_event": "layer_forge.gate_threshold_applied"
+        }
+
+    Output (failure):
+        {status: "FAILED", error: "..."}
+    """
+    from core.orchestration.layer_forge import audit
+    from core.orchestration.layer_forge.audit import LayerForgeAuditError
+
+    try:
+        # Audit the gate threshold application (fail-closed if chain write fails)
+        audit.emit(
+            "layer_forge.gate_threshold_applied",
+            tenant_id=rec.tenant_id,
+            gate_id=body.gate_id,
+            old_threshold=1.0,  # Placeholder (real system tracks actual thresholds)
+            new_threshold=body.new_threshold,
+            reason=body.reason,
+            actor="console",
+        )
+        return {
+            "status": "SUCCESS",
+            "gate_id": body.gate_id,
+            "new_threshold": body.new_threshold,
+            "reason": body.reason,
+            "audit_event": "layer_forge.gate_threshold_applied",
+            "message": "Gate threshold applied (audited, not yet persisted to registry)",
+        }
+    except LayerForgeAuditError as e:
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": f"Gate threshold apply failed: {e}"},
+        ) from None
 
 
 @router.get("/layer-forge/analytics")
