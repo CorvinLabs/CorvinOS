@@ -141,22 +141,21 @@ def _wait_http(url: str, timeout: float = 90) -> None:
 
 
 
-def _record_ibc_exception(root: Path) -> None:
-    """Mark every connection under ``root`` as an operator exception
-    (``require_ibc: false``). Since ADR-2099 P0 fact 3 (operator decision,
-    Option B) a NEW pairing requires a Corvin Labs IBC on every inbound
-    envelope; these test hosts have none, so without the exception the
-    receiver rightly answers ``instance_attestation_required_but_absent``.
-    This suite tests pairing/transport convergence, not that policy —
-    enforcement is covered by tests/e2e/a2a/test_a2a_require_ibc_enforcement_e2e.py.
+def _assert_pairing_is_permissive(root: Path) -> None:
+    """Every origin the real pairing flow wrote must carry ``require_ibc: false``.
+
+    These test hosts hold no Corvin Labs IBC, exactly like an unlicensed
+    install. 2e4bc8566 stamped ``require_ibc: true`` on every new pairing and
+    this suite had to rewrite the files to keep passing, which hid that two
+    real unlicensed peers could no longer talk (``identity_required``).
+    Since 2026-10-06 (operator, ADR-2099) the writers stay permissive until P1;
+    the tasks below then prove over real HTTP that such a pair exchanges work.
     """
-    for f in (root / "origins").glob("*.json"):
+    origins = list((root / "origins").glob("*.json"))
+    assert origins, f"no origin file under {root}"
+    for f in origins:
         cfg = json.loads(f.read_text())
-        cfg["require_ibc"] = False
-        tmp = f.with_suffix(".tmp")
-        tmp.write_text(json.dumps(cfg))
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, f)
+        assert cfg.get("require_ibc") is False, (f, cfg.get("require_ibc"))
 
 class _Proc:
     def __init__(self, root: Path, name: str) -> None:
@@ -392,7 +391,7 @@ class TestHubTenPeers(unittest.TestCase):
                 _linked(a.connection(self.kids[a.name])) for a in self.agents)
         self._await(all_linked, f"all {2 * N_PEERS} connection ends ACTIVE + bidirectional")
         for p in [self.hub, *self.agents]:
-            _record_ibc_exception(p.root)
+            _assert_pairing_is_permissive(p.root)
         hub = self._hub_connections()
         for a in self.agents:
             self.assertEqual(hub[self.kids[a.name]]["label"], a.name)

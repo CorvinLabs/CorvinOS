@@ -1,4 +1,10 @@
-"""E2E: new A2A pairings write require_ibc=true (ADR-2099 P0 Fact 3).
+"""E2E: new A2A pairings write require_ibc=false until ADR-2099 P1.
+
+2e4bc8566 made every pairing writer stamp ``require_ibc: true``. With no IBC
+on either side (no Corvin Labs licence) both peers then refused every envelope
+with ``instance_attestation_required_but_absent`` / public ``identity_required``,
+and nothing could write the ``false`` exception back. Operator decision
+2026-10-06: writers stay permissive until P1 ships the audited exception path.
 
 Reuses the real console route sandbox from
 ``core/console/tests/test_a2a_pair_friendship_security.py`` (same env-var
@@ -10,7 +16,7 @@ call to ``to_origin_dict`` in isolation. That receiver-side enforcement of
 already proven end-to-end over real HTTP in
 ``corvin_operator/bridges/shared/test_a2a_ibc_attach_e2e.py``; this file
 proves the narrower, previously-untested half: new pairings actually WRITE
-the flag the receiver enforces.
+the flag the receiver reads.
 
 Run: python3 -m pytest tests/e2e/a2a/test_a2a_require_ibc_enforcement_e2e.py -v
 """
@@ -34,7 +40,7 @@ from test_a2a_pair_friendship_security import (  # noqa: E402  # type: ignore[im
 
 
 class TestRequireIbcWrittenOnNewPairings(_RouteSandbox):
-    def test_friendship_import_writes_require_ibc_true(self):
+    def test_friendship_import_writes_require_ibc_false(self):
         """Real route call: ap.friendship_import -> origin file on disk."""
         kid = "peer-" + secrets.token_hex(4)
         tok = _forge_friendship_token({
@@ -47,8 +53,8 @@ class TestRequireIbcWrittenOnNewPairings(_RouteSandbox):
         origin_file = self.od / f"{kid}.json"
         self.assertTrue(origin_file.exists(), f"origin file not written: {origin_file}")
         cfg = json.loads(origin_file.read_text())
-        self.assertIs(cfg.get("require_ibc"), True,
-                       f"new pairing must set require_ibc=true, got: {cfg.get('require_ibc')!r}")
+        self.assertIs(cfg.get("require_ibc"), False,
+                      f"new pairing must stay permissive until ADR-2099 P1, got: {cfg.get('require_ibc')!r}")
 
 if __name__ == "__main__":
     import unittest

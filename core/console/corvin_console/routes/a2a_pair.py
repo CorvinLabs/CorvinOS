@@ -1493,7 +1493,7 @@ def friendship_import(
                 previous[p] = p.read_bytes() if p.exists() else None
             except OSError:
                 previous[p] = None
-        origin_cfg = _ft.to_origin_dict(token, require_ibc=True)  # ADR-2099 P0: enforce IBC for new pairings
+        origin_cfg = _ft.to_origin_dict(token, require_ibc=False)  # ADR-2099: permissive until P1 ships the audited exception path (operator 2026-10-06)
         if body.spawn_worker:
             origin_cfg["spawn_worker"] = True
         _write_secure(origin_path, origin_cfg)

@@ -1006,13 +1006,18 @@ failure must be what happened:
   (`routes/a2a_discovery.py`) lists only already-paired origins — there is no
   LAN/mDNS discovery — and those are the Peers tab already.
 
-Since ADR-2099 P0 fact 3 (operator decision, Option B) a **new** pairing
-requires a Corvin Labs IBC on every inbound envelope (`require_ibc: true`).
-An instance without an IBC therefore cannot exchange tasks over a new pairing
-— it reads as online (the ping is not IBC-gated) while its tasks are
-`rejected` with `instance_attestation_required_but_absent`. Transport tests
-that pair IBC-less hosts record an explicit operator exception
-(`require_ibc: false`) for that reason.
+Every pairing writer stores `require_ibc: false` (operator decision
+2026-10-06, ADR-2099). From 2026-10-04 (2e4bc8566) to 2026-10-06 they stored
+`true`: two unlicensed instances (no IBC on either side) then read as online —
+the ping is not IBC-gated — while every task was `rejected` in both directions
+with `instance_attestation_required_but_absent`, which reaches the sender as
+the public reason `identity_required`. Nothing could write `false` back, so the
+only way out was editing the origin file by hand. A pairing made in that
+window keeps `true` until its origin file is edited on BOTH hosts.
+Enforcement for new pairings returns with ADR-2099 P1, together with the
+audited exception path. The transport E2E suites (zero-config, ten-peer hub)
+now assert that the real pairing flow writes `false` and exchange tasks
+between IBC-less hosts without any rewrite.
 
 ## Zero-config connectivity — the token is the only input (ADR-2059, 2026-09-24)
 
@@ -1341,10 +1346,10 @@ drift apart (a key in only one of them is a fleet-wide outage once
 `require_ibc` is required — fact 10, still open).
 
 **ADR-2099 P0 facts 1, 3, 4 shipped (2026-10-04):** the sender attaches an
-IBC (fact 1, ab54f2183), all new pairings write `require_ibc=true`
-(fact 3, 2e4bc8566), and the CRL receive path was cache-only even before
-this session (fact 4, pre-existing). The receiver's M2 gate now enforces it:
-a peer with `require_ibc=true` and no attestation is rejected. Legacy origins
-written before the fact-3 commit keep their existing `require_ibc` value
-(likely `false`), so existing pairings are unaffected. Still open from P0:
+IBC (fact 1, ab54f2183), and the CRL receive path was cache-only even before
+this session (fact 4, pre-existing). The receiver's M2 gate enforces
+`require_ibc=true`: a peer without attestation is rejected. Fact 3
+(2e4bc8566, all new pairings write `true`) was **withdrawn on 2026-10-06**:
+it shipped without the P1 exception path and locked unlicensed pairs out
+in both directions; writers store `false` again until P1. Still open from P0:
 fact 9 (email field removal), fact 10 (second trust-ring key), and auto-renew.

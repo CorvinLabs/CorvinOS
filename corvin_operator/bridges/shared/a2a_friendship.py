@@ -586,8 +586,11 @@ def to_origin_dict(token: FriendshipToken, require_ibc: bool = False) -> dict[st
     State is PENDING (enabled=False) when the peer's URL is unknown.
 
     Args:
-        require_ibc: if True, enforce Corvino IBC attestation (ADR-2099 P0 Fact 3).
-                     Only set for new pairings; legacy pairings keep False.
+        require_ibc: if True, enforce Corvino IBC attestation (ADR-2099).
+                     Every pairing writer passes False until ADR-2099 P1 ships
+                     the audited ``require_ibc: false`` exception path: without
+                     it an unlicensed pair (no IBC on either side) refuses
+                     every envelope with no way out (operator, 2026-10-06).
     """
     active = token.url is not None
     hmac_key, recv_key = _derive_channel_keys(token.key)
@@ -601,7 +604,7 @@ def to_origin_dict(token: FriendshipToken, require_ibc: bool = False) -> dict[st
         "spawn_worker": False,
         "allowed_personas": _allowed_personas(token),
         "_friendship": True,
-        "require_ibc": require_ibc,  # ADR-2099 P0 Fact 3: enforce Corvino-only
+        "require_ibc": require_ibc,  # ADR-2099: receiver step 6.9 enforces when true
     }
     if token.max_ttl_s is not None:
         d["max_ttl_s"] = token.max_ttl_s
@@ -2474,7 +2477,7 @@ def process_friendship_ack_request(
         kid=kid, key=str(pending["key"]), url=peer_url, label=label,
         expires=pending.get("expires"), constraints=constraints,
     )
-    origin_cfg = to_origin_dict(reconstructed, require_ibc=True)  # ADR-2099 P0: enforce IBC for new pairings
+    origin_cfg = to_origin_dict(reconstructed, require_ibc=False)  # ADR-2099: permissive until P1 ships the audited exception path (operator 2026-10-06)
     endpoint_cfg = to_endpoint_dict(reconstructed)
     if sender_iid is not None:
         origin_cfg["_peer_instance_id"] = sender_iid
