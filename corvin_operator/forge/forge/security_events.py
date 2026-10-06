@@ -949,6 +949,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "layer_forge.quality_gate_evaluated":  "INFO",
     "layer_forge.enforcement_evaluated":   "INFO",
     "layer_forge.definition_transitioned": "INFO",
+    # Forge Bundle (ADR-2229) — mirrored in core/forge_bundle/audit.py::SEVERITY.
+    "forge_bundle.exported": "INFO",
     # Video Producer — Blender render path (core/skills/os_skills/video_producer/audit.py)
     # Metadata only: file paths, resolution/codec/frame/duration numbers, error_class.
     # NEVER: subprocess stdout/stderr, exception message text.
@@ -1361,6 +1363,7 @@ EVENT_SEVERITY: dict[str, str] = {
     "plugin.disabled": "INFO",
     "plugin.load_failed": "WARNING",
     "plugin.loaded": "INFO",
+    "plugin.marketplace_sync_failed": "WARNING",
     "plugin.unloaded": "INFO",
     "ulo.objective_created": "INFO",
     "ulo.objective_deleted": "INFO",
@@ -3392,6 +3395,12 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "plugin_id", "plugin_type", "boot_layer", "version", "tenant_id", "origin", "source",
         "reason", "error_class", "error_type",
     }),
+    # ADR-2228 — boot-time marketplace GitHub-tarball auto-sync (bootstrap_builtin)
+    # found no usable local source even after trying: never a plugin_id, there is
+    # no plugin to name yet.
+    "plugin.marketplace_sync_failed": frozenset({
+        "tenant_id", "reason", "error_type",
+    }),
     # ADR-0017 Phase II — compliance reports: report identity + counters + the
     # chain anchor hash; report CONTENT never enters the chain.
     "compliance.report_generated": frozenset({
@@ -3878,6 +3887,10 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "layer_forge.definition_transitioned": frozenset({
         "entry_id", "version", "from_status", "to_status", "actor", "tenant_id",
+    }),
+    # Forge Bundle (ADR-2229) — mirrored in core/forge_bundle/audit.py::ALLOWED_FIELDS.
+    "forge_bundle.exported": frozenset({
+        "bundle_id", "bundle_version", "artifact_count", "total_bytes", "tenant_id",
     }),
     # Video Producer — Blender render path (mirrored in
     # core/skills/os_skills/video_producer/audit.py::_ALLOWED_FIELDS).

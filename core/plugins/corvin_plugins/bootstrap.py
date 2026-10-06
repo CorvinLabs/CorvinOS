@@ -1041,6 +1041,15 @@ def bootstrap_builtin(
     and ``spec.plugins.load_builtin: false`` skips discovery entirely. Both honour
     the Phase 2b "builtin always active locally" default — absent config loads
     everything discovered.
+
+    ADR-2228: a fresh install has no sibling ``../Corvin-Marketplace`` checkout, so
+    before 2026-10-06 the marketplace branch below silently scanned a path that did
+    not exist and loaded zero marketplace plugins, forever, on every boot — the one
+    E2E that boots the real sequence (``test_boot_marketplace_e2e_subprocess.py``)
+    skipped exactly this case instead of catching it. :func:`ensure_marketplace_source`
+    (GitHub-tarball fallback, already built and already unit-tested, previously called
+    only on-demand from the Console's per-plugin resolve path) now runs here too, so
+    discovery itself is self-sufficient: no manual clone, no flag, no Console click.
     """
     scan_root = root if root is not None else _BUILTIN_ROOT
     plugin_dirs = _builtin_plugin_dirs(scan_root)
@@ -1048,7 +1057,22 @@ def bootstrap_builtin(
         # Also discover plugins whose SOURCE lives in the Corvin-Marketplace repo, not in
         # CorvinOS (operator rule). Same load contract (plugin.yaml + provider.py); deduped
         # by directory. An explicit test ``root`` scans only that root (isolation).
-        for _d in _builtin_plugin_dirs(_marketplace_root()):
+        #
+        # Best-effort sync BEFORE resolving the root: on a fresh install with no
+        # sibling checkout and no CORVIN_MARKETPLACE_ROOT this downloads the
+        # marketplace tarball into the existing GitHub-sync cache (no new
+        # database/cache introduced — ensure_marketplace_source already owns that
+        # cache dir). Network/extraction failures are swallowed inside
+        # ensure_marketplace_source itself and never raise here; this call only
+        # decides whether the attempt happens at boot, not whether it is safe.
+        ensure_marketplace_source()
+        marketplace_root = _marketplace_root()
+        marketplace_dirs = _builtin_plugin_dirs(marketplace_root)
+        if not marketplace_dirs and not marketplace_root.is_dir():
+            _audit_degradation(tenant_id, "plugin.marketplace_sync_failed", {
+                "tenant_id": tenant_id, "reason": "no_local_source_after_sync",
+            })
+        for _d in marketplace_dirs:
             if _d not in plugin_dirs:
                 plugin_dirs.append(_d)
     if not plugin_dirs:

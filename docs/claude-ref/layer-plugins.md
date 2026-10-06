@@ -1787,12 +1787,34 @@ The sequence itself lives once, in `bootstrap.boot_platform()`, and each host's
    If the compliance package itself is unimportable it extends `sys.path` (like
    `audit.py`) and, failing that, runs the same core assertion inline — "the
    checker is missing" must never read as "the check passed".
-2. `bootstrap.bootstrap_all(...)` — the declarative `spec.plugins.installed` path
-   plus the runtime registry, the latter gated on `plugin_runtime_lifecycle`, so a
-   fresh install loads nothing. Instantiates each `class_path` and registers with
-   a context built by `build_context()` — which populates EVERY provider handle. A
+2. `bootstrap.bootstrap_all(...)` — three paths, in order: the declarative
+   `spec.plugins.installed` path, `bootstrap_builtin()` (in-wheel `buildin/` +
+   Corvin-Marketplace `buildin/`, unconditional — see below), and the runtime
+   registry (`bootstrap_tenant()`), gated on `plugin_runtime_lifecycle` (default
+   `False`, ADR-0233 D6 "ship dark" — a fresh install's runtime-registry path
+   stays a no-op until an operator flips that flag in Settings → Features; this is
+   unaffected by ADR-2228). Instantiates each `class_path` and registers with a
+   context built by `build_context()` — which populates EVERY provider handle. A
    single bad plugin is logged and skipped; it never blocks the boot. The one
    exception is `GlobalComplianceLoadFailed`, which is re-raised.
+
+   **`bootstrap_builtin()`'s marketplace branch is self-sufficient (ADR-2228,
+   2026-10-06).** Until then it only scanned a LOCAL path for the
+   Corvin-Marketplace `buildin/` tree (operator-set `CORVIN_MARKETPLACE_ROOT`, a
+   sibling git checkout, or a previously-synced GitHub cache) — so a genuinely
+   fresh install with none of those loaded **zero** marketplace plugins, forever,
+   logged only at `log.debug`; the one E2E that boots the real sequence
+   (`test_boot_marketplace_e2e_subprocess.py`) `pytest.skip()`s exactly that case.
+   `bootstrap_builtin()` now calls `ensure_marketplace_source()` (the
+   GitHub-tarball best-effort fallback, previously reached only on-demand from
+   the Console's per-plugin resolve route) before resolving the marketplace root,
+   so a fresh install auto-downloads and loads every `buildin/`-tier marketplace
+   plugin with zero manual configuration. A sync that still leaves no usable
+   local source (e.g. offline) degrades to zero marketplace plugins for that
+   boot — unchanged — but now emits `plugin.marketplace_sync_failed` (WARNING)
+   instead of only a log line. The `contributor/`-tier (community) consent gate
+   and the `plugin_runtime_lifecycle` ship-dark flag are both untouched by this —
+   see `test_marketplace_fresh_install_e2e.py`.
 3. `tripwire.assert_post_boot()` — asks whether anything claimed the compliance
    boot layer that `bootstrap_global()` did not grant. Can only be asked after the
    plugins are loaded, which is why it is not folded into step 1.
