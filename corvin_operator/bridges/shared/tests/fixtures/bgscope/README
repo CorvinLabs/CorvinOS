@@ -1,0 +1,3 @@
+Captured from claude CLI 2.1.294 (2026-10-08) with tests/capture_bgscope_fixture.py.
+Synthetic prompts only. Scrubbed: ids, paths, tool/skill catalogues. `_t` = seconds
+since spawn (replayed by tests/fake_claude.py). Regenerate after a CLI update and diff.

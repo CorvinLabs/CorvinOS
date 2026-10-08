@@ -282,4 +282,26 @@ injects the legacy idle wakeup **only** when `BGW_LEGACY_WAKEUP=1` (default OFF
 - `test_task_supervisor.py` — a dead / zombie / heartbeat-stale worker is resumed with a continuation prompt; a healthy one is left alone; a finished one is never resurrected; both budgets end in an honest failure that says what was tried; backoff and the `O_EXCL` spawn lock; **a resume spawns a REAL OS process**; `bg_monitor.run_once` drives it; flag-off never resumes and `completion_notify` still reaps an unsupervised dead worker.
 - `test_bg_task_worker_supervised.py` — the REAL `bg_task_worker.py` driven as a REAL subprocess (only the engine is stubbed): heartbeat, progress relay, timeout/crash recorded as resumable WITHOUT a premature failure message, the continuation prompt carrying the original goal, and flag-off reporting failure immediately as it always did.
 
+## Background children of a turn — measured stream contract (ADR-2236, work in progress)
+
+A turn can start background children (`Bash run_in_background`, `Monitor`, a background `Agent`).
+Measured on claude CLI 2.1.294 (details and raw captures: ADR-2236 / PLAN-0938):
+
+- The CLI emits `system/background_tasks_changed` (full snapshot), `task_started`, `task_updated`,
+  `task_notification` (status + `summary` with the exit code). `Bash` and `Monitor` are both
+  `task_type: local_bash`; a background `Agent` is `local_agent` and its `task_started` carries the
+  sub-agent **prompt** (never persist or send it).
+- The process stays alive until every child has ended — also after the adapter closed stdin — and emits
+  **one `result` per wake-up** (`origin.kind == "task-notification"`), not just one extra. The turn is over at
+  process EOF, not at the first `result`.
+- Not yet implemented (tasks T-0071..T-0074): the adapter still drops these events, lets the 300 s idle
+  watchdog kill a quiet child, overwrites `final_text` with the last wake-up and, after an idle kill on an
+  existing session, re-runs the prompt (starting the child a second time).
+
+Test harness (T-0070): `shared/tests/fixtures/bgscope/*.jsonl` are scrubbed captures from the real CLI
+(`tests/capture_bgscope_fixture.py` regenerates them), `tests/fake_claude.py` replays one as a REAL
+subprocess selected through `CORVIN_CLAUDE_BIN`, `test_bg_scope_contract.py` pins the schema the tracker will
+rely on (opt-in live canary: `CORVIN_BGSCOPE_CANARY=1`), `test_bg_scope_watchdog_repro.py` holds the two
+strict-`xfail` repros that T-0072 turns green.
+
 All wired into `corvin_operator/bridges/run-all-tests.sh`.

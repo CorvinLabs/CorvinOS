@@ -1,0 +1,4 @@
+{"type": "system", "subtype": "init", "model": "claude-haiku-5-5", "uuid": "u001", "session_id": "S", "_t": 0.73}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}, "uuid": "u002", "session_id": "S", "_t": 1.52}
+{"type": "result", "subtype": "success", "is_error": false, "result": "ok", "terminal_reason": "completed", "stop_reason": "end_turn", "num_turns": 1, "usage": {"input_tokens": 2, "output_tokens": 4, "cache_read_input_tokens": 10875, "cache_creation_input_tokens": 17020}, "uuid": "u003", "session_id": "S", "_t": 1.54}
+{"type": "_eof", "_t": 2.27, "rc": 0, "uuid": "u004", "session_id": "S"}
