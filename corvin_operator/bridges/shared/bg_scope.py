@@ -497,9 +497,14 @@ def closing_line(children: list[dict]) -> str:
     """
     total = len(children)
     failed = [c for c in children if c.get("state") == FAILED]
+    unknown = [c for c in children if c.get("state") == UNKNOWN]
     noun = "task" if total == 1 else "tasks"
     if failed:
         return f"❌ Background work finished: {len(failed)} of {total} {noun} failed."
+    if unknown:
+        # ended without a completed/failed report (killed, stopped): never claim success
+        return (f"■ Background work ended: {len(unknown)} of {total} {noun} ended "
+                f"without a clear result.")
     return f"✅ Background work finished: {total} {noun} done."
 
 

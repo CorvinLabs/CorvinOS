@@ -5975,6 +5975,8 @@ def _call_claude_streaming_via_engine(
     _held_cls = "user"
     _last_interim = ""
     _scope_end: str | None = None   # "child_cap" | "wakeup_cap" when a cap ended the scope
+    _signal_stop = False            # the process was stopped by SIGTERM/SIGKILL we did not send
+    _cli_result_error = False       # the error came from the CLI's own result event (not synthesised)
     _cap_warned = False
     _scope_limit_s = 0.0
     _child_cap_s = _bgs.child_max_s()
@@ -6280,6 +6282,10 @@ def _call_claude_streaming_via_engine(
                     _unregister_stdin(chat_key)
                 elif ev.type == "error":
                     error_text = ev.error or "Unbekannter Fehler"
+                    # An error the CLI reported in a result event ("API Error: 529") leaves the
+                    # process alive for the engine's own cleanup to SIGTERM; the engine-made
+                    # "exited without result" has no raw event — that one is a process death.
+                    _cli_result_error = (ev.raw or {}).get("type") == "result"
                     _unregister_engine(chat_key)
                     _unregister_stdin(chat_key)
 
@@ -6302,6 +6308,11 @@ def _call_claude_streaming_via_engine(
             except Exception as e:  # noqa: BLE001
                 log(f"bg_scope finalize failed: {e!r}")
             _open_at_eof = list(_scope.open_children)
+            # A SIGTERM/SIGKILL we did not send is an operator /cancel (or an external stop). The
+            # /cancel flag is set only AFTER the process is already gone, so it cannot be relied on
+            # here: the established contract (see the rc<0 branch below) is silence either way.
+            _signal_stop = (rc < 0 and abs(rc) in (int(signal.SIGTERM), int(signal.SIGKILL))
+                            and not timed_out and not _scope_end)
             if _scope_end:
                 # We ended it on purpose: not an error, not a retry, and the user is
                 # told exactly what was cut (ADR-2236 D5/D6).
@@ -6318,7 +6329,7 @@ def _call_claude_streaming_via_engine(
                 # EOF with a child still open. The CLI exits only AFTER its children end, so
                 # this was a kill, a crash or an operator stop — never a clean finish. The
                 # user must not be handed the first answer again as if all were well.
-                _user_cancel = _turn is not None and _cancel_requested(_turn.chat_key)
+                _user_cancel = _signal_stop or (_turn is not None and _cancel_requested(_turn.chat_key))
                 _bgs.emit_audit("bgscope.cancelled", tenant_id=_scope.tenant_id,
                                 scope_id=_scope.scope_id, children_open=len(_open_at_eof),
                                 reason_code="user_cancel" if _user_cancel else "process_died")
@@ -6429,6 +6440,16 @@ def _call_claude_streaming_via_engine(
             except Exception as _e:  # noqa: BLE001
                 log(f"main_session: write failed: {_e}")
 
+        if (error_text and _signal_stop and not _cli_result_error
+                and (_scope.all_children or _last_interim)):
+            # Stopped from outside (operator /cancel) after background work started: the established
+            # contract is silence — not "API call failed", not a retry.
+            log("engine stopped by a signal after background work started — silent, not retried")
+            _bgs.emit_audit("bgscope.cancelled", tenant_id=_scope.tenant_id,
+                            scope_id=_scope.scope_id, children_open=len(_scope.open_children),
+                            reason_code="signal_stop")
+            return ""
+
         if error_text and (_scope.all_children or _last_interim):
             # ADR-2236: a prompt that already started background work or delivered messages
             # is NEVER re-run — every retry branch below would start the child a second time
@@ -6442,7 +6463,15 @@ def _call_claude_streaming_via_engine(
                 _msg += (f"\n\nBackground work that was already started ({_kinds}) has been "
                          f"ended; the request was not run again.")
             if _held_final.strip():
-                _msg += f"\n\nLast update:\n{_held_final.strip()}"
+                _quote = _held_final.strip()
+                if _output_sentinel is not None:     # undelivered model text: same gate as the final
+                    try:
+                        _quote = _apply_output_sentinel(prompt, _quote, profile=profile,
+                                                        engine_name=getattr(engine, "name", ""),
+                                                        channel=channel, chat_key=chat_key)
+                    except Exception as e:  # noqa: BLE001
+                        log(f"output-sentinel on error quote raised ({e!r}), fail-open")
+                _msg += f"\n\nLast update:\n{_quote}"
             return with_voice_override(_msg, "The call to Claude Code failed after background work had started.")
 
         if error_text:
@@ -6664,7 +6693,11 @@ def _call_claude_streaming_via_engine(
             return with_voice_override(error_msg, "The call to Claude Code failed.")
 
         if rc != 0 and not final_text:
-            stderr = (proc.stderr.read() if proc.stderr else "") or ""
+            try:
+                stderr = (proc.stderr.read() if proc.stderr else "") or ""
+            except (ValueError, OSError):
+                # the engine's cleanup has already closed the pipe (a stopped turn lands here)
+                stderr = ""
             if isinstance(stderr, bytes):
                 stderr = stderr.decode("utf-8", errors="replace")
             log(f"engine streaming exited rc={rc}: {stderr[:300]}")
@@ -10579,7 +10612,21 @@ def _synthesize_voice_for_turn(
         voice_mode = "never"
     if voice_mode == "never":
         return None, False
-    if not (voice_mode == "always" or len(answer) > settings.get("voice_threshold_chars", 200)):
+    # ADR-2236 D8: a scope that ended badly says so ALOUD even when the closing text is short
+    # (voice_summary_mode=long_only) or the summariser comes back empty. "never" still wins above.
+    _bad_ending = False
+    if scope_facts and scope_facts.get("children"):
+        try:
+            try:
+                from . import bg_scope as _bgs_e  # type: ignore
+            except ImportError:
+                import bg_scope as _bgs_e  # type: ignore[no-redef]
+            _bad_ending = bool(_bgs_e.voice_facts(scope_facts["children"],
+                                                  scope_facts.get("end_reason")))
+        except Exception:  # noqa: BLE001
+            _bad_ending = False
+    if not (voice_mode == "always" or _bad_ending
+            or len(answer) > settings.get("voice_threshold_chars", 200)):
         return None, False
 
     voice_was_expected = True
@@ -10593,11 +10640,12 @@ def _synthesize_voice_for_turn(
         # and internal instructions instead of the user's actual words.
         task=voice_task or "",
     )
-    if not spoken:
+    if not spoken and not _bad_ending:
         # Synthesis will NOT be attempted this turn — see the docstring
         # above for why this reset is required.
         _set_voice_skip_reason(None)
         return None, voice_was_expected
+    spoken = spoken or ""
 
     # Resolve the TTS voice/engine language the SAME way the content
     # language was just resolved (profile default, unless `spoken` is

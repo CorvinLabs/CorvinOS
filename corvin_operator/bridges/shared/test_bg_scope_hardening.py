@@ -18,6 +18,8 @@ import copy
 import json
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -242,3 +244,72 @@ def test_a_stuck_process_is_killed_after_the_grace_but_a_polite_one_only_termina
 
     stubborn_rc, polite_rc = asyncio.run(run())
     assert stubborn_rc == -9 and polite_rc == -15
+
+
+# ------------------------------------------------------------- review round 2 ---
+
+def _cancel_after(delay_s):
+    """adapter_hook: a real operator /cancel (adapter._cancel_chat) `delay_s` after the CLI started."""
+    def hook(adapter):
+        def canceller():
+            t0 = time.time()
+            keys = []
+            while time.time() - t0 < 30 and not keys:
+                with adapter._running_subprocs_guard:
+                    keys = [k for k, v in adapter._running_subprocs.items() if v]
+                time.sleep(0.05)
+            time.sleep(delay_s)
+            if keys:
+                adapter._cancel_chat(keys[0])
+        threading.Thread(target=canceller, daemon=True).start()
+    return hook
+
+
+def test_an_operator_cancel_with_an_open_child_is_silent_like_every_other_cancel(box, monkeypatch):
+    """/cancel after the first answer, child still running. The flag is set only AFTER the process
+    is gone, so the stop must be recognised from the signal itself — the user is not told 'the
+    Claude process ended' and nothing is spoken."""
+    msgs, tts = _turn(monkeypatch, box, "bash_bg_ok", speedup=1, adapter_hook=_cancel_after(4.0))
+    assert [n for n, e in msgs if e.get("_final") and e.get("text")] == [], _texts(msgs)
+    assert not any("ended while" in t or "API call failed" in t for t in _texts(msgs)), _texts(msgs)
+    assert tts.calls == [], "a cancelled scope must not be spoken"
+    reasons = [r["details"].get("reason_code") for r in _audit(box) if r["event_type"] == "bgscope.cancelled"]
+    assert reasons == ["user_cancel"], reasons
+    assert kit.spawn_count(box) == 1
+
+
+def test_an_operator_cancel_before_any_answer_is_silent_not_an_api_failure(box, monkeypatch):
+    def mutate(ev):
+        cut = next(i for i, e in enumerate(ev) if e.get("type") == "result")
+        del ev[cut:]
+        ev.append({"type": "_eof", "_t": 30.0, "rc": 0})
+
+    fx = _derive(box, "no_answer_yet", "bash_bg_ok", mutate)
+    msgs, tts = _turn(monkeypatch, box, fx, speedup=1, adapter_hook=_cancel_after(3.5))
+    assert not any("API call failed" in t for t in _texts(msgs)), _texts(msgs)
+    assert [n for n, e in msgs if e.get("_final") and e.get("text")] == []
+    assert kit.spawn_count(box) == 1, "a cancel must not re-run the prompt"
+    reasons = [r["details"].get("reason_code") for r in _audit(box) if r["event_type"] == "bgscope.cancelled"]
+    assert reasons == ["signal_stop"], reasons
+
+
+def test_a_bad_ending_is_spoken_even_in_long_only_mode(box, monkeypatch):
+    msgs, tts = _turn(monkeypatch, box, "bash_bg_fail", settings={"voice_summary_mode": "long_only"})
+    assert tts.calls, "long_only silenced a scope that ended badly"
+    assert "fehlgeschlagen" in tts.calls[-1] or "failed" in tts.calls[-1], tts.calls[-1]
+
+
+def test_a_clean_short_ending_stays_silent_in_long_only_mode(box, monkeypatch):
+    msgs, tts = _turn(monkeypatch, box, "bash_bg_ok", settings={"voice_summary_mode": "long_only"})
+    assert tts.calls == [], tts.calls
+
+
+def test_the_facts_are_spoken_even_when_the_summariser_returns_nothing(box, monkeypatch):
+    def hook(adapter):
+        adapter.build_voice_summary = lambda *a, **k: ""
+
+    msgs, tts = _turn(monkeypatch, box, "bash_bg_fail", adapter_hook=hook)
+    final_voice = tts.calls[-1]
+    assert "failed" in final_voice or "fehlgeschlagen" in final_voice, tts.calls
+    assert len(final_voice) < 120, "only the facts sentence was expected"
+

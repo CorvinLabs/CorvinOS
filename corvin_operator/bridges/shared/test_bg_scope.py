@@ -392,3 +392,11 @@ def test_first_started_at_is_the_scope_clock():
                "tasks": [{"task_id": "x", "task_type": "local_agent"}]}, 5.0)
     assert snap.first_started_at == 5.0
 
+
+def test_closing_line_never_claims_success_for_a_child_that_ended_without_a_result():
+    kids = [{"kind": "bash", "state": "completed"}, {"kind": "monitor", "state": "unknown"}]
+    line = bgs.closing_line(kids)
+    assert "done" not in line and "✅" not in line
+    assert line == "■ Background work ended: 1 of 2 tasks ended without a clear result."
+    assert bgs.closing_line([{"kind": "bash", "state": "failed"}, {"kind": "x", "state": "unknown"}]).startswith("❌")
+
