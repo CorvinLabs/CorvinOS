@@ -37,17 +37,13 @@
 
 ## 🎥 Video — Compliance in the AI era
 
-A short walkthrough of how CorvinOS keeps AI work compliant with GDPR and the EU AI Act. The player below runs right here on GitHub.
+A short walkthrough of how CorvinOS keeps AI work compliant with GDPR and the EU AI Act. The preview below plays right here on GitHub.
 
 <p align="center">
-  <video src="https://github.com/CorvinLabs/CorvinOS/raw/main/assets/compliance-in-the-ai-era.mp4"
-         poster="https://img.youtube.com/vi/4sXl26Hr1pA/maxresdefault.jpg"
-         width="720" controls muted preload="metadata">
-    <a href="https://www.youtube.com/watch?v=4sXl26Hr1pA&amp;t=22s">
-      <img src="https://img.youtube.com/vi/4sXl26Hr1pA/maxresdefault.jpg" alt="Video: Compliance in the AI era — click to watch on YouTube" width="720"/>
-    </a>
-  </video><br/>
-  <sub>Compliance in the AI era &middot; <a href="https://www.youtube.com/watch?v=4sXl26Hr1pA&amp;t=22s">also on YouTube</a></sub>
+  <a href="https://www.youtube.com/watch?v=4sXl26Hr1pA&amp;t=22s">
+    <img src="assets/compliance-in-the-ai-era-teaser.gif" alt="Video: Compliance in the AI era (45 s preview, plays inline)" width="720"/>
+  </a><br/>
+  <sub>45 s preview &middot; <a href="assets/compliance-in-the-ai-era.mp4">full video (MP4, hosted in this repo)</a> &middot; <a href="https://www.youtube.com/watch?v=4sXl26Hr1pA&amp;t=22s">on YouTube</a></sub>
 </p>
 
 ---
