@@ -36,6 +36,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { CommandPalette, applyCommandInsertion, useSlashCommandPalette } from "@/components/chat/SlashCommandPalette";
 import {
   createChatSession,
   deleteChatSession,
@@ -654,98 +655,12 @@ const AGENTIC_ENGINE_LABELS: Record<string, string> = {
 };
 
 // ── Slash commands ────────────────────────────────────────────────────────
+// Shared with PeerConversation.tsx and GroupConversation.tsx — see
+// components/chat/SlashCommandPalette.tsx.
 
-const SLASH_COMMANDS = [
-  // ── Help ──
-  { cmd: "/help",              args: "",               desc: "List available console commands" },
-  // ── Session management ──
-  { cmd: "/stop",             args: "",                desc: "Abort the running task (aliases: /cancel, /halt)" },
-  { cmd: "/new",              args: "",                desc: "Start a new session" },
-  { cmd: "/clear",            args: "",                desc: "Clear conversation history" },
-  { cmd: "/reset",            args: "",                desc: "Reset session and history" },
-  // ── Agentic compute (ADR-0214) ──
-  { cmd: "/use-engine tiered_delegation", args: "<task>", desc: "TDE: parallel three-gate delegation — needs Settings → Worker Engine = tde" },
-  { cmd: "/use-engine acs",   args: "<task>",          desc: "Force ACS manager/worker fan-out" },
-  { cmd: "/use-engine claude_code", args: "<task>",    desc: "Force the sequential OS engine" },
-  { cmd: "/delegate",         args: "<task>",          desc: "Force ACS delegation for this turn" },
-  { cmd: "/engine-auto",      args: "<task>",          desc: "Explicit auto-detection (normal behavior)" },
-  { cmd: "/debug-engine",     args: "<task>",          desc: "Show engine-selection signals for this turn" },
-  // ── CCC — entity creation (ADR-0168 M6) ──
-  { cmd: "/create workflow",  args: '[name="…"] [schedule="*/5 * * * *"]', desc: "CCC: create a workflow" },
-  { cmd: "/create task",      args: '[name="…"]',      desc: "CCC: create an ATS task" },
-  { cmd: "/create tool",      args: '[name="…"]',      desc: "CCC: forge a new tool" },
-  { cmd: "/create skill",     args: '[name="…"]',      desc: "CCC: create a skill" },
-  { cmd: "/erase",            args: "user uid=<id>",   desc: "CCC: GDPR Art. 17 erasure request" },
-  { cmd: "/audit",            args: "[last <n>]",      desc: "Show recent audit events" },
-  // ── Config ──
-  { cmd: "/engine",           args: "<name>",          desc: "Switch engine: claude_code · codex · opencode · copilot" },
-  { cmd: "/persona",          args: "<name>",          desc: "Pin a persona for this chat" },
-  { cmd: "/forget",           args: "",                desc: "Delete your memory (GDPR Art. 17)" },
-  { cmd: "/quota",            args: "",                desc: "Check your message quota" },
-  { cmd: "/share",            args: "",                desc: "Grant single-session consent (this console session)" },
-  { cmd: "/go",               args: "[steering]",      desc: "Execute a pending proposal" },
-  { cmd: "/propose",          args: "<text>",          desc: "Queue a proposal" },
-  { cmd: "/btw",              args: "<text>",          desc: "Inject a note into an active stream" },
-  { cmd: "/skills",           args: "",                desc: "List active skills" },
-  { cmd: "/memory",           args: "",                desc: "Show memory summary" },
-  { cmd: "/whoami",           args: "",                desc: "Show your identity and role" },
-  { cmd: "/role",             args: "",                desc: "Show your current role" },
-  { cmd: "/dialectic-on",     args: "",                desc: "Enable dialectic reasoning" },
-  { cmd: "/dialectic-off",    args: "",                desc: "Disable dialectic reasoning" },
-  // ── Plugin Builder (ADR-0253) ──
-  { cmd: "/plugin-builder",   args: "[status|cancel]", desc: "Interview-driven plugin design (Idea/Architecture/ADR/Plan + scaffold)" },
-];
-
-function CommandPalette({
-  matches,
-  selected,
-  onSelect,
-}: {
-  matches: typeof SLASH_COMMANDS;
-  selected: number;
-  onSelect: (cmd: string, hasArgs: boolean) => void;
-}) {
-  if (matches.length === 0) return null;
-  return (
-    <div className="absolute bottom-full left-0 right-0 z-50 mb-1 overflow-hidden rounded-lg border border-border bg-popover shadow-xl">
-      <div className="max-h-72 overflow-y-auto py-1">
-        {matches.map((item, i) => (
-          <button
-            key={item.cmd}
-            onMouseDown={(e) => {
-              e.preventDefault(); // prevent textarea blur before we insert
-              onSelect(item.cmd, item.args !== "");
-            }}
-            className={cn(
-              "flex w-full items-baseline gap-3 px-3 py-2 text-left transition-colors",
-              i === selected
-                ? "bg-accent/15 text-foreground"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground",
-            )}
-          >
-            <span className="w-36 shrink-0 font-mono text-[13px] font-medium text-foreground">
-              {item.cmd}
-            </span>
-            {item.args && (
-              <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-                {item.args}
-              </span>
-            )}
-            <span className="min-w-0 truncate text-xs text-muted-foreground">
-              {item.desc}
-            </span>
-          </button>
-        ))}
-      </div>
-      <div className="border-t border-border/60 px-3 py-1.5 text-[10px] text-muted-foreground">
-        <kbd className="rounded bg-muted px-1 font-mono">↑↓</kbd> navigate ·{" "}
-        <kbd className="rounded bg-muted px-1 font-mono">Tab</kbd> complete ·{" "}
-        <kbd className="rounded bg-muted px-1 font-mono">Esc</kbd> close ·{" "}
-        <kbd className="rounded bg-muted px-1 font-mono">Enter</kbd> send as-is
-      </div>
-    </div>
-  );
-}
+// Messages mounted initially / revealed per click (the rest stay in memory).
+const HISTORY_WINDOW = 60;
+const HISTORY_WINDOW_STEP = 100;
 
 function ChatPane({
   sid,
@@ -765,9 +680,15 @@ function ChatPane({
   const streaming = chatSession.streaming;
   const bgOpen = chatSession.bgOpen;
 
-  const [input, setInput] = React.useState("");
-  const [paletteOpen, setPaletteOpen] = React.useState(false);
-  const [paletteSel, setPaletteSel] = React.useState(0);
+  // The typed text is owned by <ChatComposerField> (keystrokes must not
+  // re-render this pane); we only mirror "has text" for the send button.
+  const composerRef = React.useRef<ComposerFieldHandle>(null);
+  const [composerHasText, setComposerHasText] = React.useState(false);
+  const [cccEntityHint, setCccEntityHint] = React.useState<string | null>(null);
+  const setInput = React.useCallback(
+    (next: string | ((prev: string) => string)) => composerRef.current?.setValue(next),
+    [],
+  );
   const {
     pendingAttachments, uploading, uploadError, addFiles,
     removeAttachment, clearAttachments, fileInputRef, onFileInputChange,
@@ -1355,7 +1276,7 @@ function ChatPane({
     if (SpeechRecognitionImpl) {
       try {
         // Capture the text present before the hold, and reset the accumulator.
-        pttBaseRef.current = inputRef.current;
+        pttBaseRef.current = composerRef.current?.getValue() ?? "";
         sttAccumRef.current = "";
         sttStoppingRef.current = false;
 
@@ -1484,11 +1405,9 @@ function ChatPane({
   const streamingRef = React.useRef(streaming);
   const startRecRef = React.useRef(startRecording);
   const stopRecRef = React.useRef(stopRecording);
-  const inputRef = React.useRef(input);
   const setInputRef = React.useRef(setInput);
   const sendUserRef = React.useRef(sendUser);
-  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
-  useAutosizeTextarea(textareaRef, input);
+  const submitFromComposer = React.useCallback((text: string) => sendUserRef.current(text), []);
   React.useEffect(() => {
     recordingRef.current = recording;
     if (recording) pttPendingRef.current = false; // recording confirmed — clear pending
@@ -1496,7 +1415,6 @@ function ChatPane({
   React.useEffect(() => { streamingRef.current = streaming; }, [streaming]);
   React.useEffect(() => { startRecRef.current = startRecording; });
   React.useEffect(() => { stopRecRef.current = stopRecording; });
-  React.useEffect(() => { inputRef.current = input; }, [input]);
   React.useEffect(() => { setInputRef.current = setInput; }, [setInput]);
   React.useEffect(() => { sendUserRef.current = sendUser; });
 
@@ -1529,7 +1447,7 @@ function ChatPane({
         holdTimer = null;
         if (recordingRef.current || streamingRef.current) return;
         if (inTextarea) {
-          const cur = inputRef.current;
+          const cur = composerRef.current?.getValue() ?? "";
           if (cur.endsWith(" ")) setInputRef.current(cur.slice(0, -1));
         }
         pttPendingRef.current = true; // mark pending synchronously before async call
@@ -1580,8 +1498,8 @@ function ChatPane({
       if (isNativeEnterTarget(e.target)) return;
       if (recordingRef.current || streamingRef.current) return;
       e.preventDefault();
-      setPaletteOpen(false);
-      sendUserRef.current(inputRef.current);
+      composerRef.current?.closePalette();
+      sendUserRef.current(composerRef.current?.getValue() ?? "");
     };
 
     window.addEventListener("keydown", onKeyDown);
@@ -1595,39 +1513,48 @@ function ChatPane({
     };
   }, []);
 
-  const paletteMatches: typeof SLASH_COMMANDS =
-    paletteOpen && input.startsWith("/")
-      ? SLASH_COMMANDS.filter(({ cmd }) => {
-          const q = input.toLowerCase();
-          if (cmd.startsWith(q)) return true;
-          // Multi-word match: each typed token must prefix the corresponding command token.
-          const qParts = q.split(/\s+/);
-          const cParts = cmd.split(/\s+/);
-          return qParts.every((tok, i) => i < cParts.length && cParts[i].startsWith(tok));
-        })
-      : [];
-
-  // CCC M6: lightweight frontend entity-type hint (mirrors entity_extract.py heuristics).
-  // Shows a badge when the typed text strongly implies a CCC entity — no server round-trip.
-  const cccEntityHint = React.useMemo<string | null>(() => {
-    const t = input.trim();
-    if (!t || t.length < 4) return null;
-    if (/^ats\s*:/i.test(t))       return "ATS Task";
-    if (/^a2a\s*:/i.test(t))       return "A2A Session";
-    if (/^workflow\s*:/i.test(t))  return "Workflow";
-    if (/^forge\s*:/i.test(t))     return "Forge Tool";
-    if (/^skill\s*:/i.test(t))     return "Skill";
-    if (/^rag\s*:/i.test(t))       return "RAG Source";
-    if (/\b(workflow|awpkg|flow|pipeline)\b/i.test(t) && t.length > 8) return "Workflow";
-    if (/\b(ats[\s_-]task|ats:)\b/i.test(t)) return "ATS Task";
-    if (/\b(a2a|agent[\s-]to[\s-]agent|mesh)\b/i.test(t)) return "A2A";
-    if (/\b(forge[\s-]tool|werkzeug)\b/i.test(t)) return "Forge Tool";
-    if (/\b(skillforge|skill[\s-]forge)\b/i.test(t)) return "Skill";
-    if (/\b(erasure|lösch\w+|erase)\b/i.test(t)) return "Erasure";
-    if (/\b(vault|geheimnis|secret[\s-]vault)\b/i.test(t)) return "Vault";
-    if (/\b(audit[\s-]log|hash[\s-]chain)\b/i.test(t)) return "Audit";
-    return null;
-  }, [input]);
+  // Stable callback + memoised list: a keystroke re-renders this whole page,
+  // and an inline closure per bubble defeated MessageBubble's React.memo, so
+  // every key re-rendered (and re-parsed the markdown of) the full history.
+  const viewTdeGraph = React.useCallback(() => {
+    setAuditTab("tde-graph");
+    setAuditOpen(true);
+  }, []);
+  // Windowed history: a very long chat mounts only its tail. The start index is
+  // PINNED when the history first arrives (and moves only when the user asks
+  // for older turns) — a "last N" slice would drop the oldest visible bubble on
+  // every new message and shift the page under a reader scrolled up.
+  const windowStartRef = React.useRef<number | null>(null);
+  const [, bumpWindow] = React.useReducer((n: number) => n + 1, 0);
+  if (messages.length === 0) windowStartRef.current = null;
+  else if (windowStartRef.current === null) {
+    windowStartRef.current = Math.max(0, messages.length - HISTORY_WINDOW);
+  }
+  const windowStart = Math.min(windowStartRef.current ?? 0, messages.length);
+  const hiddenCount = windowStart;
+  const scrollAnchorRef = React.useRef<{ height: number; top: number } | null>(null);
+  const showOlder = React.useCallback(() => {
+    const el = scrollRef.current;
+    if (el) scrollAnchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
+    stickToBottom.current = false;
+    windowStartRef.current = Math.max(0, (windowStartRef.current ?? 0) - HISTORY_WINDOW_STEP);
+    bumpWindow();
+  }, []);
+  // Keep the bubble the reader was looking at in place after older ones mount above it.
+  React.useLayoutEffect(() => {
+    const a = scrollAnchorRef.current;
+    const el = scrollRef.current;
+    if (!a || !el) return;
+    scrollAnchorRef.current = null;
+    el.scrollTop = a.top + (el.scrollHeight - a.height);
+  }, [windowStart]);
+  const messageList = React.useMemo(
+    () =>
+      messages
+        .slice(windowStart)
+        .map((m) => <MessageBubble key={m.id} m={m} onViewTdeGraph={viewTdeGraph} />),
+    [messages, viewTdeGraph, windowStart],
+  );
 
   const handleVoiceToggle = React.useCallback(() => {
     const next = !voiceOutRef.current;
@@ -1888,16 +1815,19 @@ function ChatPane({
             />
           )}
           {messages.length === 0 && <EmptyChat onTry={(t) => setInput(t)} />}
-          {messages.map((m) => (
-            <MessageBubble
-              key={m.id}
-              m={m}
-              onViewTdeGraph={() => {
-                setAuditTab("tde-graph");
-                setAuditOpen(true);
-              }}
-            />
-          ))}
+          {hiddenCount > 0 && (
+            <div className="flex justify-center py-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={showOlder}
+                data-testid="show-older-messages"
+              >
+                Show older messages ({hiddenCount} hidden)
+              </Button>
+            </div>
+          )}
+          {messageList}
           {/* CCC M5 — entity action cards inline below messages */}
           {cccActions.length > 0 && (
             <div className="flex flex-col gap-1 pt-1">
@@ -1969,7 +1899,7 @@ function ChatPane({
             </p>
           )}
           {/* CCC M6 — entity hint (shown when NLP detects a domain keyword) */}
-          {cccEntityHint && !paletteOpen && (
+          {cccEntityHint && (
             <p className="text-[10px] text-muted-foreground/70">
               Detected as <span className="font-semibold text-accent-foreground">{cccEntityHint}</span> — the matching tab updates once sent
             </p>
@@ -2016,73 +1946,18 @@ function ChatPane({
             >
               {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
             </Button>
-            <div className="relative min-w-0 flex-1">
-              <CommandPalette
-                matches={paletteMatches}
-                selected={Math.min(paletteSel, Math.max(0, paletteMatches.length - 1))}
-                onSelect={(cmd, hasArgs) => {
-                  setInput(cmd + (hasArgs ? " " : ""));
-                  setPaletteOpen(false);
-                }}
-              />
-              <Textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setInput(v);
-                  if (v.startsWith("/") && !v.includes("\n")) {
-                    setPaletteOpen(true);
-                    setPaletteSel(0);
-                  } else {
-                    setPaletteOpen(false);
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (paletteOpen && paletteMatches.length > 0) {
-                    if (e.key === "ArrowUp") {
-                      e.preventDefault();
-                      setPaletteSel((s) => (s - 1 + paletteMatches.length) % paletteMatches.length);
-                      return;
-                    }
-                    if (e.key === "ArrowDown") {
-                      e.preventDefault();
-                      setPaletteSel((s) => (s + 1) % paletteMatches.length);
-                      return;
-                    }
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      setPaletteOpen(false);
-                      return;
-                    }
-                    if (e.key === "Tab") {
-                      e.preventDefault();
-                      const m = paletteMatches[paletteSel];
-                      if (m) {
-                        setInput(m.cmd + (m.args ? " " : ""));
-                        setPaletteOpen(false);
-                      }
-                      return;
-                    }
-                  }
-                  if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
-                    // IME candidate confirmation (CJK) is not a send.
-                    if (e.nativeEvent.isComposing) return;
-                    e.preventDefault();
-                    setPaletteOpen(false);
-                    sendUser(input);
-                  }
-                }}
-                placeholder={recording
-                  ? "Listening — release Space to send"
-                  : streaming
-                    ? "Reply streaming — /btw <note> steers it, /stop ends it"
-                    : "Message Corvin… (hold Space to speak)"}
-                disabled={recording}
-                className="min-h-[2rem] resize-none border-0 bg-transparent px-1 py-1 font-sans text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                rows={1}
-              />
-            </div>
+            <ChatComposerField
+              ref={composerRef}
+              placeholder={recording
+                ? "Listening — release Space to send"
+                : streaming
+                  ? "Reply streaming — /btw <note> steers it, /stop ends it"
+                  : "Message Corvin… (hold Space to speak)"}
+              disabled={recording}
+              onSubmit={submitFromComposer}
+              onHasTextChange={setComposerHasText}
+              onEntityHintChange={setCccEntityHint}
+            />
             {streaming ? (
               <Button
                 variant="destructive"
@@ -2098,8 +1973,8 @@ function ChatPane({
                 variant="accent"
                 size="icon"
                 className="h-8 w-8 shrink-0 rounded-full"
-                onClick={() => sendUser(input)}
-                disabled={uploading || (!input.trim() && pendingAttachments.length === 0)}
+                onClick={() => sendUser(composerRef.current?.getValue() ?? "")}
+                disabled={uploading || (!composerHasText && pendingAttachments.length === 0)}
                 title="Send (Enter · Shift+Enter for newline)"
                 data-testid="send-button"
               >
@@ -2245,6 +2120,134 @@ function SpeakingPulse() {
     </span>
   );
 }
+
+/**
+ * The composer's text field, isolated from the conversation.
+ *
+ * The typed text lives HERE, not in ChatPane: with the state in the page, every
+ * keystroke re-rendered the whole pane (hundreds of hooks' worth of JSX, the
+ * message list reconciliation, task panels) and typing lagged on long chats.
+ * Now a keystroke re-renders this component only. The pane talks to it through
+ * the imperative handle (voice dictation, send, "try this" samples) and learns
+ * about the two facts it renders from — "is there any text" and the CCC entity
+ * hint — via callbacks that fire only when those values actually change.
+ */
+interface ComposerFieldHandle {
+  getValue: () => string;
+  setValue: (next: string | ((prev: string) => string)) => void;
+  closePalette: () => void;
+}
+
+// Mirrors entity_extract.py heuristics; pure, so it lives outside the component.
+function detectEntityHint(text: string): string | null {
+  const t = text.trim();
+  if (!t || t.length < 4) return null;
+  if (/^ats\s*:/i.test(t))       return "ATS Task";
+  if (/^a2a\s*:/i.test(t))       return "A2A Session";
+  if (/^workflow\s*:/i.test(t))  return "Workflow";
+  if (/^forge\s*:/i.test(t))     return "Forge Tool";
+  if (/^skill\s*:/i.test(t))     return "Skill";
+  if (/^rag\s*:/i.test(t))       return "RAG Source";
+  if (/\b(workflow|awpkg|flow|pipeline)\b/i.test(t) && t.length > 8) return "Workflow";
+  if (/\b(ats[\s_-]task|ats:)\b/i.test(t)) return "ATS Task";
+  if (/\b(a2a|agent[\s-]to[\s-]agent|mesh)\b/i.test(t)) return "A2A";
+  if (/\b(forge[\s-]tool|werkzeug)\b/i.test(t)) return "Forge Tool";
+  if (/\b(skillforge|skill[\s-]forge)\b/i.test(t)) return "Skill";
+  if (/\b(erasure|lösch\w+|erase)\b/i.test(t)) return "Erasure";
+  if (/\b(vault|geheimnis|secret[\s-]vault)\b/i.test(t)) return "Vault";
+  if (/\b(audit[\s-]log|hash[\s-]chain)\b/i.test(t)) return "Audit";
+  return null;
+}
+
+const ChatComposerField = React.memo(
+  React.forwardRef<
+    ComposerFieldHandle,
+    {
+      placeholder: string;
+      disabled: boolean;
+      onSubmit: (text: string) => void;
+      onHasTextChange: (hasText: boolean) => void;
+      onEntityHintChange: (hint: string | null) => void;
+    }
+  >(function ChatComposerField(
+    { placeholder, disabled, onSubmit, onHasTextChange, onEntityHintChange },
+    ref,
+  ) {
+    const [value, setValueState] = React.useState("");
+    // Always current, also between a handle write and the next commit.
+    const valueRef = React.useRef("");
+    const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+    const slashPalette = useSlashCommandPalette(value);
+    useAutosizeTextarea(textareaRef, value);
+
+    const setValue = React.useCallback(
+      (next: string | ((prev: string) => string)) => {
+        const v = typeof next === "function" ? next(valueRef.current) : next;
+        valueRef.current = v;
+        setValueState(v);
+      },
+      [],
+    );
+
+    const closePaletteRef = React.useRef(slashPalette.close);
+    closePaletteRef.current = slashPalette.close;
+    React.useImperativeHandle(
+      ref,
+      () => ({
+        getValue: () => valueRef.current,
+        setValue,
+        closePalette: () => closePaletteRef.current(),
+      }),
+      [setValue],
+    );
+
+    const hasText = value.trim().length > 0;
+    React.useEffect(() => { onHasTextChange(hasText); }, [hasText, onHasTextChange]);
+
+    // Deferred: the regex cascade must never delay the keystroke itself.
+    const deferredValue = React.useDeferredValue(value);
+    const entityHint = React.useMemo(() => detectEntityHint(deferredValue), [deferredValue]);
+    const shownHint = slashPalette.open ? null : entityHint;
+    React.useEffect(() => { onEntityHintChange(shownHint); }, [shownHint, onEntityHintChange]);
+
+    return (
+      <div className="relative min-w-0 flex-1">
+        <CommandPalette
+          matches={slashPalette.matches}
+          selected={slashPalette.selected}
+          onSelect={(match) => {
+            applyCommandInsertion(match, setValue, textareaRef);
+            slashPalette.close();
+          }}
+        />
+        <Textarea
+          ref={textareaRef}
+          value={value}
+          onChange={(e) => {
+            const v = e.target.value;
+            valueRef.current = v;
+            setValueState(v);
+            slashPalette.onChange(v);
+          }}
+          onKeyDown={(e) => {
+            if (slashPalette.onKeyDown(e, (match) => applyCommandInsertion(match, setValue, textareaRef))) return;
+            if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+              // IME candidate confirmation (CJK) is not a send.
+              if (e.nativeEvent.isComposing) return;
+              e.preventDefault();
+              slashPalette.close();
+              onSubmit(valueRef.current);
+            }
+          }}
+          placeholder={placeholder}
+          disabled={disabled}
+          className="min-h-[2rem] resize-none border-0 bg-transparent px-1 py-1 font-sans text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+          rows={1}
+        />
+      </div>
+    );
+  }),
+);
 
 const MessageBubble = React.memo(function MessageBubble({
   m,

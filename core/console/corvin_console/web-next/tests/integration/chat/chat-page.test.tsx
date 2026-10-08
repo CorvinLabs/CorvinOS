@@ -742,3 +742,64 @@ describe('Chat Page Integration', () => {
     });
   });
 });
+
+// ── Composer isolation ──────────────────────────────────────────────────────
+//
+// The typed text must live in the composer field, not in the page: a page-level
+// `input` state re-rendered the whole pane (and reconciled the full message
+// list) on every keystroke, which made typing lag in long conversations.
+// `useChatSession` is called once per ChatPane render, so its call count is a
+// direct render counter for the pane.
+describe('ChatPage composer isolation (real components)', () => {
+  it('typing re-renders only the composer, not the conversation pane', async () => {
+    const useChatSessionMock = vi.mocked(useChatSession);
+    renderRealChatPage('sid-composer-1');
+    const box = (await screen.findByPlaceholderText(/Message Corvin/i)) as HTMLTextAreaElement;
+    const send = screen.getByTestId('send-button') as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+
+    // First keystroke flips "has text" (send button enables) — one allowed pane render.
+    fireEvent.change(box, { target: { value: 'h' } });
+    await waitFor(() => expect(send.disabled).toBe(false));
+    const rendersAfterFirstKey = useChatSessionMock.mock.calls.length;
+
+    for (const v of ['he', 'hel', 'hell', 'hello', 'hello w', 'hello wo', 'hello wor', 'hello worl', 'hello world']) {
+      fireEvent.change(box, { target: { value: v } });
+    }
+    expect(box.value).toBe('hello world');
+    expect(useChatSessionMock.mock.calls.length).toBe(rendersAfterFirstKey);
+
+    // Clearing the field flips "has text" back.
+    fireEvent.change(box, { target: { value: '' } });
+    await waitFor(() => expect(send.disabled).toBe(true));
+  });
+});
+
+// ── Windowed history ────────────────────────────────────────────────────────
+describe('ChatPage windowed history (real components)', () => {
+  it('mounts only the tail of a long chat and reveals older turns on request', async () => {
+    const msgs: ChatMessage[] = Array.from({ length: 150 }, (_, i) => ({
+      id: `m${i}`,
+      role: i % 2 ? 'assistant' : 'user',
+      ts: i,
+      parts: [{ kind: 'text', text: `message-body-${i}` }],
+    }));
+    vi.mocked(useChatSession).mockReturnValue({
+      messages: msgs,
+      streaming: false,
+      error: null,
+      reconnecting: false,
+      latestResultText: null,
+      pendingTitle: null,
+    } as unknown as ReturnType<typeof useChatSession>);
+    renderRealChatPage('sid-window-1');
+
+    expect(await screen.findByText('message-body-149')).toBeTruthy();
+    expect(screen.getByText('message-body-90')).toBeTruthy();
+    expect(screen.queryByText('message-body-89')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('show-older-messages'));
+    expect(screen.getByText('message-body-0')).toBeTruthy();
+    expect(screen.queryByTestId('show-older-messages')).toBeNull();
+  });
+});
