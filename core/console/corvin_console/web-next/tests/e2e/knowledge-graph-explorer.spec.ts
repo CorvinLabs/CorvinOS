@@ -101,6 +101,19 @@ test("Focus mode shows a neighbourhood, All mode the whole graph", async () => {
   await expect.poll(shown).toBe(focus);
 });
 
+test("the whole graph is drawn as separate islands, not one clump; Force is still selectable", async () => {
+  await page.goto(`${BASE_URL}/app/corvin-knowledge`);
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  const canvas = page.getByTestId("knowledge-graph-canvas");
+  await expect(canvas).toHaveAttribute("data-layout", "islands", { timeout: 20_000 });
+  expect(Number(await canvas.getAttribute("data-islands"))).toBeGreaterThanOrEqual(8);
+  await expect(page.getByRole("button", { name: "Islands", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Force", exact: true }).click();
+  await expect(canvas).toHaveAttribute("data-layout", "force");
+  await page.getByRole("button", { name: "Focus", exact: true }).click();
+  await expect(canvas).toHaveAttribute("data-layout", "force");   // a focus keeps the organic layout
+});
+
 test("a hand-written link with a human id opens that node; an unknown id says so", async () => {
   await page.goto(`${BASE_URL}/app/corvin-knowledge?node=ADR-2206`);
   await expect(page.getByTestId("knowledge-doc-id")).toHaveText("ADR-2206", { timeout: 20_000 });

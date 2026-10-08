@@ -86,6 +86,9 @@ export function CorvinKnowledgePage() {
   const location = useLocation();
   const [mode, setMode] = useState<"focus" | "all">("focus");
   const [hops, setHops] = useState<1 | 2>(1);
+  // null = automatic: islands for the whole graph (a force layout of 1300 nodes clumps), force for a focus.
+  const [layoutChoice, setLayoutChoice] = useState<"force" | "islands" | null>(null);
+  const layoutMode = layoutChoice ?? (mode === "all" ? "islands" : "force");
   const [search, setSearch] = useState("");
   const [type, setType] = useState("");
   const [status, setStatus] = useState("");
@@ -202,7 +205,7 @@ export function CorvinKnowledgePage() {
             </label>
             <div className="flex rounded-md border border-border" role="group" aria-label="View">
               {(["focus", "all"] as const).map((m) => (
-                <Button key={m} size="sm" variant={mode === m ? "accent" : "ghost"} aria-pressed={mode === m} onClick={() => setMode(m)}>{m === "focus" ? "Focus" : "All"}</Button>
+                <Button key={m} size="sm" variant={mode === m ? "accent" : "ghost"} aria-pressed={mode === m} onClick={() => { setMode(m); setLayoutChoice(null); }}>{m === "focus" ? "Focus" : "All"}</Button>
               ))}
             </div>
             {mode === "focus" ? (
@@ -246,7 +249,7 @@ export function CorvinKnowledgePage() {
               </p>
             )}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <GraphCanvas nodes={shown.entities} edges={shown.relations} selectedKey={selectedKey} statusColours={colours} onSelect={select} />
+              <GraphCanvas nodes={shown.entities} edges={shown.relations} selectedKey={selectedKey} statusColours={colours} onSelect={select} layoutMode={layoutMode} onLayoutModeChange={setLayoutChoice} />
               <DocumentPane nodeKey={selectedKey && known.has(selectedKey) ? selectedKey : null} index={linkIndex} basePath={BASE_PATH} onOpen={select} onBack={canGoBack ? () => navigate(-1) : null} />
             </div>
             </>

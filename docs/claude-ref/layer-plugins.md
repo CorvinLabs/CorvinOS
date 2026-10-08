@@ -2268,6 +2268,7 @@ is installed AND enabled. Same pattern as `video-producer`. A static entry would
 | Piece | Where |
 |---|---|
 | Graph (vis-network, zoom/pan, Focus = 1–2 hops, All = whole graph, physics frozen after settling) | `web-next/src/pages/corvin-knowledge/GraphCanvas.tsx`, `graph-model.ts` |
+| Island layout (All view: Louvain communities, one island each, fixed positions, no physics; cross-island edges only for the selected node) | `island-layout.ts`, `GraphCanvas.tsx` (`Islands`/`Force` switch; automatic: islands for All, force for Focus) |
 | Reader (Markdown, ids → links, Links / Linked from lists) | `DocumentPane.tsx`, `link-resolver.ts`, shared `components/markdown.tsx` (`internalHref` prop) |
 | Selection | the URL: `?node=<uid or human id>` — Back/Forward is the reading history |
 | Route | `GET /v1/console/plugins/corvin-knowledge/doc/{key}` in `routes/plugins_corvin_knowledge_api.py` |
