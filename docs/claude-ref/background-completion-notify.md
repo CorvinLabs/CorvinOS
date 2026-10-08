@@ -294,9 +294,17 @@ Measured on claude CLI 2.1.294 (details and raw captures: ADR-2236 / PLAN-0938):
 - The process stays alive until every child has ended — also after the adapter closed stdin — and emits
   **one `result` per wake-up** (`origin.kind == "task-notification"`), not just one extra. The turn is over at
   process EOF, not at the first `result`.
-- Not yet implemented (tasks T-0071..T-0074): the adapter still drops these events, lets the 300 s idle
-  watchdog kill a quiet child, overwrites `final_text` with the last wake-up and, after an idle kill on an
-  existing session, re-runs the prompt (starting the child a second time).
+- **Sensor (T-0071, done):** `agents/claude_code.py::_normalise_all` now surfaces these as `bg_started` /
+  `bg_updated` / `bg_finished` / `bg_snapshot` stream events. `bg_scope.ScopeTracker` (pure reducer, no I/O) folds
+  them into the set of open children; `adapter.call_claude_streaming` feeds one tracker per spawn and writes
+  `bgscope.child_started` / `bgscope.child_finished` to the tenant audit chain (structured scalars only — never a
+  description, prompt or output). Details the tracker handles because the CLI does them: `task_updated` reports an
+  end without the exit code and is only provisional (the later `task_notification` carries it); a snapshot names a
+  child one event before `task_started`, so announcement waits for the tool to be known (Monitor vs Bash share
+  `local_bash`); a snapshot is a full state and heals a missed notification.
+- **Still not implemented (T-0072..T-0074):** the adapter still lets the 300 s idle watchdog kill a quiet child,
+  overwrites `final_text` with the last wake-up and, after an idle kill on an existing session, re-runs the prompt
+  (starting the child a second time). The tracker only observes today; nothing is gated on it yet.
 
 Test harness (T-0070): `shared/tests/fixtures/bgscope/*.jsonl` are scrubbed captures from the real CLI
 (`tests/capture_bgscope_fixture.py` regenerates them), `tests/fake_claude.py` replays one as a REAL

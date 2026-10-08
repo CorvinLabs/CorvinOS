@@ -1094,6 +1094,14 @@ EVENT_SEVERITY: dict[str, str] = {
     "task.failed":                      "WARNING",
     # Task supervision + retry classification (ADR-2107, task_supervisor.py)
     "task.retry_classified":            "INFO",
+    # Background-child scope (ADR-2236, bridges/shared/bg_scope.py)
+    "bgscope.child_started":            "INFO",
+    "bgscope.child_finished":           "INFO",
+    "bgscope.waiting":                  "INFO",
+    "bgscope.completed":                "INFO",
+    "bgscope.child_cap_exceeded":       "WARNING",
+    "bgscope.wakeup_cap_exceeded":      "WARNING",
+    "bgscope.cancelled":                "WARNING",
     # Skill A/B testing (core/skills/ab_testing.py)
     "ab_experiment_created":            "INFO",
     "ab_analysis_started":              "INFO",
@@ -4189,6 +4197,30 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "task.failed": frozenset({"task_id", "exit_code", "timed_out", "tenant_id"}),
     "task.retry_classified": frozenset({
         "task_id", "attempt", "failure_class", "reason_code", "next_attempt_in_s", "tenant_id",
+    }),
+    # Background-child scope (ADR-2236): structured scalars only — never a child's
+    # description, a sub-agent prompt or output text.
+    "bgscope.child_started": frozenset({
+        "scope_id", "child_id", "kind", "children_open", "tenant_id",
+    }),
+    "bgscope.child_finished": frozenset({
+        "scope_id", "child_id", "kind", "state", "exit_code", "duration_ms",
+        "healed", "children_open", "tenant_id",
+    }),
+    "bgscope.waiting": frozenset({
+        "scope_id", "children_open", "wakeups", "tenant_id",
+    }),
+    "bgscope.completed": frozenset({
+        "scope_id", "children_total", "wakeups", "duration_ms", "end_reason", "tenant_id",
+    }),
+    "bgscope.child_cap_exceeded": frozenset({
+        "scope_id", "children_open", "limit_s", "age_s", "tenant_id",
+    }),
+    "bgscope.wakeup_cap_exceeded": frozenset({
+        "scope_id", "children_open", "wakeups", "limit", "tenant_id",
+    }),
+    "bgscope.cancelled": frozenset({
+        "scope_id", "children_open", "reason_code", "tenant_id",
     }),
     "ab_experiment_created": frozenset({
         "experiment_id", "skill_id", "baseline_version", "variant_version",

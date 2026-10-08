@@ -427,6 +427,17 @@ _SHORT_ERROR_TOKENS = frozenset({
 })
 
 
+#: `system` subtypes the claude CLI uses for background children -> StreamEvent type.
+#: Measured on CLI 2.1.294 (tests/fixtures/bgscope); the schema is unversioned, the
+#: contract test (test_bg_scope_contract.py) is what notices drift.
+_BG_SUBTYPE_EVENTS = {
+    "task_started": "bg_started",
+    "task_updated": "bg_updated",
+    "task_notification": "bg_finished",
+    "background_tasks_changed": "bg_snapshot",
+}
+
+
 class ClaudeCodeEngine:
     """Anthropic Claude Code CLI as a backend-agnostic engine."""
 
@@ -1204,6 +1215,14 @@ class ClaudeCodeEngine:
         kind = obj.get("type")
         if kind == "system" and obj.get("subtype") == "init":
             return [StreamEvent(type="session_started", raw=obj)]
+
+        # Background children (ADR-2236). The CLI announces Bash/Monitor/Agent
+        # background tasks with `system` events; they used to be dropped here.
+        # Additive: consumers that ignore unknown event types are unaffected.
+        if kind == "system":
+            _bg = _BG_SUBTYPE_EVENTS.get(obj.get("subtype"))
+            if _bg is not None:
+                return [StreamEvent(type=_bg, raw=obj)]
 
         if kind == "assistant":
             msg = obj.get("message") or {}

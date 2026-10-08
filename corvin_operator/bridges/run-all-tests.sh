@@ -267,6 +267,8 @@ run "Python: inbox hygiene (poison quarantine + retention, F-B3/F-B12)" python3 
 run "Python: bg-task completion notification E2E (real worker)" python3 shared/test_bg_task_notification_e2e.py >/dev/null || fails=$((fails+1))
 run "Python: bg-scope CLI stream contract (fixtures)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_bg_scope_contract.py -q >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: bg-scope watchdog repro (real fake-CLI subprocess)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_bg_scope_watchdog_repro.py -q >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: bg-scope tracker (real captured streams)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_bg_scope.py -q >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: bg-scope adapter E2E (fake CLI -> tracker -> audit chain)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_bg_scope_adapter_e2e.py -q >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: LIVE LLM adapter E2E (CLAUDE_LIVE_E2E=1 only, skips otherwise)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_adapter_live_llm_e2e.py -q >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: HTTP-error reset (transient)"  python3 shared/test_adapter_http_reset.py >/dev/null || fails=$((fails+1))
 run "Python: boot self-test"     python3 shared/test_self_test.py >/dev/null || fails=$((fails+1))

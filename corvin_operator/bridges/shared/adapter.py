@@ -5962,6 +5962,14 @@ def _call_claude_streaming_via_engine(
     except ImportError:  # pragma: no cover
         import mid_turn_heartbeat as _mth_s  # type: ignore[no-redef]
 
+    # ADR-2236: track the claude CLI's background children (Bash/Monitor/Agent)
+    # for this spawn. Sensor only so far — later phases gate completion on it.
+    try:
+        from . import bg_scope as _bgs  # type: ignore
+    except ImportError:  # pragma: no cover
+        import bg_scope as _bgs  # type: ignore[no-redef]
+    _scope = _bgs.ScopeTracker(scope_id=_os_turn_id, tenant_id=_bridge_tenant())
+
     try:
         try:
             while True:
@@ -6055,6 +6063,7 @@ def _call_claude_streaming_via_engine(
                             continue
                         seen_tools += 1
                         tool_name = block.get("name", "")
+                        _scope.note_tool_use(block.get("id", ""), tool_name)
                         # EU AI Act: tool call audit — name only, no inputs (GDPR Art. 5).
                         # seq is the 1-based call counter within this turn; required by
                         # execution-log dedup to distinguish multiple tool_called events
@@ -6102,7 +6111,19 @@ def _call_claude_streaming_via_engine(
                                     )
                             except Exception as e:  # noqa: BLE001
                                 log(f"on_status callback failed: {e}")
+                elif ev.type in ("bg_started", "bg_updated", "bg_finished", "bg_snapshot"):
+                    try:
+                        for _tr in _scope.feed(ev.raw or {}, time.time()):
+                            _bgs.audit_transition(_scope, _tr)
+                    except Exception as e:  # noqa: BLE001 — a tracker bug must never break a turn
+                        log(f"bg_scope feed failed: {e!r}")
                 elif ev.type == "turn_completed":
+                    try:
+                        _scope.note_result(ev.raw or {})
+                        for _tr in _scope.flush():
+                            _bgs.audit_transition(_scope, _tr)
+                    except Exception as e:  # noqa: BLE001
+                        log(f"bg_scope result bookkeeping failed: {e!r}")
                     new_result = ev.text or ""
                     # Don't let an empty later result overwrite an
                     # earlier real one (matches legacy invariant).
@@ -6136,6 +6157,11 @@ def _call_claude_streaming_via_engine(
             # forever.
             thread.join(timeout=5)
             rc = proc.wait()
+            try:
+                for _tr in _scope.finalize(time.time()):
+                    _bgs.audit_transition(_scope, _tr)
+            except Exception as e:  # noqa: BLE001
+                log(f"bg_scope finalize failed: {e!r}")
         except Exception as e:  # noqa: BLE001
             # An exception HERE is an adapter defect, not a provider error, and
             # the engine may already have run tools. The turn FAILS — it is

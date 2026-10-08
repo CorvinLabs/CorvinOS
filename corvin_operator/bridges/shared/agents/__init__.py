@@ -133,6 +133,9 @@ class StreamEvent:
       - "tool_result"       — tool call completed
       - "turn_completed"    — turn done, final usage in `usage`
       - "error"             — non-fatal stream error (engine-specific in `raw`)
+      - "bg_started" / "bg_updated" / "bg_finished" / "bg_snapshot"
+                            — background child events (ADR-2236); `raw` is the CLI
+                              `system` event. Only the claude engine emits them.
     """
 
     type: str
