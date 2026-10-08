@@ -71,7 +71,7 @@ export interface ChatTurnsResponse {
 
 export async function getChatTurns(
   sid: string,
-  limit = 200,
+  limit = 5000,
   signal?: AbortSignal,
 ): Promise<ChatTurnsResponse> {
   return api<ChatTurnsResponse>(

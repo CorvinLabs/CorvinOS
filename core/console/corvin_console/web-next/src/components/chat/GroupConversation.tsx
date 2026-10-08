@@ -92,7 +92,7 @@ function AddPeerQuick({ group, csrf, onAdded }: { group: ChatGroup; csrf: string
   );
 }
 
-function GroupMessageRow({ m, group, selfId }: { m: GroupMessage; group: ChatGroup; selfId: string }) {
+const GroupMessageRow = React.memo(function GroupMessageRow({ m, group, selfId }: { m: GroupMessage; group: ChatGroup; selfId: string }) {
   const sender = group.participants.find((p) => p.participant_id === m.sender_participant_id);
   const mine = m.sender_participant_id === selfId;
   const name = sender?.display_name || m.sender_participant_id;
@@ -128,7 +128,7 @@ function GroupMessageRow({ m, group, selfId }: { m: GroupMessage; group: ChatGro
       </div>
     </div>
   );
-}
+});
 
 /** Outbound delivery to the group's A2A peers, as the backend recorded it.
  * "fanout" is the pre-2026-10-05 value, written before any send happened —

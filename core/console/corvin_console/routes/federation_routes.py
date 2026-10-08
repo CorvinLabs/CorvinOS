@@ -280,6 +280,20 @@ class StartConversationRequest(BaseModel):
     opener: str = Field(..., min_length=1, max_length=2000)
     max_turns: int = Field(default=6, ge=1, le=12)
     first_speaker: str = Field(default="local", pattern="^(local|peer)$")
+    settings: Optional[dict[str, Any]] = None  # max_words / pace_s / role_notes (validated in core)
+
+
+class OperatorMessageRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=1000)
+    target: Optional[str] = Field(default=None, pattern="^(local|peer)$")
+
+
+class ConversationCommandRequest(BaseModel):
+    line: str = Field(..., min_length=1, max_length=200)
+
+
+class ConversationSettingsRequest(BaseModel):
+    settings: dict[str, Any]
 
 
 def _conversation_or_404(fn: Any, *args: Any, **kw: Any) -> Any:
@@ -305,7 +319,8 @@ async def start_agent_conversation(
         return await asyncio.to_thread(
             _conversation_or_404, conv.start, tenant_id, local_agent_id=body.local_agent_id,
             endpoint_id=endpoint_id, peer_agent_id=body.peer_agent_id, opener=body.opener,
-            max_turns=body.max_turns, first_speaker=body.first_speaker)
+            max_turns=body.max_turns, first_speaker=body.first_speaker,
+            settings=body.settings)
     except FederationAuditError as exc:
         raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
                             detail=f"conversation could not be recorded, nothing was sent: {exc}") from exc
@@ -316,6 +331,13 @@ async def list_agent_conversations(session: Any = Depends(require_session)) -> d
     from core.federation import conversation as conv
     tenant_id = _tenant_of(session)
     return {"conversations": await asyncio.to_thread(conv.list_conversations, tenant_id)}
+
+
+@router.get("/conversations-commands")
+async def list_conversation_commands(session: Any = Depends(require_session)) -> dict[str, Any]:
+    """The composer's slash grammar (the client never carries its own copy)."""
+    from core.federation import conversation as conv
+    return {"commands": list(conv.COMMANDS)}
 
 
 @router.get("/conversations/{conversation_id}")
@@ -337,6 +359,61 @@ async def stop_agent_conversation(
     tenant_id = _tenant_of(session)
     stopping = await asyncio.to_thread(_conversation_or_404, conv.stop, tenant_id, conversation_id)
     return {"conversation_id": conversation_id, "stopping": stopping}
+
+
+@router.post("/conversations/{conversation_id}/messages", status_code=http_status.HTTP_202_ACCEPTED)
+async def post_conversation_message(
+    conversation_id: str, body: OperatorMessageRequest,
+    session: Any = Depends(require_session_csrf_on_mutation),
+) -> dict[str, Any]:
+    """Operator interjection — written by the moderator before the next turn."""
+    from core.federation import conversation as conv
+    tenant_id = _tenant_of(session)
+    try:
+        return await asyncio.to_thread(_conversation_or_404, conv.post, tenant_id,
+                                       conversation_id, body.text, body.target)
+    except FederationAuditError as exc:
+        raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail=f"message could not be recorded: {exc}") from exc
+
+
+@router.patch("/conversations/{conversation_id}/settings", status_code=http_status.HTTP_202_ACCEPTED)
+async def configure_conversation(
+    conversation_id: str, body: ConversationSettingsRequest,
+    session: Any = Depends(require_session_csrf_on_mutation),
+) -> dict[str, Any]:
+    from core.federation import conversation as conv
+    tenant_id = _tenant_of(session)
+    return await asyncio.to_thread(_conversation_or_404, conv.configure, tenant_id,
+                                   conversation_id, body.settings)
+
+
+@router.post("/conversations/{conversation_id}/command")
+async def run_conversation_command(
+    conversation_id: str, body: ConversationCommandRequest,
+    session: Any = Depends(require_session_csrf_on_mutation),
+) -> dict[str, Any]:
+    from core.federation import conversation as conv
+    return await asyncio.to_thread(_conversation_or_404, conv.run_command,
+                                   _tenant_of(session), conversation_id, body.line)
+
+
+@router.post("/conversations/{conversation_id}/pause")
+async def pause_conversation(
+    conversation_id: str, session: Any = Depends(require_session_csrf_on_mutation),
+) -> dict[str, Any]:
+    from core.federation import conversation as conv
+    return await asyncio.to_thread(_conversation_or_404, conv.set_paused,
+                                   _tenant_of(session), conversation_id, True)
+
+
+@router.post("/conversations/{conversation_id}/resume")
+async def resume_conversation(
+    conversation_id: str, session: Any = Depends(require_session_csrf_on_mutation),
+) -> dict[str, Any]:
+    from core.federation import conversation as conv
+    return await asyncio.to_thread(_conversation_or_404, conv.set_paused,
+                                   _tenant_of(session), conversation_id, False)
 
 
 @router.delete("/conversations/{conversation_id}")

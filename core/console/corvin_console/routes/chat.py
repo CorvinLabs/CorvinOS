@@ -35,6 +35,7 @@ import contextlib
 import json
 import logging
 import mimetypes
+import os
 import re
 import sys
 import time
@@ -252,7 +253,7 @@ async def send_btw_note(
 def get_chat_turns(
     sid: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-    limit: int = Query(default=200, ge=1, le=2000),
+    limit: int = Query(default=2000, ge=1, le=20000),
     engine_id: str | None = Query(default=None),
     delegation_mode: str | None = Query(default=None),
     model_name: str | None = Query(default=None),
@@ -486,6 +487,49 @@ async def upload_attachments(
     return JSONResponse({"attachments": results})
 
 
+#: Turns whose client went away mid-turn (reload, closed tab, dropped link) and
+#: that were let run to completion. Strong refs: the WebSocket handler that
+#: created them returns, and the loop only weakly references a bare task.
+_DETACHED_TURNS: "set[asyncio.Task[None]]" = set()
+
+#: A detached turn has no observer, so it gets a wall-clock bound; past it the
+#: turn is cancelled and finalised as ``cancelled`` like any interrupted turn.
+_DETACHED_TURN_MAX_S_DEFAULT = 1800.0
+
+
+def _detached_turn_max_s() -> float:
+    try:
+        return max(60.0, float(os.environ.get("CORVIN_DETACHED_TURN_MAX_S",
+                                              _DETACHED_TURN_MAX_S_DEFAULT)))
+    except ValueError:
+        return _DETACHED_TURN_MAX_S_DEFAULT
+
+
+def _detach_turn(task: "asyncio.Task[None] | None", *, tenant_id: str,
+                 sid_fingerprint: str, sid: str) -> None:
+    """The client is gone while its turn runs: let the turn FINISH instead of
+    cancelling it. A completed task is what owes the operator a voice summary
+    (and an answer in the history) when they come back; cancelling it on a
+    reload threw both away."""
+    if task is None or task.done():
+        return
+    watchdog = asyncio.get_running_loop().call_later(_detached_turn_max_s(), task.cancel)
+    _DETACHED_TURNS.add(task)
+
+    def _done(t: "asyncio.Task[None]") -> None:
+        watchdog.cancel()
+        _DETACHED_TURNS.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            logger.warning("detached chat turn failed (sid=%s): %r", sid, t.exception())
+
+    task.add_done_callback(_done)
+    with contextlib.suppress(Exception):
+        console_audit.action_performed(
+            tenant_id=tenant_id, sid_fingerprint=sid_fingerprint,
+            action="chat.turn.detached", target_kind="chat", target_id=sid,
+        )
+
+
 @router.websocket("/chat/sessions/{sid}/stream")
 async def chat_stream(
     websocket: WebSocket,
@@ -515,6 +559,9 @@ async def chat_stream(
 
     await websocket.accept()
     await websocket.send_json({"type": "ready", "session": _project(sess)})
+    # The operator is back: finish any voice summary a previous process (or a
+    # failed attempt) still owed. Once per process and tenant; runs detached.
+    chat_runtime.resume_owed_task_summaries(rec.tenant_id)
     with contextlib.suppress(Exception):
         console_audit.action_performed(
             tenant_id=rec.tenant_id,
@@ -572,6 +619,21 @@ async def chat_stream(
         except Exception:  # noqa: BLE001 — never let a snapshot break teardown
             logger.exception("context_bridge: snapshot-on-disconnect failed (sid=%s)", sid)
 
+    # Once the client is gone the turn keeps running (see _detach_turn); its
+    # events then have nobody to go to. A dead socket is a delivery fact, not a
+    # turn failure: stop sending and keep consuming. Other send errors (e.g. an
+    # unserialisable event) still propagate and fail the turn as before.
+    _ws_gone = False
+
+    async def _send(payload: dict[str, Any]) -> None:
+        nonlocal _ws_gone
+        if _ws_gone:
+            return
+        try:
+            await websocket.send_json(payload)
+        except (WebSocketDisconnect, RuntimeError, OSError):
+            _ws_gone = True
+
     async def _run_turn(prompt: str) -> None:
         # Robustness contract: a turn failure must NEVER drop the WebSocket.
         # stream_turn yields its own {"error"}/{"done"} on handled failures,
@@ -591,8 +653,8 @@ async def chat_stream(
                 # title), and a deleted chat runs nothing.
                 fresh = chat_runtime.get_session(rec.tenant_id, sid)
                 if fresh is None:
-                    await websocket.send_json({"type": "error", "message": "This chat was deleted."})
-                    await websocket.send_json({"type": "done"})
+                    await _send({"type": "error", "message": "This chat was deleted."})
+                    await _send({"type": "done"})
                     return
                 chat_runtime.register_live_turn(rec.tenant_id, sid, _loop, _task)
                 try:
@@ -600,7 +662,7 @@ async def chat_stream(
                         chat_runtime.stream_turn(fresh, prompt, sid_fingerprint=rec.sid_fingerprint)
                     ) as gen:
                         async for event in gen:
-                            await websocket.send_json(event)
+                            await _send(event)
                 finally:
                     chat_runtime.unregister_live_turn(rec.tenant_id, sid, _loop, _task)
         except asyncio.CancelledError:
@@ -642,19 +704,18 @@ async def chat_stream(
             else:
                 _user_msg = f"The turn failed unexpectedly ({_exc_type}). Check server logs for details."
             with contextlib.suppress(Exception):
-                await websocket.send_json({"type": "error", "message": _user_msg})
+                await _send({"type": "error", "message": _user_msg})
             with contextlib.suppress(Exception):
-                await websocket.send_json({"type": "done"})
+                await _send({"type": "done"})
 
     try:
         while True:
             try:
                 raw = await websocket.receive_text()
             except WebSocketDisconnect:
-                if _stream_task and not _stream_task.done():
-                    _stream_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await _stream_task
+                _ws_gone = True
+                _detach_turn(_stream_task, tenant_id=rec.tenant_id,
+                             sid_fingerprint=rec.sid_fingerprint, sid=sid)
                 await _cleanup_voice_forward()
                 await _maybe_snapshot_active_task()
                 return
@@ -676,6 +737,10 @@ async def chat_stream(
                 if not prompt:
                     await websocket.send_json({"type": "error", "message": "empty user text"})
                     continue
+                # The Voice-on toggle is a client preference; the turn carries it so
+                # the server-side recap (ADR-2097) is regenerated after EVERY turn
+                # while it is on, not only every 3rd.
+                chat_runtime.note_voice_on(rec.tenant_id, sid, bool(msg.get("voice_on")))
                 # PLAN-0932 / ADR-2101 P4 task half: /resume <task_id> is the
                 # production setter WebChatSession.task_id never had (see the
                 # field's comment in chat_runtime.py — "set by the web API"
@@ -807,9 +872,9 @@ async def chat_stream(
                             try:
                                 side_raw = recv_task.result()
                             except WebSocketDisconnect:
-                                _stream_task.cancel()
-                                with contextlib.suppress(asyncio.CancelledError):
-                                    await _stream_task
+                                _ws_gone = True
+                                _detach_turn(_stream_task, tenant_id=rec.tenant_id,
+                                             sid_fingerprint=rec.sid_fingerprint, sid=sid)
                                 await _cleanup_voice_forward()
                                 await _maybe_snapshot_active_task()
                                 return
@@ -872,10 +937,9 @@ async def chat_stream(
             else:
                 await websocket.send_json({"type": "error", "message": f"unknown type: {mtype!r}"})
     except WebSocketDisconnect:
-        if _stream_task and not _stream_task.done():
-            _stream_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await _stream_task
+        _ws_gone = True
+        _detach_turn(_stream_task, tenant_id=rec.tenant_id,
+                     sid_fingerprint=rec.sid_fingerprint, sid=sid)
         with contextlib.suppress(Exception):
             console_audit.action_performed(
                 tenant_id=rec.tenant_id,

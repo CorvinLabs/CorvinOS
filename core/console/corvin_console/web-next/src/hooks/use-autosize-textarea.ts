@@ -27,11 +27,19 @@ export function useAutosizeTextarea(
   value: string,
   maxPx: number = DEFAULT_MAX_PX,
 ): void {
+  const prevLen = React.useRef(0);
   React.useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
+    const grew = value.length >= prevLen.current;
+    prevLen.current = value.length;
+    // Fast path (every ordinary keystroke): text got longer and still fits
+    // the current box -> nothing to resize. Skips the height:auto reset that
+    // forces a second synchronous layout of the whole page per key.
+    if (grew && el.style.height !== "" && el.scrollHeight <= el.clientHeight) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, maxPx)}px`;
-    el.style.overflowY = el.scrollHeight > maxPx ? "auto" : "hidden";
+    const h = el.scrollHeight;
+    el.style.height = `${Math.min(h, maxPx)}px`;
+    el.style.overflowY = h > maxPx ? "auto" : "hidden";
   }, [ref, value, maxPx]);
 }

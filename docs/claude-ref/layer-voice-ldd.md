@@ -1037,16 +1037,80 @@ building the second scheme it warned against.
   goes through the existing generic
   `GET /chat/sessions/{sid}/workdir/{filepath:path}` route, since the audio
   already lives inside the chat's own session workdir.
+- **Voice on = a recap after EVERY turn (2026-10-08).** The chat sends its
+  `Voice on/off` toggle with each user message (`voice_on` on the WS frame,
+  `chat-registry.ts`); `chat_runtime.note_voice_on()` records it and
+  `_spawn_session_summary_auto` then skips the 3-turn gate. A turn that ends
+  while a regeneration is in flight marks the chat in `_SESSION_SUMMARY_RERUN`;
+  the finishing task re-spawns once, so the LAST turn is always covered.
+  Voice off keeps the 3-turn background upkeep.
+- **Full history.** Every generation is also kept: `voice-summary/history/
+  session-summary-<ms>-<id>.<ext>` + one row in `voice-summary/summary-history.jsonl`
+  (`created_at`, `text`, `turn_count_at_generation`, `audio_file`); never pruned,
+  deleted with the chat. Read via `GET /v1/console/voice/summaries/{sid}/history`.
+  The name deliberately avoids the `session-summary.*` glob the stale-file sweep uses.
 - **Identity across logout.** This tenant's single-tenant local-login has no
   durable per-user id (`auth.SessionRecord` carries `sid_fingerprint`, not a
   `user_id` — see the ADR-0007 section above), so "listen after logout"
   means "reachable by `tenant_id`" — a fresh login session resolves the same
   `_default` tenant and therefore the same summaries, not a separate
   per-user library.
+- **One summary per completed TASK (Voice on).** The chat-level recap above
+  is overwritten per chat, so with several tasks a finished task's audio is
+  lost when the next one completes. The trigger is `chat_runtime.stream_turn()`'s
+  `finally` → `_on_turn_closed()`: it reads the turn's task status AFTER the
+  finalizer ran and spawns the recaps only when the task is `completed` — so
+  every success exit (native, TDE, ACS-delegated) is covered, and a consumer
+  that closes right at the last `done` still gets one. Per task:
+  `_spawn_task_summary()` → `routes/voice.py::owe_task_summary()` writes a
+  durable marker `voice-summary/tasks/<task_id>.pending` (clipped prompt +
+  answer), then `run_owed_task_summary()` runs the summarize.py → say.py
+  pipeline (`generate_and_persist_task_summary()`) and persists
+  `<task_id>.json` + `<task_id>.<ext>`, never overwritten by another task.
+  Listing: `GET /v1/console/voice/task-summaries[?sid=]` (disk only).
+- **Always, or audited why not.** The marker is removed on success. A failed
+  attempt (summarizer, TTS, quota) is retried up to 3 times (30 s × attempt
+  backoff, slot released between attempts); after the last one the marker is
+  dropped and `voice.task_summary` is audited with `gave-up-after-retries`.
+  A console restart or cancelled attempt leaves the marker; the next chat
+  WebSocket connection runs `resume_owed_task_summaries(tenant)` (once per
+  process and tenant) and finishes it. Waiting tasks queue for the 2 slots —
+  never dropped.
+- **A reload no longer kills the task.** When the WebSocket drops mid-turn
+  (reload, closed tab, network drop) `routes/chat.py::_detach_turn()` lets the
+  turn run to completion instead of cancelling it: events are no longer
+  delivered (`_send()` stops on a dead socket), the task completes, its answer is
+  persisted and — Voice on — its summary is produced. Bounded by
+  `CORVIN_DETACHED_TURN_MAX_S` (default 1800 s, min 60); past it the turn is
+  cancelled and finalised as `cancelled`. Audited as `chat.turn.detached`. An
+  explicit `cancel` message still cancels. The chat UI re-reads its history when
+  the task log says the task ended (`use-refresh-on-task-end.ts` →
+  `chat-registry.ts::refreshHistory`, only ever to a LONGER server history), and
+  the Voice Summaries page lists every task recap (`Per task`) with a link back
+  to its chat.
+- **What still produces no task summary.** Cancelled or failed tasks (they did
+  not complete), turns on slash commands / `/debug-engine` (no `task.completed`
+  through the engine path), background `/task` runs and bridge turns (adapter
+  path, not the web chat), a detached turn that hit the wall-clock limit, and a
+  console restart while a detached turn is still running (the turn dies with the
+  process; only an owed marker of an already completed task survives).
+- **Voice state survives a restart.** `note_voice_on()` persists the toggle to
+  `voice-summary/voice-state.json` when it changes; `voice_on_for()` reads
+  memory first, then that file. Before this the toggle lived only in memory
+  and was lost on restart until the next user message re-sent it.
 - Regression guard: `core/console/tests/
   test_voice_session_summary_auto.py` (real session store, real files, real
   HTTP through the workdir file route — only the two subprocess spawns are
-  mocked, same boundary the button's own tests use).
+  mocked, same boundary the button's own tests use) and
+  `core/console/tests/test_voice_task_summary.py` (per-task persistence,
+  task-switch and restart survival, Voice-on gate, HTTP listing),
+  `test_voice_task_summary_scenarios.py` (completion matrix through the real
+  `stream_turn` wrapper: nobody listening, parallel chats, any success exit,
+  close at `done`, mid-turn disconnect, Voice off, retry, give-up, restart
+  resume via the real WebSocket) and `test_voice_task_summary_native_e2e.py`
+  (real `stream_turn` against the fake CLI subprocess) and
+  `test_chat_turn_survives_reload.py` (real WebSocket route, client context that
+  outlives the socket).
 
 **Adversarial hardening pass (2026-07-17)** — invariants added after a
 two-round refutation review of the whole ADR-0194 surface:

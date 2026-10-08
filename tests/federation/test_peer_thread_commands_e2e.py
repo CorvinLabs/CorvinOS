@@ -163,3 +163,44 @@ def test_agents_lists_local_and_this_peers_federable_agents(thread):
     body = r.json()
     assert LOCAL in body["local"]
     assert PEER in body["peer"]
+
+
+def _expire_peer_catalog():
+    """Age every stored catalog snapshot far past CATALOG_TTL_S."""
+    import json
+
+    from core.federation.peer_catalog import PeerCatalog
+
+    ledger = PeerCatalog("_default")._ledger_path
+    recs = [json.loads(line) for line in ledger.read_text().splitlines() if line.strip()]
+    for rec in recs:
+        rec["fetched_at"] = 0.0
+    ledger.write_text("".join(json.dumps(r) + "\n" for r in recs))
+
+
+def test_ask_peer_refreshes_an_expired_catalog_instead_of_failing(thread):
+    c, h, pair = thread
+    _expire_peer_catalog()
+    assert c.get(f"{FED_BASE}/peer-agents", headers=h).json()["agents"] == []  # really expired
+
+    r = _cmd(c, h, f"/ask @peer/{PEER} summarize this for me")  # needs the catalog to resolve
+    assert r.status_code == 200, r.text
+    assert r.json().get("executed") is True, r.json()
+    assert r.json()["address"] == f"agent://{pair['iid_b']}/{PEER}"
+    assert c.get(f"{FED_BASE}/peer-agents", headers=h).json()["agents"]  # catalog is fresh again
+
+
+def test_ask_peer_reports_the_refresh_failure_reason(thread, monkeypatch):
+    from core.federation.peer_catalog import PeerCatalog, PeerCatalogError
+
+    c, h, _ = thread
+    _expire_peer_catalog()
+
+    def _boom(self, endpoint_id, **kw):
+        raise PeerCatalogError("peer_unreachable")
+
+    monkeypatch.setattr(PeerCatalog, "refresh", _boom)
+    r = _cmd(c, h, "/ask @peer hello")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["executed"] is False and "peer_unreachable" in body["reason"]

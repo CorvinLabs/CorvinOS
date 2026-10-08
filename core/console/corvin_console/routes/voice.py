@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import random
 import subprocess
 import sys
@@ -33,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status as http_status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status as http_status
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
@@ -2247,12 +2248,71 @@ def generate_and_persist_session_summary(
         _log.warning("session summary persist failed for %s:%s", tenant_id, sid, exc_info=True)
         return False
 
+    # Full history: the fixed pair above is only the LATEST recap. Every
+    # generation is also kept (timestamped audio + one JSONL row), never
+    # pruned — it lives in the chat's own dir, so deleting the chat deletes it.
+    # Best-effort: history must never fail the summary itself.
+    try:
+        _append_summary_history(vdir, data, ext, meta)
+    except OSError:
+        _log.warning("session summary history append failed for %s:%s",
+                     tenant_id, sid, exc_info=True)
+
     console_audit.action_performed(
         tenant_id=tenant_id, sid_fingerprint="system",
         action="voice.session_summary", target_kind="voice", target_id=sid,
         trigger=trigger,
     )
     return True
+
+
+_SESSION_SUMMARY_HISTORY_NAME = "summary-history.jsonl"  # not "session-summary.*": the stale-file sweep globs that
+_SESSION_SUMMARY_HISTORY_DIR = "history"
+
+
+def _append_summary_history(vdir: "Path", data: bytes, ext: str, meta: "dict[str, Any]") -> None:
+    hdir = vdir / _SESSION_SUMMARY_HISTORY_DIR
+    hdir.mkdir(parents=True, exist_ok=True)
+    # ms timestamp + uuid: unique per write, so racing generations never collide.
+    stamp = f"{int(meta['created_at'] * 1000)}-{uuid.uuid4().hex[:8]}"
+    audio_name = f"session-summary-{stamp}{ext}"
+    tmp = hdir / f"{audio_name}.{uuid.uuid4().hex}.tmp"
+    tmp.write_bytes(data)
+    tmp.replace(hdir / audio_name)
+    row = {
+        "created_at": meta["created_at"], "lang": meta.get("lang"),
+        "text": meta.get("text", ""), "mime": meta.get("mime"),
+        "audio_file": f"{_SESSION_SUMMARY_HISTORY_DIR}/{audio_name}",
+        "turn_count_at_generation": meta.get("turn_count_at_generation"),
+    }
+    # One O_APPEND write of one line: atomic for concurrent appenders.
+    fd = os.open(vdir / _SESSION_SUMMARY_HISTORY_NAME,
+                 os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        os.write(fd, (json.dumps(row, sort_keys=True) + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def read_session_summary_history(tenant_id: str, sid: str) -> "list[dict[str, Any]]":
+    """Every recap ever generated for this chat, oldest first."""
+    from .. import chat_runtime as _cr  # noqa: PLC0415
+    vdir, _meta = _session_summary_paths(tenant_id, sid)
+    path = vdir / _SESSION_SUMMARY_HISTORY_NAME
+    out: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        row["audio_url"] = (f"/v1/console/chat/sessions/{sid}/workdir/"
+                            f"{_cr._VOICE_SUMMARY_SUBDIR}/{row.get('audio_file', '')}")
+        out.append(row)
+    return out
 
 
 def list_session_summaries(tenant_id: str) -> "list[dict[str, Any]]":
@@ -2301,6 +2361,299 @@ def list_voice_summaries(
     which chat tab is open or which login session generated it."""
     items = list_session_summaries(rec.tenant_id)
     return {"tenant_id": rec.tenant_id, "count": len(items), "summaries": items}
+
+
+@router.get("/voice/summaries/{sid}/history")
+def voice_summary_history(
+    sid: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """All recaps ever generated for one chat (timestamped), oldest first."""
+    from .. import chat_runtime as _cr  # noqa: PLC0415
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", sid) or _cr.get_session(rec.tenant_id, sid) is None:
+        raise HTTPException(404, "session not found")
+    items = read_session_summary_history(rec.tenant_id, sid)
+    return {"sid": sid, "count": len(items), "history": items}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-task voice summaries — one persisted recap per completed task
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The chat-level recap above is one file pair per CHAT, overwritten on every
+# regeneration: with several tasks in one chat, a finished task's audio is gone
+# as soon as the next task completes. A task summary is keyed by task_id, so
+# each completed task keeps its own audio and survives task switches and
+# console restarts (it lives in the chat's workdir, next to the task record).
+
+_TASK_SUMMARY_SUBDIR = "tasks"
+_TASK_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
+def _task_summary_dir(tenant_id: str, sid: str) -> Path:
+    from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
+    return _cr.session_summary_dir(tenant_id, sid) / _TASK_SUMMARY_SUBDIR
+
+
+# A completed task is owed a summary from the moment its marker is written
+# (``<task_id>.pending``, next to the result): the marker holds the clipped
+# exchange, so a console restart, a failed TTS or an exhausted quota never
+# loses the obligation — the next attempt (or the sweep at the next chat
+# connection) picks it up. It is removed on success or after the last attempt.
+_PENDING_SUFFIX = ".pending"
+_TASK_SUMMARY_MAX_ATTEMPTS = 3
+_MARKER_USER_CLIP = 5_000
+_MARKER_ANSWER_CLIP = 15_000
+
+
+def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def owe_task_summary(tenant_id: str, sid: str, task_id: str, *,
+                     user_text: str, answer_text: str,
+                     completed_at: float | None = None) -> bool:
+    """Durably record that *task_id* is owed a voice summary. Idempotent: a
+    task that already has its summary, or an existing marker, is left alone
+    (a marker keeps its attempt count)."""
+    if not _TASK_ID_RE.fullmatch(task_id):
+        return False
+    ddir = _task_summary_dir(tenant_id, sid)
+    marker = ddir / f"{task_id}{_PENDING_SUFFIX}"
+    if marker.exists() or (ddir / f"{task_id}.json").exists():
+        return True
+    try:
+        ddir.mkdir(parents=True, exist_ok=True)
+        _write_json_atomic(marker, {
+            "task_id": task_id, "attempts": 0, "created_at": time.time(),
+            # When the TASK finished (not when its summary got made): the console
+            # uses it to tell "already heard live" from "finished while away".
+            "completed_at": completed_at if completed_at is not None else time.time(),
+            "user_text": user_text[:_MARKER_USER_CLIP],
+            "answer_text": answer_text[:_MARKER_ANSWER_CLIP],
+        })
+    except OSError:
+        _log.warning("task summary marker failed for %s:%s/%s", tenant_id, sid, task_id,
+                     exc_info=True)
+        return False
+    return True
+
+
+def pending_task_summaries(tenant_id: str) -> list[tuple[str, str]]:
+    """(sid, task_id) of every owed-but-not-yet-delivered summary of the tenant."""
+    from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
+    out: list[tuple[str, str]] = []
+    for sess in _cr.list_sessions(tenant_id):
+        ddir = _task_summary_dir(tenant_id, sess.sid)
+        if ddir.is_dir():
+            out.extend((sess.sid, m.name[: -len(_PENDING_SUFFIX)])
+                       for m in ddir.glob(f"*{_PENDING_SUFFIX}"))
+    return out
+
+
+def run_owed_task_summary(tenant_id: str, sid: str, task_id: str) -> str:
+    """One attempt at an owed summary: ``done`` | ``retry`` | ``gave_up`` | ``none``
+    (no marker). Blocking — callers run it in a worker thread."""
+    marker = _task_summary_dir(tenant_id, sid) / f"{task_id}{_PENDING_SUFFIX}"
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+        user_text, answer_text = str(data["user_text"]), str(data["answer_text"])
+        attempts = int(data.get("attempts", 0)) + 1
+        completed_at = float(data["completed_at"]) if data.get("completed_at") else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return "none"
+    if generate_and_persist_task_summary(
+            tenant_id, sid, task_id, user_text=user_text, answer_text=answer_text,
+            completed_at=completed_at):
+        marker.unlink(missing_ok=True)
+        return "done"
+    if attempts >= _TASK_SUMMARY_MAX_ATTEMPTS:
+        marker.unlink(missing_ok=True)
+        console_audit.action_failed(
+            tenant_id=tenant_id, sid_fingerprint="system", action="voice.task_summary",
+            target_kind="voice", target_id=task_id, reason="gave-up-after-retries")
+        return "gave_up"
+    data["attempts"] = attempts
+    try:
+        _write_json_atomic(marker, data)
+    except OSError:
+        _log.warning("task summary marker update failed for %s:%s/%s",
+                     tenant_id, sid, task_id, exc_info=True)
+    return "retry"
+
+
+def generate_and_persist_task_summary(
+    tenant_id: str, sid: str, task_id: str, *,
+    user_text: str, answer_text: str, lang: str = "de",
+    completed_at: float | None = None,
+) -> bool:
+    """Summarise ONE completed task and persist its audio under its task_id.
+
+    Same two-phase pipeline as generate_and_persist_session_summary (summarize.py
+    -> say.py), but the transcript is just this task's exchange and the output
+    is keyed by task_id, so a later task never overwrites it. Blocking: callers
+    run it in a worker thread, off the turn's critical path. Every failure is
+    audited and returns False — it never surfaces as a chat-facing error.
+    """
+    action = "voice.task_summary"
+
+    def _fail(reason: str) -> bool:
+        console_audit.action_failed(
+            tenant_id=tenant_id, sid_fingerprint="system",
+            action=action, target_kind="voice", target_id=task_id, reason=reason,
+        )
+        return False
+
+    if not _TASK_ID_RE.fullmatch(task_id):
+        return _fail("invalid-task-id")
+    if not answer_text.strip():
+        return _fail("empty-answer")
+
+    try:
+        from ._compute_license_gate import enforce_voice_summaries  # noqa: PLC0415
+        enforce_voice_summaries(tenant_id, "system", audit_action=action)
+    except HTTPException:
+        return False
+
+    summarize_path = _VOICE_SCRIPTS / "summarize.py"
+    if not summarize_path.exists():
+        return _fail("summarizer-missing")
+
+    budget = _SESSION_RECAP_TRANSCRIPT_BUDGET
+    transcript = (f"User: {user_text.strip()[: budget // 4]}\n\n"
+                  f"Assistant: {answer_text.strip()[: budget * 3 // 4]}")
+    resolved_lang = lang if lang in ("de", "en") else "de"
+    angle = random.choice(
+        _SESSION_RECAP_ANGLES_DE if resolved_lang == "de" else _SESSION_RECAP_ANGLES_EN)
+    cmd = [sys.executable, str(summarize_path),
+           "--session-recap-mode",
+           "--lang", resolved_lang,
+           "--max-chars", str(_SESSION_RECAP_MAX_CHARS),
+           "--angle", angle]
+    try:
+        proc = subprocess.run(
+            cmd, input=transcript, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=_TTS_SUMMARIZE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return _fail("timeout")
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return _fail("summarize-exit-nonzero" if proc.returncode != 0
+                     else "summarize-empty-output")
+    recap_text = proc.stdout.strip()[:_TTS_PROVIDER_CHAR_LIMIT]
+
+    with tempfile.NamedTemporaryFile(prefix="corvin_tts_", suffix=".opus", delete=False) as fh:
+        out_path = Path(fh.name)
+    try:
+        proc2 = subprocess.run(_say_cmd(out_path, recap_text, resolved_lang),
+                               capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", env=_say_env(),
+                               timeout=_tts_timeout_for(recap_text))
+        if proc2.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+            return _fail("tts-failed")
+        data = out_path.read_bytes()
+    except subprocess.TimeoutExpired:
+        return _fail("tts-timeout")
+    finally:
+        _cleanup_tts_tmp(out_path)
+
+    mime = _detect_audio_mime(data)
+    ext = _AUDIO_EXT_BY_MIME.get(mime, ".ogg")
+    ddir = _task_summary_dir(tenant_id, sid)
+    meta_path = ddir / f"{task_id}.json"
+    try:
+        ddir.mkdir(parents=True, exist_ok=True)
+        # Only a re-run of THIS task can carry an older audio file under another
+        # extension; the tmp files of a concurrent write are left alone.
+        for stale in ddir.glob(f"{task_id}.*"):
+            if not stale.name.endswith((".json", ".tmp", _PENDING_SUFFIX)):
+                stale.unlink(missing_ok=True)
+        audio_name = f"{task_id}{ext}"
+        audio_tmp = ddir / f"{audio_name}.{uuid.uuid4().hex}.tmp"
+        audio_tmp.write_bytes(data)
+        audio_tmp.replace(ddir / audio_name)  # atomic — never serve a torn file
+        meta = {
+            "sid": sid,
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "created_at": time.time(),
+            "completed_at": completed_at,
+            "lang": resolved_lang,
+            "text": recap_text,
+            "mime": mime,
+            "audio_file": audio_name,
+        }
+        meta_tmp = meta_path.with_name(f"{meta_path.name}.{uuid.uuid4().hex}.tmp")
+        meta_tmp.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+        meta_tmp.replace(meta_path)
+    except OSError:
+        _log.warning("task summary persist failed for %s:%s/%s", tenant_id, sid, task_id,
+                     exc_info=True)
+        return False
+
+    console_audit.action_performed(
+        tenant_id=tenant_id, sid_fingerprint="system",
+        action=action, target_kind="voice", target_id=task_id,
+    )
+    return True
+
+
+def list_task_summaries(tenant_id: str, sid: str | None = None) -> list[dict[str, Any]]:
+    """Every persisted task summary of this tenant (or of one chat), newest
+    first. Reads only what is on disk — nothing held in memory — so a summary
+    is reachable after a task switch, a console restart or a new login."""
+    from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
+
+    sessions = _cr.list_sessions(tenant_id)
+    if sid is not None:
+        sessions = [s for s in sessions if s.sid == sid]
+    out: list[dict[str, Any]] = []
+    for sess in sessions:
+        ddir = _task_summary_dir(tenant_id, sess.sid)
+        if not ddir.is_dir():
+            continue
+        for meta_path in ddir.glob("*.json"):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            audio_file = meta.get("audio_file")
+            if not audio_file:
+                continue
+            out.append({
+                "sid": sess.sid,
+                "task_id": meta.get("task_id"),
+                "title": sess.title or "Untitled chat",
+                "created_at": meta.get("created_at"),
+                # Falls back to created_at for summaries made before the field existed.
+                "completed_at": meta.get("completed_at") or meta.get("created_at"),
+                "lang": meta.get("lang"),
+                "text": meta.get("text", ""),
+                "audio_url": (
+                    f"/v1/console/chat/sessions/{sess.sid}/workdir/"
+                    f"{_cr._VOICE_SUMMARY_SUBDIR}/{_TASK_SUMMARY_SUBDIR}/{audio_file}"
+                ),
+            })
+    out.sort(key=lambda e: e["created_at"] or 0, reverse=True)
+    return out
+
+
+@router.get("/voice/task-summaries")
+def list_voice_task_summaries(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    sid: str | None = Query(None, max_length=128),
+) -> dict[str, Any]:
+    """Persisted per-task voice summaries, newest first; optionally one chat's
+    only (``?sid=``). Each carries ``task_id`` and a playable ``audio_url``."""
+    if sid is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", sid):
+        raise HTTPException(404, "session not found")
+    items = list_task_summaries(rec.tenant_id, sid)
+    # `now`: the server clock, so the client compares completed_at against ITS
+    # own notion of "live" without trusting the browser's clock.
+    return {"tenant_id": rec.tenant_id, "count": len(items), "now": time.time(),
+            "summaries": items}
 
 
 class VoiceSegmentRequest(BaseModel):

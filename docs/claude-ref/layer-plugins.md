@@ -2306,3 +2306,43 @@ hard refresh.
 **Must NOT do:** add `corvin-knowledge` to `PANELS` or `NAV_GROUPS` · read a document path without the
 containment check · linkify inside code · link an id that does not resolve to exactly one node · put
 the selection in component state instead of the URL.
+
+
+---
+
+## Agent Conversations — `agent_conversations` plugin panel (plugin CONCEPT-0001)
+
+The panel at `/console/app/agent-conversations` is the console panel of the Marketplace plugin
+`agent_conversations` (`Corvin-Marketplace/plugins/contributor/integration/agent_conversations/`; its
+concept and ADRs live in that plugin's `docs/`, per the Plugin Exception Rule). Like `corvin_knowledge`
+it is **not** a static panel: absent from `PANELS`/`NAV_GROUPS`, resolved through `COMPONENTS_BY_NAME`,
+sidebar entry under Marketplace while the plugin is installed AND enabled. Until it is enabled the URL
+404s — enabling records the operator's consent.
+
+The operator takes part in a running conversation (peer-chat style). **The transcript still has ONE
+writer — the moderator thread** (`core/federation/conversation.py`, ADR-2234). Everything the operator
+does is a request queued under `_LIVE_LOCK` (`post`, `configure`, `set_paused`, `run_command`); the
+moderator drains it at a turn boundary (`_drain` / `_wait_boundary`) and writes it, so `seq` stays
+strictly increasing.
+
+| Route (under `/v1/console/federation`) | Effect |
+|---|---|
+| `POST /conversations/{id}/messages` `{text, target?}` | interjection, ≤ 1000 chars; `target: local\|peer` is withheld from the other agent's prompt |
+| `PATCH /conversations/{id}/settings` | live `max_words` (50–600), `pace_s` (0–60), `role_notes` (≤ 500 chars each) |
+| `POST /conversations/{id}/pause` / `resume` | holds at the next turn boundary; stop still works while paused |
+| `POST /conversations/{id}/command` `{line}` · `GET /conversations-commands` | slash grammar parsed **server-side**; an unknown `/…` is refused, never sent as text |
+
+`GET /conversations/{id}` additionally returns `events` (system rows: `paused`/`resumed`/`settings`),
+`settings`, `paused`, `pending`. A message queued after the last turn is still written (unanswered),
+never dropped. Audit (metadata only, never text): `federation.conversation_operator_message`,
+`…_settings_changed`, `…_paused`, `…_resumed` — registered in `core/federation/audit.py` AND
+`security_events.py` (`EVENT_SEVERITY` + `_EVENT_ALLOWLIST`).
+
+**Proof.** `tests/federation/test_agent_conversation_operator_e2e.py` (real console, real signed peer
+turns, real `spawn_a2a_worker` gates, stub engine only), `web-next/tests/unit/agent-conversation-view.test.ts`,
+`web-next/tests/e2e/agent-conversations-plugin.spec.ts` (real install + sidebar; thread/composer against a
+stubbed API — the live install has no agent or peer). A route change needs a console restart.
+
+**Must NOT do:** write operator input straight into the transcript file · parse slash commands in the
+client · re-add `agent-conversations` to `PANELS`/`NAV_GROUPS` · put message text into an audit record.
+

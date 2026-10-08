@@ -122,6 +122,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable
@@ -3075,6 +3076,16 @@ _ARTIFACT_EXT_FALLBACK = {
     ".pdf": "application/pdf", ".html": "text/html", ".htm": "text/html",
     ".csv": "text/csv", ".json": "application/json",
     ".txt": "text/plain", ".md": "text/markdown", ".sql": "text/plain",
+    # office deliverables: shown as a download card (no inline preview) — a
+    # generated .docx/.pptx/.xlsx is an output the operator asked for, and was
+    # silently dropped from the chat before. Source files / archives stay out.
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".odt": "application/vnd.oasis.opendocument.text",
+    ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+    ".odp": "application/vnd.oasis.opendocument.presentation",
+    ".epub": "application/epub+zip", ".rtf": "application/rtf",
 }
 
 
@@ -3125,7 +3136,7 @@ _SESSION_INTERNAL_DIRS = frozenset({
 # into the workdir must not be able to flood the chat again. Truncation is
 # ANNOUNCED (a notice event), never silent — a silently dropped artifact reads
 # as "the turn produced nothing".
-_MAX_TURN_ARTIFACTS = 20
+_MAX_TURN_ARTIFACTS = 50
 
 
 def _artifacts_truncated_notice(*, emitted: int, suppressed: int) -> dict[str, Any]:
@@ -4401,10 +4412,203 @@ _SESSION_SUMMARY_MAX_CONCURRENT = 2
 _SESSION_SUMMARY_INFLIGHT: "set[tuple[str, str]]" = set()
 
 
+#: (tenant_id, sid) -> the chat's Voice-on toggle as of its latest user turn.
+_VOICE_ON: "dict[tuple[str, str], bool]" = {}
+
+#: Chats whose turn finished while a regeneration was already in flight and
+#: Voice was on: that run summarised an older state, so one more is owed.
+_SESSION_SUMMARY_RERUN: "set[tuple[str, str]]" = set()
+
+
+#: Voice-on is persisted next to the chat's summaries so a console restart does
+#: not silently turn it off: the client only re-sends the toggle with the next
+#: user message, and every completed task in between would otherwise go unsummarised.
+_VOICE_STATE_NAME = "voice-state.json"
+
+
+def _voice_state_path(tenant_id: str, sid: str) -> Path:
+    return session_summary_dir(tenant_id, sid) / _VOICE_STATE_NAME
+
+
+def note_voice_on(tenant_id: str, sid: str, on: bool) -> None:
+    """Record the chat's Voice-on toggle (sent with every user turn).
+
+    Written to disk only when it changes, and only for a chat that exists.
+    """
+    key = (tenant_id, sid)
+    if _VOICE_ON.get(key) == on:
+        return
+    _VOICE_ON[key] = on
+    if get_session(tenant_id, sid) is None:
+        return
+    path = _voice_state_path(tenant_id, sid)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        tmp.write_text(json.dumps({"voice_on": bool(on)}), encoding="utf-8")
+        tmp.replace(path)  # atomic — a torn state file would read as "off"
+    except OSError:
+        _log.warning("voice state persist failed for %s:%s", tenant_id, sid, exc_info=True)
+
+
+def voice_on_for(tenant_id: str, sid: str) -> bool:
+    """The chat's Voice-on toggle: memory first, else the persisted value
+    (restored after a restart). Unknown or unreadable means off."""
+    key = (tenant_id, sid)
+    if key in _VOICE_ON:
+        return _VOICE_ON[key]
+    try:
+        on = bool(json.loads(_voice_state_path(tenant_id, sid).read_text(encoding="utf-8"))["voice_on"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    _VOICE_ON[key] = on
+    return on
+
+
 async def _run_session_summary_auto(tenant_id: str, sid: str) -> None:
     from .routes import voice as _voice  # noqa: PLC0415 — avoid import cycle at module load
     await asyncio.to_thread(
         _voice.generate_and_persist_session_summary, tenant_id, sid, trigger="auto")
+
+
+#: Strong refs to in-flight per-task summaries (same reasoning as above).
+_TASK_SUMMARY_TASKS: "set[asyncio.Task[Any]]" = set()
+
+#: Concurrent per-task summary pipelines. Unlike the chat-level recap, a task
+#: that finds the slots busy WAITS for one instead of being dropped: with Voice
+#: on, every completed task must get its own summary.
+_TASK_SUMMARY_MAX_CONCURRENT = 2
+_TASK_SUMMARY_SLOTS: "asyncio.Semaphore | None" = None
+
+
+#: (tenant_id, sid, task_id) with an attempt loop running, so the sweep never
+#: starts a second one for the same task.
+_TASK_SUMMARY_INFLIGHT: "set[tuple[str, str, str]]" = set()
+
+#: Seconds between attempts at a summary that failed (multiplied by the attempt number).
+_TASK_SUMMARY_RETRY_DELAY_S = 30.0
+
+
+async def _run_owed_task_summary(tenant_id: str, sid: str, task_id: str) -> None:
+    """Attempt an owed summary until it is delivered or the attempts run out.
+    The slot is released between attempts, so a failing task never blocks others."""
+    global _TASK_SUMMARY_SLOTS
+    from .routes import voice as _voice  # noqa: PLC0415 — avoid import cycle at module load
+    if _TASK_SUMMARY_SLOTS is None:
+        _TASK_SUMMARY_SLOTS = asyncio.Semaphore(_TASK_SUMMARY_MAX_CONCURRENT)
+    for attempt in range(1, _voice._TASK_SUMMARY_MAX_ATTEMPTS + 1):
+        async with _TASK_SUMMARY_SLOTS:
+            outcome = await asyncio.to_thread(
+                _voice.run_owed_task_summary, tenant_id, sid, task_id)
+        if outcome != "retry":
+            return
+        await asyncio.sleep(_TASK_SUMMARY_RETRY_DELAY_S * attempt)
+
+
+def _spawn_owed_task_summary(tenant_id: str, sid: str, task_id: str) -> bool:
+    """Start the detached attempt loop for an owed summary. False when one is
+    already running for it or no event loop is available."""
+    key = (tenant_id, sid, task_id)
+    if key in _TASK_SUMMARY_INFLIGHT:
+        return False
+    coro = _run_owed_task_summary(tenant_id, sid, task_id)
+    try:
+        task = asyncio.create_task(coro)
+    except RuntimeError:
+        coro.close()
+        _log.warning("task voice summary not started: no running event loop")
+        return False
+    _TASK_SUMMARY_TASKS.add(task)
+    _TASK_SUMMARY_INFLIGHT.add(key)
+
+    def _done(t: "asyncio.Task[Any]") -> None:
+        _TASK_SUMMARY_TASKS.discard(t)
+        _TASK_SUMMARY_INFLIGHT.discard(key)
+        if t.cancelled():
+            return  # the marker stays: the next chat connection resumes it
+        exc = t.exception()  # retrieve, else asyncio logs "never retrieved"
+        if exc is not None:
+            _log.warning("task voice summary failed for %s:%s/%s: %r",
+                         tenant_id, sid, task_id, exc)
+
+    task.add_done_callback(_done)
+    return True
+
+
+def _spawn_task_summary(sess: "WebChatSession", task_id: str, *,
+                        user_text: str, answer_text: str,
+                        completed_at: float | None = None) -> None:
+    """Owe (durably) and start a voice summary for one completed task — only
+    while the chat's Voice is on. Never awaited by the turn."""
+    if not voice_on_for(sess.tenant_id, sess.sid):
+        return
+    from .routes import voice as _voice  # noqa: PLC0415 — avoid import cycle at module load
+    if _voice.owe_task_summary(sess.tenant_id, sess.sid, task_id,
+                               user_text=user_text, answer_text=answer_text,
+                               completed_at=completed_at):
+        _spawn_owed_task_summary(sess.tenant_id, sess.sid, task_id)
+
+
+#: Tenants whose owed summaries were already resumed in this process.
+_OWED_SWEPT: "set[str]" = set()
+
+
+def resume_owed_task_summaries(tenant_id: str) -> int:
+    """Once per process and tenant: restart every summary a previous process
+    (or a cancelled attempt) still owed. Called when a chat connects — the
+    moment the operator comes back — and needs the running event loop."""
+    if tenant_id in _OWED_SWEPT:
+        return 0
+    from .routes import voice as _voice  # noqa: PLC0415 — avoid import cycle at module load
+    started = 0
+    try:
+        for sid, task_id in _voice.pending_task_summaries(tenant_id):
+            started += _spawn_owed_task_summary(tenant_id, sid, task_id)
+    except Exception:  # noqa: BLE001 — the sweep must never break a connection
+        _log.warning("owed task summaries sweep failed for %s", tenant_id, exc_info=True)
+        return started
+    _OWED_SWEPT.add(tenant_id)
+    return started
+
+
+def _last_exchange(tenant_id: str, sid: str) -> tuple[str, str]:
+    """(user text, assistant text) of the chat's most recent persisted exchange."""
+    user = answer = ""
+    for turn in reversed(read_turns(tenant_id, sid, limit=8)):
+        text = _turn_text(turn).strip()
+        if not text:
+            continue
+        if turn.get("role") == "assistant" and not answer:
+            answer = text
+        elif turn.get("role") == "user" and answer:
+            user = text
+            break
+    return user, answer
+
+
+def _on_turn_closed(sess: "WebChatSession", slot: "tuple[Path, str] | None") -> None:
+    """Spawn the voice recaps when the turn that just closed COMPLETED.
+
+    Runs from stream_turn()'s finally — the one place every success exit (native,
+    TDE, ACS-delegated) and a consumer that closes at the last yield both pass.
+    Decided by the task's recorded status, so an interrupted turn (cancelled by a
+    client disconnect) is never summarised as if it had finished.
+    """
+    if slot is None:
+        return
+    tasks_dir, task_id = slot
+    try:
+        task = _task_manager.TaskManager(tasks_dir).get_task(task_id)
+        if task is None or task.status != _task_manager.TaskStatus.COMPLETED:
+            return
+        _spawn_session_summary_auto(sess)
+        if voice_on_for(sess.tenant_id, sess.sid):
+            user_text, answer_text = _last_exchange(sess.tenant_id, sess.sid)
+            _spawn_task_summary(sess, task_id, user_text=user_text, answer_text=answer_text,
+                                completed_at=time.time())
+    except Exception:  # noqa: BLE001 — a recap must never break turn teardown
+        _log.warning("voice recap spawn failed for %s:%s", sess.tenant_id, sess.sid,
+                     exc_info=True)
 
 
 def _spawn_session_summary_auto(sess: "WebChatSession") -> None:
@@ -4414,13 +4618,20 @@ def _spawn_session_summary_auto(sess: "WebChatSession") -> None:
     latency to, or break, the chat turn that triggered it.
     """
     key = (sess.tenant_id, sess.sid)
+    # Voice on => a fresh summary after every turn (the 3-turn gate is for
+    # background upkeep when nobody asked for audio).
+    forced = voice_on_for(sess.tenant_id, sess.sid)
     if key in _SESSION_SUMMARY_INFLIGHT:
+        if forced:
+            _SESSION_SUMMARY_RERUN.add(key)  # latest turn not covered yet
         return
     if len(_SESSION_SUMMARY_TASKS) >= _SESSION_SUMMARY_MAX_CONCURRENT:
+        if forced:
+            _SESSION_SUMMARY_RERUN.add(key)
         return
     from .routes import voice as _voice  # noqa: PLC0415
     try:
-        if not _voice.should_auto_generate_session_summary(
+        if not forced and not _voice.should_auto_generate_session_summary(
                 sess.tenant_id, sess.sid, sess.turn_count):
             return
     except Exception:  # noqa: BLE001 — the gate itself must never break a turn
@@ -4441,6 +4652,11 @@ def _spawn_session_summary_auto(sess: "WebChatSession") -> None:
     def _done(t: "asyncio.Task[Any]") -> None:
         _SESSION_SUMMARY_TASKS.discard(t)
         _SESSION_SUMMARY_INFLIGHT.discard(key)
+        if key in _SESSION_SUMMARY_RERUN:
+            _SESSION_SUMMARY_RERUN.discard(key)
+            fresh = get_session(*key)
+            if fresh is not None:
+                _spawn_session_summary_auto(fresh)
         if t.cancelled():
             return
         exc = t.exception()  # retrieve, else asyncio logs "never retrieved"
@@ -5269,7 +5485,9 @@ async def stream_turn(
             async for event in gen:
                 yield event
     finally:
+        slot = sess.in_flight_task  # read BEFORE the finalizer clears it
         _finalize_in_flight_task(sess)
+        _on_turn_closed(sess, slot)
 
 
 async def _stream_turn_impl(
@@ -7674,14 +7892,11 @@ async def _stream_turn_impl(
             "user_model": _os_model_used,
         })
 
-    # Automatic, persisted whole-session voice summary (see
-    # _spawn_session_summary_auto above): independent of whether any client
-    # is connected right now, and of the per-turn TTS toggle (a distinct
-    # feature — this is a durable recap, not the live "speak this reply"
-    # playback). Detached + best-effort; sess.turn_count already reflects
-    # this turn (touch() above ran first).
+    # The voice recaps (chat-level + per task) are NOT spawned here: this is only
+    # one of several success exits (TDE and ACS-delegated turns end elsewhere),
+    # and a consumer that closes at the last yield never reaches code after it.
+    # stream_turn()'s finally spawns them for every completed task.
     if rc == 0:
-        _spawn_session_summary_auto(sess)
         # Swap the instant first-words title for a real topic title.
         _spawn_session_title_upgrade(sess)
 

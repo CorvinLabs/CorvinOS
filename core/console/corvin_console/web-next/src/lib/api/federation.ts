@@ -51,7 +51,25 @@ export interface ConversationMessage {
   text: string;
   duration_ms: number;
   error?: string | null;
+  /** Operator interjection addressed to one agent only; null/absent = both. */
+  target?: "local" | "peer" | null;
 }
+
+export interface ConversationSettings {
+  max_words: number;
+  pace_s: number;
+  role_notes: { local: string; peer: string };
+}
+
+/** System row (pause / resume / settings change) — not an agent or operator message. */
+export interface ConversationEvent {
+  seq: number;
+  ts: number;
+  event: "paused" | "resumed" | "settings";
+  settings?: ConversationSettings;
+}
+
+export interface ConversationCommand { cmd: string; args: string; desc: string }
 
 export interface ConversationSummary {
   conversation_id: string;
@@ -64,10 +82,16 @@ export interface ConversationSummary {
   ended_at: number | null;
   turns: number;
   topic: string;
+  /** `/ask @mine` one-shot from a peer thread — not a conversation, hidden from this list. */
+  ask: boolean;
+  settings: ConversationSettings;
+  paused: boolean;
+  pending: number;
 }
 
 export interface Conversation extends ConversationSummary {
   messages: ConversationMessage[];
+  events: ConversationEvent[];
   last_seq: number;
 }
 
@@ -78,6 +102,7 @@ export interface StartConversation {
   opener: string;
   max_turns: number;
   first_speaker: "local" | "peer";
+  settings?: Partial<ConversationSettings>;
 }
 
 export const listLocalAgents = () => api<{ agents: LocalAgent[] }>(`${P}/agents`);
@@ -102,3 +127,21 @@ export const deleteConversation = (id: string, csrf: string) =>
   api<{ deleted: string }>(`${P}/conversations/${encodeURIComponent(id)}`, {
     method: "DELETE", csrf,
   });
+
+const convUrl = (id: string, tail: string) => `${P}/conversations/${encodeURIComponent(id)}/${tail}`;
+export const postConversationMessage = (
+  id: string, text: string, target: "local" | "peer" | null, csrf: string,
+) => api<{ queued: number }>(convUrl(id, "messages"), {
+  method: "POST", body: { text, ...(target ? { target } : {}) }, csrf,
+});
+export const configureConversation = (
+  id: string, settings: Partial<ConversationSettings>, csrf: string,
+) => api<{ queued: number }>(convUrl(id, "settings"), { method: "PATCH", body: { settings }, csrf });
+export const pauseConversation = (id: string, csrf: string) =>
+  api<{ paused: boolean }>(convUrl(id, "pause"), { method: "POST", csrf });
+export const resumeConversation = (id: string, csrf: string) =>
+  api<{ paused: boolean }>(convUrl(id, "resume"), { method: "POST", csrf });
+export const runConversationCommand = (id: string, line: string, csrf: string) =>
+  api<{ notice: string }>(convUrl(id, "command"), { method: "POST", body: { line }, csrf });
+export const listConversationCommands = () =>
+  api<{ commands: ConversationCommand[] }>(`${P}/conversations-commands`);

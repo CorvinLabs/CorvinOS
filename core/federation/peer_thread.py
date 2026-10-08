@@ -26,7 +26,7 @@ from typing import Any
 from core.federation import conversation as conv
 from core.federation.delegation import delegate
 from core.federation.local_agent import LocalAgentRegistry
-from core.federation.peer_catalog import PeerCatalog
+from core.federation.peer_catalog import PeerCatalog, PeerCatalogError
 from core.tenants.validation import validate_tenant_id
 
 MAX_LINE_CHARS = 4096
@@ -89,8 +89,30 @@ def _only_local_agent(tenant_id: str, agent_id: str | None) -> Any:
     return agents[0]
 
 
+def _peer_candidates(tenant_id: str, endpoint_id: str) -> list[Any]:
+    return [a for a in PeerCatalog(tenant_id).agents() if a.endpoint_id == endpoint_id]
+
+
+def _refresh_peer_catalog(tenant_id: str, endpoint_id: str) -> list[Any]:
+    """Re-fetch this peer's catalog once; a failed fetch is refused, never swallowed.
+
+    Snapshots expire after ``CATALOG_TTL_S`` and the peer chat has no refresh
+    control of its own, so an expired snapshot used to surface as "no
+    federable agent" — indistinguishable from a peer that offers none.
+    """
+    try:
+        return [a for a in PeerCatalog(tenant_id).refresh(endpoint_id)
+                if a.endpoint_id == endpoint_id]
+    except PeerCatalogError as exc:
+        raise PeerThreadCommandError(
+            f"could not refresh the peer catalog ({exc.reason})") from exc
+
+
 def _only_peer_agent(tenant_id: str, endpoint_id: str, agent_id: str | None) -> Any:
-    candidates = [a for a in PeerCatalog(tenant_id).agents() if a.endpoint_id == endpoint_id]
+    candidates = _peer_candidates(tenant_id, endpoint_id)
+    stale = not candidates or (agent_id and not any(a.agent_id == agent_id for a in candidates))
+    if stale:
+        candidates = _refresh_peer_catalog(tenant_id, endpoint_id)
     if agent_id:
         named = [a for a in candidates if a.agent_id == agent_id]
         if not named:
@@ -98,7 +120,7 @@ def _only_peer_agent(tenant_id: str, endpoint_id: str, agent_id: str | None) -> 
         return named[0]
     if not candidates:
         raise PeerThreadCommandError(
-            "this peer has no federable agent — refresh the peer catalog first")
+            "this peer offers no federable agent — the peer must mark one as federable")
     if len(candidates) > 1:
         raise PeerThreadCommandError(
             "the peer offers more than one agent — say which one with @peer/<agent_id>")

@@ -12,6 +12,7 @@
 
 import { useSyncExternalStore } from "react";
 import { emitCCCEvent } from "./ccc-bus";
+import { getBool, PREF_KEYS } from "./preferences";
 import { persistMessages, loadPersistedMessages, clearPersistedMessages } from "./chat-message-persistence";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -763,6 +764,22 @@ export function loadHistory(sid: string, messages: ChatMessage[]): void {
 }
 
 /**
+ * Replace a chat's messages with a fresh server read — for history that grew
+ * while no WebSocket was attached to the turn (a task that outlived a reload).
+ *
+ * Unlike loadHistory this applies after the first visit, but only when the
+ * server holds MORE than the tab does and the tab is not streaming, so it can
+ * never clobber live content with an older snapshot.
+ */
+export function refreshHistory(sid: string, messages: ChatMessage[]): void {
+  const entry = sessions.get(sid);
+  if (!entry || entry.streaming) return;
+  if (messages.length <= entry.messages.length) return;
+  entry.messages = messages;
+  notifyState(sid);
+}
+
+/**
  * Send a user message and create the assistant placeholder.
  * Returns the two new messages, or null if the WS is not ready.
  */
@@ -797,7 +814,7 @@ export function sendMessage(
   entry.bgOpen = 0;
   entry.latestResultText = null;
 
-  entry.ws.send(JSON.stringify({ type: "user", text }));
+  entry.ws.send(JSON.stringify({ type: "user", text, voice_on: getBool(PREF_KEYS.voiceOut, true) }));
   _dbg(sid, "msg.send", { len: text.length, force_delegate: text.trim().toLowerCase().startsWith("/delegate") });
   notifyState(sid);
 

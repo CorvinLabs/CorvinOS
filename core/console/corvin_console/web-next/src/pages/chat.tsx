@@ -64,6 +64,9 @@ import {
 } from "@/lib/preferences";
 import { useTasksWithLiveUpdates } from "@/hooks/use-tasks-with-live-updates";
 import { useChatTaskStatus, type ChatTaskStatus } from "@/hooks/use-chat-task-status";
+import { useRefreshOnTaskEnd } from "@/hooks/use-refresh-on-task-end";
+import { useAutoPlayTaskSummaries } from "@/hooks/use-auto-play-task-summaries";
+import { noteLiveSpoken } from "@/lib/auto-play-task-summaries";
 import { PHASE_TEXT, sessionTasksKey, statusLine, taskLabel } from "@/lib/chat-task-status";
 import { TaskPanel } from "@/components/task-panel";
 import { QuotaWarningBanner } from "@/components/quota-warning-banner";
@@ -72,6 +75,7 @@ import {
   cancelTurn as registryCancel,
   ensureConnected,
   loadHistory,
+  refreshHistory,
   sendMessage as registrySend,
   subscribeEvents,
   consumePendingTitle,
@@ -722,7 +726,7 @@ function ChatPane({
   const [voiceOut, setVoiceOut] = usePersistedBool(PREF_KEYS.voiceOut, true);
   const [recording, setRecording] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const { voiceState, playTts, playFull, playSessionSummary, playBlocked, stopVoice } = useVoicePlayback(csrf, (msg) =>
+  const { voiceState, playTts, playFull, playSessionSummary, playAudioUrl, playBlocked, stopVoice } = useVoicePlayback(csrf, (msg) =>
     setError(msg),
   );
   // Last completed TTS text + detected language — used for the replay button.
@@ -893,6 +897,29 @@ function ChatPane({
     }
   }, [sid, streaming]);
 
+  // A task that outlives a reload finishes on the server; pull its answer in
+  // when the task log says it ended (no-op while this tab is streaming).
+  useRefreshOnTaskEnd(
+    sid,
+    streaming,
+    React.useCallback(async () => {
+      const res = await getChatTurns(sid);
+      refreshHistory(
+        sid,
+        res.turns.map((t: ChatTurn, i: number) => hydrateChatTurn(t, i, sid)),
+      );
+    }, [sid]),
+  );
+
+  // Voice on: read out the recap of a task that finished while this chat was
+  // not being listened to (another chat, a reload). Waits for silence — it never
+  // cuts a live reply off — and skips what the live voice already said.
+  useAutoPlayTaskSummaries(sid, {
+    enabled: voiceOut,
+    idle: voiceState === "idle" && !streaming,
+    play: (summary) => { void playAudioUrl(summary.audio_url); },
+  });
+
   // ── Session setup: connect WS + load history ──────────────────────────────
   // The registry keeps the WS alive across unmounts (chat switches), so
   // streaming continues in the background. On remount we just re-subscribe;
@@ -927,6 +954,7 @@ function ChatPane({
         // Remember that this turn was already spoken so a final result that
         // still trickles in late (timer fired early) is not spoken twice.
         fallbackSpokenRef.current = true;
+        noteLiveSpoken(sid);
         playTts(pending.text, pending.lang, sid).catch(() => { /* surface in playTts */ });
       }
     };
@@ -982,6 +1010,8 @@ function ChatPane({
           // so the replay button and voice synthesis always use the complete, annotated output.
           setLastTts({ text: evt.text, lang });
           if (voiceOutRef.current && !alreadySpoken) {
+            // The reply is spoken live: its task recap would repeat it.
+            noteLiveSpoken(sid);
             playTts(evt.text, lang, sid).catch(() => { /* surface in playTts */ });
           }
         }

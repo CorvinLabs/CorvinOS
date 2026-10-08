@@ -197,6 +197,46 @@ class SessionSummaryAutoTest(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["text"], "Zweite Fassung.")
 
+    def test_history_keeps_every_generation_with_timestamps_via_http(self) -> None:
+        sess = self._make_session_with_turns(n_pairs=2)
+        self._synth(recap_text="Erste Fassung.", audio=b"OggS" + b"1" * 40)
+        self.assertTrue(voice_routes.generate_and_persist_session_summary(self.tenant_id, sess.sid))
+        self._synth(recap_text="Zweite Fassung.", audio=b"ID3" + b"2" * 60)
+        self.assertTrue(voice_routes.generate_and_persist_session_summary(self.tenant_id, sess.sid))
+
+        r = self.client.get(f"/v1/console/voice/summaries/{sess.sid}/history")
+        self.assertEqual(r.status_code, 200, r.text)
+        hist = r.json()["history"]
+        self.assertEqual([h["text"] for h in hist], ["Erste Fassung.", "Zweite Fassung."])
+        self.assertTrue(all(h["created_at"] for h in hist))
+        # each version's own audio is still playable through the workdir route
+        for h in hist:
+            a = self.client.get(h["audio_url"])
+            self.assertEqual(a.status_code, 200, h["audio_url"])
+        self.assertEqual(
+            self.client.get("/v1/console/voice/summaries/does_not_exist/history").status_code, 404)
+
+    def test_voice_on_forces_regeneration_below_the_turn_delta(self) -> None:
+        """Voice on => a summary after EVERY turn, even inside the 3-turn gate."""
+        sess = self._make_session_with_turns(n_pairs=1)
+        chat_runtime.note_voice_on(sess.tenant_id, sess.sid, True)
+        self.addCleanup(chat_runtime._VOICE_ON.pop, (sess.tenant_id, sess.sid), None)
+        ran = []
+
+        async def fake_run(tenant_id, sid):
+            ran.append((tenant_id, sid))
+
+        import asyncio
+
+        async def go():
+            with patch("corvin_console.routes.voice.should_auto_generate_session_summary",
+                       return_value=False), \
+                 patch.object(chat_runtime, "_run_session_summary_auto", fake_run):
+                chat_runtime._spawn_session_summary_auto(sess)
+                await asyncio.gather(*list(chat_runtime._SESSION_SUMMARY_TASKS))
+        asyncio.run(go())
+        self.assertEqual(ran, [(sess.tenant_id, sess.sid)])
+
     def test_returns_false_and_persists_nothing_for_unknown_session(self) -> None:
         self._synth()
         ok = voice_routes.generate_and_persist_session_summary(self.tenant_id, "no-such-sid")
@@ -228,19 +268,27 @@ class SpawnHookReachabilityTest(unittest.TestCase):
     proves reachability by source inspection plus a direct call through the
     real trigger function against a real session."""
 
-    def test_stream_turn_impl_calls_the_spawn_hook_on_success(self) -> None:
+    def test_stream_turn_spawns_the_hook_for_every_completed_task(self) -> None:
+        # The hook moved out of _stream_turn_impl's native exit into the public
+        # wrapper's finally (via _on_turn_closed), so the TDE and ACS-delegated
+        # success exits are covered too. Behaviour is proven end to end in
+        # test_voice_task_summary_scenarios.py / ..._native_e2e.py; this pins
+        # the call chain against a refactor that drops one link.
         import ast
         src = Path(chat_runtime.__file__).read_text(encoding="utf-8")
         tree = ast.parse(src)
-        impl = next(
-            n for n in ast.walk(tree)
-            if isinstance(n, ast.AsyncFunctionDef) and n.name == "_stream_turn_impl")
-        calls = {
-            n.func.id for n in ast.walk(impl)
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-        }
-        self.assertIn("_spawn_session_summary_auto", calls,
-                       "_stream_turn_impl no longer calls the auto-summary spawn hook")
+
+        def calls_of(fn_name: str, kind: type) -> set[str]:
+            fn = next(n for n in ast.walk(tree) if isinstance(n, kind) and n.name == fn_name)
+            return {n.func.id for n in ast.walk(fn)
+                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+
+        self.assertIn("_on_turn_closed", calls_of("stream_turn", ast.AsyncFunctionDef))
+        self.assertIn("_spawn_session_summary_auto", calls_of("_on_turn_closed", ast.FunctionDef))
+        self.assertIn("_spawn_task_summary", calls_of("_on_turn_closed", ast.FunctionDef))
+        self.assertNotIn("_spawn_session_summary_auto",
+                         calls_of("_stream_turn_impl", ast.AsyncFunctionDef),
+                         "a second spawn in the impl would double-run the recap")
 
     def test_spawn_hook_skips_a_chat_that_does_not_need_regeneration_yet(self) -> None:
         """Direct call through the real trigger: a chat with too few new

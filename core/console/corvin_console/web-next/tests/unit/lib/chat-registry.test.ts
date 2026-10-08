@@ -492,7 +492,7 @@ describe("sendMessage", () => {
     connect("s1");
     sendMessage("s1", "hello");
     expect(mockWs.sent).toHaveLength(1);
-    expect(JSON.parse(mockWs.sent[0])).toEqual({ type: "user", text: "hello" });
+    expect(JSON.parse(mockWs.sent[0])).toEqual({ type: "user", text: "hello", voice_on: true });
   });
 
   it("resets latestResultText on new send", () => {

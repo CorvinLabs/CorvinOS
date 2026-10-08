@@ -12,18 +12,24 @@
  * TURN stages, see PendingConfirmations).
  */
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Globe2, Loader2, Paperclip, Send, Mic, MicOff, FolderUp } from "lucide-react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { AlertTriangle, Bot, Globe2, Loader2, Paperclip, Send, Mic, MicOff, FolderUp, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { CommandPalette, applyCommandInsertion, useSlashCommandPalette } from "./SlashCommandPalette";
 import {
-  a2aFeedBlobUrl, encodeFilesForA2A, getA2AFeed, sendA2AFeedMessage,
+  a2aFeedBlobUrl, encodeFilesForA2A, getA2AFeed, getPeerThreadCommands,
+  sendA2AFeedMessage, sendPeerThreadCommand,
   A2AAttachmentLimitError, A2A_MAX_ATTACHMENTS_COUNT, A2A_MAX_ATTACHMENTS_TOTAL_BYTES,
   type A2AFeedMessage,
 } from "@/lib/api/a2a";
-import { inlineImageNames, mediaKind, messageMarkdown, referencedImageAttachment } from "@/lib/a2a-feed";
+import {
+  inlineImageNames, isMinePeerRole, isObserverModeEmptyReply, mediaKind, messageMarkdown,
+  peerMessageRole, peerRoleLabel, referencedImageAttachment,
+} from "@/lib/a2a-feed";
+import { listConversations, stopConversation, type ConversationSummary } from "@/lib/api/federation";
 import { Markdown } from "@/components/markdown";
 import { presenceView } from "@/lib/a2a-presence";
 import { useVoiceInput } from "@/hooks/use-voice-input";
@@ -42,8 +48,15 @@ function fmtTime(ts: number): string {
 
 const QUEUED_STALE_S = 3600 + 120; // max send timeout + slack
 
-function PeerMessageRow({ m, label, answered }: { m: A2AFeedMessage; label: string; answered: boolean }) {
-  const mine = m.direction === "out";
+const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, answered }: { m: A2AFeedMessage; label: string; answered: boolean }) {
+  // Four actors, not two (ADR-2235): who authored this line is derived from
+  // (direction, kind) — or from thread_ref when a moderated conversation's
+  // turn-prompt overrides it — never guessed from the text itself.
+  const role = peerMessageRole(m);
+  const mine = isMinePeerRole(role);
+  const isAgent = role === "local_agent" || role === "peer_agent";
+  const roleLabel = peerRoleLabel(role, label);
+  const observerModeReply = isObserverModeEmptyReply(m);
   // "unconfirmed": the request may have reached the peer — not a failure to
   // resend (a resend runs it twice). "queued": accepted, waiting to be sent.
   const unconfirmed = m.status === "unconfirmed";
@@ -68,7 +81,8 @@ function PeerMessageRow({ m, label, answered }: { m: A2AFeedMessage; label: stri
       {!mine && <div className="mt-5"><ChatAvatar label={label} icon={Globe2} /></div>}
       <div className={cn("flex min-w-0 max-w-[85%] flex-col", mine ? "items-end" : "items-start")}>
         <div className="mb-1 flex flex-wrap items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
-          <span className="font-medium text-foreground/80">{mine ? "You" : label}</span>
+          <span className="font-medium text-foreground/80" data-testid="peer-message-role">{roleLabel}</span>
+          {isAgent && <Bot className="h-3 w-3 text-muted-foreground" aria-label="agent-authored" />}
           <span>·</span>
           <span>{m.kind === "task" ? "message" : "reply"}</span>
           <span>·</span>
@@ -85,7 +99,12 @@ function PeerMessageRow({ m, label, answered }: { m: A2AFeedMessage; label: stri
           mine ? "rounded-tr-md bg-accent/15 text-foreground" : "rounded-tl-md border border-border bg-card text-card-foreground shadow-sm",
           failed && "border border-destructive/40",
         )}>
-          {body && (
+          {observerModeReply && (
+            <p className="text-xs italic text-muted-foreground">
+              no agent — {label} has not granted Executor permission
+            </p>
+          )}
+          {!observerModeReply && body && (
             <Markdown text={body} compact blockRemoteImages resolveImageSrc={resolveImageSrc}
               className="break-words" />
           )}
@@ -125,6 +144,36 @@ function PeerMessageRow({ m, label, answered }: { m: A2AFeedMessage; label: stri
       </div>
     </div>
   );
+});
+
+/**
+ * Inline status for a `/talk` conversation running in this thread (ADR-2235
+ * Phase 3, step 2). Collapses to nothing once the conversation is no longer
+ * `running` — the full transcript stays reachable from Agent conversations.
+ */
+function ActiveConversationBanner({
+  conv, peerLabel, onStop, stopping,
+}: {
+  conv: ConversationSummary; peerLabel: string; onStop: () => void; stopping: boolean;
+}) {
+  if (conv.status !== "running") return null;
+  return (
+    <div
+      data-testid="active-conversation-banner"
+      className="mx-4 mt-3 flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs md:mx-6"
+    >
+      <Bot className="h-3.5 w-3.5 shrink-0 text-accent" />
+      <span className="truncate font-medium text-foreground/90">{conv.topic || "Agent conversation"}</span>
+      <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[9px]">
+        {conv.turns} turn{conv.turns === 1 ? "" : "s"}
+      </Badge>
+      <span className="truncate text-muted-foreground">with {peerLabel}</span>
+      <Button variant="ghost" size="sm" className="ml-auto h-6 shrink-0 gap-1 px-2 text-[11px]"
+        onClick={onStop} disabled={stopping}>
+        <Square className="h-3 w-3" /> Stop
+      </Button>
+    </div>
+  );
 }
 
 export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: string }) {
@@ -133,9 +182,37 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
     queryFn: ({ signal }) => getA2AFeed({ peer_id: peerId, limit: 200, include_former: true }, signal),
     refetchInterval: FEED_REFETCH_MS,
   });
+  // Polled faster while a conversation in THIS thread is running, so the
+  // inline banner's turn counter and the "collapses when done" transition
+  // feel live — same idea as agent-conversations.tsx's LIVE_POLL_MS.
+  const conversations = useQuery({
+    queryKey: ["federation-conversations"],
+    queryFn: listConversations,
+    refetchInterval: (q) => {
+      const running = (q.state.data?.conversations ?? []).some(
+        (c) => c.peer?.endpoint_id === peerId && c.status === "running");
+      return running ? 1_000 : 5_000;
+    },
+  });
+  const activeConversation = React.useMemo(() => {
+    const mine = (conversations.data?.conversations ?? []).filter(
+      (c) => c.peer?.endpoint_id === peerId);
+    return mine.sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0))[0] ?? null;
+  }, [conversations.data, peerId]);
+  const stopConvMutation = useMutation({
+    mutationFn: (id: string) => stopConversation(id, csrf),
+    onSuccess: () => conversations.refetch(),
+  });
   const [text, setText] = React.useState("");
+  const peerThreadCommands = useQuery({
+    queryKey: ["peer-thread-commands"],
+    queryFn: ({ signal }) => getPeerThreadCommands(signal),
+    staleTime: 5 * 60_000,
+  });
+  const slashPalette = useSlashCommandPalette(text, peerThreadCommands.data?.commands ?? []);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
+  const [commandNotice, setCommandNotice] = React.useState("");
   const endRef = React.useRef<HTMLDivElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const folderInputRef = React.useRef<HTMLInputElement>(null);
@@ -197,15 +274,36 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
   async function handleSend() {
     const body = text.trim();
     if ((!body && pendingAttachments.length === 0) || uploading) return;
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setCommandNotice("");
+    slashPalette.close();
     try {
-      await sendA2AFeedMessage({
-        peer_id: peerId,
-        text: body,
-        attachments: pendingAttachments.map((a) => ({ name: a.name, mime: a.mime, content_b64: a.content_b64 })),
-      }, csrf);
-      setText("");
-      clearAttachments();
+      // A `/` line is never sent to the peer as plain text — it goes through
+      // the server-side dispatcher first (ADR-2235 Phase 2). That dispatcher
+      // is the fix for the reported bug: before it existed, `/ask @mine …`
+      // had no interception and reached the PEER's own worker as the task
+      // instruction, which answered it instead of the local agent.
+      if (body.startsWith("/")) {
+        const result = await sendPeerThreadCommand(peerId, body, csrf);
+        if (!result.executed) {
+          setError(typeof result.reason === "string" ? result.reason : "unknown command — not sent");
+        } else {
+          setCommandNotice(
+            result.kind === "ask_mine" && typeof result.text === "string" && result.text
+              ? String(result.text)
+              : `/${String(result.kind ?? "command")} — done. See Agent conversations for the full exchange.`,
+          );
+        }
+        setText("");
+        conversations.refetch();
+      } else {
+        await sendA2AFeedMessage({
+          peer_id: peerId,
+          text: body,
+          attachments: pendingAttachments.map((a) => ({ name: a.name, mime: a.mime, content_b64: a.content_b64 })),
+        }, csrf);
+        setText("");
+        clearAttachments();
+      }
       feed.refetch();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -248,6 +346,14 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
         </div>
       </header>
 
+      {activeConversation && (
+        <ActiveConversationBanner
+          conv={activeConversation} peerLabel={label}
+          stopping={stopConvMutation.isPending}
+          onStop={() => stopConvMutation.mutate(activeConversation.conversation_id)}
+        />
+      )}
+
       <div className="relative min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(ellipse_at_top,hsl(var(--accent)/0.06),transparent_60%)] px-4 py-5 md:px-6">
         <div className="mx-auto flex w-full max-w-4xl flex-col space-y-4">
           {feed.isLoading && <Loader2 className="mx-auto h-5 w-5 animate-spin" />}
@@ -264,6 +370,11 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
           {error && (
             <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {error}
+            </p>
+          )}
+          {commandNotice && (
+            <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              {commandNotice}
             </p>
           )}
           <div ref={endRef} />
@@ -360,18 +471,33 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
             >
               {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
             </Button>
-            <Textarea ref={textareaRef} value={text} onChange={(e) => setText(e.target.value)} rows={1}
-              placeholder={peer?.presence === "removed"
-                ? "Pairing removed — this conversation is read-only"
-                : peer?.can_send === false ? "Sending to this agent is disabled" : `Message ${label}…`}
-              disabled={peer?.can_send === false || recording || busy}
-              className="min-h-[2rem] flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-              aria-label="Message to agent"
-              onKeyDown={(e) => {
-                if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
-                e.preventDefault();
-                handleSend();
-              }} />
+            <div className="relative min-w-0 flex-1">
+              <CommandPalette
+                matches={slashPalette.matches}
+                selected={slashPalette.selected}
+                onSelect={(match) => {
+                  applyCommandInsertion(match, setText, textareaRef);
+                  slashPalette.close();
+                }}
+              />
+              <Textarea ref={textareaRef} value={text} onChange={(e) => {
+                const v = e.target.value;
+                setText(v);
+                slashPalette.onChange(v);
+              }} rows={1}
+                placeholder={peer?.presence === "removed"
+                  ? "Pairing removed — this conversation is read-only"
+                  : peer?.can_send === false ? "Sending to this agent is disabled" : `Message ${label}…`}
+                disabled={peer?.can_send === false || recording || busy}
+                className="min-h-[2rem] flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                aria-label="Message to agent"
+                onKeyDown={(e) => {
+                  if (slashPalette.onKeyDown(e, (match) => applyCommandInsertion(match, setText, textareaRef))) return;
+                  if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+                  e.preventDefault();
+                  handleSend();
+                }} />
+            </div>
             <Button variant="accent" size="icon" className="h-8 w-8 shrink-0 rounded-full"
               disabled={busy || uploading || (!text.trim() && pendingAttachments.length === 0) || peer?.can_send === false}
               onClick={handleSend} aria-label="Send">

@@ -52,6 +52,16 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "federation.conversation_ended": frozenset({
         "conversation_id", "status", "reason", "turns", "tenant_id",
     }),
+    # Operator participation in a running conversation (agent_conversations plugin).
+    # Metadata only — the interjection TEXT lives in the transcript, never in the chain.
+    "federation.conversation_operator_message": frozenset({
+        "conversation_id", "seq", "target", "text_chars", "tenant_id",
+    }),
+    "federation.conversation_settings_changed": frozenset({
+        "conversation_id", "seq", "changed", "tenant_id",
+    }),
+    "federation.conversation_paused": frozenset({"conversation_id", "seq", "tenant_id"}),
+    "federation.conversation_resumed": frozenset({"conversation_id", "seq", "tenant_id"}),
     # `/ask @mine` in a peer thread (ADR-2235 Phase 2) — one-shot local turn,
     # answer text stored in the conversation transcript (kind=ask), never here.
     "federation.local_ask": frozenset({
@@ -70,6 +80,10 @@ SEVERITY: dict[str, str] = {
     "federation.conversation_started": "INFO",
     "federation.conversation_turn": "INFO",
     "federation.conversation_ended": "INFO",
+    "federation.conversation_operator_message": "INFO",
+    "federation.conversation_settings_changed": "INFO",
+    "federation.conversation_paused": "INFO",
+    "federation.conversation_resumed": "INFO",
     "federation.local_ask": "INFO",
 }
 

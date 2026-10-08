@@ -987,6 +987,10 @@ EVENT_SEVERITY: dict[str, str] = {
     "federation.conversation_started": "INFO",
     "federation.conversation_turn": "INFO",
     "federation.conversation_ended": "INFO",
+    "federation.conversation_operator_message": "INFO",
+    "federation.conversation_settings_changed": "INFO",
+    "federation.conversation_paused": "INFO",
+    "federation.conversation_resumed": "INFO",
     # Peer-chat `/ask @mine` — a one-shot local turn dispatched from a peer
     # thread (ADR-2235 Phase 2). Metadata only: the answer text lives in the
     # tenant-local conversation transcript (kind=ask), never in the chain.
@@ -3952,14 +3956,6 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "layer_forge.definition_transitioned": frozenset({
         "entry_id", "version", "from_status", "to_status", "actor", "tenant_id",
     }),
-    # Forge Bundle (ADR-2229) — mirrored in core/forge_bundle/audit.py::ALLOWED_FIELDS.
-    "forge_bundle.exported": frozenset({
-        "bundle_id", "bundle_version", "artifact_count", "total_bytes", "tenant_id",
-    }),
-    "forge_bundle.import_validated": frozenset({
-        "bundle_id", "bundle_version", "artifact_count", "total_uncompressed_bytes",
-        "actor", "tenant_id",
-    }),
     # ... remaining Layer Forge events (generated from audit.py's tables; test_module_allowlist_matches_the_central_registry pins parity)
     "layer_forge.review_evaluated": frozenset({
         "entry_id", "flags", "prompt_version", "tenant_id", "verdict", "version"
@@ -3990,6 +3986,14 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "layer_forge.optimizer_config_updated": frozenset({
         "new_version", "old_version", "reason", "signal", "success_rate", "tenant_id", "total_overrides"
+    }),
+    # Forge Bundle (ADR-2229) — mirrored in core/forge_bundle/audit.py::ALLOWED_FIELDS.
+    "forge_bundle.exported": frozenset({
+        "bundle_id", "bundle_version", "artifact_count", "total_bytes", "tenant_id",
+    }),
+    "forge_bundle.import_validated": frozenset({
+        "bundle_id", "bundle_version", "artifact_count", "total_uncompressed_bytes",
+        "actor", "tenant_id",
     }),
     "forge_bundle.import_rejected": frozenset({
         "rejected_stage", "actor", "tenant_id",
@@ -4069,6 +4073,16 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "federation.conversation_ended": frozenset({
         "conversation_id", "status", "reason", "turns", "tenant_id",
     }),
+    # Operator participation in a running conversation (agent_conversations plugin).
+    # Metadata only — the interjection TEXT lives in the transcript, never in the chain.
+    "federation.conversation_operator_message": frozenset({
+        "conversation_id", "seq", "target", "text_chars", "tenant_id",
+    }),
+    "federation.conversation_settings_changed": frozenset({
+        "conversation_id", "seq", "changed", "tenant_id",
+    }),
+    "federation.conversation_paused": frozenset({"conversation_id", "seq", "tenant_id"}),
+    "federation.conversation_resumed": frozenset({"conversation_id", "seq", "tenant_id"}),
     "federation.local_ask": frozenset({
         "conversation_id", "agent_id", "endpoint_id", "status", "duration_ms",
         "task_id", "tenant_id",

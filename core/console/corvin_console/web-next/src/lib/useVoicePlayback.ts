@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ttsBlob, ttsSegment, sessionSummaryBlob, getLastTtsReason, type TtsSegment } from "@/lib/api";
+import { ttsBlob, ttsSegment, sessionSummaryBlob, audioUrlBlob, getLastTtsReason, type TtsSegment } from "@/lib/api";
 
 export type VoiceState = "idle" | "loading" | "playing" | "blocked";
 
@@ -541,6 +541,64 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
     [csrf, onError, stopVoice, ensureAudioEl],
   );
 
+  /**
+   * Play an already-persisted audio file (a task's voice summary) through the
+   * ONE gesture-unlocked element. It is AUTOMATIC by design, so failures stay
+   * silent like the per-turn voice does (the file is still in the Voice
+   * Summaries library); a browser autoplay block yields the same `blocked`
+   * tap-to-hear state as playTts. Like every play*() it supersedes whatever is
+   * playing — callers that must not cut off live speech wait for `idle`.
+   */
+  const playAudioUrl = React.useCallback(
+    async (audioUrl: string) => {
+      stopVoice();
+      const myRequestId = ++requestIdRef.current;
+      setVoiceState("loading");
+      const ac = new AbortController();
+      abortRef.current = ac;
+      let blob: Blob | null;
+      try {
+        blob = await audioUrlBlob(audioUrl, ac.signal);
+      } catch {
+        if (myRequestId === requestIdRef.current) setVoiceState("idle");
+        return;
+      }
+      if (myRequestId !== requestIdRef.current) return; // superseded meanwhile
+      if (!blob || !blob.size) {
+        setVoiceState("idle");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      blobUrlRef.current = url;
+      const audio = ensureAudioEl();
+      audio.muted = false;
+      const release = () => {
+        if (blobUrlRef.current === url) {
+          URL.revokeObjectURL(url);
+          blobUrlRef.current = null;
+        }
+        setVoiceState("idle");
+      };
+      audio.onended = release;
+      audio.onerror = release;
+      audio.src = url;
+      try {
+        await audio.play();
+        if (myRequestId !== requestIdRef.current) return; // superseded in the play() window
+        setVoiceState("playing");
+        unlockedRef.current = true;
+      } catch (e) {
+        if (myRequestId !== requestIdRef.current || _isAbort(e)) return;
+        if (_isAutoplayBlock(e)) {
+          setVoiceState("blocked"); // audio is loaded: the tap-to-hear button plays it
+          return;
+        }
+        release();
+      }
+    },
+    [stopVoice, ensureAudioEl],
+  );
+
   const playBlocked = React.useCallback(async () => {
     const a = audioRef.current;
     if (!a) return;
@@ -579,5 +637,5 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
     }
   }, [onError, stopVoice]);
 
-  return { voiceState, playTts, playFull, playSessionSummary, playBlocked, stopVoice, unlock };
+  return { voiceState, playTts, playFull, playSessionSummary, playAudioUrl, playBlocked, stopVoice, unlock };
 }

@@ -990,9 +990,11 @@ def test_both_paid_endpoints_are_on_the_voice_axis() -> None:
     # LLM-spawn phase runs outside the TTS slot since 2026-07-17) — the gate
     # sits there so it fires before any paid spawn, and the composed
     # _voice_session_summary_sync inherits it.
+    # generate_and_persist_task_summary is the per-task recap (one paid
+    # summarize + TTS pair per completed task while Voice is on) — same gate.
     assert gated == {
         "_voice_tts_sync", "voice_summarize", "_voice_session_summary_text",
-        "generate_and_persist_session_summary",
+        "generate_and_persist_session_summary", "generate_and_persist_task_summary",
     }, gated
 
 

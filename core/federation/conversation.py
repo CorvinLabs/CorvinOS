@@ -61,9 +61,49 @@ _engine_factory: Callable[[], Any] | None = None
 _LIVE: dict[str, threading.Event] = {}
 _LIVE_LOCK = threading.Lock()
 
+# Operator participation (agent_conversations plugin, CONCEPT-0001). The transcript keeps ONE
+# writer — the moderator thread. Everything the operator does while a conversation runs is a
+# *request* queued here under _LIVE_LOCK; the moderator drains it at a turn boundary and writes.
+MAX_INTERJECTION_CHARS = 1000
+MAX_PENDING_REQUESTS = 5
+MAX_ROLE_NOTE_CHARS = 500
+DEFAULT_SETTINGS: dict[str, Any] = {
+    "max_words": 250, "pace_s": 0, "role_notes": {"local": "", "peer": ""},
+}
+_REQUESTS: dict[str, list[dict[str, Any]]] = {}
+_PAUSED: set[str] = set()
+_SETTINGS: dict[str, dict[str, Any]] = {}
+
 
 class ConversationError(ValueError):
     """Invalid request, or the conversation cannot be started."""
+
+
+def normalize_settings(raw: Any, *, base: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Validate operator-supplied conversation settings (fail-closed: unknown key = error)."""
+    out = json.loads(json.dumps(base if base is not None else DEFAULT_SETTINGS))
+    if raw is None:
+        return out
+    if not isinstance(raw, dict):
+        raise ConversationError("settings must be an object")
+    unknown = set(raw) - set(DEFAULT_SETTINGS)
+    if unknown:
+        raise ConversationError(f"unknown setting: {sorted(unknown)[0]}")
+    for key, lo, hi in (("max_words", 50, 600), ("pace_s", 0, 60)):
+        if key in raw:
+            v = raw[key]
+            if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+                raise ConversationError(f"{key} must be an integer {lo}..{hi}")
+            out[key] = v
+    if "role_notes" in raw:
+        notes = raw["role_notes"]
+        if not isinstance(notes, dict) or set(notes) - {"local", "peer"}:
+            raise ConversationError("role_notes must be an object with local/peer")
+        for side, text in notes.items():
+            if not isinstance(text, str) or len(text) > MAX_ROLE_NOTE_CHARS:
+                raise ConversationError(f"role_notes.{side} longer than {MAX_ROLE_NOTE_CHARS} characters")
+            out["role_notes"][side] = text.strip()
+    return out
 
 
 def _dir(tenant_id: str) -> Path:
@@ -170,7 +210,8 @@ def _run_peer_turn(tenant_id: str, *, instruction: str, task_id: str, endpoint_i
             "duration_ms": res.duration_ms, "error": None if res.ok else "peer_turn_failed"}
 
 
-def _prompt(meta: dict, turns: list[dict], speaker: str) -> str:
+def _prompt(meta: dict, turns: list[dict], speaker: str, settings: dict | None = None) -> str:
+    cfg = settings or DEFAULT_SETTINGS
     me = meta["local"] if speaker == "local" else meta["peer"]
     other = meta["peer"] if speaker == "local" else meta["local"]
     lines: list[str] = []
@@ -178,6 +219,9 @@ def _prompt(meta: dict, turns: list[dict], speaker: str) -> str:
     omitted = 0
     for t in reversed(turns[1:]):  # newest first; turns[0] is the opener
         text = t["text"]
+        # An interjection addressed to the other agent is not shown to this one.
+        if t.get("speaker") == "operator" and t.get("target") not in (None, speaker):
+            text = "(the operator spoke privately to the other agent)"
         if len(text) > MAX_TURN_PROMPT_CHARS:
             text = text[:MAX_TURN_PROMPT_CHARS] + " […]"
         entry = f"{t['agent_id']}: {text}"
@@ -190,11 +234,15 @@ def _prompt(meta: dict, turns: list[dict], speaker: str) -> str:
     history = "\n\n".join(lines) if lines else "(nothing yet — you open the exchange)"
     if omitted:
         history = f"({omitted} earlier message(s) omitted)\n\n" + history
+    note = (cfg.get("role_notes") or {}).get(speaker, "")
+    note_block = f"\n\nOperator's instruction for you: {note}" if note else ""
     return (
         f'You are agent "{me["agent_id"]}" ({me["address"]}) in a moderated conversation '
-        f'with agent "{other["agent_id"]}" ({other["address"]}). The operator chose the topic. '
-        f'Write only your next message to {other["agent_id"]}: no preamble, no tool use '
-        f"unless the topic needs it, at most about 250 words.\n\n"
+        f'with agent "{other["agent_id"]}" ({other["address"]}). The operator chose the topic '
+        f'and may join in; lines from "operator" are instructions from the human running this '
+        f"conversation. Write only your next message to {other['agent_id']}: no preamble, no "
+        f"tool use unless the topic needs it, at most about {int(cfg.get('max_words', 250))} "
+        f"words.{note_block}\n\n"
         f"Topic from the operator:\n{turns[0]['text']}\n\n"
         f"Conversation so far:\n{history}"
     )
@@ -221,6 +269,12 @@ def _summary(records: list[dict], conversation_id: str) -> dict[str, Any]:
         "turns": len([t for t in turns if t.get("speaker") != "operator"]),
         "topic": turns[0]["text"][:160] if turns else "",
         "ask": bool(meta.get("ask", False)),
+        # The start record's settings, then every later `settings` event (live changes).
+        "settings": next((r["settings"] for r in reversed(records)
+                          if r.get("kind") == "event" and r.get("event") == "settings"),
+                         normalize_settings(meta.get("settings"))),
+        "paused": conversation_id in _PAUSED and status == "running",
+        "pending": len(_REQUESTS.get(conversation_id, ())) if status == "running" else 0,
     }
 
 
@@ -238,12 +292,22 @@ def _prune(tenant_id: str) -> None:
             excess -= 1
 
 
+def _forget(conversation_id: str) -> None:
+    with _LIVE_LOCK:
+        _LIVE.pop(conversation_id, None)
+        _REQUESTS.pop(conversation_id, None)
+        _SETTINGS.pop(conversation_id, None)
+        _PAUSED.discard(conversation_id)
+
+
 def start(
     tenant_id: str, *, local_agent_id: str, endpoint_id: str, peer_agent_id: str,
     opener: str, max_turns: int = 6, first_speaker: str = "local",
+    settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate, audit-first, write the opener, and start the moderator thread."""
     tenant_id = validate_tenant_id(tenant_id)
+    settings = normalize_settings(settings)
     opener = (opener or "").strip()
     if not opener:
         raise ConversationError("opener must not be empty")
@@ -270,6 +334,8 @@ def start(
         conversation_id = uuid.uuid4().hex
         stop = threading.Event()
         _LIVE[conversation_id] = stop
+        _REQUESTS[conversation_id] = []
+        _SETTINGS[conversation_id] = settings
     try:
         # Audit-first: no chained record → no conversation, nothing sent.
         _audit("federation.conversation_started", tenant_id, conversation_id=conversation_id,
@@ -284,13 +350,12 @@ def start(
         }
         path = _path(tenant_id, conversation_id)
         _append(path, {"seq": 0, "kind": "start", "ts": time.time(), "max_turns": max_turns,
-                       "first_speaker": first_speaker, **meta}, create=True)
+                       "first_speaker": first_speaker, "settings": settings, **meta}, create=True)
         _append(path, {"seq": 1, "kind": "turn", "ts": time.time(), "speaker": "operator",
                        "agent_id": "operator", "address": None, "task_id": None,
                        "status": "ok", "text": opener, "duration_ms": 0})
     except Exception:
-        with _LIVE_LOCK:
-            _LIVE.pop(conversation_id, None)
+        _forget(conversation_id)
         raise
     _prune(tenant_id)
     threading.Thread(
@@ -359,19 +424,90 @@ def ask_mine(
             "duration_ms": out["duration_ms"]}
 
 
+def _drain(tenant_id: str, conversation_id: str, path: Path, seq: int,
+           turns: list[dict]) -> int:
+    """Write every queued operator request (moderator thread only — the one writer)."""
+    with _LIVE_LOCK:
+        batch, _REQUESTS[conversation_id] = _REQUESTS.get(conversation_id, []), []
+    for req in batch:
+        seq += 1
+        if req["type"] == "say":
+            target = req["target"]
+            rec = {"seq": seq, "kind": "turn", "ts": time.time(), "speaker": "operator",
+                   "agent_id": "operator", "address": None, "task_id": None, "status": "ok",
+                   "text": req["text"], "duration_ms": 0, "target": target}
+            _audit("federation.conversation_operator_message", tenant_id,
+                   conversation_id=conversation_id, seq=seq, target=target or "both",
+                   text_chars=len(req["text"]))
+            turns.append(rec)
+        else:  # settings
+            with _LIVE_LOCK:
+                merged = normalize_settings(req["changes"], base=_SETTINGS.get(conversation_id))
+                _SETTINGS[conversation_id] = merged
+            rec = {"seq": seq, "kind": "event", "ts": time.time(), "event": "settings",
+                   "settings": merged}
+            _audit("federation.conversation_settings_changed", tenant_id,
+                   conversation_id=conversation_id, seq=seq,
+                   changed=",".join(sorted(req["changes"])))
+        _append(path, rec)
+    return seq
+
+
+def _wait_boundary(tenant_id: str, conversation_id: str, path: Path, seq: int,
+                   turns: list[dict], stop: threading.Event, pace_s: int) -> int:
+    """Between turns: honour pause and the pacing window; stay responsive to stop and to requests."""
+    deadline = time.monotonic() + pace_s
+    announced = False
+    while not stop.is_set():
+        with _LIVE_LOCK:
+            paused = conversation_id in _PAUSED
+            pending = bool(_REQUESTS.get(conversation_id))
+        if pending:
+            seq = _drain(tenant_id, conversation_id, path, seq, turns)
+            continue
+        if paused and not announced:
+            seq += 1
+            _audit("federation.conversation_paused", tenant_id, conversation_id=conversation_id, seq=seq)
+            _append(path, {"seq": seq, "kind": "event", "ts": time.time(), "event": "paused"})
+            announced = True
+        if not paused:
+            if announced:
+                seq += 1
+                _audit("federation.conversation_resumed", tenant_id,
+                       conversation_id=conversation_id, seq=seq)
+                _append(path, {"seq": seq, "kind": "event", "ts": time.time(), "event": "resumed"})
+            if time.monotonic() >= deadline:
+                break
+        stop.wait(0.2)
+    return seq
+
+
 def _moderate(tenant_id: str, conversation_id: str, meta: dict, max_turns: int,
               first_speaker: str, stop: threading.Event) -> None:
     path = _path(tenant_id, conversation_id)
     seq = 1
+    agent_turns = 0
     turns = [r for r in _read(path) if r.get("kind") == "turn"]
     speaker = first_speaker
     status, reason = "completed", "max_turns"
     try:
-        for _ in range(max_turns):
+        while agent_turns < max_turns:
             if stop.is_set():
                 status, reason = "stopped", "operator_stop"
                 break
-            prompt = _prompt(meta, turns, speaker)
+            with _LIVE_LOCK:
+                cfg = dict(_SETTINGS.get(conversation_id) or DEFAULT_SETTINGS)
+            if agent_turns:
+                seq = _wait_boundary(tenant_id, conversation_id, path, seq, turns, stop,
+                                     int(cfg.get("pace_s", 0)))
+            else:
+                seq = _drain(tenant_id, conversation_id, path, seq, turns)
+            if stop.is_set():
+                status, reason = "stopped", "operator_stop"
+                break
+            with _LIVE_LOCK:
+                cfg = dict(_SETTINGS.get(conversation_id) or DEFAULT_SETTINGS)
+            prompt = _prompt(meta, turns, speaker, cfg)
             task_id = str(uuid.uuid4())
             if speaker == "local":
                 out = _run_local_turn(instruction=prompt, task_id=task_id,
@@ -385,6 +521,7 @@ def _moderate(tenant_id: str, conversation_id: str, meta: dict, max_turns: int,
                                      conversation_id=conversation_id)
             text = (out["text"] or "")[:MAX_TURN_TEXT_CHARS]
             seq += 1
+            agent_turns += 1
             rec = {"seq": seq, "kind": "turn", "ts": time.time(), "speaker": speaker,
                    "agent_id": meta[speaker]["agent_id"], "address": meta[speaker]["address"],
                    "task_id": task_id, "status": out["status"] if out["ok"] else "error",
@@ -407,14 +544,15 @@ def _moderate(tenant_id: str, conversation_id: str, meta: dict, max_turns: int,
         reason = "audit_failed" if isinstance(exc, FederationAuditError) else "internal_error"
     finally:
         try:
+            # A message queued after the last turn is still written (unanswered) — never dropped.
+            seq = _drain(tenant_id, conversation_id, path, seq, turns)
             _append(path, {"seq": seq + 1, "kind": "end", "ts": time.time(),
-                           "status": status, "reason": reason, "turns": seq - 1})
+                           "status": status, "reason": reason, "turns": agent_turns})
             _audit("federation.conversation_ended", tenant_id, conversation_id=conversation_id,
-                   status=status, reason=reason, turns=seq - 1)
+                   status=status, reason=reason, turns=agent_turns)
         except Exception:  # noqa: BLE001 — the transcript reads "interrupted" then
             pass
-        with _LIVE_LOCK:
-            _LIVE.pop(conversation_id, None)
+        _forget(conversation_id)
 
 
 # ── read / control ───────────────────────────────────────────────────────
@@ -425,6 +563,7 @@ def get(tenant_id: str, conversation_id: str, *, after_seq: int = -1) -> dict[st
         raise KeyError(conversation_id)
     out = _summary(records, conversation_id)
     out["messages"] = [r for r in records if r.get("kind") == "turn" and r["seq"] > after_seq]
+    out["events"] = [r for r in records if r.get("kind") == "event" and r["seq"] > after_seq]
     out["last_seq"] = records[-1]["seq"]
     return out
 
@@ -448,6 +587,93 @@ def stop(tenant_id: str, conversation_id: str) -> bool:
         return False
     ev.set()
     return True
+
+
+def _live_or_raise(tenant_id: str, conversation_id: str) -> None:
+    _path(tenant_id, conversation_id)
+    with _LIVE_LOCK:
+        if conversation_id not in _LIVE:
+            raise ConversationError("conversation is not running")
+
+
+def post(tenant_id: str, conversation_id: str, text: str, target: str | None = None) -> dict[str, Any]:
+    """Queue an operator interjection; the moderator writes it before the next turn."""
+    text = (text or "").strip()
+    if not text:
+        raise ConversationError("message must not be empty")
+    if len(text) > MAX_INTERJECTION_CHARS:
+        raise ConversationError(f"message longer than {MAX_INTERJECTION_CHARS} characters")
+    if target not in (None, "local", "peer"):
+        raise ConversationError("target must be 'local', 'peer' or omitted")
+    _live_or_raise(tenant_id, conversation_id)
+    with _LIVE_LOCK:
+        queue = _REQUESTS.setdefault(conversation_id, [])
+        if len(queue) >= MAX_PENDING_REQUESTS:
+            raise ConversationError("too many pending messages — wait for the next turn")
+        queue.append({"type": "say", "text": text, "target": target})
+        return {"queued": len(queue)}
+
+
+def configure(tenant_id: str, conversation_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+    """Change settings of a running conversation (applies from the next turn)."""
+    if not isinstance(changes, dict) or not changes:
+        raise ConversationError("no settings given")
+    _live_or_raise(tenant_id, conversation_id)
+    with _LIVE_LOCK:
+        base = _SETTINGS.get(conversation_id)
+    normalize_settings(changes, base=base)  # validate before queueing
+    with _LIVE_LOCK:
+        queue = _REQUESTS.setdefault(conversation_id, [])
+        if len(queue) >= MAX_PENDING_REQUESTS:
+            raise ConversationError("too many pending requests — wait for the next turn")
+        queue.append({"type": "settings", "changes": changes})
+        return {"queued": len(queue)}
+
+
+def set_paused(tenant_id: str, conversation_id: str, paused: bool) -> dict[str, Any]:
+    """Pause after the current turn / resume. Idempotent."""
+    _live_or_raise(tenant_id, conversation_id)
+    with _LIVE_LOCK:
+        (_PAUSED.add if paused else _PAUSED.discard)(conversation_id)
+    return {"paused": paused}
+
+
+# Slash grammar for the composer — parsed HERE, never in the client (ADR-2235: a client copy of
+# the grammar drifts, and a command not parsed server-side cannot be refused fail-closed).
+COMMANDS: tuple[dict[str, str], ...] = (
+    {"cmd": "/pause", "args": "", "desc": "Pause after the current turn"},
+    {"cmd": "/resume", "args": "", "desc": "Continue a paused conversation"},
+    {"cmd": "/stop", "args": "", "desc": "End the conversation after the current turn"},
+    {"cmd": "/words", "args": "<50-600>", "desc": "Limit how long each agent's reply is (words)"},
+    {"cmd": "/pace", "args": "<0-60>", "desc": "Seconds to wait between turns"},
+)
+
+
+def run_command(tenant_id: str, conversation_id: str, line: str) -> dict[str, Any]:
+    """Run one composer ``/`` line. Anything unrecognised is refused, never sent as text."""
+    parts = (line or "").strip().split()
+    if not parts or not parts[0].startswith("/"):
+        raise ConversationError("not a command")
+    cmd, args = parts[0].lower(), parts[1:]
+    if cmd in ("/pause", "/resume", "/stop") and args:
+        raise ConversationError(f"{cmd} takes no argument")
+    if cmd == "/pause":
+        set_paused(tenant_id, conversation_id, True)
+        return {"notice": "Paused after the current turn."}
+    if cmd == "/resume":
+        set_paused(tenant_id, conversation_id, False)
+        return {"notice": "Resumed."}
+    if cmd == "/stop":
+        if not stop(tenant_id, conversation_id):
+            raise ConversationError("conversation is not running")
+        return {"notice": "Stopping after the current turn."}
+    if cmd in ("/words", "/pace"):
+        if len(args) != 1 or not args[0].isdigit():
+            raise ConversationError(f"usage: {cmd} <number>")
+        key = "max_words" if cmd == "/words" else "pace_s"
+        configure(tenant_id, conversation_id, {key: int(args[0])})
+        return {"notice": f"{key} set to {int(args[0])} from the next turn."}
+    raise ConversationError(f"unknown command {cmd} — type / to see the list")
 
 
 def delete(tenant_id: str, conversation_id: str) -> bool:

@@ -27,3 +27,4 @@ dist.prev/
 .console-deploy.lock
 .tsc-failed
 playwright-report-fresh-install
+playwright-report-forge-system

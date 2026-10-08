@@ -67,6 +67,7 @@ const COMPONENTS_BY_NAME: Record<string, ComponentType> = {
   QualityGatesPage,
   CorvinKnowledgePage,
   VideoProducerPage,
+  AgentConversationsPage,
   DataHubUnifiedPage,
   OTELTelemetryPage,
   ModelsPage,
@@ -127,7 +128,9 @@ export const PANELS: ConsolePanel[] = [
   // Console-native pages removed 2026-09-27 in favor of plugin-based UI.
   rc("files", "Files", FilesPage, { nav: { label: "Files", icon: "FolderOpen", group: "intelligence" } }),
   // REMOVED 2026-09-15: "space" panel (superseded by modern UI, no nav entry)
-  rc("agent-conversations", "Agent conversations", AgentConversationsPage, { nav: { label: "Agent conversations", icon: "Users", group: "intelligence" } }),
+  // agent-conversations is deliberately NOT a static panel: it is the console panel of the
+  // Marketplace plugin `agent_conversations` (route + sidebar entry come from the capability
+  // manifest while the plugin is enabled — COMPONENTS_BY_NAME above, mergeManifestNav).
   rc("memory", "Memory", MemoryPage, { nav: { label: "Memory", icon: "BookOpen", group: "intelligence" } }),
   // Agent Hub removed 2026-10-05 (Console navigation refactor, Phase 4) —
   // its 7 functions migrated to the chat sidebar (PeerManagementDialog),
