@@ -14,14 +14,42 @@ import os
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_admin_route import _sandbox  # noqa: E402
+from test_admin_route import _sandbox as _base_sandbox  # noqa: E402
 
 _MOD = "corvin_console.routes.video_producer_api"
+_INDEX_ID = "plugin:contributor-media-video_producer"
+
+
+def _install_plugin(tenant: str, *, enable: bool) -> None:
+    """Install (and optionally enable) the Video Producer in ``tenant``'s registry through
+    the REAL lifecycle — the same record the marketplace install route writes. The API
+    is gated on exactly this state, so a test that drives it must have it."""
+    from corvin_console.routes import marketplace_resolve as _resolve
+    from corvin_plugins.state import PluginLifecycle
+
+    plugin_dir, manifest = _resolve.load_manifest(_INDEX_ID)
+    record = _resolve.record_from_manifest(manifest, plugin_dir=plugin_dir)
+    lifecycle = PluginLifecycle(tenant_id=tenant, lifecycle_enabled=True)
+    lifecycle.install(record, installed_by="test")
+    if enable:
+        lifecycle.enable(record.plugin_id, consent_granted_by="test")
+
+
+@contextmanager
+def _sandbox(tmp_path, *, tenants=("_default",), plugin: str = "enabled"):
+    """``test_admin_route._sandbox`` plus the plugin state the API is gated on
+    (``plugin`` = "enabled" | "installed" | "absent")."""
+    with _base_sandbox(tmp_path, tenants=tenants) as boxed:
+        if plugin != "absent":
+            for tenant in tenants:
+                _install_plugin(tenant, enable=plugin == "enabled")
+        yield boxed
 
 
 class _RecordingRunner:
@@ -254,6 +282,68 @@ class VideoProducerRoutesE2E(unittest.TestCase):
             _route_module().get_runner = lambda: _RecordingRunner()
             r = self._create(client, csrf, task="x" * 4001)
             self.assertEqual(r.status_code, 422, r.text)
+
+
+class VideoProducerPluginGateE2E(unittest.TestCase):
+    """The API lives and dies with the plugin: installed + enabled for the tenant."""
+
+    def setUp(self):
+        self._tmp = Path(tempfile.mkdtemp())
+
+    def _post(self, client, csrf):
+        return client.post("/v1/console/video/jobs", json={"task": "x"}, headers={"X-CSRF-Token": csrf})
+
+    def test_not_installed_and_installed_but_disabled_are_refused_before_any_work(self):
+        for state in ("absent", "installed"):
+            with _sandbox(self._tmp / state, plugin=state) as (client, csrf, _home, _c):
+                for resp in (client.get("/v1/console/video/jobs"), self._post(client, csrf),
+                             client.get("/v1/console/video/overview")):
+                    self.assertEqual(resp.status_code, 404, f"{state}: {resp.text}")
+                    self.assertIn("not installed and enabled", resp.text)
+
+    def test_enabled_plugin_passes_the_gate(self):
+        with _sandbox(self._tmp, plugin="enabled") as (client, _csrf, _home, _c):
+            self.assertEqual(client.get("/v1/console/video/jobs").status_code, 200)
+
+    def test_source_is_loaded_lazily_when_it_was_missing_at_import(self):
+        # A fresh install imports the console BEFORE anything is installed: simulate that
+        # state (nothing loaded) and check the first gated request loads the plugin.
+        with _sandbox(self._tmp, plugin="enabled") as (client, _csrf, _home, _c):
+            mod = _route_module()
+            mod.VideoJob = mod._get_storage = mod.get_runner = mod.PLUGIN_SOURCE = None
+            self.assertEqual(client.get("/v1/console/video/jobs").status_code, 200)
+            self.assertIsNotNone(mod._get_storage)
+            self.assertIsNotNone(mod.PLUGIN_SOURCE)
+
+    def test_missing_runtime_dependencies_are_refused_by_name_before_a_job_exists(self):
+        import shutil
+        from unittest import mock
+
+        with _sandbox(self._tmp, plugin="enabled") as (client, csrf, home, _c):
+            mod = _route_module()
+            mod.get_runner = lambda: _RecordingRunner()
+            real_find, real_which = mod.importlib.util.find_spec, shutil.which
+            for gone, needle in (("gtts", "gTTS"), ("PIL", "Pillow"), ("ffmpeg", "ffmpeg")):
+                with mock.patch.object(mod.importlib.util, "find_spec",
+                                       lambda n, *a, _g=gone, **k: None if n == _g else real_find(n, *a, **k)), \
+                     mock.patch.object(mod.shutil, "which",
+                                       lambda n, *a, _g=gone, **k: None if n == _g else real_which(n, *a, **k)):
+                    resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
+                                       headers={"X-CSRF-Token": csrf})
+                self.assertEqual(resp.status_code, 503, resp.text)
+                self.assertIn(needle, resp.text)
+            # nothing was stored for the refused attempts
+            self.assertEqual(client.get("/v1/console/video/jobs").json()["total"], 0)
+
+    def test_the_github_cache_is_a_plugin_location(self):
+        # On a fresh install the synced GitHub copy is the only place the source exists.
+        with _sandbox(self._tmp, plugin="absent") as (_c, _t, home, _cl):
+            locs = {kind: src for src, kind in _route_module()._plugin_locations()}
+            self.assertEqual(
+                locs["github-cache"],
+                home / "marketplace-cache" / "Corvin-Marketplace" / "plugins" / "contributor"
+                / "media" / "video_producer" / "src",
+            )
 
 
 if __name__ == "__main__":

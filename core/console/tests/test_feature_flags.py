@@ -45,7 +45,16 @@ def _write_yaml(home: Path, body: str) -> None:
 def test_every_registered_flag_defaults_off():
     assert ff.REGISTRY, "registry should not be empty"
     for entry in ff.REGISTRY:
+        if entry.id in ff.DEFAULT_ON_FLAGS:
+            continue
         assert entry.default is False, f"{entry.id} must ship dark"
+
+
+def test_the_default_on_exceptions_are_exactly_the_plugin_lifecycle_pair():
+    # A policy decision, not a free list: growing it needs this test edited on purpose.
+    assert ff.DEFAULT_ON_FLAGS == {"plugin_runtime_lifecycle", "plugin_console_surface"}
+    for fid in ff.DEFAULT_ON_FLAGS:
+        assert next(e for e in ff.REGISTRY if e.id == fid).default is True
 
 
 def test_every_flag_has_owner_and_target_release():
@@ -89,9 +98,9 @@ def test_registry_rejects_duplicate_ids():
 
 # ── Resolution ────────────────────────────────────────────────────────────
 
-def test_fresh_install_has_everything_off(tenant_home):
+def test_fresh_install_has_everything_off_except_the_default_on_flags(tenant_home):
     for entry in ff.REGISTRY:
-        assert ff.is_enabled(entry.id) is False
+        assert ff.is_enabled(entry.id) is (entry.id in ff.DEFAULT_ON_FLAGS), entry.id
 
 
 def test_unknown_flag_is_false_not_an_exception(tenant_home):
@@ -101,7 +110,7 @@ def test_unknown_flag_is_false_not_an_exception(tenant_home):
 def test_absent_key_never_means_on(tenant_home):
     _write_yaml(tenant_home, "spec:\n  features: {}\n")
     for entry in ff.REGISTRY:
-        assert ff.is_enabled(entry.id) is False
+        assert ff.is_enabled(entry.id) is (entry.id in ff.DEFAULT_ON_FLAGS), entry.id
 
 
 def test_tenant_yaml_can_enable(tenant_home):
@@ -142,7 +151,7 @@ def test_corrupt_overlay_degrades_to_off(tenant_home):
     (tenant_home / "tenants" / "_default" / "global" / "features.json").write_text(
         "{not json", encoding="utf-8")
     for entry in ff.REGISTRY:
-        assert ff.is_enabled(entry.id) is False
+        assert ff.is_enabled(entry.id) is (entry.id in ff.DEFAULT_ON_FLAGS), entry.id
 
 
 # ── Worker engine ─────────────────────────────────────────────────────────

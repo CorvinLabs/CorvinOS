@@ -71,6 +71,29 @@ Tests critical security and session management:
 
 **Run:** `npm run test:e2e -- tests/e2e/security-session-auth.spec.ts`
 
+## Fresh-install plugin lifecycle (Video Producer, GitHub marketplace)
+
+`playwright.fresh-install.config.ts` + `tests/e2e-fresh/video-producer-lifecycle.spec.ts`
+drive install -> enable -> sidebar panel -> video -> uninstall -> panel gone, plus adversarial
+cases (double/concurrent install, uninstall racing an install, uninstall while enabled,
+absent-record mutations, bad ids, missing CSRF/session, reinstall).
+
+```bash
+scripts/console-deploy.sh                                   # the SPA must be built
+npx playwright test -c playwright.fresh-install.config.ts   # needs network (GitHub)
+```
+
+`scripts/start-fresh-install-backend.sh` starts the backend from a file export of the working tree
+in `/tmp/corvin-fresh-install` with an empty `CORVIN_HOME`, no sibling Corvin-Marketplace
+checkout and no `CORVIN_MARKETPLACE_*` override, so the index and the plugin source can only
+come from `CorvinLabs/Corvin-Marketplace` on GitHub (test 1 and 3 compare them byte for byte).
+It never touches the live install on :8765. `FORGE_ROOT` stays unset on purpose: the boot
+tripwire refuses any audit-chain redirect.
+
+Tests marked `KNOWN GAP` use `test.fail()`: they assert the REQUIRED behaviour and are expected
+to fail until the product is fixed; once it is, they report "unexpected pass" and the
+annotation must be removed.
+
 ## Running Tests Locally
 
 ### All Tests

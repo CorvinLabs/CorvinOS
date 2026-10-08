@@ -46,6 +46,7 @@ export type Outcome = { kind: "ok" | "already" | "failed" | "license" | "error" 
 
 export function outcomeOfJob(j: InstallJob): Outcome {
   if (j.status === "completed" && /already/i.test(j.message)) return { kind: "already", text: "Already installed." };
+  if (j.status === "completed" && j.enabled) return { kind: "enabled", text: "Installed and enabled — audited. A panel this plugin declares is now in the sidebar." };
   if (j.status === "completed") return { kind: "ok", text: "Installed — disabled until you enable it." };
   if (j.error === "license_required") return { kind: "license", text: "Not installed — this plugin needs a capability your licence tier does not include." };
   return { kind: "failed", text: j.error ? `Not installed: ${j.error}` : "Not installed." };
@@ -160,7 +161,7 @@ function EntryCard({ p, csrf, onGoTo }: { p: IndexPlugin; csrf: string; onGoTo: 
         csrf={csrf}
         open={installModalOpen}
         onOpenChange={setInstallModalOpen}
-        onSuccess={() => { setOutcome({ kind: "ok", text: "Installed — disabled until you enable it." }); invalidate(); }}
+        onSuccess={(enabled) => { setOutcome(enabled ? { kind: "enabled", text: "Installed and enabled — audited. A panel this plugin declares is now in the sidebar." } : { kind: "ok", text: "Installed — disabled until you enable it." }); invalidate(); }}
         onGoTo={onGoTo}
       />
 

@@ -16,3 +16,9 @@ edge-tts>=6.1.8
 truststore>=0.9
 openai>=1.0
 anthropic>=0.25
+# Video Producer plugin (Corvin-Marketplace, contributor/media/video_producer) runs INSIDE the
+# console process, so its hard runtime dependencies live here. Narration is synthesised with
+# gTTS and slides are drawn with Pillow; without either every job fails at the first scene
+# (verified on a fresh install).
+gTTS>=2.5.0
+Pillow>=10.0.0

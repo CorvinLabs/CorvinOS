@@ -27,7 +27,7 @@
 | | |
 |---|---|
 | **Feature flag** | `admin_control_plane` — **off by default** (ships dark, CLAUDE.md § Feature Flags) |
-| **Mutations also need** | `plugin_runtime_lifecycle` — likewise off by default |
+| **Mutations also need** | `plugin_runtime_lifecycle` — on by default since the fresh-install fix (an operator "off" still applies) |
 | **Implemented** | the six routes in [API reference](#api-reference) below |
 | **gRPC** | **deferred, not planned** (ADR-0239). REST over the existing session auth covers every known caller; a second transport would be a pure dependency with no consumer. Revisit only when a concrete consumer exists that REST cannot serve. |
 | **Not implemented** | hook registration over HTTP, license-gated installs over HTTP, a `corvinctl` CLI. Earlier drafts of this document showed those as examples; they are ideas, not endpoints. |

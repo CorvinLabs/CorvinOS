@@ -159,8 +159,8 @@ describe("Browse", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Next: Choose version/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Next: Review/ }));
     expect(seen).toHaveLength(0);
-    fireEvent.click(await screen.findByRole("button", { name: /Install now/ }));
-    await waitFor(() => expect(seen[0]).toMatchObject({ method: "POST", path: "/v1/console/api/v1/marketplace/plugins/plugin:buildin-memory-recall/install", csrf: "csrf-test", body: { version: "1.0.0", wait: false } }));
+    fireEvent.click(await screen.findByRole("button", { name: /Install and enable/ }));
+    await waitFor(() => expect(seen[0]).toMatchObject({ method: "POST", path: "/v1/console/api/v1/marketplace/plugins/plugin:buildin-memory-recall/install", csrf: "csrf-test", body: { version: "1.0.0", wait: false, enable_after_install: true, consent_granted: false } }));
     // the phase the backend reached is what the bar shows
     await screen.findByText(/Validating the manifest \(ADR-0247 gate\) · 45%/);
     await screen.findByText(/Installation completed/);

@@ -121,13 +121,27 @@ export interface InstallJob {
    *  always leaves the plugin disabled (ADR-0124 Inv. 6 — enable is its own
    *  deliberate, audited, hot-loading step, never implicit in install). */
   requires_consent: boolean | null;
+  /** True when the install flow also enabled the plugin (`enable_after_install`).
+   *  Null/false: it was installed only — the Enable button is then offered. */
+  enabled: boolean | null;
+  /** Why the enable step did not happen, when it was requested and refused. */
+  enable_error: string | null;
 }
 
-export function startInstallJob(indexId: string, version: string, csrf: string): Promise<InstallJob> {
+/** `enable` makes the install flow leave the plugin ON. `consent` is the operator's explicit,
+ *  on-screen consent for a plugin that needs it (community tier) — never implied by the API. */
+export function startInstallJob(
+  indexId: string, version: string, csrf: string,
+  opts: { enable?: boolean; consent?: boolean } = {},
+): Promise<InstallJob> {
   return api<InstallJob>(`/api/v1/marketplace/plugins/${encodeURIComponent(indexId)}/install`, {
     method: "POST",
     csrf,
-    body: { version, wait: false },
+    body: {
+      version, wait: false,
+      enable_after_install: opts.enable ?? false,
+      consent_granted: opts.consent ?? false,
+    },
   });
 }
 

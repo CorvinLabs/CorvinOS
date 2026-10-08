@@ -38,7 +38,8 @@ interface Props {
   csrf: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSuccess: () => void;
+  /** `enabled`: the install flow also turned the plugin on (or the operator did, in the confirm step). */
+  onSuccess: (enabled: boolean) => void;
   onGoTo?: (tab: TabId) => void;
 }
 
@@ -100,9 +101,14 @@ export function InstallFlowModal({ plugin, csrf, open, onOpenChange, onSuccess, 
     enabled: open && step === "dependencies",
   });
 
+  const communityTier = plugin.tier !== "buildin";
+
   // Step 4: Execute install
   const installMutation = useMutation({
-    mutationFn: () => startInstallJob(plugin.id, version, csrf),
+    // Installing from this wizard leaves the plugin ON. For a community plugin the
+    // review step shows the consent statement and "Install and enable" is the
+    // operator's explicit consent (recorded + audited server-side).
+    mutationFn: () => startInstallJob(plugin.id, version, csrf, { enable: true, consent: communityTier }),
     onSuccess: (job) => {
       setJobId(job.job_id);
       setStep("execute");
@@ -191,7 +197,7 @@ export function InstallFlowModal({ plugin, csrf, open, onOpenChange, onSuccess, 
   };
 
   const handleSuccess = () => {
-    onSuccess();
+    onSuccess(Boolean(enableMutation.isSuccess || progressQuery.data?.enabled));
     handleClose();
   };
 
@@ -333,11 +339,21 @@ export function InstallFlowModal({ plugin, csrf, open, onOpenChange, onSuccess, 
                 )}
               </div>
             </div>
+            {communityTier ? (
+              <p className="text-xs text-muted-foreground rounded-md border border-border bg-muted/30 p-3" data-testid="install-consent-note">
+                This is a community plugin. Choosing <strong>Install and enable</strong> installs it, turns it on
+                and records your consent (audited). It may send data to external services — see its description.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground" data-testid="install-enable-note">
+                The plugin is turned on as soon as it is installed.
+              </p>
+            )}
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setStep("version")}>Back</Button>
               <Button onClick={() => installMutation.mutate()} disabled={installMutation.isPending}>
                 {installMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                Install now
+                Install and enable
               </Button>
             </div>
           </div>
@@ -369,14 +385,16 @@ export function InstallFlowModal({ plugin, csrf, open, onOpenChange, onSuccess, 
                   <div>
                     <div className="font-semibold">Installation completed</div>
                     <div className="text-xs mt-1 opacity-80">
-                      {enableMutation.isSuccess
+                      {enableMutation.isSuccess || job.enabled
                         ? "Enabled — its panel, if it has one, is already in the sidebar."
-                        : "Installed, but not yet enabled. Enabling is a separate, audited step — the sidebar panel (if this plugin has one) appears only once enabled."}
+                        : job.enable_error
+                          ? `Installed, but not enabled: ${job.enable_error}`
+                          : "Installed, but not yet enabled. Enabling is a separate, audited step — the sidebar panel (if this plugin has one) appears only once enabled."}
                     </div>
                   </div>
                 </div>
 
-                {!enableMutation.isSuccess && job.registry_id && (
+                {!enableMutation.isSuccess && !job.enabled && job.registry_id && (
                   <div className="p-3 rounded-lg bg-muted/30 border border-border space-y-2">
                     <Button
                       size="sm"

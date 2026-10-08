@@ -95,6 +95,7 @@ try:
         PluginLifecycle,
     )
     from corvin_plugins.manifest import PluginError  # type: ignore[import-not-found]
+    from corvin_plugins.protocol import PluginNotFound  # type: ignore[import-not-found]
 
     _LIFECYCLE_AVAILABLE = True
 except ImportError:  # pragma: no cover - stripped install without core/plugins
@@ -129,6 +130,10 @@ class InstallJob:
     # needs consent.
     registry_id: Optional[str] = None
     requires_consent: Optional[bool] = None
+    # Set when the caller asked for ``enable_after_install``: whether the plugin ended up
+    # enabled, and — when it was refused (consent not given) — why. Both None otherwise.
+    enabled: Optional[bool] = None
+    enable_error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -265,9 +270,22 @@ class _LicenseRefused(Exception):
         self.detail = detail
 
 
-def _run_install(job: InstallJob, rec: session_auth.SessionRecord, plugin_id: str, version: str) -> Dict[str, Any]:
+def _run_install(
+    job: InstallJob,
+    rec: session_auth.SessionRecord,
+    plugin_id: str,
+    version: str,
+    *,
+    enable: bool = False,
+    consent: bool = False,
+) -> Dict[str, Any]:
     """Perform the install, advancing ``job`` phase by phase. Returns the
-    response document; raises :class:`_LicenseRefused` for the 403 path."""
+    response document; raises :class:`_LicenseRefused` for the 403 path.
+
+    ``enable`` (``enable_after_install``): enable the plugin as the last step of the SAME
+    flow — the install wizard's "Install and enable". ``consent`` is the operator's
+    explicit on-screen consent for a plugin that needs it; it is never inferred, so a
+    bare ``POST /install`` still leaves a consent-gated plugin disabled."""
 
     def _phase(i: int) -> None:
         job.status = JobStatus.INSTALLING
@@ -297,6 +315,10 @@ def _run_install(job: InstallJob, rec: session_auth.SessionRecord, plugin_id: st
             job.registry_id = extra["registry_id"]
         if "requires_consent" in extra:
             job.requires_consent = extra["requires_consent"]
+        if "enabled" in extra:
+            job.enabled = extra["enabled"]
+        if "enable_error" in extra:
+            job.enable_error = extra["enable_error"]
         _remember(job)
         _audit(rec, "marketplace.install", plugin_id)
         return {"status": "completed", "job_id": job.job_id, "plugin_id": plugin_id, **extra}
@@ -377,14 +399,17 @@ def _run_install(job: InstallJob, rec: session_auth.SessionRecord, plugin_id: st
                 "registry_id": record.plugin_id,
                 "already_installed": True,
                 "requires_consent": record.consent_required(),
+                **(_enable_step(rec, plugin_id, record, consent) if enable else {}),
             })
         return _fail(str(exc))
     except Exception as exc:  # noqa: BLE001 - mapped to a failed job
         return _fail(f"install failed: {type(exc).__name__}")
 
-    # Install intentionally leaves the record disabled (ADR-0124 Inv. 6: enable
-    # is its own audited, hot-loading step — never implicit in install, even
-    # when no consent is required) — see
+    # A bare install intentionally leaves the record disabled (ADR-0124 Inv. 6: enable
+    # is its own audited, hot-loading step — never implicit in install). A caller that
+    # asks for ``enable_after_install`` gets that step run right here, as its OWN audited
+    # enable (``plugin.enabled`` + ``marketplace.enable``), with the consent it passed.
+    # See
     # test_install_registers_the_plugin_then_uninstall_removes_it. What WAS
     # missing is `requires_consent` / `registry_id` reaching the operator: the
     # install-flow modal polls this job with `wait: false`, and `InstallJob`
@@ -398,7 +423,24 @@ def _run_install(job: InstallJob, rec: session_auth.SessionRecord, plugin_id: st
         "tenant_id": rec.tenant_id,
         "origin": record.origin.value,
         "requires_consent": record.consent_required(),
+        **(_enable_step(rec, plugin_id, record, consent) if enable else {}),
     })
+
+
+def _enable_step(rec: session_auth.SessionRecord, plugin_id: str, record: Any, consent: bool) -> Dict[str, Any]:
+    """The optional last step of an install. Never raises: the install itself already
+    succeeded, so a refused enable (consent missing, dependency unhealthy, plugin failed to
+    load and the registry rolled back) is reported on the job and the plugin stays installed."""
+    try:
+        out = _lifecycle(rec.tenant_id).enable(
+            record.plugin_id, consent_granted_by="console" if consent else None
+        )
+    except Exception as exc:  # noqa: BLE001
+        reason = _mutation_detail(exc)
+        _audit(rec, "marketplace.enable_failed", plugin_id)
+        return {"enabled": False, "enable_error": reason[:300]}
+    _audit(rec, "marketplace.enable", plugin_id)
+    return {"enabled": bool(out.enabled)}
 
 
 @router.post("/plugins/{plugin_id}/install")
@@ -422,6 +464,8 @@ async def install_plugin(
     body = body or {}
     version = str(body.get("version", "1.0.0"))[:64]
     wait = bool(body.get("wait", True))
+    enable = bool(body.get("enable_after_install", False))
+    consent = bool(body.get("consent_granted", False))
 
     job_id = f"install_{uuid.uuid4().hex[:12]}"
     now = _now()
@@ -439,13 +483,13 @@ async def install_plugin(
 
     if wait:
         try:
-            return _run_install(job, rec, plugin_id, version)
+            return _run_install(job, rec, plugin_id, version, enable=enable, consent=consent)
         except _LicenseRefused as exc:
             raise HTTPException(status_code=403, detail=exc.detail)
 
     def _worker() -> None:
         try:
-            _run_install(job, rec, plugin_id, version)
+            _run_install(job, rec, plugin_id, version, enable=enable, consent=consent)
         except _LicenseRefused:
             pass  # the job already carries error=license_required
         except Exception as exc:  # noqa: BLE001 — the job must never stay "installing"
@@ -486,9 +530,22 @@ def _registry_id_or_400(plugin_id: str) -> str:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+def _mutation_detail(exc: Exception) -> str:
+    """The message an operator sees. ``PluginNotFound`` is a ``KeyError``, whose
+    ``str()`` is the repr of its key (``'video_producer'``) — say what happened."""
+    if _LIFECYCLE_AVAILABLE and isinstance(exc, PluginNotFound):
+        return f"{exc.args[0] if exc.args else 'plugin'} is not installed"
+    return str(exc)
+
+
 def _mutation_status(exc: Exception) -> int:
     if _LIFECYCLE_AVAILABLE and isinstance(exc, LifecycleDisabled):
         return 403
+    # PluginNotFound subclasses KeyError, NOT PluginError — before this branch an
+    # uninstall/enable/disable of an absent record fell through to 500 (and leaked the
+    # bare key as the response body).
+    if _LIFECYCLE_AVAILABLE and isinstance(exc, PluginNotFound):
+        return 404
     if _LIFECYCLE_AVAILABLE and isinstance(exc, PluginError):
         # PluginNotFound is a PluginError subclass in protocol.py; treat "not
         # installed" as 404 and every other state conflict as 409.
@@ -510,7 +567,7 @@ async def uninstall_plugin(
     try:
         _lifecycle(rec.tenant_id).uninstall(registry_id)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=_mutation_status(exc), detail=str(exc)) from exc
+        raise HTTPException(status_code=_mutation_status(exc), detail=_mutation_detail(exc)) from exc
     _audit(rec, "marketplace.uninstall", plugin_id)
     # The audit trail outlives the plugin (GDPR Art. 30) — say so.
     return {
@@ -536,7 +593,7 @@ async def enable_plugin(
     try:
         rec_out = _lifecycle(rec.tenant_id).enable(registry_id, consent_granted_by=granted)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=_mutation_status(exc), detail=str(exc)) from exc
+        raise HTTPException(status_code=_mutation_status(exc), detail=_mutation_detail(exc)) from exc
     _audit(rec, "marketplace.enable", plugin_id)
     return {"status": "enabled", "plugin_id": plugin_id, "registry_id": registry_id,
             "enabled": rec_out.enabled}
@@ -555,7 +612,7 @@ async def disable_plugin(
     try:
         rec_out = _lifecycle(rec.tenant_id).disable(registry_id)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=_mutation_status(exc), detail=str(exc)) from exc
+        raise HTTPException(status_code=_mutation_status(exc), detail=_mutation_detail(exc)) from exc
     _audit(rec, "marketplace.disable", plugin_id)
     return {"status": "disabled", "plugin_id": plugin_id, "registry_id": registry_id,
             "enabled": rec_out.enabled}

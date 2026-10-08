@@ -198,17 +198,20 @@ with **code**: a Python class that implements the `CorvinPlugin` lifecycle
 extends — an engine, a compute backend, a bridge channel, an STT provider, a
 notification / recall / summary / router provider, or an audit / user backend.
 
-**Ships dark.** Three flags in **Settings → Features**, all off on a fresh install
-and after an upgrade:
+**Two of the three ship ON.** Three flags in **Settings → Features**:
 
-| Flag | What it turns on |
-|---|---|
-| `plugin_console_surface` | the **Plugins** page and its REST routes |
-| `plugin_runtime_lifecycle` | installing / enabling / reconfiguring at runtime |
-| `plugin_health_monitoring` | health polling + metrics export |
+| Flag | Default | What it turns on |
+|---|---|---|
+| `plugin_console_surface` | **on** | the **Plugins** page / Marketplace *Installed* tab and their REST routes |
+| `plugin_runtime_lifecycle` | **on** | installing / enabling / reconfiguring at runtime |
+| `plugin_health_monitoring` | off | health polling + metrics export |
 
-With all three off — the state of a fresh install — **no plugins are loaded at all**,
-and nothing about an existing install changes. Note that `spec.plugins.installed`
+The first two are the deliberate exceptions listed in
+`corvin_core.feature_flags.DEFAULT_ON_FLAGS`: on a fresh install the first marketplace
+install used to be refused (`runtime plugin changes are switched off`) and the Installed
+tab answered 404 until an operator found two switches. An explicit operator "off" in the
+Settings overlay still wins. With `plugin_runtime_lifecycle` on, the registry bootstraps at
+boot and loads the builtin plugins for the tenant (before: nothing was loaded). Note that `spec.plugins.installed`
 from ADR-0030 is *declared but not wired*: `loader.discover_and_load()` has no
 caller, so putting entries there has no effect today. Loading happens only through
 the registry, which requires `plugin_runtime_lifecycle`.

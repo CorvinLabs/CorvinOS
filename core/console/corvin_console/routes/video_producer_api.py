@@ -15,7 +15,9 @@ import importlib.util
 import logging
 import os
 import re
+import shutil
 import sys
+import threading
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
@@ -51,6 +53,13 @@ def _plugin_locations() -> List[tuple]:
     root = os.environ.get("CORVIN_MARKETPLACE_ROOT")
     if root:
         locs.append((Path(root) / "plugins" / "contributor" / "media" / "video_producer" / "src", "dev-env"))
+    # A fresh install has no sibling checkout: the marketplace install syncs the repo
+    # from GitHub into <home>/marketplace-cache (bootstrap.ensure_marketplace_source),
+    # and that is the ONLY place the plugin source exists there. Until this entry was
+    # added the loader never looked in it, so install -> enable -> panel all worked and
+    # every /video/* call answered 503.
+    locs.append((home / "marketplace-cache" / "Corvin-Marketplace" / "plugins" / "contributor"
+                 / "media" / "video_producer" / "src", "github-cache"))
     return locs
 
 
@@ -83,8 +92,48 @@ def _load_plugin():
 
 
 VideoJob, _get_storage, get_runner, PLUGIN_SOURCE = _load_plugin()
+_load_lock = threading.Lock()
 
-router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], prefix="/video", tags=["video-producer"])
+
+def _ensure_plugin() -> None:
+    """Load the plugin source on demand.
+
+    ``_load_plugin()`` above runs once, at import — i.e. BEFORE an operator has
+    installed anything on a fresh install, so the source was never there to find and
+    stayed missing until a restart. Retry whenever a request arrives and nothing is
+    loaded yet. Cheap when loaded (one truthiness check), and a no-op once it succeeds.
+    """
+    global VideoJob, _get_storage, get_runner, PLUGIN_SOURCE
+    if _get_storage is not None:
+        return
+    with _load_lock:
+        if _get_storage is None:
+            VideoJob, _get_storage, get_runner, PLUGIN_SOURCE = _load_plugin()
+
+
+PLUGIN_ID = "video_producer"
+
+
+async def _require_plugin_enabled(rec=Depends(require_session_csrf_on_mutation)):
+    """The API lives and dies with the plugin: installed AND enabled for THIS tenant.
+
+    The router is mounted unconditionally, so without this gate an uninstalled (or
+    merely installed, consent not yet given) Video Producer still accepted jobs — and
+    every job sends its narration text to Google TTS. Fail-closed: an unreadable
+    registry means "not enabled". 404, like every other absent surface.
+    """
+    from .capabilities import _plugin_is_enabled  # noqa: PLC0415
+
+    if not await asyncio.to_thread(_plugin_is_enabled, rec.tenant_id, PLUGIN_ID):
+        raise HTTPException(status_code=404, detail="The Video Producer plugin is not installed and enabled for this tenant")
+    await asyncio.to_thread(_ensure_plugin)
+    return rec
+
+
+router = APIRouter(
+    dependencies=[Depends(require_session_csrf_on_mutation), Depends(_require_plugin_enabled)],
+    prefix="/video", tags=["video-producer"],
+)
 
 _SessionRec = Depends(require_session_csrf_on_mutation)
 _JOB_ID_RE = re.compile(r"^job_[0-9a-f]{8}$")
@@ -102,6 +151,7 @@ def _tenant_base(rec) -> Path:
 
 
 def _store(rec):
+    _ensure_plugin()  # also reached from video_learning_api, which has no router gate
     if not _get_storage:
         raise HTTPException(status_code=503, detail=_UNAVAILABLE)
     return _get_storage(str(_tenant_base(rec)))
@@ -212,6 +262,21 @@ def _storyboard_backend(tenant_id: str, chat_key: str) -> tuple:
         return "ollama", None
 
 
+def _missing_runtime_dependencies() -> List[str]:
+    """What a job needs on THIS host that is not there: gTTS (narration) and Pillow (slide
+    rendering), both imported by the plugin at the first scene, and ffmpeg (assembly). The plugin runs inside the console
+    process, so a marketplace install cannot add Python packages to it — better a named
+    refusal now than a job that dies 40 s in with ``No module named 'gtts'``."""
+    missing: List[str] = []
+    if importlib.util.find_spec("gtts") is None:
+        missing.append("gTTS (pip install 'gTTS>=2.5.0' into the console environment)")
+    if importlib.util.find_spec("PIL") is None:
+        missing.append("Pillow (pip install 'Pillow>=10.0.0' into the console environment)")
+    if shutil.which("ffmpeg") is None:
+        missing.append("ffmpeg (system binary, must be on PATH)")
+    return missing
+
+
 @router.post("/jobs")
 async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     """Create a job and start production in the background (non-blocking)."""
@@ -223,6 +288,9 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     if not get_runner:
         # Refuse instead of saving a job that nothing will ever run.
         raise HTTPException(status_code=503, detail="Video production is not available on this build (runner missing)")
+    missing = await asyncio.to_thread(_missing_runtime_dependencies)
+    if missing:
+        raise HTTPException(status_code=503, detail="Video production needs: " + "; ".join(missing))
 
     job_id = f"job_{uuid.uuid4().hex[:8]}"
     chat_key = f"video:{job_id}"

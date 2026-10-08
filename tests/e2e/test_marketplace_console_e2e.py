@@ -287,8 +287,9 @@ def test_contributor_entries_are_installable_with_community_origin(client):
     rec = listed["video_producer"]
     assert rec["origin"] == "community" and rec["requires_consent"] is True and rec["enabled"] is False
     # settings start from the manifest's declared defaults, never empty
-    assert rec["settings"]["tts_engine"] == "openai" and rec["settings"]["max_video_length_minutes"] == 60
-    assert rec["settings_schema"]["properties"]["tts_engine"]["enum"] == ["openai", "piper"]
+    assert rec["settings"]["tts_engine"] == "gtts" and rec["settings"]["max_video_length_minutes"] == 60
+    # gTTS is the only engine the producer implements (ADR-0953); the manifest says so
+    assert rec["settings_schema"]["properties"]["tts_engine"]["enum"] == ["gtts"]
 
 
 def test_video_producer_panel_follows_enable_disable_uninstall(client, home):
@@ -312,9 +313,9 @@ def test_video_producer_panel_follows_enable_disable_uninstall(client, home):
     assert reg.is_file() and "plugin-video_producer" in reg.read_text()
 
     # settings are validated against the schema and persisted
-    r = client.post("/v1/console/plugins/video_producer/settings", json={"settings": {"tts_engine": "piper", "max_video_length_minutes": 5}})
+    r = client.post("/v1/console/plugins/video_producer/settings", json={"settings": {"tts_engine": "gtts", "max_video_length_minutes": 5}})
     assert r.status_code == 200, r.text
-    assert r.json()["settings"]["tts_engine"] == "piper"
+    assert r.json()["settings"]["max_video_length_minutes"] == 5
     r = client.post("/v1/console/plugins/video_producer/settings", json={"settings": {"tts_engine": "not-an-engine"}})
     assert r.status_code in (400, 409, 422), r.text
 
@@ -394,3 +395,53 @@ def test_knowledge_graph_plugin_installs_and_its_panel_follows_enable(client, ho
     assert client.post("/v1/console/plugins/corvin_knowledge/disable").status_code == 200
     assert client.delete("/v1/console/plugins/corvin_knowledge").status_code == 200
     assert "corvin-knowledge" not in _manifest_panel_routes(client)
+
+
+# ── "Install and enable": the wizard's one flow, and honest errors for absent plugins ────
+
+_MP = "/v1/console/api/v1/marketplace/plugins"
+
+
+def test_install_with_enable_after_install_and_consent_leaves_the_plugin_on(client):
+    body = _install(client, _VIDEO, enable_after_install=True, consent_granted=True)
+    assert body["status"] == "completed", body
+    assert body["enabled"] is True, body
+    rec = {p["plugin_id"]: p for p in client.get("/v1/console/plugins").json()["plugins"]}["video_producer"]
+    assert rec["enabled"] is True
+    assert "video-producer" in _manifest_panel_routes(client), "the panel is in the sidebar without a second step"
+    # the async path the wizard uses reports the same outcome on the job
+    client.delete("/v1/console/plugins/video_producer")  # no-op if enabled -> refused; disable first
+    client.post("/v1/console/plugins/video_producer/disable")
+    assert client.delete("/v1/console/plugins/video_producer").status_code == 200
+    started = client.post(f"{_MP}/{_VIDEO}/install",
+                          json={"wait": False, "enable_after_install": True, "consent_granted": True}).json()
+    import time
+    for _ in range(100):
+        job = client.get(f"/v1/console/api/v1/marketplace/install/{started['job_id']}/progress").json()
+        if job["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    assert job["status"] == "completed" and job["enabled"] is True, job
+
+
+def test_enable_after_install_without_consent_stays_installed_and_says_why(client):
+    body = _install(client, _VIDEO, enable_after_install=True, consent_granted=False)
+    assert body["status"] == "completed" and body["enabled"] is False, body
+    assert "consent" in body["enable_error"].lower(), body
+    assert "video-producer" not in _manifest_panel_routes(client)
+    rec = {p["plugin_id"]: p for p in client.get("/v1/console/plugins").json()["plugins"]}["video_producer"]
+    assert rec["enabled"] is False
+
+
+def test_a_bare_install_still_leaves_a_consent_gated_plugin_disabled(client):
+    body = _install(client, _VIDEO)
+    assert "enabled" not in body or body["enabled"] in (None, False)
+    rec = {p["plugin_id"]: p for p in client.get("/v1/console/plugins").json()["plugins"]}["video_producer"]
+    assert rec["enabled"] is False
+
+
+def test_mutating_a_plugin_that_is_not_installed_is_404_not_500(client):
+    for verb, method in (("uninstall", "post"), ("enable", "patch"), ("disable", "patch")):
+        r = getattr(client, method)(f"{_MP}/{_VIDEO}/{verb}", json={"consent_granted": True} if verb == "enable" else {})
+        assert r.status_code == 404, (verb, r.status_code, r.text)
+        assert r.json()["detail"] == "video_producer is not installed", r.text

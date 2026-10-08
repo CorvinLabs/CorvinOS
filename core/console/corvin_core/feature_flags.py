@@ -483,6 +483,7 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         ),
         owner="maintainer",
         target_release="0.11.x",
+        default=True,
         tags=("plugins",),
     ),
     FeatureFlag(
@@ -529,6 +530,7 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         ),
         owner="maintainer",
         target_release="0.11.x",
+        default=True,
         tags=("plugins", "console"),
     ),
     FeatureFlag(
@@ -1413,6 +1415,19 @@ REGISTRY: tuple[FeatureFlag, ...] = (
 )
 
 
+#: Flags that DELIBERATELY ship on. Everything else must default to False.
+#: The rule "new features ship dark" is superseded for plugin lifecycle control
+#: (CLAUDE.md § Plugin-Based Isolation): a fresh install must be able to install a
+#: marketplace plugin and use the Installed tab without finding two hidden switches
+#: first (measured on a fresh install: install refused, /plugins 404). Both still
+#: honour an explicit operator "off" in the Settings overlay. Adding a name here is a
+#: policy decision — keep this set tiny and give each entry a reason.
+DEFAULT_ON_FLAGS: frozenset[str] = frozenset({
+    "plugin_runtime_lifecycle",   # install/enable/uninstall against the tenant registry
+    "plugin_console_surface",     # the /plugins routes behind the Marketplace Installed tab
+})
+
+
 def _validate_registry(entries: tuple[FeatureFlag, ...]) -> None:
     seen: set[str] = set()
     allowed_tiers = ("alpha", "beta", "stable", "production")
@@ -1422,11 +1437,14 @@ def _validate_registry(entries: tuple[FeatureFlag, ...]) -> None:
         if entry.id in seen:
             raise ValueError(f"duplicate feature-flag id: {entry.id!r}")
         seen.add(entry.id)
-        if entry.default:
+        if entry.default and entry.id not in DEFAULT_ON_FLAGS:
             raise ValueError(
                 f"feature flag {entry.id!r} must default to False — new "
-                "features ship dark (CLAUDE.md § Feature Flags)"
+                "features ship dark (CLAUDE.md § Feature Flags); a deliberate "
+                "exception must be listed in DEFAULT_ON_FLAGS"
             )
+        if entry.id in DEFAULT_ON_FLAGS and not entry.default:
+            raise ValueError(f"feature flag {entry.id!r} is in DEFAULT_ON_FLAGS but defaults to False")
         for bad in _PROTECTED_SUBSTRINGS:
             if bad in entry.id:
                 raise ProtectedMechanismError(

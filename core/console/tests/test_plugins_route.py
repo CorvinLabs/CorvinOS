@@ -152,8 +152,11 @@ class _Base(unittest.TestCase):
 
 
 class TestSurfaceFlagOff(_Base):
-    def test_every_route_404s_on_a_fresh_install(self):
+    def test_every_route_404s_when_the_operator_switches_the_surface_off(self):
+        # The surface ships ON (fresh installs must be able to use the Installed tab);
+        # an explicit operator "off" in the Settings overlay still removes the routes.
         with _sandbox(Path(self._tmp)) as (client, csrf, _home):
+            self._flag(client, csrf, "plugin_console_surface", False)
             for method, path in (
                 ("get", "/v1/console/plugins"),
                 ("get", "/v1/console/plugins/health"),
@@ -177,17 +180,21 @@ class TestSurfaceFlagOff(_Base):
             )
             self.assertEqual(resp.status_code, 404, resp.text)
 
-    def test_the_flag_ships_dark(self):
+    def test_the_lifecycle_pair_ships_on_and_monitoring_ships_dark(self):
         with _sandbox(Path(self._tmp)) as (client, _csrf, _home):
             features = {f["id"]: f for f in
                         client.get("/v1/console/settings/features").json()["features"]}
-            for fid in ("plugin_console_surface", "plugin_runtime_lifecycle",
-                        "plugin_health_monitoring"):
+            for fid in ("plugin_console_surface", "plugin_runtime_lifecycle"):
                 self.assertIn(fid, features)
-                self.assertFalse(features[fid]["enabled"], f"{fid} must default to off")
+                self.assertTrue(features[fid]["enabled"], f"{fid} must default to on")
+                self.assertEqual(features[fid]["source"], "default")
+            self.assertIn("plugin_health_monitoring", features)
+            self.assertFalse(features["plugin_health_monitoring"]["enabled"])
 
     def test_no_registry_file_is_created_while_off(self):
         with _sandbox(Path(self._tmp)) as (client, csrf, home):
+            self._flag(client, csrf, "plugin_console_surface", False)
+            self._flag(client, csrf, "plugin_runtime_lifecycle", False)
             client.post("/v1/console/plugins", json=_RECORD, headers=self._hdr(csrf))
             self.assertFalse(
                 (home / "tenants" / "_default" / "plugins" / "registry.yaml").exists()
@@ -201,6 +208,7 @@ class TestLifecycleFlagOff(_Base):
     def test_read_works_but_mutations_are_refused(self):
         with _sandbox(Path(self._tmp)) as (client, csrf, _home):
             self._flag(client, csrf, "plugin_console_surface", True)
+            self._flag(client, csrf, "plugin_runtime_lifecycle", False)
 
             resp = client.get("/v1/console/plugins")
             self.assertEqual(resp.status_code, 200, resp.text)
@@ -502,7 +510,8 @@ class TestHealthAndMetrics(_Base):
             self.assertIn("# TYPE corvin_plugin_health_ok gauge", resp.text)
 
     def test_metrics_404s_while_the_surface_flag_is_off(self):
-        with _sandbox(Path(self._tmp)) as (client, _csrf, _home):
+        with _sandbox(Path(self._tmp)) as (client, csrf, _home):
+            self._flag(client, csrf, "plugin_console_surface", False)
             self.assertEqual(
                 client.get("/v1/console/plugins/metrics").status_code, 404
             )

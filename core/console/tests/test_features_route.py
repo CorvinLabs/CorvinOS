@@ -79,14 +79,16 @@ class TestFeaturesRoute(unittest.TestCase):
 
     # ── Registry listing ────────────────────────────────────────────────
 
-    def test_fresh_install_lists_everything_off(self):
+    def test_fresh_install_lists_everything_off_except_default_on_flags(self):
         with _sandbox(Path(self._tmp)) as (client, _csrf, _home):
             resp = client.get("/v1/console/settings/features")
             self.assertEqual(resp.status_code, 200, resp.text)
             features = resp.json()["features"]
             self.assertTrue(features, "registry should not be empty")
+            from corvin_core.feature_flags import DEFAULT_ON_FLAGS
             for f in features:
-                self.assertFalse(f["enabled"], f"{f['id']} must ship dark")
+                self.assertEqual(f["enabled"], f["id"] in DEFAULT_ON_FLAGS,
+                                 f"{f['id']}: dark unless a deliberate default-on exception")
                 self.assertEqual(f["source"], "default")
                 self.assertTrue(f["owner"])
                 self.assertTrue(f["target_release"])
