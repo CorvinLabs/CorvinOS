@@ -208,9 +208,26 @@ DEFAULT_ENGINE_COMPLIANCE: dict[str, EngineCompliance] = {
         engine_id="video_producer",
         locality="us_cloud",
         network_egress="external",
-        notes="Console Video Producer: narration to translate.google.com (gTTS), "
+        notes="Console Video Producer: narration to translate.google.com (gTTS, tts_engine=gtts), "
               "optional storyboard via api.anthropic.com. Max classification: "
               "INTERNAL without operator override.",
+    ),
+    # The same job when its narration engine is OpenAI TTS (the default since ADR-2211) or
+    # the edge-tts tier of the "auto" chain: same floor, different destination host.
+    "video_producer_openai": EngineCompliance(
+        engine_id="video_producer_openai",
+        locality="us_cloud",
+        network_egress="external",
+        notes="Console Video Producer: narration to api.openai.com (OpenAI TTS), "
+              "optional storyboard via api.anthropic.com. Max classification: "
+              "INTERNAL without operator override.",
+    ),
+    "video_producer_edge": EngineCompliance(
+        engine_id="video_producer_edge",
+        locality="us_cloud",
+        network_egress="external",
+        notes="Console Video Producer: narration to speech.platform.bing.com (edge-tts, "
+              "second tier of the auto chain). Max classification: INTERNAL without operator override.",
     ),
     "opencode_http": EngineCompliance(
         engine_id="opencode_http",

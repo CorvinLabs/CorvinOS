@@ -3,14 +3,13 @@
 Until 2026-09-20 ``GET /v1/console/video/jobs/{id}/quality-metrics`` returned a
 hard-coded record (three scenes, "h264 7200k", 0.95/0.87/0.75) for every job
 id, including ids that did not exist. This module reads what the Video
-Producer actually wrote for a job — ``output.mp4``, ``output.srt``,
+Producer actually wrote for a job — ``output.mp4``,
 ``scenes/scene_NNN.{mp4,mp3,png}``, ``metadata.json`` and the storyboard — and
 measures it with ``ffprobe``:
 
 * container/stream facts (duration, size, bitrate, codec, resolution, fps,
   pixel format, audio codec/sample rate/channels);
-* captions (cue count, covered seconds, coverage share, consecutive
-  duplicates — the 2026-09-13 productions carry doubled cues);
+* subtitles (there must be none: no subtitle stream, no caption file);
 * per scene: planned duration (storyboard) vs rendered duration (clip),
   drift, slide + voice presence;
 * a checklist with a NAMED denominator: ``score.share`` is passed checks over
@@ -36,7 +35,6 @@ logger = logging.getLogger(__name__)
 
 _probe_cache: Dict[Tuple[str, int, int], Optional[dict]] = {}
 _probe_lock = threading.Lock()
-_SRT_TIME = re.compile(r"(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})")
 
 
 def ffprobe_available() -> bool:
@@ -113,36 +111,14 @@ def stream_facts(probe: Optional[dict]) -> Tuple[Optional[dict], Optional[dict],
     return container, video, audio
 
 
-def parse_srt(text: str) -> List[Tuple[float, float, str]]:
-    cues: List[Tuple[float, float, str]] = []
-    for block in re.split(r"\n\s*\n", text.strip()):
-        lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
-        for i, ln in enumerate(lines):
-            m = _SRT_TIME.search(ln)
-            if m:
-                h1, m1, s1, ms1, h2, m2, s2, ms2 = (int(x) for x in m.groups())
-                start = h1 * 3600 + m1 * 60 + s1 + ms1 / 1000
-                end = h2 * 3600 + m2 * 60 + s2 + ms2 / 1000
-                cues.append((start, end, " ".join(lines[i + 1:])))
-                break
-    return cues
-
-
-def caption_facts(srt_path: Optional[Path], duration_s: Optional[float]) -> Optional[dict]:
-    if not srt_path or not srt_path.is_file():
+def subtitle_facts(probe: Optional[dict], video_path: Optional[Path]) -> Optional[dict]:
+    """Subtitles must not exist: no subtitle stream in the container, no caption
+    file next to it. ``None`` when the container could not be probed."""
+    if probe is None:
         return None
-    try:
-        cues = parse_srt(srt_path.read_text(encoding="utf-8", errors="replace"))
-    except OSError:
-        return None
-    covered = sum(max(0.0, e - s) for s, e, _ in cues)
-    dups = sum(1 for a, b in zip(cues, cues[1:]) if a[2] and a[2] == b[2])
-    words = sum(len(t.split()) for _s, _e, t in cues)
-    return {
-        "file": srt_path.name, "cues": len(cues), "covered_s": round(covered, 2), "words": words,
-        "coverage": round(min(1.0, covered / duration_s), 3) if duration_s else None,
-        "duplicate_consecutive": dups,
-    }
+    streams = [s for s in (probe.get("streams") or []) if s.get("codec_type") == "subtitle"]
+    files = sorted(p.name for ext in ("srt", "vtt", "ass") for p in (video_path.parent.glob(f"*.{ext}") if video_path else []))
+    return {"streams": len(streams), "files": files}
 
 
 def _storyboard(job: dict) -> List[dict]:
@@ -202,7 +178,7 @@ def _check(cid: str, label: str, status: str, detail: str) -> dict:
 
 
 def checks_for(container: Optional[dict], video: Optional[dict], audio: Optional[dict],
-               captions: Optional[dict], scenes: List[dict], storyboard: List[dict],
+               subtitles: Optional[dict], scenes: List[dict], storyboard: List[dict],
                probed: bool) -> List[dict]:
     out: List[dict] = []
     if not probed:
@@ -226,16 +202,13 @@ def checks_for(container: Optional[dict], video: Optional[dict], audio: Optional
         if audio:
             sr = audio.get("sample_rate_hz") or 0
             out.append(_check("audio_rate", "Audio sample rate at least 22.05 kHz", "pass" if sr >= 22050 else "warn", f"{sr} Hz"))
-    if captions is None:
-        out.append(_check("captions", "Captions present", "fail" if probed else "skip", "no output.srt"))
+    if subtitles is None:
+        out.append(_check("subtitles", "No subtitles", "skip", "container not probed"))
     else:
-        cov = captions.get("coverage")
-        out.append(_check("captions", "Captions cover at least 80 % of the runtime",
-                          "pass" if cov is not None and cov >= 0.8 else "warn" if cov is not None and cov >= 0.5 else "fail" if cov is not None else "skip",
-                          f"{captions['cues']} cues · {captions['covered_s']} s covered" + (f" · {round(cov * 100)} %" if cov is not None else "")))
-        out.append(_check("captions_dupes", "No repeated consecutive captions",
-                          "pass" if captions["duplicate_consecutive"] == 0 else "warn",
-                          f"{captions['duplicate_consecutive']} repeated cue(s)"))
+        bad = subtitles["streams"] or subtitles["files"]
+        out.append(_check("subtitles", "No subtitles", "fail" if bad else "pass",
+                          f"{subtitles['streams']} subtitle stream(s), caption file(s): {', '.join(subtitles['files']) or 'none'}" if bad
+                          else "no subtitle stream, no caption file"))
     rendered = sum(1 for s in scenes if s["rendered"])
     if storyboard:
         out.append(_check("scenes", "Every storyboard scene rendered",
@@ -261,20 +234,17 @@ def checks_for(container: Optional[dict], video: Optional[dict], audio: Optional
 def measure(job: dict, video_output: Optional[dict]) -> dict:
     """The measured quality record for one job. ``job`` is the stored job as a
     dict (``id``, ``status``, ``storyboard``, timestamps, ``video_output_path``),
-    ``video_output`` the stored output record (``video_path``, ``srt_path``,
-    ``metadata``) or ``None``."""
+    ``video_output`` the stored output record (``video_path``, ``metadata``) or ``None``."""
     job_id = str(job.get("id"))
     video_path = Path(str((video_output or {}).get("video_path") or job.get("video_output_path") or "")).expanduser()
     video_ok = bool(str(video_path)) and video_path.is_file()
-    srt_raw = (video_output or {}).get("srt_path")
-    srt_path = Path(str(srt_raw)).expanduser() if srt_raw else (video_path.with_suffix(".srt") if video_ok else None)
     scenes_dir = video_path.parent / "scenes" if video_ok else None
     probe = ffprobe(video_path) if video_ok else None
     container, video, audio = stream_facts(probe)
     storyboard = _storyboard(job)
-    captions = caption_facts(srt_path, container.get("duration_s") if container else None)
+    subtitles = subtitle_facts(probe, video_path if video_ok else None)
     scenes = scene_facts(scenes_dir, storyboard)
-    checks = checks_for(container, video, audio, captions, scenes, storyboard, probed=probe is not None)
+    checks = checks_for(container, video, audio, subtitles, scenes, storyboard, probed=probe is not None)
     ran = [c for c in checks if c["status"] != "skip"]
     passed = sum(1 for c in ran if c["status"] == "pass")
     started, completed = job.get("started_at"), job.get("completed_at")
@@ -291,7 +261,6 @@ def measure(job: dict, video_output: Optional[dict]) -> dict:
         "ffprobe_available": ffprobe_available(),
         "source": {
             "video": str(video_path) if video_ok else None,
-            "captions": str(srt_path) if srt_path and srt_path.is_file() else None,
             "scenes_dir": str(scenes_dir) if scenes_dir and scenes_dir.is_dir() else None,
             "storyboard_scenes": len(storyboard),
             "metadata": (video_output or {}).get("metadata"),
@@ -299,7 +268,7 @@ def measure(job: dict, video_output: Optional[dict]) -> dict:
         "container": container,
         "video": video,
         "audio": audio,
-        "captions": captions,
+        "subtitles": subtitles,
         "scenes": scenes,
         "summary": {
             "scenes_planned": len(storyboard),

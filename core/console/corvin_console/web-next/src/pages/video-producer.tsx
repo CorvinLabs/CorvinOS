@@ -3,10 +3,10 @@
  *
  * Left: a new production and the library (poster, status, runtime, checklist
  * share). Right: the selected video's studio with three tabs —
- *   Playback  the MP4 with its transcript;
+ *   Playback  the MP4 (no subtitles, by design);
  *   Quality   what ffprobe measured on the real artifacts
  *             (routes/video_producer_api.py → video_quality.py): stream facts,
- *             captions, a checklist with a named denominator, and every scene's
+ *             a checklist with a named denominator (incl. "no subtitles"), and every scene's
  *             planned vs rendered seconds;
  *   Learning  the feedback the operator gave on this job (ADR-0314 events)
  *             and the buttons to give more, per scene.
@@ -47,11 +47,11 @@ export interface SceneRow {
 }
 export interface Quality {
   job_id: string; status: string; measured_at: string; ffprobe_available: boolean;
-  source: { video: string | null; captions: string | null; scenes_dir: string | null; storyboard_scenes: number; metadata: Record<string, unknown> | null };
+  source: { video: string | null; scenes_dir: string | null; storyboard_scenes: number; metadata: Record<string, unknown> | null };
   container: { format: string | null; duration_s: number | null; size_bytes: number; bitrate_kbps: number } | null;
   video: { codec: string | null; width: number | null; height: number | null; fps: number | null; pixel_format: string | null; bitrate_kbps: number | null } | null;
   audio: { codec: string | null; sample_rate_hz: number | null; channels: number | null; bitrate_kbps: number | null } | null;
-  captions: { file: string; cues: number; covered_s: number; words: number; coverage: number | null; duplicate_consecutive: number } | null;
+  subtitles: { streams: number; files: string[] } | null;
   scenes: SceneRow[];
   summary: { scenes_planned: number; scenes_rendered: number; planned_s: number; rendered_s: number | null; size_bytes: number | null };
   production: { started_at: string | null; completed_at: string | null; seconds: number | null };
@@ -65,6 +65,11 @@ export interface Learning {
 }
 
 const BASE = "/video";
+const TTS_LABELS: Record<string, string> = {
+  openai: "OpenAI TTS (default)",
+  auto: "Automatic: OpenAI, then edge-tts, then Piper",
+  gtts: "Google TTS (gTTS, legacy)",
+};
 const ACTIVE = ["pending", "storyboard_generating", "skills_running"];
 
 /** Rendered caption — also the deploy marker. */
@@ -118,15 +123,9 @@ function Fact({ k, v }: { k: string; v: React.ReactNode }) {
   );
 }
 
-function parseSrt(text: string): Array<{ start: string; text: string }> {
-  return text.split(/\n\s*\n/).map((b) => b.trim().split("\n")).filter((l) => l.length >= 3)
-    .map((l) => ({ start: l[1].split("-->")[0].trim().replace(/,\d+$/, ""), text: l.slice(2).join(" ") }));
-}
-
 // ── Studio tabs ──────────────────────────────────────────────────────────────
 
 function PlaybackTab({ job }: { job: Job }) {
-  const captions = useQuery({ queryKey: ["video", "captions", job.id], queryFn: ({ signal }) => api<{ content: string }>(`${BASE}/videos/${job.id}/captions`, { signal }), retry: false, enabled: job.status === "complete" });
   if (job.status !== "complete") {
     return (
       <div className="space-y-3" data-testid="playback-pending">
@@ -137,16 +136,9 @@ function PlaybackTab({ job }: { job: Job }) {
       </div>
     );
   }
-  const cues = captions.data ? parseSrt(captions.data.content) : [];
   return (
     <div className="space-y-4">
       <VideoPlayer videoPath={`/v1/console${BASE}/videos/${job.id}/download`} title={job.task} onDownload={() => { window.location.href = `/v1/console${BASE}/videos/${job.id}/download`; }} />
-      <div>
-        <div className="text-sm font-semibold mb-2">Transcript <span className="text-muted-foreground font-normal">· {captions.isError ? "no captions" : `${cues.length} cues`}</span></div>
-        <ol className="max-h-56 overflow-y-auto space-y-1 text-sm" data-testid="transcript">
-          {cues.map((c, i) => <li key={i} className="grid grid-cols-[5rem_1fr] gap-2"><span className="font-mono text-xs text-muted-foreground">{c.start}</span><span>{c.text}</span></li>)}
-        </ol>
-      </div>
     </div>
   );
 }
@@ -164,7 +156,7 @@ function QualityTab({ q }: { q: Quality }) {
           <Fact k="Picture" v={q.video ? <><span className="whitespace-nowrap">{q.video.width}×{q.video.height}</span> · {q.video.fps} fps · {q.video.codec}</> : "—"} />
           <Fact k="Sound" v={q.audio ? `${q.audio.codec} · ${q.audio.sample_rate_hz ? `${(q.audio.sample_rate_hz / 1000).toFixed(1)} kHz` : "—"} · ${q.audio.channels === 1 ? "mono" : q.audio.channels === 2 ? "stereo" : `${q.audio.channels} ch`}` : "none"} />
           <Fact k="File" v={q.container ? `${fmtBytes(q.container.size_bytes)} · ${q.container.bitrate_kbps} kbps` : "—"} />
-          <Fact k="Captions" v={q.captions ? `${q.captions.cues} cues · ${pct(q.captions.coverage)} covered` : "none"} />
+          <Fact k="Subtitles" v={q.subtitles ? (q.subtitles.streams || q.subtitles.files.length ? "present" : "none") : "—"} />
           <Fact k="Scenes" v={`${q.summary.scenes_rendered} of ${q.summary.scenes_planned} rendered`} />
           <Fact k="Planned vs rendered" v={`${fmtDur(q.summary.planned_s)} → ${fmtDur(q.summary.rendered_s)}`} />
           <Fact k="Production time" v={q.production.seconds !== null ? fmtDur(q.production.seconds) : "—"} />
@@ -337,7 +329,7 @@ export function VideoProducerPage() {
   const job = useQuery({ queryKey: ["video", "job", selected], queryFn: ({ signal }) => api<Job>(`${BASE}/jobs/${selected}`, { signal }), enabled: !!selected, retry: false,
     refetchInterval: (q) => (q.state.data && ACTIVE.includes(q.state.data.status) ? 1000 : false) });
   const quality = useQuery({ queryKey: ["video", "quality", selected, job.data?.status], queryFn: ({ signal }) => api<Quality>(`${BASE}/jobs/${selected}/quality-metrics`, { signal }), enabled: !!selected && job.data?.status === "complete", retry: false });
-  const settings = useQuery({ queryKey: ["video", "settings"], queryFn: ({ signal }) => api<{ output_folder: string; tts_engine: string; tts_engines: string[]; max_duration_minutes: number }>(`${BASE}/settings`, { signal }), retry: false });
+  const settings = useQuery({ queryKey: ["video", "settings"], queryFn: ({ signal }) => api<{ output_folder: string; tts_engine: string; tts_engines: string[]; max_duration_minutes: number; openai_configured: boolean; web_slides_available: boolean }>(`${BASE}/settings`, { signal }), retry: false });
   const [form, setForm] = useState<{ tts_engine: string; max_duration_minutes: number } | null>(null);
   useEffect(() => { if (settings.data && !form) setForm({ tts_engine: settings.data.tts_engine, max_duration_minutes: settings.data.max_duration_minutes }); }, [settings.data, form]);
 
@@ -466,9 +458,17 @@ export function VideoProducerPage() {
             <label className="text-sm"><span className="text-xs text-muted-foreground">Output folder (this tenant's video directory)</span><Input value={settings.data?.output_folder ?? ""} readOnly disabled /></label>
             <label className="text-sm"><span className="text-xs text-muted-foreground">Text-to-speech</span>
               <select value={form.tts_engine} onChange={(e) => setForm({ ...form, tts_engine: e.target.value })} className="w-full mt-1 px-3 py-2 rounded-md border border-border bg-background text-sm">
-                {(settings.data?.tts_engines ?? [form.tts_engine]).map((t) => <option key={t} value={t}>{t === "gtts" ? "Google TTS (gTTS)" : t}</option>)}
-              </select></label>
+                {(settings.data?.tts_engines ?? [form.tts_engine]).map((t) => <option key={t} value={t}>{TTS_LABELS[t] ?? t}</option>)}
+              </select>
+              {form.tts_engine !== "gtts" && settings.data && !settings.data.openai_configured ? (
+                <span className="block text-xs mt-1 text-amber-600" data-testid="tts-key-warning">
+                  {form.tts_engine === "openai" ? "No OpenAI key in the console's environment: jobs are refused until one is set or another engine is chosen." : "No OpenAI key in the console's environment: narration starts with edge-tts."}
+                </span>
+              ) : null}</label>
             <label className="text-sm"><span className="text-xs text-muted-foreground">Max duration (minutes, 1–60)</span><Input type="number" min={1} max={60} value={form.max_duration_minutes} onChange={(e) => setForm({ ...form, max_duration_minutes: Math.min(60, Math.max(1, parseInt(e.target.value) || 1)) })} /></label>
+            {settings.data && !settings.data.web_slides_available ? (
+              <p className="md:col-span-3 text-xs text-amber-600" data-testid="web-slides-note">Animated web slides need Playwright in the console environment; until it is installed every slide is the classic still.</p>
+            ) : null}
             <div className="md:col-span-3 flex items-center gap-3"><Button variant="outline" size="sm" disabled={save.isPending || !csrf} onClick={() => save.mutate(form)}>{save.isSuccess ? "Saved" : "Save settings"}</Button>{save.isError ? <span className="text-xs text-destructive">Settings were not saved.</span> : null}</div>
           </CardContent>
         )}

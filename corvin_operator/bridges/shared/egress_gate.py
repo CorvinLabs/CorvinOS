@@ -119,7 +119,11 @@ DEFAULT_ENGINE_HOSTS: dict[str, str] = {
     "acs_worker":        "api.anthropic.com",  # ACS background worker — mirrors claude_code egress
     "acs":               "api.anthropic.com",  # delegation fan-out alias (DELEGATION_ENGINE_ID) — L35 sibling of the dd2b569 L34 fix; without it delegated web-chat turns resolve host "unknown" → default_deny
     "anthropic_batch":   "api.anthropic.com",  # Anthropic batch API — named host for audit trail
-    "video_producer":    "translate.google.com",  # console Video Producer: gTTS narration, sent on EVERY job
+    # Console Video Producer: the narration is sent to the TTS provider on EVERY job, so the
+    # gate must name the host of the engine the operator chose (ADR-2211). OpenAI is the default.
+    "video_producer_openai": "api.openai.com",             # tts_engine "openai" (default) and the first tier of "auto"
+    "video_producer_edge":   "speech.platform.bing.com",   # edge-tts, the second tier of "auto"
+    "video_producer":        "translate.google.com",       # tts_engine "gtts" (legacy)
 }
 
 

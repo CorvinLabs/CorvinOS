@@ -18,7 +18,12 @@ openai>=1.0
 anthropic>=0.25
 # Video Producer plugin (Corvin-Marketplace, contributor/media/video_producer) runs INSIDE the
 # console process, so its hard runtime dependencies live here. Narration is synthesised with
-# gTTS and slides are drawn with Pillow; without either every job fails at the first scene
-# (verified on a fresh install).
+# OpenAI TTS by default (the `openai` package above + a key in the environment); gTTS is the
+# legacy engine. Classic slides are drawn with Pillow; without it every job fails at the first
+# scene (verified on a fresh install).
 gTTS>=2.5.0
 Pillow>=10.0.0
+# Animated web slides (ADR-2238) render in headless Chromium. Optional at runtime: without it
+# every slide falls back to the classic still and the Video Producer settings say so.
+# After installing, once: `python -m playwright install chromium`.
+playwright>=1.40.0

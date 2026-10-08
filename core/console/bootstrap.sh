@@ -74,6 +74,14 @@ echo "[bootstrap] installing pywhispercpp (local STT, all platforms)"
   && echo "[bootstrap]   → pywhispercpp installed (offline voice input ready)" \
   || echo "[bootstrap]   ! pywhispercpp install failed — STT will use OpenAI Whisper (API key needed)"
 
+# Video Producer web slides (ADR-2238): headless Chromium via Playwright. Non-fatal — without it
+# the producer falls back to classic slides and its settings panel says so.
+echo "[bootstrap] installing playwright + chromium (Video Producer web slides)"
+"${VENV_DIR}/bin/python" -m pip install --quiet "playwright>=1.40.0" \
+  && "${VENV_DIR}/bin/python" -m playwright install chromium >/dev/null 2>&1 \
+  && echo "[bootstrap]   → playwright + chromium ready" \
+  || echo "[bootstrap]   ! playwright install failed — Video Producer will use classic slides"
+
 echo "[bootstrap] versions:"
 "${VENV_DIR}/bin/python" -c "
 import fastapi, pydantic, httpx, uvicorn, itsdangerous, yaml, jwt, cryptography

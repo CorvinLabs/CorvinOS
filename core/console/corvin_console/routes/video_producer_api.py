@@ -139,7 +139,6 @@ _SessionRec = Depends(require_session_csrf_on_mutation)
 _JOB_ID_RE = re.compile(r"^job_[0-9a-f]{8}$")
 _SCENE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MAX_TASK_CHARS = 4000
-_MAX_CAPTION_BYTES = 2 * 1024 * 1024
 _MEASURE_WINDOW = 100
 _UNAVAILABLE = "Video Producer plugin not available"
 
@@ -218,14 +217,17 @@ class SceneFeedbackRequest(BaseModel):
 
 class SettingsRequest(BaseModel):
     output_folder: Optional[str] = None
-    tts_engine: Optional[Literal["gtts"]] = None
+    tts_engine: Optional[Literal["openai", "auto", "gtts"]] = None
     max_duration_minutes: Optional[int] = Field(None, ge=1, le=60)
 
 
-# The producer synthesises speech with gTTS only; offering engines it does not
-# have would make the setting a lie.
-_TTS_ENGINES = ["gtts"]
-_DEFAULT_SETTINGS = {"tts_engine": "gtts", "max_duration_minutes": 60}
+# Narration engines the producer really has (skill.SUPPORTED_TTS_ENGINES):
+#   openai  OpenAI TTS (tts-1-hd, voice onyx) — the default; a missing key or an API failure
+#           fails the job instead of silently switching the narrator
+#   auto    the fallback chain: OpenAI -> edge-tts -> piper -> silent mock (ADR-2211)
+#   gtts    Google Translate TTS (legacy, no key)
+_TTS_ENGINES = ["openai", "auto", "gtts"]
+_DEFAULT_SETTINGS = {"tts_engine": "openai", "max_duration_minutes": 60}
 # Per tenant, in memory (reset on restart).
 _settings: Dict[str, Dict[str, Any]] = {}
 
@@ -240,6 +242,9 @@ def _tenant_settings(rec) -> Dict[str, Any]:
         "output_folder": str(_tenant_base(rec) / "videos"),
         "output_folder_editable": False,
         "tts_engines": list(_TTS_ENGINES),
+        # What this host can actually do, so the panel can say so instead of a job failing later.
+        "openai_configured": _openai_configured(),
+        "web_slides_available": importlib.util.find_spec("playwright") is not None,
     }
 
 
@@ -262,14 +267,47 @@ def _storyboard_backend(tenant_id: str, chat_key: str) -> tuple:
         return "ollama", None
 
 
-def _missing_runtime_dependencies() -> List[str]:
-    """What a job needs on THIS host that is not there: gTTS (narration) and Pillow (slide
-    rendering), both imported by the plugin at the first scene, and ffmpeg (assembly). The plugin runs inside the console
-    process, so a marketplace install cannot add Python packages to it — better a named
-    refusal now than a job that dies 40 s in with ``No module named 'gtts'``."""
+# The gate must name the host the narration really goes to (ADR-2211): the engine id picks
+# the host in egress_gate.DEFAULT_ENGINE_HOSTS and the floor in data_classification.
+_TTS_GATE_ENGINE = {"openai": "video_producer_openai", "auto": "video_producer_openai", "gtts": "video_producer"}
+# "auto" may fall through to these tiers, so each of their hosts must be admitted too.
+_TTS_EXTRA_GATE_ENGINES = {"auto": ("video_producer_edge",)}
+
+
+def _tts_egress_refusal(tts_engine: str, tenant_id: str, chat_key: str) -> Optional[str]:
+    """Refusal text if an additional host the chosen engine may reach is not admitted, else None."""
+    extra = _TTS_EXTRA_GATE_ENGINES.get(tts_engine, ())
+    if not extra:
+        return None
+    from spawn_gates import check_l35  # type: ignore  # path set up by _spawn_gates
+
+    for engine_id in extra:
+        refusal = check_l35(engine_id, tenant_id, channel="web", chat_key=chat_key)
+        if refusal is not None:
+            return refusal
+    return None
+
+
+def _openai_configured() -> bool:
+    """A TTS key is in this process's environment (the same two names the plugin reads)."""
+    return bool(os.environ.get("CORVIN_TTS_OPENAI_KEY") or os.environ.get("OPENAI_API_KEY"))
+
+
+def _missing_runtime_dependencies(tts_engine: str = "openai") -> List[str]:
+    """What a job needs on THIS host that is not there: the narration engine's package
+    (and key), Pillow (classic slides) and ffmpeg (assembly). The plugin runs inside the
+    console process, so a marketplace install cannot add Python packages to it — better a
+    named refusal now than a job that dies 40 s in. Playwright is NOT required: without it
+    web slides fall back to the classic slide, which the panel shows (``web_slides_available``)."""
     missing: List[str] = []
-    if importlib.util.find_spec("gtts") is None:
+    if tts_engine == "gtts" and importlib.util.find_spec("gtts") is None:
         missing.append("gTTS (pip install 'gTTS>=2.5.0' into the console environment)")
+    if tts_engine == "openai":
+        if importlib.util.find_spec("openai") is None:
+            missing.append("openai (pip install 'openai>=1.0.0' into the console environment)")
+        if not _openai_configured():
+            missing.append("an OpenAI TTS key (CORVIN_TTS_OPENAI_KEY or OPENAI_API_KEY in the console's environment) — "
+                           "or pick another narration engine in the Video Producer settings")
     if importlib.util.find_spec("PIL") is None:
         missing.append("Pillow (pip install 'Pillow>=10.0.0' into the console environment)")
     if shutil.which("ffmpeg") is None:
@@ -288,7 +326,8 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     if not get_runner:
         # Refuse instead of saving a job that nothing will ever run.
         raise HTTPException(status_code=503, detail="Video production is not available on this build (runner missing)")
-    missing = await asyncio.to_thread(_missing_runtime_dependencies)
+    settings = _tenant_settings(rec)
+    missing = await asyncio.to_thread(_missing_runtime_dependencies, settings["tts_engine"])
     if missing:
         raise HTTPException(status_code=503, detail="Video production needs: " + "; ".join(missing))
 
@@ -297,15 +336,17 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
 
     # Pre-spawn gates (L44 acceptable-use, capabilities, L34 classification,
     # L35 egress) — the same function every console spawn site calls. The
-    # task text becomes narration sent to Google TTS on every job, so the
-    # gate runs under the "video_producer" engine profile (US cloud).
+    # task text becomes narration sent to the TTS provider on every job, so the
+    # gate runs under the engine profile of the chosen narration engine (US cloud).
     from .._spawn_gates import check_console_spawn_or_refusal  # noqa: PLC0415
 
     refusal = await asyncio.to_thread(
         check_console_spawn_or_refusal, task,
         tenant_id=rec.tenant_id, persona="assistant", channel="web",
-        chat_key=chat_key, engine_id="video_producer",
+        chat_key=chat_key, engine_id=_TTS_GATE_ENGINE[settings["tts_engine"]],
     )
+    if refusal is None:
+        refusal = await asyncio.to_thread(_tts_egress_refusal, settings["tts_engine"], rec.tenant_id, chat_key)
     if refusal is not None:
         raise HTTPException(status_code=403, detail=refusal)
 
@@ -314,7 +355,6 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     job = VideoJob(id=job_id, task=task, status="pending")
     storage.save_job(job)
 
-    settings = _tenant_settings(rec)
     config = {
         "storage_base": str(_tenant_base(rec)),
         "tts_engine": settings["tts_engine"],
@@ -442,16 +482,6 @@ def download_video(job_id: str, rec=_SessionRec):
     if path is None:
         raise HTTPException(status_code=404, detail="Video file not found")
     return FileResponse(str(path), media_type="video/mp4", filename=f"video_{job_id}.mp4")
-
-
-@router.get("/videos/{job_id}/captions")
-def get_captions(job_id: str, rec=_SessionRec):
-    path = _own_file(rec, _video_output(rec, job_id).srt_path)
-    if path is None:
-        raise HTTPException(status_code=404, detail="Captions not found")
-    if path.stat().st_size > _MAX_CAPTION_BYTES:
-        raise HTTPException(status_code=413, detail="Caption file too large")
-    return {"content": path.read_text(encoding="utf-8", errors="replace")}
 
 
 @router.post("/jobs/{job_id}/youtube")

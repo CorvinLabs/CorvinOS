@@ -1,5 +1,5 @@
 /**
- * Video Player Component — HTML5 <video> with SRT captions
+ * Video Player Component — HTML5 <video>. No subtitle support, by design: produced videos carry none.
  * Plays MP4 videos from Video Producer plugin
  * Supports: play/pause, seek, volume, download, metadata
  */
@@ -10,7 +10,6 @@ import { Download, Play, Pause, Volume2, VolumeX } from "lucide-react";
 
 interface VideoPlayerProps {
   videoPath: string;           // URL to MP4 file
-  srtPath?: string;            // URL to SRT captions
   title?: string;
   metadata?: {
     duration_seconds?: number;
@@ -22,7 +21,6 @@ interface VideoPlayerProps {
 
 export function VideoPlayer({
   videoPath,
-  srtPath,
   title,
   metadata,
   onDownload }: VideoPlayerProps) {
@@ -113,7 +111,6 @@ export function VideoPlayer({
           onPause={() => setIsPlaying(false)}
         >
           <source src={videoPath} type="video/mp4" />
-          {srtPath && <track kind="subtitles" src={srtPath} srcLang="en" />}
           Your browser does not support HTML5 video.
         </video>
       </div>

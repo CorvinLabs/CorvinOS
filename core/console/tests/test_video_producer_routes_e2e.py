@@ -4,7 +4,7 @@ Driven through the REAL console router (TestClient, real session cookie + CSRF,
 two tenants, a temp CORVIN_HOME). Real: route handlers, the marketplace plugin
 storage, the L44/L34/L35 pre-spawn gates, the learning EventStore and its
 audit-chain write. Replaced: only the production runner (a real job calls an
-LLM, Google TTS and ffmpeg — external egress a test must not cause); the
+LLM, a TTS provider and ffmpeg — external egress a test must not cause); the
 recorder below captures exactly what the route hands to it.
 """
 from __future__ import annotations
@@ -42,10 +42,18 @@ def _install_plugin(tenant: str, *, enable: bool) -> None:
 
 
 @contextmanager
-def _sandbox(tmp_path, *, tenants=("_default",), plugin: str = "enabled"):
+def _sandbox(tmp_path, *, tenants=("_default",), plugin: str = "enabled", keep_key: bool = True):
     """``test_admin_route._sandbox`` plus the plugin state the API is gated on
     (``plugin`` = "enabled" | "installed" | "absent")."""
-    with _base_sandbox(tmp_path, tenants=tenants) as boxed:
+    from unittest import mock
+
+    # The default narration engine is OpenAI: the route refuses a job without a key in the
+    # process environment, so every sandbox carries a dummy one (never used: the runner is a recorder).
+    env = {"CORVIN_TTS_OPENAI_KEY": "sk-test-dummy-0000000000"} if keep_key else {}
+    with mock.patch.dict(os.environ, env), _base_sandbox(tmp_path, tenants=tenants) as boxed:
+        if not keep_key:
+            os.environ.pop("CORVIN_TTS_OPENAI_KEY", None)
+            os.environ.pop("OPENAI_API_KEY", None)
         if plugin != "absent":
             for tenant in tenants:
                 _install_plugin(tenant, enable=plugin == "enabled")
@@ -138,7 +146,10 @@ class VideoProducerRoutesE2E(unittest.TestCase):
         with _sandbox(self._tmp, tenants=("tenant_a", "tenant_b")) as (_c, _t, home, clients):
             (ca, csrf_a), (cb, _) = clients["tenant_a"], clients["tenant_b"]
             s = ca.get("/v1/console/video/settings").json()
-            self.assertEqual(s["tts_engines"], ["gtts"])
+            self.assertEqual(s["tts_engines"], ["openai", "auto", "gtts"])
+            self.assertEqual(s["tts_engine"], "openai", "OpenAI TTS must be the default narration engine")
+            self.assertTrue(s["openai_configured"])
+            self.assertIn("web_slides_available", s)
             self.assertFalse(s["output_folder_editable"])
             self.assertIn(str(home / "tenants" / "tenant_a"), s["output_folder"])
 
@@ -249,22 +260,55 @@ class VideoProducerRoutesE2E(unittest.TestCase):
             self.assertEqual([j["status"] for j in jobs], ["error"])
 
     # ── B8: the real pre-spawn gates ────────────────────────────────────────
-    def test_egress_policy_denying_google_refuses_the_job_before_it_exists(self):
+    def _deny_host(self, home, host):
+        # allow everything except one host — the L44 classifier host stays reachable, so a
+        # refusal must come from L35 itself
+        _write_tenant_yaml(home, "_default", {"egress": {
+            "enabled": True, "default_action": "allow", "allowed_hosts": [], "forbidden_hosts": [host],
+        }})
+
+    def test_egress_gate_follows_the_narration_engine_of_the_job(self):
+        """The narration goes to the TTS provider on every job, so the L35 gate must name that
+        provider's host: api.openai.com for the default engine, not translate.google.com."""
         with _sandbox(self._tmp) as (client, csrf, home, _clients):
             mod = _route_module()
             runner = _RecordingRunner()
             mod.get_runner = lambda: runner
-            # allow everything except Google TTS — the L44 classifier host stays
-            # reachable, so the refusal must come from L35 itself
-            _write_tenant_yaml(home, "_default", {"egress": {
-                "enabled": True, "default_action": "allow",
-                "allowed_hosts": [], "forbidden_hosts": ["translate.google.com"],
-            }})
+
+            def put_engine(engine):
+                r = client.put("/v1/console/video/settings", json={"tts_engine": engine}, headers={"X-CSRF-Token": csrf})
+                self.assertEqual(r.status_code, 200, r.text)
+
+            # default (openai): forbidding OpenAI refuses the job before it exists
+            self._deny_host(home, "api.openai.com")
             r = self._create(client, csrf)
             self.assertEqual(r.status_code, 403, r.text)
             self.assertEqual(runner.calls, [])
             self.assertEqual(client.get("/v1/console/video/jobs").json()["total"], 0)
             self.assertIn("egress.blocked", _chain_text(home))
+            self.assertIn("api.openai.com", _chain_text(home))
+
+            # ... while forbidding only Google no longer matters for the default engine
+            self._deny_host(home, "translate.google.com")
+            self.assertEqual(self._create(client, csrf).status_code, 200)
+            self.assertEqual(len(runner.calls), 1)
+            self.assertEqual(runner.calls[0][2]["tts_engine"], "openai")
+
+            # gtts: the Google host is the one that counts
+            put_engine("gtts")
+            r = self._create(client, csrf)
+            self.assertEqual(r.status_code, 403, r.text)
+            self.assertEqual(len(runner.calls), 1)
+
+            # auto: the edge-tts tier's host must be admitted too
+            put_engine("auto")
+            self._deny_host(home, "speech.platform.bing.com")
+            r = self._create(client, csrf)
+            self.assertEqual(r.status_code, 403, r.text)
+            self.assertEqual(len(runner.calls), 1)
+            self._deny_host(home, "translate.google.com")
+            self.assertEqual(self._create(client, csrf).status_code, 200)
+            self.assertEqual(runner.calls[-1][2]["tts_engine"], "auto")
 
     def test_secret_in_task_is_refused_by_l34(self):
         with _sandbox(self._tmp) as (client, csrf, home, _clients):
@@ -289,6 +333,16 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
 
     def setUp(self):
         self._tmp = Path(tempfile.mkdtemp())
+        self._restore: list = []
+
+    def tearDown(self):
+        for obj, attr, orig in reversed(self._restore):
+            setattr(obj, attr, orig)
+
+    def _benign_l44(self):
+        import house_rules as _hr  # type: ignore  # on sys.path via corvin_console._spawn_gates
+        self._restore.append((_hr, "_house_rules_classifier", _hr._house_rules_classifier))
+        _hr._house_rules_classifier = lambda task, rules, auth, **kw: ("", 0.99, "benign (test stub)")
 
     def _post(self, client, csrf):
         return client.post("/v1/console/video/jobs", json={"task": "x"}, headers={"X-CSRF-Token": csrf})
@@ -323,7 +377,9 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
             mod = _route_module()
             mod.get_runner = lambda: _RecordingRunner()
             real_find, real_which = mod.importlib.util.find_spec, shutil.which
-            for gone, needle in (("gtts", "gTTS"), ("PIL", "Pillow"), ("ffmpeg", "ffmpeg")):
+            # default engine (openai): its package, Pillow and ffmpeg — gTTS is NOT needed any more
+            self._benign_l44()
+            for gone, needle in (("openai", "openai"), ("PIL", "Pillow"), ("ffmpeg", "ffmpeg")):
                 with mock.patch.object(mod.importlib.util, "find_spec",
                                        lambda n, *a, _g=gone, **k: None if n == _g else real_find(n, *a, **k)), \
                      mock.patch.object(mod.shutil, "which",
@@ -332,8 +388,47 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
                                        headers={"X-CSRF-Token": csrf})
                 self.assertEqual(resp.status_code, 503, resp.text)
                 self.assertIn(needle, resp.text)
+            with mock.patch.object(mod.importlib.util, "find_spec",
+                                   lambda n, *a, **k: None if n == "gtts" else real_find(n, *a, **k)):
+                self._benign_l44()
+                resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
+                                   headers={"X-CSRF-Token": csrf})
+            self.assertEqual(resp.status_code, 200, "the default engine must not need gTTS: " + resp.text)
+            # gtts selected: now gTTS is required
+            client.put("/v1/console/video/settings", json={"tts_engine": "gtts"}, headers={"X-CSRF-Token": csrf})
+            with mock.patch.object(mod.importlib.util, "find_spec",
+                                   lambda n, *a, **k: None if n == "gtts" else real_find(n, *a, **k)):
+                resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
+                                   headers={"X-CSRF-Token": csrf})
+            self.assertEqual(resp.status_code, 503, resp.text)
+            self.assertIn("gTTS", resp.text)
             # nothing was stored for the refused attempts
+            self.assertEqual(client.get("/v1/console/video/jobs").json()["total"], 1)
+
+    def test_default_engine_without_an_openai_key_is_refused_with_the_way_out(self):
+        with _sandbox(self._tmp, plugin="enabled", keep_key=False) as (client, csrf, _home, _c):
+            mod = _route_module()
+            mod.get_runner = lambda: _RecordingRunner()
+            self.assertFalse(client.get("/v1/console/video/settings").json()["openai_configured"])
+            resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
+                               headers={"X-CSRF-Token": csrf})
+            self.assertEqual(resp.status_code, 503, resp.text)
+            self.assertIn("OpenAI TTS key", resp.text)
+            self.assertIn("settings", resp.text)
+            self.assertNotIn("sk-", resp.text)
             self.assertEqual(client.get("/v1/console/video/jobs").json()["total"], 0)
+            # the other engines still work without it
+            client.put("/v1/console/video/settings", json={"tts_engine": "auto"}, headers={"X-CSRF-Token": csrf})
+            self._benign_l44()
+            resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
+                               headers={"X-CSRF-Token": csrf})
+            self.assertEqual(resp.status_code, 200, resp.text)
+
+    def test_captions_endpoint_is_gone_and_new_jobs_have_no_subtitle_output(self):
+        with _sandbox(self._tmp) as (client, _csrf, _home, _c):
+            r = client.get("/v1/console/video/videos/job_deadbeef/captions")
+            self.assertEqual(r.status_code, 404)
+            self.assertNotIn("captions", {getattr(rt, "path", "").rsplit("/", 1)[-1] for rt in _route_module().router.routes})
 
     def test_the_github_cache_is_a_plugin_location(self):
         # On a fresh install the synced GitHub copy is the only place the source exists.
