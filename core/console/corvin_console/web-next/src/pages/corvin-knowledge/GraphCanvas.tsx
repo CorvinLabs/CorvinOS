@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Network } from "vis-network";
 import "vis-network/styles/vis-network.min.css";
-import { Maximize2, Minus, Plus, Crosshair } from "lucide-react";
+import { Maximize2, Minimize2, Minus, Plus, Crosshair } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { GEdge, GNode } from "./graph-model";
 import { computeIslandLayout } from "./island-layout";
@@ -17,12 +17,14 @@ interface Props {
   /** force: organic physics layout. islands: fixed positions, one separate island per community. */
   layoutMode?: "force" | "islands";
   onLayoutModeChange?: (mode: "force" | "islands") => void;
+  onFullscreen?: (fs: boolean) => void;
+  fullscreen?: boolean;
 }
 
 /** 2D graph with zoom (wheel, buttons, +/-) and pan (drag, arrow keys when focused). The network
  *  is rebuilt only when the node/edge SET changes; a change of selection only re-selects and
  *  re-centres, so the user's zoom is not thrown away on every click. */
-export function GraphCanvas({ nodes, edges, selectedKey, statusColours, onSelect, settleThenFreeze = true, layoutMode = "force", onLayoutModeChange }: Props) {
+export function GraphCanvas({ nodes, edges, selectedKey, statusColours, onSelect, settleThenFreeze = true, layoutMode = "force", onLayoutModeChange, onFullscreen, fullscreen }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const net = useRef<Network | null>(null);
   const selected = useRef<string | null>(selectedKey);
@@ -120,18 +122,18 @@ export function GraphCanvas({ nodes, edges, selectedKey, statusColours, onSelect
 
   const zoom = (f: number) => { const n = net.current; if (n) n.moveTo({ scale: n.getScale() * f, animation: { duration: 150, easingFunction: "easeInOutQuad" } }); };
   return (
-    <div className="relative">
+    <div className={`relative ${fullscreen ? "h-screen" : ""}`}>
       <div
         ref={host}
         tabIndex={0}
         role="application"
         aria-label="Knowledge graph. Arrow keys pan, plus and minus zoom."
-        className="h-[620px] w-full rounded-lg border border-border bg-card focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className={`w-full rounded-lg border border-border bg-card focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${fullscreen ? "h-full" : "h-[620px]"}`}
         data-testid="knowledge-graph-canvas"
         data-layout={layoutMode}
         data-islands={islandLayout?.islands.length ?? 0}
       />
-      <div className="absolute right-2 top-2 flex flex-col gap-1">
+      <div className="absolute right-2 top-2 flex gap-2">
         <div className="flex rounded-md border border-border bg-card" role="group" aria-label="Layout">
           {(["force", "islands"] as const).map((m) => (
             <Button key={m} size="sm" variant={layoutMode === m ? "accent" : "ghost"} aria-pressed={layoutMode === m} onClick={() => onLayoutModeChange?.(m)}
@@ -140,10 +142,15 @@ export function GraphCanvas({ nodes, edges, selectedKey, statusColours, onSelect
             </Button>
           ))}
         </div>
-        <Button size="icon" variant="outline" aria-label="Zoom in" onClick={() => zoom(1.3)}><Plus className="h-4 w-4" /></Button>
-        <Button size="icon" variant="outline" aria-label="Zoom out" onClick={() => zoom(1 / 1.3)}><Minus className="h-4 w-4" /></Button>
-        <Button size="icon" variant="outline" aria-label="Fit graph" onClick={() => net.current?.fit({ animation: { duration: 250, easingFunction: "easeInOutQuad" } })}><Maximize2 className="h-4 w-4" /></Button>
-        <Button size="icon" variant="outline" aria-label="Centre on selection" onClick={() => selectedKey && net.current?.focus(selectedKey, { scale: 1, animation: { duration: 250, easingFunction: "easeInOutQuad" } })}><Crosshair className="h-4 w-4" /></Button>
+        <div className="flex gap-1 rounded-md border border-border bg-card">
+          <Button size="icon" variant="ghost" aria-label="Zoom in" onClick={() => zoom(1.3)} title="Zoom in"><Plus className="h-4 w-4" /></Button>
+          <Button size="icon" variant="ghost" aria-label="Zoom out" onClick={() => zoom(1 / 1.3)} title="Zoom out"><Minus className="h-4 w-4" /></Button>
+          <Button size="icon" variant="ghost" aria-label="Fit graph" onClick={() => net.current?.fit({ animation: { duration: 250, easingFunction: "easeInOutQuad" } })} title="Fit all nodes"><Maximize2 className="h-4 w-4" /></Button>
+          <Button size="icon" variant="ghost" aria-label="Centre on selection" onClick={() => selectedKey && net.current?.focus(selectedKey, { scale: 1, animation: { duration: 250, easingFunction: "easeInOutQuad" } })} title="Focus selected node"><Crosshair className="h-4 w-4" /></Button>
+        </div>
+        <Button size="icon" variant="ghost" aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"} onClick={() => onFullscreen?.(!fullscreen)} title={fullscreen ? "Exit fullscreen" : "Fullscreen"}>
+          {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+        </Button>
       </div>
     </div>
   );

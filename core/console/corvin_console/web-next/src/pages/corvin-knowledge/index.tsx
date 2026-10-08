@@ -89,6 +89,7 @@ export function CorvinKnowledgePage() {
   // null = automatic: islands for the whole graph (a force layout of 1300 nodes clumps), force for a focus.
   const [layoutChoice, setLayoutChoice] = useState<"force" | "islands" | null>(null);
   const layoutMode = layoutChoice ?? (mode === "all" ? "islands" : "force");
+  const [fullscreen, setFullscreen] = useState(false);
   const [search, setSearch] = useState("");
   const [type, setType] = useState("");
   const [status, setStatus] = useState("");
@@ -188,18 +189,19 @@ export function CorvinKnowledgePage() {
             <label className="relative flex-1 min-w-[220px]">
               <span className="sr-only">Find a node</span>
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input className="pl-9" placeholder="Find a node by id, title or tag" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Find a node" />
-              {hits.length > 0 && (
-                <ul className="absolute z-20 mt-1 w-full rounded-md border border-border bg-card shadow-md text-sm" data-testid="knowledge-search-hits">
-                  {hits.map((h) => (
+              <Input className="pl-9" placeholder="Find a node by id, title or tag" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Find a node" data-testid="knowledge-search-input" />
+              {search && hits.length > 0 && (
+                <ul className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto rounded-md border border-border bg-card shadow-md text-sm" data-testid="knowledge-search-hits">
+                  {hits.slice(0, 20).map((h) => (
                     <li key={h.id}>
                       <button type="button" className="flex w-full gap-2 px-3 py-1.5 text-left hover:bg-muted"
                         onClick={() => { select(h.id); setSearch(""); }}>
-                        <span className="font-mono text-xs text-muted-foreground">{h.label ?? h.id}</span>
-                        <span className="truncate">{h.title}</span>
+                        <span className="font-mono text-xs text-muted-foreground shrink-0">{h.label ?? h.id}</span>
+                        <span className="truncate text-foreground">{h.title}</span>
                       </button>
                     </li>
                   ))}
+                  {hits.length > 20 && <li className="px-3 py-1.5 text-xs text-muted-foreground">+{hits.length - 20} more</li>}
                 </ul>
               )}
             </label>
@@ -248,10 +250,14 @@ export function CorvinKnowledgePage() {
                 There is no node &quot;{nodeParam}&quot; in this graph — showing the newest decision instead.
               </p>
             )}
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <GraphCanvas nodes={shown.entities} edges={shown.relations} selectedKey={selectedKey} statusColours={colours} onSelect={select} layoutMode={layoutMode} onLayoutModeChange={setLayoutChoice} />
-              <DocumentPane nodeKey={selectedKey && known.has(selectedKey) ? selectedKey : null} index={linkIndex} basePath={BASE_PATH} onOpen={select} onBack={canGoBack ? () => navigate(-1) : null} />
-            </div>
+            {fullscreen ? (
+              <GraphCanvas nodes={shown.entities} edges={shown.relations} selectedKey={selectedKey} statusColours={colours} onSelect={select} layoutMode={layoutMode} onLayoutModeChange={setLayoutChoice} fullscreen={fullscreen} onFullscreen={setFullscreen} />
+            ) : (
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <GraphCanvas nodes={shown.entities} edges={shown.relations} selectedKey={selectedKey} statusColours={colours} onSelect={select} layoutMode={layoutMode} onLayoutModeChange={setLayoutChoice} fullscreen={fullscreen} onFullscreen={setFullscreen} />
+                <DocumentPane nodeKey={selectedKey && known.has(selectedKey) ? selectedKey : null} index={linkIndex} basePath={BASE_PATH} onOpen={select} onBack={canGoBack ? () => navigate(-1) : null} />
+              </div>
+            )}
             </>
           )}
         </TabsContent>
