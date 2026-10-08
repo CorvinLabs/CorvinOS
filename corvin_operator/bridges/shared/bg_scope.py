@@ -389,6 +389,53 @@ def cut_message(reason: str, open_children: list[Child], *, limit: float, partia
     return f"{head}\n\nLast update:\n{partial}" if partial else head
 
 
+# --- deterministic status lines (ADR-2236 D7) --------------------------------
+
+def _kind_label(kind: str) -> str:
+    return {"bash": "shell command", "monitor": "monitor", "agent": "sub-agent",
+            "workflow": "workflow"}.get(kind, "task")
+
+
+def status_line(t: Transition) -> str:
+    """One human line for a child transition — or "" when it needs none.
+
+    Built from kind, state, exit code and the SCRUBBED description only (D9): the line
+    is derived from the CLI's events, not from model prose, so it is there even when
+    the model says nothing.
+    """
+    c = t.child
+    if c is None or t.kind == "all_children_done":
+        return ""
+    label = _kind_label(c.kind)
+    desc = safe_description(c.description)
+    tail = f": {desc}" if desc else ""
+    left = t.children_open
+    if t.kind == "child_started":
+        return f"⏳ Background {label} started{tail} — {left} running"
+    if t.kind == "child_finished":
+        more = f" — {left} still running" if left else " — all background work is done"
+        if c.state == COMPLETED:
+            code = "" if c.exit_code in (None, 0) else f" (exit {c.exit_code})"
+            return f"✅ Background {label} finished{code}{tail}{more}"
+        if c.state == FAILED:
+            code = f" (exit {c.exit_code})" if c.exit_code is not None else ""
+            return f"❌ Background {label} failed{code}{tail}{more}"
+        return f"■ Background {label} ended{tail}{more}"
+    return ""
+
+
+def children_snapshot(tracker: "ScopeTracker", now: float | None = None) -> list[dict]:
+    """What a resumed attempt must be told when its predecessor died with children open.
+
+    Kind, age and the scrubbed description — written to a 0600 file next to the run
+    record, never into the audit chain.
+    """
+    now = time.time() if now is None else now
+    return [{"kind": c.kind, "age_s": int(now - c.started_at),
+             "description": safe_description(c.description)}
+            for c in tracker.open_children]
+
+
 # --- audit (best effort; ADR-2236 D10) --------------------------------------
 
 AUDIT_EVENTS = (

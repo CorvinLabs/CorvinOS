@@ -301,6 +301,12 @@ of the turn — **process EOF with no open child is** (`bg_scope.ScopeTracker`, 
   open, the process group is killed and the final message says what was cut (kinds and count, never
   a description). A cap of 0 or less is rejected and the default applies — it would disable the only
   bound. Not an error: no retry, `task.completed` is recorded.
+- **Status line per child.** `bg_scope.status_line()` turns every child transition into one line
+  ("⏳ Background shell command started: … — 1 running", "✅ … finished — all background work is done",
+  "❌ … failed (exit 3)") sent through `on_status(..., tool_name="_bgchild")` — the sticky progress message,
+  edited in place, so a chatty scope does not flood the chat. The alive heartbeat reads "⏳ N background
+  tasks running · 14m 3s" while children are open. `bg_scope_observer(cb)` lets a caller (the detached
+  `/task` worker) watch the tracker.
 - `task.completed` is recorded only after the stream ended; `TaskManager.record_event` additionally
   defers a completion that reports `children_open > 0` (`task.completion_deferred`, status stays
   RUNNING, no learning outcome).

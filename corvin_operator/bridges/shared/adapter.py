@@ -5979,6 +5979,25 @@ def _call_claude_streaming_via_engine(
     _child_cap_s = _bgs.child_max_s()
     _wakeup_cap = _bgs.wakeup_max()
 
+    _observer_cb = getattr(_BG_OBSERVER, "cb", None)
+
+    def _apply_transitions(trs) -> None:
+        """Audit every transition, say it on the status line, tell the observer."""
+        for _tr in trs:
+            _bgs.audit_transition(_scope, _tr)
+            if on_status is not None:
+                _line = _bgs.status_line(_tr)
+                if _line:
+                    try:
+                        on_status(_line, tool_name="_bgchild")
+                    except Exception as e:  # noqa: BLE001
+                        log(f"child status line failed: {e!r}")
+        if trs and _observer_cb is not None:
+            try:
+                _observer_cb(_scope)
+            except Exception as e:  # noqa: BLE001
+                log(f"bg_scope observer failed: {e!r}")
+
     def _emit_interim(text: str, cls: str) -> None:
         nonlocal _last_interim
         if not text.strip():
@@ -6056,9 +6075,14 @@ def _call_claude_streaming_via_engine(
                         m, s = divmod(elapsed, 60)
                         label = f"{m}m {s}s" if m else f"{s}s"
                         try:
-                            _hb_text = (f"{_current_bgstep} · ⏳ {label}"
-                                        if _current_bgstep
-                                        else f"⏳ Noch dabei … ({label})")
+                            _kids = len(_scope.open_children)
+                            if _kids:
+                                _hb_text = (f"⏳ {_kids} background "
+                                            f"{'task' if _kids == 1 else 'tasks'} running · {label}")
+                            else:
+                                _hb_text = (f"{_current_bgstep} · ⏳ {label}"
+                                            if _current_bgstep
+                                            else f"⏳ Noch dabei … ({label})")
                             on_status(
                                 _hb_text,
                                 tool_name="_alive",
@@ -6163,16 +6187,14 @@ def _call_claude_streaming_via_engine(
                                 log(f"on_status callback failed: {e}")
                 elif ev.type in ("bg_started", "bg_updated", "bg_finished", "bg_snapshot"):
                     try:
-                        for _tr in _scope.feed(ev.raw or {}, time.time()):
-                            _bgs.audit_transition(_scope, _tr)
+                        _apply_transitions(_scope.feed(ev.raw or {}, time.time()))
                     except Exception as e:  # noqa: BLE001 — a tracker bug must never break a turn
                         log(f"bg_scope feed failed: {e!r}")
                 elif ev.type == "turn_completed":
                     _cls = "user"
                     try:
                         _cls = _scope.note_result(ev.raw or {})
-                        for _tr in _scope.flush():
-                            _bgs.audit_transition(_scope, _tr)
+                        _apply_transitions(_scope.flush())
                     except Exception as e:  # noqa: BLE001
                         log(f"bg_scope result bookkeeping failed: {e!r}")
                     new_result = ev.text or ""
@@ -6238,8 +6260,7 @@ def _call_claude_streaming_via_engine(
             thread.join(timeout=5)
             rc = proc.wait()
             try:
-                for _tr in _scope.finalize(time.time()):
-                    _bgs.audit_transition(_scope, _tr)
+                _apply_transitions(_scope.finalize(time.time()))
             except Exception as e:  # noqa: BLE001
                 log(f"bg_scope finalize failed: {e!r}")
             if _scope_end:
@@ -6262,8 +6283,7 @@ def _call_claude_streaming_via_engine(
             # The process has exited, so nothing it owned is left running: close the
             # books AFTER the cap message above named what was cut.
             try:
-                for _tr in _scope.end_all(time.time()):
-                    _bgs.audit_transition(_scope, _tr)
+                _apply_transitions(_scope.end_all(time.time()))
             except Exception as e:  # noqa: BLE001
                 log(f"bg_scope end_all failed: {e!r}")
             if _scope.all_children:
@@ -7632,6 +7652,26 @@ _TURN_OUTCOME = threading.local()
 # call_claude_streaming -> _impl -> _via_engine and re-enters itself on retries,
 # and a parameter dropped on one of those hops silently loses every interim.
 _BG_INTERIM = threading.local()
+
+
+_BG_OBSERVER = threading.local()
+
+
+@contextlib.contextmanager
+def bg_scope_observer(cb):
+    """Let a caller watch the background children of the turn run inside this block.
+
+    ``cb(tracker)`` is called from the engine loop after every batch of child
+    transitions, including the last one at the end of the stream. Used by the
+    detached /task worker to keep its deadline honest and to leave a record of
+    which children a resumed attempt has lost (ADR-2236 D11).
+    """
+    prev = getattr(_BG_OBSERVER, "cb", None)
+    _BG_OBSERVER.cb = cb
+    try:
+        yield
+    finally:
+        _BG_OBSERVER.cb = prev
 
 
 @contextlib.contextmanager

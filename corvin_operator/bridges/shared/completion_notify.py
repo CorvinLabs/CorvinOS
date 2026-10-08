@@ -38,6 +38,7 @@ import json
 import os
 import secrets
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Callable
@@ -439,6 +440,56 @@ def _envelope_for(rec: dict, *, voice_path: str | None = None) -> dict:
     env["_final"] = True
     env["provenance"] = build_provenance(channel, chat_id or to or "")
     return env
+
+
+_INTERIM_LAST = 0
+_INTERIM_LOCK = threading.Lock()
+
+
+def _interim_seq() -> int:
+    """Strictly increasing within the process, even if the clock stands still or steps back.
+
+    The file name is what orders a backlog in the outbox, so interims written in the same
+    millisecond — or after an NTP step — must still sort in send order.
+    """
+    global _INTERIM_LAST
+    with _INTERIM_LOCK:
+        _INTERIM_LAST = max(_INTERIM_LAST + 1, time.time_ns() // 1000)   # microseconds
+        return _INTERIM_LAST
+
+
+def send_interim(task_id: str, text: str, outbox_dir: "str | Path") -> bool:
+    """Deliver ONE intermediate message of a still-running task straight to the outbox.
+
+    ADR-2236 D3/D7. A background child's wake-up answers are real content; routing them
+    through ``task_progress`` would fold every one that lands between two poller ticks
+    into the latest (that module's contract: "the user sees the LATEST state, never a
+    backlog"). The producer is the only writer of this file, so a direct write is
+    exactly-once without the poller machinery.
+
+    Same routing, Art. 50 provenance and 0600 permissions as the completion envelope,
+    but a normal message: no ``_final`` (the completion is still to come), its own
+    ``msg_id``. Only for a task whose record is still PENDING. Never raises.
+    """
+    try:
+        text = (text or "").strip()
+        if not text:
+            return False
+        rec = _read(_record_path(task_id))
+        if rec is None or rec.get("state") != _STATE_PENDING:
+            return False
+        env = _envelope_for(rec)
+        env.pop("_final", None)
+        uid = f"{rec.get('id')}_i{secrets.token_hex(4)}"
+        env["msg_id"] = f"cn_{uid}"
+        env["text"] = text
+        outbox = Path(outbox_dir)
+        outbox.mkdir(parents=True, exist_ok=True)
+        # `-` sorts before the completion's `cn_<id>_…` name, so a backlog is read in order
+        return _write_outbox_direct(env, None, outbox, f"cn_{rec.get('id')}_-{_interim_seq():023d}.json")
+    except Exception as e:  # noqa: BLE001 — an interim message must never kill the work
+        print(f"completion_notify: interim send failed for {task_id}: {e}", file=sys.stderr)
+        return False
 
 
 def _proactive_flag_on(tenant_id: str) -> bool:

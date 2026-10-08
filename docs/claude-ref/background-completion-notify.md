@@ -310,9 +310,28 @@ Measured on claude CLI 2.1.294 (details and raw captures: ADR-2236 / PLAN-0938):
   speak an interim result and shows a "N background tasks running" chip. Full description:
   [adapter-runtime.md](adapter-runtime.md) § Open background children, diagram
   `docs/diagrams/bg-scope-state-machine.svg`.
-- **Still not implemented (T-0073, T-0074):** durable status lines through `task_progress` for `/task`
-  workers and the supervisor's "children were lost" notice (T-0073); the closing voice summary and
-  milestone voice (T-0074).
+- **Status delivery (T-0073, done):** a child starting / finishing / failing is announced by a deterministic
+  status line built from the CLI's events (kind, state, exit code, scrubbed description — never from model
+  prose), and the alive heartbeat names the open children ("⏳ 2 background tasks running · 14m 3s"). For a
+  detached `/task` worker:
+  - `bg_task_worker` relays the status lines through `task_progress` and forces a child state change past the
+    coalescing window; the model's wake-up answers go out **in full, one message each** through
+    `completion_notify.send_interim` (a direct outbox write — `task_progress` folds every update that lands
+    between two poller ticks into the latest, which is right for status lines and wrong for content);
+  - the per-attempt wall clock (`CORVIN_BG_TASK_TIMEOUT`) does not fire while a child is open — the adapter
+    bounds the child itself (`CORVIN_BG_CHILD_MAX`); before, a 40 min child was cut at 30 min and the
+    supervisor "resumed" by starting it again;
+  - the worker records its open children (kind, age, scrubbed description) in `<task_runs>/<id>.children.json`
+    (0600; removed on finish, retire and Art. 17 purge) so `continuation_prompt` can tell a RESUMED attempt
+    which background processes died with its predecessor.
+  - **Fixed alongside:** the worker's `on_status` took one argument while the adapter calls it with
+    `tool_name=`, so every call raised `TypeError` inside the adapter and a `/task` run relayed nothing
+    (`bridge_task_progress_updates` was on and produced no line). The worker E2E now runs the real adapter
+    against a fake CLI (`test_bg_scope_task_worker_e2e.py`); the stub adapter of
+    `test_bg_task_worker_supervised.py` now calls `on_status` the way the real one does.
+  - Interactive bridge turns do not register a durable record: the adapter process that owns the claude
+    process owns the delivery, and the CLI dies with it (a restart is the supervisor's business, not the queue's).
+- **Still not implemented (T-0074):** the closing voice summary and milestone voice.
 
 Test harness (T-0070): `shared/tests/fixtures/bgscope/*.jsonl` are scrubbed captures from the real CLI
 (`tests/capture_bgscope_fixture.py` regenerates them), `tests/fake_claude.py` replays one as a REAL

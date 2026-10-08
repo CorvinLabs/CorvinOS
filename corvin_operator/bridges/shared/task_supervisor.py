@@ -404,6 +404,40 @@ def touch_heartbeat(task_id: str, *, now: float | None = None) -> None:
         pass
 
 
+def children_path(task_id: str) -> Path:
+    """Open background children the worker last reported (ADR-2236 D11)."""
+    return heartbeat_path(task_id).with_suffix(".children.json")
+
+
+def write_children(task_id: str, children: list[dict]) -> None:
+    """Record which background children the worker owns right now. Best-effort.
+
+    They die with the worker, so a RESUMED attempt must be told which were lost.
+    An empty list removes the file. 0600: it holds scrubbed descriptions.
+    """
+    p = children_path(task_id)
+    try:
+        if not children:
+            p.unlink(missing_ok=True)
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(f".tmp{secrets.token_hex(4)}")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(children[:20], fh)
+        tmp.replace(p)
+    except OSError:
+        pass
+
+
+def read_children(task_id: str) -> list[dict]:
+    try:
+        data = json.loads(children_path(task_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [c for c in data if isinstance(c, dict)] if isinstance(data, list) else []
+
+
 def _read_heartbeat(task_id: str) -> float:
     try:
         return float(heartbeat_path(task_id).read_text(encoding="utf-8").strip())
@@ -577,6 +611,7 @@ def _backoff_for(attempts: int) -> float:
 def _cleanup_run_artifacts(task_id: str) -> None:
     try:
         heartbeat_path(task_id).unlink(missing_ok=True)
+        children_path(task_id).unlink(missing_ok=True)
     except OSError:
         pass
     try:
@@ -649,6 +684,15 @@ def continuation_prompt(rec: dict) -> str:
     if carry:
         parts += ["", "WHERE IT GOT TO (partial output from the last attempt):",
                   carry]
+    lost = read_children(str(rec.get("task_id") or ""))
+    if lost:
+        # ADR-2236 D11: background children die with the worker that started them.
+        lines = [f"- {c.get('kind', 'task')}, running for ~{int(c.get('age_s') or 0) // 60} min"
+                 + (f": {c['description']}" if c.get("description") else "")
+                 for c in lost]
+        parts += ["", "BACKGROUND PROCESSES THAT WERE RUNNING WHEN THE LAST ATTEMPT STOPPED "
+                  "(they are GONE now — they died with it; do not assume they are running, "
+                  "check, and restart only what the task still needs):", *lines]
     parts += ["", "Finish the task now and report the complete result."]
     return "\n".join(parts)
 

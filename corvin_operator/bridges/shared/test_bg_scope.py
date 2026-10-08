@@ -296,3 +296,61 @@ def test_audit_events_are_registered_in_both_places():
     # No free-text carrier may be allowlisted (D9)
     for ev in bgs.AUDIT_EVENTS:
         assert not (sec._EVENT_ALLOWLIST[ev] & {"description", "prompt", "summary", "output", "text"}), ev
+
+
+# ------------------------------------------------- status lines (D7, D9) ---
+
+def _tr(kind, child, open_n):
+    return bgs.Transition(kind, child, open_n)
+
+
+def _child(**kw):
+    base = dict(task_id="a", kind="bash", task_type="local_bash", description="Sleep 8 seconds",
+                started_at=0.0)
+    base.update(kw)
+    return bgs.Child(**base)
+
+
+def test_status_lines_say_what_happened_from_the_events_not_from_model_prose():
+    started = bgs.status_line(_tr("child_started", _child(), 1))
+    assert started == "⏳ Background shell command started: Sleep 8 seconds — 1 running"
+    ok = bgs.status_line(_tr("child_finished", _child(state=bgs.COMPLETED, exit_code=0), 0))
+    assert ok == "✅ Background shell command finished: Sleep 8 seconds — all background work is done"
+    more = bgs.status_line(_tr("child_finished", _child(state=bgs.COMPLETED, exit_code=0), 2))
+    assert more.endswith("— 2 still running")
+    bad = bgs.status_line(_tr("child_finished", _child(state=bgs.FAILED, exit_code=3), 0))
+    assert bad.startswith("❌ Background shell command failed (exit 3)")
+    cut = bgs.status_line(_tr("child_finished", _child(state=bgs.UNKNOWN), 0))
+    assert cut.startswith("■ Background shell command ended")
+    assert bgs.status_line(_tr("all_children_done", None, 0)) == ""
+    assert bgs.status_line(_tr("healed", None, 0)) == ""
+
+
+def test_status_lines_scrub_the_description_and_name_each_kind():
+    line = bgs.status_line(_tr("child_started", _child(
+        kind="monitor", description="tail -f for bob@example.com sk-abcdefghijklmnop1234"), 1))
+    assert "bob@example.com" not in line and "sk-abcdefghijklmnop1234" not in line
+    assert "Background monitor started" in line
+    assert "sub-agent" in bgs.status_line(_tr("child_started", _child(kind="agent"), 1))
+    assert "workflow" in bgs.status_line(_tr("child_started", _child(kind="workflow"), 1))
+
+
+def test_every_real_fixture_produces_a_status_line_per_child_transition():
+    for name, n_children in (("bash_bg_ok", 1), ("monitor_3lines", 1), ("agent_bg", 1),
+                             ("bash_and_agent_mixed", 2)):
+        _, ts, _ = replay(name)
+        lines = [bgs.status_line(t) for t in ts if t.kind in ("child_started", "child_finished")]
+        assert len(lines) == 2 * n_children and all(lines), (name, lines)
+        assert lines[-1].endswith("all background work is done"), (name, lines[-1])
+
+
+def test_children_snapshot_is_what_a_resumed_attempt_is_told():
+    tr = bgs.ScopeTracker()
+    tr.feed({"type": "system", "subtype": "task_started", "task_id": "a", "task_type": "local_bash",
+             "description": "run as bob@example.com"}, 100.0)
+    snap = bgs.children_snapshot(tr, now=700.0)
+    assert snap == [{"kind": "bash", "age_s": 600, "description": "run as <email>"}]
+    tr.feed({"type": "system", "subtype": "task_notification", "task_id": "a",
+             "status": "completed", "summary": "x"}, 701.0)
+    assert bgs.children_snapshot(tr, now=702.0) == []
+

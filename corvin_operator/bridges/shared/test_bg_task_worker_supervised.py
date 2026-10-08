@@ -63,7 +63,9 @@ def call_claude_streaming(prompt, channel, chat_key, on_status=None,
         open(_kf, "w", encoding="utf-8").write(str(chat_key))
     if on_status is not None:
         for i in range(3):
-            on_status(f"stub step {i}")
+            # the REAL adapter contract: on_status(text, tool_name=...) — a stub that
+            # called it with one argument hid a TypeError that silenced every /task run
+            on_status(f"stub step {i}", tool_name="Read")
     if _MODE == "crash":
         raise RuntimeError("engine exploded")
     if _MODE == "hang":

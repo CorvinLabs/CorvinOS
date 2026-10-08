@@ -49,9 +49,11 @@ then, so a flag-off install runs the exact code path it always did:
 from __future__ import annotations
 
 import json
+import contextlib
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -233,11 +235,48 @@ def main() -> int:
     tp = _load_progress() if want_progress else None
     on_status = None
     if tp is not None:
-        def on_status(status_text: str) -> None:  # noqa: ANN001 — adapter contract
+        # The adapter calls `on_status(text, tool_name=...)`. This function used to
+        # take ONE argument, so every call raised TypeError inside the adapter (logged
+        # as "alive heartbeat failed" / "on_status callback failed") and a /task run
+        # relayed NOTHING — while the worker E2E, whose stub adapter called it with one
+        # argument, stayed green. Accept the real contract.
+        def on_status(status_text: str, tool_name: str | None = None, **_kw) -> None:  # noqa: ANN001
             try:
-                tp.emit(task_id, str(status_text)[:300], kind="progress")
+                # A background child starting/finishing is a state CHANGE: it must not be
+                # swallowed by the routine-progress coalescing window (ADR-2236 D7).
+                tp.emit(task_id, str(status_text)[:300], kind="progress",
+                        force=(tool_name == "_bgchild"))
             except Exception:  # noqa: BLE001 — a status line never kills the work
                 pass
+
+    # ADR-2236: background children of this worker's claude process. `children_state`
+    # is read by the deadline thread below; the observer keeps the supervisor's record
+    # of what a resumed attempt will have lost.
+    children_state = {"open": 0}
+    interim_emitted = {"n": 0}
+
+    def _observe_children(tracker) -> None:  # noqa: ANN001
+        children_state["open"] = len(tracker.open_children)
+        if run is not None:
+            try:
+                import bg_scope as _bgs  # type: ignore
+                sup.write_children(task_id, _bgs.children_snapshot(tracker))
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _relay_interim(text: str, info: dict) -> None:
+        """A wake-up result while a child runs is content the user wants to read in full."""
+        outbox = spec.get("outbox_dir")
+        if not outbox or not str(text).strip():
+            return
+        try:
+            import bg_scope as _bgs  # type: ignore
+            note = _bgs.interim_suffix(int(info.get("children_open") or 0))
+            body = str(text).strip()[:1800]
+            if cn.send_interim(task_id, f"{body}\n\n{note}" if note else body, outbox):
+                interim_emitted["n"] += 1
+        except Exception:  # noqa: BLE001
+            pass
 
     ok = True
     text = ""
@@ -260,6 +299,7 @@ def main() -> int:
         except ValueError:
             timeout = 1800.0
         timed_out = {"v": False}
+        done_evt = threading.Event()
 
         def _watchdog() -> None:
             timed_out["v"] = True
@@ -272,23 +312,45 @@ def main() -> int:
             except Exception:  # noqa: BLE001
                 pass
 
-        timer = threading.Timer(timeout, _watchdog)
-        timer.daemon = True
+        def _deadline_loop() -> None:
+            # The wall clock bounds ONE attempt of a stuck turn. Time spent while a background
+            # child is open is not counted at all: the CLI is legitimately silent, the adapter
+            # bounds the child itself (CORVIN_BG_CHILD_MAX), and merely POSTPONING the deadline
+            # would fire it the instant the child ends — long past the limit, while the wake-up
+            # turn that reports the result is still running. Before, a 40 min child was cut at
+            # 30 min and the supervisor "resumed" by starting it again.
+            active = 0.0
+            last = time.monotonic()
+            while not done_evt.wait(2.0):
+                now = time.monotonic()
+                if children_state["open"] == 0:
+                    active += now - last
+                last = now
+                if active >= timeout:
+                    _watchdog()
+                    return
+
+        timer = threading.Thread(target=_deadline_loop, daemon=True)
         timer.start()
         try:
-            text = adapter.call_claude_streaming(
-                prompt=instruction,
-                channel=channel,
-                chat_key=engine_chat_key,
-                # Supervised runs relay live status through task_progress;
-                # unsupervised ones keep the original silence (on_status=None).
-                on_status=on_status,
-                profile=spec.get("profile"),
-                msg_id=spec.get("msg_id"),
-                sender=str(spec.get("sender") or ""),
-            )
+            # getattr: an adapter without the ADR-2236 hooks (a test stub) just runs unobserved.
+            _obs = getattr(adapter, "bg_scope_observer", None)
+            _snk = getattr(adapter, "bg_interim_sink", None)
+            with (_obs(_observe_children) if _obs else contextlib.nullcontext()), \
+                    (_snk(_relay_interim) if _snk else contextlib.nullcontext()):
+                text = adapter.call_claude_streaming(
+                    prompt=instruction,
+                    channel=channel,
+                    chat_key=engine_chat_key,
+                    # Supervised runs relay live status through task_progress;
+                    # unsupervised ones keep the original silence (on_status=None).
+                    on_status=on_status,
+                    profile=spec.get("profile"),
+                    msg_id=spec.get("msg_id"),
+                    sender=str(spec.get("sender") or ""),
+                )
         finally:
-            timer.cancel()
+            done_evt.set()
         if timed_out["v"]:
             ok = False
             # Under supervision a timeout is a CONTINUATION point, not a
