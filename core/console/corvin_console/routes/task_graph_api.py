@@ -32,22 +32,21 @@ except ImportError:
     _VIBE_ORCHESTRATOR_AVAILABLE = False
     logger.warning("⚠️  VibeOrchestrator not available for checkpoint creation")
 
-# Add core to path for imports
-_core_path = Path(__file__).parent.parent.parent.parent / "vibe_engineering"
-if str(_core_path.parent) not in sys.path:
-    sys.path.insert(0, str(_core_path.parent))
-
-# Import task graph modules
+# Import task graph modules through the PACKAGE, like VibeOrchestrator above.
+# This module used to put <repo>/core first on sys.path at import time (ADR-0562
+# A11): every process that mounts the console then resolved top-level names
+# such as `audit` to core/audit, and these four modules were loaded twice
+# (as `vibe_engineering.*` and `core.vibe_engineering.*`, two class identities).
 TaskGraph = None
 GraphQueries = None
 CheckpointManager = None
 CheckpointToGraphConverter = None
 
 try:
-    from vibe_engineering.task_graph import TaskGraph, Node, Edge
-    from vibe_engineering.graph_queries import GraphQueries
-    from vibe_engineering.checkpoint_manager import CheckpointManager
-    from vibe_engineering.checkpoint_to_graph import CheckpointToGraphConverter
+    from core.vibe_engineering.task_graph import TaskGraph, Node, Edge
+    from core.vibe_engineering.graph_queries import GraphQueries
+    from core.vibe_engineering.checkpoint_manager import CheckpointManager
+    from core.vibe_engineering.checkpoint_to_graph import CheckpointToGraphConverter
     logger.info("✅ Task graph modules loaded successfully")
 except ImportError as e:
     logger.warning(f"⚠️  Task graph modules not available: {e}")

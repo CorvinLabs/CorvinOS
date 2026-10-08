@@ -616,3 +616,51 @@ class KbPeriodicLoopE2E(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SandboxedHomeNeverProjectsIntoTheRealKb(unittest.TestCase):
+    """ADV-10 (2026-10-08): only pytest was excluded; every other console on a
+    throwaway CORVIN_HOME (Playwright backends, start-isolated-e2e-backend.sh)
+    healed and committed the operator's sibling Corvin-Knowledge checkout."""
+
+    def setUp(self):
+        from corvin_console import kb_projection
+
+        self.kp = kb_projection
+        self.saved = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_KB_REPO", "PYTEST_CURRENT_TEST")}
+        # Outside pytest's own guard, exactly like a non-pytest test console.
+        os.environ.pop("PYTEST_CURRENT_TEST", None)
+        os.environ.pop("CORVIN_KB_REPO", None)
+        self.sibling = self.kp._REPO_ROOT.parent / "Corvin-Knowledge"
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_sandboxed_home_gets_no_kb_and_no_projector(self):
+        os.environ["CORVIN_HOME"] = tempfile.mkdtemp(prefix="kb-sandbox-")
+        self.assertIsNone(self.kp.kb_repo())
+        self.assertFalse(self.kp.start("_adv10_probe"))
+        self.assertEqual(self.kp.status("_adv10_probe")["state"], "off")
+        # A forced tick (what a board move triggers) also refuses, and says why.
+        self.assertIn("sandboxed CORVIN_HOME", self.kp.sync("_adv10_probe", force=True)["reason"])
+
+    def test_canonical_home_keeps_the_sibling_default(self):
+        if not (self.sibling / "scripts" / "kb.py").is_file():
+            self.skipTest("no sibling Corvin-Knowledge checkout on this host")
+        # Positive control: the same process on the install's own home still resolves it.
+        os.environ["CORVIN_HOME"] = str(self.kp._REPO_ROOT / ".corvin")
+        self.assertEqual(self.kp.kb_repo(), self.sibling)
+
+    def test_explicit_kb_repo_wins_on_a_sandboxed_home(self):
+        os.environ["CORVIN_HOME"] = tempfile.mkdtemp(prefix="kb-sandbox-")
+        fake = Path(tempfile.mkdtemp(prefix="kb-fixture-"))
+        (fake / "scripts").mkdir()
+        (fake / "scripts" / "kb.py").write_text("")
+        (fake / "kb" / "_meta").mkdir(parents=True)
+        (fake / "kb" / "_meta" / "sources.yaml").write_text("")
+        os.environ["CORVIN_KB_REPO"] = str(fake)
+        self.assertEqual(self.kp.kb_repo(), fake)

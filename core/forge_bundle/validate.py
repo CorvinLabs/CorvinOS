@@ -22,7 +22,6 @@ what SkillInstaller / StagingManager will later unpack.
 """
 from __future__ import annotations
 
-import bisect
 import bz2
 import hashlib
 import io
@@ -35,6 +34,7 @@ import zlib
 from dataclasses import dataclass
 from typing import Collection, Iterator, Mapping
 
+from core.pii.jwt_scan import LinearJwtPattern
 from core.pii.sensitive import PIIDetectionFailedClosed, detect_named_types
 
 from .envelope import (
@@ -246,41 +246,18 @@ def _check_staleness(external: list[Requirement], known: Known) -> None:
         raise _reject("staleness", f"requires what the target install does not have: {stale[:10]}")
 
 
-# The regex detectors of core.pii.sensitive, minus "jwt": its pattern backtracks
-# quadratically on input such as "eyJ-eyJ-…" (a 999-byte upload cost 43 s).
-# JWT shapes are found by the linear _has_jwt below instead.
+# The credential detectors of core.pii.sensitive. "jwt" there is now the
+# linear core.pii.jwt_scan matcher (2026-10-08); this module keeps its own
+# instance WITHOUT the trailing word boundary, as before — it can only reject
+# more, never less. (The old comment here said "a 999-byte upload cost 43 s";
+# that figure did not reproduce — 1.5 M samples of 0.5-2 KB, worst 3.3 ms —
+# but the regex IS quadratic: 160 KB took 3.1 s, x4 input = x16 time.)
 _REGEX_SECRET_TYPES = _SECRET_TYPES - {"jwt"}
-_JWT_RUN = re.compile(r"[A-Za-z0-9_\-]+")
-_WORD = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+_JWT = LinearJwtPattern(10, 10, 10, start_boundary=True, end_boundary=False)
 
 
 def _has_jwt(text: str) -> bool:
-    """Linear check for ``eyJ<seg>.<seg>.<seg>`` (base64url segments of >= 10
-    chars, the first counted after ``eyJ``) starting at a word boundary.
-    Slightly broader than the regex (no trailing boundary) — it can only
-    reject more, never less."""
-    starts: list[int] = []
-    ends: list[int] = []
-    for m in _JWT_RUN.finditer(text):
-        starts.append(m.start())
-        ends.append(m.end())
-
-    def end_of_run(i: int) -> int:
-        k = bisect.bisect_right(starts, i) - 1
-        return ends[k] if k >= 0 and i < ends[k] else i
-
-    n = len(text)
-    pos = text.find("eyJ")
-    while pos != -1:
-        if pos == 0 or text[pos - 1] not in _WORD:
-            a = end_of_run(pos)
-            if a - pos >= 13 and a < n and text[a] == ".":
-                b = end_of_run(a + 1)
-                if b - (a + 1) >= 10 and b < n and text[b] == ".":
-                    if end_of_run(b + 1) - (b + 1) >= 10:
-                        return True
-        pos = text.find("eyJ", pos + 1)
-    return False
+    return _JWT.search(text) is not None
 
 
 def _scan_text(text: str, where: str) -> None:

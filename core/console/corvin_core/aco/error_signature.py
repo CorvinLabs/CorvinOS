@@ -45,11 +45,23 @@ _REPO_ROOT_RE = re.compile(
 # placeholder so only the STRUCTURAL shape of a message survives.
 # Order matters: most-specific first so specific shapes aren't eaten by the
 # generic hex/number collapses at the end.
+
+# JWT: the linear matcher (core/pii/jwt_scan.py) has the same spans as this
+# module's former regex, which is quadratic on "eyJ-eyJ-…" (measured
+# 2026-10-08). This module is also imported where the repo root is not on
+# sys.path; a scrubber must never fail on an import, so the regex stays as the
+# fallback there.
+try:
+    from core.pii.jwt_scan import LinearJwtPattern as _LinearJwt
+    _JWT_RE = _LinearJwt(6, 6, 1, start_boundary=True, end_boundary=False)
+except ImportError:  # pragma: no cover - only without the repo root on sys.path
+    _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]+")
+
 _SCRUB: list[tuple[re.Pattern, str]] = [
     (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "<email>"),
     (re.compile(r"(?i)\b(token|secret|key|password|passwd|bearer|authorization|auth|api[_-]?key)\b"
                 r"\s*[:=]?\s*\S+"), "<credential>"),            # keyword + optional sep + value
-    (re.compile(r"\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]+"), "<jwt>"),
+    (_JWT_RE, "<jwt>"),
     (re.compile(r"\b(?:sk|pk|rk|ghp|gho|ghs|xox[baprs]|AKIA|ASIA)[_-][A-Za-z0-9_-]{8,}"),
      "<token>"),                                               # sk_live_, ghp_, slack, aws…
     (re.compile(r"\\\\[^\s'\"]+"), "<unc-path>"),              # windows UNC \\server\share

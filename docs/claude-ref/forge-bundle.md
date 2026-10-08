@@ -26,6 +26,15 @@ have regression tests in `tests/forge_bundle/` and the console's
 (C…, A…, S… round 1; R2A/R2B round 2; R3A/R3B round 3). The round-3 fixes were
 verified by those tests, not by a fourth review round.
 
+**2026-10-08 — Playwright suite + review of all four forges** (see
+[E2E suite](#e2e-and-adversarial-suite-2026-10-08)): four weaknesses found
+and fixed in the primitives (ADV-01 case-variant tool names racing through
+accept, ADV-03 import flood starving sync routes, ADV-09 a decided plugin
+package re-proposed on re-import, ADV-10 non-pytest test consoles projecting
+into the real KB), plus the quadratic JWT/e-mail regexes found while fixing.
+Each has a regression test that fails without the fix. **A refutation round
+against these fixes has not run yet** — they are verified by tests only.
+
 ## Export (Phase 2) — `core/forge_bundle/export.py`
 
 `build_bundle(*, bundle_id, bundle_version, selections, tenant_id, description=None) -> BundleResult`
@@ -96,7 +105,7 @@ refused/failed (JSON on stdout), 2 usage error.
 |---|---|---|
 | skill | `SkillInstaller(<corvin_home>/skills_installed)`, checksum = the envelope's sha256. That store is HOST-WIDE, so only the install owner (owner/admin session of the process tenant) may import a skill — same as the manual skill upload | `installed` |
 | layer | `LayerForgeOrchestrator(actor="bundle_import").create_layer_definition` — every gate, enforcement rule and the review run on THIS install. Before that: travelled state dropped, ≤ 16 gates, gate/rule/target/dependency ids short identifiers (they reach Layer Forge's audit records), each gate names ONE test file under `tests/` (no `::node`) | `forged`; detail notes a FLAGGED review on this install, or that Layer Forge wrote the layer but could not record its last step (only when the stored definition equals the bundle's, so a concurrent writer's layer is never reported as ours) |
-| plugin | `StagingManager.validate_zip_file` + `store_staged_upload` as `<id>-<version>.zip`; an identical package already pending is reported, not re-staged | `pending_approval` — approve at `/plugin-uploads/{id}/approve` |
+| plugin | `StagingManager.validate_zip_file` + `store_staged_upload` as `<id>-<version>.zip`; an identical package already pending is reported, not re-staged; one **already decided** (approved or rejected — `StagingManager.get_decision`, remembered under `plugin_staging/decisions/<upload_id>.json`) is refused: "already been decided (approved\|rejected)". The memory is a record, not a lock: the owner's manual `/plugin-uploads` re-upload stays possible, and rejection writes the record BEFORE deleting (a failed write leaves the upload pending) | `pending_approval` — approve at `/plugin-uploads/{id}/approve` |
 | tool | `ToolQuarantine.stage` — a name that already exists here (case-insensitively) is refused (`failed`, "already exists"); an entry identical in EVERYTHING the operator reviews (version, description, schema, runtime, code, meta, bundle) is reused, anything else is a new entry | `quarantined` |
 
 ### Tool quarantine — `core/forge_bundle/tool_quarantine.py`
@@ -126,7 +135,11 @@ create error `accept` looks at the registry: a tool carrying this
 `quarantine_id` in its meta exists → it counts as created. Otherwise the entry
 goes back and `artifact_failed` (`phase="accept"`) is recorded — if even that
 record fails, the ORIGINAL error is reported; the licence gate's
-`PermissionError` becomes `QuarantineForbidden` (403). If `artifact_created` cannot commit after the tool
+`PermissionError` becomes `QuarantineForbidden` (403), and `Registry.create`'s
+`FileExistsError` — it now refuses a name that differs from an existing one only
+in case, checked under its own lock — becomes `QuarantineConflict` (409): the
+caller-side `_name_taken` check runs outside that lock, so two concurrent
+accepts of `geo.fence` / `Geo.Fence` both passed it (ADV-01). If `artifact_created` cannot commit after the tool
 was created, `OutcomeNotRecorded` says exactly that (503). `reject`: claim →
 record `quarantine_rejected` → delete.
 
@@ -150,6 +163,17 @@ tenant only"). The audit chokepoint accepts records only for the process tenant
 another tenant could neither complete an import nor be kept out of host-wide
 data (inventory oracle via `/validate`, owner's tools via `/exportable`).
 
+**Heavy-slot limit (ADV-03).** `validate` and `import` are sync handlers and a
+layer import runs pytest gates plus the LLM review inside the request, so each
+holds a thread-pool worker for its whole duration; 48 concurrent imports stalled
+every other sync console route for the review's length (5.5 s measured; async
+`/healthz` stayed at 5 ms, so a liveness probe never noticed). At most
+`_HEAVY_SLOTS = 2` run at once, process-wide (Forge Bundles serve the install
+owner's tenant only); a request that finds no free slot is answered **429
+immediately** and never waits — a waiting handler would hold the very worker the
+guard keeps free. The slot is released in `finally`; the UI shows the 429 as
+"Import refused: …" and offers re-picking.
+
 Paths are RELATIVE (`/forge-bundles/...`): the console router is mounted under
 `/v1/console` by the gateway, so a router-level `/v1/console` prefix doubles it.
 `tests/forge_bundle/test_console_routes_e2e.py` mounts the router exactly as the
@@ -159,8 +183,8 @@ gateway does and checks both the real and the doubled path.
 |---|---|---|
 | `GET /forge-bundles/exportable` | session | `{skills, tools, layers, plugins: []}` · 503 a store unreadable |
 | `POST /forge-bundles/export` | session + CSRF | ZIP · 400 plugin selection · 403 skill for a non-owner · 422 `ExportError` · 503 audit down |
-| `POST /forge-bundles/validate` (multipart `file`) | session + CSRF | `{valid: true, …report}` / `{valid: false, stage, reason}` · 503 `{stage: "inventory", reason}` — writes nothing |
-| `POST /forge-bundles/import` (multipart `file`) | session + CSRF | `ImportResult.to_dict()` · 413 > 50 MiB · 422 `{stage, reason}` · 503 `{message, …outcomes}` when stopped mid-way · 503 inventory/audit |
+| `POST /forge-bundles/validate` (multipart `file`) | session + CSRF | `{valid: true, …report}` / `{valid: false, stage, reason}` · 503 `{stage: "inventory", reason}` · **429** + `Retry-After: 5` when both heavy slots are busy — writes nothing |
+| `POST /forge-bundles/import` (multipart `file`) | session + CSRF | `ImportResult.to_dict()` · 413 > 50 MiB · 422 `{stage, reason}` · 503 `{message, …outcomes}` when stopped mid-way · 503 inventory/audit · **429** + `Retry-After: 5` when both heavy slots are busy |
 | `GET /forge-bundles/quarantine` | session | `{items, count}`; each item lists `requirements` and `secrets` it would get |
 | `POST /forge-bundles/quarantine/{qid}/accept` | session + CSRF | 404 unknown/already decided · 409 name taken · 403 licence gate · 422 changed/unsafe · 503 audit (entry back in queue) / outcome unrecorded · 500 never echoes exception text |
 | `POST /forge-bundles/quarantine/{qid}/reject` | session + CSRF | 404 · 503 audit ("the tool was not rejected and is still in the review queue") |
@@ -263,10 +287,14 @@ decodings; and wherever a backslash occurs, the text with `\uXXXX`,
 (JSON, JSON Lines, YAML, Python, JS). Deliberate obfuscation (base64, string
 splitting, ROT13) is out of scope for any pattern scanner. The regex
 credential detectors run through `core.pii.sensitive.detect_named_types`
-(fail-closed); JWT shapes are found by a LINEAR check (`_has_jwt`), because the
-shared JWT regex backtracks quadratically on input like `eyJ-eyJ-…` (a 999-byte
-upload cost 43 s) — the linear check is slightly broader, so it can only reject
-more. Measured: ≈ 9 s per 40 MiB of random binary, ≈ 4 s per 40 MiB of text,
+(fail-closed). JWT shapes are matched by `core.pii.jwt_scan.LinearJwtPattern`
+(this stage drops the trailing word boundary, so it can only reject more): the
+regex it replaces is QUADRATIC on input like `eyJ-eyJ-…` — measured 2026-10-08,
+80 KB 0.73 s, 4× the input = 16× the time. (An earlier note here said a
+999-byte upload cost 43 s; that did not reproduce, the growth law did.)
+`core.pii.email_scan` does the same for the structured e-mail detector (64 KB
+1.9 s). Both matchers are proven span-identical to the original regexes by
+differential tests (`tests/pii/`). Measured: ≈ 9 s per 40 MiB of random binary, ≈ 4 s per 40 MiB of text,
 ≈ 14 s per 40 MiB of NUL-heavy text; the ratio rule caps what a small upload
 can expand to (100×). A rejection names the detector, never the matched value.
 
@@ -291,3 +319,38 @@ starts in its forge's entry state on the importing install.
 + `routes/packages.py` (its docstring cites ADR-0268, which is *task-engine-parameters*
 in this corpus; it sits behind the default-off flag `package_marketplace_ui`) and
 `core/awpkg/` (workflow packages) are separate, and this ADR does not reconcile them.
+
+## E2E and adversarial suite (2026-10-08)
+
+`web-next/playwright.forge-system.config.ts` · specs in
+`web-next/tests/e2e/forge-system/` (82 tests) · run
+`npx playwright test -c playwright.forge-system.config.ts` from `web-next/`.
+
+Two isolated installs of the real `corvin_gateway.app` on throwaway
+`CORVIN_HOME`s (harness `harness/isolated_forge_backend.py`): **A** "Nordwind
+HQ" (`:8799`, seeded with skills, tools, layers and plugin packages) and **B**
+"Depot Hamburg" (`localhost:8798`, empty). Different HOSTS on purpose — cookies
+are per host, not per port. Exports go to `~/Downloads/corvin-forge-e2e/<run>/`
+(`FORGE_E2E_DOWNLOADS` overrides). The only replaced boundaries are the licence
+tier and Layer Forge's LLM review (a stub honouring the real contract: it never
+raises, it returns `ReviewVerdict("ERROR")`); quality gates run real pytest.
+
+| Spec | Covers |
+|---|---|
+| 01 | UI export on A → `~/Downloads` → UI import on B → review queue → re-export (lossless) |
+| 02 | Layer Forge: real gates, reviewer down / flagged, ghost gate, gate caps, smuggled state |
+| 03 | Plugin Forge: console refuses plugin export, CLI export, approval queue, decided-package memory |
+| 04 | Skill and Tool Forge specifics, `requires` (references / staleness), queue contract |
+| 05 | 27 hostile bundles, one stage each (container / envelope / integrity / secrets) |
+| 06 | races (concurrent accepts, case variants, duplicate imports), timeouts, 429 shedding, UI latency |
+| 07 | XSS, header injection, auth/CSRF matrix, skill identity, scanner limits, **live-chain isolation proof** |
+
+Hostile bundles are forged by `harness/bundle_lab.py` (stdlib only, never the
+code under test) and the audit chain is verified by the production
+`verify_chain` (`harness/chain_check.py`). **Isolation:** the harness points
+`CORVIN_KB_REPO` at nothing and `chdir`s into the throwaway home — Tool Forge's
+project scope resolves from the cwd via git, so `CORVIN_HOME` alone does not
+isolate it (ADV-10).
+
+Not defects, measured: obfuscated credentials (concatenated / base64 / reversed)
+pass the pattern scanner (ADV-07) — the review queue is the control.

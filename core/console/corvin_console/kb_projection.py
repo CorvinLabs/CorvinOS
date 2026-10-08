@@ -22,7 +22,9 @@ retires the skill of retired guidance — reporting back through ``kb guidance a
 so ``kb.py`` stays the only writer of KB files.
 
 The KB is located by ``CORVIN_KB_REPO`` or, by default, the ``Corvin-Knowledge``
-checkout next to this repo. No KB -> the projector is off and says so in its status.
+checkout next to this repo — the default applies only to a process on the
+install's canonical CORVIN_HOME (see ``_canonical_home``); a sandboxed home
+needs CORVIN_KB_REPO. No KB -> the projector is off and says so in its status.
 """
 from __future__ import annotations
 
@@ -69,9 +71,34 @@ class KbTransitionRefused(service.TaskTrackingError):
     """The KB state machine refused the move (-> HTTP 409)."""
 
 
+def _canonical_home() -> bool:
+    """True when this process runs on the install's own CORVIN_HOME.
+
+    The implicit sibling ``Corvin-Knowledge`` checkout is the OPERATOR's real
+    knowledge base; the projector heals and commits there every 2 s and
+    ``/kb-transition`` writes it. A console started on a throwaway
+    CORVIN_HOME (Playwright backends, sandboxes) must never do that — before
+    2026-10-08 only pytest was excluded (ADV-10), so every non-pytest test
+    console projected into the real KB. Canonical = unset, ``<repo>/.corvin``
+    or ``~/.corvin``. Any other home needs an explicit CORVIN_KB_REPO."""
+    home = os.environ.get("CORVIN_HOME")
+    if not home:
+        return True
+    try:
+        h = Path(home).expanduser().resolve()
+        return h in {(_REPO_ROOT / ".corvin").resolve(), (Path.home() / ".corvin").resolve()}
+    except OSError:
+        return False
+
+
 def kb_repo() -> Optional[Path]:
     env = os.environ.get("CORVIN_KB_REPO")
-    p = Path(env) if env else _REPO_ROOT.parent / "Corvin-Knowledge"
+    if env:
+        p = Path(env)
+    elif _canonical_home():
+        p = _REPO_ROOT.parent / "Corvin-Knowledge"
+    else:
+        return None  # sandboxed CORVIN_HOME: never the operator's KB by default (ADV-10)
     return p if (p / "scripts" / "kb.py").is_file() and (p / "kb" / "_meta" / "sources.yaml").is_file() else None
 
 
@@ -162,7 +189,7 @@ def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
     """One projector tick. Serialised: the loop and a transition never interleave."""
     repo = kb_repo()
     if repo is None:
-        st = {"state": "off", "reason": "no Corvin-Knowledge checkout (set CORVIN_KB_REPO)"}
+        st = {"state": "off", "reason": "no Corvin-Knowledge checkout, or a sandboxed CORVIN_HOME (set CORVIN_KB_REPO)"}
         _save(tenant_id, st)
         return st
     with _lock:

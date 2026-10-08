@@ -42,6 +42,7 @@ from enum import Enum
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from core.pii.jwt_scan import LinearJwtPattern
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,8 @@ _PII_PATTERNS = {
     "aws_access_key": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     "github_token": re.compile(r"\b(ghp_|ghu_|ghs_|ghr_)[A-Za-z0-9_]{36,255}\b"),
     "openai_style_key": re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
-    "jwt": re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+    # Linear twin of r"\beyJ[A-Za-z0-9_-]{8,}\.…{8,}\.…{8,}\b" (that regex is quadratic).
+    "jwt": LinearJwtPattern(8, 8, 8),
     "bearer": re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}", re.IGNORECASE),
     "phone_number": re.compile(r"\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b"),
 }

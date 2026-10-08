@@ -220,6 +220,20 @@ class Registry:
                 raise FileExistsError(
                     f"tool {name!r} already exists (use overwrite=True)"
                 )
+            # Case-insensitive uniqueness, checked UNDER the lock: on macOS and
+            # Windows `CSV.count` and `csv.count` share one impl file, so the
+            # second create would replace the first tool's code under its name.
+            # A caller-side check outside this lock (forge_bundle quarantine's
+            # _name_taken) let two concurrent accepts both pass (ADV-01,
+            # 2026-10-08). overwrite=True never licenses a case variant: it
+            # would still create a second entry, not replace the first.
+            folded = name.casefold()
+            clash = next((k for k in data if k != name and k.casefold() == folded), None)
+            if clash is not None:
+                raise FileExistsError(
+                    f"tool {name!r} collides with existing tool {clash!r} "
+                    "(names differ only in case)"
+                )
             # Layer-11 dialectic gate (forge_creation site). Heat is high
             # only when the new tool name collides with an existing one
             # OR an existing tool shares the same namespace prefix. The

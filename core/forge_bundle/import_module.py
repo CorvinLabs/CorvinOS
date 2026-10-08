@@ -386,6 +386,11 @@ def _intake_plugin(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile,
             if existing.get("status") == "pending_approval":
                 return "pending_approval", upload_id  # already waiting; not re-staged
             raise _IntakeFailed("this exact package was staged before and has already been decided")
+        # Both decisions delete the staging record, so the branch above never
+        # saw a decided package (ADV-09); the staging primitive now remembers.
+        decided = manager.get_decision(upload_id)
+        if decided is not None:
+            raise _IntakeFailed(f"this exact package was staged before and has already been decided ({decided})")
         manager.store_staged_upload(upload_id, pkg, manifest)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

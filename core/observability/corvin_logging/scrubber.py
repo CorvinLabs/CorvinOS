@@ -27,11 +27,23 @@ from typing import Any, Dict, Tuple
 #: class as the big-data classifier fix in 0.10.62). Bounded parts cannot exhibit
 #: that behaviour, and scrubbing now runs AFTER truncation so the input is small
 #: anyway — two independent guards, because one regex edit away is too close.
+
+# JWT: the linear matcher (core/pii/jwt_scan.py) has the same spans as this
+# module's former regex, which is quadratic on "eyJ-eyJ-…" (measured
+# 2026-10-08). This module is also imported where the repo root is not on
+# sys.path; a scrubber must never fail on an import, so the regex stays as the
+# fallback there.
+try:
+    from core.pii.jwt_scan import LinearJwtPattern as _LinearJwt
+    _JWT_RE = _LinearJwt(8, 8, 8, start_boundary=True, end_boundary=True)
+except ImportError:  # pragma: no cover - only without the repo root on sys.path
+    _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
+
 _PATTERNS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     ("email", re.compile(r"[\w.+-]{1,64}@[\w-]{1,63}\.[\w.-]{2,63}")),
     # Bearer/API-token shapes that show up in error strings.
     ("token", re.compile(r"\b(?:sk|pk|ghp|gho|xox[baprs])[-_][A-Za-z0-9_-]{16,}\b")),
-    ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")),
+    ("jwt", _JWT_RE),
     # A URL with embedded credentials — the classic connection-string leak.
     ("url_credentials", re.compile(r"\b[a-z][a-z0-9+.-]{0,15}://[^\s/@]{1,64}:[^\s/@]{1,64}@")),
     ("iban", re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b")),

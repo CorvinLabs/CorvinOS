@@ -4,6 +4,7 @@
     POST /forge-bundles/export                      build + download a bundle (session + CSRF)
     POST /forge-bundles/validate                    validate an upload, write nothing (session + CSRF)
     POST /forge-bundles/import                      validate + per-forge intake (session + CSRF)
+                                                    (validate + import: at most 2 at once, else 429)
     GET  /forge-bundles/quarantine                  tools awaiting review (session)
     POST /forge-bundles/quarantine/{qid}/accept     create the tool (session + CSRF)
     POST /forge-bundles/quarantine/{qid}/reject     drop the tool (session + CSRF)
@@ -20,7 +21,9 @@ import runs Layer Forge's quality gates (pytest subprocesses).
 """
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+import threading
+from contextlib import contextmanager
+from typing import Annotated, Any, Iterator, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
@@ -72,6 +75,34 @@ class ExportBody(BaseModel):
     bundle_version: str
     description: str | None = Field(default=None, max_length=2000)
     selections: list[ArtifactSelection]
+
+
+# ADV-03 (2026-10-08): validate/import are sync handlers that hold a thread
+# pool worker for the whole request — a layer import runs pytest gates and the
+# LLM review inside it. 48 concurrent imports from one session held every
+# worker and stalled ALL sync console routes for the review's duration (5.5 s
+# measured; async /healthz stayed fast, so a liveness probe never noticed).
+# At most _HEAVY_SLOTS run at once; a request that finds no free slot is
+# answered 429 at once — it never WAITS, because a waiting handler would hold
+# the very worker this guard exists to keep free. Process-wide on purpose:
+# Forge Bundles serve the install owner's tenant only (_host_tenant_session).
+_HEAVY_SLOTS = 2
+_heavy = threading.BoundedSemaphore(_HEAVY_SLOTS)
+_RETRY_AFTER_S = "5"
+
+
+@contextmanager
+def _heavy_slot() -> Iterator[None]:
+    if not _heavy.acquire(blocking=False):
+        raise HTTPException(
+            status_code=429,
+            detail="another bundle check or import is running on this install; try again in a few seconds",
+            headers={"Retry-After": _RETRY_AFTER_S},
+        )
+    try:
+        yield
+    finally:
+        _heavy.release()
 
 
 def _audit_unavailable(exc: Exception) -> HTTPException:
@@ -159,14 +190,15 @@ def validate_upload(
     from core.forge_bundle.import_module import check_bundle
     from core.forge_bundle.validate import BundleRejected
 
-    data = _read_upload(file)
-    try:
-        report = check_bundle(data, tenant_id=rec.tenant_id)
-    except BundleRejected as exc:
-        if exc.stage == "inventory":
-            raise HTTPException(status_code=503, detail={"stage": exc.stage, "reason": exc.reason}) from None
-        return {"valid": False, "stage": exc.stage, "reason": exc.reason, "origin_verified": False}
-    return {"valid": True, **_report_dict(report)}
+    with _heavy_slot():
+        data = _read_upload(file)
+        try:
+            report = check_bundle(data, tenant_id=rec.tenant_id)
+        except BundleRejected as exc:
+            if exc.stage == "inventory":
+                raise HTTPException(status_code=503, detail={"stage": exc.stage, "reason": exc.reason}) from None
+            return {"valid": False, "stage": exc.stage, "reason": exc.reason, "origin_verified": False}
+        return {"valid": True, **_report_dict(report)}
 
 
 @router.post("/forge-bundles/import")
@@ -177,20 +209,21 @@ def import_upload(
     from core.forge_bundle.audit import ForgeBundleAuditError
     from core.forge_bundle.import_module import BundleImportAborted, BundleImportError, import_bundle
 
-    data = _read_upload(file)
-    try:
-        result = import_bundle(data, tenant_id=rec.tenant_id, actor=_ACTOR,
-                               may_install_skills=_may_touch_host_skills(rec))
-    except BundleImportError as exc:
-        code = 503 if exc.stage == "inventory" else 422
-        raise HTTPException(status_code=code, detail={"stage": exc.stage, "reason": exc.reason}) from None
-    except BundleImportAborted as exc:
-        raise HTTPException(status_code=503, detail={
-            "message": "audit chain unavailable; the import stopped — see which artifacts landed",
-            **exc.result.to_dict()}) from None
-    except ForgeBundleAuditError as exc:
-        raise _audit_unavailable(exc) from None
-    return result.to_dict()
+    with _heavy_slot():
+        data = _read_upload(file)
+        try:
+            result = import_bundle(data, tenant_id=rec.tenant_id, actor=_ACTOR,
+                                   may_install_skills=_may_touch_host_skills(rec))
+        except BundleImportError as exc:
+            code = 503 if exc.stage == "inventory" else 422
+            raise HTTPException(status_code=code, detail={"stage": exc.stage, "reason": exc.reason}) from None
+        except BundleImportAborted as exc:
+            raise HTTPException(status_code=503, detail={
+                "message": "audit chain unavailable; the import stopped — see which artifacts landed",
+                **exc.result.to_dict()}) from None
+        except ForgeBundleAuditError as exc:
+            raise _audit_unavailable(exc) from None
+        return result.to_dict()
 
 
 @router.get("/forge-bundles/quarantine")

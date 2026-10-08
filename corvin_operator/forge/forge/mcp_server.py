@@ -2122,7 +2122,9 @@ class MCPServer:
             except KeyError:
                 self._tool_error(msgid, f"unknown tool: {name}")
                 return
-            except ValueError as e:
+            except (ValueError, FileExistsError) as e:
+                # FileExistsError: the target scope holds a case variant of
+                # this name (Registry.create's case-insensitive check).
                 self._tool_error(msgid, str(e))
                 return
             self._tool_success(

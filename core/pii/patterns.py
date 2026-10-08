@@ -22,6 +22,7 @@ Patterns cover:
 import re
 from dataclasses import dataclass
 from typing import Pattern, Optional
+from core.pii.email_scan import LinearEmailPattern
 
 
 @dataclass
@@ -39,10 +40,15 @@ class PIIPattern:
 # EMAIL PATTERNS
 # ============================================================================
 
-EMAIL_RFC5322 = re.compile(
-    # A dotted TLD is REQUIRED (``user@localhost`` is not an address).
+#: The address regex, verbatim. A dotted TLD is REQUIRED (``user@localhost``
+#: is not an address). Kept as source for the differential test only: as a
+#: compiled regex it is QUADRATIC on runs like "a-a-a-…" (64 KB 1.9 s, x4 input
+#: = x16 time, measured 2026-10-08), and it sits in the structured PII gate.
+EMAIL_RFC5322_SOURCE = (
     r"\b[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,}\b"
 )
+#: Same matches, linear time (core/pii/email_scan.py; tests/pii/test_email_scan.py).
+EMAIL_RFC5322 = LinearEmailPattern()
 
 # ============================================================================
 # PHONE PATTERNS

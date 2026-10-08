@@ -49,6 +49,7 @@ from collections import Counter
 from typing import Optional
 
 from core.pii.patterns import PIIPattern, PII_PATTERNS
+from core.pii.jwt_scan import LinearJwtPattern
 
 
 class PIIDetectionFailedClosed(RuntimeError):
@@ -111,8 +112,11 @@ _SENSITIVE_DETECTORS: list[PIIPattern] = [
     _p("google_api_key", r"\bAIza[0-9A-Za-z_\-]{35}\b"),
     # Stripe / OpenAI style sk-/pk- secret keys
     _p("prefixed_secret_key", r"\b[sp]k[-_](?:live|test|proj)?[-_]?[A-Za-z0-9]{16,}\b"),
-    # JWT (three base64url segments)
-    _p("jwt", r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"),
+    # JWT (three base64url segments). Same spans as
+    # r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b",
+    # but linear: that regex is quadratic on "eyJ-eyJ-…" (80 KB 0.73 s, 1 MiB
+    # ~2 min, measured 2026-10-08) — see core/pii/jwt_scan.py.
+    PIIPattern(name="jwt", pattern=LinearJwtPattern(10, 10, 10), replacement="[REDACTED]"),
     # HTTP bearer / authorization header
     _p("bearer_token", r"(?i)\b(?:authorization\s*[:=]\s*)?bearer\s+[A-Za-z0-9\-._~+/]{12,}=*"),
     # --- Generic credential-assignment shapes -------------------------------

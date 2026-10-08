@@ -493,6 +493,31 @@ class TestA9SkippedBootstrapIsRecorded(_Env):
 # ── A11 ───────────────────────────────────────────────────────────────────────
 
 
+def test_console_import_does_not_put_core_on_sys_path():
+    """A11 for PRODUCTION code: the guard below scans test files only, and
+    routes/task_graph_api.py inserted <repo>/core at import time (7b855dfc7) —
+    in every console process, live included. It surfaced only as an
+    order-dependent failure of the guard below. Imports the console in a fresh
+    interpreter with the service's PYTHONPATH (corvin-webui.service)."""
+    import subprocess
+
+    paths = ["core/console", "core/gateway", "core/license", "core/compliance",
+             "corvin_operator/forge", "corvin_operator/skill-forge",
+             "corvin_operator/bridges/shared", "core/plugins"]
+    core = str(_REPO / "core")
+    probe = (
+        "import sys, json\n"
+        "import corvin_console.app\n"
+        f"print(json.dumps([p for p in sys.path if p.rstrip('/') == {core!r}]))\n"
+    )
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(str(_REPO / p) for p in paths) + os.pathsep + str(_REPO)}
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
+                         env=env, cwd=str(_REPO), timeout=300)
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert json.loads(out.stdout.strip().splitlines()[-1]) == [], (
+        f"importing corvin_console.app put {core!r} on sys.path")
+
+
 def test_no_test_puts_core_first_on_sys_path():
     """`<repo>/core` on sys.path makes `import audit` resolve to core/audit.
 

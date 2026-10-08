@@ -460,6 +460,43 @@ def test_C17_reimporting_a_staged_plugin_does_not_restage_it(make_plugin_package
     assert StagingManager(T).get_staged_upload(first.detail)["timestamp"] == staged_at
 
 
+@pytest.mark.parametrize("decision", ["rejected", "approved"])
+def test_ADV09_a_decided_plugin_package_is_not_proposed_again(make_plugin_package, decision):
+    """Both decisions delete the staging .meta; before the fix the "already
+    decided" branch was unreachable and a REJECTED package came back as
+    pending_approval on every re-import (2026-10-08 review, ADV-09)."""
+    pkg = make_plugin_package("acme-audit-sink", "0.5.0")
+    data = build_bundle(bundle_id="b", bundle_version="1.0.0", tenant_id=T,
+                        selections=[PluginSelection("acme-audit-sink", "0.5.0", package_path=pkg)]).data
+    from core.plugins.staging import StagingManager
+
+    upload_id = _import(data).outcomes[0].detail
+    m = StagingManager(T)
+    if decision == "rejected":
+        m.reject_staged_upload(upload_id)
+    else:
+        m.move_to_installed(upload_id, (True, "approved"))
+    assert m.get_staged_upload(upload_id) is None          # the record the old check relied on is gone
+    again = _import(data).outcomes[0]
+    assert again.status == "failed" and f"already been decided ({decision})" in again.detail
+    assert m.get_staged_upload(upload_id) is None          # and nothing was re-staged
+
+
+def test_ADV09_rejection_is_remembered_before_anything_is_deleted(make_plugin_package, monkeypatch):
+    pkg = make_plugin_package("acme-audit-sink", "0.5.0")
+    data = build_bundle(bundle_id="b", bundle_version="1.0.0", tenant_id=T,
+                        selections=[PluginSelection("acme-audit-sink", "0.5.0", package_path=pkg)]).data
+    from core.plugins.staging import StagingError, StagingManager
+
+    upload_id = _import(data).outcomes[0].detail
+    def broken(self, *_a):
+        raise StagingError("disk full")
+    monkeypatch.setattr(StagingManager, "record_decision", broken)
+    with pytest.raises(StagingError):
+        StagingManager(T).reject_staged_upload(upload_id)
+    assert StagingManager(T).get_staged_upload(upload_id) is not None  # still pending, not silently forgotten
+
+
 # ── adversarial round 2 ──────────────────────────────────────────────────────
 
 
@@ -584,6 +621,53 @@ def test_R2A_11_the_conflict_check_ignores_case(tool_bundle, make_tool):
     make_tool("CSV.count")
     outcome = _import(tool_bundle).outcomes[0]
     assert outcome.status == "failed" and "already exists" in outcome.detail
+
+
+def test_ADV01_the_registry_itself_refuses_a_case_variant(make_tool):
+    """The primitive, not the bundle path: Registry.create checks case-insensitive
+    uniqueness under its own lock (2026-10-08 review, ADV-01)."""
+    from forge.multi_registry import MultiRegistry
+
+    make_tool("geo.fence")
+    with pytest.raises(FileExistsError, match="differ only in case"):
+        MultiRegistry(tenant_id=T).create(scope="user", name="Geo.Fence", description="x",
+                                          input_schema={"type": "object"}, impl="def run(r):\n    return 1\n")
+    with pytest.raises(FileExistsError):  # overwrite=True never licenses a case variant
+        MultiRegistry(tenant_id=T).create(scope="user", name="GEO.FENCE", description="x", overwrite=True,
+                                          input_schema={"type": "object"}, impl="def run(r):\n    return 1\n")
+
+
+def test_ADV01_concurrent_case_variant_accepts_create_one_tool():
+    """Two staged entries whose names differ only in case, accepted at once:
+    _name_taken passes for both (it runs outside the registry lock), so before
+    the fix both became tools — sharing one impl file on macOS/Windows."""
+    q = ToolQuarantine(T)
+    qids = []
+    for name in ("geo.fence", "Geo.Fence"):
+        entry, _ = q.stage(tool_id=name, version="1.0.0", bundle_id=f"b-{name.lower()}x".replace(".", "-"),
+                           bundle_version="1.0.0", impl_bytes=f"def run(r):\n    return {name!r}\n".encode(),
+                           spec={"name": name, "description": "geo", "input_schema": {"type": "object"},
+                                 "runtime": "python"})
+        qids.append(entry.quarantine_id)
+    barrier, results = threading.Barrier(2), []
+
+    def go(qid):
+        barrier.wait()
+        try:
+            tq.accept(T, qid, actor="test")
+            results.append("ok")
+        except QuarantineError as exc:
+            results.append(type(exc).__name__)
+
+    threads = [threading.Thread(target=go, args=(qid,)) for qid in qids]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    from forge.multi_registry import MultiRegistry
+    names = [s.name for s in MultiRegistry(tenant_id=T).list() if s.name.casefold() == "geo.fence"]
+    assert len(names) == 1, names
+    assert sorted(results) == ["QuarantineConflict", "ok"]
+    # The loser is back in the queue, not lost.
+    assert len([e for e in ToolQuarantine(T).list() if e.tool_id.casefold() == "geo.fence"]) == 1
 
 
 def test_R2A_12_stale_claim_leftovers_are_swept(tool_bundle):

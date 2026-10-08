@@ -206,7 +206,7 @@ def reject_upload(
     if not manager.get_staged_upload(upload_id):
         raise HTTPException(status_code=404, detail="Upload not found")
     try:
-        manager.delete_staged_upload(upload_id)
+        manager.reject_staged_upload(upload_id)  # remembered, then deleted (ADV-09)
     except Exception:
         _failed(rec, "plugin.upload_reject", upload_id, "internal_error")
         raise HTTPException(status_code=500, detail="Rejection failed")

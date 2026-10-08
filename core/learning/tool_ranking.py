@@ -39,6 +39,7 @@ from .event_schema import ToolExecutedPayload
 from .event_store import EventStore
 from .learning_events import EventType, LearningEvent
 from .tool_ranking_cache import RankingCache
+from core.pii.jwt_scan import LinearJwtPattern
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ _PII_VALUE_PATTERNS = (
     re.compile(r"\+?\d[\d\s().-]{7,}\d"),  # phone-ish digit runs
     re.compile(r"\b(?:sk|pk|ghp|xox[abp])[_-][A-Za-z0-9_-]{8,}\b"),  # api keys
     re.compile(r"\bAKIA[0-9A-Z]{12,}\b"),  # AWS
-    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),  # JWT
+    LinearJwtPattern(10, 10, 10),  # JWT — linear twin of the quadratic \beyJ…{10,}…\b regex
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]{16,}"),
     re.compile(r"/(?:home|Users)/[^/\s]+"),  # user home paths
 )

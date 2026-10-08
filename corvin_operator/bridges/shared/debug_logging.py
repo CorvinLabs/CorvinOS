@@ -100,9 +100,21 @@ def _resolve_level() -> int:
 # ── Redaction ───────────────────────────────────────────────────────────
 
 # Order matters: longer / more specific patterns first.
+
+# JWT: the linear matcher (core/pii/jwt_scan.py) has the same spans as this
+# module's former regex, which is quadratic on "eyJ-eyJ-…" (measured
+# 2026-10-08). This module is also imported where the repo root is not on
+# sys.path; a scrubber must never fail on an import, so the regex stays as the
+# fallback there.
+try:
+    from core.pii.jwt_scan import LinearJwtPattern as _LinearJwt
+    _JWT_RE = _LinearJwt(16, 16, 8, start_boundary=False, end_boundary=False)
+except ImportError:  # pragma: no cover - only without the repo root on sys.path
+    _JWT_RE = re.compile(r"eyJ[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{8,}")
+
 _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # eyJ... JWTs (header.body.sig). At least 16 chars on each side.
-    (re.compile(r"eyJ[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{8,}"),
+    (_JWT_RE,
      "[REDACTED_JWT]"),
     # sk-..., sk-ant-..., ghp_..., ghs_..., xoxb-..., AKIA..., AIza...
     (re.compile(r"\b(sk-(?:ant-)?[A-Za-z0-9_\-]{20,})\b"), "[REDACTED_KEY]"),

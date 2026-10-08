@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
+import re
 import tempfile
 import zipfile
 from datetime import datetime, timezone
@@ -21,6 +24,12 @@ from pathlib import Path
 from typing import Any
 
 from forge import paths as _forge_paths
+
+log = logging.getLogger(__name__)
+
+# upload ids are the first 16 hex chars of the package's sha256 (content-addressed).
+_UPLOAD_ID_RE = re.compile(r"^[0-9a-f]{16}$")
+_DECISIONS = ("approved", "rejected")
 
 
 class StagingError(Exception):
@@ -200,6 +209,53 @@ class StagingManager:
         except (json.JSONDecodeError, OSError):
             return None
 
+    # ── decision memory (ADV-09, 2026-10-08) ─────────────────────────────
+    # Both decisions remove the staging .meta (approve moves the package to
+    # plugins_installed, reject deletes it), so "was this exact package
+    # decided before?" had no answer and forge_bundle's "already decided"
+    # refusal was unreachable: a rejected package came back as
+    # pending_approval on every re-import of the same bundle. The decision is
+    # kept per content-addressed upload id under plugin_staging/decisions/.
+    # It is a MEMORY, not a lock: the owner's own manual re-upload is a new
+    # decision and stays possible; only a bundle import refuses (import_module).
+
+    @property
+    def decisions_root(self) -> Path:
+        return self.staging_root / "decisions"
+
+    def record_decision(self, upload_id: str, decision: str) -> None:
+        if decision not in _DECISIONS or not _UPLOAD_ID_RE.match(upload_id):
+            raise StagingError("invalid decision record")
+        self.decisions_root.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=self.decisions_root, prefix=".decision-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                json.dump({"upload_id": upload_id, "decision": decision,
+                           "decided_at": datetime.now(timezone.utc).isoformat()}, fh)
+            os.replace(tmp, self.decisions_root / f"{upload_id}.json")
+        except OSError as e:
+            Path(tmp).unlink(missing_ok=True)
+            raise StagingError(f"Failed to record decision: {e}") from e
+
+    def get_decision(self, upload_id: str) -> str | None:
+        """'approved' / 'rejected' when this exact package was decided before."""
+        if not _UPLOAD_ID_RE.match(upload_id):
+            return None
+        try:
+            rec = json.loads((self.decisions_root / f"{upload_id}.json").read_text())
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError):
+            return "rejected"  # unreadable memory counts as decided: refuse, never re-propose
+        d = rec.get("decision") if isinstance(rec, dict) else None
+        return d if d in _DECISIONS else "rejected"
+
+    def reject_staged_upload(self, upload_id: str) -> None:
+        """Operator rejection: remember it FIRST, then delete. If the memory
+        cannot be written nothing is deleted and the rejection fails loudly."""
+        self.record_decision(upload_id, "rejected")
+        self.delete_staged_upload(upload_id)
+
     def delete_staged_upload(self, upload_id: str) -> None:
         """Delete staged upload and metadata.
 
@@ -276,6 +332,15 @@ class StagingManager:
             # Cleanup metadata
             if meta_path.exists():
                 meta_path.unlink()
+
+            # Remember the approval (ADV-09). After the move: the package IS
+            # installed, so a failure here must not fail the approval; it only
+            # means a later bundle import could propose it again — still behind
+            # an operator approval. Logged, never silent.
+            try:
+                self.record_decision(upload_id, "approved")
+            except StagingError as e:
+                log.warning("plugin approval of %s not remembered: %s", upload_id, e)
 
             return installed_zip
 

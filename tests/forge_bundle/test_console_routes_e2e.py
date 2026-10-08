@@ -323,3 +323,39 @@ def test_R3B_6_inventory_refusal_has_one_shape_on_both_routes(console_client, tm
     for path in ("validate", "import"):
         r = _upload(client, csrf, path, bundle)
         assert r.status_code == 503 and r.json()["detail"]["stage"] == "inventory", (path, r.text)
+
+
+def test_ADV03_heavy_routes_answer_429_instead_of_holding_a_worker(console_client):
+    """At most two validate/import handlers run at once; the next one is refused
+    immediately with Retry-After, it never waits on a pool worker (ADV-03)."""
+    from corvin_console.routes import forge_bundle_routes as fbr
+
+    client, csrf = console_client
+    held = [fbr._heavy.acquire(blocking=False) for _ in range(fbr._HEAVY_SLOTS)]
+    assert all(held)
+    try:
+        for path in ("validate", "import"):
+            r = _upload(client, csrf, path, b"not a zip")
+            assert r.status_code == 429, (path, r.text)
+            assert r.headers["retry-after"] == "5"
+    finally:
+        for _ in held:
+            fbr._heavy.release()
+    # Slots free again: the same upload reaches the validator (and is refused there).
+    assert _upload(client, csrf, "import", b"not a zip").status_code == 422
+
+
+def test_ADV03_a_refused_or_failing_request_never_leaks_a_slot(console_client):
+    from corvin_console.routes import forge_bundle_routes as fbr
+
+    client, csrf = console_client
+    for _ in range(fbr._HEAVY_SLOTS * 3):          # 422 path, 400 path
+        _upload(client, csrf, "import", b"not a zip")
+        _upload(client, csrf, "validate", b"")
+    held = [fbr._heavy.acquire(blocking=False) for _ in range(fbr._HEAVY_SLOTS)]
+    try:
+        assert all(held), "a slot leaked"
+    finally:
+        for ok in held:
+            if ok:
+                fbr._heavy.release()

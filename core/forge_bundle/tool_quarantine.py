@@ -400,6 +400,12 @@ def accept(tenant_id: str, qid: str, *, actor: str) -> QuarantinedTool:
                      **{k: v for k, v in common.items() if k != "quarantine_id"})
             except Exception:
                 pass  # the queue still holds the entry; the original error is the one to report (R2A-8)
+            if isinstance(exc, FileExistsError):
+                # Registry.create's own (locked, case-insensitive) uniqueness
+                # check refused: a concurrent accept won the name (ADV-01).
+                # The entry is back in the queue; answer 409, not a bare 500.
+                raise QuarantineConflict(
+                    f"a tool named {entry.tool_id!r} (or a case variant) was created meanwhile") from None
             if isinstance(exc, PermissionError):
                 raise QuarantineForbidden("this licence tier may not create tools") from None
             raise
