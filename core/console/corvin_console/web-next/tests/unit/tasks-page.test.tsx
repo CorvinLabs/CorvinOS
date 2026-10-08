@@ -64,8 +64,10 @@ function run(id: string, over: Record<string, unknown>) {
     created_at: ago(1), started_at: ago(1), ended_at: ago(0.5), sort_ts: 0, duration_s: 60, stale_reason: null,
     detail: null, ...over };
 }
+// The runs below use ago() (real clock) and the page windows them against server_time,
+// so this fixture's server_time must be the real clock too.
 const RUNS_BODY = {
-  server_time: NOW, scan_ms: 1, finished_total: 2,
+  server_time: new Date().toISOString(), scan_ms: 1, finished_total: 2,
   types: [
     { type: "chat", label: "Chat", active: 1, finished: 2, stale: 0, failed: 0, note: null, error: null },
     { type: "a2a", label: "A2A", active: 1, finished: 0, stale: 0, failed: 0, note: null, error: null },
@@ -214,7 +216,11 @@ describe("Tasks page", () => {
   });
 
   it("lists runs next to the items in the tree, grouped by type and channel, with steps", async () => {
-    server.use(http.get("/v1/console/initiatives/tasks", () => HttpResponse.json(RUNS_BODY)));
+    server.use(
+      http.get("/v1/console/initiatives/tasks", () => HttpResponse.json(RUNS_BODY)),
+      // The page's clock follows the list's server_time; the runs use the real clock.
+      http.get("/v1/console/task-tracking/items", () => HttpResponse.json({ ...LIST, server_time: new Date().toISOString() })),
+    );
     renderIt();
     const runs = await screen.findByTestId("runs-tree");
     expect(within(runs).getByTestId("run-group-chat:discord")).toBeTruthy();

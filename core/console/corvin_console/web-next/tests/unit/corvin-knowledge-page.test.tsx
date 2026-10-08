@@ -9,13 +9,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { http, HttpResponse } from "msw";
 import { server } from "../fixtures/server";
 
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({ session: { tenant_id: "_default", csrf_token: "csrf-test", tier: "owner" }, loading: false, refresh: vi.fn(), logout: vi.fn() }),
 }));
-vi.mock("vis-network", () => ({ Network: class { on() {} destroy() {} } }));
+vi.mock("vis-network", () => ({
+  // happy-dom has no layout engine: every Network method is a no-op.
+  Network: class { constructor() { return new Proxy(this, { get: (_t, k) => (k === "then" ? undefined : () => undefined) }); } },
+}));
 vi.mock("vis-network/styles/vis-network.min.css", () => ({}));
 
 import { CorvinKnowledgePage, MARKER_KNOWLEDGE } from "@/pages/corvin-knowledge";
@@ -27,6 +31,7 @@ const CONFIG = { repo_path: "~/.corvin-knowledge/", remote_url: "https://github.
 function handlers(graph: { entities: unknown[]; relations: unknown[] }) {
   return [
     http.get("/v1/console/plugins/corvin-knowledge/graph", () => HttpResponse.json(graph)),
+    http.get("/v1/console/plugins/corvin-knowledge/doc/:id", () => HttpResponse.json({ detail: "not found" }, { status: 404 })),
     http.get("/v1/console/plugins/corvin-knowledge/config", () => HttpResponse.json(CONFIG)),
     http.post("/v1/console/plugins/corvin-knowledge/sync", async ({ request }) => {
       seen.push({ method: "POST", path: "sync", csrf: request.headers.get("x-csrf-token"), body: await request.json() });
@@ -42,7 +47,7 @@ function handlers(graph: { entities: unknown[]; relations: unknown[] }) {
 
 function renderIt() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={qc}><CorvinKnowledgePage /></QueryClientProvider>);
+  return render(<MemoryRouter><QueryClientProvider client={qc}><CorvinKnowledgePage /></QueryClientProvider></MemoryRouter>);
 }
 afterEach(() => { cleanup(); seen.length = 0; });
 
@@ -52,7 +57,7 @@ describe("Knowledge Graph panel", () => {
     renderIt();
     expect(screen.getByText(MARKER_KNOWLEDGE)).toBeInTheDocument();
     await screen.findByTestId("knowledge-empty");
-    expect(screen.getByTestId("knowledge-empty").textContent).toMatch(/No entities at ~\/.corvin-knowledge\/\/graph/);
+    expect(screen.getByTestId("knowledge-empty").textContent).toMatch(/No entities at ~\/\.corvin-knowledge\/\/kb\/graph/);
     fireEvent.click(screen.getByRole("button", { name: "Pull" }));
     await screen.findByText(/Sync sync operation 'pull' completed — the graph was reloaded/);
     expect(seen[0]).toMatchObject({ path: "sync", csrf: "csrf-test", body: { sync_type: "pull" } });
@@ -64,9 +69,11 @@ describe("Knowledge Graph panel", () => {
       { id: "CONCEPT-0001", type: "concept", title: "Second", status: "proposed", tags: ["b"] },
     ], relations: [{ from_id: "CONCEPT-0001", to_id: "ADR-0001", relation: "relates_to" }] }));
     renderIt();
-    await screen.findByText("2 of 2 entities shown");
+    // The Type / Status filters belong to the "All" view; "Focus" is the default.
+    fireEvent.click(await screen.findByRole("button", { name: "All" }));
+    await screen.findByText("2 of 2 nodes shown");
     fireEvent.change(screen.getByLabelText("Status"), { target: { value: "accepted" } });
-    await screen.findByText("1 of 2 entities shown");
+    await screen.findByText("1 of 2 nodes shown");
   });
 
   it("saves the edited settings with CSRF", async () => {

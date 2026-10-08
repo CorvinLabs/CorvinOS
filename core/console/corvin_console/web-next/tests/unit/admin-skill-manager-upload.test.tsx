@@ -9,7 +9,7 @@
  * surface the backend's `detail` and re-enable the form.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { server } from "../fixtures/server";
 import { installCsrfFetch, setCurrentCsrf } from "@/lib/csrf-fetch";
@@ -27,10 +27,10 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const zip = () => new File([new Uint8Array([80, 75, 3, 4])], "pkg.zip", { type: "application/zip" });
 
 function fillAndSubmit(container: HTMLElement) {
-  fireEvent.change(screen.getByPlaceholderText("e.g., my-awesome-skill"), { target: { value: "demo" } });
-  fireEvent.change(screen.getByPlaceholderText("e.g., 1.0.0"), { target: { value: "1.0.0" } });
+  fireEvent.change(screen.getByPlaceholderText("e.g. my-awesome-skill"), { target: { value: "demo" } });
+  fireEvent.change(screen.getByPlaceholderText("e.g. 1.0.0"), { target: { value: "1.0.0" } });
   fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [zip()] } });
-  fireEvent.click(screen.getByRole("button", { name: /Install Skill/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Install skill/ }));
 }
 
 describe("admin skill manager upload", () => {
@@ -50,13 +50,13 @@ describe("admin skill manager upload", () => {
     process.on("unhandledRejection", unhandled);
     try {
       const { container } = render(<SkillManager />);
-      await screen.findByText("No skills installed yet.");
+      await screen.findByText("No skill packages installed yet.");
       fillAndSubmit(container);
       expect(await screen.findByText(detail)).toBeInTheDocument();
       // Form usable again: the inputs are enabled and the button no longer
       // reads "Uploading …".
       await waitFor(() =>
-        expect(screen.getByPlaceholderText("e.g., my-awesome-skill")).not.toBeDisabled(),
+        expect(screen.getByPlaceholderText("e.g. my-awesome-skill")).not.toBeDisabled(),
       );
       expect(screen.queryByText(/Uploading/)).toBeNull();
       expect(csrf).toBe("csrf-test");
@@ -72,10 +72,10 @@ describe("admin skill manager upload", () => {
       http.post(INSTALL, () => new HttpResponse("upstream exploded", { status: 502 })),
     );
     const { container } = render(<SkillManager />);
-    await screen.findByText("No skills installed yet.");
+    await screen.findByText("No skill packages installed yet.");
     fillAndSubmit(container);
     expect(await screen.findByText("Upload failed: HTTP 502")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("e.g., my-awesome-skill")).not.toBeDisabled();
+    expect(screen.getByPlaceholderText("e.g. my-awesome-skill")).not.toBeDisabled();
   });
 
   it("a refused uninstall shows the backend detail instead of nothing", async () => {
@@ -86,10 +86,12 @@ describe("admin skill manager upload", () => {
       http.delete("/v1/console/skills-manager/skills/uninstall/:id/:ver", () =>
         HttpResponse.json({ detail: "owner or admin required" }, { status: 403 })),
     );
-    vi.stubGlobal("confirm", () => true);
     render(<SkillManager />);
     await screen.findByText("demo");
-    fireEvent.click(screen.getByRole("button", { name: "Uninstall" }));
+    // Uninstall asks in a dialog (no window.confirm): open it, then confirm.
+    fireEvent.click(screen.getByRole("button", { name: /Uninstall/ }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Uninstall" }));
     expect(await screen.findByText("owner or admin required")).toBeInTheDocument();
   });
 });
