@@ -88,6 +88,13 @@ def test_voice_facts_only_speak_up_when_something_went_wrong():
     assert bg_scope.voice_facts(bad[1:], None) == "Background work finished, but 1 of 1 task failed."
     assert "stopped early" in bg_scope.voice_facts(ok, "child_cap")
     assert "stopped early" in bg_scope.voice_facts(bad, "wakeup_cap")
+    assert "interrupted" in bg_scope.voice_facts(ok, "process_died")
+    # in the language the spoken summary came out in
+    assert bg_scope.voice_facts(bad, None, "de") == "Die Hintergrundarbeit ist beendet, aber 1 von 2 Aufgaben ist fehlgeschlagen."
+    assert bg_scope.voice_facts(bad[1:], None, "de").endswith("1 von 1 Aufgabe ist fehlgeschlagen.")
+    assert "vorzeitig" in bg_scope.voice_facts(ok, "child_cap", "de")
+    assert "unterbrochen" in bg_scope.voice_facts(ok, "process_died", "de")
+    assert bg_scope.voice_facts(ok, "cancelled") == ""      # an operator /cancel says nothing
 
 
 # ------------------------------------------------------------------------- E2E
@@ -122,14 +129,16 @@ def test_a_failed_child_gets_its_own_spoken_message_before_the_end(box, monkeypa
 
 def test_a_badly_ended_scope_is_said_aloud_even_if_the_closing_text_is_silent_about_it(box, monkeypatch):
     msgs, tts = _turn(monkeypatch, box, "bash_bg_fail")
-    assert "Background work finished, but 1 of 1 task failed." in tts.calls[-1]
+    assert ("Background work finished, but 1 of 1 task failed." in tts.calls[-1]
+            or "1 von 1 Aufgabe ist fehlgeschlagen" in tts.calls[-1]), tts.calls[-1]
     final = [e for n, e in msgs if e.get("_final") and e.get("text")]
     assert "Background work finished" not in final[0]["text"], "the written message must not change"
 
 
 def test_a_cap_is_said_aloud(box, monkeypatch):
     msgs, tts = _turn(monkeypatch, box, "bash_bg_ok", speedup=1, env={"CORVIN_BG_CHILD_MAX": "3"})
-    assert "stopped early" in tts.calls[-1].lower()
+    assert ("stopped early" in tts.calls[-1].lower()
+            or "vorzeitig beendet" in tts.calls[-1].lower()), tts.calls[-1]
 
 
 def test_a_clean_run_adds_nothing_to_the_spoken_summary(box, monkeypatch):

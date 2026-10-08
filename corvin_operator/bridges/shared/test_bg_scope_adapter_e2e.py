@@ -82,9 +82,14 @@ def test_bash_child_reaches_the_tracker_and_the_audit_chain(sandbox, monkeypatch
 def test_audit_carries_no_free_text(sandbox, monkeypatch):
     """D9: neither the child's description nor the sub-agent prompt may reach the chain."""
     _, recs, _, _ = _run(monkeypatch, sandbox, "agent_bg")
-    blob = json.dumps(recs)
+    blob = json.dumps(recs, ensure_ascii=False)
     assert recs, "no bgscope records written"
-    assert "Zaehle bis 3" not in blob and "Zaehlen" not in blob and "Fertig" not in blob
+    # the strings the CLI really sent, read from the fixture itself — never a guess at them
+    started = next(e for e in kit.load_fixture("agent_bg") if e.get("subtype") == "task_started")
+    secrets_ = [started["description"], started["prompt"], "Fertig"]
+    assert all(len(x) > 3 for x in secrets_), secrets_
+    for needle in secrets_:
+        assert needle not in blob, f"{needle!r} reached the audit chain"
     allowed = {"scope_id", "child_id", "kind", "state", "exit_code", "duration_ms", "healed",
                "children_open", "tenant_id", "chain_dna", "wakeups", "children_total",
                "end_reason", "limit_s", "age_s", "limit"}

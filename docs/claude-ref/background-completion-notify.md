@@ -316,10 +316,11 @@ Measured on claude CLI 2.1.294 (details and raw captures: ADR-2236 / PLAN-0938):
   detached `/task` worker:
   - `bg_task_worker` relays the status lines through `task_progress` and forces a child state change past the
     coalescing window; the model's wake-up answers go out **in full, one message each** through
-    `completion_notify.send_interim` (a direct outbox write — `task_progress` folds every update that lands
-    between two poller ticks into the latest, which is right for status lines and wrong for content);
-  - the per-attempt wall clock (`CORVIN_BG_TASK_TIMEOUT`) does not fire while a child is open — the adapter
-    bounds the child itself (`CORVIN_BG_CHILD_MAX`); before, a 40 min child was cut at 30 min and the
+    `completion_notify.send_interim` (a direct, strictly ordered outbox write split at the channel's message limit — `task_progress` folds every
+    update that lands between two poller ticks into the latest, which is right for status lines and wrong for
+    content);
+  - the per-attempt wall clock (`CORVIN_BG_TASK_TIMEOUT`) does not COUNT the time a child is open — the
+    adapter bounds the child itself (`CORVIN_BG_CHILD_MAX`, 2 h by default for a worker); before, a 40 min child was cut at 30 min and the
     supervisor "resumed" by starting it again;
   - the worker records its open children (kind, age, scrubbed description) in `<task_runs>/<id>.children.json`
     (0600; removed on finish, retire and Art. 17 purge) so `continuation_prompt` can tell a RESUMED attempt

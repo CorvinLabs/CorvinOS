@@ -354,3 +354,41 @@ def test_children_snapshot_is_what_a_resumed_attempt_is_told():
              "status": "completed", "summary": "x"}, 701.0)
     assert bgs.children_snapshot(tr, now=702.0) == []
 
+
+# ----------------------------------------- review round 2: closing, died, mentions ---
+
+def test_closing_line_is_derived_from_the_events_only():
+    ok = [{"kind": "bash", "state": "completed", "exit_code": 0}]
+    assert bgs.closing_line(ok) == "✅ Background work finished: 1 task done."
+    mixed = ok + [{"kind": "agent", "state": "failed", "exit_code": 2}, {"kind": "bash", "state": "completed"}]
+    assert bgs.closing_line(mixed) == "❌ Background work finished: 1 of 3 tasks failed."
+
+
+def test_died_message_names_what_was_lost_and_never_a_description():
+    kids = [_child(kind="monitor", description="tail -f /var/log/secret.log"), _child(task_id="b")]
+    msg = bgs.died_message(kids, partial="last words")
+    assert "ended while 2 background tasks were still running (bash, monitor)" in msg
+    assert "incomplete" in msg and "Last update:\nlast words" in msg
+    assert "secret.log" not in msg
+    one = bgs.died_message([_child()])
+    assert "1 background task was still running" in one and "Last update" not in one
+
+
+def test_a_description_cannot_ping_a_whole_channel():
+    d = bgs.safe_description("deploy @everyone @here <@123456789> <#42> <@&7> ok")
+    for raw in ("@everyone", "@here", "<@123456789>", "<#42>", "<@&7>"):
+        assert raw not in d, d
+    assert "everyone" in d and "123456789" in d          # still readable, just inert
+
+
+def test_first_started_at_is_the_scope_clock():
+    tr = bgs.ScopeTracker()
+    assert tr.first_started_at is None
+    tr.feed({"type": "system", "subtype": "task_started", "task_id": "a", "task_type": "local_bash"}, 10.0)
+    tr.feed({"type": "system", "subtype": "task_started", "task_id": "b", "task_type": "local_bash"}, 20.0)
+    assert tr.first_started_at == 10.0
+    snap = bgs.ScopeTracker()
+    snap.feed({"type": "system", "subtype": "background_tasks_changed",
+               "tasks": [{"task_id": "x", "task_type": "local_agent"}]}, 5.0)
+    assert snap.first_started_at == 5.0
+

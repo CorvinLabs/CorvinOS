@@ -5976,6 +5976,7 @@ def _call_claude_streaming_via_engine(
     _last_interim = ""
     _scope_end: str | None = None   # "child_cap" | "wakeup_cap" when a cap ended the scope
     _cap_warned = False
+    _scope_limit_s = 0.0
     _child_cap_s = _bgs.child_max_s()
     _wakeup_cap = _bgs.wakeup_max()
 
@@ -6007,10 +6008,58 @@ def _call_claude_streaming_via_engine(
             except Exception as e:  # noqa: BLE001
                 log(f"bg_scope observer failed: {e!r}")
 
+    def _check_child_cap(now: float) -> bool:
+        """Apply the child caps; True when one ended the scope (the caller leaves the loop).
+
+        Checked when the stream is quiet AND after every event: a stream that never idles
+        for a second (a model working while a child runs) must not skip the cap. Besides
+        the oldest child's age there is a bound on the whole scope (twice the cap), so a
+        chain of sequential children cannot run for days.
+        """
+        nonlocal _scope_end, _cap_warned, _scope_limit_s
+        _open = _scope.open_children
+        if not _open:
+            return False
+        _age = _scope.oldest_open_age(now)
+        _total = (now - _scope.first_started_at) if _scope.first_started_at else 0.0
+        if _age > _child_cap_s or _total > 2 * _child_cap_s:
+            _scope_limit_s = _child_cap_s if _age > _child_cap_s else 2 * _child_cap_s
+            log(f"background scope over its cap (child {_age:.0f}s, scope {_total:.0f}s, "
+                f"limit {_scope_limit_s:.0f}s) — ending it")
+            _bgs.emit_audit("bgscope.child_cap_exceeded",
+                            tenant_id=_scope.tenant_id, scope_id=_scope.scope_id,
+                            children_open=len(_open), limit_s=int(_scope_limit_s),
+                            age_s=int(max(_age, _total)))
+            _scope_end = "child_cap"
+            try:
+                engine.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+            return True
+        if _age > 0.8 * _child_cap_s and not _cap_warned and on_status is not None:
+            _cap_warned = True
+            try:
+                on_status(f"⚠️ A background task has been running for "
+                          f"{_bgs.human_duration(_age)}; it will be ended after "
+                          f"{_bgs.human_duration(_child_cap_s)}.", tool_name="_bgcap")
+            except Exception as e:  # noqa: BLE001
+                log(f"cap warning failed: {e}")
+        return False
+
     def _emit_interim(text: str, cls: str) -> None:
         nonlocal _last_interim
         if not text.strip():
             return
+        # Interim text is model output like the final one: the same post-spawn output
+        # sentinel (opt-in per persona/tenant) applies, or a BLOCKED answer would reach
+        # the user just because it arrived early.
+        if _output_sentinel is not None:
+            try:
+                text = _apply_output_sentinel(prompt, text, profile=profile,
+                                              engine_name=getattr(engine, "name", ""),
+                                              channel=channel, chat_key=chat_key)
+            except Exception as e:  # noqa: BLE001
+                log(f"output-sentinel on interim raised ({e!r}), fail-open")
         _last_interim = text
         try:
             _interim_cb(text, {"cls": cls, "children_open": len(_scope.open_children),
@@ -6033,31 +6082,9 @@ def _call_claude_streaming_via_engine(
                     # LEGITIMATELY silent. The idle limit would kill it (and the
                     # child, and the wake-up turn, and — on an existing session —
                     # re-run the prompt). The child's own cap replaces it.
-                    _open_now = _scope.open_children
-                    if _open_now:
-                        _age = _scope.oldest_open_age(now)
-                        if _age > _child_cap_s:
-                            log(f"background child open {_age:.0f}s > cap {_child_cap_s:.0f}s "
-                                f"— ending the scope")
-                            _bgs.emit_audit("bgscope.child_cap_exceeded",
-                                            tenant_id=_scope.tenant_id, scope_id=_scope.scope_id,
-                                            children_open=len(_open_now), limit_s=int(_child_cap_s),
-                                            age_s=int(_age))
-                            _scope_end = "child_cap"
-                            try:
-                                engine.cancel()
-                            except Exception:  # noqa: BLE001
-                                pass
+                    if _scope.open_children:
+                        if _check_child_cap(now):
                             break
-                        if _age > 0.8 * _child_cap_s and not _cap_warned and on_status is not None:
-                            _cap_warned = True
-                            try:
-                                on_status(f"⚠️ A background task has been running for "
-                                          f"{_bgs.human_duration(_age)}; it will be ended after "
-                                          f"{_bgs.human_duration(_child_cap_s)}.",
-                                          tool_name="_bgcap")
-                            except Exception as e:  # noqa: BLE001
-                                log(f"cap warning failed: {e}")
                         idle_limit = 0
                     if idle_limit > 0 and (now - last_event) > idle_limit:
                         log(f"engine stream idle {now - last_event:.0f}s "
@@ -6112,6 +6139,8 @@ def _call_claude_streaming_via_engine(
                 ev = payload  # StreamEvent
                 last_event = time.time()
                 last_event_type = ev.type
+                if _scope.open_children and _check_child_cap(last_event):
+                    break
 
                 if ev.type == "session_started":
                     _captured_session_id = (ev.raw or {}).get("session_id") or ""
@@ -6272,6 +6301,7 @@ def _call_claude_streaming_via_engine(
                 _apply_transitions(_scope.finalize(time.time()))
             except Exception as e:  # noqa: BLE001
                 log(f"bg_scope finalize failed: {e!r}")
+            _open_at_eof = list(_scope.open_children)
             if _scope_end:
                 # We ended it on purpose: not an error, not a retry, and the user is
                 # told exactly what was cut (ADR-2236 D5/D6).
@@ -6279,16 +6309,33 @@ def _call_claude_streaming_via_engine(
                 error_text = None
                 final_text = _bgs.cut_message(
                     _scope_end, _scope.open_children,
-                    limit=_child_cap_s if _scope_end == "child_cap" else float(_wakeup_cap),
+                    limit=_scope_limit_s or _child_cap_s if _scope_end == "child_cap" else float(_wakeup_cap),
                     # With an interim sink every update was already delivered; quoting the
                     # last one again would duplicate it. Only an UNDELIVERED candidate
                     # (held, or any text when nobody listens) is worth quoting.
                     partial=_held_final if _interim_cb is not None else final_text)
+            elif _open_at_eof and not timed_out and not error_text:
+                # EOF with a child still open. The CLI exits only AFTER its children end, so
+                # this was a kill, a crash or an operator stop — never a clean finish. The
+                # user must not be handed the first answer again as if all were well.
+                _user_cancel = _turn is not None and _cancel_requested(_turn.chat_key)
+                _bgs.emit_audit("bgscope.cancelled", tenant_id=_scope.tenant_id,
+                                scope_id=_scope.scope_id, children_open=len(_open_at_eof),
+                                reason_code="user_cancel" if _user_cancel else "process_died")
+                _scope_end = "cancelled" if _user_cancel else "process_died"
+                # an operator /cancel keeps its established contract: silence (see below)
+                final_text = "" if _user_cancel else _bgs.died_message(
+                    _open_at_eof, partial=_held_final if _interim_cb is not None else final_text)
             elif _interim_cb is not None and not error_text:
-                # The newest result seen while no child was open is the final answer;
-                # failing that, the last interim stands in so the user is never left
-                # without a closing message.
-                final_text = _held_final or _last_interim or final_text
+                # The newest result seen while no child was open is the final answer. If the
+                # model produced none (an empty last wake-up result) a deterministic closing
+                # line stands in — re-sending the first answer would present it as news.
+                if _held_final:
+                    final_text = _held_final
+                elif _scope.all_children and _last_interim:
+                    final_text = _bgs.closing_line(_bgs.children_facts(_scope))
+                else:
+                    final_text = _last_interim or final_text
             # The process has exited, so nothing it owned is left running: close the
             # books AFTER the cap message above named what was cut.
             try:
@@ -6381,6 +6428,22 @@ def _call_claude_streaming_via_engine(
                 os.chmod(_msf, 0o600)
             except Exception as _e:  # noqa: BLE001
                 log(f"main_session: write failed: {_e}")
+
+        if error_text and (_scope.all_children or _last_interim):
+            # ADR-2236: a prompt that already started background work or delivered messages
+            # is NEVER re-run — every retry branch below would start the child a second time
+            # and deliver the first answer twice. Say what happened instead.
+            log(f"engine streaming returned error after background work started: {error_text[:200]} "
+                f"— not retried")
+            _TURN_OUTCOME.failed = "engine_error"
+            _msg = f"Claude API call failed: {error_text[:200]}"
+            if _scope.all_children:
+                _kinds = ", ".join(sorted({c.kind for c in _scope.all_children}))
+                _msg += (f"\n\nBackground work that was already started ({_kinds}) has been "
+                         f"ended; the request was not run again.")
+            if _held_final.strip():
+                _msg += f"\n\nLast update:\n{_held_final.strip()}"
+            return with_voice_override(_msg, "The call to Claude Code failed after background work had started.")
 
         if error_text:
             log(f"engine streaming returned error: {error_text[:200]}")
@@ -10475,6 +10538,7 @@ def _synthesize_voice_for_turn(
     voice_override: str | None,
     voice_task: str,
     profile: dict | None,
+    scope_facts: dict | None = None,
 ) -> tuple[Path | None, bool]:
     """Decide whether this turn should get a spoken voice-note and, if so,
     run the synth pipeline. Returns ``(voice_path, voice_was_expected)``.
@@ -10543,6 +10607,20 @@ def _synthesize_voice_for_turn(
     # with a German voice/accent (a second, independent half of the same
     # language-mismatch bug).
     _tts_lang = _resolve_voice_output_language(spoken) or "de"
+    # ADR-2236 D8: a scope that ended badly says so ALOUD. Appended after the summariser (and
+    # after a <voice> override) in the language the summary came out in, so neither can drop it.
+    if scope_facts and scope_facts.get("children"):
+        try:
+            try:
+                from . import bg_scope as _bgs_v  # type: ignore
+            except ImportError:
+                import bg_scope as _bgs_v  # type: ignore[no-redef]
+            _facts = _bgs_v.voice_facts(scope_facts["children"], scope_facts.get("end_reason"),
+                                        _tts_lang)
+            if _facts:
+                spoken = f"{spoken} {_facts}".strip()
+        except Exception as e:  # noqa: BLE001
+            log(f"voice facts skipped: {e!r}")
     # Resolve per-persona TTS voice from the chat profile. tts_voice_<lang>
     # wins over tts_voice (lang-agnostic); missing → synthesize_voice_note
     # falls back to the hardcoded language default.
@@ -12418,6 +12496,8 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     interim_seq = {"n": 0}
 
     scope_facts: dict = {"children": [], "end_reason": None}
+    milestone_voices = {"n": 0}
+    milestone_threads: list = []
 
     def _bg_interim_send(text: str, info: dict) -> None:
         cls = info.get("cls")
@@ -12461,20 +12541,30 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         interim_texts.append(full)
         log(f"interim #{interim_seq['n']} sent ({info.get('cls')}, "
             f"{info.get('children_open')} child(ren) open, chars={len(full)})")
-        if cls == "milestone":
+        if cls == "milestone" and milestone_voices["n"] < 3:
             # Spoken too — through the SAME pipeline and the SAME mode/consent gate as the
-            # closing summary. TTS is an enhancement: any failure leaves the text as sent.
-            try:
-                _vp, _ = _synthesize_voice_for_turn(body, settings, None, "", profile)
-                if _vp:
-                    n = interim_seq["n"]
-                    interim_seq["n"] += 1
-                    venv = _envelope({"voice_path": str(_vp), "msg_id": f"{msg_id}_i{n:03d}"})
-                    venv["provenance"] = _prov_i.build_provenance(channel, chat_key, persona_name)
-                    _atomic_write_outbox(OUTBOX / f"{msg_id}_-{n:03d}.json",
-                                         json.dumps(venv, ensure_ascii=False))
-            except Exception as e:  # noqa: BLE001
-                log(f"milestone voice skipped: {e!r}")
+            # closing summary, but OFF the engine loop (a TTS call can take many seconds and
+            # would stall the cap, heartbeat and cancel checks) and at most 3 per scope (a
+            # bursty failure must not become a stream of voice notes). TTS is an enhancement:
+            # any failure leaves the text as sent.
+            milestone_voices["n"] += 1
+            _n = interim_seq["n"]
+            interim_seq["n"] += 1
+
+            def _speak(_body=body, _n=_n) -> None:
+                try:
+                    _vp, _ = _synthesize_voice_for_turn(_body, settings, None, "", profile)
+                    if _vp:
+                        venv = _envelope({"voice_path": str(_vp), "msg_id": f"{msg_id}_i{_n:03d}"})
+                        venv["provenance"] = _prov_i.build_provenance(channel, chat_key, persona_name)
+                        _atomic_write_outbox(OUTBOX / f"{msg_id}_-{_n:03d}.json",
+                                             json.dumps(venv, ensure_ascii=False))
+                except Exception as e:  # noqa: BLE001
+                    log(f"milestone voice skipped: {e!r}")
+
+            _vt = threading.Thread(target=_speak, name="bgscope-milestone-voice", daemon=True)
+            _vt.start()
+            milestone_threads.append(_vt)
 
     # Heartbeat thread: kurzes Lebenszeichen falls Claude in den ersten
     # Sekunden noch gar nichts tut. Bei progress_updates ist die Wartezeit
@@ -12572,6 +12662,10 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 log(f"delegation badge skipped ({e!r})")
     finally:
         hb_stop.set()
+        # ADR-2236: a milestone voice note is synthesised off the engine loop; let it land
+        # BEFORE the closing message so the order the user hears is the order things happened.
+        for _vt in milestone_threads:
+            _vt.join(timeout=45)
         # A turn that raised before reporting is a failed turn, not a missing one.
         try:
             if not _deleg_meta.get("outcome_reported"):
@@ -12825,22 +12919,9 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # the answer is long; passes through unchanged when short. Mode-controlled.
     # See _synthesize_voice_for_turn() for why the "no summary attempted"
     # branch resets the thread-local skip-reason mirror.
-    # ADR-2236 D8: a scope that ended badly (a child failed / a cap cut it off) must say so
-    # in the spoken summary even if the closing message does not; the TEXT is not changed.
-    _voice_in = answer
-    if scope_facts.get("children"):
-        try:
-            try:
-                from . import bg_scope as _bgs_v  # type: ignore
-            except ImportError:
-                import bg_scope as _bgs_v  # type: ignore[no-redef]
-            _facts = _bgs_v.voice_facts(scope_facts["children"], scope_facts.get("end_reason"))
-            if _facts:
-                _voice_in = f"{answer}\n\n{_facts}"
-        except Exception as e:  # noqa: BLE001
-            log(f"voice facts skipped: {e!r}")
     voice_path, voice_was_expected = _synthesize_voice_for_turn(
-        _voice_in, settings, voice_override, _voice_task, profile,
+        answer, settings, voice_override, _voice_task, profile,
+        scope_facts=scope_facts,
     )
 
     # If voice was expected (mode + length / always) but the synth path

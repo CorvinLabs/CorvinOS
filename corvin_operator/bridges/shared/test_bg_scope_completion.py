@@ -153,7 +153,10 @@ def test_monitor_every_wakeup_reaches_the_user_and_the_last_one_is_final(box, mo
 def test_child_ending_before_the_first_result_is_handled(box, monkeypatch):
     msgs, _, _ = _turn(monkeypatch, box, "bash_and_agent_mixed")
     interim, final = _split(msgs)
-    assert len(final) == 1 and len(interim) == 2
+    # first answer + the sub-agent's wake-up + the failed bash child's own message (T-0074)
+    assert len(final) == 1 and len(interim) == 3, [m["text"][:50] for m in msgs]
+    milestone = [m for m in interim if "failed (exit 3)" in m["text"]]
+    assert len(milestone) == 1 and "still running" not in milestone[0]["text"]
     assert "bash" in final[0]["text"].lower()          # the failed bash child is the last one standing
 
 
@@ -222,11 +225,24 @@ def test_wakeup_cap_stops_a_chatty_monitor(box, monkeypatch):
     assert "bgscope.wakeup_cap_exceeded" in [r["event_type"] for r in _audit(box)]
 
 
-def test_a_cap_of_zero_is_rejected_not_obeyed(box, monkeypatch):
-    """A cap of 0 would disable the only bound (ADR-2236 D12)."""
-    monkeypatch.setenv("CORVIN_BG_CHILD_MAX", "0")
-    monkeypatch.setenv("CORVIN_BG_WAKEUP_MAX", "-5")
+@pytest.mark.parametrize("bad", ["0", "-5", "inf", "-inf", "nan", "1e999", "abc", "", "  "])
+def test_a_cap_that_would_disable_the_bound_is_rejected_not_obeyed(box, monkeypatch, bad):
+    """0, negative, infinite, NaN or garbage would disable the only bound (ADR-2236 D12);
+    `inf` used to crash the turn with OverflowError after the process was already spawned."""
+    monkeypatch.setenv("CORVIN_BG_CHILD_MAX", bad)
+    monkeypatch.setenv("CORVIN_BG_WAKEUP_MAX", bad)
     import bg_scope  # type: ignore  # noqa: PLC0415
 
     assert bg_scope.child_max_s() == bg_scope.CHILD_MAX_DEFAULT_S
     assert bg_scope.wakeup_max() == bg_scope.WAKEUP_MAX_DEFAULT
+
+
+def test_a_usable_cap_is_clamped_into_sane_bounds(monkeypatch):
+    import bg_scope  # type: ignore  # noqa: PLC0415
+
+    monkeypatch.setenv("CORVIN_BG_CHILD_MAX", "999999")
+    monkeypatch.setenv("CORVIN_BG_WAKEUP_MAX", "0.4")
+    assert bg_scope.child_max_s() == 86400.0          # 24 h at most
+    assert bg_scope.wakeup_max() == 1                 # at least one wake-up
+    monkeypatch.setenv("CORVIN_BG_CHILD_MAX", "90")
+    assert bg_scope.child_max_s() == 90.0

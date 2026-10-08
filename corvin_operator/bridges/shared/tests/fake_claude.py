@@ -20,11 +20,18 @@ Environment:
                         first ``result`` (simulates a quiet child)
   FAKE_CLAUDE_PIDFILE   write this process' pid here (liveness assertions)
   FAKE_CLAUDE_SPAWNLOG  append one line per spawn here (re-run detection)
+  FAKE_CLAUDE_CHILD_PIDFILE  start a REAL background child (`sleep 300`) in this process'
+                        group and write its pid here, so "the child is gone" is a fact about a
+                        process and not about a mock. SIGTERM ends the child and then the CLI —
+                        what the real CLI does (measured 2026-10-08: SIGKILL orphans the child,
+                        SIGTERM does not).
 """
 from __future__ import annotations
 
 import json
 import os
+import signal
+import subprocess
 import sys
 import time
 
@@ -39,6 +46,21 @@ def main() -> int:
     if pidfile:
         with open(pidfile, "w", encoding="utf-8") as fh:
             fh.write(str(os.getpid()))
+
+    child = None
+    childfile = os.environ.get("FAKE_CLAUDE_CHILD_PIDFILE")
+    if childfile:
+        child = subprocess.Popen(["sleep", "300"])
+        with open(childfile, "w", encoding="utf-8") as fh:
+            fh.write(str(child.pid))
+
+        def _on_term(_sig, _frm):  # what the real CLI does on SIGTERM: end its children first
+            try:
+                child.terminate()
+            finally:
+                os._exit(143)
+
+        signal.signal(signal.SIGTERM, _on_term)
 
     if "stream-json" in argv and "--input-format" in argv:
         sys.stdin.readline()  # the initial user message
@@ -61,6 +83,8 @@ def main() -> int:
             time.sleep(delay)
         if ev.get("type") == "_eof":
             rc = int(ev.get("rc") or 0)
+            if child is not None and child.poll() is None:
+                child.terminate()
             break
         out = {k: v for k, v in ev.items() if k != "_t"}
         sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")

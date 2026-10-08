@@ -453,6 +453,27 @@ def _load_bg_scope() -> Any:  # ADR-2236
     return _BG_SCOPE_MOD or None
 
 
+def _stop_proc(proc: Any, grace_s: float = 5.0) -> None:  # ADR-2236
+    """SIGTERM first, SIGKILL after *grace_s* if it is still there.
+
+    Measured on the real CLI: SIGKILL leaves its background children ORPHANED (still
+    running, unowned); SIGTERM lets the CLI end them itself. So a scope is stopped with
+    SIGTERM, and SIGKILL stays the fallback for a CLI that does not react.
+    """
+    with contextlib.suppress(ProcessLookupError):
+        proc.terminate()
+
+    def _kill_if_alive() -> None:
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+
+    try:
+        asyncio.get_running_loop().call_later(grace_s, _kill_if_alive)
+    except RuntimeError:           # no running loop: nothing can wait, stop it for good
+        _kill_if_alive()
+
+
 def _bg_status_event(bgs: Any, tracker: Any) -> dict[str, Any]:  # ADR-2236
     """The ``bg_status`` stream event: which background children are open right now.
 
@@ -7218,8 +7239,7 @@ async def _stream_turn_impl(
                                     scope_id=_bg.scope_id, children_open=len(_bg.open_children),
                                     limit_s=int(cap), age_s=int(_bg.oldest_open_age()))
                     _bg_cut = "child_cap"
-                    with contextlib.suppress(ProcessLookupError):
-                        proc.kill()
+                    _stop_proc(proc)
                     return
         _bg_watch = asyncio.create_task(_bg_cap_watch())
     try:
@@ -7335,8 +7355,7 @@ async def _stream_turn_impl(
                                         children_open=len(_bg.open_children),    # ADR-2236
                                         wakeups=_bg.wakeups, limit=_bgs.wakeup_max())  # ADR-2236
                         _bg_cut = "wakeup_cap"                                   # ADR-2236
-                        with contextlib.suppress(ProcessLookupError):            # ADR-2236
-                            proc.kill()                                          # ADR-2236
+                        _stop_proc(proc)                                         # ADR-2236
                         break                                                    # ADR-2236
                     continue                                                     # ADR-2236
                 if result_text and _this_result:
@@ -7401,7 +7420,10 @@ async def _stream_turn_impl(
             # any other exception). Kill the subprocess so it does not become
             # an orphan that blocks on a full stdout pipe.
             try:
-                proc.kill()
+                if _bg is not None and _bg.open_children:                        # ADR-2236
+                    _stop_proc(proc)         # SIGKILL would orphan the children  # ADR-2236
+                else:
+                    proc.kill()
             except ProcessLookupError:
                 pass
 
@@ -7424,9 +7446,23 @@ async def _stream_turn_impl(
                 final_text_parts.append("\n\n" + _cut)                          # ADR-2236
                 yield {"type": "delta", "text": "\n\n" + _cut}                   # ADR-2236
                 result_text = _cut                                               # ADR-2236
+            elif _bg.open_children and rc != 0:                                  # ADR-2236
+                # EOF with a child still open and a non-zero exit: the CLI only exits AFTER
+                # its children end, so this was a kill or a crash — never a clean finish.
+                _died = _bgs.died_message(_bg.open_children, partial=_bg_held)   # ADR-2236
+                _bgs.emit_audit("bgscope.cancelled", tenant_id=_bg.tenant_id,    # ADR-2236
+                                scope_id=_bg.scope_id,                           # ADR-2236
+                                children_open=len(_bg.open_children),            # ADR-2236
+                                reason_code="process_died")                      # ADR-2236
+                _bg_cut = "process_died"                                         # ADR-2236
+                final_text_parts.append("\n\n" + _died)                         # ADR-2236
+                yield {"type": "delta", "text": "\n\n" + _died}                  # ADR-2236
+                result_text = _died                                              # ADR-2236
             else:                                                                # ADR-2236
-                # The closing message is the newest result seen while no child was open.
-                result_text = _bg_held or _bg_last_interim or result_text        # ADR-2236
+                # The closing message is the newest result seen while no child was open;
+                # if the model produced none, a deterministic line (never the first answer again).
+                result_text = (_bg_held or (_bgs.closing_line(_bgs.children_facts(_bg))  # ADR-2236
+                                            if _bg_last_interim else result_text))       # ADR-2236
             yield _bg_status_event(_bgs, _bg)                                    # ADR-2236
             _ann_pending = bool(result_text.strip()) and _annotation_enabled()   # ADR-2236
             yield {"type": "result", "text": result_text, "usage": last_usage,   # ADR-2236

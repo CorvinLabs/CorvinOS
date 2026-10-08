@@ -97,7 +97,8 @@ def _load_progress():
         return None
 
 
-def _maybe_voice(cn, task_id: str, *, want_voice: bool, text: str) -> bool:
+def _maybe_voice(cn, task_id: str, *, want_voice: bool, text: str,
+                 scope_facts: dict | None = None) -> bool:
     """Best-effort: synthesize a spoken SUMMARY of *text* and stamp its
     voice_path onto the completion record — BEFORE mark_done flips it to ready.
 
@@ -134,6 +135,16 @@ def _maybe_voice(cn, task_id: str, *, want_voice: bool, text: str) -> bool:
             lang = _ad._resolve_voice_output_language(spoken) or "de"
         except Exception:  # noqa: BLE001
             lang = "de"
+        if scope_facts and scope_facts.get("children"):
+            # ADR-2236 D8: a badly ended background scope is said aloud — appended AFTER the
+            # summariser (and any <voice> override), in the language the summary came out in.
+            try:
+                import bg_scope as _bgs  # type: ignore
+                _f = _bgs.voice_facts(scope_facts["children"], scope_facts.get("end_reason"), lang)
+                if _f:
+                    spoken = f"{spoken} {_f}".strip()
+            except Exception:  # noqa: BLE001
+                pass
         voice_path = _ad.synthesize_voice_note(spoken, lang=lang)
         if voice_path:
             return bool(cn.attach_voice(task_id, str(voice_path)))
@@ -159,6 +170,10 @@ def main() -> int:
             spec_path.unlink()
         except OSError:
             pass
+
+    # A detached worker may wait on a background child much longer than an interactive turn
+    # (which holds a bridge worker and its chat): 2 h by default, still overridable.
+    os.environ.setdefault("CORVIN_BG_CHILD_MAX", "7200")
 
     task_id = spec.get("task_id") or ""
     instruction = spec.get("instruction") or ""
@@ -279,9 +294,17 @@ def main() -> int:
             import bg_scope as _bgs  # type: ignore
             note = ("" if info.get("cls") == "milestone"
                     else _bgs.interim_suffix(int(info.get("children_open") or 0)))
-            body = str(text).strip()[:1800]
-            if cn.send_interim(task_id, f"{body}\n\n{note}" if note else body, outbox):
-                interim_emitted["n"] += 1
+            body = str(text).strip()
+            full = f"{body}\n\n{note}" if note else body
+            # Same per-channel message size as every other reply (never cut a long update off).
+            ad = sys.modules.get("adapter")
+            try:
+                pieces = ad.split_for_whatsapp(full, limit=ad._chunk_limit_for(channel))
+            except Exception:  # noqa: BLE001
+                pieces = [full[:1800]]
+            for piece in pieces:
+                if cn.send_interim(task_id, piece, outbox):
+                    interim_emitted["n"] += 1
         except Exception:  # noqa: BLE001
             pass
 
@@ -406,17 +429,8 @@ def main() -> int:
     # poller delivers it. Gated by want_voice (set at register() only when the
     # proactive_voice_completion flag AND the user's voice preference allow it);
     # best-effort — a failure degrades to text-only, never blocks the text.
-    _voice_text = text or ""
-    if scope_done["children"]:
-        try:
-            import bg_scope as _bgs  # type: ignore
-            _facts = _bgs.voice_facts(scope_done["children"], scope_done["end_reason"])
-            if _facts:   # ADR-2236 D8: a badly ended scope is said aloud; the written text is unchanged
-                _voice_text = f"{_voice_text}\n\n{_facts}"
-        except Exception:  # noqa: BLE001
-            pass
     _maybe_voice(cn, task_id, want_voice=bool(spec.get("want_voice")),
-                 text=_voice_text)
+                 text=(text or ""), scope_facts=scope_done)
 
     # A gate refusal comes back as text (ok stays True) — the user still gets it.
     cn.mark_done(task_id, text=(text or "(no output)"), ok=ok)

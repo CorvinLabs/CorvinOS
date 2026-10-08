@@ -40,13 +40,27 @@ def make_fake_claude_bin(tmp: Path) -> Path:
     return launcher
 
 
-def fake_env(tmp: Path, fixture: str, *, speedup: float = 1.0,
-             silent_s: float = 0.0) -> dict[str, str]:
-    """Environment that makes the engine spawn the fake CLI replaying *fixture*."""
+def write_fixture(tmp: Path, name: str, events: list[dict]) -> Path:
+    """Write a DERIVED stream (a real capture with one deliberate mutation) for a test."""
+    tmp.mkdir(parents=True, exist_ok=True)
+    p = tmp / f"{name}.jsonl"
+    p.write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events), encoding="utf-8")
+    return p
+
+
+def fake_env(tmp: Path, fixture: "str | Path", *, speedup: float = 1.0,
+             silent_s: float = 0.0, child: bool = False) -> dict[str, str]:
+    """Environment that makes the engine spawn the fake CLI replaying *fixture*.
+
+    *fixture* is the name of a committed capture, or a path to a derived stream. With
+    ``child=True`` the fake owns a real ``sleep 300`` child (pid in ``<tmp>/child.pid``).
+    """
     launcher = make_fake_claude_bin(tmp / "fake-bin")
+    fx = Path(fixture) if isinstance(fixture, Path) else FIXTURES / f"{fixture}.jsonl"
     return {
+        **({"FAKE_CLAUDE_CHILD_PIDFILE": str(tmp / "child.pid")} if child else {}),
         "CORVIN_CLAUDE_BIN": str(launcher),
-        "FAKE_CLAUDE_FIXTURE": str(FIXTURES / f"{fixture}.jsonl"),
+        "FAKE_CLAUDE_FIXTURE": str(fx),
         "FAKE_CLAUDE_SPEEDUP": str(speedup),
         "FAKE_CLAUDE_SILENT_S": str(silent_s),
         "FAKE_CLAUDE_PIDFILE": str(tmp / "fake.pid"),

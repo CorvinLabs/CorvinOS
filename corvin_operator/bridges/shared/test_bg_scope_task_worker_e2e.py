@@ -214,3 +214,21 @@ def test_a_failed_child_is_its_own_message_for_a_task_worker_too(box):
     assert "_final" not in milestone and milestone["provenance"]["ai_generated"] is True
     final = [e for n, e in files if "_-" not in n and e.get("_final") and e.get("text")]
     assert len(final) == 1
+
+
+def test_a_long_wakeup_is_split_by_the_channel_limit_not_cut_off(box):
+    """The bridge splits a long reply at the channel limit; the worker used to cut it at 1800."""
+    events = kit.load_fixture("bash_bg_ok")
+    long_text = " ".join(f"word{i:04d}" for i in range(900))            # ~8.1k characters
+    [e for e in events if e.get("type") == "result" and not e.get("origin")][0]["result"] = long_text
+    fx = kit.write_fixture(box["tmp"] / "derived", "long_first_answer", events)
+    spec = _prepare(box)
+    p = _start(box, spec, fx)
+    p.communicate(timeout=240)
+    assert p.returncode == 0
+    interim = [e["text"] for n, e in _outbox(box) if "_-" in n]
+    assert len(interim) >= 3, [len(t) for t in interim]
+    body = "\n".join(interim)
+    assert "word0000" in body and "word0899" in body, "the update was truncated"
+    assert all(len(t) <= 1800 + 200 for t in interim)               # discord's 1800 + part counter/suffix
+

@@ -73,8 +73,8 @@ class ConsoleBackgroundScopeE2E(unittest.TestCase):
         os.environ.clear()
         os.environ.update(self._env_before)
 
-    def _turn(self, fixture, *, speedup=4.0, env=None):
-        os.environ.update(kit.fake_env(self.home, fixture, speedup=speedup))
+    def _turn(self, fixture, *, speedup=4.0, env=None, child=False):
+        os.environ.update(kit.fake_env(self.home, fixture, speedup=speedup, child=child))
         os.environ.update(env or {})
         return _drain(self.cr.stream_turn(self.sess, "please do it"))
 
@@ -147,6 +147,44 @@ class ConsoleBackgroundScopeE2E(unittest.TestCase):
         self.assertEqual(len(final), 1)
         self.assertIn("more than 2 updates", final[0]["text"])
         self.assertFalse(kit.pid_alive(self.home / "fake.pid"))
+
+    # ---- review round 2: the console must not orphan children, nor call a kill a finish ----
+
+    def test_a_cap_ends_the_scope_with_SIGTERM_so_the_real_child_does_not_outlive_it(self):
+        """Measured on the real CLI: SIGKILL orphans its background children, SIGTERM does not."""
+        ev = self._turn("bash_bg_ok", speedup=1, env={"CORVIN_BG_CHILD_MAX": "3"}, child=True)
+        final = [r for r in self._results(ev) if r.get("final")]
+        self.assertEqual(len(final), 1)
+        self.assertIn("Stopped after 3 s", final[0]["text"])
+        self.assertFalse(kit.pid_alive(self.home / "fake.pid"))
+        self.assertFalse(kit.pid_alive(self.home / "child.pid"), "the child outlived the cap (orphaned)")
+
+    def test_the_process_ending_with_an_open_child_is_not_reported_as_a_clean_finish(self):
+        events = kit.load_fixture("bash_bg_ok")
+        cut = next(i for i, e in enumerate(events) if e.get("type") == "result")
+        t = events[cut]["_t"]
+        events = events[:cut + 1] + [{"type": "_eof", "_t": t + 0.6, "rc": 137}]
+        fx = kit.write_fixture(self.home / "derived", "crash_open_child", events)
+        ev = self._turn(fx)
+        final = [r for r in self._results(ev) if r.get("final")]
+        self.assertEqual(len(final), 1)
+        self.assertIn("ended while 1 background task was still running", final[0]["text"])
+        self.assertNotEqual(final[0]["text"].strip(), "gestartet")
+        import forge.paths as fp  # type: ignore[import]
+        import json
+        recs = [json.loads(l) for l in fp.tenant_audit_chain("_default").read_text().splitlines()
+                if '"bgscope.' in l]
+        types = [r["event_type"] for r in recs]
+        self.assertIn("bgscope.cancelled", types)
+        self.assertEqual(types[-1], "bgscope.completed")
+        self.assertEqual(recs[-1]["details"]["end_reason"], "process_died")
+
+    def test_an_empty_last_wakeup_is_closed_with_a_deterministic_line(self):
+        events = kit.load_fixture("bash_bg_ok")
+        [e for e in events if e.get("type") == "result"][-1]["result"] = ""
+        fx = kit.write_fixture(self.home / "derived", "empty_wakeup", events)
+        final = [r for r in self._results(self._turn(fx)) if r.get("final")]
+        self.assertEqual(final[0]["text"], "✅ Background work finished: 1 task done.")
 
     def test_scope_is_audited(self):
         self._turn("bash_bg_ok")

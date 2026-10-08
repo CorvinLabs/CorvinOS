@@ -296,20 +296,47 @@ of the turn — **process EOF with no open child is** (`bg_scope.ScopeTracker`, 
   with no child open is held as the final candidate — a newer result demotes it to interim, EOF
   promotes it to the one `_final` message. The session ledger records interim and final in order.
   Callers without a sink keep the legacy rule (the last non-empty result is the return value).
-- **Caps end a runaway scope honestly.** Past `CORVIN_BG_CHILD_MAX`, or more than
-  `CORVIN_BG_WAKEUP_MAX` (default 25, one billed model turn per wake-up) wake-ups while a child is
-  open, the process group is killed and the final message says what was cut (kinds and count, never
-  a description). A cap of 0 or less is rejected and the default applies — it would disable the only
-  bound. Not an error: no retry, `task.completed` is recorded.
+- **Caps end a runaway scope honestly.** Past `CORVIN_BG_CHILD_MAX` (default **30 min** for an
+  interactive turn, **2 h** for a detached `/task` worker; the oldest open child, and twice that for the
+  whole scope so a chain of sequential children cannot run for days), or more than
+  `CORVIN_BG_WAKEUP_MAX` (default 25, one billed model turn per wake-up) wake-ups while a child is open,
+  the process group is stopped and the final message says what was cut (kinds and count, never a
+  description). The cap is checked when the stream is quiet **and after every event**. A cap that is 0,
+  negative, NaN, infinite or garbage is rejected and the default applies (it would disable the only
+  bound); a usable one is clamped (1 s…24 h, 1…1000 wake-ups). Not an error: no retry, `task.completed`
+  is recorded.
+- **Never re-run what already started children.** An error after background work started (or after an
+  interim message went out) is NOT retried — every retry branch (transient HTTP, idle+session reset,
+  context overflow) re-sends the whole prompt, which started the child a second time and delivered the
+  first answer twice. The user gets "Claude API call failed … background work that was already started
+  (…) has been ended; the request was not run again" plus the last update.
+- **A kill is not a finish.** The CLI exits only after its children end, so EOF with a child still open
+  means a kill, a crash or an operator stop: the closing message says "the Claude process ended while N
+  background task(s) were still running … the result is incomplete" (audit `bgscope.cancelled`,
+  `bgscope.completed end_reason=process_died`; an operator `/cancel` keeps its silent contract). If the
+  model's last wake-up result is empty, a deterministic closing line ("✅ Background work finished: 1 task
+  done.") stands in — never the first answer a second time.
+- **Interim text is model output**: it passes the same post-spawn output sentinel as the final answer.
+  The console stops a scope with SIGTERM and only SIGKILLs after a grace — measured on the real CLI,
+  SIGKILL leaves its background children orphaned, SIGTERM does not.
+- **Known limits (stated, not hidden).**
+  - A scope occupies a bridge worker (`MAX_PARALLEL=4`) and serialises its chat until the last child ends,
+    bounded by `CORVIN_BG_CHILD_MAX`. The old loop did the same but cut a quiet child after 300 s; that is
+    why the interactive default is 30 min, not 2 h. Long background work belongs in `/task`. Releasing the
+    worker after the first result (a detached continuation) is the follow-up.
+  - While a child is open the idle watchdog is off, so a hung wake-up API call is bounded only by the cap.
+  - `completion_notify.send_interim` writes straight to the outbox; with `proactive_communication` ON the
+    FINAL completion additionally passes the governed gate and an interim does not.
 - **Status line per child.** `bg_scope.status_line()` turns every child transition into one line
   ("⏳ Background shell command started: … — 1 running", "✅ … finished — all background work is done",
   "❌ … failed (exit 3)") sent through `on_status(..., tool_name="_bgchild")` — the sticky progress message,
   edited in place, so a chatty scope does not flood the chat. The alive heartbeat reads "⏳ N background
   tasks running · 14m 3s" while children are open. `bg_scope_observer(cb)` lets a caller (the detached
   `/task` worker) watch the tracker.
-- `task.completed` is recorded only after the stream ended; `TaskManager.record_event` additionally
-  defers a completion that reports `children_open > 0` (`task.completion_deferred`, status stays
-  RUNNING, no learning outcome).
+- `task.completed` is recorded only after the stream ended. `TaskManager.record_event` additionally
+  defers a completion that reports `children_open > 0` (`task.completion_deferred`, status stays RUNNING,
+  no learning outcome) — a backstop for a FUTURE caller: today's callers record completion after the
+  scope is closed, so none can trip it, and a capped scope must complete.
 
 Console (`chat_runtime`): the same tracker; interim results carry `interim: true` +
 `pending_children`, exactly one result carries `final: true` and is the text that is spoken and

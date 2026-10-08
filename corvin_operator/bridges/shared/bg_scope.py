@@ -26,6 +26,7 @@ is not versioned, so the parser is tolerant and the contract test
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 import sys
@@ -108,6 +109,10 @@ def safe_description(text: str, limit: int = DESCRIPTION_MAX) -> str:
     one function every status line, audit field or voice summary must use.
     """
     t = re.sub(r"[\x00-\x1f\x7f]+", " ", str(text or ""))
+    # A model-authored description is echoed into a chat: defuse @everyone / @here and
+    # <@id> / <#id> / <@&id> mentions (a zero-width space keeps it readable, pings nobody).
+    t = re.sub(r"@(everyone|here)\b", "@\u200b\\1", t)
+    t = re.sub(r"<([@#][!&]?\d+)>", "<\u200b\\1>", t)
     t = re.sub(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", "<email>", t)
     t = re.sub(r"\b(?:sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{12,}\b", "<secret>", t)
     t = re.sub(r"\b[A-Za-z0-9_-]{32,}\b", "<token>", t)
@@ -133,6 +138,7 @@ class ScopeTracker:
         self.results_seen = 0
         self.wakeups = 0
         self.peak_open = 0
+        self.first_started_at: float | None = None
 
     # -- inputs -----------------------------------------------------------
 
@@ -211,6 +217,8 @@ class ScopeTracker:
                       description=str(raw.get("description") or ""),
                       started_at=now, run_id=str(raw.get("run_id") or ""))
         self._children[tid] = child
+        if self.first_started_at is None:
+            self.first_started_at = now
         return [Transition("child_started", child, len(self.open_children))]
 
     def _on_update(self, tid: str, status: Any, exit_code: int | None,
@@ -275,6 +283,8 @@ class ScopeTracker:
                               started_at=now, run_id=str(t.get("run_id") or ""))
                 self._children[tid] = child
                 self._unannounced[tid] = None
+                if self.first_started_at is None:
+                    self.first_started_at = now
         for tid, child in list(self._children.items()):
             if child.state == RUNNING and tid not in listed \
                     and (now - child.started_at) >= SNAPSHOT_GRACE_S:
@@ -333,25 +343,32 @@ def classify_result(raw: dict) -> str:
 
 # --- limits and user-facing text (ADR-2236 D5/D6) ---------------------------
 
-CHILD_MAX_DEFAULT_S = 7200.0     # 2 h: the only bound on a child that never ends
+CHILD_MAX_DEFAULT_S = 1800.0     # 30 min for an interactive turn: it holds a bridge worker and its chat
+WORKER_CHILD_MAX_S = 7200.0      # 2 h for a detached /task worker (it sets CORVIN_BG_CHILD_MAX itself)
 WAKEUP_MAX_DEFAULT = 25          # one model turn is billed per wake-up result
+_CHILD_MAX_BOUNDS = (1.0, 86400.0)
+_WAKEUP_BOUNDS = (1.0, 1000.0)
 
 
-def _positive_env(name: str, default: float) -> float:
-    """A cap of 0 / negative / garbage is rejected: it would disable the only bound."""
+def _bounded_env(name: str, default: float, bounds: tuple[float, float]) -> float:
+    """A cap that is 0, negative, NaN, infinite or garbage is REJECTED (the default applies):
+    it would disable the only bound. A usable value is clamped into *bounds*."""
+    raw = os.environ.get(name, "")
     try:
-        v = float(os.environ.get(name, "") or default)
-    except ValueError:
+        v = float(raw) if raw not in ("", None) else default
+    except (TypeError, ValueError):
         return default
-    return v if v > 0 else default
+    if not math.isfinite(v) or v <= 0:
+        return default
+    return min(max(v, bounds[0]), bounds[1])
 
 
 def child_max_s() -> float:
-    return _positive_env("CORVIN_BG_CHILD_MAX", CHILD_MAX_DEFAULT_S)
+    return _bounded_env("CORVIN_BG_CHILD_MAX", CHILD_MAX_DEFAULT_S, _CHILD_MAX_BOUNDS)
 
 
 def wakeup_max() -> int:
-    return int(_positive_env("CORVIN_BG_WAKEUP_MAX", WAKEUP_MAX_DEFAULT))
+    return int(_bounded_env("CORVIN_BG_WAKEUP_MAX", WAKEUP_MAX_DEFAULT, _WAKEUP_BOUNDS))
 
 
 def human_duration(seconds: float) -> str:
@@ -445,22 +462,60 @@ def children_facts(tracker: "ScopeTracker") -> list[dict]:
             for c in tracker.all_children]
 
 
-def voice_facts(children: list[dict], end_reason: str | None) -> str:
+def voice_facts(children: list[dict], end_reason: str | None, lang: str = "en") -> str:
     """What the spoken closing summary must not leave out — or "" when nothing is off.
 
     The closing message is the model's own wording and normally says how it went. A scope
-    that ENDED BADLY (a child failed, or a cap cut it off) is the one case where silence is
-    wrong, so these facts are appended to the text the voice summary is built from. The
+    that ENDED BADLY (a child failed, a cap cut it off, the process died) is the one case where
+    silence is wrong. The sentence is appended AFTER the summariser has run, in the language the
+    summary came out in, so neither a ``<voice>`` override nor the summariser can drop it. The
     written message is never changed.
     """
+    de = (lang or "").lower().startswith("de")
     if end_reason in ("child_cap", "wakeup_cap"):
-        return "Background work was stopped early because a limit was reached."
+        return ("Die Hintergrundarbeit wurde vorzeitig beendet, weil ein Limit erreicht wurde."
+                if de else "Background work was stopped early because a limit was reached.")
+    if end_reason == "process_died":
+        return ("Die Hintergrundarbeit wurde unterbrochen: der Prozess endete, während Aufgaben liefen."
+                if de else "Background work was interrupted: the process ended while tasks were running.")
     failed = [c for c in children if c.get("state") == FAILED]
     if failed:
         total = len(children)
+        if de:
+            return (f"Die Hintergrundarbeit ist beendet, aber {len(failed)} von {total} "
+                    f"{'Aufgabe' if total == 1 else 'Aufgaben'} {'ist' if len(failed) == 1 else 'sind'} fehlgeschlagen.")
         return (f"Background work finished, but {len(failed)} of {total} "
                 f"{'task' if total == 1 else 'tasks'} failed.")
     return ""
+
+
+def closing_line(children: list[dict]) -> str:
+    """The closing message when the model produced none (an empty last wake-up result).
+
+    Deterministic, from the CLI's events only. Without it the user would be handed the first
+    answer a second time as the "final" message.
+    """
+    total = len(children)
+    failed = [c for c in children if c.get("state") == FAILED]
+    noun = "task" if total == 1 else "tasks"
+    if failed:
+        return f"❌ Background work finished: {len(failed)} of {total} {noun} failed."
+    return f"✅ Background work finished: {total} {noun} done."
+
+
+def died_message(open_children: list[Child], *, partial: str = "") -> str:
+    """Honest closing text when the claude process ended while children were still open.
+
+    That is never a clean finish: the CLI exits only after its children end, so this was a
+    crash, an OOM kill or an operator stop. Names what was lost (kinds and count, D9).
+    """
+    n = len(open_children)
+    kinds = ", ".join(sorted({c.kind for c in open_children})) or "background"
+    head = (f"⚠️ The Claude process ended while {n} background "
+            f"{'task was' if n == 1 else 'tasks were'} still running ({kinds}); "
+            f"{'it was' if n == 1 else 'they were'} ended with it and the result is incomplete.")
+    partial = (partial or "").strip()
+    return f"{head}\n\nLast update:\n{partial}" if partial else head
 
 
 # --- audit (best effort; ADR-2236 D10) --------------------------------------
