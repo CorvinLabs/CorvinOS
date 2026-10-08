@@ -8,17 +8,6 @@
 </p>
 
 <p align="center">
-  <video src="https://github.com/CorvinLabs/CorvinOS/raw/main/assets/compliance-in-the-ai-era.mp4"
-         poster="https://img.youtube.com/vi/4sXl26Hr1pA/maxresdefault.jpg"
-         width="720" controls muted preload="metadata">
-    <a href="https://www.youtube.com/watch?v=4sXl26Hr1pA&amp;t=22s">
-      <img src="https://img.youtube.com/vi/4sXl26Hr1pA/maxresdefault.jpg" alt="Video: Compliance in the AI era — click to watch on YouTube" width="720"/>
-    </a>
-  </video><br/>
-  <sub>Compliance in the AI era &middot; <a href="https://www.youtube.com/watch?v=4sXl26Hr1pA&amp;t=22s">also on YouTube</a></sub>
-</p>
-
-<p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache_2.0-blue.svg" alt="License: Apache 2.0"/></a>
   <img src="https://img.shields.io/badge/version-2.0.0-f0b429" alt="Version 2.0.0"/>
   <img src="https://img.shields.io/badge/python-%E2%89%A53.10-3776ab" alt="Python 3.10+"/>
@@ -42,6 +31,23 @@
   <a href="docs/overview/extensibility.md">Extensibility</a> &middot;
   <a href="#-installing-via-claude-code">Claude Code</a> &middot;
   <a href="docs/setup/INSTALLATION.md">Install guide</a>
+</p>
+
+---
+
+## 🎥 Video — Compliance in the AI era
+
+A short walkthrough of how CorvinOS keeps AI work compliant with GDPR and the EU AI Act. The player below runs right here on GitHub.
+
+<p align="center">
+  <video src="https://github.com/CorvinLabs/CorvinOS/raw/main/assets/compliance-in-the-ai-era.mp4"
+         poster="https://img.youtube.com/vi/4sXl26Hr1pA/maxresdefault.jpg"
+         width="720" controls muted preload="metadata">
+    <a href="https://www.youtube.com/watch?v=4sXl26Hr1pA&amp;t=22s">
+      <img src="https://img.youtube.com/vi/4sXl26Hr1pA/maxresdefault.jpg" alt="Video: Compliance in the AI era — click to watch on YouTube" width="720"/>
+    </a>
+  </video><br/>
+  <sub>Compliance in the AI era &middot; <a href="https://www.youtube.com/watch?v=4sXl26Hr1pA&amp;t=22s">also on YouTube</a></sub>
 </p>
 
 ---
