@@ -191,6 +191,22 @@ def main() -> int:
     )
 
     cn = _load_cn()
+    # The supervisor stops a wedged worker with SIGTERM. The claude CLI runs in its OWN session,
+    # so without this the worker died and the CLI + its background children lived on — and the
+    # resumed attempt was then told they were gone and could start a duplicate (ADR-2236 D11).
+    try:
+        import signal as _signal
+
+        def _on_sigterm(_sig, _frm):
+            try:
+                import adapter as _ad  # type: ignore
+                _ad._cancel_chat(engine_chat_key)
+            finally:
+                os._exit(143)
+
+        _signal.signal(_signal.SIGTERM, _on_sigterm)
+    except (ImportError, ValueError, OSError):    # not the main thread / no SIGTERM on this platform
+        pass
     if not task_id or not instruction:
         if task_id:
             cn.mark_done(task_id, text="background task had no instruction.",

@@ -163,7 +163,7 @@ class ConsoleBackgroundScopeE2E(unittest.TestCase):
         events = kit.load_fixture("bash_bg_ok")
         cut = next(i for i, e in enumerate(events) if e.get("type") == "result")
         t = events[cut]["_t"]
-        events = events[:cut + 1] + [{"type": "_eof", "_t": t + 0.6, "rc": 137}]
+        events = events[:cut + 1] + [{"type": "_eof", "_t": t + 0.6, "rc": 1}]
         fx = kit.write_fixture(self.home / "derived", "crash_open_child", events)
         ev = self._turn(fx)
         final = [r for r in self._results(ev) if r.get("final")]

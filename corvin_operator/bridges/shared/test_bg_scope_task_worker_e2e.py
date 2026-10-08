@@ -77,14 +77,14 @@ def _prepare(box, task_id="bgt_scope"):
             "outbox_dir": str(box["outbox"])}
 
 
-def _start(box, spec, fixture, *, speedup=4.0, extra_env=None):
+def _start(box, spec, fixture, *, speedup=4.0, extra_env=None, child=False):
     spec_file = box["tmp"] / f"spec_{spec['task_id']}.json"
     spec_file.write_text(json.dumps(spec), encoding="utf-8")
     runner = box["tmp"] / "runner.py"
     runner.write_text(_RUNNER.format(here=str(HERE), worker=str(HERE / "bg_task_worker.py"),
                                      spec=str(spec_file)), encoding="utf-8")
     env = dict(os.environ)
-    env.update(kit.fake_env(box["tmp"], fixture, speedup=speedup))
+    env.update(kit.fake_env(box["tmp"], fixture, speedup=speedup, child=child))
     env.update({
         "ADAPTER_HEARTBEAT_INTERVAL": "0", "ADAPTER_STREAM_IDLE_TIMEOUT": "2",
         "CORVIN_BG_TASK_HEARTBEAT": "1",
@@ -231,4 +231,24 @@ def test_a_long_wakeup_is_split_by_the_channel_limit_not_cut_off(box):
     body = "\n".join(interim)
     assert "word0000" in body and "word0899" in body, "the update was truncated"
     assert all(len(t) <= 1800 + 200 for t in interim)               # discord's 1800 + part counter/suffix
+
+
+def test_stopping_the_worker_with_sigterm_ends_the_claude_process_and_its_child(box):
+    """The supervisor stops a wedged worker with SIGTERM. The claude CLI lives in its own session:
+    before the handler existed it (and its background child) outlived the worker, and the resumed
+    attempt was told they were gone while they still ran."""
+    spec = _prepare(box)
+    p = _start(box, spec, "bash_bg_ok", speedup=1.0, child=True,
+               extra_env={"ADAPTER_STREAM_IDLE_TIMEOUT": "60"})
+    deadline = time.time() + 60
+    while time.time() < deadline and not box["sup"].read_children(spec["task_id"]):
+        time.sleep(0.3)
+    assert box["sup"].read_children(spec["task_id"]), "the worker never noted its child"
+    assert kit.pid_alive(box["tmp"] / "fake.pid") and kit.pid_alive(box["tmp"] / "child.pid")
+    p.send_signal(signal.SIGTERM)
+    p.communicate(timeout=30)
+    assert p.returncode == 143
+    time.sleep(1.0)
+    assert not kit.pid_alive(box["tmp"] / "fake.pid"), "the claude process outlived its worker"
+    assert not kit.pid_alive(box["tmp"] / "child.pid"), "the background child outlived its worker"
 

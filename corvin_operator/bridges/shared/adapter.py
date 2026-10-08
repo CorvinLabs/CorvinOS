@@ -1435,14 +1435,30 @@ _TURN_CANCEL_REQUESTS: set[str] = set()
 _TURN_CANCEL_LOCK = threading.Lock()
 
 
+#: Exit codes of a claude process that was STOPPED from outside. Popen reports a signal death as
+#: -N; but the real CLI (2.1.294, measured) catches SIGTERM while it owns a background child, ends
+#: the child itself and exits 128+N — so both shapes must be recognised (ADR-2236).
+_STOPPED_EXIT_CODES = frozenset({-int(signal.SIGTERM), -int(signal.SIGKILL),
+                                 128 + int(signal.SIGTERM), 128 + int(signal.SIGKILL)})
+
+
 def _cancel_chat(chat_key: str) -> int:
-    stopped = _cancel_chat_impl(chat_key)
-    if stopped:
-        # Only a /cancel that actually stopped something marks the turn: one
-        # sent while the turn was still preparing (nothing to stop yet — the
-        # user is told so) must not relabel a turn that then answers.
+    # Stamp the request BEFORE the process is signalled. The turn thread wakes the instant the
+    # process is gone and reads this flag; stamping afterwards (as this used to) made it lose
+    # that race and report an operator /cancel as a crash. Withdrawn when nothing was stopped:
+    # a /cancel sent while the turn was still preparing (nothing to stop yet — the user is
+    # told so) must not relabel a turn that then answers.
+    with _TURN_CANCEL_LOCK:
+        _TURN_CANCEL_REQUESTS.add(str(chat_key))
+    try:
+        stopped = _cancel_chat_impl(chat_key)
+    except BaseException:
         with _TURN_CANCEL_LOCK:
-            _TURN_CANCEL_REQUESTS.add(str(chat_key))
+            _TURN_CANCEL_REQUESTS.discard(str(chat_key))
+        raise
+    if not stopped:
+        with _TURN_CANCEL_LOCK:
+            _TURN_CANCEL_REQUESTS.discard(str(chat_key))
     return stopped
 
 
@@ -6311,8 +6327,7 @@ def _call_claude_streaming_via_engine(
             # A SIGTERM/SIGKILL we did not send is an operator /cancel (or an external stop). The
             # /cancel flag is set only AFTER the process is already gone, so it cannot be relied on
             # here: the established contract (see the rc<0 branch below) is silence either way.
-            _signal_stop = (rc < 0 and abs(rc) in (int(signal.SIGTERM), int(signal.SIGKILL))
-                            and not timed_out and not _scope_end)
+            _signal_stop = (rc in _STOPPED_EXIT_CODES and not timed_out and not _scope_end)
             if _scope_end:
                 # We ended it on purpose: not an error, not a retry, and the user is
                 # told exactly what was cut (ADR-2236 D5/D6).
@@ -6325,7 +6340,7 @@ def _call_claude_streaming_via_engine(
                     # last one again would duplicate it. Only an UNDELIVERED candidate
                     # (held, or any text when nobody listens) is worth quoting.
                     partial=_held_final if _interim_cb is not None else final_text)
-            elif _open_at_eof and not timed_out and not error_text:
+            elif _open_at_eof and rc != 0 and not timed_out and not error_text:
                 # EOF with a child still open. The CLI exits only AFTER its children end, so
                 # this was a kill, a crash or an operator stop — never a clean finish. The
                 # user must not be handed the first answer again as if all were well.
@@ -6672,8 +6687,7 @@ def _call_claude_streaming_via_engine(
                     sender=(env or {}).get("CORVIN_ORIGIN_SENDER", ""),
                 )
             if (
-                rc < 0
-                and abs(rc) in (signal.SIGTERM, signal.SIGKILL)
+                rc in _STOPPED_EXIT_CODES        # -15/-9 and the real CLI's 143/137
                 and not timed_out
             ):
                 return ""
@@ -6713,8 +6727,7 @@ def _call_claude_streaming_via_engine(
             except Exception:  # noqa: BLE001
                 pass
             if (
-                rc < 0
-                and abs(rc) in (signal.SIGTERM, signal.SIGKILL)
+                rc in _STOPPED_EXIT_CODES        # -15/-9 and the real CLI's 143/137
                 and not timed_out
             ):
                 return ""

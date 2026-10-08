@@ -316,6 +316,22 @@ of the turn — **process EOF with no open child is** (`bg_scope.ScopeTracker`, 
   `bgscope.completed end_reason=process_died`; an operator `/cancel` keeps its silent contract). If the
   model's last wake-up result is empty, a deterministic closing line ("✅ Background work finished: 1 task
   done.") stands in — never the first answer a second time.
+- **An operator `/cancel` is recognised from the exit code, not from a flag that arrives too late.** Measured
+  on the real CLI (2.1.294): with a background child it catches SIGTERM, ends the child itself and exits
+  **143** (128+SIGTERM), not −15 — so `_STOPPED_EXIT_CODES` is {−15, −9, 143, 137}. `_cancel_chat` also stamps
+  the request flag BEFORE signalling (the turn thread wakes the instant the process is gone). An error from
+  the CLI's own result event (`API Error: 529`) is not mistaken for a stop: the engine SIGTERMs the process
+  itself afterwards, but that error carries the raw result event, the engine-made "exited without result" does
+  not. A clean exit (rc 0) with a child whose end was never announced is simply done. The detached `/task`
+  worker catches SIGTERM and stops its claude process too (it lives in its own session; before, the
+  supervisor's SIGTERM killed only the worker and the resumed attempt could start a duplicate).
+- **Restarting the services must not kill running work.** `systemctl --user restart corvin-webui` (or the
+  bridge adapter) ends the unit's whole control group: every claude turn in it dies mid-task and the user
+  gets no closing message and no voice summary (measured 2026-10-08: five console restarts in one day; the boot
+  reaper marked the then-running tasks `orphaned_on_restart` in the same second). Use
+  `scripts/safe-restart.sh [--wait S] UNIT...` — it waits until no `claude -p` turn runs in the unit's
+  cgroup (idle on two polls), then restarts, and never kills a running turn (exit 3 if still busy). Run it
+  detached (`systemd-run --user …`) when the caller lives inside the unit it restarts.
 - **Interim text is model output**: it passes the same post-spawn output sentinel as the final answer.
   The console stops a scope with SIGTERM and only SIGKILLs after a grace — measured on the real CLI,
   SIGKILL leaves its background children orphaned, SIGTERM does not.

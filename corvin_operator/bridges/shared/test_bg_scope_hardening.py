@@ -104,7 +104,8 @@ def _crash_after_first_result(ev):
     cut = next(i for i, e in enumerate(ev) if e.get("type") == "result")
     t = ev[cut]["_t"]
     del ev[cut + 1:]
-    ev.append({"type": "_eof", "_t": t + 0.6, "rc": 137})
+    # a real crash exit code. (137/143 = 128+SIGKILL/SIGTERM now count as "stopped from outside".)
+    ev.append({"type": "_eof", "_t": t + 0.6, "rc": 1})
 
 
 def test_the_process_ending_with_an_open_child_is_not_a_clean_finish(box, monkeypatch):
@@ -269,7 +270,10 @@ def test_an_operator_cancel_with_an_open_child_is_silent_like_every_other_cancel
     """/cancel after the first answer, child still running. The flag is set only AFTER the process
     is gone, so the stop must be recognised from the signal itself — the user is not told 'the
     Claude process ended' and nothing is spoken."""
-    msgs, tts = _turn(monkeypatch, box, "bash_bg_ok", speedup=1, adapter_hook=_cancel_after(4.0))
+    # child=True: like the real CLI (measured) the fake ends its child on SIGTERM and exits 143 —
+    # a stub that simply dies by signal (-15) is not what the adapter sees in production
+    msgs, tts = _turn(monkeypatch, box, "bash_bg_ok", speedup=1, child=True,
+                      adapter_hook=_cancel_after(4.0))
     assert [n for n, e in msgs if e.get("_final") and e.get("text")] == [], _texts(msgs)
     assert not any("ended while" in t or "API call failed" in t for t in _texts(msgs)), _texts(msgs)
     assert tts.calls == [], "a cancelled scope must not be spoken"
@@ -285,7 +289,7 @@ def test_an_operator_cancel_before_any_answer_is_silent_not_an_api_failure(box, 
         ev.append({"type": "_eof", "_t": 30.0, "rc": 0})
 
     fx = _derive(box, "no_answer_yet", "bash_bg_ok", mutate)
-    msgs, tts = _turn(monkeypatch, box, fx, speedup=1, adapter_hook=_cancel_after(3.5))
+    msgs, tts = _turn(monkeypatch, box, fx, speedup=1, child=True, adapter_hook=_cancel_after(3.5))
     assert not any("API call failed" in t for t in _texts(msgs)), _texts(msgs)
     assert [n for n, e in msgs if e.get("_final") and e.get("text")] == []
     assert kit.spawn_count(box) == 1, "a cancel must not re-run the prompt"
@@ -312,4 +316,61 @@ def test_the_facts_are_spoken_even_when_the_summariser_returns_nothing(box, monk
     final_voice = tts.calls[-1]
     assert "failed" in final_voice or "fehlgeschlagen" in final_voice, tts.calls
     assert len(final_voice) < 120, "only the facts sentence was expected"
+
+
+def test_a_clean_exit_with_a_never_announced_child_end_is_not_reported_as_a_death(box, monkeypatch):
+    """The CLI exits 0 only after its children ended; if the end was never announced (dropped
+    events) the scope is simply done — not 'the process ended while a task was running'."""
+    def mutate(ev):
+        ev[:] = [e for e in ev if e.get("subtype") not in ("task_updated", "task_notification")
+                 and not (e.get("subtype") == "background_tasks_changed" and not e.get("tasks"))]
+
+    fx = _derive(box, "end_never_announced", "bash_bg_ok", mutate)
+    msgs, _ = _turn(monkeypatch, box, fx)
+    texts = _texts(msgs)
+    assert "ended while" not in " ".join(texts), texts
+    # the end was never announced, so the tracker still counted the child when the wake-up came:
+    # that text is delivered as an update, and the scope is closed by the deterministic line
+    assert any("abgeschlossen" in t.lower() for t in texts), texts
+    assert _final(msgs).startswith("■ Background work ended") or _final(msgs).startswith("✅"), _final(msgs)
+    assert _audit(box)[-1]["details"]["end_reason"] == "quiescent"
+
+
+def test_the_cancel_flag_is_stamped_before_the_process_is_signalled(monkeypatch, tmp_path):
+    """The turn thread wakes the instant the process is gone and reads the flag: it must already be
+    there. And a /cancel that stopped nothing must not leave a stale flag behind."""
+    for k, v in {"CORVIN_HOME": tmp_path / "c", "XDG_CONFIG_HOME": tmp_path / "x", "FORGE_ROOT": tmp_path / "f",
+                 "ADAPTER_INBOX": tmp_path / "i", "ADAPTER_OUTBOX": tmp_path / "o",
+                 "VOICE_AUDIT_PATH": tmp_path / "a.jsonl"}.items():
+        monkeypatch.setenv(k, str(v))
+    monkeypatch.setenv("CORVIN_AUDIT_ANCHOR_KEY", str(tmp_path / "k"))
+    adapter = _adapter()
+    seen = {}
+
+    def impl_stops(key):
+        seen["flag_during"] = adapter._cancel_requested(key)
+        return 1
+
+    monkeypatch.setattr(adapter, "_cancel_chat_impl", impl_stops)
+    assert adapter._cancel_chat("chat-a") == 1
+    assert seen["flag_during"] is True and adapter._cancel_requested("chat-a") is True
+
+    monkeypatch.setattr(adapter, "_cancel_chat_impl", lambda key: 0)
+    assert adapter._cancel_chat("chat-b") == 0
+    assert adapter._cancel_requested("chat-b") is False, "a /cancel that stopped nothing left a stale flag"
+
+    def impl_raises(key):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(adapter, "_cancel_chat_impl", impl_raises)
+    with pytest.raises(RuntimeError):
+        adapter._cancel_chat("chat-c")
+    assert adapter._cancel_requested("chat-c") is False
+
+
+@pytest.mark.parametrize("rc,expected", [(-15, True), (-9, True), (143, True), (137, True),
+                                         (0, False), (1, False), (2, False), (-11, False)])
+def test_which_exit_codes_count_as_stopped_from_outside(box, rc, expected):
+    adapter = _adapter()
+    assert (rc in adapter._STOPPED_EXIT_CODES) is expected
 
