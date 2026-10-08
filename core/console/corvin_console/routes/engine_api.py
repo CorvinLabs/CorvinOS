@@ -545,7 +545,7 @@ async def get_claude_models(
             "credential_absent": bool(fetched.get("credential_absent")),
         })
 
-    models = sorted(entries.values(), key=lambda m: m["id"])
+    models = sorted(entries.values(), key=_newest_first)
     return {
         "tenant_id": tenant_id,
         "models": models,
@@ -553,6 +553,21 @@ async def get_claude_models(
         "sources": sources,
         "default_model_id": default_model_id or None,
     }
+
+
+def _newest_first(entry: dict[str, Any]) -> tuple:
+    """Sort key: most capable family first, newest version first inside it,
+    then by id — so the picker opens on Opus 5.5 / Sonnet 5.5 / Haiku 5.5
+    instead of an alphabetical list where the newest model sits mid-way."""
+    try:
+        from model_lineage import FAMILY_RANK, parse  # type: ignore[import]  # noqa: PLC0415
+        parsed = parse(entry["id"])
+    except Exception:  # noqa: BLE001
+        parsed = None
+    if not parsed:
+        return (1, 0, 0, 0, entry["id"])
+    family, (major, minor) = parsed
+    return (0, -FAMILY_RANK.get(family, 0), -major, -minor, entry["id"])
 
 
 def _fetch_provider_models(provider_id: str, tenant_id: str) -> dict[str, Any]:

@@ -68,7 +68,13 @@ router = APIRouter()
 
 _CACHE_LOCK = threading.Lock()
 _REFRESH_THREAD: threading.Timer | None = None
-_REFRESH_INTERVAL = 300  # 5 minutes
+#: Hourly: model launches are rare, and every fetch is an audited L35 egress
+#: decision — 288 of them a day would bury the trail. The Models page also
+#: fetches live on open, so an operator never waits for the timer.
+_REFRESH_INTERVAL = 3600
+#: The first refresh runs shortly after boot, so a restart picks up a new model
+#: without waiting a full interval.
+_FIRST_REFRESH_DELAY = 30
 
 # The one provider base_url this module ever fetches. Kept as a constant so
 # the egress check and the fetch call can never drift apart.
@@ -177,6 +183,14 @@ def _refresh_once_impl(tenant_id: str) -> None:
         if result.get("reachable"):
             with _CACHE_LOCK:
                 cache = _read_cache(tenant_id)
+                previous_ids = sorted(
+                    m.get("id", "") for m in
+                    (cache.get("providers") or {}).get("anthropic", {}).get("models", [])
+                    if isinstance(m, dict)
+                )
+                changed = previous_ids != sorted(
+                    m.get("id", "") for m in result.get("models", []) if isinstance(m, dict)
+                )
                 cache["providers"] = {
                     "anthropic": {
                         "models": result.get("models", []),
@@ -190,6 +204,9 @@ def _refresh_once_impl(tenant_id: str) -> None:
                 _log.info(
                     f"[models] refreshed {result.get('count', 0)} models from Anthropic"
                 )
+            # Audited when the catalogue CHANGED — a new or withdrawn model is
+            # the event; an identical hourly answer is not.
+            if changed:
                 console_audit.system_event(
                     tenant_id=tenant_id,
                     event="model_catalog_refreshed",
@@ -259,7 +276,7 @@ def _schedule_background_refresh(tenant_id: str = "_default") -> None:
     Called once at startup. The timer reschedules itself after each refresh.
     """
     global _REFRESH_THREAD  # noqa: PLW0603
-    _REFRESH_THREAD = threading.Timer(_REFRESH_INTERVAL, lambda: _refresh_once_impl(tenant_id))
+    _REFRESH_THREAD = threading.Timer(_FIRST_REFRESH_DELAY, lambda: _refresh_once_impl(tenant_id))
     _REFRESH_THREAD.daemon = True
     _REFRESH_THREAD.start()
     _log.info(f"[models] scheduled background refresh every {_REFRESH_INTERVAL}s")

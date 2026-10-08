@@ -2429,7 +2429,7 @@ All four are gone.
 | Source id | Live? | What it asks | Fails how |
 |---|---|---|---|
 | `registry` | no | the curated ADR-0119 `engine_model_registry.yaml` — `os_models` + `worker_models` of every engine whose provider serves Claude | only if the YAML is unreadable |
-| `anthropic_live` | yes | `GET {base_url}/v1/models`, paginated | a keyless Claude Code subscription login has no API key — reported as an ABSENT key, and no egress is attempted |
+| `anthropic_live` | yes | `GET {base_url}/v1/models`, paginated — with `ANTHROPIC_API_KEY`, or on a subscription host with the Claude Code login's OAuth token (`engine_providers.claude_subscription_token`, `detail: subscription`) | no key AND no usable login — reported as an ABSENT key, no egress; a login the API rejects (401/403) is also ABSENT, never a failure |
 | `bedrock_live` | yes | `bedrock:ListFoundationModels` + `bedrock:ListInferenceProfiles`, SigV4-signed | any AWS failure; `detail` carries `region · credential_source` |
 
 Each source reports its OWN `reachable` / `count` / `error` / `live` / `detail`,
@@ -3124,7 +3124,21 @@ longest-prefix matching priced it as `claude-opus-5`. Cache reads use
 `_CACHE_READ_USD_PER_1K` where the published rate is not 0.1x input: Opus 5.5
 $0.20/MTok, Fable 5.1 $0.25/MTok.
 
-**Adding a new model without an API key.** Add it to
+**New models arrive on their own (2026-10-08).** `latest()` reads the registry
+MERGED with the live catalogue (`model_catalog`, refreshed hourly by the console
+and on every open of the Models page). A subscription host has no API key, so it
+used to never fetch — automatic tiers and the Routing tab stayed on the curated
+snapshot (Haiku 4.5 / Sonnet 5) while Haiku 5.5 / Sonnet 5.5 were served to
+everyone else. It now lists `/v1/models` with the Claude Code login's OAuth token:
+`CLAUDE_CODE_OAUTH_TOKEN`, else the credentials file (Linux/Windows), else the
+macOS Keychain entry `Claude Code-credentials`. Read-only — the token is never
+refreshed, stored, logged or audited, and an expired one is not sent. Tests never
+see it: the root `conftest.py` blanks the reader for every test.
+An UNSAVED tier is also SHOWN as `latest(family)` (`model_selection_config.
+_current_defaults`), not as the constant in `_DEFAULTS`. The catalogue refresh
+audits `model_catalog_refreshed` only when the model set changed.
+
+**Adding a model on a host with no live source.** Add it to
 `engine_model_registry.yaml` with a version label. Routing picks it up as
 "newest" as soon as it is there.
 

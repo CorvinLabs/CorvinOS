@@ -188,10 +188,10 @@ class TestThreeTierLadder:
     """The operator's question, as three assertions."""
 
     def test_simple_routes_to_haiku(self, unpinned_tenant):
-        assert _resolve(SIMPLE_PROMPT) == "claude-haiku-4-5-20251001"
+        assert _resolve(SIMPLE_PROMPT) == MS.tier_model("haiku")
 
     def test_medium_routes_to_sonnet_5(self, unpinned_tenant):
-        assert _resolve(MEDIUM_PROMPT) == "claude-sonnet-5"
+        assert _resolve(MEDIUM_PROMPT) == MS.tier_model("sonnet")
 
     def test_complex_routes_to_opus_5(self, unpinned_tenant):
         assert _resolve(COMPLEX_PROMPT) == MS.top_model(), (
@@ -242,7 +242,7 @@ class TestAbstainGuards:
     def test_an_abstain_falls_through_rather_than_failing_the_turn(self, unpinned_tenant):
         """Tier 3 returns Sonnet 5 unconditionally, so the fallback is a real
         model — never None, never an exception."""
-        assert _resolve(KEYWORD_ONLY_COMPLEX) == "claude-sonnet-5"
+        assert _resolve(KEYWORD_ONLY_COMPLEX) == MS.tier_model("sonnet")
 
     def test_the_tier_abstains_until_the_classifier_is_warm(
         self, unpinned_tenant, monkeypatch
@@ -264,7 +264,7 @@ class TestAbstainGuards:
 
     def test_an_empty_task_input_skips_the_tier_entirely(self, unpinned_tenant):
         assert MS.resolve_os_model(
-            None, payload_chars=1000, tenant_id="_default") == "claude-sonnet-5"
+            None, payload_chars=1000, tenant_id="_default") == MS.tier_model("sonnet")
 
     def test_a_downgrade_is_refused_on_a_large_context(self, unpinned_tenant):
         """Switching model invalidates the prompt cache. On a long chat the
@@ -299,7 +299,7 @@ class TestAbstainGuards:
         monkeypatch.setattr(
             MS, "classify_os_model",
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
-        assert _resolve(COMPLEX_PROMPT) == "claude-sonnet-5"
+        assert _resolve(COMPLEX_PROMPT) == MS.tier_model("sonnet")
 
 
 # ── 4. registry admissibility ────────────────────────────────────────
@@ -538,7 +538,7 @@ class TestOperatorRoutingPolicy:
         "add a retry to the upload endpoint",
     ])
     def test_a_short_work_request_routes_to_sonnet(self, unpinned_tenant, prompt):
-        assert _resolve(prompt) == MS.DEFAULT_HIGH
+        assert _resolve(prompt) == MS.tier_model("sonnet")
 
     @pytest.mark.parametrize("prompt", [
         "wie spät ist es?",
@@ -546,7 +546,7 @@ class TestOperatorRoutingPolicy:
         "zeig mir ein preview",  # "preview" must not read as "review"
     ])
     def test_conversation_stays_on_haiku(self, unpinned_tenant, prompt):
-        assert _resolve(prompt) == MS.resolve_registry_id("claude-haiku-4-5", "claude_code")
+        assert _resolve(prompt) == MS.tier_model("haiku")
 
     def test_a_pin_still_beats_the_policy(self, pinned_tenant):
         assert _resolve("schreib eine ADR") == "claude-haiku-4-5-20251001"

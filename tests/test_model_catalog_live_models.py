@@ -324,3 +324,94 @@ class TestAnthropicFetch:
         assert res["reachable"] is True
         assert res["cached"] is False
         assert [m["id"] for m in res["models"]] == ["claude-opus-5"]
+
+
+# ---------------------------------------------------------------------------
+# Subscription host — the Claude Code login lists the models (2026-10-08)
+# ---------------------------------------------------------------------------
+
+class TestSubscriptionLogin:
+    """A Claude subscription host has no API key. Before 2026-10-08 it never
+    fetched the catalogue, so the pickers and every automatic tier stayed on the
+    curated snapshot (Haiku 4.5 / Sonnet 5) while Haiku 5.5 / Sonnet 5.5 shipped."""
+
+    def _no_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(engine_providers._provider_keys, "resolve_by_env_var",
+                            lambda _n: None)
+
+    def test_oauth_token_lists_models_and_feeds_the_catalogue(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._no_key(monkeypatch)
+        monkeypatch.setattr(engine_providers, "claude_subscription_token", lambda: "oat-test")
+        seen: dict[str, Any] = {}
+
+        def fake_get(_url: str, **kw: Any) -> dict:
+            seen.update(kw["headers"])
+            return _page([{"id": "claude-haiku-6", "display_name": "Claude Haiku 6"}])
+
+        monkeypatch.setattr(engine_providers, "_get_json", fake_get)
+        res = engine_providers.fetch_models(
+            "anthropic", base_url="https://api.anthropic.com",
+            model_source="anthropic", credential_env="ANTHROPIC_API_KEY")
+        assert res["reachable"] is True
+        assert res["credential_source"] == "subscription"
+        assert seen["Authorization"] == "Bearer oat-test"
+        assert seen["anthropic-beta"] == engine_providers._ANTHROPIC_OAUTH_BETA
+        assert "x-api-key" not in seen
+        assert [m["id"] for m in model_catalog.catalog_models("anthropic")] == ["claude-haiku-6"]
+
+    def test_a_live_only_model_becomes_the_automatic_tier_model(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The whole chain: a model the curated YAML does not know, fetched via
+        the subscription login, is what the haiku tier routes to and what the
+        Routing tab shows for an unsaved tier."""
+        import model_lineage  # type: ignore  # noqa: PLC0415
+        import model_selector  # type: ignore  # noqa: PLC0415
+        from core.models import model_selection_config as cfg  # noqa: PLC0415
+
+        self._no_key(monkeypatch)
+        monkeypatch.setattr(engine_providers, "claude_subscription_token", lambda: "oat-test")
+        monkeypatch.setattr(engine_providers, "_get_json", lambda *_a, **_k: _page(
+            [{"id": "claude-haiku-6"}, {"id": "claude-sonnet-6"}]))
+        engine_providers.fetch_models(
+            "anthropic", base_url="https://api.anthropic.com",
+            model_source="anthropic", credential_env="ANTHROPIC_API_KEY")
+
+        assert model_lineage.latest("haiku") == "claude-haiku-6"
+        assert model_selector.tier_model("sonnet") == "claude-sonnet-6"
+        shown = cfg.load_config("_default")
+        assert shown["SIMPLE"]["selected_model"] == "claude-haiku-6"
+        assert shown["MEDIUM"]["selected_model"] == "claude-sonnet-6"
+        assert shown["COMPLEX"]["selected_model"] == model_lineage.latest("opus")
+
+    def test_rejected_login_is_benign_not_a_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A stale login must not be audited as a failed refresh every cycle."""
+        self._no_key(monkeypatch)
+        monkeypatch.setattr(engine_providers, "claude_subscription_token", lambda: "oat-old")
+
+        def boom(*_a: Any, **_k: Any) -> dict:
+            raise urllib.error.HTTPError("u", 401, "Unauthorized", {}, io.BytesIO(b""))  # type: ignore[arg-type]
+
+        monkeypatch.setattr(engine_providers, "_get_json", boom)
+        res = engine_providers.fetch_models(
+            "anthropic", base_url="https://api.anthropic.com",
+            model_source="anthropic", credential_env="ANTHROPIC_API_KEY")
+        assert res["reachable"] is False
+        assert res["credential_absent"] is True
+        assert "oat-old" not in json.dumps(res)
+
+    def test_expired_token_is_not_used(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import engine_detection  # type: ignore  # noqa: PLC0415
+
+        creds = tmp_path / ".credentials.json"
+        monkeypatch.setattr(engine_detection, "_find_claude_credentials", lambda: creds)
+        monkeypatch.setattr(engine_providers, "claude_subscription_token",
+                            engine_providers.__dict__["claude_subscription_token"])
+        creds.write_text(json.dumps({"claudeAiOauth": {
+            "accessToken": "oat-x", "expiresAt": (time.time() - 60) * 1000}}))
+        assert engine_providers._oauth_from_blob(json.loads(creds.read_text())) == ""
+        creds.write_text(json.dumps({"claudeAiOauth": {
+            "accessToken": "oat-x", "expiresAt": (time.time() + 3600) * 1000}}))
+        assert engine_providers._oauth_from_blob(json.loads(creds.read_text())) == "oat-x"

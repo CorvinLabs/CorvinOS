@@ -114,6 +114,24 @@ _OUTBOX_SEQ = [0]
 
 
 @pytest.fixture(autouse=True)
+def _no_real_claude_login(monkeypatch):
+    """Never let a test read the host's Claude Code OAuth token.
+
+    ``engine_providers.claude_subscription_token`` lists Anthropic's models with
+    the local subscription login. In a test that turned every "no API key, no
+    egress" case into a real authenticated request — and the first failing run
+    printed the live token in pytest's traceback locals (2026-10-08). A test
+    that exercises the subscription path patches the function itself; its
+    monkeypatch runs after this fixture and wins.
+    """
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    for name in ("engine_providers", "corvin_operator.bridges.shared.engine_providers"):
+        mod = _sys.modules.get(name)
+        if mod is not None and hasattr(mod, "claude_subscription_token"):
+            monkeypatch.setattr(mod, "claude_subscription_token", lambda: "")
+
+
+@pytest.fixture(autouse=True)
 def _isolated_bridge_outbox(monkeypatch):
     """Never let a test queue a real message for a real messenger.
 

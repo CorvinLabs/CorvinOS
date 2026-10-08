@@ -66,6 +66,49 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
 }
 
 
+#: The model family each tier routes to when the operator saved nothing for it.
+FAMILY_BY_TASK_TYPE: dict[str, str] = {
+    "corvinOS": "haiku", "SIMPLE": "haiku", "MEDIUM": "sonnet", "COMPLEX": "opus",
+}
+
+
+def _newest_of_family(family: str) -> Optional[str]:
+    """Newest available model of *family* — the registry merged with the live
+    catalogue (``model_lineage.latest``). ``None`` when the bridge modules are
+    not importable (stripped install); the caller keeps its curated constant."""
+    try:
+        import sys  # noqa: PLC0415
+
+        shared = Path(__file__).resolve().parents[2] / "corvin_operator" / "bridges" / "shared"
+        if shared.is_dir() and str(shared) not in sys.path:
+            sys.path.insert(0, str(shared))
+        import model_lineage  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        return model_lineage.latest(family)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _current_defaults() -> dict[str, dict[str, Any]]:
+    """``_DEFAULTS`` with every tier pointed at the NEWEST model of its family.
+
+    An unsaved tier routes to ``model_selector.tier_model(family)`` — the newest
+    version — so the console must show that model, not the constant above,
+    which goes stale the day a new version ships (Haiku 5.5 / Sonnet 5.5 were
+    served while the Routing tab still read Haiku 4.5 / Sonnet 5)."""
+    out = {k: dict(v) for k, v in _DEFAULTS.items()}
+    newest = {f: _newest_of_family(f) for f in set(FAMILY_BY_TASK_TYPE.values())}
+    for task_type, family in FAMILY_BY_TASK_TYPE.items():
+        model = newest.get(family)
+        if not model:
+            continue
+        out[task_type]["selected_model"] = model
+        out[task_type]["alternatives"] = [
+            m for f, m in sorted(newest.items()) if m and f != family
+        ]
+    return out
+
+
 def _corvin_home() -> Path:
     env = os.environ.get("CORVIN_HOME")
     if env:
@@ -79,8 +122,9 @@ def _config_path(tenant_id: str) -> Path:
 
 def load_config(tenant_id: str) -> dict[str, dict[str, Any]]:
     """Return {task_type: {selected_model, provider, alternatives}} — always
-    all four TASK_TYPES, falling back to _DEFAULTS for anything unset/corrupt."""
-    out = {k: dict(v) for k, v in _DEFAULTS.items()}
+    all four TASK_TYPES, falling back to the newest model of each tier's family
+    (``_current_defaults``) for anything unset/corrupt."""
+    out = _current_defaults()
     path = _config_path(tenant_id)
     if not path.exists():
         return out

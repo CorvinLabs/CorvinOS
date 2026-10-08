@@ -318,6 +318,10 @@ _MODEL_PRICING_USD_PER_1K: dict[str, tuple[float, float]] = {
     "claude-opus-4-8": (0.005, 0.025),
     "claude-opus-4-7": (0.005, 0.025),
     "claude-opus-4-6": (0.005, 0.025),
+    # Own key so the price is stated, not inherited by prefix from Sonnet 5.
+    # Haiku 5.5 has no verified published rate yet: left out on purpose, so its
+    # turns are reported unpriced instead of priced at a guess.
+    "claude-sonnet-5-5": (0.002, 0.010),
     "claude-sonnet-5": (0.002, 0.010),
     "claude-sonnet-4-6": (0.003, 0.015),
     "claude-haiku-4-5": (0.001, 0.005),

@@ -24,8 +24,9 @@ The ``anthropic`` source differs from the other two in both directions: it walks
 so ``engine_models.load_registry()`` can merge it into the curated picker. That
 merge is the whole point — a fetch whose result nobody stores changes nothing
 the operator can see. It is also the one source with a benign no-credential
-case: a Claude Code subscription login exposes no API key, so a keyless call
-returns an explanation and does not egress.
+case: a Claude Code subscription login exposes no API key. Such a host lists
+the models with the login's OAuth token instead (:func:`claude_subscription_token`,
+read-only); only a host with neither returns an explanation and does not egress.
 
 Credentials: the provider's ``credential_env`` names an env var; its value
 (the API key) is resolved via provider_keys.resolve_by_env_var at request
@@ -43,6 +44,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -87,25 +89,91 @@ def _label_for(model_id: str) -> str:
     return model_id
 
 
-def _fetch_anthropic(result: dict, *, base: str, key: str, timeout: float) -> dict:
+#: Beta header that lets a Claude Code OAuth access token call the API.
+_ANTHROPIC_OAUTH_BETA = "oauth-2025-04-20"
+
+#: macOS keeps the Claude Code login in the Keychain, not in a file.
+_MACOS_KEYCHAIN_SERVICE = "Claude Code-credentials"
+
+
+def _oauth_from_blob(blob: Any) -> str:
+    """The access token of a Claude Code credentials document, or ``""`` when it
+    is missing or already expired (``expiresAt`` is epoch milliseconds)."""
+    oauth = blob.get("claudeAiOauth") if isinstance(blob, dict) else None
+    if not isinstance(oauth, dict):
+        return ""
+    token = oauth.get("accessToken")
+    if not isinstance(token, str) or not token:
+        return ""
+    expires = oauth.get("expiresAt")
+    if isinstance(expires, (int, float)) and expires / 1000.0 <= time.time():
+        return ""
+    return token
+
+
+def claude_subscription_token() -> str:
+    """The local Claude Code login's OAuth access token, READ-ONLY, or ``""``.
+
+    Used for exactly one call: listing ``GET /v1/models`` on a subscription host,
+    which has no API key — without it the picker froze at the curated snapshot
+    and the newest models (Haiku 5.5, Sonnet 5.5) never appeared. The token is
+    never refreshed here (Claude Code owns that file), never stored, logged,
+    returned or audited. Order: ``CLAUDE_CODE_OAUTH_TOKEN`` (``claude
+    setup-token``), the credentials file Claude Code writes on Linux/Windows,
+    then the macOS Keychain entry.
+    """
+    env_token = (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
+    if env_token:
+        return env_token
+    try:
+        import engine_detection as _ed  # type: ignore  # noqa: PLC0415
+        path = _ed._find_claude_credentials()
+    except Exception:  # noqa: BLE001 — no detector ⇒ no token, never a crash
+        path = None
+    if path is not None:
+        try:
+            return _oauth_from_blob(json.loads(path.read_text(encoding="utf-8")))
+        except Exception:  # noqa: BLE001
+            return ""
+    if sys.platform == "darwin":
+        try:
+            r = subprocess.run(
+                ["security", "find-generic-password", "-s", _MACOS_KEYCHAIN_SERVICE, "-w"],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                return _oauth_from_blob(json.loads(r.stdout.strip()))
+        except Exception:  # noqa: BLE001
+            return ""
+    return ""
+
+
+def _fetch_anthropic(
+    result: dict, *, base: str, key: str, timeout: float, oauth_token: str = "",
+) -> dict:
     """Walk ``GET /v1/models`` and cache the result. Never raises.
 
     Kept out of :func:`fetch_models`'s inline branches because this source is the
     only one that PAGINATES and the only one that writes the shared catalogue —
     inlining it would hide two concerns inside a branch that reads like the
-    one-liners around it.
+    one-liners around it. Authenticates with the API key, or — on a subscription
+    host — with the Claude Code OAuth token (``oauth_token``).
     """
+    if key:
+        auth_headers = {"x-api-key": key, "anthropic-version": ANTHROPIC_VERSION}
+    else:
+        auth_headers = {
+            "Authorization": f"Bearer {oauth_token}",
+            "anthropic-version": ANTHROPIC_VERSION,
+            "anthropic-beta": _ANTHROPIC_OAUTH_BETA,
+        }
     models: list[dict] = []
     after_id = ""
     for _ in range(_MAX_MODEL_PAGES):
         url = f"{base}/v1/models?limit=100"
         if after_id:
             url += f"&after_id={after_id}"
-        data = _get_json(
-            url,
-            headers={"x-api-key": key, "anthropic-version": ANTHROPIC_VERSION},
-            timeout=timeout,
-        ) or {}
+        data = _get_json(url, headers=auth_headers, timeout=timeout) or {}
         for m in data.get("data") or []:
             if isinstance(m, dict) and m.get("id"):
                 models.append({
@@ -419,15 +487,19 @@ def fetch_models(
     key = (_provider_keys.resolve_by_env_var(credential_env) or "") if credential_env else ""
     base = base_url.rstrip("/")
 
+    oauth_token = ""
     if model_source == "anthropic" and not key:
-        # The COMMON case, not an error: a Claude Code subscription login exposes
-        # no API key at all. Explain it and do not egress — a keyless request
-        # would come back 401 and read like a broken credential rather than an
-        # absent one.
+        # A Claude Code subscription login exposes no API key — but its OAuth
+        # token can list the models, so the picker stays current there too.
+        oauth_token = claude_subscription_token()
+    if model_source == "anthropic" and not key and not oauth_token:
+        # No API key and no usable subscription login: explain it and do not
+        # egress — a keyless request would come back 401 and read like a broken
+        # credential rather than an absent one.
         result["error"] = (
-            f"no {credential_env or 'ANTHROPIC_API_KEY'} configured — showing the "
-            f"curated model list. Add an API key under Settings → API Keys to see "
-            f"Anthropic's live model list."
+            f"no {credential_env or 'ANTHROPIC_API_KEY'} configured and no Claude "
+            f"subscription login found — showing the curated model list. Add an API "
+            f"key under Settings → API Keys to see Anthropic's live model list."
         )
         # A FACT about this host, not a display decision: the console needs to
         # tell "never had a key here" apart from "the key is wrong", because the
@@ -438,6 +510,23 @@ def fetch_models(
 
     try:
         if model_source == "anthropic":
+            if oauth_token:
+                result["credential_source"] = "subscription"
+                try:
+                    return _fetch_anthropic(result, base=base, key="", timeout=timeout,
+                                            oauth_token=oauth_token)
+                except urllib.error.HTTPError as exc:
+                    if exc.code not in (401, 403):
+                        raise
+                    # The login is stale or not allowed to list models: the same
+                    # benign state as "no key", not a broken source — and the
+                    # 5-minute timer must not audit it as a failure every cycle.
+                    result["error"] = (
+                        f"the Claude subscription login could not list models "
+                        f"(HTTP {exc.code}) — showing the curated model list."
+                    )
+                    result["credential_absent"] = True
+                    return result
             return _fetch_anthropic(result, base=base, key=key, timeout=timeout)
         if model_source == "ollama":
             data = _get_json(f"{base}/api/tags", bearer=key, timeout=timeout)

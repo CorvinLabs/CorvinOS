@@ -192,8 +192,14 @@ engines:
       # Newest version of each family first. A retired model is dropped from
       # the pickers at runtime and any pin naming it launches its successor
       # (model_lineage.py) — remove it here in the next release as well.
+      # This list is only the offline floor: the live Anthropic catalogue
+      # (API key or the Claude subscription login) tops it up automatically.
+      - id: "claude-haiku-5-5"
+        label: "Haiku 5.5 — fast, economical (newest Haiku)"
       - id: "claude-haiku-4-5-20251001"
         label: "Haiku 4.5 — fast, economical"
+      - id: "claude-sonnet-5-5"
+        label: "Sonnet 5.5 — balanced (newest Sonnet)"
       - id: "claude-sonnet-5"
         label: "Sonnet 5 — balanced"
       - id: "claude-opus-5-5"
@@ -205,8 +211,12 @@ engines:
       - id: "claude-fable-5"
         label: "Fable 5 — creative reasoning"
     worker_models:
+      - id: "claude-haiku-5-5"
+        label: "Haiku 5.5 — fast, economical (newest Haiku)"
       - id: "claude-haiku-4-5-20251001"
         label: "Haiku 4.5 — fast, economical"
+      - id: "claude-sonnet-5-5"
+        label: "Sonnet 5.5 — balanced (newest Sonnet)"
       - id: "claude-sonnet-5"
         label: "Sonnet 5 — balanced"
       - id: "claude-opus-5-5"
@@ -244,6 +254,8 @@ engines:
       - id: ""
         label: "Provider default"
         default: true
+      - id: "anthropic/claude-sonnet-5-5"
+        label: "Claude Sonnet 5.5 (Anthropic)"
       - id: "anthropic/claude-sonnet-5"
         label: "Claude Sonnet 5 (Anthropic)"
       - id: "anthropic/claude-opus-5-5"
@@ -254,8 +266,12 @@ engines:
       - id: ""
         label: "Provider default"
         default: true
+      - id: "anthropic/claude-sonnet-5-5"
+        label: "Claude Sonnet 5.5 (Anthropic)"
       - id: "anthropic/claude-sonnet-5"
         label: "Claude Sonnet 5 (Anthropic)"
+      - id: "anthropic/claude-haiku-5-5"
+        label: "Claude Haiku 5.5 (Anthropic)"
       - id: "anthropic/claude-haiku-4-5-20251001"
         label: "Claude Haiku 4.5 (Anthropic)"
 

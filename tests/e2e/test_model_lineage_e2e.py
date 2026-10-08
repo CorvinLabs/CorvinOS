@@ -151,8 +151,11 @@ def test_a_retired_model_leaves_the_picker_and_hands_on_its_default(home):
 
 
 def test_a_retired_model_without_successor_is_not_invented(home):
-    ML.mark_retired("claude-haiku-4-5-20251001")
-    assert ML.current("claude-haiku-4-5-20251001") == "claude-haiku-4-5-20251001"
+    # The NEWEST Haiku has no successor by definition (it was 4.5 until the
+    # registry gained Haiku 5.5 — a hard-coded id here goes stale every launch).
+    newest = ML.latest("haiku")
+    ML.mark_retired(newest)
+    assert ML.current(newest) == newest
 
 
 def test_a_runtime_mark_expires(home, monkeypatch):
