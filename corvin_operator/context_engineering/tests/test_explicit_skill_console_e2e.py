@@ -228,6 +228,31 @@ class ExplicitSkillConsoleE2E(unittest.TestCase):
             f"counts={dict(self.si._request_diag_counts)}")
         self.assertEqual(self._bound(bundle), set())
 
+    # ── Auto-bind by relevance (forged skill offered without being named) ───
+    def _seed_pptx(self, graded=True):
+        self.reg.create(name="assistant.pptx_from_topic", type="learned-experience",
+                        body_md=_BODY.replace(_SENTINEL, "pptx-auto-body-marker"),
+                        description="Erzeugt aus einem Thema eine fertige .pptx Praesentation")
+        if graded:
+            self.reg.grade(name="assistant.pptx_from_topic", run_id="seed", score=0.3,
+                           notes="test seed")
+
+    def test_unnamed_but_relevant_graded_skill_is_auto_bound(self):
+        self._seed_pptx()
+        bundle, _ = self._run("erzeuge mir eine PPT")
+        self.assertIn("assistant.pptx_from_topic", self._bound(bundle))
+        self.assertIn("pptx-auto-body-marker", self.ce.render_skill_bindings(bundle) or "")
+
+    def test_irrelevant_message_binds_nothing_even_with_pptx_skill(self):
+        self._seed_pptx()
+        bundle, _ = self._run("wie ist das wetter morgen")
+        self.assertNotIn("assistant.pptx_from_topic", self._bound(bundle))
+
+    def test_relevant_but_ungraded_skill_is_not_auto_bound(self):
+        self._seed_pptx(graded=False)
+        bundle, _ = self._run("erzeuge mir eine PPT")
+        self.assertNotIn("assistant.pptx_from_topic", self._bound(bundle))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

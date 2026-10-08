@@ -617,6 +617,10 @@ def collect_active_skills(
         # Sort by mean_score desc, then created_at desc — newest among ties.
         registry_eligible.sort(
             key=lambda pair: (
+                # Skills that match what the user just asked for come first —
+                # otherwise a niche skill (pptx) loses to the best-graded few.
+                1 if is_relevant(task_text, pair[1].name,
+                                 getattr(pair[1], "description", "") or "") else 0,
                 float(pair[1].mean_score),
                 float(getattr(pair[1], "created_at", 0.0) or 0.0),
             ),
@@ -684,6 +688,60 @@ def collect_active_skills(
     while parts and parts[-1] == "":
         parts.pop()
     return "\n".join(parts).rstrip() + "\n"
+
+
+# ── Relevance matching for AUTO injection ───────────────────────────────────
+#
+# Both surfaces used to pick auto-injected skills WITHOUT looking at the user's
+# message: the bridge took the top-N by grade, the console only listed titles
+# (never bodies). A forged skill (e.g. assistant.pptx_from_topic) was therefore
+# offered only if it happened to be among the best-graded few. This scorer ranks
+# a skill against the task text: token overlap between the message and
+# the skill's name+description, minus filler words.
+_REL_STOP = frozenset((
+    "erzeuge erzeug erstelle erstell mach machen mir mich bitte eine einen einem "
+    "ein der die das den dem und oder mit von fuer fur für aus auf ist sind kann "
+    "kannst willst will soll hast habe wir ich du sie nicht noch auch wie was "
+    "please create make generate give the and for with from this that into "
+    "aus ueber über zum zur beim eines neue neuen neuer thema themen"
+).split())
+_REL_MIN = 0.34   # share of the message's content terms a skill must cover
+_REL_ALIASES = {"powerpoint": "pptx", "ppt": "pptx", "praesentation": "pptx",
+                "präsentation": "pptx", "folien": "pptx", "slides": "pptx"}
+
+
+def _rel_terms(text: str) -> set[str]:
+    out: set[str] = set()
+    for tok in re.findall(r"[a-zA-ZäöüÄÖÜß0-9]+", (text or "").lower()):
+        if len(tok) < 3 or tok in _REL_STOP:
+            continue
+        out.add(_REL_ALIASES.get(tok, tok))
+    return out
+
+
+def task_relevance(task_text: str | None, name: str, description: str = "") -> float:
+    """Share (0..1) of the message's content terms found in the skill's
+    name+description (exact or containment, with a small alias table for ppt/powerpoint/slides). 0.0 when the message has no content terms."""
+    q = _rel_terms(task_text or "")
+    if not q:
+        return 0.0
+    doc = _rel_terms(f"{name.replace('_', ' ').replace('.', ' ')} {description}")
+    if not doc:
+        return 0.0
+    hit = 0
+    for t in q:
+        # Exact, or containment of a 4+ char term (plural/compound forms) — no
+        # fuzzy stem match: 'validiere' must not select a skill that merely
+        # says 'validiertem Layout'.
+        if t in doc or (len(t) >= 4 and any(
+                len(d) >= 4 and (t in d or d in t) for d in doc)):
+            hit += 1
+    return hit / len(q)
+
+
+def is_relevant(task_text: str | None, name: str, description: str = "") -> bool:
+    return task_relevance(task_text, name, description) >= _REL_MIN
+
 
 
 def _apply_ldd_filter(

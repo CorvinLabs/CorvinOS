@@ -147,6 +147,60 @@ def honor_explicit_skill_requests(bundle, ctx) -> int:
     return honored
 
 
+def auto_bind_relevant_skills(bundle, ctx, *, max_auto: int = 2) -> int:
+    """Bind the BODY of registry skills that match what the user asked for.
+
+    Closes the second half of the gap: ``SkillStage`` only lists titles in the
+    brief, and ``honor_explicit_skill_requests`` needs the skill to be NAMED. A
+    request like "erzeuge mir eine PPT" names nothing, so a forged
+    ``assistant.pptx_from_topic`` was never offered. Same gates as the bridge's
+    AUTO path: persona namespace (fail-closed), at least one grade with a
+    positive mean, capped, loud-free no-op on any error."""
+    si = _load_helpers()
+    if si is None:
+        return 0
+    task_text = getattr(bundle, "task", "") or ""
+    if not task_text.strip():
+        return 0
+    ns_prefix = si._persona_namespace(getattr(ctx, "persona", "") or None)
+    if ns_prefix is None:
+        return 0
+    reg = _skill_registry(getattr(ctx, "tenant_id", "_default") or "_default")
+    if reg is None:
+        return 0
+    try:
+        scoped = reg.list_with_scope()
+    except Exception:  # noqa: BLE001
+        return 0
+    already = {str(getattr(s, "skill_id", "") or "").lower()
+               for s in (bundle.skills_to_bind or [])}
+    cands = []
+    for _scope, spec in scoped:
+        name = getattr(spec, "name", "") or ""
+        if not name or name.lower() in already:
+            continue
+        if name.split(".", 1)[0].lower() != ns_prefix or "." not in name:
+            continue
+        if getattr(spec, "n_grades", 0) < 1 or getattr(spec, "mean_score", 0.0) <= 0:
+            continue
+        rel = si.task_relevance(task_text, name, getattr(spec, "description", "") or "")
+        if rel >= si._REL_MIN:
+            cands.append((rel, float(getattr(spec, "mean_score", 0.0)), name))
+    cands.sort(reverse=True)
+    cap = max(0, min(max_auto, MAX_BINDINGS - len(bundle.skills_to_bind or [])))
+    bound = 0
+    for _rel, _score, name in cands[:cap]:
+        try:
+            body = si._strip_front_matter(reg.get_body(name) or "").strip()
+        except Exception:  # noqa: BLE001
+            body = ""
+        if not body:
+            continue
+        bundle.skills_to_bind.append(SkillRef(skill_id=name, body=body))
+        bound += 1
+    return bound
+
+
 class ExplicitSkillStage:
     id = "explicit_skill"
     requires: tuple = ()
@@ -162,9 +216,13 @@ class ExplicitSkillStage:
             bound = honor_explicit_skill_requests(bundle, ctx)
         except Exception:  # noqa: BLE001 — explicit-honor must never break the turn
             bound = 0
+        try:
+            bound += auto_bind_relevant_skills(bundle, ctx)
+        except Exception:  # noqa: BLE001 — auto-bind is best-effort too
+            pass
         return bundle, StageTelemetry(
             stage=self.id, status="ok",
-            reason=None if bound else "no_explicit_skill_request",
+            reason=None if bound else "no_skill_bound",
             confidence_tier="high" if bound else "low",
             sources=[{"id": s.skill_id, "score": 1.0}
                      for s in (bundle.skills_to_bind or [])
