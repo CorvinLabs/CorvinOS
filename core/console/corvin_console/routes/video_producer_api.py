@@ -250,18 +250,35 @@ def _tenant_settings(rec) -> Dict[str, Any]:
 
 # ── Jobs ─────────────────────────────────────────────────────────────────────
 
-def _storyboard_backend(tenant_id: str, chat_key: str) -> tuple:
-    """Where the storyboard LLM call goes. The host decides, after its own
-    egress gate: Anthropic only when a key is configured AND L35 admits
-    api.anthropic.com for this tenant; otherwise the local Ollama instance."""
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+def _claude_cli_available() -> bool:
+    pinned = (os.environ.get("CORVIN_CLAUDE_BIN") or "").strip()
+    if pinned:
+        return os.path.isfile(pinned) and os.access(pinned, os.X_OK)
+    return shutil.which("claude") is not None
+
+
+def _storyboard_backend(tenant_id: str, chat_key: str, task: str) -> tuple:
+    """Where the storyboard LLM call goes. The host decides, after its own gates:
+    the Anthropic API when a key is configured, else this host's Claude Code
+    login (the ``claude`` CLI the console already runs), else local Ollama.
+    Both remote paths send the task text to api.anthropic.com, so both need the
+    L35 egress gate AND the L34 classification of the task under the
+    ``claude_code`` engine; any refusal or doubt keeps the call local.
+    Sonnet, not Opus: on the real storyboard prompt both produced fully valid,
+    equally varied template choices, Sonnet in ~14 s for ~$0.03 vs ~17-42 s
+    for ~$0.06 (measured 2026-10-08, ADR-2238 amendment)."""
+    api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if not api_key and not _claude_cli_available():
         return "ollama", None
     try:
-        from spawn_gates import check_l35  # type: ignore  # path set up by _spawn_gates
+        from spawn_gates import check_l34, check_l35  # type: ignore  # path set up by _spawn_gates
         if check_l35("claude_code", tenant_id, channel="web", chat_key=chat_key) is not None:
             return "ollama", None
+        if check_l34("claude_code", tenant_id, prompt=task, persona="assistant",
+                     channel="web", chat_key=chat_key) is not None:
+            return "ollama", None
         import model_selector  # type: ignore  # bridges/shared, same import as chat_runtime
-        return "anthropic", model_selector.top_model()
+        return ("anthropic" if api_key else "claude_cli"), model_selector.tier_model("sonnet")
     except Exception as e:  # noqa: BLE001 — any doubt → the local backend
         logger.warning("video producer: storyboard backend check failed (%s) — using local", type(e).__name__)
         return "ollama", None
@@ -350,7 +367,7 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     if refusal is not None:
         raise HTTPException(status_code=403, detail=refusal)
 
-    backend, model = await asyncio.to_thread(_storyboard_backend, rec.tenant_id, chat_key)
+    backend, model = await asyncio.to_thread(_storyboard_backend, rec.tenant_id, chat_key, task)
     storage = _store(rec)
     job = VideoJob(id=job_id, task=task, status="pending")
     storage.save_job(job)

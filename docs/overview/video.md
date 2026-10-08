@@ -18,12 +18,12 @@
 
 > **Type one sentence, get back a narrated explainer video — produced on your own machine, behind the same gates as every other CorvinOS run.**
 
-<p align="center"><img src="img/video-hero.svg" alt="Pipeline: a text task passes the L44, L34 and L35 gates; an LLM writes a storyboard of up to six scenes (local Ollama by default, Anthropic when a key is set and egress admits it); OpenAI TTS narrates each scene; scenes with a template become animated web slides (Pillow stills as the fallback); ffmpeg encodes and joins; output is an MP4 without subtitles, plus poster, slides and quality metrics." width="100%"/></p>
+<p align="center"><img src="img/video-hero.svg" alt="Pipeline: a text task passes the L44, L34 and L35 gates; an LLM writes a storyboard of up to eight scenes (Claude Sonnet when the L35 and L34 gates admit Anthropic, local Ollama otherwise or on failure); OpenAI TTS narrates each scene; scenes with a template become animated web slides (Pillow stills as the fallback); ffmpeg encodes and joins; output is an MP4 without subtitles, plus poster, slides and quality metrics." width="100%"/></p>
 
 ## What you get
 
 - **A finished artefact, not a prompt.** One task text produces `output.mp4` — with no subtitles —, a poster image and one slide per scene.
-- **Local by default.** The storyboard is written by a local Ollama model unless you deliberately provide an Anthropic key — and even then only if the L35 egress gate admits it for your tenant.
+- **Claude writes the storyboard, behind the gates.** On a host where the console already runs Claude Code, the storyboard is written by Claude Sonnet through that login (or an Anthropic API key) — only if L35 admits `api.anthropic.com` and L34 admits the task for the `claude_code` engine. Forbid that host and every job stays on the local Ollama model.
 - **Gated like any other run.** The task passes the acceptable-use gate (L44), data classification (L34) and the egress gate (L35) before anything is generated.
 - **Measurable output.** Each job reports per-step progress and ffprobe quality metrics; feedback on a single scene is recorded in the audit chain before it is stored.
 - **A plugin you can take out.** It ships through the Corvin Marketplace; uninstall it and the sidebar entry is gone.
@@ -32,9 +32,9 @@
 
 1. **Task.** You submit a text task in the Video panel or with `POST /v1/console/video/jobs`. The job runs in the background; the request returns a `job_id` immediately.
 2. **Gates.** The same pre-spawn function every console spawn site calls checks L44 acceptable use, capabilities, L34 classification and L35 egress — under the `video_producer` engine profile, because the narration text is sent to a cloud TTS service on every job.
-3. **Storyboard.** An LLM turns the task into at most six scenes, each with narration and slide text. Default backend: local Ollama (`qwen3:1.7b`, sized for a CPU-only host). Anthropic is used only when `ANTHROPIC_API_KEY` is set and L35 admits `api.anthropic.com` for the tenant; any doubt or failure falls back to Ollama — the plugin never upgrades a job to more egress on its own.
+3. **Storyboard.** An LLM turns the task into scenes, each with narration, a slide template and its data. Backend, decided by the route: the Anthropic API when `ANTHROPIC_API_KEY` is set, else the host's `claude` CLI (`CORVIN_CLAUDE_BIN` or PATH; called with no tools, no MCP servers, no settings and no saved session, prompt over stdin) — both with the newest Sonnet and both only when L35 admits `api.anthropic.com` and L34 admits the task under `claude_code`; otherwise local Ollama (`qwen3:1.7b`). Up to eight scenes from Claude, six from the local model. A failed Claude call falls back to Ollama; the job's metadata (`storyboard_llm`) names the backend that actually answered. Measured on the real prompt: the local model took ~65 s and repeated or broke templates, Sonnet took ~14 s (~$0.03 list price) with every scene on a valid, varied template — Opus was no better here and slower.
 4. **Narration.** OpenAI TTS (`tts-1-hd`, voice `onyx`) synthesises one audio track per scene — the default engine, chosen in the panel's Settings (`openai` · `auto` = OpenAI, then edge-tts, then Piper · `gtts` = legacy). **This calls the TTS provider's endpoint** (`api.openai.com` by default) — the narration text leaves your machine. Without an OpenAI key in the console's environment the default engine refuses the job with a message instead of switching the voice.
-5. **Slides.** Scenes with a template become animated web slides in the corvin-labs.com design, rendered frame by frame in headless Chromium (needs Playwright in the console environment — Settings says when it is missing); any other scene, or any scene when Chromium is unavailable, gets a classic Pillow slide. Output is 1920×1080. Nothing the narrator says is drawn on a slide.
+5. **Slides.** Scenes with a template become animated web slides in the corvin-labs.com design — 14 templates, among them animated data visuals: line charts that draw themselves, donuts that sweep in, branching flow graphs with travelling data pulses, timelines, feedback loops and layer stacks — rendered frame by frame in headless Chromium (needs Playwright in the console environment — Settings says when it is missing); any other scene, or any scene when Chromium is unavailable, gets a classic Pillow slide. Output is 1920×1080. Nothing the narrator says is drawn on a slide.
 6. **Encode.** ffmpeg turns each slide plus its audio into a clip and joins them. No caption file and no subtitle stream are produced.
 
 <p align="center"><img src="img/video-status.svg" width="100%" alt="Live host routes under /v1/console/video: jobs, progress, download, quality metrics, overview, poster and slides, scene feedback, settings. Not built or removed: YouTube upload (501), Blender, Three.js and Manim render tiers, screenshot capture and asset analysis."/></p>
@@ -63,8 +63,8 @@ The plugin's code lives entirely in the Marketplace (`plugins/contributor/media/
 | Capability | Status | Where |
 |---|---|---|
 | Job API: create, list, status, per-step progress | **LIVE** | `core/console/corvin_console/routes/video_producer_api.py` |
-| Storyboard (Ollama default, ≤ 6 scenes) | **LIVE** | Marketplace `video_producer/src/skill.py` |
-| Storyboard via Anthropic | **GATED** — key set + L35 admits | `_storyboard_backend()` in the routes |
+| Storyboard via Claude Sonnet (CLI login or API key, ≤ 8 scenes) | **GATED** — CLI or key present + L35 and L34 admit | `_storyboard_backend()` in the routes, `_call_claude_cli()` in the plugin |
+| Storyboard via local Ollama (≤ 6 scenes) | **LIVE** — fallback | Marketplace `video_producer/src/skill.py` |
 | OpenAI TTS narration (default), web slides with Pillow fallback, ffmpeg encode + join — no subtitles | **LIVE** | Marketplace `video_producer/src/` |
 | Pre-spawn gates L44 / L34 / L35 (engine profile follows the narration engine: `video_producer_openai` · `video_producer_edge` · `video_producer`) | **LIVE** | `core/console/corvin_console/_spawn_gates.py` |
 | Download, poster, per-scene slide | **LIVE** | `video_producer_api.py` |
@@ -115,7 +115,7 @@ The pipeline's events go to an in-memory list on the orchestrator; they are
 
 ## Try it
 
-1. Install the system tools: `ffmpeg`, plus Python packages `openai` and `Pillow` (plus `playwright` for web slides; the plugin's `requirements.txt` lists them) and an OpenAI TTS key (`CORVIN_TTS_OPENAI_KEY` or `OPENAI_API_KEY`) in the console's environment. For the default storyboard, run [Ollama](https://ollama.com) locally and pull `qwen3:1.7b`.
+1. Install the system tools: `ffmpeg`, plus Python packages `openai` and `Pillow` (plus `playwright` for web slides; the plugin's `requirements.txt` lists them) and an OpenAI TTS key (`CORVIN_TTS_OPENAI_KEY` or `OPENAI_API_KEY`) in the console's environment. For the storyboard, the console's Claude Code login is used when present; as the local fallback, run [Ollama](https://ollama.com) and pull `qwen3:1.7b`.
 2. In the console, open **Marketplace**, install **video_producer** and enable it. A **Video** entry appears in the sidebar.
 3. Enter a task, for example *"Explain in one minute how our onboarding works"*, and watch the step progress. Download the MP4 when it finishes.
 
@@ -132,10 +132,10 @@ curl -s -b "$COOKIE" -o video.mp4 http://127.0.0.1:8765/v1/console/video/videos/
 
 ## Honest limits
 
-- **Narration goes to the TTS provider.** OpenAI TTS (default) calls `api.openai.com` on every job (`auto` may also reach Microsoft's edge-tts endpoint, `gtts` calls Google); the gate checks the host of the engine you chose. Do not put confidential text into a task unless that egress is acceptable; the L34/L35 gates exist precisely to refuse it where it is not.
+- **The task goes to Anthropic, the narration to the TTS provider.** On a host with a Claude login the storyboard call sends the task text to `api.anthropic.com` (forbid that host in L35 to keep it local). OpenAI TTS (default) calls `api.openai.com` on every job (`auto` may also reach Microsoft's edge-tts endpoint, `gtts` calls Google); the gate checks the host of the engine you chose. Do not put confidential text into a task unless that egress is acceptable; the L34/L35 gates exist precisely to refuse it where it is not.
 - **Slides, not footage.** The plugin's output is narrated slides — animated web slides, or classic stills as the fallback. Its 3D and animation tiers (Blender, Three.js, Manim), screenshot capture and asset analysis were removed by the plugin-local ADR-0953 in the Marketplace repo — they had no working path there. The separate scripted Maestro pipeline (below) is not affected by that removal.
 - **No publishing.** YouTube upload answers 501.
-- **Small storyboards.** At most six scenes; the default local model is chosen for CPU-only hosts, not for prose quality.
+- **Short storyboards.** At most eight scenes (six on the local fallback model, which is chosen for CPU-only hosts, not for quality).
 - **Console-only API.** The routes sit behind the single-operator console session; there is no separate public video API.
 
 ## Under the hood

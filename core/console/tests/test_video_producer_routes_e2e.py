@@ -310,6 +310,37 @@ class VideoProducerRoutesE2E(unittest.TestCase):
             self.assertEqual(self._create(client, csrf).status_code, 200)
             self.assertEqual(runner.calls[-1][2]["tts_engine"], "auto")
 
+    def test_storyboard_uses_the_hosts_claude_login_only_when_the_gates_admit_anthropic(self):
+        """No API key on this kind of host: the storyboard goes to the Claude Code CLI the
+        console already runs (Sonnet, measured), and stays on local Ollama when there is
+        no CLI or when L35 forbids api.anthropic.com."""
+        from unittest import mock
+
+        fake = self._tmp / "claude"
+        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.chmod(0o755)
+        with _sandbox(self._tmp) as (client, csrf, home, _clients), \
+                mock.patch.dict(os.environ, {"CORVIN_CLAUDE_BIN": str(fake)}):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            mod = _route_module()
+            runner = _RecordingRunner()
+            mod.get_runner = lambda: runner
+
+            self.assertEqual(self._create(client, csrf).status_code, 200)
+            cfg = runner.calls[-1][2]
+            self.assertEqual(cfg["storyboard_backend"], "claude_cli")
+            self.assertTrue(cfg["storyboard_model"].startswith("claude-sonnet-"), cfg["storyboard_model"])
+
+            self._deny_host(home, "api.anthropic.com")
+            self.assertEqual(self._create(client, csrf).status_code, 200)
+            self.assertEqual(runner.calls[-1][2]["storyboard_backend"], "ollama")
+            self.assertIsNone(runner.calls[-1][2]["storyboard_model"])
+
+            _write_tenant_yaml(home, "_default", {"egress": {"enabled": False}})
+            os.environ["CORVIN_CLAUDE_BIN"] = str(self._tmp / "no-such-claude")
+            self.assertEqual(self._create(client, csrf).status_code, 200)
+            self.assertEqual(runner.calls[-1][2]["storyboard_backend"], "ollama")
+
     def test_secret_in_task_is_refused_by_l34(self):
         with _sandbox(self._tmp) as (client, csrf, home, _clients):
             mod = _route_module()
