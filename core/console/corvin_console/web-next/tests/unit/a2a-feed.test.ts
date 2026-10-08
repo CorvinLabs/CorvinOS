@@ -6,9 +6,13 @@ import {
   maxSeq,
   initials,
   isEmptyDelivery,
+  isMinePeerRole,
+  isObserverModeEmptyReply,
   mediaKind,
   mergeMessages,
   messageBody,
+  peerMessageRole,
+  peerRoleLabel,
   pendingTaskIds,
   sanitizeAttachmentName,
   statusTone,
@@ -30,6 +34,7 @@ function msg(p: Partial<A2AFeedMessage>): A2AFeedMessage {
     attachments: p.attachments ?? [],
     duration_ms: null,
     error: p.error ?? null,
+    thread_ref: p.thread_ref ?? null,
   };
 }
 
@@ -139,6 +144,55 @@ describe("helpers", () => {
       expect(s).toMatch(re);
       expect(s).not.toContain("..");
     }
+  });
+});
+
+describe("peerMessageRole (ADR-2235 four-actor labelling)", () => {
+  it("derives all four roles from (direction, kind) with no thread_ref", () => {
+    expect(peerMessageRole(msg({ direction: "out", kind: "task" }))).toBe("operator");
+    expect(peerMessageRole(msg({ direction: "in", kind: "response" }))).toBe("peer_agent");
+    expect(peerMessageRole(msg({ direction: "in", kind: "task" }))).toBe("peer_operator");
+    expect(peerMessageRole(msg({ direction: "out", kind: "response" }))).toBe("local_agent");
+  });
+
+  it("thread_ref overrides the default — the conversation turn-prompt bug fix", () => {
+    const m = msg({
+      direction: "out", kind: "task",
+      thread_ref: { kind: "conversation", id: "c1", author_role: "local_agent", agent_id: "opus" },
+    });
+    // Without the override this would be "operator" ("You") — the exact
+    // misattribution ADR-2235 point 2 reports.
+    expect(peerMessageRole(m)).toBe("local_agent");
+  });
+
+  it("isMinePeerRole aligns operator and local_agent on 'our side'", () => {
+    expect(isMinePeerRole("operator")).toBe(true);
+    expect(isMinePeerRole("local_agent")).toBe(true);
+    expect(isMinePeerRole("peer_operator")).toBe(false);
+    expect(isMinePeerRole("peer_agent")).toBe(false);
+  });
+
+  it("peerRoleLabel names all four actors distinctly", () => {
+    expect(peerRoleLabel("operator", "Acme")).toBe("You");
+    expect(peerRoleLabel("local_agent", "Acme")).toBe("Your agent");
+    expect(peerRoleLabel("peer_operator", "Acme")).toBe("Acme");
+    expect(peerRoleLabel("peer_agent", "Acme")).toBe("Acme's agent");
+  });
+});
+
+describe("isObserverModeEmptyReply (PLAN-0937 Resolved — Observer-mode label, not an empty bubble)", () => {
+  it("flags a plain ok response with no text, data or attachments", () => {
+    expect(isObserverModeEmptyReply(msg({ direction: "in", kind: "response", status: "ok" }))).toBe(true);
+  });
+  it("does not flag a real reply, an error, an outbound message, or one with attachments", () => {
+    expect(isObserverModeEmptyReply(msg({ direction: "in", kind: "response", status: "ok", text: "hi" }))).toBe(false);
+    expect(isObserverModeEmptyReply(msg({ direction: "in", kind: "response", status: "error", error: "x" }))).toBe(false);
+    expect(isObserverModeEmptyReply(msg({ direction: "out", kind: "task", status: "ok" }))).toBe(false);
+    expect(isObserverModeEmptyReply(msg({ direction: "in", kind: "task", status: "ok" }))).toBe(false);
+    expect(isObserverModeEmptyReply(msg({
+      direction: "in", kind: "response", status: "ok",
+      attachments: [{ name: "a.png", mime: "image/png", sha256: "x", size: 1 }],
+    }))).toBe(false);
   });
 });
 

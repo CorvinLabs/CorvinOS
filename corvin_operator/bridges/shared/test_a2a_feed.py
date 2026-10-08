@@ -423,3 +423,39 @@ class TestRound7FairBudgets(TestConcurrentStore):
         peers = [m["peer_id"] for m in a2a_feed.read(limit=0)]
         self.assertIn("peerA", peers, "the flooding peer evicted another peer's conversation")
         self.assertLess(peers.count("peerB"), 60)
+
+
+class TestThreadRef(TestConcurrentStore):
+    """ADR-2235 Phase 1 — closed-vocabulary validation, never raises."""
+
+    VALID = {"kind": "conversation", "id": "abc123", "author_role": "local_agent",
+             "agent_id": "opus-private"}
+
+    def test_valid_thread_ref_round_trips(self):
+        a2a_feed.record(direction="out", kind="task", peer_id="p", task_id="t1",
+                        text="x", thread_ref=self.VALID)
+        self.assertEqual(a2a_feed.read(limit=0)[0]["thread_ref"], self.VALID)
+
+    def test_agent_id_may_be_none(self):
+        ref = {**self.VALID, "agent_id": None}
+        a2a_feed.record(direction="out", kind="task", peer_id="p", task_id="t1", text="x", thread_ref=ref)
+        self.assertEqual(a2a_feed.read(limit=0)[0]["thread_ref"], ref)
+
+    def test_no_thread_ref_stores_none_not_a_missing_key(self):
+        a2a_feed.record(direction="out", kind="task", peer_id="p", task_id="t1", text="x")
+        self.assertIsNone(a2a_feed.read(limit=0)[0]["thread_ref"])
+
+    def test_unknown_kind_or_role_is_dropped_not_raised(self):
+        for bad in (
+            {**self.VALID, "kind": "chitchat"},
+            {**self.VALID, "author_role": "operator_evil"},
+            {**self.VALID, "id": "../../etc/passwd"},
+            {**self.VALID, "agent_id": "has spaces"},
+            "not-a-dict",
+            42,
+        ):
+            a2a_feed.record(direction="out", kind="task", peer_id="p", task_id="t1",
+                            text="x", thread_ref=bad)
+        msgs = a2a_feed.read(limit=0)
+        self.assertEqual(len(msgs), 6)
+        self.assertTrue(all(m["thread_ref"] is None for m in msgs))

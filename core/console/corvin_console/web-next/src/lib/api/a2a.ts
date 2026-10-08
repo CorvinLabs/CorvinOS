@@ -542,6 +542,19 @@ export interface A2AFeedAttachment {
   sha256: string;
 }
 
+/**
+ * ADR-2235 Phase 1 — set only on a conversation's outbound turn-prompt
+ * (`direction: "out", kind: "task"`); every other record is `null` and
+ * renders by the (direction, kind) default (see `peerMessageRole` in
+ * `lib/a2a-feed.ts`).
+ */
+export interface A2AThreadRef {
+  kind: "conversation" | "ask";
+  id: string;
+  author_role: "operator" | "peer_operator" | "local_agent" | "peer_agent";
+  agent_id: string | null;
+}
+
 export interface A2AFeedMessage {
   id: string;
   /** Append-order sequence number — the read cursor (0 = written before seq existed). */
@@ -559,6 +572,7 @@ export interface A2AFeedMessage {
   attachments: A2AFeedAttachment[];
   duration_ms: number | null;
   error: string | null;
+  thread_ref: A2AThreadRef | null;
 }
 
 export interface A2AFeedPeer {
@@ -623,6 +637,37 @@ export async function clearA2AFeed(
   csrf: string,
 ): Promise<{ cleared: boolean; messages_removed: number; blobs_removed: number }> {
   return api(`/a2a/feed`, { method: "DELETE", csrf });
+}
+
+// ── Peer-thread command dispatcher (ADR-2235 Phase 2) ─────────────────────
+//
+// A `/` line in the peer-chat composer must never go through
+// `sendA2AFeedMessage` — that would send it to the peer as plain text,
+// which is the bug this dispatcher exists to close (`/ask @mine …` used to
+// reach the PEER's agent). Every `/` line goes through
+// `sendPeerThreadCommand` instead; the command table itself is fetched from
+// `getPeerThreadCommands`, never hard-coded here (ADR-2235 Alternatives (e)).
+
+export interface PeerThreadCommand {
+  cmd: string;
+  args: string;
+  desc: string;
+}
+
+export async function getPeerThreadCommands(
+  signal?: AbortSignal,
+): Promise<{ commands: PeerThreadCommand[] }> {
+  return api(`/peer-thread/commands`, { signal });
+}
+
+export async function sendPeerThreadCommand(
+  endpointId: string,
+  line: string,
+  csrf: string,
+): Promise<{ executed: boolean; reason?: string; kind?: string } & Record<string, unknown>> {
+  return api(`/peer-thread/${encodeURIComponent(endpointId)}/command`, {
+    method: "POST", body: { line }, csrf,
+  });
 }
 
 // ── Peer/A2A attachment encoding (client-side; NO upload route) ───────────

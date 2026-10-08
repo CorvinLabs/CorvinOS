@@ -201,3 +201,52 @@ export function sanitizeAttachmentName(name: string): string {
   if (!s) s = "file";
   return s.slice(0, 128);
 }
+
+// ── Peer thread — four-actor role labelling (ADR-2235) ───────────────────
+
+export type PeerThreadRole = "operator" | "peer_operator" | "local_agent" | "peer_agent";
+
+/**
+ * Who authored one feed record, for the peer-thread view. `thread_ref`
+ * (set only on a moderated conversation's outbound turn-prompt) overrides;
+ * every other record derives its role from (direction, kind) — a mapping
+ * that already distinguishes all four actors with no new field:
+ *   out + task     → operator      (the composer sent it — a human typed it)
+ *   in  + response → peer_agent    (every 1:1 message wakes the peer's worker)
+ *   in  + task     → peer_operator (the peer's own composer sent it to us)
+ *   out + response → local_agent   (our worker answered their instruction)
+ */
+export function peerMessageRole(m: Pick<A2AFeedMessage, "direction" | "kind" | "thread_ref">): PeerThreadRole {
+  if (m.thread_ref?.author_role) return m.thread_ref.author_role;
+  if (m.direction === "out") return m.kind === "task" ? "operator" : "local_agent";
+  return m.kind === "task" ? "peer_operator" : "peer_agent";
+}
+
+/** Bubble side: the two "our side" roles align right, like "mine" did before. */
+export function isMinePeerRole(role: PeerThreadRole): boolean {
+  return role === "operator" || role === "local_agent";
+}
+
+/** Display label for a role — `peerLabel` is the peer's connection label. */
+export function peerRoleLabel(role: PeerThreadRole, peerLabel: string): string {
+  switch (role) {
+    case "operator": return "You";
+    case "local_agent": return "Your agent";
+    case "peer_agent": return `${peerLabel}'s agent`;
+    case "peer_operator": return peerLabel;
+  }
+}
+
+/**
+ * A plain 1:1 response with no text, no structured fields and no
+ * attachments is the peer's Observer-mode fallback (`spawn_worker: false`
+ * on their side — PLAN-0937's "Resolved" note): their installation
+ * answered "ok" without running their agent at all. Rendering it as an
+ * empty bubble reads as a bug; this names what actually happened.
+ */
+export function isObserverModeEmptyReply(
+  m: Pick<A2AFeedMessage, "direction" | "kind" | "status" | "error" | "attachments" | "text" | "data">,
+): boolean {
+  return m.direction === "in" && m.kind === "response" && m.status === "ok" && !m.error
+    && m.attachments.length === 0 && !messageMarkdown(m).trim();
+}

@@ -300,6 +300,9 @@ router.include_router(forge_bundle_route.router, tags=["console-forge-bundles"])
 # discovery/delegation deliberately out of scope; see the Phase 1 ADR).
 # federation_routes.router's own prefix is "/federation" (relative), same rule.
 router.include_router(federation_route.router, tags=["console-federation"])
+# ADR-2235 Phase 2 — peer-chat command dispatcher, its own "/peer-thread"
+# prefix (relative), deliberately not nested under "/federation".
+router.include_router(federation_route.peer_thread_router, tags=["console-peer-thread"])
 # ADR-0681 Phase 5 — Console Skill Manager (install, list, uninstall)
 router.include_router(skill_manager_route.router, prefix="/skills-manager", tags=["console-skill-manager"])
 # ADR-0682 — skill catalogue, the Marketplace's "Skills" tab (read-only; lists

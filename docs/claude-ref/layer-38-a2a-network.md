@@ -1472,3 +1472,123 @@ by ADR-2232), including the full prompt each turn sends.
 Tests: `tests/federation/test_agent_conversation_e2e.py` (console login/CSRF →
 real gated local worker + real signed A2A to a second instance; ordering,
 exchange, live read, stop, refusal, framing escape, audit-first, erasure).
+
+### Peer-thread command dispatcher — `/ask`, `/talk`, `/stop`, `/agents` (ADR-2235 Phase 2, 2026-10-07)
+
+Before this dispatcher existed, a `/` line typed into the peer-chat composer
+(`PeerConversation.tsx`) had no interception and was sent to the peer as
+plain A2A task text — so `/ask @mine <text>` reached the PEER's own worker,
+which answered it, because it has no reason to treat `/ask` as anything but
+an ordinary instruction (the exact bug an operator reported). Every peer-chat
+composer now POSTs a `/` line to the dispatcher first; it is executed or
+refused, never sent as text.
+
+- **Module**: `core/federation/peer_thread.py` — one command table
+  (`COMMANDS`), one parser (`dispatch()`), no state of its own. Addressing
+  grammar: `/ask @mine[/<agent_id>]  <task>`, `/ask @peer[/<agent_id>] <task>`,
+  `/talk [@mine/<id>] [@peer/<id>] [--turns N] <topic>`, `/stop`, `/agents`.
+  `@mine`/`@peer` resolve to the installation's only local agent / the
+  thread's only federable peer agent when there is exactly one; more than one
+  with no `/<agent_id>` suffix is refused, never guessed.
+  Fail-closed: any `/` line outside this table — including a console-session
+  command like `/stop`, `/new`, `/delegate` (ADR-2235 point 3: that grammar is
+  not peer-chat grammar) — returns `{"executed": false, "reason": "unknown
+  command — not sent"}`, a plain 200, never forwarded.
+- **`/ask @mine`** (`conversation.ask_mine()`) is a one-shot local turn
+  through the same `a2a_worker.spawn_a2a_worker` gates a conversation turn
+  gets, never sent to the peer. Stored as a one-turn record (`ask: true` in
+  the start meta, closed end-reason `"ask"`) in the SAME
+  `global/federation/conversations/<id>.jsonl` store ADR-2234 uses — so
+  `GET /federation/conversations`, the erasure layer and `_prune()`'s 50-per-
+  tenant cap cover it without a second store. Audited once, after completion
+  (`federation.local_ask`: `conversation_id`, `agent_id`, `endpoint_id`,
+  `status`, `duration_ms`, `task_id` — never the answer text), before the
+  turn/end records are appended (same order `_moderate()` uses: a chain-write
+  failure leaves only the start record, which reads as `interrupted` and is
+  pruned, the answer never shown unaudited).
+- **`/ask @peer`** and **`/talk`** call the existing `delegation.delegate()` /
+  `conversation.start()` directly — no new wire behaviour, same audit trail
+  those already have.
+- **`/stop`** stops whichever conversation in `list_conversations()` is
+  `status == "running"` with this thread's `endpoint_id` (there is at most
+  one, `MAX_RUNNING` is process-wide but a thread only ever starts its own).
+- **Console**: `GET /v1/console/peer-thread/commands` (the table the
+  composer's palette renders — `SlashCommandPalette.tsx`'s
+  `useSlashCommandPalette(value, extraCommands)` merges it in; NOT a
+  client-side constant, by ADR-2235 Alternatives (e): a command not parsed
+  server-side can't be audited or refused fail-closed), `POST
+  /v1/console/peer-thread/{endpoint_id}/command` `{line}` (CSRF-protected,
+  `peer_thread_router`, its own prefix — deliberately not nested under
+  `/federation`). `PeerConversation.tsx::handleSend` routes every line
+  starting with `/` through `sendPeerThreadCommand`; everything else keeps
+  using `sendA2AFeedMessage` unchanged.
+Tests: `tests/federation/test_peer_thread_commands_e2e.py` (console
+login/CSRF; `/ask @mine` spawns locally and never touches the wire; `/ask
+@peer` crosses a real signed A2A call and produces a trace hop; `/talk`
+starts and `/stop` ends a conversation in the thread; `/frobnicate` and a
+console-only command (`/delegate`) are refused and spawn nothing anywhere;
+CSRF missing is a 403).
+
+### Four-actor rendering — `thread_ref` + role derivation (ADR-2235 Phases 1+3, 2026-10-07)
+
+Fixes the misattribution ADR-2235 point 2 names: a conversation's outbound
+turn-prompt (the moderator/framing text sent to the peer during
+`conversation._run_peer_turn`) used to render in the peer chat as **"You"**
+— as if the operator had personally typed it — because the only distinction
+the UI ever made was `direction === "out"` ("mine") vs `"in"` ("theirs").
+
+- **`a2a_feed.record(..., thread_ref=None)`** — one optional field,
+  `{kind, id, author_role, agent_id}`, closed vocabularies (`kind ∈
+  {conversation, ask}`, `author_role ∈ {operator, peer_operator, local_agent,
+  peer_agent}`, ids regex-checked); anything else is silently dropped
+  (`_sanitize_thread_ref`), never raised — recording stays best-effort. A
+  record without it renders exactly as before this field existed.
+  Threaded through `RemoteTriggerSender.send(..., thread_ref=)` →
+  `_record_feed_task` and `delegation.delegate(..., thread_ref=)`.
+  **Only `conversation._run_peer_turn` sets it** (`kind="conversation",
+  author_role="local_agent"`, the agent moderating the exchange) — a plain
+  composer send and a direct `/ask @peer` stay `None`, because their default
+  rendering (below) is already correct: a human DID type that text.
+- **Default role, no new field needed for the other three actors** — derived
+  from `(direction, kind)` alone in `lib/a2a-feed.ts::peerMessageRole`:
+  `out+task→operator` (composer sent it) · `in+response→peer_agent` (every
+  1:1 message wakes the peer's worker) · `in+task→peer_operator` (their
+  composer sent it to us) · `out+response→local_agent` (our worker answered
+  their instruction). `thread_ref.author_role` overrides this when present —
+  the ONLY case that fires today is the conversation turn-prompt above.
+- **Console**: `PeerMessageRow` labels every bubble with its role ("You" /
+  "Your agent" / "`<peer>`" / "`<peer>`'s agent", a small Bot icon on the two
+  agent-authored roles) instead of a bare "You"/`<peer>` toggle; alignment
+  (`isMinePeerRole`) still groups `operator`+`local_agent` on our side.
+- **Observer-mode label** (`isObserverModeEmptyReply`, closes the PLAN-0937
+  "Resolved" note): a plain `direction=in, kind=response, status=ok` record
+  with no text, no structured data and no attachments is the peer's
+  `spawn_worker=false` fallback — rendered as "no agent — `<peer>` has not
+  granted Executor permission" instead of a blank bubble.
+- **Inline conversation banner** (`ActiveConversationBanner`): polls
+  `GET /federation/conversations` (1 s while a conversation for this
+  `endpoint_id` is `running`, else 5 s), shows topic + turn count + Stop,
+  and collapses to nothing once the conversation is no longer `running` —
+  the full transcript stays reachable from `/app/agent-conversations`.
+
+**Not yet built** (deferred, named so the gap stays explicit): the
+`GET /peer-thread/{endpoint_id}` read-side join of feed + conversation
+transcripts ADR-2235's Structural section describes. It is not needed for
+the fixes above (role derivation needs no join; the banner reads the
+conversation list directly) — it would let the LOCAL agent's own spoken
+turns (today transcript-only, never touching the feed) appear inline in the
+SAME thread rather than only on `/app/agent-conversations`. Receiver-side
+`thread_ref` derivation (so the PEER sees OUR conversation's turns grouped
+in THEIR view of it) is also not built — this slice only fixes the
+origin-side rendering.
+
+Tests: `corvin_operator/bridges/shared/test_a2a_feed.py::TestThreadRef`
+(closed-vocabulary validation, round-trip, malformed input dropped not
+raised) · `tests/federation/test_peer_thread_commands_e2e.py` (the real
+`/talk` conversation's peer-turn feed record carries the right `thread_ref`;
+a plain `/ask @peer` carries none) · `tests/unit/a2a-feed.test.ts`
+(`peerMessageRole`/`isMinePeerRole`/`peerRoleLabel`/`isObserverModeEmptyReply`)
+· `tests/unit/peer-conversation-four-actor-roles.test.tsx` (the real
+component renders all four role labels from a mixed feed, labels an
+Observer-mode reply, and the banner's Stop button ends a running
+conversation and collapses).

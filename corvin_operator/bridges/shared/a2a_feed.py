@@ -272,6 +272,30 @@ def _assign_missing_seq(root: Path) -> list[dict]:
         return _apply_overrides(records, overrides)
 
 
+_THREAD_REF_KINDS = frozenset({"conversation", "ask"})
+_THREAD_REF_ROLES = frozenset({"operator", "peer_operator", "local_agent", "peer_agent"})
+_THREAD_REF_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+
+
+def _sanitize_thread_ref(thread_ref: dict | None) -> dict | None:
+    """Closed vocabularies only (ADR-2235 Phase 1); anything else is dropped,
+    not raised — a record without ``thread_ref`` renders exactly as before
+    this field existed."""
+    if not isinstance(thread_ref, dict):
+        return None
+    kind, rid, role, agent_id = (
+        thread_ref.get("kind"), thread_ref.get("id"),
+        thread_ref.get("author_role"), thread_ref.get("agent_id"),
+    )
+    if kind not in _THREAD_REF_KINDS or role not in _THREAD_REF_ROLES:
+        return None
+    if not isinstance(rid, str) or not _THREAD_REF_ID_RE.match(rid):
+        return None
+    if agent_id is not None and (not isinstance(agent_id, str) or not _THREAD_REF_ID_RE.match(agent_id)):
+        return None
+    return {"kind": kind, "id": rid, "author_role": role, "agent_id": agent_id}
+
+
 def record(
     *,
     direction: str,
@@ -285,6 +309,7 @@ def record(
     duration_ms: int | None = None,
     peer_label: str | None = None,
     error: str | None = None,
+    thread_ref: dict | None = None,
     tenant_id: str | None = None,
 ) -> dict | None:
     """Append one message. Returns the stored record, or None on any failure."""
@@ -312,6 +337,7 @@ def record(
                 "attachments": _store_attachments(root, attachments),
                 "duration_ms": duration_ms,
                 "error": (str(error)[:256] if error else None),
+                "thread_ref": _sanitize_thread_ref(thread_ref),
             }
             line = (json.dumps(rec, ensure_ascii=False) + "\n").encode("utf-8")
             fd = os.open(root / "messages.jsonl", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)

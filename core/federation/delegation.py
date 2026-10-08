@@ -171,9 +171,15 @@ def delegate(
     endpoint_id: str | None = None, agent_id: str | None = None,
     parent_task_id: str | None = None, origin_agent_id: str | None = None,
     hop: int = 0, ttl_s: int | None = None, timeout_s: int | None = None,
-    task_id: str | None = None, sender: Any = None,
+    task_id: str | None = None, sender: Any = None, thread_ref: dict | None = None,
 ) -> DelegationResult:
-    """Send one task to one peer agent. Raises DelegationError on bad input."""
+    """Send one task to one peer agent. Raises DelegationError on bad input.
+
+    ``thread_ref`` (ADR-2235 Phase 1) is passed straight through to the
+    sender's outbound feed record — see ``RemoteTriggerSender.send``'s
+    docstring. Plain `/ask @peer` calls leave it ``None``: the text IS
+    operator-typed, today's default rendering is already correct.
+    """
     from core.federation import audit as federation_audit
 
     tenant_id = validate_tenant_id(tenant_id)
@@ -231,7 +237,7 @@ def delegate(
 
     sender = sender or default_sender()
     res = sender.send(endpoint_id, instruction, task_id=task_id, ttl_s=ttl_s,
-                      timeout_s=timeout_s, federation=fed)
+                      timeout_s=timeout_s, federation=fed, thread_ref=thread_ref)
     # Peer-supplied strings never reach our chain, ledger or API verbatim
     # (review 2026-10-06, finding 3): closed status, closed reason, else the
     # sender's own closed error category.

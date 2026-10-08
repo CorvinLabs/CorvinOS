@@ -348,3 +348,56 @@ async def delete_agent_conversation(
     if not await asyncio.to_thread(_conversation_or_404, conv.delete, tenant_id, conversation_id):
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="conversation not found")
     return {"deleted": conversation_id}
+
+
+# ── Peer-thread command dispatcher (ADR-2235 Phase 2) ───────────────────────
+#
+# A `/` line typed into the peer-chat composer is never sent to the peer as
+# plain A2A text (that was the bug: `/ask @mine …` reached the PEER's worker,
+# because nothing intercepted it). Every such line is POSTed here first; a
+# recognised command runs through the federation primitives above, anything
+# else is refused — "/peer-thread" is its own prefix, deliberately not nested
+# under "/federation", matching the paths named in ADR-2235.
+
+peer_thread_router = APIRouter(prefix="/peer-thread", tags=["peer-thread"])
+
+
+@peer_thread_router.get("/commands")
+async def list_peer_thread_commands(session: Any = Depends(require_session)) -> dict[str, Any]:
+    """The command table the peer-chat composer's palette renders. Parsed and
+    listed server-side only (ADR-2235 Alternatives (e)) — the palette fetches
+    this instead of carrying its own copy of the grammar."""
+    from core.federation import peer_thread
+    _tenant_of(session)
+    return {"commands": peer_thread.commands_table()}
+
+
+class PeerThreadCommandRequest(BaseModel):
+    line: str = Field(..., min_length=1, max_length=4096)
+
+
+@peer_thread_router.post("/{endpoint_id}/command")
+async def run_peer_thread_command(
+    endpoint_id: str, body: PeerThreadCommandRequest,
+    session: Any = Depends(require_session_csrf_on_mutation),
+) -> dict[str, Any]:
+    """Execute, or fail-closed refuse, one `/` line from the peer-chat
+    composer. A refusal is a normal 200 (`executed: false, reason: …`), never
+    an exception — only a primitive's own error (bad input, audit failure)
+    becomes an HTTP error."""
+    from core.federation import conversation as conv
+    from core.federation import peer_thread
+
+    tenant_id = _tenant_of(session)
+    endpoint_id = _check_endpoint_id(endpoint_id)
+    try:
+        return await asyncio.to_thread(peer_thread.dispatch, tenant_id, endpoint_id, body.line)
+    except peer_thread.PeerThreadCommandError as exc:
+        return {"executed": False, "reason": str(exc)}
+    except conv.ConversationError as exc:
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except DelegationError as exc:
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except FederationAuditError as exc:
+        raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail=f"command could not be recorded, nothing ran: {exc}") from exc

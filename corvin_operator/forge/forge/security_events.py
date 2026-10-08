@@ -977,6 +977,10 @@ EVENT_SEVERITY: dict[str, str] = {
     "federation.conversation_started": "INFO",
     "federation.conversation_turn": "INFO",
     "federation.conversation_ended": "INFO",
+    # Peer-chat `/ask @mine` — a one-shot local turn dispatched from a peer
+    # thread (ADR-2235 Phase 2). Metadata only: the answer text lives in the
+    # tenant-local conversation transcript (kind=ask), never in the chain.
+    "federation.local_ask": "INFO",
     # Video Producer — Blender render path (core/skills/os_skills/video_producer/audit.py)
     # Metadata only: file paths, resolution/codec/frame/duration numbers, error_class.
     # NEVER: subprocess stdout/stderr, exception message text.
@@ -4015,6 +4019,10 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "federation.conversation_ended": frozenset({
         "conversation_id", "status", "reason", "turns", "tenant_id",
+    }),
+    "federation.local_ask": frozenset({
+        "conversation_id", "agent_id", "endpoint_id", "status", "duration_ms",
+        "task_id", "tenant_id",
     }),
     # Video Producer — Blender render path (mirrored in
     # core/skills/os_skills/video_producer/audit.py::_ALLOWED_FIELDS).

@@ -52,6 +52,12 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "federation.conversation_ended": frozenset({
         "conversation_id", "status", "reason", "turns", "tenant_id",
     }),
+    # `/ask @mine` in a peer thread (ADR-2235 Phase 2) — one-shot local turn,
+    # answer text stored in the conversation transcript (kind=ask), never here.
+    "federation.local_ask": frozenset({
+        "conversation_id", "agent_id", "endpoint_id", "status", "duration_ms",
+        "task_id", "tenant_id",
+    }),
 }
 
 SEVERITY: dict[str, str] = {
@@ -64,6 +70,7 @@ SEVERITY: dict[str, str] = {
     "federation.conversation_started": "INFO",
     "federation.conversation_turn": "INFO",
     "federation.conversation_ended": "INFO",
+    "federation.local_ask": "INFO",
 }
 
 
