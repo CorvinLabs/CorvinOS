@@ -8,10 +8,14 @@
 </p>
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=4sXl26Hr1pA&t=22s" title="Watch on YouTube: Compliance in the AI era">
-    <img src="https://img.youtube.com/vi/4sXl26Hr1pA/maxresdefault.jpg" alt="Video: Compliance in the AI era — click to watch on YouTube" width="720"/>
-  </a><br/>
-  <sub>▶ <a href="https://www.youtube.com/watch?v=4sXl26Hr1pA&t=22s">Compliance in the AI era</a> (YouTube)</sub>
+  <video src="https://github.com/CorvinLabs/CorvinOS/raw/main/assets/compliance-in-the-ai-era.mp4"
+         poster="https://img.youtube.com/vi/4sXl26Hr1pA/maxresdefault.jpg"
+         width="720" controls muted preload="metadata">
+    <a href="https://www.youtube.com/watch?v=4sXl26Hr1pA&amp;t=22s">
+      <img src="https://img.youtube.com/vi/4sXl26Hr1pA/maxresdefault.jpg" alt="Video: Compliance in the AI era — click to watch on YouTube" width="720"/>
+    </a>
+  </video><br/>
+  <sub>Compliance in the AI era &middot; <a href="https://www.youtube.com/watch?v=4sXl26Hr1pA&amp;t=22s">also on YouTube</a></sub>
 </p>
 
 <p align="center">
