@@ -264,14 +264,21 @@ def main() -> int:
             except Exception:  # noqa: BLE001
                 pass
 
+    scope_done: dict = {"children": [], "end_reason": None}
+
     def _relay_interim(text: str, info: dict) -> None:
         """A wake-up result while a child runs is content the user wants to read in full."""
+        if info.get("cls") == "scope_done":
+            scope_done["children"] = list(info.get("children") or [])
+            scope_done["end_reason"] = info.get("end_reason")
+            return
         outbox = spec.get("outbox_dir")
         if not outbox or not str(text).strip():
             return
         try:
             import bg_scope as _bgs  # type: ignore
-            note = _bgs.interim_suffix(int(info.get("children_open") or 0))
+            note = ("" if info.get("cls") == "milestone"
+                    else _bgs.interim_suffix(int(info.get("children_open") or 0)))
             body = str(text).strip()[:1800]
             if cn.send_interim(task_id, f"{body}\n\n{note}" if note else body, outbox):
                 interim_emitted["n"] += 1
@@ -399,8 +406,17 @@ def main() -> int:
     # poller delivers it. Gated by want_voice (set at register() only when the
     # proactive_voice_completion flag AND the user's voice preference allow it);
     # best-effort — a failure degrades to text-only, never blocks the text.
+    _voice_text = text or ""
+    if scope_done["children"]:
+        try:
+            import bg_scope as _bgs  # type: ignore
+            _facts = _bgs.voice_facts(scope_done["children"], scope_done["end_reason"])
+            if _facts:   # ADR-2236 D8: a badly ended scope is said aloud; the written text is unchanged
+                _voice_text = f"{_voice_text}\n\n{_facts}"
+        except Exception:  # noqa: BLE001
+            pass
     _maybe_voice(cn, task_id, want_voice=bool(spec.get("want_voice")),
-                 text=(text or ""))
+                 text=_voice_text)
 
     # A gate refusal comes back as text (ok stays True) — the user still gets it.
     cn.mark_done(task_id, text=(text or "(no output)"), ok=ok)

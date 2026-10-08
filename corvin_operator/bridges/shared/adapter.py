@@ -5985,13 +5985,22 @@ def _call_claude_streaming_via_engine(
         """Audit every transition, say it on the status line, tell the observer."""
         for _tr in trs:
             _bgs.audit_transition(_scope, _tr)
-            if on_status is not None:
-                _line = _bgs.status_line(_tr)
-                if _line:
-                    try:
-                        on_status(_line, tool_name="_bgchild")
-                    except Exception as e:  # noqa: BLE001
-                        log(f"child status line failed: {e!r}")
+            _line = _bgs.status_line(_tr)
+            if on_status is not None and _line:
+                try:
+                    on_status(_line, tool_name="_bgchild")
+                except Exception as e:  # noqa: BLE001
+                    log(f"child status line failed: {e!r}")
+            # A failed child is the one background event worth its own message (and
+            # voice): it is what the user would otherwise only learn at the very end.
+            if (_interim_cb is not None and _line and _tr.child is not None
+                    and _tr.kind == "child_finished" and _tr.child.state == _bgs.FAILED):
+                try:
+                    _interim_cb(_line, {"cls": "milestone",
+                                        "children_open": len(_scope.open_children),
+                                        "wakeups": _scope.wakeups})
+                except Exception as e:  # noqa: BLE001
+                    log(f"milestone delivery failed: {e!r}")
         if trs and _observer_cb is not None:
             try:
                 _observer_cb(_scope)
@@ -6292,6 +6301,13 @@ def _call_claude_streaming_via_engine(
                                 wakeups=_scope.wakeups,
                                 duration_ms=int((time.time() - start_t) * 1000),
                                 end_reason=_scope_end or ("error" if error_text else "quiescent"))
+                if _interim_cb is not None:
+                    try:   # tell the sink how the scope ended (feeds the spoken closing summary)
+                        _interim_cb("", {"cls": "scope_done",
+                                         "children": _bgs.children_facts(_scope),
+                                         "end_reason": _scope_end})
+                    except Exception as e:  # noqa: BLE001
+                        log(f"scope_done delivery failed: {e!r}")
         except Exception as e:  # noqa: BLE001
             # An exception HERE is an adapter defect, not a provider error, and
             # the engine may already have run tools. The turn FAILS — it is
@@ -12401,7 +12417,14 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     interim_texts: list[str] = []
     interim_seq = {"n": 0}
 
+    scope_facts: dict = {"children": [], "end_reason": None}
+
     def _bg_interim_send(text: str, info: dict) -> None:
+        cls = info.get("cls")
+        if cls == "scope_done":
+            scope_facts["children"] = list(info.get("children") or [])
+            scope_facts["end_reason"] = info.get("end_reason")
+            return
         body = text
         try:
             try:
@@ -12419,7 +12442,9 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             from . import bg_scope as _bgs_i  # type: ignore
         except ImportError:
             import bg_scope as _bgs_i  # type: ignore[no-redef]
-        note = _bgs_i.interim_suffix(int(info.get("children_open") or 0))
+        # A milestone is a deterministic one-liner (a child failed); it is not an update
+        # of the running work, so it does not carry the "still running" suffix.
+        note = "" if cls == "milestone" else _bgs_i.interim_suffix(int(info.get("children_open") or 0))
         full = f"{body}\n\n{note}" if note else body
         try:
             from . import provenance as _prov_i  # type: ignore
@@ -12436,6 +12461,20 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         interim_texts.append(full)
         log(f"interim #{interim_seq['n']} sent ({info.get('cls')}, "
             f"{info.get('children_open')} child(ren) open, chars={len(full)})")
+        if cls == "milestone":
+            # Spoken too — through the SAME pipeline and the SAME mode/consent gate as the
+            # closing summary. TTS is an enhancement: any failure leaves the text as sent.
+            try:
+                _vp, _ = _synthesize_voice_for_turn(body, settings, None, "", profile)
+                if _vp:
+                    n = interim_seq["n"]
+                    interim_seq["n"] += 1
+                    venv = _envelope({"voice_path": str(_vp), "msg_id": f"{msg_id}_i{n:03d}"})
+                    venv["provenance"] = _prov_i.build_provenance(channel, chat_key, persona_name)
+                    _atomic_write_outbox(OUTBOX / f"{msg_id}_-{n:03d}.json",
+                                         json.dumps(venv, ensure_ascii=False))
+            except Exception as e:  # noqa: BLE001
+                log(f"milestone voice skipped: {e!r}")
 
     # Heartbeat thread: kurzes Lebenszeichen falls Claude in den ersten
     # Sekunden noch gar nichts tut. Bei progress_updates ist die Wartezeit
@@ -12786,8 +12825,22 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # the answer is long; passes through unchanged when short. Mode-controlled.
     # See _synthesize_voice_for_turn() for why the "no summary attempted"
     # branch resets the thread-local skip-reason mirror.
+    # ADR-2236 D8: a scope that ended badly (a child failed / a cap cut it off) must say so
+    # in the spoken summary even if the closing message does not; the TEXT is not changed.
+    _voice_in = answer
+    if scope_facts.get("children"):
+        try:
+            try:
+                from . import bg_scope as _bgs_v  # type: ignore
+            except ImportError:
+                import bg_scope as _bgs_v  # type: ignore[no-redef]
+            _facts = _bgs_v.voice_facts(scope_facts["children"], scope_facts.get("end_reason"))
+            if _facts:
+                _voice_in = f"{answer}\n\n{_facts}"
+        except Exception as e:  # noqa: BLE001
+            log(f"voice facts skipped: {e!r}")
     voice_path, voice_was_expected = _synthesize_voice_for_turn(
-        answer, settings, voice_override, _voice_task, profile,
+        _voice_in, settings, voice_override, _voice_task, profile,
     )
 
     # If voice was expected (mode + length / always) but the synth path

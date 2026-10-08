@@ -436,6 +436,33 @@ def children_snapshot(tracker: "ScopeTracker", now: float | None = None) -> list
             for c in tracker.open_children]
 
 
+# --- voice (ADR-2236 D8) ------------------------------------------------------
+
+def children_facts(tracker: "ScopeTracker") -> list[dict]:
+    """Kind, final state and exit code of every child of the scope — no description."""
+    return [{"kind": c.kind, "state": c.state,
+             "exit_code": c.exit_code if c.exit_code is not None else -1}
+            for c in tracker.all_children]
+
+
+def voice_facts(children: list[dict], end_reason: str | None) -> str:
+    """What the spoken closing summary must not leave out — or "" when nothing is off.
+
+    The closing message is the model's own wording and normally says how it went. A scope
+    that ENDED BADLY (a child failed, or a cap cut it off) is the one case where silence is
+    wrong, so these facts are appended to the text the voice summary is built from. The
+    written message is never changed.
+    """
+    if end_reason in ("child_cap", "wakeup_cap"):
+        return "Background work was stopped early because a limit was reached."
+    failed = [c for c in children if c.get("state") == FAILED]
+    if failed:
+        total = len(children)
+        return (f"Background work finished, but {len(failed)} of {total} "
+                f"{'task' if total == 1 else 'tasks'} failed.")
+    return ""
+
+
 # --- audit (best effort; ADR-2236 D10) --------------------------------------
 
 AUDIT_EVENTS = (

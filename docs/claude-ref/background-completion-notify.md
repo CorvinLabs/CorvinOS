@@ -331,7 +331,17 @@ Measured on claude CLI 2.1.294 (details and raw captures: ADR-2236 / PLAN-0938):
     `test_bg_task_worker_supervised.py` now calls `on_status` the way the real one does.
   - Interactive bridge turns do not register a durable record: the adapter process that owns the claude
     process owns the delivery, and the CLI dies with it (a restart is the supervisor's business, not the queue's).
-- **Still not implemented (T-0074):** the closing voice summary and milestone voice.
+- **Voice (T-0074, done):** there is ONE spoken summary, at the end, built from the CLOSING message only through the
+  same pipeline and mode/consent gate as every reply (`_synthesize_voice_for_turn`: `voice_summary_mode`,
+  threshold, per-persona voice); the first answer and every interim message are text. A scope that ended
+  badly — a child failed, or a cap cut it off — is not allowed to be glossed over, so `bg_scope.voice_facts()`
+  appends one neutral sentence ("Background work finished, but 1 of 2 tasks failed." / "…was stopped early because
+  a limit was reached.") to the text the summary is built from; the written message is never changed. A
+  **failed child** is the one background event with its own message: it is sent as soon as it happens, in
+  writing and (bridge turns, through the same gate) spoken, once per child. A TTS failure leaves the text
+  delivered. The web console speaks the closing `final` result only (its text is also the pinned voice key);
+  it has no milestone voice. The detached `/task` worker keeps its single voice note on the completion
+  (`_maybe_voice`) with the same facts appended; its failed-child milestone is text.
 
 Test harness (T-0070): `shared/tests/fixtures/bgscope/*.jsonl` are scrubbed captures from the real CLI
 (`tests/capture_bgscope_fixture.py` regenerates them), `tests/fake_claude.py` replays one as a REAL

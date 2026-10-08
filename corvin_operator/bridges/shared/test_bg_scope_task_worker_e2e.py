@@ -197,3 +197,20 @@ def test_the_children_file_is_gone_after_a_clean_finish_and_after_retire(box):
     box["sup"].write_children(spec["task_id"], [{"kind": "bash", "age_s": 5, "description": "x"}])
     box["sup"]._cleanup_run_artifacts(spec["task_id"])
     assert box["sup"].read_children(spec["task_id"]) == []
+
+
+def test_a_failed_child_is_its_own_message_for_a_task_worker_too(box):
+    """ADR-2236 D8: the one background event worth a message of its own. (The worker's voice
+    is the single note on the completion — see _maybe_voice — so this milestone is text.)"""
+    spec = _prepare(box)
+    p = _start(box, spec, "bash_bg_fail")
+    p.communicate(timeout=240)
+    assert p.returncode == 0
+    files = _outbox(box)
+    interim = [e for n, e in files if "_-" in n]
+    assert any("failed (exit 3)" in e["text"] for e in interim), [e["text"][:60] for e in interim]
+    milestone = next(e for e in interim if "failed (exit 3)" in e["text"])
+    assert "still running" not in milestone["text"], "a milestone is not a progress update"
+    assert "_final" not in milestone and milestone["provenance"]["ai_generated"] is True
+    final = [e for n, e in files if "_-" not in n and e.get("_final") and e.get("text")]
+    assert len(final) == 1
