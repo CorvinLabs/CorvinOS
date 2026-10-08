@@ -93,7 +93,7 @@ export interface ChatMessage {
 export interface StreamEvent {
   type: "ready" | "delta" | "tool_use" | "result" | "error" | "done" | "info" |
         "pong" | "session_title" | "artifact" | "ccc_action" | "voice" | "engine" |
-        "engine_progress" | "notice" | "language";
+        "engine_progress" | "notice" | "language" | "bg_status";
   /** `notice` only: which runtime message this is ("quota_fallback",
    *  "acs_fallback", "artifacts_truncated"). Rendered as a distinct chip so a
    *  degrade is never mistaken for part of the model's answer. */
@@ -114,6 +114,16 @@ export interface StreamEvent {
   // (notably TTS, which costs a real synthesis per call) must wait for the
   // final event; consumers that only render text can use either.
   annotation_pending?: boolean;
+  // ADR-2236: a turn whose claude process keeps background tasks alive (Bash/Monitor/
+  // Agent in the background) emits one `result` per wake-up. `interim` marks every one
+  // that is NOT the closing message (do not speak it, do not treat the turn as over);
+  // exactly one `final` result closes the turn and is what gets spoken.
+  interim?: boolean;
+  final?: boolean;
+  pending_children?: number;
+  // `bg_status` event: how many background tasks are open right now (kind/age only).
+  open?: number;
+  children?: { kind: string; state: string; age_s: number }[];
   // ADR-0214: engine event — which agentic-compute engine runs this turn.
   // Last event of a turn wins (fallback paths re-stamp the actual engine).
   engine?: string;
@@ -166,6 +176,8 @@ export interface SessionState {
   messages: ChatMessage[];
   streaming: boolean;
   error: string | null;
+  /** Background tasks of the running turn that have not ended yet (ADR-2236). */
+  bgOpen: number;
   /** True while a reconnect attempt is in progress (backoff timer fired, WS connecting). */
   reconnecting: boolean;
   /** Full text of the last completed result (for TTS). Cleared when a new send starts. */
@@ -246,6 +258,7 @@ interface SessionEntry {
   messages: ChatMessage[];
   streaming: boolean;
   error: string | null;
+  bgOpen: number;
   latestResultText: string | null;
   pendingTitle: string | null;
 }
@@ -289,6 +302,7 @@ function getOrCreate(sid: string): SessionEntry {
       messages: loadPersistedMessages(sid) ?? [],
       streaming: false,
       error: null,
+      bgOpen: 0,
       latestResultText: null,
       pendingTitle: null,
       currentAssistantId: null,
@@ -323,6 +337,7 @@ function makeSnapshot(entry: SessionEntry): SessionState {
     messages: entry.messages,
     streaming: entry.streaming,
     error: entry.error,
+    bgOpen: entry.bgOpen,
     reconnecting: entry.reconnecting,
     latestResultText: entry.latestResultText,
     pendingTitle: entry.pendingTitle,
@@ -418,7 +433,13 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
     }
 
     case "result": {
-      if (evt.text) entry.latestResultText = evt.text;
+      // An interim result (ADR-2236) is progress, not the answer to replay or speak.
+      if (evt.text && !evt.interim) entry.latestResultText = evt.text;
+      return;
+    }
+
+    case "bg_status": {
+      entry.bgOpen = Math.max(0, Number(evt.open ?? 0));
       return;
     }
 
@@ -497,6 +518,7 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
 
     case "done": {
       entry.streaming = false;
+      entry.bgOpen = 0;
       const aid = entry.currentAssistantId;
       if (aid) {
         entry.messages = entry.messages.map((m) =>
@@ -772,6 +794,7 @@ export function sendMessage(
   entry.messages = [...entry.messages, userMsg, placeholder];
   entry.currentAssistantId = aid;
   entry.streaming = true;
+  entry.bgOpen = 0;
   entry.latestResultText = null;
 
   entry.ws.send(JSON.stringify({ type: "user", text }));

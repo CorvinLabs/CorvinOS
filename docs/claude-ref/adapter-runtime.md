@@ -277,6 +277,42 @@ E2E coverage: `test_adapter_stream_idle.py` —
 2 s token-idle) and `test_tool_backstop_kills_genuinely_hung_tool` (a
 never-returning tool still dies at the backstop).
 
+### Open background children (ADR-2236)
+
+A claude process that has started `Bash run_in_background`, a `Monitor` or a background `Agent`
+stays alive until they end and emits one `result` per wake-up, so the first `result` is not the end
+of the turn — **process EOF with no open child is** (`bg_scope.ScopeTracker`, fed from the CLI's
+`task_*` / `background_tasks_changed` events). Consequences in this loop:
+
+- **No idle kill while a child is open.** The CLI is legitimately silent; `ADAPTER_STREAM_IDLE_TIMEOUT`
+  is replaced by the child's own cap `CORVIN_BG_CHILD_MAX` (default 7200 s, measured from the oldest
+  open child; a warning status goes out at 80 %). Before this, a quiet child was killed after 300 s
+  and — on an existing session — the reset+retry **re-ran the prompt, starting the child a second
+  time**.
+- **Delay-by-one delivery** when `process_one` installs an interim sink (`bg_interim_sink`): a result
+  that arrives while a child is open is sent at once as an *interim* message (normal envelope, own
+  `msg_id`, Art. 50 provenance, no `_final`, file name `<msg_id>_-NNN.json` so it sorts before the
+  final `_00`; first answer carries "⏳ N background task(s) still running"). A result that arrives
+  with no child open is held as the final candidate — a newer result demotes it to interim, EOF
+  promotes it to the one `_final` message. The session ledger records interim and final in order.
+  Callers without a sink keep the legacy rule (the last non-empty result is the return value).
+- **Caps end a runaway scope honestly.** Past `CORVIN_BG_CHILD_MAX`, or more than
+  `CORVIN_BG_WAKEUP_MAX` (default 25, one billed model turn per wake-up) wake-ups while a child is
+  open, the process group is killed and the final message says what was cut (kinds and count, never
+  a description). A cap of 0 or less is rejected and the default applies — it would disable the only
+  bound. Not an error: no retry, `task.completed` is recorded.
+- `task.completed` is recorded only after the stream ended; `TaskManager.record_event` additionally
+  defers a completion that reports `children_open > 0` (`task.completion_deferred`, status stays
+  RUNNING, no learning outcome).
+
+Console (`chat_runtime`): the same tracker; interim results carry `interim: true` +
+`pending_children`, exactly one result carries `final: true` and is the text that is spoken and
+pinned as the voice key; `bg_status` events report the open count (kind and age only).
+
+E2E: `test_bg_scope_completion.py` (bridge, via `process_one`),
+`core/console/tests/test_bg_scope_console_e2e.py` (console, via `stream_turn`),
+`test_bg_scope_watchdog_repro.py` (the two defects as regression guards).
+
 ### Sticky progress messages + finalize guard (all channels)
 
 `adapter.py`'s `_emit_status()` (`~L9319`) writes `_progress: true` outbox

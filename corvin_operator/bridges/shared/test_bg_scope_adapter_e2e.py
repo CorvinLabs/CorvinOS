@@ -66,6 +66,8 @@ def _run(monkeypatch, sandbox, fixture, chat="bgs"):
 
 def test_bash_child_reaches_the_tracker_and_the_audit_chain(sandbox, monkeypatch):
     _, recs, chain, sec = _run(monkeypatch, sandbox, "bash_bg_ok")
+    # child records only here; waiting/completed are covered by test_bg_scope_completion.py
+    recs = [r for r in recs if r["event_type"] in ("bgscope.child_started", "bgscope.child_finished")]
     assert [r["event_type"] for r in recs] == ["bgscope.child_started", "bgscope.child_finished"]
     start, fin = recs[0]["details"], recs[1]["details"]
     assert start["kind"] == "bash" and start["tenant_id"] == "_default"
@@ -84,14 +86,15 @@ def test_audit_carries_no_free_text(sandbox, monkeypatch):
     assert recs, "no bgscope records written"
     assert "Zaehle bis 3" not in blob and "Zaehlen" not in blob and "Fertig" not in blob
     allowed = {"scope_id", "child_id", "kind", "state", "exit_code", "duration_ms", "healed",
-               "children_open", "tenant_id", "chain_dna"}
+               "children_open", "tenant_id", "chain_dna", "wakeups", "children_total",
+               "end_reason", "limit_s", "age_s", "limit"}
     for r in recs:
         assert set(r["details"]) <= allowed, set(r["details"]) - allowed
 
 
 def test_monitor_is_audited_as_monitor_not_bash(sandbox, monkeypatch):
     _, recs, _, _ = _run(monkeypatch, sandbox, "monitor_3lines")
-    assert {r["details"]["kind"] for r in recs} == {"monitor"}
+    assert {r["details"]["kind"] for r in recs if "kind" in r["details"]} == {"monitor"}
     assert [r["event_type"] for r in recs].count("bgscope.child_started") == 1
 
 

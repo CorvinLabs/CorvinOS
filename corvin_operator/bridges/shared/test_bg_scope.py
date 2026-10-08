@@ -139,6 +139,20 @@ def test_late_notification_after_a_terminal_state_only_adds_the_exit_code():
     assert out == [] and tr.all_children[0].exit_code == 9
 
 
+def test_end_all_closes_what_the_exited_process_left_running():
+    """The CLI is gone, so is every child it owned. `finalize` alone leaves a running
+    child running (the cap message must still be able to name it); end_all closes it."""
+    tr = bgs.ScopeTracker()
+    tr.feed({"type": "system", "subtype": "task_started", "task_id": "a", "task_type": "local_bash"}, 0)
+    assert tr.finalize(5) == [] and len(tr.open_children) == 1
+    named = list(tr.open_children)                       # what a cap message would quote
+    out = tr.end_all(6)
+    assert kinds(out) == ["healed", "all_children_done"]
+    assert tr.open_children == [] and tr.all_children[0].state == bgs.UNKNOWN
+    assert [c.kind for c in named] == ["bash"]
+    assert tr.end_all(7) == []
+
+
 def test_duplicate_events_are_idempotent():
     tr = bgs.ScopeTracker()
     evs = [e for e in kit.load_fixture("bash_bg_ok") if e.get("type") == "system"]

@@ -302,9 +302,17 @@ Measured on claude CLI 2.1.294 (details and raw captures: ADR-2236 / PLAN-0938):
   end without the exit code and is only provisional (the later `task_notification` carries it); a snapshot names a
   child one event before `task_started`, so announcement waits for the tool to be known (Monitor vs Bash share
   `local_bash`); a snapshot is a full state and heals a missed notification.
-- **Still not implemented (T-0072..T-0074):** the adapter still lets the 300 s idle watchdog kill a quiet child,
-  overwrites `final_text` with the last wake-up and, after an idle kill on an existing session, re-runs the prompt
-  (starting the child a second time). The tracker only observes today; nothing is gated on it yet.
+- **Completion gate (T-0072, done):** a scope is complete at process EOF with no open child. The first
+  answer is delivered at once with "⏳ N background task(s) still running", every wake-up while a child is
+  open is an interim message, and exactly one `_final` message closes the turn; the idle watchdog no longer
+  kills a quiet child (`CORVIN_BG_CHILD_MAX`, `CORVIN_BG_WAKEUP_MAX` bound it instead). Console:
+  `interim` / `final` / `pending_children` on `result` events and a `bg_status` event; the web client does not
+  speak an interim result and shows a "N background tasks running" chip. Full description:
+  [adapter-runtime.md](adapter-runtime.md) § Open background children, diagram
+  `docs/diagrams/bg-scope-state-machine.svg`.
+- **Still not implemented (T-0073, T-0074):** durable status lines through `task_progress` for `/task`
+  workers and the supervisor's "children were lost" notice (T-0073); the closing voice summary and
+  milestone voice (T-0074).
 
 Test harness (T-0070): `shared/tests/fixtures/bgscope/*.jsonl` are scrubbed captures from the real CLI
 (`tests/capture_bgscope_fixture.py` regenerates them), `tests/fake_claude.py` replays one as a REAL

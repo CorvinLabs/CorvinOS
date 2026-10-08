@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 520" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Task scope completion with background children</title>
+  <desc>State machine of one claude process. RUNNING moves to WAITING when the first result arrives while a background child is open, interim messages are sent for every wake-up result, and DONE is reached only at process EOF with no open child. Caps end the scope early; a plain turn goes straight to DONE.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+  </defs>
+  <text x="550" y="30" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">A task is done only when nothing runs in the background</text>
+  <text x="550" y="50" text-anchor="middle" font-size="12" fill="#475569">Source of truth: the claude CLI's task_started / task_notification / background_tasks_changed events; arbiter: process EOF</text>
+
+  <rect x="40"  y="140" width="180" height="70" rx="10" fill="#e0f2fe" stroke="#0284c7"/>
+  <text x="130" y="170" text-anchor="middle" font-size="15" font-weight="700" fill="#0c4a6e">RUNNING</text>
+  <text x="130" y="190" text-anchor="middle" font-size="11" fill="#0c4a6e">turn in progress</text>
+
+  <rect x="330" y="140" width="220" height="70" rx="10" fill="#fef3c7" stroke="#d97706"/>
+  <text x="440" y="168" text-anchor="middle" font-size="15" font-weight="700" fill="#78350f">WAITING ON CHILDREN</text>
+  <text x="440" y="188" text-anchor="middle" font-size="11" fill="#78350f">first answer sent, ⏳ N tasks running</text>
+
+  <rect x="650" y="140" width="180" height="70" rx="10" fill="#fef3c7" stroke="#d97706"/>
+  <text x="740" y="168" text-anchor="middle" font-size="15" font-weight="700" fill="#78350f">WRAPPING UP</text>
+  <text x="740" y="188" text-anchor="middle" font-size="11" fill="#78350f">no child open, final candidate held</text>
+
+  <rect x="900" y="140" width="160" height="70" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="980" y="168" text-anchor="middle" font-size="15" font-weight="700" fill="#14532d">DONE</text>
+  <text x="980" y="188" text-anchor="middle" font-size="11" fill="#14532d">one final message</text>
+
+  <rect x="330" y="340" width="220" height="70" rx="10" fill="#fee2e2" stroke="#dc2626"/>
+  <text x="440" y="368" text-anchor="middle" font-size="15" font-weight="700" fill="#7f1d1d">ENDED BY A CAP</text>
+  <text x="440" y="388" text-anchor="middle" font-size="11" fill="#7f1d1d">process group killed, honest final</text>
+
+  <path d="M220 175 H328" stroke="#475569" fill="none" marker-end="url(#a)"/>
+  <text x="274" y="165" text-anchor="middle" font-size="11" fill="#334155">1st result, child open</text>
+  <path d="M550 175 H648" stroke="#475569" fill="none" marker-end="url(#a)"/>
+  <text x="600" y="165" text-anchor="middle" font-size="11" fill="#334155">tasks = []</text>
+  <path d="M830 175 H898" stroke="#475569" fill="none" marker-end="url(#a)"/>
+  <text x="864" y="165" text-anchor="middle" font-size="11" fill="#334155">EOF</text>
+
+  <path d="M440 140 C440 90 440 90 440 140" stroke="none" fill="none"/>
+  <path d="M400 140 C380 100 500 100 480 140" stroke="#475569" fill="none" marker-end="url(#a)"/>
+  <text x="440" y="100" text-anchor="middle" font-size="11" fill="#334155">each wake-up → interim message</text>
+
+  <path d="M130 210 V270 H980 V212" stroke="#16a34a" fill="none" stroke-dasharray="5 4" marker-end="url(#a)"/>
+  <text x="770" y="262" text-anchor="middle" font-size="11" fill="#14532d">plain turn (no child): result → EOF → DONE, byte-identical to before</text>
+
+  <path d="M440 210 V338" stroke="#dc2626" fill="none" marker-end="url(#a)"/>
+  <text x="452" y="285" font-size="11" fill="#7f1d1d">oldest child &gt; CORVIN_BG_CHILD_MAX</text>
+  <text x="452" y="301" font-size="11" fill="#7f1d1d">or wake-ups &gt; CORVIN_BG_WAKEUP_MAX</text>
+  <path d="M550 375 H980 V212" stroke="#dc2626" fill="none" stroke-dasharray="5 4" marker-end="url(#a)"/>
+  <text x="760" y="368" text-anchor="middle" font-size="11" fill="#7f1d1d">final message names what was cut — not an error, no retry</text>
+
+  <text x="40" y="460" font-size="12" fill="#334155">No idle kill while a child is open (the CLI is legitimately silent). task.completed is recorded only at DONE;</text>
+  <text x="40" y="478" font-size="12" fill="#334155">TaskManager defers a completion that still reports children_open &gt; 0. Every transition is a hash-chained bgscope.* audit record.</text>
+</svg>

@@ -17,6 +17,7 @@ voice_cli.sh (whatsapp on/off subcommand).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import math
 import os
@@ -5969,6 +5970,25 @@ def _call_claude_streaming_via_engine(
     except ImportError:  # pragma: no cover
         import bg_scope as _bgs  # type: ignore[no-redef]
     _scope = _bgs.ScopeTracker(scope_id=_os_turn_id, tenant_id=_bridge_tenant())
+    _interim_cb = getattr(_BG_INTERIM, "cb", None)
+    _held_final = ""            # delay-by-one: newest result seen while NO child was open
+    _held_cls = "user"
+    _last_interim = ""
+    _scope_end: str | None = None   # "child_cap" | "wakeup_cap" when a cap ended the scope
+    _cap_warned = False
+    _child_cap_s = _bgs.child_max_s()
+    _wakeup_cap = _bgs.wakeup_max()
+
+    def _emit_interim(text: str, cls: str) -> None:
+        nonlocal _last_interim
+        if not text.strip():
+            return
+        _last_interim = text
+        try:
+            _interim_cb(text, {"cls": cls, "children_open": len(_scope.open_children),
+                               "wakeups": _scope.wakeups})
+        except Exception as e:  # noqa: BLE001 — a delivery failure must not break the turn
+            log(f"interim delivery failed: {e!r}")
 
     try:
         try:
@@ -5981,6 +6001,36 @@ def _call_claude_streaming_via_engine(
                     # result; the stream is legitimately silent meanwhile.
                     in_tool = last_event_type == "tool_call"
                     idle_limit = tool_idle_to if in_tool else stream_idle_to
+                    # ADR-2236 D5: while a background child is open the CLI is
+                    # LEGITIMATELY silent. The idle limit would kill it (and the
+                    # child, and the wake-up turn, and — on an existing session —
+                    # re-run the prompt). The child's own cap replaces it.
+                    _open_now = _scope.open_children
+                    if _open_now:
+                        _age = _scope.oldest_open_age(now)
+                        if _age > _child_cap_s:
+                            log(f"background child open {_age:.0f}s > cap {_child_cap_s:.0f}s "
+                                f"— ending the scope")
+                            _bgs.emit_audit("bgscope.child_cap_exceeded",
+                                            tenant_id=_scope.tenant_id, scope_id=_scope.scope_id,
+                                            children_open=len(_open_now), limit_s=int(_child_cap_s),
+                                            age_s=int(_age))
+                            _scope_end = "child_cap"
+                            try:
+                                engine.cancel()
+                            except Exception:  # noqa: BLE001
+                                pass
+                            break
+                        if _age > 0.8 * _child_cap_s and not _cap_warned and on_status is not None:
+                            _cap_warned = True
+                            try:
+                                on_status(f"⚠️ A background task has been running for "
+                                          f"{_bgs.human_duration(_age)}; it will be ended after "
+                                          f"{_bgs.human_duration(_child_cap_s)}.",
+                                          tool_name="_bgcap")
+                            except Exception as e:  # noqa: BLE001
+                                log(f"cap warning failed: {e}")
+                        idle_limit = 0
                     if idle_limit > 0 and (now - last_event) > idle_limit:
                         log(f"engine stream idle {now - last_event:.0f}s "
                             f"(limit={idle_limit:.0f}s, "
@@ -6118,8 +6168,9 @@ def _call_claude_streaming_via_engine(
                     except Exception as e:  # noqa: BLE001 — a tracker bug must never break a turn
                         log(f"bg_scope feed failed: {e!r}")
                 elif ev.type == "turn_completed":
+                    _cls = "user"
                     try:
-                        _scope.note_result(ev.raw or {})
+                        _cls = _scope.note_result(ev.raw or {})
                         for _tr in _scope.flush():
                             _bgs.audit_transition(_scope, _tr)
                     except Exception as e:  # noqa: BLE001
@@ -6129,6 +6180,35 @@ def _call_claude_streaming_via_engine(
                     # earlier real one (matches legacy invariant).
                     if new_result.strip() or not final_text:
                         final_text = new_result
+                    if _interim_cb is not None and new_result.strip():
+                        # ADR-2236 D3: a result that arrives while a child is open
+                        # is interim; one that arrives with none open is the final
+                        # CANDIDATE, held until EOF or demoted by a newer result.
+                        if _held_final:
+                            _emit_interim(_held_final, _held_cls)
+                            _held_final = ""
+                        if _scope.open_children:
+                            _emit_interim(new_result, _cls)
+                        else:
+                            _held_final, _held_cls = new_result, _cls
+                    if _scope.open_children and _scope.results_seen == 1:
+                        _bgs.emit_audit("bgscope.waiting", tenant_id=_scope.tenant_id,
+                                        scope_id=_scope.scope_id,
+                                        children_open=len(_scope.open_children),
+                                        wakeups=_scope.wakeups)
+                    if _scope.wakeups > _wakeup_cap and _scope.open_children:
+                        log(f"background scope produced {_scope.wakeups} wake-ups "
+                            f"> cap {_wakeup_cap} — ending the scope")
+                        _bgs.emit_audit("bgscope.wakeup_cap_exceeded",
+                                        tenant_id=_scope.tenant_id, scope_id=_scope.scope_id,
+                                        children_open=len(_scope.open_children),
+                                        wakeups=_scope.wakeups, limit=_wakeup_cap)
+                        _scope_end = "wakeup_cap"
+                        try:
+                            engine.cancel()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        break
                     # ADR-0696 follow-up — capture real token usage for the
                     # cost-efficiency dashboard (see final_usage init above).
                     if ev.usage:
@@ -6162,6 +6242,36 @@ def _call_claude_streaming_via_engine(
                     _bgs.audit_transition(_scope, _tr)
             except Exception as e:  # noqa: BLE001
                 log(f"bg_scope finalize failed: {e!r}")
+            if _scope_end:
+                # We ended it on purpose: not an error, not a retry, and the user is
+                # told exactly what was cut (ADR-2236 D5/D6).
+                rc = 0
+                error_text = None
+                final_text = _bgs.cut_message(
+                    _scope_end, _scope.open_children,
+                    limit=_child_cap_s if _scope_end == "child_cap" else float(_wakeup_cap),
+                    # With an interim sink every update was already delivered; quoting the
+                    # last one again would duplicate it. Only an UNDELIVERED candidate
+                    # (held, or any text when nobody listens) is worth quoting.
+                    partial=_held_final if _interim_cb is not None else final_text)
+            elif _interim_cb is not None and not error_text:
+                # The newest result seen while no child was open is the final answer;
+                # failing that, the last interim stands in so the user is never left
+                # without a closing message.
+                final_text = _held_final or _last_interim or final_text
+            # The process has exited, so nothing it owned is left running: close the
+            # books AFTER the cap message above named what was cut.
+            try:
+                for _tr in _scope.end_all(time.time()):
+                    _bgs.audit_transition(_scope, _tr)
+            except Exception as e:  # noqa: BLE001
+                log(f"bg_scope end_all failed: {e!r}")
+            if _scope.all_children:
+                _bgs.emit_audit("bgscope.completed", tenant_id=_scope.tenant_id,
+                                scope_id=_scope.scope_id, children_total=len(_scope.all_children),
+                                wakeups=_scope.wakeups,
+                                duration_ms=int((time.time() - start_t) * 1000),
+                                end_reason=_scope_end or ("error" if error_text else "quiescent"))
         except Exception as e:  # noqa: BLE001
             # An exception HERE is an adapter defect, not a provider error, and
             # the engine may already have run tools. The turn FAILS — it is
@@ -6557,10 +6667,15 @@ def _call_claude_streaming_via_engine(
                         },
                     )
                 else:
+                    try:
+                        _open_kids = len(_scope.open_children)   # ADR-2236 D4
+                    except NameError:                            # failed before the scope existed
+                        _open_kids = 0
                     _done_evt = {
                         "event": "task.completed",
                         "exit_code": 0,
                         "output_chars": len(final_text),
+                        "children_open": _open_kids,
                     }
                     if _turn is not None:
                         _turn.report(_retry_count, _done_evt)
@@ -7499,7 +7614,41 @@ def _current_turn_task() -> "_TurnTask | None":
 #: when a gate (L44 house-rules, capability, budget, …) answered instead of the
 #: engine. process_one resets it before the turn and reads it after, so the
 #: session ledger and the CEL outbound hook can tell a refusal from an answer.
+def _chunk_limit_for(channel: str) -> int:
+    """Per-channel message size cap shared by the final reply and interim messages."""
+    return {
+        "discord":  1800,
+        "telegram": 3500,
+        "whatsapp": 3500,
+        "slack":    3500,
+        "email":    3500,
+    }.get(channel, CHUNK_LIMIT)
+
+
 _TURN_OUTCOME = threading.local()
+
+# ADR-2236 D3/D7: where interim messages of a turn with background children go.
+# A thread-local rather than a parameter: the engine loop is reached through
+# call_claude_streaming -> _impl -> _via_engine and re-enters itself on retries,
+# and a parameter dropped on one of those hops silently loses every interim.
+_BG_INTERIM = threading.local()
+
+
+@contextlib.contextmanager
+def bg_interim_sink(cb):
+    """Route the interim messages of the turn run inside this block to *cb*.
+
+    ``cb(text, info)`` is called from the engine loop; ``info`` carries ``cls``
+    ("user" = the first answer, "wakeup"), ``children_open`` and ``wakeups``.
+    With no sink installed the loop behaves exactly as before ADR-2236: the last
+    non-empty result is the answer.
+    """
+    prev = getattr(_BG_INTERIM, "cb", None)
+    _BG_INTERIM.cb = cb
+    try:
+        yield
+    finally:
+        _BG_INTERIM.cb = prev
 
 
 def _turn_refused(reason: str, retry_count: "int | None" = None, *, cancelled: bool = False) -> None:
@@ -12204,6 +12353,50 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         except OSError as e:
             log(f"status write failed: {e}")
 
+    # ADR-2236 D3/D7 — interim messages of a turn whose claude process keeps
+    # background children alive. Each is a NORMAL message (own msg_id, no `_final`,
+    # not the sticky `_progress` the next reply would delete), AI-marked like every
+    # other model text. The file name sorts BEFORE the final `_00` so a backlog
+    # still reaches the user in order. What was sent is kept for the session ledger.
+    interim_texts: list[str] = []
+    interim_seq = {"n": 0}
+
+    def _bg_interim_send(text: str, info: dict) -> None:
+        body = text
+        try:
+            try:
+                from . import mid_turn_heartbeat as _mth_i  # type: ignore
+            except ImportError:
+                import mid_turn_heartbeat as _mth_i  # type: ignore[no-redef]
+            body = _mth_i.strip_markers(body)
+        except Exception:  # noqa: BLE001
+            pass
+        body, _ = extract_voice_override(body)
+        body = body.strip()
+        if not body:
+            return
+        try:
+            from . import bg_scope as _bgs_i  # type: ignore
+        except ImportError:
+            import bg_scope as _bgs_i  # type: ignore[no-redef]
+        note = _bgs_i.interim_suffix(int(info.get("children_open") or 0))
+        full = f"{body}\n\n{note}" if note else body
+        try:
+            from . import provenance as _prov_i  # type: ignore
+        except ImportError:
+            import provenance as _prov_i  # type: ignore[no-redef]
+        persona_name = str((profile or {}).get("persona") or (profile or {}).get("_auto_routed") or "")
+        for piece in split_for_whatsapp(full, limit=_chunk_limit_for(channel)):
+            n = interim_seq["n"]
+            interim_seq["n"] += 1
+            env = _envelope({"text": piece, "msg_id": f"{msg_id}_i{n:03d}"})
+            env["provenance"] = _prov_i.build_provenance(channel, chat_key, persona_name)
+            _atomic_write_outbox(OUTBOX / f"{msg_id}_-{n:03d}.json",
+                                 json.dumps(env, ensure_ascii=False))
+        interim_texts.append(full)
+        log(f"interim #{interim_seq['n']} sent ({info.get('cls')}, "
+            f"{info.get('children_open')} child(ren) open, chars={len(full)})")
+
     # Heartbeat thread: kurzes Lebenszeichen falls Claude in den ersten
     # Sekunden noch gar nichts tut. Bei progress_updates ist die Wartezeit
     # länger, weil tool_use-Events das Lebenszeichen anyway liefern.
@@ -12247,14 +12440,15 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         if answer is not None:
             pass
         elif progress_on:
-            answer = call_claude_streaming(
-                prompt, channel=channel, chat_key=chat_key,
-                on_status=_emit_status, status_mode=status_mode,
-                profile=profile,
-                msg_id=str(msg_id),
-                sender=sender,
-                **media_kwargs,
-            )
+            with bg_interim_sink(_bg_interim_send):
+                answer = call_claude_streaming(
+                    prompt, channel=channel, chat_key=chat_key,
+                    on_status=_emit_status, status_mode=status_mode,
+                    profile=profile,
+                    msg_id=str(msg_id),
+                    sender=sender,
+                    **media_kwargs,
+                )
         else:
             # C1 fix (path-audit 2026-07-06): the non-progress branch previously
             # called the legacy call_claude(), which spawns claude -p directly
@@ -12267,14 +12461,15 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             # no env var may disable L44. Route through the SAME gated dispatcher
             # with progress suppressed (on_status=None) so gating + charging
             # always run; only the live status emission is turned off.
-            answer = call_claude_streaming(
-                prompt, channel=channel, chat_key=chat_key,
-                on_status=None, status_mode=status_mode,
-                profile=profile,
-                msg_id=str(msg_id),
-                sender=sender,
-                **media_kwargs,
-            )
+            with bg_interim_sink(_bg_interim_send):
+                answer = call_claude_streaming(
+                    prompt, channel=channel, chat_key=chat_key,
+                    on_status=None, status_mode=status_mode,
+                    profile=profile,
+                    msg_id=str(msg_id),
+                    sender=sender,
+                    **media_kwargs,
+                )
         _report_route_outcome(_route_tid, _deleg_meta, answer, chat_key, _route_t0)
         # Delegation-transparency badge (flag `delegation_badge`, ships-dark):
         # append a compact "how was this task delegated" text-suffix so a bridge
@@ -12414,7 +12609,10 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             _ledger.append_turn(
                 _ledger_wd, channel=str(channel or ""), chat_key=str(chat_key),
                 user_text=_owner_text, observer_text=_obs_block,
-                assistant_text=answer or "",
+                # Interim messages were delivered to the user too (ADR-2236): the
+                # verbatim record must hold everything that was said, in order.
+                assistant_text="\n\n".join([*interim_texts, answer or ""]).strip()
+                if interim_texts else (answer or ""),
                 msg_id=str(msg_id or ""), sender=str(sender or ""),
                 # The persona the pre-spawn gate classified this turn under: the
                 # per-turn L34 re-check must use it too (review R10-6).
@@ -12526,13 +12724,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # Per-channel chunk limits. Discord caps at 2000 chars/message, so
     # we stay well below it here — the daemon would otherwise re-split
     # mid-stream and turn one reply into two Discord messages.
-    _channel_chunk_limit = {
-        "discord":  1800,
-        "telegram": 3500,
-        "whatsapp": 3500,
-        "slack":    3500,
-        "email":    3500,
-    }.get(channel, CHUNK_LIMIT)
+    _channel_chunk_limit = _chunk_limit_for(channel)
     chunks = split_for_whatsapp(answer, limit=_channel_chunk_limit)
 
     # Context bar: compact session-state line prepended to the first chunk when

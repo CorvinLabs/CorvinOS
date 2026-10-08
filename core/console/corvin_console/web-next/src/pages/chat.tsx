@@ -763,6 +763,7 @@ function ChatPane({
   const chatSession = useChatSession(sid);
   const messages = chatSession.messages;
   const streaming = chatSession.streaming;
+  const bgOpen = chatSession.bgOpen;
 
   const [input, setInput] = React.useState("");
   const [paletteOpen, setPaletteOpen] = React.useState(false);
@@ -1014,7 +1015,9 @@ function ChatPane({
     // These side-effects only apply while this ChatPane is mounted (i.e. the
     // user is actually looking at this chat).
     const unsubEvents = subscribeEvents(sid, (evt: StreamEvent) => {
-      if (evt.type === "result" && evt.text) {
+      // ADR-2236: an interim result (a wake-up while background tasks still run) is
+      // progress. Speaking it would read out every update and replay the last one.
+      if (evt.type === "result" && evt.text && !evt.interim) {
         // Language Priority (ADR-0643 — Language Priority Resolver):
         //   1. Profile Setting (display_language) — CANONICAL when pinned
         //   2. Input/Response Detection — auto-detect when profile not set
@@ -1648,6 +1651,15 @@ function ChatPane({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {streaming && bgOpen > 0 && (
+            <span
+              className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground"
+              role="status"
+              data-testid="bg-children-chip"
+            >
+              ⏳ {bgOpen} background {bgOpen === 1 ? "task" : "tasks"} running
+            </span>
+          )}
           {voiceOut && voiceState !== "idle" && (
             <VoicePlaybackChip
               state={voiceState}

@@ -494,6 +494,22 @@ class TaskManager:
 
         Returns: sequence number of the event
         """
+        # ADR-2236 D4: a task whose process still owns background children is NOT done.
+        # The callers record completion only after the stream ended, so this is a
+        # structural backstop, not the primary mechanism: should a future caller record
+        # completion early, the task stays RUNNING, no outcome is learned from a task
+        # that is still working, and the attempt is visible in the log.
+        if event.get("event") == "task.completed":
+            try:
+                _open_kids = int(event.get("children_open") or 0)
+            except (TypeError, ValueError):
+                _open_kids = 0
+            if _open_kids > 0:
+                return self._write_event(task_id, {
+                    "event": "task.completion_deferred",
+                    "children_open": _open_kids,
+                })
+
         seq = self._write_event(task_id, event)
 
         # Update metadata if this is a state-change event

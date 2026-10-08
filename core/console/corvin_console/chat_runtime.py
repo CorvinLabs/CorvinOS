@@ -426,6 +426,50 @@ _ANN_CALL_TIMEOUT_S = 8   # per subprocess.run — hard-killed past this
 _ANN_TOTAL_BUDGET_S = 5   # skip any remaining call once elapsed exceeds this
 
 
+# --- ADR-2236: background children of a turn ---------------------------------
+_BG_SCOPE_MOD: Any = None  # ADR-2236 cached module, False when unavailable
+
+
+def _load_bg_scope() -> Any:  # ADR-2236
+    """Import ``bg_scope`` from corvin_operator/bridges/shared (shared with the bridges).
+
+    Searched upward from this file so it works from a checkout and from an install;
+    ``None`` (feature inert, turn unchanged) when it cannot be found.
+    """
+    global _BG_SCOPE_MOD
+    if _BG_SCOPE_MOD is None:
+        _BG_SCOPE_MOD = False
+        for parent in Path(__file__).resolve().parents:
+            shared = parent / "corvin_operator" / "bridges" / "shared"
+            if (shared / "bg_scope.py").is_file():
+                if str(shared) not in sys.path:
+                    sys.path.insert(0, str(shared))
+                try:
+                    import bg_scope as _m  # noqa: PLC0415
+                    _BG_SCOPE_MOD = _m
+                except Exception:  # noqa: BLE001
+                    _BG_SCOPE_MOD = False
+                break
+    return _BG_SCOPE_MOD or None
+
+
+def _bg_status_event(bgs: Any, tracker: Any) -> dict[str, Any]:  # ADR-2236
+    """The ``bg_status`` stream event: which background children are open right now.
+
+    Descriptions are model-authored free text and never leave the server (kind and
+    age only).
+    """
+    now = time.time()
+    return {
+        "type": "bg_status",
+        "open": len(tracker.open_children),
+        "children": [
+            {"kind": c.kind, "state": c.state, "age_s": int(now - c.started_at)}
+            for c in tracker.all_children
+        ],
+    }
+
+
 def _annotation_enabled() -> bool:
     """Cheap, spawn-free "could _compute_web_annotation_suffix produce anything?".
 
@@ -7152,6 +7196,32 @@ async def _stream_turn_impl(
     # or any other abnormal exit (prevents orphaned subprocesses when the
     # WebSocket client disconnects mid-turn).
     _stdout_drained_normally = False
+    # ADR-2236: background children of this turn (Bash/Monitor/Agent run_in_background).
+    # The CLI keeps the process alive until they end and emits one `result` per wake-up,
+    # so the FIRST result is not the end of the turn. No children => every line below is
+    # inert and the turn is byte-identical to before.
+    _bgs = _load_bg_scope()                                                  # ADR-2236
+    _bg = _bgs.ScopeTracker(scope_id=_os_turn_id, tenant_id=sess.tenant_id) if _bgs else None  # ADR-2236
+    _bg_held = ""            # ADR-2236 delay-by-one: newest result seen while NO child was open
+    _bg_last_interim = ""    # ADR-2236
+    _bg_cut: str | None = None   # ADR-2236 "child_cap" | "wakeup_cap"
+    _bg_watch = None         # ADR-2236 cap watchdog task
+    _bg_t0 = time.time()     # ADR-2236
+    if _bg is not None:      # ADR-2236
+        async def _bg_cap_watch() -> None:
+            nonlocal _bg_cut
+            cap = _bgs.child_max_s()
+            while proc.returncode is None:
+                await asyncio.sleep(1.0)
+                if _bg.open_children and _bg.oldest_open_age() > cap:
+                    _bgs.emit_audit("bgscope.child_cap_exceeded", tenant_id=_bg.tenant_id,
+                                    scope_id=_bg.scope_id, children_open=len(_bg.open_children),
+                                    limit_s=int(cap), age_s=int(_bg.oldest_open_age()))
+                    _bg_cut = "child_cap"
+                    with contextlib.suppress(ProcessLookupError):
+                        proc.kill()
+                    return
+        _bg_watch = asyncio.create_task(_bg_cap_watch())
     try:
         async for raw in proc.stdout:
             saw_any_event = True
@@ -7163,6 +7233,12 @@ async def _stream_turn_impl(
             except json.JSONDecodeError:
                 continue
             etype = evt.get("type")
+            if _bg is not None and etype == "system":                          # ADR-2236
+                _bg_trs = _bg.feed(evt, time.time())                            # ADR-2236
+                for _tr in _bg_trs:                                             # ADR-2236
+                    _bgs.audit_transition(_bg, _tr)                             # ADR-2236
+                if _bg_trs:                                                     # ADR-2236
+                    yield _bg_status_event(_bgs, _bg)                           # ADR-2236
             if etype == "system" and evt.get("subtype") == "init":
                 # Subprocess-confirmed model — authoritative over the
                 # requested one (CLI may alias/upgrade model ids).
@@ -7181,6 +7257,8 @@ async def _stream_turn_impl(
                             yield {"type": "delta", "text": text}
                         elif btype == "tool_use":
                             tname = block.get("name") or ""
+                            if _bg is not None:                                 # ADR-2236
+                                _bg.note_tool_use(block.get("id") or "", tname)  # ADR-2236
                             tinput = block.get("input") or {}
                             # Sanitize tool input for UI display + persistence: extract only safe,
                             # non-sensitive parameters (GDPR Art. 5 data-minimisation).
@@ -7224,6 +7302,43 @@ async def _stream_turn_impl(
                 # An injected /btw yields a SECOND result after the turn's own
                 # one; accumulate so TTS and the ledger keep the main answer.
                 _this_result = evt.get("result") or ""
+                if _bg is not None:                                              # ADR-2236
+                    _bg.note_result(evt)                                         # ADR-2236
+                    for _tr in _bg.flush():                                      # ADR-2236
+                        _bgs.audit_transition(_bg, _tr)                          # ADR-2236
+                if _bg is not None and (_bg.open_children or _bg.all_children):  # ADR-2236
+                    last_usage = evt.get("usage") or {}                          # ADR-2236
+                    _exec_ctx_builder.set_usage(last_usage)                      # ADR-2236
+                    if _bg_held and _this_result.strip():                        # ADR-2236
+                        _bg_last_interim = _bg_held                              # ADR-2236
+                        yield {"type": "result", "text": _bg_held, "usage": last_usage,  # ADR-2236
+                               "annotation_pending": False, "interim": True,     # ADR-2236
+                               "pending_children": len(_bg.open_children)}       # ADR-2236
+                        _bg_held = ""                                            # ADR-2236
+                    if _this_result.strip():                                     # ADR-2236
+                        if _bg.open_children:                                    # ADR-2236
+                            _bg_last_interim = _this_result                      # ADR-2236
+                            yield {"type": "result", "text": _this_result,       # ADR-2236
+                                   "usage": last_usage, "annotation_pending": False,  # ADR-2236
+                                   "interim": True,                              # ADR-2236
+                                   "pending_children": len(_bg.open_children)}   # ADR-2236
+                        else:                                                    # ADR-2236
+                            _bg_held = _this_result                              # ADR-2236
+                    if _bg.open_children and _bg.results_seen == 1:              # ADR-2236
+                        _bgs.emit_audit("bgscope.waiting", tenant_id=_bg.tenant_id,  # ADR-2236
+                                        scope_id=_bg.scope_id,                   # ADR-2236
+                                        children_open=len(_bg.open_children),    # ADR-2236
+                                        wakeups=_bg.wakeups)                     # ADR-2236
+                    if _bg.wakeups > _bgs.wakeup_max() and _bg.open_children:    # ADR-2236
+                        _bgs.emit_audit("bgscope.wakeup_cap_exceeded",           # ADR-2236
+                                        tenant_id=_bg.tenant_id, scope_id=_bg.scope_id,  # ADR-2236
+                                        children_open=len(_bg.open_children),    # ADR-2236
+                                        wakeups=_bg.wakeups, limit=_bgs.wakeup_max())  # ADR-2236
+                        _bg_cut = "wakeup_cap"                                   # ADR-2236
+                        with contextlib.suppress(ProcessLookupError):            # ADR-2236
+                            proc.kill()                                          # ADR-2236
+                        break                                                    # ADR-2236
+                    continue                                                     # ADR-2236
                 if result_text and _this_result:
                     result_text = result_text + "\n\n" + _this_result
                 else:
@@ -7277,6 +7392,8 @@ async def _stream_turn_impl(
         # harmless in practice (stale pipe write just fails closed →
         # "no_active_stream"), but leaving it unregistered immediately is
         # the honest invariant to keep.
+        if _bg_watch is not None:                                                # ADR-2236
+            _bg_watch.cancel()                                                   # ADR-2236
         if _btw_stdin_registered:
             _unregister_stdin_web(sess.chat_key)
         if not _stdout_drained_normally:
@@ -7289,6 +7406,39 @@ async def _stream_turn_impl(
                 pass
 
     rc = await proc.wait()
+    if _bg_watch is not None:                                                    # ADR-2236
+        _bg_watch.cancel()                                                       # ADR-2236
+        with contextlib.suppress(asyncio.CancelledError, Exception):             # ADR-2236
+            await _bg_watch                                                      # ADR-2236
+    if _bg is not None:                                                          # ADR-2236
+        for _tr in _bg.finalize(time.time()):                                    # ADR-2236
+            _bgs.audit_transition(_bg, _tr)                                      # ADR-2236
+        if _bg.all_children:                                                     # ADR-2236
+            if _bg_cut:                                                          # ADR-2236
+                # We ended it on purpose: not a failure, and the user is told what was cut.
+                rc = 0                                                           # ADR-2236
+                _cut = _bgs.cut_message(                                         # ADR-2236
+                    _bg_cut, _bg.open_children,                                  # ADR-2236
+                    limit=_bgs.child_max_s() if _bg_cut == "child_cap" else float(_bgs.wakeup_max()),  # ADR-2236
+                    partial=_bg_held)                                            # ADR-2236
+                final_text_parts.append("\n\n" + _cut)                          # ADR-2236
+                yield {"type": "delta", "text": "\n\n" + _cut}                   # ADR-2236
+                result_text = _cut                                               # ADR-2236
+            else:                                                                # ADR-2236
+                # The closing message is the newest result seen while no child was open.
+                result_text = _bg_held or _bg_last_interim or result_text        # ADR-2236
+            yield _bg_status_event(_bgs, _bg)                                    # ADR-2236
+            _ann_pending = bool(result_text.strip()) and _annotation_enabled()   # ADR-2236
+            yield {"type": "result", "text": result_text, "usage": last_usage,   # ADR-2236
+                   "annotation_pending": _ann_pending, "final": True,            # ADR-2236
+                   "pending_children": 0}                                        # ADR-2236
+            for _tr in _bg.end_all(time.time()):                                 # ADR-2236
+                _bgs.audit_transition(_bg, _tr)                                  # ADR-2236
+            _bgs.emit_audit("bgscope.completed", tenant_id=_bg.tenant_id,        # ADR-2236
+                            scope_id=_bg.scope_id, children_total=len(_bg.all_children),  # ADR-2236
+                            wakeups=_bg.wakeups,                                 # ADR-2236
+                            duration_ms=int((time.time() - _bg_t0) * 1000),      # ADR-2236
+                            end_reason=_bg_cut or "quiescent")                   # ADR-2236
     _os_emit_completed(rc)
     if rc != 0 and not saw_any_event:
         stderr_bytes = await (proc.stderr.read() if proc.stderr else asyncio.sleep(0, b""))
@@ -7420,6 +7570,7 @@ async def _stream_turn_impl(
             "event": "task.completed",
             "exit_code": 0,
             "summary": f"{sum(len(p) for p in final_text_parts)} chars output",
+            "children_open": len(_bg.open_children) if _bg is not None else 0,  # ADR-2236 D4
         })
     else:
         tm.record_event(task_id, {

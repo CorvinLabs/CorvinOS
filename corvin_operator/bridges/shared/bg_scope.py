@@ -26,6 +26,7 @@ is not versioned, so the parser is tolerant and the contract test
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 import time
@@ -289,6 +290,23 @@ class ScopeTracker:
                                           len(self.open_children)))
         return out
 
+    def end_all(self, now: float | None = None) -> list[Transition]:
+        """The claude process is gone, and so is every child it owned: close what is still open.
+
+        Call it AFTER anything that needs to name the open children (the cap message);
+        ``finalize`` alone deliberately leaves a still-running child running.
+        """
+        now = time.time() if now is None else now
+        out = self.finalize(now)
+        had_open = bool(self.open_children)
+        for tid, child in list(self._children.items()):
+            if child.state == RUNNING:
+                self._children[tid] = replace(child, state=UNKNOWN, ended_at=now)
+                out.append(Transition("healed", self._children[tid], len(self.open_children)))
+        if had_open:
+            out.append(Transition("all_children_done", None, 0))
+        return out
+
     # -- views ------------------------------------------------------------
 
     @property
@@ -311,6 +329,64 @@ def classify_result(raw: dict) -> str:
     if isinstance(origin, dict) and origin.get("kind") == "task-notification":
         return "wakeup"
     return "user"
+
+
+# --- limits and user-facing text (ADR-2236 D5/D6) ---------------------------
+
+CHILD_MAX_DEFAULT_S = 7200.0     # 2 h: the only bound on a child that never ends
+WAKEUP_MAX_DEFAULT = 25          # one model turn is billed per wake-up result
+
+
+def _positive_env(name: str, default: float) -> float:
+    """A cap of 0 / negative / garbage is rejected: it would disable the only bound."""
+    try:
+        v = float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+    return v if v > 0 else default
+
+
+def child_max_s() -> float:
+    return _positive_env("CORVIN_BG_CHILD_MAX", CHILD_MAX_DEFAULT_S)
+
+
+def wakeup_max() -> int:
+    return int(_positive_env("CORVIN_BG_WAKEUP_MAX", WAKEUP_MAX_DEFAULT))
+
+
+def human_duration(seconds: float) -> str:
+    s = int(round(seconds))
+    if s >= 3600 and s % 3600 == 0:
+        return f"{s // 3600} h"
+    if s >= 60:
+        return f"{s // 60} min" if s % 60 == 0 else f"{s // 60} min {s % 60} s"
+    return f"{s} s"
+
+
+def interim_suffix(children_open: int) -> str:
+    """Line appended to an interim message while children are still running."""
+    if children_open <= 0:
+        return ""
+    noun = "background task" if children_open == 1 else "background tasks"
+    return f"⏳ {children_open} {noun} still running — I will report when everything is done."
+
+
+def cut_message(reason: str, open_children: list[Child], *, limit: float, partial: str = "") -> str:
+    """Honest final text when a scope was ended by a cap instead of finishing (D5/D6).
+
+    Names WHAT was cut (kinds and count — never a description, D9) and WHY.
+    """
+    n = len(open_children)
+    kinds = ", ".join(sorted({c.kind for c in open_children})) or "background"
+    noun = "task was" if n == 1 else "tasks were"
+    if reason == "child_cap":
+        head = (f"⚠️ Stopped after {human_duration(limit)}: {n} background {noun} still "
+                f"running ({kinds}) and {'has' if n == 1 else 'have'} been ended.")
+    else:
+        head = (f"⚠️ Stopped: the background work produced more than {int(limit)} updates; "
+                f"{n} {noun} still running ({kinds}) and {'has' if n == 1 else 'have'} been ended.")
+    partial = (partial or "").strip()
+    return f"{head}\n\nLast update:\n{partial}" if partial else head
 
 
 # --- audit (best effort; ADR-2236 D10) --------------------------------------
