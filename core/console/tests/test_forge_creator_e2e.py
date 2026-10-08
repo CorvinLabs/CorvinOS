@@ -482,3 +482,65 @@ def test_task_board_labels_forge_runs_by_kind(tmp_path):
         import time as _t
         rows = list(task_sources._skill_creator(client.home / "tenants" / client.tenant, _t.time()))
         assert [r["subtype"] for r in rows] == ["plugin"]
+
+
+# ── Console restart: runs survive (persisted) and are resumed ───────────────
+
+def _run_file(client, run_id: str) -> Path:
+    return client.home / "tenants" / client.tenant / "global" / "forge_runs" / f"{run_id}.json"
+
+
+def _simulate_restart(client, run_id: str, **patch) -> None:
+    """What a restart leaves behind: the record on disk, a dead process's boot id,
+    and an empty in-memory store."""
+    from corvin_console import forge_runs
+    path = _run_file(client, run_id)
+    rec = json.loads(path.read_text())
+    rec.update({"boot_id": "previous-process", **patch})
+    path.write_text(json.dumps(rec))
+    with forge_runs.runs_lock:
+        forge_runs.runs.clear()
+
+
+def _orphaned_tool_run(client, **patch) -> str:
+    """A tool run the previous process was still working on when it died."""
+    from corvin_console import forge_runs
+    from corvin_console.routes.forge_creator import _phases
+    run_id = forge_runs.new_run(
+        tenant_id=client.tenant, kind="tool", phases=_phases("tool"), sid_fingerprint=None,
+        resume={"request": "count the words in a text", "panel_request": ""})
+    _simulate_restart(client, run_id, **patch)
+    return run_id
+
+
+def test_finished_run_is_still_pollable_after_a_console_restart(tmp_path):
+    with console(tmp_path, ScriptedEngine()) as client:
+        run_id = start(client, "tool", "count the words in a text")
+        assert poll(client, run_id)["status"] == "success"
+        _simulate_restart(client, run_id)
+        body = poll(client, run_id)
+        assert body["status"] == "success" and body["tool"]["name"] == "assistant.word_count"
+
+
+def test_interrupted_run_is_resumed_after_a_console_restart(tmp_path):
+    with console(tmp_path, ScriptedEngine()) as client:
+        run_id = _orphaned_tool_run(client)
+        body = poll(client, run_id)  # never a 404: the run is re-spawned from its request
+        assert body["status"] in ("running", "success")
+        assert poll(client, run_id)["status"] == "success"
+        assert json.loads(_run_file(client, run_id).read_text())["resumes"] == 1
+
+
+def test_run_that_cannot_be_resumed_reports_interrupted_not_404(tmp_path):
+    with console(tmp_path, ScriptedEngine()) as client:
+        run_id = _orphaned_tool_run(client, resumes=2)
+        body = client.get(f"/v1/console/forge-creator/status/{run_id}").json()
+        assert body["status"] == "failed" and "restart" in body["message"]
+
+
+def test_run_record_is_not_readable_across_tenants_or_by_guessed_path(tmp_path):
+    with console(tmp_path, ScriptedEngine()) as client:
+        run_id = start(client, "tool", "count the words in a text")
+        poll(client, run_id)
+        assert client.get("/v1/console/forge-creator/status/..%2F..%2Fx").status_code == 404
+        assert oct(_run_file(client, run_id).stat().st_mode & 0o777) == "0o600"

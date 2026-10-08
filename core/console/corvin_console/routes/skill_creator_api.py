@@ -636,8 +636,20 @@ def _spawn_generation_task(user_request: str, tenant_id: str,
         tenant_id=tenant_id, kind="skill", phases=PHASES,
         sid_fingerprint=sid_fingerprint,
         base_skill=base["name"] if base else None,
+        resume={"user_request": user_request, "base": base},
     )
+    forge_runs.spawn(
+        run_id=run_id, kind="skill", tenant_id=tenant_id,
+        sid_fingerprint=sid_fingerprint,
+        **_skill_spawn_kwargs(run_id, tenant_id, user_request, base),
+    )
+    return run_id
 
+
+def _skill_spawn_kwargs(run_id: str, tenant_id: str, user_request: str,
+                        base: Optional[Dict[str, str]]) -> Dict[str, Any]:
+    """The ``forge_runs.spawn`` arguments of a skill run — shared by the POST
+    and by the resume of a run a console restart interrupted."""
     def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
         orchestrator = SkillCreatorOrchestrator(
             progress_cb=progress,
@@ -668,15 +680,18 @@ def _spawn_generation_task(user_request: str, tenant_id: str,
             },
         }
 
-    forge_runs.spawn(
-        run_id=run_id, kind="skill", tenant_id=tenant_id,
-        sid_fingerprint=sid_fingerprint, work=work,
-        success_action="skill.generated_created",
-        failure_action="skill.generated_creation_failed",
-        hint=_operator_hint,
-        failure_target_id=base["name"] if base else "new",
-    )
-    return run_id
+    return {
+        "work": work,
+        "success_action": "skill.generated_created",
+        "failure_action": "skill.generated_creation_failed",
+        "hint": _operator_hint,
+        "failure_target_id": base["name"] if base else "new",
+    }
+
+
+forge_runs.register_resumer(
+    "skill", lambda run_id, rec: _skill_spawn_kwargs(
+        run_id, rec["tenant_id"], rec["resume"]["user_request"], rec["resume"].get("base")))
 
 
 def _operator_hint(exc: Exception) -> str:

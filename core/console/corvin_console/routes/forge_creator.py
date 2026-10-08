@@ -82,6 +82,39 @@ def _operator_hint(exc: Exception) -> str:
     return text
 
 
+def _spawn_kwargs(kind: str, tenant_id: str, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """The ``forge_runs.spawn`` arguments for a run — shared by the POST and by
+    the resume of a run a console restart interrupted."""
+    request = str(payload["request"])
+    panel_request = str(payload.get("panel_request") or "")
+    if kind == "tool":
+        def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
+            from skill_creator.tool_creator import ToolCreatorOrchestrator  # noqa: PLC0415
+            orch = ToolCreatorOrchestrator(tenant_id=tenant_id, progress_cb=progress)
+            forge_runs.update_run(run_id, engine=orch.engine_id)
+            tool = asyncio.run(orch.create_tool(request))
+            return {"target_id": tool["name"], "phase": "promotion", "tool": tool,
+                    "message": f"Tool '{tool['name']}' passed its sandbox tests and is registered."}
+        success, failure = "tool.generated_created", "tool.generated_creation_failed"
+    else:
+        def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
+            from skill_creator.plugin_creator import PluginCreatorOrchestrator  # noqa: PLC0415
+            orch = PluginCreatorOrchestrator(tenant_id=tenant_id, progress_cb=progress)
+            forge_runs.update_run(run_id, engine=orch.engine_id)
+            plugin = asyncio.run(orch.create_plugin(request, panel_request=panel_request))
+            return {"target_id": plugin["plugin_id"], "phase": "staging", "plugin": plugin,
+                    "message": (f"Plugin '{plugin['plugin_id']}' is staged under Marketplace → "
+                                "Forged. It is not installed.")}
+        success, failure = "plugin.forged_staged", "plugin.forged_staging_failed"
+    return {"work": work, "success_action": success, "failure_action": failure,
+            "hint": _operator_hint}
+
+
+for _k in ("tool", "plugin"):
+    forge_runs.register_resumer(
+        _k, lambda run_id, rec, _k=_k: _spawn_kwargs(_k, rec["tenant_id"], run_id, rec["resume"]))
+
+
 @router.post("/{kind}/generate", status_code=202)
 async def generate(
     kind: Kind,
@@ -102,37 +135,17 @@ async def generate(
         raise HTTPException(status_code=403, detail=str(refused))
 
     tenant_id = rec.tenant_id
+    panel_request = req.panel_request.strip()
+    payload = {"request": request, "panel_request": panel_request}
     try:
         run_id = forge_runs.new_run(tenant_id=tenant_id, kind=kind, phases=_phases(kind),
-                                    sid_fingerprint=rec.sid_fingerprint)
+                                    sid_fingerprint=rec.sid_fingerprint, resume=payload)
     except forge_runs.GenerationBusy as busy:
         raise HTTPException(status_code=429, detail=str(busy))
 
-    if kind == "tool":
-        def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
-            from skill_creator.tool_creator import ToolCreatorOrchestrator  # noqa: PLC0415
-            orch = ToolCreatorOrchestrator(tenant_id=tenant_id, progress_cb=progress)
-            forge_runs.update_run(run_id, engine=orch.engine_id)
-            tool = asyncio.run(orch.create_tool(request))
-            return {"target_id": tool["name"], "phase": "promotion", "tool": tool,
-                    "message": f"Tool '{tool['name']}' passed its sandbox tests and is registered."}
-        success, failure = "tool.generated_created", "tool.generated_creation_failed"
-    else:
-        panel_request = req.panel_request.strip()
-
-        def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
-            from skill_creator.plugin_creator import PluginCreatorOrchestrator  # noqa: PLC0415
-            orch = PluginCreatorOrchestrator(tenant_id=tenant_id, progress_cb=progress)
-            forge_runs.update_run(run_id, engine=orch.engine_id)
-            plugin = asyncio.run(orch.create_plugin(request, panel_request=panel_request))
-            return {"target_id": plugin["plugin_id"], "phase": "staging", "plugin": plugin,
-                    "message": (f"Plugin '{plugin['plugin_id']}' is staged under Marketplace → "
-                                "Forged. It is not installed.")}
-        success, failure = "plugin.forged_staged", "plugin.forged_staging_failed"
-
     forge_runs.spawn(run_id=run_id, kind=kind, tenant_id=tenant_id,
-                     sid_fingerprint=rec.sid_fingerprint, work=work,
-                     success_action=success, failure_action=failure, hint=_operator_hint)
+                     sid_fingerprint=rec.sid_fingerprint,
+                     **_spawn_kwargs(kind, tenant_id, run_id, payload))
     return {"status": "accepted", "run_id": run_id, "kind": kind,
             "message": f"{kind.capitalize()} generation started. Poll /forge-creator/status/{run_id}."}
 

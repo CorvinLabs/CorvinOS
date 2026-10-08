@@ -8,10 +8,16 @@ route had already lost the pre-spawn gates before this module existed.
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
+import re
+import tempfile
 import threading
+import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional, Tuple
 from uuid import uuid4
 
 from . import audit as console_audit
@@ -30,6 +36,81 @@ MAX_RUNS = 500
 MAX_RUNNING_PER_TENANT = 2
 
 ProgressCb = Callable[[str, int, str], None]
+
+#: Identifies THIS process. A record still "running" under another boot id was
+#: orphaned by a restart: its worker thread (and engine subprocess) died with
+#: the old process, so nothing will ever update it again.
+BOOT_ID = uuid4().hex
+#: An interrupted run is re-spawned from its persisted request at most this
+#: many times, so a request that crashes the console cannot restart-loop.
+MAX_RESUMES = 2
+#: Finished run files older than this are pruned when a new run starts.
+_FINISHED_TTL_S = 14 * 86400
+_RUN_ID_RE = re.compile(r"^run-[0-9a-f]{12}$")
+
+#: kind -> builder(run_id, record) returning the spawn kwargs (``work``,
+#: ``success_action``, ``failure_action``, ``hint``, ``failure_target_id``).
+#: Routes register one per kind at import so an interrupted run can be rebuilt
+#: from its persisted ``resume`` payload without the original request context.
+ResumeBuilder = Callable[[str, Dict[str, Any]], Dict[str, Any]]
+_resumers: Dict[str, ResumeBuilder] = {}
+
+
+def register_resumer(kind: str, builder: ResumeBuilder) -> None:
+    _resumers[kind] = builder
+
+
+def _runs_dir(tenant_id: str) -> Path:
+    from core.paths.tenant import tenant_home  # noqa: PLC0415
+    return tenant_home(tenant_id) / "global" / "forge_runs"
+
+
+def _persist(run_id: str, record: Dict[str, Any]) -> None:
+    """Write the record atomically (0600). A persistence failure never fails the run."""
+    try:
+        d = _runs_dir(str(record.get("tenant_id") or ""))
+        d.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=".run-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(record, fh, default=str)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, d / f"{run_id}.json")
+        except BaseException:
+            _unlink_quiet(tmp)
+            raise
+    except Exception:  # noqa: BLE001
+        logger.warning("forge run %s: could not persist record", run_id, exc_info=True)
+
+
+def _unlink_quiet(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _load(run_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+    if not _RUN_ID_RE.match(run_id):
+        return None
+    try:
+        path = _runs_dir(tenant_id) / f"{run_id}.json"
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get("tenant_id") != tenant_id:
+        return None
+    return record
+
+
+def _prune(tenant_id: str) -> None:
+    try:
+        cutoff = time.time() - _FINISHED_TTL_S
+        for f in _runs_dir(tenant_id).glob("run-*.json"):
+            if f.stat().st_mtime < cutoff:
+                f.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        logger.debug("forge run prune failed", exc_info=True)
 
 
 class GenerationRefused(Exception):
@@ -66,7 +147,9 @@ def check_spawn_gates(prompt: str, *, tenant_id: str, sid_fingerprint: str,
 
 
 def new_run(*, tenant_id: str, kind: str, phases: tuple[str, ...],
-            sid_fingerprint: Optional[str], **extra: Any) -> str:
+            sid_fingerprint: Optional[str], resume: Optional[Dict[str, Any]] = None,
+            **extra: Any) -> str:
+    """``resume`` is the JSON payload a registered resumer needs to rebuild this run's work."""
     run_id = f"run-{uuid4().hex[:12]}"
     record = {
         "tenant_id": tenant_id,
@@ -80,6 +163,9 @@ def new_run(*, tenant_id: str, kind: str, phases: tuple[str, ...],
         "error": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "sid_fingerprint": sid_fingerprint,
+        "boot_id": BOOT_ID,
+        "resume": resume,
+        "resumes": 0,
     }
     record.update(extra)
     with runs_lock:
@@ -92,6 +178,9 @@ def new_run(*, tenant_id: str, kind: str, phases: tuple[str, ...],
         if len(runs) >= MAX_RUNS:
             raise GenerationBusy("The console's run store is full — try again shortly.")
         runs[run_id] = record
+        snapshot = dict(record)
+    _prune(tenant_id)
+    _persist(run_id, snapshot)
     return run_id
 
 
@@ -106,19 +195,57 @@ def _evict_locked() -> None:
 def update_run(run_id: str, **fields: Any) -> None:
     with runs_lock:
         run = runs.get(run_id)
-        if run is not None:
-            run.update(fields)
+        if run is None:
+            return
+        run.update(fields)
+        snapshot = dict(run)
+    _persist(run_id, snapshot)
 
 
 def get_run(run_id: str, tenant_id: str, kind: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """A copy of the run, or None when it is unknown, another tenant's, or another kind's."""
+    """A copy of the run, or None when it is unknown, another tenant's, or another kind's.
+
+    A run unknown to this process is looked up on disk (the console restarted).
+    One that was still running then is re-spawned from its persisted request
+    (at most ``MAX_RESUMES`` times) or, when that is impossible, reported as
+    failed with an explicit "interrupted" message — never a bare 404.
+    """
+    resume_args: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None
+    newly_interrupted = False
     with runs_lock:
-        run = dict(runs.get(run_id) or {})
-    if not run or run.get("tenant_id") != tenant_id:
+        run = runs.get(run_id)
+        if run is None:
+            loaded = _load(run_id, tenant_id)
+            if loaded is not None:
+                run = loaded
+                runs[run_id] = run
+                if run.get("status") == "running" and run.get("boot_id") != BOOT_ID:
+                    builder = _resumers.get(str(run.get("kind")))
+                    if builder and run.get("resume") and int(run.get("resumes") or 0) < MAX_RESUMES:
+                        run.update(boot_id=BOOT_ID, resumes=int(run.get("resumes") or 0) + 1,
+                                   message="The console restarted — resuming this run…")
+                        resume_args = (dict(run), builder(run_id, dict(run)))
+                    else:
+                        run.update(status="failed", boot_id=BOOT_ID, interrupted=True,
+                                   error="interrupted by a console restart",
+                                   message="The console restarted while this run was in progress "
+                                           "and it could not be resumed. Start it again.")
+                        newly_interrupted = True
+        copy = dict(run or {})
+    if copy and resume_args is not None:
+        _persist(run_id, copy)
+        record, kwargs = resume_args
+        logger.warning("forge %s run %s: resuming after console restart (attempt %s)",
+                       record.get("kind"), run_id, copy.get("resumes"))
+        spawn(run_id=run_id, kind=str(record["kind"]), tenant_id=tenant_id,
+              sid_fingerprint=record.get("sid_fingerprint"), **kwargs)
+    elif copy and newly_interrupted:
+        _persist(run_id, copy)
+    if not copy or copy.get("tenant_id") != tenant_id:
         return None
-    if kind is not None and run.get("kind") != kind:
+    if kind is not None and copy.get("kind") != kind:
         return None
-    return run
+    return copy
 
 
 def spawn(*, run_id: str, kind: str, tenant_id: str, sid_fingerprint: Optional[str],

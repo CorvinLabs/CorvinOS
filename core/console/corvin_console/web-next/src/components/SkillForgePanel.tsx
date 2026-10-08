@@ -46,6 +46,7 @@
  * and the UI must not imply they are.
  */
 
+import { isRunGone, usePersistedRunId } from "@/lib/forge-run";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -123,7 +124,7 @@ export const SkillForgePanel: React.FC = () => {
 
   const [mode, setMode] = useState<ComposerMode>("orchestrated");
   const [userRequest, setUserRequest] = useState("");
-  const [runId, setRunId] = useState<string | null>(null);
+  const [runId, setRunId] = usePersistedRunId("skill-forge-run");
   const [refineTarget, setRefineTarget] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -149,9 +150,12 @@ export const SkillForgePanel: React.FC = () => {
     queryKey: ["skill-creator", "run", runId],
     queryFn: ({ signal }) => getSkillRunStatus(runId!, signal),
     enabled: !!runId,
+    retry: (count, err) => !isRunGone(err) && count < 3,
     // Poll only while the run is live. A finished run keeps its last payload
-    // on screen without hammering the endpoint forever.
+    // on screen without hammering the endpoint forever. Only a real 404 ends
+    // it early: a restart or dropped connection must not abandon a live run.
     refetchInterval: (query) => {
+      if (isRunGone(query.state.error)) return false;
       const status = query.state.data?.status;
       return status === "success" || status === "failed" ? false : 1000;
     },
@@ -162,6 +166,14 @@ export const SkillForgePanel: React.FC = () => {
     queryFn: ({ signal }) => getGeneratedSkill(viewing!, signal),
     enabled: !!viewing,
   });
+
+  // A run the server no longer knows frees the form instead of spinning forever.
+  useEffect(() => {
+    if (!runId || !isRunGone(run.error)) return;
+    setError("This run is no longer known to the console. Start a new one.");
+    setRunId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run.error, runId]);
 
   const isRunning = run.data ? run.data.status === "running" || run.data.status === "pending" : !!runId;
 

@@ -787,6 +787,17 @@ REFINE gates the base skill's body together with the request. At most
 `skill_creator_api._generation_runs` / `_runs_lock` are aliases of the shared store; the Tasks
 board lists every run as "Forge generation" with the kind as subtype.
 
+**Runs survive a console restart.** Every record is persisted (atomic, 0600) to
+`<tenant_home>/global/forge_runs/<run_id>.json` on creation and on each update, together with a
+`resume` payload (the request). A status poll for a run this process does not hold loads it
+from disk; one still `running` under another `BOOT_ID` is re-spawned from its payload through the
+resumer each route registers (`forge_runs.register_resumer`, at most `MAX_RESUMES` = 2 times,
+so a request that crashes the console cannot restart-loop) or, when it cannot be resumed,
+answered as `failed` / "interrupted by a console restart" — never a bare 404. Finished files
+are pruned after 14 days. Frontend rule (`lib/forge-run.ts`): the run id lives in
+`sessionStorage` (panel switch / hard refresh drop only the view), and only a real 404 ends a
+poll — a network error, 5xx or 401 is transient.
+
 **One engine and one review.** Tool and plugin runs resolve the engine through
 `skill_creator.skill_creator.resolve_llm_client` (patch that one attribute to
 script an engine in tests) and review with `skill_creator/artifact_review.py`:
