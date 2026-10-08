@@ -41,12 +41,27 @@ committed; a failed chain write raises `LayerForgeAuditError` and nothing change
 | `layer_forge.quality_gate_evaluated` | INFO | entry_id, version, gate_id, status, tenant_id |
 | `layer_forge.enforcement_evaluated` | INFO | entry_id, version, rule_id, status, tenant_id |
 | `layer_forge.definition_transitioned` | INFO | entry_id, version, from_status, to_status, actor, tenant_id |
+| `layer_forge.review_evaluated` | INFO | entry_id, version, verdict, flags, prompt_version, tenant_id |
+| `layer_forge.review_override_applied` | WARNING | entry_id, version, override_reason, overridden_flags, actor, tenant_id |
+| `layer_forge.plan_generated` | INFO | layer_id, intent_len, intent_sha256, manifest_id, manifest_version, actor, tenant_id |
+| `layer_forge.plan_failed` | WARNING | layer_id, intent_len, intent_sha256, error_class, actor, tenant_id |
+| `layer_forge.canary_rollout_assigned` / `canary_rollback` | INFO / WARNING | see `audit.py::ALLOWED_FIELDS` |
+| `layer_forge.optimizer_config_updated` | INFO | old_version, new_version, reason, signal, success_rate, total_overrides, tenant_id |
+| `layer_forge.definition_outcome_feedback`, `gate_threshold_suggested` / `_applied` | INFO | see `audit.py::ALLOWED_FIELDS` |
 
-Metadata only — never manifest bodies, gate output or exception messages. A
+Metadata only — never manifest bodies, gate output or exception messages. The PLAN events
+carry a short hash and the length of the `intent`, never its text (user prose), and the
+exception CLASS, never its message; any id a model wrote (`layer_id`, `manifest_*`) passes
+`audit.ident()` and is recorded as `<invalid>` unless it is a short identifier. A
 manifest that fails schema validation is recorded without `entry_id`/`version`
 (an invalid id never reaches the chain). The field sets live in
 `layer_forge/audit.py::ALLOWED_FIELDS` and are mirrored in `security_events.py`
-(`EVENT_SEVERITY` + `_EVENT_ALLOWLIST`); `test_module_allowlist_matches_the_central_registry` pins them together.
+(`EVENT_SEVERITY` + `_EVENT_ALLOWLIST`); `test_module_allowlist_matches_the_central_registry` pins them together, and
+`tests/layer_forge/test_plan_phase_wiring.py` fails if the package emits an event name that is
+not registered (`emit` RAISES for one). Until 2026-10-08 nine of the twelve events here, plus
+`plan_generated`, `plan_failed` and `optimizer_config_updated`, were missing from the central
+registry — so every successful PLAN ended as "audit failed" and the optimizer's own config change
+was never recorded.
 `actor` is `cli` or `console`.
 
 ## Concurrency (ADR-2222 D4)
@@ -85,12 +100,18 @@ the runtime half is `SKIPPED` (`skipped_no_runtime_host`) — never a silent PAS
 |---|---|---|
 | GET | `/layer-forge/definitions` | `{items, count}` |
 | GET | `/layer-forge/definitions/{entry_id}[?version=]` | entry, 404 if unknown |
-| POST | `/layer-forge/plan` `{layer_id, intent}` | 200 `{status: SUCCESS, manifest}` · 422 `{status: FAILED, error, phase}` · 503 audit failed — generates a manifest preview via LLM; nothing is persisted yet (ADR-2224/2225) |
+| POST | `/layer-forge/plan` `{layer_id, intent}` | 200 `{status: SUCCESS, manifest}` · 422 `{status: FAILED, error, phase}` · 503 audit failed — generates a manifest preview via LLM; nothing is persisted yet (ADR-2224/2225). The model call is bounded: `llm_plan.PLAN_TIMEOUT_S = 60` s, one retry |
 | POST | `/layer-forge/definitions` (body = manifest) | 200 SUCCESS · 409 version exists · 422 rejected (`detail.phase`) · 503 audit failed |
 | POST | `/layer-forge/definitions/{entry_id}/{version}/transition` `{to_status}` | 200 · 404 · 409 illegal transition · 503 |
 | POST | `/layer-forge/gate-thresholds/analyze` `{gate_id, lookback_days}` | correlation suggestion, never auto-applied |
 | POST | `/layer-forge/gate-thresholds/apply` `{gate_id, new_threshold, reason}` | operator-explicit apply, audited |
 | GET | `/layer-forge/analytics[?since=&until=]` | decisions/confidence/flags/convergence metrics |
+
+The REVIEW phase's model call is bounded too (`review.REVIEW_TIMEOUT_S = 45` s, one retry → worst case
+`REVIEW_WORST_CASE_S = 90` s, then verdict `ERROR`, i.e. refused). It runs inside this request and inside
+every layer of a bundle import, holding a worker and one import slot; the SDK default (10 min x 3 attempts)
+let a hung call hold that for up to ~30 min. Neither call passes `temperature`: the installed SDK's
+`messages.create()` takes none, and the PLAN call used to die on that before any network traffic.
 
 Quality gates cannot be skipped from the console. Handlers are sync `def`
 (the pipeline runs pytest subprocesses in FastAPI's threadpool, not on the
@@ -152,3 +173,40 @@ python scripts/layer_forge_cli.py [--tenant TID] promote <id> <version> <to_stat
   rendered `disabled` with a note pointing at the real transition endpoint — a
   human runs transitions via the CLI (`layer_forge_cli.py promote`) or a direct
   `POST .../transition` call today, not by clicking in the console.
+
+## Review-prompt canary and the optimizer (Phase 3c/4a2)
+
+Defects found and fixed 2026-10-08 (each has a regression test in `tests/layer_forge/`):
+
+- `OptimizerEngine.rollback_canary` wrote `self._data` / called `self._persist()` on the ENGINE, which has
+  neither; every rollback raised `AttributeError`, was swallowed and returned `False` — **a regressing canary
+  was never rolled back**. It now calls `ReviewPromptVersions.set_current()` (versions stay immutable, only the
+  pointer moves).
+- `check_canary_regression` used `FeedbackPattern.is_significant` as "enough data", but that demands a success rate
+  >= 70 %, so a canary that did badly (80 % -> 20 %) counted as "no significant data" and only mild drops were
+  caught. It uses `has_enough_data` (>= 5 outcomes).
+- `FeedbackPattern.is_significant` demanded >= 70 % for BOTH signals; an UNDERCAUTIOUS pattern is <= 40 % by
+  construction, so the optimizer could relax a review but never tighten one. Significance is now per signal.
+- `select_canary_version` read the literal tenant `_default` for everyone; it takes `tenant_id` / `storage_root`
+  and the orchestrator passes its tenant.
+- `EnforcementChecker.check_schema_validation` returned `ERROR` ("the check could not complete") for a detected
+  dependency cycle or an unresolvable dependency; both are a definite `FAIL` of the manifest.
+- `analytics` windows used `datetime.utcnow().timestamp()`, which treats the naive UTC value as local time: at UTC+2
+  the window ended two hours in the past and a definition created a minute ago was outside it. `time.time()` now;
+  an ISO string without a zone means UTC.
+- `gate_outcome_correlation` ignored its `gate_id` argument and could never count a failure (an inner
+  `status == "deployed"` inside `status == "deployed"`): the rate was always 1.0, the signal always "overcautious".
+  It filters by gate and counts deployed vs rejected/superseded.
+- The console panel's Create sent `{manifest}`; the route takes the manifest itself as the body, so every Create
+  answered "validation failed: missing required field: id". The panel (and its vitest, which had pinned the wrong
+  shape) now send the manifest.
+
+**Still not wired (named, not hidden):** `gate_outcome_correlation` reads `_review_verdict`, which nothing writes into
+the registry (only `_created_at` / `_promoted_at` exist), and a failed quality gate refuses the definition rather than
+leaving a record to override. Until a producer exists the gate-threshold suggestion has no live data; the
+function's contract is pinned by tests that supply the field. The rollback audit event is written AFTER the
+pointer moves (the module's "audit-first" rule would reverse that) — a design decision left open.
+
+Tests: the REVIEW phase calls the Anthropic API, the one external boundary. `tests/layer_forge/conftest.py` stubs it
+(autouse; `@pytest.mark.real_review` opts out) and the CLI wiring tests start their subprocess through a wrapper
+that patches only that boundary — without it 19 tests were red on any machine without an API key.

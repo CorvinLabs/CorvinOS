@@ -262,10 +262,30 @@ def _reset_module_cache() -> None:
         del sys.modules[mod]
 
 
+@pytest.fixture(autouse=True)
+def _review_phase_is_stubbed(request, monkeypatch):
+    """The REVIEW phase calls the Anthropic API — the one external boundary of Layer Forge.
+
+    Without this, every test that creates a layer ran the real review: green on a machine
+    with an API key and red on one without ("Could not resolve authentication method"), and
+    the key-less result looked like 19 product failures (2026-10-08). The stub honours the
+    real contract (a ``ReviewVerdict``, never an exception). A test that exercises the
+    review itself opts out with ``@pytest.mark.real_review``; its model client is mocked there.
+    """
+    if request.node.get_closest_marker("real_review") or request.module.__name__.endswith("test_review_phase"):
+        return
+    from core.orchestration.layer_forge import orchestrator
+    from core.orchestration.layer_forge.review import ReviewVerdict
+
+    monkeypatch.setattr(orchestrator, "review_layer_definition",
+                        lambda manifest, enforcement, **_k: ReviewVerdict("PASS", flags=[]))
+
+
 # Marks for organizing tests by phase
 
 def pytest_configure(config):
     """Register custom pytest marks for Layer Forge test phases."""
+    config.addinivalue_line("markers", "real_review: runs the real review phase (model client mocked by the test)")
     config.addinivalue_line("markers", "validate: schema validation tests")
     config.addinivalue_line("markers", "gate: quality gate execution tests")
     config.addinivalue_line("markers", "enforce: enforcement rule tests")

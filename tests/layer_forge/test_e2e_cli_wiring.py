@@ -23,10 +23,27 @@ def home(tmp_path):
     return tmp_path / "corvin_home"
 
 
+# `create` runs the REVIEW phase, which calls the Anthropic API — the one external boundary of
+# Layer Forge. In a subprocess an in-process monkeypatch does not apply, and a test-only
+# environment switch in the product code would be a back door. So the child starts through this
+# wrapper: it replaces only that boundary, then runs the REAL CLI file via runpy. Without it these
+# four tests passed on a machine with an API key and failed on one without
+# ("Could not resolve authentication method"), which read as a product failure.
+_CLI_WRAPPER = """
+import runpy, sys
+from core.orchestration.layer_forge import orchestrator
+from core.orchestration.layer_forge.review import ReviewVerdict
+orchestrator.review_layer_definition = lambda manifest, enforcement, **_k: ReviewVerdict("PASS", flags=[])
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+
+
 def _run_cli(home: Path, *args):
-    env = dict(os.environ, CORVIN_HOME=str(home), FORGE_ROOT=str(home / "forge_root"))
+    env = dict(os.environ, CORVIN_HOME=str(home), FORGE_ROOT=str(home / "forge_root"),
+               PYTHONPATH=os.pathsep.join(filter(None, [str(CLI.parents[1]), os.environ.get("PYTHONPATH")])))
     env.pop("CORVIN_TENANT_ID", None)
-    return subprocess.run([sys.executable, str(CLI), "--tenant", TENANT, *args],
+    return subprocess.run([sys.executable, "-c", _CLI_WRAPPER, str(CLI), "--tenant", TENANT, *args],
                           capture_output=True, text=True, timeout=120, env=env)
 
 
@@ -84,18 +101,26 @@ def test_create_lands_in_registry_and_hash_chain(tmp_path, home):
 
     events = _lf_events(home)
     types = [_etype(e) for e in events]
-    assert types == [
-        "layer_forge.enforcement_evaluated",
-        "layer_forge.definition_proposed",
-        "layer_forge.definition_transitioned",
-    ]
-    proposed = _details(events[1])
+    # The pipeline records far more than ADR-2222's first three events by now: the three boot-time
+    # enforcement rules, the REVIEW verdict and the canary assignment all land before the definition
+    # is proposed. Pin the ORDER of the decisions (audit-first: each precedes the state change it
+    # justifies), not an exact list that every new phase silently invalidates.
+    expected_order = ["layer_forge.enforcement_evaluated", "layer_forge.review_evaluated",
+                      "layer_forge.canary_rollout_assigned", "layer_forge.definition_proposed",
+                      "layer_forge.definition_transitioned"]
+    positions = [types.index(t) for t in expected_order]
+    assert positions == sorted(positions), types
+    assert types.count("layer_forge.enforcement_evaluated") == 3        # schema + boundaries + host awareness
+    assert types.count("layer_forge.definition_proposed") == 1 and types.count("layer_forge.definition_transitioned") == 1
+    assert types[-1] == "layer_forge.definition_transitioned"
+    proposed = _details(events[types.index("layer_forge.definition_proposed")])
     assert proposed["entry_id"] == "e2e.test-rule"
     assert proposed["gates_skipped"] is True
     assert proposed["actor"] == "cli"
     assert proposed["tenant_id"] == TENANT
-    assert _details(events[2])["from_status"] == "proposed"
-    assert _details(events[2])["to_status"] == "accepted"
+    transitioned = _details(events[types.index("layer_forge.definition_transitioned")])
+    assert transitioned["from_status"] == "proposed"
+    assert transitioned["to_status"] == "accepted"
     assert all(e.get("hash") and "prev_hash" in e for e in events)
     _verify_chain(home)
 

@@ -949,6 +949,16 @@ EVENT_SEVERITY: dict[str, str] = {
     "layer_forge.quality_gate_evaluated":  "INFO",
     "layer_forge.enforcement_evaluated":   "INFO",
     "layer_forge.definition_transitioned": "INFO",
+    "layer_forge.review_evaluated":     "INFO",
+    "layer_forge.review_override_applied":     "WARNING",
+    "layer_forge.definition_outcome_feedback":     "INFO",
+    "layer_forge.gate_threshold_suggested":     "INFO",
+    "layer_forge.gate_threshold_applied":     "INFO",
+    "layer_forge.canary_rollout_assigned":     "INFO",
+    "layer_forge.canary_rollback":     "WARNING",
+    "layer_forge.plan_generated":     "INFO",
+    "layer_forge.plan_failed":     "WARNING",
+    "layer_forge.optimizer_config_updated":     "INFO",
     # Forge Bundle (ADR-2229) — mirrored in core/forge_bundle/audit.py::SEVERITY.
     "forge_bundle.exported": "INFO",
     "forge_bundle.import_validated": "INFO",
@@ -3941,6 +3951,37 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "forge_bundle.import_validated": frozenset({
         "bundle_id", "bundle_version", "artifact_count", "total_uncompressed_bytes",
         "actor", "tenant_id",
+    }),
+    # ... remaining Layer Forge events (generated from audit.py's tables; test_module_allowlist_matches_the_central_registry pins parity)
+    "layer_forge.review_evaluated": frozenset({
+        "entry_id", "flags", "prompt_version", "tenant_id", "verdict", "version"
+    }),
+    "layer_forge.review_override_applied": frozenset({
+        "actor", "entry_id", "overridden_flags", "override_reason", "tenant_id", "version"
+    }),
+    "layer_forge.definition_outcome_feedback": frozenset({
+        "actor", "entry_id", "outcome", "phase", "tenant_id", "version"
+    }),
+    "layer_forge.gate_threshold_suggested": frozenset({
+        "actor", "gate_id", "new_threshold", "old_threshold", "override_success_rate", "reason", "signal", "tenant_id", "total_overrides"
+    }),
+    "layer_forge.gate_threshold_applied": frozenset({
+        "actor", "gate_id", "new_threshold", "old_threshold", "reason", "tenant_id"
+    }),
+    "layer_forge.canary_rollout_assigned": frozenset({
+        "entry_id", "prompt_version", "rollout_percentage", "tenant_id", "version"
+    }),
+    "layer_forge.canary_rollback": frozenset({
+        "canary_success_rate", "canary_version", "parent_success_rate", "parent_version", "reason", "tenant_id"
+    }),
+    "layer_forge.plan_generated": frozenset({
+        "actor", "intent_len", "intent_sha256", "layer_id", "manifest_id", "manifest_version", "tenant_id"
+    }),
+    "layer_forge.plan_failed": frozenset({
+        "actor", "error_class", "intent_len", "intent_sha256", "layer_id", "tenant_id"
+    }),
+    "layer_forge.optimizer_config_updated": frozenset({
+        "new_version", "old_version", "reason", "signal", "success_rate", "tenant_id", "total_overrides"
     }),
     "forge_bundle.import_rejected": frozenset({
         "rejected_stage", "actor", "tenant_id",

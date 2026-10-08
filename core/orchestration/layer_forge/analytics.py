@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -75,6 +76,9 @@ class LayerForgeAnalytics:
                 ...
             }
         """
+        # time.time(), not datetime.utcnow().timestamp(): that treats the naive UTC value as LOCAL time,
+        # so the window ended (UTC+2) two hours in the past and a definition created a minute ago
+        # fell outside it (2026-10-08 review). Same for ISO strings below: no zone means UTC.
         since_ts = self._parse_iso_to_ts(since_iso) if since_iso else 0
         until_ts = self._parse_iso_to_ts(until_iso, end_of_day=True) if until_iso else float("inf")
 
@@ -255,11 +259,9 @@ class LayerForgeAnalytics:
             }
         """
         since_ts = self._parse_iso_to_ts(since_iso) if since_iso else (
-            datetime.utcnow() - timedelta(days=30)
-        ).timestamp()
-        until_ts = self._parse_iso_to_ts(until_iso, end_of_day=True) if until_iso else (
-            datetime.utcnow()
-        ).timestamp()
+            time.time() - 30 * 86400
+        )
+        until_ts = self._parse_iso_to_ts(until_iso, end_of_day=True) if until_iso else time.time()
 
         # Aggregate decisions by week
         decisions_by_week = self.get_decisions_by_week(since_iso, until_iso)
@@ -309,6 +311,8 @@ class LayerForgeAnalytics:
                 dt = datetime.fromisoformat(iso_str)
                 if end_of_day:
                     dt = dt.replace(hour=23, minute=59, second=59)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
             return dt.timestamp()
         except (ValueError, AttributeError):
             return 0.0
@@ -358,11 +362,9 @@ class LayerForgeAnalytics:
             }
         """
         since_ts = self._parse_iso_to_ts(since_iso) if since_iso else (
-            datetime.utcnow() - timedelta(days=30)
-        ).timestamp()
-        until_ts = self._parse_iso_to_ts(until_iso, end_of_day=True) if until_iso else (
-            datetime.utcnow()
-        ).timestamp()
+            time.time() - 30 * 86400
+        )
+        until_ts = self._parse_iso_to_ts(until_iso, end_of_day=True) if until_iso else time.time()
 
         # Iterate through all definitions looking for gate FAIL outcomes
         correlations = {
@@ -383,20 +385,27 @@ class LayerForgeAnalytics:
             if created_ts < since_ts or created_ts > until_ts:
                 continue
 
-            # Check if this definition had a FAIL for our target gate
-            verdict = entry.get("_review_verdict", {})
-            if verdict.get("status") == "FLAGGED":
-                # Does this definition have a record of override and deployment?
-                if entry.get("review_flagged") and entry.get("status") == "deployed":
-                    correlations["total_fails"] += 1
-                    correlations["overridden_fails"] += 1
+            # Only definitions that carry THIS gate (the filter the comment above promised and the
+            # code never applied: every gate_id got the same global numbers).
+            if not any(isinstance(g, dict) and g.get("gate_id") == gate_id for g in entry.get("quality_gates", [])):
+                continue
 
-                    # In a real scenario, check deployment outcome from a separate outcome log
-                    # For now, we assume deployed=success (actual signal comes from learning events)
-                    if entry.get("status") == "deployed":
-                        correlations["override_successes"] += 1
-                    else:
-                        correlations["override_failures"] += 1
+            verdict = entry.get("_review_verdict", {})
+            if verdict.get("status") == "FLAGGED" and entry.get("review_flagged"):
+                # A flagged definition that was overridden has an outcome once it is decided:
+                # deployed = the override held, rejected/superseded = it did not. Still-open
+                # definitions (proposed/accepted) have no outcome yet and are not counted.
+                # (The old inner `if status == "deployed"` was inside `status == "deployed"`, so
+                # failures could never be counted and the rate was always 1.0 — i.e. "overcautious".)
+                status = entry.get("status")
+                if status == "deployed":
+                    correlations["override_successes"] += 1
+                elif status in ("rejected", "superseded"):
+                    correlations["override_failures"] += 1
+                else:
+                    continue
+                correlations["total_fails"] += 1
+                correlations["overridden_fails"] += 1
 
         # Compute success rate
         if correlations["overridden_fails"] > 0:

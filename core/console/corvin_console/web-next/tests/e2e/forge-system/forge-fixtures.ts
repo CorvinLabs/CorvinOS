@@ -99,6 +99,11 @@ export function cliExport(inst: Install, args: string[]): any {
 }
 
 /** Steer the stubbed Layer Forge reviewer (the one replaced external boundary). */
+/** Steer the PLAN-phase model double (harness: <home>/e2e-control/plan.json). */
+export function setPlanner(inst: Install, cfg: { mode: 'manifest' | 'error'; manifest?: Record<string, unknown>; message?: string; delay_s?: number }) {
+  fs.writeFileSync(path.join(inst.home, 'e2e-control/plan.json'), JSON.stringify({ delay_s: 0, ...cfg }));
+}
+
 export function setReviewer(inst: Install, cfg: { verdict: 'PASS' | 'FLAGGED' | 'ERROR'; delay_s?: number }) {
   fs.writeFileSync(path.join(inst.home, 'e2e-control/layer_review.json'), JSON.stringify({ delay_s: 0, ...cfg }));
 }

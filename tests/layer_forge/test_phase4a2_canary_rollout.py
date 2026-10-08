@@ -64,7 +64,7 @@ class TestDeterministicCanarySampling:
         # Get version 5 times, should always be same
         versions = []
         for _ in range(5):
-            v = select_canary_version(entry_id)
+            v = select_canary_version(entry_id, storage_root=temp_storage)
             versions.append(v)
 
         # All should be identical
@@ -76,8 +76,8 @@ class TestDeterministicCanarySampling:
         entry1 = "layer-alpha-001"
         entry2 = "layer-beta-001"
 
-        v1 = select_canary_version(entry1)
-        v2 = select_canary_version(entry2)
+        v1 = select_canary_version(entry1, storage_root=temp_storage)
+        v2 = select_canary_version(entry2, storage_root=temp_storage)
 
         # Both should resolve to current/parent chain
         assert v1 in ["v1.0"]
@@ -100,7 +100,7 @@ class TestDeterministicCanarySampling:
         canary_count = 0
         for i in range(1000):
             entry_id = f"layer-test-{i:04d}"
-            v = select_canary_version(entry_id)
+            v = select_canary_version(entry_id, storage_root=temp_storage)
             if v == "v1.1":
                 canary_count += 1
 

@@ -154,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
             # Apply the gate threshold change — audit-first, operator-explicit (no auto-apply)
             try:
                 from core.orchestration.layer_forge import audit
-                audit.emit(
+                digest = audit.emit(
                     "layer_forge.gate_threshold_applied",
                     tenant_id=args.tenant,
                     gate_id=args.gate_id,
@@ -168,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
                     "gate_id": args.gate_id,
                     "new_threshold": args.new_threshold,
                     "reason": args.reason,
+                    "audit_event": digest,   # the chain record's hash: the operator's proof it was recorded
                     "message": "Gate threshold applied (audited, not persisted to registry yet)",
                 })
                 return 0

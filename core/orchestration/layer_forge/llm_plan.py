@@ -19,6 +19,11 @@ from pathlib import Path
 
 import anthropic
 
+# Bounded like the review (review.py): the plan call runs inside POST /layer-forge/plan, so a
+# hung model call must not hold a worker for the SDK default of 10 minutes x 3 attempts.
+PLAN_TIMEOUT_S = 60.0
+PLAN_MAX_RETRIES = 1
+
 logger = logging.getLogger(__name__)
 
 
@@ -106,7 +111,6 @@ def generate_manifest_from_intent(
     intent: str,
     *,
     model: str = "claude-opus-5",
-    temperature: float = 0.0,  # Deterministic
     max_tokens: int = 2048,
 ) -> dict:
     """Call Claude to generate a layer-definition manifest.
@@ -115,7 +119,8 @@ def generate_manifest_from_intent(
         layer_id: The layer identifier (e.g., 'L34')
         intent: Description of what the layer should do
         model: Model to use (default: opus for best quality)
-        temperature: Must be 0.0 for determinism
+        (no sampling parameters: the installed SDK's messages.create() takes no `temperature`;
+        the plan is validated and gated afterwards, not trusted to be deterministic)
         max_tokens: Max tokens in response
 
     Returns:
@@ -125,7 +130,7 @@ def generate_manifest_from_intent(
         LLMPlanError: if the LLM output is invalid JSON or the call fails
     """
     try:
-        client = anthropic.Anthropic()
+        client = anthropic.Anthropic(timeout=PLAN_TIMEOUT_S, max_retries=PLAN_MAX_RETRIES)
     except Exception as e:
         raise LLMPlanError(f"cannot initialize Anthropic client: {e}") from e
 
@@ -135,7 +140,6 @@ def generate_manifest_from_intent(
         message = client.messages.create(
             model=model,
             max_tokens=max_tokens,
-            temperature=temperature,
             system=LayerPlanPrompt.SYSTEM_PROMPT,
             messages=[
                 {"role": "user", "content": user_prompt},

@@ -171,7 +171,7 @@ describe("ForgeLayerPanel", () => {
 
     await waitFor(() => expect(screen.getByTestId("create-layer-success")).toBeTruthy());
     expect(seen[1]).toMatchObject({
-      method: "POST", path: "/v1/console/layer-forge/definitions", csrf: "csrf-test", body: { manifest },
+      method: "POST", path: "/v1/console/layer-forge/definitions", csrf: "csrf-test", body: manifest,
     });
     expect(screen.getByTestId("create-layer-success").textContent).toContain("L34@1.0.0");
     // onCreated fires AFTER a real create, not on plan — Generator uses this

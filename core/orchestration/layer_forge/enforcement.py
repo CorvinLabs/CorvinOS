@@ -12,7 +12,13 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .schema import content_hash_of_paths, validate_manifest, validate_dependency_dag, LayerSchemaValidationError
+from .schema import (
+    LayerDependencyDAGError,
+    LayerSchemaValidationError,
+    content_hash_of_paths,
+    validate_dependency_dag,
+    validate_manifest,
+)
 
 
 @dataclass(frozen=True)
@@ -185,7 +191,10 @@ class EnforcementChecker:
             return EnforcementVerdict(
                 "schema_validation", "PASS", "manifest and DAG valid"
             )
-        except LayerSchemaValidationError as e:
+        except (LayerSchemaValidationError, LayerDependencyDAGError) as e:
+            # A cycle or an unresolvable dependency is a definite verdict about the MANIFEST (FAIL).
+            # It used to fall through to the generic handler below and read as ERROR — "the check
+            # could not complete" — which sends the operator looking for an infrastructure problem.
             return EnforcementVerdict("schema_validation", "FAIL", str(e))
         except Exception as e:
             return EnforcementVerdict("schema_validation", "ERROR", str(e))

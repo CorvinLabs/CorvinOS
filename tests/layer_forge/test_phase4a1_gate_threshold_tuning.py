@@ -15,6 +15,7 @@ Mocks are for test doubles only; the happy path runs the real code.
 from __future__ import annotations
 
 import json
+import time
 import os
 import subprocess
 import sys
@@ -59,7 +60,7 @@ def _lf_events(home: Path) -> list[dict]:
     ]
 
 
-def _create_definition_with_flags(home: Path, gate_id: str = "test_gate") -> str:
+def _create_definition_with_flags(home: Path, gate_id: str = "test_gate", version: str = "1.0.0") -> str:
     """Helper: create a layer definition with review flags for testing outcome correlation."""
     from core.orchestration.layer_forge.registry import LayerRegistry
     from core.orchestration.layer_forge.primitive import atomic_write_json
@@ -69,7 +70,7 @@ def _create_definition_with_flags(home: Path, gate_id: str = "test_gate") -> str
 
     manifest = {
         "id": f"test.threshold.{gate_id}",
-        "version": "1.0.0",
+        "version": version,
         "targets": [{"layer_id": "L34"}],
         "quality_gates": [{"gate_id": gate_id, "test_path": "tests/layer_forge/test_schema.py"}],
     }
@@ -80,7 +81,11 @@ def _create_definition_with_flags(home: Path, gate_id: str = "test_gate") -> str
     record["status"] = "deployed"  # Simulate successful override
     record["review_flagged"] = True
     record["review_flags"] = ["scope_creep"]
-    record["_created_at"] = 1600000000.0  # Fixed timestamp for testing
+    # gate_outcome_correlation counts a definition only if (a) its review verdict was FLAGGED and
+    # (b) it was created inside the analysis window (default: the last 30 days). The helper used
+    # a fixed 2020 timestamp and no verdict, so the correlation could never be anything but 0.0.
+    record["_review_verdict"] = {"status": "FLAGGED"}
+    record["_created_at"] = time.time()
 
     atomic_write_json(registry._path_for(entry_id, version), record)
     return entry_id
@@ -101,8 +106,10 @@ class TestGateOutcomeCorrelation:
         registry = LayerRegistry(registry_root)
 
         # Create 7 definitions with review flags that deployed successfully
+        # One version per definition: the registry makes versions immutable, so seven writes of
+        # the same id@version (what this loop did) are refused.
         for i in range(7):
-            _create_definition_with_flags(home, gate_id="schema_check")
+            _create_definition_with_flags(home, gate_id="schema_check", version=f"1.0.{i}")
 
         # Create 2 that failed
         from core.orchestration.layer_forge.primitive import atomic_write_json
@@ -112,12 +119,14 @@ class TestGateOutcomeCorrelation:
                 "id": f"test.failed.{i}",
                 "version": "1.0.0",
                 "targets": [{"layer_id": "L34"}],
+                "quality_gates": [{"gate_id": "schema_check", "test_path": "tests/layer_forge/test_schema.py"}],
             }
             registry.validate(manifest)
             record = dict(manifest)
             record["status"] = "rejected"  # Failed deployment
             record["review_flagged"] = True
-            record["_created_at"] = 1600000000.0
+            record["_review_verdict"] = {"status": "FLAGGED"}
+            record["_created_at"] = time.time()
             atomic_write_json(registry._path_for(record["id"], record["version"]), record)
 
         analytics = LayerForgeAnalytics(registry=registry, tenant_id=TENANT)
@@ -347,8 +356,8 @@ class TestE2EGateThresholdLoop:
     def test_full_loop_e2e(self, home):
         """E2E: Create outcomes, analyze gate, verify suggestion, apply via CLI, audit trail complete."""
         # 1. Create definitions with flags (providing outcome data)
-        for _ in range(8):
-            _create_definition_with_flags(home, gate_id="e2e_gate")
+        for i in range(8):
+            _create_definition_with_flags(home, gate_id="e2e_gate", version=f"1.0.{i}")
 
         # 2. Analyze gate via CLI
         analyze_result = _run_cli(

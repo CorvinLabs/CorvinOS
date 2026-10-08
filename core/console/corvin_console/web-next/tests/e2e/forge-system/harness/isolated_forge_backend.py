@@ -71,6 +71,7 @@ def _reset_home() -> None:
     yml.write_text("spec:\n  telemetry:\n    ping_enabled: false\n    healing_traces: false\n")
     os.chmod(yml, 0o600)
     (HOME / "e2e-control" / "layer_review.json").write_text(json.dumps({"verdict": "PASS", "delay_s": 0}))
+    (HOME / "e2e-control" / "plan.json").write_text(json.dumps({"mode": "manifest", "delay_s": 0}))
 
 
 def _sandbox_env() -> None:
@@ -137,6 +138,43 @@ def _patch_external_boundaries() -> None:
         return ReviewVerdict("PASS", flags=[])
 
     orchestrator.review_layer_definition = _review
+
+    # ── PLAN phase model double ────────────────────────────────────────────────────────────
+    # llm_plan calls anthropic.Anthropic().messages.create(...). The double accepts a call only
+    # if the REAL SDK signature accepts its keywords (inspect.bind), so a keyword the installed
+    # SDK rejects — `temperature`, which broke the phase for good — fails here exactly as in
+    # production instead of being swallowed by a mock. Behaviour per <home>/e2e-control/plan.json:
+    #   {"mode": "manifest", "manifest": {...}, "delay_s": 0}  |  {"mode": "error", "message": "..."}
+    import inspect
+    import types
+
+    import anthropic
+    from core.orchestration.layer_forge import llm_plan
+
+    real_create = inspect.signature(anthropic.resources.messages.Messages.create)
+    plan_control = HOME / "e2e-control" / "plan.json"
+
+    class _Messages:
+        def create(self, **kwargs):
+            real_create.bind(None, **kwargs)          # TypeError for any keyword the SDK does not take
+            try:
+                cfg = json.loads(plan_control.read_text())
+            except (OSError, ValueError):
+                cfg = {}
+            time.sleep(float(cfg.get("delay_s", 0)))
+            if cfg.get("mode") == "error":
+                raise RuntimeError(cfg.get("message", "model unavailable"))
+            manifest = cfg.get("manifest") or {
+                "id": "nordwind.planned", "version": "1.0.0",
+                "targets": [{"layer_id": "L34", "layer_name": "Data Flow Guard"}],
+                "quality_gates": [], "enforcement_rules": []}
+            return types.SimpleNamespace(content=[types.SimpleNamespace(text=json.dumps(manifest))])
+
+    class _FakeAnthropic:
+        def __init__(self, **_kwargs):
+            self.messages = _Messages()
+
+    llm_plan.anthropic = types.SimpleNamespace(Anthropic=_FakeAnthropic)
 
 
 # ── Seed: Nordwind Logistik ─────────────────────────────────────────────────

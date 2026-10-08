@@ -166,7 +166,7 @@ class LayerForgeOrchestrator:
                                 enforcement=enforcement)
 
         # REVIEW: Adversarial review phase (M4, ADR-2227, Phase 4 A2: Canary sampling)
-        review_verdict = review_layer_definition(manifest, enforcement)
+        review_verdict = review_layer_definition(manifest, enforcement, tenant_id=self.tenant_id)
         try:
             flags_list = [f.value for f in review_verdict.flags] if review_verdict.flags else []
             self._audit("layer_forge.review_evaluated", entry_id=entry_id, version=version,
@@ -331,8 +331,10 @@ class LayerForgeOrchestrator:
             manifest = plan_layer_definition(layer_id, intent)
         except LLMPlanError as e:
             try:
-                self._audit("layer_forge.plan_failed", layer_id=layer_id, intent=intent,
-                            error=str(e)[:200], actor=self.actor)
+                cause = e.__cause__ if e.__cause__ is not None else e
+                self._audit("layer_forge.plan_failed", layer_id=audit.ident(layer_id),
+                            error_class=type(cause).__name__, actor=self.actor,
+                            **audit.intent_fingerprint(intent))
             except audit.LayerForgeAuditError:
                 pass  # Audit failure doesn't override plan failure
             return None, self._reject("plan", f"LLM planning failed: {e}",
@@ -340,9 +342,10 @@ class LayerForgeOrchestrator:
 
         # Audit success
         try:
-            self._audit("layer_forge.plan_generated", layer_id=layer_id, intent=intent,
-                        manifest_id=manifest.get("id"), manifest_version=manifest.get("version"),
-                        actor=self.actor)
+            self._audit("layer_forge.plan_generated", layer_id=audit.ident(layer_id),
+                        manifest_id=audit.ident(manifest.get("id")),
+                        manifest_version=audit.ident(manifest.get("version")),
+                        actor=self.actor, **audit.intent_fingerprint(intent))
         except audit.LayerForgeAuditError as exc:
             return None, LayerForgeResult("FAILED", error=f"audit failed: {exc}", phase="audit")
 

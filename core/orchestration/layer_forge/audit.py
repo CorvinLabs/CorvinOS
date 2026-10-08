@@ -10,6 +10,7 @@ manifest bodies, gate output, file contents or exception messages.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -55,6 +56,20 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
         "canary_version", "parent_version", "reason", "canary_success_rate",
         "parent_success_rate", "tenant_id",
     }),
+    # PLAN phase (ADR-2224). Never the intent text (user prose) or an exception message:
+    # a hash + length of the intent and the exception CLASS. layer_id / manifest_* may come
+    # from the model, so they pass ``ident()`` first.
+    "layer_forge.plan_generated": frozenset({
+        "layer_id", "intent_len", "intent_sha256", "manifest_id", "manifest_version",
+        "actor", "tenant_id",
+    }),
+    # The optimizer adjusts its own config (never silently): ids, a signal name and rates.
+    "layer_forge.optimizer_config_updated": frozenset({
+        "old_version", "new_version", "reason", "signal", "success_rate", "total_overrides", "tenant_id",
+    }),
+    "layer_forge.plan_failed": frozenset({
+        "layer_id", "intent_len", "intent_sha256", "error_class", "actor", "tenant_id",
+    }),
 }
 
 SEVERITY: dict[str, str] = {
@@ -70,7 +85,26 @@ SEVERITY: dict[str, str] = {
     "layer_forge.gate_threshold_applied": "INFO",
     "layer_forge.canary_rollout_assigned": "INFO",
     "layer_forge.canary_rollback": "WARNING",
+    "layer_forge.plan_generated": "INFO",
+    "layer_forge.plan_failed": "WARNING",
+    "layer_forge.optimizer_config_updated": "INFO",
 }
+
+
+_IDENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+
+
+def ident(value: Any) -> str:
+    """A value that may reach the audit chain as an identifier: short, no spaces, no prose.
+    Anything else — notably text a model wrote — is recorded as ``<invalid>``, never verbatim."""
+    return value if isinstance(value, str) and _IDENT.match(value) else "<invalid>"
+
+
+def intent_fingerprint(intent: str) -> dict[str, Any]:
+    """Length + short sha256 of the operator's intent text: enough to correlate, nothing to read."""
+    import hashlib
+
+    return {"intent_len": len(intent), "intent_sha256": hashlib.sha256(intent.encode("utf-8", "replace")).hexdigest()[:16]}
 
 
 class LayerForgeAuditError(RuntimeError):

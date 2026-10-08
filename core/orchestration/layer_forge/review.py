@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 from enum import Enum
 from typing import Optional
 
@@ -30,6 +31,18 @@ from .enforcement import EnforcementVerdict
 # This is the prompt used by default; versioned history is maintained in
 # core/orchestration/layer_forge/optimizer.py::ReviewPromptVersions.
 REVIEW_PROMPT_VERSION = "v1.0"
+
+# The review runs INSIDE the request of POST /layer-forge/definitions and of every
+# layer in a bundle import, and the route holds a thread-pool worker plus one of the
+# two import slots for as long as it takes. The SDK default is a 10-minute timeout
+# with 2 retries — a hung call held that slot for up to ~30 minutes, and the 429
+# answer's Retry-After was a guess (2026-10-08 review, R4-A3-2). Bounded now: one
+# attempt of REVIEW_TIMEOUT_S plus ONE retry, so the worst case is
+# REVIEW_TIMEOUT_S * (REVIEW_MAX_RETRIES + 1) = 90 s, after which the verdict is ERROR
+# (fail-closed: the layer is not created).
+REVIEW_TIMEOUT_S = 45.0
+REVIEW_MAX_RETRIES = 1
+REVIEW_WORST_CASE_S = REVIEW_TIMEOUT_S * (REVIEW_MAX_RETRIES + 1)
 
 REVIEW_PROMPT = """You are an adversarial reviewer for Layer Forge definitions.
 Your job is to identify scope creep, security gaps, untested complexity, compliance risks,
@@ -83,6 +96,8 @@ def review_layer_definition(
     manifest: dict,
     enforcement_verdicts: list[EnforcementVerdict],
     prompt_version: Optional[str] = None,
+    *,
+    tenant_id: str = "_default",
 ) -> ReviewVerdict:
     """Run adversarial review phase with optional canary sampling (Phase 4 A2).
 
@@ -101,7 +116,7 @@ def review_layer_definition(
     if prompt_version is None:
         entry_id = manifest.get("id", "")
         if entry_id:
-            prompt_version = select_canary_version(entry_id)
+            prompt_version = select_canary_version(entry_id, tenant_id=tenant_id)
         else:
             prompt_version = REVIEW_PROMPT_VERSION
 
@@ -111,7 +126,7 @@ def review_layer_definition(
         return ReviewVerdict("ERROR", reason="anthropic SDK not installed", prompt_version=prompt_version)
 
     try:
-        client = Anthropic()
+        client = Anthropic(timeout=REVIEW_TIMEOUT_S, max_retries=REVIEW_MAX_RETRIES)
         flags = _adversarial_review(client, manifest, enforcement_verdicts, prompt_version=prompt_version)
 
         if not flags:
@@ -125,7 +140,7 @@ def review_layer_definition(
         return ReviewVerdict("ERROR", reason=f"Unexpected review error: {type(e).__name__}", prompt_version=prompt_version)
 
 
-def select_canary_version(entry_id: str) -> str:
+def select_canary_version(entry_id: str, *, tenant_id: str = "_default", storage_root: Optional[Path] = None) -> str:
     """Deterministically select a prompt version for this entry (Phase 4 A2).
 
     Uses hash(entry_id) % 100 to assign entries to prompt versions based on
@@ -136,6 +151,10 @@ def select_canary_version(entry_id: str) -> str:
 
     Args:
         entry_id: Layer definition ID (used for deterministic sampling)
+        tenant_id: whose prompt-version history decides. It used to be the literal "_default"
+            for everyone: another tenant's review read the default tenant's canary state.
+        storage_root: the directory holding ``prompt_versions.json`` (default: the tenant's
+            Layer Forge home, the same place the optimizer writes it).
 
     Returns:
         Prompt version key (e.g., "v1.0", "v1.1")
@@ -144,7 +163,8 @@ def select_canary_version(entry_id: str) -> str:
         from .optimizer import ReviewPromptVersions
         from core.paths import tenant_home
 
-        versions = ReviewPromptVersions(tenant_home("_default") / "global" / "layer_forge" / "prompt_versions.json")
+        root = Path(storage_root) if storage_root is not None else tenant_home(tenant_id) / "global" / "layer_forge"
+        versions = ReviewPromptVersions(root / "prompt_versions.json")
         current = versions.current_version()
 
         # Compute deterministic hash for this entry

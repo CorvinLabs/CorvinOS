@@ -50,10 +50,27 @@ class FeedbackPattern:
     review_prompt_version: str          # Current prompt version when these overrides occurred
 
     @property
+    def has_enough_data(self) -> bool:
+        """True if there are enough override outcomes to compare rates at all (>= 5)."""
+        return self.total_overrides >= 5
+
+    @property
     def is_significant(self) -> bool:
-        """True if this pattern merits a prompt update."""
-        # Significant if: (1) enough data (>= 5 overrides), and (2) strong signal (>70% success)
-        return self.total_overrides >= 5 and self.success_rate >= 0.70
+        """True if this pattern merits a prompt update.
+
+        Per signal: enough data AND the rate that signal is defined by — OVERCAUTIOUS needs
+        >= 70 % successful overrides, UNDERCAUTIOUS <= 40 % (the thresholds that produce the
+        signal in ``analyze``). This used to demand >= 70 % for BOTH, which an undercautious
+        pattern (<= 40 % by construction) can never meet: the optimizer could relax a review
+        but never tighten one — the half that matters when the review misses real problems.
+        """
+        if not self.has_enough_data:
+            return False
+        if self.signal == OptimizationSignal.OVERCAUTIOUS:
+            return self.success_rate >= 0.70
+        if self.signal == OptimizationSignal.UNDERCAUTIOUS:
+            return self.success_rate <= 0.40
+        return False
 
 
 @dataclass(frozen=True)
@@ -189,6 +206,14 @@ class ReviewPromptVersions:
         versions[new_version.version] = self._serialize_version(new_version)
         self._data["versions"] = versions
         self._data["current"] = new_version.version
+        self._persist()
+
+    def set_current(self, version: str) -> None:
+        """Make an EXISTING version the current one (canary rollback). Versions stay immutable:
+        nothing is added or changed, only the pointer moves."""
+        if version not in self._data.get("versions", {}):
+            raise ValueError(f"Cannot make unknown version {version!r} current")
+        self._data["current"] = version
         self._persist()
 
     def _persist(self) -> None:
@@ -430,16 +455,19 @@ class OptimizerEngine:
 
         # Get current version pattern
         current_pattern = versions.get(current_version_key)
-        if not current_pattern or not current_pattern.is_significant:
-            return None  # No significant data for current version
+        # "Enough data", NOT is_significant: that one also demands a success rate >= 70 %, so a
+        # canary that did badly (80 % -> 20 %) counted as "no significant data" and the regression
+        # guard only ever fired for mild drops (95 % -> 75 %), never for the severe ones.
+        if not current_pattern or not current_pattern.has_enough_data:
+            return None  # Too few outcomes for the current version to judge
 
         # Get parent version pattern
         if not current.parent_version:
             return None  # No parent to compare against
 
         parent_pattern = versions.get(current.parent_version)
-        if not parent_pattern or not parent_pattern.is_significant:
-            return None  # No significant data for parent
+        if not parent_pattern or not parent_pattern.has_enough_data:
+            return None  # Too few outcomes for the parent to compare against
 
         # Check for regression: current success_rate < parent success_rate
         if current_pattern.success_rate < parent_pattern.success_rate:
@@ -477,9 +505,11 @@ class OptimizerEngine:
                 logger.error("Cannot rollback: parent %s not found", canary.parent_version)
                 return False
 
-            # Freeze canary at current rollout_percentage (do NOT promote)
-            self._data["current"] = parent.version
-            self._persist()
+            # Freeze canary at current rollout_percentage (do NOT promote). The pointer lives in
+            # ReviewPromptVersions: this method used to write ``self._data`` / call ``self._persist()``
+            # on the ENGINE, which has neither — every rollback raised AttributeError, was swallowed
+            # by the except below and returned False, so a regressing canary was never rolled back.
+            self.versions.set_current(parent.version)
 
             # Emit audit event
             try:

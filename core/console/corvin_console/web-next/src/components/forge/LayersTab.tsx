@@ -164,7 +164,9 @@ export function ForgeLayerPanel({ onCreated }: { onCreated?: () => void }) {
     mutationFn: () =>
       api<CreateResponse>(`${BASE}/definitions`, {
         method: "POST",
-        body: { manifest },
+        // The route takes the manifest itself as the body (a single un-embedded Body param); wrapped as
+        // { manifest } it answered "validation failed: missing required field: id" for every Create.
+        body: manifest,
         csrf: session?.csrf_token ?? "",
       }),
     onSuccess: () => {
