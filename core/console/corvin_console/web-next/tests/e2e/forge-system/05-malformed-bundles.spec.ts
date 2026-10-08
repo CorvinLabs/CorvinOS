@@ -98,8 +98,11 @@ test('transport-level refusals: not a ZIP (422 container), empty (400), > 50 MiB
   expect((await upload(b, 'import', Buffer.alloc(50 * 1024 * 1024 + 1))).status()).toBe(413);
 });
 
-test('ReDoS probe: 200 KB of "eyJ-eyJ-…" is judged in well under 5 s', async () => {
-  const zip = forgeBundle('redos-jwt', base([labTool(`X = "${'eyJ-'.repeat(50_000)}"\n`)]));
+// 400 KB: the quadratic regex needs ~18 s here (x4 input = x16 time; 80 KB took 0.73 s), the
+// linear matcher ~0.2 s. The first version used 200 KB / 5 s and failed the old regex by only
+// 14 % — a faster CPU would have let it pass (R4-I-6).
+test('ReDoS probe: 400 KB of "eyJ-eyJ-…" is judged in well under 5 s', async () => {
+  const zip = forgeBundle('redos-jwt', base([labTool(`X = "${'eyJ-'.repeat(100_000)}"\n`)]));
   const t0 = Date.now();
   const r = await upload(b, 'validate', zip, { timeout: 30_000 });
   expect(r.status()).toBe(200);

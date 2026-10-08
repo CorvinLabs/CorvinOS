@@ -248,12 +248,14 @@ def _check_staleness(external: list[Requirement], known: Known) -> None:
 
 # The credential detectors of core.pii.sensitive. "jwt" there is now the
 # linear core.pii.jwt_scan matcher (2026-10-08); this module keeps its own
-# instance WITHOUT the trailing word boundary, as before — it can only reject
-# more, never less. (The old comment here said "a 999-byte upload cost 43 s";
+# instance WITHOUT either word boundary — it can only reject more, never less. (The old comment here said "a 999-byte upload cost 43 s";
 # that figure did not reproduce — 1.5 M samples of 0.5-2 KB, worst 3.3 ms —
 # but the regex IS quadratic: 160 KB took 3.1 s, x4 input = x16 time.)
 _REGEX_SECRET_TYPES = _SECRET_TYPES - {"jwt"}
-_JWT = LinearJwtPattern(10, 10, 10, start_boundary=True, end_boundary=False)
+# No start boundary on purpose: the previous check treated any non-ASCII-word char as a
+# boundary, \b is Unicode — a JWT glued to "é" or "²" slipped through (R4-R-1, 511 of 1M
+# fuzz cases). Without it every "eyJ…" candidate is judged, which can only reject more.
+_JWT = LinearJwtPattern(10, 10, 10, start_boundary=False, end_boundary=False)
 
 
 def _has_jwt(text: str) -> bool:

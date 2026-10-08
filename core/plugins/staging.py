@@ -238,7 +238,13 @@ class StagingManager:
             raise StagingError(f"Failed to record decision: {e}") from e
 
     def get_decision(self, upload_id: str) -> str | None:
-        """'approved' / 'rejected' when this exact package was decided before."""
+        """'approved' / 'rejected' when this exact package was decided before.
+
+        An unreadable record is "no decision" (logged), NOT "rejected": the memory
+        only ever stops a bundle from RE-PROPOSING a package, and a re-proposal still
+        waits for the operator's approval — so failing open here costs one more
+        approval prompt, while failing closed would block a legitimate plugin for good
+        after a truncated write, with no way to clear it (R4-A9-2)."""
         if not _UPLOAD_ID_RE.match(upload_id):
             return None
         try:
@@ -246,14 +252,41 @@ class StagingManager:
         except FileNotFoundError:
             return None
         except (OSError, ValueError):
-            return "rejected"  # unreadable memory counts as decided: refuse, never re-propose
+            log.warning("plugin decision record for %s is unreadable; treating it as undecided", upload_id)
+            return None
         d = rec.get("decision") if isinstance(rec, dict) else None
-        return d if d in _DECISIONS else "rejected"
+        if d not in _DECISIONS:
+            log.warning("plugin decision record for %s has no valid decision; treating it as undecided", upload_id)
+            return None
+        return d
+
+    def withdraw_rejection(self, upload_id: str) -> bool:
+        """The owner uploading a package themselves is a NEW decision: it withdraws a
+        REJECTION. An approval stays — the package is installed, and an upload of it
+        must not make the memory forget that (R4-A9-3)."""
+        return self.get_decision(upload_id) == "rejected" and self.clear_decision(upload_id)
+
+    def clear_decision(self, upload_id: str) -> bool:
+        """Forget a decision. The owner's own manual upload of a package is a NEW
+        decision, so it withdraws the memory (the only way to clear one)."""
+        if not _UPLOAD_ID_RE.match(upload_id):
+            return False
+        try:
+            (self.decisions_root / f"{upload_id}.json").unlink()
+            return True
+        except FileNotFoundError:
+            return False
+        except OSError as e:
+            raise StagingError(f"Failed to clear decision: {e}") from e
 
     def reject_staged_upload(self, upload_id: str) -> None:
         """Operator rejection: remember it FIRST, then delete. If the memory
         cannot be written nothing is deleted and the rejection fails loudly."""
-        self.record_decision(upload_id, "rejected")
+        # An approval is sticky: rejecting a re-upload of a package that is ALREADY
+        # installed must not rewrite the memory to "rejected" while the installed ZIP
+        # stays (R4-A9-3). A later manual re-upload clears it (clear_decision).
+        if self.get_decision(upload_id) != "approved":
+            self.record_decision(upload_id, "rejected")
         self.delete_staged_upload(upload_id)
 
     def delete_staged_upload(self, upload_id: str) -> None:

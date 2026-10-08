@@ -637,7 +637,7 @@ def test_ADV01_the_registry_itself_refuses_a_case_variant(make_tool):
                                           input_schema={"type": "object"}, impl="def run(r):\n    return 1\n")
 
 
-def test_ADV01_concurrent_case_variant_accepts_create_one_tool():
+def test_ADV01_concurrent_case_variant_accepts_create_one_tool(chain_events):
     """Two staged entries whose names differ only in case, accepted at once:
     _name_taken passes for both (it runs outside the registry lock), so before
     the fix both became tools — sharing one impl file on macOS/Windows."""
@@ -668,6 +668,12 @@ def test_ADV01_concurrent_case_variant_accepts_create_one_tool():
     assert sorted(results) == ["QuarantineConflict", "ok"]
     # The loser is back in the queue, not lost.
     assert len([e for e in ToolQuarantine(T).list() if e.tool_id.casefold() == "geo.fence"]) == 1
+    # And the refusal is on the record (the first review did not check this): one failed
+    # accept, phase "accept", FileExistsError — alongside exactly one created tool.
+    failed = [e for e in chain_events() if e["event_type"] == "forge_bundle.artifact_failed"]
+    assert len(failed) == 1 and failed[0]["details"].get("phase") == "accept"
+    assert failed[0]["details"].get("error_class") == "FileExistsError"
+    assert _types(chain_events).count("forge_bundle.artifact_created") == 1
 
 
 def test_R2A_12_stale_claim_leftovers_are_swept(tool_bundle):

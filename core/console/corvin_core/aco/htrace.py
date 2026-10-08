@@ -78,6 +78,19 @@ _PII_NO_LONGHEX = re.compile(
     r"\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}\s?[A-Z0-9]{1,4}\b",
 )
 
+# JWT header (`\beyJ…{6,}\.`): matched by a LINEAR scan, not by the alternation below —
+# that alternative is quadratic on "eyJ-eyJ-…" (64 KB ~1 s, x4 input = x16 time). The
+# remaining alternatives are unchanged; an install without `core.pii` keeps the original
+# regex (this module ships in a separate package and must never fail on an import).
+try:
+    from core.pii.jwt_scan import LinearJwtHeader as _LinearJwtHeader
+    _JWT_HDR = _LinearJwtHeader(6)
+    _JWT_ALT = r"\beyJ[A-Za-z0-9_-]{6,}\.|"
+    _PII = re.compile(_PII.pattern.replace(_JWT_ALT, "", 1))
+    _PII_NO_LONGHEX = re.compile(_PII_NO_LONGHEX.pattern.replace(_JWT_ALT, "", 1))
+except ImportError:  # pragma: no cover - only without the repo on sys.path
+    _JWT_HDR = None
+
 # Fields that contain legitimate long-hex values (sha256 hashes, HMAC tokens).
 # Use the reduced scanner (_PII_NO_LONGHEX) for these — the long-hex check
 # would otherwise reject valid fingerprints and HMAC pseudonyms.
@@ -239,7 +252,7 @@ def _assert_safe_htrace(record: dict) -> None:
     def _scan_value(v, *, reduced: bool = False):
         if isinstance(v, str):
             pattern = _PII_NO_LONGHEX if reduced else _PII
-            m = pattern.search(v)
+            m = (_JWT_HDR.search(v) if _JWT_HDR is not None else None) or pattern.search(v)
             if m:
                 raise ValueError(f"HealingTrace: PII near {m.group(0)[:20]!r}")
             if _FREE_TEXT.search(v):

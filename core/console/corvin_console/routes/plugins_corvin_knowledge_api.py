@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..deps import require_csrf, require_session
+from .. import kb_projection
 
 router = APIRouter(
     prefix="/plugins/corvin-knowledge",
@@ -271,6 +272,17 @@ def sync_repository(
     repo_path = Path(effective_config(getattr(session, "tenant_id", "_default"))["repo_path"]).expanduser()
     if not repo_path.exists():
         raise HTTPException(status_code=400, detail=f"Repository not found at {repo_path}")
+    # `git fetch` / `merge` / `push` against the operator's REAL sibling checkout is
+    # exactly what kb_projection.kb_repo() refuses to a sandboxed CORVIN_HOME
+    # (ADV-10); this route reached it by its own path (R4-I-2). An explicitly
+    # configured other repository is the operator's choice and stays allowed.
+    sibling = (kb_projection._REPO_ROOT.parent / "Corvin-Knowledge")
+    if kb_projection.kb_repo() is None and repo_path.resolve() == sibling.resolve():
+        raise HTTPException(
+            status_code=409,
+            detail="this install runs on a sandboxed CORVIN_HOME and may not sync the operator's "
+                   "Corvin-Knowledge checkout; set CORVIN_KB_REPO to a repository of its own",
+        )
 
     result: Dict[str, Any] = {
         "status": "success",

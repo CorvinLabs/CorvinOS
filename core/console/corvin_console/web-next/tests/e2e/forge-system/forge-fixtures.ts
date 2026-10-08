@@ -13,15 +13,17 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { HOME_A, HOME_B, URL_A, URL_B } from './forge-env';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const harness = path.join(here, 'harness');
-export const REPO = path.resolve(here, '../../../../../../..');
+export { REPO } from './repo-root';
+import { REPO } from './repo-root';
 export const PYTHON = path.join(REPO, 'core/console/.venv/bin/python');
 
 export type Install = { name: 'A' | 'B'; url: string; home: string };
-export const A: Install = { name: 'A', url: 'http://127.0.0.1:8799', home: '/tmp/corvin-forge-e2e' };
-export const B: Install = { name: 'B', url: 'http://localhost:8798', home: '/tmp/corvin-forge-e2e-b' };
+export const A: Install = { name: 'A', url: URL_A, home: HOME_A };
+export const B: Install = { name: 'B', url: URL_B, home: HOME_B };
 export const BUNDLES = '/v1/console/forge-bundles';
 
 /** ~/Downloads/corvin-forge-e2e/<run>/ — one folder per run, kept after the run. */
@@ -30,6 +32,16 @@ process.env.FORGE_E2E_RUN = RUN;
 export const DOWNLOADS = path.join(
   process.env.FORGE_E2E_DOWNLOADS ?? path.join(os.homedir(), 'Downloads', 'corvin-forge-e2e'), RUN);
 fs.mkdirSync(DOWNLOADS, { recursive: true });
+/** Keep the newest FORGE_E2E_KEEP (default 10) run folders; older ones were piling up forever (R4-I-7).
+ *  Only folders named like a run stamp are ever touched — never anything else in that directory. */
+(() => {
+  const root = path.dirname(DOWNLOADS);
+  const keep = Number(process.env.FORGE_E2E_KEEP ?? 10);
+  const runs = fs.readdirSync(root).filter((d) => /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/.test(d)).sort();
+  for (const old of runs.slice(0, Math.max(0, runs.length - keep))) {
+    if (old !== RUN) fs.rmSync(path.join(root, old), { recursive: true, force: true });
+  }
+})();
 /** Scratch dir for forged/hostile bundles — never mixed into Downloads. */
 export const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-e2e-lab-'));
 

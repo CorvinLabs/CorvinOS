@@ -4,7 +4,7 @@
     POST /forge-bundles/export                      build + download a bundle (session + CSRF)
     POST /forge-bundles/validate                    validate an upload, write nothing (session + CSRF)
     POST /forge-bundles/import                      validate + per-forge intake (session + CSRF)
-                                                    (validate + import: at most 2 at once, else 429)
+                                                    (validate and import: at most 2 of each at once, else 429)
     GET  /forge-bundles/quarantine                  tools awaiting review (session)
     POST /forge-bundles/quarantine/{qid}/accept     create the tool (session + CSRF)
     POST /forge-bundles/quarantine/{qid}/reject     drop the tool (session + CSRF)
@@ -82,27 +82,32 @@ class ExportBody(BaseModel):
 # LLM review inside it. 48 concurrent imports from one session held every
 # worker and stalled ALL sync console routes for the review's duration (5.5 s
 # measured; async /healthz stayed fast, so a liveness probe never noticed).
-# At most _HEAVY_SLOTS run at once; a request that finds no free slot is
-# answered 429 at once — it never WAITS, because a waiting handler would hold
-# the very worker this guard exists to keep free. Process-wide on purpose:
-# Forge Bundles serve the install owner's tenant only (_host_tenant_session).
+# At most _HEAVY_SLOTS of EACH kind run at once; a request that finds no free
+# slot is answered 429 at once — it never WAITS, because a waiting handler
+# would hold the very worker this guard exists to keep free.
+#
+# Two pools, not one (R4-A3-1): validate is cheap and the UI calls it on every
+# file pick; with one shared pool a validate flood made the operator's own
+# import answer 429 in 6 of 8 attempts. Worst case is now 2 + 2 workers.
+# Process-wide on purpose: Forge Bundles serve the install owner's tenant only.
 _HEAVY_SLOTS = 2
-_heavy = threading.BoundedSemaphore(_HEAVY_SLOTS)
-_RETRY_AFTER_S = "5"
+_heavy = {"validate": threading.BoundedSemaphore(_HEAVY_SLOTS),
+          "import": threading.BoundedSemaphore(_HEAVY_SLOTS)}
+_RETRY_AFTER_S = {"validate": "2", "import": "15"}  # a validate takes seconds, an import (gates + review) longer
 
 
 @contextmanager
-def _heavy_slot() -> Iterator[None]:
-    if not _heavy.acquire(blocking=False):
+def _heavy_slot(kind: str) -> Iterator[None]:
+    if not _heavy[kind].acquire(blocking=False):
         raise HTTPException(
             status_code=429,
-            detail="another bundle check or import is running on this install; try again in a few seconds",
-            headers={"Retry-After": _RETRY_AFTER_S},
+            detail=f"another bundle {kind} is running on this install; try again in a few seconds",
+            headers={"Retry-After": _RETRY_AFTER_S[kind]},
         )
     try:
         yield
     finally:
-        _heavy.release()
+        _heavy[kind].release()
 
 
 def _audit_unavailable(exc: Exception) -> HTTPException:
@@ -190,7 +195,7 @@ def validate_upload(
     from core.forge_bundle.import_module import check_bundle
     from core.forge_bundle.validate import BundleRejected
 
-    with _heavy_slot():
+    with _heavy_slot("validate"):
         data = _read_upload(file)
         try:
             report = check_bundle(data, tenant_id=rec.tenant_id)
@@ -209,7 +214,7 @@ def import_upload(
     from core.forge_bundle.audit import ForgeBundleAuditError
     from core.forge_bundle.import_module import BundleImportAborted, BundleImportError, import_bundle
 
-    with _heavy_slot():
+    with _heavy_slot("import"):
         data = _read_upload(file)
         try:
             result = import_bundle(data, tenant_id=rec.tenant_id, actor=_ACTOR,

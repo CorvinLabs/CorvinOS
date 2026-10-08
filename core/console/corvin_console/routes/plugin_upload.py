@@ -123,6 +123,10 @@ async def upload_skill(
             )
 
         manager.store_staged_upload(upload_id, temp_path, manifest)
+        # The owner uploading this exact package is a NEW decision: it withdraws a
+        # REJECTION the bundle import consults (the only way to clear one; R4-A9-2).
+        # An approval is kept (R4-A9-3).
+        manager.withdraw_rejection(upload_id)
     except HTTPException:
         raise
     except StagingError:

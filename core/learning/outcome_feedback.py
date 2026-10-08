@@ -34,6 +34,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
+from core.pii.jwt_scan import LinearJwtPattern
+
+_JWT_ANY_CASE = LinearJwtPattern(1, 1, 1, start_boundary=False, end_boundary=False, ignore_case=True)
 
 
 class OutcomeType(str, Enum):
@@ -145,7 +148,6 @@ class OutcomeRecorder:
             r'\b(api_key|api_secret|password|token|credential|secret|auth|key)\b\s*[=:]',
             # Bearer tokens (OAuth, JWT)
             r'Bearer\s+[a-zA-Z0-9\-._~+/]+=*',
-            r'eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+',  # JWT pattern
             # AWS credentials
             r'AKIA[0-9A-Z]{16}',  # AWS access key
             r'aws_secret_access_key\s*[=:]',
@@ -160,7 +162,9 @@ class OutcomeRecorder:
         for pattern in patterns:
             if re.search(pattern, text, re.IGNORECASE):
                 return True
-        return False
+        # JWT: linear twin of r'eyJ[a-zA-Z0-9_\-]+\.…+\.…+' with re.IGNORECASE — that regex
+        # is quadratic on "eyJ-eyJ-…" and this text is user-supplied feedback.
+        return _JWT_ANY_CASE.search(text) is not None
 
 
 class OutcomeFeedbackStore:

@@ -154,7 +154,7 @@ test('ADV-03: a flood of slow imports is shed with 429 and does not starve other
   expect(codes.every((c) => c === 200 || c === 429), JSON.stringify(codes)).toBe(true);
   expect(codes.filter((c) => c === 200).length).toBeGreaterThanOrEqual(1);
   expect(shed.length).toBeGreaterThanOrEqual(40);                 // 2 slots: nearly everything else is shed
-  expect(results.find((r) => r.status() === 429)!.headers()['retry-after']).toBe('5');
+  expect(results.find((r) => r.status() === 429)!.headers()['retry-after']).toBe('15');   // import: gates + review take longer than a validate
   expect(chain(B).ok).toBe(true);
   // Shed requests wrote nothing: only imported layers exist.
   const flooded = (await (await b.api.get('/v1/console/layer-forge/definitions')).json()).items.filter((l: any) => l.id.startsWith('nordwind.flood-'));

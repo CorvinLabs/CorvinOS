@@ -39,6 +39,20 @@ TENANT = "_default"
 MARKER = ".forge-e2e-home"  # only a directory carrying this marker is ever wiped
 
 
+def _main_checkout() -> Path:
+    """The main working tree (a git worktree's siblings are NOT the operator's projects)."""
+    import subprocess
+
+    try:
+        common = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                capture_output=True, text=True, timeout=10).stdout.strip()
+        if common.endswith(".git"):
+            return Path(common).parent
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return REPO
+
+
 def _reset_home() -> None:
     if HOME.exists():
         if not (HOME / MARKER).exists():
@@ -85,6 +99,13 @@ def _sandbox_env() -> None:
     # the live checkout's <repo>/.corvin/forge/tools. The throwaway home is no
     # git checkout, so the project scope stays inside it.
     os.chdir(HOME)
+    # No network in a throwaway install: bootstrap would sync the marketplace from GitHub into
+    # <home>/marketplace-cache. Use a local marketplace checkout when there is one (read-only).
+    if not os.environ.get("CORVIN_MARKETPLACE_ROOT"):
+        for cand in (os.environ.get("FORGE_E2E_MARKETPLACE_ROOT"), str(_main_checkout().parent / "Corvin-Marketplace")):
+            if cand and Path(cand, "plugins").is_dir():
+                os.environ["CORVIN_MARKETPLACE_ROOT"] = cand
+                break
     for p in ("core/plugins", "corvin_operator/bridges/shared", "corvin_operator/skill-forge",
               "corvin_operator/forge", "core/compliance", "core/license", "core/gateway", "core/console", ""):
         sys.path.insert(0, str(REPO / p) if p else str(REPO))

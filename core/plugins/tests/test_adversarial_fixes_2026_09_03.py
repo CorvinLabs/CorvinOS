@@ -505,10 +505,15 @@ def test_console_import_does_not_put_core_on_sys_path():
              "corvin_operator/forge", "corvin_operator/skill-forge",
              "corvin_operator/bridges/shared", "core/plugins"]
     core = str(_REPO / "core")
+    # Both hosts (corvin-webui runs corvin_gateway.app, which mounts the console), and the
+    # comparison is by REAL path: "<repo>/core/../core" or a symlink spelling is the same
+    # entry (R4-I-8).
     probe = (
-        "import sys, json\n"
+        "import os, sys, json\n"
         "import corvin_console.app\n"
-        f"print(json.dumps([p for p in sys.path if p.rstrip('/') == {core!r}]))\n"
+        "import corvin_gateway.app\n"
+        f"core = os.path.realpath({core!r})\n"
+        "print(json.dumps([p for p in sys.path if p and os.path.realpath(p) == core]))\n"
     )
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(str(_REPO / p) for p in paths) + os.pathsep + str(_REPO)}
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,

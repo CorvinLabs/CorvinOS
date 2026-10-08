@@ -3,6 +3,9 @@
 import re
 from typing import List, Tuple
 from dataclasses import dataclass
+from core.pii.jwt_scan import LinearJwtPattern
+
+_JWT_ANY_CASE = LinearJwtPattern(1, 1, 1, start_boundary=False, end_boundary=False, ignore_case=True)
 
 
 @dataclass
@@ -62,7 +65,8 @@ class SecurityScanner:
 
     def __init__(self):
         self.compiled_secrets = {
-            k: (re.compile(v[0], re.IGNORECASE), v[1])
+            # jwt_token: linear twin (the regex is quadratic on "eyJ-eyJ-…"), same spans, IGNORECASE
+            k: ((_JWT_ANY_CASE if k == "jwt_token" else re.compile(v[0], re.IGNORECASE)), v[1])
             for k, v in self.SECRET_PATTERNS.items()
         }
         self.compiled_pii = {

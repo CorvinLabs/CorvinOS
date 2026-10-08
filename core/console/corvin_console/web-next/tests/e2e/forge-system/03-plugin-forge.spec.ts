@@ -12,7 +12,7 @@
 import path from 'path';
 import fs from 'fs';
 import {
-  A, B, DOWNLOADS, apiSession, cliExport, exportApi, expect, inspectBundle, openBundles, test, uiLogin, upload, quarantine, decide,
+  A, B, DOWNLOADS, apiSession, cliExport, exportApi, expect, forgeBundle, inspectBundle, openBundles, test, uiLogin, upload, quarantine, decide,
   type Session,
 } from './forge-fixtures';
 
@@ -85,21 +85,33 @@ test('approve one plugin, reject the other — through the plugin-upload routes'
   expect(reject.status(), await reject.text()).toBe(200);
 });
 
-// ADV-09 — FIXED 2026-10-08: StagingManager now remembers each decision (plugin_staging/decisions/).
-// Before, `_intake_plugin` refused "this exact package was staged
-// before and has already been decided" — but it learns that from the staging
-// .meta file, and BOTH decisions delete it (reject: delete_staged_upload;
-// approve: move_to_installed unlinks it, core/plugins/staging.py). The branch
-// is unreachable: a REJECTED package comes back as pending_approval every time
-// the same bundle is imported again, and an approved one is staged a second time.
-test('ADV-09 (fixed): re-importing the same bundle cannot re-propose a decided plugin package', async () => {
-  const body = await (await upload(b, 'import', bundle)).json();
-  const plugins = body.outcomes.filter((o: any) => o.kind === 'plugin');
-  test.info().annotations.push({ type: 'ADV-09', description: `re-import statuses: ${plugins.map((o: any) => `${o.id}=${o.status}`).join(', ')}` });
-  expect(plugins.map((o: any) => o.status)).toEqual(['failed', 'failed']);
-  const details = plugins.map((o: any) => o.detail).join(' | ');
-  expect(details).toContain('already been decided (approved)');   // nordwind-tms-bridge
-  expect(details).toContain('already been decided (rejected)');   // nordwind-eta-panel
+// ADV-09 — FIXED 2026-10-08: StagingManager now remembers each decision
+// (plugin_staging/decisions/). Before, `_intake_plugin` refused "already decided" by
+// reading the staging .meta that BOTH decisions delete, so a rejected package came
+// back as pending_approval on every re-import of the same bundle.
+//
+// Self-contained on purpose (R4-I-4): it forges its own two plugin packages and
+// decides them itself, so it passes alone (`-g ADV-09`), sharded, or after the rest.
+test('ADV-09 (fixed): a decided plugin package is not proposed again by a re-import', async () => {
+  const pkg = (name: string) => ({ zip: {
+    'manifest.json': JSON.stringify({ name, version: '1.0.0', author: 'Nordwind Logistik IT' }),
+    'src/plugin.py': 'def setup(ctx):\n    return {"ready": True}\n' } });
+  const zip = forgeBundle('adv09-self-contained', { id: 'adv09-kit', version: '1.0.0', artifacts: ['a', 'b'].map((x) => ({
+    kind: 'plugin', id: `nordwind-adv09-${x}`, version: '1.0.0', files: { [`nordwind-adv09-${x}-1.0.0.zip`]: pkg(`nordwind-adv09-${x}`) } })) });
+
+  const first = (await (await upload(b, 'import', zip)).json()).outcomes;
+  expect(first.map((o: any) => o.status), JSON.stringify(first)).toEqual(['pending_approval', 'pending_approval']);
+  const idOf = (id: string) => first.find((o: any) => o.id === id).detail;
+  const approve = await b.api.post(`/v1/console/plugin-uploads/${idOf('nordwind-adv09-a')}/approve`, { headers: { 'X-CSRF-Token': b.csrf } });
+  const reject = await b.api.post(`/v1/console/plugin-uploads/${idOf('nordwind-adv09-b')}/reject`, { headers: { 'X-CSRF-Token': b.csrf } });
+  expect([approve.status(), reject.status()]).toEqual([200, 200]);
+
+  const again = (await (await upload(b, 'import', zip)).json()).outcomes;
+  test.info().annotations.push({ type: 'ADV-09', description: again.map((o: any) => `${o.id}=${o.status}`).join(', ') });
+  expect(again.map((o: any) => o.status)).toEqual(['failed', 'failed']);
+  expect(again.find((o: any) => o.id === 'nordwind-adv09-a').detail).toContain('already been decided (approved)');
+  expect(again.find((o: any) => o.id === 'nordwind-adv09-b').detail).toContain('already been decided (rejected)');
+
 });
 
 test('cleanup: drop what the re-import staged, leave B\'s queues empty', async () => {

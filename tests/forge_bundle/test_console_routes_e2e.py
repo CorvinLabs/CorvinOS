@@ -325,24 +325,54 @@ def test_R3B_6_inventory_refusal_has_one_shape_on_both_routes(console_client, tm
         assert r.status_code == 503 and r.json()["detail"]["stage"] == "inventory", (path, r.text)
 
 
-def test_ADV03_heavy_routes_answer_429_instead_of_holding_a_worker(console_client):
-    """At most two validate/import handlers run at once; the next one is refused
+def _fill(fbr, kind):
+    held = [fbr._heavy[kind].acquire(blocking=False) for _ in range(fbr._HEAVY_SLOTS)]
+    assert all(held)
+    return held
+
+
+def _free(fbr, kind, held):
+    for ok in held:
+        if ok:
+            fbr._heavy[kind].release()
+
+
+@pytest.mark.parametrize("kind,retry_after", [("validate", "2"), ("import", "15")])
+def test_ADV03_heavy_routes_answer_429_instead_of_holding_a_worker(console_client, kind, retry_after):
+    """At most two handlers of each kind run at once; the next one is refused
     immediately with Retry-After, it never waits on a pool worker (ADV-03)."""
     from corvin_console.routes import forge_bundle_routes as fbr
 
     client, csrf = console_client
-    held = [fbr._heavy.acquire(blocking=False) for _ in range(fbr._HEAVY_SLOTS)]
-    assert all(held)
+    held = _fill(fbr, kind)
     try:
-        for path in ("validate", "import"):
-            r = _upload(client, csrf, path, b"not a zip")
-            assert r.status_code == 429, (path, r.text)
-            assert r.headers["retry-after"] == "5"
+        r = _upload(client, csrf, kind, b"not a zip")
+        assert r.status_code == 429, (kind, r.text)
+        assert r.headers["retry-after"] == retry_after
     finally:
-        for _ in held:
-            fbr._heavy.release()
+        _free(fbr, kind, held)
     # Slots free again: the same upload reaches the validator (and is refused there).
     assert _upload(client, csrf, "import", b"not a zip").status_code == 422
+
+
+def test_R4_A3_1_a_validate_flood_cannot_lock_the_operator_out_of_importing(console_client):
+    """The UI validates on every file pick. With one shared pool, two busy validates
+    made the operator's own import answer 429 (6 of 8 attempts, 2026-10-08 review)."""
+    from corvin_console.routes import forge_bundle_routes as fbr
+
+    client, csrf = console_client
+    held = _fill(fbr, "validate")
+    try:
+        assert _upload(client, csrf, "validate", b"x").status_code == 429          # the flood is shed ...
+        assert _upload(client, csrf, "import", b"not a zip").status_code == 422   # ... the import still runs
+    finally:
+        _free(fbr, "validate", held)
+    held = _fill(fbr, "import")
+    try:
+        assert _upload(client, csrf, "import", b"x").status_code == 429
+        assert _upload(client, csrf, "validate", b"not a zip").status_code == 200  # and the other way round
+    finally:
+        _free(fbr, "import", held)
 
 
 def test_ADV03_a_refused_or_failing_request_never_leaks_a_slot(console_client):
@@ -352,10 +382,82 @@ def test_ADV03_a_refused_or_failing_request_never_leaks_a_slot(console_client):
     for _ in range(fbr._HEAVY_SLOTS * 3):          # 422 path, 400 path
         _upload(client, csrf, "import", b"not a zip")
         _upload(client, csrf, "validate", b"")
-    held = [fbr._heavy.acquire(blocking=False) for _ in range(fbr._HEAVY_SLOTS)]
-    try:
-        assert all(held), "a slot leaked"
-    finally:
-        for ok in held:
-            if ok:
-                fbr._heavy.release()
+    for kind in ("validate", "import"):
+        held = [fbr._heavy[kind].acquire(blocking=False) for _ in range(fbr._HEAVY_SLOTS)]
+        try:
+            assert all(held), f"a {kind} slot leaked"
+        finally:
+            _free(fbr, kind, held)
+
+
+# ── second refutation round: plugin decision memory (R4-A9-2 / R4-A9-3) ──────
+
+PLUGINS = "/v1/console/plugin-uploads"
+
+
+def _package(make_plugin_package):
+    """ONE package file and its bytes. make_plugin_package stamps the current time into the
+    ZIP, so calling it twice across a second boundary yields a different package (a different
+    content hash, hence no remembered decision) — the first version of these tests did, and
+    failed only in a slow full run."""
+    pkg = make_plugin_package("acme-audit-sink", "0.5.0")
+    return pkg, pkg.read_bytes()
+
+
+def _upload_plugin(client, csrf, data):
+    return client.post(PLUGINS, headers={"X-CSRF-Token": csrf},
+                       files={"file": ("acme.zip", data, "application/zip")})
+
+
+def _bundle_of(pkg):
+    from core.forge_bundle import PluginSelection, build_bundle
+
+    return build_bundle(bundle_id="b", bundle_version="1.0.0", tenant_id=T,
+                        selections=[PluginSelection("acme-audit-sink", "0.5.0", package_path=pkg)]).data
+
+
+def test_R4_A9_2_a_manual_upload_withdraws_a_rejection(console_client, make_plugin_package):
+    """The memory must never become a lock: the owner can always clear it by
+    uploading the package themselves (the only way to clear one)."""
+    client, csrf = console_client
+    pkg, data = _package(make_plugin_package)
+    bundle = _bundle_of(pkg)
+    uid = _upload_plugin(client, csrf, data).json()["upload_id"]
+    assert client.post(f"{PLUGINS}/{uid}/reject", headers={"X-CSRF-Token": csrf}).status_code == 200
+
+    out = _upload(client, csrf, "import", bundle).json()["outcomes"][0]
+    assert out["status"] == "failed" and "already been decided (rejected)" in out["detail"]
+
+    assert _upload_plugin(client, csrf, data).status_code == 200   # the owner decides anew
+    out = _upload(client, csrf, "import", bundle).json()["outcomes"][0]
+    assert out["status"] == "pending_approval", out        # memory withdrawn; and it is merely pending
+
+
+def test_R4_A9_2_an_unreadable_record_does_not_lock_a_plugin_out(make_plugin_package):
+    from core.plugins.staging import StagingManager
+
+    m = StagingManager(T)
+    uid = "0123456789abcdef"
+    m.decisions_root.mkdir(parents=True, exist_ok=True)
+    for body in ("", "{not json", '{"decision": "banana"}', "[]"):
+        (m.decisions_root / f"{uid}.json").write_text(body)
+        assert m.get_decision(uid) is None, body
+    (m.decisions_root / f"{uid}.json").write_text('{"decision": "rejected"}')   # positive control
+    assert m.get_decision(uid) == "rejected"
+    assert m.clear_decision(uid) is True and m.clear_decision(uid) is False
+    assert m.get_decision(uid) is None
+
+
+def test_R4_A9_3_rejecting_a_reupload_of_an_installed_plugin_keeps_the_approval(console_client, make_plugin_package):
+    client, csrf = console_client
+    _pkg, data = _package(make_plugin_package)
+    uid = _upload_plugin(client, csrf, data).json()["upload_id"]
+    assert client.post(f"{PLUGINS}/{uid}/approve", headers={"X-CSRF-Token": csrf}).status_code == 200
+    from core.plugins.staging import StagingManager
+    assert StagingManager(T).get_decision(uid) == "approved"
+
+    # The owner uploads the installed package again and rejects THAT upload:
+    # the installed ZIP stays, so the memory must keep saying "approved".
+    assert _upload_plugin(client, csrf, data).json()["upload_id"] == uid
+    assert client.post(f"{PLUGINS}/{uid}/reject", headers={"X-CSRF-Token": csrf}).status_code == 200
+    assert StagingManager(T).get_decision(uid) == "approved"

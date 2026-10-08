@@ -21,7 +21,7 @@ import bisect
 import re
 from typing import Callable, Iterator, Optional, Union
 
-from core.pii.jwt_scan import _Match, _word
+from core.pii.jwt_scan import _Match, _word, clamp_span
 
 LOCAL_CLASS = r"A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-"
 DOMAIN = (r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
@@ -45,8 +45,7 @@ class LinearEmailPattern:
     def _iter(self, text: str, pos: int = 0, endpos: Optional[int] = None) -> Iterator[tuple[int, int]]:
         if not isinstance(text, str):
             raise TypeError(f"expected str, got {type(text).__name__}")
-        if endpos is not None:
-            text = text[:endpos]
+        text, pos = clamp_span(text, pos, endpos)
         n = len(text)
         starts: list[int] = []
         ends: list[int] = []

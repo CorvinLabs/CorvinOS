@@ -32,6 +32,27 @@ from typing import Callable, Iterator, Optional, Union
 _RUN = re.compile(r"[A-Za-z0-9_\-]+")
 
 
+_EYJ_I = re.compile("eyj", re.IGNORECASE)
+
+
+def clamp_span(text: str, pos: int, endpos: Optional[int]) -> tuple[str, int]:
+    """re semantics for ``pos``/``endpos``: both are CLAMPED into [0, len] (a
+    negative value means 0 — it does not count from the end like a slice)."""
+    n = len(text)
+    pos = 0 if pos < 0 else min(pos, n)
+    if endpos is not None:
+        endpos = 0 if endpos < 0 else min(endpos, n)
+        text = text[:endpos]
+    return text, pos
+
+
+def _find_eyj(text: str, start: int, ignore_case: bool) -> int:
+    if not ignore_case:
+        return text.find("eyJ", start)
+    m = _EYJ_I.search(text, start)
+    return m.start() if m else -1
+
+
 def _word(ch: str) -> bool:
     # Python's \w (str patterns, no ASCII flag): Unicode alphanumerics + "_".
     return ch.isalnum() or ch == "_"
@@ -92,11 +113,13 @@ class LinearJwtPattern:
     """Drop-in for the compiled JWT regex: ``search`` / ``finditer`` /
     ``findall`` / ``sub`` with identical spans, in linear time."""
 
-    def __init__(self, a: int, b: int, c: int, *, start_boundary: bool = True, end_boundary: bool = True) -> None:
+    def __init__(self, a: int, b: int, c: int, *, start_boundary: bool = True, end_boundary: bool = True,
+                 ignore_case: bool = False) -> None:
         if min(a, b, c) < 1:
             raise ValueError("segment minimums must be >= 1")
         self.a, self.b, self.c = a, b, c
-        self.start_boundary, self.end_boundary = start_boundary, end_boundary
+        self.start_boundary, self.end_boundary, self.ignore_case = start_boundary, end_boundary, ignore_case
+        self.flags = re.IGNORECASE if ignore_case else 0
         self.pattern = ((r"\b" if start_boundary else "") + rf"eyJ[A-Za-z0-9_\-]{{{a},}}\."
                         rf"[A-Za-z0-9_\-]{{{b},}}\.[A-Za-z0-9_\-]{{{c},}}" + (r"\b" if end_boundary else ""))
 
@@ -140,17 +163,17 @@ class LinearJwtPattern:
     def _iter(self, text: str, pos: int = 0, endpos: Optional[int] = None) -> Iterator[tuple[int, int]]:
         if not isinstance(text, str):
             raise TypeError(f"expected str, got {type(text).__name__}")
-        if endpos is not None:
-            text = text[:endpos]
+        text, pos = clamp_span(text, pos, endpos)
         sc = _Scan(text)
-        i = text.find("eyJ", pos)
+        ic = self.ignore_case
+        i = _find_eyj(text, pos, ic)
         while i != -1:
             e = self._match_at(sc, i)
             if e != -1:
                 yield i, e
-                i = text.find("eyJ", e)
+                i = _find_eyj(text, e, ic)
             else:
-                i = text.find("eyJ", i + 1)
+                i = _find_eyj(text, i + 1, ic)
 
     # ── regex-compatible surface ─────────────────────────────────────────
     def search(self, text: str, pos: int = 0, endpos: Optional[int] = None) -> Optional[_Match]:
@@ -182,3 +205,32 @@ class LinearJwtPattern:
             done += 1
         out.append(text[last:])
         return "".join(out), done
+
+
+class LinearJwtHeader:
+    """Linear twin of ``\\beyJ[A-Za-z0-9_-]{n,}\\.`` — the JWT-header alternative that
+    htrace.py / telemetry.py embed in their (fail-closed) PII scanners. Those are
+    one big alternation, so the regex cannot be swapped whole; the scanners test
+    this first and run the remaining alternatives as before. Same quadratic
+    shape as the full JWT regex ("eyJ-eyJ-…": every start rescans its run)."""
+
+    def __init__(self, n: int, *, start_boundary: bool = True) -> None:
+        if n < 1:
+            raise ValueError("minimum must be >= 1")
+        self.n, self.start_boundary = n, start_boundary
+        self.pattern = (r"\b" if start_boundary else "") + rf"eyJ[A-Za-z0-9_\-]{{{n},}}\."
+        self.flags = 0
+
+    def search(self, text: str, pos: int = 0, endpos: Optional[int] = None) -> Optional[_Match]:
+        if not isinstance(text, str):
+            raise TypeError(f"expected str, got {type(text).__name__}")
+        text, pos = clamp_span(text, pos, endpos)
+        sc = _Scan(text)
+        i = text.find("eyJ", pos)
+        while i != -1:
+            if not (self.start_boundary and i > 0 and _word(text[i - 1])):
+                r = sc.run_end(i)
+                if r - (i + 3) >= self.n and r < sc.n and text[r] == ".":
+                    return _Match(text, i, r + 1)
+            i = text.find("eyJ", i + 1)
+        return None

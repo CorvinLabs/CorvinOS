@@ -664,3 +664,89 @@ class SandboxedHomeNeverProjectsIntoTheRealKb(unittest.TestCase):
         (fake / "kb" / "_meta" / "sources.yaml").write_text("")
         os.environ["CORVIN_KB_REPO"] = str(fake)
         self.assertEqual(self.kp.kb_repo(), fake)
+
+
+class HomeSpoofingCannotMakeASandboxCanonical(unittest.TestCase):
+    """R4-I-1: ``Path.home()`` follows $HOME, so HOME=<tmp> + CORVIN_HOME=<tmp>/.corvin
+    looked canonical and got the operator's real sibling Corvin-Knowledge."""
+
+    def setUp(self):
+        from corvin_console import kb_projection
+
+        self.kp = kb_projection
+        self.saved = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_KB_REPO", "HOME", "PYTEST_CURRENT_TEST")}
+        os.environ.pop("PYTEST_CURRENT_TEST", None)
+        os.environ.pop("CORVIN_KB_REPO", None)
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_spoofed_home_dot_corvin_is_not_canonical(self):
+        fake_home = Path(tempfile.mkdtemp(prefix="kb-fakehome-"))
+        (fake_home / ".corvin").mkdir()
+        os.environ["HOME"] = str(fake_home)
+        os.environ["CORVIN_HOME"] = str(fake_home / ".corvin")
+        self.assertFalse(self.kp._canonical_home())
+        self.assertIsNone(self.kp.kb_repo())
+
+    def test_the_real_account_home_is_still_canonical(self):
+        import pwd
+
+        os.environ["HOME"] = tempfile.mkdtemp(prefix="kb-fakehome-")      # spoofed, irrelevant
+        os.environ["CORVIN_HOME"] = str(Path(pwd.getpwuid(os.getuid()).pw_dir) / ".corvin")
+        self.assertTrue(self.kp._canonical_home())                         # positive control
+
+
+class KnowledgePluginSyncRouteHonoursTheSandboxGuard(unittest.TestCase):
+    """R4-I-2: POST /plugins/corvin-knowledge/sync ran git fetch/merge/push in the
+    sibling checkout regardless of CORVIN_HOME."""
+
+    def test_sync_refuses_the_operators_checkout_on_a_sandboxed_home(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from corvin_console import auth, kb_projection
+        from corvin_console.routes import plugins_corvin_knowledge_api as api
+
+        sibling = kb_projection._REPO_ROOT.parent / "Corvin-Knowledge"
+        if not sibling.exists():
+            self.skipTest("no sibling Corvin-Knowledge checkout on this host")
+        saved = {k: os.environ.get(k) for k in ("CORVIN_HOME", "CORVIN_KB_REPO", "PYTEST_CURRENT_TEST")}
+        os.environ["CORVIN_HOME"] = tempfile.mkdtemp(prefix="kb-sandbox-")
+        os.environ.pop("CORVIN_KB_REPO", None)
+        calls: list = []
+
+        def forbidden_git(*args, **kwargs):
+            calls.append(args)
+            raise AssertionError("git must not run against the operator's checkout")
+
+        orig_git, orig_cfg = api._git, api.effective_config
+        api._git = forbidden_git
+        api.effective_config = lambda tid: {**orig_cfg(tid), "repo_path": str(sibling)}
+        try:
+            rec = auth.create_session(tenant_id="_default", token_fingerprint="t")
+            app = FastAPI()
+            app.include_router(api.router, prefix="/v1/console")
+            c = TestClient(app, raise_server_exceptions=False)
+            c.cookies.set("corvin_console_sid", rec.sid)
+            csrf = auth.derive_csrf_token(rec.csrf_secret, rec.sid)
+            # Positive control: with the guard satisfied the very same request is NOT refused as 409.
+            os.environ["CORVIN_KB_REPO"] = str(sibling)
+            self.assertNotEqual(c.post("/v1/console/plugins/corvin-knowledge/sync", json={"sync_type": "bogus"},
+                                       headers={"X-CSRF-Token": csrf}).status_code, 409)
+            os.environ.pop("CORVIN_KB_REPO")
+            r = c.post("/v1/console/plugins/corvin-knowledge/sync", json={"sync_type": "pull"},
+                       headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 409, r.text)
+            self.assertEqual(calls, [])
+        finally:
+            api._git, api.effective_config = orig_git, orig_cfg
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v

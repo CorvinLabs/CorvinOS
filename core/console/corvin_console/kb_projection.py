@@ -86,9 +86,21 @@ def _canonical_home() -> bool:
         return True
     try:
         h = Path(home).expanduser().resolve()
-        return h in {(_REPO_ROOT / ".corvin").resolve(), (Path.home() / ".corvin").resolve()}
+        return h in {(_REPO_ROOT / ".corvin").resolve(), (_real_user_home() / ".corvin").resolve()}
     except OSError:
         return False
+
+
+def _real_user_home() -> Path:
+    """The account's home from the passwd database, NOT $HOME: a sandbox that sets
+    HOME=<tmp> must not make <tmp>/.corvin look like the operator's install
+    (R4-I-1). Platforms without ``pwd`` (Windows) fall back to ``Path.home()``."""
+    try:
+        import pwd
+
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except (ImportError, KeyError, OSError):
+        return Path.home()
 
 
 def kb_repo() -> Optional[Path]:

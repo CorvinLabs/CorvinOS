@@ -8,10 +8,9 @@
  * measured and annotated, not asserted either way.
  */
 import fs from 'fs';
-import path from 'path';
 import { request } from '@playwright/test';
 import {
-  A, B, BUNDLES, REPO, apiSession, exportApi, expect, forgeBundle, graftBundle, inspectBundle, openBundles, test, uiLogin,
+  A, B, BUNDLES, apiSession, exportApi, expect, forgeBundle, graftBundle, inspectBundle, openBundles, test, uiLogin,
   upload, saveExport, type Session,
 } from './forge-fixtures';
 
@@ -19,13 +18,10 @@ test.describe.configure({ mode: 'serial' });
 
 let a: Session;
 let b: Session;
-const LIVE_CHAIN = path.join(REPO, '.corvin/tenants/_default/global/forge/audit.jsonl');
-let liveChainSize = 0;
 
 test.beforeAll(async () => {
   a = await apiSession(A);
   b = await apiSession(B);
-  liveChainSize = fs.existsSync(LIVE_CHAIN) ? fs.statSync(LIVE_CHAIN).size : 0;
 });
 
 const labTool = (name: string, impl: string, desc = 'lab') => ({
@@ -118,15 +114,4 @@ test('ADV-08: credentials in a UTF-16 file and in a nested archive\'s ENTRY NAME
   test.info().annotations.push({ type: 'ADV-08', description: `utf16: ${JSON.stringify(utf16).slice(0, 120)} | entry name: ${JSON.stringify(entryName).slice(0, 120)}` });
   expect(utf16).toMatchObject({ valid: false, stage: 'secrets' });
   expect(entryName).toMatchObject({ valid: false, stage: 'secrets' });
-});
-
-test('isolation proof: nothing of this suite reached the LIVE install\'s audit chain', () => {
-  if (!fs.existsSync(LIVE_CHAIN)) test.skip(true, 'no live chain on this host');
-  const fd = fs.openSync(LIVE_CHAIN, 'r');
-  const size = fs.statSync(LIVE_CHAIN).size;
-  const buf = Buffer.alloc(Math.max(0, size - liveChainSize));
-  fs.readSync(fd, buf, 0, buf.length, liveChainSize);
-  fs.closeSync(fd);
-  const appended = buf.toString('utf-8');
-  for (const marker of ['nordwind', 'forge_bundle.import', 'xss-kit', 'adv0']) expect(appended).not.toContain(marker);
 });
