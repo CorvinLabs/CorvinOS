@@ -71,6 +71,10 @@ interface MarkdownProps {
    *  inline even under ``blockRemoteImages`` — the URL is ours, not the
    *  author's; anything unresolved keeps the normal rule. */
   resolveImageSrc?: (src: string) => string | null;
+  /** In-app links: an href starting with `prefix` renders as a same-tab link whose plain click
+   *  calls `onNavigate(rest)` instead of following the href (modified clicks still open it
+   *  normally). Without this prop every link opens in a new tab, as before. */
+  internalHref?: { prefix: string; onNavigate: (rest: string) => void };
 }
 
 /**
@@ -85,7 +89,7 @@ interface MarkdownProps {
  *   the Corvin palette via Tailwind classes (NOT @tailwindcss/typography
  *   so we keep full control over spacing and colour).
  */
-export function Markdown({ text, compact, className, blockRemoteImages, resolveImageSrc }: MarkdownProps) {
+export function Markdown({ text, compact, className, blockRemoteImages, resolveImageSrc, internalHref }: MarkdownProps) {
   const components: Components = React.useMemo(
     () => ({
       h1: ({ children }) => (
@@ -139,6 +143,22 @@ export function Markdown({ text, compact, className, blockRemoteImages, resolveI
       td: ({ children }) => <td className="px-3 py-2 align-top">{children}</td>,
       a: ({ href, children }) => {
         const url = href || "";
+        if (internalHref && url.startsWith(internalHref.prefix)) {
+          return (
+            <a
+              href={url}
+              data-internal-link
+              onClick={(e) => {
+                if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                e.preventDefault();
+                internalHref.onNavigate(url.slice(internalHref.prefix.length));
+              }}
+              className="text-accent underline-offset-2 hover:underline"
+            >
+              {children}
+            </a>
+          );
+        }
         const isPdf = PDF_EXT.test(url);
         const isExternal = /^https?:\/\//i.test(url);
         return (
@@ -217,7 +237,7 @@ export function Markdown({ text, compact, className, blockRemoteImages, resolveI
         return <CodeBlock code={code} lang={lang}>{children}</CodeBlock>;
       },
     }),
-    [compact, blockRemoteImages, resolveImageSrc],
+    [compact, blockRemoteImages, resolveImageSrc, internalHref],
   );
 
   return (

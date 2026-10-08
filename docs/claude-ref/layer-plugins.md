@@ -2253,3 +2253,44 @@ marketplace-checkout plugin as `builtin` · put an absolute path into `plugin.lo
 registry's downgrade under a tenant other than its own · re-add a `PluginMarketplace`-style
 downloader (distribution stays ADR-0096/0142/0156).
 
+
+---
+
+## Knowledge Graph explorer — `corvin_knowledge` plugin panel (CONCEPT-0099, ADR-2237)
+
+The panel at `/console/app/corvin-knowledge` is the console panel of the Marketplace plugin
+`corvin_knowledge`. It is **not** a static panel: it is absent from `PANELS` and `NAV_GROUPS`, its
+route comes from the capability manifest (`COMPONENTS_BY_NAME` → `manifestPanelRoutes`) and its
+sidebar entry is appended to the `marketplace` group by `mergeManifestNav`, only while the plugin
+is installed AND enabled. Same pattern as `video-producer`. A static entry would outlive the plugin
+(`panel-nav-wiring` would then demand it, and the entry would show for a disabled plugin).
+
+| Piece | Where |
+|---|---|
+| Graph (vis-network, zoom/pan, Focus = 1–2 hops, All = whole graph, physics frozen after settling) | `web-next/src/pages/corvin-knowledge/GraphCanvas.tsx`, `graph-model.ts` |
+| Reader (Markdown, ids → links, Links / Linked from lists) | `DocumentPane.tsx`, `link-resolver.ts`, shared `components/markdown.tsx` (`internalHref` prop) |
+| Selection | the URL: `?node=<uid or human id>` — Back/Forward is the reading history |
+| Route | `GET /v1/console/plugins/corvin-knowledge/doc/{key}` in `routes/plugins_corvin_knowledge_api.py` |
+
+**Link rules.** `ADR-/CONCEPT-/PLAN-/IDEA-/REVIEW-/NOTE-nnnn`, `T-nnnn`, `E-nnn`, `I-nn`, `[[id]]` and
+relative `*.md` links become internal links only when they resolve to exactly one node of the loaded
+graph; unknown or ambiguous ids stay plain text. Code spans, fenced code, existing links and URLs are
+never rewritten.
+
+**Route safety (security-critical).** `path` in `kb/graph/entities.jsonl` is data, not a trusted path:
+it is read only if `resolve()` lands inside the configured `repo_path`, the target is a regular `.md`
+file, and it is ≤ 512 KB (413 otherwise). `..`, an absolute path elsewhere and a symlink out all answer
+404. Read-only: no write, no git, no audit record per read (same as `/graph`).
+
+**Proof.** `core/console/tests/test_corvin_knowledge_doc_route_e2e.py` (real router, real `kb new` +
+`kb index` fixture, containment cases), `web-next/tests/unit/knowledge-link-resolver.test.ts`, and
+`web-next/tests/e2e/knowledge-graph-explorer.spec.ts` (real browser against the live console: sidebar
+group, wheel zoom, search → document, click an id → next node, Back, Focus vs All, hand-written
+`?node=ADR-nnnn`). Run the last one with `CONSOLE_BASE_URL=http://127.0.0.1:8765 npx playwright test
+tests/e2e/knowledge-graph-explorer.spec.ts --project=chromium`. A route change needs a console restart
+(`systemctl --user restart corvin-webui`); a frontend change needs `scripts/console-deploy.sh` and a
+hard refresh.
+
+**Must NOT do:** add `corvin-knowledge` to `PANELS` or `NAV_GROUPS` · read a document path without the
+containment check · linkify inside code · link an id that does not resolve to exactly one node · put
+the selection in component state instead of the URL.

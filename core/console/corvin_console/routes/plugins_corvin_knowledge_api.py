@@ -104,6 +104,8 @@ def load_graph_data(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     entities = [
         {
             "id": row.get("uid") or row.get("id", ""),
+            "label": row.get("id") or row.get("uid", ""),
+            "file": Path(str(row.get("path") or "")).name,
             "type": row.get("type", "decision"),
             "title": row.get("title", ""),
             "status": row.get("status", "proposed"),
@@ -224,6 +226,94 @@ async def update_config(
 @router.get("/graph")
 async def get_graph(session: Any = Depends(require_session)) -> Dict[str, Any]:
     return load_graph_data(effective_config(getattr(session, "tenant_id", "_default")))
+
+
+_DOC_MAX_BYTES = 512 * 1024
+
+
+def _split_frontmatter(text: str) -> tuple[Dict[str, Any], str]:
+    if not text.startswith("---"):
+        return {}, text
+    parts = text.split("\n---", 1)
+    if len(parts) != 2:
+        return {}, text
+    head = parts[0][3:]
+    body = parts[1].split("\n", 1)[1] if "\n" in parts[1] else ""
+    try:
+        import yaml  # noqa: PLC0415
+
+        meta = yaml.safe_load(head) or {}
+    except Exception:  # noqa: BLE001 — unreadable frontmatter is shown as text, not an error
+        return {}, text
+    return (meta if isinstance(meta, dict) else {}), body
+
+
+def load_document(config: Dict[str, Any], key: str) -> Dict[str, Any]:
+    """One node's Markdown plus its resolved neighbours. ``path`` in entities.jsonl is data,
+    not a trusted path: it is read only if it resolves INSIDE the configured repo (a symlink
+    out, ``..`` or an absolute path elsewhere all fail that test)."""
+    repo = Path(config["repo_path"]).expanduser()
+    graph_dir = repo / "kb" / "graph"
+    rows = [r for r in _read_jsonl(graph_dir / "entities.jsonl") if (r.get("uid") or r.get("id"))]
+    by_node: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        by_node[r.get("uid") or r.get("id")] = r
+    row = by_node.get(key)
+    if row is None:
+        same_id = [r for r in by_node.values() if r.get("id") == key]
+        if len(same_id) > 1:
+            raise HTTPException(status_code=409, detail="id is carried by several documents; use the uid")
+        row = same_id[0] if same_id else None
+    if row is None or not row.get("path"):
+        raise HTTPException(status_code=404, detail="document not found")
+    raw = Path(str(row["path"]))
+    target = (raw if raw.is_absolute() else repo / raw)
+    try:
+        resolved, root = target.resolve(strict=True), repo.resolve(strict=True)
+    except OSError:
+        raise HTTPException(status_code=404, detail="document not found") from None
+    if not resolved.is_relative_to(root) or resolved.suffix != ".md" or not resolved.is_file():
+        raise HTTPException(status_code=404, detail="document not found")
+    if resolved.stat().st_size > _DOC_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="document too large to display")
+    try:
+        text = resolved.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        raise HTTPException(status_code=404, detail="document not found") from None
+    meta, body = _split_frontmatter(text)
+
+    node = row.get("uid") or row.get("id")
+
+    def _ref(other: str, rel: str) -> Optional[Dict[str, Any]]:
+        o = by_node.get(other)
+        if o is None:
+            return None
+        return {"id": other, "label": o.get("id") or other, "title": o.get("title", ""),
+                "type": o.get("type", ""), "relation": rel}
+
+    outgoing: List[Dict[str, Any]] = []
+    incoming: List[Dict[str, Any]] = []
+    for rel in _read_jsonl(graph_dir / "relations.jsonl"):
+        if rel.get("external") or not rel.get("resolved"):
+            continue
+        if rel.get("src") == node and (x := _ref(rel.get("dst", ""), rel.get("rel", "relates_to"))):
+            outgoing.append(x)
+        elif rel.get("dst") == node and (x := _ref(rel.get("src", ""), rel.get("rel", "relates_to"))):
+            incoming.append(x)
+    return {
+        "entity": {"id": node, "label": row.get("id") or node, "type": row.get("type", ""),
+                   "title": row.get("title", ""), "status": row.get("status", ""),
+                   "realization": row.get("realization", "")},
+        "frontmatter": json.loads(json.dumps(meta, default=str)),
+        "markdown": body,
+        "outgoing": outgoing,
+        "incoming": incoming,
+    }
+
+
+@router.get("/doc/{key}")
+async def get_document(key: str, session: Any = Depends(require_session)) -> Dict[str, Any]:
+    return load_document(effective_config(getattr(session, "tenant_id", "_default")), key)
 
 
 _GIT_ENV_KEEP = ("PATH", "HOME", "LANG", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND")

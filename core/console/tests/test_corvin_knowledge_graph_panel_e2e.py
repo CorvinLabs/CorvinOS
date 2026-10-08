@@ -74,7 +74,8 @@ class KnowledgeGraphPanelE2E(unittest.TestCase):
             "      decisions: decision\n      kb/tasks: task\n      kb/epics: epic\n      kb/initiatives: initiative\n")
         (kb / "kb/audit.jsonl").write_text("")
         _sh("git", "init", "-q", "-b", "main", cwd=kb)
-        _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init", cwd=kb)
+        _sh("git", "add", "-A", cwd=kb)   # kb refuses to write while kb/audit.jsonl is untracked
+        _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init", cwd=kb)
 
     def tearDown(self):
         import shutil
@@ -129,15 +130,26 @@ class KnowledgeGraphPanelE2E(unittest.TestCase):
         ids = {e["id"] for e in g["entities"]}
         self.assertTrue(all(r["from_id"] in ids and r["to_id"] in ids for r in g["relations"]))
 
-    def test_panel_route_is_reachable_from_the_shell(self):
-        """ADR-2206 Context: the page component was imported but never routed. This pins the
-        two SOURCE registrations (PANELS + NAV_GROUPS); that the served bundle carries them is
-        proved at deploy time by `scripts/console-deploy.sh --marker` (no build runs here)."""
+    def test_panel_is_a_manifest_plugin_panel_not_a_static_one(self):
+        """The panel belongs to the Marketplace plugin `corvin_knowledge`: its route and its
+        sidebar entry come from the capability manifest while the plugin is installed and enabled
+        (same pattern as video-producer). A static PANELS/NAV_GROUPS entry would outlive the
+        plugin. This pins the SOURCE wiring; that a browser really shows it under Marketplace is
+        proved by tests/e2e/knowledge-graph-explorer.spec.ts against the live console."""
         web = _this_checkout() / "core" / "console" / "corvin_console" / "web-next"
         reg = (web / "src" / "panels" / "registry.tsx").read_text()
-        self.assertIn('rc("corvin-knowledge"', reg)
+        self.assertNotIn('rc("corvin-knowledge"', reg)
+        # mountable by name from the manifest: the component name the plugin declares
+        self.assertRegex(reg, r"COMPONENTS_BY_NAME[^=]*=\s*\{[^}]*\bCorvinKnowledgePage,")
         nav = (web / "src" / "components" / "layout.tsx").read_text()
-        self.assertIn('/app/corvin-knowledge', nav)
+        self.assertNotIn("/app/corvin-knowledge", nav)
+        self.assertIn('id: "marketplace"', nav)   # the group the manifest entry is appended to
+        yaml_ = (_projects_root() / "Corvin-Marketplace" / "plugins" / "contributor" / "knowledge_management"
+                 / "corvin_knowledge" / "plugin.yaml")
+        if yaml_.is_file():
+            text = yaml_.read_text()
+            self.assertIn("group: marketplace", text)
+            self.assertIn("component: CorvinKnowledgePage", text)
 
 
 def by_title_id(graph: dict, node_id: str) -> str:

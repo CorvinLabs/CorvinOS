@@ -38,7 +38,6 @@ import {
   Video,
   Workflow,
   X,
-  Share2,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -264,7 +263,6 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/app/rag-hub",         label: "Knowledge Hub", icon: Globe2 },
       { to: "/app/custom-provider", label: "Add Provider",  icon: Plug },
       { to: "/app/datahub-unified", label: "DataHub",       icon: Database },
-      { to: "/app/corvin-knowledge", label: "Knowledge Graph", icon: Share2 },
     ],
   },
   {

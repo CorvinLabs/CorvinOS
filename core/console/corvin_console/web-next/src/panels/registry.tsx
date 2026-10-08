@@ -156,10 +156,10 @@ export const PANELS: ConsolePanel[] = [
   // The backend manifest declares the same route/component, so the sidebar
   // dedupes to ONE entry (mergeManifestNav keys on the path).
   rc("marketplace", "Marketplace", MarketplacePage, { nav: { label: "Marketplace", icon: "Blocks", group: "marketplace" } }),
-  // Knowledge Graph (ADR-2206): the real, current KB (decisions, concepts, ideas,
-  // plans, reviews, notes, initiatives/epics/tasks) as one graph. Was imported here
-  // but never placed into PANELS/NAV_GROUPS — unreachable since it was added.
-  rc("corvin-knowledge", "Knowledge Graph", CorvinKnowledgePage, { nav: { label: "Knowledge Graph", icon: "Share2", group: "knowledge" } }),
+  // corvin-knowledge (Knowledge Graph) is deliberately NOT a static panel: it is the console panel of
+  // the Marketplace plugin `corvin_knowledge`, so its route AND its sidebar entry come from the
+  // capability manifest while that plugin is installed and enabled (COMPONENTS_BY_NAME above,
+  // mergeManifestNav in layout.tsx) and leave with it. Same pattern as video-producer.
   // Cross-Device-Learning GitHub Integration (Iteration 1-5)
   rc("settings/github", "GitHub", GitHubPage,
      { nav: { label: "GitHub", icon: "Github", group: "system" } }),

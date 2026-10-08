@@ -12,20 +12,22 @@
  * is a port of the plugin's shipped web-next sources onto the console's tokens:
  * no hard-coded light palette, no bare fetch, no console.log placeholders.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Network } from "vis-network";
-import "vis-network/styles/vis-network.min.css";
 import { AlertCircle, Loader2, Network as NetworkIcon, RefreshCw, Search } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, ApiError } from "@/lib/api/client";
 import { useAuth } from "@/lib/auth";
+import { GraphCanvas } from "./GraphCanvas";
+import { DocumentPane } from "./DocumentPane";
+import { buildLinkIndex } from "./link-resolver";
+import { neighbourhood, newestDecisionKey, searchNodes } from "./graph-model";
 
-export interface KnowledgeEntity { id: string; type: string; title: string; status: string; tags: string[] }
+export interface KnowledgeEntity { id: string; label?: string; file?: string; type: string; title: string; status: string; tags: string[] }
 export interface KnowledgeRelation { from_id: string; to_id: string; relation: string }
 export interface KnowledgeGraph { entities: KnowledgeEntity[]; relations: KnowledgeRelation[] }
 export interface KnowledgeConfig {
@@ -36,6 +38,9 @@ export interface SyncResult { status: string; message: string; timestamp: string
 const BASE_PATH = "/plugins/corvin-knowledge";
 const KEY_GRAPH = ["corvin-knowledge", "graph"] as const;
 const KEY_CONFIG = ["corvin-knowledge", "config"] as const;
+
+/** Deploy marker for the explorer (a string literal, see ADR-0885). */
+export const MARKER_EXPLORER = "Click a node to read its document. Follow an id in the text to move through the graph.";
 
 /** Rendered caption — also the deploy marker (a string literal, see ADR-0885). */
 export const MARKER_KNOWLEDGE = "Decisions, concepts and ideas of the configured knowledge repository, as the graph its relations describe.";
@@ -69,43 +74,6 @@ function statusColours(): Record<string, string> {
   };
 }
 
-function GraphCanvas({ graph, onSelect }: { graph: KnowledgeGraph; onSelect: (e: KnowledgeEntity | null) => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || graph.entities.length === 0) return;
-    const colours = statusColours();
-    const fg = getComputedStyle(document.documentElement).getPropertyValue("--foreground").trim();
-    const font = fg ? `hsl(${fg})` : undefined;
-    // Defensive: the loader dedupes, but a duplicate node id makes the graph
-    // library throw and the error boundary swallow the whole panel.
-    const uniq = Array.from(new Map(graph.entities.map((e) => [e.id, e])).values());
-    const nodes = uniq.map((e) => ({
-      id: e.id,
-      label: e.title.length > 32 ? `${e.title.slice(0, 31)}…` : e.title,
-      color: { background: colours[e.status] ?? colours.superseded, border: colours[e.status] ?? colours.superseded },
-      shape: e.type === "decision" ? "box" : "dot",
-      size: e.type === "decision" ? 18 : 10,
-      font: { size: e.type === "decision" ? 13 : 11, color: font },
-      title: `${e.type} · ${e.status}\n${e.title}`,
-    }));
-    const known = new Set(uniq.map((e) => e.id));
-    const edges = graph.relations
-      .filter((r) => known.has(r.from_id) && known.has(r.to_id))
-      .map((r) => ({ from: r.from_id, to: r.to_id, label: r.relation, arrows: "to", font: { size: 9, align: "middle" as const } }));
-    const net = new Network(el, { nodes, edges }, {
-      physics: { solver: "forceAtlas2Based", forceAtlas2Based: { gravitationalConstant: -30, springLength: 160 }, stabilization: { iterations: 120 } },
-      interaction: { hover: true, navigationButtons: false, keyboard: false },
-      layout: { randomSeed: 42 },
-    });
-    net.on("click", (params: { nodes: string[] }) => {
-      onSelect(params.nodes.length ? uniq.find((e) => e.id === params.nodes[0]) ?? null : null);
-    });
-    return () => net.destroy();
-  }, [graph, onSelect]);
-  return <div ref={ref} className="h-[560px] w-full rounded-lg border border-border bg-card" data-testid="knowledge-graph-canvas" />;
-}
-
 export function CorvinKnowledgePage() {
   const { session } = useAuth();
   const csrf = session?.csrf_token ?? "";
@@ -113,7 +81,11 @@ export function CorvinKnowledgePage() {
   const graph = useQuery({ queryKey: [...KEY_GRAPH], queryFn: ({ signal }) => api<KnowledgeGraph>(`${BASE_PATH}/graph`, { signal }), retry: false });
   const config = useQuery({ queryKey: [...KEY_CONFIG], queryFn: ({ signal }) => api<KnowledgeConfig>(`${BASE_PATH}/config`, { signal }), retry: false });
 
-  const [selected, setSelected] = useState<KnowledgeEntity | null>(null);
+  const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [mode, setMode] = useState<"focus" | "all">("focus");
+  const [hops, setHops] = useState<1 | 2>(1);
   const [search, setSearch] = useState("");
   const [type, setType] = useState("");
   const [status, setStatus] = useState("");
@@ -121,15 +93,32 @@ export function CorvinKnowledgePage() {
   const [draft, setDraft] = useState<KnowledgeConfig | null>(null);
 
   const entities = useMemo(() => graph.data?.entities ?? [], [graph.data]);
+  const relations = useMemo(() => graph.data?.relations ?? [], [graph.data]);
   const types = useMemo(() => Array.from(new Set(entities.map((e) => e.type))).sort(), [entities]);
-  const filtered = useMemo(() => {
-    const s = search.trim().toLowerCase();
-    const keep = entities.filter((e) =>
-      (!type || e.type === type) && (!status || e.status === status) &&
-      (!s || e.title.toLowerCase().includes(s) || e.id.toLowerCase().includes(s) || e.tags.some((t) => t.toLowerCase().includes(s))));
+  const linkIndex = useMemo(() => buildLinkIndex(entities), [entities]);
+  const colours = useMemo(() => statusColours(), [graph.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The selection is the URL (?node=<key>): browser Back/Forward is the reading history and a
+  // link can be shared. With no node in the URL the newest decision is the start page.
+  const nodeParam = params.get("node");
+  const known = useMemo(() => new Set(entities.map((e) => e.id)), [entities]);
+  // The parameter may be a node key (uid) or the human id of a hand-written link (ADR-2206).
+  const resolvedParam = nodeParam ? (linkIndex.byKey.get(nodeParam) ?? linkIndex.byLabel.get(nodeParam) ?? null) : null;
+  const unknownParam = nodeParam !== null && resolvedParam === null && entities.length > 0;
+  const selectedKey = resolvedParam ?? newestDecisionKey(entities);
+  const select = useCallback((key: string) => setParams({ node: key }), [setParams]);
+  const canGoBack = location.key !== "default";
+
+  const shown = useMemo(() => {
+    if (mode === "focus" && selectedKey && known.has(selectedKey)) {
+      const keep = neighbourhood(relations, selectedKey, hops);
+      return { entities: entities.filter((e) => keep.has(e.id)), relations: relations.filter((r) => keep.has(r.from_id) && keep.has(r.to_id)) };
+    }
+    const keep = entities.filter((e) => (!type || e.type === type) && (!status || e.status === status));
     const ids = new Set(keep.map((e) => e.id));
-    return { entities: keep, relations: (graph.data?.relations ?? []).filter((r) => ids.has(r.from_id) && ids.has(r.to_id)) };
-  }, [entities, graph.data, search, type, status]);
+    return { entities: keep, relations: relations.filter((r) => ids.has(r.from_id) && ids.has(r.to_id)) };
+  }, [mode, hops, selectedKey, known, entities, relations, type, status]);
+  const hits = useMemo(() => searchNodes(entities, search), [entities, search]);
 
   const sync = useMutation({
     mutationFn: (sync_type: "pull" | "push" | "both") => api<SyncResult>(`${BASE_PATH}/sync`, { method: "POST", csrf, body: { sync_type } }),
@@ -191,25 +180,52 @@ export function CorvinKnowledgePage() {
         </TabsList>
 
         <TabsContent value="graph" className="mt-6 space-y-4">
+          <p className="text-xs text-muted-foreground" data-testid="knowledge-hint">{MARKER_EXPLORER}</p>
           <div className="flex flex-wrap items-end gap-3">
-            <label className="flex-1 min-w-[220px]">
-              <span className="sr-only">Search entities</span>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input className="pl-9" placeholder="Search title, id or tag" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search entities" />
+            <label className="relative flex-1 min-w-[220px]">
+              <span className="sr-only">Find a node</span>
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input className="pl-9" placeholder="Find a node by id, title or tag" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Find a node" />
+              {hits.length > 0 && (
+                <ul className="absolute z-20 mt-1 w-full rounded-md border border-border bg-card shadow-md text-sm" data-testid="knowledge-search-hits">
+                  {hits.map((h) => (
+                    <li key={h.id}>
+                      <button type="button" className="flex w-full gap-2 px-3 py-1.5 text-left hover:bg-muted"
+                        onClick={() => { select(h.id); setSearch(""); }}>
+                        <span className="font-mono text-xs text-muted-foreground">{h.label ?? h.id}</span>
+                        <span className="truncate">{h.title}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </label>
+            <div className="flex rounded-md border border-border" role="group" aria-label="View">
+              {(["focus", "all"] as const).map((m) => (
+                <Button key={m} size="sm" variant={mode === m ? "accent" : "ghost"} aria-pressed={mode === m} onClick={() => setMode(m)}>{m === "focus" ? "Focus" : "All"}</Button>
+              ))}
+            </div>
+            {mode === "focus" ? (
+              <div className="flex rounded-md border border-border" role="group" aria-label="Distance">
+                {([1, 2] as const).map((h) => (
+                  <Button key={h} size="sm" variant={hops === h ? "accent" : "ghost"} aria-pressed={hops === h} onClick={() => setHops(h)}>{h} hop{h > 1 ? "s" : ""}</Button>
+                ))}
               </div>
-            </label>
-            <label className="text-xs text-muted-foreground flex flex-col gap-1">Type
-              <select className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground" value={type} onChange={(e) => setType(e.target.value)} aria-label="Type">
-                <option value="">all</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </label>
-            <label className="text-xs text-muted-foreground flex flex-col gap-1">Status
-              <select className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status">
-                <option value="">all</option>{statuses.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </label>
-            <span className="text-xs text-muted-foreground" data-testid="knowledge-summary">{filtered.entities.length} of {entities.length} entities shown</span>
+            ) : (
+              <>
+                <label className="text-xs text-muted-foreground flex flex-col gap-1">Type
+                  <select className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground" value={type} onChange={(e) => setType(e.target.value)} aria-label="Type">
+                    <option value="">all</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </label>
+                <label className="text-xs text-muted-foreground flex flex-col gap-1">Status
+                  <select className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status">
+                    <option value="">all</option>{statuses.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </label>
+              </>
+            )}
+            <span className="text-xs text-muted-foreground" data-testid="knowledge-summary">{shown.entities.length} of {entities.length} nodes shown</span>
           </div>
 
           {graph.isLoading ? (
@@ -220,29 +236,20 @@ export function CorvinKnowledgePage() {
             <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg" data-testid="knowledge-empty">
               No entities at <span className="font-mono">{config.data?.repo_path ?? "the configured path"}</span>/kb/graph. Point the repository path at a Corvin-Knowledge checkout under Settings, run `kb index` there, or pull it.
             </div>
-          ) : filtered.entities.length === 0 ? (
-            <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">No entity matches.</div>
+          ) : shown.entities.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">No node matches.</div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-4">
-              <GraphCanvas graph={filtered} onSelect={setSelected} />
-              <Card>
-                <CardContent className="p-4 space-y-3 text-sm">
-                  {selected ? (
-                    <>
-                      <div className="flex flex-wrap gap-1"><Badge variant="outline">{selected.type}</Badge><Badge variant="secondary">{selected.status}</Badge></div>
-                      <div className="font-semibold">{selected.title}</div>
-                      <div className="text-xs text-muted-foreground font-mono break-all">{selected.id}</div>
-                      {selected.tags.length > 0 && <div className="flex flex-wrap gap-1">{selected.tags.map((t) => <Badge key={t} variant="outline">{t}</Badge>)}</div>}
-                      <div className="text-xs text-muted-foreground">
-                        {(graph.data?.relations ?? []).filter((r) => r.from_id === selected.id || r.to_id === selected.id).length} relations
-                      </div>
-                    </>
-                  ) : (
-                    <p className="text-muted-foreground text-xs">Click an entity to see its details. Boxes are decisions; dots are concepts, ideas and implementations. Colour is the status.</p>
-                  )}
-                </CardContent>
-              </Card>
+            <>
+            {unknownParam && (
+              <p className="text-xs text-muted-foreground" data-testid="knowledge-unknown-node">
+                There is no node &quot;{nodeParam}&quot; in this graph — showing the newest decision instead.
+              </p>
+            )}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <GraphCanvas nodes={shown.entities} edges={shown.relations} selectedKey={selectedKey} statusColours={colours} onSelect={select} />
+              <DocumentPane nodeKey={selectedKey && known.has(selectedKey) ? selectedKey : null} index={linkIndex} basePath={BASE_PATH} onOpen={select} onBack={canGoBack ? () => navigate(-1) : null} />
             </div>
+            </>
           )}
         </TabsContent>
 
