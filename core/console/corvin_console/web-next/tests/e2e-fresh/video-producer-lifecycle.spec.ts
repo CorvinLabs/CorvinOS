@@ -328,7 +328,18 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
       md.renderers.map(() => "web"),
     );
     expect(Array.isArray(md.layout_collisions), "the overlap check shipped in the installed plugin ran").toBe(true);
-    expect(md.layout_collisions, `colliding slides: ${JSON.stringify(md.layout_collisions)}`).toEqual([]);
+    // a collision the plugin resolved (without chips, compact variant, bullets, quote) leaves a clean slide;
+    // only "kept" means a colliding slide went into the video
+    const kept = md.layout_collisions.filter((c: any) => c.action === "kept");
+    expect(kept, `colliding slides in the video: ${JSON.stringify(kept)}`).toEqual([]);
+    // ADR-2245: every web scene ran on a cue timeline built from its own narration audio
+    expect(Array.isArray(md.cues), "the cue timeline shipped in the installed plugin ran").toBe(true);
+    expect(md.cues.length, "one cue record per web scene").toBe(md.renderers.length);
+    for (const c of md.cues) {
+      expect(["llm", "fallback"], `scene ${c.scene}: beats source`).toContain(c.beats_source);
+      expect(c.items.every((it: any) => typeof it.at === "number" && it.at >= 0),
+        `scene ${c.scene}: every item has a reveal time`).toBe(true);
+    }
 
     // the poster is the first slide: it carries the real mark (chevron, bar and the gold dot #C9A227)
     const poster = await page.request.get(`${API}/video/videos/${jobId}/poster`);
@@ -352,11 +363,17 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
       const frameAt = (t: number) => execFileSync(
         "ffmpeg", ["-v", "error", "-ss", String(t), "-i", mp4, "-frames:v", "1", "-vf", "scale=96:54,format=gray", "-f", "rawvideo", "-"],
         { maxBuffer: 1 << 24 });
-      const early = frameAt(0.2), late = frameAt(Math.max(1, qm.summary.rendered_s * 0.4));
+      // a scene opens empty and fills as the narration names its items (ADR-2245), so sample across the video
+      const dur = qm.summary.rendered_s;
+      const frames = [0.15, 0.3, 0.45, 0.6, 0.75, 0.9].map((f) => frameAt(Math.max(0.2, dur * f)));
       const spread = (b: Buffer) => Math.max(...b) - Math.min(...b);
-      expect(spread(early) + spread(late), "frames are not blank").toBeGreaterThan(20);
+      expect(Math.max(...frames.map(spread)), "frames are not blank").toBeGreaterThan(20);
       let diff = 0;
-      for (let i = 0; i < Math.min(early.length, late.length); i++) diff += Math.abs(early[i] - late[i]);
+      for (const f of frames.slice(1)) {
+        let d = 0;
+        for (let i = 0; i < Math.min(f.length, frames[0].length); i++) d += Math.abs(f[i] - frames[0][i]);
+        diff = Math.max(diff, d);
+      }
       expect(diff, "the video changes over time (animation, scene change)").toBeGreaterThan(500);
     } catch (e: any) {
       if (e?.code !== "ENOENT") throw e;
