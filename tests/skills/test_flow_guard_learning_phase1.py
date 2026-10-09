@@ -157,8 +157,9 @@ class TestFlowGuardPhase1:
                 data_class="pii",
                 engine="claude-haiku",
                 destination="console",
-                policy_decision="allow" if i < 8 else "deny",
-                feedback_type=PolicyFeedbackType.ALLOW_CORRECT if i < 8 else PolicyFeedbackType.DENY_WRONG,
+                policy_decision="allow",
+                # 8 allows that were right, 2 that were wrong (the flow leaked) — as the comment says
+                feedback_type=PolicyFeedbackType.ALLOW_CORRECT if i < 8 else PolicyFeedbackType.ALLOW_WRONG,
                 confidence_score=0.95,
                 tenant_id="_default",
             )
@@ -168,7 +169,7 @@ class TestFlowGuardPhase1:
         thresholds, feedback_count = confidence_scorer.update_from_feedback()
 
         assert feedback_count == 10
-        # P(safe) should be high (8 correct allows / 10 total)
+        # P(safe) = (8 safe + 1) / (10 + 2) = 0.75 with Laplace smoothing
         pii_haiku_console = thresholds.get_threshold("pii", "claude-haiku", "console")
         assert 0.70 < pii_haiku_console < 0.90  # High confidence with smoothing
 

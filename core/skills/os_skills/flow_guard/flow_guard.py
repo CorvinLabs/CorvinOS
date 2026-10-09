@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Dict, List
+import copy
 import logging
 from uuid import uuid4
 
@@ -97,11 +98,26 @@ class FlowGuard:
       - Any error → DENY (fail-closed)
     """
 
+    # PII classes that need an explicit per-class user consent before they may leave.
+    CONSENT_REQUIRED = frozenset({
+        DataClassification.PERSONAL_EMAIL,
+        DataClassification.PHONE_NUMBER,
+        DataClassification.HOME_ADDRESS,
+    })
+    # Low-risk classes flow without a learned ALLOW rule (a learned DENY still wins).
+    LOW_RISK = frozenset({
+        DataClassification.BUSINESS_EMAIL,
+        DataClassification.GENERIC_ID,
+        DataClassification.PUBLIC_URL,
+        DataClassification.METADATA,
+    })
+
     def __init__(
         self,
         tenant_id: str,
         confidence_threshold: float = 0.7,
         allow_uncertain_flows: bool = False,
+        audit_backend=None,
     ):
         """
         Initialize Flow Guard.
@@ -110,6 +126,9 @@ class FlowGuard:
             tenant_id: Tenant ID for policy isolation (required, fail-closed)
             confidence_threshold: Confidence level for auto-allow/deny (0.0–1.0)
             allow_uncertain_flows: If False (default), uncertain flows are blocked
+            audit_backend: Optional object with ``write_event(dict)``. It receives a COPY of
+                each audit record after the tenant audit chain committed it (additive only —
+                it can never replace or suppress the chain write).
 
         Raises:
             ValueError: If tenant_id is empty or None (fail-closed validation)
@@ -121,6 +140,7 @@ class FlowGuard:
         self.tenant_id = tenant_id.strip()
         self.confidence_threshold = confidence_threshold
         self.allow_uncertain_flows = allow_uncertain_flows
+        self.audit_backend = audit_backend
 
         self.classifier = DataClassifier()
         self.policy_manager = FlowPolicyManager()
@@ -191,18 +211,18 @@ class FlowGuard:
                 break
 
         # Step 4: Check consent (if applicable)
-        if classification.data_class in [
-            DataClassification.PERSONAL_EMAIL,
-            DataClassification.PHONE_NUMBER,
-            DataClassification.HOME_ADDRESS,
-        ]:
+        consent_granted = False
+        if classification.data_class in self.CONSENT_REQUIRED:
             # PII requires explicit consent
-            if not user_consent or not user_consent.get(classification.data_class.value, False):
+            consent_granted = bool(user_consent and user_consent.get(classification.data_class.value, False))
+            if not consent_granted:
+                # Fail-closed: without consent the flow is blocked unless the operator opted
+                # into surfacing uncertain flows for approval.
                 return FlowEvaluation(
                     data_class=classification.data_class.value,
                     classification_confidence=classification.confidence,
                     destination_engine=destination_engine,
-                    decision=FlowDecision.UNCERTAIN,
+                    decision=FlowDecision.UNCERTAIN if self.allow_uncertain_flows else FlowDecision.DENY,
                     policy_confidence=0.0,
                     reasoning="PII requires explicit user consent",
                     evidence=classification.evidence,
@@ -217,6 +237,12 @@ class FlowGuard:
         if policy_decision == FlowDecision.DENY:
             final_decision = FlowDecision.DENY
             block_reason = FlowBlockReason.DENY_POLICY
+        elif policy_decision == FlowDecision.UNCERTAIN and (
+            consent_granted or classification.data_class in self.LOW_RISK
+        ):
+            # No learned rule, but the user consented (PII) or the class is low-risk: a
+            # learned DENY (above) is the only thing that can still stop this flow.
+            pass
         elif policy_decision == FlowDecision.UNCERTAIN:
             if self.allow_uncertain_flows:
                 final_decision = FlowDecision.UNCERTAIN
@@ -269,26 +295,12 @@ class FlowGuard:
         )
         self.policy_manager.record_outcome(self.tenant_id, outcome)
 
-        # Emit audit event (structured, hash-chainable format)
-        # TODO: Wire to formal audit backend (ADR-0232)
-        audit_event = {
-            "event_id": str(uuid4()),
-            "event_type": "flow_outcome_recorded",
-            "skill_id": "os.flow_guard",
-            "tenant_id": self.tenant_id,
-            "data_class": data_class,
-            "destination_engine": destination_engine,
-            "result": result,
-            "reasoning": reasoning,
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "") + "Z",
-            "lom": "flow_guard.FlowGuard.record_outcome:L245",
-        }
-
-        # Log structured event (can be consumed by audit backend)
-        logger.info(
-            f"Flow outcome recorded: data_class={data_class}, "
-            f"destination={destination_engine}, result={result}",
-            extra=audit_event,
+        # The registered ``skill_feedback`` event carries the outcome signal only; the
+        # data class / destination live in the policy, the free-text reasoning nowhere.
+        self._audit(
+            "skill_feedback",
+            {"feedback_type": "outcome", "signal": result},
+            lom="flow_guard.FlowGuard.record_outcome",
         )
 
     def add_policy_rule(self, rule: PolicyRule) -> None:
@@ -301,30 +313,54 @@ class FlowGuard:
         policy = self.policy_manager.get_or_create_policy(self.tenant_id)
         policy.add_rule(rule)
 
-        # Emit audit event (structured, hash-chainable format)
-        # TODO: Wire to formal audit backend (ADR-0232)
-        audit_event = {
-            "event_id": str(uuid4()),
-            "event_type": "flow_policy_updated",
-            "skill_id": "os.flow_guard",
-            "tenant_id": self.tenant_id,
-            "data_class": rule.data_class,
-            "destination_engine": rule.destination_engine,
-            "decision": rule.decision.value,
-            "confidence": rule.confidence,
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "") + "Z",
-            "lom": "flow_guard.FlowGuard.add_policy_rule:L297",
-        }
-
-        logger.info(
-            f"Policy rule added: {rule.data_class} → {rule.destination_engine} "
-            f"({rule.decision.value}, confidence={rule.confidence})",
-            extra=audit_event,
+        self._audit(
+            "skill_config_updated",
+            {
+                "param_name": f"rule:{rule.data_class}->{rule.destination_engine}",
+                "new_value": f"{rule.decision.value}:{rule.confidence}",
+                "reason_code": "operator_rule",
+            },
+            lom="flow_guard.FlowGuard.add_policy_rule",
         )
 
     def get_policy(self) -> FlowPolicy:
-        """Get current policy (for introspection/testing)."""
-        return self.policy_manager.get_or_create_policy(self.tenant_id)
+        """A SNAPSHOT of the current policy (for introspection/testing).
+
+        A copy, so a caller can compare before/after and can never mutate the live rules
+        through it; changes go through ``record_outcome`` / ``add_policy_rule``.
+        """
+        return copy.deepcopy(self.policy_manager.get_or_create_policy(self.tenant_id))
+
+    def _audit(self, event_type: str, details: dict, *, lom: str) -> None:
+        """Chain a skill audit record (never free text), then hand a copy to the backend.
+
+        The chain write reports failure instead of raising (a flow decision must not crash
+        on it); a failed commit is logged at ERROR by the helper and the backend copy is
+        then NOT sent — nothing is recorded that the chain does not hold.
+        """
+        from core.skills.os_skills.audit_integration import emit_skill_audit_event
+
+        if not emit_skill_audit_event(
+            event_type,
+            "os.flow_guard",
+            self.tenant_id,
+            line_of_moral_responsibility=lom,
+            details=details,
+        ):
+            return
+        if self.audit_backend is not None:
+            record = {
+                "event_id": str(uuid4()),
+                "event_type": event_type,
+                "skill_id": "os.flow_guard",
+                "tenant_id": self.tenant_id,
+                "lom": lom,
+                **details,
+            }
+            try:
+                self.audit_backend.write_event(record)
+            except Exception as exc:  # noqa: BLE001 — additive copy, never blocks the decision
+                logger.error("flow_guard audit backend copy failed: %s", type(exc).__name__)
 
     def export_policy(self) -> str:
         """Export policy as JSON (for backup/restore)."""

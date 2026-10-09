@@ -105,7 +105,9 @@ class FlowPolicy:
             existing.feedback_count += 1
             existing.updated_at = datetime.utcnow()
         else:
-            # New rule
+            # New rule — the rule itself is one feedback event
+            if rule.feedback_count < 1:
+                rule.feedback_count = 1
             self.rules.append(rule)
 
     def _find_rule(
@@ -262,9 +264,14 @@ class FlowPolicyManager:
     Maintains per-tenant policies and provides thread-safe updates.
     """
 
+    MAX_OUTCOME_EVENTS = 1000
+
     def __init__(self):
         """Initialize policy storage."""
         self.policies: Dict[str, FlowPolicy] = {}
+        # Recent outcomes per manager (newest last, bounded). In memory only: the
+        # free-text ``reasoning`` is kept for introspection and never persisted.
+        self.outcome_events: List[FlowOutcome] = []
 
     def get_or_create_policy(self, tenant_id: str) -> FlowPolicy:
         """Get policy for tenant, creating empty one if needed."""
@@ -287,6 +294,8 @@ class FlowPolicyManager:
         """Record outcome and update policy."""
         policy = self.get_or_create_policy(tenant_id)
         policy.update_from_outcome(outcome)
+        self.outcome_events.append(outcome)
+        del self.outcome_events[:-self.MAX_OUTCOME_EVENTS]
 
     def export_policy(self, tenant_id: str) -> str:
         """Export policy as JSON string."""

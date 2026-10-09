@@ -180,15 +180,15 @@ class TestFlowGuardUnit:
         assert eval_result.data_class == "personal_email"
 
     def test_data_classification_public(self):
-        """Public data classified correctly."""
+        """A well-known public URL is classified public_url (the taxonomy has no bare 'public')."""
         from core.skills.os_skills.flow_guard.flow_guard import FlowGuard
         guard = FlowGuard(tenant_id="_default")
 
         eval_result = guard.evaluate_flow(
-            data="The weather today is sunny",
+            data="https://en.wikipedia.org/wiki/Weather",
             destination_engine="anthropic/claude-opus-5"
         )
-        assert eval_result.data_class == "public"
+        assert eval_result.data_class == "public_url"
 
     def test_classification_confidence_in_range(self):
         """Classification confidence 0–1."""
@@ -202,16 +202,15 @@ class TestFlowGuardUnit:
         assert 0.0 <= eval_result.classification_confidence <= 1.0
 
     def test_decision_allow_public_data(self):
-        """Public data → ALLOW."""
+        """Public data (low-risk class) → ALLOW without a learned rule."""
         from core.skills.os_skills.flow_guard.flow_guard import FlowGuard
         guard = FlowGuard(tenant_id="_default")
 
         eval_result = guard.evaluate_flow(
-            data="This is public information",
+            data="https://github.com/torvalds/linux",
             destination_engine="anthropic/claude-opus-5"
         )
-        # Public data should be allowed
-        assert eval_result.decision.value in ("allow", "uncertain")
+        assert eval_result.decision.value == "allow"
 
     def test_decision_deny_credentials(self):
         """Credentials → DENY (fail-closed)."""

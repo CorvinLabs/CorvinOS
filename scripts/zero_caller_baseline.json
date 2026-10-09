@@ -25,7 +25,6 @@
  "core/plugins/templates/user_backend_plugin.py::MyLdapUserPlugin",
  "core/plugins/templates/worker_engine_plugin.py::WorkerEnginePluginTemplate",
  "core/skills/os_skills/l5_workflow_optimizer_skill.py::WorkflowOptimizerSkill",
- "core/skills/workflow_optimizer.py::WorkflowOptimizerSkill",
  "corvin_operator/context_engineering/stages/adr_reranking_stage.py::ADRRerangkingStage",
  "corvin_operator/context_engineering/stages/memory_pruning_stage.py::MemoryPruningStage",
  "corvin_operator/context_engineering/stages/selective_injection_stage.py::SelectiveInjectionStage",

@@ -26,11 +26,14 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def client():
-    """Test client for FastAPI app."""
-    # TODO: Import and setup real FastAPI app
-    # from core.console.corvin_console.app import app
-    # return TestClient(app)
-    pass
+    """Test client for the Security Orchestrator console router.
+
+    The router in ``routes/security_orchestrator_routes.py`` is a stub: it is mounted by
+    no app, nothing feeds a ThreatDetector in production and no component enforces the
+    SecurityPolicy it would let an operator override. Until a follow-up task builds that
+    path, every test here is skipped instead of passing against TODO bodies.
+    """
+    pytest.skip("Security Orchestrator console router is not mounted (follow-up: real detector feed + enforced policy)")
 
 
 # ============================================================================

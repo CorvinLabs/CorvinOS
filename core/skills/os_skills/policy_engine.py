@@ -185,7 +185,6 @@ class PolicyEngine:
                 blocked_users=old.blocked_users | {threat.evidence.get("user_id", "")},
                 enable_audit_logging=True,
                 audit_log_retention_days=max(old.audit_log_retention_days, 180),
-                require_manual_review_above_level=old.require_manual_review_above_level,
             )
 
         elif threat.threat_type == ThreatType.DATA_EXFILTRATION:
@@ -204,7 +203,6 @@ class PolicyEngine:
                 blocked_users=old.blocked_users | {threat.evidence.get("user_id", "")},
                 enable_audit_logging=True,
                 audit_log_retention_days=365,  # Year-long retention
-                require_manual_review_above_level=old.require_manual_review_above_level,
             )
 
         elif threat.threat_type == ThreatType.CROSS_TENANT_ACCESS:
@@ -223,7 +221,6 @@ class PolicyEngine:
                 blocked_users=old.blocked_users | {threat.evidence.get("user_id", "")},
                 enable_audit_logging=True,
                 audit_log_retention_days=365,
-                require_manual_review_above_level=old.require_manual_review_above_level,
             )
 
         else:

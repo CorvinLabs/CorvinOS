@@ -264,6 +264,8 @@ class TestStagingSoakTest:
 
             if threat:
                 policy_engine.tighten_on_threat(threat)
+                # the full lifecycle: the threat clears, then the policy reverts
+                detector.clear_threat(threat.threat_id)
                 policy_engine.revert_on_clear(threat.threat_id)
 
         # Verify system stable

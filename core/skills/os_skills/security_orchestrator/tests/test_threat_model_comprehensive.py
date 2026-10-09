@@ -124,8 +124,8 @@ class TestPrivilegeEscalationVariants:
         threat = detector.detect_privilege_escalation(
             user_id="user3@example.com",
             old_role="editor",
-            new_role="admin",  # Escalation to gain export_all
-            escalation_level=2,
+            new_role="admin",  # a single-level jump that confers export_all
+            escalation_level=1,  # minimum jump that counts: one level is enough here
         )
         assert threat is not None
 

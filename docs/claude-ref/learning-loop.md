@@ -330,3 +330,16 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
 * Learning events for a session tenant that is not the process tenant are
   refused fail-closed (see invariants) — one process per tenant is the
   supported multi-tenant deployment for learning.
+
+## Operator skill feedback route (Stream 4)
+
+`POST /v1/console/feedback/skill` (mounted from `routes/stream4_skill_feedback.py`) takes a
+rating in `-2..2` for `os.workflow_optimizer` / `os.security_orchestrator` / `os.flow_guard`.
+The rating's sign becomes the OUTCOME signal (`>0` yes, `<0` no, `0` other). The route chains a
+`skill_feedback` event FIRST (signal only — no free text); if the chain does not commit it
+answers 500 and stores nothing. It then appends the structured record (ids, rating, category —
+never the free-text reason) to `<tenant>/learning/skill_feedback/events.jsonl`
+(`core/skills/feedback/history_store.py`). `GET …/history?skill_id=` and `GET …/status` read that
+file only; `status` reports `total_received` and `last_feedback_timestamp` and nothing unmeasured.
+The route does NOT apply a config delta — that is the optimizer's loop-closure job.
+Proof: `tests/e2e/test_stream4_skill_feedback_console_e2e.py`.

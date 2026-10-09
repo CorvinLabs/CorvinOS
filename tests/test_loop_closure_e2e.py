@@ -144,15 +144,15 @@ class TestConfidenceFeedback:
         manager = LoopClosureManager()
         manager.skill_configs["os.router"] = {"confidence_threshold": 0.7}
 
-        # Invalid: > 1.0
-        feedback = ConfidenceFeedback(
-            skill_id="os.router",
-            tenant_id="_default",
-            signal=1.5,
-        )
-
-        update = await manager.process_feedback(feedback)
-        assert update is None  # Rejected
+        # Invalid: > 1.0 — rejected fail-closed at construction, so it can never
+        # reach process_feedback (and the stored threshold stays untouched).
+        with pytest.raises(ValueError, match="CONFIDENCE signal"):
+            ConfidenceFeedback(
+                skill_id="os.router",
+                tenant_id="_default",
+                signal=1.5,
+            )
+        assert manager.skill_configs["os.router"]["confidence_threshold"] == 0.7
 
 
 class TestMetricFeedback:
@@ -311,8 +311,10 @@ class TestConvergence:
             if update:
                 thresholds.append(manager.skill_configs["os.router"]["confidence_threshold"])
 
-        # Should see oscillation (no strict monotonic behavior)
-        assert len(set(thresholds)) > 3  # At least 3 different values
+        # The step is a fixed +/-0.05, so alternating outcomes must oscillate between
+        # exactly two values and never drift (no monotonic run in either direction).
+        assert sorted(set(round(t, 2) for t in thresholds)) == [0.5, 0.55]
+        assert len(thresholds) == 9
 
 
 class TestHistoryTracking:

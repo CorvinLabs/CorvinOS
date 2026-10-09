@@ -74,7 +74,11 @@ class CredentialsDetector(PatternDetector):
         (r"aws_secret_access_key\s*=", "AWS secret", 0.98),
         # Generic API tokens (Bearer, token=, api_key=)
         (r"Bearer\s+[A-Za-z0-9\-._~\+\/]+=*", "Bearer token", 0.90),
-        (r"api[_-]?key\s*=\s*[A-Za-z0-9\-_.]{32,}", "API key", 0.85),
+        (r"api[_-]?key\s*=\s*[A-Za-z0-9\-_.]{16,}", "API key", 0.85),
+        # Provider-prefixed tokens (sk-…, pk-…, rk-…, ghp_…) are secrets whatever the
+        # surrounding key name is; the generic length floor above must not let them through.
+        (r"\b(?:sk|pk|rk)-[A-Za-z0-9]{10,}", "Provider API token", 0.90),
+        (r"\bgh[pousr]_[A-Za-z0-9]{20,}", "GitHub token", 0.95),
         # Private keys (BEGIN PRIVATE KEY, BEGIN RSA PRIVATE KEY)
         (r"-----BEGIN.*PRIVATE KEY-----", "Private key", 0.99),
         # Passwords (common patterns: password=, passwd:)
@@ -135,9 +139,11 @@ class EmailDetector(PatternDetector):
                 evidence=domain,
             )
 
-        # Ambiguous domain — classify as business (more conservative)
+        # Ambiguous domain — classify as PERSONAL: the personal class is the stricter one
+        # (consent required), the business class is low-risk and auto-allowed, so guessing
+        # "business" would let an unrecognised personal address through.
         return ClassificationResult(
-            data_class=DataClassification.BUSINESS_EMAIL,
+            data_class=DataClassification.PERSONAL_EMAIL,
             confidence=0.60,
             reasoning="Non-personal email provider",
             evidence=domain,

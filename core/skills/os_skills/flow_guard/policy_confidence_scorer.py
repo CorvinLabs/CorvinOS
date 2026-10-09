@@ -1,6 +1,6 @@
 """Stream 3 Phase 2: Policy Confidence Scorer for Flow Guard (ADR-0314).
 
-Computes Bayesian confidence scores P(policy correct | data_class, engine, destination).
+Computes Bayesian confidence scores P(flow safe | data_class, engine, destination).
 Updates learned policy thresholds based on operator feedback.
 
 **Algorithm:**
@@ -145,7 +145,8 @@ class PolicyConfidenceScorer:
         Algorithm:
         1. Fetch recent feedback events from EventStore
         2. For each (data_class, engine, destination) tuple:
-           - Count allow_correct + deny_correct (true positives/negatives)
+           - Count safe flows (allow_correct + deny_wrong) against unsafe ones
+             (allow_wrong + deny_correct)
            - Count allow_wrong + deny_wrong (false positives/negatives)
            - Compute new P(safe) = correct_allows / (correct_allows + wrong_denies + alpha)
         3. Apply Laplace smoothing (α=1.0)
@@ -201,7 +202,7 @@ class PolicyConfidenceScorer:
                 deny_wrong_counts[key] = deny_wrong_counts.get(key, 0) + 1
 
         # Bayesian update with Laplace smoothing
-        # P(safe) = (allow_correct + deny_correct + α) / (allow_correct + deny_correct + allow_wrong + deny_wrong + 2α)
+        # P(safe) = (allow_correct + deny_wrong + α) / (all four + 2α)
         alpha = 1.0
         updated_thresholds = dict(current_thresholds.thresholds)
         updated_fp: Dict[str, int] = {}
@@ -211,12 +212,16 @@ class PolicyConfidenceScorer:
                    set(allow_wrong_counts.keys()) | set(deny_wrong_counts.keys())
 
         for key in all_keys:
-            correct = allow_correct_counts.get(key, 0) + deny_correct_counts.get(key, 0)
-            wrong = allow_wrong_counts.get(key, 0) + deny_wrong_counts.get(key, 0)
-            total = correct + wrong
+            # P(safe) counts flows that TURNED OUT safe: an allow that was right and a deny
+            # that was wrong (it should have allowed). A correct deny is evidence the flow was
+            # UNSAFE — counting it as "correct" (the old formula) drove the threshold of a
+            # reliably-denied class (API keys) UP instead of down.
+            safe = allow_correct_counts.get(key, 0) + deny_wrong_counts.get(key, 0)
+            unsafe = allow_wrong_counts.get(key, 0) + deny_correct_counts.get(key, 0)
+            total = safe + unsafe
 
             # Laplace-smoothed P(safe flow)
-            p_new = (correct + alpha) / (total + 2 * alpha)
+            p_new = (safe + alpha) / (total + 2 * alpha)
             updated_thresholds[key] = p_new
 
             # Track false positives (deny_wrong: should have allowed)
@@ -225,7 +230,7 @@ class PolicyConfidenceScorer:
             updated_fn[key] = allow_wrong_counts.get(key, 0)
 
             logger.info(
-                f"Updated threshold {key}: {correct}/{total} correct → P={p_new:.3f}, "
+                f"Updated threshold {key}: {safe}/{total} safe → P={p_new:.3f}, "
                 f"FP={updated_fp[key]}, FN={updated_fn[key]}"
             )
 

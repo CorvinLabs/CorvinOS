@@ -32,6 +32,19 @@ class ThreatSeverity(str, Enum):
     HIGH = "HIGH"
     CRITICAL = "CRITICAL"
 
+    @property
+    def rank(self) -> int:
+        """Ordinal rank (LOW=0 .. CRITICAL=3); str-enum comparison would sort alphabetically."""
+        return _SEVERITY_RANK[self]
+
+
+_SEVERITY_RANK = {
+    ThreatSeverity.LOW: 0,
+    ThreatSeverity.MEDIUM: 1,
+    ThreatSeverity.HIGH: 2,
+    ThreatSeverity.CRITICAL: 3,
+}
+
 
 class ThreatType(str, Enum):
     """Detected threat patterns."""
@@ -96,6 +109,9 @@ class ThreatDetector:
     # Cross-tenant access
     CROSS_TENANT_SEVERITY = ThreatSeverity.CRITICAL
 
+    # Hard cap on retained threats (a long-running detector must not grow without bound)
+    MAX_RETAINED_THREATS = 10_000
+
     def __init__(self, tenant_id: str):
         """
         Initialize threat detector for a tenant.
@@ -106,6 +122,16 @@ class ThreatDetector:
         validate_tenant_id(tenant_id)
         self.tenant_id = tenant_id
         self._detected_threats: dict[str, Threat] = {}
+
+    def _store(self, threat_id: str, threat: Threat) -> None:
+        """Retain a threat; past the cap, drop expired ones first, then the oldest."""
+        self._detected_threats[threat_id] = threat
+        if len(self._detected_threats) <= self.MAX_RETAINED_THREATS:
+            return
+        for tid in [tid for tid, t in self._detected_threats.items() if t.is_expired()]:
+            self._detected_threats.pop(tid, None)
+        while len(self._detected_threats) > self.MAX_RETAINED_THREATS:
+            self._detected_threats.pop(next(iter(self._detected_threats)))
 
     def detect_brute_force(
         self,
@@ -155,7 +181,7 @@ class ThreatDetector:
             ttl_minutes=60,
         )
 
-        self._detected_threats[threat_id] = threat
+        self._store(threat_id, threat)
         logger.warning(f"Brute force threat detected: {threat_id} for user {user_id}")
 
         return threat
@@ -175,7 +201,8 @@ class ThreatDetector:
             user_id: User being escalated
             old_role: Previous role
             new_role: New role
-            escalation_level: How many permission levels jumped
+            escalation_level: Minimum number of role levels the move must span to count as an
+                escalation (the actual jump is derived from the two roles)
             confidence: Confidence score
 
         Returns:
@@ -220,7 +247,7 @@ class ThreatDetector:
             ttl_minutes=120,
         )
 
-        self._detected_threats[threat_id] = threat
+        self._store(threat_id, threat)
         logger.warning(f"Privilege escalation detected: {threat_id}")
 
         return threat
@@ -248,9 +275,12 @@ class ThreatDetector:
             return None
 
         # Check if destination is external (simplified: non-localhost)
+        dest = destination.lower()
         is_external = not (
-            destination.lower() in ["localhost", "127.0.0.1", "::1"]
-            or destination.startswith("internal-")
+            dest in ["localhost", "127.0.0.1", "::1"]
+            or dest.startswith("internal-")
+            # RFC-reserved private-use names never resolve publicly (.internal: ICANN 2024)
+            or dest.endswith((".internal", ".localhost", ".local"))
         )
 
         if not is_external:
@@ -284,7 +314,7 @@ class ThreatDetector:
             ttl_minutes=240,  # Longer TTL for critical threats
         )
 
-        self._detected_threats[threat_id] = threat
+        self._store(threat_id, threat)
         logger.error(f"Data exfiltration threat detected: {threat_id}")
 
         return threat
@@ -338,7 +368,7 @@ class ThreatDetector:
             ttl_minutes=360,  # Very long TTL
         )
 
-        self._detected_threats[threat_id] = threat
+        self._store(threat_id, threat)
         logger.critical(f"Cross-tenant access detected: {threat_id}")
 
         return threat
@@ -346,7 +376,7 @@ class ThreatDetector:
     def get_active_threats(self) -> list[Threat]:
         """Get all active (non-expired) threats."""
         active = [t for t in self._detected_threats.values() if not t.is_expired()]
-        return sorted(active, key=lambda t: t.severity, reverse=True)
+        return sorted(active, key=lambda t: t.severity.rank, reverse=True)
 
     def get_threat(self, threat_id: str) -> Optional[Threat]:
         """Get threat by ID."""

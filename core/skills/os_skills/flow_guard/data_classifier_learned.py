@@ -280,7 +280,7 @@ class DataClassifierLearned:
 
         # API Key patterns
         if re.search(
-            r"\b(?:sk_live_|sk_test_|pk_live_|pk_test_)[A-Za-z0-9]{20,}\b",
+            r"\b(?:sk_live_|sk_test_|pk_live_|pk_test_)[A-Za-z0-9]{10,}\b",
             data_content,
         ):
             return DataClass.API_KEY

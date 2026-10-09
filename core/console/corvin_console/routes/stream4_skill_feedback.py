@@ -17,9 +17,9 @@ from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, Field, validator
 
+from core.skills.feedback import history_store
 from core.skills.feedback.schema import FeedbackEvent, FeedbackType, validate_feedback
-from core.paths.tenant import tenant_home
-from core.learning.feedback_processor import FeedbackProcessor, create_feedback_processor
+from core.skills.os_skills.audit_integration import emit_skill_audit_event
 
 from .. import auth as session_auth
 from ..deps import require_session
@@ -124,25 +124,11 @@ class FeedbackHistoryResponse(BaseModel):
 
 
 class FeedbackStatusResponse(BaseModel):
-    """Feedback processing status."""
+    """Feedback submission status (counts are read from the tenant's stored feedback)."""
 
     total_received: int
-    total_processed: int
-    processing_errors: int
-    avg_latency_ms: float
     last_feedback_timestamp: Optional[str]
     timestamp: str
-
-
-# ============================================================================
-# Dependency: Get Feedback Processor
-# ============================================================================
-
-async def get_feedback_processor(
-    rec: session_auth.SessionRecord = Depends(require_session),
-) -> FeedbackProcessor:
-    """Get feedback processor for the session's tenant."""
-    return create_feedback_processor()
 
 
 # ============================================================================
@@ -153,7 +139,6 @@ async def get_feedback_processor(
 async def submit_skill_feedback(
     req: SkillFeedbackRequest,
     rec: session_auth.SessionRecord = Depends(require_session),
-    processor: FeedbackProcessor = Depends(get_feedback_processor),
 ) -> dict:
     """
     Submit feedback on a skill decision (ADR-2033, ADR-2034).
@@ -162,13 +147,15 @@ async def submit_skill_feedback(
     - Immutable (hash-chained to audit trail)
     - Tenant-scoped (fail-closed on tenant mismatch)
     - Validated (rating, skill_id, category, subject_id)
-    - Processed by the skill's optimizer (config delta applied)
-    - Audited (feedback_received → skill_config_updated events)
+    - Audited FIRST (``skill_feedback`` event, outcome signal only) — no chain
+      commit, no stored feedback (HTTP 500)
+    - Stored per tenant (ids, rating, category; the free-text reason is never kept)
+    - NOT applied to a skill config here: turning feedback into a config delta is
+      the optimizer's job (loop closure), not this route's
 
     Args:
         req: SkillFeedbackRequest with skill_id, rating, category, reasoning
         rec: Session record (provides tenant_id, operator_id)
-        processor: FeedbackProcessor to apply feedback (audit-first)
 
     Returns:
         SkillFeedbackResponse with feedback_id, status, timestamp
@@ -201,13 +188,16 @@ async def submit_skill_feedback(
     """
 
     try:
-        # Create feedback event
+        # The schema's OUTCOME signal is bool or "yes"/"no"/"other" — the rating's sign
+        # is the outcome (>0 correct, <0 incorrect, 0 neither); its magnitude is kept in
+        # the stored history, not in the signal.
+        signal = True if req.rating > 0 else False if req.rating < 0 else "other"
         feedback_event = FeedbackEvent(
             skill_id=req.skill_id,
             tenant_id=rec.tenant_id,
             feedback_type=FeedbackType.OUTCOME,  # Outcome feedback (was the decision correct?)
-            signal=req.rating,  # Rating (-2 to +2) encodes outcome quality
-            reason=req.reasoning,  # Optional free-text reason (scrubbed)
+            signal=signal,
+            reason=None,  # free text is never persisted or chained
         )
 
         # Validate feedback event (fail-closed). core.learning.feedback_validator
@@ -217,15 +207,26 @@ async def submit_skill_feedback(
         if not ok:
             raise HTTPException(status_code=400, detail=err or "invalid feedback")
 
-        # Process feedback (audit-first, config delta applied)
-        # In production, this would:
-        # 1. Write feedback_received event to audit chain
-        # 2. Call skill optimizer to compute delta
-        # 3. Apply delta to skill config (via SkillAdapter)
-        # 4. Write skill_config_updated event to audit chain
-        processor.process_optimizer_delta(
-            delta=None,  # Delta computed by optimizer (future: integrate with Skill Adapter)
-            dry_run=False,  # Real execution (not test)
+        # Audit-first: the outcome signal is chained before anything is stored. The
+        # helper reports False instead of raising, so a missing commit aborts here.
+        outcome = "yes" if signal is True else "no" if signal is False else "other"
+        if not emit_skill_audit_event(
+            "skill_feedback",
+            req.skill_id,
+            rec.tenant_id,
+            line_of_moral_responsibility="stream4_skill_feedback.submit_skill_feedback",
+            details={"feedback_type": "outcome", "signal": outcome, "tenant_id": rec.tenant_id},
+        ):
+            raise HTTPException(status_code=500, detail="Audit chain unavailable — feedback not stored")
+
+        history_store.append(
+            rec.tenant_id,
+            feedback_id=feedback_event.feedback_id,
+            timestamp=feedback_event.timestamp,
+            skill_id=req.skill_id,
+            subject_id=req.subject_id,
+            rating=req.rating,
+            category=req.category,
         )
 
         logger.info(
@@ -244,6 +245,9 @@ async def submit_skill_feedback(
             "subject_id": req.subject_id,
             "message": f"Feedback received for {req.skill_id} on {req.subject_id}",
         }
+
+    except HTTPException:
+        raise
 
     except ValueError as e:
         logger.warning("Invalid feedback: %s", str(e))
@@ -308,17 +312,15 @@ async def get_feedback_history(
         if skill_id not in VALID_SKILLS:
             raise ValueError(f"Invalid skill_id: {skill_id}")
 
-        # TODO: Load feedback history from storage
-        # In production, this would query the feedback store by skill_id + tenant_id
-        feedback_events = []  # Mock: empty history
-
-        avg_rating = 0.0
-        if feedback_events:
-            avg_rating = sum(e.get("rating", 0) for e in feedback_events) / len(feedback_events)
+        total, events, avg_rating = history_store.history(rec.tenant_id, skill_id, limit)
+        feedback_events = [
+            {**e, "reasoning": None}  # free text is never stored
+            for e in events
+        ]
 
         return {
             "skill_id": skill_id,
-            "total_count": len(feedback_events),
+            "total_count": total,
             "feedback_events": feedback_events,
             "avg_rating": avg_rating,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -337,13 +339,10 @@ async def get_feedback_status(
     rec: session_auth.SessionRecord = Depends(require_session),
 ) -> dict:
     """
-    Get overall feedback processing status (ADR-2033).
+    Get feedback submission status (ADR-2033).
 
-    Returns aggregated metrics on feedback submission and processing:
+    Counts are read from the tenant's stored feedback; nothing unmeasured is reported:
     - Total feedback received
-    - Total successfully processed
-    - Processing error count
-    - Average latency
     - Last feedback timestamp
 
     Returns:
@@ -359,23 +358,16 @@ async def get_feedback_status(
         Response (200):
         {
           "total_received": 157,
-          "total_processed": 155,
-          "processing_errors": 2,
-          "avg_latency_ms": 42.5,
           "last_feedback_timestamp": "2026-09-22T12:34:00Z",
           "timestamp": "2026-09-22T12:34:56Z"
         }
     """
 
     try:
-        # TODO: Query feedback metrics from monitoring
-        # In production, this would read from Prometheus or a metrics store
+        total, last_ts = history_store.status(rec.tenant_id)
         return {
-            "total_received": 0,
-            "total_processed": 0,
-            "processing_errors": 0,
-            "avg_latency_ms": 0.0,
-            "last_feedback_timestamp": None,
+            "total_received": total,
+            "last_feedback_timestamp": last_ts,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
