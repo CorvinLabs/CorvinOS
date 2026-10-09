@@ -1170,6 +1170,15 @@ end to end in `test_a2a_quota_exhaustion_e2e.py` (tasks 1-10 ok, 11-12 `quota`).
   can no longer see is not a fact about now; an older build answers without the field and clears a stale value) →
   `GET /a2a/feed` peers → the peer header shows *daily limit reached* BEFORE anything is sent.
 
+**Is the RUNNING host on the new code?** A service keeps serving the code it was started with — the console bundle
+can be new while the A2A receiver behind it is not. `tests/e2e/a2a/test_live_host_a2a_contract_e2e.py` proves it over
+the host's real HTTP boundary (`CORVIN_LIVE_URL=http://127.0.0.1:8765 pytest …`): it drops a throwaway origin
+(random id/keys, mode 0600, removed again), checks a signed pong carries `task_capacity`, a signed task-status query
+for an unknown task answers `unknown`, a re-aimed signature is ignored, a forged ping gets the opaque 403, an ordinary
+old-style ping still works, and `GET /a2a/feed` carries `stages` and `task_capacity` per peer.
+`web-next/tests/e2e/peer-live-status-symbols.spec.ts` does the same for the page, with no stubs. Run both after every
+restart; red against a host started before the change, green after (2026-10-09: 2 red → 6 green).
+
 Operator note: testing against a **live** peer spends THAT peer's pool. 10 tasks a day is also what a fresh free-tier
 installation can accept from its peers — a product/licensing question (a separate, larger inbound-A2A allowance) that
 this layer deliberately does not decide.
