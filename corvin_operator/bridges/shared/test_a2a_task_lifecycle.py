@@ -480,5 +480,30 @@ class TestFeedStageLog(_Base):
         self.assertEqual(a2a_feed.latest_stages()["t399"]["stage"], "delivered")
 
 
+class TestErasureCoversStageStores(unittest.TestCase):
+    """GDPR Art. 17 through the real L36 handler: the receiver's task-state rows of an
+    origin and the sender's stage observations of a peer go with the peer's messages."""
+
+    def test_purge_removes_task_state_and_stage_log_of_the_subject_only(self):
+        import erasure_handlers as eh
+        with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"CORVIN_HOME": home}):
+            os.environ.pop("CORVIN_A2A_FEED_DIR", None)
+            ats._reset_for_tests()
+            try:
+                a2a_feed.record(direction="out", kind="task", peer_id="gone", task_id="t1", text="x")
+                a2a_feed.observe_stage(peer_id="gone", task_id="t1", stage="delivered")
+                a2a_feed.observe_stage(peer_id="kept", task_id="t2", stage="delivered")
+                ats.record_stage("gone", "in-1", "completed")
+                ats.record_stage("kept", "in-2", "completed")
+                res = eh.A2AFeedHandler(tenant_id="_default").purge("gone", "req-1")
+                self.assertEqual(str(res.status).lower().split(".")[-1], "applied", res)
+                self.assertEqual(set(a2a_feed.latest_stages()), {"t2"})
+                ats._reset_for_tests()  # re-read from disk: the file must be clean too
+                self.assertEqual(ats.lookup("gone", "in-1")["stage"], "unknown")
+                self.assertEqual(ats.lookup("kept", "in-2")["stage"], "completed")
+            finally:
+                ats._reset_for_tests()
+
+
 if __name__ == "__main__":
     unittest.main()
