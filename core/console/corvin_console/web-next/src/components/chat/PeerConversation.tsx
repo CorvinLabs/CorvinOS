@@ -86,7 +86,13 @@ export function MessageStatusSymbol({ v, mine }: { v: MessageStatusView; mine: b
       <span>{v.label}</span>
       {v.chain.length > 0 && (
         <span className="ml-0.5 flex items-center gap-[3px]" aria-hidden data-testid="peer-message-chain">
-          {v.chain.map((c) => <span key={c.key} data-state={c.state} className={cn("h-1.5 w-1.5 rounded-full", CHAIN_DOT[c.state])} />)}
+          {v.chain.map((c) => (
+            // On a failure only the step that failed is red; the steps before it are
+            // history, not five failures.
+            <span key={c.key} data-state={c.state}
+              className={cn("h-1.5 w-1.5 rounded-full",
+                c.state === "done" && v.tone === "danger" ? "bg-muted-foreground/60" : CHAIN_DOT[c.state])} />
+          ))}
         </span>
       )}
       {v.observedAgeS !== null && v.icon !== "check-check" && v.tone !== "danger" && (
