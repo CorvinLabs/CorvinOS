@@ -108,9 +108,10 @@ class TestTierResourceLimits(unittest.TestCase):
                           f"Quota key {key!r} missing from member tier defaults")
 
     def test_free_tier_is_bounded(self):
-        # The free tier actually constrains the heavy machinery (compute=1, a2a=1,
-        # 1 workflow, 1 custom layer) — but chat is always free (unlimited).
-        self.assertEqual(FREE_TIER["compute_units_per_day"], 1)
+        # The free tier actually constrains the heavy machinery (compute=10/day since the
+        # maintainer decision of 2026-07-24 — it was 1 —, a2a=1, 1 workflow, 1 custom layer)
+        # — but chat is always free (unlimited).
+        self.assertEqual(FREE_TIER["compute_units_per_day"], 10)
         self.assertEqual(FREE_TIER["a2a_peers_max"], 1)
         self.assertEqual(FREE_TIER["workflows_max"], 1)
         self.assertEqual(FREE_TIER["active_custom_layers_bc"], 1)
@@ -222,10 +223,12 @@ class TestAssertLimitWithTierDefaults(unittest.TestCase):
         _v.assert_limit("compute_units_per_day", 500)
 
     def test_free_compute_over_limit_raises(self):
-        # 2-tier: only the FREE tier bounds compute (=1/day); member is unlimited.
+        # 2-tier: only the FREE tier bounds compute (10/day); member is unlimited.
         _v._set_active_license(None)
+        limit = FREE_TIER["compute_units_per_day"]
+        _v.assert_limit("compute_units_per_day", limit)          # the last unit of the day is allowed
         with self.assertRaises(LicenseLimitError):
-            _v.assert_limit("compute_units_per_day", 2)
+            _v.assert_limit("compute_units_per_day", limit + 1)  # the next one is not
 
     def test_sest_override_respected_in_assert(self):
         _v._set_active_license({

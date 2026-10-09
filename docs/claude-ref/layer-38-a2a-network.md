@@ -1151,6 +1151,29 @@ A rejection with **no** reason (an older peer build, or a pairing the peer no lo
 "refused without naming a reason (an older build, or it no longer recognises this connection) — check the peer's
 audit log for `house_rules.*` / `A2A.engine_spawned`, its engine sign-in and usage limit" instead of nothing.
 
+**The commonest refusal: the peer's daily compute pool (measured 2026-10-09, PF65XQC9).** The free tier allows
+`compute_units_per_day = 10` agent runs per UTC day — ONE pool shared by every engine on that instance (ACS, TDE,
+forge compute, A2A inbound, its own chat agents). PF65XQC9 completed 9 runs for us and timed out a 10th between
+14:49 and 14:55 UTC; from the 11th task on **every** task was refused, for the rest of the UTC day. It looked like
+an outage because (a) the cause was discarded (above) and (b) the quota gate sits **behind** L44 — a refusal cost
+the sender ~22-28 s (relay round trip + the L44 model call) and the peer a model call per refused task. Reproduced
+end to end in `test_a2a_quota_exhaustion_e2e.py` (tasks 1-10 ok, 11-12 `quota`). Two structural fixes:
+
+- **Fast-fail.** `compute_quota.peek_exhausted()` (read-only, never consumes, any doubt → False) runs right after
+  the sanitiser, before L34/L35/L44. The authoritative `increment_and_check` stays AFTER L44 on purpose — a request
+  refused by acceptable-use must burn no unit. A refused task now costs one relay round trip and no model call, and
+  `reason=quota` travels with it.
+- **Capacity in the pong.** Every authenticated pong carries `task_capacity` (`available` | `limit_reached`, closed
+  enum, signed with the pong; read-only, unaudited — pings run every minute). `PingResult.task_capacity` →
+  `a2a_connectivity._CAPACITY_SEEN` (beside the unchanged `_ping_peer` contract) → `_peer_task_capacity` on the
+  connection files → `presence()["task_capacity"]` (only while the peer is **online**; an old reading of a peer we
+  can no longer see is not a fact about now; an older build answers without the field and clears a stale value) →
+  `GET /a2a/feed` peers → the peer header shows *daily limit reached* BEFORE anything is sent.
+
+Operator note: testing against a **live** peer spends THAT peer's pool. 10 tasks a day is also what a fresh free-tier
+installation can accept from its peers — a product/licensing question (a separate, larger inbound-A2A allowance) that
+this layer deliberately does not decide.
+
 **Resend.** A refused or never-sent message of ours shows a *Resend* action. It is withheld for `unconfirmed`
 (the message may already have run — a resend would run it twice), for messages with attachments (the feed keeps no
 bytes), for refusals about the content itself (`injection`, `house_rules`, `data_flow`) and for lines a

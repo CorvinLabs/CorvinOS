@@ -79,7 +79,7 @@ const REASON_TEXT: Record<string, string> = {
   egress: "the peer's network policy blocks its agent engine",
   house_rules: "the peer's acceptable-use gate refused it",
   house_rules_unavailable: "the peer's acceptable-use gate is unavailable (fail-closed)",
-  quota: "the peer's compute quota is used up",
+  quota: "the peer's daily compute limit is used up (a free-tier peer runs 10 agent tasks per day; it resets at 00:00 UTC)",
   license: "the peer's licence check failed",
   attachments: "the peer could not store the attachments",
   engine_unavailable: "the peer's agent engine could not start — check Claude Code is installed and signed in there",

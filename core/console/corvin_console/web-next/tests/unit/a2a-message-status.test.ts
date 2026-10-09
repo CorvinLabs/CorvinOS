@@ -143,7 +143,7 @@ describe("robustness", () => {
     ["engine_failed", /usage limit or sign-in problem/],
     ["engine_unavailable", /installed and signed in/],
     ["house_rules_unavailable", /unavailable \(fail-closed\)/],
-    ["quota", /compute quota/],
+    ["quota", /daily compute limit.*10 agent tasks per day.*00:00 UTC/],
   ])("the worker refusal %s is explained in the tooltip", (reason, re) => {
     const v = messageStatusView(msg({}), { now: NOW, stage: stage("rejected", 2, reason) });
     expect(v.icon).toBe("x");

@@ -100,5 +100,31 @@ class TaskLifecycleRouteTests(unittest.TestCase):
         self.assertEqual(self._client().get("/v1/console/a2a/feed/task/" + "x" * 65).status_code, 422)
 
 
+    def test_peers_carry_the_capacity_the_peer_reported_only_while_online(self):
+        """ADR-2242 §8: "daily limit reached" is a fact about NOW — shown while the peer is
+        online, never from a peer we can no longer see, and absent for an older peer."""
+        import json
+        import time
+        now = time.time()
+        home = Path(os.environ["CORVIN_HOME"])
+
+        def put(pid, **cfg):
+            for kind, key in (("origins", "origin_id"), ("endpoints", "endpoint_id")):
+                (home / kind / f"{pid}.json").write_text(json.dumps({key: pid, "enabled": True, **cfg}))
+
+        put("full-peer", state="ACTIVE", _last_check_at=now - 20, _last_ok_at=now - 20,
+            _peer_task_capacity="limit_reached")
+        put("gone-peer", state="UNREACHABLE", _last_check_at=now - 20, _last_ok_at=now - 650_000,
+            _peer_task_capacity="limit_reached")
+        put("old-peer", state="ACTIVE", _last_check_at=now - 20, _last_ok_at=now - 20)
+        put("bad-peer", state="ACTIVE", _last_check_at=now - 20, _last_ok_at=now - 20,
+            _peer_task_capacity="<script>")
+        peers = {p["peer_id"]: p for p in self._client().get("/v1/console/a2a/feed").json()["peers"]}
+        self.assertEqual(peers["full-peer"]["task_capacity"], "limit_reached")
+        self.assertIsNone(peers["gone-peer"]["task_capacity"])
+        self.assertIsNone(peers["old-peer"]["task_capacity"])
+        self.assertIsNone(peers["bad-peer"]["task_capacity"], "an unknown value is never passed on")
+
+
 if __name__ == "__main__":
     unittest.main()

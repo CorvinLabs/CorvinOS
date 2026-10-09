@@ -614,6 +614,27 @@ def spawn_a2a_worker(
         instruction = ATTACHMENTS_ONLY_INSTRUCTION
     clean = sanitize_instruction(instruction)
 
+    # 1a. Quota FAST-FAIL (ADR-2242 §8, non-consuming). The authoritative quota gate (1d) sits
+    # AFTER L44 on purpose — a request refused by acceptable-use must burn no unit — but L44 is
+    # the expensive step (a model call, ~15 s). A free-tier peer whose daily pool is spent used
+    # to pay all of that for every task it was going to refuse anyway: the sender waited ~25 s
+    # and got nothing back that named a cause. Peeking costs a file read and can only ever
+    # say "exhausted" when it is; any doubt falls through to the real gate.
+    try:
+        _lic_root_0 = str(Path(__file__).resolve().parents[2])
+        if _lic_root_0 not in sys.path:
+            sys.path.append(_lic_root_0)  # APPEND — see the note at 1d
+        from license.compute_quota import peek_exhausted as _cq_peek  # type: ignore
+        if _cq_peek(_CORVIN_HOME_SNAPSHOT_A2A, channel="a2a", chat_key=str(origin_id)):
+            return WorkerResult(
+                status="rejected", raw_output="", parsed_output={},
+                duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+                reason_code="quota",
+                error="compute_quota_exceeded: daily pool already used up (fast-fail before L44)",
+            )
+    except Exception:  # noqa: BLE001 — the real gate at 1d decides
+        pass
+
     # 1b. Layer 34 — data-classification × engine-egress gate (review fix).
     # The A2A worker spawns a cloud engine (ClaudeCodeEngine → external
     # egress); a SECRET/CONFIDENTIAL inbound instruction must not reach it.
@@ -1243,6 +1264,19 @@ def _harvest_outputs(out_dir: Path, result_schema: dict) -> list:
         total_bytes += size
 
     return out
+
+
+def quota_exhausted_now() -> bool:
+    """Is this instance's daily compute pool used up? Read-only, unaudited (it backs the
+    liveness ping, which runs every minute) and never raises; any doubt answers False."""
+    try:
+        _root = str(Path(__file__).resolve().parents[2])
+        if _root not in sys.path:
+            sys.path.append(_root)
+        from license.compute_quota import peek_exhausted as _peek  # type: ignore
+        return bool(_peek(_CORVIN_HOME_SNAPSHOT_A2A, audit=False))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _ms(start: float) -> int:

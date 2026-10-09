@@ -24,10 +24,12 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
-# Purge any stale cached copies so a fresh import picks up current code.
-for _mod_name in list(sys.modules.keys()):
-    if _mod_name in ("remote_trigger_receiver", "remote_trigger_sender"):
-        del sys.modules[_mod_name]
+# NOTE: this used to delete remote_trigger_receiver / remote_trigger_sender from sys.modules at
+# IMPORT (collection) time "so a fresh import picks up current code". That left two module
+# objects alive in one pytest process: every suite collected earlier kept the old one, while
+# mock.patch("remote_trigger_receiver.time") resolved to the new one and patched nothing —
+# test_a2a_crypto_e2e's rate-limit refill and URLError tests failed only in a combined run.
+# The path above already points at the canonical checkout; there is nothing stale to purge.
 
 
 # ---------------------------------------------------------------------------

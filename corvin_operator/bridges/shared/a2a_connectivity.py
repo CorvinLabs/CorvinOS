@@ -122,6 +122,14 @@ class _Schedule:
     last_result: dict[str, Any] = field(default_factory=dict)
 
 
+#: What the last real ping of a connection said about the peer's task capacity
+#: (ADR-2242 §8). ``_ping_peer`` keeps its (reachable, via) contract — callers and tests
+#: depend on it — so the capacity travels beside it: "available" | "limit_reached", or ""
+#: when the peer answered without saying (an older build). Absent = no ping was made.
+_CAPACITY_SEEN: dict[str, str] = {}
+_CAPACITY_VALUES = frozenset({"available", "limit_reached"})
+
+
 def _ping_peer(kid: str, endpoints_dir: Path, *, audit: bool = True) -> tuple[bool, str | None]:
     """Signed ADR-0199 ping (direct, else relay). (reachable, via).
 
@@ -132,9 +140,24 @@ def _ping_peer(kid: str, endpoints_dir: Path, *, audit: bool = True) -> tuple[bo
         )
         result = _RTS(endpoints_dir, _RER(endpoints_dir)).ping(kid, timeout_s=5, audit=audit)
         reachable = bool(result.reachable)
+        if reachable:
+            _cap = getattr(result, "task_capacity", None)
+            _CAPACITY_SEEN[kid] = _cap if _cap in _CAPACITY_VALUES else ""
         return reachable, (getattr(result, "via", None) if reachable else None)
     except Exception:  # noqa: BLE001 — reachability check is best-effort
         return False, None
+
+
+def _stamp_capacity(cfg: dict[str, Any], kid: str) -> None:
+    """Record the capacity the last ping reported on the connection file. Only a ping that
+    actually answered changes it: "" (an older peer) clears a stale value, absence leaves it."""
+    seen = _CAPACITY_SEEN.get(kid)  # read, not pop: the origin AND the endpoint file get it
+    if seen is None:
+        return
+    if seen in _CAPACITY_VALUES:
+        cfg["_peer_task_capacity"] = seen
+    else:
+        cfg.pop("_peer_task_capacity", None)
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -224,8 +247,11 @@ def refresh_friendship(
             cfg["_peer_reports_reachable"] = peer_reports_reachable
             if via is not None:
                 cfg["_last_via"] = via
+            if reachable:
+                _stamp_capacity(cfg, kid)
             ft.stamp_probe(cfg, reachable, now)
             ft._atomic_write(p, cfg)
+    _CAPACITY_SEEN.pop(kid, None)
 
     return {
         "ok": True, "kid": kid,
@@ -279,7 +305,15 @@ def presence(cfgs: list[dict[str, Any]], now: float | None = None) -> dict[str, 
         status = "pending"
     else:
         status = "offline"
-    return {"presence": status, "last_check_at": last_check, "last_ok_at": last_ok}
+    # ADR-2242 §8: what the peer said about taking tasks — only while it is online (an old
+    # "limit reached" from a peer we can no longer see is not a fact about now).
+    capacity = None
+    if status == "online":
+        for c in cfgs:
+            if c.get("_peer_task_capacity") in _CAPACITY_VALUES:
+                capacity = c["_peer_task_capacity"]
+    return {"presence": status, "last_check_at": last_check, "last_ok_at": last_ok,
+            "task_capacity": capacity}
 
 
 def _probe_plain_endpoint(kid: str, endpoints_dir: Path) -> None:
@@ -297,8 +331,11 @@ def _probe_plain_endpoint(kid: str, endpoints_dir: Path) -> None:
         cfg = _read_json(path)
         if cfg is None:
             return
+        if reachable:
+            _stamp_capacity(cfg, kid)
         ft.stamp_probe(cfg, reachable, now)
         ft._atomic_write(path, cfg)
+    _CAPACITY_SEEN.pop(kid, None)
     after = "online" if reachable else "offline"
     if before != after:
         _audit("A2A.connection_state", "INFO" if reachable else "WARNING",

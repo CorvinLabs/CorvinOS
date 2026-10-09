@@ -58,6 +58,7 @@
     <text x="565" y="411" text-anchor="middle">signed pong + task_stage {stage, seq, reason}  (content-free)</text>
     <text x="565" y="446" text-anchor="middle" fill="#475569">foreign / unknown task id → the same "unknown" · old peer → plain pong → no polling</text>
     <text x="565" y="466" text-anchor="middle" fill="#475569">audit: stage changes only (not every poll)</text>
+    <text x="565" y="482" text-anchor="middle" fill="#475569">every pong also says task_capacity: available | limit_reached</text>
 
     <!-- 5 feed + UI -->
     <rect x="262" y="506" width="170" height="26" rx="4" fill="#bfdbfe" stroke="#3b82f6"/><text x="347" y="523" text-anchor="middle">stages.jsonl (observed)</text>

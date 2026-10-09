@@ -144,6 +144,32 @@ describe("PeerConversation — a status symbol on every message", () => {
     expect(screen.queryAllByTestId("peer-message-resend")).toHaveLength(0);
   });
 
+  it("a peer that reports its daily limit as reached is flagged BEFORE anything is sent", async () => {
+    vi.mocked(getA2AFeed).mockResolvedValue({
+      peers: [{ peer_id: "peer-1", label: "Test Peer", can_send: true, can_receive: true,
+        presence: "online", task_capacity: "limit_reached" }],
+      messages: [], stages: {},
+    } as unknown as Awaited<ReturnType<typeof getA2AFeed>>);
+    renderIt();
+    const badge = await screen.findByTestId("peer-task-capacity");
+    expect(badge.textContent).toMatch(/daily limit reached/);
+    expect(badge.getAttribute("title")).toMatch(/00:00 UTC/);
+  });
+
+  it("no capacity banner for an available peer, an older peer, or no report", async () => {
+    for (const cap of ["available", null, undefined]) {
+      vi.mocked(getA2AFeed).mockResolvedValue({
+        peers: [{ peer_id: "peer-1", label: "Test Peer", can_send: true, can_receive: true,
+          presence: "online", task_capacity: cap }],
+        messages: [feedMsg({ id: "1" })], stages: {},
+      } as unknown as Awaited<ReturnType<typeof getA2AFeed>>);
+      const { unmount } = renderIt();
+      await screen.findAllByTestId("peer-message");
+      expect(screen.queryByTestId("peer-task-capacity")).toBeNull();
+      unmount();
+    }
+  });
+
   it("an older host without `stages` still draws every symbol", async () => {
     vi.mocked(getA2AFeed).mockResolvedValue({
       peers: [{ peer_id: "peer-1", label: "Test Peer", can_send: true, can_receive: true }],

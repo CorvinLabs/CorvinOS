@@ -23,7 +23,7 @@ test("every message carries a status symbol and the chain follows the peer's sta
   const feed = {
     tenant_id: "_default", ts: NOW(), retention_days: 30, has_more: false, last_seq: 9,
     peers: [{ peer_id: PEER, label: "E2E Peer", state: "ACTIVE", can_send: true, can_receive: true,
-      enabled: true, presence: "online" }],
+      enabled: true, presence: "online", task_capacity: "limit_reached" }],
     messages: [
       msg("1", "t-queued", { status: "queued" }),
       msg("2", "t-sent", { status: "sent" }),
@@ -73,6 +73,9 @@ test("every message carries a status symbol and the chain follows the peer's sta
   await expect(rows.nth(5).getByTestId("peer-message-resend")).toBeVisible();
   await expect(rows.nth(6).getByTestId("peer-message-resend")).toHaveCount(0);
   await expect(page.getByTestId("peer-message-resend")).toHaveCount(1);
+
+  // A peer that reports its daily pool as spent is flagged in the header, before anything is sent.
+  await expect(page.getByTestId("peer-task-capacity")).toContainText("daily limit reached");
 
   // It must stay readable: nothing clipped to zero width, symbol inside the viewport.
   const box = await working.boundingBox();

@@ -380,6 +380,14 @@ def process_ping_request(
         "protocol_version": str(PROTOCOL_VERSION),
         "server_time": now,
     }
+    # ADR-2242 §8: can this instance take a task right now? A closed enum, signed with the
+    # rest of the pong — the sender shows "daily limit reached" BEFORE a task is sent into a
+    # refusal it would otherwise wait ~25 s for. An older sender ignores the extra key.
+    try:
+        import a2a_worker as _w  # noqa: PLC0415
+        response["task_capacity"] = "limit_reached" if _w.quota_exhausted_now() else "available"
+    except Exception:  # noqa: BLE001 — capacity is advisory; a pong without it is still valid
+        pass
 
     # ADR-2242: optional task-stage query riding on the ping. The ping's own
     # signature stays over the original three fields (older peers verify it and

@@ -180,6 +180,44 @@ def get_today_count(corvin_home: Path, counter_file: str = "compute_quota.json")
         return 0
 
 
+def peek_exhausted(
+    corvin_home: Path,
+    *,
+    channel: str = "",
+    chat_key: str = "",
+    feature: str = "compute_units_per_day",
+    counter_file: str = "compute_quota.json",
+    audit: bool = True,
+) -> bool:
+    """True when today's ``feature`` quota is ALREADY used up. Never consumes a unit.
+
+    A fast-fail for callers that would otherwise spend real work before the authoritative
+    :func:`increment_and_check` refuses them — the A2A worker ran the L44 classification
+    (~15 s and a model call) for every task of an exhausted peer, only to reject it after.
+    The authoritative gate stays where it is (a request refused by L44 must burn no unit);
+    this only avoids the wasted work, so it can only ever say "exhausted" when it is:
+    any error, an unreadable counter, an unlimited tier or a malformed limit answers False
+    and leaves the decision to the real gate. An exhausted answer is audited exactly as the
+    real gate audits it (``compute.quota_exceeded``).
+    """
+    try:
+        from .validator import get_limit, active_tier  # type: ignore
+
+        limit = get_limit(feature)
+        if limit is None:
+            return False
+        limit_int = int(limit)
+        current = max(0, int(_load(_quota_path(corvin_home, counter_file)).get(_today_utc(), 0)))
+        if current < limit_int:
+            return False
+        if audit:
+            _emit_quota_exceeded(channel=channel, chat_key=chat_key, requested=current + 1,
+                                 limit=limit_int, tier=active_tier(), feature=feature)
+        return True
+    except Exception:  # noqa: BLE001 — a fast-fail must never block on its own failure
+        return False
+
+
 def increment_and_check(
     corvin_home: Path,
     *,
@@ -447,6 +485,7 @@ def refund_one(
 
 __all__ = [
     "get_today_count",
+    "peek_exhausted",
     "increment_and_check",
     "refund_one",
     "LicenseLimitError",

@@ -651,6 +651,8 @@ class PingResult:
                               cache cannot work)
     error_category : str | None — ADR-0197: failure reason if reachable=False
     error_detail   : str | None — Template-based error detail (ADR-0197 §2)
+    task_capacity  : str | None — "available" | "limit_reached" as the peer reports it
+                              (ADR-2242 §8); None for a peer that does not say
     duration_ms    : int    — Wall time spent (network: 2-10s max)
     via            : str    — "direct" or "relay" (ADR-0258 Stage 3) — which
                               transport actually answered. Console surfaces
@@ -663,6 +665,7 @@ class PingResult:
     error_detail: str | None = None
     duration_ms: int = 0
     via: str = "direct"
+    task_capacity: str | None = None
 
 
 # ── ADR-0197 §2: FIXED TEMPLATE SET for error_detail ──────────────────────
@@ -708,7 +711,8 @@ _WORKER_REFUSAL_TEXT: dict[str, str] = {
     "house_rules": "The peer's acceptable-use gate refused the task",
     "house_rules_unavailable": "The peer's acceptable-use gate is unavailable and refused the task (fail-closed) - "
                                "check the peer's installation",
-    "quota": "The peer's compute quota is used up",
+    "quota": "The peer's daily compute limit is used up (a free-tier peer runs 10 agent tasks per day, "
+             "shared with its own chat; it resets at 00:00 UTC) - try again tomorrow, or upgrade the peer's licence",
     "license": "The peer's licence check failed",
     "attachments": "The peer could not store the attachments",
     "engine_unavailable": "The peer's agent engine could not start - check that Claude Code is installed "
@@ -720,9 +724,10 @@ _WORKER_REFUSAL_TEXT: dict[str, str] = {
 }
 #: A rejection that names no reason at all — an older peer build, or a refusal path that
 #: predates reason codes. Says so instead of leaving the operator with a bare "rejected".
-_OPAQUE_REFUSAL_TEXT = ("The peer refused the task without naming a reason (an older build, or it no longer recognises this connection) - "
-                        "check the peer's audit log for house_rules.* / A2A.engine_spawned, "
-                        "and its engine sign-in and usage limit")
+_OPAQUE_REFUSAL_TEXT = ("The peer refused the task without naming a reason (an older build, or it no longer recognises "
+                        "this connection). The most common cause is its daily compute limit (a free-tier peer runs "
+                        "10 agent tasks per day and refuses the 11th until 00:00 UTC) - otherwise check its audit log "
+                        "for house_rules.* / A2A.engine_spawned and its engine sign-in")
 
 # Closed rejection reasons a signed "rejected" may carry (review R3) — the
 # fixed texts _PUBLIC_REJECTION_TEXT maps them to are templates like the rest.
@@ -1632,9 +1637,11 @@ class RemoteTriggerSender:
 
         # Network probe: signed request + signed-response verification
         try:
+            _out: dict = {}
             ok, error_cat, error_det, via = self._http_ping_probe(
-                endpoint_id, timeout_s=timeout_s, audit=audit
+                endpoint_id, timeout_s=timeout_s, audit=audit, out=_out
             )
+            _cap = (_out.get("response") or {}).get("task_capacity") if ok else None
             result = PingResult(
                 reachable=ok,
                 source="network_probe",
@@ -1642,6 +1649,7 @@ class RemoteTriggerSender:
                 error_detail=error_det if not ok else None,
                 duration_ms=_ms(start),
                 via=via,
+                task_capacity=_cap if _cap in ("available", "limit_reached") else None,
             )
         except Exception as exc:
             # Catch-all: any unexpected error maps to INTERNAL_ERROR with an

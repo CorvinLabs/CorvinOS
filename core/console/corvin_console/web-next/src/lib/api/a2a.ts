@@ -601,6 +601,8 @@ export interface A2AFeedPeer {
   /** Unix seconds of the newest probe / newest successful probe. */
   last_check_at?: number | null;
   last_ok_at?: number | null;
+  /** What the peer says about taking tasks right now; absent for an older peer or when offline. */
+  task_capacity?: "available" | "limit_reached" | null;
 }
 
 export type A2APresence = "online" | "offline" | "unknown" | "pending" | "disabled" | "removed";
