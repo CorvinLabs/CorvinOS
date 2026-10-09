@@ -84,15 +84,19 @@ function TaskSummaryRow({ item }: { item: TaskVoiceSummary }) {
         </div>
         {item.text && <p className="text-sm text-muted-foreground">{item.text}</p>}
         {/* Playing it here counts as heard: the chat must not read it out again. */}
-        <audio
-          controls
-          preload="none"
-          className="w-full"
-          src={item.audio_url}
-          onPlay={() => rememberHeard([summaryKey(item)])}
-        >
-          Your browser does not support inline audio playback.
-        </audio>
+        {item.audio_url ? (
+          <audio
+            controls
+            preload="none"
+            className="w-full"
+            src={item.audio_url}
+            onPlay={() => rememberHeard([summaryKey(item)])}
+          >
+            Your browser does not support inline audio playback.
+          </audio>
+        ) : (
+          <p className="text-xs text-muted-foreground">Audio not available yet.</p>
+        )}
       </CardContent>
     </Card>
   );

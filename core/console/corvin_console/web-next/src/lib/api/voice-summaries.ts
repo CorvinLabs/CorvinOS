@@ -42,8 +42,8 @@ export interface TaskVoiceSummary {
   completed_at: number | null;
   lang: string | null;
   text: string;
-  /** Relative to the API origin; playable directly as an <audio src>. */
-  audio_url: string;
+  /** Relative to the API origin; null while the audio is still owed (speech synthesis failed). */
+  audio_url: string | null;
 }
 
 export interface TaskVoiceSummariesResponse {

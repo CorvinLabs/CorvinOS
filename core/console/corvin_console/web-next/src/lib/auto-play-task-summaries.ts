@@ -46,7 +46,7 @@ export interface AutoPlayDecision {
 export function decideAutoPlay(input: AutoPlayInput): AutoPlayDecision {
   const markHeard: string[] = [];
   const open = input.summaries
-    .filter((s) => s.task_id && !input.heard.has(summaryKey(s)) && doneAt(s) >= input.sinceS)
+    .filter((s) => s.task_id && s.audio_url && !input.heard.has(summaryKey(s)) && doneAt(s) >= input.sinceS)
     .sort((a, b) => doneAt(a) - doneAt(b));
 
   const pending: TaskVoiceSummary[] = [];
@@ -64,6 +64,24 @@ export function decideAutoPlay(input: AutoPlayInput): AutoPlayDecision {
   const play = queue[0] ?? null;
   if (play) markHeard.push(summaryKey(play));
   return { play, markHeard };
+}
+
+/**
+ * The recap to show as text in the chat right now: the newest one that carries
+ * text, finished after this pane was opened (older ones live in the Voice
+ * Summaries library) and was not dismissed. Independent of whether its audio
+ * exists, so a failed speech synthesis still shows the summary.
+ */
+export function pickLiveSummary(input: {
+  summaries: TaskVoiceSummary[];
+  sinceS: number;
+  dismissed: ReadonlySet<string>;
+}): TaskVoiceSummary | null {
+  const open = input.summaries
+    .filter((s) => s.task_id && s.text.trim() && doneAt(s) >= input.sinceS
+      && !input.dismissed.has(summaryKey(s)))
+    .sort((a, b) => doneAt(b) - doneAt(a));
+  return open[0] ?? null;
 }
 
 // ── persistence (localStorage) + in-memory live marker ─────────────────────────

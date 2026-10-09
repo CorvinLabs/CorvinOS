@@ -86,6 +86,45 @@ class TaskSummaryTest(unittest.TestCase):
     def _task_dir(self, task_id: str) -> Path:
         return voice_routes._task_summary_dir(self.tenant_id, self.sess.sid)
 
+    # ── text survives a failed speech synthesis ────────────────────────
+
+    def test_tts_failure_keeps_the_text_and_the_retry_skips_the_summarizer(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if "--session-recap-mode" in cmd:
+                return _completed(0, stdout="Gerettete Summary.\n")
+            return _completed(1)  # say.py fails
+
+        def fake_say_cmd(out_path, text, lang):
+            return ["false"]
+
+        with patch.object(voice_routes.subprocess, "run", fake_run), \
+                patch.object(voice_routes, "_say_cmd", fake_say_cmd):
+            ok = voice_routes.generate_and_persist_task_summary(
+                self.tenant_id, self.sess.sid, "task-tts", user_text="u", answer_text="a")
+        self.assertFalse(ok)  # still owed: the marker logic retries the audio
+
+        items = voice_routes.list_task_summaries(self.tenant_id, self.sess.sid)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["text"], "Gerettete Summary.")
+        self.assertIsNone(items[0]["audio_url"])
+
+        # Retry: say.py works now, summarize.py must NOT run a second time.
+        calls.clear()
+        self._synth(recap_text="darf nicht benutzt werden")
+        with patch.object(voice_routes.subprocess, "run") as run_mock:
+            run_mock.side_effect = lambda cmd, **kw: (
+                calls.append(cmd) or _completed(0, stdout="ok"))
+            ok = voice_routes.generate_and_persist_task_summary(
+                self.tenant_id, self.sess.sid, "task-tts", user_text="u", answer_text="a")
+        self.assertTrue(ok)
+        self.assertFalse(any("--session-recap-mode" in c for c in calls))
+        items = voice_routes.list_task_summaries(self.tenant_id, self.sess.sid)
+        self.assertEqual(items[0]["text"], "Gerettete Summary.")
+        self.assertTrue(items[0]["audio_url"])
+
     # ── persistence per task ───────────────────────────────────────────
 
     def test_each_completed_task_gets_its_own_persisted_summary(self) -> None:

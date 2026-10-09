@@ -2484,6 +2484,21 @@ def run_owed_task_summary(tenant_id: str, sid: str, task_id: str) -> str:
     return "retry"
 
 
+def _write_task_meta(ddir: Path, task_id: str, meta: dict[str, Any]) -> None:
+    ddir.mkdir(parents=True, exist_ok=True)
+    _write_json_atomic(ddir / f"{task_id}.json", meta)
+
+
+def _persisted_task_text(ddir: Path, task_id: str) -> str:
+    """Summary text of a task whose audio is still missing ("" when none). Lets a
+    retry after a TTS failure skip the paid summarize phase."""
+    try:
+        meta = json.loads((ddir / f"{task_id}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return "" if meta.get("audio_file") else str(meta.get("text") or "")
+
+
 def generate_and_persist_task_summary(
     tenant_id: str, sid: str, task_id: str, *,
     user_text: str, answer_text: str, lang: str = "de",
@@ -2517,32 +2532,46 @@ def generate_and_persist_task_summary(
     except HTTPException:
         return False
 
-    summarize_path = _VOICE_SCRIPTS / "summarize.py"
-    if not summarize_path.exists():
-        return _fail("summarizer-missing")
-
-    budget = _SESSION_RECAP_TRANSCRIPT_BUDGET
-    transcript = (f"User: {user_text.strip()[: budget // 4]}\n\n"
-                  f"Assistant: {answer_text.strip()[: budget * 3 // 4]}")
+    ddir = _task_summary_dir(tenant_id, sid)
     resolved_lang = lang if lang in ("de", "en") else "de"
-    angle = random.choice(
-        _SESSION_RECAP_ANGLES_DE if resolved_lang == "de" else _SESSION_RECAP_ANGLES_EN)
-    cmd = [sys.executable, str(summarize_path),
-           "--session-recap-mode",
-           "--lang", resolved_lang,
-           "--max-chars", str(_SESSION_RECAP_MAX_CHARS),
-           "--angle", angle]
+    # A retry after a TTS failure already has its text: do not pay for it twice.
+    recap_text = _persisted_task_text(ddir, task_id)
+    if not recap_text:
+        summarize_path = _VOICE_SCRIPTS / "summarize.py"
+        if not summarize_path.exists():
+            return _fail("summarizer-missing")
+
+        budget = _SESSION_RECAP_TRANSCRIPT_BUDGET
+        transcript = (f"User: {user_text.strip()[: budget // 4]}\n\n"
+                      f"Assistant: {answer_text.strip()[: budget * 3 // 4]}")
+        angle = random.choice(
+            _SESSION_RECAP_ANGLES_DE if resolved_lang == "de" else _SESSION_RECAP_ANGLES_EN)
+        cmd = [sys.executable, str(summarize_path),
+               "--session-recap-mode",
+               "--lang", resolved_lang,
+               "--max-chars", str(_SESSION_RECAP_MAX_CHARS),
+               "--angle", angle]
+        try:
+            proc = subprocess.run(
+                cmd, input=transcript, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=_TTS_SUMMARIZE_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            return _fail("timeout")
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return _fail("summarize-exit-nonzero" if proc.returncode != 0
+                         else "summarize-empty-output")
+        recap_text = proc.stdout.strip()[:_TTS_PROVIDER_CHAR_LIMIT]
+    # Text first: a failed or timed-out TTS must not throw the summary away.
     try:
-        proc = subprocess.run(
-            cmd, input=transcript, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=_TTS_SUMMARIZE_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired:
-        return _fail("timeout")
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return _fail("summarize-exit-nonzero" if proc.returncode != 0
-                     else "summarize-empty-output")
-    recap_text = proc.stdout.strip()[:_TTS_PROVIDER_CHAR_LIMIT]
+        _write_task_meta(ddir, task_id, {
+            "sid": sid, "tenant_id": tenant_id, "task_id": task_id,
+            "created_at": time.time(), "completed_at": completed_at,
+            "lang": resolved_lang, "text": recap_text, "mime": None, "audio_file": None,
+        })
+    except OSError:
+        _log.warning("task summary text persist failed for %s:%s/%s",
+                     tenant_id, sid, task_id, exc_info=True)
 
     with tempfile.NamedTemporaryFile(prefix="corvin_tts_", suffix=".opus", delete=False) as fh:
         out_path = Path(fh.name)
@@ -2561,7 +2590,6 @@ def generate_and_persist_task_summary(
 
     mime = _detect_audio_mime(data)
     ext = _AUDIO_EXT_BY_MIME.get(mime, ".ogg")
-    ddir = _task_summary_dir(tenant_id, sid)
     meta_path = ddir / f"{task_id}.json"
     try:
         ddir.mkdir(parents=True, exist_ok=True)
@@ -2620,7 +2648,7 @@ def list_task_summaries(tenant_id: str, sid: str | None = None) -> list[dict[str
             except (OSError, json.JSONDecodeError):
                 continue
             audio_file = meta.get("audio_file")
-            if not audio_file:
+            if not audio_file and not meta.get("text"):
                 continue
             out.append({
                 "sid": sess.sid,
@@ -2631,10 +2659,11 @@ def list_task_summaries(tenant_id: str, sid: str | None = None) -> list[dict[str
                 "completed_at": meta.get("completed_at") or meta.get("created_at"),
                 "lang": meta.get("lang"),
                 "text": meta.get("text", ""),
+                # None = the text exists but its audio is still owed (TTS failed).
                 "audio_url": (
                     f"/v1/console/chat/sessions/{sess.sid}/workdir/"
                     f"{_cr._VOICE_SUMMARY_SUBDIR}/{_TASK_SUMMARY_SUBDIR}/{audio_file}"
-                ),
+                ) if audio_file else None,
             })
     out.sort(key=lambda e: e["created_at"] or 0, reverse=True)
     return out
