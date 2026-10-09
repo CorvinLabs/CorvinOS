@@ -93,7 +93,7 @@ The prefix is not `task.` because `task.spawn_*` already names runtime spawns.
 | POST / DELETE | `/items/{id}/runs` | `run_type` ∈ task_sources types except `initiative` |
 | POST | `/import` | **retired → 410** (2026-10-03): Loop A/B/C were imported into the KB once (`I-02..I-04`) |
 | POST | `/items/{id}/kb-transition` | CSRF; `{to, reason?, dod?}` — board move of a knowledge-base task; runs `kb task` (the KB state machine) and re-projects; **409** `{message, kb_refused}` with the KB's own refusal |
-| GET | `/kb/status` | projector state: `ok`/`blocked`/`diverged`/`error`/`off`, `blocking`, `failing`, `drift_total` |
+| GET | `/kb/status` | projector state: `ok`/`blocked`/`diverged`/`error`/`off`, `blocking`, `failing`, `drift_total`, `human_queue` (what waits for a human: `queue[]` of `{id, kind: decision\|review\|incident, title, since, hours}`, `max_age_hours`, `paused`) |
 | POST | `/kb/sync` | CSRF; one forced projector tick (heal → export → apply) |
 
 ## Runs are linked, not copied
@@ -337,3 +337,12 @@ Colours: status marks use `--viz-status-progress/-blocked/-complete`
 (`src/index.css`, validated light vs `#ffffff` and dark vs `#0e1320` with the
 dataviz validator, all pairs); `open` is a hollow mark. Priority is an ordinal
 amber ramp keyed on the tier (`--viz-tier-*`). Status is never colour alone.
+
+**Human-queue banner.** After every KB change the projector runs `kb queue` and keeps the result in
+its state (`human_queue`); `/kb/status` returns it and the Tasks board draws one banner
+(`data-testid="human-queue-banner"`) above the work views: "N items wait for a human", one row per
+item (id, kind - decision awaiting acceptance / review escalated / incident - and how long it has
+waited), and, when the oldest item waited past `human_queue_max_age_hours`, that autonomous
+building (A2) is paused. An empty queue draws nothing. Proof:
+`core/console/tests/test_kb_projection_e2e.py::test_the_human_queue_reaches_the_status_endpoint`
+(real routes + the real `kb` subprocess) and `web-next/tests/unit/tasks-page.test.tsx`.
