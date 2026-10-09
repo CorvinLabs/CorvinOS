@@ -177,6 +177,42 @@ def a2a_feed(
         "has_more": more,
         "last_seq": max((int(m.get("seq") or 0) for m in msgs), default=after or 0),
         "peers": peers,
+        # ADR-2242: the furthest stage the peer reported per task we sent. Not tied to the
+        # `after` cursor on purpose — a stage changes on a message that is already
+        # delivered to the client, so the whole (small, capped) map rides every poll.
+        "stages": _recent_stages(tid, peer_id),
+    }
+
+
+def _recent_stages(tenant_id: str, peer_id: str | None) -> dict[str, Any]:
+    try:
+        st = _feed.latest_stages(peer_id=peer_id, tenant_id=tenant_id)
+    except Exception:  # noqa: BLE001 — a status ticker never fails the feed
+        return {}
+    keep = sorted(st, key=lambda t: st[t]["ts"], reverse=True)[:400]
+    return {t: st[t] for t in keep}
+
+
+@router.get("/a2a/feed/task/{task_id}")
+def a2a_feed_task(rec: Session, task_id: str) -> dict[str, Any]:
+    """ADR-2242: the whole chain of one task — what we sent, which stages the peer
+    reported, and the answer if it arrived. Metadata only (no message text)."""
+    tid = _a2a_tenant(rec)
+    if not task_id or len(task_id) > 64:
+        raise HTTPException(status_code=422, detail="invalid task id")
+    rows = [m for m in _feed.read(limit=0, tenant_id=tid) if m.get("task_id") == task_id]
+    if not rows:
+        raise HTTPException(status_code=404, detail="task not found")
+    timeline = _feed.stage_timeline(task_id, tenant_id=tid)
+    latest = _feed.latest_stages(task_ids=[task_id], tenant_id=tid).get(task_id)
+    return {
+        "task_id": task_id,
+        "peer_id": rows[0].get("peer_id"),
+        "messages": [{"direction": m.get("direction"), "kind": m.get("kind"),
+                      "status": m.get("status"), "ts": m.get("ts"),
+                      "duration_ms": m.get("duration_ms"), "error": m.get("error")} for m in rows],
+        "stage": latest,
+        "timeline": timeline,
     }
 
 

@@ -944,6 +944,9 @@ class RemoteTriggerReceiver:
                  "reason": f"internal_error:{type(exc).__name__}",
                  "status": "rejected", "duration_ms": _ms(start)},
             )
+            # ADR-2242: an escaped internal error is a FAILED task, not a refusal
+            # (create=False: only a task that reached `delivered` is tracked).
+            self._stage(origin_id, task_id, "failed", "worker_error", create=False)
             try:
                 return self._rejected_response(task_id, origin_id, None)
             except Exception:  # noqa: BLE001 — last resort, still no raise
@@ -1096,6 +1099,7 @@ class RemoteTriggerReceiver:
             if env.purpose_id is not None:
                 audit_detail["purpose_id"] = env.purpose_id[:64]
             self._audit_strict("A2A.envelope_received", "INFO", audit_detail)
+            self._stage(env.origin_id, env.task_id, "delivered")
         except AuditWriteError as exc:
             # Roll back the nonce so the sender can retry — the nonce was
             # consumed in _validate() before the audit write; without rollback
@@ -1386,7 +1390,9 @@ class RemoteTriggerReceiver:
             )
             return resp
 
+        self._stage(env.origin_id, env.task_id, "accepted")
         if spawn_worker:
+            self._stage(env.origin_id, env.task_id, "processing")
             try:
                 try:
                     worker_status, worker_data, worker_attachments = (
@@ -1399,6 +1405,7 @@ class RemoteTriggerReceiver:
                 finally:
                     _worker_slot_release(env.origin_id)
             except _InjectionRejected as exc:
+                self._stage(env.origin_id, env.task_id, "rejected", "injection")
                 # C-5: sign the rejection with recv_key (we have it now)
                 resp = self._rejected_response(env.task_id, env.origin_id, recv_key_bytes)
                 self._audit_best_effort(
@@ -1450,6 +1457,16 @@ class RemoteTriggerReceiver:
         except Exception:
             _out_audit = {"attachments_count": len(worker_attachments)}
 
+        # "filtered" = the worker ran and its output went through the result-schema filter:
+        # that is a finished task, not a failure.
+        _final = {"ok": "completed", "filtered": "completed", "timeout": "timeout",
+                  "rejected": "rejected"}.get(
+            str(resp.status), "failed")
+        # A "rejected" that comes back from the worker path is a gate/engine refusal
+        # (house rules, quota, engine unavailable) — name it so the sender can tell it
+        # from a pairing or permission problem.
+        self._stage(env.origin_id, env.task_id, _final,
+                    {"timeout": "timeout", "failed": "worker_error", "rejected": "gate"}.get(_final, ""))
         self._audit_best_effort(
             "A2A.response_signed", "INFO",
             {"task_id": env.task_id, "origin_id": env.origin_id,
@@ -2680,6 +2697,23 @@ class RemoteTriggerReceiver:
         except TypeError:
             self._nonces.remove(env.nonce)
 
+    def _stage(self, origin_id: str, task_id: str, stage: str, reason: str = "",
+               *, create: bool = True) -> None:
+        """ADR-2242: advance the task's stage (monotonic, best-effort) and audit a change.
+
+        Never raises into the A2A path; nothing but closed vocabularies reaches the chain."""
+        try:
+            import a2a_task_state  # type: ignore[import-not-found]  # noqa: PLC0415
+            ch = a2a_task_state.record_stage(origin_id, task_id, stage, reason, create=create)
+            if ch is not None:
+                self._audit_best_effort(
+                    "A2A.task_stage_changed", "INFO",
+                    {"task_id": task_id, "origin_id": origin_id, "stage": stage,
+                     "prev_stage": ch["prev"], "reason": reason if reason in a2a_task_state.REASONS else ""},
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
     def _rejected_response(
         self, task_id: str, origin_id: str, recv_key: bytes | None = None,
         *, reason: str | None = None,
@@ -2704,6 +2738,10 @@ class RemoteTriggerReceiver:
         if recv_key:
             sig = _hmac.new(recv_key, resp.canonical_payload(), hashlib.sha256).hexdigest()
             resp.signature = sig
+        # ADR-2242: close a KNOWN task as rejected. create=False — the pre-auth reject
+        # paths also land here, and an unauthenticated sender must not grow the store.
+        self._stage(origin_id, task_id, "rejected",
+                    "busy" if reason == "busy" else "", create=False)
         return resp
 
     # ── ADR-0077 helpers ──────────────────────────────────────────────

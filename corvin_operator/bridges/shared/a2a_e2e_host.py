@@ -205,6 +205,16 @@ def main() -> int:
                                          for a in result.attachments],
                                      "error": getattr(result, "error_category", None),
                                      "detail": getattr(result, "error_detail", None)})
+                elif self.path.startswith("/task_status/"):
+                    # ADR-2242: ask the peer how far a task has come (real signed ping).
+                    kid = self.path.split("/")[-1]
+                    import remote_trigger_sender as rts  # noqa: PLC0415
+                    sender = rts.RemoteTriggerSender(endpoints, rts.RemoteEndpointRegistry(endpoints))
+                    self._send(200, sender.task_status(kid, str(self._body().get("task_id") or ""),
+                                                       timeout_s=10))
+                elif self.path == "/feed_stages":
+                    import a2a_feed  # noqa: PLC0415
+                    self._send(200, {"stages": a2a_feed.latest_stages()})
                 else:
                     self._send(404, {})
             except HTTPException as exc:

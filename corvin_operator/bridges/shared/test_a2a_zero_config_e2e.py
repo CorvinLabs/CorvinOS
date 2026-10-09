@@ -21,6 +21,8 @@ Scenarios:
   2. issuer offline while the token is imported → converges on its own
   3. address change after pairing → the peer learns the new address
   4. revocation on one side → the other side stops claiming "peer knows us"
+  5. (ADR-2242) a sent task's stage is queryable over the relay, origin-bound, and the
+     sender's feed carries the observed terminal stage
 
 Run: python3 test_a2a_zero_config_e2e.py   (needs fastapi, uvicorn, websockets)
 """
@@ -279,6 +281,33 @@ class TestZeroConfigPairing(unittest.TestCase):
                              .startswith(new_url)),
                     "issuer stored the redeemer's new address")
         self._await_linked(kid)
+
+    def test_5_task_stage_is_queryable_over_the_relay_and_origin_bound(self):
+        kid = self._pair()
+        self._await_linked(kid)
+        code, sent = self.issuer.call("POST", f"/send/{kid}")
+        self.assertEqual(code, 200, sent)
+        self.assertTrue(sent["ok"], sent)
+        tid = sent["task_id"]
+        # The peer reports the stage it holds for OUR task — a signed, content-free answer.
+        code, st = self.issuer.call("POST", f"/task_status/{kid}", {"task_id": tid})
+        self.assertEqual(code, 200, st)
+        self.assertTrue(st["reachable"] and st["supported"], st)
+        self.assertEqual(st["stage"], "completed", st)
+        self.assertEqual(st["via"], "relay", st)
+        # Origin-bound: the OTHER side asks the issuer about the same task id. The issuer
+        # sent it, never received it, so it has nothing — and says exactly what it says
+        # about an id that never existed (no enumeration oracle).
+        code, theirs = self.redeemer.call("POST", f"/task_status/{kid}", {"task_id": tid})
+        self.assertTrue(theirs["supported"], theirs)
+        self.assertEqual(theirs["stage"], "unknown", theirs)
+        code, never = self.issuer.call("POST", f"/task_status/{kid}", {"task_id": "00000000-no-such-task"})
+        self.assertEqual((never["supported"], never["stage"]), (True, "unknown"), never)
+        # The sender's feed carries what it observed (the verified answer = terminal).
+        stages = self._await(
+            lambda: self.issuer.call("POST", "/feed_stages")[1]["stages"].get(tid),
+            "the observed terminal stage in the sender's feed", timeout=20)
+        self.assertEqual(stages["stage"], "completed")
 
     def test_4_revocation_is_reflected_on_the_other_side(self):
         kid = self._pair()

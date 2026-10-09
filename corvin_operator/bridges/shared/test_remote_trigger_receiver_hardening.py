@@ -454,7 +454,7 @@ class TestRound8BusyFeedRecordAndFilesOnly(_Base):
 
         with mock.patch.object(sender, "_send_impl", impl), \
              mock.patch.object(rts, "_record_feed_task",
-                               lambda eid, tid, text, atts, lbl: fed.append(text)), \
+                               lambda eid, tid, text, atts, lbl, *rest: fed.append(text)), \
              mock.patch.object(rts, "_record_feed_response", lambda *a, **kw: None):
             sender.send("bob", "", attachments=[{"name": "a.png"}])
             sender.send("bob", "hello", attachments=[{"name": "a.png"}])

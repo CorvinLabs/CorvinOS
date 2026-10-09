@@ -1100,6 +1100,52 @@ broken store never breaks a send, retention, clear),
 (`CORVIN_E2E_A2A_LIVE=1` additionally sends a real envelope with a PNG to the
 paired peer and verifies feed, blob serving and the `task_id` link to the chain).
 
+## Message lifecycle — every stage visible to the sender (ADR-2242, 2026-10-09)
+
+![message lifecycle](../diagrams/32-a2a-message-lifecycle.svg)
+
+**Problem.** After `sent` the sender used to be blind until the peer's single, final answer
+(~30 s for a "pong" over the relay), and an `unconfirmed` send was a dead end.
+
+**Stages (one ordered state machine per `task_id`, receiver-recorded):**
+`delivered → accepted → processing → completed | failed | rejected | timeout`. Only forward moves
+are accepted; a terminal stage is immutable, so a replayed or reordered event can never regress a
+task. `queued`/`sent` stay the sender's own feed statuses.
+
+| Where | What |
+|---|---|
+| `a2a_task_state.py` (receiver) | the stage store: in memory + `a2a_feed/task_state.jsonl` (0600). Origin-bound `lookup`, `create=False` for pre-auth reject paths so an unauthenticated sender can never grow it, closed reason vocabulary, restart closes orphans as `failed(restart)`. |
+| `remote_trigger_receiver.py` | `_stage()` at: envelope audit committed → `delivered`; gates passed → `accepted`; worker start → `processing`; response built → `completed`/`failed`/`rejected`/`timeout`. `_rejected_response` closes a *known* task as `rejected`; an escaped internal error is `failed(worker_error)`. A worker-path refusal carries `reason=gate`. |
+| `a2a_http_server.process_ping_request` | answers a **task-status query that rides on the ping**: optional `task_id` + `task_sig` (HMAC over `ping_id, issued_at, origin_id, task_id`). The ping's own signature stays over the original three fields, so an older peer ignores the extra keys and answers a plain pong — that is how a sender detects "no stage support". The answer carries `task_stage` and is signed over it. Foreign and unknown ids answer the same `{"stage":"unknown"}`. Works on all three hosts and through the relay listener because they share this core. |
+| `remote_trigger_sender.py` | `task_status()`; `_StagePoller` (daemon thread per in-flight 1:1 task, max 8): first query after 1.5 s, then 2.5 s → 6 s backoff, starting on the transport that worked last. Stops at a terminal stage, when the peer lacks support (remembered 10 min), when the send provably never reached the peer, or — after an `unconfirmed` send — when the peer has never heard of the task / is unreachable. **Outlives `send()` only for an unconfirmed send**, so it resolves to the real stage. |
+| `a2a_feed.py` | the sender's observations in a **separate** `stages.jsonl` (not rows in `messages.jsonl`: context bridge, groups, erasure and task sources all key on kind `task`/`response`). `observe_stage` / `latest_stages` (furthest by rank) / `stage_timeline`. Covered by `erase_peer`, `clear`, the 2 MiB cap and 30-day retention. |
+| `routes/a2a_feed.py` | `GET /a2a/feed` now carries `stages` (task_id → furthest stage, not tied to the `after` cursor, capped at 400) and `GET /a2a/feed/task/{task_id}` returns the chain without message text. |
+| `web-next` | `lib/a2a-message-status.ts` maps (message, reply, stage) → symbol/label/chain; `PeerConversation` draws it on **every** message and polls every 2 s while one of ours is in flight (4 s otherwise). |
+
+**Symbols** (never claim more than was observed): clock *Queued* · tick *Sent* · double tick
+*Delivered* / *Accepted* · spinner *Agent working* · green double tick *Done* · cross *Refused /
+Failed / Timed out / Not sent* · question mark *Delivery unconfirmed* (only while no stage was ever
+observed). Outbound messages also show the six-dot chain and the age of the last observation
+("seen 6 s ago") — the stage is a pull, so its freshness is bounded by the transport (direct ≈ sub-second,
+relay ≈ 6–9 s) and the UI says so instead of implying real time.
+
+**Audit** (`EVENT_SEVERITY` + `_EVENT_ALLOWLIST`, closed enums only): `A2A.task_stage_changed`
+(receiver; `stage`, `prev_stage`, `reason`) and `A2A.task_status_queried` (once per stage *change*
+on either side, not per poll).
+
+**GDPR.** The store is content-free (ids, an enum, numbers). `a2a_feed.erase_peer` removes the
+sender-side observations, `A2AFeedHandler` also calls `a2a_task_state.erase_origin`.
+
+**Compatibility.** Peer without the feature → plain pong → `supported:false` → sender behaves exactly as
+before (symbols fall back to Queued / Sent / Done / Failed from the feed). MCP-sent tasks get the poller
+too, because it lives in `RemoteTriggerSender.send()`.
+
+**Tests.** `test_a2a_task_lifecycle.py` (state machine, real `receive()` with a blocking worker while the
+real ping core answers `processing`, forged/re-aimed/foreign/oversized queries, tampered answer, poller
+decisions), `test_a2a_zero_config_e2e.py::test_5…` (two fresh instance processes + a real relay),
+`core/console/tests/test_a2a_task_lifecycle_routes.py`, `web-next/tests/unit/a2a-message-status.test.ts`
+and `peer-conversation-status-symbols.test.tsx`.
+
 ## Adversarial review + hardening (ADR-2064, 2026-09-25)
 
 Five parallel adversarial reviews of the whole A2A stack found 44 defects

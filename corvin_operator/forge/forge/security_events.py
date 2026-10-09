@@ -615,6 +615,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "A2A.friendship_peer_revoked":    "WARNING",  # the peer revoked the friendship (signed notice)
     "A2A.relay_fallback_used":        "INFO",
     "A2A.ping_result":                "INFO",
+    # ADR-2242 message lifecycle: stage changes on the receiver, status queries both sides.
+    "A2A.task_stage_changed":         "INFO",
+    "A2A.task_status_queried":        "INFO",
     "A2A.reconnect_sent":             "INFO",
     "A2A.reconnect_send_failed":      "WARNING",
     # Layer 38 M4 — A2A Invite-Token Protocol (ADR-0063)
@@ -3211,6 +3214,8 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         ("A2A.chain_dna_genesis_absent", {"nonce_prefix"}),
         ("A2A.relay_fallback_used", set()),
         ("A2A.ping_result", {"reachable", "error_category"}),
+        ("A2A.task_stage_changed", {"stage", "prev_stage"}),
+        ("A2A.task_status_queried", {"stage"}),
         ("A2A.reconnect_sent", set()),
         ("A2A.reconnect_send_failed", set()),
         ("A2A.instance_pinned", set()),

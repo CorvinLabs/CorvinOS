@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 700" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title>Corvin A2A — message lifecycle: how a sender sees every stage (ADR-2242)</title>
+  <desc>Sequence of one task sent to a paired peer. The receiver records monotonic stages
+  (delivered, accepted, processing, completed). While the single blocking answer is pending,
+  the sender asks with a signed task-status query that rides on the ping (direct HTTP, or the
+  relay when the direct route is dead). The answer is signed over the stage, content-free and
+  bound to the asking origin. The sender appends observed stages to a separate stage log; the
+  chat polls the feed and draws one status symbol on every message.</desc>
+
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1e40af"/>
+    </marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/>
+    </marker>
+  </defs>
+
+  <rect width="1080" height="700" fill="#f8fafc"/>
+  <text x="540" y="34" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">One message, every stage visible</text>
+  <text x="540" y="56" text-anchor="middle" font-size="13" fill="#475569">The sender asks (signed pull) — it never needs to be reachable itself</text>
+
+  <!-- lifelines -->
+  <g font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">
+    <rect x="40"  y="76" width="170" height="38" rx="6" fill="#e0e7ff" stroke="#6366f1"/><text x="125" y="100">Chat (peer thread)</text>
+    <rect x="260" y="76" width="170" height="38" rx="6" fill="#dbeafe" stroke="#3b82f6"/><text x="345" y="100">Sender (this instance)</text>
+    <rect x="480" y="76" width="170" height="38" rx="6" fill="#f1f5f9" stroke="#94a3b8"/><text x="565" y="100">Direct HTTP / Relay</text>
+    <rect x="700" y="76" width="170" height="38" rx="6" fill="#dcfce7" stroke="#22c55e"/><text x="785" y="100">Receiver (peer)</text>
+    <rect x="900" y="76" width="140" height="38" rx="6" fill="#fef9c3" stroke="#eab308"/><text x="970" y="100">Peer agent</text>
+  </g>
+  <g stroke="#cbd5e1" stroke-dasharray="4 4">
+    <line x1="125" y1="114" x2="125" y2="670"/><line x1="345" y1="114" x2="345" y2="670"/>
+    <line x1="565" y1="114" x2="565" y2="670"/><line x1="785" y1="114" x2="785" y2="670"/>
+    <line x1="970" y1="114" x2="970" y2="670"/>
+  </g>
+
+  <g font-size="12" fill="#0f172a">
+    <!-- 1 send -->
+    <line x1="125" y1="150" x2="345" y2="150" stroke="#1e40af" stroke-width="1.6" marker-end="url(#a)"/>
+    <text x="235" y="143" text-anchor="middle">send  ·  symbol: clock "Queued"</text>
+    <!-- 2 envelope -->
+    <line x1="345" y1="188" x2="785" y2="188" stroke="#1e40af" stroke-width="1.6" marker-end="url(#a)"/>
+    <text x="565" y="181" text-anchor="middle">signed task envelope  ·  symbol: tick "Sent"</text>
+    <!-- 3 stages on receiver -->
+    <rect x="800" y="204" width="150" height="26" rx="4" fill="#bbf7d0" stroke="#22c55e"/><text x="875" y="221" text-anchor="middle">stage: delivered</text>
+    <rect x="800" y="238" width="150" height="26" rx="4" fill="#bbf7d0" stroke="#22c55e"/><text x="875" y="255" text-anchor="middle">stage: accepted (gates passed)</text>
+    <line x1="785" y1="284" x2="970" y2="284" stroke="#1e40af" stroke-width="1.6" marker-end="url(#a)"/>
+    <text x="878" y="277" text-anchor="middle">spawn worker</text>
+    <rect x="800" y="292" width="150" height="26" rx="4" fill="#bbf7d0" stroke="#22c55e"/><text x="875" y="309" text-anchor="middle">stage: processing</text>
+
+    <!-- 4 poll loop -->
+    <rect x="262" y="338" width="540" height="150" rx="8" fill="none" stroke="#7c3aed" stroke-dasharray="6 4"/>
+    <text x="272" y="356" font-size="12" font-weight="700" fill="#6d28d9">while the answer is pending  (2.5 s → 6 s backoff; transport that worked last)</text>
+    <line x1="345" y1="384" x2="785" y2="384" stroke="#7c3aed" stroke-width="1.6" marker-end="url(#a)"/>
+    <text x="565" y="377" text-anchor="middle">signed ping + task_id + task_sig  (HMAC over the 4 fields)</text>
+    <line x1="785" y1="418" x2="345" y2="418" stroke="#16a34a" stroke-width="1.6" marker-end="url(#g)"/>
+    <text x="565" y="411" text-anchor="middle">signed pong + task_stage {stage, seq, reason}  (content-free)</text>
+    <text x="565" y="446" text-anchor="middle" fill="#475569">foreign / unknown task id → the same "unknown" · old peer → plain pong → no polling</text>
+    <text x="565" y="466" text-anchor="middle" fill="#475569">audit: stage changes only (not every poll)</text>
+
+    <!-- 5 feed + UI -->
+    <rect x="262" y="506" width="170" height="26" rx="4" fill="#bfdbfe" stroke="#3b82f6"/><text x="347" y="523" text-anchor="middle">stages.jsonl (observed)</text>
+    <line x1="345" y1="556" x2="125" y2="556" stroke="#16a34a" stroke-width="1.6" marker-end="url(#g)"/>
+    <text x="235" y="549" text-anchor="middle">GET /a2a/feed → stages map</text>
+    <text x="125" y="580" text-anchor="middle" fill="#0f172a">spinner "Agent working" · ●●●●○</text>
+
+    <!-- 6 final -->
+    <line x1="970" y1="610" x2="785" y2="610" stroke="#16a34a" stroke-width="1.6" marker-end="url(#g)"/>
+    <text x="878" y="603" text-anchor="middle">result</text>
+    <line x1="785" y1="640" x2="345" y2="640" stroke="#16a34a" stroke-width="1.6" marker-end="url(#g)"/>
+    <text x="565" y="633" text-anchor="middle">signed final answer  ·  stage: completed</text>
+    <text x="125" y="660" text-anchor="middle" fill="#15803d" font-weight="700">✓✓ "Done"</text>
+  </g>
+  <text x="540" y="688" text-anchor="middle" font-size="11" fill="#64748b">No answer after sent? The poller keeps asking: "unconfirmed" resolves to the last known stage.</text>
+</svg>

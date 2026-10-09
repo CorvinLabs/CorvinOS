@@ -575,6 +575,19 @@ export interface A2AFeedMessage {
   thread_ref: A2AThreadRef | null;
 }
 
+/** Furthest stage the peer reported for a task this instance sent. */
+export type A2AStageName =
+  | "delivered" | "accepted" | "processing" | "completed" | "failed" | "rejected" | "timeout";
+
+export interface A2AStageInfo {
+  stage: A2AStageName;
+  stage_seq: number;
+  /** Unix seconds this stage was last observed. */
+  ts: number;
+  /** Closed vocabulary (busy, restart, injection, worker_error, …) or "". */
+  reason: string;
+}
+
 export interface A2AFeedPeer {
   peer_id: string;
   label: string | null;
@@ -601,6 +614,8 @@ export interface A2AFeedResponse {
   has_more: boolean;
   last_seq: number;
   peers: A2AFeedPeer[];
+  /** task_id -> furthest stage the peer reported. Absent on older hosts. */
+  stages?: Record<string, A2AStageInfo>;
 }
 
 export async function getA2AFeed(

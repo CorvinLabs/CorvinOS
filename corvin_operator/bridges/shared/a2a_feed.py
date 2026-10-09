@@ -351,6 +351,92 @@ def record(
         return None
 
 
+# ── stage observations (ADR-2242) ─────────────────────────────────────────
+#
+# What the SENDER learned about the peer's progress on a task it sent
+# (delivered → accepted → processing → terminal), appended by the stage poller.
+# A separate log, not rows in messages.jsonl: every other reader of the message
+# store (context bridge, groups, erasure, task sources) keys on kind task|response
+# and has no business with a status ticker. Content-free: ids, an enum, a number.
+
+_STAGES_FILE = "stages.jsonl"
+_STAGES_MAX_BYTES = 2 * 1024 * 1024
+_STAGES_KEEP_LINES = 1500
+_STAGE_NAMES = frozenset({"delivered", "accepted", "processing",
+                          "completed", "failed", "rejected", "timeout"})
+_STAGE_RANKS = {"delivered": 2, "accepted": 3, "processing": 4,
+                "completed": 5, "failed": 5, "rejected": 5, "timeout": 5}
+
+
+def observe_stage(*, peer_id: str, task_id: str, stage: str, stage_seq: int = 0,
+                  reason: str = "", tenant_id: str | None = None) -> bool:
+    """Append one observed stage. False when dropped (bad input / I/O); never raises."""
+    try:
+        if stage not in _STAGE_NAMES or not peer_id or not task_id:
+            return False
+        root = feed_dir(tenant_id)
+        _ensure_dir(root)
+        line = (json.dumps({
+            "ts": time.time(), "peer_id": str(peer_id)[:128], "task_id": str(task_id)[:64],
+            "stage": stage, "stage_seq": int(stage_seq or 0),
+            "reason": re.sub(r"[^a-z_]", "", str(reason or "").lower())[:24],
+        }) + "\n").encode("utf-8")
+        with _store_lock(root):
+            path = root / _STAGES_FILE
+            try:
+                if path.stat().st_size > _STAGES_MAX_BYTES:
+                    keep = path.read_text(encoding="utf-8").splitlines()[-_STAGES_KEEP_LINES:]
+                    _write_atomic(path, ("\n".join(keep) + "\n").encode("utf-8"))
+            except OSError:
+                pass
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+            try:
+                os.write(fd, line)
+            finally:
+                os.close(fd)
+        return True
+    except Exception:
+        return False
+
+
+def _iter_stage_rows(root: Path) -> list[dict]:
+    cutoff = time.time() - RETENTION_DAYS * 86400
+    return [r for r in _iter_records(root / _STAGES_FILE)
+            if r.get("stage") in _STAGE_NAMES and (r.get("ts") or 0.0) >= cutoff]
+
+
+def latest_stages(*, task_ids: Iterable[str] | None = None, peer_id: str | None = None,
+                  tenant_id: str | None = None) -> dict[str, dict]:
+    """task_id -> the furthest observed stage ``{stage, stage_seq, ts, reason}``.
+
+    "Furthest" is by rank, ties by time, so an out-of-order or replayed row can
+    never pull a task back (same monotonic rule as the receiver)."""
+    want = set(task_ids) if task_ids is not None else None
+    out: dict[str, dict] = {}
+    for r in _iter_stage_rows(feed_dir(tenant_id)):
+        tid = r.get("task_id")
+        if (want is not None and tid not in want) or (peer_id and r.get("peer_id") != peer_id):
+            continue
+        cur = out.get(tid)
+        if cur is None or (_STAGE_RANKS[r["stage"]], r.get("ts") or 0.0) > (
+                _STAGE_RANKS[cur["stage"]], cur["ts"]):
+            out[tid] = {"stage": r["stage"], "stage_seq": int(r.get("stage_seq") or 0),
+                        "ts": r.get("ts") or 0.0, "reason": r.get("reason") or ""}
+    return out
+
+
+def stage_timeline(task_id: str, tenant_id: str | None = None) -> list[dict]:
+    """Every observed stage of one task, oldest first (distinct consecutive stages)."""
+    rows = sorted((r for r in _iter_stage_rows(feed_dir(tenant_id)) if r.get("task_id") == task_id),
+                  key=lambda r: r.get("ts") or 0.0)
+    out: list[dict] = []
+    for r in rows:
+        if not out or out[-1]["stage"] != r["stage"]:
+            out.append({"stage": r["stage"], "ts": r.get("ts") or 0.0,
+                        "reason": r.get("reason") or ""})
+    return out
+
+
 # ── read ──────────────────────────────────────────────────────────────────
 
 def _iter_records(path: Path) -> Iterable[dict]:
@@ -566,7 +652,7 @@ def erase_peer(subject_id: str, tenant_id: str | None = None) -> tuple[int, int]
         return 0, 0
     root = feed_dir(tenant_id)
     path = root / "messages.jsonl"
-    if not path.exists():
+    if not path.exists() and not (root / _STAGES_FILE).exists():
         return 0, 0
     with _store_lock(root):
         overrides = _load_overrides(root)
@@ -575,10 +661,18 @@ def erase_peer(subject_id: str, tenant_id: str | None = None) -> tuple[int, int]
         # it wiped every peer that happened to share it (review R4).
         keep = [r for r in records if r.get("peer_id") != subject_id]
         removed = len(records) - len(keep)
+        _sp = root / _STAGES_FILE
+        if _sp.exists():
+            _srows = list(_iter_records(_sp))
+            _skeep = [r for r in _srows if r.get("peer_id") != subject_id]
+            if len(_skeep) != len(_srows):
+                _write_atomic(_sp, "".join(json.dumps(r) + "\n" for r in _skeep).encode("utf-8"))
+                removed += len(_srows) - len(_skeep)
         if not removed:
             return 0, 0
-        _write_atomic(path, "".join(
-            json.dumps(r, ensure_ascii=False) + "\n" for r in keep).encode("utf-8"))
+        if len(keep) != len(records):
+            _write_atomic(path, "".join(
+                json.dumps(r, ensure_ascii=False) + "\n" for r in keep).encode("utf-8"))
         if overrides:
             _write_atomic(root / "seq_overrides.json", b"{}")
         referenced = {a.get("sha256") for r in keep for a in r.get("attachments") or []}
@@ -604,7 +698,7 @@ def clear(tenant_id: str | None = None) -> tuple[int, int]:
     path = root / "messages.jsonl"
     with _store_lock(root):
         msgs = sum(1 for _ in _iter_records(path))
-        for f in (path, root / "seq_overrides.json"):
+        for f in (path, root / "seq_overrides.json", root / _STAGES_FILE, root / "task_state.jsonl"):
             try:
                 f.unlink()
             except FileNotFoundError:
@@ -622,4 +716,5 @@ def clear(tenant_id: str | None = None) -> tuple[int, int]:
 __all__ = [
     "FEED_DIRNAME", "RETENTION_DAYS", "MAX_FEED_BYTES",
     "feed_dir", "record", "read", "read_page", "blob_path", "compact", "clear",
+    "observe_stage", "latest_stages", "stage_timeline",
 ]

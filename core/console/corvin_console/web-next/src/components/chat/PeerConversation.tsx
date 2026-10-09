@@ -13,7 +13,7 @@
  */
 import * as React from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Bot, Globe2, Loader2, Paperclip, Send, Mic, MicOff, FolderUp, Square } from "lucide-react";
+import { AlertTriangle, Bot, Check, CheckCheck, CircleHelp, Clock, Globe2, Loader2, Paperclip, Send, Mic, MicOff, FolderUp, Square, XCircle, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -23,8 +23,11 @@ import {
   a2aFeedBlobUrl, encodeFilesForA2A, getA2AFeed, getPeerThreadCommands,
   sendA2AFeedMessage, sendPeerThreadCommand,
   A2AAttachmentLimitError, A2A_MAX_ATTACHMENTS_COUNT, A2A_MAX_ATTACHMENTS_TOTAL_BYTES,
-  type A2AFeedMessage,
+  type A2AFeedMessage, type A2AStageInfo,
 } from "@/lib/api/a2a";
+import {
+  formatAge, messageStatusView, type MessageStatusView, type StatusIcon, type StatusTone,
+} from "@/lib/a2a-message-status";
 import {
   inlineImageNames, isMinePeerRole, isObserverModeEmptyReply, mediaKind, messageMarkdown,
   peerMessageRole, peerRoleLabel, referencedImageAttachment,
@@ -41,14 +44,62 @@ import { useAutosizeTextarea } from "@/hooks/use-autosize-textarea";
 import { DropOverlay } from "./DropOverlay";
 
 const FEED_REFETCH_MS = 4_000;
+/** Faster while a message of ours is still on its way, so the symbol follows the peer. */
+const FEED_REFETCH_INFLIGHT_MS = 2_000;
 
 function fmtTime(ts: number): string {
   return new Date(ts * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-const QUEUED_STALE_S = 3600 + 120; // max send timeout + slack
+const STATUS_ICON: Record<StatusIcon, LucideIcon> = {
+  clock: Clock, check: Check, "check-check": CheckCheck, spinner: Loader2, x: XCircle, help: CircleHelp,
+};
+const STATUS_TONE: Record<StatusTone, string> = {
+  muted: "text-muted-foreground",
+  info: "text-sky-600 dark:text-sky-400",
+  working: "text-sky-600 dark:text-sky-400",
+  success: "text-emerald-600 dark:text-emerald-400",
+  warning: "text-amber-700 dark:text-amber-400",
+  danger: "text-destructive",
+};
+const CHAIN_DOT: Record<string, string> = {
+  done: "bg-current opacity-80", current: "bg-current ring-2 ring-current/30",
+  pending: "bg-muted-foreground/30", failed: "bg-destructive",
+};
 
-const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, answered }: { m: A2AFeedMessage; label: string; answered: boolean }) {
+/**
+ * The status symbol that stays on EVERY message, whatever its state — a tick, a clock, a
+ * spinner, a cross or a question mark — with the whole chain for messages we sent
+ * (queued → sent → delivered → accepted → working → done). The mapping lives in
+ * lib/a2a-message-status.ts; this only draws it.
+ */
+export function MessageStatusSymbol({ v, mine }: { v: MessageStatusView; mine: boolean }) {
+  const Icon = STATUS_ICON[v.icon];
+  const chainText = v.chain.length
+    ? `\n${v.chain.map((c) => `${c.state === "done" ? "✓" : c.state === "current" ? "●" : c.state === "failed" ? "✗" : "○"} ${c.label}`).join("\n")}`
+    : "";
+  return (
+    <div data-testid="peer-message-status" data-status={v.key}
+      title={`${v.detail}${chainText}`}
+      className={cn("mt-1 flex items-center gap-1 px-1 text-[11px]", STATUS_TONE[v.tone], mine ? "justify-end" : "justify-start")}>
+      <Icon aria-hidden className={cn("h-3.5 w-3.5 shrink-0", v.icon === "spinner" && "motion-safe:animate-spin")} />
+      <span>{v.label}</span>
+      {v.chain.length > 0 && (
+        <span className="ml-0.5 flex items-center gap-[3px]" aria-hidden data-testid="peer-message-chain">
+          {v.chain.map((c) => <span key={c.key} data-state={c.state} className={cn("h-1.5 w-1.5 rounded-full", CHAIN_DOT[c.state])} />)}
+        </span>
+      )}
+      {v.observedAgeS !== null && v.icon !== "check-check" && v.tone !== "danger" && (
+        <span className="text-muted-foreground">· {formatAge(v.observedAgeS)}</span>
+      )}
+      <span className="sr-only">{v.detail}</span>
+    </div>
+  );
+}
+
+const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, reply, stage, now }: {
+  m: A2AFeedMessage; label: string; reply: A2AFeedMessage | null; stage: A2AStageInfo | null; now: number;
+}) {
   // Four actors, not two (ADR-2235): who authored this line is derived from
   // (direction, kind) — or from thread_ref when a moderated conversation's
   // turn-prompt overrides it — never guessed from the text itself.
@@ -61,11 +112,9 @@ const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, answered }
   // resend (a resend runs it twice). "queued": accepted, waiting to be sent.
   const unconfirmed = m.status === "unconfirmed";
   const failed = !unconfirmed && (Boolean(m.error) || ["rejected", "timeout", "error"].includes(m.status));
-  // A queued send lives in the host process's pool; after a restart nothing
-  // sends it. Past the longest send timeout it is reported as not sent.
-  const staleQueued = m.status === "queued" && !answered && Date.now() / 1000 - m.ts > QUEUED_STALE_S;
-  const showStatus = m.status && m.status !== "ok" && m.status !== "received" && m.status !== "sent"
-    && !(m.status === "queued" && answered);
+  // The status symbol: what the feed knows about this message, its reply and the
+  // stage the peer reported — one pure mapping (lib/a2a-message-status.ts).
+  const statusView = messageStatusView(m, { reply, stage, now });
   // Same Markdown renderer as the chat. Peer-authored text never loads a URL
   // it chose (blockRemoteImages); an image it names by attachment filename is
   // shown inline from this console's own blob store and not listed twice.
@@ -87,12 +136,6 @@ const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, answered }
           <span>{m.kind === "task" ? "message" : "reply"}</span>
           <span>·</span>
           <span>{fmtTime(m.ts)}</span>
-          {showStatus && (
-            <Badge variant={failed ? "danger" : "outline"} data-testid="peer-message-status"
-              className={cn("px-1.5 py-0 text-[9px]", unconfirmed && "border-amber-500/50 text-amber-700 dark:text-amber-400")}>
-              {unconfirmed ? "delivery unconfirmed" : staleQueued ? "not sent (interrupted)" : m.status}
-            </Badge>
-          )}
         </div>
         <div className={cn(
           "w-fit max-w-full rounded-2xl px-4 py-3 text-sm leading-relaxed",
@@ -141,6 +184,7 @@ const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, answered }
             </div>
           )}
         </div>
+        <MessageStatusSymbol v={statusView} mine={mine} />
       </div>
     </div>
   );
@@ -180,7 +224,15 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
   const feed = useQuery({
     queryKey: ["a2a", "feed", "peer", peerId],
     queryFn: ({ signal }) => getA2AFeed({ peer_id: peerId, limit: 200, include_former: true }, signal),
-    refetchInterval: FEED_REFETCH_MS,
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      if (!d) return FEED_REFETCH_MS;
+      const replied = new Set(d.messages.filter((m) => m.kind === "response").map((m) => m.task_id));
+      const inFlight = d.messages.some((m) => m.direction === "out" && m.kind === "task"
+        && !replied.has(m.task_id) && (m.status === "queued" || m.status === "sent")
+        && !["completed", "failed", "rejected", "timeout"].includes(d.stages?.[m.task_id]?.stage ?? ""));
+      return inFlight ? FEED_REFETCH_INFLIGHT_MS : FEED_REFETCH_MS;
+    },
   });
   // Polled faster while a conversation in THIS thread is running, so the
   // inline banner's turn counter and the "collapses when done" transition
@@ -256,8 +308,15 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
   const peer = feed.data?.peers.find((p) => p.peer_id === peerId);
   const label = peer?.label || peerId;
   const msgs = React.useMemo(() => feed.data?.messages ?? [], [feed.data]);
-  const answeredTasks = React.useMemo(
-    () => new Set(msgs.filter((m) => m.kind === "response").map((m) => m.task_id)), [msgs]);
+  // task_id -> the reply record, so the symbol of a task knows HOW it was answered
+  // (ok / refused / unconfirmed), not just that it was.
+  const repliesByTask = React.useMemo(() => {
+    const byTask = new Map<string, A2AFeedMessage>();
+    for (const m of msgs) if (m.kind === "response") byTask.set(m.task_id, m);
+    return byTask;
+  }, [msgs]);
+  const stages = feed.data?.stages;
+  const nowS = Math.floor((feed.dataUpdatedAt || Date.now()) / 1000);
   // Reachable is not the same as accepting: a peer can answer pings while
   // refusing every task (e.g. it requires a verified CorvinOS identity).
   const lastReply = React.useMemo(() => {
@@ -366,7 +425,9 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
             <p className="pt-10 text-center text-sm text-muted-foreground">No messages with this agent yet.</p>
           )}
           {msgs.map((m) => <PeerMessageRow key={m.id} m={m} label={label}
-            answered={m.kind === "task" && answeredTasks.has(m.task_id)} />)}
+            reply={m.kind === "task" ? repliesByTask.get(m.task_id) ?? null : null}
+            stage={m.kind === "task" && m.direction === "out" ? stages?.[m.task_id] ?? null : null}
+            now={nowS} />)}
           {error && (
             <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {error}

@@ -381,6 +381,36 @@ def process_ping_request(
         "server_time": now,
     }
 
+    # ADR-2242: optional task-stage query riding on the ping. The ping's own
+    # signature stays over the original three fields (older peers verify it and
+    # simply ignore the extra keys, answering a plain pong — which is how a
+    # sender learns the peer has no stage support). The query is authenticated by
+    # its own HMAC over the three fields PLUS the queried task_id, so a captured
+    # ping cannot be re-targeted at another task. Answered only for tasks THIS
+    # origin sent; foreign/unknown ids answer the same {"stage": "unknown"}.
+    try:
+        _qid, _qsig = req.get("task_id"), req.get("task_sig")
+        if (isinstance(_qid, str) and isinstance(_qsig, str) and 0 < len(_qid) <= 128
+                and _is_hex64(_qsig)):
+            _qcanon = json.dumps(
+                {"ping_id": ping_id, "issued_at": issued_at,
+                 "origin_id": origin_id, "task_id": _qid},
+                separators=(",", ":"), sort_keys=True)
+            _qexp = _hmac.new(bytes.fromhex(origin_cfg["hmac_key"]),
+                              _qcanon.encode("utf-8"), hashlib.sha256).hexdigest()
+            if _hmac.compare_digest(_qsig.lower(), _qexp):
+                import a2a_task_state as _ats  # noqa: PLC0415
+                response["task_stage"] = _ats.lookup(origin_id, _qid)
+                _audit = getattr(receiver, "_audit_best_effort", None)
+                if _audit is not None and _ats.note_query(
+                        origin_id, _qid, response["task_stage"].get("stage", "unknown")):
+                    _audit("A2A.task_status_queried", "INFO",
+                           {"task_id": _qid[:128], "origin_id": origin_id[:128],
+                            "stage": response["task_stage"].get("stage", "unknown"),
+                            "via": "responder"})
+    except Exception:  # noqa: BLE001 — a failed stage lookup is still a valid pong
+        response.pop("task_stage", None)
+
     # Sign response with recv_key
     response_canonical = json.dumps(response, separators=(",", ":"), sort_keys=True)
     try:

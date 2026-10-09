@@ -1085,13 +1085,21 @@ class RemoteTriggerSender:
         wire_instruction = instruction
         if not (instruction or "").strip() and attachments:
             wire_instruction = ATTACHMENTS_ONLY_INSTRUCTION
-        result = self._send_impl(
-            endpoint_id, wire_instruction,
-            result_schema=result_schema, ttl_s=ttl_s, timeout_s=timeout_s,
-            attachments=attachments, purpose_id=purpose_id,
-            attestation=attestation, task_id=task_id, group_id=group_id,
-            federation=federation,
-        )
+        poller = _StagePoller(self, endpoint_id, task_id, ttl_s) if in_feed else None
+        if poller is not None:
+            poller.start()
+        result = None
+        try:
+            result = self._send_impl(
+                endpoint_id, wire_instruction,
+                result_schema=result_schema, ttl_s=ttl_s, timeout_s=timeout_s,
+                attachments=attachments, purpose_id=purpose_id,
+                attestation=attestation, task_id=task_id, group_id=group_id,
+                federation=federation,
+            )
+        finally:
+            if poller is not None:
+                poller.finish(result)
         if in_feed:
             _record_feed_response(endpoint_id, result, peer_label)
         return result
@@ -1278,6 +1286,7 @@ class RemoteTriggerSender:
         except TransportError as direct_exc:
             failure: TransportError = direct_exc
             if not direct_exc.maybe_delivered:
+                _note_via(endpoint_id, "relay")  # ADR-2242: the stage poller starts there
                 try:
                     raw = self._relay_post(cfg, endpoint_id, envelope, timeout_s)
                     via = "relay"
@@ -1632,7 +1641,9 @@ class RemoteTriggerSender:
         return result
 
     def _http_ping_probe(
-        self, endpoint_id: str, timeout_s: float = 5, audit: bool = True
+        self, endpoint_id: str, timeout_s: float = 5, audit: bool = True,
+        *, task_id: str | None = None, out: dict | None = None,
+        prefer_relay: bool = False,
     ) -> tuple[bool, str | None, str | None, str]:
         """ADR-0199: Signed ping request-response (network probe).
 
@@ -1671,6 +1682,20 @@ class RemoteTriggerSender:
             hashlib.sha256,
         ).hexdigest()
         ping_request["signature"] = signature
+        if task_id:
+            # ADR-2242 task-stage query: the ping's own signature above stays over the
+            # original three fields, so a peer that predates this just ignores the extra
+            # keys and answers a plain pong. The query itself is authenticated by a
+            # second HMAC that also covers task_id (a captured ping cannot be
+            # re-aimed at another task).
+            ping_request["task_id"] = str(task_id)[:128]
+            ping_request["task_sig"] = _hmac.new(
+                bytes.fromhex(cfg["hmac_key"]),
+                json.dumps({"ping_id": ping_id, "issued_at": issued_at,
+                            "origin_id": origin_id, "task_id": ping_request["task_id"]},
+                           separators=(",", ":"), sort_keys=True).encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
 
         # POST to /v1/a2a/ping. cfg["url"] is the full RECEIVE url
         # (".../v1/a2a/receive") — strip that suffix to get the base, then
@@ -1691,25 +1716,38 @@ class RemoteTriggerSender:
         # only), so a relay retry after ANY direct failure is harmless — the
         # delivered-or-not gate that protects send() is not needed here.
         via = "direct"
-        try:
-            raw = self._http_post(ping_url, ping_request, timeout_s)
-        except TransportError as direct_exc:
+        relay_cfg = dict(cfg, _sender_instance_id=self._instance_id)
+        if prefer_relay and _via_hint(endpoint_id) == "relay":
+            # A poller that already knows the direct route is dead must not pay its
+            # connect timeout on every probe (a LAN peer that moved takes ~10 s to fail).
             try:
-                # The relay payload's self-delivery marker / instance tag must
-                # be THIS sender's identity (an explicit instance_id may differ
-                # from the process identity — e2e hosts, tests).
-                relay_cfg = dict(cfg, _sender_instance_id=self._instance_id)
                 raw = self._relay_ping(relay_cfg, endpoint_id, ping_request, timeout_s)
                 via = "relay"
-                if audit:
-                    self._audit_best_effort(
-                        "A2A.relay_fallback_used", "INFO",
-                        {"endpoint_id": endpoint_id, "reason": direct_exc.reason,
-                         "source": "ping", "via": "relay"},
-                    )
-            except TransportError as exc:
-                error_cat, error_det = self._categorize_transport_error(direct_exc)
-                return False, error_cat, error_det, "direct"
+            except TransportError:
+                try:
+                    raw = self._http_post(ping_url, ping_request, timeout_s)
+                except TransportError as direct_exc:
+                    error_cat, error_det = self._categorize_transport_error(direct_exc)
+                    return False, error_cat, error_det, "direct"
+        else:
+            try:
+                raw = self._http_post(ping_url, ping_request, timeout_s)
+            except TransportError as direct_exc:
+                try:
+                    # The relay payload's self-delivery marker / instance tag must
+                    # be THIS sender's identity (an explicit instance_id may differ
+                    # from the process identity — e2e hosts, tests).
+                    raw = self._relay_ping(relay_cfg, endpoint_id, ping_request, timeout_s)
+                    via = "relay"
+                    if audit:
+                        self._audit_best_effort(
+                            "A2A.relay_fallback_used", "INFO",
+                            {"endpoint_id": endpoint_id, "reason": direct_exc.reason,
+                             "source": "ping", "via": "relay"},
+                        )
+                except TransportError as exc:
+                    error_cat, error_det = self._categorize_transport_error(direct_exc)
+                    return False, error_cat, error_det, "direct"
 
         # Verify response signature with recv_key
         try:
@@ -1759,7 +1797,40 @@ class RemoteTriggerSender:
             self._tofu_pin_instance(cfg, endpoint_id, received_iid)
 
         # Success
+        _note_via(endpoint_id, via)
+        if out is not None:
+            out["response"] = response
+            out["via"] = via
         return True, None, None, via
+
+    def task_status(self, endpoint_id: str, task_id: str, timeout_s: float = 8) -> dict:
+        """ADR-2242: ask the peer how far ``task_id`` has come (signed, content-free).
+
+        Returns ``{reachable, supported, stage, stage_seq, reason, via}``. ``supported`` is
+        False when the peer answered a plain pong (no ``task_stage``) — an older build.
+        ``stage`` is ``"unknown"`` when the peer has no record of the task (yet, or ever).
+        Never raises."""
+        res: dict = {"reachable": False, "supported": False, "stage": "unknown",
+                     "stage_seq": 0, "reason": "", "via": "direct"}
+        try:
+            out: dict = {}
+            ok, _cat, _det, via = self._http_ping_probe(
+                endpoint_id, timeout_s=max(2, min(10, timeout_s)), audit=False,
+                task_id=task_id, out=out, prefer_relay=True)
+            res["via"] = via
+            if not ok:
+                return res
+            res["reachable"] = True
+            ts = out.get("response", {}).get("task_stage")
+            if isinstance(ts, dict) and ts.get("stage") in _STAGE_VOCAB:
+                res["supported"] = True
+                res["stage"] = ts["stage"]
+                res["stage_seq"] = int(ts.get("stage_seq") or 0)
+                r = str(ts.get("reason") or "")
+                res["reason"] = r if _re.fullmatch(r"[a-z_]{0,24}", r) else ""
+        except Exception:  # noqa: BLE001
+            pass
+        return res
 
     # ── Internals ─────────────────────────────────────────────────────
 
@@ -2529,6 +2600,126 @@ _PUBLIC_REJECTION_TEXT: dict[str, str] = {
     "group_message_refused": "The peer did not accept this group message "
                              "(not a member there, or the group is unknown to it)",
 }
+
+
+# ── ADR-2242: task-stage polling ──────────────────────────────────────────
+
+_STAGE_VOCAB = frozenset({"unknown", "delivered", "accepted", "processing",
+                          "completed", "failed", "rejected", "timeout"})
+_STAGE_TERMINAL = frozenset({"completed", "failed", "rejected", "timeout"})
+_VIA_HINTS: dict[str, tuple[str, float]] = {}
+_NO_STAGE_SUPPORT: dict[str, float] = {}
+_HINT_TTL_S = 600
+_POLLER_SLOTS = threading.BoundedSemaphore(8)
+_POLL_MAX_S = 900
+
+
+def _note_via(endpoint_id: str, via: str) -> None:
+    """Remember which transport last worked for a peer (the poller starts there)."""
+    if len(_VIA_HINTS) > 256:
+        _VIA_HINTS.clear()
+    _VIA_HINTS[str(endpoint_id)[:128]] = (via, time.time())
+
+
+def _via_hint(endpoint_id: str) -> str:
+    v = _VIA_HINTS.get(str(endpoint_id)[:128])
+    return v[0] if v and time.time() - v[1] < _HINT_TTL_S else ""
+
+
+class _StagePoller:
+    """Asks the peer how far a task has come while ``send()`` blocks on the answer.
+
+    Runs in a daemon thread, one per in-flight 1:1 task (bounded). Observed stages go
+    to the feed's stage log; the UI reads them from there. It outlives ``send()`` only
+    when the answer never arrived (``unconfirmed``/timeout) — then it keeps asking until
+    the task is terminal, the peer has never heard of it, or the TTL window ends — so an
+    unconfirmed message resolves to the truth instead of a dead end.
+    """
+
+    def __init__(self, sender: "RemoteTriggerSender", endpoint_id: str, task_id: str,
+                 ttl_s: int | None) -> None:
+        self._s, self._ep, self._tid = sender, endpoint_id, task_id
+        self._deadline = time.time() + min(_POLL_MAX_S, (ttl_s or 300) + 120)
+        self._done = threading.Event()
+        self._final: Any = None
+        self._held = False
+
+    def start(self) -> bool:
+        try:
+            if time.time() - _NO_STAGE_SUPPORT.get(self._ep, 0.0) < _HINT_TTL_S:
+                return False
+            if not _POLLER_SLOTS.acquire(blocking=False):
+                return False
+            self._held = True
+            threading.Thread(target=self._run, name="a2a-stage-poll", daemon=True).start()
+            return True
+        except Exception:  # noqa: BLE001
+            if self._held:
+                _POLLER_SLOTS.release()
+                self._held = False
+            return False
+
+    def finish(self, result: Any) -> None:
+        self._final = result
+        self._done.set()
+
+    def _observe(self, stage: str, seq: int, reason: str, via: str, last: str | None) -> None:
+        import a2a_feed  # type: ignore[import-not-found]  # noqa: PLC0415
+        a2a_feed.observe_stage(peer_id=self._ep, task_id=self._tid, stage=stage,
+                               stage_seq=seq, reason=reason)
+        self._s._audit_best_effort(
+            "A2A.task_status_queried", "INFO",
+            {"endpoint_id": self._ep, "task_id": self._tid, "stage": stage, "via": via})
+
+    def _run(self) -> None:
+        try:
+            self._loop()
+        except Exception:  # noqa: BLE001 — a status ticker must never hurt a send
+            pass
+        finally:
+            if self._held:
+                self._held = False
+                _POLLER_SLOTS.release()
+
+    def _loop(self) -> None:
+        interval, fails, unknown, last = 2.5, 0, 0, None
+        time.sleep(1.5)  # the envelope is on its way; an earlier query only says "unknown"
+        while time.time() < self._deadline:
+            fin = self._final if self._done.is_set() else None
+            if self._done.is_set():
+                if fin is not None and getattr(fin, "ok", False):
+                    self._observe("completed", 0, "", "direct", last)
+                    return
+                if fin is not None and getattr(fin, "status", "") in ("rejected", "timeout"):
+                    self._observe(fin.status, 0, "", "direct", last)
+                    return
+                if fin is None or not getattr(fin, "maybe_delivered", False):
+                    return  # provably never delivered (or the send blew up): nothing to follow
+            res = self._s.task_status(self._ep, self._tid)
+            if res["reachable"] and not res["supported"]:
+                _NO_STAGE_SUPPORT[self._ep] = time.time()
+                return
+            if not res["reachable"]:
+                fails += 1
+                if self._done.is_set() and fails >= 3:
+                    return
+                interval = min(interval * 1.5, 15.0)
+            else:
+                fails = 0
+                stage = res["stage"]
+                if stage == "unknown":
+                    unknown += 1
+                    if self._done.is_set() and unknown >= 6:
+                        return  # the peer never heard of it
+                else:
+                    unknown = 0
+                    if stage != last:
+                        self._observe(stage, res["stage_seq"], res["reason"], res["via"], last)
+                        last = stage
+                    if stage in _STAGE_TERMINAL:
+                        return
+                interval = min(interval * 1.2, 6.0 if not self._done.is_set() else 10.0)
+            self._done.wait(interval)
 
 
 def _record_feed_task(

@@ -266,7 +266,7 @@ class A2ASendConfirmRouteTests(_Sandbox):
         # usable for the rest of the suite.
         done = threading.Event()
 
-        def _fake_send_in_background(peer_id, text, atts, timeout_s):
+        def _fake_send_in_background(peer_id, text, atts, timeout_s, task_id=None):
             sent.append((peer_id, text))
             done.set()
 

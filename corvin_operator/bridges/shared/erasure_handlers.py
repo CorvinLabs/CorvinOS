@@ -2003,6 +2003,11 @@ class A2AFeedHandler:
         try:
             import a2a_feed as _feed  # noqa: PLC0415
             msgs, blobs = _feed.erase_peer(subject_id, tenant_id=self.tenant_id)
+            try:  # ADR-2242: the receiver-side stage record of this peer's tasks
+                import a2a_task_state as _ats  # noqa: PLC0415
+                msgs += _ats.erase_origin(subject_id, tenant_id=self.tenant_id)
+            except Exception:  # noqa: BLE001 — covered by the generic path purge below
+                pass
             # Plus the documented generic rule every covered store honours
             # (subject-named files, identity-keyed records), under the
             # store's own lock.
