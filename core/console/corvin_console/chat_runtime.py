@@ -1252,6 +1252,47 @@ def _turn_text(turn: dict[str, Any]) -> str:
     return "".join(out)
 
 
+def _ordered_turn_parts(
+    assistant_parts: list[dict[str, Any]],
+    final_text_parts: list[str],
+    ann_suffix: str = "",
+) -> "list[dict[str, Any]] | None":
+    """Persisted parts in ARRIVAL order (text, tool, text, ...), like the live stream.
+
+    The live UI appends text and tool cards as they arrive, so a turn ends with its
+    closing text. Persisting ONE glued text part before ALL tool parts made a reload
+    show the closing summary above dozens of tool cards (and run the narration
+    together: "...an.Der Install-Pfad..."). Adjacent text blocks are merged exactly as
+    the live reducer merges them; the concatenated text equals the legacy combined
+    text. Returns None when the ordered text does not add up to ``final_text_parts``
+    (text appended elsewhere) — the caller then keeps the legacy layout.
+    """
+    out: list[dict[str, Any]] = []
+    for p in assistant_parts:
+        if p.get("kind") == "text" and p.get("text"):
+            if out and out[-1]["kind"] == "text":
+                out[-1] = {"kind": "text", "text": out[-1]["text"] + p["text"]}
+            else:
+                out.append({"kind": "text", "text": p["text"]})
+        elif p.get("kind") == "tool":
+            out.append(p)
+    if "".join(x["text"] for x in out if x["kind"] == "text") != "".join(final_text_parts):
+        return None
+    first = next((x for x in out if x["kind"] == "text"), None)
+    if first is not None:
+        first["text"] = first["text"].lstrip()
+    last = next((x for x in reversed(out) if x["kind"] == "text"), None)
+    if last is not None:
+        last["text"] = last["text"].rstrip()
+    out = [x for x in out if x["kind"] != "text" or x["text"]]
+    if ann_suffix:
+        if out and out[-1]["kind"] == "text":
+            out[-1] = {"kind": "text", "text": (out[-1]["text"] + "\n\n" + ann_suffix).strip()}
+        else:
+            out.append({"kind": "text", "text": ann_suffix.strip()})
+    return out
+
+
 def attach_voice_artifacts(tenant_id: str, sid: str,
                            turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Append each assistant turn's archived voice file as an artifact part.
@@ -7491,6 +7532,7 @@ async def _stream_turn_impl(
                         if btype == "text" and block.get("text"):
                             text = str(block["text"])
                             final_text_parts.append(text)
+                            assistant_parts.append({"kind": "text", "text": text})
                             tm.record_event(task_id, {"event": "stream_token", "chunk": text})
                             yield {"type": "delta", "text": text}
                         elif btype == "tool_use":
@@ -7662,6 +7704,7 @@ async def _stream_turn_impl(
                     limit=_bgs.child_max_s() if _bg_cut == "child_cap" else float(_bgs.wakeup_max()),  # ADR-2236
                     partial=_bg_held)                                            # ADR-2236
                 final_text_parts.append("\n\n" + _cut)                          # ADR-2236
+                assistant_parts.append({"kind": "text", "text": "\n\n" + _cut})
                 yield {"type": "delta", "text": "\n\n" + _cut}                   # ADR-2236
                 result_text = _cut                                               # ADR-2236
             elif _bg.open_children and rc != 0:                                  # ADR-2236
@@ -7674,6 +7717,7 @@ async def _stream_turn_impl(
                                 reason_code="process_died")                      # ADR-2236
                 _bg_cut = "process_died"                                         # ADR-2236
                 final_text_parts.append("\n\n" + _died)                         # ADR-2236
+                assistant_parts.append({"kind": "text", "text": "\n\n" + _died})
                 yield {"type": "delta", "text": "\n\n" + _died}                  # ADR-2236
                 result_text = _died                                              # ADR-2236
             else:                                                                # ADR-2236
@@ -7796,9 +7840,13 @@ async def _stream_turn_impl(
     # derivations byte-identical forever.
     _spoken_text = (result_text + "\n\n" + _ann_suffix) if _ann_suffix else result_text
     parts_persisted: list[dict[str, Any]] = []
-    if combined_text:
-        parts_persisted.append({"kind": "text", "text": combined_text})
-    parts_persisted.extend(p for p in assistant_parts if p.get("kind") == "tool")
+    _ordered = _ordered_turn_parts(assistant_parts, final_text_parts, _ann_suffix)
+    if _ordered is not None:
+        parts_persisted.extend(_ordered)
+    else:
+        if combined_text:
+            parts_persisted.append({"kind": "text", "text": combined_text})
+        parts_persisted.extend(p for p in assistant_parts if p.get("kind") == "tool")
     # Artifact parts are added after the subprocess scan below; collect them here
     # and append to the turn after emitting the artifact events.
     _artifact_parts_buf: list[dict[str, Any]] = []

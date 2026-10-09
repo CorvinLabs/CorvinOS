@@ -106,6 +106,47 @@ class NativeTurnVoiceSummaryE2E(unittest.TestCase):
         _events, calls = self._turn(voice_on=False)
         self.assertEqual(calls, [])
 
+    def test_a_reloaded_turn_ends_with_its_closing_text_after_the_tool_cards(self):
+        """Persisted parts keep ARRIVAL order (text, tool, text, tool, closing text), so the
+        closing summary is at the END after a reload, as it is live."""
+        def msg(*blocks):
+            return {"type": "assistant", "message": {"role": "assistant",
+                                                     "content": list(blocks)}, "session_id": "S"}
+
+        def tool(name):
+            return {"type": "tool_use", "id": "t-" + name, "name": name, "input": {"command": "ls"}}
+
+        def text(t):
+            return {"type": "text", "text": t}
+
+        events = [{"type": "system", "subtype": "init", "model": "claude-haiku-5-5",
+                   "session_id": "S", "_t": 0.1},
+                  {**msg(text("Ich lese zuerst.")), "_t": 0.2},
+                  {**msg(tool("Bash")), "_t": 0.3},
+                  {**msg(text("Jetzt schreibe ich.")), "_t": 0.4},
+                  {**msg(tool("Bash")), "_t": 0.5},
+                  {**msg(tool("Bash")), "_t": 0.6},
+                  {**msg(text("Fertig: alles gruen.")), "_t": 0.7},
+                  {"type": "result", "subtype": "success", "is_error": False,
+                   "result": "Fertig: alles gruen.", "terminal_reason": "completed",
+                   "stop_reason": "end_turn", "num_turns": 1,
+                   "usage": {"input_tokens": 2, "output_tokens": 4}, "session_id": "S", "_t": 0.8},
+                  {"type": "_eof", "_t": 0.9, "rc": 0, "session_id": "S"}]
+        fx = kit.write_fixture(self.home / "fx", "tools_then_closing_text", events)
+        os.environ.update(kit.fake_env(self.home, fx, speedup=4.0, child=False))
+        self.cr.note_voice_on("_default", self.sess.sid, False)
+
+        async def go():
+            return [ev async for ev in self.cr.stream_turn(self.sess, "bitte arbeiten")]
+
+        asyncio.run(go())
+        assistant = [t for t in self.cr.read_turns("_default", self.sess.sid, limit=10)
+                     if t.get("role") == "assistant"][-1]
+        kinds = [p["kind"] for p in assistant["parts"]]
+        self.assertEqual(kinds, ["text", "tool", "text", "tool", "tool", "text"], kinds)
+        self.assertEqual(assistant["parts"][-1]["text"], "Fertig: alles gruen.")
+        self.assertEqual(assistant["parts"][0]["text"], "Ich lese zuerst.")
+
 
 if __name__ == "__main__":
     unittest.main()
