@@ -149,6 +149,52 @@ export function getInstallProgress(jobId: string, signal?: AbortSignal): Promise
   return api<InstallJob>(`/api/v1/marketplace/install/${encodeURIComponent(jobId)}/progress`, { signal });
 }
 
+// ── Plugin updates ───────────────────────────────────────────────────────
+
+export interface PluginUpdate {
+  plugin_id: string;      // marketplace index id
+  registry_id: string;    // key of the installed record
+  name: string;
+  installed_version: string;
+  latest_version: string;
+  enabled: boolean;
+}
+
+export interface UpdateList {
+  updates: PluginUpdate[];
+  count: number;
+  /** True when the plugin source was re-synced from GitHub for this call. */
+  refreshed: boolean;
+  /** True for a git checkout / CORVIN_MARKETPLACE_ROOT: the operator updates it. */
+  source_managed_by_operator: boolean;
+}
+
+export interface UpdateResult {
+  status: "completed";
+  from_version: string;
+  to_version: string;
+  enabled: boolean;
+  escalations: string[];
+  settings_dropped: string[];
+  restart_recommended: boolean;
+}
+
+export function listPluginUpdates(refresh: boolean, signal?: AbortSignal): Promise<UpdateList> {
+  return api<UpdateList>(`/api/v1/marketplace/updates${refresh ? "?refresh=true" : ""}`, { signal });
+}
+
+/** `approveEscalations` is the operator's explicit OK for a version that widens
+ *  pii / network / consent declarations; the server refuses (409) without it. */
+export function updateIndexPlugin(
+  indexId: string, csrf: string, approveEscalations = false,
+): Promise<UpdateResult> {
+  return api<UpdateResult>(`/api/v1/marketplace/plugins/${encodeURIComponent(indexId)}/update`, {
+    method: "POST",
+    csrf,
+    body: { approve_escalations: approveEscalations },
+  });
+}
+
 // ── Dependency resolution ────────────────────────────────────────────────
 
 export interface DependencyNode {

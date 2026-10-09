@@ -1418,6 +1418,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "plugin.boot_layer_rejected": "WARNING",
     "plugin.disabled": "INFO",
     "plugin.load_failed": "WARNING",
+    "plugin.updated": "INFO",
+    "plugin.update_denied": "WARNING",
+    "plugin.update_failed": "WARNING",
     "plugin.loaded": "INFO",
     "plugin.marketplace_sync_failed": "WARNING",
     "plugin.unloaded": "INFO",
@@ -3470,6 +3473,12 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "plugin_id", "plugin_type", "boot_layer", "version", "tenant_id", "origin", "source", "reason",
     }),
     "plugin.boot_layer_rejected": frozenset({"plugin_id", "tenant_id", "declared_boot_layer", "reason"}),
+    "plugin.updated": frozenset({
+        "plugin_id", "tenant_id", "from_version", "to_version", "was_enabled",
+        "escalations", "settings_dropped", "updated_by",
+    }),
+    "plugin.update_denied": frozenset({"plugin_id", "tenant_id", "to_version", "reason", "escalations"}),
+    "plugin.update_failed": frozenset({"plugin_id", "tenant_id", "to_version", "reason"}),
     "plugin.health_check_failed": frozenset({
         "plugin_id", "error_type", "tenant_id",
     }),

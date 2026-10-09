@@ -2346,3 +2346,30 @@ stubbed API — the live install has no agent or peer). A route change needs a c
 **Must NOT do:** write operator input straight into the transcript file · parse slash commands in the
 client · re-add `agent-conversations` to `PANELS`/`NAV_GROUPS` · put message text into an audit record.
 
+
+
+## Marketplace plugin updates (ADR-2239)
+
+An installed marketplace plugin is updated **in place** when the marketplace source offers a
+strictly newer `version` (PEP 440) in its `plugin.yaml`. No new downloader: the source is the
+one install already resolves (sibling checkout, `CORVIN_MARKETPLACE_ROOT`, or the GitHub-synced
+cache — only the cache is re-synced by `GET /api/v1/marketplace/updates?refresh=true`).
+
+| Endpoint (under `/v1/console`) | Purpose |
+|---|---|
+| `GET /api/v1/marketplace/updates[?refresh=true]` | installed plugins with a newer source version |
+| `POST /api/v1/marketplace/plugins/{id}/update` `{approve_escalations}` | `PluginLifecycle.upgrade()` |
+| `GET /api/v1/marketplace/plugins` | each entry also carries `installed_version`, `latest_version`, `update_available` |
+
+`upgrade()` keeps install time, enabled state and the settings values the new schema still
+declares; new keys get defaults, dropped keys are reported. A version that raises `pii_risk` /
+`network_egress`, adds `egress_hosts`, newly requires consent or worsens `origin` is refused
+with 409 `update_refused` until re-sent with `approve_escalations: true`. Enabled plugins are
+hot-reloaded (marketplace modules purged from `sys.modules`); a load failure restores the
+installed version. Audit: `plugin.updated`, `plugin.update_denied`, `plugin.update_failed`.
+Proof: `tests/e2e/test_marketplace_plugin_update_e2e.py`.
+
+**Author flow:** bump `version` in the plugin's `plugin.yaml` and `plugin.json`, merge to
+Corvin-Marketplace. Operators see "update available" in Marketplace → Installed after the next
+source refresh. **Not built:** automatic updates (`update_policy` is stored, nothing applies it),
+signed-artifact verification, a rollback endpoint.

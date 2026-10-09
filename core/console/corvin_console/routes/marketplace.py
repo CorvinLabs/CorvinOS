@@ -280,7 +280,8 @@ def _tenant_install_state(tenant_id: str) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
     for pid, rec in registry.records.items():
         loaded, _why = _plugins._runtime_state(pid)
-        out[pid] = {"enabled": bool(getattr(rec, "enabled", False)), "runtime_loaded": bool(loaded)}
+        out[pid] = {"enabled": bool(getattr(rec, "enabled", False)), "runtime_loaded": bool(loaded),
+                    "version": str(getattr(rec, "version", "") or "")}
     return out
 
 
@@ -302,7 +303,18 @@ def _get_tenant_spec(tenant_id: str) -> Dict[str, Any]:
 def _local_state(entry: Dict[str, Any], installed: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     registry_id, blocker = _resolve_index_id(str(entry.get("id") or ""))
     state = installed.get(registry_id) if registry_id else None
+    installed_version = state["version"] if state else None
+    latest = None
+    update_available = False
+    if state and installed_version:
+        from . import marketplace_install as _inst
+
+        latest = _inst.latest_version(str(entry.get("id") or ""))
+        update_available = bool(latest and _inst.version_is_newer(latest, installed_version))
     return {
+        "installed_version": installed_version,
+        "latest_version": latest,
+        "update_available": update_available,
         "registry_id": registry_id,
         "installable": blocker is None,
         "install_blocker": blocker,

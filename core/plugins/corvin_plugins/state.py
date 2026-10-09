@@ -46,6 +46,7 @@ from .manifest import (
     NetworkEgress,
     PIIRisk,
     PluginError,
+    PluginManifest,
     PluginNotFound,
     PluginOrigin,
     PluginRecord,
@@ -531,6 +532,100 @@ def _audit(event_type: str, details: dict, *, tenant_id: str) -> None:
         log.error("audit emit failed for %s (%s)", event_type, type(exc).__name__)
 
 
+def forget_plugin_modules(record: PluginRecord) -> bool:
+    """Drop the cached Python modules of a marketplace plugin so a re-activation
+    imports the UPDATED source instead of the copy already in ``sys.modules``.
+
+    Scoped hard: only modules whose file lives under the Corvin-Marketplace
+    plugins root (and the top-level package of ``class_path``) are removed —
+    never ``corvin_plugins``, the console or anything from site-packages.
+    Returns False when nothing could be proven to be marketplace code; the
+    caller then reports that a restart is needed to run the new code."""
+    import sys
+
+    cp = record.class_path or ""
+    if not cp:
+        return False
+    module_path = cp.rsplit(":", 1)[0] if ":" in cp else cp.rsplit(".", 1)[0]
+    top = module_path.split(".")[0]
+    try:
+        from .bootstrap import _marketplace_root
+
+        root = _marketplace_root().parent.resolve()
+    except Exception:  # noqa: BLE001
+        return False
+    doomed = []
+    for name, mod in list(sys.modules.items()):
+        if name != top and not name.startswith(top + "."):
+            continue
+        f = getattr(mod, "__file__", None)
+        try:
+            if f and root in Path(f).resolve().parents:
+                doomed.append(name)
+        except OSError:
+            continue
+    for name in doomed:
+        sys.modules.pop(name, None)
+    return bool(doomed)
+
+
+class UpdateRefused(PluginError):
+    """An update was refused: not newer, or it widens what the plugin may do and
+    the operator has not approved that. Carries ``escalations`` for the UI."""
+
+    def __init__(self, message: str, *, escalations: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.escalations = escalations
+
+
+def version_is_newer(candidate: str, installed: str) -> bool:
+    """True only when ``candidate`` is strictly newer than ``installed``.
+
+    A version this process cannot parse is never "newer": an update has to be
+    provably forward, so a malformed manifest cannot trigger one (and cannot be
+    used to downgrade)."""
+    try:
+        from packaging.version import InvalidVersion, Version
+    except ImportError:  # optional dependency: plain dotted-integer fallback
+        try:
+            parse = lambda v: tuple(int(x) for x in str(v).split("."))  # noqa: E731
+            return parse(candidate) > parse(installed)
+        except ValueError:
+            return False
+    try:
+        return Version(candidate) > Version(installed)
+    except (InvalidVersion, TypeError):
+        return False
+
+
+_PII_RANK = {PIIRisk.NONE: 0, PIIRisk.LOW: 1, PIIRisk.MEDIUM: 2, PIIRisk.HIGH: 3}
+_EGRESS_RANK = {NetworkEgress.NONE: 0, NetworkEgress.LOCAL: 1, NetworkEgress.EXTERNAL: 2}
+_ORIGIN_RANK = {PluginOrigin.BUILTIN: 0, PluginOrigin.VETTED: 1, PluginOrigin.COMMUNITY: 2}
+#: How many superseded versions a record remembers (rollback reference, audit).
+_MAX_VERSION_HISTORY = 20
+
+
+def update_escalations(old: PluginRecord, new: PluginRecord) -> list[str]:
+    """What the new version may do that the installed one could not.
+
+    The operator consented to — and the L34/L35 gates were passed for — the OLD
+    declarations. An update that widens them is a new grant, so it is listed here
+    and needs explicit approval; narrowing or keeping them never does."""
+    out: list[str] = []
+    if _PII_RANK[new.pii_risk] > _PII_RANK[old.pii_risk]:
+        out.append(f"pii_risk {old.pii_risk.value} -> {new.pii_risk.value}")
+    if _EGRESS_RANK[new.network_egress] > _EGRESS_RANK[old.network_egress]:
+        out.append(f"network_egress {old.network_egress.value} -> {new.network_egress.value}")
+    added_hosts = sorted(set(new.egress_hosts) - set(old.egress_hosts))
+    if added_hosts:
+        out.append("new egress hosts: " + ", ".join(added_hosts))
+    if new.consent_required() and not old.consent_required():
+        out.append("now requires consent")
+    if _ORIGIN_RANK[new.origin] > _ORIGIN_RANK[old.origin]:
+        out.append(f"origin {old.origin.value} -> {new.origin.value}")
+    return out
+
+
 class PluginLifecycle:
     """install / enable / configure / disable / uninstall against one tenant.
 
@@ -885,6 +980,160 @@ class PluginLifecycle:
                 "hot-unload of %r failed (%s)", record.plugin_id, type(exc).__name__
             )
 
+    def upgrade(
+        self,
+        plugin_id: str,
+        new_record: PluginRecord,
+        *,
+        updated_by: str,
+        approve_escalations: bool = False,
+    ) -> tuple[PluginRecord, dict]:
+        """Replace an installed record with a newer version of the SAME plugin.
+
+        Keeps what is the operator's — install time, enabled state, update policy
+        and the settings values the new schema still knows (new keys get their
+        defaults, dropped keys are counted, never silently kept). Refuses a
+        non-newer version and, unless ``approve_escalations``, one that widens
+        pii/egress/consent declarations. An enabled plugin is hot-reloaded; if the
+        new version fails to load, the old record AND instance are restored.
+
+        Returns ``(record, report)``; ``report`` carries ``from_version``,
+        ``to_version``, ``escalations``, ``settings_dropped`` and ``reloaded``.
+        """
+        self._require_enabled("update")
+        with self._mutation() as reg:
+            return self._upgrade_locked(
+                reg, plugin_id, new_record,
+                updated_by=updated_by, approve_escalations=approve_escalations,
+            )
+
+    def _upgrade_locked(
+        self,
+        reg: TenantRegistry,
+        plugin_id: str,
+        new_record: PluginRecord,
+        *,
+        updated_by: str,
+        approve_escalations: bool,
+    ) -> tuple[PluginRecord, dict]:
+        old = reg.get(plugin_id)
+        if new_record.plugin_id != plugin_id:
+            raise UpdateRefused(
+                f"update source is {new_record.plugin_id!r}, installed is {plugin_id!r}"
+            )
+        if not version_is_newer(new_record.version, old.version):
+            raise UpdateRefused(
+                f"{plugin_id} {new_record.version} is not newer than installed {old.version}"
+            )
+
+        new_record = _downgrade_privileged_boot_layer(
+            new_record, path=reg.path, tenant_id=self.tenant_id
+        )
+        escalations = update_escalations(old, new_record)
+        if escalations and not approve_escalations:
+            _audit(
+                "plugin.update_denied",
+                {
+                    "plugin_id": old.full_id,
+                    "to_version": new_record.version,
+                    "reason": "escalation_not_approved",
+                    "escalations": escalations,
+                },
+                tenant_id=self.tenant_id,
+            )
+            raise UpdateRefused(
+                f"{plugin_id} {new_record.version} widens what the plugin may do: "
+                + "; ".join(escalations),
+                escalations=tuple(escalations),
+            )
+
+        # Settings: carry values the new schema still declares, default the rest.
+        validator = SettingsValidator(new_record.settings_schema)
+        defaults = validator.defaults()
+        known = set((new_record.settings_schema or {}).get("properties") or {})
+        kept = {k: v for k, v in old.settings.items() if not known or k in known}
+        dropped = sorted(set(old.settings) - set(kept))
+        merged = {**defaults, **kept}
+        validator.validate(merged)
+
+        history = [*old.version_history, PluginManifest(
+            plugin_id=old.plugin_id,
+            version=old.version,
+            settings_schema_version=old.settings_schema_version,
+        )][-_MAX_VERSION_HISTORY:]
+        base = new_record.to_dict()
+        old_d = old.to_dict()
+        upgraded = PluginRecord.from_dict({
+            **base,
+            "installed_at": old_d.get("installed_at"),
+            "installed_by": old_d.get("installed_by"),
+            "enabled": old.enabled,
+            "enabled_at": old_d.get("enabled_at"),
+            "update_policy": old_d.get("update_policy", "none"),
+            "settings": merged,
+            "version_history": [m.to_dict() for m in history],
+        })
+
+        reloaded: bool | None = None
+        code_reloaded = False
+        if old.enabled:
+            self._assert_flow_declarations(upgraded)
+            # A changed dependency set must still order, like enable() checks.
+            reg.records[plugin_id] = upgraded
+            try:
+                reg.load_order()
+            except PluginError:
+                reg.records[plugin_id] = old
+                raise
+            self._deactivate(old)
+            code_reloaded = forget_plugin_modules(upgraded)
+            reloaded = self._activate(upgraded)
+            if reloaded is False:
+                reg.records[plugin_id] = old
+                forget_plugin_modules(old)
+                self._activate(old)  # best effort: put the working version back
+                _audit(
+                    "plugin.update_failed",
+                    {
+                        "plugin_id": old.full_id,
+                        "to_version": new_record.version,
+                        "reason": "load_failed",
+                    },
+                    tenant_id=self.tenant_id,
+                )
+                raise PluginError(
+                    f"{plugin_id} {new_record.version} could not be loaded; "
+                    f"{old.version} stays installed"
+                )
+        else:
+            reg.records[plugin_id] = upgraded
+
+        _audit(
+            "plugin.updated",
+            {
+                "plugin_id": upgraded.full_id,
+                "from_version": old.version,
+                "to_version": upgraded.version,
+                "was_enabled": old.enabled,
+                "escalations": escalations,
+                "settings_dropped": len(dropped),
+                "updated_by": updated_by,
+            },
+            tenant_id=self.tenant_id,
+        )
+        if old.enabled:
+            self._sync_console_panel(upgraded, "enable")
+        return upgraded, {
+            "from_version": old.version,
+            "to_version": upgraded.version,
+            "escalations": escalations,
+            "settings_dropped": dropped,
+            "reloaded": reloaded,
+            # Enabled and activated but the new code could not be proven loaded
+            # (no marketplace module to purge): a restart picks it up.
+            "restart_recommended": bool(old.enabled and reloaded and not code_reloaded),
+        }
+
     def set_settings(self, plugin_id: str, settings: dict) -> PluginRecord:
         """Validate and persist new settings.
 
@@ -1074,6 +1323,10 @@ __all__ = [
     "REGISTRY_SCHEMA_VERSION",
     "RegistryCorrupt",
     "TenantRegistry",
+    "UpdateRefused",
+    "forget_plugin_modules",
     "instance_dir",
+    "update_escalations",
+    "version_is_newer",
     "registry_path",
 ]

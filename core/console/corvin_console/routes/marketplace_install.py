@@ -11,6 +11,8 @@ Effective paths (under ``/v1/console``):
 - GET   /api/v1/marketplace/plugins/{id}/dependencies (ADR-0892 Session 2)
 - POST  /api/v1/marketplace/plugins/{id}/install
 - POST  /api/v1/marketplace/plugins/{id}/uninstall
+- GET   /api/v1/marketplace/updates
+- POST  /api/v1/marketplace/plugins/{id}/update
 - PATCH /api/v1/marketplace/plugins/{id}/enable
 - PATCH /api/v1/marketplace/plugins/{id}/disable
 - GET   /api/v1/marketplace/install/{job_id}/progress
@@ -93,6 +95,8 @@ try:
     from corvin_plugins.state import (  # type: ignore[import-not-found]
         LifecycleDisabled,
         PluginLifecycle,
+        UpdateRefused,
+        version_is_newer,
     )
     from corvin_plugins.manifest import PluginError  # type: ignore[import-not-found]
     from corvin_plugins.protocol import PluginNotFound  # type: ignore[import-not-found]
@@ -551,6 +555,132 @@ def _mutation_status(exc: Exception) -> int:
         # installed" as 404 and every other state conflict as 409.
         return 404 if "not" in type(exc).__name__.lower() else 409
     return 500
+
+
+def latest_version(index_id: str) -> Optional[str]:
+    """Version the marketplace source currently offers for ``index_id`` (read live
+    from its ``plugin.yaml``, never cached — a sync changes it). None when the
+    source cannot be resolved."""
+    try:
+        _dir, manifest = _resolve.load_manifest(index_id)
+    except Exception:  # noqa: BLE001 - "no source" is not an update, not a 500
+        return None
+    v = manifest.get("version")
+    return str(v) if v else None
+
+
+@router.get("/updates")
+async def list_updates(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    refresh: bool = False,
+) -> Dict[str, Any]:
+    """Installed plugins whose marketplace source offers a newer version.
+
+    ``refresh=true`` first re-syncs the plugin source from GitHub, but ONLY when
+    that source is the cache this process owns; a sibling checkout or
+    ``CORVIN_MARKETPLACE_ROOT`` is the operator's (``git pull``) and is read as-is.
+    """
+    if not _LIFECYCLE_AVAILABLE or not _resolve.available():
+        raise HTTPException(status_code=503, detail="plugin subsystem unavailable")
+    import asyncio
+
+    from corvin_plugins import bootstrap as _bootstrap  # type: ignore[import-not-found]
+    from . import marketplace as _mkt
+
+    refreshed = False
+    if refresh and _bootstrap.marketplace_source_is_managed():
+        await asyncio.to_thread(_bootstrap.ensure_marketplace_source, force=True)
+        refreshed = True
+
+    def _scan() -> list[Dict[str, Any]]:
+        installed = _lifecycle(rec.tenant_id)._registry().records
+        out: list[Dict[str, Any]] = []
+        for entry in (_mkt._index_manager.get_index().get("by_id") or {}).values():
+            index_id = str(entry.get("id") or "")
+            registry_id, _blocker = _mkt._resolve_index_id(index_id)
+            record = installed.get(registry_id) if registry_id else None
+            if record is None:
+                continue
+            latest = latest_version(index_id)
+            if latest and version_is_newer(latest, record.version):
+                out.append({
+                    "plugin_id": index_id,
+                    "registry_id": registry_id,
+                    "name": entry.get("name") or record.display_name,
+                    "installed_version": record.version,
+                    "latest_version": latest,
+                    "enabled": record.enabled,
+                })
+        return out
+
+    updates = await asyncio.to_thread(_scan)
+    return {"updates": updates, "count": len(updates), "refreshed": refreshed,
+            "source_managed_by_operator": not _bootstrap.marketplace_source_is_managed()}
+
+
+@router.post("/plugins/{plugin_id}/update")
+async def update_plugin(
+    plugin_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    body: Optional[Dict[str, Any]] = Body(None),
+) -> Dict[str, Any]:
+    """Update an installed plugin to the version the marketplace source offers.
+
+    Request: ``{"approve_escalations": false}``. The new manifest passes the same
+    ADR-0247 gate and licence check as an install. Operator settings, enabled state
+    and install time are kept. A version that widens pii / egress / consent
+    declarations is refused with 409 ``update_refused`` + ``escalations`` until the
+    operator re-sends with ``approve_escalations: true``. Enabled plugins are
+    hot-reloaded; a version that fails to load is rolled back to the installed one.
+    """
+    plugin_id = _validate_plugin_id(plugin_id)
+    if not _LIFECYCLE_AVAILABLE or not _resolve.available():
+        raise HTTPException(status_code=503, detail="plugin subsystem unavailable")
+    body = body or {}
+    approve = bool(body.get("approve_escalations", False))
+    if not _index_has(plugin_id):
+        raise HTTPException(status_code=404, detail=f"{plugin_id} is not in the marketplace index")
+    try:
+        plugin_dir, manifest = _resolve.load_manifest(plugin_id)
+    except _resolve.MarketplaceResolveError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    report = _resolve.validate_builtin_manifest(plugin_dir)
+    if not report.ok:
+        raise HTTPException(
+            status_code=422,
+            detail="manifest failed the ADR-0247 gate: "
+            + "; ".join(f.message for f in report.errors[:3]),
+        )
+    if _LICENSING_AVAILABLE and not _is_utility_plugin(plugin_id):
+        try:
+            require_capability("forge.create", requested=1, tenant_id=rec.tenant_id, entry_point="http")
+        except LicenseDenied as exc:
+            _audit(rec, "marketplace.update_denied_license", plugin_id)
+            raise HTTPException(status_code=403, detail={
+                "error": "license_required", "capability": exc.capability,
+                "tier": exc.tier, "reason": exc.reason, "upgrade_url": exc.upgrade_url,
+            }) from exc
+    try:
+        new_record = _resolve.record_from_manifest(manifest, plugin_dir=plugin_dir)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"invalid manifest: {type(exc).__name__}") from exc
+
+    try:
+        updated, outcome = _lifecycle(rec.tenant_id).upgrade(
+            new_record.plugin_id, new_record, updated_by="console", approve_escalations=approve,
+        )
+    except UpdateRefused as exc:
+        _audit(rec, "marketplace.update_refused", plugin_id)
+        raise HTTPException(status_code=409, detail={
+            "error": "update_refused", "message": str(exc), "escalations": list(exc.escalations),
+        }) from exc
+    except Exception as exc:  # noqa: BLE001
+        _audit(rec, "marketplace.update_failed", plugin_id)
+        raise HTTPException(status_code=_mutation_status(exc), detail=_mutation_detail(exc)) from exc
+    _audit(rec, "marketplace.update", plugin_id)
+    return {"status": "completed", "plugin_id": plugin_id, "registry_id": updated.plugin_id,
+            "enabled": updated.enabled, **outcome}
 
 
 @router.post("/plugins/{plugin_id}/uninstall")

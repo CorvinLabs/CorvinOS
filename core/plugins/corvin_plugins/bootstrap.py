@@ -797,6 +797,17 @@ def _marketplace_root() -> Path:
     return sibling
 
 
+def marketplace_source_is_managed() -> bool:
+    """True when the plugin source is the GitHub-synced cache this process owns.
+
+    An operator-managed source (``CORVIN_MARKETPLACE_ROOT`` or a sibling git
+    checkout) is updated by the operator (``git pull``) and must never be
+    replaced behind their back; only the cache may be re-synced on request."""
+    import os
+
+    return not os.environ.get("CORVIN_MARKETPLACE_ROOT") and not _marketplace_sibling_dir().is_dir()
+
+
 def ensure_marketplace_source(*, force: bool = False) -> None:
     """Download the Corvin-Marketplace repo from GitHub into the cache dir when
     no local checkout is usable yet.

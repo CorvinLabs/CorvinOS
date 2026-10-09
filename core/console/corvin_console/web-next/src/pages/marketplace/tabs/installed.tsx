@@ -21,9 +21,12 @@ import { KEY_INDEX, KEY_INSTALLED } from "../header";
 import { KEY_CAPABILITIES, KEY_MANIFEST } from "./browse";
 import {
   disablePlugin, enablePlugin, getPluginHealth, listInstalledPlugins, uninstallPlugin,
-  updatePluginSettings, type PluginSummary,
+  listPluginUpdates, updateIndexPlugin, updatePluginSettings,
+  type PluginSummary, type PluginUpdate,
 } from "../api";
 import type { TabId } from "../tabs";
+
+const KEY_UPDATES = ["marketplace", "updates"] as const;
 
 function actionError(e: unknown, fallback: string): string {
   if (e instanceof ApiError && e.status === 403) return "Not allowed — the compliance layer or your role refuses this change.";
@@ -32,8 +35,15 @@ function actionError(e: unknown, fallback: string): string {
   return fallback;
 }
 
-function Row({ p, csrf, lifecycleEnabled, health }: {
-  p: PluginSummary; csrf: string; lifecycleEnabled: boolean;
+/** Escalations the server listed when it refused an update (409 update_refused). */
+function refusedEscalations(e: unknown): string[] | null {
+  if (!(e instanceof ApiError) || e.status !== 409) return null;
+  const d = (e.detail as { detail?: { error?: string; escalations?: string[] } } | undefined)?.detail;
+  return d?.error === "update_refused" && d.escalations?.length ? d.escalations : null;
+}
+
+function Row({ p, csrf, lifecycleEnabled, health, update }: {
+  p: PluginSummary; csrf: string; lifecycleEnabled: boolean; update?: PluginUpdate | undefined;
   health?: { ok: boolean; message: string } | undefined;
 }) {
   const qc = useQueryClient();
@@ -48,7 +58,27 @@ function Row({ p, csrf, lifecycleEnabled, health }: {
     qc.invalidateQueries({ queryKey: [...KEY_INDEX] });
     qc.invalidateQueries({ queryKey: [...KEY_MANIFEST] });
     qc.invalidateQueries({ queryKey: [...KEY_CAPABILITIES] });
+    qc.invalidateQueries({ queryKey: [...KEY_UPDATES] });
   };
+  // Set when the server refused an update because it widens what the plugin may do.
+  const [pendingEscalations, setPendingEscalations] = useState<string[] | null>(null);
+  const doUpdate = useMutation({
+    mutationFn: (approve: boolean) => updateIndexPlugin(update!.plugin_id, csrf, approve),
+    onSuccess: (r) => {
+      setPendingEscalations(null);
+      setMsg(
+        `Updated ${r.from_version} → ${r.to_version} — audited.` +
+        (r.settings_dropped.length ? ` Settings no longer in the schema were dropped: ${r.settings_dropped.join(", ")}.` : "") +
+        (r.restart_recommended ? " Restart the console to run the new code." : ""),
+      );
+      invalidate();
+    },
+    onError: (e) => {
+      const esc = refusedEscalations(e);
+      if (esc) { setPendingEscalations(esc); setMsg(null); return; }
+      setMsg(actionError(e, "Not updated — the new version failed to load; the installed version was kept."));
+    },
+  });
   const enable = useMutation({
     mutationFn: () => enablePlugin(p.plugin_id, csrf, p.requires_consent),
     onSuccess: () => { setMsg("Enabled — audited."); invalidate(); },
@@ -69,7 +99,7 @@ function Row({ p, csrf, lifecycleEnabled, health }: {
     onSuccess: () => { setMsg("Settings saved — audited."); setEditing(false); invalidate(); },
     onError: (e) => setMsg(actionError(e, "Not saved — a value does not match the plugin's settings schema.")),
   });
-  const busy = enable.isPending || disable.isPending || uninstall.isPending || save.isPending;
+  const busy = enable.isPending || disable.isPending || uninstall.isPending || save.isPending || doUpdate.isPending;
   const canMutate = lifecycleEnabled && !!csrf && !busy;
 
   return (
@@ -82,6 +112,7 @@ function Row({ p, csrf, lifecycleEnabled, health }: {
           </div>
           <div className="flex flex-wrap gap-1">
             <Badge variant="outline" title="Provenance, not a capability tier">{p.origin}</Badge>
+            {update && <Badge variant="accent" data-testid={`update-badge-${p.plugin_id}`}>update {update.latest_version}</Badge>}
             <Badge variant={p.enabled ? "secondary" : "outline"}>{p.enabled ? "enabled" : "disabled"}</Badge>
             <Badge variant={p.runtime_loaded ? "secondary" : "outline"}>{p.runtime_loaded ? "running" : "not running"}</Badge>
             {p.contained_by && <Badge variant="danger">{p.contained_by}</Badge>}
@@ -105,6 +136,12 @@ function Row({ p, csrf, lifecycleEnabled, health }: {
           ) : (
             <Button size="sm" variant="accent" disabled={!canMutate} onClick={() => enable.mutate()}>
               {p.requires_consent ? "Enable (with consent)" : "Enable"}
+            </Button>
+          )}
+          {update && !pendingEscalations && (
+            <Button size="sm" variant="accent" disabled={!canMutate} data-testid={`update-btn-${p.plugin_id}`}
+                    onClick={() => doUpdate.mutate(false)}>
+              Update to {update.latest_version}
             </Button>
           )}
           <Button size="sm" variant="outline" disabled={!canMutate} onClick={() => setEditing((v) => !v)}>
@@ -131,6 +168,19 @@ function Row({ p, csrf, lifecycleEnabled, health }: {
           {busy && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground self-center" />}
         </div>
 
+        {update && pendingEscalations && (
+          <div className="rounded border border-amber-500/40 p-3 text-xs space-y-2" data-testid={`update-escalations-${p.plugin_id}`}>
+            <p>Version {update.latest_version} widens what this plugin may do:</p>
+            <ul className="list-disc pl-5">{pendingEscalations.map((x) => <li key={x}>{x}</li>)}</ul>
+            <div className="flex gap-2">
+              <Button size="sm" variant="destructive" disabled={!canMutate} onClick={() => doUpdate.mutate(true)}>
+                Approve and update
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setPendingEscalations(null)}>Cancel</Button>
+            </div>
+          </div>
+        )}
+
         {editing && (
           <SettingsForm id={p.plugin_id} schema={p.settings_schema} value={p.settings ?? {}}
                         saving={!canMutate} onSave={(settings) => save.mutate(settings)} />
@@ -146,6 +196,16 @@ export function InstalledTab({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
   const { session } = useAuth();
   const csrf = session?.csrf_token ?? "";
   const q = useQuery({ queryKey: [...KEY_INSTALLED], queryFn: ({ signal }) => listInstalledPlugins(signal), retry: false });
+  const [checking, setChecking] = useState(false);
+  const qc = useQueryClient();
+  const updates = useQuery({ queryKey: [...KEY_UPDATES], queryFn: ({ signal }) => listPluginUpdates(false, signal), retry: false });
+  const updateByRegistryId = new Map((updates.data?.updates ?? []).map((u) => [u.registry_id, u]));
+  const checkNow = async () => {
+    setChecking(true);
+    try { qc.setQueryData([...KEY_UPDATES], await listPluginUpdates(true)); }
+    catch { /* the cached list stays; the button can be pressed again */ }
+    finally { setChecking(false); }
+  };
   const health = useQuery({ queryKey: ["marketplace", "plugin-health"], queryFn: ({ signal }) => getPluginHealth(signal), retry: false });
 
   if (q.isLoading) {
@@ -176,6 +236,11 @@ export function InstalledTab({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
         {plugins.length} plugins — registry records of this tenant plus builtins running in this process.
         {health.data && !health.data.monitoring_enabled && " Health monitoring is off."}
         {" "}<button type="button" className="underline" onClick={() => onGoTo("browse")}>Browse the index</button> to install more.
+        {" "}{updates.data ? `${updates.data.count} update${updates.data.count === 1 ? "" : "s"} available.` : ""}
+        {" "}<button type="button" className="underline" disabled={checking} onClick={checkNow} data-testid="check-updates">
+          {checking ? "Checking…" : "Check for updates"}
+        </button>
+        {updates.data?.source_managed_by_operator && " (plugin source is a local checkout — pull it to fetch new versions)"}
       </p>
       {plugins.length === 0 ? (
         <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">
@@ -185,7 +250,7 @@ export function InstalledTab({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {plugins.map((p) => (
             <Row key={p.plugin_id} p={p} csrf={csrf} lifecycleEnabled={lifecycleEnabled}
-                 health={health.data?.plugins?.[p.plugin_id]} />
+                 health={health.data?.plugins?.[p.plugin_id]} update={updateByRegistryId.get(p.plugin_id)} />
           ))}
         </div>
       )}
