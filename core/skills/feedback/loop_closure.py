@@ -373,3 +373,32 @@ class LoopClosureManager:
         for skill_id, updates in self.update_history.items():
             all_updates.extend([u for u in updates if u.tenant_id == tenant_id])
         return sorted(all_updates, key=lambda u: u.timestamp, reverse=True)[:limit]
+
+
+async def apply_outcome_to_skill(feedback: OutcomeFeedback) -> Optional[ConfigUpdate]:
+    """Close the loop for one OUTCOME event: transform it, persist it through the Skill's
+    adapter, and return the update (``None`` when nothing changes).
+
+    The transformation rule is ``LoopClosureManager``'s (+/-0.05 on ``confidence_threshold``).
+    The manager itself keeps state in memory only, so it is seeded from the Skill's persisted
+    config on every call and the resulting delta goes through
+    ``SkillAdapter.apply_config_delta`` — the audit-first, versioned, rollback-able writer that
+    Skills read back with ``load_skill_config``. A write that cannot be audited raises
+    (``RuntimeError``) and persists nothing.
+    """
+    from core.skills.os_skills.skill_adapter import SkillAdapter, load_skill_config  # noqa: PLC0415
+
+    if not isinstance(feedback.signal, bool):
+        return None  # "other" carries no direction
+    current, _ = load_skill_config(feedback.skill_id, feedback.tenant_id)
+    manager = LoopClosureManager()
+    manager.skill_configs[feedback.skill_id] = {"confidence_threshold": current.confidence_threshold}
+    update = await manager.process_feedback(feedback)
+    if update is None:
+        return None
+    change = update.config_delta["confidence_threshold"]
+    # No measured improvement is claimed: confidence_delta stays 0.0.
+    SkillAdapter(feedback.skill_id, feedback.tenant_id).apply_config_delta(
+        {"confidence_threshold": change["new"] - change["old"]}, confidence_delta=0.0
+    )
+    return update

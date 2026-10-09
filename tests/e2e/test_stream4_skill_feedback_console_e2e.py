@@ -62,7 +62,9 @@ def _body(skill_id: str, subject_id: str = "task-1", rating: int = 2) -> dict:
     return {"skill_id": skill_id, "subject_id": subject_id, "rating": rating, "category": "accuracy"}
 
 
-@pytest.mark.parametrize("skill_id", ["os.workflow_optimizer", "os.security_orchestrator", "os.flow_guard"])
+@pytest.mark.parametrize(
+    "skill_id", ["os.delegation_router", "os.workflow_optimizer", "os.security_orchestrator", "os.flow_guard"]
+)
 def test_feedback_is_accepted_for_every_stream_skill(client, skill_id):
     r = client.post(BASE, json=_body(skill_id))
     assert r.status_code == 200, r.text
@@ -133,3 +135,55 @@ def test_feedback_is_chained_before_it_is_stored(client, tmp_path):
     d = recs[-1].get("details", recs[-1])
     assert d.get("signal") == "no" and d.get("skill_id") == "os.flow_guard"
     assert "do-not-chain-me" not in text
+
+
+def test_feedback_closes_the_loop_for_a_skill_that_reads_its_config(client):
+    from core.skills.os_skills.skill_adapter import load_skill_config
+
+    assert load_skill_config("os.delegation_router", "_default")[1] is None  # nothing learned yet
+    up = client.post(BASE, json=_body("os.delegation_router", "t-1", rating=2)).json()
+    assert up["config_applied"] is True and up["config_version"] == "v1"
+    cfg, version = load_skill_config("os.delegation_router", "_default")
+    assert version == "v1" and round(cfg.confidence_threshold, 2) == 0.75  # 0.70 + 0.05
+
+    down = client.post(BASE, json=_body("os.delegation_router", "t-2", rating=-1)).json()
+    assert down["config_applied"] is True and down["config_version"] == "v2"
+    assert round(load_skill_config("os.delegation_router", "_default")[0].confidence_threshold, 2) == 0.70
+
+    neutral = client.post(BASE, json=_body("os.delegation_router", "t-3", rating=0)).json()
+    assert neutral["config_applied"] is False  # "other" carries no direction
+    assert load_skill_config("os.delegation_router", "_default")[1] == "v2"
+
+
+def test_the_learned_threshold_reaches_the_skill_that_consumes_it(client):
+    from core.skills.os_skills.delegation_router import _learned_threshold
+
+    assert _learned_threshold("_default") is None
+    client.post(BASE, json=_body("os.delegation_router", "t-1", rating=1))
+    value, version = _learned_threshold("_default")
+    assert version == "v1" and round(value, 2) == 0.75
+
+
+def test_feedback_for_a_skill_without_a_config_consumer_changes_nothing(client):
+    from core.skills.os_skills.skill_adapter import load_skill_config
+
+    r = client.post(BASE, json=_body("os.flow_guard", "f-1", rating=2)).json()
+    assert r["config_applied"] is False and "reads no learned config" in r["message"]
+    assert load_skill_config("os.flow_guard", "_default")[1] is None
+
+
+def test_config_change_is_chained_before_it_is_persisted(client, tmp_path):
+    import json
+
+    from core.learning.event_persistence import _resolve_core_audit
+    from core.paths.tenant import tenant_home
+
+    client.post(BASE, json=_body("os.delegation_router", "t-9", rating=2))
+    events = list((tenant_home("_default") / "learning" / "events").glob("*.jsonl"))
+    recs = [json.loads(line) for f in events for line in f.read_text().splitlines()]
+    cfg = [r for r in recs if r.get("event_type") == "config_updated" and r.get("skill_id") == "os.delegation_router"]
+    assert len(cfg) == 1, recs
+    ref = cfg[0]["audit_ref"]
+    chain = _resolve_core_audit().audit_path()
+    assert str(chain).startswith(str(tmp_path)), "audit write escaped the sandbox"
+    assert ref in open(chain).read()  # the chain record exists, and it carries no payload

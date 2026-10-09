@@ -341,5 +341,12 @@ answers 500 and stores nothing. It then appends the structured record (ids, rati
 never the free-text reason) to `<tenant>/learning/skill_feedback/events.jsonl`
 (`core/skills/feedback/history_store.py`). `GET …/history?skill_id=` and `GET …/status` read that
 file only; `status` reports `total_received` and `last_feedback_timestamp` and nothing unmeasured.
-The route does NOT apply a config delta — that is the optimizer's loop-closure job.
+Loop closure (`core/skills/feedback/loop_closure.py::apply_outcome_to_skill`): for a skill in
+`CONFIG_CONSUMERS` (today only `os.delegation_router`, whose `_learned_threshold` reads the
+config back through `load_skill_config`) the outcome moves `confidence_threshold` by +/-0.05 via
+`SkillAdapter.apply_config_delta` (audit-first, versioned, rollback-able). The response carries
+`config_applied` / `config_version`; a rating of 0 ("other") and a threshold already at its bound
+change nothing; for every other skill the feedback is audited and stored only, and the message
+says the skill reads no learned config yet. A config write that cannot be audited fails and the
+feedback stays stored.
 Proof: `tests/e2e/test_stream4_skill_feedback_console_e2e.py`.

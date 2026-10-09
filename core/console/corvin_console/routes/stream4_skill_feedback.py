@@ -18,7 +18,8 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, Field, validator
 
 from core.skills.feedback import history_store
-from core.skills.feedback.schema import FeedbackEvent, FeedbackType, validate_feedback
+from core.skills.feedback.loop_closure import apply_outcome_to_skill
+from core.skills.feedback.schema import FeedbackEvent, FeedbackType, OutcomeFeedback, validate_feedback
 from core.skills.os_skills.audit_integration import emit_skill_audit_event
 
 from .. import auth as session_auth
@@ -30,10 +31,15 @@ router = APIRouter(dependencies=[Depends(require_session_csrf_on_mutation)], pre
 
 # Valid skill IDs
 VALID_SKILLS = [
+    "os.delegation_router",  # reads its learned confidence_threshold back (load_skill_config)
     "os.workflow_optimizer",
     "os.security_orchestrator",
     "os.flow_guard",
 ]
+
+# Skills that read their learned config back (``load_skill_config``). Feedback for any
+# other skill is audited and stored but changes nothing — saying otherwise would be false.
+CONFIG_CONSUMERS = frozenset({"os.delegation_router"})
 
 # Valid feedback categories
 VALID_CATEGORIES = [
@@ -53,7 +59,7 @@ class SkillFeedbackRequest(BaseModel):
 
     skill_id: str = Field(
         ...,
-        description="One of: os.workflow_optimizer, os.security_orchestrator, os.flow_guard"
+        description="One of: os.delegation_router, os.workflow_optimizer, os.security_orchestrator, os.flow_guard"
     )
     # Bounded + charset-restricted: subject_id is echoed into the log line and
     # the response. 8436dcb1e dropped the iteration-3 constraint, which let a
@@ -99,6 +105,8 @@ class SkillFeedbackResponse(BaseModel):
     skill_id: str = Field(...)
     subject_id: str = Field(...)
     message: Optional[str] = None
+    config_applied: bool = Field(False, description="True when the feedback changed the skill's learned config")
+    config_version: Optional[str] = Field(None, description="Version id of the applied config, if any")
 
 
 class FeedbackHistoryItem(BaseModel):
@@ -237,13 +245,40 @@ async def submit_skill_feedback(
             rec.tenant_id,
         )
 
+        # Loop closure: the outcome adjusts the skill's learned config (audited by the
+        # adapter). The feedback above is already chained and stored, so a failure here
+        # is reported, never lost.
+        config_applied, config_version, note = False, None, ""
+        if req.skill_id not in CONFIG_CONSUMERS:
+            note = " (this skill reads no learned config yet)"
+        elif isinstance(signal, bool):
+            try:
+                update = await apply_outcome_to_skill(
+                    OutcomeFeedback(
+                        skill_id=req.skill_id, tenant_id=rec.tenant_id, signal=signal,
+                        feedback_id=feedback_event.feedback_id,
+                    )
+                )
+                config_applied = update is not None
+                if update is not None:
+                    from core.skills.os_skills.skill_adapter import load_skill_config  # noqa: PLC0415
+
+                    config_version = load_skill_config(req.skill_id, rec.tenant_id)[1]
+                else:
+                    note = " (threshold already at its bound)"
+            except Exception as exc:  # noqa: BLE001 — feedback is stored; config change is best-effort
+                logger.error("Loop closure failed for %s: %s", req.skill_id, type(exc).__name__)
+                note = f" (config not updated: {type(exc).__name__})"
+
         return {
             "status": "received",
             "feedback_id": feedback_event.feedback_id,
             "timestamp": feedback_event.timestamp,
             "skill_id": req.skill_id,
             "subject_id": req.subject_id,
-            "message": f"Feedback received for {req.skill_id} on {req.subject_id}",
+            "message": f"Feedback received for {req.skill_id} on {req.subject_id}{note}",
+            "config_applied": config_applied,
+            "config_version": config_version,
         }
 
     except HTTPException:
