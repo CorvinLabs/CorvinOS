@@ -1123,6 +1123,23 @@ in-flight last message is left out. Console slash commands the dispatcher answer
 sent, gated like a turn, `cli_spawned=False`. A pre-marker (v1) turn log's refusal is recognised by the tag every gate refusal starts with (`[house-rules]`, `[data-flow]`, `[egress]`, `[security]`). The streamed part of a cancelled answer is persisted, marked `[answer cancelled here]`. With `cel_cache_stable` on, the turn's message still reaches the ledger renderer (`ledger_prompt`), so an earlier unanswered message stays history (review R5-6). The worker is pointed at the generated view in the session workdir, never at `turns.jsonl` (which keeps a refused message's text for the chat window). The console's 50-chats-per-tenant cap still
 deletes the oldest chat whole — a retention rule that predates the ledger.
 
+**Tool-card diffs (ADR-2241, 2026-10-09).** For an Edit / MultiEdit / Write the console
+streams `tool_use` with the tool-use `id`, then — when the tool actually RAN — a
+`tool_diff` event carrying the hunks Claude Code computed itself
+(`tool_use_result.structuredPatch` on the CLI's stream-json `user` event; a created file's
+content as one all-added hunk). Nothing in CorvinOS diffs anything, and a denied or failed
+tool (its result is an error string) shows no change. `chat_runtime._tool_result_diff`
+bounds it (200 lines, 400 chars/line, `diff_truncated`; 400 000 chars per turn, then
+`diff_withheld: turn_budget`) and withholds the WHOLE diff (`diff_withheld: credential |
+scan_failed`) when the fail-closed source-text gate `core.pii.code_secrets` fires on the
+shown lines, context lines included — a gate, not a scrubber. Personal data in a diff is
+NOT gated (owner-only surface; see ADR-2241 Consequences). The diff is stored on the tool part in `turns.jsonl` so a reload shows it; it is
+never a text part, so `records_from_turn_log` (text only) never re-supplies it to the worker,
+and the audit chain keeps tool name + sequence only. The card renders it red/green
+(`--diff-add` / `--diff-del` tokens) under a "Show changes" checkbox, checked by default.
+E2E: `core/console/tests/test_chat_diff_e2e.py` (real subprocess replaying a stream captured
+from the claude CLI), `web-next/tests/unit/chat-tool-diff.test.tsx`.
+
 **What it does not cover:** a turn whose recording fails (disk error — audited
 as `append_failed`), and anything beyond the budget is in the view only as an
 index line or a reference to the history view (the worker can Read/Grep

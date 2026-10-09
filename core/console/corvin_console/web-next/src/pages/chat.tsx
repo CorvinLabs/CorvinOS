@@ -1,4 +1,5 @@
 import * as React from "react";
+import { classifyDiffLines, diffCounts, DIFF_WITHHELD_TEXT } from "@/lib/diff-lines";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
@@ -227,7 +228,14 @@ export function hydrateChatTurn(t: ChatTurn, i: number, sid: string): ChatMessag
         sid,
         ...(p.label ? { label: String(p.label) } : {}),
       };
-      return { kind: "tool", name: String(p.name ?? ""), input: (p.input ?? {}) as Record<string, unknown> };
+      return {
+        kind: "tool",
+        name: String(p.name ?? ""),
+        input: (p.input ?? {}) as Record<string, unknown>,
+        ...(p.id ? { id: String(p.id) } : {}),
+        ...(typeof p.diff === "string" ? { diff: p.diff, diffTruncated: !!p.diff_truncated } : {}),
+        ...(p.diff_withheld ? { diffWithheld: String(p.diff_withheld) } : {}),
+      };
     }),
   };
 }
@@ -2335,7 +2343,7 @@ const MessageBubble = React.memo(function MessageBubble({
               {p.text}
             </p>
           ) : (
-            <ToolUseCard key={i} name={p.name} input={p.input} />
+            <ToolUseCard key={i} part={p} />
           ),
         )}
         {m.error && (
@@ -2607,7 +2615,8 @@ function ArtifactCard({ artifact }: { artifact: Extract<MessagePart, { kind: "ar
   );
 }
 
-function ToolUseCard({ name, input }: { name: string; input: Record<string, unknown> }) {
+export function ToolUseCard({ part }: { part: Extract<MessagePart, { kind: "tool" }> }) {
+  const { name, input } = part;
   const [open, setOpen] = React.useState(false);
   // Format the most-likely-interesting field on a single line if possible
   // (e.g. Read tool's "file_path" or Bash tool's "command").
@@ -2636,9 +2645,56 @@ function ToolUseCard({ name, input }: { name: string; input: Record<string, unkn
           )}
         </div>
       </button>
+      {(part.diff !== undefined || part.diffWithheld) && <ToolDiff part={part} />}
       {open && (
         <pre className="max-h-60 overflow-auto border-t border-border/60 bg-background/40 px-3 py-2 font-mono text-[10.5px] leading-relaxed">
           {JSON.stringify(input, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/** ADR-2241: the change Claude Code made, red/green, with a "Show changes"
+ *  checkbox above it — checked by default, per card. */
+function ToolDiff({ part }: { part: Extract<MessagePart, { kind: "tool" }> }) {
+  const [show, setShow] = React.useState(true);
+  const lines = React.useMemo(() => classifyDiffLines(part.diff ?? ""), [part.diff]);
+  const { added, removed } = diffCounts(lines);
+  if (part.diffWithheld) {
+    return (
+      <p data-testid="tool-diff-withheld" className="border-t border-border/60 px-3 py-1.5 text-[10.5px] italic text-muted-foreground">
+        {DIFF_WITHHELD_TEXT[part.diffWithheld] ?? "Diff hidden."}
+      </p>
+    );
+  }
+  return (
+    <div data-testid="tool-diff" className="border-t border-border/60 px-3 py-1.5">
+      <label className="flex cursor-pointer items-center gap-2 text-[10.5px] text-muted-foreground">
+        <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} className="rounded" />
+        <span>Show changes</span>
+        <span className="font-mono text-diff-add">+{added}</span>
+        <span className="font-mono text-diff-del">&minus;{removed}</span>
+      </label>
+      {show && (
+        <pre className="mt-1.5 max-h-80 overflow-auto rounded border border-border/40 bg-background/60 py-1 font-mono text-[11px] leading-relaxed">
+          {lines.map((l, idx) => (
+            <div
+              key={idx}
+              data-diff={l.kind}
+              className={cn(
+                "whitespace-pre px-2",
+                l.kind === "add" && "bg-diff-add/10 text-diff-add",
+                l.kind === "del" && "bg-diff-del/10 text-diff-del",
+                l.kind === "hunk" && "text-muted-foreground",
+              )}
+            >
+              {l.text}
+            </div>
+          ))}
+          {part.diffTruncated && (
+            <div className="px-2 text-muted-foreground">… diff shortened</div>
+          )}
         </pre>
       )}
     </div>

@@ -18,6 +18,8 @@ export default {
     },
     extend: {
       colors: {
+        "diff-add": "hsl(var(--diff-add) / <alpha-value>)",
+        "diff-del": "hsl(var(--diff-del) / <alpha-value>)",
         background: "hsl(var(--background) / <alpha-value>)",
         foreground: "hsl(var(--foreground) / <alpha-value>)",
         muted: {

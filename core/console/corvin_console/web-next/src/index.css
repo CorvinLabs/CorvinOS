@@ -76,6 +76,9 @@
     --viz-status-progress: #c08a1e;
     --viz-status-blocked: #b0306a;
     --viz-status-complete: #2a78c6;
+    /* ADR-2241 chat diff (text ≥ 4.5:1 on card/background) */
+    --diff-add: 138 71% 23%;
+    --diff-del: 4 76% 40%;
   }
 
   [data-theme="dark"] {
@@ -117,6 +120,8 @@
     --viz-status-progress: #b88422;
     --viz-status-blocked: #d05a9c;
     --viz-status-complete: #2a8fd6;
+    --diff-add: 136 50% 53%;
+    --diff-del: 4 100% 72%;
   }
 
   * {

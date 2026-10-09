@@ -19,7 +19,10 @@ import { persistMessages, loadPersistedMessages, clearPersistedMessages } from "
 
 export type MessagePart =
   | { kind: "text"; text: string }
-  | { kind: "tool"; name: string; input: Record<string, unknown> }
+  // ADR-2241: an executed Edit/MultiEdit/Write gets the CLI's own diff (or the
+  // reason it is withheld) from a `tool_diff` event keyed by the tool-use id.
+  | { kind: "tool"; name: string; input: Record<string, unknown>; id?: string;
+      diff?: string; diffTruncated?: boolean; diffWithheld?: string }
   | { kind: "artifact"; name: string; path: string; mime: string; size: number; sid: string; label?: string }
   // Live-only, never persisted in turns.jsonl: an in-band runtime message about
   // THIS turn that is not part of the model's answer — an ACS quota fallback,
@@ -94,7 +97,7 @@ export interface ChatMessage {
 export interface StreamEvent {
   type: "ready" | "delta" | "tool_use" | "result" | "error" | "done" | "info" |
         "pong" | "session_title" | "artifact" | "ccc_action" | "voice" | "engine" |
-        "engine_progress" | "notice" | "language" | "bg_status";
+        "engine_progress" | "notice" | "language" | "bg_status" | "tool_diff";
   /** `notice` only: which runtime message this is ("quota_fallback",
    *  "acs_fallback", "artifacts_truncated"). Rendered as a distinct chip so a
    *  degrade is never mistaken for part of the model's answer. */
@@ -102,6 +105,13 @@ export interface StreamEvent {
   text?: string;
   name?: string;
   input?: Record<string, unknown>;
+  /** `tool_use` (file tools) / `tool_diff`: the tool-use id the diff belongs to. */
+  id?: string;
+  /** `tool_diff` only (ADR-2241): unified-diff hunks Claude Code computed for an
+   *  EXECUTED Edit/MultiEdit/Write, bounded; or why it is withheld. */
+  diff?: string;
+  diff_truncated?: boolean;
+  diff_withheld?: string;
   message?: string;
   title?: string;
   path?: string;
@@ -390,9 +400,37 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
     case "tool_use": {
       const aid = entry.currentAssistantId;
       if (!aid || !evt.name) return;
+      const toolPart: MessagePart = {
+        kind: "tool",
+        name: evt.name!,
+        input: evt.input ?? {},
+        ...(evt.id ? { id: evt.id } : {}),
+      };
       entry.messages = entry.messages.map((m) =>
         m.id === aid
-          ? { ...m, parts: [...m.parts, { kind: "tool", name: evt.name!, input: evt.input ?? {} }] }
+          ? { ...m, parts: [...m.parts, toolPart] }
+          : m
+      );
+      return;
+    }
+
+    case "tool_diff": {
+      const aid = entry.currentAssistantId;
+      if (!aid || !evt.id) return;
+      entry.messages = entry.messages.map((m) =>
+        m.id === aid
+          ? {
+              ...m,
+              parts: m.parts.map((p) =>
+                p.kind === "tool" && p.id === evt.id
+                  ? {
+                      ...p,
+                      ...(evt.diff !== undefined ? { diff: evt.diff, diffTruncated: !!evt.diff_truncated } : {}),
+                      ...(evt.diff_withheld ? { diffWithheld: evt.diff_withheld } : {}),
+                    }
+                  : p
+              ),
+            }
           : m
       );
       return;

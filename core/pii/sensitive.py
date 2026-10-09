@@ -111,7 +111,9 @@ _SENSITIVE_DETECTORS: list[PIIPattern] = [
     # Google API key
     _p("google_api_key", r"\bAIza[0-9A-Za-z_\-]{35}\b"),
     # Stripe / OpenAI style sk-/pk- secret keys
-    _p("prefixed_secret_key", r"\b[sp]k[-_](?:live|test|proj)?[-_]?[A-Za-z0-9]{16,}\b"),
+    # (+ Anthropic sk-ant-<kind>NN-…, whose dashes split the run the first form needs)
+    _p("prefixed_secret_key",
+       r"\b[sp]k[-_](?:live|test|proj)?[-_]?[A-Za-z0-9]{16,}\b|\bsk-ant-[a-z]+\d*-[A-Za-z0-9_\-]{16,}"),
     # JWT (three base64url segments). Same spans as
     # r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b",
     # but linear: that regex is quadratic on "eyJ-eyJ-…" (80 KB 0.73 s, 1 MiB

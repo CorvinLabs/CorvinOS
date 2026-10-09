@@ -44,6 +44,12 @@ export interface ChatTurnPart {
   text?: string;
   name?: string;
   input?: Record<string, unknown>;
+  /** `kind: "tool"` only (ADR-2241): tool-use id and the executed file tool's
+   *  bounded diff, or why it was withheld. */
+  id?: string;
+  diff?: string;
+  diff_truncated?: boolean;
+  diff_withheld?: string;
   path?: string;
   mime?: string;
   size?: number;

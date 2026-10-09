@@ -24,7 +24,8 @@ What IS in v1
   contract bridges use), so multi-turn conversations work
 * stream-json output parsed into normalised events:
     {type: "delta",  text: ...}
-    {type: "tool_use", name: ..., input: ...}
+    {type: "tool_use", name: ..., input: ..., id?: ...}
+    {type: "tool_diff", id: ..., diff | diff_withheld: ...}   (ADR-2241)
     {type: "result", text: ..., usage: {...}}
     {type: "error",  message: ...}
 * per-tenant chat workdir under ``<corvin_home>/sessions/web:<sid>/``
@@ -4221,6 +4222,69 @@ def _sanitize_tool_input(tool_name: str, full_input: dict[str, Any]) -> dict[str
     return safe
 
 
+# ── Chat diff (ADR-2241) ──────────────────────────────────────────────────────
+#
+# The diff a tool card shows is the one Claude Code itself computed: the CLI's
+# stream-json `user` event carries `tool_use_result.structuredPatch` for every
+# Edit / MultiEdit / Write it EXECUTED. Nothing here diffs anything — a denied or
+# failed edit has no structured result, so it shows no change. The shown text is
+# bounded, and it is withheld WHOLE when any credential detector of the
+# fail-closed core.pii.sensitive gate fires (a partially scrubbed secret is still
+# a leaked secret), or when the scan cannot finish.
+_DIFF_TOOLS = frozenset({"Edit", "MultiEdit", "Write"})
+_DIFF_MAX_LINES = 200
+_DIFF_MAX_LINE_CHARS = 400
+_DIFF_SCAN_LINE_CHARS = 1000  # scan past the cut so a secret split by it is still seen
+_DIFF_TURN_BUDGET = 400_000   # chars of diff per turn: one turns.jsonl line, one sessionStorage copy
+
+
+def _tool_result_diff(result: Any) -> "dict[str, Any] | None":
+    """Chat-card fields for one executed file tool, from its CLI result.
+
+    Returns ``{"diff": str, "diff_truncated": bool}``, ``{"diff_withheld": reason}``
+    or None (nothing to show: an error result, a no-op, an unknown shape).
+    ``diff`` is unified-diff hunks with file line numbers, every line prefixed
+    by exactly one of `` ``/``+``/``-`` or an ``@@`` header.
+    """
+    if not isinstance(result, dict):
+        return None
+    lines: list[str] = []
+    patch = result.get("structuredPatch")
+    if isinstance(patch, list) and patch:
+        for h in patch:
+            if not isinstance(h, dict) or not isinstance(h.get("lines"), list):
+                return None
+            lines.append(f"@@ -{h.get('oldStart', 0)},{h.get('oldLines', 0)} "
+                         f"+{h.get('newStart', 0)},{h.get('newLines', 0)} @@")
+            lines.extend(str(x) for x in h["lines"][:_DIFF_MAX_LINES + 1])
+            if len(lines) > _DIFF_MAX_LINES:
+                break
+    elif result.get("type") == "create" and isinstance(result.get("content"), str):
+        # A created file has an empty structuredPatch; its content IS the change.
+        content = result["content"]
+        n = content.count("\n") + (0 if content.endswith("\n") or not content else 1)
+        if n == 0:
+            return None
+        lines.append(f"@@ -0,0 +1,{n} @@")
+        lines.extend("+" + x for x in content.split("\n", _DIFF_MAX_LINES + 1)[:min(n, _DIFF_MAX_LINES + 1)])
+    if not lines:
+        return None
+    truncated = len(lines) > _DIFF_MAX_LINES
+    shown = lines[:_DIFF_MAX_LINES]
+    try:
+        from core.pii.code_secrets import detect_code_secrets  # noqa: PLC0415
+        if detect_code_secrets("\n".join(x[:_DIFF_SCAN_LINE_CHARS] for x in shown)):
+            return {"diff_withheld": "credential"}
+    except Exception:  # noqa: BLE001 — a scan that cannot finish withholds
+        return {"diff_withheld": "scan_failed"}
+    out: list[str] = []
+    for x in shown:
+        if len(x) > _DIFF_MAX_LINE_CHARS:
+            x, truncated = x[:_DIFF_MAX_LINE_CHARS] + "…", True
+        out.append(x)
+    return {"diff": "\n".join(out), "diff_truncated": truncated}
+
+
 # ── L44 + L-integrity + L34 + L35 pre-spawn gates (CRITICAL compliance) ───────
 #
 # The owner-console web-chat runs an OS turn either by spawning ``claude -p``
@@ -5545,7 +5609,9 @@ async def _stream_turn_impl(
 
     Yielded shapes:
       {type: "delta",    text: str}
-      {type: "tool_use", name: str, input: dict}
+      {type: "tool_use", name: str, input: dict, id?: str}   # id: Edit/MultiEdit/Write
+      {type: "tool_diff", id: str, diff: str, diff_truncated: bool}
+      {type: "tool_diff", id: str, diff_withheld: "credential" | "scan_failed"}
       {type: "result",   text: str, usage: dict | None}
       {type: "error",    message: str}
       {type: "done"}
@@ -7461,6 +7527,8 @@ async def _stream_turn_impl(
     # frontend's MessagePart union expects — so the turns.jsonl can be
     # replayed verbatim on re-open.
     assistant_parts: list[dict[str, Any]] = []
+    _diff_parts: dict[str, dict[str, Any]] = {}  # ADR-2241: tool_use id -> its card
+    _diff_budget = _DIFF_TURN_BUDGET
     # `last_usage` is initialised at the top of this function (see the comment
     # there) — it must NOT be re-bound here, or the early-emit paths above go
     # back to raising NameError.
@@ -7542,12 +7610,20 @@ async def _stream_turn_impl(
                             tinput = block.get("input") or {}
                             # Sanitize tool input for UI display + persistence: extract only safe,
                             # non-sensitive parameters (GDPR Art. 5 data-minimisation).
-                            # Full input never leaves the server. Safe params only: cmd name,
+                            # The raw input never leaves the server. Safe params only: cmd name,
                             # file name (not full path), URLs, patterns — no secrets exposed.
+                            # (An EXECUTED file tool's diff is shown from its RESULT instead,
+                            # bounded and credential-gated — ADR-2241, see _tool_result_diff.)
                             safe_input = _sanitize_tool_input(tname, tinput)
-                            assistant_parts.append({
-                                "kind": "tool", "name": tname, "input": safe_input,
-                            })
+
+                            tool_id = str(block.get("id") or "")
+                            event_payload = {"kind": "tool", "name": tname, "input": safe_input}
+                            if tool_id and tname in _DIFF_TOOLS:
+                                # ADR-2241: the card's diff arrives with the tool's
+                                # result (user event below), keyed by this id.
+                                event_payload["id"] = tool_id
+                                _diff_parts[tool_id] = event_payload
+                            assistant_parts.append(event_payload)
                             # GDPR Art. 5 data-minimisation: record tool name only,
                             # never tool input (may contain paths, vault secrets).
                             tm.record_event(task_id, {
@@ -7566,7 +7642,21 @@ async def _stream_turn_impl(
                                 "type": "tool_use",
                                 "name": tname,
                                 "input": safe_input,
+                                **({"id": event_payload["id"]} if "id" in event_payload else {}),
                             }
+            elif etype == "user" and _diff_parts:
+                # ADR-2241: an EXECUTED Edit/MultiEdit/Write carries the CLI's own
+                # structuredPatch here; a denied/failed one carries an error string.
+                _tr_ids = [b.get("tool_use_id") for b in ((evt.get("message") or {}).get("content") or [])
+                           if isinstance(b, dict) and b.get("type") == "tool_result"]
+                _part = _diff_parts.pop(_tr_ids[0], None) if len(_tr_ids) == 1 else None
+                _fields = _tool_result_diff(evt.get("tool_use_result")) if _part is not None else None
+                if _fields and len(_fields.get("diff", "")) > _diff_budget:
+                    _fields = {"diff_withheld": "turn_budget"}
+                if _fields:
+                    _diff_budget -= len(_fields.get("diff", ""))
+                    _part.update(_fields)
+                    yield {"type": "tool_diff", "id": _part["id"], **_fields}
             elif etype == "result":
                 # ADR-2220: unregister + close stdin the moment the first
                 # `result` event arrives — mirrors the bridge adapter's

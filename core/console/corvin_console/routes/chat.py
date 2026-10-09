@@ -15,7 +15,7 @@ WebSocket protocol
 ------------------
 Client → server: ``{"type": "user", "text": "..."}``
 Server → client: streamed events from ``chat_runtime.stream_turn``
-                 (``delta`` / ``tool_use`` / ``result`` / ``error`` / ``done``)
+                 (``delta`` / ``tool_use`` / ``tool_diff`` / ``result`` / ``error`` / ``done``)
 
 A session may be cancelled mid-turn by sending ``{"type": "cancel"}``.
 
