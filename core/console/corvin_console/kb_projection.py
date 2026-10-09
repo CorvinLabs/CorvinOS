@@ -232,8 +232,12 @@ def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
             _save(tenant_id, st)
             return st
         fp = fingerprint(repo) if healed.get("commit") else fp
+        # what waits for a human (escalated reviews, human-required decisions, incidents): the board
+        # banner reads it from /kb/status, so it follows every KB change like the projection does
+        rc_q, queue = _run(repo, "queue")
         base = {"fingerprint": fp, "checked_at": now, "drift_total": prev.get("drift_total", 0),
-                "healed": healed.get("fixed", 0) if rc_h == 0 else None}
+                "healed": healed.get("fixed", 0) if rc_h == 0 else None,
+                "human_queue": queue if rc_q == 0 and isinstance(queue.get("queue"), list) else None}
         if not payload.get("ok"):
             # red wins over held: an inconsistent KB is reported first (one record per state)
             res = projection.apply(tenant_id, payload)

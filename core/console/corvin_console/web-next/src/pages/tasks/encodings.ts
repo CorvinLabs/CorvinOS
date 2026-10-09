@@ -11,7 +11,7 @@
  *  - priority is ORDINAL, so it is an ordinal amber ramp keyed on the tier
  *    (`--viz-tier-*`), never on a measured value.
  */
-import type { Item, ItemKind, ItemStatus, Priority } from "@/lib/api/task-tracking";
+import type { Item, ItemKind, ItemStatus, KbHumanQueue, Priority } from "@/lib/api/task-tracking";
 
 export const STATUS_ORDER: ItemStatus[] = ["open", "in_progress", "blocked", "complete", "archived"];
 export const BOARD_COLUMNS: ItemStatus[] = ["open", "in_progress", "blocked", "complete"];
@@ -370,4 +370,39 @@ export function deadlineText(deadline: string | null, nowMs: number, closed: boo
   const abs = Math.abs(diff);
   const unit = abs >= DAY ? `${Math.floor(abs / DAY)}d` : abs >= 3_600_000 ? `${Math.floor(abs / 3_600_000)}h` : `${Math.max(1, Math.floor(abs / 60_000))}m`;
   return diff >= 0 ? `due in ${unit}` : `${unit} overdue`;
+}
+
+
+const QUEUE_KIND: Record<string, string> = {
+  decision: "decision awaiting acceptance",
+  review: "review escalated",
+  incident: "incident",
+};
+
+/** "waiting 3d", "waiting 5h", "waiting 12m" - from the moment the wait started (ISO), en-US. */
+export function waitingText(since: string, nowMs: number): string {
+  const t = Date.parse(since);
+  if (Number.isNaN(t)) return "waiting";
+  const d = Math.max(0, nowMs - t);
+  return `waiting ${d >= DAY ? `${Math.floor(d / DAY)}d` : d >= 3_600_000 ? `${Math.floor(d / 3_600_000)}h` : `${Math.max(1, Math.floor(d / 60_000))}m`}`;
+}
+
+/**
+ * The board banner for the knowledge base's human queue: a headline that names the queue and what
+ * it does (autonomous building paused or not), plus one row per item. `null` when nothing waits -
+ * an empty queue draws nothing rather than a reassuring zero.
+ */
+export function humanQueueBanner(hq: KbHumanQueue | null | undefined, nowMs: number): {
+  headline: string; paused: boolean; rows: { id: string; text: string }[];
+} | null {
+  if (!hq || !Array.isArray(hq.queue) || hq.queue.length === 0) return null;
+  const n = hq.queue.length;
+  return {
+    headline: `${n} item${n === 1 ? "" : "s"} wait${n === 1 ? "s" : ""} for a human`
+      + (hq.paused ? ` - autonomous building is paused until the oldest is handled (limit ${hq.max_age_hours}h)` : ""),
+    paused: hq.paused,
+    rows: hq.queue.slice(0, 5).map((x) => ({
+      id: x.id, text: `${x.id} - ${QUEUE_KIND[x.kind] ?? x.kind}: ${x.title} (${waitingText(x.since, nowMs)})`,
+    })),
+  };
 }

@@ -37,7 +37,7 @@ import { CreateDialog } from "./create-dialog";
 import { DetailDrawer } from "./detail-drawer";
 import {
   EMPTY_FILTERS, KIND_META, KIND_ORDER, PRIORITY_META, PRIORITY_ORDER, STATUS_META, WORK_KINDS, buildTree,
-  filtersActive, filtersFromQuery, filtersToQuery, isKbItem, kindMeta, matches, type Filters,
+  filtersActive, filtersFromQuery, filtersToQuery, humanQueueBanner, isKbItem, kindMeta, matches, type Filters,
 } from "./encodings";
 import { clockSkewMs, formatUtc } from "./format";
 import { LIVE_QUERY, freshness } from "./live";
@@ -215,6 +215,7 @@ export default function TasksPage() {
   }, [move]);
   const kbQ = useQuery({ queryKey: ["task-tracking", "kb-status"], queryFn: ({ signal }) => getKbStatus(signal),
     ...LIVE_QUERY, retry: false });
+  const queueBanner = useMemo(() => humanQueueBanner(kbQ.data?.human_queue, now), [kbQ.data?.human_queue, now]);
   const imp = useMutation({
     mutationFn: () => importInitiatives(csrf),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["task-tracking"] }),
@@ -410,6 +411,17 @@ export default function TasksPage() {
                 : kbQ.data.state === "error" ? `Knowledge-base sync failed: ${kbQ.data.error ?? "unknown error"}`
                 : kbQ.data.state === "diverged" ? "Knowledge-base sync could not repair every difference — see kb status." : null}
             </p>
+          )}
+
+          {kbQ.data?.enabled && queueBanner && (
+            <section data-testid="human-queue-banner" aria-label="Human queue"
+              className={`rounded-md border px-3 py-2 text-xs ${queueBanner.paused
+                ? "border-destructive/40 bg-destructive/10" : "border-amber-500/40 bg-amber-500/10"}`}>
+              <p className="font-medium" role="status">{queueBanner.headline}</p>
+              <ul className="mt-1 list-disc pl-4">
+                {queueBanner.rows.map((r) => <li key={r.id}>{r.text}</li>)}
+              </ul>
+            </section>
           )}
 
           {(view === "tree" || view === "timeline" || (items.length === 0 && workViews && view !== "graph")) && runs.length > 0 && (

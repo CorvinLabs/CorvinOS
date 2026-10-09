@@ -21,9 +21,9 @@ import { CreateDialog } from "@/pages/tasks/create-dialog";
 import { LIVE_QUERY, freshness } from "@/pages/tasks/live";
 import {
   EMPTY_FILTERS, boardColumns, buildTimeline, buildTree, deadlineText, displayProgress, filtersFromQuery,
-  filtersToQuery, matches,
+  filtersToQuery, humanQueueBanner, matches, waitingText,
 } from "@/pages/tasks/encodings";
-import type { Item } from "@/lib/api/task-tracking";
+import type { Item, KbHumanQueue } from "@/lib/api/task-tracking";
 
 const NOW = "2026-09-24T12:00:00Z";
 
@@ -182,7 +182,71 @@ describe("tasks encodings", () => {
   });
 });
 
+describe("human queue banner", () => {
+  const now = Date.parse(NOW);
+  const queue = (over: Partial<KbHumanQueue> = {}): KbHumanQueue => ({
+    max_age_hours: 72, paused: false,
+    queue: [
+      { id: "REVIEW-0004", uid: "u1", kind: "review", title: "Escalate me", since: "2026-09-21T12:00:00Z", hours: 72 },
+      { id: "T-0099", uid: "u2", kind: "incident", title: "Escalated: postcondition", since: "2026-09-24T09:00:00Z", hours: 3 },
+    ], ...over,
+  });
+
+  it("draws nothing for an empty or missing queue - no reassuring zero", () => {
+    expect(humanQueueBanner(null, now)).toBeNull();
+    expect(humanQueueBanner(undefined, now)).toBeNull();
+    expect(humanQueueBanner(queue({ queue: [] }), now)).toBeNull();
+  });
+
+  it("names the queue, each item with its kind and how long it has waited", () => {
+    const b = humanQueueBanner(queue(), now)!;
+    expect(b.headline).toBe("2 items wait for a human");
+    expect(b.paused).toBe(false);
+    expect(b.rows.map((r) => r.text)).toEqual([
+      "REVIEW-0004 - review escalated: Escalate me (waiting 3d)",
+      "T-0099 - incident: Escalated: postcondition (waiting 3h)",
+    ]);
+    expect(humanQueueBanner(queue({ queue: [queue().queue[1]] }), now)!.headline).toBe("1 item waits for a human");
+  });
+
+  it("says autonomous building is paused, with the limit, once the oldest waited too long", () => {
+    const b = humanQueueBanner(queue({ paused: true }), now)!;
+    expect(b.paused).toBe(true);
+    expect(b.headline).toContain("autonomous building is paused");
+    expect(b.headline).toContain("limit 72h");
+  });
+
+  it("writes the waiting time compactly and survives a broken timestamp", () => {
+    expect(waitingText("2026-09-24T11:20:00Z", now)).toBe("waiting 40m");
+    expect(waitingText("2026-09-24T11:59:50Z", now)).toBe("waiting 1m");
+    expect(waitingText("not a date", now)).toBe("waiting");
+  });
+
+  it("caps the list at five rows", () => {
+    const many = Array.from({ length: 8 }, (_, i) => ({ ...queue().queue[0], id: `T-${i}`, uid: `u${i}` }));
+    expect(humanQueueBanner(queue({ queue: many }), now)!.rows).toHaveLength(5);
+    expect(humanQueueBanner(queue({ queue: many }), now)!.headline).toBe("8 items wait for a human");
+  });
+});
+
 describe("Tasks page", () => {
+  it("shows the human queue from /kb/status above the work views, and nothing when it is empty", async () => {
+    const kb = (hq: KbHumanQueue | null) => http.get("/v1/console/task-tracking/kb/status",
+      () => HttpResponse.json({ enabled: true, state: "ok", human_queue: hq }));
+    server.use(kb({ max_age_hours: 72, paused: true, queue: [
+      { id: "T-0099", uid: "u2", kind: "incident", title: "Escalated: postcondition", since: "2026-09-24T08:00:00Z", hours: 4 },   // the page clock follows the server time (NOW)
+    ] }));
+    const first = renderIt();
+    const banner = await screen.findByTestId("human-queue-banner");
+    expect(within(banner).getByText(/1 item waits for a human - autonomous building is paused/)).toBeTruthy();
+    expect(within(banner).getByText(/T-0099 - incident: Escalated: postcondition \(waiting 4h\)/)).toBeTruthy();
+    first.unmount();
+    server.use(kb({ max_age_hours: 72, paused: false, queue: [] }));
+    renderIt();
+    expect(await screen.findByText("Loop B — Phase 9 fixes")).toBeTruthy();
+    expect(screen.queryByTestId("human-queue-banner")).toBeNull();
+  });
+
   it("renders the tree with rollups, KPIs and the decision banner", async () => {
     renderIt();
     expect(await screen.findByText("Loop B — Phase 9 fixes")).toBeTruthy();

@@ -143,6 +143,24 @@ class KbProjectionE2E(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         return r.json()
 
+    def test_the_human_queue_reaches_the_status_endpoint(self):
+        """An escalated task (an incident) is in the human queue, and /kb/status carries it."""
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            st = self._sync(client, csrf)
+            self.assertEqual(st["state"], "ok", st)
+            self.assertEqual(client.get(f"{_URL}/kb/status").json()["human_queue"]["queue"], [])
+            L = _kb_lib_of(self.kb)
+            p = _kb_file(self.kb / "kb" / "tasks", self.t2["id"])
+            doc = L.parse(p)
+            L.write_doc(p, L.fm_set(doc.text, "labels", "\n- escalated"), like=doc)
+            _sh("git", "add", "-A", cwd=self.kb)
+            _sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "escalate", cwd=self.kb)
+            self._sync(client, csrf)
+            hq = client.get(f"{_URL}/kb/status").json()["human_queue"]
+            self.assertEqual([(x["id"], x["kind"]) for x in hq["queue"]], [(self.t2["id"], "incident")], hq)
+            self.assertFalse(hq["paused"])
+            self.assertTrue(hq["queue"][0]["since"] and hq["queue"][0]["title"])
+
     def test_projection_ownership_transition_drift_heal_block(self):
         with _sandbox(self.tmp) as (client, csrf, home, _):
             # 1. projection: hierarchy + refs

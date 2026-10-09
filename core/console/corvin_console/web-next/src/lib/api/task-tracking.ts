@@ -187,8 +187,27 @@ export function kbTransition(id: string, to: ItemStatus, csrf: string,
     { method: "POST", body: { to, ...extra }, csrf });
 }
 
+/** What waits for a human in the knowledge base (`kb queue`): escalated reviews, human-required
+ *  decisions and incidents (escalated tasks), oldest first. */
+export interface KbHumanQueueItem {
+  id: string;
+  uid: string;
+  kind: "decision" | "review" | "incident";
+  title: string;
+  since: string;
+  hours: number;
+}
+
+export interface KbHumanQueue {
+  queue: KbHumanQueueItem[];
+  max_age_hours: number;
+  /** Autonomous building (A2) is paused because the oldest item waited longer than the limit. */
+  paused: boolean;
+}
+
 export interface KbProjectionStatus {
   enabled: boolean;
+  human_queue?: KbHumanQueue | null;
   state: "ok" | "blocked" | "held" | "diverged" | "error" | "off" | "idle";
   pending_uncommitted?: string[];
   sha?: string;
