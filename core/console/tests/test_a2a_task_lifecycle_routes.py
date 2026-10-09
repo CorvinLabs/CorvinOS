@@ -126,5 +126,19 @@ class TaskLifecycleRouteTests(unittest.TestCase):
         self.assertIsNone(peers["bad-peer"]["task_capacity"], "an unknown value is never passed on")
 
 
+    def test_a_removed_peer_row_also_carries_task_capacity(self):
+        """Found by the live watch (2026-10-09): `include_former=true` — how the UI asks — appended rows for
+        connections that no longer exist, built apart from presence(), without the key."""
+        R._feed.record(direction="out", kind="task", peer_id="vanished", task_id="t-old",
+                       text="x", status="sent", tenant_id="_default")
+        body = self._client().get("/v1/console/a2a/feed?include_former=true").json()
+        rows = {p["peer_id"]: p for p in body["peers"]}
+        self.assertEqual(rows["vanished"]["presence"], "removed")
+        self.assertIn("task_capacity", rows["vanished"])
+        self.assertIsNone(rows["vanished"]["task_capacity"])
+        for p in body["peers"]:
+            self.assertIn("task_capacity", p, p.get("peer_id"))
+
+
 if __name__ == "__main__":
     unittest.main()

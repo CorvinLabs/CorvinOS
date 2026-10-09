@@ -124,7 +124,9 @@ def _former_peers(tenant_id: str, configured: set[str]) -> list[dict[str, Any]]:
     return [
         {"peer_id": e["peer_id"], "label": e["label"], "state": None,
          "can_send": False, "can_receive": False, "enabled": False,
-         "presence": "removed", "last_check_at": None, "last_ok_at": e["last_ts"] or None}
+         "presence": "removed", "last_check_at": None, "last_ok_at": e["last_ts"] or None,
+         # every peer row carries the key (ADR-2242 §8): a connection that no longer exists has no capacity
+         "task_capacity": None}
         for e in sorted(seen.values(), key=lambda e: -e["last_ts"])
     ]
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=Corvin — A2A live health watch trigger
+
+[Timer]
+OnBootSec=2min
+# Every 10 min: a pass is a handful of local HTTP calls and spends no peer quota (pings and reads only).
+# It leaves one synthetic A2A.task_status_queried audit record per pass — keep the interval modest.
+OnUnitActiveSec=10min
+AccuracySec=30s
+Unit=corvin-a2a-watch.service
+
+[Install]
+WantedBy=timers.target

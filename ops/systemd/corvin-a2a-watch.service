@@ -1,0 +1,16 @@
+[Unit]
+Description=Corvin — A2A live health watch (is the host on current code, is the contract intact, do peers answer?)
+# Template: replace @REPO@ with the checkout (the installed unit under ~/.config/systemd/user uses absolute
+# paths, like the other Corvin user units) and @HOME@ with the CORVIN_HOME the host runs with (live root:
+# <repo>/.corvin). Install:  see docs/claude-ref/layer-38-a2a-network.md § "Continuous watch".
+
+[Service]
+Type=oneshot
+Environment=CORVIN_HOME=@HOME@
+Environment=CORVIN_LIVE_URL=http://127.0.0.1:8765
+# Exit 0 = healthy or degraded (warnings), 1 = the HOST is broken (shows in `systemctl --user --failed`),
+# 2 = the watch itself could not run. --quiet: the journal only gets a line when something is not healthy.
+ExecStart=@REPO@/core/console/.venv/bin/python @REPO@/corvin_operator/bridges/shared/a2a_live_watch.py --quiet
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=120

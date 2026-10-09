@@ -1179,6 +1179,41 @@ old-style ping still works, and `GET /a2a/feed` carries `stages` and `task_capac
 `web-next/tests/e2e/peer-live-status-symbols.spec.ts` does the same for the page, with no stubs. Run both after every
 restart; red against a host started before the change, green after (2026-10-09: 2 red → 6 green).
 
+### Continuous watch — `a2a_live_watch.py` (2026-10-09)
+
+**Goal:** A2A works on every freshly installed instance. **Success = a pass says `healthy`.** One pass
+(`corvin_operator/bridges/shared/a2a_live_watch.py`, run by `ops/systemd/corvin-a2a-watch.timer` every 10 min)
+measures, over the host's REAL HTTP boundary and without sending a task or spending a peer's quota:
+
+| Level | Check | Meaning |
+|---|---|---|
+| CRITICAL (host wrong) | `service_fresh` | the serving process started AFTER the newest A2A source file on disk — a service keeps the code it started with (this class left the quota fast-fail undeployed for hours) |
+| CRITICAL | `ordinary_ping`, `pong_capacity`, `task_status_unknown`, `reaimed_ignored`, `forged_refused`, `feed_shape` | the contract in `a2a_live_probe` (the same probe `tests/e2e/a2a/test_live_host_a2a_contract_e2e.py` asserts on) |
+| WARN | `peer_offline`, `peer_probe_stale` (>5 min), `peer_limit_reached` | a paired peer is down / the host stopped probing it / it reports its daily pool as spent |
+| WARN | `peer_pool_pressure` | we alone used ≥ 8 of a free-tier peer's 10 daily units today (UTC) |
+| WARN | `peer_refusing` | the peer's last ≥ 3 answers to us were refusals — with the reason it gave |
+
+Exit 0 = healthy/degraded, **1 = broken (shows in `systemctl --user --failed`)**, 2 = the watch could not run. Output:
+`<CORVIN_HOME>/logs/a2a_watch.jsonl` (capped) and `a2a_watch.status.json` (atomic). Boundaries: it only pings and reads;
+a throwaway origin (random id/keys, 0600, never a symlink target) is created and ALWAYS removed; keys never appear in
+output; concurrent runs are serialised (the second exits 0); it leaves one synthetic `A2A.task_status_queried` audit
+record per pass.
+
+Install (units live outside the repo, absolute paths — like the other Corvin user units):
+
+```bash
+sed -e "s#@REPO@/#$PWD/#g" -e "s#@HOME@#$PWD/.corvin#" ops/systemd/corvin-a2a-watch.service > ~/.config/systemd/user/corvin-a2a-watch.service
+cp ops/systemd/corvin-a2a-watch.timer ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now corvin-a2a-watch.timer
+```
+
+Adversarial coverage (`test_a2a_live_watch.py`): a fake host that lies (forged ping accepted, re-aimed signature
+honoured, wrong-key pong), hangs, answers HTML/500/oversized bodies or is down; hostile feeds (string/NaN/bool
+timestamps, junk rows); unwritable origin and log directories; a symlink planted where the throwaway origin goes;
+concurrent runs; the real CLI as a subprocess; the unit's ExecStart pointing at a script that exists.
+Found by running it on 2026-10-09: peer rows of removed connections lacked `task_capacity`; the watch itself crashed
+on a non-numeric timestamp and exited 2 when its log directory was unusable.
+
 Operator note: testing against a **live** peer spends THAT peer's pool. 10 tasks a day is also what a fresh free-tier
 installation can accept from its peers — a product/licensing question (a separate, larger inbound-A2A allowance) that
 this layer deliberately does not decide.

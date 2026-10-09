@@ -22,7 +22,9 @@ def test_acs_chokepoint_blocks_second_free_tier_run(monkeypatch):
     import license.validator as _v
     from license.limits import FREE_TIER
     _v._set_active_license(None)
-    with tempfile.TemporaryDirectory() as td:
+    # ignore_cleanup_errors: the over-quota run emits a compute.quota_exceeded audit event whose writer can
+    # still be touching this directory when it is removed — a cleanup race, not a test result.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         monkeypatch.setenv("CORVIN_HOME", td)
         limit = int(FREE_TIER["compute_units_per_day"])
         for n in range(limit):
