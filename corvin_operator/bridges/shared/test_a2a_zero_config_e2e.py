@@ -115,6 +115,7 @@ class _Host:
         self.advertised_url = advertised_url
         self.port = _free_port()
         self.proc: subprocess.Popen | None = None
+        self.extra_env: dict[str, str] = {}
 
     def env(self) -> dict[str, str]:
         home = self.root / "home"
@@ -135,6 +136,7 @@ class _Host:
             "CORVIN_A2A_INGRESS": "off",
             "CORVIN_TENANT_ID": "_default",
         })
+        env.update(self.extra_env)
         return env
 
     def start(self) -> None:
@@ -308,6 +310,56 @@ class TestZeroConfigPairing(unittest.TestCase):
             lambda: self.issuer.call("POST", "/feed_stages")[1]["stages"].get(tid),
             "the observed terminal stage in the sender's feed", timeout=20)
         self.assertEqual(stages["stage"], "completed")
+
+    def test_6_processing_is_visible_mid_run_in_order_over_the_relay(self):
+        """A task whose worker runs ~20 s: the sender sees delivered/accepted/processing
+        while it runs — over the relay, from a SEPARATE query — and completed at the end."""
+        import threading
+        import uuid
+        # The receiving instance runs a scripted agent through the real worker path.
+        self.redeemer.stop()
+        self.redeemer.extra_env = {"E2E_AGENT_MODE": "echo", "E2E_AGENT_NAME": "redeemer",
+                                   "E2E_SKIP_L44": "1"}
+        self.redeemer.start()
+        code, created = self.issuer.call("POST", "/create", {"label": "issuer"})
+        self.assertEqual(code, 200, created)
+        code, imported = self.redeemer.call("POST", "/import",
+                                            {"token": created["token"], "spawn_worker": True})
+        self.assertEqual(code, 200, imported)
+        kid = created["kid"]
+        self._await_linked(kid)
+
+        tid = str(uuid.uuid4())
+        out: dict = {}
+
+        def _send() -> None:
+            out["code"], out["body"] = self.issuer.call(
+                "POST", f"/send/{kid}",
+                {"task_id": tid, "text": "[e2e-lifecycle1] [sleep=20] work", "timeout_s": 90, "ttl_s": 120})
+
+        t = threading.Thread(target=_send)
+        t.start()
+        seen: list[str] = []
+        deadline = time.time() + 80
+        while t.is_alive() and time.time() < deadline:
+            _c, st = self.issuer.call("POST", f"/task_status/{kid}", {"task_id": tid})
+            if st.get("supported") and st["stage"] != "unknown" and (not seen or seen[-1] != st["stage"]):
+                seen.append(st["stage"])
+            time.sleep(1.0)
+        t.join(60)
+        self.assertEqual(out.get("code"), 200, out)
+        self.assertIn(out["body"]["status"], ("ok", "filtered"), out)
+        self.assertIn("processing", seen, f"never saw `processing` while the worker ran: {seen}")
+        order = {"delivered": 2, "accepted": 3, "processing": 4, "completed": 5}
+        ranks = [order[s_] for s_ in seen]
+        self.assertEqual(ranks, sorted(ranks), f"stages went backwards: {seen}")
+        _c, st = self.issuer.call("POST", f"/task_status/{kid}", {"task_id": tid})
+        self.assertEqual(st["stage"], "completed", st)
+        # The sender's own poller (inside send()) recorded the progress in its feed too.
+        _c, fs = self.issuer.call("POST", "/feed_stages", {"task_id": tid})
+        names = [r["stage"] for r in fs["timeline"]]
+        self.assertIn("processing", names, fs)
+        self.assertEqual(names[-1], "completed", fs)
 
     def test_4_revocation_is_reflected_on_the_other_side(self):
         kid = self._pair()

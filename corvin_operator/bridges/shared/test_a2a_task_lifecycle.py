@@ -136,6 +136,8 @@ class _Base(unittest.TestCase):
         self._env = mock.patch.dict(os.environ, {"CORVIN_A2A_FEED_DIR": str(self.tmp / "feed")})
         self._env.start()
         ats._reset_for_tests()
+        srv._PING_RATE_BUCKETS.clear()  # module-global; a flood test must not starve the next one
+        srv._PING_SEEN.clear()
 
     def tearDown(self) -> None:
         self._env.stop()
@@ -341,6 +343,13 @@ class TestStatusQueryAdversarial(_Base):
         code, resp = srv.process_ping_request(req, self.recv)
         self.assertEqual(code, 200)
         self.assertNotIn("task_stage", resp)
+
+    def test_status_flood_is_rate_limited_not_unbounded(self):
+        """A key holder polling far faster than any real poller gets 429s — the query
+        spends the same per-origin budget as a ping, so it cannot drain the host."""
+        codes = [srv.process_ping_request(_query(self.tid), self.recv)[0] for _ in range(90)]
+        self.assertIn(429, codes, "90 queries in a burst must hit the rate limit")
+        self.assertEqual(codes[0], 200)
 
     def test_audit_once_per_stage_change_not_per_poll(self):
         _mock_se.write_event.reset_mock()

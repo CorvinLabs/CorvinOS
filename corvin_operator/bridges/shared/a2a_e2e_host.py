@@ -129,6 +129,12 @@ def main() -> int:
     from corvin_console.routes import a2a_pair as ap  # noqa: PLC0415
     from fastapi import HTTPException  # noqa: PLC0415
 
+    if os.environ.get("E2E_SKIP_L44") == "1":
+        # Harness-only: the lifecycle E2E drives a scripted agent, not the live L44
+        # classifier (which spawns the real `claude` CLI per task).
+        import spawn_gates  # noqa: PLC0415
+        spawn_gates.check_l44 = lambda *a, **kw: None  # type: ignore[assignment]
+
     agent = os.environ.get("E2E_AGENT_NAME", "")
     if os.environ.get("E2E_AGENT_MODE") == "echo" and agent:
         receiver = rtr.RemoteTriggerReceiver(
@@ -197,7 +203,9 @@ def main() -> int:
                     b = self._body()
                     result = sender.send(kid, b.get("text") or "e2e ping message",
                                          attachments=b.get("attachments") or None,
-                                         ttl_s=60, timeout_s=int(b.get("timeout_s") or 20))
+                                         ttl_s=int(b.get("ttl_s") or 60),
+                                         timeout_s=int(b.get("timeout_s") or 20),
+                                         task_id=b.get("task_id") or None)
                     self._send(200, {"ok": result.ok, "status": result.status,
                                      "task_id": result.task_id, "data": result.data,
                                      "attachments": [
@@ -214,7 +222,9 @@ def main() -> int:
                                                        timeout_s=10))
                 elif self.path == "/feed_stages":
                     import a2a_feed  # noqa: PLC0415
-                    self._send(200, {"stages": a2a_feed.latest_stages()})
+                    tid = str(self._body().get("task_id") or "")
+                    self._send(200, {"stages": a2a_feed.latest_stages(),
+                                     "timeline": a2a_feed.stage_timeline(tid) if tid else []})
                 else:
                     self._send(404, {})
             except HTTPException as exc:
