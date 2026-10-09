@@ -73,7 +73,9 @@ const CHAIN_DOT: Record<string, string> = {
  * (queued → sent → delivered → accepted → working → done). The mapping lives in
  * lib/a2a-message-status.ts; this only draws it.
  */
-export function MessageStatusSymbol({ v, mine }: { v: MessageStatusView; mine: boolean }) {
+export function MessageStatusSymbol({ v, mine, onResend }: {
+  v: MessageStatusView; mine: boolean; onResend?: () => void;
+}) {
   const Icon = STATUS_ICON[v.icon];
   const chainText = v.chain.length
     ? `\n${v.chain.map((c) => `${c.state === "done" ? "✓" : c.state === "current" ? "●" : c.state === "failed" ? "✗" : "○"} ${c.label}`).join("\n")}`
@@ -99,12 +101,22 @@ export function MessageStatusSymbol({ v, mine }: { v: MessageStatusView; mine: b
         <span className="text-muted-foreground">· {formatAge(v.observedAgeS)}</span>
       )}
       <span className="sr-only">{v.detail}</span>
+      {onResend && (
+        <button type="button" data-testid="peer-message-resend" onClick={onResend}
+          className="ml-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-foreground/80 underline-offset-2 hover:bg-muted hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+          Resend
+        </button>
+      )}
     </div>
   );
 }
 
-const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, reply, stage, now }: {
+/** Refusals that depend on the message itself — sending the same text again cannot help. */
+const CONTENT_REFUSALS: ReadonlySet<string> = new Set(["injection", "house_rules", "data_flow"]);
+
+const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, reply, stage, now, onResend }: {
   m: A2AFeedMessage; label: string; reply: A2AFeedMessage | null; stage: A2AStageInfo | null; now: number;
+  onResend?: (text: string) => void;
 }) {
   // Four actors, not two (ADR-2235): who authored this line is derived from
   // (direction, kind) — or from thread_ref when a moderated conversation's
@@ -121,6 +133,13 @@ const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, reply, sta
   // The status symbol: what the feed knows about this message, its reply and the
   // stage the peer reported — one pure mapping (lib/a2a-message-status.ts).
   const statusView = messageStatusView(m, { reply, stage, now });
+  // A refused or never-sent message of ours can be sent again — by the user, explicitly.
+  // Never for "unconfirmed" (it may already have run: a resend would run it twice), never
+  // with attachments (the feed keeps no bytes to re-attach), never when the refusal was
+  // about the content itself, and never for a line a conversation generated.
+  const canResend = Boolean(onResend) && mine && m.kind === "task" && statusView.key === "failed"
+    && m.attachments.length === 0 && !m.thread_ref && m.text.trim() !== ""
+    && !CONTENT_REFUSALS.has(stage?.reason ?? "");
   // Same Markdown renderer as the chat. Peer-authored text never loads a URL
   // it chose (blockRemoteImages); an image it names by attachment filename is
   // shown inline from this console's own blob store and not listed twice.
@@ -190,7 +209,8 @@ const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, reply, sta
             </div>
           )}
         </div>
-        <MessageStatusSymbol v={statusView} mine={mine} />
+        <MessageStatusSymbol v={statusView} mine={mine}
+          onResend={canResend && onResend ? () => onResend(m.text) : undefined} />
       </div>
     </div>
   );
@@ -321,6 +341,16 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
     for (const m of msgs) if (m.kind === "response") byTask.set(m.task_id, m);
     return byTask;
   }, [msgs]);
+  const resend = React.useCallback(async (resendText: string) => {
+    setError("");
+    try {
+      await sendA2AFeedMessage({ peer_id: peerId, text: resendText, attachments: [] }, csrf);
+      void feed.refetch();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- feed.refetch is stable
+  }, [peerId, csrf]);
   const stages = feed.data?.stages;
   const nowS = Math.floor((feed.dataUpdatedAt || Date.now()) / 1000);
   // Reachable is not the same as accepting: a peer can answer pings while
@@ -433,7 +463,7 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
           {msgs.map((m) => <PeerMessageRow key={m.id} m={m} label={label}
             reply={m.kind === "task" ? repliesByTask.get(m.task_id) ?? null : null}
             stage={m.kind === "task" && m.direction === "out" ? stages?.[m.task_id] ?? null : null}
-            now={nowS} />)}
+            now={nowS} onResend={resend} />)}
           {error && (
             <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {error}

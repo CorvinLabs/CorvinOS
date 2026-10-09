@@ -698,9 +698,36 @@ _ERROR_DETAIL_TEMPLATES = frozenset({
     "Relay transport error",
     _ERROR_DETAIL_GENERIC,
 })
+# WHY a peer's worker path refused a task (a2a_worker.WorkerResult.reason_code, carried in
+# the signed response data). Fixed texts only: a peer-supplied string is never shown or
+# audited verbatim. Each text says who has to act and what to look at.
+_WORKER_REFUSAL_TEXT: dict[str, str] = {
+    "data_flow": "The peer's data-flow gate blocked the task (its data class is not allowed for the peer's engine)",
+    "gate_error": "A safety gate on the peer failed and refused the task (fail-closed) - try again later",
+    "egress": "The peer's network-egress policy blocks its agent engine",
+    "house_rules": "The peer's acceptable-use gate refused the task",
+    "house_rules_unavailable": "The peer's acceptable-use gate is unavailable and refused the task (fail-closed) - "
+                               "check the peer's installation",
+    "quota": "The peer's compute quota is used up",
+    "license": "The peer's licence check failed",
+    "attachments": "The peer could not store the attachments",
+    "engine_unavailable": "The peer's agent engine could not start - check that Claude Code is installed "
+                          "and signed in on the peer",
+    "engine_failed": "The peer's agent engine failed to run the task (for example a usage limit or a "
+                     "sign-in problem on the peer) - try again later",
+    "engine_error": "The peer's agent engine reported an error while working on the task",
+    "refused": "The peer refused the task",
+}
+#: A rejection that names no reason at all — an older peer build, or a refusal path that
+#: predates reason codes. Says so instead of leaving the operator with a bare "rejected".
+_OPAQUE_REFUSAL_TEXT = ("The peer refused the task without naming a reason (an older build, or it no longer recognises this connection) - "
+                        "check the peer's audit log for house_rules.* / A2A.engine_spawned, "
+                        "and its engine sign-in and usage limit")
+
 # Closed rejection reasons a signed "rejected" may carry (review R3) — the
 # fixed texts _PUBLIC_REJECTION_TEXT maps them to are templates like the rest.
-_ERROR_DETAIL_TEMPLATES = frozenset(_ERROR_DETAIL_TEMPLATES) | frozenset({
+_ERROR_DETAIL_TEMPLATES = frozenset(_ERROR_DETAIL_TEMPLATES) | frozenset(_WORKER_REFUSAL_TEXT.values()) | frozenset({
+    _OPAQUE_REFUSAL_TEXT,
     "The peer only accepts verified CorvinOS instances (Corvin Labs identity certificate) and this "
     "instance has none - without a licence, the peer's operator has to allow this connection by "
     "setting require_ibc to false on their side",
@@ -1461,6 +1488,11 @@ class RemoteTriggerSender:
             reason_text = _PUBLIC_REJECTION_TEXT.get(str(data.get("reason") or ""))
             if reason_text:
                 error_det = self._sanitize_error(reason_text)
+            elif not data.get("reason"):
+                # A pairing/permission refusal is caught by the explicit tokens above; a
+                # bare rejection of a task that passed those is the case the operator
+                # could not tell apart from "peer is down" until now.
+                error_det = self._sanitize_error(_OPAQUE_REFUSAL_TEXT)
         return SendResult(
             ok=is_ok,
             status=status,
@@ -2599,6 +2631,7 @@ _PUBLIC_REJECTION_TEXT: dict[str, str] = {
     "busy": "The peer is busy with other tasks - try again in a moment",
     "group_message_refused": "The peer did not accept this group message "
                              "(not a member there, or the group is unknown to it)",
+    **_WORKER_REFUSAL_TEXT,
 }
 
 

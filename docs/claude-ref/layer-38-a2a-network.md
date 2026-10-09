@@ -1129,6 +1129,34 @@ observed). Outbound messages also show the six-dot chain and the age of the last
 ("seen 6 s ago") — the stage is a pull, so its freshness is bounded by the transport (direct ≈ sub-second,
 relay ≈ 6–9 s) and the UI says so instead of implying real time.
 
+**Why was it refused? — closed reason codes (2026-10-09).** A refusal on the worker path
+(`a2a_worker.spawn_a2a_worker`) used to die at the peer: `_spawn_and_filter` returned `{}`, so the sender saw a
+bare `rejected` after ~20-30 s — indistinguishable from "the peer is down", and the operator had to dig the
+peer's chain. `WorkerResult` now carries `reason_code` (set at every refusal site; the free-text `error`
+with exception names / gate wording stays on the peer), the receiver puts it into the SIGNED response
+`data.reason`, the stage record and the audit record, and the sender maps it to fixed text
+(`_WORKER_REFUSAL_TEXT`, part of the audit template allowlist — a peer-supplied string is never shown):
+
+| Code | Meaning / who acts |
+|---|---|
+| `engine_unavailable` | the engine could not start — Claude Code missing or not signed in on the peer |
+| `engine_failed` | the engine failed to run (usage limit, sign-in) — transient, try again later |
+| `engine_error` | the engine ran and reported an error |
+| `house_rules` / `house_rules_unavailable` | L44 acceptable-use refusal / gate missing (fail-closed) |
+| `data_flow`, `egress`, `gate_error` | L34 / L35 refusals, or a gate that errored (fail-closed) |
+| `quota`, `license`, `attachments` | compute quota, licence check, attachment store |
+| `refused` | a code this build does not know |
+
+A rejection with **no** reason (an older peer build, or a pairing the peer no longer recognises) now reads
+"refused without naming a reason (an older build, or it no longer recognises this connection) — check the peer's
+audit log for `house_rules.*` / `A2A.engine_spawned`, its engine sign-in and usage limit" instead of nothing.
+
+**Resend.** A refused or never-sent message of ours shows a *Resend* action. It is withheld for `unconfirmed`
+(the message may already have run — a resend would run it twice), for messages with attachments (the feed keeps no
+bytes), for refusals about the content itself (`injection`, `house_rules`, `data_flow`) and for lines a
+conversation generated. It is an explicit user action on purpose: an automatic retry must use a new `task_id`
+(the receiver's stage record of the old one is terminal), which would split one message into two feed rows.
+
 **Audit** (`EVENT_SEVERITY` + `_EVENT_ALLOWLIST`, closed enums only): `A2A.task_stage_changed`
 (receiver; `stage`, `prev_stage`, `reason`) and `A2A.task_status_queried` (once per stage *change*
 on either side, not per poll).

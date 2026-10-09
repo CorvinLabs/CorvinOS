@@ -74,6 +74,18 @@ const REASON_TEXT: Record<string, string> = {
   worker_error: "the peer's agent hit an error",
   timeout: "the peer's agent ran out of time",
   group_refused: "the peer did not accept the group message",
+  data_flow: "the peer's data-flow gate blocked it",
+  gate_error: "a safety gate on the peer failed (fail-closed) — try again later",
+  egress: "the peer's network policy blocks its agent engine",
+  house_rules: "the peer's acceptable-use gate refused it",
+  house_rules_unavailable: "the peer's acceptable-use gate is unavailable (fail-closed)",
+  quota: "the peer's compute quota is used up",
+  license: "the peer's licence check failed",
+  attachments: "the peer could not store the attachments",
+  engine_unavailable: "the peer's agent engine could not start — check Claude Code is installed and signed in there",
+  engine_failed: "the peer's agent engine failed to run it (a usage limit or sign-in problem on the peer?) — try again later",
+  engine_error: "the peer's agent engine reported an error",
+  refused: "the peer refused it",
 };
 
 function reasonText(reason: string | undefined): string {

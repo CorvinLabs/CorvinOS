@@ -4,15 +4,15 @@
  * and it follows the stage the peer reports on the next feed poll.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within, waitFor } from "@testing-library/react";
+import { render, screen, within, waitFor, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PeerConversation } from "@/components/chat/PeerConversation";
-import { getA2AFeed, getPeerThreadCommands, type A2AFeedMessage } from "@/lib/api/a2a";
+import { getA2AFeed, getPeerThreadCommands, sendA2AFeedMessage, type A2AFeedMessage } from "@/lib/api/a2a";
 import { listConversations } from "@/lib/api/federation";
 
 vi.mock("@/lib/api/a2a", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api/a2a")>("@/lib/api/a2a");
-  return { ...actual, getA2AFeed: vi.fn(), getPeerThreadCommands: vi.fn() };
+  return { ...actual, getA2AFeed: vi.fn(), getPeerThreadCommands: vi.fn(), sendA2AFeedMessage: vi.fn() };
 });
 vi.mock("@/lib/api/federation", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api/federation")>("@/lib/api/federation");
@@ -103,6 +103,45 @@ describe("PeerConversation — a status symbol on every message", () => {
     const sym = symbolOf((await screen.findAllByTestId("peer-message"))[0]);
     expect(sym.getAttribute("data-status")).toBe("failed");
     expect(sym.getAttribute("title")).toMatch(/busy with other tasks/);
+  });
+
+  it("a refused message offers Resend, which sends the same text again", async () => {
+    vi.mocked(sendA2AFeedMessage).mockResolvedValue({ accepted: true, peer_id: "peer-1" });
+    feed([feedMsg({ id: "1", task_id: "r", status: "sent", text: "please summarise the report" })],
+      { r: { stage: "rejected", stage_seq: 2, ts: NOW_S() - 2, reason: "engine_failed" } });
+    renderIt();
+    const row = (await screen.findAllByTestId("peer-message"))[0];
+    expect(symbolOf(row).getAttribute("title")).toMatch(/usage limit or sign-in problem/);
+    fireEvent.click(within(row).getByTestId("peer-message-resend"));
+    await waitFor(() => expect(sendA2AFeedMessage).toHaveBeenCalledWith(
+      { peer_id: "peer-1", text: "please summarise the report", attachments: [] }, "c"));
+  });
+
+  it("Resend is withheld where it would be wrong: unconfirmed, content refusals, attachments, healthy", async () => {
+    feed([
+      feedMsg({ id: "1", task_id: "u", status: "sent" }),
+      feedMsg({ id: "2", task_id: "u", kind: "response", direction: "in", status: "unconfirmed" }),
+      feedMsg({ id: "3", task_id: "c", status: "sent" }),
+      feedMsg({ id: "4", task_id: "a", status: "sent" }),
+      feedMsg({ id: "5", task_id: "h", status: "sent" }),
+    ], {
+      c: { stage: "rejected", stage_seq: 2, ts: NOW_S() - 2, reason: "house_rules" },
+      a: { stage: "failed", stage_seq: 2, ts: NOW_S() - 2, reason: "engine_failed" },
+    });
+    vi.mocked(getA2AFeed).mockResolvedValue({
+      ...(await getA2AFeed({} as never)),
+      messages: [
+        feedMsg({ id: "1", task_id: "u", status: "sent" }),
+        feedMsg({ id: "2", task_id: "u", kind: "response", direction: "in", status: "unconfirmed" }),
+        feedMsg({ id: "3", task_id: "c", status: "sent" }),
+        { ...feedMsg({ id: "4", task_id: "a", status: "sent" }),
+          attachments: [{ name: "a.png", mime: "image/png", size: 1, sha256: "x" }] },
+        feedMsg({ id: "5", task_id: "h", status: "sent" }),
+      ],
+    });
+    renderIt();
+    await screen.findAllByTestId("peer-message");
+    expect(screen.queryAllByTestId("peer-message-resend")).toHaveLength(0);
   });
 
   it("an older host without `stages` still draws every symbol", async () => {

@@ -44,6 +44,9 @@ TERMINAL = frozenset(s for s, r in STAGE_RANK.items() if r == 5)
 #: closed reason vocabulary (audit-safe: no free text ever reaches the chain)
 REASONS = frozenset({
     "", "busy", "restart", "injection", "gate", "worker_error", "timeout", "group_refused",
+    # WHY the worker path refused a task (a2a_worker.WorkerResult.reason_code)
+    "data_flow", "gate_error", "egress", "house_rules", "house_rules_unavailable", "quota",
+    "license", "attachments", "engine_unavailable", "engine_failed", "engine_error", "refused",
 })
 
 _FILE = "task_state.jsonl"

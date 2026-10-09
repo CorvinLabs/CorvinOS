@@ -1465,8 +1465,11 @@ class RemoteTriggerReceiver:
         # A "rejected" that comes back from the worker path is a gate/engine refusal
         # (house rules, quota, engine unavailable) — name it so the sender can tell it
         # from a pairing or permission problem.
+        _why = ""
+        if _final == "rejected" and isinstance(worker_data, dict):
+            _why = str(worker_data.get("reason") or "") or "gate"
         self._stage(env.origin_id, env.task_id, _final,
-                    {"timeout": "timeout", "failed": "worker_error", "rejected": "gate"}.get(_final, ""))
+                    _why or {"timeout": "timeout", "failed": "worker_error"}.get(_final, ""))
         self._audit_best_effort(
             "A2A.response_signed", "INFO",
             {"task_id": env.task_id, "origin_id": env.origin_id,
@@ -1643,13 +1646,18 @@ class RemoteTriggerReceiver:
         # If the worker failed structurally (timeout/engine error), emit
         # filtered with empty data and propagate the failure status.
         if worker_result.status != "ok":
+            # WHY it was refused travels as a CLOSED code in the signed response data and
+            # in the audit record — never the free text in ``error`` (exception names, gate
+            # wording). Before this the cause died here: the sender got a bare "rejected"
+            # and the operator on this side had to dig the chain for it.
+            code = self._refusal_code(worker_result) if worker_result.status == "rejected" else ""
             self._audit_best_effort(
                 "A2A.result_filtered", "INFO",
                 {"task_id": env.task_id, "origin_id": env.origin_id,
                  "filter_pass_count": 0, "filter_reject_count": 0,
-                 "status": worker_result.status},
+                 "status": worker_result.status, **({"reason": code} if code else {})},
             )
-            return worker_result.status, {}, []
+            return worker_result.status, ({"reason": code} if code else {}), []
 
         # Apply result_schema filter (properties whitelist).
         all_fields = worker_result.parsed_output
@@ -2696,6 +2704,16 @@ class RemoteTriggerReceiver:
             self._nonces.remove(env.nonce, origin_id=env.origin_id)
         except TypeError:
             self._nonces.remove(env.nonce)
+
+    @staticmethod
+    def _refusal_code(worker_result: Any) -> str:
+        """Closed reason for a refused worker run (``a2a_worker.WorkerResult.reason_code``).
+
+        An unknown or missing code collapses to ``refused`` — a worker module that predates
+        the field must not make this raise or leak free text."""
+        import a2a_task_state  # type: ignore[import-not-found]  # noqa: PLC0415
+        code = str(getattr(worker_result, "reason_code", "") or "")
+        return code if code in a2a_task_state.REASONS and code else "refused"
 
     def _stage(self, origin_id: str, task_id: str, stage: str, reason: str = "",
                *, create: bool = True) -> None:

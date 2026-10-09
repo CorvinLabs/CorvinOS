@@ -480,6 +480,110 @@ class TestFeedStageLog(_Base):
         self.assertEqual(a2a_feed.latest_stages()["t399"]["stage"], "delivered")
 
 
+class _FailingEngine:
+    """An engine whose spawn raises — the shape of a CLI that cannot run (usage limit, sign-in)."""
+    name = "fake"
+    capabilities: dict = {}
+
+    def spawn(self, prompt, **kwargs):
+        raise RuntimeError("usage limit reached")
+
+    def cancel(self):
+        pass
+
+
+class TestRefusalReasonTravelsToTheSender(_Base):
+    """The cause of a refusal used to die in the peer's worker path: the sender saw a bare
+    ``rejected`` — indistinguishable from "peer is down". Now a CLOSED code travels in the
+    signed response and reaches the operator as fixed text."""
+
+    def _loopback_sender(self, recv, *, instance="sender-iid"):
+        eps = self.tmp / "endpoints"
+        eps.mkdir(exist_ok=True)
+        ep = eps / "ep-1.json"
+        ep.write_text(json.dumps({
+            "endpoint_id": "ep-1", "url": "http://peer.invalid/v1/a2a/receive",
+            "hmac_key": HMAC_KEY, "recv_key": RECV_KEY, "instance_id": "", "enabled": True,
+            "default_ttl_s": 60, "origin_id_for_send": ORIGIN}))
+        ep.chmod(0o600)
+        sender = rts.RemoteTriggerSender(eps, rts.RemoteEndpointRegistry(eps), instance_id=instance)
+        # the real receiver answers; only the network hop is replaced
+        patcher = mock.patch.object(rts.RemoteTriggerSender, "_http_post",
+                                    staticmethod(lambda url, env, t: recv.receive(env).to_dict()))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return sender
+
+    def test_a_failing_engine_names_its_cause_end_to_end(self):
+        _write_origin(self.origins)
+        recv = rtr.RemoteTriggerReceiver(origins_dir=self.origins, engine_factory=lambda: _FailingEngine())
+        res = self._loopback_sender(recv).send("ep-1", "do the thing", timeout_s=20)
+        self.assertEqual(res.status, "rejected")
+        self.assertEqual(res.data, {"reason": "engine_failed"})
+        self.assertIn("usage limit", res.error_detail)          # the fixed text, not the exception
+        self.assertNotIn("RuntimeError", res.error_detail or "")
+        tid = res.task_id
+        self.assertEqual(ats.lookup(ORIGIN, tid)["stage"], "rejected")
+        self.assertEqual(ats.lookup(ORIGIN, tid)["reason"], "engine_failed")
+
+    def test_engine_that_cannot_start_is_told_apart_from_one_that_fails(self):
+        _write_origin(self.origins)
+        def boom():
+            raise OSError("claude: command not found")
+        recv = rtr.RemoteTriggerReceiver(origins_dir=self.origins, engine_factory=boom)
+        res = self._loopback_sender(recv).send("ep-1", "do the thing", timeout_s=20)
+        self.assertEqual(res.data, {"reason": "engine_unavailable"})
+        self.assertIn("installed and signed in", res.error_detail)
+
+    def test_the_free_text_cause_never_leaves_the_peer(self):
+        _write_origin(self.origins)
+        recv = rtr.RemoteTriggerReceiver(origins_dir=self.origins, engine_factory=lambda: _FailingEngine())
+        env = _envelope(str(uuid.uuid4()))
+        wire = json.dumps(recv.receive(env).to_dict())
+        for leak in ("usage limit", "RuntimeError", "spawn_failed", "claude"):
+            self.assertNotIn(leak, wire)
+
+    def test_a_refusal_naming_no_reason_says_so_instead_of_looking_like_an_outage(self):
+        _write_origin(self.origins, spawn_worker=False)
+        recv = rtr.RemoteTriggerReceiver(origins_dir=self.origins)
+        sender = self._loopback_sender(recv)
+        with mock.patch.object(rts.RemoteTriggerSender, "_http_post", staticmethod(
+                lambda url, env, t: json.loads(json.dumps(
+                    recv._build_response(env["task_id"], env["origin_id"], "rejected", {},
+                                         bytes.fromhex(RECV_KEY)).to_dict())))):
+            res = sender.send("ep-1", "do the thing", timeout_s=20)
+        self.assertEqual(res.status, "rejected")
+        self.assertIn("without naming a reason", res.error_detail)
+        self.assertIn("older build", res.error_detail)
+
+    def test_an_unknown_reason_from_a_peer_is_not_echoed(self):
+        _write_origin(self.origins, spawn_worker=False)
+        recv = rtr.RemoteTriggerReceiver(origins_dir=self.origins)
+        sender = self._loopback_sender(recv)
+        with mock.patch.object(rts.RemoteTriggerSender, "_http_post", staticmethod(
+                lambda url, env, t: json.loads(json.dumps(
+                    recv._build_response(env["task_id"], env["origin_id"], "rejected",
+                                         {"reason": "<script>alert(1)</script> /etc/passwd"},
+                                         bytes.fromhex(RECV_KEY)).to_dict())))):
+            res = sender.send("ep-1", "do the thing", timeout_s=20)
+        self.assertNotIn("script", res.error_detail or "")
+        self.assertNotIn("passwd", res.error_detail or "")
+
+    def test_every_worker_reason_code_has_fixed_text_and_a_stage_reason(self):
+        import a2a_worker
+        codes = set(rts._WORKER_REFUSAL_TEXT)
+        self.assertTrue(codes <= set(rts._PUBLIC_REJECTION_TEXT))
+        for text in rts._WORKER_REFUSAL_TEXT.values():
+            self.assertEqual(rts._sanitize_error(text), text, "text must pass the audit template gate")
+        self.assertTrue(codes <= set(ats.REASONS), codes - set(ats.REASONS))
+        src = Path(a2a_worker.__file__).read_text()
+        import re as _re
+        used = set(_re.findall(r'reason_code="([a-z_]+)"', src))
+        self.assertTrue(used and used <= codes, f"worker emits codes with no text: {used - codes}")
+        self.assertIn("house_rules", src)  # the dynamic l44 expression names both variants
+        self.assertEqual(rtr.RemoteTriggerReceiver._refusal_code(object()), "refused")
+
+
 class TestErasureCoversStageStores(unittest.TestCase):
     """GDPR Art. 17 through the real L36 handler: the receiver's task-state rows of an
     origin and the sender's stage observations of a peer go with the peer's messages."""

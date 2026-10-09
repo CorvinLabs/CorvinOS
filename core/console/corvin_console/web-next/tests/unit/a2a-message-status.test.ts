@@ -139,6 +139,16 @@ describe("robustness", () => {
     expect([formatAge(null), formatAge(2), formatAge(30), formatAge(120), formatAge(7300)])
       .toEqual(["", "just now", "30 s ago", "2 min ago", "2 h ago"]);
   });
+  it.each([
+    ["engine_failed", /usage limit or sign-in problem/],
+    ["engine_unavailable", /installed and signed in/],
+    ["house_rules_unavailable", /unavailable \(fail-closed\)/],
+    ["quota", /compute quota/],
+  ])("the worker refusal %s is explained in the tooltip", (reason, re) => {
+    const v = messageStatusView(msg({}), { now: NOW, stage: stage("rejected", 2, reason) });
+    expect(v.icon).toBe("x");
+    expect(v.detail).toMatch(re);
+  });
   it("an unknown reason is not echoed into the UI", () => {
     const v = messageStatusView(msg({}), { now: NOW, stage: stage("failed", 1, "<script>alert(1)</script>") });
     expect(v.detail).not.toMatch(/script/);

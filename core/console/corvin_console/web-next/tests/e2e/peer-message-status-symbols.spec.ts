@@ -69,6 +69,11 @@ test("every message carries a status symbol and the chain follows the peer's sta
   await expect(rows.nth(5).getByTestId("peer-message-status")).toHaveAttribute("title", /busy with other tasks/);
   await expect(rows.nth(6).getByTestId("peer-message-status")).toHaveAttribute("title", /last known state/);
 
+  // The refused message (peer busy) offers Resend; the unconfirmed one must NOT (it may have run).
+  await expect(rows.nth(5).getByTestId("peer-message-resend")).toBeVisible();
+  await expect(rows.nth(6).getByTestId("peer-message-resend")).toHaveCount(0);
+  await expect(page.getByTestId("peer-message-resend")).toHaveCount(1);
+
   // It must stay readable: nothing clipped to zero width, symbol inside the viewport.
   const box = await working.boundingBox();
   expect(box && box.width > 20 && box.height > 8).toBeTruthy();

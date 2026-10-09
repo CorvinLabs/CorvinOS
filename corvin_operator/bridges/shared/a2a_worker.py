@@ -251,6 +251,10 @@ class WorkerResult:
     engine_name: str
     out_attachments: list = field(default_factory=list)  # v3: harvested files
     error: str | None = None  # populated on non-"ok" status
+    # Closed vocabulary naming WHY a task was refused (ADR-2242). ``error`` above is free
+    # text that may carry exception names or gate wording and stays on this instance;
+    # the code is what travels to the sender in the signed response. "" = no refusal.
+    reason_code: str = ""
 
 
 # ── System prompt (the structural defence) ────────────────────────────────
@@ -640,6 +644,7 @@ def spawn_a2a_worker(
                         status="rejected", raw_output="",
                         parsed_output={}, duration_ms=_ms(start),
                         persona=persona, engine_name="claude_code",
+                        reason_code="data_flow",
                         error=(f"data-flow-denied: {_classif.name} not allowed for "
                                f"A2A worker engine: {_decision.reason}")[:300],
                     )
@@ -647,6 +652,7 @@ def spawn_a2a_worker(
             return WorkerResult(
                 status="rejected", raw_output="", parsed_output={},
                 duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+                reason_code="gate_error",
                 error=f"data-classification-gate-error (fail-closed): {type(_gexc).__name__}"[:300],
             )
 
@@ -667,12 +673,14 @@ def spawn_a2a_worker(
                     status="rejected", raw_output="",
                     parsed_output={}, duration_ms=_ms(start),
                     persona=persona, engine_name="claude_code",
+                    reason_code="egress",
                     error=_eg[:300],
                 )
         except Exception as _eexc:  # noqa: BLE001 — egress gate ERROR → FAIL-CLOSED
             return WorkerResult(
                 status="rejected", raw_output="", parsed_output={},
                 duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+                reason_code="gate_error",
                 error=f"egress-gate-error (fail-closed): {type(_eexc).__name__}"[:300],
             )
 
@@ -707,6 +715,7 @@ def spawn_a2a_worker(
         return WorkerResult(
             status="rejected", raw_output="", parsed_output={},
             duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+            reason_code="house_rules_unavailable",
             error="house-rules-gate-unavailable (fail-closed): spawn_gates import failed",
         )
     _l44_refusal = _sg_l44(
@@ -724,6 +733,7 @@ def spawn_a2a_worker(
         return WorkerResult(
             status="rejected", raw_output="", parsed_output={},
             duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+            reason_code="house_rules_unavailable" if "unavailable" in _l44_refusal.lower() else "house_rules",
             error=_l44_refusal[:300],
         )
 
@@ -764,6 +774,7 @@ def spawn_a2a_worker(
                 return WorkerResult(
                     status="rejected", raw_output="", parsed_output={},
                     duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+                    reason_code="license",
                     error=f"license-module-shadow-detected (fail-closed): {_b1_name}",
                 )
         _cq_home = _CORVIN_HOME_SNAPSHOT_A2A  # A3: snapshotted at import
@@ -775,6 +786,7 @@ def spawn_a2a_worker(
             return WorkerResult(
                 status="rejected", raw_output="", parsed_output={},
                 duration_ms=_ms(start), persona=persona, engine_name="claude_code",
+                reason_code="quota",
                 error=f"compute_quota_exceeded:{_cq_exc!s}"[:300],
             )
         # Other exceptions already swallowed by increment_and_check (fail-open).
@@ -808,6 +820,7 @@ def spawn_a2a_worker(
             status="rejected", raw_output="",
             parsed_output={}, duration_ms=_ms(start),
             persona=persona, engine_name="",
+            reason_code="attachments",
             error="attachment_drop_failed",
         )
 
@@ -854,6 +867,7 @@ def spawn_a2a_worker(
             status="rejected", raw_output="",
             parsed_output={}, duration_ms=_ms(start),
             persona=persona, engine_name="",
+            reason_code="engine_unavailable",
             error=f"engine_init_failed:{exc}",
         )
 
@@ -988,6 +1002,7 @@ def spawn_a2a_worker(
             status="rejected", raw_output="",
             parsed_output={}, duration_ms=_ms(start),
             persona=persona, engine_name=engine_name,
+            reason_code="engine_failed",
             error=f"spawn_failed:{type(exc).__name__}",
         )
 
@@ -1028,6 +1043,7 @@ def spawn_a2a_worker(
                 status="rejected", raw_output="",
                 parsed_output={}, duration_ms=_ms(start),
                 persona=persona, engine_name=engine_name,
+                reason_code="engine_failed",
                 error=f"spawn_failed_after_eviction:{type(exc2).__name__}",
             )
 
@@ -1081,6 +1097,7 @@ def spawn_a2a_worker(
         persona=persona,
         engine_name=engine_name,
         out_attachments=out_attachments,
+        reason_code="engine_error" if err else "",
         error=err,
     )
 
