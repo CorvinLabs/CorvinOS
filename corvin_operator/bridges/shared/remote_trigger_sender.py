@@ -333,6 +333,35 @@ class TransportError(SendError):
         self.maybe_delivered = maybe_delivered
 
 
+def _relay_fallback_enabled() -> bool:
+    """Is the ``a2a_relay_fallback`` flag on for this process's tenant?
+
+    A subprocess that cannot import ``corvin_core`` (an MCP server or CLI with
+    a narrow PYTHONPATH) used to read the ImportError as "flag off": the relay
+    was skipped and a peer that is only reachable through it failed as
+    ``unreachable``, although the same instance's pings used the relay fine.
+    The operator's overlay file is the flag's source of truth, so read it
+    directly when the resolver is missing. Never raises.
+    """
+    try:
+        from corvin_core import feature_flags as _ff  # type: ignore[import-not-found]  # noqa: PLC0415
+        return bool(_ff.is_enabled("a2a_relay_fallback"))
+    except ImportError:
+        pass
+    except Exception:  # noqa: BLE001 — a broken resolver degrades to the overlay
+        pass
+    try:
+        tenant = os.environ.get("CORVIN_TENANT_ID") or "_default"
+        if not _re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,63}", tenant):
+            return False
+        home = os.environ.get("CORVIN_HOME") or str(Path.home() / ".corvin")
+        overlay = Path(home) / "tenants" / tenant / "global" / "features.json"
+        flags = json.loads(overlay.read_text(encoding="utf-8")).get("flags", {})
+        return flags.get("a2a_relay_fallback") is True
+    except Exception:  # noqa: BLE001 — missing/unreadable overlay = dark
+        return False
+
+
 class ResponseVerificationError(SendError):
     """Signature mismatch, malformed response, or instance_id pin miss."""
 
@@ -2093,11 +2122,7 @@ class RemoteTriggerSender:
         correctly without either side needing to know the other's
         instance_id.
         """
-        try:
-            from corvin_core import feature_flags as _ff  # type: ignore[import-not-found]  # noqa: PLC0415
-            if not _ff.is_enabled("a2a_relay_fallback"):
-                raise TransportError("relay_fallback_disabled")
-        except ImportError:
+        if not _relay_fallback_enabled():
             raise TransportError("relay_fallback_disabled")
 
         import a2a_friendship as _ft  # type: ignore[import-not-found]  # noqa: PLC0415
@@ -2145,11 +2170,7 @@ class RemoteTriggerSender:
         ``sender_instance_id`` field, applied here without a wire-format
         change since ping_request has no signed slot for it.
         """
-        try:
-            from corvin_core import feature_flags as _ff  # type: ignore[import-not-found]  # noqa: PLC0415
-            if not _ff.is_enabled("a2a_relay_fallback"):
-                raise TransportError("relay_fallback_disabled")
-        except ImportError:
+        if not _relay_fallback_enabled():
             raise TransportError("relay_fallback_disabled")
 
         import a2a_friendship as _ft  # type: ignore[import-not-found]  # noqa: PLC0415

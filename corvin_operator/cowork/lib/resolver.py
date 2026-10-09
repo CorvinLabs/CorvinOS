@@ -770,6 +770,11 @@ def _inject_orchestration_capability(merged: dict, persona_name: str) -> dict:
                 "PYTHONPATH": os.pathsep.join((
                     "{{CORE_ROOT}}/core/orchestration",
                     "{{CORE_ROOT}}/core/workflows",
+                    # corvin_core (feature flags): the A2A sender read an
+                    # ImportError here as "a2a_relay_fallback is off", so
+                    # every MCP-sent task skipped the relay and failed
+                    # `unreachable` when the peer was off the LAN.
+                    "{{CORE_ROOT}}/core/console",
                     "{{REPO_ROOT}}/corvin_operator/bridges/shared",
                     "{{REPO_ROOT}}/corvin_operator/forge",
                 )),
