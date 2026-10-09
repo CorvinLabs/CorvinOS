@@ -309,6 +309,59 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
       if (e?.code !== "ENOENT") throw e;
       test.info().annotations.push({ type: "skipped-check", description: "ffprobe not installed on the test host" });
     }
+
+    // ── verify the artefact itself, not just that a file came back ────────────────────────────
+    const qm = await (await page.request.get(`${API}/video/jobs/${jobId}/quality-metrics`)).json();
+    // Every technical check must pass. "timing" and "runtime" compare the model's duration GUESS with the
+    // real narration length — the runtime follows the voice, not the plan — so they are reported, not gated.
+    const PLAN_DRIFT = new Set(["timing", "runtime"]);
+    const failed = qm.checks.filter((c: any) => c.status === "fail" && !PLAN_DRIFT.has(c.id));
+    expect(failed, `quality checks failed: ${JSON.stringify(failed)}`).toEqual([]);
+    for (const c of qm.checks.filter((c: any) => PLAN_DRIFT.has(c.id) && c.status !== "pass"))
+      test.info().annotations.push({ type: "plan-drift", description: `${c.label}: ${c.detail}` });
+    expect(qm.video).toMatchObject({ codec: "h264", width: 1920, height: 1080 });
+    expect(qm.audio, "narration track present").toBeTruthy();
+    expect(qm.subtitles, "no subtitles: no stream, no caption file, nothing burned in").toMatchObject({ streams: 0, files: [] });
+    const md = qm.source.metadata;
+    expect(md.renderers.length, "one renderer entry per scene").toBeGreaterThanOrEqual(2);
+    expect(md.renderers, "every scene is an animated web slide, none fell back to the plain placeholder").toEqual(
+      md.renderers.map(() => "web"),
+    );
+    expect(Array.isArray(md.layout_collisions), "the overlap check shipped in the installed plugin ran").toBe(true);
+    expect(md.layout_collisions, `colliding slides: ${JSON.stringify(md.layout_collisions)}`).toEqual([]);
+
+    // the poster is the first slide: it carries the real mark (chevron, bar and the gold dot #C9A227)
+    const poster = await page.request.get(`${API}/video/videos/${jobId}/poster`);
+    expect(poster.status()).toBe(200);
+    try {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vp-poster-"));
+      const png = path.join(dir, "poster.png");
+      fs.writeFileSync(png, await poster.body());
+      const raw = (vf: string, file = png) =>
+        execFileSync("ffmpeg", ["-v", "error", "-i", file, "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], { maxBuffer: 1 << 26 });
+      const corner = raw("scale=1920:1080,crop=140:90:160:950");
+      let gold = 0;
+      for (let i = 0; i < corner.length; i += 3) {
+        if (Math.abs(corner[i] - 0xc9) < 28 && Math.abs(corner[i + 1] - 0xa2) < 28 && Math.abs(corner[i + 2] - 0x27) < 40) gold++;
+      }
+      expect(gold, "the gold dot of the CorvinOS mark is drawn in the footer").toBeGreaterThan(40);
+
+      // the video moves and is not blank: an early and a late frame differ, and neither is one flat colour
+      const mp4 = path.join(dir, "out.mp4");
+      fs.writeFileSync(mp4, bytes);
+      const frameAt = (t: number) => execFileSync(
+        "ffmpeg", ["-v", "error", "-ss", String(t), "-i", mp4, "-frames:v", "1", "-vf", "scale=96:54,format=gray", "-f", "rawvideo", "-"],
+        { maxBuffer: 1 << 24 });
+      const early = frameAt(0.2), late = frameAt(Math.max(1, qm.summary.rendered_s * 0.4));
+      const spread = (b: Buffer) => Math.max(...b) - Math.min(...b);
+      expect(spread(early) + spread(late), "frames are not blank").toBeGreaterThan(20);
+      let diff = 0;
+      for (let i = 0; i < Math.min(early.length, late.length); i++) diff += Math.abs(early[i] - late[i]);
+      expect(diff, "the video changes over time (animation, scene change)").toBeGreaterThan(500);
+    } catch (e: any) {
+      if (e?.code !== "ENOENT") throw e;
+      test.info().annotations.push({ type: "skipped-check", description: "ffmpeg not installed on the test host" });
+    }
   });
 
   test("7. disable removes the panel; uninstall via the UI removes everything, panel gone", async ({ page }) => {
