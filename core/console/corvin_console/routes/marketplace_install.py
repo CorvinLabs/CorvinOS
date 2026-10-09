@@ -8,6 +8,7 @@ routers used to declare the prefix, which doubled it to
 reachable for anyone else. Adversarial review E-03, 2026-09-03.)
 
 Effective paths (under ``/v1/console``):
+- GET   /api/v1/marketplace/default-plugins (the standard-plugin list + live state)
 - GET   /api/v1/marketplace/plugins/{id}/dependencies (ADR-0892 Session 2)
 - POST  /api/v1/marketplace/plugins/{id}/install
 - POST  /api/v1/marketplace/plugins/{id}/uninstall
@@ -219,6 +220,37 @@ def _index_has(plugin_id: str) -> bool:
     except Exception:  # noqa: BLE001 - a broken index must not 500 the install
         return False
     return plugin_id in (index.get("by_id") or {})
+
+
+@router.get("/default-plugins")
+async def get_default_plugins(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> Dict[str, Any]:
+    """The plugins a fresh installation gets (``default_plugins.yaml``) with the
+    tenant's live state for each: ``offered`` (provisioned once), ``installed``, ``enabled``."""
+    from .. import default_plugins as _dp
+
+    try:
+        entries = _dp.load_list()
+    except _dp.DefaultPluginsError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    offered = _dp._read_ledger(rec.tenant_id)["offered"]
+    records: Dict[str, Any] = {}
+    if _LIFECYCLE_AVAILABLE:
+        try:
+            from corvin_plugins.state import TenantRegistry  # type: ignore[import-not-found]
+
+            records = TenantRegistry.load(tenant_id=rec.tenant_id).records
+        except Exception:  # noqa: BLE001 — a broken registry reads as "nothing installed"
+            records = {}
+    out = []
+    for e in entries:
+        reg_id = (offered.get(e["index_id"]) or {}).get("registry_id") or e["registry_id"]
+        r = records.get(reg_id)
+        out.append({**e, "offered": e["index_id"] in offered,
+                    "installed": r is not None, "enabled": bool(r and r.enabled),
+                    "installed_version": str(r.version) if r else None})
+    return {"plugins": out, "total": len(out)}
 
 
 @router.get("/plugins/{plugin_id}/dependencies")

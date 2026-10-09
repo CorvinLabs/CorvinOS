@@ -1,0 +1,30 @@
+# Plugins that CorvinOS installs on a fresh installation ("standard plugins").
+#
+# This file is THE list. A plugin is bundled by adding an entry here — nothing else
+# decides what a new install gets. The plugin SOURCE is not part of CorvinOS: it is
+# resolved from the Corvin-Marketplace (local checkout, else synced from GitHub) and
+# goes through exactly the same gates as an install from the marketplace UI (index
+# allowlist, manifest gate, licence gate, tenant registry, audit).
+#
+# Semantics (default_plugins.py):
+#   * order     entries are installed top to bottom; dependencies must come first
+#   * once      each entry is provisioned ONCE per tenant. A plugin the operator later
+#               uninstalls stays uninstalled — the ledger
+#               <tenant>/plugins/default_plugins.json remembers it was offered
+#   * enable    true = enable after install, but only when the plugin needs no consent.
+#               A consent-gated plugin stays installed + disabled for the operator to
+#               enable; consent is never granted on someone's behalf
+#   * min_version  a marketplace listing older than this is refused (the entry is
+#               skipped and reported, not installed)
+# Documentation: docs/claude-ref/default-plugins.md
+schema: 1
+plugins:
+  - index_id: plugin:contributor-media-video_producer
+    registry_id: video_producer
+    name: Video Producer
+    min_version: "1.2.0"
+    enable: false
+    # requires_consent: true in its manifest -> installed, left disabled until the operator enables it
+    reason: >-
+      Turns a task description into a narrated MP4 (storyboard, narration, animated
+      web slides). First bundled plugin.

@@ -880,6 +880,15 @@ def create_app() -> FastAPI:
             import logging
             logging.getLogger(__name__).warning("kb projection not started: %s", exc)
 
+        # Standard plugins (corvin_console/default_plugins.yaml) — same call as corvin_gateway.app.
+        try:
+            from . import default_plugins
+
+            default_plugins.start()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("default plugins not started: %s", exc)
+
         # ADR-2066 Phase 2 — Centralized Configuration Management
         # Initialize config manager for fail-closed config validation
         # NOT create_with_audit(tenant_audit_chain(...)): that binds an

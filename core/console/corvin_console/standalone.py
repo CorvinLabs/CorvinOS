@@ -367,6 +367,14 @@ def create_app() -> FastAPI:
         except Exception:
             pass  # best-effort — license daemon failure does not block console startup
 
+        # Standard plugins (default_plugins.yaml): what a fresh install gets. Background
+        # thread, once per tenant, never blocks startup.
+        try:
+            from corvin_console import default_plugins as _default_plugins
+            _default_plugins.start()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("default plugins not started: %s", exc)
+
         # ── Phase 1a: Voice config migration (best-effort — never blocks startup) ─
         # Auto-migrate voice configuration from legacy ~/.config/corvin-voice/
         # to tenant-scoped <corvin_home>/tenants/<tenant_id>/voice/ on first access.

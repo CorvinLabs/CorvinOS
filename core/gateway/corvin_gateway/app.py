@@ -521,6 +521,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # noqa: BLE001
         logging.getLogger(__name__).warning("kb projection not started: %s", exc)
 
+    # Standard plugins — install the plugins listed in corvin_console/default_plugins.yaml
+    # (background thread, once per tenant; docs/claude-ref/default-plugins.md).
+    try:
+        import corvin_console  # noqa: F401
+        from corvin_console import default_plugins as _dp
+        _dp.start()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("default plugins not started: %s", exc)
+
     # ADR-0191/ADR-0193 — idempotently seed the built-in zero-config tools
     # (image-generation, native browser) into the mcp_manager catalog on
     # every boot, so a genuinely fresh install has them active with no
