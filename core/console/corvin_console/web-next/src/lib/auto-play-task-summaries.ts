@@ -66,24 +66,6 @@ export function decideAutoPlay(input: AutoPlayInput): AutoPlayDecision {
   return { play, markHeard };
 }
 
-/**
- * The recap to show as text in the chat right now: the newest one that carries
- * text, finished after this pane was opened (older ones live in the Voice
- * Summaries library) and was not dismissed. Independent of whether its audio
- * exists, so a failed speech synthesis still shows the summary.
- */
-export function pickLiveSummary(input: {
-  summaries: TaskVoiceSummary[];
-  sinceS: number;
-  dismissed: ReadonlySet<string>;
-}): TaskVoiceSummary | null {
-  const open = input.summaries
-    .filter((s) => s.task_id && s.text.trim() && doneAt(s) >= input.sinceS
-      && !input.dismissed.has(summaryKey(s)))
-    .sort((a, b) => doneAt(b) - doneAt(a));
-  return open[0] ?? null;
-}
-
 // ── persistence (localStorage) + in-memory live marker ─────────────────────────
 const HEARD_KEY = "corvin.voice.heardTaskSummaries";
 const SINCE_KEY = "corvin.voice.autoplaySince";

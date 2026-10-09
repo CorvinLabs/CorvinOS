@@ -66,7 +66,6 @@ import { useTasksWithLiveUpdates } from "@/hooks/use-tasks-with-live-updates";
 import { useChatTaskStatus, type ChatTaskStatus } from "@/hooks/use-chat-task-status";
 import { useRefreshOnTaskEnd } from "@/hooks/use-refresh-on-task-end";
 import { useAutoPlayTaskSummaries } from "@/hooks/use-auto-play-task-summaries";
-import { useLiveTaskSummary } from "@/hooks/use-live-task-summary";
 import { noteLiveSpoken } from "@/lib/auto-play-task-summaries";
 import { PHASE_TEXT, sessionTasksKey, statusLine, taskLabel } from "@/lib/chat-task-status";
 import { TaskPanel } from "@/components/task-panel";
@@ -920,8 +919,6 @@ function ChatPane({
     idle: voiceState === "idle" && !streaming,
     play: (summary) => { if (summary.audio_url) void playAudioUrl(summary.audio_url); },
   });
-  // The same recap as text, shown above the composer (resets per opened chat).
-  const liveSummary = useLiveTaskSummary(sid, voiceOut);
 
   // ── Session setup: connect WS + load history ──────────────────────────────
   // The registry keeps the WS alive across unmounts (chat switches), so
@@ -1910,23 +1907,6 @@ function ChatPane({
             }}
             data-testid="folder-input"
           />
-          {liveSummary.summary && (
-            <div
-              className="flex items-start gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm"
-              data-testid="task-summary-live"
-            >
-              <Volume2 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-              <p className="min-w-0 flex-1">{liveSummary.summary.text}</p>
-              <button
-                type="button"
-                className="shrink-0 text-muted-foreground hover:text-foreground"
-                onClick={liveSummary.dismiss}
-                aria-label="Dismiss task summary"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          )}
           {/* Pending-attachment chips */}
           {pendingAttachments.length > 0 && (
             <div className="flex flex-wrap gap-1.5" data-testid="attachment-preview-bar">
