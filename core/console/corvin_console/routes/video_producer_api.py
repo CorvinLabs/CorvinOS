@@ -305,6 +305,96 @@ def _tts_egress_refusal(tts_engine: str, tenant_id: str, chat_key: str) -> Optio
     return None
 
 
+def _grounding_audit(tenant_id: str, event: str, details: Dict[str, Any]) -> bool:
+    """Write a grounding decision to the tenant chain; False if it did not commit."""
+    try:
+        from .. import _bootstrap  # noqa: PLC0415
+        from forge.security_events import write_event  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        write_event(_bootstrap.forge_paths.tenant_audit_chain(tenant_id), event,
+                    details={"tenant_id": tenant_id, **details})
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("video producer: grounding audit write failed (%s)", type(e).__name__)
+        return False
+
+
+def _grounding_for_job(tenant_id: str, chat_key: str, job_id: str, task: str, backend: str,
+                       tts_engine: str) -> tuple:
+    """(pack, status) for a job — PLAN-0942 D1/D2/D7.
+
+    The knowledge base and the code are the OPERATOR's: only the tenant the KB belongs
+    to (``CORVIN_KB_TENANT``, default ``_default``) can get a pack. The plugin builds it;
+    this host decides: per decision the L34 heuristic (secret/PII shapes) under every
+    engine the text may reach, then the whole pack through L44 + capabilities + L34 at
+    the declared class INTERNAL + L35. Released and refused packs are audited
+    (ids, digest, size — never text) BEFORE the job may use them."""
+    try:
+        from ..kb_projection import kb_repo, kb_tenant  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return None, None
+    if tenant_id != kb_tenant():
+        return None, None
+    try:
+        g = importlib.import_module(f"{_PLUGIN_PKG}.grounding")
+    except Exception:  # noqa: BLE001 — an older plugin without grounding
+        return None, None
+    if not g.is_candidate_task(task):
+        return None, None
+    if backend == "ollama":
+        return None, {"status": "unavailable", "reason": "local_storyboard_model"}
+    kb = kb_repo()
+    if kb is None:
+        return None, {"status": "unavailable", "reason": "no_knowledge_base"}
+    roots = [g.CodeRoot(_repo_root)]
+    market = _repo_root.parent / "Corvin-Marketplace"
+    if (market / ".git").exists():
+        roots.append(g.CodeRoot(market, "Corvin-Marketplace/", ("plugins/buildin/",)))
+    try:
+        pack = g.build_pack(task, kb, roots, deadline_s=8.0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("video producer: grounding pack failed (%s)", type(e).__name__)
+        return None, {"status": "unavailable", "reason": "pack_build_failed"}
+    if pack is None:
+        return None, None
+
+    from spawn_gates import check_l34  # type: ignore  # path set up by _spawn_gates
+    from .._spawn_gates import check_console_spawn_or_refusal  # noqa: PLC0415
+
+    engines = ["claude_code", _TTS_GATE_ENGINE[tts_engine], *_TTS_EXTRA_GATE_ENGINES.get(tts_engine, ())]
+    keep, dropped = [], []
+    for sec in pack["sections"]:
+        try:
+            refused = any(check_l34(e, tenant_id, prompt=sec["text"], persona="assistant", channel="web",
+                                    chat_key=chat_key) is not None for e in engines)
+        except Exception:  # noqa: BLE001 — doubt drops the decision
+            refused = True
+        (dropped if refused else keep).append(sec["id"])
+    base = {"job_id": job_id, "engines": ",".join(engines)}
+    if not keep:
+        _grounding_audit(tenant_id, "video_producer.grounding_refused",
+                         {**base, "entity_ids": ",".join(dropped), "gate": "l34_per_decision"})
+        return None, {"status": "refused", "reason": "l34"}
+    pack = g.with_sections(pack, keep)
+    text = g.render_pack(pack)
+    digest = g.pack_digest(pack)[:16]
+    for engine in engines:
+        refusal = check_console_spawn_or_refusal(
+            text, tenant_id=tenant_id, persona="assistant", channel="web", chat_key=chat_key,
+            engine_id=engine, classification="INTERNAL",
+        )
+        if refusal is not None:
+            _grounding_audit(tenant_id, "video_producer.grounding_refused",
+                             {**base, "entity_ids": ",".join(keep), "pack_sha256": digest, "chars": len(text),
+                              "gate": f"pack:{engine}"})
+            return None, {"status": "refused", "reason": "pack_gate"}
+    if not _grounding_audit(tenant_id, "video_producer.grounding_released",
+                            {**base, "entity_ids": ",".join(keep), "dropped_ids": ",".join(dropped),
+                             "pack_sha256": digest, "chars": len(text)}):
+        return None, {"status": "unavailable", "reason": "audit_write_failed"}
+    return pack, None
+
+
 def _openai_configured() -> bool:
     """A TTS key is in this process's environment (the same two names the plugin reads)."""
     return bool(os.environ.get("CORVIN_TTS_OPENAI_KEY") or os.environ.get("OPENAI_API_KEY"))
@@ -368,6 +458,9 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
         raise HTTPException(status_code=403, detail=refusal)
 
     backend, model = await asyncio.to_thread(_storyboard_backend, rec.tenant_id, chat_key, task)
+    grounding_pack, grounding_status = await asyncio.to_thread(
+        _grounding_for_job, rec.tenant_id, chat_key, job_id, task, backend, settings["tts_engine"],
+    )
     storage = _store(rec)
     job = VideoJob(id=job_id, task=task, status="pending")
     storage.save_job(job)
@@ -379,6 +472,10 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
         "storyboard_backend": backend,
         "storyboard_model": model,
     }
+    if grounding_pack is not None:
+        config["grounding_pack"] = grounding_pack
+    elif grounding_status is not None:
+        config["grounding_status"] = grounding_status
     try:
         await get_runner().start_job(job_id, task, config)
     except Exception as e:  # noqa: BLE001

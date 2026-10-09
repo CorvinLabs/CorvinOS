@@ -641,7 +641,7 @@ is what the ADR-0232 boot tripwire verifies, what `audit_query` reads and what
 every compliance report is generated from, so a record written anywhere else is
 not in the audit trail at all. Until 2026-09-07 `security_events.write_event`
 took its path from the caller and every caller composed its own: SIX live chain
-files for tenant `_default` across two roots (measured — see ADR-0650).
+files for tenant `_default` across two roots (measured — see ADR-0654).
 The historical files are append-only and are NEVER merged, rewritten or deleted;
 the boot check links them with a chained `audit.chain_supersedes` seam naming
 each one's path key and final tail hash (`security_events.chain_seam_links`).

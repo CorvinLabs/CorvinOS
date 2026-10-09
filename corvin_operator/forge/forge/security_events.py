@@ -1136,6 +1136,11 @@ EVENT_SEVERITY: dict[str, str] = {
     "operator_approval.expired":        "WARNING",
     # Video Producer storyboard timeline (core/skills/video_producer/api/timeline.py)
     "video_producer.timeline_event":    "INFO",
+    # PLAN-0942: a grounding pack (knowledge-base decisions + code excerpts) left the
+    # host with a video job, or the gates refused it. Ids, digest and size only —
+    # never pack text.
+    "video_producer.grounding_released": "INFO",
+    "video_producer.grounding_refused":  "WARNING",
     # ADR validation framework (core/deployment/adr_validation_framework.py via
     # core/deployment/audit_sink — mirrored statically so the floor does not
     # depend on import order)
@@ -4310,6 +4315,12 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "operator_approval.expired": frozenset({"request_id", "phase_name", "tenant_id", "lom"}),
     "video_producer.timeline_event": frozenset({
         "action", "task_id", "frame_id", "status", "progress", "tenant_id",
+    }),
+    "video_producer.grounding_released": frozenset({
+        "tenant_id", "job_id", "entity_ids", "dropped_ids", "pack_sha256", "chars", "engines",
+    }),
+    "video_producer.grounding_refused": frozenset({
+        "tenant_id", "job_id", "entity_ids", "pack_sha256", "chars", "engines", "gate",
     }),
     # "violations" holds "ADR-NNNN/check_name" codes, never free text.
     "deployment.adr_violation_detected": frozenset({

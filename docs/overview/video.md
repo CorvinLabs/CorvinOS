@@ -23,6 +23,7 @@
 ## What you get
 
 - **A finished artefact, not a prompt.** One task text produces `output.mp4` — with no subtitles —, a poster image and one slide per scene.
+- **Corvin explainers are grounded in the knowledge base and the code.** When the task is about Corvin (or names a decision id), the console builds a fact pack from Corvin-Knowledge decisions and the git-tracked code — for the knowledge base's own tenant only — runs it through L44, L34 (declared INTERNAL) and L35, audits what leaves the host, and the storyboard may only state numbers, identifiers and paths that are in that pack. Real console screenshots with measured hotspots and a "you are here" layer strip come with it (ADR-2240).
 - **Claude writes the storyboard, behind the gates.** On a host where the console already runs Claude Code, the storyboard is written by Claude Sonnet through that login (or an Anthropic API key) — only if L35 admits `api.anthropic.com` and L34 admits the task for the `claude_code` engine. Forbid that host and every job stays on the local Ollama model.
 - **Gated like any other run.** The task passes the acceptable-use gate (L44), data classification (L34) and the egress gate (L35) before anything is generated.
 - **Measurable output.** Each job reports per-step progress and ffprobe quality metrics; feedback on a single scene is recorded in the audit chain before it is stored.
@@ -65,6 +66,7 @@ The plugin's code lives entirely in the Marketplace (`plugins/contributor/media/
 | Job API: create, list, status, per-step progress | **LIVE** | `core/console/corvin_console/routes/video_producer_api.py` |
 | Storyboard via Claude Sonnet (CLI login or API key, ≤ 8 scenes) | **GATED** — CLI or key present + L35 and L34 admit | `_storyboard_backend()` in the routes, `_call_claude_cli()` in the plugin |
 | Storyboard via local Ollama (≤ 6 scenes) | **LIVE** — fallback | Marketplace `video_producer/src/skill.py` |
+| Grounding pack (KB decisions + code excerpts) for Corvin topics, claims check + one repair, `console_still` screenshots, `map` overlay (≤ 10 scenes) | **GATED** — KB tenant only, remote storyboard backend, pack admitted by L44/L34(INTERNAL)/L35; audited as `video_producer.grounding_released` / `_refused` | `_grounding_for_job()` in the routes; plugin `src/grounding.py`, `src/grounded_storyboard.py` |
 | OpenAI TTS narration (default), web slides with Pillow fallback, ffmpeg encode + join — no subtitles | **LIVE** | Marketplace `video_producer/src/` |
 | Pre-spawn gates L44 / L34 / L35 (engine profile follows the narration engine: `video_producer_openai` · `video_producer_edge` · `video_producer`) | **LIVE** | `core/console/corvin_console/_spawn_gates.py` |
 | Download, poster, per-scene slide | **LIVE** | `video_producer_api.py` |
@@ -133,6 +135,7 @@ curl -s -b "$COOKIE" -o video.mp4 http://127.0.0.1:8765/v1/console/video/videos/
 ## Honest limits
 
 - **The task goes to Anthropic, the narration to the TTS provider.** On a host with a Claude login the storyboard call sends the task text to `api.anthropic.com` (forbid that host in L35 to keep it local). OpenAI TTS (default) calls `api.openai.com` on every job (`auto` may also reach Microsoft's edge-tts endpoint, `gtts` calls Google); the gate checks the host of the engine you chose. Do not put confidential text into a task unless that egress is acceptable; the L34/L35 gates exist precisely to refuse it where it is not.
+- **Grounding sends Corvin's own knowledge out.** A grounded job sends excerpts of Corvin-Knowledge decisions and of the tracked code (scrubbed of secret shapes, emails, IPs and home paths) with the storyboard prompt to Anthropic; the narration built from them goes to the TTS provider. It is declared INTERNAL: a tenant whose L34 matrix keeps INTERNAL data in the EU gets an ungrounded video instead. Only the tenant the knowledge base belongs to (`CORVIN_KB_TENANT`, default `_default`) is ever grounded. The ranking is a heuristic — name decision ids in the task to force sources — and numbers written as words are not checked.
 - **Slides, not footage.** The plugin's output is narrated slides — animated web slides, or classic stills as the fallback. Its 3D and animation tiers (Blender, Three.js, Manim), screenshot capture and asset analysis were removed by the plugin-local ADR-0953 in the Marketplace repo — they had no working path there. The separate scripted Maestro pipeline (below) is not affected by that removal.
 - **No publishing.** YouTube upload answers 501.
 - **Short storyboards.** At most eight scenes (six on the local fallback model, which is chosen for CPU-only hosts, not for quality).
