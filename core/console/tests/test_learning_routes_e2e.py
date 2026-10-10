@@ -82,6 +82,17 @@ def _sandbox(tmp_path: Path):
         _reset_modules()
 
 
+def _seed_execution(home: Path, tenant_id: str, skill_id: str, output: dict | None = None):
+    """Write one audit-first ``skill_executed`` learning event, as the registry does."""
+    from core.learning.event_store import EventStore
+    from core.learning.learning_events import EventType, LearningEvent
+    ev = LearningEvent.create(event_type=EventType.SKILL_EXECUTED, skill_id=skill_id,
+                              tenant_id=tenant_id, signal={"status": "success", "output": output or {"ok": True}},
+                              lom="core/skills/skill_registry_phase1.py:execute")
+    EventStore(home / "tenants" / tenant_id, tenant_id=tenant_id).write_event(ev)
+    return ev
+
+
 def _events_on_disk(home: Path, tenant_id: str) -> list[dict]:
     events_dir = home / "tenants" / tenant_id / "learning" / "events"
     out: list[dict] = []
@@ -98,37 +109,16 @@ class TestToolRatingRoute(unittest.TestCase):
         import shutil
         shutil.rmtree(self._tmp, ignore_errors=True)
 
-    def test_rating_round_trip_persists_learning_event(self):
+    def test_tool_rating_is_refused_as_unverifiable(self):
+        """ADR-0534: a tool has no execution record in the learning store, so a
+        rating on it cannot be checked against reality and is refused (audited),
+        not learned from."""
         with _sandbox(Path(self._tmp)) as (client, home, tid):
-            r1 = client.post("/v1/console/tools/tool_x/rating", json={"rating": 5, "feedback_text": "good"})
-            self.assertEqual(r1.status_code, 200, r1.text)
-            body = r1.json()
-            self.assertEqual(body["status"], "success")
-            self.assertEqual(body["rating_recorded"], 5)
-            self.assertEqual(body["feedback_stats"]["sample_count"], 1)
-
-            r2 = client.post("/v1/console/tools/tool_x/rating", json={"rating": 3})
-            self.assertEqual(r2.status_code, 200, r2.text)
-            self.assertEqual(r2.json()["feedback_stats"]["sample_count"], 2)
-            self.assertAlmostEqual(r2.json()["feedback_stats"]["average_rating"], 4.0)
-
-            g = client.get("/v1/console/tools/tool_x/feedback")
-            self.assertEqual(g.status_code, 200, g.text)
-            stats = g.json()
-            self.assertEqual(stats["entity_id"], "tool_x")
-            self.assertEqual(stats["entity_type"], "tool")
-            self.assertEqual(stats["sample_count"], 2)
-            self.assertEqual(stats["min_rating"], 3)
-            self.assertEqual(stats["max_rating"], 5)
-
-            # Side effect on disk: two FEEDBACK events for subject tool:tool_x in
-            # <CORVIN_HOME>/tenants/_default/learning/events/ — no events.db dir.
-            events = _events_on_disk(home, tid)
-            ratings = [e for e in events if e["skill_id"] == "tool:tool_x"]
-            self.assertEqual(len(ratings), 2, events)
-            self.assertEqual({e["event_type"] for e in ratings}, {"feedback"})
-            self.assertEqual(sorted(e["signal"]["rating"] for e in ratings), [3, 5])
-            self.assertTrue(all(e["tenant_id"] == tid for e in ratings))
+            r = client.post("/v1/console/tools/tool_x/rating", json={"rating": 5, "feedback_text": "good"})
+            self.assertEqual(r.status_code, 422, r.text)
+            self.assertEqual(r.json()["detail"]["reason"], "subject_not_verifiable")
+            self.assertTrue(r.json()["detail"]["audit_ref"])
+            self.assertEqual([e for e in _events_on_disk(home, tid) if e["event_type"] == "feedback"], [])
             self.assertFalse((home / "tenants" / tid / "learning" / "events.db").exists())
 
     def test_invalid_rating_is_400_and_not_persisted(self):
@@ -155,6 +145,7 @@ class TestSkillRatingRoute(unittest.TestCase):
 
     def test_skill_rating_round_trip(self):
         with _sandbox(Path(self._tmp)) as (client, home, tid):
+            _seed_execution(home, tid, "skill_y")  # ADR-0534: a rating needs a real run
             r = client.post("/v1/console/skills/skill_y/rating", json={"rating": 4})
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(r.json()["feedback_stats"]["sample_count"], 1)
@@ -165,6 +156,7 @@ class TestSkillRatingRoute(unittest.TestCase):
             events = [e for e in _events_on_disk(home, tid) if e["skill_id"] == "skill:skill_y"]
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0]["signal"]["kind"], "operator_rated_skill")
+            self.assertEqual(events[0]["signal"]["trust_weight"], 1.0)
 
 
 class TestLearningNodesRoute(unittest.TestCase):
@@ -188,13 +180,14 @@ class TestLearningNodesRoute(unittest.TestCase):
 
     def test_grade_unknown_pattern_does_not_500_on_constructor(self):
         """The old constructor crashed (AnomalyDetector(store) → TypeError) before
-        any handler ran; grading now reaches the handler."""
+        any handler ran; grading now reaches the handler — and a grade on a
+        pattern that does not exist is a 404 (ADR-0534 Layer 2), not a stored
+        signal about nothing."""
         with _sandbox(Path(self._tmp)) as (client, home, tid):
             r = client.post("/v1/console/learning/grade",
                             json={"pattern_id": "pattern_nope", "grade": 0.5, "reason": "x"})
-            self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(r.json()["status"], "success")
-            self.assertIsNone(r.json()["new_confidence"])
+            self.assertEqual(r.status_code, 404, r.text)
+            self.assertEqual([e for e in _events_on_disk(home, tid) if e["event_type"] == "feedback"], [])
 
 
 if __name__ == "__main__":

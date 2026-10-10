@@ -42,6 +42,19 @@ from core.learning.feedback_ingestion import (
 # F1: Race Condition in weight_updater.py (HIGH)
 # ============================================================================
 
+
+@pytest.fixture(autouse=True)
+def _downstream_of_the_feedback_gate(monkeypatch):
+    """This suite exercises code downstream of the ADR-0534 feedback gate (writers,
+    aggregations, optimizers), with bulk feedback on skills its sandbox never ran.
+    The gate itself is proven in tests/learning/test_feedback_trust_gate_e2e.py."""
+    from tests.learning.feedback_gate_helpers import open_gate
+    open_gate(monkeypatch)
+    # Its EventStore tests mock the core chain (``_audit_chain_first``) for a
+    # tenant that is not the process tenant; mock the gate's records the same way.
+    from core.learning import feedback_gate
+    monkeypatch.setattr(feedback_gate, "_audit", lambda *a, **k: "audit_ref_gate")
+
 class TestF1RaceConditionFix:
     """Test F1: Thread-safe weight updates with concurrent feedback processing."""
 

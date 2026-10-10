@@ -39,11 +39,28 @@ def _fake_session_record(tenant_id: str) -> session_auth.SessionRecord:
     return session_auth.SessionRecord(**values)  # type: ignore[arg-type]
 
 
+_STREAM_SKILLS = ("os.delegation_router", "os.workflow_optimizer", "os.security_orchestrator", "os.flow_guard")
+
+
+def _seed_execution(home, skill_id: str, tenant_id: str = "_default") -> None:
+    """One ``skill_executed`` record in the tenant's learning store, as the registry leaves it."""
+    import json
+    from core.learning.learning_events import EventType, LearningEvent
+    ev = LearningEvent.create(EventType.SKILL_EXECUTED, skill_id, tenant_id, signal={"output": {}})
+    f = home / "tenants" / tenant_id / "learning" / "events" / (ev.timestamp[:10] + ".jsonl")
+    f.parent.mkdir(parents=True, exist_ok=True)
+    with open(f, "a") as fh:
+        fh.write(json.dumps(ev.to_dict()) + "\n")
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     h = tmp_path / "corvin-home"
     (h / "tenants" / "_default" / "global").mkdir(parents=True)
     monkeypatch.setenv("CORVIN_HOME", str(h))
+    # ADR-0534: feedback is only admitted for a skill that actually ran.
+    for sid in _STREAM_SKILLS:
+        _seed_execution(h, sid)
     from core.console.corvin_console.routes import stream4_skill_feedback as route
 
     app = FastAPI()
@@ -187,3 +204,39 @@ def test_config_change_is_chained_before_it_is_persisted(client, tmp_path):
     chain = _resolve_core_audit().audit_path()
     assert str(chain).startswith(str(tmp_path)), "audit write escaped the sandbox"
     assert ref in open(chain).read()  # the chain record exists, and it carries no payload
+
+
+def test_feedback_on_a_skill_that_never_ran_is_refused_and_moves_nothing(client, tmp_path):
+    """ADR-0534: the trust gate runs before the outcome is stored or applied."""
+    events = tmp_path / "corvin-home" / "tenants" / "_default" / "learning" / "events"
+    for f in events.glob("*.jsonl"):  # this tenant's security orchestrator never ran
+        f.write_text("".join(l + "\n" for l in f.read_text().splitlines()
+                             if "os.security_orchestrator" not in l))
+    r = client.post(BASE, json=_body("os.security_orchestrator", "x-1", rating=2))
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["reason"] == "no_corresponding_execution"
+    hist = client.get(BASE + "/history", params={"skill_id": "os.security_orchestrator"}).json()
+    assert hist["total_count"] == 0
+
+
+def test_low_trust_shrinks_the_config_step(client, tmp_path):
+    """Rejections lower the source's trust; the next accepted outcome moves the
+    router's threshold by trust_weight × the full step."""
+    import time
+    from core.learning import feedback_gate
+    from core.learning.event_store import EventStore
+    from core.learning.learning_events import EventType, LearningEvent
+    from core.skills.os_skills.skill_adapter import load_skill_config
+    home = tmp_path / "corvin-home" / "tenants" / "_default"
+    store = EventStore(home, tenant_id="_default")
+    t0 = time.time() - 3600
+    for i in range(4):  # 4 claims about an output the router never produced
+        bad = LearningEvent.create(EventType.FEEDBACK, "os.delegation_router", "_default",
+                                   signal={"claimed_output_hash": "sha256:" + "f" * 64})
+        with pytest.raises(feedback_gate.FeedbackRejected):
+            feedback_gate.admit(bad, store, now=t0 + i * 120)
+    before = load_skill_config("os.delegation_router", "_default")[0].confidence_threshold
+    r = client.post(BASE, json=_body("os.delegation_router", "t-w", rating=2)).json()
+    assert r["trust_weight"] == pytest.approx(0.1)  # 4/4 rejected → the 0.1 floor
+    after = load_skill_config("os.delegation_router", "_default")[0].confidence_threshold
+    assert abs(after - before) == pytest.approx(0.05 * 0.1)

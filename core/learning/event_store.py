@@ -109,7 +109,7 @@ class EventStore:
         date_str = timestamp.split("T")[0]
         return self.events_dir / f"{date_str}.jsonl"
 
-    def write_event(self, event: LearningEvent) -> str:
+    def write_event(self, event: LearningEvent, *, subject_verified: bool = False) -> str:
         """Write event: core audit chain FIRST (fail-closed), then disk.
 
         Returns the ``audit_ref`` of the committed chain record.
@@ -129,6 +129,8 @@ class EventStore:
         so an operator can join the two.
 
         Raises:
+            FeedbackRejected: a FEEDBACK event failed the ADR-0534 trust gate
+                (the rejection is audited; nothing is written to disk).
             RuntimeError: the core audit writer is unavailable or the chain
                 write did not commit — nothing is written to disk then.
             IOError: the disk append failed AFTER the chain committed (the
@@ -139,6 +141,12 @@ class EventStore:
                 f"Tenant mismatch: store is bound to {self.tenant_id!r}, "
                 f"event carries {event.tenant_id!r}"
             )
+        if event.event_type is EventType.FEEDBACK:
+            # ADR-0534: every feedback signal passes the trust gate (throttle →
+            # reality check → trust weight) before it becomes learnable state.
+            # Raises FeedbackRejected (audited) — nothing is written then.
+            from core.learning.feedback_gate import admit  # noqa: PLC0415
+            event = admit(event, self, subject_verified=subject_verified)
         with self._lock:
             audit_ref = self._audit_chain_first(event)
             event_file = self._get_event_file(event.timestamp)

@@ -14,6 +14,7 @@ All tests verify:
 """
 
 import json
+import pytest
 import tempfile
 import unittest
 from datetime import datetime
@@ -33,6 +34,15 @@ from core.skills.os_skills.workflow_optimizer_skill.confidence_calculator import
     RoutingWeights,
 )
 
+
+
+@pytest.fixture(autouse=True)
+def _downstream_of_the_feedback_gate(monkeypatch):
+    """This suite exercises code downstream of the ADR-0534 feedback gate (writers,
+    aggregations, optimizers), with bulk feedback on skills its sandbox never ran.
+    The gate itself is proven in tests/learning/test_feedback_trust_gate_e2e.py."""
+    from tests.learning.feedback_gate_helpers import open_gate
+    open_gate(monkeypatch)
 
 class TestPhase2FeedbackToEventStore(unittest.TestCase):
     """Group 1: Feedback write → EventStore (3 tests)."""

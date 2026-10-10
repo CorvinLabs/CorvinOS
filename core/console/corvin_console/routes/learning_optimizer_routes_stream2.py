@@ -105,25 +105,36 @@ async def submit_feedback_signal(
     req: FeedbackSignalRequest,
     components: Dict = Depends(get_components),
 ) -> dict:
-    """Submit feedback signal (Story 1-4: Modal, context, types).
+    """Record a feedback signal as an ADR-0314 FEEDBACK learning event.
 
-    Non-blocking submission (<200ms), queued for async processing.
+    Until 2026-10-10 this answered ``"queued"`` and stored nothing. It now
+    writes through ``EventStore.write_event`` — audit-first, and through the
+    ADR-0534 trust gate: a signal on a skill that did not run in the last 24 h,
+    or a burst of signals, is refused (422, audited) instead of learned from.
+    ``comment`` is never persisted — only its presence and length.
     """
+    from core.learning.event_store import EventStore  # noqa: PLC0415
+    from core.learning.feedback_gate import FeedbackRejected  # noqa: PLC0415
+    from core.learning.learning_events import EventType, LearningEvent  # noqa: PLC0415
+
+    tenant_id = components["tenant_id"]
+    text = (req.comment or "").strip()
+    event = LearningEvent.create(
+        event_type=EventType.FEEDBACK,
+        skill_id=req.skill_id,
+        tenant_id=tenant_id,
+        signal={"kind": "operator_signal", "signal_type": req.signal_type,
+                "value": req.value, "has_text": bool(text), "text_length": len(text)},
+        lom="core/console/corvin_console/routes/learning_optimizer_routes_stream2.py:submit_feedback_signal",
+    )
     try:
-        # TODO: Auto-capture context (skill_id, input, output, duration)
-        # For now, accept what's submitted
-
-        return {
-            "status": "queued",
-            "message": "Feedback received, processing in background",
-            "timestamp": __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ).isoformat().replace('+00:00', 'Z'),
-        }
-
-    except Exception as e:
-        logger.exception(f"submit_feedback_error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to submit feedback")
+        audit_ref = EventStore(tenant_home(tenant_id), tenant_id=tenant_id).write_event(event)
+    except FeedbackRejected as e:
+        raise HTTPException(status_code=422, detail={
+            "error": "feedback_rejected", "reason": e.reason, "audit_ref": e.audit_ref})
+    except RuntimeError as e:  # chain did not commit → nothing recorded
+        raise HTTPException(status_code=503, detail=f"audit chain unavailable: {e}")
+    return {"status": "recorded", "event_id": event.event_id, "audit_ref": audit_ref}
 
 
 # ============================================================================

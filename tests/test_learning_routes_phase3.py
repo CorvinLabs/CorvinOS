@@ -178,21 +178,43 @@ def test_every_learning_post_requires_csrf(tmp_path: Path):
 # ── grade / ratings: chained, free text never persisted ─────────────────────
 
 
-def test_grade_is_chained_and_reason_is_not_persisted(tmp_path: Path):
+def _seed_execution(sb, skill_id: str) -> None:
+    from core.learning.event_store import EventStore
+    from core.learning.learning_events import EventType, LearningEvent
+    EventStore(sb.tenant_home, tenant_id=sb.tenant_id).write_event(LearningEvent.create(
+        event_type=EventType.SKILL_EXECUTED, skill_id=skill_id, tenant_id=sb.tenant_id,
+        signal={"status": "success", "output": {"ok": True}},
+        lom="core/skills/skill_registry_phase1.py:execute"))
+
+
+def test_grade_on_unknown_pattern_is_404_and_stores_nothing(tmp_path: Path):
+    # The console builds a fresh LearningIntegration per request, whose pattern
+    # store is in-memory; a grade on a pattern it does not know described
+    # nothing and used to be stored anyway (ADR-0534 Layer 2).
     with console_client(tmp_path) as sb:
         r = sb.client.post(
             "/v1/console/learning/grade",
             json={"pattern_id": "pattern_x", "grade": 0.7, "reason": "SECRET-REASON hunter2"},
             headers=sb.csrf_headers,
         )
-        assert r.status_code == 200, r.text
-        event_id = r.json()["event_id"]
+        assert r.status_code == 404, r.text
+        assert [e for e in sb.events_on_disk() if e["event_type"] == "feedback"] == []
+        assert "hunter2" not in (sb.chain.read_text() if sb.chain.exists() else "")
+
+
+def test_grade_is_chained_and_reason_is_not_persisted(tmp_path: Path):
+    with console_client(tmp_path) as sb:
+        from core.learning.integration import LearningIntegration
+        integ = LearningIntegration(sb.tenant_home / "learning", tenant_id=sb.tenant_id)
+        integ.register_pattern("pattern_x", "x", when=["w"])
+        event_id = integ.grade_pattern("pattern_x", 0.7, reason="SECRET-REASON hunter2")
         on_disk = [e for e in sb.events_on_disk() if e["event_id"] == event_id]
         assert len(on_disk) == 1
         assert on_disk[0]["event_type"] == "feedback"
         assert on_disk[0]["signal"]["grade"] == 0.7
         assert on_disk[0]["signal"]["has_reason"] is True
         assert on_disk[0]["signal"]["reason_length"] == len("SECRET-REASON hunter2")
+        assert on_disk[0]["signal"]["trust_weight"] == 1.0
         assert on_disk[0]["audit_ref"]
         assert "hunter2" not in json.dumps(on_disk)
         assert "hunter2" not in sb.chain.read_text()
@@ -200,9 +222,12 @@ def test_grade_is_chained_and_reason_is_not_persisted(tmp_path: Path):
         assert any(c["details"].get("audit_ref") == on_disk[0]["audit_ref"] for c in chain)
 
 
-@pytest.mark.parametrize("kind", ["tools", "skills"])
+@pytest.mark.parametrize("kind", ["skills"])
 def test_rating_persists_has_text_only(tmp_path: Path, kind: str):
+    # Tool ratings are refused by the ADR-0534 trust gate (no execution record
+    # to verify against) — tests/learning/test_feedback_trust_gate_e2e.py.
     with console_client(tmp_path) as sb:
+        _seed_execution(sb, "entity_1")
         r = sb.client.post(
             f"/v1/console/{kind}/entity_1/rating",
             json={"rating": 4, "feedback_text": "the operator's private remark", "task_id": "t1"},

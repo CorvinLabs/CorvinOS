@@ -107,6 +107,7 @@ class SkillFeedbackResponse(BaseModel):
     message: Optional[str] = None
     config_applied: bool = Field(False, description="True when the feedback changed the skill's learned config")
     config_version: Optional[str] = Field(None, description="Version id of the applied config, if any")
+    trust_weight: float = Field(1.0, description="ADR-0534 trust weight that scaled the config step")
 
 
 class FeedbackHistoryItem(BaseModel):
@@ -142,6 +143,26 @@ class FeedbackStatusResponse(BaseModel):
 # ============================================================================
 # Routes
 # ============================================================================
+
+def _admit_through_trust_gate(req, tenant_id: str, signal) -> float:
+    """Run ADR-0534's gate for this feedback; return its trust weight or raise 422."""
+    from core.learning.event_store import EventStore  # noqa: PLC0415
+    from core.learning.feedback_gate import FeedbackRejected, admit  # noqa: PLC0415
+    from core.learning.learning_events import EventType, LearningEvent  # noqa: PLC0415
+    from core.paths.tenant import tenant_home  # noqa: PLC0415
+
+    probe = LearningEvent.create(
+        event_type=EventType.FEEDBACK, skill_id=req.skill_id, tenant_id=tenant_id,
+        signal={"kind": "skill_outcome_feedback", "outcome": str(signal)},
+        lom="core/console/corvin_console/routes/stream4_skill_feedback.py:submit_skill_feedback",
+    )
+    try:
+        admitted = admit(probe, EventStore(tenant_home(tenant_id), tenant_id=tenant_id))
+    except FeedbackRejected as e:
+        raise HTTPException(status_code=422, detail={
+            "error": "feedback_rejected", "reason": e.reason, "audit_ref": e.audit_ref})
+    return float(admitted.signal["trust_weight"])
+
 
 @router.post("", response_model=SkillFeedbackResponse)
 async def submit_skill_feedback(
@@ -215,6 +236,11 @@ async def submit_skill_feedback(
         if not ok:
             raise HTTPException(status_code=400, detail=err or "invalid feedback")
 
+        # ADR-0534 trust gate — this is the one route whose feedback moves a
+        # live skill config, so it must not bypass the gate EventStore applies
+        # to every stored FEEDBACK event. Rejection: audited, nothing stored.
+        trust_weight = _admit_through_trust_gate(req, rec.tenant_id, signal)
+
         # Audit-first: the outcome signal is chained before anything is stored. The
         # helper reports False instead of raising, so a missing commit aborts here.
         outcome = "yes" if signal is True else "no" if signal is False else "other"
@@ -257,7 +283,8 @@ async def submit_skill_feedback(
                     OutcomeFeedback(
                         skill_id=req.skill_id, tenant_id=rec.tenant_id, signal=signal,
                         feedback_id=feedback_event.feedback_id,
-                    )
+                    ),
+                    trust_weight=trust_weight,
                 )
                 config_applied = update is not None
                 if update is not None:
@@ -279,6 +306,7 @@ async def submit_skill_feedback(
             "message": f"Feedback received for {req.skill_id} on {req.subject_id}{note}",
             "config_applied": config_applied,
             "config_version": config_version,
+            "trust_weight": trust_weight,
         }
 
     except HTTPException:

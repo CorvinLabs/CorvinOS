@@ -27,6 +27,7 @@ from statistics import mean, stdev
 from .learning_events import LearningEvent, EventType
 from .event_store import EventStore
 from .event_emitter import EventEmitter
+from .adversarial_detector import weight_of
 
 logger = logging.getLogger(__name__)
 
@@ -182,8 +183,14 @@ class FeedbackAggregator:
         entity_name: str,
         ratings: List[int],  # All 1-5 ratings
         window_days: int = 7,
+        weights: Optional[List[float]] = None,
     ) -> FeedbackStats:
-        """Aggregate feedback ratings into statistics."""
+        """Aggregate feedback ratings into statistics.
+
+        ``weights`` are the ADR-0534 trust weights of the ratings (same order);
+        the average — the number that drives sentiment and promotion — is the
+        trust-weighted mean. ``None`` = every rating at full weight.
+        """
         if not ratings:
             return FeedbackStats(
                 entity_id=entity_id,
@@ -203,7 +210,10 @@ class FeedbackAggregator:
 
         sorted_ratings = sorted(ratings)
         sample_count = len(ratings)
-        average = mean(ratings)
+        if weights and len(weights) == len(ratings) and sum(weights) > 0:
+            average = sum(r * w for r, w in zip(ratings, weights)) / sum(weights)
+        else:
+            average = mean(ratings)
         median = sorted_ratings[sample_count // 2]
 
         if sample_count < 2:
@@ -403,13 +413,14 @@ class OperatorFeedbackHandler:
     def _ratings_in_window(
         self, *, tenant_id: str, subject: str, kind: str, id_key: str, name_key: str,
         entity_id: str, window_days: int,
-    ) -> Tuple[List[int], str]:
-        """Collect (ratings, entity_name) for one entity inside the window."""
+    ) -> Tuple[List[int], str, List[float]]:
+        """Collect (ratings, entity_name, trust_weights) for one entity inside the window."""
         cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
         events = self.event_store.query_events(
             tenant_id, event_type=EventType.FEEDBACK, skill_id=subject, limit=10000
         )
         ratings: List[int] = []
+        weights: List[float] = []
         entity_name = entity_id
         for event in events:
             signal = event.signal or {}
@@ -423,8 +434,9 @@ class OperatorFeedbackHandler:
             rating = signal.get("rating")
             if isinstance(rating, int) and 1 <= rating <= 5:
                 ratings.append(rating)
+                weights.append(weight_of(signal))
                 entity_name = signal.get(name_key) or entity_id
-        return ratings, entity_name
+        return ratings, entity_name, weights
 
     def get_tool_feedback_stats(
         self,
@@ -438,7 +450,7 @@ class OperatorFeedbackHandler:
         if use_cache and self._is_cache_valid() and cache_key in self._aggregate_cache:
             return self._aggregate_cache[cache_key]
 
-        ratings, tool_name = self._ratings_in_window(
+        ratings, tool_name, weights = self._ratings_in_window(
             tenant_id=tenant_id, subject=tool_subject_id(tool_id), kind=RATING_KIND_TOOL,
             id_key="tool_id", name_key="tool_name", entity_id=tool_id, window_days=window_days,
         )
@@ -448,6 +460,7 @@ class OperatorFeedbackHandler:
             entity_name=tool_name,
             ratings=ratings,
             window_days=window_days,
+            weights=weights,
         )
         if use_cache:
             self._aggregate_cache[cache_key] = stats
@@ -466,7 +479,7 @@ class OperatorFeedbackHandler:
         if use_cache and self._is_cache_valid() and cache_key in self._aggregate_cache:
             return self._aggregate_cache[cache_key]
 
-        ratings, skill_name = self._ratings_in_window(
+        ratings, skill_name, weights = self._ratings_in_window(
             tenant_id=tenant_id, subject=skill_subject_id(skill_id), kind=RATING_KIND_SKILL,
             id_key="skill_id", name_key="skill_name", entity_id=skill_id, window_days=window_days,
         )
@@ -476,6 +489,7 @@ class OperatorFeedbackHandler:
             entity_name=skill_name,
             ratings=ratings,
             window_days=window_days,
+            weights=weights,
         )
         if use_cache:
             self._aggregate_cache[cache_key] = stats

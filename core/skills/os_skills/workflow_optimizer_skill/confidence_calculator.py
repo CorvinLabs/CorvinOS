@@ -27,6 +27,7 @@ from typing import Optional, Dict, Any, Tuple
 from uuid import uuid4
 
 from core.learning.learning_events import LearningEvent, EventType
+from core.learning.adversarial_detector import weight_of
 from core.learning.event_store import EventStore
 
 logger = logging.getLogger(__name__)
@@ -160,8 +161,11 @@ class ConfidenceCalculator:
             return current_weights, 0
 
         # Tally successes per (complexity, model)
-        success_counts: Dict[str, int] = {}
-        total_counts: Dict[str, int] = {}
+        # ADR-0534: each signal counts with its trust weight (1.0 for signals
+        # stored before the gate existed), so a low-trust source moves the
+        # posterior less than a trusted one.
+        success_counts: Dict[str, float] = {}
+        total_counts: Dict[str, float] = {}
 
         for event in feedback_events:
             signal = event.signal or {}
@@ -170,10 +174,11 @@ class ConfidenceCalculator:
             feedback_type = signal.get("feedback_type", "skip")
 
             key = f"{complexity}_{model.split('-')[0].lower()}"
-            total_counts[key] = total_counts.get(key, 0) + 1
+            w = weight_of(signal)
+            total_counts[key] = total_counts.get(key, 0) + w
 
             if feedback_type == "correct":
-                success_counts[key] = success_counts.get(key, 0) + 1
+                success_counts[key] = success_counts.get(key, 0) + w
 
         # Bayesian (Beta-Binomial) update centred on the DEFAULT prior:
         #   P_new = (p0 * n0 + successes) / (n0 + total)
@@ -196,7 +201,7 @@ class ConfidenceCalculator:
             p_new = (p0 * n0 + successes) / (n0 + total)
             updated_weights[key] = p_new
             logger.info(
-                f"Updated weight {key}: {successes}/{total} successes → P={p_new:.3f}"
+                f"Updated weight {key}: {successes:.2f}/{total:.2f} weighted successes → P={p_new:.3f}"
             )
 
         # Create new RoutingWeights object

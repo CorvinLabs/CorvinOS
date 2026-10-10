@@ -49,11 +49,15 @@ try:
     from core.learning.event_store import EventStore
     from core.learning.learning_events import EventType
     from core.learning.operator_feedback import OperatorFeedbackHandler
+    from core.learning.feedback_gate import FeedbackRejected
 except ImportError:  # pragma: no cover - stripped install
     LearningIntegration = None  # type: ignore
     EventStore = None  # type: ignore
     EventType = None  # type: ignore
     OperatorFeedbackHandler = None  # type: ignore
+
+    class FeedbackRejected(ValueError):  # type: ignore[no-redef]
+        reason = audit_ref = ""
 
 
 def _tenant_home(tenant_id: str) -> Path:
@@ -227,6 +231,11 @@ async def grade_pattern(
     grade = max(-1.0, min(1.0, request.grade))
     try:
         event_id = integration.grade_pattern(request.pattern_id, grade, reason=request.reason)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Pattern not found")
+    except FeedbackRejected as e:  # ADR-0534 trust gate (throttle), audited
+        raise HTTPException(status_code=422, detail={
+            "error": "feedback_rejected", "reason": e.reason, "audit_ref": e.audit_ref})
     except RuntimeError as e:  # chain did not commit → nothing was graded
         raise HTTPException(status_code=503, detail=f"audit chain unavailable: {e}")
 
@@ -282,6 +291,9 @@ def _record_rating(kind: str, entity_id: str, request, handler, session) -> dict
         else:
             handler.record_skill_rating(skill_id=entity_id, skill_name=entity_id, **common)
             stats = handler.get_skill_feedback_stats(skill_id=entity_id, tenant_id=session.tenant_id, use_cache=False)
+    except FeedbackRejected as e:  # ADR-0534 trust gate: audited, nothing stored
+        raise HTTPException(status_code=422, detail={
+            "error": "feedback_rejected", "reason": e.reason, "audit_ref": e.audit_ref})
     except RuntimeError as e:  # chain did not commit → the rating was NOT recorded
         raise HTTPException(status_code=503, detail=f"audit chain unavailable: {e}")
     return {

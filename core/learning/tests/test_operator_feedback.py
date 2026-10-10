@@ -70,6 +70,24 @@ def create_skill_rating_event(
     )
 
 
+def _store_raw(store: EventStore, ev: LearningEvent) -> None:
+    """Put a rating on disk as a pre-ADR-0534 record would be (no gate).
+
+    The aggregation tests below are about arithmetic over stored ratings, not
+    about admission; the gate has its own E2E suite
+    (tests/learning/test_feedback_trust_gate_e2e.py).
+    """
+    import json
+    f = store.events_dir / (ev.timestamp[:10] + ".jsonl")
+    with open(f, "a") as fh:
+        fh.write(json.dumps(ev.to_dict()) + "\n")
+
+
+def _seed_execution(store: EventStore, skill_id: str, tenant_id: str = "_default") -> None:
+    _store_raw(store, LearningEvent.create(EventType.SKILL_EXECUTED, skill_id, tenant_id,
+                                           signal={"output": {"ok": True}}))
+
+
 def _feedback_events(store: EventStore, tenant_id: str = "_default", subject: Optional[str] = None):
     return store.query_events(tenant_id, event_type=EventType.FEEDBACK, skill_id=subject)
 
@@ -151,19 +169,22 @@ class TestFeedbackAggregator:
 
 
 class TestOperatorFeedbackHandler:
-    def test_record_tool_rating(self, feedback_handler, event_store):
-        ev = feedback_handler.record_tool_rating(
-            tool_id="tool_1", tool_name="TestTool", rating=5, tenant_id="_default",
-            feedback_text="Works great!",
-        )
-        events = _feedback_events(event_store, subject=tool_subject_id("tool_1"))
-        assert len(events) == 1
-        assert events[0].event_id == ev.event_id
-        assert events[0].event_type == EventType.FEEDBACK
-        assert events[0].signal["kind"] == RATING_KIND_TOOL
-        assert events[0].signal["tool_id"] == "tool_1"
-        assert events[0].signal["rating"] == 5
-        assert events[0].lom, "LoM is recorded on the event"
+    def test_record_tool_rating_is_refused_by_the_trust_gate(self, feedback_handler, event_store):
+        # ADR-0534: a tool has no execution record to verify a rating against.
+        from core.learning.feedback_gate import FeedbackRejected
+        with pytest.raises(FeedbackRejected) as exc:
+            feedback_handler.record_tool_rating(
+                tool_id="tool_1", tool_name="TestTool", rating=5, tenant_id="_default",
+                feedback_text="Works great!",
+            )
+        assert exc.value.reason == "subject_not_verifiable"
+        assert _feedback_events(event_store) == []
+
+    def test_tool_rating_event_shape(self):
+        ev = create_tool_rating_event(tool_id="tool_1", rating=5)
+        assert ev.event_type == EventType.FEEDBACK
+        assert ev.signal["kind"] == RATING_KIND_TOOL
+        assert ev.signal["tool_id"] == "tool_1" and ev.signal["rating"] == 5
 
     def test_record_tool_rating_invalid(self, feedback_handler, event_store):
         with pytest.raises(ValueError):
@@ -171,26 +192,30 @@ class TestOperatorFeedbackHandler:
         assert _feedback_events(event_store) == []
 
     def test_record_skill_rating(self, feedback_handler, event_store):
-        feedback_handler.record_skill_rating(
+        _seed_execution(event_store, "skill_1")
+        ev = feedback_handler.record_skill_rating(
             skill_id="skill_1", skill_name="TestSkill", rating=4, tenant_id="_default",
         )
         events = _feedback_events(event_store, subject=skill_subject_id("skill_1"))
         assert len(events) == 1
         assert events[0].signal["kind"] == RATING_KIND_SKILL
         assert events[0].signal["skill_id"] == "skill_1" and events[0].signal["rating"] == 4
+        assert events[0].event_id == ev.event_id and events[0].lom
+        assert events[0].signal["trust_weight"] == 1.0
 
     def test_record_skill_rating_invalid(self, feedback_handler):
         with pytest.raises(ValueError):
             feedback_handler.record_skill_rating(skill_id="skill_1", skill_name="S", rating=0)
 
     def test_record_through_event_emitter(self, event_store):
+        _seed_execution(event_store, "skill_e")
         emitter = EventEmitter(event_store)
         handler = OperatorFeedbackHandler(event_store=event_store, event_emitter=emitter)
         try:
-            handler.record_tool_rating(tool_id="tool_e", tool_name="E", rating=5)
+            handler.record_skill_rating(skill_id="skill_e", skill_name="E", rating=5)
         finally:
             emitter.stop()  # flushes the queue
-        events = _feedback_events(event_store, subject=tool_subject_id("tool_e"))
+        events = _feedback_events(event_store, subject=skill_subject_id("skill_e"))
         assert len(events) == 1 and events[0].signal["rating"] == 5
 
     def test_dropped_emit_is_an_error_not_silence(self, event_store):
@@ -203,7 +228,7 @@ class TestOperatorFeedbackHandler:
 
     def test_get_tool_feedback_stats(self, feedback_handler, event_store):
         for rating in [5, 5, 4, 5, 3]:
-            event_store.write_event(create_tool_rating_event(tool_id="tool_1", rating=rating))
+            _store_raw(event_store, create_tool_rating_event(tool_id="tool_1", rating=rating))
         stats = feedback_handler.get_tool_feedback_stats(tool_id="tool_1", tenant_id="_default")
         assert stats.entity_id == "tool_1" and stats.entity_name == "TestTool"
         assert stats.sample_count == 5
@@ -212,7 +237,7 @@ class TestOperatorFeedbackHandler:
 
     def test_get_skill_feedback_stats(self, feedback_handler, event_store):
         for rating in [4, 4, 3, 4]:
-            event_store.write_event(create_skill_rating_event(skill_id="skill_1", rating=rating))
+            _store_raw(event_store, create_skill_rating_event(skill_id="skill_1", rating=rating))
         stats = feedback_handler.get_skill_feedback_stats(skill_id="skill_1", tenant_id="_default")
         assert stats.entity_id == "skill_1" and stats.sample_count == 4
         assert 3.5 <= stats.average_rating <= 4.0
@@ -222,9 +247,9 @@ class TestOperatorFeedbackHandler:
         # Audit-first store: a record enters the core chain only under the
         # process tenant, so each tenant's event is written AS that tenant.
         monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_1")
-        event_store.write_event(create_tool_rating_event(rating=5, tenant_id="tenant_1"))
+        _store_raw(event_store, create_tool_rating_event(rating=5, tenant_id="tenant_1"))
         monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_2")
-        event_store.write_event(create_tool_rating_event(rating=1, tenant_id="tenant_2"))
+        _store_raw(event_store, create_tool_rating_event(rating=1, tenant_id="tenant_2"))
         monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
         stats1 = feedback_handler.get_tool_feedback_stats(tool_id="tool_1", tenant_id="tenant_1")
         stats2 = feedback_handler.get_tool_feedback_stats(tool_id="tool_1", tenant_id="tenant_2")
@@ -234,16 +259,28 @@ class TestOperatorFeedbackHandler:
         assert feedback_handler.get_tool_feedback_stats("tool_1", tenant_id="tenant_3").sample_count == 0
 
     def test_feedback_stats_entity_isolation(self, feedback_handler, event_store):
-        event_store.write_event(create_tool_rating_event(tool_id="tool_1", rating=5))
-        event_store.write_event(create_tool_rating_event(tool_id="tool_2", rating=1))
-        event_store.write_event(create_skill_rating_event(skill_id="tool_1", rating=1))  # a SKILL named tool_1
+        _store_raw(event_store, create_tool_rating_event(tool_id="tool_1", rating=5))
+        _store_raw(event_store, create_tool_rating_event(tool_id="tool_2", rating=1))
+        _store_raw(event_store, create_skill_rating_event(skill_id="tool_1", rating=1))  # a SKILL named tool_1
         stats = feedback_handler.get_tool_feedback_stats(tool_id="tool_1")
         assert stats.sample_count == 1 and stats.average_rating == 5.0
 
+    def test_trust_weight_moves_the_average(self, feedback_handler, event_store):
+        # ADR-0534 Layer 3: a 1-star rating at trust 0.1 barely moves a 5-star one
+        good = create_skill_rating_event(rating=5)
+        bad = create_skill_rating_event(rating=1)
+        bad = LearningEvent(**{**bad.to_dict(), "event_type": bad.event_type,
+                               "signal": {**bad.signal, "trust_weight": 0.1}})
+        _store_raw(event_store, good)
+        _store_raw(event_store, bad)
+        stats = feedback_handler.get_skill_feedback_stats("skill_1")
+        assert stats.sample_count == 2
+        assert stats.average_rating == pytest.approx((5 * 1.0 + 1 * 0.1) / 1.1)
+
     def test_feedback_stats_time_window(self, feedback_handler, event_store):
         old_time = datetime.now(timezone.utc) - timedelta(days=8)
-        event_store.write_event(create_tool_rating_event(rating=1, timestamp=old_time))
-        event_store.write_event(create_tool_rating_event(rating=5))
+        _store_raw(event_store, create_tool_rating_event(rating=1, timestamp=old_time))
+        _store_raw(event_store, create_tool_rating_event(rating=5))
         stats = feedback_handler.get_tool_feedback_stats(tool_id="tool_1", window_days=7)
         assert stats.sample_count == 1 and stats.average_rating == 5.0
         stats30 = feedback_handler.get_tool_feedback_stats(tool_id="tool_1", window_days=30, use_cache=False)
@@ -280,13 +317,14 @@ class TestOperatorFeedbackHandler:
         assert adjusted == 0.7 and "Insufficient" in reason
 
     def test_cache_invalidation(self, feedback_handler, event_store):
-        event_store.write_event(create_tool_rating_event(rating=5))
-        stats1 = feedback_handler.get_tool_feedback_stats("tool_1")
+        _seed_execution(event_store, "skill_1")
+        _store_raw(event_store, create_skill_rating_event(rating=5))
+        stats1 = feedback_handler.get_skill_feedback_stats("skill_1")
         assert stats1.sample_count == 1
         assert feedback_handler._is_cache_valid()
 
-        feedback_handler.record_tool_rating(tool_id="tool_1", tool_name="TestTool", rating=4)
+        feedback_handler.record_skill_rating(skill_id="skill_1", skill_name="TestSkill", rating=4)
         assert not feedback_handler._is_cache_valid()
 
-        stats2 = feedback_handler.get_tool_feedback_stats("tool_1")
+        stats2 = feedback_handler.get_skill_feedback_stats("skill_1")
         assert stats2.sample_count == 2

@@ -156,6 +156,12 @@ class LearningIntegration:
         grade = float(max(-1.0, min(1.0, grade)))
         reason_text = reason.strip() if isinstance(reason, str) else ""
 
+        node = self.store.get_node(pattern_id)
+        if node is None:
+            # A grade on a pattern that does not exist describes nothing
+            # (ADR-0534 Layer 2); it used to be stored anyway.
+            raise LookupError(f"unknown pattern {pattern_id!r}")
+
         chained = _ChainedEvent.create(
             event_type=EventType.FEEDBACK,
             skill_id=pattern_id,
@@ -170,9 +176,9 @@ class LearningIntegration:
             },
             lom="core/learning/integration.py:grade_pattern",
         )
-        self.event_store.write_event(chained)
+        # The node check above is this subject's reality check (ADR-0534).
+        self.event_store.write_event(chained, subject_verified=True)
 
-        node = self.store.get_node(pattern_id)
         if node:
             update_confidence(
                 node,

@@ -21,6 +21,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core", "learni
 # PHASE 3 GATE VERIFICATION
 # ============================================================================
 
+
+@pytest.fixture(autouse=True)
+def _downstream_of_the_feedback_gate(monkeypatch):
+    """This suite exercises code downstream of the ADR-0534 feedback gate (writers,
+    aggregations, optimizers), with bulk feedback on skills its sandbox never ran.
+    The gate itself is proven in tests/learning/test_feedback_trust_gate_e2e.py."""
+    from tests.learning.feedback_gate_helpers import open_gate
+    open_gate(monkeypatch)
+
 class TestPhase3Gate:
     """
     Phase 3 Gate Requirements (from PLAN-0661):

@@ -375,7 +375,7 @@ class LoopClosureManager:
         return sorted(all_updates, key=lambda u: u.timestamp, reverse=True)[:limit]
 
 
-async def apply_outcome_to_skill(feedback: OutcomeFeedback) -> Optional[ConfigUpdate]:
+async def apply_outcome_to_skill(feedback: OutcomeFeedback, *, trust_weight: float = 1.0) -> Optional[ConfigUpdate]:
     """Close the loop for one OUTCOME event: transform it, persist it through the Skill's
     adapter, and return the update (``None`` when nothing changes).
 
@@ -385,9 +385,15 @@ async def apply_outcome_to_skill(feedback: OutcomeFeedback) -> Optional[ConfigUp
     ``SkillAdapter.apply_config_delta`` — the audit-first, versioned, rollback-able writer that
     Skills read back with ``load_skill_config``. A write that cannot be audited raises
     (``RuntimeError``) and persists nothing.
+
+    ``trust_weight`` (ADR-0534 Layer 3, from ``feedback_gate.admit``) scales the
+    applied step: a source whose recent signals kept failing the reality check
+    moves the threshold by at most a tenth of the full step.
     """
     from core.skills.os_skills.skill_adapter import SkillAdapter, load_skill_config  # noqa: PLC0415
 
+    if not 0.0 < trust_weight <= 1.0:
+        raise ValueError(f"trust_weight must be in (0, 1], got {trust_weight!r}")
     if not isinstance(feedback.signal, bool):
         return None  # "other" carries no direction
     current, _ = load_skill_config(feedback.skill_id, feedback.tenant_id)
@@ -399,6 +405,6 @@ async def apply_outcome_to_skill(feedback: OutcomeFeedback) -> Optional[ConfigUp
     change = update.config_delta["confidence_threshold"]
     # No measured improvement is claimed: confidence_delta stays 0.0.
     SkillAdapter(feedback.skill_id, feedback.tenant_id).apply_config_delta(
-        {"confidence_threshold": change["new"] - change["old"]}, confidence_delta=0.0
+        {"confidence_threshold": (change["new"] - change["old"]) * trust_weight}, confidence_delta=0.0
     )
     return update

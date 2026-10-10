@@ -262,6 +262,37 @@ optimizer consumes them. The manifest route additionally caches the resolved
 flags per tenant for 5 s (`routes/capabilities.py::_read_flags`), invalidated
 by `POST /features/toggle`, so an operator decision is never stale.
 
+## Feedback trust gate (ADR-0534, accepted + built 2026-10-10)
+
+Feedback is untrusted input. `EventStore.write_event` runs `core/learning/feedback_gate.admit()`
+on every `EventType.FEEDBACK` event BEFORE the audit-first write; a refusal raises
+`FeedbackRejected(reason, audit_ref)` and nothing is stored (routes answer **422**
+`{error: feedback_rejected, reason, audit_ref}`).
+
+| Layer | Module | Rule | Refusal event |
+|---|---|---|---|
+| 1 Throttle | `feedback_throttle.py` | ≤ 5 decisions / 60 s per subject, counted over `<tenant>/learning/feedback_gate/decisions.jsonl` (content-free; rejected attempts count) — never an in-process deque, the console builds a handler per request | `learning.feedback_throttled` |
+| 2 Reality | `reality_check.py` | the skill ran (a `skill_executed` learning event of THIS tenant) within 24 h before the signal (+5 s skew); an optional `claimed_output_hash` must equal `execution_output_hash()` of one of those runs | `learning.feedback_rejected` (`subject_not_verifiable`, `no_corresponding_execution`) · `learning.feedback_reality_mismatch` |
+| 3 Trust | `adversarial_detector.py` | `trust_weight = max(0.1, 1 − rejected/total)` over the last 20 decisions, stamped into `signal.trust_weight`; < 0.3 → alert | `learning.adversarial_feedback_detected` (ERROR) |
+
+Accepted → `learning.feedback_accepted` (with `trust_weight`). Consumers multiply by
+`adversarial_detector.weight_of(signal)` (1.0 for signals stored before the gate):
+operator-rating stats (weighted mean), the workflow optimizer's Beta update, and the router
+threshold step of `POST /feedback/skill` — that route moves a live config without storing a
+FEEDBACK event, so it calls `admit()` itself and passes `trust_weight` to
+`loop_closure.apply_outcome_to_skill`.
+
+* `tool:<id>` ratings are refused (`subject_not_verifiable`): a tool has no execution record here.
+* `grade_pattern` checks the node exists and passes `subject_verified=True` (replaces Layer 2
+  only); an unknown pattern is a 404. The console's per-request `LearningIntegration` has an
+  in-memory pattern store, so over HTTP every pattern is unknown today.
+* `POST /learning/feedback/submit` writes a real gated FEEDBACK event (it used to answer
+  `"queued"` and store nothing).
+* No override secret. Change `RateLimitConfig` in code review instead.
+
+Proof: `tests/learning/test_feedback_trust_gate_e2e.py`,
+`tests/e2e/test_stream4_skill_feedback_console_e2e.py`.
+
 ## Registry hardening (2026-09-07 adversarial review F-K2/F-K3/F-K5/F-K6/F-K8)
 
 | Mechanism | Where | Rule |

@@ -12,6 +12,7 @@ Tests verify:
 """
 
 import tempfile
+import pytest
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -29,6 +30,15 @@ from core.skills.os_skills.flow_guard.feedback_handler import (
     PolicyFeedbackType,
 )
 
+
+
+@pytest.fixture(autouse=True)
+def _downstream_of_the_feedback_gate(monkeypatch):
+    """This suite exercises code downstream of the ADR-0534 feedback gate (writers,
+    aggregations, optimizers), with bulk feedback on skills its sandbox never ran.
+    The gate itself is proven in tests/learning/test_feedback_trust_gate_e2e.py."""
+    from tests.learning.feedback_gate_helpers import open_gate
+    open_gate(monkeypatch)
 
 class TestPhase3Stream2Security(unittest.TestCase):
     """Stream 2 (Security Orchestrator) integration tests (12 tests)."""
