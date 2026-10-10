@@ -24,8 +24,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# The Layer Forge Skill (container for Layer Forge decisions)
-LAYER_FORGE_SKILL_ID = "os.layer_forge"
+# Label under which Layer Forge events are stored. Not a registered Skill and not "os.*":
+# Layer Forge runs minutes (LLM review, gate tests), far past a Skill.execute() budget (ADR-2175).
+LAYER_FORGE_SKILL_ID = "layer_forge"
 
 
 def learning_emitter() -> Optional:

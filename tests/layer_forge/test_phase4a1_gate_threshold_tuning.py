@@ -84,7 +84,6 @@ def _create_definition_with_flags(home: Path, gate_id: str = "test_gate", versio
     # gate_outcome_correlation counts a definition only if (a) its review verdict was FLAGGED and
     # (b) it was created inside the analysis window (default: the last 30 days). The helper used
     # a fixed 2020 timestamp and no verdict, so the correlation could never be anything but 0.0.
-    record["_review_verdict"] = {"status": "FLAGGED"}
     record["_created_at"] = time.time()
 
     atomic_write_json(registry._path_for(entry_id, version), record)
@@ -125,7 +124,6 @@ class TestGateOutcomeCorrelation:
             record = dict(manifest)
             record["status"] = "rejected"  # Failed deployment
             record["review_flagged"] = True
-            record["_review_verdict"] = {"status": "FLAGGED"}
             record["_created_at"] = time.time()
             atomic_write_json(registry._path_for(record["id"], record["version"]), record)
 

@@ -38,9 +38,10 @@ def sample_definitions(temp_registry):
     two_days_ago = now - 2 * 24 * 60 * 60
 
     # Helper to set _created_at after promotion
-    def set_created_time(entry_id: str, version: str, ts: float):
+    def set_created_time(entry_id: str, version: str, ts: float, **extra):
         entry = temp_registry.get(entry_id, version)
         entry["_created_at"] = ts
+        entry.update(extra)
         # Write back by re-reading and directly setting (no direct update API)
         path = temp_registry._path_for(entry_id, version)
         import json
@@ -60,9 +61,9 @@ def sample_definitions(temp_registry):
 
     manifest3 = {"id": "l3", "version": "1.0.0", "targets": [{"layer_id": "L10"}]}
     temp_registry.create(manifest3)
-    entry3 = temp_registry.get("l3")
-    entry3["_review_verdict"] = {"status": "FLAGGED", "flags": ["scope_creep", "security_gap"]}
-    set_created_time("l3", "1.0.0", week_ago)
+    # Same shape the orchestrator persists for a FLAGGED review (orchestrator.py).
+    set_created_time("l3", "1.0.0", week_ago, review_flagged=True,
+                     review_flags=["scope_creep", "security_gap"])
 
     # Week 0: One superseded
     manifest4 = {"id": "l4", "version": "1.0.0", "targets": [{"layer_id": "L10"}]}

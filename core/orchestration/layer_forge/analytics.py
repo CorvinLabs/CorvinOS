@@ -104,7 +104,7 @@ class LayerForgeAnalytics:
                 weeks[week]["accepted"] += 1
             elif status == STATUS_SUPERSEDED:
                 weeks[week]["rejected"] += 1
-            elif entry.get("_review_verdict", {}).get("status") == "FLAGGED":
+            elif entry.get("review_flagged"):
                 weeks[week]["flagged"] += 1
             elif status == STATUS_ACCEPTED:
                 weeks[week]["accepted"] += 1
@@ -136,15 +136,15 @@ class LayerForgeAnalytics:
                 continue
 
             week = self.week_of(created_ts)
-            verdict = entry.get("_review_verdict", {})
-
-            if verdict.get("status") != "FLAGGED":
+            # The orchestrator persists the review outcome as review_flagged/review_flags on the
+            # definition (only when the verdict is FLAGGED); there is no separate verdict record.
+            if not entry.get("review_flagged"):
                 continue
 
             if week not in weeks:
                 weeks[week] = {flag: 0 for flag in REVIEW_FLAG_TYPES}
 
-            for flag in verdict.get("flags", []):
+            for flag in entry.get("review_flags", []):
                 if flag in weeks[week]:
                     weeks[week][flag] += 1
 
@@ -334,7 +334,7 @@ class LayerForgeAnalytics:
             #     tenant_id=self.tenant_id,
             #     since=since_ts,
             #     until=until_ts,
-            #     skill_id="os.layer_forge"
+            #     skill_id="layer_forge"
             # ):
             #     events.append(event.to_dict())
             return events
@@ -390,8 +390,7 @@ class LayerForgeAnalytics:
             if not any(isinstance(g, dict) and g.get("gate_id") == gate_id for g in entry.get("quality_gates", [])):
                 continue
 
-            verdict = entry.get("_review_verdict", {})
-            if verdict.get("status") == "FLAGGED" and entry.get("review_flagged"):
+            if entry.get("review_flagged"):
                 # A flagged definition that was overridden has an outcome once it is decided:
                 # deployed = the override held, rejected/superseded = it did not. Still-open
                 # definitions (proposed/accepted) have no outcome yet and are not counted.

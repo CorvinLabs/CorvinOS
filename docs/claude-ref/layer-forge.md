@@ -201,10 +201,12 @@ Defects found and fixed 2026-10-08 (each has a regression test in `tests/layer_f
   answered "validation failed: missing required field: id". The panel (and its vitest, which had pinned the wrong
   shape) now send the manifest.
 
-**Still not wired (named, not hidden):** `gate_outcome_correlation` reads `_review_verdict`, which nothing writes into
-the registry (only `_created_at` / `_promoted_at` exist), and a failed quality gate refuses the definition rather than
-leaving a record to override. Until a producer exists the gate-threshold suggestion has no live data; the
-function's contract is pinned by tests that supply the field. The rollback audit event is written AFTER the
+**Review outcome (fixed 2026-10-10, ADR-2175 G6):** the analytics read `review_flagged` / `review_flags`, the fields the
+orchestrator persists on the definition when a review is FLAGGED. They used to read a `_review_verdict` record that nothing
+ever wrote, so the weekly decision, flag and gate-correlation figures were always zero in production. A failed quality gate
+still refuses the definition rather than leaving a record to override, so the gate-threshold suggestion rests on flagged,
+overridden definitions only. Learning events are stored under the label `layer_forge` (not a registered Skill, not `os.*`:
+a run takes minutes, far beyond a `Skill.execute()` budget). The rollback audit event is written AFTER the
 pointer moves (the module's "audit-first" rule would reverse that) — a design decision left open.
 
 Tests: the REVIEW phase calls the Anthropic API, the one external boundary. `tests/layer_forge/conftest.py` stubs it

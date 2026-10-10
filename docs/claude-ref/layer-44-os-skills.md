@@ -488,6 +488,15 @@ one generic `PromptSkill`):
 
 Proof: `tests/skills/test_prompt_skill_adapter_e2e.py`, `tests/e2e/test_prompt_skill_injection_gate_bridge_e2e.py` (through `adapter.process_one`, argv dump, verified chain).
 
+### Decisions that are NOT Skills (ADR-2175 G5/G6/G9, 2026-10-10)
+
+- **Layer Forge is not a Skill.** It runs minutes (LLM review, gate tests); `Skill.execute()` is budgeted in seconds.
+  Its learning events carry the label `layer_forge`; there is no `os.layer_forge` and no second outcome emitter.
+- **Review outcome has one home**: `review_flagged` / `review_flags` on the layer definition. No `_review_verdict` record.
+- **Peer turns get no operator skills.** Inbound A2A tasks and agent-conversation turns carry a stranger's words; injecting
+  the operator's skills there would hand over working knowledge. `tests/security/test_a2a_turns_carry_no_operator_skills.py`
+  fails if those modules start reaching the injector.
+
 ---
 
 ## E2E Wiring Proof
