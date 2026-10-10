@@ -12,6 +12,7 @@ import copy
 import importlib
 import io
 import json
+import os
 import sys
 import tempfile
 import types
@@ -185,7 +186,6 @@ class StyleRoutesE2E(unittest.TestCase):
                 "low contrast": low,
                 "unbundled font": font,
                 "bad decor": _wire(decor="<script>"),
-                "plate without safe rect": _wire(plate_png_b64=base64.b64encode(_png((1920, 1080))).decode()),
                 "empty name": _wire(name=""),
             }
             for label, wire in cases.items():
@@ -411,8 +411,8 @@ class StyleRoutesE2E(unittest.TestCase):
 
             saved = _chain_records(home, "tenant_a", "video_producer.style_saved")
             self.assertEqual(len(saved), 1)
-            self.assertEqual({k: saved[0]["details"][k] for k in ("style_id", "source_kind", "has_plate", "has_mark")},
-                             {"style_id": sid, "source_kind": "tokens", "has_plate": False, "has_mark": True})
+            self.assertEqual({k: saved[0]["details"][k] for k in ("style_id", "source_kind", "has_mark")},
+                             {"style_id": sid, "source_kind": "tokens", "has_mark": True})
             self.assertEqual(saved[0]["details"]["tenant_id"], "tenant_a")
             applied = _chain_records(home, "tenant_a", "video_producer.style_applied")
             self.assertEqual([(a["details"]["job_id"], a["details"]["style_id"]) for a in applied], [(job_id, sid), (job2, "corvin")])
@@ -462,6 +462,231 @@ def _plugin_has_no_browser() -> bool:
     import importlib.util
 
     return importlib.util.find_spec("playwright") is None
+
+
+class StyleHardeningE2E(unittest.TestCase):
+    """Defects found by the 2026-10 adversarial reviews, each proven through the real route."""
+    _base = _routes.VideoProducerRoutesE2E
+    setUp, tearDown, _benign_l44 = _base.setUp, _base.tearDown, _base._benign_l44
+    _commit, _job, _stub_importer = StyleRoutesE2E._commit, StyleRoutesE2E._job, StyleRoutesE2E._stub_importer
+
+    def _gates(self, mod):
+        return sys.modules[mod.__name__.rsplit(".", 2)[0] + "._spawn_gates"]
+
+    # 1. the 25 MB import limit must hold BEFORE the multipart body is spooled
+    def _body_cap_case(self, cap_for_name: str):
+        from unittest import mock
+
+        from starlette import formparsers
+
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _clients):
+            mod = _route_module()
+            bc = importlib.import_module("corvin_console.body_cap")
+            mod._previews = _no_previews
+            sp = _plugin("style_pack")
+            entered = []
+
+            def behaviour(data, filename, Err, Result):
+                entered.append(len(data))
+                return Result(sp.draft_from_wire(_wire(), style_id="sty_00000000", imported_at="2026-10-10T00:00:00Z"), [])
+
+            self._stub_importer(behaviour)
+            client.app.middleware("http")(bc.make_body_cap_middleware(getattr(bc, cap_for_name)))
+            parsed = []
+            orig = formparsers.MultiPartParser.parse
+
+            async def spy(self_):
+                parsed.append(1)
+                return await orig(self_)
+
+            url = f"{V}/styles/import"
+            with mock.patch.object(formparsers.MultiPartParser, "parse", spy):
+                huge = b"PK\x03\x04" + b"\0" * (80 * 1024 * 1024)
+                r = client.post(url, files={"file": ("a.pptx", huge)}, headers=H(csrf))
+                self.assertEqual(r.status_code, 413, r.text[:200])
+                self.assertEqual((parsed, entered), ([], []), "the refused body was parsed/spooled or reached the importer")
+                deck = b"PK\x03\x04" + os.urandom(5 * 1024 * 1024)
+                r = client.post(url, files={"file": ("a.pptx", deck)}, headers=H(csrf))
+                self.assertEqual(r.status_code, 200, r.text[:200])
+                self.assertEqual(len(entered), 1)
+            # the JSON routes carry their own 8 MiB budget
+            big = {"draft": _wire(mark_png_b64="A" * (9 * 1024 * 1024))}
+            self.assertEqual(client.post(f"{V}/styles", json=big, headers=H(csrf)).status_code, 413)
+            self.assertEqual(client.post(f"{V}/styles/preview", json=big, headers=H(csrf)).status_code, 413)
+
+    def test_import_body_is_refused_before_spooling_on_the_standalone_host(self):
+        self._body_cap_case("standalone_cap_for")
+
+    def test_import_body_is_refused_before_spooling_on_the_gateway_host(self):
+        self._body_cap_case("gateway_cap_for")
+
+    def test_cap_tables_and_both_hosts_are_wired(self):
+        bc = importlib.import_module("corvin_console.body_cap")
+        mib = 1024 * 1024
+        self.assertGreater(bc.standalone_cap_for(f"{V}/styles/import"), 25 * mib)
+        self.assertLess(bc.standalone_cap_for(f"{V}/styles/import"), 26 * mib)
+        for path in (f"{V}/styles", f"{V}/styles/preview"):
+            self.assertEqual(bc.standalone_cap_for(path), 8 * mib)
+            self.assertEqual(bc.gateway_cap_for(path), 8 * mib)
+        self.assertIsNone(bc.gateway_cap_for("/v1/console/files/upload"))  # the gateway caps only what it names
+        root = Path(__file__).resolve().parents[2]
+        self.assertIn("make_body_cap_middleware(_standalone_cap_for)", (root / "console" / "corvin_console" / "standalone.py").read_text())
+        self.assertIn("make_body_cap_middleware(_body_cap.gateway_cap_for)", (root / "gateway" / "corvin_gateway" / "app.py").read_text())
+
+    # 2. importer CPU
+    def test_imports_are_bounded_and_a_burst_is_refused_not_queued(self):
+        import threading
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _clients):
+            mod = _route_module()
+            mod._previews = _no_previews
+            sp = _plugin("style_pack")
+            lock, state = threading.Lock(), {"now": 0, "max": 0}
+
+            def behaviour(data, filename, Err, Result):
+                with lock:
+                    state["now"] += 1
+                    state["max"] = max(state["max"], state["now"])
+                time.sleep(0.4)
+                with lock:
+                    state["now"] -= 1
+                return Result(sp.draft_from_wire(_wire(), style_id="sty_00000000", imported_at="2026-10-10T00:00:00Z"), [])
+
+            self._stub_importer(behaviour)
+
+            def up(_):
+                return client.post(f"{V}/styles/import", files={"file": ("a.pptx", b"PK\x03\x04xx")}, headers=H(csrf)).status_code
+
+            with ThreadPoolExecutor(14) as ex:
+                codes = list(ex.map(up, range(14)))
+            self.assertLessEqual(state["max"], mod._IMPORT_RUNNING, state)
+            self.assertIn(429, codes, codes)
+            self.assertGreaterEqual(codes.count(200), mod._IMPORT_RUNNING)
+            self.assertEqual(set(codes) - {200, 429}, set())
+            self.assertEqual(mod._import_inflight, 0, "a slot leaked")
+            # a failing importer releases its slot too
+            self._stub_importer(lambda d, f, Err, R: (_ for _ in ()).throw(Err("no")))
+            for _ in range(mod._IMPORT_MAX_INFLIGHT + 2):
+                self.assertEqual(up(0), 422)
+            self.assertEqual(mod._import_inflight, 0)
+
+    # 3. a damaged default never poisons jobs that did not ask for it
+    def test_a_damaged_default_style_falls_back_and_is_reported(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _clients):
+            mod = _route_module()
+            mod._previews = _no_previews
+            runner = _RecordingRunner()
+            mod.get_runner = lambda: runner
+            sid = self._commit(client, csrf, set_default=True).json()["style"]["id"]
+            (home / "tenants" / "_default" / "video_producer" / "styles" / sid / "style.json").write_text("{" + "A" * 300000)
+            lst = client.get(f"{V}/styles").json()
+            self.assertEqual(lst["default_style_id"], sid)
+            self.assertIn("damaged", lst["default_style_error"])
+            r = self._job(client, csrf)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertNotIn("web_style", runner.calls[-1][2])
+            self.assertEqual(self._job(client, csrf, style_id=sid).status_code, 409)
+            self.assertEqual(self._job(client, csrf, style_id="corvin").status_code, 200)
+
+    def test_a_healthy_list_has_no_default_error(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _clients):
+            _route_module()._previews = _no_previews
+            self._commit(client, csrf, set_default=True)
+            self.assertIsNone(client.get(f"{V}/styles").json()["default_style_error"])
+
+    # 4. malformed input is a 4xx
+    def test_malformed_input_is_a_client_error_never_a_500(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _clients):
+            _route_module()._previews = _no_previews
+            hdr = {**H(csrf), "content-type": "application/json"}
+            deep = "[" * 100000 + "]" * 100000
+            for path in ("/styles/preview", "/styles"):
+                r = client.post(f"{V}{path}", content=deep, headers=hdr)
+                self.assertIn(r.status_code, (400, 422), (path, r.status_code))
+            for bad in ([], {}, 7, None):
+                w = _wire()
+                w["tokens"]["typography"]["heading_family"] = bad
+                for path in ("/styles", "/styles/preview"):
+                    r = client.post(f"{V}{path}", json={"draft": w}, headers=H(csrf))
+                    self.assertEqual(r.status_code, 422, (path, bad, r.status_code, r.text[:120]))
+            self.assertEqual(client.get(f"{V}/styles").json()["styles"], [])
+
+    # 5. the preview applies the acceptable-use gate, once per distinct brand text
+    def test_preview_gate_refuses_and_is_cached_per_brand_text(self):
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _clients):
+            mod = _route_module()
+            mod._previews = _no_previews
+            mod._gate_cache.clear()
+            g = self._gates(mod)
+            calls = []
+
+            def refuse(text, **kw):
+                calls.append(text)
+                return "Refused by the acceptable-use policy"
+
+            orig = g.check_console_spawn_or_refusal
+            g.check_console_spawn_or_refusal = refuse
+            self.addCleanup(setattr, g, "check_console_spawn_or_refusal", orig)
+            for _ in range(5):
+                r = client.post(f"{V}/styles/preview", json={"draft": _wire()}, headers=H(csrf))
+                self.assertEqual((r.status_code, r.json()["detail"]), (403, "Refused by the acceptable-use policy"))
+            self.assertEqual(len(calls), 1, "the classifier ran on every keystroke")
+            w = _wire()
+            w["brand"]["wordmark"] = "Another"
+            self.assertEqual(client.post(f"{V}/styles/preview", json={"draft": w}, headers=H(csrf)).status_code, 403)
+            self.assertEqual(len(calls), 2)
+            # a pass is cached as well, and never leaks into another tenant's key
+            g.check_console_spawn_or_refusal = lambda text, **kw: calls.append(text) or None
+            w["brand"]["wordmark"] = "Third"
+            for _ in range(3):
+                self.assertEqual(client.post(f"{V}/styles/preview", json={"draft": w}, headers=H(csrf)).status_code, 200)
+            self.assertEqual(len(calls), 3)
+            # a stored style is exempt (gated at save)
+            self.assertEqual(client.get(f"{V}/styles/sty_00000000/preview").status_code, 404)
+
+    # 6. quota under a concurrent commit burst
+    def test_concurrent_commits_never_exceed_the_quota(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _clients):
+            _route_module()._previews = _no_previews
+            self._benign_l44()
+            sm = _plugin("style_store")
+            with ThreadPoolExecutor(12) as ex:
+                codes = list(ex.map(lambda i: client.post(f"{V}/styles", json={"draft": _wire(name=f"S{i}")}, headers=H(csrf)).status_code, range(12)))
+            self.assertLessEqual(codes.count(201), sm.MAX_STYLES, codes)
+            self.assertEqual(set(codes) - {201, 409}, set(), codes)
+            stored = [p for p in (home / "tenants" / "_default" / "video_producer" / "styles").iterdir() if p.is_dir() and not p.name.startswith(".")]
+            self.assertEqual(len(stored), codes.count(201))
+            self.assertLessEqual(len(stored), sm.MAX_STYLES)
+
+    # 7. a revision whose base snapshot is damaged is a 409, not a silent switch to the built-in look
+    def test_revision_with_a_damaged_snapshot_is_refused(self):
+        from test_video_producer_revision_sources_e2e import _complete_job_with_storyboard
+
+        with _sandbox(Path(tempfile.mkdtemp())) as (client, csrf, home, _clients):
+            mod = _route_module()
+            runner = _RecordingRunner()
+            mod.get_runner = lambda: runner
+            sid = self._commit(client, csrf).json()["style"]["id"]
+            tenant = home / "tenants" / "_default"
+            style = _plugin("style_store").StyleStore(str(tenant / "video_producer")).load(sid)
+            for victim in ("style.json", "logo.png"):
+                base = f"job_{'a' if victim == 'style.json' else 'b'}0000000"
+                _complete_job_with_storyboard(tenant, base, "Explain things.")
+                snap = tenant / "video_producer" / "videos" / base / "style"
+                _plugin("style_store").write_style_snapshot(style, snap)
+                (snap / victim).write_bytes(b"{garbage")
+                r = self._job(client, csrf, base_job_id=base)
+                self.assertEqual(r.status_code, 409, (victim, r.text))
+                self.assertIn("pick a style explicitly", r.json()["detail"])
+                self.assertEqual(runner.calls, [])
+                # an explicit style wins
+                self.assertEqual(self._job(client, csrf, base_job_id=base, style_id="corvin").status_code, 200)
+                self.assertEqual(self._job(client, csrf, base_job_id=base, style_id=sid).status_code, 200)
+                runner.calls.clear()
 
 
 def _chain_records(home: Path, tenant: str, event: str) -> list:

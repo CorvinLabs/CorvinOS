@@ -10,6 +10,7 @@ no tenant can list, read or download another tenant's jobs.
 from __future__ import annotations
 
 import asyncio
+import collections
 import importlib
 import importlib.util
 import logging
@@ -919,7 +920,7 @@ async def submit_scene_feedback(
 
 
 # ── Styles (PLAN-0945 P2) ────────────────────────────────────────────────────
-# A style is the tenant's own look (palette, fonts, logo, decoration, optional background plate).
+# A style is the tenant's own look (palette, fonts, logo, decoration, a logo mark).
 # The client is never trusted: ids, timestamps and provenance are server-made, every draft is fully
 # re-validated by the plugin, and a job can only ever name a style by an id that resolves in THIS
 # tenant's store - no client path, no client tokens.
@@ -932,6 +933,19 @@ _DRAFT_PLACEHOLDER_ID = "sty_00000000"
 _STYLE_NOT_FOUND = "Style not found"
 # One browser per preview, at most this many at once on the whole host.
 _preview_slots = threading.BoundedSemaphore(2)
+# Deck imports are CPU-bound (zip + XML + image work): two at a time host-wide, and a bounded
+# queue behind them, so a burst of uploads cannot starve the event loop's thread pool.
+_IMPORT_RUNNING = 2
+_IMPORT_MAX_INFLIGHT = 8  # running + waiting
+_import_slots = threading.BoundedSemaphore(_IMPORT_RUNNING)
+_import_lock = threading.Lock()
+_import_inflight = 0
+# Acceptable-use verdicts for brand text, so a debounced preview does not respawn the classifier
+# on every keystroke: (tenant, sha256(name+wordmark)) -> (monotonic time, refusal or None).
+_GATE_CACHE_MAX = 128
+_GATE_CACHE_TTL_S = 600.0
+_gate_cache: "collections.OrderedDict[tuple, tuple]" = collections.OrderedDict()
+_gate_cache_lock = threading.Lock()
 
 
 def _style_mod(name: str):
@@ -976,10 +990,25 @@ def _resolve_job_style(rec, style_id: Optional[str], base_job_id: Optional[str])
     if base_job_id:
         # A revision keeps the look of the video it revises: the copy that travelled with it.
         # (A base without a snapshot was built-in, so the tenant default does not apply to it.)
-        sm = _style_mod("style_store")
-        return sm.load_snapshot(_store(rec).videos_dir / base_job_id / "style")
+        sm, sp = _style_mod("style_store"), _style_mod("style_pack")
+        try:
+            return sm.load_snapshot(_store(rec).videos_dir / base_job_id / "style")
+        except sp.StyleError:
+            # Never fall back to the built-in look: the video was NOT built-in, it just cannot be read.
+            raise HTTPException(
+                status_code=409,
+                detail="The original video's style could not be read; pick a style explicitly.",
+            ) from None
     default = _style_store(rec).get_default()
-    return _load_own_style(rec, default) if default else None
+    if not default:
+        return None
+    try:
+        return _load_own_style(rec, default)
+    except HTTPException:
+        # A damaged tenant default must not stop jobs that never asked for it; the styles list
+        # reports it as default_style_error. An EXPLICIT style_id above still answers 409.
+        logger.warning("video producer: the tenant default style is unreadable; using the built-in look")
+        return None
 
 
 async def _read_json_body(request, limit: int = _MAX_STYLE_JSON_BYTES) -> dict:
@@ -995,7 +1024,7 @@ async def _read_json_body(request, limit: int = _MAX_STYLE_JSON_BYTES) -> dict:
             raise HTTPException(status_code=413, detail="Request body is too large")
     try:
         body = json.loads(bytes(buf).decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):
         raise HTTPException(status_code=400, detail="Body must be JSON") from None
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Body must be a JSON object")
@@ -1008,6 +1037,38 @@ def _draft_style(wire: Any, style_id: str = _DRAFT_PLACEHOLDER_ID):
         return sp.draft_from_wire(wire, style_id=style_id, imported_at=_now_iso())
     except sp.StyleError as e:
         raise HTTPException(status_code=422, detail=str(e)) from None
+    except (TypeError, ValueError, RecursionError, AttributeError, KeyError):
+        # Defence in depth: a malformed token shape is the client's mistake, never a 500.
+        raise HTTPException(status_code=422, detail="The style draft is malformed") from None
+
+
+async def _brand_text_refusal(rec, style, chat_key: str, *, cached: bool) -> Optional[str]:
+    """The acceptable-use verdict on the name + wordmark (they end up on screen in every video)."""
+    import hashlib  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    text = f"{style.name}\n{style.wordmark}".strip()
+    key = (rec.tenant_id, hashlib.sha256(text.encode("utf-8")).hexdigest())
+    if cached:
+        with _gate_cache_lock:
+            hit = _gate_cache.get(key)
+            if hit and time.monotonic() - hit[0] < _GATE_CACHE_TTL_S:
+                _gate_cache.move_to_end(key)
+                return hit[1]
+    from .._spawn_gates import check_console_spawn_or_refusal  # noqa: PLC0415
+
+    refusal = await asyncio.to_thread(
+        check_console_spawn_or_refusal, text,
+        tenant_id=rec.tenant_id, persona="assistant", channel="web",
+        chat_key=chat_key, engine_id="video_producer",
+    )
+    if cached:
+        with _gate_cache_lock:
+            _gate_cache[key] = (time.monotonic(), refusal)
+            _gate_cache.move_to_end(key)
+            while len(_gate_cache) > _GATE_CACHE_MAX:
+                _gate_cache.popitem(last=False)
+    return refusal
 
 
 async def _previews(style, themes: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -1029,9 +1090,17 @@ def _public_style(style) -> Dict[str, Any]:
 def list_styles(rec=_SessionRec):
     sm = _style_mod("style_store")
     store = sm.StyleStore(str(_tenant_base(rec)))
+    default_id = store.get_default()
+    default_error = None
+    if default_id:
+        try:
+            store.load(default_id)
+        except Exception:  # noqa: BLE001 - any failure to read it means jobs fall back to the built-in look
+            default_error = "The default style is damaged; videos use the built-in look until you delete it or pick another."
     return {
         "styles": [_public_style(st) for st in store.list()],
-        "default_style_id": store.get_default(),
+        "default_style_id": default_id,
+        "default_style_error": default_error,
         "builtin": {"id": _BUILTIN_STYLE_ID, "name": _BUILTIN_STYLE_NAME},
         "limits": {"max_styles": sm.MAX_STYLES, "max_upload_bytes": _MAX_STYLE_UPLOAD_BYTES},
     }
@@ -1073,8 +1142,27 @@ async def import_style(file: UploadFile = File(...), rec=_SessionRec):
         refuse(400, "The file is empty")
     if not data.startswith(b"PK\x03\x04"):
         refuse(415, "This is not a PowerPoint (.pptx or .potx) file")
+    global _import_inflight
+    with _import_lock:
+        busy = _import_inflight >= _IMPORT_MAX_INFLIGHT
+        if not busy:
+            _import_inflight += 1
+    if busy:
+        raise HTTPException(status_code=429, detail="Too many imports are running; try again in a moment",
+                            headers={"Retry-After": "5"})
+
+    def _import_bounded():
+        # The slot is held and released inside the worker thread, so a cancelled request cannot leak it.
+        global _import_inflight
+        try:
+            with _import_slots:
+                return imp.import_pptx(data, name)
+        finally:
+            with _import_lock:
+                _import_inflight -= 1
+
     try:
-        result = await asyncio.to_thread(imp.import_pptx, data, name)
+        result = await asyncio.to_thread(_import_bounded)
     except sp.StyleError as e:  # PptxImportError is one
         refuse(422, str(e))
     except Exception as e:  # noqa: BLE001 - a hostile deck must not become a 500 with internals
@@ -1092,7 +1180,11 @@ async def import_style(file: UploadFile = File(...), rec=_SessionRec):
 @router.post("/styles/preview")
 async def preview_draft(request: Request, rec=_SessionRec):
     body = await _read_json_body(request)
-    return await _previews(_draft_style(body.get("draft")))
+    style = _draft_style(body.get("draft"))
+    refusal = await _brand_text_refusal(rec, style, "video-style:preview", cached=True)
+    if refusal is not None:
+        raise HTTPException(status_code=403, detail=refusal)
+    return await _previews(style)
 
 
 @router.post("/styles", status_code=201)
@@ -1107,19 +1199,12 @@ async def save_style(request: Request, rec=_SessionRec):
     style = _draft_style(body.get("draft"), style_id)
     if len(store.ids()) >= sm.MAX_STYLES:
         raise HTTPException(status_code=409, detail=f"At most {sm.MAX_STYLES} styles per tenant; delete one first")
-    # The name and wordmark end up on screen in every video: same acceptable-use gate as a task.
-    from .._spawn_gates import check_console_spawn_or_refusal  # noqa: PLC0415
-
-    refusal = await asyncio.to_thread(
-        check_console_spawn_or_refusal, f"{style.name}\n{style.wordmark}".strip(),
-        tenant_id=rec.tenant_id, persona="assistant", channel="web",
-        chat_key=f"video-style:{style_id}", engine_id="video_producer",
-    )
+    refusal = await _brand_text_refusal(rec, style, f"video-style:{style_id}", cached=False)
     if refusal is not None:
         raise HTTPException(status_code=403, detail=refusal)
     if not _audit(rec.tenant_id, "video_producer.style_saved",
                   {"style_id": style_id, "source_kind": style.source.get("kind", "tokens"),
-                   "has_plate": style.plate_png is not None, "has_mark": style.mark_png is not None}):
+                   "has_mark": style.mark_png is not None}):
         raise HTTPException(status_code=503, detail="The style could not be recorded; it was not saved")
     try:
         store.save(style)

@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, ApiError } from "@/lib/api/client";
 import {
-  BUILTIN_STYLE_ID, FONT_FAMILIES, MIN_TEXT_CONTRAST, contrastRatio, importStyleDeck, isHex, removeLogo, setBrand, setColour,
+  BUILTIN_STYLE_ID, FONT_FAMILIES, MIN_DIM_CONTRAST, MIN_HIGHLIGHT_CONTRAST, MIN_MUTED_CONTRAST, MIN_TEXT_CONTRAST, contrastRatio, dimmedText, importStyleDeck, isHex, removeLogo, setBrand, setColour,
   setFamily, setName, setTopLevel,
   type ColourKey, type Draft, type FontRole, type StyleList, type StylePreview, type StyleSummary, type Theme,
 } from "@/lib/api/video-styles";
@@ -99,8 +99,9 @@ export function StyleImportDialog({ file, csrf, onClose, onSaved }: {
   const [previewing, setPreviewing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [previewError, setPreviewError] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const edited = useRef(false);
+  const cardByHand = useRef(false); // once the card colour was chosen here, Background/Text edits stop re-deriving it
 
   useEffect(() => {
     const ac = new AbortController();
@@ -116,10 +117,10 @@ export function StyleImportDialog({ file, csrf, onClose, onSaved }: {
     if (!draft || !edited.current) return;
     const ac = new AbortController();
     const t = setTimeout(() => {
-      setPreviewing(true); setPreviewError(false);
+      setPreviewing(true); setPreviewError(null);
       api<{ previews: StylePreview[] }>(`${BASE}/styles/preview`, { method: "POST", csrf, body: { draft }, signal: ac.signal })
         .then((r) => { setPreviews(r.previews ?? []); })
-        .catch((e) => { if (!ac.signal.aborted) setPreviewError(true); void e; })
+        .catch((e) => { if (!ac.signal.aborted) setPreviewError(msg(e, "")); })
         .finally(() => { if (!ac.signal.aborted) setPreviewing(false); });
     }, 600);
     return () => { clearTimeout(t); ac.abort(); };
@@ -140,7 +141,16 @@ export function StyleImportDialog({ file, csrf, onClose, onSaved }: {
     } catch (e) { setError(msg(e, "The style could not be saved.")); setSaving(false); }
   };
 
-  const hints: Array<[string, ColourKey, ColourKey, number]> = [["Text on background", "text", "bg", MIN_TEXT_CONTRAST], ["Muted text on background", "text_muted", "bg", 3], ["Accent on background", "accent", "bg", 3]];
+  // [id, label, foreground, background, floor]; the floors mirror the server's validate_style.
+  const hints: Array<[string, string, string | undefined, string | undefined, number]> = [
+    ["text", "Text on background", tok.text, tok.bg, MIN_TEXT_CONTRAST],
+    ["text_muted", "Muted text on background", tok.text_muted, tok.bg, MIN_MUTED_CONTRAST],
+    ["card-text", "Text on cards", tok.text, tok.bg_card, MIN_TEXT_CONTRAST],
+    ["card-muted", "Muted text on cards", tok.text_muted, tok.bg_card, MIN_MUTED_CONTRAST],
+    ["accent", "Accent on background", tok.accent, tok.bg, MIN_MUTED_CONTRAST],
+    ["accent_hi", "Accent highlight on background", tok.accent_hi, tok.bg, MIN_HIGHLIGHT_CONTRAST],
+    ["dim", "Out-of-focus items on background", isHex(tok.bg) && isHex(tok.text) ? dimmedText(tok.bg, tok.text) : undefined, tok.bg, MIN_DIM_CONTRAST],
+  ];
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o && !saving) onClose(); }}>
@@ -170,18 +180,20 @@ export function StyleImportDialog({ file, csrf, onClose, onSaved }: {
             )}
 
             <PreviewFrames previews={previews} busy={previewing} loading={false} />
-            {previewError && <p className="text-xs text-muted-foreground" data-testid="preview-error">The previews could not be updated; your edits are kept.</p>}
+            {previewError !== null && <p className="text-xs text-muted-foreground" data-testid="preview-error">
+              {previewError ? `The previews could not be updated: ${previewError}` : "The previews could not be updated; your edits are kept."}</p>}
 
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-sm"><span className="text-xs text-muted-foreground">Name</span>
                 <input value={name} maxLength={60} onChange={(e) => edit((d) => setName(d, e.target.value))} data-testid="style-name" aria-invalid={!name.trim()}
                   className="w-full mt-1 px-3 py-2 rounded-md border border-border bg-background text-sm" /></label>
-              <label className="text-sm"><span className="text-xs text-muted-foreground">Wordmark (shown on the intro)</span>
+              <label className="text-sm"><span className="text-xs text-muted-foreground">Wordmark (shown in the footer of every slide)</span>
                 <input value={draft.brand?.wordmark ?? ""} maxLength={40} onChange={(e) => edit((d) => setBrand(d, "wordmark", e.target.value))} data-testid="style-wordmark"
                   className="w-full mt-1 px-3 py-2 rounded-md border border-border bg-background text-sm" /></label>
               <label className="text-sm"><span className="text-xs text-muted-foreground">Default theme</span>
                 <select value={theme} onChange={(e) => edit((d) => setTopLevel(d, "default_theme", e.target.value))} data-testid="style-theme"
-                  className="w-full mt-1 px-3 py-2 rounded-md border border-border bg-background text-sm"><option value="dark">Dark</option><option value="light">Light</option></select></label>
+                  className="w-full mt-1 px-3 py-2 rounded-md border border-border bg-background text-sm"><option value="dark">Dark</option><option value="light">Light</option></select>
+                <span className="block text-xs text-muted-foreground mt-1" data-testid="theme-help">Videos use this theme throughout.</span></label>
               <label className="text-sm"><span className="text-xs text-muted-foreground">Decoration</span>
                 <select value={draft.decor ?? "minimal"} onChange={(e) => edit((d) => setTopLevel(d, "decor", e.target.value))} data-testid="style-decor"
                   className="w-full mt-1 px-3 py-2 rounded-md border border-border bg-background text-sm">
@@ -196,18 +208,18 @@ export function StyleImportDialog({ file, csrf, onClose, onSaved }: {
                   return (
                     <label key={key} className="flex items-center gap-2 text-sm rounded-md border border-border p-2">
                       <input type="color" value={isHex(v) ? v : "#000000"} aria-label={`${label} colour`} data-testid={`swatch-${key}`}
-                        onChange={(e) => edit((d) => setColour(d, theme, key, e.target.value))} className="h-7 w-9 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0" />
+                        onChange={(e) => { if (key === "bg_card") cardByHand.current = true; const hex = e.target.value; edit((d) => setColour(d, theme, key, hex, { deriveCard: !cardByHand.current })); }} className="h-7 w-9 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0" />
                       <span className="min-w-0"><span className="block truncate">{label}</span><span className="block text-xs text-muted-foreground font-mono">{isHex(v) ? v : "—"}</span></span>
                     </label>
                   );
                 })}
               </div>
               <ul className="text-xs space-y-0.5" data-testid="contrast-hints">
-                {hints.map(([label, fg, bg, min]) => {
-                  if (!isHex(tok[fg]) || !isHex(tok[bg])) return null;
-                  const r = contrastRatio(tok[fg], tok[bg]);
+                {hints.map(([id, label, fg, bg, min]) => {
+                  if (!isHex(fg) || !isHex(bg)) return null;
+                  const r = contrastRatio(fg, bg);
                   const bad = r < min;
-                  return <li key={fg} data-testid={`contrast-${fg}`} className={bad ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}>
+                  return <li key={id} data-testid={`contrast-${id}`} className={bad ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}>
                     {label}: {r.toFixed(1)}:1{bad ? ` — below ${min}:1, this will be hard to read` : ""}</li>;
                 })}
               </ul>
@@ -321,6 +333,7 @@ export function StylesSection({ list, loading, unavailable, csrf, importDisabled
           <Upload className="w-4 h-4" /> Import from PowerPoint…</Button>
       </div>
       {importDisabledReason && <p className="text-xs text-muted-foreground" data-testid="styles-quota">{importDisabledReason}</p>}
+      {list?.default_style_error && <p className="text-xs text-destructive" role="alert" data-testid="styles-default-error">{list.default_style_error}</p>}
       {unavailable ? <p className="text-sm text-muted-foreground" data-testid="styles-unavailable">Custom styles are not available on this installation.</p>
         : loading ? <Skeleton className="h-16 w-full" />
         : (list?.styles.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground" data-testid="styles-empty">No styles yet. Videos use the built-in CorvinOS look.</p>

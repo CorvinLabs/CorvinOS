@@ -95,12 +95,8 @@ def _use_os_trust_store() -> None:
 _use_os_trust_store()
 
 
-class _BodyTooLarge(Exception):
-    """Raised by the streaming body guard when a chunked body exceeds its cap."""
-
-    def __init__(self, cap: int) -> None:
-        super().__init__(f"request body exceeds {cap} bytes")
-        self.cap = cap
+from .body_cap import standalone_cap_for as _standalone_cap_for  # noqa: E402
+from .body_cap import make_body_cap_middleware as _make_body_cap_middleware  # noqa: E402
 
 
 def _tripwire_assert_all() -> None:
@@ -641,71 +637,7 @@ def create_app() -> FastAPI:
     # unbounded, which together with E-02/E-03 was a pre-auth memory DoS.
     # A request with no Content-Length (chunked) is capped by
     # ``_LimitedBodyReceive`` below on the same budget.
-    _BODY_CAP_DEFAULT = 2 * 1024 * 1024
-    _BODY_CAPS = {
-        "/v1/console/voice/transcribe": 25 * 1024 * 1024,
-        "/v1/console/files/upload": 512 * 1024 * 1024,
-        "/v1/console/license/upload": 8 * 1024 * 1024,
-        "/v1/console/packages/upload": 256 * 1024 * 1024,
-        "/v1/console/workflows/import": 64 * 1024 * 1024,
-    }
-    _BODY_CAP_PREFIXES = {
-        # POST /chat/sessions/{sid}/attachments
-        "/v1/console/chat/sessions/": 512 * 1024 * 1024,
-    }
-
-    def _body_cap_for(path: str) -> int:
-        cap = _BODY_CAPS.get(path)
-        if cap is not None:
-            return cap
-        for prefix, pcap in _BODY_CAP_PREFIXES.items():
-            if path.startswith(prefix) and path.endswith("/attachments"):
-                return pcap
-        return _BODY_CAP_DEFAULT
-
-    @app.middleware("http")
-    async def _cap_request_body(request, call_next):  # noqa: ANN001, ANN202
-        cap = _body_cap_for(request.url.path)
-        raw_len = request.headers.get("content-length")
-        if raw_len:
-            try:
-                if int(raw_len) > cap:
-                    return JSONResponse(
-                        status_code=413,
-                        content={"detail": f"request body exceeds {cap} bytes"},
-                    )
-            except ValueError:
-                pass  # unparseable — the streaming guard below still applies
-        # Streaming guard: a body sent without Content-Length (chunked) is
-        # counted as it arrives and cut off at the same budget.
-        received = 0
-        original_receive = request.receive
-
-        async def _limited_receive():  # noqa: ANN202
-            nonlocal received
-            message = await original_receive()
-            if message.get("type") == "http.request":
-                received += len(message.get("body", b""))
-                if received > cap:
-                    raise _BodyTooLarge(cap)
-            return message
-
-        request._receive = _limited_receive  # noqa: SLF001 — Starlette's own hook
-        try:
-            response = await call_next(request)
-        except _BodyTooLarge as exc:
-            return JSONResponse(
-                status_code=413,
-                content={"detail": f"request body exceeds {exc.cap} bytes"},
-            )
-        if received > cap:
-            # FastAPI turns ANY error while reading a body into a 400 ("error
-            # parsing the body"); the byte count is the truth.
-            return JSONResponse(
-                status_code=413,
-                content={"detail": f"request body exceeds {cap} bytes"},
-            )
-        return response
+    app.middleware("http")(_make_body_cap_middleware(_standalone_cap_for))
 
     # Allow the same-origin SPA to call the API in development.
     # In production (serving SPA from the same origin) this is a no-op.

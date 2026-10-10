@@ -750,6 +750,10 @@ try:
         _sys2.path.insert(0, str(_console_path))
     from corvin_console import app as _console_app  # type: ignore[import-not-found]
     app.include_router(_console_app.router, prefix="/v1/console")
+    # The gateway has no global body cap; the style upload paths get the same Content-Length
+    # pre-check the standalone host uses, so a multipart body is refused before it is spooled.
+    from corvin_console import body_cap as _body_cap  # type: ignore[import-not-found]
+    app.middleware("http")(_body_cap.make_body_cap_middleware(_body_cap.gateway_cap_for))
     _console_app.mount_static(app)
     # ADR-0241/0243: in headless mode this process serves no browser surface.
     # mount_static() already declines the SPA; the HTML dashboards below are the

@@ -17,10 +17,10 @@ export interface StyleSummary {
   source: { kind: string; sha256: string | null; deck_aspect: string | null; imported_at: string | null };
   default_theme: Theme; decor: string;
   brand: { wordmark: string; has_mark: boolean; intro_mark: boolean; credit: boolean };
-  plate: unknown; warnings: string[]; mark_data_uri: string | null;
+  warnings: string[]; mark_data_uri: string | null;
 }
 export interface StyleList {
-  styles: StyleSummary[]; default_style_id: string | null;
+  styles: StyleSummary[]; default_style_id: string | null; default_style_error?: string | null;
   builtin: { id: string; name: string }; limits: { max_styles: number; max_upload_bytes: number };
 }
 export interface StylePreview { template: string; theme: string; data_uri: string }
@@ -69,6 +69,27 @@ export function contrastRatio(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 export const MIN_TEXT_CONTRAST = 4.5;
+// Server floors (style_pack.py MIN_TEXT/MIN_MUTED/MIN_CARD_TEXT/MIN_ACCENT/MIN_HIGHLIGHT/MIN_DIM, DIM = 0.38).
+export const MIN_MUTED_CONTRAST = 3;
+export const MIN_HIGHLIGHT_CONTRAST = 1.8;
+export const MIN_DIM_CONTRAST = 2;
+export const DIM_MIX = 0.38;
+
+/** Python's round(): halves go to the even neighbour (style_pack._hex), so the client and server agree on every channel. */
+function roundHalfEven(x: number): number {
+  const f = Math.floor(x);
+  const d = x - f;
+  return d < 0.5 ? f : d > 0.5 ? f + 1 : f % 2 === 0 ? f : f + 1;
+}
+/** `a` moved `t` (0..1) toward `b`; identical to style_pack.mix. */
+export function mix(a: string, b: string, t: number): string {
+  const [r1, g1, b1] = hexToRgb(a);
+  const [r2, g2, b2] = hexToRgb(b);
+  const ch = (x: number, y: number) => Math.max(0, Math.min(255, roundHalfEven(x + (y - x) * t))).toString(16).padStart(2, "0");
+  return `#${ch(r1, r2)}${ch(g1, g2)}${ch(b1, b2)}`;
+}
+/** The colour an out-of-focus item is drawn in (the server's readability rule is contrast(bg, this) >= 2). */
+export const dimmedText = (bg: string, text: string) => mix(bg, text, DIM_MIX);
 
 // ── immutable draft edits (unknown fields are spread through untouched) ──────
 
@@ -79,10 +100,19 @@ export function setBrand(d: Draft, key: "wordmark" | "intro_mark" | "credit", va
 }
 export function removeLogo(d: Draft): Draft { return { ...d, mark_png_b64: null, brand: { ...(d.brand ?? {}), intro_mark: false } }; }
 
-export function setColour(d: Draft, theme: Theme, key: ColourKey, hex: string): Draft {
+/**
+ * `deriveCard` (default true) re-derives the surfaces from Background/Text exactly like the importer does
+ * (style_import_pptx: bg_card = mix(bg, text, 0.05), border = mix(bg, text, 0.14)); pass false once the
+ * card colour was set by hand. The border is always derived (it has no control of its own).
+ */
+export function setColour(d: Draft, theme: Theme, key: ColourKey, hex: string, opts: { deriveCard?: boolean } = {}): Draft {
   const t = d.tokens?.[theme] ?? {};
   const next = { ...t, [key]: hex };
   if (key === "accent") next.glow = accentGlow(hex, t.glow);
+  if ((key === "bg" || key === "text") && isHex(next.bg) && isHex(next.text)) {
+    if (opts.deriveCard !== false) next.bg_card = mix(next.bg, next.text, 0.05);
+    next.border = mix(next.bg, next.text, 0.14);
+  }
   return { ...d, tokens: { ...d.tokens, [theme]: next } };
 }
 

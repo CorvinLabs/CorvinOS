@@ -11,7 +11,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { http, HttpResponse } from "msw";
 import { server } from "../fixtures/server";
-import { accentGlow, contrastRatio, setColour, setFamily, type Draft } from "@/lib/api/video-styles";
+import { accentGlow, contrastRatio, mix, setColour, setFamily, type Draft } from "@/lib/api/video-styles";
 
 vi.mock("recharts", async (importOriginal) => {
   const mod = await importOriginal<typeof import("recharts")>();
@@ -37,11 +37,11 @@ const DRAFT: Draft = {
   fonts: { mapping: [{ from: "Georgia", to: "Newsreader", reason: "closest serif" }, { from: "Verdana", to: "Instrument Sans", reason: "closest sans" }] },
   warnings: ["Embedded fonts were not used."],
   source: { kind: "pptx", sha256: "a".repeat(64), deck_aspect: "16:9", imported_at: null },
-  mark_png_b64: PNG, plate_png_b64: "UExBVEU=", plate_safe: true, x_future_field: { keep: [1, 2, 3] },
+  mark_png_b64: PNG, x_future_field: { keep: [1, 2, 3] },
 };
 const PREVIEWS = ["hero", "diagram", "quote"].map((template) => ({ template, theme: "dark", data_uri: `data:image/png;base64,${PNG}` }));
 const SAVED = { id: "sty_aaaaaaaa", name: "Acme deck", source: { kind: "pptx", sha256: null, deck_aspect: "16:9", imported_at: "2026-10-10T10:00:00Z" }, default_theme: "dark", decor: "minimal",
-  brand: { wordmark: "Acme", has_mark: true, intro_mark: true, credit: false }, plate: null, warnings: [], mark_data_uri: `data:image/png;base64,${PNG}` };
+  brand: { wordmark: "Acme", has_mark: true, intro_mark: true, credit: false }, warnings: [], mark_data_uri: `data:image/png;base64,${PNG}` };
 const LIST_EMPTY = { styles: [], default_style_id: null, builtin: { id: "corvin", name: "CorvinOS" }, limits: { max_styles: 3, max_upload_bytes: 26214400 } };
 const LIST_ONE = { ...LIST_EMPTY, styles: [SAVED] };
 const JOBS = { total: 1, jobs: [{ id: "job_1", task: "HTTP vs HTTPS", status: "complete", created_at: "2026-09-13T08:11:46", percent: 100 }] };
@@ -52,6 +52,7 @@ let importPreviews: any[] = PREVIEWS;
 let saveStatus = 201;
 let stylesStatus = 200;
 let importRefusal: string | null = null;
+let previewRefusal: string | null = null;
 
 function handlers() {
   return [
@@ -63,7 +64,7 @@ function handlers() {
     http.get(`${B}/styles`, () => (stylesStatus === 200 ? HttpResponse.json(list) : HttpResponse.json({ detail: "n/a" }, { status: stylesStatus }))),
     http.get(`${B}/styles/:id/preview`, () => HttpResponse.json({ previews: PREVIEWS })),
     http.post(`${B}/styles/import`, async () => { calls.imports++; if (importRefusal) return HttpResponse.json({ detail: importRefusal }, { status: 415 }); return HttpResponse.json({ draft: DRAFT, previews: importPreviews, notes: ["The deck has 12 slides."] }); }),
-    http.post(`${B}/styles/preview`, async ({ request }) => { calls.previews.push(await request.json()); return HttpResponse.json({ previews: PREVIEWS }); }),
+    http.post(`${B}/styles/preview`, async ({ request }) => { calls.previews.push(await request.json()); if (previewRefusal) return HttpResponse.json({ detail: previewRefusal }, { status: 422 }); return HttpResponse.json({ previews: PREVIEWS }); }),
     http.post(`${B}/styles`, async ({ request }) => {
       calls.saves.push({ csrf: request.headers.get("x-csrf-token"), body: await request.json() });
       return saveStatus === 201 ? HttpResponse.json({ style: SAVED }, { status: 201 }) : HttpResponse.json({ detail: "This style name is not allowed." }, { status: saveStatus });
@@ -80,7 +81,7 @@ function renderIt(search = "") {
   return render(<MemoryRouter initialEntries={[`/app/video-producer${search}`]}><QueryClientProvider client={qc}><VideoProducerPage /></QueryClientProvider></MemoryRouter>);
 }
 afterEach(() => {
-  cleanup(); list = LIST_EMPTY; importPreviews = PREVIEWS; saveStatus = 201; stylesStatus = 200; importRefusal = null;
+  cleanup(); list = LIST_EMPTY; importPreviews = PREVIEWS; saveStatus = 201; stylesStatus = 200; importRefusal = null; previewRefusal = null;
   Object.assign(calls, { extract: 0, previews: [], saves: [], jobs: [], puts: [], deletes: [], imports: 0 });
 });
 const deck = (name = "brand.pptx") => new File(["PK"], name);
@@ -223,7 +224,7 @@ describe("import dialog", () => {
     expected.tokens.typography.body_family = "Newsreader";
     expected.fonts.mapping[1] = { from: "Verdana", to: "Newsreader", reason: "Chosen by you" };
     expected.brand.credit = true;
-    expect(body.draft).toEqual(expected); // incl. plate_png_b64, plate_safe, source, x_future_field
+    expect(body.draft).toEqual(expected); // incl. source and x_future_field
     await waitFor(() => expect(screen.queryByTestId("style-dialog")).toBeNull());
   });
 
@@ -308,5 +309,80 @@ describe("styles list and limits", () => {
     fireEvent.click(await screen.findByTestId("styles-toggle"));
     expect((await screen.findByTestId("styles-unavailable")).textContent).toMatch(/not available on this installation/);
     expect((screen.getByTestId("styles-import") as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe("style editing parity with the server rules", () => {
+  it("mix() matches style_pack.mix (Python rounding included)", () => {
+    expect(mix("#101820", "#f2f2f2", 0.05)).toBe("#1b232a");
+    expect(mix("#101820", "#f2f2f2", 0.14)).toBe("#30373d");
+    expect(mix("#ffffff", "#111111", 0.05)).toBe("#f3f3f3");
+    expect(mix("#101820", "#ffffff", 0.38)).toBe("#6b7075");
+    expect(mix("#000000", "#010101", 0.5)).toBe("#000000");
+  });
+
+  it("Background/Text edits re-derive the card and border like the importer; a hand-set card is kept", () => {
+    const a = setColour(DRAFT, "dark", "bg", "#101820");
+    expect(a.tokens.dark.bg_card).toBe("#1b232a");
+    expect(a.tokens.dark.border).toBe(mix("#101820", "#f2f2f2", 0.14));
+    const b = setColour(DRAFT, "dark", "text", "#ffffff", { deriveCard: false });
+    expect(b.tokens.dark.bg_card).toBe(DRAFT.tokens.dark.bg_card);
+    expect(b.tokens.dark.border).toBe(mix("#101820", "#ffffff", 0.14));
+  });
+
+  it("the dialog re-derives surfaces until the card colour is set by hand", async () => {
+    renderIt();
+    await openDialog();
+    fireEvent.change(screen.getByTestId("swatch-bg"), { target: { value: "#000000" } });
+    fireEvent.click(screen.getByTestId("style-save"));
+    await waitFor(() => expect(calls.saves).toHaveLength(1));
+    expect(calls.saves[0].body.draft.tokens.dark.bg_card).toBe(mix("#000000", "#f2f2f2", 0.05));
+    cleanup(); Object.assign(calls, { saves: [], previews: [] });
+    renderIt();
+    await openDialog();
+    fireEvent.change(screen.getByTestId("swatch-bg_card"), { target: { value: "#123456" } });
+    fireEvent.change(screen.getByTestId("swatch-bg"), { target: { value: "#000000" } });
+    fireEvent.click(screen.getByTestId("style-save"));
+    await waitFor(() => expect(calls.saves).toHaveLength(1));
+    expect(calls.saves[0].body.draft.tokens.dark.bg_card).toBe("#123456");
+  });
+
+  it("the full set of readability hints is shown and the new ones warn", async () => {
+    renderIt();
+    await openDialog();
+    for (const id of ["text", "text_muted", "card-text", "card-muted", "accent", "accent_hi", "dim"]) {
+      expect(screen.getByTestId(`contrast-${id}`)).toBeInTheDocument();
+    }
+    // bg and text almost equal: the card text, the out-of-focus rule and the muted text all fail
+    fireEvent.change(screen.getByTestId("swatch-text"), { target: { value: "#1b2430" } });
+    expect(screen.getByTestId("contrast-card-text").textContent).toMatch(/below 4\.5:1/);
+    expect(screen.getByTestId("contrast-dim").textContent).toMatch(/below 2:1/);
+    fireEvent.change(screen.getByTestId("swatch-accent_hi"), { target: { value: "#101820" } });
+    expect(screen.getByTestId("contrast-accent_hi").textContent).toMatch(/below 1\.8:1/);
+  });
+
+  it("a server refusal of the preview is shown with its reason", async () => {
+    previewRefusal = "dark: text on a card is 2.10:1, needs 4.5:1";
+    renderIt();
+    await openDialog();
+    fireEvent.click(screen.getByTestId("style-credit"));
+    await waitFor(() => expect(screen.getByTestId("preview-error").textContent).toMatch(/text on a card is 2\.10:1/), { timeout: 3000 });
+  });
+
+  it("the logo toggle refreshes the preview, and the copy says what the server does", async () => {
+    renderIt();
+    await openDialog();
+    expect(screen.getByText("Wordmark (shown in the footer of every slide)")).toBeInTheDocument();
+    expect(screen.getByTestId("theme-help").textContent).toBe("Videos use this theme throughout.");
+    fireEvent.click(screen.getByTestId("style-intro-mark"));
+    await waitFor(() => expect(calls.previews).toHaveLength(1), { timeout: 3000 });
+    expect(calls.previews[0].draft.brand.intro_mark).toBe(false);
+  });
+
+  it("a damaged default is reported in the styles list", async () => {
+    list = { ...LIST_ONE, default_style_error: "The default style is damaged; videos use the built-in look until you delete it or pick another." };
+    renderIt();
+    fireEvent.click(await screen.findByTestId("styles-toggle"));
+    expect((await screen.findByTestId("styles-default-error")).textContent).toMatch(/damaged/);
   });
 });
