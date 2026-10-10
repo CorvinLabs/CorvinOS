@@ -14,9 +14,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_video_producer_routes_e2e import (  # noqa: E402
-    VideoProducerRoutesE2E as _Base, _RecordingRunner, _route_module, _sandbox, _write_tenant_yaml,
-)
+import test_video_producer_routes_e2e as _routes  # noqa: E402  (module import: pytest must not collect its TestCase again)
+from test_video_producer_routes_e2e import _RecordingRunner, _route_module, _sandbox, _write_tenant_yaml  # noqa: E402
 
 H = lambda csrf: {"X-CSRF-Token": csrf}  # noqa: E731
 
@@ -36,7 +35,8 @@ def _complete_job_with_storyboard(rec_tenant_home: Path, job_id: str, task: str)
 
 
 class RevisionAndSourcesE2E(unittest.TestCase):
-    setUp, tearDown, _benign_l44, _create = _Base.setUp, _Base.tearDown, _Base._benign_l44, _Base._create
+    _base = _routes.VideoProducerRoutesE2E
+    setUp, tearDown, _benign_l44, _create = _base.setUp, _base.tearDown, _base._benign_l44, _base._create
 
     def _post(self, client, csrf, body):
         self._benign_l44()

@@ -459,17 +459,25 @@ def _record_revision(rec, job_id: str, base_job_id: str) -> None:
 
     base = _tenant_base(rec)
     base.mkdir(parents=True, exist_ok=True)
-    data = _revisions(rec)
-    data[job_id] = base_job_id
-    fd, tmp = tempfile.mkstemp(dir=base, prefix=".revisions.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, base / _REVISIONS_FILE)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    # read-modify-write under a cross-process lock where the platform has one (two host processes can share a tenant)
+    with open(base / ".revisions.lock", "a") as lock_fh:
+        try:
+            import fcntl  # noqa: PLC0415
+
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        except ImportError:  # Windows: the single-process event loop already serialises this function
+            pass
+        data = _revisions(rec)
+        data[job_id] = base_job_id
+        fd, tmp = tempfile.mkstemp(dir=base, prefix=".revisions.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, base / _REVISIONS_FILE)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
 
 def _revision_brief(base_job, instruction: str) -> str:
