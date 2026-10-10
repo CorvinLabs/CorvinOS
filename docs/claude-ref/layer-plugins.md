@@ -71,6 +71,13 @@ page `core/console/corvin_console/web-next/src/pages/personas.tsx`):
 
 ## Auto-routing (layer 5) — the default since cowork v0.2
 
+> **ADR-0537 (accepted 2026-10-10): persona routing is eliminated.** On this
+> install the router branch is unreachable — the only persona file
+> (`assistant.json`) has no `zero_config`, so the routable pool is empty and
+> every unpinned turn takes `_fallback_identity()`. The router modules, the
+> `router_backend` plugin type's consumer and the dialectic `auto_routing` site
+> are scheduled for removal (KB tasks under ADR-0537); do not build on them.
+
 When a chat has **no** explicit persona pinned and cowork is installed,
 the adapter calls `_apply_auto_routing()`, which in turn asks
 `router.route()` (Haiku) and merges the result into the profile — before
@@ -105,9 +112,17 @@ the adapter calls `_apply_auto_routing()`, which in turn asks
 - **A turn without a pinned persona always leaves routing with a persona
   identity** — also when the router is skipped (cowork/router not importable,
   `routing.mode` = `"off"`, no routable personas installed) or the chosen
-  persona has no config on disk. In those cases `_fallback_identity()` sets only
-  `_auto_routed` (+ why/confidence) and merges no persona config: no prompt, no
-  tools, no reply prefix. Reason: the explicit-skill namespace gate
+  persona has no config on disk. In those cases `_fallback_identity()` sets
+  `_auto_routed` (+ why/confidence) and — since 2026-10-10 (ADR-0537 accepted) —
+  lays the identity's **capability profile** over the chat profile
+  (`cowork.resolve("assistant", overrides=profile)`, the same profile the console
+  uses): forge, skill-forge and orchestration MCP servers, capability awareness.
+  No reply prefix. Before that it merged nothing, so every unpinned Discord turn
+  ran without Forge/SkillForge (`test_adapter_fallback_persona.py` now asserts
+  the real `--mcp-config`). No file for the identity → identity only, as
+  before. A chat the operator restricted (`allowed_tools` / `disallowed_tools` /
+  `permission_mode`) and `routing.mode = off` stay identity-only — the profile is
+  never widened. Reason for the identity itself: the explicit-skill namespace gate
   (`skill_inject._persona_namespace`) is fail-closed on an unresolved persona;
   after every persona JSON was removed (c93ef9915) turns had NO persona and
   every explicit skill request was refused as `persona_unresolved`

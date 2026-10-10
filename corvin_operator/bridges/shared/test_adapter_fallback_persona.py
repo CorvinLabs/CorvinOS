@@ -53,7 +53,7 @@ def _fresh_adapter(env_overrides: dict[str, str]):
     return importlib.import_module("adapter")
 
 
-def _run_turn(text: str, mode: str) -> tuple[list[dict], dict]:
+def _run_turn(text: str, mode: str, *, with_args: bool = False):
     base = Path(tempfile.mkdtemp(prefix="adapter-fallback-persona-"))
     for d in ("inbox", "outbox", "processed"):
         (base / d).mkdir()
@@ -86,6 +86,10 @@ def _run_turn(text: str, mode: str) -> tuple[list[dict], dict]:
         adapter.process_one(in_file, settings={"whitelist": ["u-1"], "voice_summary_mode": "never"})
         events = [json.loads(line) for line in audit_path.read_text().splitlines() if line.strip()] \
             if audit_path.exists() else []
+        if with_args:
+            dumps = [json.loads(l) for l in (base / "args.jsonl").read_text().splitlines() if l.strip()] \
+                if (base / "args.jsonl").exists() else []
+            return events, dict(skill_inject._request_diag_counts), dumps
         return events, dict(skill_inject._request_diag_counts)
     finally:
         for k, v in prev.items():
@@ -117,8 +121,45 @@ def test_gate_stays_closed_outside_the_namespace():
       diag.get("wrong_namespace", 0) >= 1 and diag.get("persona_unresolved", 0) == 0, detail=str(diag))
 
 
+def _mcp_servers(argv: list[str]) -> dict:
+    if "--mcp-config" not in argv:
+        return {}
+    cfg = argv[argv.index("--mcp-config") + 1]
+    try:
+        return (json.loads(Path(cfg).read_text()) or {}).get("mcpServers") or {}
+    except (OSError, ValueError):
+        # inline JSON form
+        try:
+            return (json.loads(cfg) or {}).get("mcpServers") or {}
+        except ValueError:
+            return {}
+
+
+def test_unpinned_turn_gets_the_capability_profile():
+    """ADR-0537 (accepted 2026-10-10): no persona routing, but every unpinned
+    turn carries the one capability profile the console uses. Until then the
+    fallback set only the identity, so Discord turns had no Forge/SkillForge
+    MCP server and no forged tools."""
+    print("\n[unpinned turn → capability profile]")
+    _events, _diag, dumps = _run_turn("hello there", "heuristic", with_args=True)
+    t("fake CLI argv was dumped", bool(dumps), detail=str(len(dumps)))
+    if not dumps:
+        return
+    prof, argv = dumps[-1]["profile"] or {}, dumps[-1]["args"]
+    t("profile carries forge_enabled + skill_forge_enabled",
+      bool(prof.get("forge_enabled")) and bool(prof.get("skill_forge_enabled")),
+      detail=str({k: prof.get(k) for k in ("forge_enabled", "skill_forge_enabled", "_auto_routed")}))
+    servers = _mcp_servers(argv)
+    t("real argv carries the forge + skill_forge MCP servers",
+      "forge" in servers and "skill_forge" in servers, detail=str(sorted(servers)))
+    env = (servers.get("forge") or {}).get("env") or {}
+    t("forge MCP runs as the fallback identity (namespace gate)",
+      env.get("FORGE_PERSONA") == "assistant", detail=str(env.get("FORGE_PERSONA")))
+
+
 if __name__ == "__main__":
     test_fallback_identity_restored()
     test_gate_stays_closed_outside_the_namespace()
+    test_unpinned_turn_gets_the_capability_profile()
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

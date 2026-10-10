@@ -2052,10 +2052,36 @@ def _apply_auto_routing(prompt: str, channel: str, chat_key: str,
 def _fallback_identity(profile: dict, cfg: dict, why: str, *,
                        persona: str | None = None, confidence: float = 0.0) -> dict:
     """The profile, marked as routed to *persona* (default: the configured
-    fallback) WITHOUT merging any persona config — there is none to merge.
-    Sets only the identity fields; no reply prefix, no tools, no prompt."""
+    fallback), carrying that identity's capability profile.
+
+    ADR-0537 (accepted 2026-10-10): there is no persona ROUTING any more, but
+    every unpinned turn gets the one capability profile the console already
+    uses (``cowork.resolve("assistant")`` — forge, skill-forge, orchestration,
+    capability awareness, each with its MCP stanza). Until 2026-10-10 this
+    function set only the identity, so every unpinned bridge turn ran without
+    the Forge / SkillForge MCP servers that 14fbb749f restored for the console.
+    ``resolve`` returns only the keys it knows, so the chat profile stays the
+    base and the resolved capability keys are laid over it (inside ``resolve``
+    the chat profile already wins on every scalar it sets). No file for the
+    identity → the profile is returned with the identity only, as before.
+
+    Never widened: a chat the operator RESTRICTED (``allowed_tools``,
+    ``disallowed_tools`` or ``permission_mode`` in its chat profile) keeps
+    exactly that profile — merging would union the Forge tools into a
+    read-only chat. ``routing.mode = off`` keeps its meaning "apply no
+    persona config". Both stay identity-only."""
     name = persona or cfg.get("fallback_persona") or "assistant"
-    return {**profile, "_auto_routed": name, "_auto_routed_why": why,
+    base = profile
+    restricted = any(profile.get(k) is not None
+                     for k in ("allowed_tools", "disallowed_tools", "permission_mode"))
+    if _cowork is not None and not restricted and cfg.get("mode") != "off":
+        try:
+            resolved = _cowork.resolve(name, overrides=profile)
+            if isinstance(resolved, dict) and resolved.get("_persona"):
+                base = {**profile, **resolved}
+        except Exception as e:  # noqa: BLE001
+            log(f"capability profile {name!r} unavailable: {e}")
+    return {**base, "_auto_routed": name, "_auto_routed_why": why,
             "_auto_routed_confidence": confidence}
 
 
