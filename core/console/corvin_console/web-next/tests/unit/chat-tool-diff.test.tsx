@@ -55,6 +55,18 @@ describe("chat tool diff (ADR-2241)", () => {
     expect(toolPart().diff).toBe(DIFF);
   });
 
+  it("shows a Bash card's multi-file diff, each hunk naming its file (ADR-2241 amendment)", () => {
+    const ws = FakeSocket.last!;
+    const bashDiff = "@@ a.py -1,2 +1,2 @@\n x = 1\n-y = 2\n+y = 3\n@@ b.txt -0,0 +1 @@\n+new";
+    ws.emit({ type: "tool_use", name: "Bash", input: { command: "sed -i s/2/3/ a.py" }, id: "toolu_b1" });
+    ws.emit({ type: "tool_diff", id: "toolu_b1", diff: bashDiff, diff_truncated: false });
+    expect(toolPart().diff).toBe(bashDiff);
+    const kinds = classifyDiffLines(bashDiff).map((l) => l.kind);
+    expect(kinds).toEqual(["hunk", "ctx", "del", "add", "hunk", "add"]);
+    render(<ToolUseCard part={toolPart()} />);
+    expect(screen.getByTestId("tool-diff").textContent).toContain("@@ b.txt");
+  });
+
   it("carries a withheld reason instead of text", () => {
     const ws = FakeSocket.last!;
     ws.emit({ type: "tool_use", name: "Write", input: { file_path: ".env" }, id: "toolu_2" });

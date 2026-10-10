@@ -1137,6 +1137,23 @@ NOT gated (owner-only surface; see ADR-2241 Consequences). The diff is stored on
 never a text part, so `records_from_turn_log` (text only) never re-supplies it to the worker,
 and the audit chain keeps tool name + sequence only. The card renders it red/green
 (`--diff-add` / `--diff-del` tokens) under a "Show changes" checkbox, checked by default.
+**Bash changes (ADR-2241 amendment, 2026-10-10).** A `Bash` command (`sed -i`, a python
+heredoc, `cat >`) has no `structuredPatch`, so its change is rebuilt from the files the command
+NAMES, before vs. after — `console/corvin_console/bash_diff.py`. The console passes the CLI
+`--settings <per-turn dir>/hook-settings.json` installing a `PreToolUse` hook on Bash (the same
+file run as a script); the hook writes `<tool_use_id>.json` into `$CORVIN_BASH_DIFF_DIR` BEFORE
+the command runs (a hook finishes before the tool starts — a snapshot taken when the stream
+event arrives could race it). After the tool's result the console re-reads the same paths
+(`asyncio.to_thread`), diffs (`difflib`, hunk headers `@@ <file> -a,b +c,d @@`), and feeds the
+lines through the SAME bound + `code_secrets` gate + per-turn budget as an Edit
+(`_finalize_diff_lines`). The hook never denies and never raises: a failure means no diff, never
+a wrong one. Limits, stated: only files the command names (not a glob, `git checkout`, a build
+tool's output); ≤12 files, ≤256 KB, ≤4000 lines each; no binaries; no `.git`/`node_modules`/
+credential-named files (`.env`, `*.pem`, `id_rsa`, `*secret*` …); a concurrent writer of the same
+file inside the tool window is attributed to the command. The snapshot dir is `0700`, removed in
+the turn's `finally`, stale ones swept after 6 h. A failed command still shows what actually
+changed. E2E: `core/console/tests/test_bash_diff.py` (a real subprocess that runs the real hook
+and the real shell like the CLI does).
 E2E: `core/console/tests/test_chat_diff_e2e.py` (real subprocess replaying a stream captured
 from the claude CLI), `web-next/tests/unit/chat-tool-diff.test.tsx`.
 

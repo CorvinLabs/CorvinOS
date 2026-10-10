@@ -4267,6 +4267,12 @@ def _tool_result_diff(result: Any) -> "dict[str, Any] | None":
             return None
         lines.append(f"@@ -0,0 +1,{n} @@")
         lines.extend("+" + x for x in content.split("\n", _DIFF_MAX_LINES + 1)[:min(n, _DIFF_MAX_LINES + 1)])
+    return _finalize_diff_lines(lines)
+
+
+def _finalize_diff_lines(lines: "list[str]") -> "dict[str, Any] | None":
+    """Bound + credential-gate diff lines (shared by the Edit/Write result and
+    the Bash snapshot diff, so both go through the SAME fail-closed gate)."""
     if not lines:
         return None
     truncated = len(lines) > _DIFF_MAX_LINES
@@ -7428,6 +7434,21 @@ async def _stream_turn_impl(
     # session workdir and write WDAT run directories for the Audit graph.
     # Per-subprocess env copy keeps concurrent sessions isolated.
     _spawn_env = {**os.environ, "CORVIN_SESSION_DIR": str(sess.workdir)}
+    # ADR-2241 amendment: a PreToolUse hook on Bash snapshots the files a command
+    # names BEFORE it runs, so its card can show what it changed. Per-turn dir,
+    # removed in the turn's `finally`; a failure here only means "no Bash diff".
+    _bash_snap = ""
+    try:
+        from . import bash_diff as _bash_diff  # noqa: PLC0415
+        _bash_snap = _bash_diff.make_snap_dir()
+        _bash_settings = Path(_bash_snap) / "hook-settings.json"
+        _bash_settings.write_text(_bash_diff.hook_settings_json(), encoding="utf-8")
+        args += ["--settings", str(_bash_settings)]
+        _spawn_env[_bash_diff.SNAP_ENV] = _bash_snap
+    except Exception:  # noqa: BLE001
+        if _bash_snap:
+            _bash_diff.remove_snap_dir(_bash_snap)
+        _bash_snap = ""
     _spawn_kwargs: dict[str, Any] = dict(
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
@@ -7463,10 +7484,14 @@ async def _stream_turn_impl(
                 "To fix: install it from https://claude.ai/code, then restart the server, "
                 "and check the engine setup on Setup → Engines."
             )
+        if _bash_snap:
+            _bash_diff.remove_snap_dir(_bash_snap)
         yield {"type": "error", "message": msg}
         yield {"type": "done"}
         return
     except OSError as e:
+        if _bash_snap:
+            _bash_diff.remove_snap_dir(_bash_snap)
         yield {"type": "error", "message": f"subprocess spawn failed: {e}"}
         yield {"type": "done"}
         return
@@ -7528,6 +7553,7 @@ async def _stream_turn_impl(
     # replayed verbatim on re-open.
     assistant_parts: list[dict[str, Any]] = []
     _diff_parts: dict[str, dict[str, Any]] = {}  # ADR-2241: tool_use id -> its card
+    _bash_ids: set[str] = set()                  # ADR-2241 amendment: ids of Bash cards
     _diff_budget = _DIFF_TURN_BUDGET
     # `last_usage` is initialised at the top of this function (see the comment
     # there) — it must NOT be re-bound here, or the early-emit paths above go
@@ -7623,6 +7649,12 @@ async def _stream_turn_impl(
                                 # result (user event below), keyed by this id.
                                 event_payload["id"] = tool_id
                                 _diff_parts[tool_id] = event_payload
+                            elif tool_id and tname == "Bash" and _bash_snap:
+                                # ADR-2241 amendment: its diff is rebuilt from the
+                                # hook's pre-run snapshot of the files it names.
+                                event_payload["id"] = tool_id
+                                _diff_parts[tool_id] = event_payload
+                                _bash_ids.add(tool_id)
                             assistant_parts.append(event_payload)
                             # GDPR Art. 5 data-minimisation: record tool name only,
                             # never tool input (may contain paths, vault secrets).
@@ -7650,7 +7682,14 @@ async def _stream_turn_impl(
                 _tr_ids = [b.get("tool_use_id") for b in ((evt.get("message") or {}).get("content") or [])
                            if isinstance(b, dict) and b.get("type") == "tool_result"]
                 _part = _diff_parts.pop(_tr_ids[0], None) if len(_tr_ids) == 1 else None
-                _fields = _tool_result_diff(evt.get("tool_use_result")) if _part is not None else None
+                if _part is not None and _tr_ids[0] in _bash_ids:
+                    # Bash: file IO + difflib off the event loop (a stalled loop
+                    # stalls every chat); same bound + credential gate as Edit.
+                    _bash_ids.discard(_tr_ids[0])
+                    _bl = await asyncio.to_thread(_bash_diff.diff_from_snapshot, _bash_snap, _tr_ids[0])
+                    _fields = _finalize_diff_lines(_bl) if _bl else None
+                else:
+                    _fields = _tool_result_diff(evt.get("tool_use_result")) if _part is not None else None
                 if _fields and len(_fields.get("diff", "")) > _diff_budget:
                     _fields = {"diff_withheld": "turn_budget"}
                 if _fields:
@@ -7763,6 +7802,8 @@ async def _stream_turn_impl(
         # the honest invariant to keep.
         if _bg_watch is not None:                                                # ADR-2236
             _bg_watch.cancel()                                                   # ADR-2236
+        if _bash_snap:
+            _bash_diff.remove_snap_dir(_bash_snap)   # ADR-2241 amendment
         if _btw_stdin_registered:
             _unregister_stdin_web(sess.chat_key)
         if not _stdout_drained_normally:
