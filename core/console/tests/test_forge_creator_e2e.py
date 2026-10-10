@@ -67,7 +67,7 @@ class ScriptedEngine:
     engine_id = "scripted"
     model = "scripted-model"
 
-    def __init__(self, **script: str):
+    def __init__(self, **script):
         self.messages = self
         self.script = script
         self.prompts: list[str] = []
@@ -78,11 +78,16 @@ class ScriptedEngine:
         if "reviewer focused on" in prompt:
             dim = prompt.split("reviewer focused on ", 1)[1].split(".", 1)[0].lower()
             reply = self.script.get(f"review_{dim}", "VERDICT: REFUTED")
+            if isinstance(reply, list):  # a sequence of replies; the last one repeats
+                reply = reply.pop(0) if len(reply) > 1 else reply[0]
             if reply == "RAISE":
                 raise RuntimeError("reviewer crashed")
             return _Reply(reply)
         if "Design a small, single-purpose tool" in prompt:
-            return _Reply(self.script.get("tool_plan", tool_plan(GOOD_IMPL)))
+            reply = self.script.get("tool_plan", tool_plan(GOOD_IMPL))
+            if isinstance(reply, list):
+                reply = reply.pop(0) if len(reply) > 1 else reply[0]
+            return _Reply(reply)
         if "violates its contract" in prompt:
             return _Reply(self.script.get("tool_repair", tool_plan(GOOD_IMPL)))
         if "fails its own test cases" in prompt:
@@ -544,3 +549,154 @@ def test_run_record_is_not_readable_across_tenants_or_by_guessed_path(tmp_path):
         poll(client, run_id)
         assert client.get("/v1/console/forge-creator/status/..%2F..%2Fx").status_code == 404
         assert oct(_run_file(client, run_id).stat().st_mode & 0o777) == "0o600"
+
+
+# ── Tool Forge robustness: every tool must be able to finish (review gate) ──
+
+SMA_IMPL = ("import json, sys\n"
+            "d = json.load(sys.stdin)\n"
+            "c = [float(x['Close']) for x in d['bars']]\n"
+            "n = int(d.get('fast', 2))\n"
+            "sig = [sum(c[i-n+1:i+1]) / n for i in range(n-1, len(c))]\n"
+            "print(json.dumps({'ok': True, 'signals': len(sig), 'last_close': c[-1]}))\n")
+SMA_SCHEMA = {"type": "object", "required": ["bars"],
+              "properties": {"bars": {"type": "array"}, "fast": {"type": "integer"}}}
+SMA_CASES = [{"input": {"bars": [{"Close": 1}, {"Close": 2}, {"Close": 3}], "fast": 2},
+              "expect": {"ok": True, "signals": 2, "last_close": 3.0}},
+             {"input": {"bars": [{"Close": 5}, {"Close": 7}], "fast": 2},
+              "expect": {"ok": True, "signals": 1, "last_close": 7.0}}]
+UPPER_IMPL = ("import json, sys\n"
+              "d = json.load(sys.stdin)\n"
+              "print(json.dumps({'upper': d['text'].upper()}))\n")
+UPPER_CASES = [{"input": {"text": "ab"}, "expect": {"upper": "AB"}},
+               {"input": {"text": ""}, "expect": {"upper": ""}}]
+SUM_IMPL = ("import json, sys\n"
+            "d = json.load(sys.stdin)\n"
+            "print(json.dumps({'total': sum(d['numbers'])}))\n")
+SUM_SCHEMA = {"type": "object", "required": ["numbers"], "properties": {"numbers": {"type": "array"}}}
+SUM_CASES = [{"input": {"numbers": [1, 2, 3]}, "expect": {"total": 6}},
+             {"input": {"numbers": []}, "expect": {"total": 0}}]
+
+
+def _plan(name, impl, cases, schema=SCHEMA):
+    return json.dumps({"name": name, "description": "A small deterministic helper tool.",
+                       "input_schema": schema, "impl": impl, "test_cases": cases})
+
+
+@pytest.mark.parametrize("name,plan", [
+    ("assistant.sma_signals", _plan("assistant.sma_signals", SMA_IMPL, SMA_CASES, SMA_SCHEMA)),
+    ("assistant.shout", _plan("assistant.shout", UPPER_IMPL, UPPER_CASES)),
+    ("assistant.sum_numbers", _plan("assistant.sum_numbers", SUM_IMPL, SUM_CASES, SUM_SCHEMA)),
+])
+def test_every_kind_of_tool_runs_through_all_five_phases(tmp_path, name, plan):
+    engine = ScriptedEngine(tool_plan=plan)
+    with console(tmp_path, engine) as client:
+        seen: set[str] = set()
+        run_id = start(client, "tool", "a small deterministic helper tool please")
+        while True:
+            body = client.get(f"/v1/console/forge-creator/status/{run_id}").json()
+            seen.add(body["phase"])
+            if body["status"] in ("success", "failed"):
+                break
+            time.sleep(0.02)
+        assert body["status"] == "success", body
+        assert body["tool"]["name"] == name
+        assert body["tool"]["tests"]["passed"] == body["tool"]["tests"]["total"]
+        assert name in listed_tools(client)
+        assert body["phase"] == "promotion"
+
+
+def test_a_reviewer_format_slip_is_retried_instead_of_failing_the_run(tmp_path):
+    # Measured live: ~1 in 4 security replies was prose without a VERDICT line.
+    engine = ScriptedEngine(review_security=["Der Code ist unbedenklich, keine Befunde.",
+                                             "VERDICT: REFUTED"])
+    with console(tmp_path, engine) as client:
+        body = poll(client, start(client, "tool", "count the words in a text"))
+        assert body["status"] == "success", body
+        assert body["tool"]["review_attempts"] == 2
+        assert "assistant.word_count" in listed_tools(client)
+
+
+def test_robustness_findings_are_advisory_and_do_not_block(tmp_path):
+    engine = ScriptedEngine(review_security=(
+        "FINDING: [ROBUSTNESS] an empty text list is not validated\nVERDICT: CONFIRMED"))
+    with console(tmp_path, engine) as client:
+        body = poll(client, start(client, "tool", "count the words in a text"))
+        assert body["status"] == "success", body
+        adv = [f for f in body["tool"]["findings"] if f["dimension"] == "security"]
+        assert adv and adv[0]["verdict"] == "confirmed" and adv[0]["advisory"] is True
+
+
+@pytest.mark.parametrize("finding", [
+    "FINDING: [SHELL] spawns a shell from the input\nVERDICT: CONFIRMED",
+    "FINDING: reads environment secrets\nVERDICT: CONFIRMED",  # untagged stays blocking
+    "FINDING: [ROBUSTNESS] but it calls os.system on the text\nVERDICT: CONFIRMED",  # tag cannot launder a boundary
+])
+def test_boundary_findings_still_block_even_with_the_robustness_escape_hatch(tmp_path, finding):
+    engine = ScriptedEngine(review_security=finding)
+    with console(tmp_path, engine) as client:
+        body = poll(client, start(client, "tool", "count the words in a text"))
+        assert body["status"] == "failed"
+        assert body["failure_code"] == "security_confirmed"
+        assert "assistant.word_count" not in listed_tools(client)
+
+
+def test_unavailable_reviewer_keeps_the_draft_and_a_retry_never_regenerates(tmp_path):
+    engine = ScriptedEngine(review_security="Ich pruefe das gleich, hier mein Bericht ohne Urteil.")
+    with console(tmp_path, engine) as client:
+        failed = poll(client, start(client, "tool", "count the words in a text"))
+        assert failed["status"] == "failed"
+        assert failed["failure_code"] == "reviewer_unavailable"
+        assert failed["tool"]["review_attempts"] == 1 + 2  # first try + REVIEW_RETRIES
+        assert failed["draft_saved"] is True
+        assert "forge.tool_rejected" in chain_actions(client)
+        plans_before = sum("Design a small" in p for p in engine.prompts)
+
+        engine.script["review_security"] = "VERDICT: REFUTED"  # the reviewer recovers
+        resp = client.post(f"/v1/console/forge-creator/tool/retry/{failed['run_id']}")
+        assert resp.status_code == 202, resp.text
+        body = poll(client, resp.json()["run_id"])
+        assert body["status"] == "success", body
+        assert sum("Design a small" in p for p in engine.prompts) == plans_before == 1
+        assert "assistant.word_count" in listed_tools(client)
+
+
+def test_retry_is_refused_for_unknown_and_for_successful_runs(tmp_path):
+    engine = ScriptedEngine()
+    with console(tmp_path, engine) as client:
+        ok = poll(client, start(client, "tool", "count the words in a text"))
+        assert client.post(f"/v1/console/forge-creator/tool/retry/{ok['run_id']}").status_code == 409
+        assert client.post("/v1/console/forge-creator/tool/retry/nope").status_code == 404
+
+
+def test_a_rejection_is_audited_with_its_reason_code(tmp_path):
+    engine = ScriptedEngine(tool_plan=tool_plan(BROKEN_IMPL), tool_fix=tool_plan(BROKEN_IMPL))
+    with console(tmp_path, engine) as client:
+        body = poll(client, start(client, "tool", "count the words in a text"))
+        assert body["failure_code"] == "tests_failed"
+        chain = client.home / "tenants" / client.tenant / "global" / "forge" / "audit.jsonl"
+        recs = [json.loads(line) for line in chain.read_text().splitlines() if line.strip()]
+        rej = [r for r in recs if r.get("event_type") == "forge.tool_rejected"]
+        assert rej and rej[-1]["details"]["code"] == "tests_failed"
+        assert rej[-1]["details"]["tests_total"] == 2
+
+
+# ── Tool Forge robustness: an unusable plan reply is asked again, never "repaired" ──
+
+def test_plan_reply_without_the_tool_keys_is_re_planned_not_repaired(tmp_path):
+    # A stray example object ahead of the real plan, then a reply with no plan at all.
+    stray = 'Beispiel: {"ok": true}\n' + tool_plan(GOOD_IMPL)
+    engine = ScriptedEngine(tool_plan=['{"error": "no plan"}', stray])
+    with console(tmp_path, engine) as client:
+        body = poll(client, start(client, "tool", "count the words in a text"))
+        assert body["status"] == "success", body
+        assert sum("Design a small" in p for p in engine.prompts) == 2
+        assert not any("violates its contract" in p for p in engine.prompts)  # no repair of an empty shell
+
+
+def test_a_plan_that_never_arrives_fails_with_a_clear_code(tmp_path):
+    engine = ScriptedEngine(tool_plan='{"error": "no plan"}')
+    with console(tmp_path, engine) as client:
+        body = poll(client, start(client, "tool", "count the words in a text"))
+        assert body["status"] == "failed" and body["failure_code"] == "plan_unusable"
+        assert sum("Design a small" in p for p in engine.prompts) == 3

@@ -227,6 +227,7 @@ EVENT_SEVERITY: dict[str, str] = {
     # Allowed fields: tool_name, worker_id, run_id, decision, tenant_id.
     # Forbidden: tool input params, output content, file paths.
     "forge.tool_executed":       "INFO",
+    "forge.tool_rejected":       "WARNING",
     # path_gate AST gate — LLM-generated Python code execution (layer 10 extension)
     # Metadata only: language, outcome, blocked_reason. Never code content.
     "code.exec_attempt":         "INFO",
@@ -4581,6 +4582,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "engine.trust_tier_violated": frozenset({"actual_tier", "effective_tier", "engine_id", "evaluated_at", "expected_sha256", "min_tier", "observed_sha256", "reason", "valid_until"}),
     "forge.secrets_no_sandbox": frozenset({}),
     "forge.tool_executed": frozenset({"cache_hit", "decision", "duration_ms", "exit_code", "run_id", "sandbox", "status", "tool_name", "ts", "worker_id"}),
+    "forge.tool_rejected": frozenset({"advisory_findings", "blocking_findings", "code", "phase", "review_attempts", "tests_passed", "tests_total"}),
     "hermes.ollama_unavailable": frozenset({"channel", "chat_key", "engine_id", "error_class"}),
     "hermes.stream_timeout": frozenset({"engine_id", "error_class"}),
     "hermes.turn_end": frozenset({"channel", "chat_key", "engine_id"}),

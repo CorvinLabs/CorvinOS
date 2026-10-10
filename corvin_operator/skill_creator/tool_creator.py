@@ -35,6 +35,9 @@ K_MAX = 3
 MIN_TEST_CASES = 2
 MAX_TEST_CASES = 5
 MAX_IMPL_CHARS = 64 * 1024
+#: Keys a plan reply must carry; without them it is not a plan.
+PLAN_KEYS = ("name", "impl", "input_schema", "test_cases")
+PLAN_ATTEMPTS = 3
 _NAME_OK = re.compile(r"^[a-z0-9_.]{1,128}$")
 
 
@@ -43,11 +46,20 @@ class ToolCreatorError(Exception):
 
     ``result_fields`` travels onto the failed run record, so the operator sees
     WHICH test cases failed or what the reviewers found, not only that it failed.
+    ``code`` separates infrastructure failures (``reviewer_unavailable``) from
+    content verdicts (``security_confirmed``, ``tests_failed``); ``draft`` keeps
+    the generated work so a retry never regenerates it.
     """
 
-    def __init__(self, message: str, *, summary: Optional[Dict[str, Any]] = None):
+    def __init__(self, message: str, *, summary: Optional[Dict[str, Any]] = None,
+                 code: str = "failed", draft: Optional[Dict[str, Any]] = None):
         super().__init__(message)
-        self.result_fields = {"tool": summary} if summary else {}
+        self.code = code
+        self.result_fields: Dict[str, Any] = {"failure_code": code}
+        if summary:
+            self.result_fields["tool"] = summary
+        if draft:
+            self.result_fields["draft"] = draft
 
 
 class SandboxUnavailable(ToolCreatorError):
@@ -151,9 +163,13 @@ class ToolCreatorOrchestrator:
 
     def __init__(self, *, tenant_id: str,
                  progress_cb: Optional[Callable[[str, int, str], None]] = None,
-                 client: Any = None):
+                 client: Any = None,
+                 draft_cb: Optional[Callable[[Dict[str, Any]], None]] = None):
         self.tenant_id = tenant_id
         self.progress_cb = progress_cb
+        #: Called with the draft as soon as it passed validation, so the run record
+        #: holds it before the (fallible) review phase.
+        self.draft_cb = draft_cb
         self.client = client if client is not None else ar.resolve_engine()
         self.engine_id = ar.engine_id(self.client)
 
@@ -291,28 +307,42 @@ class ToolCreatorOrchestrator:
 
     # -- the run ----------------------------------------------------------
 
-    async def create_tool(self, user_request: str) -> Dict[str, Any]:
+    def _reject_audit(self, name: str, code: str, phase: str, *, tests: Optional[Dict[str, Any]] = None,
+                      blocking_n: int = 0, advisory_n: int = 0, attempts: int = 0) -> None:
+        """One tenant-chain record per rejected run (metadata only) - the completion-rate source."""
+        try:
+            from forge.paths import tenant_audit_chain  # noqa: PLC0415
+            from forge.security_events import write_event  # noqa: PLC0415
+            write_event(
+                tenant_audit_chain(self.tenant_id), "forge.tool_rejected", tool=name,
+                details={"code": code, "phase": phase, "review_attempts": attempts,
+                         "tests_passed": int((tests or {}).get("passed", 0)),
+                         "tests_total": int((tests or {}).get("total", 0)),
+                         "blocking_findings": blocking_n, "advisory_findings": advisory_n})
+        except Exception as exc:  # noqa: BLE001 - a failed audit record must not mask the rejection reason
+            logger.error("forge.tool_rejected audit write failed: %s", exc)
+
+    async def create_tool(self, user_request: str, *,
+                          resume_draft: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if self.client is None:
             raise ToolCreatorError(
                 "No engine available — Tool Forge writes code with the engine and never "
-                "fabricates it. Log in with `claude` or set ANTHROPIC_API_KEY.")
+                "fabricates it. Log in with `claude` or set ANTHROPIC_API_KEY.", code="no_engine")
 
-        self._progress("planning", 10, f"Designing the tool via {self.engine_id}…")
-        draft = _draft_from(await asyncio.to_thread(
-            ar.ask_json, self.client,
-            _PLAN_PROMPT.format(request=user_request, contract=_CONTRACT)))
-
-        self._progress("validation", 30, f"Checking '{draft.name}' against the forge contract…")
-        problems = self.collect_violations(draft)
-        if problems:
-            self._progress("validation", 35, f"Repairing ({len(problems)} issue(s))…")
-            draft = _draft_from(await asyncio.to_thread(
-                ar.ask_json, self.client,
-                _REPAIR_PROMPT.format(problems="\n".join(f"- {p}" for p in problems),
-                                      draft=_draft_json(draft), contract=_CONTRACT)))
+        if resume_draft:
+            # Retry of a run that already produced a validated draft: never regenerate it.
+            draft = _draft_from(resume_draft)
             problems = self.collect_violations(draft)
             if problems:
-                raise ToolCreatorError("Tool draft violates the forge contract: " + "; ".join(problems))
+                raise ToolCreatorError("Saved draft no longer valid: " + "; ".join(problems),
+                                       code="contract_violation")
+        else:
+            draft = await self._plan_and_validate(user_request)
+        if self.draft_cb is not None:
+            try:
+                self.draft_cb(json.loads(_draft_json(draft)))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("draft callback failed: %s", exc)
 
         tests: Dict[str, Any] = {}
         converged = False
@@ -339,10 +369,12 @@ class ToolCreatorOrchestrator:
         iterations = k
 
         self._progress("review", 75, "Adversarial review (correctness, security, scope)…")
+        raw: List[Dict[str, Any]] = []
         findings = await ar.review(
             self.client, kind="tool", name=draft.name, purpose=draft.description,
-            artifact=_draft_json(draft))
+            artifact=_draft_json(draft), raw_sink=raw)
         score = ar.quality(findings, converged=converged, dimensions=len(ar.DIMENSIONS))
+        attempts = max((r["attempt"] for r in raw), default=0)
         summary = {
             "name": draft.name,
             "description": draft.description,
@@ -351,25 +383,35 @@ class ToolCreatorOrchestrator:
             "iterations": iterations,
             "quality": score,
             "findings": ar.findings_out(findings),
+            "review_attempts": attempts,
             "sandbox": sorted({c.get("sandbox", "") for c in tests.get("cases", []) if c.get("sandbox")}),
         }
+        saved = json.loads(_draft_json(draft))
+        saved["review_raw"] = raw  # what the reviewers actually said - the only way to debug a rejection
+        blocking = ar.blocking(findings, "security")
+        advisory = [f for f in findings if ar.is_advisory(f)]
+
+        def reject(message: str, code: str) -> ToolCreatorError:
+            self._reject_audit(draft.name, code, "review" if code != "tests_failed" else "sandbox_test",
+                               tests=tests, blocking_n=len(blocking), advisory_n=len(advisory),
+                               attempts=attempts)
+            return ToolCreatorError(message, summary=summary, code=code, draft=saved)
 
         if not converged:
-            raise ToolCreatorError(
+            raise reject(
                 f"Not registered: {tests.get('total', 0) - tests.get('passed', 0)} of "
                 f"{tests.get('total', 0)} sandbox test case(s) still fail after {iterations} iteration(s).",
-                summary=summary)
-        security = [f for f in findings
-                    if f.dimension == "security" and f.verdict.value == "confirmed"]
-        if security:
-            raise ToolCreatorError(
-                "Not registered: the security reviewer confirmed a finding — " + security[0].summary,
-                summary=summary)
+                "tests_failed")
+        if blocking:
+            raise reject(
+                "Not registered: the security reviewer confirmed a finding — " + blocking[0].summary,
+                "security_confirmed")
         missing = ar.unreviewed(findings, "security")
         if missing:
-            raise ToolCreatorError(
-                "Not registered: the security review did not complete — " + missing[0].summary,
-                summary=summary)
+            raise reject(
+                f"Not registered: the security review did not complete after {attempts} attempt(s) — "
+                + missing[0].summary + ". The draft is saved; retry the review.",
+                "reviewer_unavailable")
 
         self._progress("promotion", 90, f"Registering '{draft.name}'…")
         spec = self._multi().create(
@@ -382,3 +424,37 @@ class ToolCreatorOrchestrator:
         summary["registry_path"] = spec.impl_path
         summary["sha256"] = spec.sha256
         return summary
+
+    async def _plan_and_validate(self, user_request: str) -> ToolDraft:
+        self._progress("planning", 10, f"Designing the tool via {self.engine_id}…")
+        plan: Optional[Dict[str, Any]] = None
+        last_err = ""
+        for attempt in range(1, PLAN_ATTEMPTS + 1):
+            try:
+                plan = await asyncio.to_thread(
+                    ar.ask_json, self.client,
+                    _PLAN_PROMPT.format(request=user_request, contract=_CONTRACT),
+                    required_keys=PLAN_KEYS)
+                break
+            except ValueError as exc:  # no/odd JSON: ask for the PLAN again, never repair an empty shell
+                last_err = str(exc)
+                logger.warning("tool plan attempt %d/%d unusable: %s", attempt, PLAN_ATTEMPTS, exc)
+                self._progress("planning", 10, f"Plan reply unusable ({last_err}); asking again…")
+        if plan is None:
+            raise ToolCreatorError("The engine never returned a usable tool plan: " + last_err,
+                                   code="plan_unusable")
+        draft = _draft_from(plan)
+
+        self._progress("validation", 30, f"Checking '{draft.name}' against the forge contract…")
+        problems = self.collect_violations(draft)
+        if problems:
+            self._progress("validation", 35, f"Repairing ({len(problems)} issue(s))…")
+            draft = _draft_from(await asyncio.to_thread(
+                ar.ask_json, self.client,
+                _REPAIR_PROMPT.format(problems="\n".join(f"- {p}" for p in problems),
+                                      draft=_draft_json(draft), contract=_CONTRACT)))
+            problems = self.collect_violations(draft)
+            if problems:
+                raise ToolCreatorError("Tool draft violates the forge contract: " + "; ".join(problems),
+                                       code="contract_violation")
+        return draft

@@ -41,11 +41,15 @@ Purpose: {purpose}
 {artifact}
 --- END ARTIFACT ---
 
-For each finding, output:
-FINDING: <one sentence>
+Reply rules (a reply that breaks them is discarded and asked again):
+- Write in English. You have NO tools: do not emit tool calls, shell commands or code blocks to run.
+- For each finding output exactly two lines:
+FINDING: [TAG] <one sentence>
 VERDICT: CONFIRMED / PLAUSIBLE / REFUTED
-
-If no findings, output: VERDICT: REFUTED"""
+- TAG is one of EXFIL, SHELL, NETWORK, FILESYSTEM, SECRET (a boundary escape) or ROBUSTNESS
+  (bad input, numeric edge cases, availability, wrong results for odd data - NOT a boundary escape).
+- If there are no findings, output only: VERDICT: REFUTED
+- The LAST line of your reply must be a VERDICT line."""
 
 #: Upper bound on the artifact text one reviewer sees; a review of a truncated
 #: artifact says so instead of silently judging half of it.
@@ -77,13 +81,45 @@ def ask(client: Any, prompt: str, *, max_tokens: int = 4000, system: Optional[st
     return response.content[0].text
 
 
-def ask_json(client: Any, prompt: str, *, max_tokens: int = 8000) -> Dict[str, Any]:
-    """Ask for one JSON object; raises ValueError when the reply holds none."""
+def _object_with_keys(reply: str, required: Sequence[str]) -> Optional[Dict[str, Any]]:
+    """The first JSON object in *reply* that holds every *required* key.
+
+    ``sc._extract_json_object`` returns the first parsable object, which can be a
+    stray example (``{"ok": true}``) written ahead of the real answer.
+    """
+    decoder = json.JSONDecoder()
+    for m in re.finditer(r"\{", reply or ""):
+        try:
+            obj, _ = decoder.raw_decode(reply, m.start())
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and all(k in obj for k in required):
+            return obj
+    return None
+
+
+def ask_json(client: Any, prompt: str, *, max_tokens: int = 8000,
+             required_keys: Sequence[str] = ()) -> Dict[str, Any]:
+    """Ask for one JSON object; raises ValueError when the reply holds none.
+
+    With *required_keys* the returned object must contain all of them - a reply
+    whose first object lacks them is searched for a later one, and a reply with
+    none raises instead of handing the caller an empty shell to "repair".
+    """
     reply = ask(client, prompt, max_tokens=max_tokens)
     blob = sc._extract_json_object(reply)
     if not blob:
         raise ValueError("engine reply contained no JSON object")
-    data = json.loads(blob)
+    data = None
+    try:
+        data = json.loads(blob)
+    except ValueError:
+        if not required_keys:
+            raise
+    if required_keys and not (isinstance(data, dict) and all(k in data for k in required_keys)):
+        data = _object_with_keys(reply, required_keys)
+        if data is None:
+            raise ValueError("engine reply held no JSON object with keys " + ", ".join(required_keys))
     if not isinstance(data, dict):
         raise ValueError("engine reply JSON is not an object")
     return data
@@ -94,6 +130,37 @@ def ask_json(client: Any, prompt: str, *, max_tokens: int = 8000) -> Dict[str, A
 ERROR_SUFFIX = "-error"
 NO_VERDICT_SUFFIX = "-noverdict"
 TRUNCATED_ID = "artifact-truncated"
+
+
+#: Extra attempts for a dimension whose reviewer crashed or replied without a verdict.
+#: A single stochastic format slip must not decide a run (measured: 1 of 4 live replies).
+REVIEW_RETRIES = 2
+ROBUSTNESS_TAG = "ROBUSTNESS"
+#: A [ROBUSTNESS] finding that nevertheless names a boundary is NOT downgraded.
+_BOUNDARY_WORDS = re.compile(
+    r"\b(os\.system|subprocess|socket|network|shell|environ|secret|credential|token|password|"
+    r"eval|exec|pickle|__import__|exfiltrat\w*|filesystem|file write|writes? to disk|open\()", re.I)
+
+
+def _plain(summary: str) -> str:
+    return re.sub(r"^[\s*_`#]+", "", summary or "")
+
+
+def is_advisory(finding: sc.ReviewFinding) -> bool:
+    """True for a finding the reviewer explicitly tagged [ROBUSTNESS] and that names no boundary.
+
+    Only an EXPLICIT tag downgrades; an untagged finding stays blocking (fail-closed).
+    """
+    text = _plain(finding.summary)
+    if not re.match(r"\[\s*" + ROBUSTNESS_TAG + r"\s*\]", text, re.I):
+        return False
+    return not _BOUNDARY_WORDS.search(text + " " + (finding.reasoning or ""))
+
+
+def blocking(findings: List[sc.ReviewFinding], dimension: str) -> List[sc.ReviewFinding]:
+    """CONFIRMED findings of *dimension* that gate registration (advisories excluded)."""
+    return [f for f in findings
+            if f.dimension == dimension and f.verdict.value == "confirmed" and not is_advisory(f)]
 
 
 async def run_reviewers(fns: Dict[str, Callable[[], Awaitable[str]]], *,
@@ -142,8 +209,15 @@ async def run_reviewers(fns: Dict[str, Callable[[], Awaitable[str]]], *,
 
 
 async def review(client: Any, *, kind: str, name: str, purpose: str, artifact: str,
-                 dimensions: Sequence[str] = tuple(DIMENSIONS)) -> List[sc.ReviewFinding]:
-    """Correctness / security / scope review of a tool or plugin; engine-less → []."""
+                 dimensions: Sequence[str] = tuple(DIMENSIONS),
+                 raw_sink: Optional[List[Dict[str, Any]]] = None) -> List[sc.ReviewFinding]:
+    """Correctness / security / scope review of a tool or plugin; engine-less → [].
+
+    A dimension whose reviewer crashed or replied without a verdict is asked
+    again up to ``REVIEW_RETRIES`` times; only when every attempt failed does
+    the synthetic ``-error`` / ``-noverdict`` finding survive. ``raw_sink``
+    receives every raw reply (truncated) so a rejected run can be diagnosed.
+    """
     if client is None:
         logger.warning("%s review skipped: no engine available", kind)
         return []
@@ -152,14 +226,32 @@ async def review(client: Any, *, kind: str, name: str, purpose: str, artifact: s
     if truncated:
         text = text[:MAX_ARTIFACT_CHARS] + "\n[artifact truncated for review]"
 
+    attempt_no: Dict[str, int] = {}
+
     def fn(dimension: str) -> Callable[[], Awaitable[str]]:
         prompt = _REVIEW_TEMPLATE.format(
             kind=kind, kind_title=kind.capitalize(), dimension_upper=dimension.upper(),
             what=DIMENSIONS[dimension], name=name, purpose=purpose, artifact=text,
         )
-        return lambda: asyncio.to_thread(ask, client, prompt, max_tokens=800)
 
-    findings = await run_reviewers({d: fn(d) for d in dimensions}, on_error="flag")
+        async def go() -> str:
+            attempt_no[dimension] = attempt_no.get(dimension, 0) + 1
+            reply = await asyncio.to_thread(ask, client, prompt, max_tokens=800)
+            if raw_sink is not None:
+                raw_sink.append({"dimension": dimension, "attempt": attempt_no[dimension],
+                                 "reply": (reply or "")[:4000]})
+            return reply
+        return go
+
+    runners = {d: fn(d) for d in dimensions}
+    findings = await run_reviewers(runners, on_error="flag")
+    for _ in range(REVIEW_RETRIES):
+        redo = [d for d in dimensions if unreviewed(findings, d)
+                and not all(f.finding_id == TRUNCATED_ID for f in unreviewed(findings, d))]
+        if not redo:
+            break
+        again = await run_reviewers({d: runners[d] for d in redo}, on_error="flag")
+        findings = [f for f in findings if f.dimension not in redo] + again
     if truncated:
         findings.append(sc.ReviewFinding(
             finding_id=TRUNCATED_ID, dimension="security",
@@ -179,5 +271,5 @@ def quality(findings: List[sc.ReviewFinding], *, converged: bool, dimensions: in
 
 
 def findings_out(findings: List[sc.ReviewFinding]) -> List[Dict[str, str]]:
-    return [{"dimension": f.dimension, "summary": f.summary, "verdict": f.verdict.value}
-            for f in findings]
+    return [{"dimension": f.dimension, "summary": f.summary, "verdict": f.verdict.value,
+             "advisory": is_advisory(f)} for f in findings]

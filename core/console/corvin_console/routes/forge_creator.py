@@ -90,9 +90,14 @@ def _spawn_kwargs(kind: str, tenant_id: str, run_id: str, payload: Dict[str, Any
     if kind == "tool":
         def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
             from skill_creator.tool_creator import ToolCreatorOrchestrator  # noqa: PLC0415
-            orch = ToolCreatorOrchestrator(tenant_id=tenant_id, progress_cb=progress)
+            def keep_draft(draft: Dict[str, Any]) -> None:
+                # The validated draft rides in the resume payload: a console restart or a
+                # retry continues from it instead of regenerating the tool.
+                forge_runs.update_run(run_id, resume={**payload, "draft": draft})
+            orch = ToolCreatorOrchestrator(tenant_id=tenant_id, progress_cb=progress,
+                                           draft_cb=keep_draft)
             forge_runs.update_run(run_id, engine=orch.engine_id)
-            tool = asyncio.run(orch.create_tool(request))
+            tool = asyncio.run(orch.create_tool(request, resume_draft=payload.get("draft")))
             return {"target_id": tool["name"], "phase": "promotion", "tool": tool,
                     "message": f"Tool '{tool['name']}' passed its sandbox tests and is registered."}
         success, failure = "tool.generated_created", "tool.generated_creation_failed"
@@ -150,6 +155,37 @@ async def generate(
             "message": f"{kind.capitalize()} generation started. Poll /forge-creator/status/{run_id}."}
 
 
+@router.post("/tool/retry/{run_id}", status_code=202)
+async def retry_tool(
+    run_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _lic: Annotated[session_auth.SessionRecord, Depends(require_forge_capability)],
+) -> Dict[str, Any]:
+    """Re-run the test + review phases of a FAILED tool run from its saved draft."""
+    old = forge_runs.get_run(run_id, rec.tenant_id, kind="tool")
+    if old is None:
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+    draft = (old.get("resume") or {}).get("draft") or old.get("draft")
+    if old.get("status") != "failed" or not isinstance(draft, dict):
+        raise HTTPException(status_code=409, detail="Only a failed run with a saved draft can be retried")
+    payload = {"request": str((old.get("resume") or {}).get("request") or ""),
+               "panel_request": "", "draft": {k: v for k, v in draft.items() if k != "review_raw"}}
+    try:
+        forge_runs.check_spawn_gates(payload["request"], tenant_id=rec.tenant_id,
+                                     sid_fingerprint=rec.sid_fingerprint, kind="tool")
+        new_id = forge_runs.new_run(tenant_id=rec.tenant_id, kind="tool", phases=_phases("tool"),
+                                    sid_fingerprint=rec.sid_fingerprint, resume=payload)
+    except forge_runs.GenerationRefused as refused:
+        raise HTTPException(status_code=403, detail=str(refused))
+    except forge_runs.GenerationBusy as busy:
+        raise HTTPException(status_code=429, detail=str(busy))
+    forge_runs.spawn(run_id=new_id, kind="tool", tenant_id=rec.tenant_id,
+                     sid_fingerprint=rec.sid_fingerprint,
+                     **_spawn_kwargs("tool", rec.tenant_id, new_id, payload))
+    return {"status": "accepted", "run_id": new_id, "kind": "tool", "retry_of": run_id,
+            "message": f"Retry started from the saved draft. Poll /forge-creator/status/{new_id}."}
+
+
 @router.get("/status/{run_id}")
 async def status(
     run_id: str,
@@ -168,6 +204,8 @@ async def status(
         "message": run.get("message", ""),
         "engine": run.get("engine", "unknown"),
         "error": run.get("error"),
+        "failure_code": run.get("failure_code"),
+        "draft_saved": bool((run.get("resume") or {}).get("draft") or run.get("draft")),
         "tool": run.get("tool"),
         "plugin": run.get("plugin"),
     }
