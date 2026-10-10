@@ -9,6 +9,7 @@ callable that reaches the core hash chain in production.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -16,7 +17,7 @@ import pytest
 
 from core.skills.boot import boot_skills
 from core.skills.prompt_skill_adapter import (
-    collect_prompt_sources, prompt_skill_id, prompt_skill_version, sync_prompt_skills)
+    collect_prompt_sources, prompt_skill_id, sync_prompt_skills)
 from core.skills.skill_registry_phase1 import get_registry
 
 REPO = Path(__file__).resolve().parents[2]
@@ -67,7 +68,7 @@ def test_boot_registers_the_bundle_prompt_skills(env):
     one = next(d for d in _migrated(records) if d["skill_id"] == prompt_skill_id("adr_gate"))
     assert one["action"] == "registered" and one["source"] == "bundle"
     assert one["tenant_id"] == TENANT and len(one["content_hash"]) == 16
-    assert one["skill_version"].startswith("0.0.0+")
+    assert re.fullmatch(r"0\.0\.\d+\+[0-9a-f]{8}", one["skill_version"])
 
 
 def test_prompt_skill_run_is_audited(env):
@@ -79,23 +80,29 @@ def test_prompt_skill_run_is_audited(env):
     assert out.status == "success" and out.output == {"decision": "inject", "mode": "bundle"}
     ran = [d for t, d in records[before:] if t == "skill.executed" and d.get("skill_id") == prompt_skill_id("adr_gate")]
     assert ran, [t for t, _ in records[before:]]
-    assert ran[0]["decision"]["decision"] == "inject" and ran[0]["skill_version"].startswith("0.0.0+")
+    assert ran[0]["decision"]["decision"] == "inject" and re.fullmatch(r"0\.0\.\d+\+[0-9a-f]{8}", ran[0]["skill_version"])
 
 
-def test_sync_is_idempotent_and_a_changed_hash_is_migrated_again(env):
+def test_sync_is_idempotent_and_a_changed_body_gets_the_next_version(env):
+    import dataclasses
+    from core.skills.prompt_skill_adapter import resolve_versions
     records, spy = env
     boot_skills(tenant_id=TENANT, audit_emit=spy, wire_learning=False)
     reg = get_registry()
-    src = [s for s in collect_prompt_sources(TENANT) if s.name == "adr_gate"][0]
+    raw = [s for s in collect_prompt_sources(TENANT) if s.name == "adr_gate"]
+    (src,), _, _ = resolve_versions(raw, TENANT)
     n = len(_migrated(records))
     again = sync_prompt_skills(reg, [src], tenant_id=TENANT)
     assert again.unchanged == 1 and not again.registered and len(_migrated(records)) == n
-    changed = type(src)(name=src.name, description=src.description, sha256="ab" * 32, scope=src.scope)
-    r = sync_prompt_skills(reg, [changed], tenant_id=TENANT)
+    edited = dataclasses.replace(raw[0], body=raw[0].body + "\nedited\n")
+    (src2,), _, _ = resolve_versions([edited], TENANT)
+    assert src2.version.startswith("0.0.2+") and src.version.startswith("0.0.1+")
+    r = sync_prompt_skills(reg, [src2], tenant_id=TENANT)
     assert r.updated == [prompt_skill_id("adr_gate")]
     last = _migrated(records)[-1]
-    assert last["action"] == "updated" and last["skill_version"] == prompt_skill_version("ab" * 32)
-    assert reg.get(prompt_skill_id("adr_gate")).metadata.version == prompt_skill_version("ab" * 32)
+    assert last["action"] == "updated" and last["skill_version"] == src2.version
+    assert reg.get(prompt_skill_id("adr_gate")).metadata.version == src2.version
+    assert "edited" not in repr(records)  # the body never reaches the chain
 
 
 def test_a_forged_skill_is_picked_up_from_skillforge(env):
@@ -115,3 +122,10 @@ def test_a_failing_source_does_not_break_the_boot(env, monkeypatch):
     monkeypatch.setattr(m, "skillforge_sources", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
     ids = boot_skills(tenant_id=TENANT, audit_emit=spy, wire_learning=False)
     assert "os.delegation_router" in ids  # builtins unaffected
+
+
+def test_catalog_versions_order_by_sequence_not_text():
+    from core.skills.version_manager import SemanticVersion, VersionResolver
+    vs = ["0.0.9+aaaaaaaa", "0.0.10+bbbbbbbb", "0.0.2+cccccccc"]
+    assert VersionResolver().resolve_version("prompt.x", vs) == "0.0.10+bbbbbbbb"
+    assert str(SemanticVersion("0.0.3+abc12345")) == "0.0.3+abc12345"

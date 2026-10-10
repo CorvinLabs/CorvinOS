@@ -445,7 +445,7 @@ Accepted → `learning.feedback_accepted`. Full reference: [learning-loop.md](le
 
 ---
 
-## Prompt skills are registry skills (ADR-2175, T-0103 + T-0104 built 2026-10-10)
+## Prompt skills are registry skills (ADR-2175, T-0103/T-0104/T-0105 built 2026-10-10)
 
 Every SKILL.md of the shipped bundle and every SkillForge skill visible to the tenant is
 registered by `skills.boot.boot_skills` as **`prompt.<name>`** (`core/skills/prompt_skill_adapter.py`,
@@ -472,7 +472,19 @@ one generic `PromptSkill`):
     elapsed_ms / budget_ms / budget_exceeded.
   * No audited registry in the process (`booted_registry()` is None — never lazily created) or a turn
     tenant ≠ boot tenant → selection unchanged, nothing gated.
-* One version per id (T-0105 open).
+* **Versions are kept and pinnable (T-0105, ADR-0533).** `core/skills/prompt_skill_versions.py`:
+  every body the registry is about to execute is recorded in a per-tenant catalog
+  (`<tenant>/skills/prompt_versions/catalog.jsonl` — name, seq, sha256, first_seen; content-free) with a
+  content-addressed copy (`bodies/<sha256>.md`, written once, **re-hashed on read** — an altered copy is
+  never served). Version = `0.0.<seq>+<sha8>`: the patch number orders the edits, the build part names
+  the content (`version_manager.SemanticVersion` accepts and ignores `+build` for precedence).
+  Pins: `spec.skills."prompt.<name>".version` in `tenants/<tid>/global/tenant.corvin.yaml`, resolved by
+  `version_manager.VersionResolver` (its first production caller). A pin to an older version injects
+  that stored body; a pin the catalog cannot serve (unknown, or the stored copy altered) **withholds**
+  the skill — never falls through to "latest", which would re-install what the operator rolled away
+  from. `skill.executed.skill_version` names the version actually served; the per-turn record counts
+  `pinned` / `pin_unavailable`. No canaries (single-operator installs roll out 100 %). The registry
+  holds the RESOLVED version per id; the catalog holds every version.
 
 Proof: `tests/skills/test_prompt_skill_adapter_e2e.py`, `tests/e2e/test_prompt_skill_injection_gate_bridge_e2e.py` (through `adapter.process_one`, argv dump, verified chain).
 

@@ -21,7 +21,9 @@ class SemanticVersion:
 
     def __init__(self, version_str: str):
         """Parse a semantic version string."""
-        match = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:-([a-z0-9]+))?$', version_str)
+        # ``+build`` metadata (semver 2.0 §10) is accepted and IGNORED for precedence:
+        # prompt skills are versioned ``0.0.<seq>+<sha8>`` (ADR-2175 T-0105).
+        match = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:-([a-z0-9]+))?(?:\+([0-9A-Za-z.-]+))?$', version_str)
         if not match:
             raise ValueError(f"Invalid semver: {version_str}")
 
@@ -29,11 +31,14 @@ class SemanticVersion:
         self.minor = int(match.group(2))
         self.patch = int(match.group(3))
         self.prerelease = match.group(4)
+        self.build = match.group(5)
 
     def __str__(self):
         s = f"{self.major}.{self.minor}.{self.patch}"
         if self.prerelease:
             s += f"-{self.prerelease}"
+        if self.build:
+            s += f"+{self.build}"
         return s
 
     def __lt__(self, other):

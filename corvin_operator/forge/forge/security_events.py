@@ -4669,7 +4669,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "session.timeout": frozenset({"chan_id", "reason"}),
     "skill.auto.disabled": frozenset({"failures", "skill_id", "tenant_id", "timestamp"}),
     "skill.disable.refused": frozenset({"failures", "operation", "skill_id", "tenant_id", "tier", "timestamp"}),
-    "skill.injection.gated": frozenset({"allowed", "budget_exceeded", "budget_ms", "candidates", "elapsed_ms", "errors", "tenant_id", "timestamp", "ungated", "withheld"}),
+    "skill.injection.gated": frozenset({"allowed", "budget_exceeded", "budget_ms", "candidates", "elapsed_ms", "errors", "pin_unavailable", "pinned", "tenant_id", "timestamp", "ungated", "withheld"}),
     "skill.migrated": frozenset({"action", "content_hash", "skill_id", "skill_version", "source", "tenant_id", "timestamp"}),
     "skill.executed": frozenset({"decision", "error_class", "exc_type", "execution_time_ms", "latency_ms", "lom", "lom_hash", "phase_completed", "run_id", "skill_id", "skill_version", "status", "tenant_id", "timeout_ms", "timestamp"}),
     "skill.manually.disabled": frozenset({"skill_id", "tenant_id", "timestamp"}),

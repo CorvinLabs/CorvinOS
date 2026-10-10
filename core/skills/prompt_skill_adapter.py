@@ -19,6 +19,7 @@ which SkillForge skills exist depends on the channel/project scope of that turn.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import logging
 import sys
@@ -51,6 +52,10 @@ class PromptSkillSource:
     description: str
     sha256: str
     scope: str
+    #: The body this version serves — never in a repr, a log line or the audit chain.
+    body: Optional[str] = field(default=None, repr=False, compare=False)
+    #: Catalog version (``0.0.<seq>+<sha8>``, T-0105); None → hash-only fallback.
+    version: Optional[str] = None
 
 
 def prompt_skill_id(name: str) -> str:
@@ -75,7 +80,7 @@ class PromptSkill(Skill):
             id=prompt_skill_id(source.name),
             name=source.name,
             description=(source.description or source.name)[:200],
-            version=prompt_skill_version(source.sha256),
+            version=source.version or prompt_skill_version(source.sha256),
             origin=SkillOrigin.BUILTIN if bundle else SkillOrigin.COMMUNITY,
             owner="bundle" if bundle else "skill-forge",
             tags=["prompt", source.scope],
@@ -105,7 +110,7 @@ def sync_prompt_skills(registry: SkillsRegistry, sources: Iterable[PromptSkillSo
         failures_before = int(getattr(backend, "write_failures", 0))
         for src in sources:
             sid = prompt_skill_id(src.name)
-            version = prompt_skill_version(src.sha256)
+            version = src.version or prompt_skill_version(src.sha256)
             existing = registry.get(sid)
             if existing is not None and existing.metadata.version == version:
                 result.unchanged += 1
@@ -164,7 +169,8 @@ def bundle_sources() -> List[PromptSkillSource]:
         name = md.parent.name
         out.append(PromptSkillSource(
             name=name, description=_frontmatter_description(text) or name,
-            sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(), scope="bundle"))
+            sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(), scope="bundle",
+            body=text))
     return out
 
 
@@ -179,9 +185,15 @@ def skillforge_sources(tenant_id: str, *, channel_id: Optional[str] = None,
         from skill_forge.multi_registry import MultiSkillRegistry  # noqa: PLC0415
 
         reg = MultiSkillRegistry(tenant_id=tenant_id, channel_id=channel_id, project_root=project_root)
-        return [PromptSkillSource(name=spec.name, description=spec.description or spec.name,
-                                  sha256=spec.sha256 or "", scope=scope)
-                for scope, spec in reg.list_with_scope()]
+        out = []
+        for scope, spec in reg.list_with_scope():
+            try:
+                body = reg.get_body(spec.name)
+            except Exception:  # noqa: BLE001
+                body = None
+            out.append(PromptSkillSource(name=spec.name, description=spec.description or spec.name,
+                                         sha256=spec.sha256 or "", scope=scope, body=body))
+        return out
     except Exception as exc:  # noqa: BLE001
         logger.info("skillforge prompt skills unavailable (%s)", type(exc).__name__)
         return []
@@ -216,6 +228,52 @@ class InjectionGate:
     errors: int = 0
     elapsed_ms: float = 0.0
     budget_ms: float = DEFAULT_BUDGET_MS
+    #: name → body of a PINNED older version to inject instead of the current one.
+    bodies: Dict[str, str] = field(default_factory=dict)
+    pinned: int = 0
+    pin_unavailable: List[str] = field(default_factory=list)
+
+
+def resolve_versions(candidates: List[PromptSkillSource], tenant_id: str
+                     ) -> tuple[List[PromptSkillSource], Dict[str, str], List[str]]:
+    """Catalog every body and apply the tenant's pins (T-0105, ADR-0533).
+
+    Returns ``(sources at their resolved version, pinned bodies, pin-unavailable names)``.
+    A source without a body keeps its hash-only version. Catalog trouble never breaks a
+    turn: the sources come back unversioned.
+    """
+    try:
+        from .prompt_skill_versions import (  # noqa: PLC0415
+            PinUnavailable, PromptVersionCatalog, load_pins, resolve)
+        catalog = PromptVersionCatalog.for_tenant(tenant_id)
+        pins = load_pins(tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("prompt version catalog unavailable (%s)", type(exc).__name__)
+        return list(candidates), {}, []
+    out: List[PromptSkillSource] = []
+    bodies: Dict[str, str] = {}
+    unavailable: List[str] = []
+    for src in candidates:
+        if src.body is None:
+            out.append(src)
+            continue
+        try:
+            current = catalog.record(src.name, src.body)
+            version, body = resolve(catalog, prompt_skill_id(src.name), src.name, current, pins)
+        except PinUnavailable:
+            unavailable.append(src.name)
+            continue
+        except OSError as exc:
+            logger.warning("prompt version not recorded for %s (%s)", src.name, type(exc).__name__)
+            out.append(src)
+            continue
+        served = src.body if body is None else body
+        out.append(dataclasses.replace(
+            src, version=version, body=served,
+            sha256=hashlib.sha256(served.encode("utf-8")).hexdigest()))
+        if body is not None:
+            bodies[src.name] = body
+    return out, bodies, unavailable
 
 
 def booted_registry() -> Optional[SkillsRegistry]:
@@ -259,6 +317,9 @@ def gate_injection(candidates: List[PromptSkillSource], *, tenant_id: Optional[s
     gate = InjectionGate(mode="gated", budget_ms=budget_ms)
     keep = set(keep_on_disable)
     t0 = _time.perf_counter()
+    candidates, gate.bodies, gate.pin_unavailable = resolve_versions(candidates, tid)
+    gate.pinned = len(gate.bodies)
+    gate.withheld.extend(gate.pin_unavailable)  # ADR-0533: a pin never falls through to latest
     sync_prompt_skills(registry, candidates, tenant_id=tid)
     for src in candidates:
         elapsed = (_time.perf_counter() - t0) * 1000.0
@@ -285,6 +346,8 @@ def gate_injection(candidates: List[PromptSkillSource], *, tenant_id: Optional[s
         "withheld": len(gate.withheld),
         "ungated": len(gate.ungated),
         "errors": gate.errors,
+        "pinned": gate.pinned,
+        "pin_unavailable": len(gate.pin_unavailable),
         "elapsed_ms": gate.elapsed_ms,
         "budget_ms": budget_ms,
         "budget_exceeded": bool(gate.ungated),

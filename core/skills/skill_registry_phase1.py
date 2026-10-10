@@ -368,7 +368,7 @@ SKILL_AUDIT_ALLOWLISTS: Dict[str, frozenset] = {
     }),
     # ADR-2175 T-0104: one record per turn — the measured cost of gating injection.
     "skill.injection.gated": frozenset({
-        "candidates", "allowed", "withheld", "ungated", "errors", "elapsed_ms",
+        "candidates", "allowed", "withheld", "ungated", "errors", "pinned", "pin_unavailable", "elapsed_ms",
         "budget_ms", "budget_exceeded", "timestamp", "tenant_id",
     }),
     "skill.auto.disabled": frozenset({"skill_id", "timestamp", "tenant_id", "failures"}),

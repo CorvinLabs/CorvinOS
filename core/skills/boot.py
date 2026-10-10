@@ -152,10 +152,11 @@ def boot_skills(
     # skills (versioned by content hash, `skill.migrated` chained per new hash).
     # Not part of the returned builtin ids; boot must not depend on it.
     try:
-        from .prompt_skill_adapter import collect_prompt_sources, sync_prompt_skills
+        from .prompt_skill_adapter import (
+            collect_prompt_sources, resolve_versions, sync_prompt_skills)
 
-        synced = sync_prompt_skills(
-            integration.registry, collect_prompt_sources(tenant_id), tenant_id=tenant_id)
+        sources, _pinned, _unavailable = resolve_versions(collect_prompt_sources(tenant_id), tenant_id)
+        synced = sync_prompt_skills(integration.registry, sources, tenant_id=tenant_id)
         logger.info(
             "prompt skills: %d registered, %d updated, %d unchanged, %d failed",
             len(synced.registered), len(synced.updated), synced.unchanged, len(synced.failed))

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -114,7 +115,7 @@ def test_every_injected_skill_is_a_registry_decision(bridge):
     assert g["budget_exceeded"] is False and g["elapsed_ms"] < DEFAULT_BUDGET_MS
     runs = [e for e in _events(base, "skill.executed") if e.get("skill_id") == "prompt.adr_gate"]
     assert runs and runs[-1]["lom"] == INJECTION_LOM and runs[-1]["lom_hash"]
-    assert runs[-1]["skill_version"].startswith("0.0.0+")
+    assert re.fullmatch(r"0\.0\.\d+\+[0-9a-f]{8}", runs[-1]["skill_version"])
     assert runs[-1]["decision"]["decision"] == "inject"
     _verify(base)
 
@@ -146,4 +147,66 @@ def test_budget_exhaustion_passes_the_rest_undecided_and_says_so(bridge, monkeyp
     assert '<auto_skill name="adr_gate"' in prompt  # never dropped for lack of time
     g = _events(base, "skill.injection.gated")[-1]
     assert g["budget_exceeded"] is True and g["ungated"] == g["candidates"] and g["errors"] == 0
+    _verify(base)
+
+
+# ── T-0105: content-hash versions, kept and pinnable (ADR-0533) ──────────────────
+
+def _registry_for_probe():
+    from skill_forge.multi_registry import MultiSkillRegistry
+    return MultiSkillRegistry(tenant_id=TENANT, channel_id=f"discord:{CHAT}", caller_persona="assistant")
+
+
+def _pin(base: Path, version: str) -> None:
+    import os
+    import yaml
+    p = Path(os.environ["CORVIN_HOME"]) / "tenants" / TENANT / "global" / "tenant.corvin.yaml"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(yaml.safe_dump({"spec": {"skills": {f"prompt.{PROBE}": {"version": version}}}}))
+    os.chmod(p, 0o600)
+
+
+def _probe_versions():
+    from core.skills.prompt_skill_versions import PromptVersionCatalog
+    return PromptVersionCatalog.for_tenant(TENANT).versions(PROBE)
+
+
+def test_an_edited_skill_gets_a_new_version_and_a_pin_serves_the_old_body(bridge):
+    adapter, base = bridge
+    _make_probe_skill()
+    ask = f"please use the skill {PROBE} now"
+    assert "GATE-PROBE-BODY" in _send(adapter, base, ask)
+    _registry_for_probe().update_body(PROBE, scope="session", body_md="EDITED-PROBE-BODY v2.")
+    assert "EDITED-PROBE-BODY" in _send(adapter, base, ask)  # unpinned → newest content
+
+    versions = sorted(_probe_versions())
+    assert [v.split("+")[0] for v in versions] == ["0.0.1", "0.0.2"], versions
+    _pin(base, versions[0])  # roll back to the first version
+    prompt = _send(adapter, base, ask)
+    assert "GATE-PROBE-BODY" in prompt and "EDITED-PROBE-BODY" not in prompt
+    runs = [e for e in _events(base, "skill.executed") if e.get("skill_id") == f"prompt.{PROBE}"]
+    assert runs[-1]["skill_version"] == versions[0]  # the chain names what was served
+    assert _events(base, "skill.injection.gated")[-1]["pinned"] == 1
+    _verify(base)
+
+
+def test_a_pin_to_an_unknown_or_altered_version_withholds_never_falls_through(bridge):
+    adapter, base = bridge
+    _make_probe_skill()
+    ask = f"please use the skill {PROBE} now"
+    _send(adapter, base, ask)
+    _pin(base, "0.0.9+deadbeef")
+    prompt = _send(adapter, base, ask)
+    assert "GATE-PROBE-BODY" not in prompt  # not silently "latest"
+    assert _events(base, "skill.injection.gated")[-1]["pin_unavailable"] == 1
+
+    from core.skills.prompt_skill_versions import PromptVersionCatalog
+    _registry_for_probe().update_body(PROBE, scope="session", body_md="EDITED-PROBE-BODY v2.")
+    _pin(base, sorted(_probe_versions())[0])
+    cat = PromptVersionCatalog.for_tenant(TENANT)
+    sha = _probe_versions()[sorted(_probe_versions())[0]]
+    (cat.bodies / f"{sha}.md").write_text("TAMPERED")  # a stored copy altered on disk
+    prompt = _send(adapter, base, ask)
+    assert "TAMPERED" not in prompt and "GATE-PROBE-BODY" not in prompt
+    assert _events(base, "skill.injection.gated")[-1]["pin_unavailable"] == 1
     _verify(base)
