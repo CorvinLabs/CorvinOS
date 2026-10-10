@@ -517,8 +517,14 @@ def collect_active_skills(
     max_skills: int | None = None,
     task_text: str | None = None,
     persona: str | None = None,
+    tenant_id: str | None = None,
 ) -> str | None:
     """Return a markdown block of currently active skills, or None.
+
+    ADR-2175 (T-0104): when this process booted an audited Skills registry, every
+    selected skill is decided by ``registry.execute("prompt.<name>")`` within a
+    per-turn latency budget (``_gate_through_registry``) — audited, versioned,
+    disable-able. Without one, selection is unchanged.
 
     Filtering rules:
       - profile.inject_skills (default True) — set False to opt out.
@@ -657,6 +663,7 @@ def collect_active_skills(
             for req in requested:
                 _diag_excluded_request(req, "registry_unavailable")
 
+    eligible = _gate_through_registry(eligible, reg=reg, tenant_id=tenant_id)
     if not eligible:
         return None
 
@@ -1113,6 +1120,45 @@ def grade_from_user_followup(
         except Exception:  # noqa: BLE001
             continue
     return graded
+
+
+def _gate_through_registry(eligible: list[tuple[str, Any]], *, reg: Any,
+                           tenant_id: str | None) -> list[tuple[str, Any]]:
+    """Keep the skills the Skills registry admits this turn (ADR-2175, T-0104).
+
+    Zero cost when no registry was booted in this process (the module is not even
+    imported). Core quality skills keep their own off switch (``quality_layers``)
+    and are never withheld by a registry disable. Never raises: a gate failure
+    leaves selection as it was, and says so in the log.
+    """
+    if not eligible or "core.skills.skill_registry_phase1" not in sys.modules:
+        return eligible
+    try:
+        import hashlib  # noqa: PLC0415
+        from core.skills.prompt_skill_adapter import (  # noqa: PLC0415
+            PromptSkillSource, gate_injection)
+
+        sources = []
+        for scope, spec in eligible:
+            if scope == "core":
+                sha = hashlib.sha256((spec.body or "").encode("utf-8")).hexdigest()
+                src_scope = "bundle"
+            else:
+                sha = getattr(spec, "sha256", "") or ""
+                src_scope = scope
+            sources.append(PromptSkillSource(
+                name=spec.name, description=spec.description or spec.name,
+                sha256=sha, scope=src_scope))
+        gate = gate_injection(
+            sources, tenant_id=tenant_id,
+            keep_on_disable={spec.name for scope, spec in eligible if scope == "core"})
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("skill registry gate failed (%s) — selection unchanged", type(exc).__name__)
+        return eligible
+    if gate.mode != "gated":
+        return eligible
+    allowed = set(gate.allowed)
+    return [(scope, spec) for scope, spec in eligible if spec.name in allowed]
 
 
 def _load_body(reg: Any, name: str) -> str | None:

@@ -187,6 +187,113 @@ def skillforge_sources(tenant_id: str, *, channel_id: Optional[str] = None,
         return []
 
 
+# ── per-turn injection gate (T-0104) ────────────────────────────────────────
+
+#: The production call site every gated execution names (``execute`` refuses an
+#: unresolvable LoM, so a rename of either part fails the E2E, not silently).
+INJECTION_LOM = "corvin_operator/bridges/shared/skill_inject.py:collect_active_skills"
+#: Hard ceiling on what gating may add to one turn (measured — see ADR-2175 T-0104).
+DEFAULT_BUDGET_MS = 250.0
+#: Per-call timeout. A call is STARTED only when at least this much budget remains,
+#: so a call can never overrun the budget, and a budget-starved call is never
+#: counted as a failure (three would auto-disable the skill).
+PER_CALL_TIMEOUT_MS = 100
+
+
+@dataclass
+class InjectionGate:
+    """Which candidate names may be injected this turn, and how that was decided.
+
+    ``mode``: ``gated`` (audited registry decided), ``registry_unavailable`` /
+    ``tenant_mismatch`` (no admissible registry in this process — everything
+    passes, nothing is audited; the caller's legacy behaviour).
+    """
+
+    mode: str
+    allowed: List[str] = field(default_factory=list)
+    withheld: List[str] = field(default_factory=list)
+    ungated: List[str] = field(default_factory=list)  # budget exhausted → passed un-decided
+    errors: int = 0
+    elapsed_ms: float = 0.0
+    budget_ms: float = DEFAULT_BUDGET_MS
+
+
+def booted_registry() -> Optional[SkillsRegistry]:
+    """The audited registry ``boot_skills`` installed in THIS process, or None.
+
+    Never initialises: ``get_registry()`` would lazily build one WITHOUT an audit
+    backend, and an unaudited decision is not admissible (same rule as the CEL
+    ``l10_adapter`` stage).
+    """
+    mod = sys.modules.get("core.skills.skill_registry_phase1")
+    reg = getattr(mod, "_global_registry", None) if mod is not None else None
+    if reg is None or getattr(reg, "audit_backend", None) is None:
+        return None
+    return reg
+
+
+def gate_injection(candidates: List[PromptSkillSource], *, tenant_id: Optional[str] = None,
+                   keep_on_disable: Iterable[str] = (),
+                   budget_ms: Optional[float] = None) -> InjectionGate:
+    """Run every candidate through ``registry.execute`` within ``budget_ms``.
+
+    * disabled (manually or auto) → withheld, except names in ``keep_on_disable``
+      (the core quality skills, whose off switch is ``quality_layers.py``);
+    * timeout / error → allowed (injection is the pre-registry behaviour; the
+      failure is in the chain) — fail-OPEN on the injection, never on the audit;
+    * budget exhausted → the rest are allowed un-decided and counted.
+
+    One ``skill.injection.gated`` record per turn carries the measurement.
+    """
+    import time as _time  # noqa: PLC0415
+
+    budget_ms = DEFAULT_BUDGET_MS if budget_ms is None else budget_ms
+    names = [c.name for c in candidates]
+    registry = booted_registry()
+    if registry is None:
+        return InjectionGate(mode="registry_unavailable", allowed=names, budget_ms=budget_ms)
+    tid = tenant_id or registry.tenant_id
+    if tid != registry.tenant_id:
+        return InjectionGate(mode="tenant_mismatch", allowed=names, budget_ms=budget_ms)
+
+    gate = InjectionGate(mode="gated", budget_ms=budget_ms)
+    keep = set(keep_on_disable)
+    t0 = _time.perf_counter()
+    sync_prompt_skills(registry, candidates, tenant_id=tid)
+    for src in candidates:
+        elapsed = (_time.perf_counter() - t0) * 1000.0
+        if budget_ms - elapsed < PER_CALL_TIMEOUT_MS:
+            gate.ungated.append(src.name)
+            gate.allowed.append(src.name)
+            continue
+        r = registry.execute(prompt_skill_id(src.name), {"phase": "inject"},
+                             timeout_ms=PER_CALL_TIMEOUT_MS, lom=INJECTION_LOM, tenant_id=tid)
+        decision = r.output.get("decision") if isinstance(r.output, dict) else None
+        if r.error_class == "skill_auto_disabled" and src.name not in keep:
+            gate.withheld.append(src.name)
+        elif r.status == "success" and decision != "inject":
+            gate.withheld.append(src.name)
+        else:
+            if r.status != "success":
+                gate.errors += 1
+            gate.allowed.append(src.name)
+    gate.elapsed_ms = round((_time.perf_counter() - t0) * 1000.0, 2)
+    registry._write_audit({
+        "event_type": "SKILL_INJECTION_GATED",
+        "candidates": len(candidates),
+        "allowed": len(gate.allowed),
+        "withheld": len(gate.withheld),
+        "ungated": len(gate.ungated),
+        "errors": gate.errors,
+        "elapsed_ms": gate.elapsed_ms,
+        "budget_ms": budget_ms,
+        "budget_exceeded": bool(gate.ungated),
+        "timestamp": _utc_now_iso(),
+        "tenant_id": tid,
+    })
+    return gate
+
+
 def collect_prompt_sources(tenant_id: str, **scope: Any) -> List[PromptSkillSource]:
     """Bundle skills win over a same-named SkillForge skill (the injector's rule)."""
     bundle = bundle_sources()
@@ -194,5 +301,6 @@ def collect_prompt_sources(tenant_id: str, **scope: Any) -> List[PromptSkillSour
     return bundle + [s for s in skillforge_sources(tenant_id, **scope) if s.name not in taken]
 
 
-__all__ = ["PromptSkill", "PromptSkillSource", "SyncResult", "collect_prompt_sources",
+__all__ = ["InjectionGate", "PromptSkill", "PromptSkillSource", "SyncResult",
+           "booted_registry", "collect_prompt_sources", "gate_injection",
            "prompt_skill_id", "prompt_skill_version", "sync_prompt_skills"]

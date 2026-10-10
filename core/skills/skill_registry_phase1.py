@@ -366,6 +366,11 @@ SKILL_AUDIT_ALLOWLISTS: Dict[str, frozenset] = {
     "skill.migrated": frozenset({
         "skill_id", "skill_version", "source", "action", "content_hash", "timestamp", "tenant_id",
     }),
+    # ADR-2175 T-0104: one record per turn — the measured cost of gating injection.
+    "skill.injection.gated": frozenset({
+        "candidates", "allowed", "withheld", "ungated", "errors", "elapsed_ms",
+        "budget_ms", "budget_exceeded", "timestamp", "tenant_id",
+    }),
     "skill.auto.disabled": frozenset({"skill_id", "timestamp", "tenant_id", "failures"}),
     "skill.disable.refused": frozenset({
         "skill_id", "tier", "operation", "timestamp", "tenant_id", "failures",

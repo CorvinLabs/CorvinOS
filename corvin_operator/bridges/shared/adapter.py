@@ -3307,6 +3307,7 @@ def _resolve_spawn_inputs(
             skill_block = _skill_inject.collect_active_skills(
                 channel_id=cid, profile=profile,
                 task_text=prompt, persona=_sk_persona or None,
+                tenant_id=_cl_tid,
             )
         except Exception as e:  # noqa: BLE001
             log(f"skill_inject failed: {e}")

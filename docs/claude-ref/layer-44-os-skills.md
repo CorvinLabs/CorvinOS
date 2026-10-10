@@ -401,18 +401,18 @@ async def execute_workflow_optimization(input: Dict) -> Dict:
 
 Every OS-Skill decision is **immutable, hash-chained, and auditable**.
 
-**Three audit events per skill invocation:**
+**Audit events per skill (boot, invocation, optimization):**
 
 | Event | Timing | Purpose |
 |-------|--------|---------|
-| `skill_loaded` | Boot-time | Skill version, boot layer, dependencies |
+| `skill.migrated` | Boot-time | A prompt skill (`prompt.<name>`) entered the registry / changed hash (ADR-2175) |
 | `skill_executed` | Phases 0–10 | Input, output, latency, reasoning, lom |
 | `skill_config_updated` | Phase 11 (async) | Optimizer param changes, reason |
 
 **Example audit trail** (for one `os.delegation_router` invocation):
 
 ```jsonl
-{"event_type":"skill_loaded","skill_id":"os.delegation_router","version":"1.2.3","boot_layer":"bundled","dependencies":[],"timestamp":"2026-09-01T12:00:00Z","tenant_id":"tenant_123","hash":"sha256(abc...)","prev_hash":"sha256(xyz...)"}
+{"event_type":"skill.migrated","skill_id":"prompt.adr_gate","skill_version":"0.0.0+1a2b3c4d","source":"bundle","action":"registered","content_hash":"1a2b3c4d5e6f7a8b","timestamp":"2026-10-10T12:00:00Z","tenant_id":"tenant_123","hash":"sha256(abc...)","prev_hash":"sha256(xyz...)"}
 {"event_type":"skill_executed","skill_id":"os.delegation_router","run_id":"run_2026_09_01_xyz","input":{"task_shape":"small_code","context_size":500},"output":{"decision":"native","confidence":0.92,"reasoning":"Task < 5K tokens, native execution faster"},"latency_ms":42,"lom":"os_skills/delegation_router.py:L237","tenant_id":"tenant_123","timestamp":"2026-09-01T12:34:56Z","hash":"sha256(def...)","prev_hash":"sha256(abc...)"}
 {"event_type":"skill_feedback","skill_id":"os.delegation_router","run_id":"run_2026_09_01_xyz","signal":"correct","feedback_source":"operator_ui","timestamp":"2026-09-01T12:35:10Z","tenant_id":"tenant_123","hash":"sha256(ghi...)","prev_hash":"sha256(def...)"}
 {"event_type":"skill_config_updated","skill_id":"os.delegation_router","param_name":"confidence_threshold","param_before":0.85,"param_after":0.87,"reason":"false_positive_reduction","confidence_delta":0.03,"timestamp":"2026-09-01T12:36:00Z","tenant_id":"tenant_123","hash":"sha256(jkl...)","prev_hash":"sha256(ghi...)"}
@@ -426,42 +426,55 @@ Every OS-Skill decision is **immutable, hash-chained, and auditable**.
 
 ---
 
-## Feedback Validation (ADR-0534)
+## Feedback Validation (ADR-0534, built 2026-10-10)
 
-OS-Skills learn from feedback, but **feedback must be validated** to prevent poisoning attacks.
+OS-Skills learn from feedback, but **feedback must be validated** to prevent poisoning.
+The gate is `core/learning/feedback_gate.admit()`, run inside `EventStore.write_event` for
+every `FEEDBACK` learning event (and by `POST /feedback/skill`, which moves a live config
+without storing one). Fail-closed; every decision is chained; a refusal answers HTTP 422
+`{error, reason, audit_ref}`.
 
-**Three validation layers** (all fail-closed):
+| Layer | Rule | Chained event |
+|---|---|---|
+| 1 Throttle (`feedback_throttle.py`) | ≤ 5 decisions / 60 s per subject, counted over a persisted content-free ledger; **no override secret** | `learning.feedback_throttled` |
+| 2 Reality (`reality_check.py`) | the skill ran (a `skill_executed` learning event of this tenant) within 24 h before the signal; an optional `claimed_output_hash` must match a run's output; `tool:<id>` is unverifiable | `learning.feedback_rejected`, `learning.feedback_reality_mismatch` |
+| 3 Trust (`adversarial_detector.py`) | `trust_weight = max(0.1, 1 − rejected/total)` over the last 20 decisions, stamped into `signal.trust_weight`, applied by every consumer; < 0.3 alerts | `learning.adversarial_feedback_detected` |
 
-### Layer 1: Rate Throttle (Malice Detection)
-```python
-# Reject feedback bursts (e.g., 5+ signals/60sec → adversarial)
-FeedbackRateLimiter(
-    skill_id='os.delegation_router',
-    window_sec=60,
-    max_per_window=5,
-)
-```
-**Audit event:** `feedback_throttled` (if rejected)
+Accepted → `learning.feedback_accepted`. Full reference: [learning-loop.md](learning-loop.md)
+§ Feedback trust gate.
 
-### Layer 2: Reality Check (Audit Cross-Check)
-```python
-# Feedback must describe what skill actually did
-# Checks: output_hash matches, timestamp within 10sec, tenant_id matches
-RealityValidator.validate_feedback(feedback, skill_id, audit_backend)
-```
-**Audit event:** `feedback_rejected` (if inconsistent)
+---
 
-### Layer 3: Adversarial Detection (PII Filtering)
-```python
-# Remove any PII-prone fields before feeding to optimizer
-AdversarialDetector.sanitize_feedback(feedback)
-```
-**Audit event:** `adversarial_feedback_detected` (if suspicious)
+## Prompt skills are registry skills (ADR-2175, T-0103 + T-0104 built 2026-10-10)
 
-**All three layers:**
-- Log every decision (GDPR Art. 30, 32)
-- Fail-closed (rejects by default)
-- Operator can override with secret (audit-logged)
+Every SKILL.md of the shipped bundle and every SkillForge skill visible to the tenant is
+registered by `skills.boot.boot_skills` as **`prompt.<name>`** (`core/skills/prompt_skill_adapter.py`,
+one generic `PromptSkill`):
+
+* **Version = content hash** (`0.0.0+<sha8>`); a changed hash re-registers the skill.
+* **`skill.migrated`** is chained once per new (id, hash): ids, source label, 16 hex of the
+  hash, action (`registered`/`updated`) — never the body.
+* `execute()` answers `{"decision": "inject", "mode": <scope>}`; tier `installed`, `learn=False`
+  (one run per injected skill per turn would flood the learning store; every run is still audited).
+* `skill.executed` records now carry `skill_version` for every skill.
+* **Injection goes through the registry (T-0104).** `skill_inject.collect_active_skills` — the one
+  choke point for the bridge and the delegate engines — hands its selection to
+  `prompt_skill_adapter.gate_injection`, which syncs the selected skills (so a skill forged after boot
+  is registered on its first turn) and runs `registry.execute("prompt.<name>")` for each:
+  * registry-disabled → **withheld**, except the core quality skills (`adr_gate`, `e2e-wiring-proof`,
+    `concept_gate`), whose off switch stays `quality_layers.py`;
+  * timeout / error → **injected** (fail-open on injection, never on audit — the failure is chained);
+  * **per-turn budget 250 ms** (`DEFAULT_BUDGET_MS`): a call starts only if ≥ 100 ms
+    (`PER_CALL_TIMEOUT_MS`) remain, so gating can never overrun it, and a budget-starved skill is passed
+    un-decided instead of counted as a failure (three failures would auto-disable it). Measured with the
+    real chain writer: 8 skills p50 12 ms, p95 20 ms, max 21 ms.
+  * one **`skill.injection.gated`** record per turn: candidates / allowed / withheld / ungated / errors /
+    elapsed_ms / budget_ms / budget_exceeded.
+  * No audited registry in the process (`booted_registry()` is None — never lazily created) or a turn
+    tenant ≠ boot tenant → selection unchanged, nothing gated.
+* One version per id (T-0105 open).
+
+Proof: `tests/skills/test_prompt_skill_adapter_e2e.py`, `tests/e2e/test_prompt_skill_injection_gate_bridge_e2e.py` (through `adapter.process_one`, argv dump, verified chain).
 
 ---
 
