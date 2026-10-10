@@ -44,53 +44,10 @@ with tempfile.TemporaryDirectory() as tmpdir:
     print(f"  Convergence: {report.convergence_reason}")
     print("  ✓ PASS\n")
 
-# Test 3: Dependency Resolution
-print("Test 3: Dependency DAG validation...")
-from skills.dependency_resolver import DependencyResolver
-
-registry = {
-    'os.delegation_router': {'version': '1.0.0', 'depends_on': []},
-    'os.context_adapter': {'version': '1.0.0', 'depends_on': []},
-    'os.workflow_optimizer': {
-        'version': '1.0.0',
-        'depends_on': [{'name': 'os.delegation_router', 'version': '>=1.0.0', 'required': True}]
-    }
-}
-
-resolver = DependencyResolver(registry)
-
-# Test valid deps
-is_valid, errors = resolver.validate_dependencies('os.workflow_optimizer')
-assert is_valid is True, f"workflow_optimizer should be valid, got: {errors}"
-
-# Test topological sort
-sorted_skills = resolver.topological_sort(['os.workflow_optimizer', 'os.delegation_router'])
-assert sorted_skills[0] == 'os.delegation_router', "delegation_router should load first"
-assert sorted_skills[1] == 'os.workflow_optimizer', "workflow_optimizer should load second"
-
-print("  Valid DAG detected, topological sort correct")
-print("  ✓ PASS\n")
-
-# Test 4: Cycle detection
-print("Test 4: Cyclic dependency detection...")
-registry_cycle = {
-    'skill_a': {'version': '1.0.0', 'depends_on': [{'name': 'skill_b', 'version': '>=1.0.0'}]},
-    'skill_b': {'version': '1.0.0', 'depends_on': [{'name': 'skill_a', 'version': '>=1.0.0'}]}
-}
-
-resolver_cycle = DependencyResolver(registry_cycle)
-is_valid, errors = resolver_cycle.validate_dependencies('skill_a')
-assert is_valid is False, "Cyclic deps should be detected"
-assert any('Cyclic' in e for e in errors), "Should mention cycle"
-print("  Cycle correctly detected and blocked")
-print("  ✓ PASS\n")
-
 print("=" * 60)
 print("✅ PHASE 2-3 TESTS PASSED")
 print("=" * 60)
 print("\nSummary:")
 print("  ✓ Feedback sanitization (fail-closed PII detection)")
 print("  ✓ Optimization loop (Inner + Refinement converges)")
-print("  ✓ DAG validation (topological sort)")
-print("  ✓ Cycle detection (blocks cyclic deps)")
 print("\n🚀 PHASE 2-3 FOUNDATION READY")

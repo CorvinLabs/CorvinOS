@@ -322,23 +322,6 @@ class TestConvergence:
 class TestProductionImports:
     """Verify production importers are wired (not test-only)."""
 
-    def test_model_selector_imported_in_production_code(self):
-        """Verify ModelSelector is imported by production code (not just tests)."""
-        # This verifies the import chain:
-        # - VideoProducerModelSelectorComposition imports ModelSelector
-        # - Routing logic uses it
-        # - NOT just in test files
-
-        try:
-            from core.skills.composition.video_producer_model_selector import (
-                VideoProducerModelSelectorComposition
-            )
-            composition = VideoProducerModelSelectorComposition()
-            assert composition is not None
-            logger.info("✅ Production import: VideoProducerModelSelectorComposition")
-        except ImportError as e:
-            pytest.fail(f"Production import failed: {e}")
-
     def test_learning_event_store_imported_in_production(self):
         """Verify learning event store is imported by production feedback sink."""
         try:

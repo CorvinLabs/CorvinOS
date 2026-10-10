@@ -13,7 +13,7 @@ Tests the complete plugin lifecycle and compliance guarantees:
 
 # ── Not runnable on main (2026-09-20 adversarial review) ─────────────────
 # The manifest module ships DependencyConflictError, not a Dependency type;
-# the dependency resolver is core/skills/dependency_resolver.py.
+# the plugin dependency resolver is core/plugins/dependency_resolver.py.
 #
 # This was a COLLECTION ERROR in every full run, i.e. invisible rather than
 # pending. Delete this guard in the commit that reconciles the APIs.
