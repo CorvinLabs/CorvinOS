@@ -496,6 +496,17 @@ Proof: `tests/skills/test_prompt_skill_adapter_e2e.py`, `tests/e2e/test_prompt_s
 - **Peer turns get no operator skills.** Inbound A2A tasks and agent-conversation turns carry a stranger's words; injecting
   the operator's skills there would hand over working knowledge. `tests/security/test_a2a_turns_carry_no_operator_skills.py`
   fails if those modules start reaching the injector.
+- **Composition is not a Skill (ADR-2250).** Dependency admission is a registry invariant: `SkillsRegistry.execute()` →
+  `skill_dag_loader.DependencyValidator`. `skill_dag_loader.py` is the one composition module. Six parallel
+  implementations with no production caller were deleted (`composer.py`, `dependency_resolver.py`,
+  `skill_dependency_resolver.py`, `skill_manifest_dependencies.py`, `core/skills/composition/`,
+  `core/learning/composition_engine.py`). Measured when decided: 25 booted skills, none declaring `depends_on`.
+  A composer Skill is reconsidered only when a skill declares a dependency, a caller needs an order or selection
+  among several, and there is a score to learn from.
+- **A pinned chat name decides the namespace, not the capabilities (ADR-0537, T-0101).** Every turn gets the one
+  capability profile; `resolve(<file>, identity=<name>)` binds `FORGE_PERSONA` / `SKILL_FORGE_PERSONA` /
+  `CORVIN_CALLER_PERSONA` and the forge brief to the pinned name. A chat the operator restricted
+  (`allowed_tools`, `disallowed_tools`, `permission_mode`) or with `routing.mode = off` stays exactly as configured.
 
 ---
 

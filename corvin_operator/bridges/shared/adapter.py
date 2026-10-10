@@ -1949,7 +1949,7 @@ def _apply_auto_routing(prompt: str, channel: str, chat_key: str,
     with NO persona, and the explicit-skill namespace gate — fail-closed on an
     unresolved persona, by design — refused every explicit skill request."""
     if profile.get("persona"):
-        return profile  # explizit gepinnt — Auto-Routing umgehen
+        return _pinned_identity(profile, _routing_config(shared_settings, profile))
     cfg = _routing_config(shared_settings, profile)
     if _cowork is None or _router is None:
         return _fallback_identity(profile, cfg, "fallback (persona router unavailable)")
@@ -2083,6 +2083,33 @@ def _fallback_identity(profile: dict, cfg: dict, why: str, *,
             log(f"capability profile {name!r} unavailable: {e}")
     return {**base, "_auto_routed": name, "_auto_routed_why": why,
             "_auto_routed_confidence": confidence}
+
+
+def _pinned_identity(profile: dict, cfg: dict) -> dict:
+    """A chat pinned to a persona NAME keeps that name (the attribution namespace)
+    and gets the same single capability profile as every other turn (ADR-0537, T-0101).
+
+    A pin used to return the profile untouched, so a chat pinned to a name with no
+    file (the live ``coder`` pin) ran with no Forge / SkillForge MCP servers. The
+    name decides only the namespace; capability is not chosen per turn, so the
+    ``assistant`` capability profile is laid over the chat profile and the pinned
+    name is put back on top. Same limits as ``_fallback_identity``: a chat the
+    operator restricted, or ``routing.mode = off``, stays exactly as configured."""
+    pinned = profile["persona"]
+    restricted = any(profile.get(k) is not None
+                     for k in ("allowed_tools", "disallowed_tools", "permission_mode"))
+    if _cowork is None or restricted or cfg.get("mode") == "off":
+        return profile
+    for source in (pinned, cfg.get("fallback_persona") or "assistant"):
+        try:
+            # capabilities from `source`'s file, bound to the PINNED namespace
+            resolved = _cowork.resolve(source, overrides=profile, identity=pinned)
+        except Exception as e:  # noqa: BLE001
+            log(f"capability profile {source!r} unavailable: {e}")
+            continue
+        if isinstance(resolved, dict) and resolved.get("_persona"):
+            return {**profile, **resolved, "persona": pinned}
+    return profile
 
 
 def _persona_has_namespace_gate(persona_name: str | None) -> bool:

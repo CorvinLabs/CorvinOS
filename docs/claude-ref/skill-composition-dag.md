@@ -1,5 +1,7 @@
 # Skill Composition & DAG (ADR-0535)
 
+> **Status (ADR-2250, 2026-10-10):** only the dependency VALIDATION is wired (`SkillsRegistry.execute()`). `SkillDAGLoader`, `topological_sort_skills` and `load_skills_with_dag` have no production caller yet: no booted skill declares `depends_on`. Composition is not a Skill; the six other implementations were deleted.
+
 > Load when building OS-Skills that depend on other Skills, or when implementing skill composition.
 
 ## Overview

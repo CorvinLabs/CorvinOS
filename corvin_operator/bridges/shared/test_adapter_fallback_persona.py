@@ -53,11 +53,15 @@ def _fresh_adapter(env_overrides: dict[str, str]):
     return importlib.import_module("adapter")
 
 
-def _run_turn(text: str, mode: str, *, with_args: bool = False):
+def _run_turn(text: str, mode: str, *, with_args: bool = False, chat_profile: dict | None = None):
     base = Path(tempfile.mkdtemp(prefix="adapter-fallback-persona-"))
     for d in ("inbox", "outbox", "processed"):
         (base / d).mkdir()
     audit_path = base / "audit.jsonl"
+    if chat_profile is not None:
+        (base / "bridges" / "discord").mkdir(parents=True)
+        (base / "bridges" / "discord" / "settings.json").write_text(
+            json.dumps({"chat_profiles": {"c-1": chat_profile}}))
     env = {
         "ADAPTER_INBOX": str(base / "inbox"),
         "ADAPTER_OUTBOX": str(base / "outbox"),
@@ -157,7 +161,42 @@ def test_unpinned_turn_gets_the_capability_profile():
       env.get("FORGE_PERSONA") == "assistant", detail=str(env.get("FORGE_PERSONA")))
 
 
+def test_pinned_name_without_a_file_gets_the_capability_profile():
+    """ADR-0537 T-0101: the live Discord settings pin ``coder`` for one chat; no
+    persona file has that name. The pin decides the namespace only — the chat gets
+    the same capability profile as every other turn, and is still attributed as
+    ``coder`` (so ``assistant.*`` skills stay outside its namespace)."""
+    print("\n[chat pinned to a name with no file → capability profile, namespace kept]")
+    _events, _diag, dumps = _run_turn("hello there", "heuristic", with_args=True,
+                                      chat_profile={"persona": "coder"})
+    t("fake CLI argv was dumped", bool(dumps), detail=str(len(dumps)))
+    if not dumps:
+        return
+    prof, argv = dumps[-1]["profile"] or {}, dumps[-1]["args"]
+    t("pinned name survives the merge", prof.get("persona") == "coder", detail=str(prof.get("persona")))
+    servers = _mcp_servers(argv)
+    t("real argv carries the forge + skill_forge MCP servers",
+      "forge" in servers and "skill_forge" in servers, detail=str(sorted(servers)))
+    env = (servers.get("forge") or {}).get("env") or {}
+    t("forge MCP runs under the PINNED namespace, not the fallback",
+      env.get("FORGE_PERSONA") == "coder", detail=str(env.get("FORGE_PERSONA")))
+
+
+def test_restricted_pinned_chat_is_never_widened():
+    print("\n[restricted + pinned chat → profile untouched]")
+    _events, _diag, dumps = _run_turn("hello there", "heuristic", with_args=True,
+                                      chat_profile={"persona": "coder", "allowed_tools": ["Read"]})
+    if not dumps:
+        t("fake CLI argv was dumped", False)
+        return
+    servers = _mcp_servers(dumps[-1]["args"])
+    t("no Forge tools unioned into a read-only chat",
+      "forge" not in servers and "skill_forge" not in servers, detail=str(sorted(servers)))
+
+
 if __name__ == "__main__":
+    test_pinned_name_without_a_file_gets_the_capability_profile()
+    test_restricted_pinned_chat_is_never_widened()
     test_fallback_identity_restored()
     test_gate_stays_closed_outside_the_namespace()
     test_unpinned_turn_gets_the_capability_profile()

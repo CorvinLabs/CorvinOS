@@ -295,6 +295,12 @@ def _persona_network_status(persona_name: str) -> str:
             "implementations and stdlib modules.")
 
 
+def _policy_namespace(persona_name: str) -> str | None:
+    """The registration prefix policy assigns to *persona_name* (``coder`` → ``code``)."""
+    ns = _bundle_policy_data().get("persona_namespaces") or {}
+    return ns.get(persona_name) or None
+
+
 def _persona_has_namespace_gate(persona_name: str) -> bool:
     """True iff the persona has a registration prefix entry in policy."""
     ns = _bundle_policy_data().get("persona_namespaces") or {}
@@ -425,7 +431,7 @@ def list_available() -> list[dict]:
     return [seen[k] for k in sorted(seen)]
 
 
-def resolve(name: str, overrides: dict | None = None) -> dict:
+def resolve(name: str, overrides: dict | None = None, *, identity: str | None = None) -> dict:
     """Persona laden + chat_profile-Overrides reinmergen.
 
     Skalare (permission_mode, append_system, model): overrides gewinnt.
@@ -439,9 +445,16 @@ def resolve(name: str, overrides: dict | None = None) -> dict:
     Alias resolution: persona name passes through ``_PERSONA_ALIASES`` before
     lookup so historical bindings (e.g. ``persona = "skill-forge"``) continue
     to resolve to the unified target.
+
+    ``identity`` (ADR-0537, T-0101): the attribution namespace the capabilities are
+    bound to when it is not the file's own name — a chat pinned to a name that has no
+    persona file gets ``name``'s capability profile under ``identity``'s namespace
+    (``FORGE_PERSONA`` / ``SKILL_FORGE_PERSONA`` / ``CORVIN_CALLER_PERSONA`` and the
+    forge brief name ``identity``; the flags come from ``name``'s file).
     """
     name = _PERSONA_ALIASES.get(name, name)
     persona = load(name)
+    ident = identity or name
     overrides = overrides or {}
     if persona is None:
         # Persona nicht gefunden → liefer overrides unchanged back
@@ -518,15 +531,15 @@ def resolve(name: str, overrides: dict | None = None) -> dict:
     # Diagnose-Felthat throughreichen.
     out["_persona"] = persona.get("name", name)
     out["_persona_source"] = persona.get("_source")
-    out = _inject_forge_capability(out, name)
-    out = _inject_skill_forge_capability(out, name)
-    out = _inject_delegate_capability(out, name)
-    out = _inject_orchestration_capability(out, name)
+    out = _inject_forge_capability(out, ident, name)
+    out = _inject_skill_forge_capability(out, ident, name)
+    out = _inject_delegate_capability(out, ident, name)
+    out = _inject_orchestration_capability(out, ident, name)
     # ADR-0190 — runs LAST of the five injectors so it can read the
     # resolved forge_enabled/skill_forge_enabled/delegate_enabled/
     # orchestration_enabled flags off `out` and describe only what THIS
     # persona actually has, not a one-size-fits-all map.
-    out = _inject_capability_awareness(out, name)
+    out = _inject_capability_awareness(out, ident, name)
 
     # Layer-14 LDD section: persona preset/delta + chat-profile overrides.
     # Result lives directly on the merged profile dict, where the bridge
@@ -540,7 +553,7 @@ def resolve(name: str, overrides: dict | None = None) -> dict:
     return out
 
 
-def _inject_forge_capability(merged: dict, persona_name: str) -> dict:
+def _inject_forge_capability(merged: dict, persona_name: str, source: str | None = None) -> dict:
     """Layer 9 — every persona with ``forge_enabled: true`` inherits forge
     tools (forge_tool, forge_promote). Idempotent. The forge persona itself
     is left untouched (it ships its own MCP config). Default without the
@@ -560,7 +573,7 @@ def _inject_forge_capability(merged: dict, persona_name: str) -> dict:
     FORGE_PERSONA remains as the persona-attribution tag for the audit log.
     """
     if not persona_name or persona_name == "forge":  return merged
-    persona = load(persona_name)
+    persona = load(source or persona_name)
     if not persona:                                  return merged
     if not persona.get("forge_enabled"):             return merged
     out = dict(merged)
@@ -602,12 +615,16 @@ def _inject_forge_capability(merged: dict, persona_name: str) -> dict:
             "env": env,
         }
     out["mcp_servers"] = mcp
-    namespace = persona.get("tool_namespace") or persona_name
+    if source and source != persona_name:
+        # capabilities borrowed from another file: that file's tool_namespace is not ours
+        namespace = _policy_namespace(persona_name) or persona_name
+    else:
+        namespace = persona.get("tool_namespace") or persona_name
     _ensure_brief(out, _build_forge_brief(persona_name, namespace))
     return out
 
 
-def _inject_skill_forge_capability(merged: dict, persona_name: str) -> dict:
+def _inject_skill_forge_capability(merged: dict, persona_name: str, source: str | None = None) -> dict:
     """Layer 9 — opt-in skill-forge MCP server materialization.
 
     Mirrors ``_inject_forge_capability`` for the skill-forge plugin. Every
@@ -623,7 +640,7 @@ def _inject_skill_forge_capability(merged: dict, persona_name: str) -> dict:
     """
     if not persona_name or persona_name == "skill-forge":
         return merged
-    persona = load(persona_name)
+    persona = load(source or persona_name)
     if not persona:
         return merged
     if not persona.get("skill_forge_enabled"):
@@ -719,7 +736,7 @@ _ORCHESTRATION_BRIEF = (
 )
 
 
-def _inject_orchestration_capability(merged: dict, persona_name: str) -> dict:
+def _inject_orchestration_capability(merged: dict, persona_name: str, source: str | None = None) -> dict:
     """ADR-0190 M4/M5/M6 — inject workflow_run/resume/list_paused and
     acs_delegate MCP tools when persona has orchestration_enabled=True.
     Mirror of _inject_delegate_capability.
@@ -739,7 +756,7 @@ def _inject_orchestration_capability(merged: dict, persona_name: str) -> dict:
     """
     if not persona_name:
         return merged
-    persona = load(persona_name)
+    persona = load(source or persona_name)
     if not persona:
         return merged
     if not persona.get("orchestration_enabled"):
@@ -786,7 +803,7 @@ def _inject_orchestration_capability(merged: dict, persona_name: str) -> dict:
     return out
 
 
-def _inject_delegate_capability(merged: dict, persona_name: str) -> dict:
+def _inject_delegate_capability(merged: dict, persona_name: str, source: str | None = None) -> dict:
     """Layer 29 — inject delegate_* MCP tools when persona has
     delegate_enabled=True. Mirror of _inject_forge_capability /
     _inject_skill_forge_capability. Idempotent.
@@ -799,7 +816,7 @@ def _inject_delegate_capability(merged: dict, persona_name: str) -> dict:
     """
     if not persona_name:
         return merged
-    persona = load(persona_name)
+    persona = load(source or persona_name)
     if not persona:
         return merged
     if not persona.get("delegate_enabled"):
@@ -875,7 +892,7 @@ def _inject_delegate_capability(merged: dict, persona_name: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _inject_capability_awareness(merged: dict, persona_name: str) -> dict:
+def _inject_capability_awareness(merged: dict, persona_name: str, source: str | None = None) -> dict:
     """ADR-0190 — inject the self-aware capability map when the persona
     opts in via ``capability_aware: true``.
 
@@ -894,7 +911,7 @@ def _inject_capability_awareness(merged: dict, persona_name: str) -> dict:
     """
     if not persona_name:
         return merged
-    persona = load(persona_name)
+    persona = load(source or persona_name)
     if not persona:
         return merged
     if not persona.get("capability_aware"):

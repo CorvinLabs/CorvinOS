@@ -284,7 +284,30 @@ def test_brief_skipped_when_capability_off():
       out.get("append_system") == "Be terse.")
 
 
+def test_identity_rebinds_the_namespace_not_the_capabilities():
+    """ADR-0537 T-0101: ``resolve(<file>, identity=<pinned name>)`` grants <file>'s
+    capabilities but binds every attribution tag and the forge brief to the pinned
+    name — a chat pinned to a name that has no persona file."""
+    print("\n[identity= rebinds the namespace]")
+    merged = resolver.resolve("coder", identity="research")
+    mcp = merged.get("mcp_servers") or {}
+    t("forge + skill_forge MCP servers present", "forge" in mcp and "skill_forge" in mcp,
+      detail=str(sorted(mcp)))
+    t("FORGE_PERSONA is the pinned name", (mcp.get("forge") or {}).get("env", {}).get("FORGE_PERSONA") == "research")
+    t("SKILL_FORGE_PERSONA is the pinned name",
+      (mcp.get("skill_forge") or {}).get("env", {}).get("SKILL_FORGE_PERSONA") == "research")
+    tags = json.dumps({k: (v.get("env") or {}).get("CORVIN_CALLER_PERSONA") for k, v in mcp.items()})
+    t("no caller tag still names the capability source", "coder" not in tags, detail=tags)
+    brief = merged.get("append_system") or ""
+    t("brief names the pinned namespace, not the source's 'code.'",
+      "research." in brief and "`code.`" not in brief and "code.<" not in brief)
+    plain = resolver.resolve("coder")
+    t("without identity= nothing changes",
+      plain["mcp_servers"]["forge"]["env"]["FORGE_PERSONA"] == "coder")
+
+
 def main() -> int:
+    test_identity_rebinds_the_namespace_not_the_capabilities()
     test_zero_config_personas_get_forge_tools()
     test_forge_persona_unified_pattern()
     test_persona_can_opt_out()
