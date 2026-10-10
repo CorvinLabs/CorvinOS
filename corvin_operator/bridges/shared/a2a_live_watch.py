@@ -59,6 +59,8 @@ SOURCE_GLOBS = (
     "corvin_operator/bridges/shared/a2a_*.py",
     "corvin_operator/license/compute_quota.py",
     "core/console/corvin_console/routes/a2a_*.py",
+    "core/console/corvin_console/routes/federation_routes.py",
+    "core/federation/*.py",
     "core/gateway/corvin_gateway/app.py",
 )
 #: Files the glob matches that the HOST never loads (the watch and its probe run beside it): a change to
@@ -161,8 +163,8 @@ def service_started_ts(unit: str | None) -> float | None:
         env = dict(os.environ)
         # A timer/cron/bare-shell run may lack the user-manager coordinates systemctl --user needs; without
         # them the freshness check would silently skip — on exactly the hosts it exists to catch.
-        rt = f"/run/user/{os.getuid()}"
-        if "XDG_RUNTIME_DIR" not in env and Path(rt).is_dir():
+        rt = f"/run/user/{os.getuid()}" if hasattr(os, "getuid") else ""
+        if rt and "XDG_RUNTIME_DIR" not in env and Path(rt).is_dir():
             env["XDG_RUNTIME_DIR"] = rt
             env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={rt}/bus")
         out = subprocess.run(["systemctl", "--user", "show", unit, "-p", "ActiveEnterTimestampMonotonic", "--value"],

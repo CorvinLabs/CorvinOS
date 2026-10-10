@@ -385,6 +385,21 @@ class TestFreshnessAndVerdict(unittest.TestCase):
             ts, name = watch.newest_source(repo)
             self.assertEqual((ts, name), (1000.0, "a2a_worker.py"))
 
+    def test_federation_code_counts_as_host_code(self):
+        """Found live (2026-10-10): the console UI was new while the backend still lacked the federation routes
+        it calls, and the watch could not say so because it did not look at core/federation."""
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            for rel in ("core/federation/local_agent.py", "core/console/corvin_console/routes/federation_routes.py"):
+                f = repo / rel
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text("x")
+                os.utime(f, (5000, 5000))
+            ts, name = watch.newest_source(repo)
+            self.assertEqual(ts, 5000.0)
+            self.assertIn(name, ("local_agent.py", "federation_routes.py"))
+            self.assertFalse(watch.source_is_newer(1000.0, ts, name).ok)
+
     def test_verdict_levels(self):
         ok, warn, crit = (watch.Check("a", True), watch.Check("b", False, severity="warn"), watch.Check("c", False))
         self.assertEqual(watch.verdict([ok]), "healthy")
