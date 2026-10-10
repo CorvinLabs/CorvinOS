@@ -82,6 +82,31 @@ export async function sendMessage(
   });
 }
 
+// ── Group commands ────────────────────────────────────────────────────────
+// A `/` line in the group composer must never go through `sendMessage` — it
+// would be fanned out to every peer as plain text. It goes to the server-side
+// dispatcher; the command table is fetched, never hard-coded (ADR-2235 (e)).
+
+export interface GroupCommand {
+  cmd: string;
+  args: string;
+  desc: string;
+}
+
+export async function getGroupCommands(signal?: AbortSignal): Promise<{ commands: GroupCommand[] }> {
+  return api(`/chat/group-commands`, { signal });
+}
+
+export async function sendGroupCommand(
+  groupId: string, line: string, senderParticipantId: string, csrf: string,
+): Promise<{ executed: boolean; reason?: string; kind?: string } & Record<string, unknown>> {
+  return api(`/chat/groups/${encodeURIComponent(groupId)}/command`, {
+    method: "POST",
+    body: { line, sender_participant_id: senderParticipantId },
+    csrf,
+  });
+}
+
 // ── Attachments (mirrors api/chat.ts::uploadAttachments — same 50 MB/file
 // limit, no extension whitelist; stored under the group's own
 // attachments/ directory, see routes/chat_groups.py::upload_group_attachments) ──

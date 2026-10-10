@@ -56,3 +56,42 @@ test("session chat: palette opens and is opaque", async ({ page }) => {
   await opaque(page);
   await expect(page.getByTestId("slash-palette").getByText("/help", { exact: true })).toBeVisible();
 });
+
+test("group chat: palette shows the server table, a / line hits the dispatcher and is never a group message", async ({ page }) => {
+  const GID = "grp-e2e-slash";
+  const group = {
+    group_id: GID, title: "E2E Group", created_at: NOW(), created_by: "operator",
+    participants: [
+      { participant_id: "operator", kind: "human", display_name: "operator", peer_endpoint_id: null, added_at: NOW(), added_by: "operator" },
+      { participant_id: "bob", kind: "a2a_peer", display_name: "Bob", peer_endpoint_id: "ep-bob", added_at: NOW(), added_by: "operator" },
+    ],
+  };
+  await page.route(/\/v1\/console\/chat\/groups$/, (route) => route.fulfill({ json: [group] }));
+  await page.route(new RegExp(`/v1/console/chat/groups/${GID}$`), (route) => route.fulfill({ json: group }));
+  await page.route(new RegExp(`/v1/console/chat/groups/${GID}/messages$`), (route) => {
+    if (route.request().method() === "POST") { sentAsMessage = true; return route.fulfill({ json: {} }); }
+    return route.fulfill({ json: [] });
+  });
+  await page.route(/\/v1\/console\/chat\/group-commands$/, (route) => route.fulfill({ json: {
+    commands: [{ cmd: "/ask @mine", args: "<task>", desc: "Ask your own agent" }],
+  } }));
+  let dispatched: { line: string; sender_participant_id: string } | null = null;
+  let sentAsMessage = false;
+  await page.route(new RegExp(`/v1/console/chat/groups/${GID}/command$`), (route) => {
+    dispatched = route.request().postDataJSON();
+    return route.fulfill({ json: { executed: true, kind: "ask_mine", text: "local answer" } });
+  });
+
+  await page.goto(`/console/app/chat/group/${GID}`);
+  const box = page.getByLabel("Group message");
+  await box.fill("/");
+  await opaque(page);
+  await expect(page.getByTestId("slash-palette").locator("button")).toHaveText([/\/ask @mine/]);
+  await box.fill("/ask @mine hello");
+  await box.press("Escape");
+  await box.press("Enter");
+  await expect.poll(() => dispatched?.line).toBe("/ask @mine hello");
+  expect(dispatched!.sender_participant_id).toBe("operator");
+  await expect(page.getByText("local answer")).toBeVisible();
+  expect(sentAsMessage).toBe(false);
+});

@@ -407,6 +407,58 @@ def send_message_to_peer(rec: Session, group_id: str, body: SendToPeerRequest) -
     return SendToPeerResponse(message_id=msg["id"], status="sent_pending")
 
 
+class GroupCommandRequest(BaseModel):
+    line: str = Field(..., min_length=1, max_length=4096)
+    sender_participant_id: str = Field(..., min_length=1, max_length=128)
+
+
+@router.get("/chat/group-commands")
+def list_group_commands(rec: Session) -> dict[str, Any]:
+    """The command table the group composer's palette renders — the peer
+    thread's grammar, served by the same server-side parser (ADR-2235 (e))."""
+    from core.federation import group_thread
+    return {"commands": group_thread.commands_table()}
+
+
+@router.post("/chat/groups/{group_id}/command")
+async def run_group_command(rec: Session, group_id: str, body: GroupCommandRequest) -> dict[str, Any]:
+    """Execute, or fail-closed refuse, one `/` line from the group composer.
+    A `/` line is NEVER stored or fanned out as a group message. A refusal is
+    a normal 200 (`executed: false, reason`); only a primitive's own error
+    (bad input, audit failure) becomes an HTTP error."""
+    import asyncio
+
+    from core.federation import conversation as conv
+    from core.federation import group_thread, peer_thread
+    from core.federation.delegation import DelegationError
+    from core.federation.audit import FederationAuditError
+
+    tenant_dir = _a2a_paths.tenant_global_dir(rec.tenant_id)
+    g = _store.get_group(tenant_dir, group_id)
+    if g is None or g.get("tenant_id") != rec.tenant_id:
+        raise HTTPException(status_code=404, detail="group not found")
+    if not _store.is_participant(tenant_dir, group_id, body.sender_participant_id):
+        raise HTTPException(status_code=403, detail="sender is not a participant of this group")
+    try:
+        result = await asyncio.to_thread(
+            group_thread.dispatch, rec.tenant_id, g, body.line,
+            require_active=require_friendship_active)
+    except peer_thread.PeerThreadCommandError as exc:
+        return {"executed": False, "reason": str(exc)}
+    except HTTPException as exc:  # live friendship gate: a refusal, not a crash
+        return {"executed": False, "reason": str(exc.detail)}
+    except (conv.ConversationError, DelegationError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FederationAuditError as exc:
+        raise HTTPException(status_code=503,
+                            detail=f"command could not be recorded, nothing ran: {exc}") from exc
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+        action="chat.group.command", target_kind="chat_group", target_id=group_id,
+    )
+    return result
+
+
 @router.post("/chat/groups/{group_id}/messages")
 def send_message(rec: Session, group_id: str, body: SendMessageRequest) -> MessageOut:
     """Append a message to the group. If the group has any ``a2a_peer``

@@ -1,9 +1,10 @@
 /**
  * Slash-command autocomplete — shared across every composer (session chat
- * `pages/chat.tsx::ChatPane`, direct A2A thread `PeerConversation`) so the `/`-triggered dropdown is the same
+ * `pages/chat.tsx::ChatPane`, direct A2A thread `PeerConversation`, group chat
+ * `GroupConversation`) so the `/`-triggered dropdown is the same
  * component, with the same keyboard contract, everywhere a message can be
- * typed. `GroupConversation` has no palette: a group message has no
- * server-side command dispatcher, so a `/` line there is plain text.
+ * typed. Peer and group composers show only their server-provided
+ * table (`sessionCommands: false`).
  *
  * Enter and Tab both INSERT the selected command into the composer (with its
  * argument placeholder pre-selected so typing replaces it) — neither sends or

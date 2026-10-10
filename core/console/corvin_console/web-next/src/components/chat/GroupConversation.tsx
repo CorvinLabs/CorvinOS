@@ -23,12 +23,13 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
-  addParticipant, deleteGroup, getGroup, groupAttachmentUrl, listMessages, sendMessage,
-  uploadGroupAttachments, type ChatGroup, type GroupMessage,
+  addParticipant, deleteGroup, getGroup, getGroupCommands, groupAttachmentUrl, listMessages,
+  sendGroupCommand, sendMessage, uploadGroupAttachments, type ChatGroup, type GroupMessage,
 } from "@/lib/api/chat-groups";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import { getA2AFeed } from "@/lib/api/a2a";
 import { ChatAvatar } from "./ChatAvatar";
+import { CommandPalette, applyCommandInsertion, useSlashCommandPalette, type SlashCommand } from "./SlashCommandPalette";
 import { MembersSection } from "./MembersSection";
 import { AttachmentChip } from "./AttachmentChip";
 import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
@@ -170,6 +171,9 @@ export function attachmentNames(text: string): string[] {
   return out;
 }
 
+// Module-level so the palette's memo key stays stable while the table loads.
+const EMPTY_COMMANDS: readonly SlashCommand[] = [];
+
 export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: string }) {
   const qc = useQueryClient();
   const group = useQuery({
@@ -184,6 +188,14 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
   const [text, setText] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
+  const [commandNotice, setCommandNotice] = React.useState("");
+  const groupCommands = useQuery({
+    queryKey: ["group-commands"],
+    queryFn: ({ signal }) => getGroupCommands(signal),
+    staleTime: 5 * 60_000,
+  });
+  const slashPalette = useSlashCommandPalette(
+    text, groupCommands.data?.commands ?? EMPTY_COMMANDS, { sessionCommands: false });
   const [membersOpen, setMembersOpen] = React.useState(false);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
   const navigate = useNavigate();
@@ -230,8 +242,25 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
       ...pendingAttachments.map((a) => `- ${a.path} (${(a.size / 1024).toFixed(1)} KB, ${a.mime})`),
       ...(body ? ["", body] : []),
     ].join("\n");
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setCommandNotice("");
+    slashPalette.close();
     try {
+      // A `/` line is never a group message (it would reach every peer as
+      // text): the server-side dispatcher runs it or refuses it.
+      if (body.startsWith("/")) {
+        const result = await sendGroupCommand(groupId, body, selfId, csrf);
+        if (!result.executed) {
+          setError(typeof result.reason === "string" ? result.reason : "unknown command — not sent");
+        } else {
+          setCommandNotice(
+            result.kind === "ask_mine" && typeof result.text === "string" && result.text
+              ? String(result.text)
+              : `/${String(result.kind ?? "command")} — done. See Agent conversations for the full exchange.`,
+          );
+        }
+        setText("");
+        return;
+      }
       await sendMessage(groupId, full, selfId, csrf);
       setText("");
       clearAttachments();
@@ -316,6 +345,11 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
           {error && (
             <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {error}
+            </p>
+          )}
+          {commandNotice && (
+            <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              {commandNotice}
             </p>
           )}
           <div ref={endRef} />
@@ -417,16 +451,31 @@ export function GroupConversation({ groupId, csrf }: { groupId: string; csrf: st
             >
               {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
             </Button>
-            <Textarea ref={textareaRef} value={text} onChange={(e) => setText(e.target.value)} rows={1}
-              placeholder={`Message ${g.title}…`}
-              disabled={recording || busy}
-              className="min-h-[2rem] flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-              aria-label="Group message"
-              onKeyDown={(e) => {
-                if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
-                e.preventDefault();
-                handleSend();
-              }} />
+            <div className="relative min-w-0 flex-1">
+              <CommandPalette
+                matches={slashPalette.matches}
+                selected={slashPalette.selected}
+                onSelect={(match) => {
+                  applyCommandInsertion(match, setText, textareaRef);
+                  slashPalette.close();
+                }}
+              />
+              <Textarea ref={textareaRef} value={text} onChange={(e) => {
+                const v = e.target.value;
+                setText(v);
+                slashPalette.onChange(v);
+              }} rows={1}
+                placeholder={`Message ${g.title}…`}
+                disabled={recording || busy}
+                className="min-h-[2rem] flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                aria-label="Group message"
+                onKeyDown={(e) => {
+                  if (slashPalette.onKeyDown(e, (match) => applyCommandInsertion(match, setText, textareaRef))) return;
+                  if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+                  e.preventDefault();
+                  handleSend();
+                }} />
+            </div>
             <Button variant="accent" size="icon" className="h-8 w-8 shrink-0 rounded-full"
               disabled={busy || uploading || (!text.trim() && pendingAttachments.length === 0)}
               onClick={handleSend} aria-label="Send">

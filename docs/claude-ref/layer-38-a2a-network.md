@@ -1663,6 +1663,19 @@ refused, never sent as text.
   `/federation`). `PeerConversation.tsx::handleSend` routes every line
   starting with `/` through `sendPeerThreadCommand`; everything else keeps
   using `sendA2AFeedMessage` unchanged.
+- **Group chat** (same grammar, same parser): `core/federation/group_thread.py`
+  resolves WHICH peer of the group a line acts through and then calls
+  `peer_thread.dispatch` — the group's only `a2a_peer` participant, or the
+  one named by `--in <participant_id>` (`/ask --in bob @peer q`); several
+  peers without a selector are refused, never guessed. `/stop` and `/agents`
+  cover every peer. The live friendship gate (`require_friendship_active`)
+  runs for each peer a command touches. `GET /v1/console/chat/group-commands`
+  (table) and `POST /v1/console/chat/groups/{id}/command` `{line,
+  sender_participant_id}` (CSRF, sender must be a participant); a `/` line is
+  never stored or fanned out as a group message. `GroupConversation.tsx`
+  routes `/` lines through `sendGroupCommand`. Tests:
+  `tests/federation/test_group_thread_commands_e2e.py`,
+  `web-next/tests/e2e/chat-slash-palette.spec.ts`.
 Tests: `tests/federation/test_peer_thread_commands_e2e.py` (console
 login/CSRF; `/ask @mine` spawns locally and never touches the wire; `/ask
 @peer` crosses a real signed A2A call and produces a trace hop; `/talk`
