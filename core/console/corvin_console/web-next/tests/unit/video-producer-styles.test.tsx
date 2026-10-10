@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
-import { http, HttpResponse } from "msw";
+import { delay, http, HttpResponse } from "msw";
 import { server } from "../fixtures/server";
 import { accentGlow, contrastRatio, mix, setColour, setFamily, type Draft } from "@/lib/api/video-styles";
 
@@ -226,6 +226,23 @@ describe("import dialog", () => {
     expected.brand.credit = true;
     expect(body.draft).toEqual(expected); // incl. source and x_future_field
     await waitFor(() => expect(screen.queryByTestId("style-dialog")).toBeNull());
+  });
+
+  it("the saved style is the choice for the next video even while the refetched list is still on its way", async () => {
+    renderIt();
+    await openDialog();
+    // The server list changes only on save, and its answer arrives late: the page must not drop the new choice meanwhile.
+    server.use(
+      http.post(`${B}/styles`, async () => { list = LIST_ONE; return HttpResponse.json({ style: SAVED }, { status: 201 }); }),
+      http.get(`${B}/styles`, async () => { await delay(400); return HttpResponse.json(list); }),
+    );
+    fireEvent.click(screen.getByTestId("style-save"));
+    await waitFor(() => expect(screen.queryByTestId("style-dialog")).toBeNull());
+    expect(screen.getByTestId("style-chip").textContent).toContain("Acme deck");
+    await new Promise((r) => setTimeout(r, 700)); // the late refetch has landed
+    expect(screen.getByTestId("style-chip").textContent).toContain("Acme deck");
+    await send("A video in the new look");
+    expect(calls.jobs[0].style_id).toBe("sty_aaaaaaaa");
   });
 
   it("Save and set as default asks for the default; removing the logo clears it", async () => {

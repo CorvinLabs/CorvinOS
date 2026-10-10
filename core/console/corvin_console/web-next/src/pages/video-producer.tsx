@@ -547,6 +547,9 @@ export function VideoProducerPage() {
       {deckFile && (
         <StyleImportDialog file={deckFile} csrf={csrf} onClose={() => setDeckFile(null)}
           onSaved={(style) => {
+            // Put the saved style in the cache first: the cleanup effect above would otherwise
+            // drop the new choice while the refetched list does not contain it yet.
+            qc.setQueryData<StyleList>(["video", "styles"], (old) => (old ? { ...old, styles: [...old.styles.filter((x) => x.id !== style.id), style] } : old));
             setDeckFile(null); setPickedStyle(style.id); setStylesOpen(true);
             void qc.invalidateQueries({ queryKey: ["video", "styles"] });
           }} />
