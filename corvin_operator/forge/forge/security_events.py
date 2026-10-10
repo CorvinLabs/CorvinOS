@@ -1151,6 +1151,7 @@ EVENT_SEVERITY: dict[str, str] = {
     "video_producer.style_saved":        "INFO",
     "video_producer.style_deleted":      "INFO",
     "video_producer.style_applied":      "INFO",
+    "video_producer.job_cancelled":      "INFO",
     # ADR validation framework (core/deployment/adr_validation_framework.py via
     # core/deployment/audit_sink — mirrored statically so the floor does not
     # depend on import order)
@@ -4350,6 +4351,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "video_producer.style_deleted": frozenset({"tenant_id", "style_id"}),
     "video_producer.style_applied": frozenset({"tenant_id", "job_id", "style_id"}),
+    "video_producer.job_cancelled": frozenset({"tenant_id", "job_id", "runner", "outcome"}),
     # "violations" holds "ADR-NNNN/check_name" codes, never free text.
     "deployment.adr_violation_detected": frozenset({
         "week", "violation_count", "violations", "tenant_id", "lom", "component",

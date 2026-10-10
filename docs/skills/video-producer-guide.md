@@ -65,6 +65,28 @@ the video. On the maintainer host the first measured job showed 10 of 10
 scenes rendered, captions 99.9 % covered with 2 repeated cues, and 44 s
 rendered against 14 s planned — real findings about the pipeline.
 
+## Running, budget and cancel (unreleased 1.5.0, ADR-2247)
+
+* **Each production runs in its own process** (its own process group, started by the console with its
+  interpreter). Progress still travels through the job record the panel polls. A console restart closes
+  jobs it orphaned as `error` (reason `interrupted`).
+* **Every external call has a deadline** (`src/deadline.py`): ffmpeg, ffprobe, the storyboard model, TTS,
+  the browser. A call that overruns is stopped with its whole process tree; a hung browser is killed
+  together with its driver. A raw `subprocess.run` in the plugin is a test failure.
+* **A job has a wall-clock budget** of `min(3 x max_duration_minutes x 60, 2700)` seconds; when it runs out
+  the job ends `error` and the message names what was running. The console adds a last-resort kill 60 s
+  after the budget for a job process that cannot be reached any other way.
+* **Cancel.** While a video is being produced the stage shows **Cancel production**. It calls
+  `POST /v1/console/video/jobs/{id}/cancel` (session + CSRF, your workspace's jobs only): the job's process
+  group gets SIGTERM, then SIGKILL after 5 s, and the job ends `cancelled`. A cancel of a queued job just
+  removes it. The answer is `cancelled`, or `cancelling` if the record had not settled after 8 s. A finished
+  job answers 409; another workspace's job id answers 404. Each cancel is an audit event
+  (`video_producer.job_cancelled`: job id, runner, outcome - never the task text).
+* **Fallback.** `_JOB_RUNNER = "thread"` in `routes/video_producer_api.py` runs jobs on threads again. Cancel
+  then stops the job's in-flight external process and ends it at the next step; a blocking SDK call (a
+  TTS or model request) cannot be killed and is abandoned until it returns or its deadline passes.
+* **Not done yet:** Art. 17 erasure does not stop a running job; there is no delete (PLAN-0946 R3).
+
 ## Troubleshooting
 
 * **"The Video Producer plugin is not available on this build."** The
@@ -81,6 +103,8 @@ rendered against 14 s planned — real findings about the pipeline.
 
 ## Proof
 
+`core/console/tests/test_video_producer_cancel_e2e.py` drives the cancel route through the real router with a
+job hung in a SIGTERM-ignoring `ffmpeg` and with a live Chromium, and reads /proc for what is left;
 `tests/e2e/test_video_quality_console_e2e.py` renders a two-second MP4 with
 ffmpeg inside the test and asserts the measured facts and the checklist over
 HTTP; `web-next/tests/unit/video-producer-page.test.tsx` covers the studio.

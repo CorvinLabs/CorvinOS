@@ -113,6 +113,40 @@ describe("Video Producer studio", () => {
     expect(screen.queryByTestId("stage-video")).toBeNull();
   });
 
+  it("a running job can be cancelled: POST /cancel with CSRF, then the stage says it was cancelled", async () => {
+    let cancelled = false;
+    const cancels: Array<string | null> = [];
+    server.use(
+      http.get(`${B}/jobs/job_run`, () => HttpResponse.json(cancelled ? { ...JOBS.jobs[2], status: "cancelled" } : JOBS.jobs[2])),
+      http.post(`${B}/jobs/job_run/cancel`, ({ request }) => {
+        cancels.push(request.headers.get("x-csrf-token"));
+        cancelled = true;
+        return HttpResponse.json({ job_id: "job_run", status: "cancelled" });
+      }),
+      ...handlers(),
+    );
+    renderIt("?job=job_run");
+    fireEvent.click(await screen.findByTestId("cancel-job"));
+    await waitFor(() => expect(cancels).toEqual(["csrf-test"]));
+    expect(await screen.findByTestId("stage-cancelled")).toBeTruthy();
+    expect(screen.queryByTestId("cancel-job")).toBeNull();
+  });
+
+  it("a finished video has no cancel button, and a refused cancel says why", async () => {
+    server.use(
+      http.get(`${B}/jobs/job_run`, () => HttpResponse.json(JOBS.jobs[2])),
+      http.post(`${B}/jobs/job_run/cancel`, () => HttpResponse.json({ detail: "The job is not running in this console process" }, { status: 409 })),
+      ...handlers(),
+    );
+    renderIt("?job=job_2626f1e8");
+    await screen.findByTestId("stage-video");
+    expect(screen.queryByTestId("cancel-job")).toBeNull();
+    cleanup();
+    renderIt("?job=job_run");
+    fireEvent.click(await screen.findByTestId("cancel-job"));
+    expect((await screen.findByTestId("cancel-error")).textContent).toMatch(/not running in this console process/);
+  });
+
   it("the composer starts a NEW video with CSRF, no revision base and no sources", async () => {
     server.use(...handlers());
     renderIt();

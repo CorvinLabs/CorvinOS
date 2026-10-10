@@ -43,8 +43,9 @@ _PLUGIN_PKG = "corvin_video_producer_plugin"
 
 # How jobs are executed: "process" = one OS process (own process group) per job via the plugin's
 # ProcessJobRunner (PLAN-0946 R1); "thread" = the in-process thread pool. One line to flip back.
-# An installed plugin that predates ProcessJobRunner falls back to threads.
-_JOB_RUNNER = "thread"
+# R1a go (2026-10-10, ADR-2247): process is the default - a job can be killed (cancel, budget), a thread
+# cannot. An installed plugin that predates ProcessJobRunner falls back to threads.
+_JOB_RUNNER = "process"
 
 _repo_root = Path(__file__).resolve().parents[4]
 
@@ -849,6 +850,48 @@ def get_job_progress(job_id: str, rec=_SessionRec):
         "total_scenes": getattr(job, "total_scenes", None),
         "current_step": getattr(job, "current_step", None),
     }
+
+
+_CANCEL_WAIT_S = 8.0   # the runner's SIGTERM grace (5 s) plus the reap
+
+
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_video_job(job_id: str, rec=_SessionRec):
+    """Stop a job that is being produced (ADR-2247, PLAN-0946 R1b). Session + CSRF (router dependency),
+    tenant-scoped through the tenant's own store: another tenant's job id is a 404, like any absent job.
+
+    Process mode kills the job's whole process group - the job process, ffmpeg and any Chromium that
+    outlived its driver - SIGTERM, then SIGKILL after the grace period, and the runner records
+    ``cancelled``. Thread mode flags the job's budget and stops its in-flight external call. The answer
+    is the job's state after the kill, waited for up to a few seconds; ``cancelling`` means the
+    runner has been told and the record is not terminal yet."""
+    _check_job_id(job_id)
+    storage = _store(rec)
+    job = storage.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in _TERMINAL:
+        raise HTTPException(status_code=409, detail=f"The job has already ended ({job.status})")
+    runner = get_runner() if get_runner else None
+    cancel = getattr(runner, "cancel_job", None)
+    if cancel is None:
+        raise HTTPException(status_code=501, detail="This build cannot cancel a running video job")
+    # the runner is process-wide, the store is the tenant's: ownership was proven by the lookup above
+    if not await asyncio.to_thread(cancel, job_id):
+        raise HTTPException(status_code=409, detail="The job is not running in this console process")
+    end = time.monotonic() + _CANCEL_WAIT_S
+    state = job.status
+    while time.monotonic() < end:
+        cur = await asyncio.to_thread(storage.get_job, job_id)
+        state = cur.status if cur else state
+        if state in _TERMINAL:
+            break
+        await asyncio.sleep(0.1)
+    outcome = state if state in _TERMINAL else "cancelling"
+    # lifecycle audit is best-effort (ADR-2247): a failed chain write never un-cancels a job
+    await asyncio.to_thread(_audit, rec.tenant_id, "video_producer.job_cancelled",
+                            {"job_id": job_id, "runner": _JOB_RUNNER, "outcome": outcome})
+    return {"job_id": job_id, "status": outcome}
 
 
 # ── Settings ─────────────────────────────────────────────────────────────────

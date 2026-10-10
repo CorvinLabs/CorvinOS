@@ -86,7 +86,7 @@ const fmtWhen = (iso?: string | null) => (iso ? new Date(iso).toLocaleString("en
 const fmtDur = (s?: number | null) => (s === null || s === undefined ? "—" : s >= 60 ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")} min` : `${s.toFixed(1)} s`);
 const fmtBytes = (n?: number | null) => (n === null || n === undefined ? "—" : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(2)} MB`);
 const pct = (v?: number | null) => (v === null || v === undefined ? "—" : `${Math.round(v * 100)} %`);
-const STATUS_LABEL: Record<string, string> = { pending: "queued", storyboard_generating: "writing storyboard", skills_running: "rendering", complete: "produced", error: "failed" };
+const STATUS_LABEL: Record<string, string> = { pending: "queued", storyboard_generating: "writing storyboard", skills_running: "rendering", complete: "produced", error: "failed", cancelled: "cancelled" };
 
 function StatusPill({ status }: { status: string }) {
   const variant = status === "complete" ? "ok" : status === "error" ? "danger" : ACTIVE.includes(status) ? "accent" : "outline";
@@ -293,8 +293,15 @@ function LearningTab({ job, scenes }: { job: Job; scenes: SceneRow[] }) {
 const isTyping = (el: EventTarget | null) =>
   el instanceof HTMLElement && (["input", "textarea", "select"].includes(el.tagName.toLowerCase()) || el.isContentEditable);
 
-function VideoStage({ job, loading }: { job: Job | undefined; loading: boolean }) {
+function VideoStage({ job, loading, csrf }: { job: Job | undefined; loading: boolean; csrf: string }) {
   const box = useRef<HTMLElement>(null);
+  const qc = useQueryClient();
+  // Stops the production: the host kills the job's whole process group (ffmpeg, the browser) and the
+  // job ends "cancelled". The answer says whether that finished within a few seconds.
+  const cancel = useMutation({
+    mutationFn: () => api<{ job_id: string; status: string }>(`${BASE}/jobs/${job!.id}/cancel`, { method: "POST", csrf }),
+    onSettled: () => { void qc.invalidateQueries({ queryKey: ["video"] }); },
+  });
   const [full, setFull] = useState(false);
   const canFull = typeof document !== "undefined" && !!document.fullscreenEnabled;
   const playable = job?.status === "complete";
@@ -330,12 +337,20 @@ function VideoStage({ job, loading }: { job: Job | undefined; loading: boolean }
     );
   } else if (job.status === "error") {
     body = <div className="max-w-xl text-sm rounded-md border border-red-400/40 bg-red-500/10 p-4 text-red-200" data-testid="stage-error">{job.error_message || "The production failed."}</div>;
+  } else if (job.status === "cancelled") {
+    body = <div className="max-w-xl text-sm rounded-md border border-white/20 bg-white/5 p-4 text-white/80" data-testid="stage-cancelled">This production was cancelled.</div>;
   } else if (!playable) {
     body = (
       <div className="w-full max-w-xl px-6 space-y-3 text-white" data-testid="playback-pending">
         <div className="text-5xl font-semibold tabular-nums">{job.percent ?? 0}<span className="text-2xl text-white/60"> %</span></div>
         <Progress value={job.percent ?? 0} />
         <div className="flex justify-between text-xs text-white/70"><span>{job.current_step || "Working…"}</span>{job.total_scenes ? <span>Scene {job.current_scene ?? 0} of {job.total_scenes}</span> : null}</div>
+        <div className="flex items-center gap-3">
+          <Button type="button" variant="outline" size="sm" data-testid="cancel-job" aria-label="Cancel production" disabled={!csrf || cancel.isPending} onClick={() => cancel.mutate()}>
+            <X className="w-3.5 h-3.5 mr-1" />{cancel.isPending ? "Cancelling…" : "Cancel production"}
+          </Button>
+          {cancel.isError ? <span className="text-xs text-red-300" data-testid="cancel-error">{cancel.error instanceof ApiError ? cancel.error.message : "The job could not be cancelled."}</span> : null}
+        </div>
       </div>
     );
   } else {
@@ -536,7 +551,7 @@ export function VideoProducerPage() {
         <Button variant="ghost" size="sm" className="ml-auto shrink-0" aria-label="Refresh" onClick={() => void qc.invalidateQueries({ queryKey: ["video"] })}><RefreshCw className="w-4 h-4" /></Button>
       </div>
 
-      <VideoStage job={j} loading={!!selected && job.isLoading} />
+      <VideoStage job={j} loading={!!selected && job.isLoading} csrf={csrf} />
 
       <Composer csrf={csrf} selected={j} mode={mode} setMode={setMode} inputRef={inputRef}
         onCreated={(id) => { setSelected(id); }}
