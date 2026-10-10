@@ -687,3 +687,14 @@ BUILTIN_SKILL_IDS: tuple[str, ...] = (
     "os.security_orchestrator",
     "os.workflow_optimizer",
 )
+
+# Phase 2 Skills: lazy-load, not booted at startup (ADR-0314 learning infrastructure)
+# See: Corvin-Knowledge/decisions/ADR-2175-skills-2-0-migration.md
+# Gap G4: These skills are in MANIFEST.json but have no call-site from boot_skills().
+# Sync decision (2026-10-10): keep in registry, mark as optional until Phase 2 wiring.
+OPTIONAL_SKILLS: tuple[str, ...] = (
+    "os.data_hub",
+    "os.skill_tool_creator",
+    "os.learning_daemon",
+    "os.learning_dashboard",
+)
