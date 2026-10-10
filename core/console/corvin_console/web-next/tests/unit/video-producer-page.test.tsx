@@ -21,13 +21,14 @@ vi.mock("recharts", async (importOriginal) => {
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({ session: { tenant_id: "_default", csrf_token: "csrf-test", tier: "owner" }, loading: false, refresh: vi.fn(), logout: vi.fn() }),
 }));
-vi.mock("@/components/VideoPlayer", () => ({ VideoPlayer: ({ videoPath }: { videoPath: string }) => <div data-testid="player">{videoPath}</div> }));
+vi.mock("@/hooks/use-voice-input", () => ({ useVoiceInput: () => ({ recording: false, startRecording: vi.fn(), stopRecording: vi.fn() }) }));
 
 import { MARKER_VIDEO, VideoProducerPage } from "@/pages/video-producer";
 
 const B = "/v1/console/video";
-const JOBS = { total: 2, jobs: [
+const JOBS = { total: 3, jobs: [
   { id: "job_2626f1e8", task: "Erkläre kurz den Unterschied zwischen HTTP und HTTPS.", status: "complete", created_at: "2026-09-13T08:11:46", percent: 100 },
+  { id: "job_rev", task: "Make scene 2 shorter", status: "complete", created_at: "2026-09-21T09:00:00", percent: 100, revision_of: "job_2626f1e8" },
   { id: "job_run", task: "Still rendering", status: "skills_running", created_at: "2026-09-20T10:00:00", percent: 40, current_step: "Rendering scene 3", current_scene: 3, total_scenes: 7 },
 ] };
 const OVERVIEW = { jobs_total: 2, by_status: { complete: 1, skills_running: 1 }, videos: 1, runtime_s: 44.3, size_bytes: 798680, measured_videos: 1, mean_score_share: 0.75, last_activity: "2026-09-20T10:00:00", ffprobe_available: true, plugin_source: "/x/src" };
@@ -52,6 +53,7 @@ const QUALITY = {
   score: { passed: 1, warned: 1, failed: 1, total: 3, skipped: 0, share: 0.333 },
 };
 const seen: Array<{ path: string; csrf: string | null; body: unknown }> = [];
+const posted: Array<{ csrf: string | null; body: Record<string, unknown> }> = [];
 
 function handlers() {
   return [
@@ -61,6 +63,15 @@ function handlers() {
     http.get(`${B}/jobs/job_2626f1e8/quality-metrics`, () => HttpResponse.json(QUALITY)),
     http.get(`${B}/jobs/job_2626f1e8/learning-metrics`, () => HttpResponse.json({ job_id: "job_2626f1e8", total_feedback_events: 0, approved: 0, rejected: 0, average_confidence: null, events: [], source: "learning.event_store" })),
     http.get(`${B}/settings`, () => HttpResponse.json({ output_folder: "~/.corvin/video-producer/videos", tts_engine: "openai", tts_engines: ["openai", "auto", "gtts"], max_duration_minutes: 60, openai_configured: true, web_slides_available: false })),
+    http.post(`${B}/jobs`, async ({ request }) => {
+      posted.push({ csrf: request.headers.get("x-csrf-token"), body: (await request.json()) as Record<string, unknown> });
+      return HttpResponse.json({ job_id: "job_new0001", status: "pending", created_at: "2026-09-22T10:00:00" });
+    }),
+    http.post(`${B}/attachments/extract`, async ({ request }) => {
+      const names = ((await request.formData()).getAll("files") as File[]).map((f) => f.name);
+      if (names.includes("evil.exe")) return HttpResponse.json({ detail: "evil.exe: unsupported type (text, Markdown, JSON, CSV, YAML or PDF)" }, { status: 415 });
+      return HttpResponse.json({ sources: names.map((name) => ({ name, text: `text of ${name}`, chars: 42, truncated: false })) });
+    }),
     http.post(`${B}/jobs/job_2626f1e8/scenes/:scene/feedback`, async ({ request, params }) => {
       seen.push({ path: String(params.scene), csrf: request.headers.get("x-csrf-token"), body: await request.json() });
       return HttpResponse.json({ status: "recorded" });
@@ -72,22 +83,103 @@ function renderIt(search = "") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(<MemoryRouter initialEntries={[`/app/video-producer${search}`]}><QueryClientProvider client={qc}><VideoProducerPage /></QueryClientProvider></MemoryRouter>);
 }
-afterEach(() => { cleanup(); seen.length = 0; });
+afterEach(() => { cleanup(); seen.length = 0; posted.length = 0; });
 
 describe("Video Producer studio", () => {
-  it("lists the library, selects the first video and plays it - with no transcript or caption UI", async () => {
+  it("the selected video fills the stage above the composer, the library follows - with no transcript or caption UI", async () => {
     server.use(...handlers());
     renderIt();
     await screen.findByTestId("video-producer");
     expect(screen.getByText(MARKER_VIDEO)).toBeInTheDocument();
     await screen.findByTestId("job-job_2626f1e8");
+    const video = (await screen.findByTestId("stage-video")) as HTMLVideoElement;
+    expect(video.getAttribute("src")).toBe("/v1/console/video/videos/job_2626f1e8/download");
+    // order on the page: stage, then composer, then library
+    const stage = screen.getByTestId("studio"), composer = screen.getByTestId("composer"), library = screen.getByTestId("library");
+    expect(stage.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(composer.compareDocumentPosition(library) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByTestId("overview-tiles").textContent).toMatch(/1\s*Videos produced · 2 jobs in total/);
-    expect(screen.getByTestId("overview-tiles").textContent).toMatch(/75 %\s*Checks passed · mean over 1 measured video/);
-    await screen.findByTestId("player");
-    expect(screen.getByTestId("player").textContent).toBe("/v1/console/video/videos/job_2626f1e8/download");
-    expect(screen.queryByTestId("transcript")).toBeNull();
     expect(document.querySelector("track")).toBeNull();
     expect(screen.queryByText(/Transcript/i)).toBeNull();
+  });
+
+  it("a running job shows its progress on the stage instead of a player", async () => {
+    server.use(http.get(`${B}/jobs/job_run`, () => HttpResponse.json(JOBS.jobs[2])), ...handlers());
+    renderIt("?job=job_run");
+    const pending = await screen.findByTestId("playback-pending");
+    expect(pending.textContent).toMatch(/40\s*%/);
+    expect(pending.textContent).toMatch(/Rendering scene 3/);
+    expect(pending.textContent).toMatch(/Scene 3 of 7/);
+    expect(screen.queryByTestId("stage-video")).toBeNull();
+  });
+
+  it("the composer starts a NEW video with CSRF, no revision base and no sources", async () => {
+    server.use(...handlers());
+    renderIt();
+    const input = await screen.findByTestId("task-input");
+    fireEvent.change(input, { target: { value: "Explain the sweep." } });
+    fireEvent.click(screen.getByTestId("start-production"));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0].csrf).toBe("csrf-test");
+    expect(posted[0].body).toEqual({ task: "Explain the sweep.", sources: [] });
+    await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe(""));
+  });
+
+  it("a change request on the selected video is sent as a revision of that video", async () => {
+    server.use(...handlers());
+    renderIt("?job=job_2626f1e8");
+    await screen.findByTestId("stage-video");
+    fireEvent.click(await screen.findByTestId("revise-job_2626f1e8"));
+    expect(screen.getByTestId("mode-revise").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("mode-revise").textContent).toMatch(/Revise: Erkläre kurz/);
+    fireEvent.change(screen.getByTestId("task-input"), { target: { value: "Make scene 2 shorter" } });
+    fireEvent.click(screen.getByTestId("start-production"));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0].body).toMatchObject({ task: "Make scene 2 shorter", base_job_id: "job_2626f1e8" });
+    // the new job is selected and the composer is back to "new video"
+    await waitFor(() => expect(screen.getByTestId("mode-new").getAttribute("aria-selected")).toBe("true"));
+  });
+
+  it("revising needs a produced video, and a revision is marked in the library", async () => {
+    server.use(...handlers());
+    renderIt("?job=job_run");
+    await screen.findByTestId("job-job_run");
+    expect((screen.getByTestId("mode-revise") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByTestId("revise-job_run")).toBeNull();
+    expect(screen.getByTestId("revision-job_rev").getAttribute("title")).toMatch(/Revision of: Erkläre kurz/);
+    expect(screen.queryByTestId("revision-job_2626f1e8")).toBeNull();
+  });
+
+  it("attachments become source chips that travel with the job; a refused file says why", async () => {
+    server.use(...handlers());
+    renderIt();
+    const attach = (await screen.findByTestId("attach-input")) as HTMLInputElement;
+    fireEvent.change(attach, { target: { files: [new File(["x"], "notes.md", { type: "text/markdown" })] } });
+    await waitFor(() => expect(screen.getAllByTestId("source-chip")).toHaveLength(1));
+    expect(screen.getByTestId("source-chip").textContent).toMatch(/notes\.md/);
+    fireEvent.change(attach, { target: { files: [new File(["MZ"], "evil.exe")] } });
+    await waitFor(() => expect(screen.getByTestId("composer-error").textContent).toMatch(/unsupported type/));
+    expect(screen.getAllByTestId("source-chip")).toHaveLength(1);
+    fireEvent.change(screen.getByTestId("task-input"), { target: { value: "Explain my notes" } });
+    fireEvent.click(screen.getByTestId("start-production"));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0].body.sources).toEqual([{ name: "notes.md", text: "text of notes.md" }]);
+  });
+
+  it("fullscreen: the button and the F key put the stage into fullscreen; F while typing does not", async () => {
+    server.use(...handlers());
+    const req = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
+    renderIt("?job=job_2626f1e8");
+    await screen.findByTestId("stage-video");
+    (screen.getByTestId("studio") as HTMLElement).requestFullscreen = req;
+    fireEvent.click(screen.getByTestId("fullscreen"));
+    expect(req).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(window, { key: "f" });
+    expect(req).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(screen.getByTestId("task-input"), { key: "f" });
+    expect(req).toHaveBeenCalledTimes(2);
+    Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: undefined });
   });
 
   it("the Quality tab shows what was measured, with a named denominator", async () => {

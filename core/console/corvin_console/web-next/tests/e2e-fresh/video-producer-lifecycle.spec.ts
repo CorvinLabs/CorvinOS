@@ -293,6 +293,23 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
     const job = await (await page.request.get(`${API}/video/jobs/${jobId}`)).json();
     expect(job.status, `job error: ${job.error_message}`).toMatch(/^complete/);
 
+    // the panel layout: the produced video fills the stage, the composer sits directly under it, the library follows
+    const stageVideo = page.getByTestId("stage-video");
+    await expect(stageVideo, "the new video is selected and plays on the stage").toBeVisible({ timeout: 60_000 });
+    await expect(stageVideo).toHaveAttribute("src", new RegExp(`/video/videos/${jobId}/download$`));
+    const box = async (id: string) => (await page.getByTestId(id).boundingBox())!;
+    const [stage, composer, library, vp] = [await box("studio"), await box("composer"), await box("library"), page.viewportSize()!];
+    expect(stage.width, "the stage spans the panel").toBeGreaterThan(vp.width * 0.6);
+    expect(composer.y, "the composer is directly under the stage").toBeGreaterThanOrEqual(stage.y + stage.height - 1);
+    expect(composer.y - (stage.y + stage.height), "no gap between stage and composer").toBeLessThan(8);
+    expect(library.y, "the library follows the composer").toBeGreaterThan(composer.y + composer.height - 1);
+    await page.getByTestId("studio").hover();
+    await page.getByTestId("fullscreen").click();
+    await expect.poll(() => page.evaluate(() => document.fullscreenElement?.getAttribute("data-testid") ?? null), { message: "fullscreen shows the stage" }).toBe("studio");
+    await page.evaluate(() => document.exitFullscreen());
+    await expect.poll(() => page.evaluate(() => !!document.fullscreenElement)).toBe(false);
+    await expect(page.getByTestId(`revise-${jobId}`), "a produced video can be revised").toBeVisible();
+
     const dl = await page.request.get(`${API}/video/videos/${jobId}/download`);
     expect(dl.status()).toBe(200);
     expect(dl.headers()["content-type"]).toContain("video");

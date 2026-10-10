@@ -7,15 +7,32 @@ task, plays it, measures it and lets you teach the producer scene by scene.
 
 ## Layout
 
+One column, top to bottom (ADR-2246):
+
 | Region | What it shows | Source |
 |---|---|---|
+| Stage | the selected video at full panel width, with progress while it renders; **Fullscreen** button (or `F`, not while typing); download | `/videos/{id}/download`, `/videos/{id}/poster` |
+| Composer | directly under the stage: a text box with **attachment**, **microphone** and **hold Space to dictate** (hold ≥ 0.4 s, release to stop; a short tap types a space), **Enter** sends. Two modes: **New video** and **Revise: <selected video>** | `POST /v1/console/video/jobs` (CSRF) |
+| Produced videos | every job as a card with poster, status, creation time, progress while rendering, a *revision* badge, and **Revise** on finished videos | `GET /v1/console/video/jobs`, `/videos/{id}/poster` |
 | Tiles | videos produced (of all jobs), total runtime and size, mean checklist share **over measured videos only**, last activity | `GET /v1/console/video/overview` |
-| New production | the task text; **Start production** creates a job | `POST /v1/console/video/jobs` (CSRF) |
-| Library | every job with poster (first rendered slide), status, creation time, progress while rendering | `GET /v1/console/video/jobs`, `/videos/{id}/poster` |
-| Studio · Playback | the MP4 with controls and download, the transcript from `output.srt` | `/videos/{id}/download`, `/videos/{id}/captions` |
-| Studio · Quality | what `ffprobe` measured on the real artifacts (below) | `GET /v1/console/video/jobs/{id}/quality-metrics` |
-| Studio · Learning | the ADR-0314 feedback events recorded for this job; approve / reject per scene | `/jobs/{id}/learning-metrics`, `POST /jobs/{id}/scenes/{scene}/feedback` (CSRF) |
+| Quality and learning · Quality | what `ffprobe` measured on the real artifacts (below) | `GET /v1/console/video/jobs/{id}/quality-metrics` |
+| Quality and learning · Learning | the ADR-0314 feedback events recorded for this job; approve / reject per scene | `/jobs/{id}/learning-metrics`, `POST /jobs/{id}/scenes/{scene}/feedback` (CSRF) |
 | Settings | output folder, text-to-speech engine, max duration | `/settings` |
+
+### Revising a video
+
+Select a produced video (or press **Revise** on its card), describe the change ("make scene 2 shorter",
+"add a diagram") and send. A **new** video is produced from the old storyboard plus your request; the original
+stays. The new job carries `revision_of`. Scenes the request does not touch are kept by instruction to the
+storyboard model — their wording is stable, but it is a full new production (storyboard, narration, render),
+not a patch of the old clips.
+
+### Attachments
+
+The paperclip takes up to 4 files of at most 2 MiB each: text, Markdown, JSON, CSV, YAML, log, and PDF when
+`pdftotext` is installed on the host. The text (at most 20 000 characters per file, 40 000 in total) becomes
+source material the video is built on. It is not stored by the console; it travels with the job request, and
+the same pre-spawn gates (house rules, data classification, egress) that check your task text check it.
 
 Deep links: `/app/video-producer?job=<id>&tab=quality`. The former page
 `/app/video-quality-metrics?job_id=<id>` only redirects there (2026-09-20).

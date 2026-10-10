@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from ..deps import require_session_csrf_on_mutation
@@ -139,6 +139,11 @@ _SessionRec = Depends(require_session_csrf_on_mutation)
 _JOB_ID_RE = re.compile(r"^job_[0-9a-f]{8}$")
 _SCENE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MAX_TASK_CHARS = 4000
+_MAX_SOURCE_CHARS = 20_000
+_MAX_SOURCES = 4
+_MAX_SOURCES_TOTAL = 40_000
+_MAX_UPLOAD_BYTES = 2 * 1024 * 1024
+_SCENE_NARRATION_CHARS = 600
 _MEASURE_WINDOW = 100
 _UNAVAILABLE = "Video Producer plugin not available"
 
@@ -181,13 +186,23 @@ def _own_file(rec, raw_path: Optional[str]) -> Optional[Path]:
 
 # ── Models ───────────────────────────────────────────────────────────────────
 
+class SourceItem(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    text: str = Field(..., min_length=1, max_length=_MAX_SOURCE_CHARS)
+
+
 class CreateJobRequest(BaseModel):
     task: str = Field(..., max_length=_MAX_TASK_CHARS)
+    # Revision: a change request against a produced video of this tenant. The original stays.
+    base_job_id: Optional[str] = Field(None, max_length=32)
+    # Source material extracted from attachments (POST /video/attachments/extract).
+    sources: List[SourceItem] = Field(default_factory=list, max_length=_MAX_SOURCES)
 
 
 class JobResponse(BaseModel):
     id: str
     task: str
+    revision_of: Optional[str] = None
     status: str
     created_at: str
     percent: int = 0
@@ -422,17 +437,142 @@ def _missing_runtime_dependencies(tts_engine: str = "openai") -> List[str]:
     return missing
 
 
+# ── Revisions, sources, attachments ──────────────────────────────────────────
+
+_REVISIONS_FILE = "revisions.json"
+
+
+def _revisions(rec) -> Dict[str, str]:
+    """job id -> the job it revises (tenant-scoped sidecar; the plugin's job record is untouched)."""
+    import json  # noqa: PLC0415
+
+    try:
+        data = json.loads((_tenant_base(rec) / _REVISIONS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in data.items() if _JOB_ID_RE.match(str(k)) and _JOB_ID_RE.match(str(v))} if isinstance(data, dict) else {}
+
+
+def _record_revision(rec, job_id: str, base_job_id: str) -> None:
+    import json  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    base = _tenant_base(rec)
+    base.mkdir(parents=True, exist_ok=True)
+    data = _revisions(rec)
+    data[job_id] = base_job_id
+    fd, tmp = tempfile.mkstemp(dir=base, prefix=".revisions.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, base / _REVISIONS_FILE)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _revision_brief(base_job, instruction: str) -> str:
+    """The task text of a revision: the previous storyboard plus the change request."""
+    sb = getattr(base_job, "storyboard", None)
+    scenes = list(getattr(sb, "scenes", None) or [])
+    if not scenes:
+        raise HTTPException(status_code=409, detail="The video to revise has no storyboard")
+    lines = []
+    for i, sc in enumerate(scenes, 1):
+        narr = " ".join((getattr(sc, "narration_text", "") or "").split())[:_SCENE_NARRATION_CHARS]
+        lines.append(f"Scene {i} [{getattr(sc, 'template', None) or getattr(sc, 'kind', '')}]: {narr}")
+    return (
+        "REVISION OF AN EXISTING VIDEO. Produce the video again with the change request applied. Keep every scene "
+        "the request does not touch (same template, same content, same narration) and keep the narration language "
+        "of the current storyboard; change only what is asked.\n"
+        f"Original task: {' '.join((base_job.task or '').split())[:1500]}\n"
+        "Current storyboard:\n" + "\n".join(lines) + "\n"
+        f"Change request: {instruction}"
+    )
+
+
+def _sources_block(sources) -> str:
+    if not sources:
+        return ""
+    if sum(len(x.text) for x in sources) > _MAX_SOURCES_TOTAL:
+        raise HTTPException(status_code=413, detail=f"Source material is limited to {_MAX_SOURCES_TOTAL} characters in total")
+    parts = [f"--- SOURCE MATERIAL {i} ({x.name}) ---\n{x.text}" for i, x in enumerate(sources, 1)]
+    return ("\n\nSOURCE MATERIAL (attached by the operator; use it as the factual basis of the video, "
+            "do not invent beyond it):\n" + "\n".join(parts))
+
+
+_TEXT_EXT = {".txt", ".md", ".markdown", ".json", ".csv", ".log", ".yaml", ".yml"}
+
+
+def _extract_text(name: str, data: bytes) -> str:
+    ext = Path(name).suffix.lower()
+    if ext in _TEXT_EXT:
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=415, detail=f"{name}: not valid UTF-8 text") from None
+    if ext == ".pdf":
+        import shutil as _sh  # noqa: PLC0415
+        import subprocess  # noqa: PLC0415
+
+        exe = _sh.which("pdftotext")
+        if not exe:
+            raise HTTPException(status_code=415, detail="PDF extraction needs pdftotext (poppler-utils) on this host")
+        try:
+            r = subprocess.run([exe, "-q", "-enc", "UTF-8", "-", "-"], input=data, capture_output=True, timeout=30, check=False)
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=422, detail=f"{name}: PDF extraction timed out") from None
+        if r.returncode != 0:
+            raise HTTPException(status_code=422, detail=f"{name}: not a readable PDF")
+        return r.stdout.decode("utf-8", "replace")
+    raise HTTPException(status_code=415, detail=f"{name}: unsupported type (text, Markdown, JSON, CSV, YAML or PDF)")
+
+
+@router.post("/attachments/extract")
+async def extract_attachments(files: List[UploadFile] = File(...), rec=_SessionRec):
+    """Turn uploads into source-material text. Nothing is stored; the text travels with the job request,
+    where the pre-spawn gates (L44, L34, L35) see it as part of the task."""
+    if not files or len(files) > _MAX_SOURCES:
+        raise HTTPException(status_code=400, detail=f"Attach 1 to {_MAX_SOURCES} files")
+    out = []
+    for f in files:
+        name = Path(f.filename or "attachment").name[:120] or "attachment"
+        data = await f.read(_MAX_UPLOAD_BYTES + 1)
+        if not data:
+            raise HTTPException(status_code=400, detail=f"{name}: empty file")
+        if len(data) > _MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=f"{name}: larger than 2 MiB")
+        text = (await asyncio.to_thread(_extract_text, name, data)).replace("\x00", "").strip()
+        if not text:
+            raise HTTPException(status_code=422, detail=f"{name}: no text found")
+        out.append({"name": name, "text": text[:_MAX_SOURCE_CHARS], "chars": len(text), "truncated": len(text) > _MAX_SOURCE_CHARS})
+    return {"sources": out}
+
+
 @router.post("/jobs")
 async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     """Create a job and start production in the background (non-blocking)."""
-    task = (req.task or "").strip()
-    if not task:
+    shown = (req.task or "").strip()
+    if not shown:
         raise HTTPException(status_code=400, detail="Task cannot be empty")
+    base_job = None
+    if req.base_job_id:
+        _check_job_id(req.base_job_id)
+    task = shown
     if not VideoJob or not _get_storage:
         raise HTTPException(status_code=503, detail=_UNAVAILABLE)
     if not get_runner:
         # Refuse instead of saving a job that nothing will ever run.
         raise HTTPException(status_code=503, detail="Video production is not available on this build (runner missing)")
+    if req.base_job_id:
+        base_job = _store(rec).get_job(req.base_job_id)
+        if not base_job:
+            raise HTTPException(status_code=404, detail="The video to revise was not found")
+        if base_job.status != "complete":
+            raise HTTPException(status_code=409, detail="Only a produced video can be revised")
+        task = _revision_brief(base_job, shown)
+    task += _sources_block(req.sources)
     settings = _tenant_settings(rec)
     missing = await asyncio.to_thread(_missing_runtime_dependencies, settings["tts_engine"])
     if missing:
@@ -462,8 +602,10 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
         _grounding_for_job, rec.tenant_id, chat_key, job_id, task, backend, settings["tts_engine"],
     )
     storage = _store(rec)
-    job = VideoJob(id=job_id, task=task, status="pending")
+    job = VideoJob(id=job_id, task=shown, status="pending")
     storage.save_job(job)
+    if req.base_job_id:
+        _record_revision(rec, job_id, req.base_job_id)
 
     config = {
         "storage_base": str(_tenant_base(rec)),
@@ -500,6 +642,7 @@ def get_job_status(job_id: str, rec=_SessionRec):
     return JobDetailResponse(
         id=job.id,
         task=job.task,
+        revision_of=_revisions(rec).get(job.id),
         status=job.status,
         created_at=job.created_at.isoformat(),
         started_at=job.started_at.isoformat() if job.started_at else None,
@@ -521,11 +664,13 @@ def list_jobs(limit: int = 20, offset: int = 0, rec=_SessionRec):
         raise HTTPException(status_code=400, detail="Offset cannot be negative")
     storage = _store(rec)
     jobs = storage.list_jobs(limit=limit, offset=offset)
+    revs = _revisions(rec)
     return {
         "jobs": [
             JobResponse(
                 id=j.id,
                 task=j.task,
+                revision_of=revs.get(j.id),
                 status=j.status,
                 created_at=j.created_at.isoformat(),
                 percent=getattr(j, "percent", 0),

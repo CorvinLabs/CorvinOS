@@ -1,9 +1,11 @@
 /**
- * Video Producer — studio: produce, watch, measure, teach.
+ * Video Producer — studio: produce, watch, revise, measure, teach.
  *
- * Left: a new production and the library (poster, status, runtime, checklist
- * share). Right: the selected video's studio with three tabs —
- *   Playback  the MP4 (no subtitles, by design);
+ * One column, top to bottom: the selected video fills the panel (own fullscreen),
+ * directly below it the composer (attachment, voice, hold Space to dictate) that either
+ * starts a NEW video or sends a change request that produces a REVISION of the selected
+ * one (the original stays), then the library of produced videos. Quality / Learning /
+ * Settings sit in a collapsible section underneath:
  *   Quality   what ffprobe measured on the real artifacts
  *             (routes/video_producer_api.py → video_quality.py): stream facts,
  *             a checklist with a named denominator (incl. "no subtitles"), and every scene's
@@ -15,24 +17,25 @@
  * hard-coded record for any job id. Nothing here is invented: an unmeasured
  * value is "—", a missing ffprobe says so, and the score is "n of m checks".
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Clapperboard, Film, Loader2, PlayCircle, RefreshCw, ThumbsDown, ThumbsUp, Wand2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Clapperboard, Download, Film, Loader2, Maximize2, Mic, Minimize2, Paperclip, Pencil, RefreshCw, Send, Square, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { VideoPlayer } from "@/components/VideoPlayer";
 import { api, ApiError } from "@/lib/api/client";
 import { useAuth } from "@/lib/auth";
+import { useVoiceInput } from "@/hooks/use-voice-input";
+import { extractVideoSources, MAX_VIDEO_SOURCES, VIDEO_SOURCE_ACCEPT, type VideoSource } from "@/lib/api/video-sources";
 
 // ── Types (routes/video_producer_api.py, video_quality.py, video_learning_api.py) ──
 
 export interface Job {
-  id: string; task: string; status: string; created_at: string; percent: number;
+  id: string; task: string; revision_of?: string | null; status: string; created_at: string; percent: number;
   current_step?: string | null; current_scene?: number | null; total_scenes?: number | null;
   started_at?: string | null; completed_at?: string | null; error_message?: string | null; video_output_path?: string | null;
 }
@@ -123,25 +126,7 @@ function Fact({ k, v }: { k: string; v: React.ReactNode }) {
   );
 }
 
-// ── Studio tabs ──────────────────────────────────────────────────────────────
-
-function PlaybackTab({ job }: { job: Job }) {
-  if (job.status !== "complete") {
-    return (
-      <div className="space-y-3" data-testid="playback-pending">
-        <div className="flex justify-between text-xs text-muted-foreground"><span>{job.current_step || "Working…"}</span><span>{job.percent ?? 0}%</span></div>
-        <Progress value={job.percent ?? 0} />
-        {job.total_scenes ? <p className="text-xs text-muted-foreground">Scene {job.current_scene ?? 0} of {job.total_scenes}</p> : null}
-        {job.error_message && <div className="text-sm rounded-md border border-destructive/30 bg-destructive/10 p-3 text-destructive">{job.error_message}</div>}
-      </div>
-    );
-  }
-  return (
-    <div className="space-y-4">
-      <VideoPlayer videoPath={`/v1/console${BASE}/videos/${job.id}/download`} title={job.task} onDownload={() => { window.location.href = `/v1/console${BASE}/videos/${job.id}/download`; }} />
-    </div>
-  );
-}
+// ── Studio tabs (below the fold) ─────────────────────────────────────────────
 
 function QualityTab({ q }: { q: Quality }) {
   const [open, setOpen] = useState(false);
@@ -301,6 +286,161 @@ function LearningTab({ job, scenes }: { job: Job; scenes: SceneRow[] }) {
   );
 }
 
+// ── Stage: the selected video fills the panel ────────────────────────────────
+
+const isTyping = (el: EventTarget | null) =>
+  el instanceof HTMLElement && (["input", "textarea", "select"].includes(el.tagName.toLowerCase()) || el.isContentEditable);
+
+function VideoStage({ job, loading }: { job: Job | undefined; loading: boolean }) {
+  const box = useRef<HTMLElement>(null);
+  const [full, setFull] = useState(false);
+  const canFull = typeof document !== "undefined" && !!document.fullscreenEnabled;
+  const playable = job?.status === "complete";
+
+  useEffect(() => {
+    const on = () => setFull(document.fullscreenElement === box.current);
+    document.addEventListener("fullscreenchange", on);
+    return () => document.removeEventListener("fullscreenchange", on);
+  }, []);
+  const toggle = useCallback(() => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void box.current?.requestFullscreen?.();
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== "f" || e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target) || !playable || !canFull) return;
+      e.preventDefault();
+      toggle();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [playable, canFull, toggle]);
+
+  const url = job ? `/v1/console${BASE}/videos/${job.id}` : "";
+  let body: React.ReactNode;
+  if (loading) body = <Loader2 className="w-8 h-8 animate-spin text-white/70" />;
+  else if (!job) {
+    body = (
+      <div className="text-center text-white/70 space-y-2 px-6" data-testid="stage-empty">
+        <Film className="w-10 h-10 mx-auto opacity-60" />
+        <p className="text-sm">Describe a video below. It plays here, full size.</p>
+      </div>
+    );
+  } else if (job.status === "error") {
+    body = <div className="max-w-xl text-sm rounded-md border border-red-400/40 bg-red-500/10 p-4 text-red-200" data-testid="stage-error">{job.error_message || "The production failed."}</div>;
+  } else if (!playable) {
+    body = (
+      <div className="w-full max-w-xl px-6 space-y-3 text-white" data-testid="playback-pending">
+        <div className="text-5xl font-semibold tabular-nums">{job.percent ?? 0}<span className="text-2xl text-white/60"> %</span></div>
+        <Progress value={job.percent ?? 0} />
+        <div className="flex justify-between text-xs text-white/70"><span>{job.current_step || "Working…"}</span>{job.total_scenes ? <span>Scene {job.current_scene ?? 0} of {job.total_scenes}</span> : null}</div>
+      </div>
+    );
+  } else {
+    body = <video key={job.id} src={`${url}/download`} poster={`${url}/poster`} controls controlsList="nofullscreen nodownload" playsInline preload="metadata" className="h-full w-full object-contain bg-black [&::-webkit-media-controls-fullscreen-button]:hidden" data-testid="stage-video" />;
+  }
+  return (
+    <section ref={box} data-testid="studio" data-fullscreen={full}
+      className={`group relative flex items-center justify-center bg-black overflow-hidden ${full ? "h-screen w-screen" : "h-[calc(100vh-15.5rem)] min-h-[300px] w-full"}`}>
+      {body}
+      {playable && (
+        <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+          <a href={`${url}/download`} aria-label="Download video" title="Download" className="rounded-md bg-black/60 p-2 text-white hover:bg-black/80"><Download className="w-4 h-4" /></a>
+          <button type="button" onClick={toggle} disabled={!canFull} aria-label={full ? "Exit fullscreen" : "Fullscreen"} title={full ? "Exit fullscreen (Esc)" : "Fullscreen (F)"} data-testid="fullscreen"
+            className="rounded-md bg-black/60 p-2 text-white hover:bg-black/80 disabled:opacity-40">{full ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}</button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── Composer: new video or change request, with attachment and voice ─────────
+
+type Mode = "new" | "revise";
+
+function Composer({ csrf, selected, mode, setMode, inputRef, onCreated }: {
+  csrf: string; selected: Job | undefined; mode: Mode; setMode: (m: Mode) => void;
+  inputRef: React.RefObject<HTMLTextAreaElement>; onCreated: (jobId: string) => void;
+}) {
+  const qc = useQueryClient();
+  const [text, setText] = useState("");
+  const [sources, setSources] = useState<VideoSource[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const canRevise = selected?.status === "complete";
+  const revising = mode === "revise" && canRevise;
+
+  const create = useMutation({
+    mutationFn: () => api<{ job_id: string }>(`${BASE}/jobs`, {
+      method: "POST", csrf,
+      body: { task: text.trim(), base_job_id: revising ? selected!.id : undefined, sources: sources.map(({ name, text: t }) => ({ name, text: t })) },
+    }),
+    onSuccess: (r) => { setText(""); setSources([]); setError(null); setMode("new"); onCreated(r.job_id); void qc.invalidateQueries({ queryKey: ["video"] }); },
+    onError: (e) => setError(e instanceof ApiError ? e.message : "The production could not be started."),
+  });
+  const busy = create.isPending || uploading;
+  const { recording, startRecording, stopRecording } = useVoiceInput({ value: text, onChange: setText, csrf, disabled: busy, onError: setError });
+
+  const attach = async (files: File[]) => {
+    if (files.length === 0) return;
+    if (sources.length + files.length > MAX_VIDEO_SOURCES) { setError(`At most ${MAX_VIDEO_SOURCES} attachments per video.`); return; }
+    setUploading(true); setError(null);
+    try { const got = await extractVideoSources(files, csrf); setSources((cur) => [...cur, ...got]); }
+    catch (e) { setError(e instanceof ApiError ? e.message : "The attachment could not be read."); }
+    finally { setUploading(false); if (fileRef.current) fileRef.current.value = ""; }
+  };
+  const send = () => { if (text.trim() && !busy && csrf) create.mutate(); };
+
+  return (
+    <div className="px-6 pt-3 pb-2 space-y-2" data-testid="composer">
+      <div className="flex items-center gap-1 text-xs" role="tablist" aria-label="What to do">
+        <button type="button" role="tab" aria-selected={!revising} onClick={() => setMode("new")} data-testid="mode-new"
+          className={`px-2.5 py-1 rounded-md ${!revising ? "bg-accent/15 font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>New video</button>
+        <button type="button" role="tab" aria-selected={revising} disabled={!canRevise} onClick={() => { setMode("revise"); inputRef.current?.focus(); }} data-testid="mode-revise"
+          title={canRevise ? undefined : "Select a produced video to revise it"}
+          className={`px-2.5 py-1 rounded-md inline-flex items-center gap-1 max-w-[28rem] ${revising ? "bg-accent/15 font-medium text-foreground" : "text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:hover:text-muted-foreground"}`}>
+          <Pencil className="w-3 h-3 shrink-0" /><span className="truncate">Revise{canRevise ? `: ${selected!.task}` : ""}</span>
+        </button>
+        {revising && <span className="text-muted-foreground ml-1">A new version is produced; the original stays.</span>}
+      </div>
+      {sources.length > 0 && (
+        <ul className="flex flex-wrap gap-1.5" data-testid="sources">
+          {sources.map((s, i) => (
+            <li key={`${s.name}-${i}`} data-testid="source-chip" className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-2 py-0.5 text-xs">
+              <Paperclip className="w-3 h-3" /><span className="max-w-[14rem] truncate">{s.name}</span>
+              <span className="text-muted-foreground">{s.chars.toLocaleString("en-US")} chars{s.truncated ? ", cut" : ""}</span>
+              <button type="button" aria-label={`Remove ${s.name}`} onClick={() => setSources((c) => c.filter((_, k) => k !== i))}><X className="w-3 h-3" /></button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex items-end gap-2 rounded-xl border border-border bg-background p-2 focus-within:border-accent">
+        <input ref={fileRef} type="file" multiple accept={VIDEO_SOURCE_ACCEPT} className="hidden" data-testid="attach-input" onChange={(e) => void attach(Array.from(e.target.files ?? []))} />
+        <Button type="button" variant="ghost" size="sm" aria-label="Attach files" title="Attach text, Markdown or PDF as source material" disabled={busy || sources.length >= MAX_VIDEO_SOURCES} onClick={() => fileRef.current?.click()}>
+          {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
+        </Button>
+        <textarea ref={inputRef} value={text} onChange={(e) => setText(e.target.value)} rows={2} data-testid="task-input" maxLength={4000}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
+          placeholder={recording ? "Listening… release Space to stop" : revising ? "Describe the change: shorter scene 2, add a diagram, other title…" : "Explain in a short video what HTTPS adds to HTTP. Length: one minute."}
+          className="flex-1 resize-none bg-transparent px-1 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground" />
+        <Button type="button" variant={recording ? "destructive" : "ghost"} size="sm" data-testid="voice-button" disabled={busy}
+          aria-label={recording ? "Stop voice input" : "Start voice input"} title={recording ? "Stop (or release Space)" : "Dictate (or hold Space)"}
+          onClick={() => (recording ? stopRecording() : void startRecording())}>
+          {recording ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+        </Button>
+        <Button type="button" variant="accent" size="sm" data-testid="start-production" aria-label={revising ? "Produce revision" : "Start production"} disabled={!text.trim() || busy || !csrf} onClick={send}>
+          {create.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+        </Button>
+      </div>
+      <div className="flex justify-between gap-4 text-xs">
+        <span className="text-muted-foreground">Hold <kbd className="rounded bg-muted px-1 font-mono">Space</kbd> to dictate · <kbd className="rounded bg-muted px-1 font-mono">Enter</kbd> to send · <kbd className="rounded bg-muted px-1 font-mono">F</kbd> for fullscreen</span>
+        {error && <span className="text-destructive" role="alert" data-testid="composer-error">{error}</span>}
+      </div>
+    </div>
+  );
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export function VideoProducerPage() {
@@ -311,9 +451,12 @@ export function VideoProducerPage() {
   const { search } = useLocation();
   const params = useMemo(() => new URLSearchParams(search), [search]);
   const [selected, setSelected] = useState<string | null>(params.get("job"));
-  const [tab, setTab] = useState<"playback" | "quality" | "learning">((params.get("tab") as "playback" | "quality" | "learning") || "playback");
-  const [task, setTask] = useState("");
+  const initialTab = params.get("tab");
+  const [tab, setTab] = useState<"quality" | "learning">(initialTab === "learning" ? "learning" : "quality");
+  const [detailsOpen, setDetailsOpen] = useState(initialTab === "quality" || initialTab === "learning");
+  const [mode, setMode] = useState<Mode>("new");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const overview = useQuery({ queryKey: ["video", "overview"], queryFn: ({ signal }) => api<Overview>(`${BASE}/overview`, { signal }), retry: false, refetchInterval: 15_000 });
   const jobs = useQuery({
@@ -322,9 +465,9 @@ export function VideoProducerPage() {
   });
   useEffect(() => { if (!selected && jobs.data?.jobs.length) setSelected(jobs.data.jobs[0].id); }, [jobs.data, selected]);
   useEffect(() => {
-    const p = new URLSearchParams(); if (selected) p.set("job", selected); p.set("tab", tab);
+    const p = new URLSearchParams(); if (selected) p.set("job", selected); if (detailsOpen) p.set("tab", tab);
     navigate({ search: `?${p.toString()}` }, { replace: true });
-  }, [selected, tab, navigate]);
+  }, [selected, tab, detailsOpen, navigate]);
 
   const job = useQuery({ queryKey: ["video", "job", selected], queryFn: ({ signal }) => api<Job>(`${BASE}/jobs/${selected}`, { signal }), enabled: !!selected, retry: false,
     refetchInterval: (q) => (q.state.data && ACTIVE.includes(q.state.data.status) ? 1000 : false) });
@@ -332,11 +475,6 @@ export function VideoProducerPage() {
   const settings = useQuery({ queryKey: ["video", "settings"], queryFn: ({ signal }) => api<{ output_folder: string; tts_engine: string; tts_engines: string[]; max_duration_minutes: number; openai_configured: boolean; web_slides_available: boolean }>(`${BASE}/settings`, { signal }), retry: false });
   const [form, setForm] = useState<{ tts_engine: string; max_duration_minutes: number } | null>(null);
   useEffect(() => { if (settings.data && !form) setForm({ tts_engine: settings.data.tts_engine, max_duration_minutes: settings.data.max_duration_minutes }); }, [settings.data, form]);
-
-  const create = useMutation({
-    mutationFn: (t: string) => api<{ job_id: string }>(`${BASE}/jobs`, { method: "POST", csrf, body: { task: t } }),
-    onSuccess: (r) => { setTask(""); setSelected(r.job_id); setTab("playback"); void qc.invalidateQueries({ queryKey: ["video"] }); },
-  });
   const save = useMutation({ mutationFn: (f: NonNullable<typeof form>) => api(`${BASE}/settings`, { method: "PUT", csrf, body: f }) });
 
   if (jobs.isError) {
@@ -352,101 +490,96 @@ export function VideoProducerPage() {
 
   const ov = overview.data;
   const list = jobs.data?.jobs ?? [];
+  const byId = new Map(list.map((it) => [it.id, it]));
   const j = job.data;
 
   return (
-    <div className="max-w-7xl mx-auto p-6 space-y-6" data-testid="video-producer">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2"><Clapperboard className="w-7 h-7" /> Video Producer</h1>
-          <p className="text-muted-foreground max-w-3xl">{MARKER_VIDEO}</p>
+    <div className="-mx-6 -my-8 h-[calc(100vh-3.5rem)] overflow-y-auto" data-testid="video-producer">
+      <div className="flex items-center gap-3 px-6 h-12 border-b border-border">
+        <Clapperboard className="w-5 h-5 shrink-0" />
+        <h1 className="text-base font-semibold shrink-0">Video Producer</h1>
+        {j && <><span className="text-muted-foreground truncate min-w-0 flex-1 text-sm" title={j.task}>{j.task}</span><StatusPill status={j.status} /></>}
+        <Button variant="ghost" size="sm" className="ml-auto shrink-0" aria-label="Refresh" onClick={() => void qc.invalidateQueries({ queryKey: ["video"] })}><RefreshCw className="w-4 h-4" /></Button>
+      </div>
+
+      <VideoStage job={j} loading={!!selected && job.isLoading} />
+
+      <Composer csrf={csrf} selected={j} mode={mode} setMode={setMode} inputRef={inputRef}
+        onCreated={(id) => { setSelected(id); }} />
+
+      <div className="px-6 pb-8 space-y-6">
+        <section>
+          <div className="flex items-baseline justify-between mb-2">
+            <h2 className="text-sm font-semibold flex items-center gap-2"><Film className="w-4 h-4" /> Produced videos</h2>
+            <span className="text-xs text-muted-foreground">{jobs.isLoading ? "loading…" : `${list.length} of ${jobs.data?.total ?? list.length}`}</span>
+          </div>
+          {list.length === 0 && !jobs.isLoading ? <p className="text-sm text-muted-foreground">No videos yet. Describe one above.</p> : (
+            <ul className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3" data-testid="library">
+              {list.map((it) => {
+                const base = it.revision_of ? byId.get(it.revision_of) : undefined;
+                return (
+                  <li key={it.id} className="relative">
+                    <button type="button" onClick={() => setSelected(it.id)} data-testid={`job-${it.id}`} aria-current={selected === it.id}
+                      className={`w-full text-left rounded-lg border p-2 transition ${selected === it.id ? "border-accent bg-accent/10" : "border-border hover:bg-muted/40"}`}>
+                      <div className="aspect-video rounded-md overflow-hidden border border-border bg-muted/40">
+                        {it.status === "complete" ? <img src={`/v1/console${BASE}/videos/${it.id}/poster`} alt="" className="w-full h-full object-cover" loading="lazy" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} /> : null}
+                      </div>
+                      <div className="text-sm font-medium truncate mt-2">{it.task}</div>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        <StatusPill status={it.status} />
+                        {it.revision_of && <Badge variant="outline" title={base ? `Revision of: ${base.task}` : `Revision of ${it.revision_of}`} data-testid={`revision-${it.id}`}>revision</Badge>}
+                        <span className="text-xs text-muted-foreground">{fmtWhen(it.created_at)}</span>
+                      </div>
+                      {ACTIVE.includes(it.status) && <div className="mt-1"><Progress value={it.percent ?? 0} /></div>}
+                    </button>
+                    {it.status === "complete" && (
+                      <Button variant="ghost" size="sm" className="absolute top-3 right-3 h-7 px-2 bg-black/60 text-white hover:bg-black/80" aria-label={`Revise ${it.task}`} data-testid={`revise-${it.id}`}
+                        onClick={() => { setSelected(it.id); setMode("revise"); inputRef.current?.focus(); }}><Pencil className="w-3 h-3" /> Revise</Button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3" data-testid="overview-tiles">
+          {[
+            ["Videos produced", ov ? String(ov.videos) : "—", ov ? `${ov.jobs_total} jobs in total` : ""],
+            ["Total runtime", ov ? fmtDur(ov.runtime_s) : "—", ov ? fmtBytes(ov.size_bytes) : ""],
+            ["Checks passed", ov && ov.mean_score_share !== null ? pct(ov.mean_score_share) : "—", ov ? (ov.measured_videos ? `mean over ${ov.measured_videos} measured video${ov.measured_videos === 1 ? "" : "s"}` : "nothing measured yet") : ""],
+            ["Last activity", ov?.last_activity ? fmtWhen(ov.last_activity) : "—", ov?.plugin_source ? "plugin loaded" : ""],
+          ].map(([label, value, sub]) => (
+            <Card key={label}><CardContent className="pt-4 pb-3">
+              <div className="text-xl font-bold tabular-nums">{value}</div>
+              <div className="text-xs text-muted-foreground">{label}{sub ? ` · ${sub}` : ""}</div>
+            </CardContent></Card>
+          ))}
         </div>
-        <Button variant="outline" size="sm" onClick={() => void qc.invalidateQueries({ queryKey: ["video"] })}><RefreshCw className="w-4 h-4" /> Refresh</Button>
-      </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4" data-testid="overview-tiles">
-        {[
-          ["Videos produced", ov ? String(ov.videos) : "—", ov ? `${ov.jobs_total} jobs in total` : ""],
-          ["Total runtime", ov ? fmtDur(ov.runtime_s) : "—", ov ? fmtBytes(ov.size_bytes) : ""],
-          ["Checks passed", ov && ov.mean_score_share !== null ? pct(ov.mean_score_share) : "—", ov ? (ov.measured_videos ? `mean over ${ov.measured_videos} measured video${ov.measured_videos === 1 ? "" : "s"}` : "nothing measured yet") : ""],
-          ["Last activity", ov?.last_activity ? fmtWhen(ov.last_activity) : "—", ov?.plugin_source ? "plugin loaded" : ""],
-        ].map(([label, value, sub]) => (
-          <Card key={label}><CardContent className="pt-5 pb-4">
-            <div className="text-2xl font-bold tabular-nums">{value}</div>
-            <div className="text-xs text-muted-foreground">{label}{sub ? ` · ${sub}` : ""}</div>
-          </CardContent></Card>
-        ))}
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-12">
-        <div className="lg:col-span-4 space-y-6">
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><Wand2 className="w-4 h-4" /> New production</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              <textarea value={task} onChange={(e) => setTask(e.target.value)} rows={4} placeholder="Explain in a short video what HTTPS adds to HTTP. Length: one minute."
-                className="w-full px-3 py-2 rounded-md border border-border bg-background text-foreground text-sm" data-testid="task-input" />
-              <Button variant="accent" className="w-full" disabled={!task.trim() || create.isPending || !csrf} onClick={() => create.mutate(task)} data-testid="start-production">
-                {create.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <PlayCircle className="w-4 h-4" />} Start production
-              </Button>
-              {create.isError && <p className="text-xs text-destructive">The production could not be started.</p>}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><Film className="w-4 h-4" /> Library</CardTitle><CardDescription>{jobs.isLoading ? "loading…" : `${list.length} of ${jobs.data?.total ?? list.length} jobs`}</CardDescription></CardHeader>
+        <Card>
+          <button type="button" onClick={() => setDetailsOpen((o) => !o)} aria-expanded={detailsOpen} data-testid="details-toggle" className="w-full text-left px-6 py-3 flex items-center gap-2 text-sm font-semibold">
+            {detailsOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />} Quality and learning
+            <span className="text-xs font-normal text-muted-foreground">{MARKER_VIDEO}</span>
+          </button>
+          {detailsOpen && (
             <CardContent>
-              {list.length === 0 && !jobs.isLoading ? <p className="text-sm text-muted-foreground">No videos yet. Start a production above.</p> : (
-                <ul className="space-y-2 max-h-[34rem] overflow-y-auto pr-1" data-testid="library">
-                  {list.map((it) => (
-                    <li key={it.id}>
-                      <button type="button" onClick={() => setSelected(it.id)} className={`w-full text-left rounded-lg border p-2 flex gap-3 transition ${selected === it.id ? "border-accent bg-accent/10" : "border-border hover:bg-muted/40"}`} data-testid={`job-${it.id}`}>
-                        <div className="w-24 shrink-0 aspect-video rounded-md overflow-hidden border border-border bg-muted/40">
-                          {it.status === "complete" ? <img src={`/v1/console${BASE}/videos/${it.id}/poster`} alt="" className="w-full h-full object-cover" loading="lazy" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} /> : null}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm font-medium truncate">{it.task}</div>
-                          <div className="flex items-center gap-2 mt-1"><StatusPill status={it.status} /><span className="text-xs text-muted-foreground">{fmtWhen(it.created_at)}</span></div>
-                          {ACTIVE.includes(it.status) && <div className="mt-1"><Progress value={it.percent ?? 0} /></div>}
-                        </div>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="lg:col-span-8">
-          <Card className="min-h-[24rem]" data-testid="studio">
-            {!j ? (
-              <CardContent className="py-16 text-center text-sm text-muted-foreground">{selected ? <Loader2 className="w-6 h-6 animate-spin mx-auto" /> : "Select a video from the library."}</CardContent>
-            ) : (
-              <>
-                <CardHeader className="pb-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <CardTitle className="text-lg flex-1 min-w-0 truncate">{j.task}</CardTitle>
-                    <StatusPill status={j.status} />
-                  </div>
-                  <CardDescription>Created {fmtWhen(j.created_at)}{j.completed_at ? ` · produced ${fmtWhen(j.completed_at)}` : ""}{quality.data?.production.seconds ? ` in ${fmtDur(quality.data.production.seconds)}` : ""} · <span className="font-mono">{j.id}</span></CardDescription>
-                  <div className="flex gap-1 mt-2" role="tablist">
-                    {(["playback", "quality", "learning"] as const).map((t) => (
+              {!j ? <p className="text-sm text-muted-foreground">Select a video.</p> : (
+                <>
+                  <div className="flex gap-1 mb-3" role="tablist">
+                    {(["quality", "learning"] as const).map((t) => (
                       <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} data-testid={`tab-${t}`}
                         className={`px-3 py-1.5 rounded-md text-sm capitalize ${tab === t ? "bg-accent/15 text-foreground font-medium" : "text-muted-foreground hover:text-foreground"}`}>{t}</button>
                     ))}
                   </div>
-                </CardHeader>
-                <CardContent>
-                  {tab === "playback" && <PlaybackTab job={j} />}
                   {tab === "quality" && (j.status !== "complete" ? <p className="text-sm text-muted-foreground" data-testid="quality-pending">Quality is measured once the video is produced.</p>
                     : quality.isLoading ? <Loader2 className="w-6 h-6 animate-spin" /> : quality.isError ? <p className="text-sm text-destructive">The quality measurement failed.</p> : quality.data ? <QualityTab q={quality.data} /> : null)}
                   {tab === "learning" && <LearningTab job={j} scenes={quality.data?.scenes ?? []} />}
-                </CardContent>
-              </>
-            )}
-          </Card>
-        </div>
-      </div>
+                </>
+              )}
+            </CardContent>
+          )}
+        </Card>
 
       <Card>
         <button type="button" onClick={() => setSettingsOpen((o) => !o)} className="w-full text-left px-6 py-3 flex items-center gap-2 text-sm font-semibold">
@@ -473,6 +606,7 @@ export function VideoProducerPage() {
           </CardContent>
         )}
       </Card>
+      </div>
     </div>
   );
 }
