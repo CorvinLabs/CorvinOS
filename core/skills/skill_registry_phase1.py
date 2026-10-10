@@ -1046,6 +1046,42 @@ class SkillsRegistry:
                 error_class="skill_saturated",
             )
 
+        # G1 Wiring: Validate dependencies (ADR-0535 Gate 3, DAG validation)
+        # Before execution, check that all declared dependencies are available.
+        # This prevents a Skill from starting if its dependencies are missing/incompatible.
+        if skill.metadata.depends_on:
+            from core.skills.skill_dag_loader import (  # noqa: PLC0415
+                DependencyValidator,
+                SkillDependency,
+            )
+
+            validator = DependencyValidator(self)
+            # Convert metadata depends_on (list of strings or dicts) to SkillDependency objects
+            dep_specs = []
+            for dep in skill.metadata.depends_on:
+                if isinstance(dep, str):
+                    dep_specs.append(SkillDependency(name=dep, version="*"))
+                elif isinstance(dep, dict):
+                    dep_specs.append(
+                        SkillDependency(
+                            name=dep.get("name", ""),
+                            version=dep.get("version", "*"),
+                        )
+                    )
+
+            report = validator.validate_dependencies(skill_id, dep_specs)
+            if not report.is_valid:
+                blocker_msg = "; ".join(report.blockers)
+                return self._finish_error(
+                    skill_id,
+                    f"Dependency validation failed: {blocker_msg}",
+                    effective_tenant_id,
+                    lom,
+                    start_time,
+                    track=True,
+                    error_class="dependency_validation_failed",
+                )
+
         # FIX #10: Scrub PII from input before Skill execution (GDPR Art. 32)
         scrubbed_input = self._scrub_pii_from_output(input)
 
