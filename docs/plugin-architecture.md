@@ -64,7 +64,6 @@ once let `..\..\etc` through, which is a real traversal on Windows and lands in
 | `notification_backend` | L3+ | `providers.notification_backend` |
 | `recall_backend` | L28 | `providers.recall_backend` |
 | `summary_provider` | L11 | `providers.summary_provider` |
-| `router_backend` | L5 | `providers.router_backend` |
 
 `build_context()` populates **every** handle in one place. A missing handle means a
 plugin of that type can never register — which was the case for all of them at one
@@ -467,7 +466,7 @@ since a check after the import asks "may we run this?" about running code.
 A plugin of one of those types loads, registers, reports healthy, appears in the
 Console — and nothing ever calls it. There is no error and no log line.
 
-**Consumed (6).** `router_backend`, `summary_provider`, `notification_backend` and
+**Consumed (5).** `summary_provider`, `notification_backend` and
 `recall_backend` are all called from `corvin_operator/bridges/shared/adapter.py`;
 `audit_backend` from the gateway; `compute_engine` from the compute worker
 (`corvin_compute/cli.py`), which is a different PROCESS — the one that
@@ -530,7 +529,7 @@ curl -s localhost:8765/v1/console/plugins/metrics
 
 **Must NOT**, for any plugin: import `anthropic` directly (CI AST lint enforces),
 put message content or PII into a notification payload, store un-redacted text in a
-recall backend, let a router backend raise, or reach the core audit chain.
+recall backend, or reach the core audit chain.
 
 → Technical reference: [Layer Plugins](claude-ref/layer-plugins.md) ·
 Declarative surfaces: [Plugin System](plugin-system.md) ·

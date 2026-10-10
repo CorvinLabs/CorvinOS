@@ -21,25 +21,16 @@ import { KEY_INDEX, KEY_INSTALLED } from "../header";
 import { KEY_CAPABILITIES, KEY_MANIFEST } from "./browse";
 import {
   disablePlugin, enablePlugin, getPluginHealth, listInstalledPlugins, uninstallPlugin,
-  listPluginUpdates, updateIndexPlugin, updatePluginSettings,
+  KEY_UPDATES, listPluginUpdates, refusedEscalations, updateIndexPlugin, updatePluginSettings,
   type PluginSummary, type PluginUpdate,
 } from "../api";
 import type { TabId } from "../tabs";
-
-const KEY_UPDATES = ["marketplace", "updates"] as const;
 
 function actionError(e: unknown, fallback: string): string {
   if (e instanceof ApiError && e.status === 403) return "Not allowed — the compliance layer or your role refuses this change.";
   if (e instanceof ApiError && e.status === 409) return "Refused — the plugin's current state does not allow this (disable it before uninstalling).";
   if (e instanceof ApiError && e.status === 404) return "Not available — the plugin console surface is switched off on this build.";
   return fallback;
-}
-
-/** Escalations the server listed when it refused an update (409 update_refused). */
-function refusedEscalations(e: unknown): string[] | null {
-  if (!(e instanceof ApiError) || e.status !== 409) return null;
-  const d = (e.detail as { detail?: { error?: string; escalations?: string[] } } | undefined)?.detail;
-  return d?.error === "update_refused" && d.escalations?.length ? d.escalations : null;
 }
 
 function Row({ p, csrf, lifecycleEnabled, health, update }: {

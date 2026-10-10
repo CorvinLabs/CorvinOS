@@ -82,9 +82,6 @@ _PLUGIN_TYPE_KEYWORDS: dict[str, tuple[str, ...]] = {
     "summary_provider": (
         "summar", "condense", "digest",
     ),
-    "router_backend": (
-        "route", "router", "persona selection", "dispatch",
-    ),
     "user_backend": (
         "auth", "authentic", "login", "sso", "okta", "identity provider",
     ),

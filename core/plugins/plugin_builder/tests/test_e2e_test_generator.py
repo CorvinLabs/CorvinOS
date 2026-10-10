@@ -47,14 +47,14 @@ def _run_generated_tests(test_path):
 
 def test_consumed_provider_gets_a_real_passing_wiring_test(tmp_path):
     idea = PluginIdea(
-        "Smart Router",
-        ProblemStatement("routes messages between personas", "ops", "", "MVP"),
+        "Smart Summariser",
+        ProblemStatement("condenses long messages into a digest", "ops", "", "MVP"),
         DependencySpec(), Constraints(),
     )
     classification, plugin_id, result = _scaffold(tmp_path, idea)
-    assert classification.plugin_type == "router_backend"
+    assert classification.plugin_type == "summary_provider"
     from corvin_plugins.surface_map import surface_for
-    assert surface_for("router_backend").consumed  # fixture assumption, not hardcoded
+    assert surface_for("summary_provider").consumed  # fixture assumption, not hardcoded
 
     test_path = generate_e2e_tests(classification, plugin_id, result.scaffold_files[0], result.dest)
     assert test_path is not None

@@ -53,7 +53,7 @@ Settings are stored in `~/.corvin/global/quality-layers.json`. You can also edit
     "adr_gate": true,
     "docs_as_definition_of_done": true,
     "e2e_driven_iteration": true,
-    "usability_first": false
+    "usability_first": true
   }
 }
 ```

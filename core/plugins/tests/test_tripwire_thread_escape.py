@@ -113,7 +113,6 @@ def _make_plugin_context(plugin_id: str, tenant_id: str = "_default") -> protoco
         notification_registry=None,
         recall_registry=None,
         summary_registry=None,
-        router_registry=None,
         audit_registry=None,
         user_registry=None,
         stt_registry=None,

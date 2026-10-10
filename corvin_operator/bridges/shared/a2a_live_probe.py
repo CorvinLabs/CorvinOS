@@ -106,7 +106,7 @@ def throwaway_origin(origins_dir: Path) -> Iterator[dict]:
     cfg = {"origin_id": oid, "hmac_key": secrets.token_hex(32), "recv_key": secrets.token_hex(32),
            "enabled": True, "max_ttl_s": 60, "allowed_personas": ["assistant"], "spawn_worker": False}
     path = origins_dir / f"{oid}.json"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)  # no O_NOFOLLOW on Windows
     try:
         with os.fdopen(fd, "w") as fh:
             json.dump(cfg, fh)

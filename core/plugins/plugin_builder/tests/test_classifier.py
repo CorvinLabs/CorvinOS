@@ -57,11 +57,17 @@ def test_provider_classification_notifications():
     assert c.plugin_type == "notification_backend"
 
 
-def test_provider_classification_router_is_consumed_no_dead_flag():
-    c = classify(_idea("A custom router that decides persona dispatch"))
+def test_provider_classification_summary_is_consumed_no_dead_flag():
+    c = classify(_idea("A custom summariser that condenses long messages"))
     assert c.kind == PluginKind.PROVIDER
-    assert c.plugin_type == "router_backend"
+    assert c.plugin_type == "summary_provider"
     assert not any("NOTHING currently invokes it" in f for f in c.risk_flags)
+
+
+def test_a_router_idea_is_not_classified_as_a_removed_plugin_type():
+    # ADR-0537: persona routing is gone, so is router_backend.
+    c = classify(_idea("A custom router that decides persona dispatch"))
+    assert c.plugin_type != "router_backend"
 
 
 def test_integration_fallback_on_network_egress_with_no_keyword_match():

@@ -54,7 +54,7 @@ def test_plugin_contract_is_the_real_lifecycle_shape_on_the_real_tree():
     copy-and-edit templates have exactly that shape and are never imported."""
     assert "Plugin" not in z.CONTRACTS and "BasePlugin" not in z.CONTRACTS
     dead = {(d["file"], d["class"]): d["contract"] for d in _real()[3]["dead"]}
-    assert dead[("core/plugins/templates/router_backend_plugin.py", "MyRouterPlugin")] == "CorvinPlugin"
+    assert dead[("core/plugins/templates/summary_provider_plugin.py", "MySummaryPlugin")] == "CorvinPlugin"
     assert ("core/plugins/buildin/ai/vibe_engineering/src/vibe_routing.py", "VibeRouter") not in dead
 
 

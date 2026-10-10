@@ -35,15 +35,9 @@ A single adapter process watches every channel's inbox directory at once. On a n
 3. **Profile resolution** — `_resolve_chat_profile(chat_key)` looks up `chat_profiles[chat_key]` first, then JID-normalised forms (WhatsApp), then `"default"`, then the empty profile (legacy max-open). The result is a **base profile** — `permission_mode`, `allowed_tools`, `disallowed_tools`, `append_system`, `add_dirs`, `mcp_servers`, optional `persona`.
 4. **Cowork merge (if installed)** — if `cowork` is importable and the profile has `persona: <name>`, `cowork.resolver.resolve()` loads the persona JSON and merges its fields into the profile: lists union, scalars → profile wins, `mcp_servers` shallow-merged, `append_system` concatenated.
 
-### Stage 3 — auto-routing (only if no persona pinned)
+### Stage 3 — persona identity (no routing, ADR-0537)
 
-If the profile has no explicit `persona`, `_apply_auto_routing()` calls `bridges/shared/router.py`:
-
-1. **Heuristic pass.** `_HEURISTIC_PATTERNS` matches `text.lower()` against per-persona regexes. "find me the cheapest train" hits the `browser` persona's pattern (transactional verb + travel noun). Confidence high → return `{persona: "browser", confidence: 0.9, why: "heuristic:travel"}`. Done in <1 ms.
-2. **Embedding pass** (only if heuristic returned nothing or low confidence). The text is embedded via `text-embedding-3-small`; cosine-similarity against each persona's `routing_anchors` (cached on disk) picks the best.
-3. **Fallback.** Below threshold → `assistant` persona. The router never returns `None`; the fallback is part of the contract.
-
-The picked persona is merged into the profile (its tools, MCP servers, `append_system`, possibly its `FORGE_ALLOWED_TOOLS`). A `[browser]` prefix is queued for the eventual reply.
+`_apply_persona_identity()` gives every turn an identity and never picks a persona from the message text. A pinned chat keeps its pinned name; every other chat gets `routing.fallback_persona` (default `assistant`). Both carry the one capability profile (forge, skill-forge, orchestration MCP servers) unless the operator restricted the chat (`allowed_tools` / `disallowed_tools` / `permission_mode`) or set `routing.mode = off`, in which case only the identity is set.
 
 ### Stage 4 — `claude` subprocess
 

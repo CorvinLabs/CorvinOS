@@ -6,7 +6,7 @@ edit a curated subset of the per-chat tunables:
 
   * persona            (one of the bundle + user personas)
   * observer_visibility ("off" / "transcript")
-  * dialectic_mode_<site> for the six known sites
+  * dialectic_mode_<site> for the known sites
   * ldd_enabled, ldd_layers per layer
   * audience           ("owner" / "all")
 
@@ -111,11 +111,10 @@ _AUDIENCE_VALUES = ("owner", "all")
 
 
 class DialecticModesPatch(BaseModel):
-    """Per-site mode for the six canonical sites. Absent = unchanged;
+    """Per-site mode for the canonical sites. Absent = unchanged;
     null = reset to default."""
     skill_promotion: Literal["off", "fast", "skill", "cli"] | None = None
     forge_creation:  Literal["off", "fast", "skill", "cli"] | None = None
-    auto_routing:    Literal["off", "fast", "skill", "cli"] | None = None
     path_gate:       Literal["off", "fast", "skill", "cli"] | None = None
     session_reset:   Literal["off", "fast", "skill", "cli"] | None = None
     voice_summary:   Literal["off", "fast", "skill", "cli"] | None = None

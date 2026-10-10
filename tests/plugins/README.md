@@ -83,7 +83,6 @@ coverage html --include=tests/plugins/  # Open htmlcov/index.html
 | **cowork_hub** | 8 | ⏳ STUB | Persona routing, task dispatch (ADR-0510) |
 | **data_connector** | 8 | ⏳ STUB | DB query, schema inference, SQL injection prevention |
 | **notification_backend** | 4 | ✅ TEMPLATE | Notify, batch, status tracking |
-| **router_backend** | 4 | ✅ TEMPLATE | Routing decision, load balancing |
 | **vibe_webhook_dispatcher** | 8 | ⏳ STUB | Webhook dispatch, signature verify, retry |
 
 ### Observability (1 plugin, 8 tests)

@@ -92,12 +92,27 @@ export interface ChatMessage {
    *  Persisted to turns.jsonl so audit graph survives reload/reconnect.
    *  Only present on TDE turns (when engine === "tiered_delegation"). */
   tdeProgress?: TdeProgress;
+  /** Live-turn id from `turn_started` / `turn_attach` (live_turns.py): lets a
+   *  reconnecting socket find the bubble of the turn it re-attaches to. */
+  turnId?: string;
+  /** Restored from the sessionStorage mirror after a page load: what the tab
+   *  last SAW, not the record. Never live, and superseded by the server's
+   *  history as soon as it arrives. */
+  restored?: boolean;
 }
 
 export interface StreamEvent {
   type: "ready" | "delta" | "tool_use" | "result" | "error" | "done" | "info" |
         "pong" | "session_title" | "artifact" | "ccc_action" | "voice" | "engine" |
-        "engine_progress" | "notice" | "language" | "bg_status" | "tool_diff";
+        "engine_progress" | "notice" | "language" | "bg_status" | "tool_diff" |
+        "turn_started" | "turn_attach" | "turn_resync";
+  /** `turn_started` / `turn_attach` / attached `done`: the live turn's id. */
+  turn_id?: string;
+  /** `done` only: this socket did not start the turn, it attached to it —
+   *  its view must reconcile with the persisted record (live_turns.py). */
+  attached?: boolean;
+  /** `turn_attach` only: the replay is incomplete (buffer cap). */
+  truncated?: boolean;
   /** `notice` only: which runtime message this is ("quota_fallback",
    *  "acs_fallback", "artifacts_truncated"). Rendered as a distinct chip so a
    *  degrade is never mistaken for part of the model's answer. */
@@ -290,6 +305,9 @@ interface SessionEntry {
   bgChildrenAt: number;
   latestResultText: string | null;
   pendingTitle: string | null;
+  /** Set when this view attached to a turn another socket started, or fell
+   *  behind it: reconcile with the server's record when the turn ends. */
+  needsReconcile: boolean;
 }
 
 const sessions = new Map<string, SessionEntry>();
@@ -328,7 +346,12 @@ function getOrCreate(sid: string): SessionEntry {
     // the tab last saw, not an empty chat.
     sessions.set(sid, {
       ws: null,
-      messages: loadPersistedMessages(sid) ?? [],
+      // A restored message is never live: this page has no socket on the turn
+      // that produced it (live_turns.py re-attaches a running one), and the
+      // server's history replaces it as soon as it is read.
+      messages: (loadPersistedMessages(sid) ?? []).map((m) => ({
+        ...m, streaming: false, restored: true,
+      })),
       streaming: false,
       error: null,
       bgOpen: 0,
@@ -343,6 +366,7 @@ function getOrCreate(sid: string): SessionEntry {
       reconnectDelay: 1_000,
       reconnecting: false,
       heartbeatInterval: null,
+      needsReconcile: false,
     });
   }
   return sessions.get(sid)!;
@@ -585,7 +609,70 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
       return;
     }
 
+    case "turn_started": {
+      // This socket started the turn: tag its placeholder so a reconnect can
+      // find it again (turn_attach carries the same id).
+      const aid = entry.currentAssistantId;
+      if (aid && evt.turn_id) {
+        entry.messages = entry.messages.map((m) =>
+          m.id === aid ? { ...m, turnId: evt.turn_id } : m
+        );
+      }
+      return;
+    }
+
+    case "turn_attach": {
+      // A turn of this chat is running that this socket did not start (this
+      // tab before a reload, another tab). The server replays what it produced
+      // so far right after this event, then streams it live.
+      if (!evt.turn_id) return;
+      const existing = entry.messages.find(
+        (m) => m.role === "assistant" && m.turnId === evt.turn_id
+      );
+      let aid: string;
+      if (existing) {
+        // Same page, socket re-opened: the replay rebuilds the bubble from
+        // the start, so drop what it held instead of doubling it.
+        aid = existing.id;
+        entry.messages = entry.messages.map((m) =>
+          m.id === aid ? { ...m, parts: [], streaming: true, error: undefined } : m
+        );
+      } else {
+        // Any other bubble still marked streaming belongs to a turn that is
+        // over as far as this socket can tell.
+        aid = `a-${_nextMsgId()}`;
+        entry.messages = [
+          ...entry.messages.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
+          {
+            id: aid,
+            role: "assistant",
+            parts: [],
+            ts: Date.now() / 1000,
+            streaming: true,
+            turnId: evt.turn_id,
+          },
+        ];
+      }
+      entry.currentAssistantId = aid;
+      entry.streaming = true;
+      entry.bgOpen = 0;
+      entry.bgChildren = [];
+      entry.needsReconcile = true;
+      return;
+    }
+
+    case "turn_resync": {
+      // The server stopped feeding this socket (it fell behind); the end of
+      // the turn brings the full record.
+      entry.needsReconcile = true;
+      return;
+    }
+
     case "done": {
+      if (evt.attached || entry.needsReconcile) {
+        entry.needsReconcile = false;
+        _reconcileWithServer(sid);
+      }
       entry.streaming = false;
       entry.bgOpen = 0;
       entry.bgChildren = [];
@@ -818,34 +905,112 @@ export function ensureConnected(sid: string): void {
  */
 export function loadHistory(sid: string, messages: ChatMessage[]): void {
   const entry = getOrCreate(sid);
-  // Allow re-load when historyLoaded was set on a previous visit but the entry
-  // was never populated (e.g., racing WS arrival that came in empty, or component
-  // unmounted before fetch resolved). Only skip when we already have content.
-  if (entry.historyLoaded && entry.messages.length > 0) return;
-
+  const firstLoad = !entry.historyLoaded;
   entry.historyLoaded = true;
-
-  // Don't overwrite live streamed content that arrived before getChatTurns resolved.
-  if (entry.streaming || entry.messages.length > 0) return;
-
+  // The server's history is the record. Until 2026-10-09 any non-empty entry
+  // skipped it, so a sessionStorage mirror restored mid-turn hid the finished
+  // answer forever. Now: while this page streams a turn (sent before the
+  // history arrived, or attached via turn_attach) its live messages are kept
+  // after the record; otherwise the record replaces whatever the tab holds —
+  // finished turns are in it, restored mirror content is superseded by it.
+  if (entry.streaming) {
+    const live = entry.messages.filter((m) => !m.restored && !m.id.startsWith("h-"));
+    entry.messages = mergeLiveTail(messages, live);
+    notifyState(sid);
+    return;
+  }
+  if (messages.length === 0 && entry.messages.some((m) => !m.restored)) return; // never wipe live content with an empty read
+  if (fingerprint(messages) === fingerprint(entry.messages)) {
+    // Same content: still drop the `restored` marks so later reads compare cleanly.
+    if (entry.messages.some((m) => m.restored)) {
+      entry.messages = messages;
+      notifyState(sid);
+    } else if (firstLoad) {
+      notifyState(sid);
+    }
+    return;
+  }
   entry.messages = messages;
   notifyState(sid);
 }
 
+/** The record followed by live messages it does not contain yet. A live user
+ *  message the record already holds (persisted at turn start) is not doubled. */
+function mergeLiveTail(record: ChatMessage[], live: ChatMessage[]): ChatMessage[] {
+  if (live.length === 0) return record;
+  const last = record[record.length - 1];
+  const firstLive = live[0];
+  const sameUser =
+    last && firstLive && last.role === "user" && firstLive.role === "user" &&
+    textOf(last) === textOf(firstLive);
+  return sameUser ? [...record.slice(0, -1), ...live] : [...record, ...live];
+}
+
+function textOf(m: ChatMessage): string {
+  return m.parts.map((p) => (p.kind === "text" ? p.text : "")).join("");
+}
+
+/** Identity of a message list for reconcile decisions: role, text and part
+ *  count per message. Replaces the old length comparison, which read a stale
+ *  [user, empty placeholder] as equal to the finished [user, answer]. */
+function fingerprint(msgs: ChatMessage[]): string {
+  return msgs.map((m) => `${m.role}:${m.parts.length}:${textOf(m).length}:${textOf(m).slice(-64)}`).join("|");
+}
+
 /**
  * Replace a chat's messages with a fresh server read — for history that grew
- * while no WebSocket was attached to the turn (a task that outlived a reload).
+ * while no socket of this page streamed the turn (a reload, a closed tab, a
+ * turn finished on another tab).
  *
- * Unlike loadHistory this applies after the first visit, but only when the
- * server holds MORE than the tab does and the tab is not streaming, so it can
- * never clobber live content with an older snapshot.
+ * Never while this page is streaming a turn (live content owns the display
+ * then). Otherwise the record wins whenever it differs from what the tab
+ * shows; restored mirror content always loses.
  */
 export function refreshHistory(sid: string, messages: ChatMessage[]): void {
   const entry = sessions.get(sid);
   if (!entry || entry.streaming) return;
-  if (messages.length <= entry.messages.length) return;
+  // A snapshot shorter than what this page itself streamed is older than it
+  // (e.g. read before the answer was persisted) — never let it erase content.
+  // Restored mirror content does not count: it is not the page's own.
+  const own = entry.messages.filter((m) => !m.restored).length;
+  if (messages.length < own) return;
+  if (fingerprint(messages) === fingerprint(entry.messages)) return;
+  entry.historyLoaded = true;
   entry.messages = messages;
   notifyState(sid);
+}
+
+/** True while ANY chat of this page streams a turn (sent or attached) — the
+ *  build-freshness auto-reload waits for this to clear. */
+export function anyChatStreaming(): boolean {
+  for (const e of sessions.values()) if (e.streaming) return true;
+  return false;
+}
+
+// ── Server reconcile (attached turns) ─────────────────────────────────────────
+// The registry cannot hydrate turns itself (hydrateChatTurn lives with the chat
+// page); the page registers the reader once at module load.
+type HistoryReader = (sid: string) => Promise<ChatMessage[]>;
+let _historyReader: HistoryReader | null = null;
+
+export function registerHistoryReader(fn: HistoryReader): void {
+  _historyReader = fn;
+}
+
+/** After an attached turn ends, the persisted record is authoritative: the
+ *  replay may have been truncated, and only the record carries voice parts.
+ *  The attached `done` is sent after the turn was persisted, so one read
+ *  suffices; a short retry covers a failed request. */
+function _reconcileWithServer(sid: string, attempt = 0): void {
+  const reader = _historyReader;
+  if (!reader) return;
+  setTimeout(() => {
+    reader(sid)
+      .then((msgs) => refreshHistory(sid, msgs))
+      .catch(() => {
+        if (attempt < 3) _reconcileWithServer(sid, attempt + 1);
+      });
+  }, attempt === 0 ? 0 : 1000 * 2 ** attempt);
 }
 
 /**
@@ -1035,6 +1200,7 @@ export function useChatSession(sid: string): SessionState {
 
 /** Reset all module state — only for unit tests. */
 export function __resetForTests(): void {
+  _historyReader = null;
   sessions.forEach((e) => {
     if (e.reconnectTimer) clearTimeout(e.reconnectTimer);
     if (e.heartbeatInterval) clearInterval(e.heartbeatInterval);

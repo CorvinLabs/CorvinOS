@@ -92,6 +92,8 @@ class LanguageResolutionWsE2E(unittest.TestCase):
             with c.websocket_connect("/v1/console/chat/sessions/lang-e2e/stream") as ws:
                 self.assertEqual(ws.receive_json()["type"], "ready")
                 ws.send_json({"type": "user", "text": prompt})
+                # live_turns.py: the turn opens with turn_started (re-attach id).
+                self.assertEqual(ws.receive_json()["type"], "turn_started")
                 evt = ws.receive_json()
                 # Drain the truncation error so the socket closes cleanly.
                 self.assertEqual(ws.receive_json()["type"], "error")

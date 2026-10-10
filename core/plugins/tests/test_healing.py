@@ -137,7 +137,7 @@ class TestPolicy(_Base):
             )
 
     def test_degradable_types_default_to_disable(self):
-        for ptype in ("router_backend", "worker_engine"):
+        for ptype in ("worker_engine",):
             self.assertIs(
                 self.healer.policy_for("x", ptype), hl.HealingPolicy.DISABLE_AND_DEGRADE
             )
@@ -208,12 +208,12 @@ class TestActions(_Base):
         self.assertEqual(plugin.unloads, 1)
 
     def test_disable_and_degrade_unregisters(self):
-        plugin = self._register(_Plugin("p.router", "router_backend"))
+        plugin = self._register(_Plugin("p.worker", "worker_engine"))
         rec = self.healer.consider(
-            "p.router", plugin_type="router_backend", consecutive_failures=3
+            "p.worker", plugin_type="worker_engine", consecutive_failures=3
         )
         self.assertIs(rec.action, hl.HealingAction.DISABLE)
-        self.assertNotIn("p.router", self.registry.discover())
+        self.assertNotIn("p.worker", self.registry.discover())
         self.assertEqual(plugin.unloads, 1)
 
     def test_healing_an_unregistered_plugin_is_a_noop(self):

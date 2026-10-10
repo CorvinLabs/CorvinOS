@@ -13,7 +13,7 @@ layer don't compromise others (defense-in-depth).
 | **L7** | SkillForge | Runtime skill generation, prompt-injected | [layer-plugins.md](layer-plugins.md) |
 | **L8** | Session lifecycle | `/new /clear /reset`, audit-first lifecycle | [layer-model.md § Layer 8](../layer-model.md#layer-8--session-bound-lifecycle-new-clear-reset--7-day-timeout-sweep) |
 | **L10** | Path-Gate | FS-write protection, fail-closed, Bash detection | [layer-10-path-gate.md](layer-10-path-gate.md) |
-| **L11** | Dialectic decision-points | 6 integration sites (skill_promotion, auto_routing, etc.) | [layer-voice-ldd.md § L11](layer-voice-ldd.md#layer-11--native-dialectic-decision-points-ldd-integrated) |
+| **L11** | Dialectic decision-points | 5 integration sites (skill_promotion, forge_creation, path_gate, session_reset, voice_summary) | [layer-voice-ldd.md § L11](layer-voice-ldd.md#layer-11--native-dialectic-decision-points-ldd-integrated) |
 | **L12** | Voice listener-profile | TTS tuning for the listener (`voice_audience_*` fields) | [layer-voice-ldd.md § L12](layer-voice-ldd.md#layer-12--voice-listener-profile-tts-audience-tuning) |
 | **L13** | /btw mid-stream injection | In-flight note pushing via side-channel envelope | [layer-voice-ldd.md § L13](layer-voice-ldd.md#layer-13--btw-text-mid-stream-injection) |
 | **L14** | LDD-Toggle-System | Enable/disable all 12 LDD layers per persona/scope | [layer-voice-ldd.md § L14](layer-voice-ldd.md#layer-14--ldd-toggle-system-per-layer-enabledisable) |

@@ -69,79 +69,38 @@ page `core/console/corvin_console/web-next/src/pages/personas.tsx`):
   mode explicitly — it activates only when a chat opts in via
   `chat_profiles[<chat>].persona = "coder"`.
 
-## Auto-routing (layer 5) — the default since cowork v0.2
+## Persona identity (layer 5) — routing was removed (ADR-0537)
 
-> **ADR-0537 (accepted 2026-10-10): persona routing is eliminated.** On this
-> install the router branch is unreachable — the only persona file
-> (`assistant.json`) has no `zero_config`, so the routable pool is empty and
-> every unpinned turn takes `_fallback_identity()`. The router modules, the
-> `router_backend` plugin type's consumer and the dialectic `auto_routing` site
-> are scheduled for removal (KB tasks under ADR-0537); do not build on them.
+**There is no persona routing.** `router.py`, `router_embedding.py`, the
+`router_backend` plugin type (provider, template, `ctx.router_registry`,
+`RouterBackend` protocol, Marketplace schema entries) and the dialectic
+`auto_routing` site are deleted (T-0100). Do not rebuild them: the routable pool
+was empty on every install, so the branch never ran.
 
-When a chat has **no** explicit persona pinned and cowork is installed,
-the adapter calls `_apply_auto_routing()`, which in turn asks
-`router.route()` (Haiku) and merges the result into the profile — before
-`_build_claude_args`.
+Every turn still leaves `adapter._apply_persona_identity()` with a persona
+identity, because the explicit-skill namespace gate (`skill_inject._persona_namespace`)
+is fail-closed on an unresolved persona:
 
-**What you need to know when editing:**
+- **Pinned chat** (`chat_profiles[<chat>].persona`) → `_pinned_identity()`: the
+  pinned name is the namespace, the capability profile is the common one.
+- **Everything else** → `_fallback_identity()` with `routing.fallback_persona`
+  (default `assistant`): sets `_auto_routed` (the identity marker the namespace
+  gate, ledger and UI read; the name predates the removal) and lays the
+  identity's **capability profile** over the chat profile
+  (`cowork.resolve("assistant", overrides=profile)`): forge, skill-forge and
+  orchestration MCP servers, capability awareness.
+- A chat the operator restricted (`allowed_tools` / `disallowed_tools` /
+  `permission_mode`) and `routing.mode = off` (or env `ADAPTER_ROUTING_MODE=off`)
+  stay identity-only — the profile is never widened. `mode` has no other
+  meaning; the former `heuristic` / `auto` / `embedding` values in saved settings
+  are ignored.
 
-- `bridges/shared/router.py` is the backend layer with three modes:
-  - `off` — never route, return None.
-  - `heuristic` — keyword matcher only (0 ms, no API key, no LLM call).
-    DEFAULT — works on Max-subscription setups without an
-    `ANTHROPIC_API_KEY`.
-  - `auto` — heuristic first, then anthropic SDK if `ANTHROPIC_API_KEY`
-    is set. The `claude -p` CLI fallback (slow, times out on
-    Max-subscription) is **opt-in only via `ROUTER_ALLOW_CLI=1`** —
-    by default we skip it silently, because it would burn 12 s per
-    request on every Max-subscription user.
-  - `ROUTER_FAKE=1` overrides everything for tests.
-  `route()` returns `{persona, confidence, why}` or `None`.
-- Heuristic patterns live in `_HEURISTIC_PATTERNS` (lowercased regex,
-  two-token rule for ambiguous verbs: "open" alone is too generic;
-  only "open … URL/link/page/site" routes to a web persona). When adding a persona that should
-  be router-pickable, add a tight pattern there — false positives are
-  worse than misses (the assistant fallback handles misses fine).
-- The adapter calls the router only when:
-  - cowork + router are both importable
-  - no `profile.persona` is set
-  - `routing.mode` ≠ `"off"` (in shared/settings.json or via env
-    `ADAPTER_ROUTING_MODE=off`)
-- Low confidence OR router returns None → `fallback_persona`
-  (default `assistant`, defined in `_ROUTING_DEFAULTS`).
-- **A turn without a pinned persona always leaves routing with a persona
-  identity** — also when the router is skipped (cowork/router not importable,
-  `routing.mode` = `"off"`, no routable personas installed) or the chosen
-  persona has no config on disk. In those cases `_fallback_identity()` sets
-  `_auto_routed` (+ why/confidence) and — since 2026-10-10 (ADR-0537 accepted) —
-  lays the identity's **capability profile** over the chat profile
-  (`cowork.resolve("assistant", overrides=profile)`, the same profile the console
-  uses): forge, skill-forge and orchestration MCP servers, capability awareness.
-  No reply prefix. Before that it merged nothing, so every unpinned Discord turn
-  ran without Forge/SkillForge (`test_adapter_fallback_persona.py` now asserts
-  the real `--mcp-config`). No file for the identity → identity only, as
-  before. A chat the operator restricted (`allowed_tools` / `disallowed_tools` /
-  `permission_mode`) and `routing.mode = off` stay identity-only — the profile is
-  never widened. Reason for the identity itself: the explicit-skill namespace gate
-  (`skill_inject._persona_namespace`) is fail-closed on an unresolved persona;
-  after every persona JSON was removed (c93ef9915) turns had NO persona and
-  every explicit skill request was refused as `persona_unresolved`
-  (2026-09-26). The gate stays closed outside the fallback's namespace.
-- The final reply is prefixed in `process_one` with `[<persona>] `
-  (only the first chunk) when `_routing_show_prefix` is true.
-- Tests that verify legacy max-open behaviour MUST set
-  `ADAPTER_ROUTING_MODE=off` — otherwise the default routing collides
-  with the expectation.
-- The generalist `assistant.json` is marked with `routing_exclude: true`,
-  so the router doesn't "route" to the generalist persona (that would be
-  self-reference); it is only active via the fallback.
-
-**What you must NOT do:**
-
-- Don't rename the default generalist without adjusting
-  `_ROUTING_DEFAULTS.fallback_persona` in parallel.
-- Tests must NEVER overwrite the LIVE `bridges/shared/settings.json`.
-  Use `ADAPTER_ROUTING_MODE=off` env or a sandbox file instead.
+**What you must NOT do:** re-introduce a router, a `router_backend` type or a
+dialectic `auto_routing` site; rename the default generalist without adjusting
+`_ROUTING_DEFAULTS.fallback_persona`; overwrite the LIVE
+`bridges/shared/settings.json` from a test (use `ADAPTER_ROUTING_MODE=off` or a
+sandbox file). `test_plugin_system.py` and `test_surface_map.py` pin that
+`router_backend` is not a known plugin type.
 
 ### ACS-X — Autonomous Command Selector (ADR-0155)
 
@@ -1506,8 +1465,7 @@ current behaviour rather than bugs to be fixed casually:
   audit events — `audit_event()` calls one process-wide sink with whatever
   `tenant_id` the event carries;
 - the same holds for `user_backend` (authenticates for all tenants),
-  `recall_backend` (all tenants' turns land in the path A configured) and
-  `router_backend`.
+  `recall_backend` (all tenants' turns land in the path A configured).
 
 On a single-operator install — the default, and what `_default` means — this is
 invisible, because there is one tenant. It becomes a data-protection question
@@ -1665,7 +1623,7 @@ Three **reversible** actions, chosen per plugin:
 |---|---|---|
 | `circuit_break_only` | refuse calls for the cooldown | `audit_backend`, `user_backend`, `compute_engine`, `recall_backend`, `bridge_channel`, `data_connector` — anything that could lose state or evidence |
 | `soft_restart` | `registry.restart()`: `on_unload()` → `on_load()`, same context, same boot layer (the public `unregister()`+`register()` pair is what the ADR-0233 D5 same-epoch guard demotes to `installed`) | `stt_provider`, `summary_provider`, `notification_backend` |
-| `disable_and_degrade` | unregister + detach the provider slot | `router_backend`, `worker_engine` — the platform runs fine without them |
+| `disable_and_degrade` | unregister + detach the provider slot | `worker_engine` — the platform runs fine without it |
 | `none` | opt out entirely | — |
 
 An **unknown** plugin type defaults to containment, not to the most permissive

@@ -35,7 +35,7 @@ and identifies where structural controls enforce the regulatory obligations.
 | Feature | Layers | Description |
 |---|---|---|
 | Orchestrator / worker delegation | L22, L29 | `delegate_claude_code`, `delegate_opencode`, `delegate_codex`, `delegate_copilot` — ClaudeCode spawns workers for subtasks |
-| Multi-model routing | L5, L22 | `auto_routing` selects a persona/model based on user message; `orchestrator-haiku` persona switches engine dynamically |
+| Multi-model routing | L5, L22 | OS-turn model routing picks the model tier (`model_selector.resolve_os_model`); there is no persona routing (ADR-0537) |
 | Forge MCP tools | L6 | Runtime tool generation; tools call external APIs, read/write filesystem, run Python |
 | SkillForge auto-promotion | L7 | Skills auto-promoted from `task` → `session` → `project` → `user` scope via grading |
 | A2A RemoteTrigger | L38 | Agent-to-agent task envelopes between CorvinOS instances over HTTPS; bilateral HMAC authentication |

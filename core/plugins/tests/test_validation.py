@@ -31,7 +31,7 @@ def _record_dict(**over) -> dict:
         "plugin_id": "com.example.router",
         "version": "1.0.0",
         "display_name": "Example Router",
-        "plugin_type": "router_backend",
+        "plugin_type": "summary_provider",
     }
     base.update(over)
     return base
@@ -39,13 +39,13 @@ def _record_dict(**over) -> dict:
 
 class _GoodPlugin:
     plugin_id = "com.example.router"
-    plugin_type = "router_backend"
+    plugin_type = "summary_provider"
     version = "1.0.0"
     display_name = "Example Router"
 
     def on_load(self, ctx: PluginContext) -> None:
-        if ctx.router_registry is not None:
-            ctx.router_registry.set_active(self)
+        if ctx.summary_registry is not None:
+            ctx.summary_registry.set_active(self)
 
     def on_unload(self) -> None:
         pass
@@ -73,7 +73,7 @@ def test_unknown_plugin_type_is_an_error_and_lists_the_known_ones():
     report = validate_record_dict(_record_dict(plugin_type="nonsense_backend"))
     assert not report.ok
     msg = " ".join(f.message for f in report.errors)
-    assert "router_backend" in msg
+    assert "summary_provider" in msg
 
 
 def test_community_origin_may_not_claim_a_privileged_boot_layer():
@@ -102,20 +102,20 @@ def test_unconsumed_type_warns_but_does_not_block():
 
 
 def test_consumed_type_does_not_warn_about_consumption():
-    report = validate_record_dict(_record_dict(plugin_type="router_backend"))
+    report = validate_record_dict(_record_dict(plugin_type="summary_provider"))
     assert "type.unconsumed" not in [f.code for f in report.warnings]
 
 
 # ── Class validation ─────────────────────────────────────────────────────────
 
 def test_good_class_passes():
-    assert validate_class(_GoodPlugin, expected_type="router_backend").ok
+    assert validate_class(_GoodPlugin, expected_type="summary_provider").ok
 
 
 def test_missing_lifecycle_method_is_an_error():
     class NoHealth:
         plugin_id = "x.y"
-        plugin_type = "router_backend"
+        plugin_type = "summary_provider"
         version = "1.0.0"
         display_name = "X"
 
@@ -136,7 +136,7 @@ def test_class_type_mismatch_against_manifest_is_an_error():
 def test_on_load_that_never_registers_warns():
     class NeverRegisters:
         plugin_id = "x.y"
-        plugin_type = "router_backend"
+        plugin_type = "summary_provider"
         version = "1.0.0"
         display_name = "X"
 
@@ -163,7 +163,7 @@ def test_registration_into_a_throwaway_registry_succeeds():
 def test_registration_failure_is_reported_not_raised():
     class Exploding:
         plugin_id = "x.boom"
-        plugin_type = "router_backend"
+        plugin_type = "summary_provider"
         version = "1.0.0"
         display_name = "Boom"
 

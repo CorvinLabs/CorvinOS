@@ -85,7 +85,7 @@
   <rect x="630" y="352" width="270" height="118" rx="8" fill="#161b22" stroke="#3b82f6" stroke-width="1.6"/>
   <text x="648" y="376" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#3b82f6">Level 3 — disable_and_degrade</text>
   <text x="648" y="395" font-family="system-ui,sans-serif" font-size="9.5" fill="#e6edf3">Unregister + detach the provider slot.</text>
-  <text x="648" y="414" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">router_backend · worker_engine</text>
+  <text x="648" y="414" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">worker_engine</text>
   <text x="648" y="428" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">the platform runs fine without them</text>
   <text x="648" y="448" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">registry.yaml is NOT rewritten — an autonomous</text>
   <text x="648" y="462" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">action must not edit operator configuration.</text>

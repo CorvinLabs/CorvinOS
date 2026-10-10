@@ -522,8 +522,8 @@ command substitution in pipe position — all four raise `deny=True`
 
 `dialectic.decide()` now throttles `mode in (skill, cli)` calls
 through a 60s sliding-window limit per site. Defaults conservative:
-6/min for skill_promotion + forge_creation + session_reset, 12/min
-for auto_routing, 30/min for path_gate. Operator override via
+6/min for skill_promotion + forge_creation + session_reset, 30/min
+for path_gate. Operator override via
 `cfg.rate_limits[<site>]` (calls per 60s int). When the window is
 full, the call degrades to thesis-only / mode=off + emits a
 `dialectic.rate_limited` audit event.

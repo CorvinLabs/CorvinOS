@@ -298,7 +298,7 @@ def _consumer_pattern(module: str) -> str:
     """Regex matching a real import-or-call of a provider module.
 
     Must cover the shape actually used in this tree:
-        from corvin_plugins.providers import router_backend as _router_prov
+        from corvin_plugins.providers import summary_provider as _summary_prov
     An earlier version used ``providers[. ]*<module>``, which cannot match that
     line — ` import ` sits between the two halves — so the search returned zero
     hits for every module and the "still dead" assertion below was vacuously
@@ -317,12 +317,12 @@ def test_grep_finds_a_known_live_consumer():
 
     Without this, a broken pattern makes every "is still unconsumed" assertion
     pass by finding nothing, and the suite reports health it never checked. This
-    pins one case we know is true — adapter.py imports router_backend — so the
+    pins one case we know is true — adapter.py imports summary_provider — so the
     search failing silently is itself a failure.
     """
-    hits = _grep_repo(_consumer_pattern("router_backend"), exclude=_NOT_A_CONSUMER)
+    hits = _grep_repo(_consumer_pattern("summary_provider"), exclude=_NOT_A_CONSUMER)
     assert any("adapter.py" in h for h in hits), (
-        "the consumer search found no live consumer for router_backend — the "
+        "the consumer search found no live consumer for summary_provider — the "
         f"grep pattern is broken, so every unconsumed assertion is vacuous. "
         f"hits={hits}"
     )
@@ -367,7 +367,6 @@ def test_the_unconsumed_set_is_recorded_not_incidental():
         "bridge_channel",   # no channel_registry class exists
     }
     assert set(consumed_types()) == {
-        "router_backend",
         "summary_provider",
         "notification_backend",
         "recall_backend",
@@ -390,13 +389,14 @@ def test_the_unconsumed_set_is_recorded_not_incidental():
 # ── Lookup helpers ───────────────────────────────────────────────────────────
 
 def test_surface_for_returns_the_row():
-    assert surface_for("router_backend").ctx_handle == "router_registry"
+    assert surface_for("summary_provider").ctx_handle == "summary_registry"
 
 
 def test_surface_for_unknown_type_lists_the_known_ones():
     with pytest.raises(KeyError) as exc:
         surface_for("nonsense_backend")
-    assert "router_backend" in str(exc.value)
+    assert "summary_provider" in str(exc.value)
+    assert "router_backend" not in str(exc.value)  # ADR-0537: the type is gone
 
 
 def test_buildable_types_are_exactly_those_with_templates():

@@ -135,7 +135,6 @@ except Exception:  # noqa: BLE001
 SITES: dict[str, dict[str, Any]] = {
     "skill_promotion": {"mode": "skill", "threshold": 0.5},
     "forge_creation":  {"mode": "skill", "threshold": 0.5},
-    "auto_routing":    {"mode": "fast",  "threshold": 0.5},
     "path_gate":       {"mode": "fast",  "threshold": 0.6},
     "session_reset":   {"mode": "cli",   "threshold": 0.5},
     # voice_summary — faithfulness check on the read-aloud summary BEFORE
@@ -354,7 +353,6 @@ _RATE_WINDOW_SECONDS = 60.0
 _RATE_DEFAULTS: dict[str, int] = {
     "skill_promotion": 6,
     "forge_creation":  6,
-    "auto_routing":    12,
     "path_gate":       30,
     "session_reset":   6,
 }
@@ -754,17 +752,6 @@ def register_fast_synth(site: str):
 
 # Built-in fast synthesizers — deterministic rules per site. These are
 # intentionally simple; richer synthesis lives in mode=skill / mode=cli.
-
-@register_fast_synth("auto_routing")
-def _fast_auto_routing(thesis, antithesis, ctx):
-    # thesis/antithesis carry (persona, confidence). Highest confidence
-    # wins; ties go to thesis (persona-router's first pick).
-    t_conf = (thesis or {}).get("confidence", 0.0) if isinstance(thesis, dict) else 0.0
-    a_conf = (antithesis or {}).get("confidence", 0.0) if isinstance(antithesis, dict) else 0.0
-    if a_conf > t_conf:
-        return antithesis, _json_safe(antithesis), "antithesis-confidence-higher"
-    return thesis, _json_safe(thesis), "thesis-wins-or-tie"
-
 
 @register_fast_synth("path_gate")
 def _fast_path_gate(thesis, antithesis, ctx):

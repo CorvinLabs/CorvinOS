@@ -34,7 +34,6 @@ from corvin_plugins.state import _PROVIDER_MODULES  # noqa: E402
 #: plugin_type -> (module, the ctx handle a plugin registers itself through)
 _CASES = (
     ("recall_backend", "recall_registry"),
-    ("router_backend", "router_registry"),
     ("summary_provider", "summary_registry"),
     ("notification_backend", "notification_registry"),
     ("audit_backend", "audit_registry"),
@@ -82,11 +81,11 @@ def _ctx(plugin_id: str) -> PluginContext:
 
 
 class TestEveryProviderTypeIsCovered(unittest.TestCase):
-    def test_all_eight_types_are_mapped(self):
+    def test_all_provider_types_are_mapped(self):
         # Types with no provider registry (compute_engine, worker_engine,
         # bridge_channel) are legitimately absent; every type that HAS one must
         # be mapped, or its plugins leak their slot on unload. The map listed
-        # four of eight for one commit.
+        # four of eight (then) for one commit.
         for plugin_type, _handle in _CASES:
             with self.subTest(plugin_type=plugin_type):
                 self.assertIn(plugin_type, _PROVIDER_MODULES)

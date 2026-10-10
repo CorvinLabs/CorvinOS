@@ -50,6 +50,7 @@ from .. import attachments_common as _attachments
 from .. import audit as console_audit
 from .. import auth as session_auth
 from .. import chat_runtime
+from .. import live_turns
 from .. import task_manager as tm_module
 from ..deps import require_csrf, require_session
 from ..utils import read_json_or_empty as _read_json_safe
@@ -585,11 +586,34 @@ async def chat_stream(
 
     _voice_forward_task = asyncio.create_task(_forward_voice_events())
 
+    # A turn of this chat that is already running (started by another socket —
+    # this tab before a reload, another tab) streams to THIS socket too: replay
+    # what it produced so far, then forward it live (live_turns.py). The
+    # snapshot goes out before the forwarder starts, so it precedes every
+    # queued event.
+    _hub_token = live_turns.new_token()
+    _hub_snapshot, _hub_queue, _hub_unsub = live_turns.subscribe(rec.tenant_id, sid, _hub_token)
+    for _ev in _hub_snapshot:
+        with contextlib.suppress(Exception):
+            await websocket.send_json(_ev)
+
+    async def _forward_hub_events() -> None:
+        while True:
+            event = await _hub_queue.get()
+            with contextlib.suppress(Exception):
+                await websocket.send_json(event)
+
+    _hub_forward_task = asyncio.create_task(_forward_hub_events())
+
     async def _cleanup_voice_forward() -> None:
-        _voice_forward_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await _voice_forward_task
+        # Also tears down the live-turn subscription: both forwarders end with
+        # the socket.
+        for _t in (_voice_forward_task, _hub_forward_task):
+            _t.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await _t
         _voice_unsub()
+        _hub_unsub()
 
     # _stream_task holds the asyncio.Task running stream_turn while a turn is
     # in flight.  A cancel message (or a WebSocket disconnect) cancels the task,
@@ -634,6 +658,10 @@ async def chat_stream(
         except (WebSocketDisconnect, RuntimeError, OSError):
             _ws_gone = True
 
+    # Set by _run_turn when the turn it ran was stopped from another tab
+    # (live_turns.request_cancel) — distinguishes that from a chat deletion.
+    _operator_cancelled = False
+
     async def _run_turn(prompt: str) -> None:
         # Robustness contract: a turn failure must NEVER drop the WebSocket.
         # stream_turn yields its own {"error"}/{"done"} on handled failures,
@@ -643,8 +671,19 @@ async def chat_stream(
         # error+done event so the chat shows the failure and the socket stays
         # open for the next turn. Only CancelledError (genuine cancel /
         # client disconnect) propagates to the outer handler for cleanup.
+        nonlocal _operator_cancelled
         _task = asyncio.current_task()
         _loop = asyncio.get_running_loop()
+        _turn_id: str | None = None
+
+        async def _emit(event: dict[str, Any]) -> None:
+            # Every event of the turn goes to the hub (other sockets, late
+            # joiners) AND to this socket — the hub even when this socket is
+            # gone, which is exactly when a reloaded tab needs it.
+            if _turn_id is not None:
+                live_turns.publish(rec.tenant_id, sid, _turn_id, event)
+            await _send(event)
+
         try:
             async with _session_turn_lock(rec.tenant_id, sid):
                 # The socket's session object is as old as the connection;
@@ -657,12 +696,14 @@ async def chat_stream(
                     await _send({"type": "done"})
                     return
                 chat_runtime.register_live_turn(rec.tenant_id, sid, _loop, _task)
+                _turn_id = live_turns.begin(rec.tenant_id, sid, _hub_token)
+                await _send({"type": "turn_started", "turn_id": _turn_id})
                 try:
                     async with contextlib.aclosing(
                         chat_runtime.stream_turn(fresh, prompt, sid_fingerprint=rec.sid_fingerprint)
                     ) as gen:
                         async for event in gen:
-                            await _send(event)
+                            await _emit(event)
                 finally:
                     chat_runtime.unregister_live_turn(rec.tenant_id, sid, _loop, _task)
         except asyncio.CancelledError:
@@ -704,9 +745,14 @@ async def chat_stream(
             else:
                 _user_msg = f"The turn failed unexpectedly ({_exc_type}). Check server logs for details."
             with contextlib.suppress(Exception):
-                await _send({"type": "error", "message": _user_msg})
+                await _emit({"type": "error", "message": _user_msg})
             with contextlib.suppress(Exception):
                 await _send({"type": "done"})
+        finally:
+            # After stream_turn closed, i.e. after the turn was persisted: the
+            # attached sockets' "done" makes them reconcile with the record.
+            if _turn_id is not None:
+                _operator_cancelled = live_turns.end(rec.tenant_id, sid, _turn_id)
 
     try:
         while True:
@@ -915,13 +961,16 @@ async def chat_stream(
                             with contextlib.suppress(asyncio.CancelledError):
                                 await recv_task
                     if _stream_task.cancelled() and not _user_cancelled:
-                        # Cancelled from outside this socket (the chat was
-                        # deleted in another request): close the turn for the
-                        # client too, or its UI stays "streaming" forever.
-                        # A user cancel already answered "done" above.
+                        # Cancelled from outside this socket: stopped from
+                        # another tab of this chat, or the chat was deleted.
+                        # Close the turn for the client too, or its UI stays
+                        # "streaming" forever. A user cancel on THIS socket
+                        # already answered "done" above.
                         with contextlib.suppress(Exception):
-                            await websocket.send_json({"type": "error", "message": "This chat was deleted."})
+                            if not _operator_cancelled:
+                                await websocket.send_json({"type": "error", "message": "This chat was deleted."})
                             await websocket.send_json({"type": "done"})
+                        _operator_cancelled = False
                     elif not _stream_task.cancelled():
                         # Propagate any exception from the turn task.
                         _stream_task.result()
@@ -932,8 +981,23 @@ async def chat_stream(
             elif mtype == "ping":
                 await websocket.send_json({"type": "pong"})
             elif mtype == "cancel":
-                # cancel received outside of a running turn — acknowledge and ignore.
-                await websocket.send_json({"type": "info", "message": "no active turn"})
+                # Not this socket's turn. If the chat has a live turn started
+                # elsewhere (this tab before a reload, another tab) and this
+                # socket is attached to it, stop it — the stop button is shown
+                # for an attached turn as well.
+                if live_turns.request_cancel(rec.tenant_id, sid) and \
+                        chat_runtime.cancel_live_turn(rec.tenant_id, sid):
+                    with contextlib.suppress(Exception):
+                        console_audit.action_performed(
+                            tenant_id=rec.tenant_id,
+                            sid_fingerprint=rec.sid_fingerprint,
+                            action="chat.turn.cancelled",
+                            target_kind="chat",
+                            target_id=sid,
+                        )
+                    await websocket.send_json({"type": "info", "message": "stopping the running turn"})
+                else:
+                    await websocket.send_json({"type": "info", "message": "no active turn"})
             else:
                 await websocket.send_json({"type": "error", "message": f"unknown type: {mtype!r}"})
     except WebSocketDisconnect:

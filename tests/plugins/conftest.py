@@ -72,14 +72,6 @@ def mock_notification_registry():
 
 
 @pytest.fixture
-def mock_router_registry():
-    """Fixture: Mock router registry."""
-    registry = MagicMock()
-    registry.route = MagicMock(return_value={"target": "opus", "confidence": 0.95})
-    return registry
-
-
-@pytest.fixture
 def mock_learning_event_store():
     """Fixture: Mock learning event store."""
     store = MagicMock()

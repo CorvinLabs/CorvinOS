@@ -71,7 +71,7 @@ class TestPluginRecord(unittest.TestCase):
             _record(plugin_type="")
 
     def test_known_plugin_types_are_accepted(self):
-        for ptype in ("audit_backend", "worker_engine", "router_backend"):
+        for ptype in ("audit_backend", "worker_engine", "summary_provider"):
             self.assertEqual(_record(plugin_type=ptype).plugin_type, ptype)
 
     def test_empty_plugin_id_is_rejected(self):

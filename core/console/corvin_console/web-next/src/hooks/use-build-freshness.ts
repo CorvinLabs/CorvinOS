@@ -1,4 +1,5 @@
 import * as React from "react";
+import { anyChatStreaming } from "@/lib/chat-registry";
 
 /**
  * Detect that a NEW console bundle has been deployed and bring the tab onto it.
@@ -82,8 +83,13 @@ export function useBuildFreshness(
       try {
         const live = await deployedEntryHash(ctrl.signal);
         if (!cancelled && live && live !== bootHash.current) {
-          if (operatorIsTyping()) {
-            setStale(true); // surface the banner, let them finish
+          if (operatorIsTyping() || anyChatStreaming()) {
+            // Surface the banner and let them finish typing / let the running
+            // turn finish streaming; polling continues and reloads once both
+            // are clear. A reload mid-turn no longer loses the turn (the new
+            // socket re-attaches, live_turns.py), but it would cut the live
+            // view for the reload's duration for no gain.
+            setStale(true);
           } else {
             window.location.reload();
             return;

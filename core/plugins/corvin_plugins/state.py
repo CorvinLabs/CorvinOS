@@ -1282,7 +1282,6 @@ _PROVIDER_MODULES: Dict[str, str] = {
     "stt_provider": "stt_provider",
     "data_connector": "data_connector",
     "recall_backend": "recall_backend",
-    "router_backend": "router_backend",
     "summary_provider": "summary_provider",
     "notification_backend": "notification_backend",
     "context_retriever": "context_retriever",  # ADR-0599

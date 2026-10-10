@@ -31,8 +31,9 @@ import { ApiError } from "@/lib/api/client";
 import { useAuth } from "@/lib/auth";
 import { KEY_INDEX, KEY_INSTALLED, KEY_STATS } from "../header";
 import {
-  enablePlugin, getInstallProgress, listIndex, startInstallJob,
-  type IndexPlugin, type InstallJob,
+  KEY_UPDATES, enablePlugin, getInstallProgress, listIndex, listPluginUpdates, refusedEscalations,
+  startInstallJob, updateIndexPlugin,
+  type IndexPlugin, type InstallJob, type PluginUpdate,
 } from "../api";
 import type { TabId } from "../tabs";
 import { InstallFlowModal } from "../components/install-flow-modal";
@@ -84,7 +85,9 @@ function useInstallJob(jobId: string | null, onDone: (j: InstallJob) => void) {
   return q.data ?? null;
 }
 
-function EntryCard({ p, csrf, onGoTo }: { p: IndexPlugin; csrf: string; onGoTo: (t: TabId) => void }) {
+function EntryCard({ p, csrf, onGoTo, update }: {
+  p: IndexPlugin; csrf: string; onGoTo: (t: TabId) => void; update?: PluginUpdate | undefined;
+}) {
   const qc = useQueryClient();
   const [installModalOpen, setInstallModalOpen] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
@@ -95,7 +98,25 @@ function EntryCard({ p, csrf, onGoTo }: { p: IndexPlugin; csrf: string; onGoTo: 
     qc.invalidateQueries({ queryKey: [...KEY_STATS] });
     qc.invalidateQueries({ queryKey: [...KEY_MANIFEST] });
     qc.invalidateQueries({ queryKey: [...KEY_CAPABILITIES] });
+    qc.invalidateQueries({ queryKey: [...KEY_UPDATES] });
   };
+  // Update state machine: idle -> pending (spinner) -> success | error. The button
+  // exists only while the server reports a newer version for this installed plugin.
+  const [pendingEscalations, setPendingEscalations] = useState<string[] | null>(null);
+  const doUpdate = useMutation({
+    mutationFn: (approve: boolean) => updateIndexPlugin(update!.plugin_id, csrf, approve),
+    onSuccess: (r) => {
+      setPendingEscalations(null);
+      setOutcome({ kind: "ok", text: `Updated ${r.from_version} → ${r.to_version} — audited.` +
+        (r.restart_recommended ? " Restart the console to run the new code." : "") });
+      invalidate();
+    },
+    onError: (e) => {
+      const esc = refusedEscalations(e);
+      if (esc) { setPendingEscalations(esc); setOutcome(null); return; }
+      setOutcome({ kind: "error", text: "Not updated — the new version could not be installed; the installed version was kept." });
+    },
+  });
   const community = tierKey(p.tier) === "contributor";
   const enable = useMutation({
     mutationFn: () => enablePlugin(p.registry_id as string, csrf, community),
@@ -114,7 +135,7 @@ function EntryCard({ p, csrf, onGoTo }: { p: IndexPlugin; csrf: string; onGoTo: 
             <div className="text-xs text-muted-foreground font-mono truncate">{p.id}</div>
           </div>
           <div className="flex flex-col items-end gap-1 shrink-0">
-            <Badge variant="outline">v{p.version}</Badge>
+            <Badge variant="outline" title={update ? "installed version" : "version"}>v{update?.installed_version ?? p.version}</Badge>
             <Badge variant="secondary" title={`origin ${tier.origin}`}>{tier.label.toLowerCase()}</Badge>
           </div>
         </div>
@@ -133,9 +154,29 @@ function EntryCard({ p, csrf, onGoTo }: { p: IndexPlugin; csrf: string; onGoTo: 
             {community ? "Enable now (with consent)" : "Enable now"}
           </Button>
         ) : p.installed ? (
-          <Button variant="secondary" size="sm" className="w-full" onClick={() => onGoTo("installed")}>
-            Manage on the Installed tab
-          </Button>
+          <div className="space-y-2">
+            {update && !pendingEscalations && (
+              <Button variant="accent" size="sm" className="w-full" data-testid={`update-btn-${p.id}`}
+                      disabled={!csrf || doUpdate.isPending} onClick={() => doUpdate.mutate(false)}>
+                {doUpdate.isPending ? <><Loader2 className="w-4 h-4 animate-spin" /> Updating…</> : `Update to v${update.latest_version}`}
+              </Button>
+            )}
+            {update && pendingEscalations && (
+              <div className="rounded border border-amber-500/40 p-3 text-xs space-y-2" data-testid={`update-escalations-${p.id}`}>
+                <p>Version {update.latest_version} widens what this plugin may do:</p>
+                <ul className="list-disc pl-4">{pendingEscalations.map((x) => <li key={x}>{x}</li>)}</ul>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="destructive" disabled={!csrf || doUpdate.isPending} onClick={() => doUpdate.mutate(true)}>
+                    {doUpdate.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Approve and update
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => setPendingEscalations(null)}>Cancel</Button>
+                </div>
+              </div>
+            )}
+            <Button variant="secondary" size="sm" className="w-full" onClick={() => onGoTo("installed")}>
+              Manage on the Installed tab
+            </Button>
+          </div>
         ) : p.installable ? (
           <Button variant="accent" size="sm" className="w-full" disabled={!csrf} onClick={() => setInstallModalOpen(true)}>
             Install
@@ -199,8 +240,9 @@ function EntryCard({ p, csrf, onGoTo }: { p: IndexPlugin; csrf: string; onGoTo: 
   );
 }
 
-function TierSection({ tier, rows, total, csrf, onGoTo }: {
+function TierSection({ tier, rows, total, csrf, onGoTo, updates }: {
   tier: TierKey; rows: IndexPlugin[]; total: number; csrf: string; onGoTo: (t: TabId) => void;
+  updates: Map<string, PluginUpdate>;
 }) {
   const t = TIER[tier];
   const Icon = t.icon;
@@ -218,7 +260,7 @@ function TierSection({ tier, rows, total, csrf, onGoTo }: {
         <div className="py-6 text-center text-xs text-muted-foreground border border-dashed border-border rounded-lg">No entry matches in this tier.</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {rows.map((p) => <EntryCard key={p.id} p={p} csrf={csrf} onGoTo={onGoTo} />)}
+          {rows.map((p) => <EntryCard key={p.id} p={p} csrf={csrf} onGoTo={onGoTo} update={updates.get(p.id)} />)}
         </div>
       )}
     </section>
@@ -229,6 +271,10 @@ export function BrowseTab({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
   const { session } = useAuth();
   const csrf = session?.csrf_token ?? "";
   const q = useQuery({ queryKey: [...KEY_INDEX], queryFn: ({ signal }) => listIndex(signal), retry: false });
+
+  // 404/503 (plugin surface off) just means "no updates known" — the listing still works.
+  const upd = useQuery({ queryKey: [...KEY_UPDATES], queryFn: ({ signal }) => listPluginUpdates(false, signal), retry: false });
+  const updates = useMemo(() => new Map((upd.data?.updates ?? []).map((u) => [u.plugin_id, u])), [upd.data]);
 
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
@@ -291,8 +337,8 @@ export function BrowseTab({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
         {all.length - installableCount > 0 && ` · ${all.length - installableCount} not installable (no local source — remote download is not offered)`}
       </p>
 
-      <TierSection tier="buildin" rows={byTier("buildin", rows)} total={byTier("buildin", all).length} csrf={csrf} onGoTo={onGoTo} />
-      <TierSection tier="contributor" rows={byTier("contributor", rows)} total={byTier("contributor", all).length} csrf={csrf} onGoTo={onGoTo} />
+      <TierSection tier="buildin" rows={byTier("buildin", rows)} total={byTier("buildin", all).length} csrf={csrf} onGoTo={onGoTo} updates={updates} />
+      <TierSection tier="contributor" rows={byTier("contributor", rows)} total={byTier("contributor", all).length} csrf={csrf} onGoTo={onGoTo} updates={updates} />
     </div>
   );
 }

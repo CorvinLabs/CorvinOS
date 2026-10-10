@@ -68,7 +68,7 @@ def test_entry_point_names_the_class_that_declares_plugin_type(template):
     )
 
 
-def _scaffold(tmp_path: Path, plugin_type: str = "router_backend") -> Path:
+def _scaffold(tmp_path: Path, plugin_type: str = "summary_provider") -> Path:
     import argparse
 
     from corvin.plugin_cmd import cmd_new
@@ -97,10 +97,12 @@ def test_check_actually_exercises_the_code_not_just_the_manifest(tmp_path, capsy
     capsys.readouterr()
 
     src = (pkg / "plugin.py").read_text(encoding="utf-8")
-    broken = src.replace(
-        '    def health_check(self) -> HealthStatus:\n'
-        '        return HealthStatus(ok=True, message="ok")',
+    import re
+
+    broken = re.sub(
+        r"    def health_check\(self\) -> HealthStatus:\n(?:        #[^\n]*\n)*        return HealthStatus\([^\n]*\)\n",
         "",
+        src,
     )
     assert broken != src, "fixture did not actually remove health_check"
     (pkg / "plugin.py").write_text(broken, encoding="utf-8")
@@ -207,13 +209,13 @@ def _buildable() -> list[str]:
 def test_every_type_scaffolds_into_something_that_passes_its_own_check(
     plugin_type, tmp_path, capsys
 ):
-    """new → check must hold for ALL nine types, not just router_backend.
+    """new → check must hold for EVERY buildable type, not just summary_provider.
 
     The single-type version of this test passed while three templates were still
     broken: they assign `plugin_id` more than once (compute_engine three times, in
     helper and example classes), so a regex rewrite with count=1 could rename an
     example and leave the real class on the placeholder. Parametrising over every
-    buildable type is what turns "it works" into "it works for the nine things a
+    buildable type is what turns "it works" into "it works for the things a
     user can actually ask for".
     """
     import argparse

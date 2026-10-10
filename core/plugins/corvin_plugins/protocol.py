@@ -28,7 +28,6 @@ class PluginContext:
     notification_registry: Any | None = None   # providers.notification_backend._registry
     recall_registry: Any | None = None         # providers.recall_backend._registry
     summary_registry: Any | None = None        # providers.summary_provider._registry
-    router_registry: Any | None = None         # providers.router_backend._registry
     # ADR-0233 additive-backend registries
     audit_registry: Any | None = None          # providers.audit_backend._registry
     user_registry: Any | None = None           # providers.user_backend._registry
@@ -159,28 +158,6 @@ class SummaryProvider(Protocol):
         max_chars: int = 400,
         tenant_id: str = "_default",
     ) -> str: ...
-
-
-@runtime_checkable
-class RouterBackend(Protocol):
-    """Select a persona for an incoming user message (ADR-0033).
-
-    Returns {"persona": str, "confidence": float, "why": str} on match,
-    None on no-match or any error.  Must NOT raise.
-    Signature mirrors router.route() so ChainRouterBackend can delegate 1-to-1.
-    """
-
-    def route(
-        self,
-        text: str,
-        personas: list[dict],
-        *,
-        model: str = "",
-        min_confidence: float = 0.5,
-        timeout: float = 12.0,
-        mode: str = "heuristic",
-        tenant_id: str = "_default",
-    ) -> dict | None: ...
 
 
 @runtime_checkable
@@ -358,7 +335,6 @@ KNOWN_PLUGIN_TYPES: frozenset[str] = frozenset({
     "notification_backend",  # L3+  — NotificationBackend
     "recall_backend",        # L28  — RecallBackend
     "summary_provider",      # L11  — SummaryProvider
-    "router_backend",        # L5   — RouterBackend
     # ADR-0233 (additive backends; core keeps its own guarantees)
     "user_backend",          # L18-21 — UserBackend
     # ADR-0356 (P2.5 — the Console as a bundled/builtin web UI surface)

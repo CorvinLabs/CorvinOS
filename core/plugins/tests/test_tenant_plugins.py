@@ -35,7 +35,7 @@ def plugin_dir(tmp_path):
     (plugin_root / "plugin.yaml").write_text(
         """
 plugin_id: test-plugin
-plugin_type: router_backend
+plugin_type: summary_provider
 version: 0.1.0
 display_name: Test Plugin
 boot_layer: installed
@@ -51,7 +51,7 @@ requires_consent: false
         """
 class TestPlugin:
     plugin_id = "test-plugin"
-    plugin_type = "router_backend"
+    plugin_type = "summary_provider"
     version = "0.1.0"
 
     def on_load(self, ctx):
@@ -370,7 +370,7 @@ class TestEdgeCases:
         plugin_dir_b = tmp_path / "plugin-b"
         plugin_dir_b.mkdir()
         (plugin_dir_b / "plugin.yaml").write_text(
-            "plugin_id: plugin-b\nplugin_type: router_backend\nversion: 2.0.0\n"
+            "plugin_id: plugin-b\nplugin_type: summary_provider\nversion: 2.0.0\n"
         )
         (plugin_dir_b / "plugin.py").write_text("pass")
         registry.register_plugin(

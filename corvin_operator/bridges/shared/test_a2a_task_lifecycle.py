@@ -584,6 +584,40 @@ class TestRefusalReasonTravelsToTheSender(_Base):
         self.assertEqual(rtr.RemoteTriggerReceiver._refusal_code(object()), "refused")
 
 
+class TestPlatformIndependence(_Base):
+    """Windows has no os.O_NOFOLLOW. A missing attribute inside a broad ``except`` is a SILENT failure:
+    stages would simply never be persisted there. Simulate the platform by removing the attribute."""
+
+    def setUp(self):
+        super().setUp()
+        self._had = hasattr(os, "O_NOFOLLOW")
+        self._val = getattr(os, "O_NOFOLLOW", None)
+        if self._had:
+            del os.O_NOFOLLOW
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        if self._had:
+            os.O_NOFOLLOW = self._val
+
+    def test_task_state_persists_without_o_nofollow(self):
+        ats.record_stage("o", "t", "completed")
+        raw = (Path(os.environ["CORVIN_A2A_FEED_DIR"]) / "task_state.jsonl").read_text()
+        self.assertIn('"stage": "completed"', raw)
+        ats._reset_for_tests()
+        self.assertEqual(ats.lookup("o", "t")["stage"], "completed")   # and survives a restart
+
+    def test_stage_observations_persist_without_o_nofollow(self):
+        self.assertTrue(a2a_feed.observe_stage(peer_id="p", task_id="t", stage="processing"))
+        self.assertEqual(a2a_feed.latest_stages()["t"]["stage"], "processing")
+
+    def test_the_live_probe_origin_works_without_o_nofollow(self):
+        import a2a_live_probe as probe
+        with probe.throwaway_origin(self.tmp / "origins") as o:
+            self.assertTrue((self.tmp / "origins" / f"{o['origin_id']}.json").is_file())
+        self.assertEqual(list((self.tmp / "origins").glob("live-probe-*")), [])
+
+
 class TestErasureCoversStageStores(unittest.TestCase):
     """GDPR Art. 17 through the real L36 handler: the receiver's task-state rows of an
     origin and the sender's stage observations of a peer go with the peer's messages."""

@@ -94,13 +94,10 @@ def case_load_writes_defaults():
     t("config absent before first load", not p.exists())
     cfg = ldd.load_config()
     t("config written after first load", p.exists())
-    # Default-OFF since the policy switch: LDD soft-discipline does not
-    # ship enabled by default. Hard structural enforcement (forge sandbox,
-    # skill-forge linter, path-gate, audit hash-chain, promotion gates)
-    # lives outside this toggle and stays active regardless.
-    t("default enabled=False", cfg.get("enabled") is False)
-    t("every layer default=False",
-      all(cfg["layers"][layer] is False for layer in ldd.LAYERS))
+    # Default-ON: a fresh install runs LDD at maximum depth (operator mandate).
+    t("default enabled=True", cfg.get("enabled") is True)
+    t("every layer default=True",
+      all(cfg["layers"][layer] is True for layer in ldd.LAYERS))
 
 
 def case_hot_reload_via_mtime():
@@ -333,9 +330,9 @@ def case_cli_status():
     reset_config()
     r = _run_cli("status")
     t("status exit 0", r.returncode == 0)
-    # Default-OFF since the policy switch.
-    t("status mentions enabled=False",
-      "enabled=False" in r.stdout)
+    # Default-ON: fresh install ships LDD enabled.
+    t("status mentions enabled=True",
+      "enabled=True" in r.stdout)
     t("status lists every layer",
       all(layer in r.stdout for layer in ldd.LAYERS))
 

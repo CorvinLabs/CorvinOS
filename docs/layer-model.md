@@ -114,28 +114,20 @@ Corvin never patches Claude Code. If a layer needs a new affordance, it goes thr
 
 ---
 
-## Layer 4 — auto-routing
+## Layer 4 — persona identity (routing removed, ADR-0537)
 
-**Module:** `corvin_operator/bridges/shared/router.py`
-**Owns:** picking *which persona* should handle the next message, when no persona is pinned for that chat.
+**Module:** `corvin_operator/bridges/shared/adapter.py::_apply_persona_identity`
+**Owns:** giving every turn a persona identity (the attribution namespace and the one capability profile). It does **not** choose a persona: the router, its embedding pass and the `router_backend` plugin type were deleted.
 
 ### Responsibilities
 
-- Three modes: `off`, `heuristic`, `embedding` (auto). Default is `heuristic` (zero-cost), with `embedding` as opt-in for chats where the heuristic is too brittle.
-- **Heuristic** — a regex matcher in `_HEURISTIC_PATTERNS` keyed by persona. Two-token rule: ambiguous verbs ("open", "find") only fire a persona if paired with a strong noun ("URL", "page").
-- **Embedding** — a `text-embedding-3-small` request against each persona's `routing_anchors`. Cached by anchor hash on disk so anchors only embed once.
-- **Confidence threshold** — anything below threshold lands at the fallback persona (`assistant` by default), which has full tool access anyway and picks the right tool itself.
+- A chat pinned to a name keeps that name; every other chat gets `routing.fallback_persona` (default `assistant`).
+- `routing.mode = off` and operator-restricted chats stay identity-only.
 
-### Contract with the layer below
+### What this layer does not own
 
-- The router is called from the adapter, not the bridge daemon. The router result is merged into the resolved profile *before* `_build_claude_args`.
-- The `assistant` bundle persona is marked `routing_exclude: true` so the router does not "route" to itself when used as fallback.
-
-### What auto-routing does not own
-
-- It does not run any tool. It only labels.
-- It does not change the agent's mind mid-message — once a persona is picked, the message goes through that persona's full system prompt and tool set.
-- It does not alter the audit log; the persona pick appears in the audit entry written by the bridge wrapper, not by the router itself.
+- It does not run any tool and does not read the message text.
+- It does not alter the audit log; the identity appears in the audit entry written by the bridge wrapper.
 
 ---
 
@@ -237,7 +229,7 @@ This is the layer that makes "every persona may forge" safe. The MCP server stay
 ## Layer 11 — native dialectic decision-points
 
 **Module:** `bridges/shared/dialectic.py`
-**Owns:** thesis/antithesis/synthesis at five high-consequence sites — `skill_promotion`, `forge_creation`, `auto_routing`, `path_gate`, `session_reset`.
+**Owns:** thesis/antithesis/synthesis at four high-consequence sites — `skill_promotion`, `forge_creation`, `path_gate`, `session_reset` (plus the opt-in `voice_summary`).
 
 The library is wired into the integration sites natively, not as prompt-only injection. A Heat-Score gate (consequence × uncertainty × scope) filters trivial decisions out so hot paths stay zero-overhead. Modes: `off` / `fast` (local, < 1 ms) / `skill` (caller's Claude builds the synthesis in its existing turn — kostenneutral) / `cli` (`claude -p --max-turns 1` subprocess, Max-Abo). A `dialectic.json` toggle file with mtime hot-reload + five slash-commands (`/dialectic-on/off/status/set/show`) lets the operator scope the discipline. The library MUST NOT import the Anthropic SDK — a CI lint enforces this.
 

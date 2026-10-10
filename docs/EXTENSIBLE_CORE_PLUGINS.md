@@ -168,7 +168,6 @@ register.
 
 | Registry | Protocol | `ctx` handle | With no plugin installed | Non-negotiable guarantee |
 |---|---|---|---|---|
-| `router_backend` | `RouterBackend.route()` | `router_registry` | `ChainRouterBackend` — the existing fake → heuristic → embeddings → SDK → CLI chain | `route()` must not raise; `None` means no match |
 | `recall_backend` | `RecallBackend.index_turn/recall/forget()` | `recall_registry` | `SqliteRecallBackend` → `conversation_recall.py` | text handed to `index_turn` is **already PII-redacted by the caller**; a backend must not undo that. `forget()` is the GDPR Art. 17 path |
 | `summary_provider` | `SummaryProvider.summarize()` | `summary_registry` | `ClaudeCliSummaryProvider` → `corvin_operator/voice/scripts/summarize.py` | must not raise (truncate instead); must not import the Anthropic SDK directly |
 | `audit_backend` | `AuditBackend.fanout/verify_chain/enforce_retention()` | `audit_registry` | **none** — `get_active()` returns `None` | **additive-only.** Core writes its hash-chained record first and unconditionally; the backend receives a COPY afterwards and can never suppress, rewrite, reorder or delay it. `fanout()` is a hand-off to a bounded queue, never a call on the caller's thread — a slow sink drops the oldest *monitoring* copy rather than blocking an audited action. `verify_chain()` reports on the backend's own copy and is never consulted about the core chain |
@@ -443,7 +442,7 @@ elsewhere still cite them.
 | Earlier draft said | Reality |
 |---|---|
 | `core/core_plugins/tier_0/`, `tier_1_core/`, `tier_2_bundled/`, `base/hooks.py` | none of these paths exist. The code is `core/plugins/corvin_plugins/`, and the load-order axis is `BootLayer`, not a directory tree |
-| `plugin_type = "tier-1-core"` / `"tier-1-alternative"` | not in `KNOWN_PLUGIN_TYPES`; constructing such a record raises `UnknownPluginType`. `plugin_type` is the capability (`compute_engine`, `router_backend`, …); the load layer is the separate `boot_layer` field |
+| `plugin_type = "tier-1-core"` / `"tier-1-alternative"` | not in `KNOWN_PLUGIN_TYPES`; constructing such a record raises `UnknownPluginType`. `plugin_type` is the capability (`compute_engine`, `summary_provider`, …); the load layer is the separate `boot_layer` field |
 | `ctx.registry.registry["voice-summary/1.0.0"].on_unload(); del ...` | `PluginContext` has no `registry` attribute. Replacement is `registry.replace(plugin, ctx, replaces=...)`, which enforces the `boot_layer=core` rule and audits the swap |
 | `plugins: tier_2_bundled: enabled: [...]` in `config.yaml` | the real key is `spec.plugins.installed` in `tenant.corvin.yaml`, plus `spec.plugins.auto_discover_entry_points` |
 | `corvinctl plugin install X --tier-1-replace Y` | no such CLI. Replacement goes through the registry API; the Console surface is behind `plugin_console_surface` / `admin_control_plane` |

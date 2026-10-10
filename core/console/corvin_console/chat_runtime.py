@@ -1518,6 +1518,21 @@ def _cancel_live_turns(tenant_id: str, sid: str) -> None:
             pass
 
 
+def cancel_live_turn(tenant_id: str, sid: str) -> bool:
+    """Cancel *sid*'s running turn(s) without unregistering them — the turn's
+    own teardown unregisters. Used when an operator presses stop in a tab that
+    did not start the turn (it attached via ``live_turns``). Returns False when
+    nothing is running."""
+    with _live_turns_guard:
+        entries = list(_live_turns.get((tenant_id, sid), set()))
+    for loop, task in entries:
+        try:
+            loop.call_soon_threadsafe(task.cancel)
+        except RuntimeError:  # loop already closed
+            pass
+    return bool(entries)
+
+
 def delete_session(tenant_id: str, sid: str) -> bool:
     path = _meta_path(tenant_id, sid)
     with _meta_update_lock_for(tenant_id):

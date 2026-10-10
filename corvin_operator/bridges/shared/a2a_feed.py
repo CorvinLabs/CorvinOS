@@ -389,7 +389,7 @@ def observe_stage(*, peer_id: str, task_id: str, stage: str, stage_seq: int = 0,
                     _write_atomic(path, ("\n".join(keep) + "\n").encode("utf-8"))
             except OSError:
                 pass
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)  # no O_NOFOLLOW on Windows
             try:
                 os.write(fd, line)
             finally:

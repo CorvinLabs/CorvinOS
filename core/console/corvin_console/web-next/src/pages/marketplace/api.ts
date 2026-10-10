@@ -179,6 +179,16 @@ export interface UpdateResult {
   restart_recommended: boolean;
 }
 
+/** Query key of the update list — shared by the Browse and Installed tabs. */
+export const KEY_UPDATES = ["marketplace", "updates"] as const;
+
+/** Escalations the server listed when it refused an update (409 update_refused). */
+export function refusedEscalations(e: unknown): string[] | null {
+  if (!(e instanceof ApiError) || e.status !== 409) return null;
+  const d = (e.detail as { detail?: { error?: string; escalations?: string[] } } | undefined)?.detail;
+  return d?.error === "update_refused" && d.escalations?.length ? d.escalations : null;
+}
+
 export function listPluginUpdates(refresh: boolean, signal?: AbortSignal): Promise<UpdateList> {
   return api<UpdateList>(`/api/v1/marketplace/updates${refresh ? "?refresh=true" : ""}`, { signal });
 }

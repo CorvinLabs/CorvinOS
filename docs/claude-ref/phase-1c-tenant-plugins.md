@@ -234,7 +234,7 @@ uv run pytest core/plugins/tests/test_tenant_plugins.py -v
 
 ```bash
 # Create plugin from template
-corvin plugin new router_backend com.example.my-router
+corvin plugin new summary_provider com.example.my-summariser
 
 # Validate manifest
 corvin plugin check ./com_example_my_router/

@@ -626,7 +626,7 @@ def add_parser(sub: Any) -> None:
     )
 
     n = ps.add_parser("new", help="Scaffold a plugin from the shipped template")
-    n.add_argument("plugin_type", metavar="TYPE", help="e.g. router_backend")
+    n.add_argument("plugin_type", metavar="TYPE", help="e.g. summary_provider")
     n.add_argument("plugin_id", metavar="ID", help="e.g. com.example.my-router")
     n.add_argument("-o", "--output", metavar="DIR", help="Where to create it (default: .)")
 

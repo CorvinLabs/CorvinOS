@@ -2,7 +2,7 @@
 persona files installed.
 
 Regression (2026-09-26): c93ef9915 deleted every persona JSON (bundle + cowork),
-so ``cowork.list_available()`` returns ``[]`` and ``_apply_auto_routing`` returned
+so ``cowork.list_available()`` returns ``[]`` and the old persona routing returned
 the profile untouched — no persona at all. The explicit-skill namespace gate is
 fail-closed on an unresolved persona, so EVERY explicitly requested skill was
 refused with ``persona_unresolved`` (visible in the live adapter journal).
@@ -194,11 +194,52 @@ def test_restricted_pinned_chat_is_never_widened():
       "forge" not in servers and "skill_forge" not in servers, detail=str(sorted(servers)))
 
 
+def test_message_text_never_selects_a_persona():
+    """ADR-0537 / T-0100: the router is gone, so a message the old keyword
+    matcher sent to another persona (travel -> browser) lands on the fallback
+    identity, whatever the saved routing mode says."""
+    print("\n[message text does not pick a persona; legacy routing modes are inert]")
+    for mode in ("heuristic", "auto", "embedding", "on"):
+        events, _diag = _run_turn("find me the cheapest train to Berlin and open the booking page", mode)
+        t(f"mode={mode}: attributed to the fallback persona only",
+          _routed(events) == ["assistant"], detail=str(_routed(events)))
+    _events, _diag, dumps = _run_turn("find me the cheapest train to Berlin", "auto", with_args=True)
+    servers = _mcp_servers(dumps[-1]["args"]) if dumps else {}
+    t("unpinned turn still carries the capability profile (real argv)",
+      "forge" in servers and "skill_forge" in servers, detail=str(sorted(servers)))
+
+
+def test_no_router_remains():
+    print("\n[the router and its plugin type are gone]")
+    shared = Path(__file__).resolve().parent
+    t("router.py is deleted", not (shared / "router.py").exists())
+    t("router_embedding.py is deleted", not (shared / "router_embedding.py").exists())
+    adapter = sys.modules.get("adapter")
+    t("adapter has no router handles",
+      adapter is not None and not hasattr(adapter, "_router") and not hasattr(adapter, "_router_prov")
+      and not hasattr(adapter, "_apply_auto_routing"))
+    plugins_pkg = REPO_ROOT / "core" / "plugins"
+    if str(plugins_pkg) not in sys.path:
+        sys.path.insert(0, str(plugins_pkg))
+    try:
+        importlib.import_module("corvin_plugins.providers.router_backend")
+        gone = False
+    except ModuleNotFoundError:
+        gone = True
+    t("corvin_plugins.providers.router_backend is not importable", gone)
+    from corvin_plugins.manifest import KNOWN_PLUGIN_TYPES
+    t("router_backend is not a known plugin type", "router_backend" not in KNOWN_PLUGIN_TYPES)
+    dialectic = importlib.import_module("dialectic")
+    t("dialectic has no auto_routing site", "auto_routing" not in dialectic.SITES)
+
+
 if __name__ == "__main__":
     test_pinned_name_without_a_file_gets_the_capability_profile()
     test_restricted_pinned_chat_is_never_widened()
     test_fallback_identity_restored()
     test_gate_stays_closed_outside_the_namespace()
     test_unpinned_turn_gets_the_capability_profile()
+    test_message_text_never_selects_a_persona()
+    test_no_router_remains()
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

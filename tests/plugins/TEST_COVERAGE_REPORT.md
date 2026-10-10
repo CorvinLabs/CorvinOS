@@ -64,7 +64,6 @@
 | **cowork_hub** | 4 | 2 | 2 | ⏳ | Stub (persona routing, ADR-0510) |
 | **data_connector** | 4 | 2 | 2 | ⏳ | Stub (DB query, schema inference) |
 | **notification_backend** | 4 | 2 | 2 | ✅ | Template-matched (notify, batch) |
-| **router_backend** | 4 | 2 | 2 | ✅ | Template-matched (routing decision) |
 | **vibe_webhook_dispatcher** | 4 | 2 | 2 | ⏳ | Stub (webhook dispatch, retry) |
 
 **Subtotal: 48 tests, 3 concrete + 3 stubs**
@@ -118,7 +117,6 @@ tests/plugins/
 │   ├── test_notification_backend.py            (4 tests)
 │   ├── test_path_gate.py                       (4 tests)
 │   ├── test_recall_backend.py                  (4 tests)
-│   ├── test_router_backend.py                  (4 tests)
 │   ├── test_user_backend.py                    (4 tests)
 │   ├── test_user_model_learner.py              (4 tests)
 │   ├── test_vibe_decision_audit.py             (4 tests)
@@ -141,7 +139,6 @@ tests/plugins/
 │   ├── test_notification_backend_e2e.py        (2 tests)
 │   ├── test_path_gate_e2e.py                   (2 tests)
 │   ├── test_recall_backend_e2e.py              (2 tests)
-│   ├── test_router_backend_e2e.py              (2 tests)
 │   ├── test_user_backend_e2e.py                (2 tests)
 │   ├── test_user_model_learner_e2e.py          (2 tests)
 │   ├── test_vibe_decision_audit_e2e.py         (2 tests)
@@ -164,7 +161,6 @@ tests/plugins/
     ├── test_notification_backend_hostile.py      (2 tests)
     ├── test_path_gate_hostile.py                 (2 tests)
     ├── test_recall_backend_hostile.py            (2 tests)
-    ├── test_router_backend_hostile.py            (2 tests)
     ├── test_user_backend_hostile.py              (2 tests)
     ├── test_user_model_learner_hostile.py        (2 tests)
     ├── test_vibe_decision_audit_hostile.py       (2 tests)

@@ -174,13 +174,12 @@ def _config_path(*, tenant_id: str | None = None) -> Path:
 
 
 def _default_config() -> dict[str, Any]:
-    # Default-OFF since the policy switch: LDD soft-discipline does not
-    # ship enabled by default. The hard structural enforcement (forge
-    # sandbox, skill-forge linter, path-gate, audit hash-chain, promotion
-    # gates) lives outside this toggle system and stays active regardless.
+    # Default-ON: LDD ships enabled at maximum depth on every fresh install
+    # (operator mandate, docs/claude-ref/ldd-mandatory.md). Opt-out stays
+    # possible through /ldd-off or the console, never through a shipped default.
     return {
-        "enabled": False,
-        "layers": {layer: False for layer in LAYERS},
+        "enabled": True,
+        "layers": {layer: True for layer in LAYERS},
     }
 
 

@@ -15,7 +15,6 @@ prompt-injected skill alone.
 |---|---|---|---|
 | `skill_promotion`  | `skill` | 0.5 | session→project→user transitions; heat from reach + grade-count |
 | `forge_creation`   | `skill` | 0.5 | new tool name collides or shares namespace with an existing entry |
-| `auto_routing`     | `fast`  | 0.5 | router-confidence < 0.6 AND high-stake content |
 | `path_gate`        | `fast`  | 0.6 | unparseable Bash with hint-strings (deny stays fail-closed; dialectic only records) |
 | `session_reset`    | `cli`   | 0.5 | session has 3+ promoted skills or 10+ tools |
 | `voice_summary`    | `off`   | 0.5 | (opt-in) faithfulness check on the read-aloud summary before delivery; default-off because cli mode adds 5-15 s latency on every voice reply, flip on with `/dialectic-set voice_summary cli` |
@@ -79,12 +78,10 @@ so operators can justify deviations in their own DPIA.
 | `session_reset` | `cli` | Session reset is **user-initiated and irreversible** (deletes skills + tools). `cli` mode invokes an adversarial subprocess that must affirmatively confirm before the reset proceeds. Highest-quality oversight for an irreversible action. For `high_risk` tenants this default is load-bearing. | EU AI Act Art. 14(1): human must be able to "interrupt the AI system" — the cli confirmation dialog is that interrupt. |
 | `skill_promotion` | `skill` | Skill promotion changes future LLM behavior across sessions. `skill` mode uses the injected skill itself as the reasoning source — appropriate for a skill-quality self-assessment. Low blast radius (promotion can be reversed by purging the skill). | No direct regulatory obligation; best-practice oversight for self-modifying system behavior. |
 | `forge_creation` | `skill` | Tool creation is sandboxed by bwrap — the true safety boundary is the sandbox, not the dialectic. `skill` mode provides structured reasoning on namespace collisions at low cost. | EU AI Act Art. 15: robustness through sandboxing (structural), dialectic is transparency layer. |
-| `auto_routing` | `fast` | Routing selects a persona, not a decision with legal effect. Fast mode is a keyword classifier (0 ms). The actual safety boundary is the persona's `permission_mode: bypassPermissions` gate (operator-controlled). | No Art. 22 GDPR trigger (no significant effect on the data subject from persona selection alone). |
 | `voice_summary` | `off` | Voice summaries are a presentation layer (TTS output). The structural faithfulness defense is the two-layer voice-summary system baked into the summarizer's LLM call. Dialectic would add latency with no incremental safety benefit. | EU AI Act Art. 13 (transparency): fulfilled by the underlying summarizer's instruction-following. |
 
 **For `high_risk` tenants** (`spec.risk_classification: high_risk`): `session_reset` must stay
-at `cli` mode (already the default). Operators should additionally consider upgrading
-`auto_routing` to `skill` mode to add a reasoning record for routing decisions.
+at `cli` mode (already the default).
 
 ### What you, as Claude Code, must NOT do
 
@@ -1474,38 +1471,19 @@ the previous section applies on top.
 
 ### Bundle-persona LDD defaults
 
-**Default-OFF policy (since 2026-05-11):** every bundle persona ships
-with `ldd_preset: "off"`. The soft LDD discipline does NOT inject by
-default. Hard structural enforcement (forge sandbox, skill-forge
-linter, path-gate, audit hash-chain, promotion gates, MCP-server) lives
-OUTSIDE the LDD toggle system and stays active regardless of these
-defaults.
+**Default-ON policy (since 2026-10-09):** a fresh install runs LDD at
+maximum depth. `ldd.py::_default_config()` returns `enabled: true` with all
+12 layers `true`, the bundled `config-templates/ldd.json` ships the same, and
+the quality layers (`quality_layers.DEFAULT_CONFIG`, including
+`usability_first`) are all on. This replaces the 2026-05-11 default-off
+policy, which contradicted the operator mandate in `ldd-mandatory.md`.
+Bundle personas carry no `ldd_preset`, so they inherit the global default.
 
-| Persona | Preset | Delta | Active layer count |
-|---|---|---|---|
-| `coder` | off | — | 0 / 12 |
-| `forge` (Tools + Skills) | off | — | 0 / 12 |
-| `research` | off | — | 0 / 12 |
-| `assistant` | off | — | 0 / 12 |
-| `inbox` | off | — | 0 / 12 |
-| `homeassistant` | off | — | 0 / 12 |
-| `os` | off | — | 0 / 12 |
-| `orchestrator` | off | — | 0 / 12 |
-
-Operators who want LDD-discipline active for a specific chat opt in via
-`chat_profile.ldd_layers` (per-layer) or `chat_profile.ldd_enabled = True`
-plus per-layer overrides in `bridges/<channel>/settings.json`. The
-global default in `ldd.py::_default_config()` is also off — flipping
-the global master on via `/ldd-on` or per-chat overrides is the only
-path to re-enable.
-
-**Why default-off:** soft LDD relies on prompt-injection of skill
-bodies plus model self-discipline; the value it adds is real but
-indirect (it catches verification-theatre, symptom-patches and
-overfit-on-one-test, not erfundene API-calls or library-existence
-claims). The hard structural gates already cover the load-bearing
-safety surface; soft LDD on top is opt-in for code-with-tests
-workflows where the discipline clearly pays off.
+Operators who want LDD off for a specific chat opt out via
+`chat_profile.ldd_enabled = False` or per-layer overrides in
+`bridges/<channel>/settings.json`; globally via `/ldd-off`. Hard structural
+enforcement (forge sandbox, skill-forge linter, path-gate, audit hash-chain,
+promotion gates, MCP-server) is independent of this toggle system.
 
 ### Override-stack visibility
 

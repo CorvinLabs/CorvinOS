@@ -5,6 +5,7 @@ project-level constraint that applies to every task, every session.
 
 Configuration: `.corvin/tenants/_default/global/ldd.json` (all layers `true`).
 Auto-install hook: `LDD_AUTO_OPTIN=1` in `~/.bashrc` — every new session triggers LDD install.
+Fresh installs: `ldd.py::_default_config()` and `config-templates/ldd.json` ship everything ON (since 2026-10-09); the env var is no longer needed for a new install.
 
 ## The Mandate
 

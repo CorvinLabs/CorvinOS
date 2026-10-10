@@ -20,7 +20,6 @@
  "core/plugins/templates/compute_engine_plugin.py::ComputeEnginePluginTemplate",
  "core/plugins/templates/notification_backend_plugin.py::MyNotificationPlugin",
  "core/plugins/templates/recall_backend_plugin.py::MyRecallPlugin",
- "core/plugins/templates/router_backend_plugin.py::MyRouterPlugin",
  "core/plugins/templates/summary_provider_plugin.py::MySummaryPlugin",
  "core/plugins/templates/user_backend_plugin.py::MyLdapUserPlugin",
  "core/plugins/templates/worker_engine_plugin.py::WorkerEnginePluginTemplate",

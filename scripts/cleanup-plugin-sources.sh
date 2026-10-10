@@ -17,7 +17,6 @@ if [ -d "$PROVIDERS_DIR" ]; then
         "data_connector.py"
         "notification_backend.py"
         "recall_backend.py"
-        "router_backend.py"
         "stt_provider.py"
         "summary_provider.py"
         "user_backend.py"

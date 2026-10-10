@@ -187,7 +187,6 @@ _KIND_TEMPLATE_FILE = {
 _CTX_HANDLE_GUESS: dict[str, str] = {
     "data_connector": "data_connector_registry",
     "stt_provider": "stt_registry",
-    "router_backend": "router_registry",
     "summary_provider": "summary_registry",
     "notification_backend": "notification_registry",
     "recall_backend": "recall_registry",

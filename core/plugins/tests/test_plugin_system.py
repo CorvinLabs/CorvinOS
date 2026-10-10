@@ -447,7 +447,8 @@ class TestModuleLevelFunctions(unittest.TestCase):
         self.assertIn("notification_backend", KNOWN_PLUGIN_TYPES)
         self.assertIn("recall_backend", KNOWN_PLUGIN_TYPES)
         self.assertIn("summary_provider", KNOWN_PLUGIN_TYPES)
-        self.assertIn("router_backend", KNOWN_PLUGIN_TYPES)
+        # ADR-0537: persona routing is gone, so is its plugin type.
+        self.assertNotIn("router_backend", KNOWN_PLUGIN_TYPES)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -458,7 +459,6 @@ from corvin_plugins.protocol import (
     NotificationBackend,
     RecallBackend,
     SummaryProvider,
-    RouterBackend,
 )
 from corvin_plugins.providers.notification_backend import (
     LogNotificationBackend,
@@ -472,10 +472,6 @@ from corvin_plugins.providers.summary_provider import (
     ClaudeCliSummaryProvider,
     SummaryProviderRegistry,
 )
-from corvin_plugins.providers.router_backend import (
-    ChainRouterBackend,
-    RouterBackendRegistry,
-)
 
 
 class TestProviderProtocols(unittest.TestCase):
@@ -488,9 +484,6 @@ class TestProviderProtocols(unittest.TestCase):
 
     def test_claude_cli_summary_provider_isinstance(self) -> None:
         self.assertIsInstance(ClaudeCliSummaryProvider(), SummaryProvider)
-
-    def test_chain_router_backend_isinstance(self) -> None:
-        self.assertIsInstance(ChainRouterBackend(), RouterBackend)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -517,10 +510,6 @@ class TestProviderRegistries(unittest.TestCase):
         reg = SummaryProviderRegistry()
         self.assertIsInstance(reg.get_active(), ClaudeCliSummaryProvider)
 
-    def test_router_default_is_chain(self) -> None:
-        reg = RouterBackendRegistry()
-        self.assertIsInstance(reg.get_active(), ChainRouterBackend)
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 16. ADR-0033 provider registries wired into PluginContext
@@ -540,9 +529,9 @@ class TestPluginContextProviderFields(unittest.TestCase):
         ctx = _make_ctx()
         self.assertIsNone(ctx.summary_registry)
 
-    def test_router_registry_field_exists(self) -> None:
+    def test_router_registry_field_is_gone(self) -> None:
         ctx = _make_ctx()
-        self.assertIsNone(ctx.router_registry)
+        self.assertFalse(hasattr(ctx, "router_registry"))
 
     def test_plugin_on_load_can_call_set_active(self) -> None:
         """A plugin can register itself via ctx.summary_registry in on_load()."""
@@ -599,12 +588,6 @@ class TestProviderDefaultContracts(unittest.TestCase):
         p._script_path = lambda: None  # type: ignore[method-assign]
         result = p.summarize("hello world", lang="de", max_chars=5)
         self.assertEqual(result, "hello")
-
-    def test_chain_router_returns_none_when_module_missing(self) -> None:
-        b = ChainRouterBackend()
-        b._router_mod = lambda: None  # type: ignore[method-assign]
-        result = b.route("test", [], tenant_id="t")
-        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

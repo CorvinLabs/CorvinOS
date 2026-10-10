@@ -9,10 +9,11 @@ through ``corvin_plugins.registry`` like any other plugin (that is how it gets
 a real ``on_load(ctx)`` call with a trustworthy ``ctx.tenant_id`` — see that
 module's docstring on why identity matters for a hook), which means it still
 needs a ``plugin_type`` from ``KNOWN_PLUGIN_TYPES``. This template defaults to
-``router_backend`` — a real, consumed type (ADR-0245) — purely so the plugin
-loads; the actual routing capability below is a harmless pass-through. Pick a
-different consumed type if one fits your plugin better; it has no effect on
-the hook itself.
+``summary_provider`` — a real, consumed type (ADR-0245) — purely so the plugin
+loads. It does NOT register itself as the active summariser: the capability
+method below is a pass-through, and taking the slot would replace the real one.
+Pick a different consumed type if one fits your plugin better; it has no effect
+on the hook itself.
 
 **Read before you fill in the hook body — three rules that are enforced, not
 suggestions:**
@@ -49,7 +50,7 @@ class MyHookPlugin:
     """Replace with your actual class name."""
 
     plugin_id = "__PLUGIN_ID__"
-    plugin_type = "router_backend"  # see module docstring — chosen for consumed=True
+    plugin_type = "summary_provider"  # see module docstring — chosen for consumed=True
     version = "1.0.0"
     display_name = "__DISPLAY_NAME__"
 
@@ -60,8 +61,6 @@ class MyHookPlugin:
 
     def on_load(self, ctx: PluginContext) -> None:
         self._tenant_id = ctx.tenant_id
-        if ctx.router_registry is not None:
-            ctx.router_registry.set_active(self)
         register_hook(
             EXTENSION_POINT,
             self._hook,
@@ -75,11 +74,11 @@ class MyHookPlugin:
     def health_check(self) -> HealthStatus:
         return HealthStatus(ok=True, message="ok")
 
-    # ── router_backend capability (harmless pass-through, see module docstring) ─
+    # ── summary_provider capability (never registered, see module docstring) ─
 
-    def route(self, text: str, personas: Any, *, min_confidence: float = 0.5,
-              tenant_id: str = "_default") -> None:
-        return None  # this plugin exists for its hook, not for routing
+    def summarize(self, text: str, *, lang: str = "de", max_chars: int = 400,
+                  tenant_id: str = "_default") -> str:
+        return text[:max_chars]  # this plugin exists for its hook, not for summaries
 
     # ── The actual hook ──────────────────────────────────────────────────────
 

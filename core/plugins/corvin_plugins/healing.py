@@ -68,7 +68,6 @@ DEFAULT_POLICY_BY_TYPE: Dict[str, HealingPolicy] = {
     "summary_provider": HealingPolicy.SOFT_RESTART,
     "notification_backend": HealingPolicy.SOFT_RESTART,
     "recall_backend": HealingPolicy.CIRCUIT_BREAK_ONLY,   # owns a database
-    "router_backend": HealingPolicy.DISABLE_AND_DEGRADE,  # native routing is fine
     "worker_engine": HealingPolicy.DISABLE_AND_DEGRADE,   # degrade ladder ends native
     "bridge_channel": HealingPolicy.CIRCUIT_BREAK_ONLY,
     "data_connector": HealingPolicy.CIRCUIT_BREAK_ONLY,

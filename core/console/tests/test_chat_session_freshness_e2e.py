@@ -76,6 +76,9 @@ class ChatSessionFreshnessE2E(unittest.TestCase):
             self.assertEqual(self.c.patch(f"/v1/console/chat/sessions/{sid}",
                                           json={"title": "Renamed"}).status_code, 200)
             ws.send_json({"type": "user", "text": "hello"})
+            # live_turns.py: every turn opens with turn_started (its id lets a
+            # reconnecting socket re-attach); the stub's turn then just ends.
+            self.assertEqual(ws.receive_json()["type"], "turn_started")
             self.assertEqual(ws.receive_json()["type"], "done")
         self.assertEqual(self._titles(sid), ["Renamed"])
 
@@ -104,6 +107,7 @@ class ChatSessionFreshnessE2E(unittest.TestCase):
         with self.c.websocket_connect(f"/v1/console/chat/sessions/{sid}/stream") as ws:
             ws.receive_json()
             ws.send_json({"type": "user", "text": "long"})
+            self.assertEqual(ws.receive_json()["type"], "turn_started")
             time.sleep(0.2)
             ws.send_json({"type": "cancel"})
             self.assertEqual(ws.receive_json(), {"type": "done"})
@@ -131,8 +135,22 @@ class ChatSessionFreshnessE2E(unittest.TestCase):
         with self.c.websocket_connect(f"/v1/console/chat/sessions/{sid}/stream") as a, \
                 self.c.websocket_connect(f"/v1/console/chat/sessions/{sid}/stream") as b:
             a.receive_json(); b.receive_json()
-            a.send_json({"type": "user", "text": "t1"}); a.receive_json()
-            b.send_json({"type": "user", "text": "t2"}); b.receive_json()
+
+            def own_done(ws):
+                # Tab b also sees tab a's turn (live_turns.py: turn_attach …
+                # done{attached}); each tab waits for the done of ITS turn.
+                seen = []
+                while True:
+                    evt = ws.receive_json()
+                    seen.append(evt)
+                    if evt.get("type") == "done" and not evt.get("attached"):
+                        return seen
+
+            a.send_json({"type": "user", "text": "t1"}); own_done(a)
+            b.send_json({"type": "user", "text": "t2"})
+            b_events = own_done(b)
+            self.assertIn("turn_attach", [e["type"] for e in b_events],
+                          "the second tab sees the first tab's turn")
         self.assertEqual(self.seen, [("t1", False), ("t2", True)])
         self.assertEqual(self.cr.get_session(self.tid, sid).turn_count, 2)
 

@@ -57,7 +57,6 @@ PROVIDER_PLUGIN_TYPES: frozenset[str] = frozenset(
         "audit_backend",
         "user_backend",
         "recall_backend",
-        "router_backend",
         "summary_provider",
         "notification_backend",
         "stt_provider",

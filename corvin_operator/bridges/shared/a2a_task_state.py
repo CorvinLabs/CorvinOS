@@ -129,7 +129,9 @@ def _persist(root: Path, k: tuple[str, str], e: dict[str, Any]) -> None:
         line = json.dumps({"origin_id": k[0], "task_id": k[1], "stage": e["stage"],
                            "stage_seq": e["stage_seq"], "updated_at": e["updated_at"],
                            "reason": e.get("reason", "")}) + "\n"
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        # O_NOFOLLOW does not exist on Windows: a missing attribute here used to raise inside the broad
+        # except below and silently stop every stage from being persisted there.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
         try:
             os.write(fd, line.encode("utf-8"))
         finally:

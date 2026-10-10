@@ -78,6 +78,7 @@ import {
   ensureConnected,
   loadHistory,
   refreshHistory,
+  registerHistoryReader,
   sendMessage as registrySend,
   subscribeEvents,
   consumePendingTitle,
@@ -239,6 +240,28 @@ export function hydrateChatTurn(t: ChatTurn, i: number, sid: string): ChatMessag
       };
     }),
   };
+}
+
+// The registry reconciles an attached turn (live_turns.py) with the record when
+// it ends; it reads the history through the same hydration as a page load.
+registerHistoryReader(async (sid) => {
+  const res = await getChatTurns(sid);
+  return res.turns.map((t: ChatTurn, i: number) => hydrateChatTurn(t, i, sid));
+});
+
+/** Read the history after a task ended, waiting out the gap between the task
+ *  log's "completed" and the persisted answer (chat_runtime records the task
+ *  end before it appends the assistant turn): retry while the record still
+ *  ends on the user's message. */
+async function readHistoryAfterTaskEnd(sid: string): Promise<ChatMessage[]> {
+  let msgs: ChatMessage[] = [];
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const res = await getChatTurns(sid);
+    msgs = res.turns.map((t: ChatTurn, i: number) => hydrateChatTurn(t, i, sid));
+    if (msgs.length === 0 || msgs[msgs.length - 1].role !== "user") return msgs;
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  return msgs;
 }
 
 export function ChatPage() {
@@ -912,11 +935,7 @@ function ChatPane({
     sid,
     streaming,
     React.useCallback(async () => {
-      const res = await getChatTurns(sid);
-      refreshHistory(
-        sid,
-        res.turns.map((t: ChatTurn, i: number) => hydrateChatTurn(t, i, sid)),
-      );
+      refreshHistory(sid, await readHistoryAfterTaskEnd(sid));
     }, [sid]),
   );
 

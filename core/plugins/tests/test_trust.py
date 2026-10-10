@@ -44,7 +44,7 @@ def _b64(b: bytes) -> str:
 def _record(**over) -> dict:
     base = {
         "plugin_id": "com.example.r",
-        "plugin_type": "router_backend",
+        "plugin_type": "summary_provider",
         "version": "1.0.0",
         "origin": "community",
     }

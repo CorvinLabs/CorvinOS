@@ -62,7 +62,6 @@ class TestBuildContext(unittest.TestCase):
             "notification_registry",
             "recall_registry",
             "summary_registry",
-            "router_registry",
             "audit_registry",
             "user_registry",
         ):

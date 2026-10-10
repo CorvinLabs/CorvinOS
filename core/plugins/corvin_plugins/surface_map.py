@@ -1,14 +1,14 @@
 """Extension-surface map: what is buildable, and whether anything calls it (ADR-0245).
 
 "What can I extend?" had three different answers depending on which artifact you
-read — ``KNOWN_PLUGIN_TYPES`` (11 entries), ``providers/`` (8 modules), and the
+read — ``KNOWN_PLUGIN_TYPES``, ``providers/``, and the
 marketplace's seven file-shaped surfaces. Nothing connected them, so an author had
 to infer from ``bootstrap.build_context`` which registry handle their ``on_load()``
 was supposed to use.
 
 This module is that connection, and it is **verified, not asserted**. The mapping
-itself has to be written down — no rule in the tree derives "a ``router_backend``
-hands itself to ``ctx.router_registry``" — but every column is checked against the
+itself has to be written down — no rule in the tree derives "a ``recall_backend``
+hands itself to ``ctx.recall_registry``" — but every column is checked against the
 code by ``core/plugins/tests/test_surface_map.py``: every ``plugin_type`` matches
 ``KNOWN_PLUGIN_TYPES``, every ``ctx_handle`` names a real :class:`PluginContext`
 field, every ``template`` names a file that exists, every ``provider_module``
@@ -90,15 +90,6 @@ class ExtensionSurface:
 #: The map. Working surfaces first, then the ones that register but are unused.
 SURFACES: tuple[ExtensionSurface, ...] = (
     # ── Live: something calls these ─────────────────────────────────────────
-    ExtensionSurface(
-        plugin_type="router_backend",
-        ctx_handle="router_registry",
-        provider_module="router_backend",
-        template="router_backend_plugin.py",
-        consumed_by="corvin_operator/bridges/shared/adapter.py",
-        dead_reason=None,
-        invariant="route() must NOT raise — return None on no-match or error.",
-    ),
     ExtensionSurface(
         plugin_type="web_surface",
         # No provider registry: a WebSurface does not self-register in

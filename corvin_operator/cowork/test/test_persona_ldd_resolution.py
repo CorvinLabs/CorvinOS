@@ -72,17 +72,17 @@ def reset_ldd():
 # enforcement (forge sandbox, skill-forge linter, path-gate, audit
 # hash-chain, promotion gates) lives outside the LDD toggle, so "all
 # layers off" here does NOT disable the load-bearing safety surface.
-_OFF = {layer: False for layer in ldd.LAYERS}
+_ON = {layer: True for layer in ldd.LAYERS}
 
 EXPECTED: dict[str, dict[str, bool]] = {
-    "coder":         dict(_OFF),
-    "forge":         dict(_OFF),
-    "browser":       dict(_OFF),
-    "research":      dict(_OFF),
-    "inbox":         dict(_OFF),
-    "homeassistant": dict(_OFF),
-    "assistant":     dict(_OFF),
-    "os":            dict(_OFF),
+    "coder":         dict(_ON),
+    "forge":         dict(_ON),
+    "browser":       dict(_ON),
+    "research":      dict(_ON),
+    "inbox":         dict(_ON),
+    "homeassistant": dict(_ON),
+    "assistant":     dict(_ON),
+    "os":            dict(_ON),
 }
 
 
@@ -133,8 +133,9 @@ def case_chat_profile_per_layer_overrides_persona():
     t("browser + override root_cause=True → on",
       ldd.is_layer_active("root_cause_by_layer", profile=profile) is True)
     # Untouched layer stays off (preset-derived False).
-    t("browser + override leaves unrelated layer (docs_as_dod) off",
-      ldd.is_layer_active("docs_as_dod", profile=profile) is False)
+    # Default-ON: an untouched layer stays on (global default, no persona kill).
+    t("browser + override leaves unrelated layer (docs_as_dod) on",
+      ldd.is_layer_active("docs_as_dod", profile=profile) is True)
 
 
 def case_chat_profile_master_overrides_persona():
@@ -149,12 +150,11 @@ def case_chat_profile_master_overrides_persona():
     # WITHOUT touching layer values (preset still wired all-off).
     profile2 = resolver.resolve("homeassistant", overrides={"ldd_enabled": True})
     for layer in ldd.LAYERS:
-        if ldd.is_layer_active(layer, profile=profile2):
-            t(f"ha + master-on still has {layer} off (preset off keeps layers off)",
+        if not ldd.is_layer_active(layer, profile=profile2):
+            t(f"ha + master-on still has {layer} on (default-on keeps layers on)",
               False)
             return
-    t("ha + master-on still has every layer off (preset wins on layer values)",
-      True)
+    t("ha + master-on still has every layer on (global default-on)", True)
 
 
 def case_chat_profile_combination():
@@ -169,8 +169,8 @@ def case_chat_profile_combination():
     profile = resolver.resolve("homeassistant", overrides=overrides)
     t("ha + chat overrides (master+layer) → dialectical_reasoning on",
       ldd.is_layer_active("dialectical_reasoning", profile=profile) is True)
-    t("ha + chat overrides → other layers still off",
-      ldd.is_layer_active("e2e_driven_iteration", profile=profile) is False)
+    t("ha + chat overrides → other layers still on",
+      ldd.is_layer_active("e2e_driven_iteration", profile=profile) is True)
 
 
 # ── 4. Cascade applies on top of persona profile ───────────────────────────

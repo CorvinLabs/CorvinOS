@@ -301,7 +301,6 @@ _NEVER_EXTENSIBLE: Dict[str, str] = {
 #: computes an attribute name by string surgery is one rename away from telling
 #: a plugin author to call something that does not exist.
 _PROVIDER_POINTS: Dict[str, str] = {
-    "router_backend": "router_registry",
     "recall_backend": "recall_registry",
     "summary_provider": "summary_registry",
     "audit_backend": "audit_registry",

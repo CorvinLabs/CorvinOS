@@ -18,11 +18,11 @@
 
 > **Seven live ways to extend CorvinOS: code plugins, sandboxed runtime tools, self-graded skills, a chat-driven plugin builder, MCP servers, custom prompt layers and Claude Code plugins. Each one is labelled below with whether it runs today.**
 
-<p align="center"><img src="img/extensibility-hero.svg" alt="Hub-and-spoke diagram: CorvinOS in the centre; solid spokes to live extension points (8 called plugin types, Forge tools, SkillForge skills, Plugin-Builder, MCP servers, Claude Code plugins); a partial spoke to custom layers; dashed spokes to 5 plugin types without a call site and to engines and bridges, which are hard-coded." width="100%"/></p>
+<p align="center"><img src="img/extensibility-hero.svg" alt="Hub-and-spoke diagram: CorvinOS in the centre; solid spokes to live extension points (7 called plugin types, Forge tools, SkillForge skills, Plugin-Builder, MCP servers, Claude Code plugins); a partial spoke to custom layers; dashed spokes to 5 plugin types without a call site and to engines and bridges, which are hard-coded." width="100%"/></p>
 
 ## What you get
 
-- **Code plugins with a contract.** 13 plugin types, each with a named invariant. `corvin plugin types`
+- **Code plugins with a contract.** 12 plugin types, each with a named invariant. `corvin plugin types`
   tells you honestly which ones the runtime calls.
 - **Tools the agent writes for itself.** The agent writes a Forge tool through MCP. The tool is checked
   statically, runs in a **bwrap/docker sandbox**, and is audited. It is callable in the same turn.
@@ -38,7 +38,7 @@
 
 | Extension point | Status | How, in one line |
 |---|---|---|
-| Plugin types — 8 called: `router_backend`, `summary_provider`, `notification_backend`, `recall_backend`, `audit_backend` (gets a copy after the core write), `context_retriever`, `compute_engine`, `web_surface` | **LIVE** | `corvin plugin new <type> <id>` → `corvin plugin check <dir>` → `corvin plugin install <dir>` |
+| Plugin types — 7 called: `summary_provider`, `notification_backend`, `recall_backend`, `audit_backend` (gets a copy after the core write), `context_retriever`, `compute_engine`, `web_surface` | **LIVE** | `corvin plugin new <type> <id>` → `corvin plugin check <dir>` → `corvin plugin install <dir>` |
 | Plugin types — 5 not wired: `user_backend`, `stt_provider`, `data_connector`, `worker_engine`, `bridge_channel` | **NOT BUILT** (no call site) | They load and register, but nothing calls them yet |
 | Forge runtime tools | **LIVE** | MCP tools `forge_tool`, `forge_promote`, `forge_list`, `forge_exec` |
 | SkillForge skills | **LIVE** | `skill_create`, then one seed `skill_grade` so the injection gate admits it |
@@ -54,7 +54,7 @@
 <p align="center"><img src="img/extensibility-three-commands.svg" width="100%" alt="Four steps: corvin plugin types, corvin plugin new TYPE ID, corvin plugin check DIR, then corvin plugin install DIR."/></p>
 
 The offline tooling (ADR-0244) checks your plugin against the same rules the registry enforces at load.
-Templates ship for 9 of the 13 types, in `core/plugins/templates/`. For `web_surface`,
+Templates ship for 8 of the 12 types, in `core/plugins/templates/`. For `web_surface`,
 `context_retriever`, `stt_provider` and `data_connector`, `new` refuses with a clear message.
 `user_backend`, `worker_engine` and `bridge_channel` do have templates, and they scaffold, load and
 register, but the runtime never calls them. `corvin plugin types` prints this next to each type, so you
@@ -94,7 +94,7 @@ your decision, through the normal manifest-gated path.
 
 | Capability | Status | Where |
 |---|---|---|
-| 13 plugin types, 8 called | **LIVE** | `core/plugins/corvin_plugins/` (`surface_map`) |
+| 12 plugin types, 7 called | **LIVE** | `core/plugins/corvin_plugins/` (`surface_map`) |
 | 5 plugin types without a call site | **NOT BUILT** | listed by `corvin plugin types` |
 | Plugin authoring CLI (`types`/`new`/`check`) | **LIVE** | `ops/launcher/corvin/plugin_cmd.py` |
 | Forge runtime tools (bwrap/docker sandbox) | **LIVE** | `corvin_operator/forge/forge/mcp_server.py` |
@@ -110,8 +110,8 @@ your decision, through the normal manifest-gated path.
 
 ```bash
 # A code plugin
-corvin plugin types                                   # 13 surfaces, called or not
-corvin plugin new router_backend com.example.my-router
+corvin plugin types                                   # 12 surfaces, called or not
+corvin plugin new summary_provider com.example.my-summariser
 corvin plugin check ./com.example.my-router
 corvin plugin install ./com.example.my-router
 
@@ -143,7 +143,7 @@ corvin-layer custom list
 
 ## Honest limits
 
-- **5 of 13 plugin types are not wired.** `user_backend`, `stt_provider`, `data_connector`,
+- **5 of 12 plugin types are not wired.** `user_backend`, `stt_provider`, `data_connector`,
   `worker_engine` and `bridge_channel` load and register, but nothing calls them. A plugin of one of
   these types runs no code.
 - **Engines and bridges cannot be plugged in yet.** The four worker engines and seven bridges are

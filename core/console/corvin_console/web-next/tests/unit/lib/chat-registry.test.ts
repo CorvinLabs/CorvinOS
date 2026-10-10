@@ -155,37 +155,49 @@ describe("loadHistory", () => {
     expect(getSessionState("s1").messages).toHaveLength(1);
   });
 
-  it("does not overwrite on second call (historyLoaded guard)", () => {
+  it("a later read of the record replaces an earlier one (record is authoritative)", () => {
     const msgs1: ChatMessage[] = [
       { id: "h1", role: "user", parts: [{ kind: "text", text: "first" }], ts: 1 },
     ];
     const msgs2: ChatMessage[] = [
-      { id: "h2", role: "user", parts: [{ kind: "text", text: "second" }], ts: 2 },
+      { id: "h1", role: "user", parts: [{ kind: "text", text: "first" }], ts: 1 },
+      { id: "h2", role: "assistant", parts: [{ kind: "text", text: "answer" }], ts: 2 },
     ];
     loadHistory("s1", msgs1);
     loadHistory("s1", msgs2);
-    expect(getSessionState("s1").messages[0].id).toBe("h1");
+    expect(getSessionState("s1").messages.map((m) => m.id)).toEqual(["h1", "h2"]);
   });
 
-  it("does NOT overwrite live-streamed messages (WS race fix)", () => {
+  it("keeps live-streamed messages after the record when history arrives late (WS race)", () => {
     // Simulate: WS delivers a delta BEFORE getChatTurns resolves.
     connect("s1");
     sendMessage("s1", "hello");
-    // Simulate one delta arriving
     mockWs.emit({ type: "delta", text: "live content" });
 
-    const oldMessages = getSessionState("s1").messages;
-    expect(oldMessages.length).toBeGreaterThan(0);
+    const live = getSessionState("s1").messages;
+    expect(live.length).toBe(2);
 
-    // History arrives late — must NOT overwrite live buffer
+    // History arrives late — the record goes first, the live turn stays after it.
     const history: ChatMessage[] = [
       { id: "hist-1", role: "user", parts: [{ kind: "text", text: "old" }], ts: 0 },
     ];
     loadHistory("s1", history);
 
-    // Live content preserved
-    expect(getSessionState("s1").messages).toBe(oldMessages);
-    expect(getSessionState("s1").messages.some((m) => m.id === "hist-1")).toBe(false);
+    const msgs = getSessionState("s1").messages;
+    expect(msgs.map((m) => m.id)).toEqual(["hist-1", live[0].id, live[1].id]);
+    const assistant = msgs[2];
+    expect(assistant.parts.some((p) => p.kind === "text" && p.text === "live content")).toBe(true);
+  });
+
+  it("does not double the live user message the record already holds", () => {
+    connect("s1");
+    sendMessage("s1", "hello");
+    loadHistory("s1", [
+      { id: "hist-u", role: "user", parts: [{ kind: "text", text: "hello" }], ts: 0 },
+    ]);
+    const msgs = getSessionState("s1").messages;
+    expect(msgs.filter((m) => m.role === "user")).toHaveLength(1);
+    expect(msgs[msgs.length - 1].streaming).toBe(true);
   });
 
   it("does NOT overwrite when session is currently streaming", () => {

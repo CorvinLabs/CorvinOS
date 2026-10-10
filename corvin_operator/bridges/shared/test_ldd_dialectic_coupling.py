@@ -110,8 +110,8 @@ def case_profile_master_off():
         t(f"site={site} → off (profile master off)",
           m == "off", detail=f"got={m!r}")
     # Other profile (no override) sees the bundle default again.
-    m = dialectic.resolve_mode(site="auto_routing")
-    t("global state untouched (auto_routing → bundle default fast)",
+    m = dialectic.resolve_mode(site="path_gate")
+    t("global state untouched (path_gate → bundle default fast)",
       m == "fast", detail=f"got={m!r}")
 
 
@@ -130,26 +130,26 @@ def case_re_enable_lifts_gate():
     reset_all()
     ldd.set_master(False)
     # confirm OFF first
-    t("auto_routing OFF while LDD master off",
-      dialectic.resolve_mode(site="auto_routing") == "off")
+    t("path_gate OFF while LDD master off",
+      dialectic.resolve_mode(site="path_gate") == "off")
     ldd.set_master(True)
     # Default per-layer is also off since the policy switch, so re-enabling
     # requires both master AND the specific layer.
     ldd.set_layer("dialectical_reasoning", True)
-    t("auto_routing back to fast after LDD master+layer ON",
-      dialectic.resolve_mode(site="auto_routing") == "fast")
+    t("path_gate back to fast after LDD master+layer ON",
+      dialectic.resolve_mode(site="path_gate") == "fast")
 
 
 def case_explicit_profile_mode_beats_ldd_gate():
     print("\n[7] explicit profile.dialectic_mode_<site> beats LDD gate")
     reset_all()
     ldd.set_layer("dialectical_reasoning", False)  # gate would force off
-    profile = {"dialectic_mode_auto_routing": "fast"}
-    m = dialectic.resolve_mode(site="auto_routing", profile=profile)
+    profile = {"dialectic_mode_path_gate": "fast"}
+    m = dialectic.resolve_mode(site="path_gate", profile=profile)
     t("explicit per-site mode wins over LDD gate",
       m == "fast", detail=f"got={m!r}")
     # Sites without an explicit override stay gated.
-    m2 = dialectic.resolve_mode(site="path_gate", profile=profile)
+    m2 = dialectic.resolve_mode(site="forge_creation", profile=profile)
     t("non-overridden sites still off via LDD gate",
       m2 == "off", detail=f"got={m2!r}")
 
@@ -159,7 +159,7 @@ def case_decide_returns_thesis_when_gated():
     reset_all()
     ldd.set_layer("dialectical_reasoning", False)
     d = dialectic.decide(
-        site="auto_routing",
+        site="path_gate",
         thesis={"persona": "browser", "confidence": 0.8},
         antithesis={"persona": "research", "confidence": 0.5},
         heat=0.9,  # would normally trigger fast mode

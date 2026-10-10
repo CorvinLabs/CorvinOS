@@ -575,14 +575,6 @@ def _emit_os_engine_span(kind, *, turn_id, chat_key, engine_id,
         pass
 
 
-# Router-module liegt im selben directory wie der Adapter — Import ist
-# unkritisch, das module selbst hat keine zwingenden Dependencies (anthropic
-# wed optional geladen, claude-CLI-Fallback funktioniert immer).
-try:
-    import router as _router  # type: ignore
-except Exception:  # noqa: BLE001
-    _router = None
-
 # SkillForge live-injection layer (optional, mirrors the cowork pattern).
 # When skill-forge is installed alongside voice we collect the active
 # session-scope skills per inbox-message and append the markdown bodies
@@ -684,12 +676,10 @@ try:
     from corvin_plugins.providers import notification_backend as _notif_prov  # type: ignore
     from corvin_plugins.providers import recall_backend as _recall_prov  # type: ignore
     from corvin_plugins.providers import summary_provider as _summary_prov  # type: ignore
-    from corvin_plugins.providers import router_backend as _router_prov  # type: ignore
 except Exception:  # noqa: BLE001
     _notif_prov = None
     _recall_prov = None
     _summary_prov = None
-    _router_prov = None
 
 # Layer-17 per-user consent gate. Required for the observer-transcript
 # path: an `_observer: true` envelope only reaches the per-chat ring
@@ -1898,24 +1888,16 @@ def _resolve_chat_profile(channel: str, chat_key: str) -> dict:
     return profile
 
 
-# ── Auto-Routing (optional, wenn cowork + router available) ─────────────────
-# default behaviour (auch wenn `routing` in shared/settings.json fehlt): auto.
-# Per-Chat viaschreibbar via chat_profiles[<chat>].routing.
+# ── Persona identity (ADR-0537: no persona routing) ─────────────────────────
+# Per-chat overridable via chat_profiles[<chat>].routing. Only these keys act:
+#   mode "off"        — apply no persona config, identity only
+#   fallback_persona  — the identity every unpinned turn gets
+# Any other mode value (including the former heuristic / auto / embedding)
+# means the same as the default; stale values in saved settings stay harmless.
 
 _ROUTING_DEFAULTS = {
-    # mode: off | heuristic | auto
-    #   off       — never route, always use fallback_persona
-    #   heuristic — keyword matcher only (0 ms, no API key) — Default since
-    #               most users run on the Max subscription without an
-    #               ANTHROPIC_API_KEY, so the LLM-backed router would just
-    #               time out on the `claude -p` fallback.
-    #   auto      — heuristic + LLM (SDK or CLI). LLM only fires when an
-    #               API key is present, otherwise behaves like 'heuristic'.
-    "mode": "heuristic",
-    "model": "claude-haiku-4-5",
-    "fallback_persona": "assistant",      # used wenn Router unsicher / offline
-    "min_confidence": 0.5,
-    "show_prefix": True,                  # "[browser] …" am Anfang der reply
+    "mode": "on",
+    "fallback_persona": "assistant",
 }
 
 
@@ -1935,118 +1917,22 @@ def _routing_config(shared_settings: dict, profile: dict) -> dict:
     return out
 
 
-def _apply_auto_routing(prompt: str, channel: str, chat_key: str,
-                        profile: dict, shared_settings: dict) -> dict:
-    """When the chat has no pinned persona and router mode is ``auto``, let
-    Haiku decide. On low confidence / router offline: fallback persona
-    (assistant). Returns the profile, enriched with persona fields where
-    applicable (with an `_auto_routed` marker for the UI).
+def _apply_persona_identity(channel: str, chat_key: str,
+                            profile: dict, shared_settings: dict) -> dict:
+    """Give every turn a persona identity. There is no routing (ADR-0537): a
+    pinned chat keeps its pinned name, every other chat gets the configured
+    fallback persona. Both carry the one capability profile, and both mark the
+    turn with ``_auto_routed`` (the identity marker the attribution namespace
+    and the UI read; the name predates the removal of routing).
 
-    A turn without a pinned persona ALWAYS leaves here with a persona identity —
-    the fallback when nothing better is available, even when no persona config
-    exists at all (no cowork, no router, mode=off, empty pool). Since c93ef9915
-    removed every persona JSON, returning the profile untouched left the turn
-    with NO persona, and the explicit-skill namespace gate — fail-closed on an
-    unresolved persona, by design — refused every explicit skill request."""
-    if profile.get("persona"):
-        return _pinned_identity(profile, _routing_config(shared_settings, profile))
+    A turn ALWAYS leaves here with an identity, even when no persona config
+    exists at all: the explicit-skill namespace gate is fail-closed on an
+    unresolved persona, by design, and refused every explicit skill request
+    when a turn was returned untouched."""
     cfg = _routing_config(shared_settings, profile)
-    if _cowork is None or _router is None:
-        return _fallback_identity(profile, cfg, "fallback (persona router unavailable)")
-    if cfg.get("mode") == "off":
-        return _fallback_identity(profile, cfg, "fallback (routing off)")
-
-    try:
-        all_personas = _cowork.list_available()
-    except Exception as e:  # noqa: BLE001
-        log(f"router: cowork.list_available failed: {e}")
-        return _fallback_identity(profile, cfg, "fallback (persona list unavailable)")
-    # Nur zero-config Personas sind router-pickable.
-    pool = [p for p in all_personas if p.get("zero_config")]
-    if not pool:
-        return _fallback_identity(profile, cfg, "fallback (no routable personas installed)")
-
-    chosen_name = None
-    confidence = 0.0
-    why = ""
-
-    if (prompt or "").strip():
-        try:
-            # ADR-0033: route through provider registry when available;
-            # fall back to direct _router call when corvin-plugins absent.
-            _route_fn = (
-                _router_prov.get_active().route
-                if _router_prov is not None
-                else (_router.route if _router is not None else None)
-            )
-            if _route_fn is None:
-                choice = None
-            else:
-                choice = _route_fn(
-                    prompt, pool,
-                    model=cfg["model"],
-                    min_confidence=float(cfg["min_confidence"]),
-                    mode=str(cfg.get("mode") or "heuristic"),
-                )
-            if choice:
-                chosen_name = choice["persona"]
-                confidence = float(choice.get("confidence", 0))
-                why = str(choice.get("why", ""))
-        except Exception as e:  # noqa: BLE001
-            log(f"router: route() failed: {e}")
-
-    # Kein klarer Winner → Fallback.
-    if not chosen_name:
-        chosen_name = cfg.get("fallback_persona") or "assistant"
-        why = why or "fallback (no clear router pick)"
-    else:
-        # Layer-11 dialectic gate — only fires when the router's pick is
-        # below 0.6 confidence (uncertainty ≥ 0.4) AND the heat-score lifts
-        # above the auto_routing threshold (default 0.5). For high-confidence
-        # picks the gate short-circuits and the router's choice stands.
-        try:
-            import dialectic as _dialectic  # type: ignore  # noqa: PLC0415
-            fallback_persona = cfg.get("fallback_persona") or "assistant"
-            d = _dialectic.decide(
-                site="auto_routing",
-                thesis={"persona": chosen_name, "confidence": confidence},
-                antithesis={"persona": fallback_persona, "confidence": 0.5},
-                consequence=0.2,                       # local, reversible
-                uncertainty=max(0.0, 1.0 - confidence),
-                scope=1,                               # one decision
-                profile=profile,
-                channel_id=f"{channel}:{chat_key}",
-                persona=chosen_name,
-            )
-            # Apply only when the gate triggered (mode != off) AND the
-            # synthesizer flipped the choice.
-            if (d.mode != "off"
-                    and isinstance(d.choice, dict)
-                    and d.choice.get("persona") != chosen_name):
-                chosen_name = d.choice["persona"]
-                confidence = float(d.choice.get("confidence", 0.5))
-                why = f"{why} → dialectic({d.mode}): {d.why}"
-        except Exception as e:  # noqa: BLE001
-            log(f"dialectic auto_routing skipped: {e}")
-
-    # Persona auflösen + ins profile mergen.
-    try:
-        merged = _cowork.resolve(chosen_name, overrides=profile)
-        if isinstance(merged, dict) and merged:
-            merged["_auto_routed"] = chosen_name
-            merged["_auto_routed_why"] = why
-            merged["_auto_routed_confidence"] = confidence
-            merged["_routing_show_prefix"] = bool(cfg.get("show_prefix", True))
-            log(f"auto-route {channel}:{chat_key} → {chosen_name} "
-                f"(conf={confidence:.2f}, why={why[:80]!r})")
-            return merged
-    except Exception as e:  # noqa: BLE001
-        log(f"router: cowork.resolve({chosen_name!r}) failed: {e}")
-
-    # The chosen persona has no config on disk (or resolve failed): keep the
-    # identity so the turn is still attributed and namespace-gated as it.
-    return _fallback_identity(profile, cfg, why or "fallback (persona config unavailable)",
-                              persona=chosen_name, confidence=confidence)
+    if profile.get("persona"):
+        return _pinned_identity(profile, cfg)
+    return _fallback_identity(profile, cfg, "fallback persona (no routing)")
 
 
 def _fallback_identity(profile: dict, cfg: dict, why: str, *,
@@ -12461,7 +12347,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # lass Haiku entscheiden welche Spezial-Persona passt. Bei Unsicherheit
     # → Allrounder. Wed hier vor dem Logging/Spawnen angewandt, so that das
     # Log already die finale Persona zeigt.
-    profile = _apply_auto_routing(prompt, channel, chat_key, profile, settings)
+    profile = _apply_persona_identity(channel, chat_key, profile, settings)
 
     # Phase 1 — Outcome-grounded grading. If the previous turn auto-graded
     # any skills, check whether THIS turn's text carries an approval /
@@ -13017,17 +12903,9 @@ def process_one(inbox_file: Path, settings: dict) -> None:
 
     # Context bar: compact session-state line prepended to the first chunk when
     # something non-default is active (goal, non-default persona, scheduled tasks).
-    # When the bar is shown, it already includes the persona, so the standalone
-    # auto-routing prefix (below) is suppressed to avoid duplication.
     _ctx_bar = _build_context_bar(channel, chat_key, profile)
     if _ctx_bar and chunks:
         chunks[0] = _ctx_bar + chunks[0]
-    elif profile and profile.get("_auto_routed") and profile.get("_routing_show_prefix"):
-        # Auto-Routing-Prefix: wenn der Adapter selbst eine Persona gewählt hat
-        # (kein expliziter /persona-Pin), markiere die reply dezent.
-        prefix = f"[{profile['_auto_routed']}] "
-        if chunks:
-            chunks[0] = prefix + chunks[0]
 
     # Voice-note: synthesize a SHORT spoken summary (1-3 sentences) instead
     # of reading the full answer aloud. Uses summarize.py to compress when

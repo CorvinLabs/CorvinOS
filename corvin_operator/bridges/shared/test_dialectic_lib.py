@@ -9,7 +9,7 @@ Covers:
   - skill-mode produces a wrapper block with thesis+antithesis+synthesis
   - cli-mode subprocess command structure (mocked via env-overridable shim)
   - Recursion guard: depth ≥ 1 degrades to off
-  - The pre-calibration table (13 fictive tasks → trigger expectations)
+  - The pre-calibration table (10 fictive tasks → trigger expectations)
   - CI-lint: ``import anthropic`` is forbidden in dialectic.py
 
 Run as: python3 operator/bridges/shared/test_dialectic_lib.py
@@ -91,7 +91,7 @@ def case_heat_gate_short_circuits():
     print("\n[2] Heat-Score gate: below threshold → thesis-only / mode=off")
     reset_config()
     d = dialectic.decide(
-        site="auto_routing",
+        site="path_gate",
         thesis={"persona": "browser", "confidence": 0.85},
         antithesis={"persona": "research", "confidence": 0.4},
         consequence=0.2, uncertainty=0.15, scope=1,  # heat ≈ 0.185
@@ -122,7 +122,7 @@ def case_mode_lookup_chain():
     dialectic.save_config(cfg)
     t("cfg.enabled=false → all sites off",
       dialectic.resolve_mode(site="skill_promotion") == "off"
-      and dialectic.resolve_mode(site="auto_routing") == "off")
+      and dialectic.resolve_mode(site="path_gate") == "off")
 
     # cfg re-enabled, per-site mode set
     cfg["enabled"] = True
@@ -169,29 +169,6 @@ def case_mode_off():
       d.mode == "off")
     t("off: synthesis is thesis stringified",
       d.synthesis == "promote-OK")
-
-
-# ── 5. Mode = fast (auto_routing rule) ─────────────────────────────────────
-
-def case_mode_fast_auto_routing():
-    print("\n[5] mode=fast: auto_routing higher-confidence wins")
-    reset_config()
-    # Force fast mode for auto_routing with explicit kwarg.
-    d = dialectic.decide(
-        site="auto_routing",
-        thesis={"persona": "research", "confidence": 0.5},
-        antithesis={"persona": "browser", "confidence": 0.7},
-        heat=0.9,  # above gate
-        mode="fast",
-    )
-    t("fast/auto_routing: higher confidence wins",
-      d.choice == {"persona": "browser", "confidence": 0.7})
-    t("fast/auto_routing: mode=fast",
-      d.mode == "fast")
-    t("fast/auto_routing: thesis+antithesis preserved",
-      d.thesis is not None and d.antithesis is not None)
-    t("fast/auto_routing: why mentions confidence",
-      "confidence" in d.why)
 
 
 # ── 6. Mode = fast (path_gate fail-closed) ─────────────────────────────────
@@ -306,9 +283,6 @@ CALIBRATION = [
     ("A skill_prom user 5g 0.8",   "skill_promotion", 1.0, 0.2, 5, True),
     ("B skill_prom proj 3g 0.5",   "skill_promotion", 0.3, 0.5, 2, False),
     ("C skill_prom user 4g 0.7",   "skill_promotion", 1.0, 0.3, 5, True),
-    ("D routing trivial",          "auto_routing",    0.2, 0.15, 1, False),
-    ("E routing low-conf",         "auto_routing",    0.2, 0.6, 1, False),
-    ("F routing high-stake",       "auto_routing",    0.6, 0.55, 2, True),
     ("G path_gate clean",          "path_gate",       0.1, 0.05, 1, False),
     ("H path_gate eval+hint",      "path_gate",       0.9, 0.7, 3, True),
     ("I path_gate /tmp write",     "path_gate",       0.1, 0.1, 1, False),
@@ -320,7 +294,7 @@ CALIBRATION = [
 
 
 def case_calibration_table():
-    print("\n[10] Pre-calibration: 13 fictive tasks → trigger expectation")
+    print("\n[10] Pre-calibration: 10 fictive tasks → trigger expectation")
     reset_config()
     mismatches = []
     for label, site, c, u, scope, expected in CALIBRATION:
@@ -372,7 +346,7 @@ def case_reply_footer():
     cfg["show_in_reply"] = False
     dialectic.save_config(cfg)
     d = dialectic.Decision(
-        site="auto_routing", choice="browser",
+        site="path_gate", choice="browser",
         synthesis="browser", thesis="browser", antithesis="research",
         why="confidence-higher", mode="fast", heat=0.6,
     )
@@ -382,7 +356,7 @@ def case_reply_footer():
     dialectic.save_config(cfg)
     out = dialectic.format_reply_footer([d])
     t("show_in_reply=true → non-empty footer",
-      out and "[decision/auto_routing" in out,
+      out and "[decision/path_gate" in out,
       detail=f"out={out!r}")
 
 
@@ -463,14 +437,14 @@ def case_rate_limit_does_not_throttle_fast_off():
     print("\n[case] rate-limit ignores fast/off modes")
     dialectic._rate_limit_reset()
     cfg = dialectic.load_config()
-    cfg["rate_limits"] = {"auto_routing": 2}  # tiny budget
-    cfg["modes"]["auto_routing"] = "fast"     # but mode is fast
+    cfg["rate_limits"] = {"path_gate": 2}  # tiny budget
+    cfg["modes"]["path_gate"] = "fast"     # but mode is fast
     dialectic.save_config(cfg)
 
     fast_count = 0
     for i in range(8):  # 4x the budget — would be throttled if fast counted
         d = dialectic.decide(
-            site="auto_routing",
+            site="path_gate",
             thesis={"persona": "coder", "confidence": 0.8},
             antithesis={"persona": "research", "confidence": 0.6},
             heat=0.9,
@@ -482,7 +456,7 @@ def case_rate_limit_does_not_throttle_fast_off():
 
     # Restore to default mode for downstream tests.
     dialectic._rate_limit_reset()
-    cfg["modes"]["auto_routing"] = "fast"
+    cfg["modes"]["path_gate"] = "fast"
     cfg.pop("rate_limits", None)
     dialectic.save_config(cfg)
 
@@ -492,7 +466,6 @@ def main():
     case_heat_gate_short_circuits()
     case_mode_lookup_chain()
     case_mode_off()
-    case_mode_fast_auto_routing()
     case_mode_fast_path_gate()
     case_mode_skill_block()
     case_mode_cli_parsing()
