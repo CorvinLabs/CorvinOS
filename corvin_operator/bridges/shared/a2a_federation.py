@@ -52,7 +52,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-FEDERABLE_ENGINE = "claude_code"
 _SEEN_TTL_S = 3600.0
 _SEEN_MAX_PER_ORIGIN = 2000
 _ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
@@ -66,7 +65,7 @@ def _repo_root() -> Path:
 if str(_repo_root()) not in sys.path:
     sys.path.insert(0, str(_repo_root()))
 from core.federation.protocol import (  # noqa: E402
-    FEDERATION_VERSION, MAX_HOPS, PUBLIC_REASONS,
+    FEDERABLE_ENGINE, FEDERATION_VERSION, MAX_HOPS, PUBLIC_REASONS,
 )
 
 

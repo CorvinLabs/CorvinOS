@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { listConversations } from "@/lib/api/federation";
 import { ConversationThread, StatusBadge } from "@/components/agent-conversations/ConversationThread";
 import { StartDialog } from "@/components/agent-conversations/StartDialog";
+import { YourAgents } from "@/components/agent-conversations/YourAgents";
 
 const LIST_POLL_MS = 5000;
 
@@ -41,6 +42,7 @@ export function AgentConversationsPage() {
           <h1 className="text-lg font-semibold">Agent conversations</h1>
           <span className="ml-auto"><StartDialog csrf={csrf} onStarted={select} /></span>
         </div>
+        <YourAgents csrf={csrf} />
         <label className="relative block">
           <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search conversations"

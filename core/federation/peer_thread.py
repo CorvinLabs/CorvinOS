@@ -82,7 +82,8 @@ def _only_local_agent(tenant_id: str, agent_id: str | None) -> Any:
     agents = registry.list_agents()
     if not agents:
         raise PeerThreadCommandError(
-            "no local agent registered — add one under Federation first")
+            "no local agent registered — open Agent conversations → Your agents and register "
+            "the Claude Code agent first")
     if len(agents) > 1:
         raise PeerThreadCommandError(
             "more than one local agent is registered — say which one with @mine/<agent_id>")
@@ -120,7 +121,10 @@ def _only_peer_agent(tenant_id: str, endpoint_id: str, agent_id: str | None) -> 
         return named[0]
     if not candidates:
         raise PeerThreadCommandError(
-            "this peer offers no federable agent — the peer must mark one as federable")
+            "this peer offers no federable agent — on the peer, open Agent conversations → Your agents "
+            "and turn on \"Share with paired peers\" (the peer needs the current version). "
+            "A plain message without a slash is answered by the peer's default agent "
+            "if it granted you Executor permission.")
     if len(candidates) > 1:
         raise PeerThreadCommandError(
             "the peer offers more than one agent — say which one with @peer/<agent_id>")

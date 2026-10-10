@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.federation.protocol import FEDERABLE_ENGINE
 from core.paths import tenant_home
 from core.tenants.validation import validate_tenant_id
 
@@ -37,8 +38,18 @@ _VALID_CAPABILITIES = frozenset({
 _AGENT_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
 
 
+#: The one-click agent (see :meth:`LocalAgentRegistry.ensure_default_agent`). The model is a display label
+#: for the operator and for peers; the engine that actually runs a task chooses its own model.
+DEFAULT_AGENT_ID = "claude-code"
+DEFAULT_AGENT_MODEL = "claude-code"
+
+
 class LocalAgentError(ValueError):
     """A LocalAgent registration/lookup request was malformed or invalid."""
+
+
+class UnknownLocalAgentError(LocalAgentError):
+    """No such registered agent (never registered, or deregistered)."""
 
 
 @dataclass(frozen=True)
@@ -192,6 +203,40 @@ class LocalAgentRegistry:
         )
         self._append(agent)
         return agent
+
+    def set_federable(self, agent_id: str, federable: bool) -> LocalAgent:
+        """Offer (or stop offering) one registered agent to paired peers — an explicit, audited opt-in.
+
+        Registration never shares by itself. Only a Claude Code agent can be offered (the wire side lists
+        no other engine), so asking for more is refused instead of recording a "shared" flag that has no
+        effect. Raises :class:`LocalAgentError` for an unknown/deregistered agent or an unshareable engine."""
+        current = self.get(agent_id)
+        if current is None:
+            raise UnknownLocalAgentError(f"no registered agent {agent_id.strip()[:64]!r}")
+        if federable and current.engine_type != FEDERABLE_ENGINE:
+            raise LocalAgentError(
+                f"only {FEDERABLE_ENGINE} agents can be shared with peers "
+                f"(this one runs {current.engine_type!r})")
+        if current.federable == bool(federable):
+            return current
+        return self.register(
+            agent_id=current.agent_id, engine_type=current.engine_type,
+            capabilities=current.capabilities, model=current.model,
+            max_concurrent=current.max_concurrent,
+            cost_per_task_usd=current.cost_per_task_usd, federable=bool(federable))
+
+    def ensure_default_agent(self) -> tuple[LocalAgent, bool]:
+        """The standard "this installation's Claude Code agent": ``(agent, created)``.
+
+        Idempotent — an existing registration is returned untouched (``created=False``), whatever its
+        sharing state. A new one is NOT shared: the operator turns that on separately."""
+        existing = self.get(DEFAULT_AGENT_ID)
+        if existing is not None:
+            return existing, False
+        agent = self.register(
+            agent_id=DEFAULT_AGENT_ID, engine_type=FEDERABLE_ENGINE,
+            capabilities=["analysis", "code_execution"], model=DEFAULT_AGENT_MODEL, federable=False)
+        return agent, True
 
     def deregister(self, agent_id: str) -> bool:
         agent_id = _validate_agent_id(agent_id)

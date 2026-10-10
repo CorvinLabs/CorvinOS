@@ -1512,8 +1512,28 @@ validated only after the HMAC (`a2a_federation.parse_request`).
 | `task` | Selects one local agent (`target_agent_id`, else the cheapest offering `capability`), reserves one of its `max_concurrent` slots, strict-audits `federation.task_received`, then runs `_receive_task` — the former task-path body, unchanged — with that agent's model; `finish()` releases the slot and audits `federation.task_completed` on every return path. |
 
 **Who is offered.** An agent is federable only if the operator opted it in
-(`LocalAgent.federable`, `POST /v1/console/federation/agents` with
-`"federable": true`; default false) AND it runs on `claude_code`. Only an
+(`LocalAgent.federable`; default false) AND it runs on `claude_code`
+(`core.federation.protocol.FEDERABLE_ENGINE` — the one definition the wire side, the registry and the console
+share).
+
+**Operator surface — "Your agents" (2026-10-10).** The opt-in used to exist only as a hand-written
+`POST /v1/console/federation/agents`: the console could LIST local agents and do nothing else, so on a freshly
+installed instance `/ask @peer` answered "this peer offers no federable agent — the peer must mark one as
+federable" with no way to do so, and `/ask @mine` / `/talk` could never find an agent either. Now, in *Agent
+conversations → Your agents*:
+
+| Control | API | Rule |
+|---|---|---|
+| **Register Claude Code agent** (one click) | `POST /federation/default-agent` → 201 created / 200 existed | idempotent; registers `claude-code` (engine `claude_code`, capabilities analysis + code_execution) **not shared** |
+| **Share with paired peers** (switch) | `PATCH /federation/agents/{id}` `{"federable": bool}` | strict body (a truthy string, `null` or an extra field is 422 — a consent decision is never coerced); unknown/deregistered agent 404; an agent on another engine 400 (it would register as "shared" and never be listed); CSRF required; every change audited as `federation.local_agent_registered` |
+
+Registering is never consenting. The refusals now say where to fix it: `/ask @peer` → "on the peer, open Agent
+conversations → Your agents and turn on *Share with paired peers* (the peer needs the current version) — a plain
+message without a slash is answered by the peer's default agent if it granted you Executor permission";
+`/ask @mine` → "open Agent conversations → Your agents and register the Claude Code agent first". Proof:
+`tests/federation/test_local_agent_sharing_e2e.py` (two instances over real signed HTTP: nothing registered →
+refusals name the fix → one click → not shared → share → `/ask @peer` really spawns on the peer → unshare → refused),
+`web-next/tests/unit/your-agents.test.tsx`, `web-next/tests/e2e/your-agents.spec.ts` (real bundle, CSRF header checked). Only an
 origin that may run workers (`spawn_worker`, not `CORVIN_A2A_M1_ONLY`) gets a
 catalog or a run — the no-worker path would answer a signed `ok` for a task
 that never ran. `federation` together with `group_id` is refused.

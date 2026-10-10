@@ -1,15 +1,19 @@
+import type * as React from "react";
 import { cn } from "@/lib/utils";
 
-interface SwitchProps {
+// Standard button attributes (aria-label, title, data-testid, id …) pass through: a switch with no accessible
+// name is announced as "switch" and nothing else. Existing call sites are unaffected.
+interface SwitchProps extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "onClick" | "role" | "type" | "onChange"> {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
   disabled?: boolean;
   className?: string;
 }
 
-export function Switch({ checked, onCheckedChange, disabled, className }: SwitchProps) {
+export function Switch({ checked, onCheckedChange, disabled, className, ...rest }: SwitchProps) {
   return (
     <button
+      {...rest}
       type="button"
       role="switch"
       aria-checked={checked}

@@ -10,12 +10,14 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status as http_status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Response, status as http_status
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from core.federation.audit import FederationAuditError
 from core.federation.delegation import DelegationError, delegate, rank_candidates, trace
-from core.federation.local_agent import LocalAgentError, LocalAgentRegistry
+from core.federation.local_agent import (
+    LocalAgentError, LocalAgentRegistry, UnknownLocalAgentError,
+)
 from core.federation.peer_catalog import PeerCatalog, PeerCatalogError
 
 from ..deps import require_session, require_session_csrf_on_mutation
@@ -33,6 +35,20 @@ class RegisterLocalAgentRequest(BaseModel):
     # Offer this agent to paired A2A peers (ADR-2232). Off unless asked for;
     # re-POST the same agent_id to change it.
     federable: bool = False
+
+
+class SetFederableRequest(BaseModel):
+    """Strict on purpose: sharing an agent with peers is a consent decision, so a truthy string, a null or an
+    extra field is refused instead of being coerced into "yes"."""
+    model_config = ConfigDict(extra="forbid")
+    federable: StrictBool
+
+
+def _tenant_of(session: Any) -> str:
+    tenant_id = session.get("tenant_id") if isinstance(session, dict) else getattr(session, "tenant_id", None)
+    if not tenant_id:
+        raise HTTPException(status_code=http_status.HTTP_401_UNAUTHORIZED, detail="tenant_id missing")
+    return tenant_id
 
 
 def _agent_to_response(agent: Any) -> dict[str, Any]:
@@ -76,6 +92,49 @@ async def register_local_agent(
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"registration could not be recorded: {exc}",
+        ) from exc
+    return _agent_to_response(agent)
+
+
+@router.post("/default-agent")
+async def register_default_agent(
+    response: Response,
+    session: dict[str, Any] = Depends(require_session_csrf_on_mutation),
+) -> dict[str, Any]:
+    """One click: register this installation's Claude Code agent (NOT shared with peers).
+
+    Console users had no way to register an agent at all, so ``/ask @mine``, ``/ask @peer`` and ``/talk``
+    could never work on a fresh install. 201 when created, 200 when it already existed (idempotent)."""
+    try:
+        agent, created = LocalAgentRegistry(_tenant_of(session)).ensure_default_agent()
+    except LocalAgentError as exc:
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except FederationAuditError as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"registration could not be recorded: {exc}",
+        ) from exc
+    response.status_code = http_status.HTTP_201_CREATED if created else http_status.HTTP_200_OK
+    return _agent_to_response(agent)
+
+
+@router.patch("/agents/{agent_id}")
+async def set_agent_federable(
+    agent_id: str,
+    body: SetFederableRequest,
+    session: dict[str, Any] = Depends(require_session_csrf_on_mutation),
+) -> dict[str, Any]:
+    """Offer an agent to paired peers, or stop offering it. An explicit, audited opt-in per agent."""
+    try:
+        agent = LocalAgentRegistry(_tenant_of(session)).set_federable(agent_id, body.federable)
+    except UnknownLocalAgentError as exc:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except LocalAgentError as exc:
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except FederationAuditError as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"the change could not be recorded: {exc}",
         ) from exc
     return _agent_to_response(agent)
 

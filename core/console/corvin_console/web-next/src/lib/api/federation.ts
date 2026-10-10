@@ -106,6 +106,12 @@ export interface StartConversation {
 }
 
 export const listLocalAgents = () => api<{ agents: LocalAgent[] }>(`${P}/agents`);
+/** One click: register this installation's Claude Code agent. NOT shared with peers (201 created / 200 existed). */
+export const registerDefaultAgent = (csrf: string) =>
+  api<LocalAgent>(`${P}/default-agent`, { method: "POST", csrf });
+/** Offer an agent to paired peers, or stop offering it — an explicit opt-in per agent. */
+export const setAgentFederable = (agentId: string, federable: boolean, csrf: string) =>
+  api<LocalAgent>(`${P}/agents/${encodeURIComponent(agentId)}`, { method: "PATCH", csrf, body: { federable } });
 export const listPeerAgents = () => api<{ agents: PeerAgent[] }>(`${P}/peer-agents`);
 export const listFederationPeers = () => api<{ peers: FederationPeer[] }>(`${P}/peers`);
 export const refreshPeerCatalog = (endpointId: string, csrf: string) =>

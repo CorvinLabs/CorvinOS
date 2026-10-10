@@ -10,6 +10,11 @@ from __future__ import annotations
 import re
 
 FEDERATION_VERSION = 1
+
+#: The only engine whose agents can be offered to paired peers (ADR-2232). One definition: the wire side
+#: (``a2a_federation._is_federable``), the registry and the console all read this, so "share" can never be
+#: switched on for an agent the catalog would silently never list.
+FEDERABLE_ENGINE = "claude_code"
 MAX_HOPS = 3
 
 # Signed rejection reasons a receiver may send for a federation request.

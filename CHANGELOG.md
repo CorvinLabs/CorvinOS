@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### Added — Agent conversations → "Your agents": register an agent and share it with peers from the console
+- A freshly installed instance could not use `/ask @peer`, `/ask @mine` or `/talk`: the console could only list
+  local agents, so the refusal "this peer offers no federable agent — the peer must mark one as federable" named an
+  action that existed only as a hand-written API call. New panel *Agent conversations → Your agents*: one click
+  registers the Claude Code agent (**not** shared), a separate **Share with paired peers** switch is the explicit opt-in
+  (`PATCH /federation/agents/{id}`; strict body, only Claude Code agents, CSRF, audited). Refusals now say where to fix it.
+- Both sides need this version for `/ask @peer` to work: the peer's operator registers and shares an agent there.
+
+### Added — A2A: every sent message shows its stage, a refusal names its cause, a live health watch
+- **Message lifecycle.** The receiver records `delivered → accepted → processing → completed|failed|rejected|timeout`
+  per task; the sender asks with a signed, content-free task-status query that rides on the ping (direct or relay,
+  origin-bound) and follows the peer while the answer is pending. The peer chat draws one status symbol on **every**
+  message (queued, sent, delivered, accepted, agent working, done, refused, unconfirmed) with the chain and the age
+  of the last observation; an unconfirmed send now resolves to its last known stage. Refused messages offer *Resend*.
+- **A refusal names its cause.** The peer's worker path used to discard why it refused, so the sender saw a bare
+  `rejected`. A closed reason code (`quota`, `engine_failed`, `house_rules`, …) now travels in the signed response
+  and reaches the operator as fixed text.
+- **Daily compute pool.** A free-tier instance runs 10 agent tasks per UTC day (one pool for every engine). A refused
+  task no longer pays for the L44 model call first, every pong carries `task_capacity` (`available` | `limit_reached`)
+  and the peer header shows *daily limit reached* before anything is sent.
+- **Continuous watch** (`ops/systemd/corvin-a2a-watch.{service,timer}`, `a2a_live_watch.py`): proves the RUNNING host is
+  on current code (a service keeps the code it started with) and that the A2A contract holds over its real HTTP
+  boundary; warns about offline peers, spent pools and refusal streaks. Sends no task, spends no quota.
+- MCP-sent A2A tasks used to skip the relay (the orchestration MCP server could not import `corvin_core`, which the
+  sender read as "relay fallback off"); fixed.
+- Compatibility: additive. A peer on an older build answers a plain pong (no stage support) and keeps working
+  exactly as before. Windows: stage persistence and the probe no longer depend on `os.O_NOFOLLOW`.
+- Update an existing install with `sh update.sh` (Windows: `update.ps1`, Claude Code: `/corvin:update`).
+
 ### Changed — README redesign and nine overview pages
 - New banner (`assets/banner.svg`), header with badges and a navigation row, and a rewritten
   README from "The problem we solve" on: CorvinOS as the system layer around your agent, with
