@@ -398,6 +398,83 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
     }
   });
 
+  test("6b. a PowerPoint deck is imported as a style, previewed, saved, and the produced video carries ITS accent, not the Corvin mark", async ({ page }) => {
+    test.setTimeout(600_000);
+    await ensure(page, "enabled");
+    // Synthetic deck from the plugin's own fixtures (generated, no real data). Needs python3 + Pillow on the test host.
+    const fixtures = process.env.CORVIN_STYLE_FIXTURES_DIR
+      ?? "/home/shumway/projects/Corvin-Marketplace/plugins/contributor/media/video_producer/tests";
+    const deckPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vp-deck-")), "brand.pptx");
+    try {
+      execFileSync("python3", ["-I", "-c",
+        "import sys; sys.path.insert(0, sys.argv[1]); import style_fixtures as f; open(sys.argv[2], 'wb').write(f.make_deck())",
+        fixtures, deckPath]);
+    } catch (e: any) {
+      test.skip(true, `synthetic deck could not be generated (${e?.code ?? "python error"}); set CORVIN_STYLE_FIXTURES_DIR`);
+    }
+    const ACCENT = [0xc2, 0x18, 0x5b]; // DISTINCT_SCHEME accent1 in style_fixtures.py
+
+    await page.goto("/console/app/video-producer", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("video-producer")).toBeVisible({ timeout: 45_000 });
+    const name = `E2E brand ${Date.now()}`;
+
+    await page.getByTestId("deck-input").setInputFiles(deckPath);
+    const nameInput = page.getByTestId("style-name");
+    await expect(nameInput, "the deck is read and the draft is shown").toBeVisible({ timeout: 60_000 });
+    // previews need the web renderer; when present they are three real frames, otherwise the honest empty state
+    await expect(page.getByTestId("preview-frames").or(page.getByTestId("previews-empty")).first()).toBeVisible({ timeout: 60_000 });
+    if (await page.getByTestId("preview-frames").count()) {
+      await expect(page.getByTestId("preview-frames").locator("img")).toHaveCount(3);
+    } else {
+      test.info().annotations.push({ type: "skipped-check", description: "no preview renderer on the test host" });
+    }
+    await nameInput.fill(name);
+    const saved = page.waitForResponse((r) => r.url().endsWith("/video/styles") && r.request().method() === "POST");
+    await page.getByTestId("style-save").click();
+    const sres = await saved;
+    expect(sres.status(), `POST /video/styles: ${await sres.text()}`).toBe(201);
+    const styleId = (await sres.json()).style.id as string;
+    await expect(page.getByTestId("style-dialog")).toHaveCount(0);
+    await expect(page.getByTestId("style-chip"), "the new style is chosen for the next video").toContainText(name);
+
+    await page.getByTestId("task-input").fill("Explain in two very short scenes why the sky is blue.");
+    const created = page.waitForResponse((r) => r.url().includes("/video/jobs") && r.request().method() === "POST");
+    await page.getByTestId("start-production").click();
+    const res = await created;
+    expect(res.request().postDataJSON().style_id, "the chosen style travels with the job").toBe(styleId);
+    expect(res.status(), `POST /video/jobs: ${await res.text()}`).toBe(200);
+    const jobId = (await res.json()).job_id as string;
+    await expect
+      .poll(async () => (await (await page.request.get(`${API}/video/jobs/${jobId}`)).json()).status, { timeout: 540_000, intervals: [3_000] })
+      .toMatch(/^(complete|completed|error|failed)$/);
+    const job = await (await page.request.get(`${API}/video/jobs/${jobId}`)).json();
+    expect(job.status, `job error: ${job.error_message}`).toMatch(/^complete/);
+
+    try {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vp-style-"));
+      const png = path.join(dir, "poster.png");
+      fs.writeFileSync(png, await (await page.request.get(`${API}/video/videos/${jobId}/poster`)).body());
+      const rgb = (vf: string) => execFileSync("ffmpeg", ["-v", "error", "-i", png, "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], { maxBuffer: 1 << 26 });
+      const near = (b: Buffer, c: number[], tol: number) => {
+        let n = 0;
+        for (let i = 0; i < b.length; i += 3) if (Math.abs(b[i] - c[0]) < tol && Math.abs(b[i + 1] - c[1]) < tol && Math.abs(b[i + 2] - c[2]) < tol) n++;
+        return n;
+      };
+      expect(near(rgb("scale=480:270"), ACCENT, 30), "the poster carries the imported accent colour").toBeGreaterThan(20);
+      // the footer corner where the CorvinOS mark's gold dot (#C9A227) sits in a built-in video
+      expect(near(rgb("scale=1920:1080,crop=140:90:160:950"), [0xc9, 0xa2, 0x27], 28), "the CorvinOS mark is not drawn").toBeLessThan(10);
+    } catch (e: any) {
+      if (e?.code !== "ENOENT") throw e;
+      test.info().annotations.push({ type: "skipped-check", description: "ffmpeg not installed on the test host" });
+    }
+
+    // clean up through the UI so later tests start from a style-less tenant
+    await page.getByTestId("styles-toggle").click();
+    await page.getByTestId(`style-delete-${styleId}`).click();
+    await page.getByTestId(`style-delete-confirm-${styleId}`).click();
+    await expect(page.getByTestId(`style-row-${styleId}`)).toHaveCount(0);
+  });
+
   test("7. disable removes the panel; uninstall via the UI removes everything, panel gone", async ({ page }) => {
     await ensure(page, "enabled");
     await page.goto("/console/app/marketplace?tab=installed", { waitUntil: "domcontentloaded" });

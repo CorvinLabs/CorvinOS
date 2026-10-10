@@ -22,7 +22,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from ..deps import require_session_csrf_on_mutation
@@ -197,6 +198,8 @@ class CreateJobRequest(BaseModel):
     base_job_id: Optional[str] = Field(None, max_length=32)
     # Source material extracted from attachments (POST /video/attachments/extract).
     sources: List[SourceItem] = Field(default_factory=list, max_length=_MAX_SOURCES)
+    # PLAN-0945: absent = the tenant's default style (else built-in); "corvin" = built-in; else one of THIS tenant's styles.
+    style_id: Optional[str] = Field(None, max_length=32)
 
 
 class JobResponse(BaseModel):
@@ -332,6 +335,9 @@ def _grounding_audit(tenant_id: str, event: str, details: Dict[str, Any]) -> boo
     except Exception as e:  # noqa: BLE001
         logger.warning("video producer: grounding audit write failed (%s)", type(e).__name__)
         return False
+
+
+_audit = _grounding_audit  # same tenant-chain writer for every video_producer.* event
 
 
 def _grounding_for_job(tenant_id: str, chat_key: str, job_id: str, task: str, backend: str,
@@ -581,6 +587,7 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
             raise HTTPException(status_code=409, detail="Only a produced video can be revised")
         task = _revision_brief(base_job, shown)
     task += _sources_block(req.sources)
+    web_style = await asyncio.to_thread(_resolve_job_style, rec, req.style_id, req.base_job_id)
     settings = _tenant_settings(rec)
     missing = await asyncio.to_thread(_missing_runtime_dependencies, settings["tts_engine"])
     if missing:
@@ -609,6 +616,12 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     grounding_pack, grounding_status = await asyncio.to_thread(
         _grounding_for_job, rec.tenant_id, chat_key, job_id, task, backend, settings["tts_engine"],
     )
+    # audit-first: the record exists before the style can reach a pixel
+    # (a plain job that never chose a style - no default, no style_id - has nothing to record)
+    if (web_style is not None or req.style_id == _BUILTIN_STYLE_ID) and not _audit(
+            rec.tenant_id, "video_producer.style_applied",
+            {"job_id": job_id, "style_id": web_style.id if web_style is not None else _BUILTIN_STYLE_ID}):
+        raise HTTPException(status_code=503, detail="The style could not be recorded; the job was not started")
     storage = _store(rec)
     job = VideoJob(id=job_id, task=shown, status="pending")
     storage.save_job(job)
@@ -622,6 +635,8 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
         "storyboard_backend": backend,
         "storyboard_model": model,
     }
+    if web_style is not None:
+        config["web_style"] = web_style
     if grounding_pack is not None:
         config["grounding_pack"] = grounding_pack
     elif grounding_status is not None:
@@ -901,3 +916,254 @@ async def submit_scene_feedback(
         "status": "recorded",
         "audit_ref": audit_ref,
     }
+
+
+# ── Styles (PLAN-0945 P2) ────────────────────────────────────────────────────
+# A style is the tenant's own look (palette, fonts, logo, decoration, optional background plate).
+# The client is never trusted: ids, timestamps and provenance are server-made, every draft is fully
+# re-validated by the plugin, and a job can only ever name a style by an id that resolves in THIS
+# tenant's store - no client path, no client tokens.
+
+_BUILTIN_STYLE_ID = "corvin"
+_BUILTIN_STYLE_NAME = "CorvinOS"
+_MAX_STYLE_UPLOAD_BYTES = 25 * 1024 * 1024
+_MAX_STYLE_JSON_BYTES = 8 * 1024 * 1024  # two 2 MiB PNGs as base64 plus the tokens, with headroom
+_DRAFT_PLACEHOLDER_ID = "sty_00000000"
+_STYLE_NOT_FOUND = "Style not found"
+# One browser per preview, at most this many at once on the whole host.
+_preview_slots = threading.BoundedSemaphore(2)
+
+
+def _style_mod(name: str):
+    _ensure_plugin()
+    if not _get_storage:
+        raise HTTPException(status_code=503, detail=_UNAVAILABLE)
+    try:
+        return importlib.import_module(f"{_PLUGIN_PKG}.{name}")
+    except ImportError:
+        raise HTTPException(status_code=501, detail="Custom styles are not available on this build") from None
+
+
+def _style_store(rec):
+    return _style_mod("style_store").StyleStore(str(_tenant_base(rec)))
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _load_own_style(rec, style_id: str):
+    """One of THIS tenant's styles; the same 404 for an unknown id, a malformed id and another tenant's id."""
+    sm, sp = _style_mod("style_store"), _style_mod("style_pack")
+    if not isinstance(style_id, str) or not sp.ID_RE.fullmatch(style_id):
+        raise HTTPException(status_code=404, detail=_STYLE_NOT_FOUND)
+    try:
+        return sm.StyleStore(str(_tenant_base(rec))).load(style_id)
+    except sm.StyleNotFound:
+        raise HTTPException(status_code=404, detail=_STYLE_NOT_FOUND) from None
+    except sp.StyleError:
+        raise HTTPException(status_code=409, detail="This style is damaged on disk; delete it and import it again") from None
+
+
+def _resolve_job_style(rec, style_id: Optional[str], base_job_id: Optional[str]):
+    """The Style object a job renders with, or None for the built-in Corvin look."""
+    if style_id == _BUILTIN_STYLE_ID:
+        return None
+    if style_id is not None:
+        return _load_own_style(rec, style_id)
+    if base_job_id:
+        # A revision keeps the look of the video it revises: the copy that travelled with it.
+        # (A base without a snapshot was built-in, so the tenant default does not apply to it.)
+        sm = _style_mod("style_store")
+        return sm.load_snapshot(_store(rec).videos_dir / base_job_id / "style")
+    default = _style_store(rec).get_default()
+    return _load_own_style(rec, default) if default else None
+
+
+async def _read_json_body(request, limit: int = _MAX_STYLE_JSON_BYTES) -> dict:
+    import json  # noqa: PLC0415
+
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
+        raise HTTPException(status_code=413, detail="Request body is too large")
+    buf = bytearray()
+    async for chunk in request.stream():
+        buf += chunk
+        if len(buf) > limit:
+            raise HTTPException(status_code=413, detail="Request body is too large")
+    try:
+        body = json.loads(bytes(buf).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Body must be JSON") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+    return body
+
+
+def _draft_style(wire: Any, style_id: str = _DRAFT_PLACEHOLDER_ID):
+    sp = _style_mod("style_pack")
+    try:
+        return sp.draft_from_wire(wire, style_id=style_id, imported_at=_now_iso())
+    except sp.StyleError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+
+
+async def _previews(style, themes: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Three sample slides in the style's look as data: URIs. Never raises for render problems."""
+    mod = _style_mod("style_preview")
+    if not _preview_slots.acquire(blocking=False):
+        return {"previews": [], "notes": ["Previews are busy right now; try again in a moment."]}
+    try:
+        return await mod.render_previews(style, themes=themes)
+    finally:
+        _preview_slots.release()
+
+
+def _public_style(style) -> Dict[str, Any]:
+    return style.public()
+
+
+@router.get("/styles")
+def list_styles(rec=_SessionRec):
+    sm = _style_mod("style_store")
+    store = sm.StyleStore(str(_tenant_base(rec)))
+    return {
+        "styles": [_public_style(st) for st in store.list()],
+        "default_style_id": store.get_default(),
+        "builtin": {"id": _BUILTIN_STYLE_ID, "name": _BUILTIN_STYLE_NAME},
+        "limits": {"max_styles": sm.MAX_STYLES, "max_upload_bytes": _MAX_STYLE_UPLOAD_BYTES},
+    }
+
+
+@router.post("/styles/import")
+async def import_style(file: UploadFile = File(...), rec=_SessionRec):
+    """Read a PowerPoint deck's look into a DRAFT. Stateless: the upload is held in memory for this
+    request only (Starlette may spool a large multipart body to its own temp file, which is removed
+    when the request closes) and nothing is stored until the draft is committed."""
+    import hashlib  # noqa: PLC0415
+
+    imp = _style_mod("style_import_pptx")
+    sp = _style_mod("style_pack")
+    buf = bytearray()
+    too_big = False
+    while True:
+        chunk = await file.read(64 * 1024)
+        if not chunk:
+            break
+        buf += chunk
+        if len(buf) > _MAX_STYLE_UPLOAD_BYTES:
+            too_big = True  # stop reading: the bytes held so far are all that is hashed and counted
+            break
+    data = bytes(buf)
+    size = len(data)
+    digest = hashlib.sha256(data).hexdigest()[:12]
+    name = Path(file.filename or "deck.pptx").name[:120]
+
+    def refuse(status: int, message: str, warnings: int = 0):
+        if not _audit(rec.tenant_id, "video_producer.style_imported",
+                      {"bytes": size, "warning_count": warnings, "sha256_prefix": digest, "outcome": "refused"}):
+            raise HTTPException(status_code=503, detail="The import could not be recorded")
+        raise HTTPException(status_code=status, detail=message)
+
+    if too_big:
+        refuse(413, "The file is larger than 25 MB")
+    if not data:
+        refuse(400, "The file is empty")
+    if not data.startswith(b"PK\x03\x04"):
+        refuse(415, "This is not a PowerPoint (.pptx or .potx) file")
+    try:
+        result = await asyncio.to_thread(imp.import_pptx, data, name)
+    except sp.StyleError as e:  # PptxImportError is one
+        refuse(422, str(e))
+    except Exception as e:  # noqa: BLE001 - a hostile deck must not become a 500 with internals
+        logger.warning("video producer: style import failed (%s)", type(e).__name__)
+        refuse(422, "The deck could not be read")
+    del data, buf
+    style = result.style
+    if not _audit(rec.tenant_id, "video_producer.style_imported",
+                  {"bytes": size, "warning_count": len(style.warnings), "sha256_prefix": digest, "outcome": "accepted"}):
+        raise HTTPException(status_code=503, detail="The import could not be recorded")
+    pv = await _previews(style)
+    return {"draft": sp.draft_to_wire(style), "previews": pv["previews"], "notes": [*result.notes, *pv["notes"]]}
+
+
+@router.post("/styles/preview")
+async def preview_draft(request: Request, rec=_SessionRec):
+    body = await _read_json_body(request)
+    return await _previews(_draft_style(body.get("draft")))
+
+
+@router.post("/styles", status_code=201)
+async def save_style(request: Request, rec=_SessionRec):
+    body = await _read_json_body(request)
+    set_default = body.get("set_default", False)
+    if not isinstance(set_default, bool):
+        raise HTTPException(status_code=422, detail="set_default must be true or false")
+    sm = _style_mod("style_store")
+    store = sm.StyleStore(str(_tenant_base(rec)))
+    style_id = store.new_id()
+    style = _draft_style(body.get("draft"), style_id)
+    if len(store.ids()) >= sm.MAX_STYLES:
+        raise HTTPException(status_code=409, detail=f"At most {sm.MAX_STYLES} styles per tenant; delete one first")
+    # The name and wordmark end up on screen in every video: same acceptable-use gate as a task.
+    from .._spawn_gates import check_console_spawn_or_refusal  # noqa: PLC0415
+
+    refusal = await asyncio.to_thread(
+        check_console_spawn_or_refusal, f"{style.name}\n{style.wordmark}".strip(),
+        tenant_id=rec.tenant_id, persona="assistant", channel="web",
+        chat_key=f"video-style:{style_id}", engine_id="video_producer",
+    )
+    if refusal is not None:
+        raise HTTPException(status_code=403, detail=refusal)
+    if not _audit(rec.tenant_id, "video_producer.style_saved",
+                  {"style_id": style_id, "source_kind": style.source.get("kind", "tokens"),
+                   "has_plate": style.plate_png is not None, "has_mark": style.mark_png is not None}):
+        raise HTTPException(status_code=503, detail="The style could not be recorded; it was not saved")
+    try:
+        store.save(style)
+        if set_default:
+            store.set_default(style_id)
+    except sm.StyleQuotaExceeded as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+    except _style_mod("style_pack").StyleError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+    return JSONResponse(status_code=201, content={"style": _public_style(style)})
+
+
+class DefaultStyleRequest(BaseModel):
+    style_id: Optional[str] = Field(None, max_length=32)
+
+
+@router.put("/styles/default")
+def set_default_style(req: DefaultStyleRequest, rec=_SessionRec):
+    store = _style_store(rec)
+    if req.style_id is None:
+        store.set_default(None)
+        return {"default_style_id": None}
+    _load_own_style(rec, req.style_id)
+    store.set_default(req.style_id)
+    return {"default_style_id": req.style_id}
+
+
+@router.delete("/styles/{style_id}", status_code=204)
+def delete_style(style_id: str, rec=_SessionRec):
+    sm = _style_mod("style_store")
+    store = sm.StyleStore(str(_tenant_base(rec)))
+    sp = _style_mod("style_pack")
+    if not sp.ID_RE.fullmatch(style_id) or style_id not in store.ids():
+        raise HTTPException(status_code=404, detail=_STYLE_NOT_FOUND)
+    if not _audit(rec.tenant_id, "video_producer.style_deleted", {"style_id": style_id}):
+        raise HTTPException(status_code=503, detail="The deletion could not be recorded; the style was kept")
+    try:
+        store.delete(style_id)  # also clears the tenant default when it pointed here
+    except sm.StyleNotFound:
+        raise HTTPException(status_code=404, detail=_STYLE_NOT_FOUND) from None
+    return Response(status_code=204)
+
+
+@router.get("/styles/{style_id}/preview")
+async def preview_saved_style(style_id: str, rec=_SessionRec):
+    style = await asyncio.to_thread(_load_own_style, rec, style_id)
+    return await _previews(style)

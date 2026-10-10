@@ -31,6 +31,8 @@ import { api, ApiError } from "@/lib/api/client";
 import { useAuth } from "@/lib/auth";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import { extractVideoSources, MAX_VIDEO_SOURCES, VIDEO_SOURCE_ACCEPT, type VideoSource } from "@/lib/api/video-sources";
+import { BUILTIN_STYLE_ID, STYLE_DECK_ACCEPT, isDeckFile, type StyleList } from "@/lib/api/video-styles";
+import { StyleChip, StyleImportDialog, StylesSection } from "@/components/video-styles";
 
 // ── Types (routes/video_producer_api.py, video_quality.py, video_learning_api.py) ──
 
@@ -358,15 +360,18 @@ function VideoStage({ job, loading }: { job: Job | undefined; loading: boolean }
 
 type Mode = "new" | "revise";
 
-function Composer({ csrf, selected, mode, setMode, inputRef, onCreated }: {
+function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, pickedStyle, onPickStyle, onImportStyle, onUseDeckAsStyle, importBlocked }: {
   csrf: string; selected: Job | undefined; mode: Mode; setMode: (m: Mode) => void;
   inputRef: React.RefObject<HTMLTextAreaElement>; onCreated: (jobId: string) => void;
+  styles: StyleList | undefined; pickedStyle: string | null; onPickStyle: (id: string) => void;
+  onImportStyle: () => void; onUseDeckAsStyle: (f: File) => void; importBlocked: string | null;
 }) {
   const qc = useQueryClient();
   const [text, setText] = useState("");
   const [sources, setSources] = useState<VideoSource[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deck, setDeck] = useState<File | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const canRevise = selected?.status === "complete";
   const revising = mode === "revise" && canRevise;
@@ -374,7 +379,7 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated }: {
   const create = useMutation({
     mutationFn: () => api<{ job_id: string }>(`${BASE}/jobs`, {
       method: "POST", csrf,
-      body: { task: text.trim(), base_job_id: revising ? selected!.id : undefined, sources: sources.map(({ name, text: t }) => ({ name, text: t })) },
+      body: { task: text.trim(), base_job_id: revising ? selected!.id : undefined, style_id: pickedStyle ?? undefined, sources: sources.map(({ name, text: t }) => ({ name, text: t })) },
     }),
     onSuccess: (r) => { setText(""); setSources([]); setError(null); setMode("new"); onCreated(r.job_id); void qc.invalidateQueries({ queryKey: ["video"] }); },
     onError: (e) => setError(e instanceof ApiError ? e.message : "The production could not be started."),
@@ -383,7 +388,11 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated }: {
   const { recording, startRecording, stopRecording } = useVoiceInput({ value: text, onChange: setText, csrf, disabled: busy, onError: setError });
 
   const attach = async (files: File[]) => {
-    if (files.length === 0) return;
+    // A PowerPoint file is never source material: it is offered as a style and never reaches text extraction.
+    const decks = files.filter((f) => isDeckFile(f.name));
+    files = files.filter((f) => !isDeckFile(f.name));
+    if (decks.length > 0) setDeck(decks[0]);
+    if (files.length === 0) { if (fileRef.current) fileRef.current.value = ""; return; }
     if (sources.length + files.length > MAX_VIDEO_SOURCES) { setError(`At most ${MAX_VIDEO_SOURCES} attachments per video.`); return; }
     setUploading(true); setError(null);
     try { const got = await extractVideoSources(files, csrf); setSources((cur) => [...cur, ...got]); }
@@ -402,8 +411,21 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated }: {
           className={`px-2.5 py-1 rounded-md inline-flex items-center gap-1 max-w-[28rem] ${revising ? "bg-accent/15 font-medium text-foreground" : "text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:hover:text-muted-foreground"}`}>
           <Pencil className="w-3 h-3 shrink-0" /><span className="truncate">Revise{canRevise ? `: ${selected!.task}` : ""}</span>
         </button>
-        {revising && <span className="text-muted-foreground ml-1">A new version is produced; the original stays.</span>}
+        <span className="ml-auto" />
+        <StyleChip list={styles} picked={pickedStyle} onPick={onPickStyle} onImport={onImportStyle} importDisabledReason={importBlocked}
+          label={pickedStyle ? (pickedStyle === BUILTIN_STYLE_ID ? styles?.builtin.name ?? "CorvinOS" : styles?.styles.find((s) => s.id === pickedStyle)?.name ?? "CorvinOS")
+            : revising ? "same as original" : (styles?.styles.find((s) => s.id === styles.default_style_id)?.name ?? styles?.builtin.name ?? "CorvinOS")} />
       </div>
+      {revising && <p className="text-xs text-muted-foreground -mt-1">A new version is produced; the original stays.</p>}
+      {deck && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs" data-testid="deck-offer">
+          <Paperclip className="w-3 h-3" /><span className="max-w-[14rem] truncate">{deck.name}</span>
+          <span className="text-muted-foreground">PowerPoint files cannot be used as source material.</span>
+          <Button type="button" variant="outline" size="sm" className="h-6 px-2" disabled={!!importBlocked || !csrf} title={importBlocked ?? undefined} data-testid="use-as-style"
+            onClick={() => { onUseDeckAsStyle(deck); setDeck(null); }}>Use as style</Button>
+          <button type="button" aria-label={`Dismiss ${deck.name}`} onClick={() => setDeck(null)}><X className="w-3 h-3" /></button>
+        </div>
+      )}
       {sources.length > 0 && (
         <ul className="flex flex-wrap gap-1.5" data-testid="sources">
           {sources.map((s, i) => (
@@ -416,8 +438,8 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated }: {
         </ul>
       )}
       <div className="flex items-end gap-2 rounded-xl border border-border bg-background p-2 focus-within:border-accent">
-        <input ref={fileRef} type="file" multiple accept={VIDEO_SOURCE_ACCEPT} className="hidden" data-testid="attach-input" onChange={(e) => void attach(Array.from(e.target.files ?? []))} />
-        <Button type="button" variant="ghost" size="sm" aria-label="Attach files" title="Attach text, Markdown or PDF as source material" disabled={busy || sources.length >= MAX_VIDEO_SOURCES} onClick={() => fileRef.current?.click()}>
+        <input ref={fileRef} type="file" multiple accept={`${VIDEO_SOURCE_ACCEPT},${STYLE_DECK_ACCEPT}`} className="hidden" data-testid="attach-input" onChange={(e) => void attach(Array.from(e.target.files ?? []))} />
+        <Button type="button" variant="ghost" size="sm" aria-label="Attach files" title="Attach text, Markdown or PDF as source material, or a PowerPoint deck as a style" disabled={busy || sources.length >= MAX_VIDEO_SOURCES} onClick={() => fileRef.current?.click()}>
           {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
         </Button>
         <textarea ref={inputRef} value={text} onChange={(e) => setText(e.target.value)} rows={2} data-testid="task-input" maxLength={4000}
@@ -456,6 +478,10 @@ export function VideoProducerPage() {
   const [detailsOpen, setDetailsOpen] = useState(initialTab === "quality" || initialTab === "learning");
   const [mode, setMode] = useState<Mode>("new");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [stylesOpen, setStylesOpen] = useState(false);
+  const [pickedStyle, setPickedStyle] = useState<string | null>(null);
+  const [deckFile, setDeckFile] = useState<File | null>(null);
+  const deckPicker = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const overview = useQuery({ queryKey: ["video", "overview"], queryFn: ({ signal }) => api<Overview>(`${BASE}/overview`, { signal }), retry: false, refetchInterval: 15_000 });
@@ -472,6 +498,14 @@ export function VideoProducerPage() {
   const job = useQuery({ queryKey: ["video", "job", selected], queryFn: ({ signal }) => api<Job>(`${BASE}/jobs/${selected}`, { signal }), enabled: !!selected, retry: false,
     refetchInterval: (q) => (q.state.data && ACTIVE.includes(q.state.data.status) ? 1000 : false) });
   const quality = useQuery({ queryKey: ["video", "quality", selected, job.data?.status], queryFn: ({ signal }) => api<Quality>(`${BASE}/jobs/${selected}/quality-metrics`, { signal }), enabled: !!selected && job.data?.status === "complete", retry: false });
+  const styles = useQuery({ queryKey: ["video", "styles"], queryFn: ({ signal }) => api<StyleList>(`${BASE}/styles`, { signal }), retry: false });
+  // A deleted style can no longer be the session choice.
+  useEffect(() => {
+    if (pickedStyle && pickedStyle !== BUILTIN_STYLE_ID && styles.data && !styles.data.styles.some((s) => s.id === pickedStyle)) setPickedStyle(null);
+  }, [styles.data, pickedStyle]);
+  const styleFull = styles.data ? styles.data.styles.length >= styles.data.limits.max_styles : false;
+  const importBlocked = styles.isError ? "Custom styles are not available on this installation."
+    : styleFull ? `You have reached the limit of ${styles.data!.limits.max_styles} styles. Delete one to import another.` : null;
   const settings = useQuery({ queryKey: ["video", "settings"], queryFn: ({ signal }) => api<{ output_folder: string; tts_engine: string; tts_engines: string[]; max_duration_minutes: number; openai_configured: boolean; web_slides_available: boolean }>(`${BASE}/settings`, { signal }), retry: false });
   const [form, setForm] = useState<{ tts_engine: string; max_duration_minutes: number } | null>(null);
   useEffect(() => { if (settings.data && !form) setForm({ tts_engine: settings.data.tts_engine, max_duration_minutes: settings.data.max_duration_minutes }); }, [settings.data, form]);
@@ -505,7 +539,18 @@ export function VideoProducerPage() {
       <VideoStage job={j} loading={!!selected && job.isLoading} />
 
       <Composer csrf={csrf} selected={j} mode={mode} setMode={setMode} inputRef={inputRef}
-        onCreated={(id) => { setSelected(id); }} />
+        onCreated={(id) => { setSelected(id); }}
+        styles={styles.data} pickedStyle={pickedStyle} onPickStyle={setPickedStyle} importBlocked={importBlocked}
+        onImportStyle={() => deckPicker.current?.click()} onUseDeckAsStyle={setDeckFile} />
+      <input ref={deckPicker} type="file" accept={STYLE_DECK_ACCEPT} className="hidden" data-testid="deck-input" aria-label="PowerPoint deck to import as a style"
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) setDeckFile(f); e.target.value = ""; }} />
+      {deckFile && (
+        <StyleImportDialog file={deckFile} csrf={csrf} onClose={() => setDeckFile(null)}
+          onSaved={(style) => {
+            setDeckFile(null); setPickedStyle(style.id); setStylesOpen(true);
+            void qc.invalidateQueries({ queryKey: ["video", "styles"] });
+          }} />
+      )}
 
       <div className="px-6 pb-8 space-y-6">
         <section>
@@ -580,6 +625,19 @@ export function VideoProducerPage() {
             </CardContent>
           )}
         </Card>
+
+      <Card>
+        <button type="button" onClick={() => setStylesOpen((o) => !o)} aria-expanded={stylesOpen} data-testid="styles-toggle" className="w-full text-left px-6 py-3 flex items-center gap-2 text-sm font-semibold">
+          {stylesOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />} Styles
+          <span className="text-xs font-normal text-muted-foreground">{styles.data ? `${styles.data.styles.length} of ${styles.data.limits.max_styles} saved` : ""}</span>
+        </button>
+        {stylesOpen && (
+          <CardContent>
+            <StylesSection list={styles.data} loading={styles.isLoading} unavailable={styles.isError} csrf={csrf} importDisabledReason={importBlocked}
+              onImport={() => deckPicker.current?.click()} onChanged={() => void qc.invalidateQueries({ queryKey: ["video", "styles"] })} />
+          </CardContent>
+        )}
+      </Card>
 
       <Card>
         <button type="button" onClick={() => setSettingsOpen((o) => !o)} className="w-full text-left px-6 py-3 flex items-center gap-2 text-sm font-semibold">

@@ -2418,6 +2418,58 @@ class TenantStoreHandler:
 
 
 @dataclass
+class VideoProducerHandler:
+    """GDPR Art. 17 for the Video Producer store (``<tenant>/video_producer``): the tenant's
+    saved styles (palette, fonts, logo, background plate), jobs and their task text, rendered
+    videos, thumbnails and the revisions sidecar.
+
+    OWNERSHIP SEMANTICS (stated, not hidden): none of these records carries a per-user owner -
+    a job belongs to the console tenant that started it. So there are two routes:
+
+    * the documented attribution rule of :func:`_purge_path` runs over the store (a directory or
+      file named after the subject, a JSON/JSONL record naming it under an identity key) - the
+      same rule every generic store honours;
+    * when the subject IS the tenant (``subject_id == tenant_id``: the whole tenant is erased),
+      the entire store goes - styles, jobs, videos, thumbnails, sidecars. Any other subject
+      leaves un-attributed jobs and styles alone, because deleting them would destroy other
+      people's work on a guess.
+    """
+    tenant_id: str = "_default"
+    layer_id: str = "L-video-producer"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        root = _tenant_home(self.tenant_id) / "video_producer"
+        if not root.exists() and not root.is_symlink():
+            return _result(self.layer_id, t0, 0, absent=True,
+                           absent_reason="video producer store absent",
+                           empty_reason="", applied_reason="")
+        import shutil  # noqa: PLC0415
+
+        removed = 0
+        try:
+            if subject_id == self.tenant_id:
+                if root.is_symlink():
+                    root.unlink()
+                    removed = 1
+                else:
+                    removed = sum(1 for p in root.rglob("*") if p.is_file())
+                    shutil.rmtree(root)
+            else:
+                removed = _purge_path(root, subject_id)
+        except Exception as exc:  # noqa: BLE001
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
+                reason=f"video producer purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
+                       empty_reason="no video producer record matched subject",
+                       applied_reason="removed {n} video producer file(s) for subject")
+
+
+@dataclass
 class UnattributableStoreHandler:
     """Report — never silently pass — stores that CANNOT be erased per subject.
 
@@ -2531,6 +2583,8 @@ COVERED_DIRS: dict[str, frozenset[str]] = {
     "L-chat-groups":         frozenset({"global/chat_groups"}),
     "L-federation-conversations": frozenset({"global/federation/conversations"}),
     "L-voice":               frozenset({"voice"}),
+    # 2026-10-10 (PLAN-0945) - styles, jobs, videos; no per-user owner, see VideoProducerHandler.
+    "L-video-producer":      frozenset({"video_producer"}),
     # R4-F1/F4: the format-specific handlers above own the sqlite tables and the
     # file shapes they were written for; this layer runs the generic attribution
     # rule over the SAME roots, so a record those narrower rules do not look at
@@ -2673,6 +2727,7 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         A2AFeedHandler(tenant_id=tenant_id),                # global/a2a_feed/
         ChatGroupHandler(tenant_id=tenant_id),              # global/chat_groups/
         FederationConversationHandler(tenant_id=tenant_id), # global/federation/conversations/
+        VideoProducerHandler(tenant_id=tenant_id),          # video_producer/ (styles, jobs, videos)
         IdentityMappingHandlerBase(),
     ]
     # R4-F1: the remaining live tenant-home stores, all erased by the same

@@ -1144,6 +1144,12 @@ EVENT_SEVERITY: dict[str, str] = {
     # never pack text.
     "video_producer.grounding_released": "INFO",
     "video_producer.grounding_refused":  "WARNING",
+    # PLAN-0945: a tenant's own video style (palette/fonts/logo) was imported, stored, removed or
+    # applied to a job. Ids, sizes and counts only - never a filename, a colour, or any slide text.
+    "video_producer.style_imported":     "INFO",
+    "video_producer.style_saved":        "INFO",
+    "video_producer.style_deleted":      "INFO",
+    "video_producer.style_applied":      "INFO",
     # ADR validation framework (core/deployment/adr_validation_framework.py via
     # core/deployment/audit_sink — mirrored statically so the floor does not
     # depend on import order)
@@ -4327,6 +4333,14 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "video_producer.grounding_refused": frozenset({
         "tenant_id", "job_id", "entity_ids", "pack_sha256", "chars", "engines", "gate",
     }),
+    "video_producer.style_imported": frozenset({
+        "tenant_id", "bytes", "warning_count", "sha256_prefix", "outcome",
+    }),
+    "video_producer.style_saved": frozenset({
+        "tenant_id", "style_id", "source_kind", "has_plate", "has_mark",
+    }),
+    "video_producer.style_deleted": frozenset({"tenant_id", "style_id"}),
+    "video_producer.style_applied": frozenset({"tenant_id", "job_id", "style_id"}),
     # "violations" holds "ADR-NNNN/check_name" codes, never free text.
     "deployment.adr_violation_detected": frozenset({
         "week", "violation_count", "violations", "tenant_id", "lom", "component",
