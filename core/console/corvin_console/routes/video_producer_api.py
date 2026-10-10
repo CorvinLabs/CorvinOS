@@ -39,6 +39,11 @@ logger = logging.getLogger(__name__)
 # producer's module instead.
 _PLUGIN_PKG = "corvin_video_producer_plugin"
 
+# How jobs are executed: "process" = one OS process (own process group) per job via the plugin's
+# ProcessJobRunner (PLAN-0946 R1); "thread" = the in-process thread pool. One line to flip back.
+# An installed plugin that predates ProcessJobRunner falls back to threads.
+_JOB_RUNNER = "thread"
+
 _repo_root = Path(__file__).resolve().parents[4]
 
 
@@ -89,7 +94,12 @@ def _load_plugin():
         except Exception as e:  # noqa: BLE001 — read routes still work without the producer
             logger.warning("video producer runner unavailable (%s): jobs cannot be started", type(e).__name__)
         logger.info("video producer plugin loaded from %s", kind)
-        return models.VideoJob, storage.get_storage, (runner_mod.get_runner if runner_mod else None), kind
+        getter = None
+        if runner_mod is not None:
+            getter = runner_mod.get_runner
+            if _JOB_RUNNER == "process" and hasattr(runner_mod, "get_process_runner"):
+                getter = runner_mod.get_process_runner
+        return models.VideoJob, storage.get_storage, getter, kind
     return None, None, None, None
 
 
@@ -487,8 +497,22 @@ def _record_revision(rec, job_id: str, base_job_id: str) -> None:
             raise
 
 
-def _revision_brief(base_job, instruction: str) -> str:
-    """The task text of a revision: the previous storyboard plus the change request."""
+_LANG_NAMES = {"de": "German", "en": "English"}
+
+# One tenant cannot fill the host's job workers (three, shared by every tenant) or queue without
+# bound, each job spending TTS money (review 2026-10-10).
+_MAX_ACTIVE_JOBS_PER_TENANT = 2
+_ACTIVE_JOBS_LOCK = threading.Lock()
+_TERMINAL = frozenset({"complete", "error", "cancelled"})
+
+
+def _active_job_count(storage) -> int:
+    return sum(n for status, n in storage.count_by_status().items() if status not in _TERMINAL)
+
+
+def _revision_brief(base_job, instruction: str, lang: Optional[str] = None) -> str:
+    """The task text of a revision: the previous storyboard plus the change request. ``lang`` is the
+    base video's measured narration language (its output metadata); it is named, not left implied."""
     sb = getattr(base_job, "storyboard", None)
     scenes = list(getattr(sb, "scenes", None) or [])
     if not scenes:
@@ -501,6 +525,8 @@ def _revision_brief(base_job, instruction: str) -> str:
         "REVISION OF AN EXISTING VIDEO. Produce the video again with the change request applied. Keep every scene "
         "the request does not touch (same template, same content, same narration) and keep the narration language "
         "of the current storyboard; change only what is asked.\n"
+        + (f"Narration language: {_LANG_NAMES[lang]} - every scene, also the changed ones.\n" if lang in _LANG_NAMES else "")
+        +
         f"Original task: {' '.join((base_job.task or '').split())[:1500]}\n"
         "Current storyboard:\n" + "\n".join(lines) + "\n"
         f"Change request: {instruction}"
@@ -518,6 +544,11 @@ def _sources_block(sources) -> str:
 
 
 _TEXT_EXT = {".txt", ".md", ".markdown", ".json", ".csv", ".log", ".yaml", ".yml"}
+_PDF_SEM = threading.BoundedSemaphore(1)
+_PDF_TIMEOUT_S = 30
+_PDF_MAX_PAGES = 200
+_PDF_MEM_BYTES = 512 * 1024 * 1024
+
 
 
 def _extract_text(name: str, data: bytes) -> str:
@@ -534,13 +565,24 @@ def _extract_text(name: str, data: bytes) -> str:
         exe = _sh.which("pdftotext")
         if not exe:
             raise HTTPException(status_code=415, detail="PDF extraction needs pdftotext (poppler-utils) on this host")
+        # A 0.5 MB PDF with one deflated content stream drove pdftotext to 2.5 GB for 30 s
+        # (review 2026-10-10): one extraction at a time, bounded memory/CPU/pages/output.
+        if not _PDF_SEM.acquire(timeout=_PDF_TIMEOUT_S):
+            raise HTTPException(status_code=429, detail="Another PDF is being read; try again in a moment")
         try:
-            r = subprocess.run([exe, "-q", "-enc", "UTF-8", "-", "-"], input=data, capture_output=True, timeout=30, check=False)
+            argv = [exe, "-q", "-l", str(_PDF_MAX_PAGES), "-enc", "UTF-8", "-", "-"]
+            if os.name == "posix" and _sh.which("sh"):
+                # rlimits via the shell (preexec_fn is unsafe in a threaded server); exe and args are
+                # positional parameters, never part of the script text
+                argv = ["sh", "-c", f'ulimit -v {_PDF_MEM_BYTES // 1024} && ulimit -t {_PDF_TIMEOUT_S} && exec "$@"', "pdftotext", *argv]
+            r = subprocess.run(argv, input=data, capture_output=True, timeout=_PDF_TIMEOUT_S, check=False)
         except subprocess.TimeoutExpired:
             raise HTTPException(status_code=422, detail=f"{name}: PDF extraction timed out") from None
+        finally:
+            _PDF_SEM.release()
         if r.returncode != 0:
             raise HTTPException(status_code=422, detail=f"{name}: not a readable PDF")
-        return r.stdout.decode("utf-8", "replace")
+        return r.stdout[: _MAX_SOURCE_CHARS * 4].decode("utf-8", "replace")
     raise HTTPException(status_code=415, detail=f"{name}: unsupported type (text, Markdown, JSON, CSV, YAML or PDF)")
 
 
@@ -586,7 +628,9 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
             raise HTTPException(status_code=404, detail="The video to revise was not found")
         if base_job.status != "complete":
             raise HTTPException(status_code=409, detail="Only a produced video can be revised")
-        task = _revision_brief(base_job, shown)
+        base_out = _store(rec).get_video_output(base_job.id)
+        base_lang = ((getattr(base_out, "metadata", None) or {}).get("language")) if base_out else None
+        task = _revision_brief(base_job, shown, base_lang)
     task += _sources_block(req.sources)
     web_style = await asyncio.to_thread(_resolve_job_style, rec, req.style_id, req.base_job_id)
     settings = _tenant_settings(rec)
@@ -625,7 +669,12 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
         raise HTTPException(status_code=503, detail="The style could not be recorded; the job was not started")
     storage = _store(rec)
     job = VideoJob(id=job_id, task=shown, status="pending")
-    storage.save_job(job)
+    with _ACTIVE_JOBS_LOCK:  # count + save is one step, so two parallel requests cannot both pass
+        if _active_job_count(storage) >= _MAX_ACTIVE_JOBS_PER_TENANT:
+            raise HTTPException(status_code=429, detail=(
+                f"{_MAX_ACTIVE_JOBS_PER_TENANT} videos are already being produced for this workspace; "
+                "start the next one when one of them has finished"))
+        storage.save_job(job)
     if req.base_job_id:
         _record_revision(rec, job_id, req.base_job_id)
 

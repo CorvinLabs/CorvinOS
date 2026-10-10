@@ -47,7 +47,7 @@ export interface Overview {
 }
 export interface Check { id: string; label: string; status: "pass" | "warn" | "fail" | "skip"; detail: string }
 export interface SceneRow {
-  index: number; id: string; kind?: string | null; planned_s: number | null; actual_s: number | null; drift_pct: number | null;
+  index: number; id: string; kind?: string | null; planned_s: number | null; actual_s: number | null; drift_pct: number | null; voice_drift_pct?: number | null;
   rendered: boolean; size_bytes: number | null; has_slide: boolean; has_voice: boolean; voice_s: number | null; narration_words: number | null;
 }
 export interface Quality {
@@ -207,7 +207,7 @@ function QualityTab({ q }: { q: Quality }) {
                   <div className="aspect-video rounded-md overflow-hidden border border-border bg-muted/40">
                     {s.has_slide ? <img src={`/v1/console${BASE}/videos/${q.job_id}/scenes/${s.index}/slide`} alt={`Scene ${s.index}`} className="w-full h-full object-cover" loading="lazy" /> : <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">no slide</div>}
                   </div>
-                  <figcaption className="text-xs mt-1 truncate"><span className="font-mono">{s.id}</span> · {fmtDur(s.actual_s)}{s.drift_pct !== null ? <span className={Math.abs(s.drift_pct) > 25 ? " text-destructive" : " text-muted-foreground"}> · {s.drift_pct > 0 ? "+" : ""}{s.drift_pct}%</span> : null}</figcaption>
+                  <figcaption className="text-xs mt-1 truncate"><span className="font-mono">{s.id}</span> · {fmtDur(s.actual_s)}{s.voice_drift_pct != null ? <span className={Math.abs(s.voice_drift_pct) > 25 ? " text-destructive" : " text-muted-foreground"}> · {s.voice_drift_pct > 0 ? "+" : ""}{s.voice_drift_pct}%</span> : null}</figcaption>
                 </figure>
               ))}
             </div>
@@ -218,14 +218,14 @@ function QualityTab({ q }: { q: Quality }) {
               <div className="mt-2 rounded-lg border border-border overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead className="bg-muted/40 border-b border-border"><tr>
-                    <th className="text-left px-3 py-2">Scene</th><th className="text-left px-3 py-2">Kind</th><th className="text-right px-3 py-2">Planned</th><th className="text-right px-3 py-2">Rendered</th><th className="text-right px-3 py-2">Drift</th><th className="text-right px-3 py-2">Voice</th><th className="text-right px-3 py-2">Words</th><th className="text-right px-3 py-2">Size</th>
+                    <th className="text-left px-3 py-2">Scene</th><th className="text-left px-3 py-2">Kind</th><th className="text-right px-3 py-2">Planned</th><th className="text-right px-3 py-2">Rendered</th><th className="text-right px-3 py-2">vs. voice</th><th className="text-right px-3 py-2">Voice</th><th className="text-right px-3 py-2">Words</th><th className="text-right px-3 py-2">Size</th>
                   </tr></thead>
                   <tbody>
                     {q.scenes.map((s) => (
                       <tr key={s.index} className="border-b border-border last:border-b-0">
                         <td className="px-3 py-1.5 font-mono">{s.id}</td><td className="px-3 py-1.5">{s.kind ?? "—"}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{fmtDur(s.planned_s)}</td><td className="px-3 py-1.5 text-right tabular-nums">{fmtDur(s.actual_s)}</td>
-                        <td className="px-3 py-1.5 text-right tabular-nums">{s.drift_pct === null ? "—" : `${s.drift_pct > 0 ? "+" : ""}${s.drift_pct} %`}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{s.voice_drift_pct == null ? "—" : `${s.voice_drift_pct > 0 ? "+" : ""}${s.voice_drift_pct} %`}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{s.has_voice ? fmtDur(s.voice_s) : "none"}</td><td className="px-3 py-1.5 text-right tabular-nums">{s.narration_words ?? "—"}</td><td className="px-3 py-1.5 text-right tabular-nums">{fmtBytes(s.size_bytes)}</td>
                       </tr>
                     ))}

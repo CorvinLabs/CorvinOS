@@ -40,15 +40,15 @@ const QUALITY = {
   audio: { codec: "aac", sample_rate_hz: 24000, channels: 1, bitrate_kbps: 108.8 },
   subtitles: { streams: 0, files: [] },
   scenes: [
-    { index: 1, id: "s1", kind: "title", planned_s: 3, actual_s: 1.85, drift_pct: -38.3, rendered: true, size_bytes: 32143, has_slide: true, has_voice: true, voice_s: 1.85, narration_words: 3 },
-    { index: 2, id: "s2", kind: "narration", planned_s: 1, actual_s: 5.76, drift_pct: 476, rendered: true, size_bytes: 101280, has_slide: true, has_voice: true, voice_s: 5.76, narration_words: 11 },
+    { index: 1, id: "s1", kind: "title", planned_s: 3, actual_s: 1.85, drift_pct: -38.3, voice_drift_pct: 0, rendered: true, size_bytes: 32143, has_slide: true, has_voice: true, voice_s: 1.85, narration_words: 3 },
+    { index: 2, id: "s2", kind: "narration", planned_s: 1, actual_s: 5.76, drift_pct: 476, voice_drift_pct: 31.2, rendered: true, size_bytes: 101280, has_slide: true, has_voice: true, voice_s: 5.76, narration_words: 11 },
   ],
   summary: { scenes_planned: 2, scenes_rendered: 2, planned_s: 4, rendered_s: 44.35, size_bytes: 798680 },
   production: { started_at: "2026-09-13T08:11:46", completed_at: "2026-09-13T08:12:16", seconds: 30 },
   checks: [
     { id: "playable", label: "Container readable", status: "pass", detail: "mov · 44.35 s" },
     { id: "subtitles", label: "No subtitles", status: "pass", detail: "no subtitle stream, no caption file" },
-    { id: "timing", label: "Scene timing within 10 % of the storyboard", status: "fail", detail: "largest drift 476 %" },
+    { id: "timing", label: "Every scene is as long as its narration", status: "fail", detail: "largest difference 31.2 %" },
   ],
   score: { passed: 1, warned: 1, failed: 1, total: 3, skipped: 0, share: 0.333 },
 };
@@ -187,7 +187,7 @@ describe("Video Producer studio", () => {
     renderIt("?job=job_2626f1e8&tab=quality");
     await screen.findByTestId("quality-tab");
     expect(screen.getByTestId("score-ring").textContent).toMatch(/1 of 3 checks passed/);
-    expect(screen.getByTestId("check-timing").textContent).toMatch(/largest drift 476 %/);
+    expect(screen.getByTestId("check-timing").textContent).toMatch(/largest difference 31.2 %/);
     expect(screen.getByTestId("check-subtitles").textContent).toMatch(/no subtitle stream, no caption file/);
     expect(screen.queryByText(/Captions/)).toBeNull();
     expect(screen.getByTestId("timing-caption").textContent).toMatch(/2 scenes, one shared scale/);

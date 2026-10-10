@@ -57,7 +57,12 @@ def _sandbox(tmp_path, *, tenants=("_default",), plugin: str = "enabled", keep_k
         if plugin != "absent":
             for tenant in tenants:
                 _install_plugin(tenant, enable=plugin == "enabled")
-        yield boxed
+        # A recorder runner never finishes a job, so the per-tenant in-flight cap (2) would refuse the
+        # third job of any test; the cap itself is proven in test_video_producer_review_2026_10_10_e2e.
+        mod = sys.modules.get(_MOD)
+        with (mock.patch.object(mod, "_MAX_ACTIVE_JOBS_PER_TENANT", 1000) if mod is not None and hasattr(mod, "_MAX_ACTIVE_JOBS_PER_TENANT")
+              else mock.patch.dict(os.environ, {})):
+            yield boxed
 
 
 class _RecordingRunner:

@@ -6,7 +6,7 @@ plugin, add an entry there; to stop bundling one, remove it (already-installed c
 
 | # | Plugin | Index id | Min. version | Enabled by boot? |
 |---|---|---|---|---|
-| 1 | Video Producer | `plugin:contributor-media-video_producer` | 1.2.0 | No — its manifest has `requires_consent: true`; the operator enables it (Marketplace → Enable) |
+| 1 | Video Producer | `plugin:contributor-media-video_producer` | 1.4.1 | No — its manifest has `requires_consent: true`; the operator enables it (Marketplace → Enable) |
 
 ## Entry format
 

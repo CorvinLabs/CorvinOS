@@ -21,6 +21,16 @@ STYLE_BODY_CAPS = {
     "/v1/console/video/styles/preview": 8 * MIB,
 }
 
+# Every Video Producer route that takes a body, on BOTH hosts: up to 4 attachments of 2 MiB each
+# (+ multipart framing), and a job request whose task + 40 000 characters of source text stays
+# under 1 MiB even fully \u-escaped. Without a cap the gateway parses (and spools) any size
+# before the route - or the session check - runs.
+VIDEO_BODY_CAPS = {
+    **STYLE_BODY_CAPS,
+    "/v1/console/video/attachments/extract": 8 * MIB + 256 * 1024,
+    "/v1/console/video/jobs": 1 * MIB,
+}
+
 
 BODY_CAP_DEFAULT = 2 * MIB  # far above any JSON body the SPA sends
 BODY_CAPS = {
@@ -29,7 +39,7 @@ BODY_CAPS = {
     "/v1/console/license/upload": 8 * MIB,
     "/v1/console/packages/upload": 256 * MIB,
     "/v1/console/workflows/import": 64 * MIB,
-    **STYLE_BODY_CAPS,
+    **VIDEO_BODY_CAPS,
 }
 BODY_CAP_PREFIXES = {
     # POST /chat/sessions/{sid}/attachments
@@ -58,7 +68,7 @@ class BodyTooLarge(Exception):
 
 def gateway_cap_for(path: str) -> Optional[int]:
     """Gateway host: only the upload paths named here are capped (everything else is untouched)."""
-    return STYLE_BODY_CAPS.get(path)
+    return VIDEO_BODY_CAPS.get(path)
 
 
 def make_body_cap_middleware(cap_for: Callable[[str], Optional[int]]):

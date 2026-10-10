@@ -168,6 +168,8 @@ def scene_facts(scenes_dir: Optional[Path], storyboard: List[dict]) -> List[dict
             "has_slide": bool(slide and slide.is_file()),
             "has_voice": bool(voice and voice.is_file()),
             "voice_s": round(v_container["duration_s"], 2) if v_container and v_container.get("duration_s") else None,
+            "voice_drift_pct": (round((actual - v_container["duration_s"]) / v_container["duration_s"] * 100, 1)
+                                if actual is not None and v_container and v_container.get("duration_s") else None),
             "narration_words": len(str(plan.get("narration_text") or "").split()) if plan else None,
         })
     return rows
@@ -179,8 +181,9 @@ def _check(cid: str, label: str, status: str, detail: str) -> dict:
 
 def checks_for(container: Optional[dict], video: Optional[dict], audio: Optional[dict],
                subtitles: Optional[dict], scenes: List[dict], storyboard: List[dict],
-               probed: bool) -> List[dict]:
+               probed: bool, metadata: Optional[dict] = None) -> List[dict]:
     out: List[dict] = []
+    metadata = metadata if isinstance(metadata, dict) else {}
     if not probed:
         out.append(_check("playable", "Container readable", "skip", "ffprobe is not available on this host" if not ffprobe_available() else "no output file"))
     else:
@@ -213,19 +216,31 @@ def checks_for(container: Optional[dict], video: Optional[dict], audio: Optional
     if storyboard:
         out.append(_check("scenes", "Every storyboard scene rendered",
                           "pass" if rendered == len(storyboard) else "fail", f"{rendered} of {len(storyboard)}"))
-        drifts = [abs(s["drift_pct"]) for s in scenes if s.get("drift_pct") is not None]
+        # A clip is as long as its narration (the storyboard's duration_ms is a hint the pipeline
+        # does not follow), so timing is measured against the voice track, never the plan.
+        drifts = [abs(s["voice_drift_pct"]) for s in scenes if s.get("voice_drift_pct") is not None]
         if drifts:
             worst = max(drifts)
-            out.append(_check("timing", "Scene timing within 10 % of the storyboard",
-                              "pass" if worst <= 10 else "warn" if worst <= 25 else "fail", f"largest drift {worst} %"))
-        planned = sum(s["planned_s"] or 0 for s in scenes)
-        if planned and container and container.get("duration_s"):
-            diff = abs(container["duration_s"] - planned) / planned * 100
-            out.append(_check("runtime", "Runtime within 10 % of the plan",
-                              "pass" if diff <= 10 else "warn" if diff <= 25 else "fail",
-                              f"planned {round(planned, 1)} s · rendered {round(container['duration_s'], 1)} s"))
+            out.append(_check("timing", "Every scene is as long as its narration",
+                              "pass" if worst <= 10 else "warn" if worst <= 25 else "fail", f"largest difference {worst} %"))
+        clips = sum(s["actual_s"] or 0 for s in scenes)
+        if clips and container and container.get("duration_s"):
+            diff = abs(container["duration_s"] - clips) / clips * 100
+            out.append(_check("runtime", "Runtime equals the sum of the scenes",
+                              "pass" if diff <= 5 else "warn" if diff <= 15 else "fail",
+                              f"scenes {round(clips, 1)} s · video {round(container['duration_s'], 1)} s"))
         voiced = sum(1 for s in scenes if s["has_voice"])
-        out.append(_check("voice", "Every scene has a voice track", "pass" if voiced == len(scenes) else "warn", f"{voiced} of {len(scenes)}"))
+        provider = str(metadata.get("tts_provider_used") or "")
+        if "mock" in provider:
+            out.append(_check("voice", "Every scene has a voice track", "fail",
+                              "silent placeholder voice (no narration provider was available)"))
+        else:
+            out.append(_check("voice", "Every scene has a voice track", "pass" if voiced == len(scenes) else "warn", f"{voiced} of {len(scenes)}"))
+        kept = [c for c in (metadata.get("layout_collisions") or []) if isinstance(c, dict) and c.get("action") == "kept"]
+        if "layout_collisions" in metadata:
+            out.append(_check("layout", "No slide shipped with overlapping elements", "fail" if kept else "pass",
+                              f"{len(kept)} slide(s) kept with overlaps: {', '.join(str(c.get('scene')) for c in kept[:5])}" if kept
+                              else "no overlap left"))
     else:
         out.append(_check("scenes", "Every storyboard scene rendered", "skip", "no storyboard on the job"))
     return out
@@ -244,7 +259,8 @@ def measure(job: dict, video_output: Optional[dict]) -> dict:
     storyboard = _storyboard(job)
     subtitles = subtitle_facts(probe, video_path if video_ok else None)
     scenes = scene_facts(scenes_dir, storyboard)
-    checks = checks_for(container, video, audio, subtitles, scenes, storyboard, probed=probe is not None)
+    checks = checks_for(container, video, audio, subtitles, scenes, storyboard, probed=probe is not None,
+                        metadata=(video_output or {}).get("metadata"))
     ran = [c for c in checks if c["status"] != "skip"]
     passed = sum(1 for c in ran if c["status"] == "pass")
     started, completed = job.get("started_at"), job.get("completed_at")
