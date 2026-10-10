@@ -134,7 +134,7 @@ export interface StreamEvent {
   pending_children?: number;
   // `bg_status` event: how many background tasks are open right now (kind/age only).
   open?: number;
-  children?: { kind: string; state: string; age_s: number }[];
+  children?: { id?: string; kind: string; state: string; age_s: number; label?: string }[];
   // ADR-0214: engine event — which agentic-compute engine runs this turn.
   // Last event of a turn wins (fallback paths re-stamp the actual engine).
   engine?: string;
@@ -183,12 +183,28 @@ export interface StreamEvent {
   payload?: Record<string, unknown> | null;
 }
 
+/** One background child of the running turn (ADR-2236 `bg_status`). */
+export interface BgChild {
+  id: string;
+  /** bash | monitor | agent | workflow | other */
+  kind: string;
+  /** running | completed | failed | … */
+  state: string;
+  /** Scrubbed one-line description (server-side). */
+  label: string;
+  /** Age in seconds when the event was sent. */
+  ageS: number;
+}
+
 export interface SessionState {
   messages: ChatMessage[];
   streaming: boolean;
   error: string | null;
   /** Background tasks of the running turn that have not ended yet (ADR-2236). */
   bgOpen: number;
+  /** The turn's background children (ADR-2236 `bg_status`) with the time the list arrived. */
+  bgChildren: BgChild[];
+  bgChildrenAt: number;
   /** True while a reconnect attempt is in progress (backoff timer fired, WS connecting). */
   reconnecting: boolean;
   /** Full text of the last completed result (for TTS). Cleared when a new send starts. */
@@ -270,6 +286,8 @@ interface SessionEntry {
   streaming: boolean;
   error: string | null;
   bgOpen: number;
+  bgChildren: BgChild[];
+  bgChildrenAt: number;
   latestResultText: string | null;
   pendingTitle: string | null;
 }
@@ -314,6 +332,8 @@ function getOrCreate(sid: string): SessionEntry {
       streaming: false,
       error: null,
       bgOpen: 0,
+      bgChildren: [],
+      bgChildrenAt: 0,
       latestResultText: null,
       pendingTitle: null,
       currentAssistantId: null,
@@ -349,6 +369,8 @@ function makeSnapshot(entry: SessionEntry): SessionState {
     streaming: entry.streaming,
     error: entry.error,
     bgOpen: entry.bgOpen,
+    bgChildren: entry.bgChildren,
+    bgChildrenAt: entry.bgChildrenAt,
     reconnecting: entry.reconnecting,
     latestResultText: entry.latestResultText,
     pendingTitle: entry.pendingTitle,
@@ -479,6 +501,14 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
 
     case "bg_status": {
       entry.bgOpen = Math.max(0, Number(evt.open ?? 0));
+      entry.bgChildren = (evt.children ?? []).map((c, i) => ({
+        id: c.id ?? `${c.kind}-${i}`,
+        kind: String(c.kind ?? "other"),
+        state: String(c.state ?? "running"),
+        label: typeof c.label === "string" ? c.label : "",
+        ageS: Math.max(0, Number(c.age_s ?? 0)),
+      }));
+      entry.bgChildrenAt = Date.now();
       return;
     }
 
@@ -558,6 +588,7 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
     case "done": {
       entry.streaming = false;
       entry.bgOpen = 0;
+      entry.bgChildren = [];
       const aid = entry.currentAssistantId;
       if (aid) {
         entry.messages = entry.messages.map((m) =>
@@ -850,6 +881,7 @@ export function sendMessage(
   entry.currentAssistantId = aid;
   entry.streaming = true;
   entry.bgOpen = 0;
+  entry.bgChildren = [];
   entry.latestResultText = null;
 
   entry.ws.send(JSON.stringify({ type: "user", text, voice_on: getBool(PREF_KEYS.voiceOut, true) }));

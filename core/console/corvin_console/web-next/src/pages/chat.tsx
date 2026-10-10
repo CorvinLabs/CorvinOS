@@ -29,6 +29,7 @@ import {
   FolderUp,
 } from "lucide-react";
 import { Markdown } from "@/components/markdown";
+import { BackgroundActivity } from "@/components/chat/BackgroundActivity";
 import { WdatAuditPanel } from "@/components/WdatAuditPanel";
 import { DualTrackAuditPanel } from "@/components/DualTrackAuditPanel";
 import { TdeAuditGraphPanel } from "@/components/TdeAuditGraphPanel";
@@ -1883,6 +1884,9 @@ function ChatPane({
       </div>
 
       <footer className="px-4 py-3 md:px-6">
+        {streaming && chatSession.bgChildren.length > 0 && (
+          <BackgroundActivity children={chatSession.bgChildren} receivedAt={chatSession.bgChildrenAt} />
+        )}
         <div className="mx-auto w-full max-w-4xl space-y-1.5 rounded-2xl" data-testid="composer-dropzone">
           {/* Hidden file input */}
           <input

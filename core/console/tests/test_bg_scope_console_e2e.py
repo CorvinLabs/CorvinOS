@@ -106,16 +106,32 @@ class ConsoleBackgroundScopeE2E(unittest.TestCase):
         self.assertTrue(res[-1]["final"] and "beendet" in res[-1]["text"].lower())
         self.assertEqual([r["pending_children"] for r in res[:4]], [1, 1, 1, 1])
 
-    def test_bg_status_reports_open_children_and_never_leaks_free_text(self):
+    def test_bg_status_reports_open_children_with_only_a_scrubbed_label(self):
         ev = self._turn("bash_bg_ok")
         st = [e for e in ev if e.get("type") == "bg_status"]
         self.assertTrue(st, "no bg_status event")
         self.assertEqual(st[0]["open"], 1)
         self.assertEqual(st[-1]["open"], 0)
         child = st[0]["children"][0]
-        self.assertEqual(set(child), {"kind", "state", "age_s"})   # no description
+        # D9: the description reaches a status line only scrubbed and cut to 80 chars.
+        self.assertEqual(set(child), {"id", "kind", "state", "age_s", "label"})
         self.assertEqual(child["kind"], "bash")
-        self.assertNotIn("Sleep 8", repr(st))
+        self.assertTrue(child["label"].startswith("Sleep 8 seconds"), child["label"])
+        self.assertLessEqual(len(child["label"]), 80)
+
+    def test_bg_status_label_is_scrubbed_server_side(self):
+        from corvin_console import chat_runtime as cr
+        import bg_scope as bgs
+        tr = bgs.ScopeTracker(scope_id="s")
+        now = 1000.0
+        tr.feed({"type": "system", "subtype": "task_started", "task_id": "t1", "task_type": "local_bash",
+                 "description": "deploy to a.b@example.com with sk-ant-api03-ABCDEFGHIJKLMNOP and @everyone\nnow"},
+                now=now)
+        label = cr._bg_status_event(bgs, tr)["children"][0]["label"]
+        for leaked in ("a.b@example.com", "sk-ant-api03", "\n"):
+            self.assertNotIn(leaked, label)
+        self.assertNotIn("@everyone", label)
+        self.assertIn("deploy to", label)
 
     def test_turn_without_children_is_unchanged(self):
         ev = self._turn("plain_no_children")

@@ -483,12 +483,18 @@ def _bg_status_event(bgs: Any, tracker: Any) -> dict[str, Any]:  # ADR-2236
     age only).
     """
     now = time.time()
+    scrub = getattr(bgs, "safe_description", None)
     return {
         "type": "bg_status",
         "open": len(tracker.open_children),
+        # `label` is the ADR-2236 D9 scrubbed description (one line, no mentions,
+        # e-mail/secret/token shapes replaced) — the one function every status
+        # line uses. `id` is the CLI's task id, only a stable row key.
         "children": [
-            {"kind": c.kind, "state": c.state, "age_s": int(now - c.started_at)}
-            for c in tracker.all_children
+            {"id": str(c.task_id)[:64], "kind": c.kind, "state": c.state,
+             "age_s": int(now - c.started_at),
+             "label": (scrub(c.description, 80) if callable(scrub) else "")}
+            for c in tracker.all_children[-20:]
         ],
     }
 

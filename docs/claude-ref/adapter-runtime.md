@@ -356,7 +356,16 @@ of the turn — **process EOF with no open child is** (`bg_scope.ScopeTracker`, 
 
 Console (`chat_runtime`): the same tracker; interim results carry `interim: true` +
 `pending_children`, exactly one result carries `final: true` and is the text that is spoken and
-pinned as the voice key; `bg_status` events report the open count (kind and age only).
+pinned as the voice key; `bg_status` events report the open count and, per child (last 20), `{id, kind, state, age_s, label}`
+— `label` is the ADR-2236 D9 scrubbed description (`bg_scope.safe_description`: one line, ≤80 chars,
+mentions / e-mail / secret / token shapes replaced); the raw description, a background agent's prompt
+and `output_file` contents never leave the server. The web client keeps the list in the chat registry
+(`bgChildren`, cleared when the turn ends) and renders it as the **background activity strip** above the
+composer (`components/chat/BackgroundActivity.tsx`: icon by kind — shell / monitor / agent / workflow —,
+label, a clock that runs on client-side from the reported age, a pulse for running and ✓/✗ for ended
+children; running first, last 3 ended kept; collapsible; read-only and outside the composer, so it never
+takes focus or blocks typing). Tests: `core/console/tests/test_bg_scope_console_e2e.py`,
+`web-next/tests/unit/chat-bg-activity.test.tsx`, `web-next/tests/e2e/chat-bg-activity.spec.ts`.
 
 E2E: `test_bg_scope_completion.py` (bridge, via `process_one`),
 `core/console/tests/test_bg_scope_console_e2e.py` (console, via `stream_turn`),

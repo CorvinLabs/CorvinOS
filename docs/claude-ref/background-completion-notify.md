@@ -307,7 +307,8 @@ Measured on claude CLI 2.1.294 (details and raw captures: ADR-2236 / PLAN-0938):
   open is an interim message, and exactly one `_final` message closes the turn; the idle watchdog no longer
   kills a quiet child (`CORVIN_BG_CHILD_MAX`, `CORVIN_BG_WAKEUP_MAX` bound it instead). Console:
   `interim` / `final` / `pending_children` on `result` events and a `bg_status` event; the web client does not
-  speak an interim result and shows a "N background tasks running" chip. Full description:
+  speak an interim result, shows a "N background tasks running" chip and a live activity strip listing each
+  child (kind, scrubbed label, clock, state). Full description:
   [adapter-runtime.md](adapter-runtime.md) § Open background children, diagram
   `docs/diagrams/bg-scope-state-machine.svg`.
 - **Status delivery (T-0073, done):** a child starting / finishing / failing is announced by a deterministic
