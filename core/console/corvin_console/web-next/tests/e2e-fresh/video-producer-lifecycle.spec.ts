@@ -35,6 +35,7 @@ const REGISTRY_ID = "video_producer";
 const GITHUB_RAW = "https://raw.githubusercontent.com/CorvinLabs/Corvin-Marketplace/main";
 const GITHUB_REPO = "https://github.com/CorvinLabs/Corvin-Marketplace.git";
 const ROOT = process.env.CORVIN_FRESH_ROOT ?? "/tmp/corvin-fresh-install";
+const md0 = (qm: any) => qm.source.metadata;
 const HOME = path.join(ROOT, "home");
 const TENANT_PLUGINS = path.join(HOME, "tenants", "_default", "plugins");
 const API = "/v1/console";
@@ -329,17 +330,16 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
 
     // ── verify the artefact itself, not just that a file came back ────────────────────────────
     const qm = await (await page.request.get(`${API}/video/jobs/${jobId}/quality-metrics`)).json();
-    // Every technical check must pass. "timing" and "runtime" compare the model's duration GUESS with the
-    // real narration length — the runtime follows the voice, not the plan — so they are reported, not gated.
-    const PLAN_DRIFT = new Set(["timing", "runtime"]);
-    const failed = qm.checks.filter((c: any) => c.status === "fail" && !PLAN_DRIFT.has(c.id));
+    // Every check must pass — timing and runtime included: since 1.4.1 they compare each clip with its
+    // narration and the video with its clips, not with the model's duration guess (review 2026-10-10).
+    const failed = qm.checks.filter((c: any) => c.status === "fail");
     expect(failed, `quality checks failed: ${JSON.stringify(failed)}`).toEqual([]);
-    for (const c of qm.checks.filter((c: any) => PLAN_DRIFT.has(c.id) && c.status !== "pass"))
-      test.info().annotations.push({ type: "plan-drift", description: `${c.label}: ${c.detail}` });
+    expect(qm.checks.map((c: any) => c.id), "the voice and layout checks ran").toEqual(expect.arrayContaining(["voice", "layout", "timing"]));
+    expect(md0(qm).language, "the measured narration language is recorded").toMatch(/^(de|en)$/);
     expect(qm.video).toMatchObject({ codec: "h264", width: 1920, height: 1080 });
     expect(qm.audio, "narration track present").toBeTruthy();
     expect(qm.subtitles, "no subtitles: no stream, no caption file, nothing burned in").toMatchObject({ streams: 0, files: [] });
-    const md = qm.source.metadata;
+    const md = md0(qm);
     expect(md.renderers.length, "one renderer entry per scene").toBeGreaterThanOrEqual(2);
     expect(md.renderers, "every scene is an animated web slide, none fell back to the plain placeholder").toEqual(
       md.renderers.map(() => "web"),
