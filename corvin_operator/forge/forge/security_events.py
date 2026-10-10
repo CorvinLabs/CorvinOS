@@ -1331,6 +1331,7 @@ EVENT_SEVERITY: dict[str, str] = {
     "skill.auto.disabled": "INFO",
     "skill.disable.refused": "WARNING",
     "skill.executed": "INFO",
+    "skill.migrated": "INFO",  # ADR-2175 prompt skill entered the registry / changed hash
     # core/skills/os_skills/audit_integration.py (console DoD-verifier route and
     # SkillExecutionAuditor) — its import of a nonexistent
     # core.compliance.audit_backend dropped every one of these until round 5.
@@ -4667,6 +4668,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "session.timeout": frozenset({"chan_id", "reason"}),
     "skill.auto.disabled": frozenset({"failures", "skill_id", "tenant_id", "timestamp"}),
     "skill.disable.refused": frozenset({"failures", "operation", "skill_id", "tenant_id", "tier", "timestamp"}),
+    "skill.migrated": frozenset({"action", "content_hash", "skill_id", "skill_version", "source", "tenant_id", "timestamp"}),
     "skill.executed": frozenset({"decision", "error_class", "exc_type", "execution_time_ms", "latency_ms", "lom", "lom_hash", "phase_completed", "run_id", "skill_id", "skill_version", "status", "tenant_id", "timeout_ms", "timestamp"}),
     "skill.manually.disabled": frozenset({"skill_id", "tenant_id", "timestamp"}),
     "skill.manually.enabled": frozenset({"skill_id", "tenant_id", "timestamp"}),

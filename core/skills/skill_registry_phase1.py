@@ -199,6 +199,10 @@ class SkillExecutionResult:
     lom_hash: Optional[str] = None  # SHA256 of source
     tenant_id: str = "_default"
     error_class: Optional[str] = None
+    #: Version of the Skill that ran (set by the registry at audit time). Without
+    #: it a record proves THAT a skill ran, not WHICH revision — for prompt skills
+    #: (ADR-2175) the version is the content hash.
+    skill_version: Optional[str] = None
 
     def to_audit_event(self) -> Dict[str, Any]:
         """Convert to audit trail event format.
@@ -212,7 +216,7 @@ class SkillExecutionResult:
         projection (engine, flag counts + hash, enabled/mode …) under keys the
         floor keeps.
         """
-        return {
+        event = {
             "event_type": "SKILL_EXECUTED",
             "skill_id": self.skill_id,
             "status": self.status,
@@ -224,6 +228,9 @@ class SkillExecutionResult:
             "lom_hash": self.lom_hash,
             "tenant_id": self.tenant_id,
         }
+        if self.skill_version:
+            event["skill_version"] = self.skill_version
+        return event
 
 
 #: Scalar output fields that may appear verbatim in the audit chain. Every key
@@ -353,6 +360,11 @@ SKILL_AUDIT_ALLOWLISTS: Dict[str, frozenset] = {
         "timestamp", "lom", "lom_hash", "tenant_id",
         "skill_version", "latency_ms", "run_id", "timeout_ms", "exc_type",
         "phase_completed", "error_class",
+    }),
+    # ADR-2175: a prompt skill (SkillForge / bundle SKILL.md) entered the registry or
+    # changed content hash. Ids + a source label + 16 hex of the hash; never the body.
+    "skill.migrated": frozenset({
+        "skill_id", "skill_version", "source", "action", "content_hash", "timestamp", "tenant_id",
     }),
     "skill.auto.disabled": frozenset({"skill_id", "timestamp", "tenant_id", "failures"}),
     "skill.disable.refused": frozenset({
@@ -1318,6 +1330,7 @@ class SkillsRegistry:
             lom=result.lom,
             lom_hash=result.lom_hash,
             tenant_id=result.tenant_id,
+            skill_version=getattr(self._metadata_by_id.get(result.skill_id), "version", None),
         )
         self._write_audit(scrubbed_result.to_audit_event())
 

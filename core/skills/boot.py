@@ -147,6 +147,20 @@ def boot_skills(
         raise RuntimeError(f"builtin Skills missing after boot: {missing}")
 
     assert get_registry() is integration.registry  # one global registry, not two
+
+    # ADR-2175: bundle + SkillForge prompt skills become `prompt.<name>` registry
+    # skills (versioned by content hash, `skill.migrated` chained per new hash).
+    # Not part of the returned builtin ids; boot must not depend on it.
+    try:
+        from .prompt_skill_adapter import collect_prompt_sources, sync_prompt_skills
+
+        synced = sync_prompt_skills(
+            integration.registry, collect_prompt_sources(tenant_id), tenant_id=tenant_id)
+        logger.info(
+            "prompt skills: %d registered, %d updated, %d unchanged, %d failed",
+            len(synced.registered), len(synced.updated), synced.unchanged, len(synced.failed))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("prompt skills not registered (%s)", type(exc).__name__)
     logger.info("ACP Skills booted for tenant %s: %d skills", tenant_id, len(registered))
     return registered
 
