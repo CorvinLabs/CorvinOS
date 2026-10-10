@@ -469,7 +469,8 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
     }
 
     // clean up through the UI so later tests start from a style-less tenant
-    await page.getByTestId("styles-toggle").click();
+    // saving opens the Styles card already; toggling it would close it
+    if (!(await page.getByTestId(`style-row-${styleId}`).isVisible())) await page.getByTestId("styles-toggle").click();
     await page.getByTestId(`style-delete-${styleId}`).click();
     await page.getByTestId(`style-delete-confirm-${styleId}`).click();
     await expect(page.getByTestId(`style-row-${styleId}`)).toHaveCount(0);
