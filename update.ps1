@@ -748,8 +748,16 @@ else {
     }
     Write-Warn "package install failed (see $LogFile)"
 }
+# The first interpreter start after a fresh install is cold: bytecode is compiled
+# and antivirus scans every new file, which measured ~3 minutes before the
+# console wrote its first log line -- longer than the verification window, so a
+# good update was rolled back. Pay that cost here, visibly, not inside the wait.
+if ($PkgOk -and (Test-Path -LiteralPath $ToolPy)) {
+    Write-Host "  ... warming up the new install (first start is slow)"
+    $null = Invoke-Native -Exe $ToolPy -Arguments @("-W", "ignore", "-c", "import corvin_console.standalone")
+}
 $null = Invoke-Native -Exe $UvExe -Arguments @("tool", "dir", "--bin")
-$binDir = ([string]($script:LastOutput | Select-Object -Last 1)).Trim()
+$binDir =([string]($script:LastOutput | Select-Object -Last 1)).Trim()
 if ($binDir -and (Test-Path -LiteralPath $binDir)) { $env:PATH = "$binDir;$env:PATH" }
 
 # The new bundle goes live only now, with the console down.
@@ -945,7 +953,7 @@ if ((Get-PortState -TargetPort $Port) -eq "foreign") {
 }
 Start-ConsoleAgain
 Write-Host "  ... waiting for the console"
-$Live = Wait-Live 180
+$Live = Wait-Live 420
 if ($Live) { Write-Ok "console is serving the new build" } else { Write-Warn "console did not come up with the new build" }
 
 # -----------------------------------------------------------------------------
@@ -1046,7 +1054,7 @@ if (Test-Path -LiteralPath (Join-Path $Web "dist.prev")) {
 Write-Host "  ... reinstalling the previous version"
 if (-not (Install-PackageHealing)) { $rb = $false }
 Start-ConsoleAgain
-if ($rb -and (Wait-Live 180)) {
+if ($rb -and (Wait-Live 420)) {
     Write-Host "  Rolled back -- the previous version is running. Log: $LogFile" -ForegroundColor Yellow
     Exit-SetupLock
     exit 1
