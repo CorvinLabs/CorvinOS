@@ -117,13 +117,6 @@ const PAGE_CHIPS: Record<string, Record<UiLang, { label: string; prompt: string 
       { label: "Set up Telegram", prompt: "How do I set up Telegram?" },
     ],
   },
-  "/app/personas": {
-    en: [
-      { label: "What is a persona?", prompt: "What is a persona and how do I configure it?" },
-      { label: "New persona", prompt: "How do I create a new persona?" },
-      { label: "Enable LDD", prompt: "How do I enable LDD for a persona?" },
-    ],
-  },
   "/app/workflows": {
     en: [
       { label: "Create workflow", prompt: "How do I create a new workflow?" },

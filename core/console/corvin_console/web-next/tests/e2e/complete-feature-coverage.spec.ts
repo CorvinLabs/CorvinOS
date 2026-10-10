@@ -229,20 +229,10 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
     });
   });
 
-  test.describe('Advanced Configuration Flow (Dependencies: Personas → Connectors → Files)', () => {
-    test('Complete workflow: Personas → Connectors → Files Processing', async ({ page }) => {
-      // Step 1: Personas
-      await page.goto('/console/app/personas');
-      await page.waitForLoadState('load');
-      await page.waitForTimeout(1000);
-      let content = await page.content();
-      expect(content.length).toBeGreaterThan(100);
-
-      // Look for persona list and creation interface
-      const personaButtons = page.locator('button').filter({ hasText: /create|new|persona/i });
-      expect(await personaButtons.count()).toBeGreaterThanOrEqual(0);
-
-      // Step 2: Connectors (dependent on persona creation)
+  test.describe('Advanced Configuration Flow (Dependencies: Connectors → Files)', () => {
+    test('Complete workflow: Connectors → Files Processing', async ({ page }) => {
+      // Step 1: Connectors
+      let content = '';
       await page.goto('/console/app/connectors');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
@@ -253,7 +243,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       const connectorButtons = page.locator('button').filter({ hasText: /add|connect|source/i });
       expect(await connectorButtons.count()).toBeGreaterThanOrEqual(0);
 
-      // Step 3: Files (dependent on connector setup)
+      // Step 2: Files (dependent on connector setup)
       await page.goto('/console/app/files');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);

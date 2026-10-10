@@ -209,30 +209,18 @@ _GLOBAL_COMMANDS: dict[str, list[dict[str, Any]]] = {
             "details": "Mid-stream injection to add context or redirect the running task."
         },
     ],
-    "Personas & Models": [
-        {
-            "name": "/personas",
-            "description": "List all available cowork personas",
-            "syntax": "/personas",
-            "details": "Shows all AI assistant styles (coder, researcher, browser, etc.) that can be activated."
-        },
-        {
-            "name": "/persona set <name>",
-            "description": "Change AI assistant style",
-            "syntax": "/persona set <persona_name>",
-            "details": "Example: /persona set researcher. Back to default with: /persona reset"
-        },
+    "Identity & Skills": [
         {
             "name": "/whoami",
-            "description": "Show current persona + tools + config",
+            "description": "Show current identity + tools + config",
             "syntax": "/whoami",
-            "details": "Displays the active persona, available abilities, and LDD configuration."
+            "details": "Displays the active identity, available abilities, and LDD configuration."
         },
         {
             "name": "/skills",
-            "description": "Show available abilities in current persona",
+            "description": "Show available abilities",
             "syntax": "/skills",
-            "details": "Lists tools and skills available in the currently active persona."
+            "details": "Lists the tools and skills available in this chat."
         },
     ],
     "Access Control & Teamwork": [

@@ -280,56 +280,6 @@ export async function getEngineProbes(signal?: AbortSignal): Promise<EngineProbe
 }
 
 
-// ── ADR-0123: Per-persona engine & model config ───────────────────────────────
-
-export interface PersonaEngineConfig {
-  engine: string | null;
-  os_model: string | null;
-  worker_model: string | null;
-  engine_lock: boolean;
-  available_engines: string[];
-  available_os_models: string[];
-  available_worker_models: string[];
-  registry: Record<
-    string,
-    {
-      label?: string;
-      supports_os_turn?: boolean;
-      supports_worker_turn?: boolean;
-      os_models?: { id: string; label: string; default?: boolean }[];
-      worker_models?: { id: string; label: string; default?: boolean }[];
-    }
-  >;
-}
-
-export async function getPersonaEngine(
-  name: string,
-  signal?: AbortSignal,
-): Promise<PersonaEngineConfig> {
-  return api<PersonaEngineConfig>(
-    `/personas/${encodeURIComponent(name)}/engine`,
-    { signal },
-  );
-}
-
-export interface PersonaEngineUpdateRequest {
-  engine: string | null;
-  os_model: string | null;
-  worker_model: string | null;
-  engine_lock: boolean;
-}
-
-export async function setPersonaEngine(
-  name: string,
-  cfg: PersonaEngineUpdateRequest,
-  csrf: string,
-): Promise<{ ok: boolean }> {
-  return api<{ ok: boolean }>(
-    `/personas/${encodeURIComponent(name)}/engine`,
-    { method: "PUT", body: cfg, csrf },
-  );
-}
-
 // ── ADR-0641/0642: Model Selection Config (per-task-type) ─────────────────
 
 export type TaskType = "corvinOS" | "SIMPLE" | "MEDIUM" | "COMPLEX";

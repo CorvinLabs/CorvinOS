@@ -124,18 +124,5 @@ export async function setupMockApis(page: Page) {
     });
   });
 
-  // Mock landing personas
-  await page.route('**/v1/console/landing/personas', (route) => {
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        personas: [
-          { id: 'assistant', name: 'Assistant', description: 'General assistant' },
-        ],
-      }),
-    });
-  });
-
   console.log('[MockAPI] All API routes mocked');
 }

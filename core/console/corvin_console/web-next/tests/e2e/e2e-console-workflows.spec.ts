@@ -404,20 +404,6 @@ test.describe('CorvinOS Console: Critical Workflows (E2E)', () => {
     }
   });
 
-  test('8.2: /app/personas page loads', async () => {
-    const page = await sharedCtx.newPage();
-    try {
-      await page.goto('/console/app/personas', { waitUntil: 'load' });
-      await page.waitForTimeout(2000);
-
-      const html = await page.content();
-      expect(html).toContain('id="root"');
-      console.log('✅ 8.2: Personas page renders');
-    } finally {
-      await page.close();
-    }
-  });
-
   test('8.3: Chat persona can be set via API', async () => {
     const r = await sharedCtx.request.get(`${API_BASE}/personas`);
     if (r.status() === 200) {

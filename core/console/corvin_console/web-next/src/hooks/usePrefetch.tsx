@@ -9,7 +9,6 @@ const PREFETCHABLE_PAGES = [
   "/app/dashboard",
   "/app/chat",
   "/app/workflows",
-  "/app/personas",
   "/app/rag-hub",
   "/app/custom-provider",
 ];
