@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { CommandPalette, applyCommandInsertion, useSlashCommandPalette } from "./SlashCommandPalette";
+import { CommandPalette, applyCommandInsertion, useSlashCommandPalette, type SlashCommand } from "./SlashCommandPalette";
 import {
   a2aFeedBlobUrl, encodeFilesForA2A, getA2AFeed, getPeerThreadCommands,
   sendA2AFeedMessage, sendPeerThreadCommand,
@@ -43,6 +43,8 @@ import { useFileDrop, supportsDirectoryDrop, MAX_DROPPED_FILES } from "@/hooks/u
 import { useAutosizeTextarea } from "@/hooks/use-autosize-textarea";
 import { DropOverlay } from "./DropOverlay";
 
+// Module-level so the palette's memo key stays stable while the table loads.
+const EMPTY_COMMANDS: readonly SlashCommand[] = [];
 const FEED_REFETCH_MS = 4_000;
 /** Faster while a message of ours is still on its way, so the symbol follows the peer. */
 const FEED_REFETCH_INFLIGHT_MS = 2_000;
@@ -287,7 +289,8 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
     queryFn: ({ signal }) => getPeerThreadCommands(signal),
     staleTime: 5 * 60_000,
   });
-  const slashPalette = useSlashCommandPalette(text, peerThreadCommands.data?.commands ?? []);
+  const slashPalette = useSlashCommandPalette(
+    text, peerThreadCommands.data?.commands ?? EMPTY_COMMANDS, { sessionCommands: false });
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
   const [commandNotice, setCommandNotice] = React.useState("");

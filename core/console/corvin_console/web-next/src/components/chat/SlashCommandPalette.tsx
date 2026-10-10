@@ -1,11 +1,9 @@
 /**
  * Slash-command autocomplete — shared across every composer (session chat
- * `pages/chat.tsx::ChatPane`, direct A2A thread `PeerConversation`, group
- * chat `GroupConversation`) so the `/`-triggered dropdown is the same
+ * `pages/chat.tsx::ChatPane`, direct A2A thread `PeerConversation`) so the `/`-triggered dropdown is the same
  * component, with the same keyboard contract, everywhere a message can be
- * typed. Previously only ChatPane had it; Peer/Group were "reskinned to the
- * same [composer] language" (see GroupConversation.tsx's header comment)
- * but never got this piece, which is why `/` did nothing there.
+ * typed. `GroupConversation` has no palette: a group message has no
+ * server-side command dispatcher, so a `/` line there is plain text.
  *
  * Enter and Tab both INSERT the selected command into the composer (with its
  * argument placeholder pre-selected so typing replaces it) — neither sends or
@@ -127,18 +125,28 @@ export function applyCommandInsertion(
  * back into its own text state) — this hook never touches the composer's
  * text itself, it only decides what the palette should show.
  *
- * `extraCommands` merges in composer-specific entries (e.g. the peer-thread
- * `/ask` / `/talk` grammar) on top of the shared `SLASH_COMMANDS` — pass a
- * module-level constant, not an inline array, so it stays referentially
- * stable across renders.
+ * `extraCommands` merges in composer-specific entries on top of the shared
+ * `SLASH_COMMANDS` — pass a module-level constant (or a memoised array), not
+ * an inline one, so it stays referentially stable across renders.
+ *
+ * `sessionCommands: false` is for a composer whose `/` lines go to a
+ * DIFFERENT dispatcher than the session chat's (the peer thread): the session
+ * table (/help, /new, /clear, /use-engine …) would be offered there and then
+ * refused by that dispatcher ("unknown command — not sent"), and its `/stop`
+ * would collide with the peer thread's own `/stop`. Such a composer shows ONLY
+ * its server-provided table (ADR-2235).
  */
-export function useSlashCommandPalette(value: string, extraCommands: readonly SlashCommand[] = []) {
+export function useSlashCommandPalette(
+  value: string,
+  extraCommands: readonly SlashCommand[] = [],
+  { sessionCommands = true }: { sessionCommands?: boolean } = {},
+) {
   const [open, setOpen] = React.useState(false);
   const [selected, setSelected] = React.useState(0);
-  const commands = React.useMemo(
-    () => (extraCommands.length ? [...SLASH_COMMANDS, ...extraCommands] : SLASH_COMMANDS),
-    [extraCommands],
-  );
+  const commands = React.useMemo<readonly SlashCommand[]>(() => {
+    if (!sessionCommands) return extraCommands;
+    return extraCommands.length ? [...SLASH_COMMANDS, ...extraCommands] : SLASH_COMMANDS;
+  }, [extraCommands, sessionCommands]);
 
   const onChange = React.useCallback((next: string) => {
     if (next.startsWith("/") && !next.includes("\n")) {
@@ -204,7 +212,7 @@ export function CommandPalette({
 }) {
   if (matches.length === 0) return null;
   return (
-    <div className="absolute bottom-full left-0 right-0 z-50 mb-1 overflow-hidden rounded-lg border border-border bg-popover shadow-xl">
+    <div data-testid="slash-palette" className="absolute bottom-full left-0 right-0 z-50 mb-1 overflow-hidden rounded-lg border border-border bg-popover shadow-xl">
       <div className="max-h-72 overflow-y-auto py-1">
         {matches.map((item, i) => (
           <button
