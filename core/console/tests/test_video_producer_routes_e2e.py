@@ -9,6 +9,7 @@ recorder below captures exactly what the route hands to it.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -59,9 +60,14 @@ def _sandbox(tmp_path, *, tenants=("_default",), plugin: str = "enabled", keep_k
                 _install_plugin(tenant, enable=plugin == "enabled")
         # A recorder runner never finishes a job, so the per-tenant in-flight cap (2) would refuse the
         # third job of any test; the cap itself is proven in test_video_producer_review_2026_10_10_e2e.
+        # The execution watcher polls fast so a test that "finishes" a job sees its event within moments.
         mod = sys.modules.get(_MOD)
-        with (mock.patch.object(mod, "_MAX_ACTIVE_JOBS_PER_TENANT", 1000) if mod is not None and hasattr(mod, "_MAX_ACTIVE_JOBS_PER_TENANT")
-              else mock.patch.dict(os.environ, {})):
+        with contextlib.ExitStack() as stack:
+            if mod is not None:
+                if hasattr(mod, "_MAX_ACTIVE_JOBS_PER_TENANT"):
+                    stack.enter_context(mock.patch.object(mod, "_MAX_ACTIVE_JOBS_PER_TENANT", 1000))
+                if hasattr(mod, "_EXEC_POLL_S"):
+                    stack.enter_context(mock.patch.object(mod, "_EXEC_POLL_S", 0.05))
             yield boxed
 
 
@@ -79,6 +85,33 @@ class _RecordingRunner:
 
 def _route_module():
     return sys.modules[_MOD]
+
+
+def _finish_job(home: Path, tenant: str, job_id: str, status: str = "complete", timeout: float = 10.0) -> None:
+    """Do what a runner does when a job ends - persist the end state through the plugin's own storage -
+    then wait until the host's watcher has recorded the execution (the ADR-0534 reality check reads it)."""
+    import time
+    from datetime import datetime, timedelta
+
+    from core.learning.learning_events import EventType
+    from core.paths.tenant import tenant_home
+
+    mod = _route_module()
+    storage = mod._get_storage(str(home / "tenants" / tenant / "video_producer"))
+    job = storage.get_job(job_id)
+    job.status, job.started_at = status, datetime.now() - timedelta(seconds=3)
+    job.completed_at = datetime.now()
+    storage.save_job(job)
+    from core.learning.event_store import EventStore
+
+    store = EventStore(tenant_home(tenant), tenant_id=tenant)
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if any((e.signal or {}).get("task_id") == job_id
+               for e in store.query_events(tenant, event_type=EventType.SKILL_EXECUTED, skill_id="os.video_producer")):
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"no skill_executed event for {job_id} within {timeout}s")
 
 
 def _chain_text(home: Path) -> str:
@@ -199,6 +232,12 @@ class VideoProducerRoutesE2E(unittest.TestCase):
             job_id = self._create(ca, csrf_a).json()["job_id"]
             url = f"/v1/console/video/jobs/{job_id}/scenes/s01/feedback"
 
+            # a job that has not run yet cannot be rated: ADR-0534 wants a real execution first
+            early = ca.post(url, json={"feedback_type": "approve"}, headers={"X-CSRF-Token": csrf_a})
+            self.assertEqual(early.status_code, 503, early.text)
+            self.assertIn("once it has been produced", early.json()["detail"])
+            _finish_job(home, "tenant_a", job_id)
+
             for bad in ({"feedback_type": "bogus"}, {"feedback_type": "approve", "confidence": 7},
                         {"feedback_type": "approve", "quality_rating": 99}):
                 r = ca.post(url, json=bad, headers={"X-CSRF-Token": csrf_a})
@@ -242,6 +281,10 @@ class VideoProducerRoutesE2E(unittest.TestCase):
             r = client.post(f"/v1/console/video/jobs/{job_id}/feedback", json={"scene_id": "s1", "rating": 9},
                             headers={"X-CSRF-Token": csrf})
             self.assertEqual(r.status_code, 422, r.text)
+            r = client.post(f"/v1/console/video/jobs/{job_id}/feedback", json={"scene_id": "s1", "rating": 4},
+                            headers={"X-CSRF-Token": csrf})
+            self.assertEqual(r.status_code, 503, r.text)  # the job has not run yet
+            _finish_job(_home, "_default", job_id)
             r = client.post(f"/v1/console/video/jobs/{job_id}/feedback", json={"scene_id": "s1", "rating": 4},
                             headers={"X-CSRF-Token": csrf})
             self.assertEqual(r.status_code, 200, r.text)

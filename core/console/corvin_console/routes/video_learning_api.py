@@ -90,10 +90,11 @@ async def submit_feedback(job_id: str, feedback: FeedbackSubmissionRequest, rec=
     """Record a 1–5 rating for one scene of a job (same audit-first path as the
     scene-feedback route). 503 when nothing was recorded."""
     from .feedback_emitter_helper import emit_feedback_event  # noqa: PLC0415
-    from .video_producer_api import _check_job_id, _store  # noqa: PLC0415
+    from .video_producer_api import _check_job_id, _feedback_refusal_detail, _store  # noqa: PLC0415
 
     _check_job_id(job_id)
-    if not _store(rec).get_job(job_id):
+    job = _store(rec).get_job(job_id)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     audit_ref = await emit_feedback_event(
         skill_id=_SKILL_ID,
@@ -106,7 +107,7 @@ async def submit_feedback(job_id: str, feedback: FeedbackSubmissionRequest, rec=
         scene_id=feedback.scene_id,
     )
     if not audit_ref:
-        raise HTTPException(status_code=503, detail="Feedback could not be recorded")
+        raise HTTPException(status_code=503, detail=_feedback_refusal_detail(job))
     return {"job_id": job_id, "scene_id": feedback.scene_id, "rating": feedback.rating,
             "status": "recorded", "audit_ref": audit_ref}
 

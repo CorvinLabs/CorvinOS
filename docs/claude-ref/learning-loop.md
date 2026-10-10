@@ -289,6 +289,18 @@ FEEDBACK event, so it calls `admit()` itself and passes `trust_weight` to
 * `POST /learning/feedback/submit` writes a real gated FEEDBACK event (it used to answer
   `"queued"` and store nothing).
 * No override secret. Change `RateLimitConfig` in code review instead.
+* **Producers of rated skills must write the execution.** A rating whose skill never wrote a
+  `skill_executed` event is refused, so every surface that offers ratings owes the store that event.
+  The Video Producer (`os.video_producer`) is not a registry Skill and runs in a plugin that cannot
+  import `core.learning`, so the host does it: `create_video_job` starts a watcher thread
+  (`video_producer_api._record_job_execution`) that waits for the job's END STATE and writes one
+  `skill_executed` event (ids, status, counts — never the task text) through `EventStore.write_event`.
+  Written at the end, not the start: a job that never ran must not make a rating valid. A job ending
+  `error` or `cancelled` counts (it ran). Consequences, stated: a video older than 24 h cannot be
+  rated (the routes say so: "more than 24 hours ago"), a job the console restart interrupted records
+  nothing, and a rating on a running job is refused ("once it has been produced"). Proof:
+  `core/console/tests/test_video_producer_process_e2e.py` (real child process → event → rating 200),
+  `test_video_producer_review_2026_10_10_e2e.py::JobExecutionIsRecordedForTheFeedbackGate`.
 
 Proof: `tests/learning/test_feedback_trust_gate_e2e.py`,
 `tests/e2e/test_stream4_skill_feedback_console_e2e.py`.

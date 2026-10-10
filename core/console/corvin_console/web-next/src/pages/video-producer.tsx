@@ -251,7 +251,7 @@ function LearningTab({ job, scenes }: { job: Job; scenes: SceneRow[] }) {
     mutationFn: ({ scene, type }: { scene: string; type: "approve" | "reject" }) =>
       api(`${BASE}/jobs/${job.id}/scenes/${encodeURIComponent(scene)}/feedback`, { method: "POST", csrf, body: { feedback_type: type, confidence: 0.8 } }),
     onSuccess: (_r, v) => { setMsg(`Recorded: ${v.type} for ${v.scene}.`); void qc.invalidateQueries({ queryKey: ["video", "learning", job.id] }); },
-    onError: () => setMsg("Feedback could not be recorded."),
+    onError: (e) => setMsg(e instanceof ApiError && e.message ? e.message : "Feedback could not be recorded."),
   });
   const l = learning.data;
   return (

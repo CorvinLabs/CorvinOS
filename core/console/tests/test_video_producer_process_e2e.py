@@ -170,6 +170,11 @@ class ProcessRunnerHttpE2E(unittest.TestCase):
             self.assertLess(_near(frame, (0xE8, 0xA8, 0x3A), 40), 30, "Corvin's accent leaked into the styled video")
             self.assertTrue(_wait(lambda: not _procs(job_id), 10), _procs(job_id))
             self.assertEqual(list((home / "tenants" / "tenant_a" / "video_producer" / "jobs").glob("*.run")), [])
+            # the whole chain: real child process -> terminal record -> the host's watcher writes the
+            # `skill_executed` event -> the ADR-0534 reality check accepts the operator's rating
+            fb = f"{V}/jobs/{job_id}/scenes/s1/feedback"
+            self.assertTrue(_wait(lambda: client.post(fb, json={"feedback_type": "approve"}, headers=H(csrf)).status_code == 200, 15),
+                            "feedback on a produced video was refused")
 
     def test_cancel_mid_render_through_the_router_state_leaves_no_process(self):
         with _sandbox(Path(tempfile.mkdtemp()), tenants=("tenant_a",)) as (_c, _t, home, clients):

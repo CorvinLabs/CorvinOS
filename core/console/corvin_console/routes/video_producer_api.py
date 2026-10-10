@@ -19,7 +19,9 @@ import re
 import shutil
 import sys
 import threading
+import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -497,6 +499,78 @@ def _record_revision(rec, job_id: str, base_job_id: str) -> None:
             raise
 
 
+_SKILL_ID = "os.video_producer"
+
+# ADR-0534: a rating is accepted only for a skill that really ran in the last 24 h (reality check
+# against the tenant's own `skill_executed` learning events). A production is an execution, so the
+# host records one when the job reaches an end state - the job's own record is the ground truth,
+# never the start (a job that never ran must not make feedback valid). The plugin cannot do it: it
+# has no access to the learning store, and in process mode it is a different process.
+_EXEC_POLL_S = 2.0
+_EXEC_WATCH_MAX_S = 3 * 3600
+_FEEDBACK_WINDOW_S = 24 * 3600
+
+
+def _write_execution_event(tenant_id: str, job, meta: Optional[dict]) -> Optional[str]:
+    from core.learning.event_store import EventStore  # noqa: PLC0415
+    from core.learning.learning_events import EventType, LearningEvent  # noqa: PLC0415
+    from core.paths.tenant import tenant_home  # noqa: PLC0415
+
+    meta = meta if isinstance(meta, dict) else {}
+    started, done = getattr(job, "started_at", None), getattr(job, "completed_at", None)
+    seconds = round((done - started).total_seconds(), 1) if started and done else None
+    event = LearningEvent.create(
+        event_type=EventType.SKILL_EXECUTED,
+        skill_id=_SKILL_ID,
+        tenant_id=tenant_id,
+        # ids, counts and enums only - never the task text, narration or an error message
+        signal={"task_id": job.id, "status": job.status, "seconds": seconds,
+                "output": {"job_id": job.id, "status": job.status, "scenes": meta.get("scenes"),
+                           "language": meta.get("language"), "tts_provider": meta.get("tts_provider_used")}},
+        lom="corvin_console.routes.video_producer_api:_record_job_execution",
+    )
+    return EventStore(tenant_home(tenant_id), tenant_id=tenant_id).write_event(event)
+
+
+def _record_job_execution(tenant_id: str, job_id: str, storage_base: str) -> None:
+    """Wait for the job to end, then record that the Video Producer ran (audit-first). Runs on its
+    own daemon thread: it must outlive the request's event loop (a test client closes that loop with
+    the request) and it is bound to the host process exactly like the job it watches."""
+    try:
+        storage = _get_storage(storage_base)
+        deadline = time.monotonic() + _EXEC_WATCH_MAX_S
+        job = None
+        while time.monotonic() < deadline:
+            job = storage.get_job(job_id)
+            if job is not None and job.status in _TERMINAL:
+                break
+            time.sleep(_EXEC_POLL_S)
+        else:
+            logger.warning("[%s] job did not end within the watch window; no execution recorded", job_id)
+            return
+        out = storage.get_video_output(job_id)
+        ref = _write_execution_event(tenant_id, job, getattr(out, "metadata", None))
+        if not ref:
+            logger.error("[%s] execution event not recorded: feedback for this job will be refused", job_id)
+    except Exception as e:  # noqa: BLE001 - never takes the host down; the cost is a refused rating
+        logger.error("[%s] execution event not recorded (%s)", job_id, type(e).__name__)
+
+
+def _watch_job_execution(tenant_id: str, job_id: str, storage_base: str) -> None:
+    threading.Thread(target=_record_job_execution, args=(tenant_id, job_id, storage_base),
+                     name=f"vp-exec-{job_id}", daemon=True).start()
+
+
+def _feedback_refusal_detail(job) -> str:
+    """Why a rating was not recorded, as far as the host can tell."""
+    done = getattr(job, "completed_at", None)
+    if done is not None and (datetime.now() - done).total_seconds() > _FEEDBACK_WINDOW_S:
+        return "This video was produced more than 24 hours ago; ratings are only accepted for recent productions"
+    if getattr(job, "status", None) not in _TERMINAL:
+        return "Rate a video once it has been produced"
+    return "Feedback could not be recorded"
+
+
 _LANG_NAMES = {"de": "German", "en": "English"}
 
 # One tenant cannot fill the host's job workers (three, shared by every tenant) or queue without
@@ -703,6 +777,7 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
         storage.save_job(job)
         raise HTTPException(status_code=500, detail="Failed to start the job") from None
 
+    _watch_job_execution(rec.tenant_id, job_id, config["storage_base"])
     return {"job_id": job_id, "status": "pending", "created_at": job.created_at.isoformat()}
 
 
@@ -940,13 +1015,14 @@ async def submit_scene_feedback(
     _check_job_id(job_id)
     if not _SCENE_ID_RE.match(scene_id):
         raise HTTPException(status_code=400, detail="invalid scene id")
-    if not _store(rec).get_job(job_id):
+    job = _store(rec).get_job(job_id)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
     from .feedback_emitter_helper import emit_feedback_event
 
     audit_ref = await emit_feedback_event(
-        skill_id="os.video_producer",
+        skill_id=_SKILL_ID,
         task_id=job_id,
         tenant_id=rec.tenant_id,
         outcome_feedback={"approve": "yes", "reject": "no"}[feedback.feedback_type],
@@ -958,7 +1034,7 @@ async def submit_scene_feedback(
         scene_id=scene_id,
     )
     if not audit_ref:
-        raise HTTPException(status_code=503, detail="Feedback could not be recorded")
+        raise HTTPException(status_code=503, detail=_feedback_refusal_detail(job))
     return {
         "job_id": job_id,
         "scene_id": scene_id,

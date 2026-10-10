@@ -21,7 +21,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_video_producer_routes_e2e as _routes  # noqa: E402
 from test_video_producer_revision_sources_e2e import H, _complete_job_with_storyboard  # noqa: E402
-from test_video_producer_routes_e2e import _RecordingRunner, _route_module, _sandbox  # noqa: E402
+from test_video_producer_routes_e2e import _RecordingRunner, _finish_job, _route_module, _sandbox  # noqa: E402
 
 V = "/v1/console/video"
 
@@ -137,6 +137,75 @@ class VideoProducerReview20261010E2E(unittest.TestCase):
             r = client.post(f"{V}/jobs", json={"task": "Mach Szene 2 kürzer", "base_job_id": base_id}, headers=H(csrf))
             self.assertEqual(r.status_code, 200, r.text)
             self.assertIn("Narration language: German", runner.calls[-1][1])
+
+
+class JobExecutionIsRecordedForTheFeedbackGate(unittest.TestCase):
+    """ADR-0534 reality check: a rating needs a `skill_executed` event of the same tenant. The host
+    writes it when a job ENDS (the job record is the ground truth), through the real EventStore."""
+    _base = _routes.VideoProducerRoutesE2E
+    setUp, tearDown, _benign_l44, _create = _base.setUp, _base.tearDown, _base._benign_l44, _base._create
+
+    def _events(self, tenant):
+        from core.learning.event_store import EventStore
+        from core.learning.learning_events import EventType
+        from core.paths.tenant import tenant_home
+
+        return EventStore(tenant_home(tenant), tenant_id=tenant).query_events(
+            tenant, event_type=EventType.SKILL_EXECUTED, skill_id="os.video_producer")
+
+    def test_no_event_while_the_job_runs_one_when_it_ends_and_never_the_task_text(self):
+        with _sandbox(self._tmp, tenants=("tenant_a", "tenant_b")) as (_c, _t, home, clients):
+            mod = _route_module()
+            mod.get_runner = lambda: _RecordingRunner()
+            (ca, csrf_a), (cb, csrf_b) = clients["tenant_a"], clients["tenant_b"]
+            task = "SECRET-TASK-TEXT explain the audit chain in three scenes"
+            job_id = self._create(ca, csrf_a, task=task).json()["job_id"]
+            time.sleep(0.5)  # the watcher polls every 50 ms in the sandbox
+            self.assertEqual(self._events("tenant_a"), [], "an unfinished job was recorded as an execution")
+            _finish_job(home, "tenant_a", job_id)
+            evs = self._events("tenant_a")
+            self.assertEqual(len(evs), 1)
+            self.assertEqual((evs[0].signal["task_id"], evs[0].signal["status"]), (job_id, "complete"))
+            self.assertTrue(evs[0].audit_ref, "audit-first: the chain record exists")
+            on_disk = "".join(p.read_text(errors="replace") for p in (home / "tenants").rglob("*.jsonl"))
+            self.assertNotIn("SECRET-TASK-TEXT", on_disk)
+            self.assertEqual(self._events("tenant_b"), [], "another tenant has no execution")
+            # tenant B's own feedback cannot ride on A's execution
+            url = f"/v1/console/video/jobs/{job_id}/scenes/s01/feedback"
+            self.assertEqual(cb.post(url, json={"feedback_type": "approve"}, headers=H(csrf_b)).status_code, 404)
+
+    def test_a_failed_job_is_an_execution_too_and_can_be_rated(self):
+        with _sandbox(self._tmp) as (client, csrf, home, _clients):
+            mod = _route_module()
+            mod.get_runner = lambda: _RecordingRunner()
+            job_id = self._create(client, csrf).json()["job_id"]
+            _finish_job(home, "_default", job_id, status="error")
+            self.assertEqual(self._events("_default")[0].signal["status"], "error")
+            r = client.post(f"{V}/jobs/{job_id}/scenes/s01/feedback", json={"feedback_type": "reject"}, headers=H(csrf))
+            self.assertEqual(r.status_code, 200, r.text)
+
+    def test_a_rating_for_an_old_video_says_why_it_is_refused(self):
+        from datetime import datetime, timedelta
+
+        with _sandbox(self._tmp) as (client, csrf, home, _clients):
+            mod = _route_module()
+            mod.get_runner = lambda: _RecordingRunner()
+            # a video finished 30 h ago has an execution event that old too; the gate (24 h window)
+            # no longer finds it. The watcher would stamp "now", so it is switched off for this case.
+            patch = mock.patch.object(mod, "_write_execution_event", lambda *a, **k: None)
+            patch.start()
+            self.addCleanup(patch.stop)
+            job_id = self._create(client, csrf).json()["job_id"]
+            storage = mod._get_storage(str(home / "tenants" / "_default" / "video_producer"))
+            job = storage.get_job(job_id)
+            job.status, job.completed_at = "complete", datetime.now() - timedelta(hours=30)
+            storage.save_job(job)
+            time.sleep(0.5)
+            for path, body in ((f"{V}/jobs/{job_id}/scenes/s01/feedback", {"feedback_type": "approve"}),
+                               (f"{V}/jobs/{job_id}/feedback", {"scene_id": "s1", "rating": 4})):
+                r = client.post(path, json=body, headers=H(csrf))
+                self.assertEqual(r.status_code, 503, r.text)
+                self.assertIn("more than 24 hours ago", r.json()["detail"], path)
 
 
 class QualityChecksMeasureTheRightThing(unittest.TestCase):

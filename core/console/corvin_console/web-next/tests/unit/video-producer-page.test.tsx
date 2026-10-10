@@ -207,6 +207,19 @@ describe("Video Producer studio", () => {
     expect(seen[0]).toMatchObject({ path: "s1", csrf: "csrf-test", body: { feedback_type: "approve" } });
   });
 
+  it("a refused rating shows the server's reason, not a generic line", async () => {
+    server.use(
+      http.post(`${B}/jobs/job_2626f1e8/scenes/:scene/feedback`, () =>
+        HttpResponse.json({ detail: "This video was produced more than 24 hours ago; ratings are only accepted for recent productions" }, { status: 503 })),
+      ...handlers(), // the first matching handler wins, so the refusal above shadows the recording one
+    );
+    renderIt("?job=job_2626f1e8&tab=learning");
+    await screen.findByTestId("learning-tab");
+    await screen.findByLabelText("approve s1");
+    fireEvent.click(screen.getByLabelText("approve s1"));
+    await screen.findByText(/more than 24 hours ago/);
+  });
+
   it("Settings: OpenAI TTS is the selected default, the engines are labelled, and missing capabilities are said out loud", async () => {
     server.use(...handlers());
     renderIt();
