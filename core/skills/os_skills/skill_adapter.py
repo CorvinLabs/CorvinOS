@@ -129,6 +129,9 @@ class OptimizerState:
     current_success_rate: float = 0.0
     best_config: SkillConfig = field(default_factory=SkillConfig)
     config_versions: list[SkillConfigVersion] = field(default_factory=list)
+    #: The version whose config is ``best_config`` NOW. Not ``config_versions[-1]``: a
+    #: rollback restores an older config without deleting the newer versions.
+    active_version: Optional[str] = None
     hypotheses_tested: int = 0
     hypotheses_accepted: int = 0
     mde_threshold: float = 0.05  # Minimum Detectable Effect
@@ -179,7 +182,9 @@ def load_skill_config(
         data = json.loads(path.read_text())
         config = SkillConfig.from_dict(data.get("config"))
         versions = data.get("versions") or []
-        version_id = versions[-1].get("version_id") if versions else None
+        version_id = data.get("active_version")
+        if not isinstance(version_id, str):  # written before active_version existed
+            version_id = versions[-1].get("version_id") if versions else None
     except (OSError, ValueError, AttributeError, TypeError):
         return SkillConfig(), None
     _CONFIG_CACHE[key] = (mtime, config, version_id)
@@ -308,6 +313,9 @@ class SkillAdapter:
             except (KeyError, ValueError, TypeError):
                 logger.warning("skipping malformed skill config version: %r", v)
         self.state.config_versions = versions
+        active = data.get("active_version")
+        self.state.active_version = active if isinstance(active, str) else (
+            versions[-1].version_id if versions else None)
 
     def _persist(self) -> None:
         """Save config + versions + optimizer counters (atomic tmp → rename)."""
@@ -315,6 +323,7 @@ class SkillAdapter:
             "skill_id": self.skill_id,
             "tenant_id": self.tenant_id,
             "config": self.state.best_config.to_dict(),
+            "active_version": self.state.active_version,
             "optimizer": {
                 "epoch": self.state.epoch,
                 "baseline_success_rate": self.state.baseline_success_rate,
@@ -349,7 +358,8 @@ class SkillAdapter:
             "tenant_id": self.tenant_id,
             "change": change,
             "config": self.state.best_config.to_dict(),
-            "version_id": self.state.config_versions[-1].version_id if self.state.config_versions else None,
+            "version_id": self.state.active_version
+            or (self.state.config_versions[-1].version_id if self.state.config_versions else None),
             **fields,
         }
         try:
@@ -418,6 +428,7 @@ class SkillAdapter:
                     improvement_pct=improvement * 100,
                 )
                 self.state.config_versions.append(version)
+                self.state.active_version = version.version_id
 
                 self._persist()
                 self._announce(
@@ -450,6 +461,7 @@ class SkillAdapter:
             for v in self.state.config_versions:
                 if v.version_id == to_version:
                     self.state.best_config = v.config
+                    self.state.active_version = v.version_id
                     self._persist()
                     self._announce("rollback", to_version=to_version)
                     return v.config
@@ -525,6 +537,7 @@ class SkillAdapter:
             user_can_undo=True,
         )
         self.state.config_versions.append(version)
+        self.state.active_version = version.version_id
 
         # 5. Emit audit event FIRST (fail-closed: no audit write → no persist)
         self._emit_config_update_audit_event(

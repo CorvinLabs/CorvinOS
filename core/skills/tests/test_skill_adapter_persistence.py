@@ -71,17 +71,21 @@ class TestPersistence:
 
 
 class TestRouterConsumesLearnedConfig:
-    def test_default_config_routes_exactly_as_before(self, tmp_path: Path, monkeypatch):
+    """The router (ADR-2092) advises ``native``/``acs``/``tde``; the learned
+    ``confidence_threshold`` is the acceptance bar the Phase 2 call site applies to that
+    advice. The Skill reports it (with the config version) only once something was learned."""
+
+    ENGINES = ("native", "acs", "tde")
+
+    def test_without_a_learned_config_no_threshold_is_reported(self, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
         out = DelegationRouterSkill().execute({"complexity": 3, "task_type": "chat", "tenant_id": TENANT})
-        assert out["engine"] == "claude-haiku-4"
-        assert out["confidence_threshold"] == pytest.approx(0.70)
-        assert out["learned_config_version"] is None
+        assert out["engine"] in self.ENGINES and out["engine"] == out["decision"]
+        assert "confidence_threshold" not in out and "learned_config_version" not in out
 
-    def test_learned_threshold_escalates_low_confidence_decisions(self, tmp_path: Path, monkeypatch):
+    def test_learned_threshold_is_reported_with_its_version(self, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
         a = SkillAdapter(SKILL, TENANT)  # default work dir under CORVIN_HOME
-        # push the threshold above the "code < 7" branch's 0.80 confidence
         _accept(a, "confidence_threshold", 0.05)
         _accept(a, "confidence_threshold", 0.05)
         _accept(a, "confidence_threshold", 0.05)
@@ -89,20 +93,27 @@ class TestRouterConsumesLearnedConfig:
         assert cfg.confidence_threshold == pytest.approx(0.85) and version == "v3"
 
         out = DelegationRouterSkill().execute({"complexity": 4, "task_type": "code", "tenant_id": TENANT})
-        assert out["engine"] == "claude-opus-5"  # sonnet (0.80 < 0.85) escalated one tier
-        assert "escalated" in out["reasoning"] and "v3" in out["reasoning"]
+        assert out["confidence_threshold"] == pytest.approx(0.85)
         assert out["learned_config_version"] == "v3"
+        assert out["engine"] in self.ENGINES  # the threshold gates serving, it does not re-route
 
-        # without a tenant the router cannot know a config and stays heuristic
-        out = DelegationRouterSkill().execute({"complexity": 4, "task_type": "code"})
-        assert out["engine"] == "claude-sonnet-4" and "confidence_threshold" not in out
+        a.rollback("v1")
+        out = DelegationRouterSkill().execute({"complexity": 4, "task_type": "code", "tenant_id": TENANT})
+        assert out["confidence_threshold"] == pytest.approx(0.75) and out["learned_config_version"] == "v1"
+
+    def test_without_a_tenant_the_router_cannot_know_a_config(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+        a = SkillAdapter(SKILL, TENANT)
+        _accept(a, "confidence_threshold", 0.05)
+        out = DelegationRouterSkill().execute({"complexity": 4, "task_type": "code", "tenant_id": ""})
+        assert out["engine"] in self.ENGINES and "confidence_threshold" not in out
 
     def test_shadow_input_is_echoed(self):
         out = DelegationRouterSkill().execute(
             {"complexity": 8, "task_type": "big_data", "shadow": True, "bundled_engine": "acs"}
         )
         assert out["shadow"] is True and out["bundled_engine"] == "acs"
-        assert out["engine"] == "claude-opus-5"
+        assert out["engine"] in self.ENGINES
 
     def test_unreadable_config_never_breaks_routing(self, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
@@ -110,5 +121,5 @@ class TestRouterConsumesLearnedConfig:
         skills.mkdir(parents=True)
         (skills / "os_delegation_router_config.json").write_text("{not json")
         out = DelegationRouterSkill().execute({"complexity": 9, "task_type": "chat", "tenant_id": TENANT})
-        assert out["engine"] == "claude-opus-5"
-        assert out["confidence_threshold"] == pytest.approx(0.70)  # default, not a crash
+        assert out["engine"] in self.ENGINES  # advice survives; no threshold is invented
+        assert "learned_config_version" not in out
