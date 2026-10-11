@@ -168,7 +168,7 @@ class SkillPackager:
             "generator_version": "2.0.0",
             "skill_id": manifest.skill_id,
             "version": manifest.version,
-            "domain": manifest.domain.value,
+            "boot_layer": manifest.boot_layer,
             "phases_completed": [
                 "phase1_skeleton_generated",
                 "phase2_llm_code_generated",
