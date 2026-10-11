@@ -56,14 +56,25 @@ class SkillInstaller:
             if unmet:
                 return False, f"Unmet dependencies: {', '.join(unmet)}"
             
+            manifest_status = self._check_package_manifest(zip_path, skill_id, version)
+            if manifest_status.startswith("refused:"):
+                return False, f"Manifest check failed: {manifest_status[len('refused:'):]}"
+
             target_dir = self._target_dir(skill_id, version)
             self._atomic_unzip(zip_path, target_dir)
-            
+
             if skill_id not in registry:
                 registry[skill_id] = []
             registry[skill_id].append({
                 "version": version, "boot_layer": "installed",
-                "dependencies": metadata.get("dependencies", []), "verified": True
+                "dependencies": metadata.get("dependencies", []),
+                # Nothing here proves WHO built the package: the checksum is supplied by
+                # the same caller as the ZIP, and no package carries a signature. A flag
+                # that read True after only that check told the Installed tab "verified"
+                # for any ZIP; it is False until a real authenticity check exists.
+                "verified": False,
+                "verification": {"checksum": "caller_supplied", "manifest": manifest_status,
+                                 "signature": "absent"},
             })
             self._write_registry(registry)
             return True, f"✅ {skill_id}@{version} installed"
@@ -122,6 +133,41 @@ class SkillInstaller:
 
         return True
     
+    _MANIFEST_MAX_BYTES = 1024 * 1024
+
+    def _check_package_manifest(self, zip_path: Path, skill_id: str, version: str) -> str:
+        """Compare the package's own ``skill.json`` with the id/version it is installed as.
+
+        Returns ``"consistent"``, ``"absent"`` (no manifest; allowed, the packager always
+        writes one but older bundles may not) or ``"refused:<reason>"``. Without this a
+        ZIP could be installed under any id/version the caller names, whatever it holds.
+        """
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = [i for i in zf.infolist()
+                     if not i.is_dir() and i.filename.split("/")[-1] == "skill.json"
+                     and i.filename.count("/") <= 1]
+            if not names:
+                return "absent"
+            if len(names) > 1:
+                return "refused:more than one skill.json"
+            info = names[0]
+            if info.file_size > self._MANIFEST_MAX_BYTES:
+                return "refused:skill.json too large"
+            try:
+                manifest = json.loads(zf.read(info).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                return "refused:skill.json is not valid JSON"
+        if not isinstance(manifest, dict):
+            return "refused:skill.json is not an object"
+        named_id, named_version = manifest.get("skill_id"), manifest.get("version")
+        # Only a manifest that NAMES something else is a contradiction. One that names
+        # nothing (or only one of the two) cannot be compared; it is recorded as such,
+        # never as "consistent".
+        if named_id not in (None, skill_id) or named_version not in (None, version):
+            return (f"refused:skill.json says {named_id!r}@{named_version!r}, "
+                    f"installing as {skill_id}@{version}")
+        return "consistent" if (named_id is not None and named_version is not None) else "incomplete"
+
     def _resolve_dependencies(self, deps: List[Dict], registry: Dict) -> List[str]:
         unmet = []
         for dep in deps:

@@ -124,7 +124,13 @@ class TestSkillInstaller:
         ok, msg = inst.install_skill(zip_path, zip_hash, {"skill_id": "test_skill", "version": "1.0.0"})
         assert ok, msg
         assert (tmp_path / "installed" / "test_skill" / "1.0.0" / "test_skill" / "skill.json").exists()
-        assert inst._load_registry()["test_skill"][0]["version"] == "1.0.0"
+        rec = inst._load_registry()["test_skill"][0]
+        assert rec["version"] == "1.0.0"
+        # No signature exists on any package and the checksum comes from the caller, so
+        # the record must not claim authenticity; it records what WAS checked.
+        assert rec["verified"] is False
+        assert rec["verification"] == {"checksum": "caller_supplied",
+                                       "manifest": "consistent", "signature": "absent"}
         ok2, msg2 = inst.install_skill(zip_path, zip_hash, {"skill_id": "test_skill", "version": "1.0.0"})
         assert not ok2 and "already installed" in msg2
 
@@ -144,6 +150,45 @@ class TestSkillInstaller:
             bad, digest, {"skill_id": "evil", "version": "1.0.0"})
         assert not ok
         assert not (tmp_path / "escape.txt").exists()
+
+    @staticmethod
+    def _zip_with(tmp_path, files):
+        z = tmp_path / "p.zip"
+        with zipfile.ZipFile(z, "w") as zf:
+            for name, body in files.items():
+                zf.writestr(name, body)
+        return z, hashlib.sha256(z.read_bytes()).hexdigest()
+
+    def test_manifest_naming_another_skill_is_refused(self, tmp_path):
+        z, h = self._zip_with(tmp_path, {"other/skill.json": json.dumps(
+            {"skill_id": "other", "version": "9.9.9"})})
+        inst = SkillInstaller(tmp_path / "installed")
+        ok, msg = inst.install_skill(z, h, {"skill_id": "test_skill", "version": "1.0.0"})
+        assert not ok and "Manifest check failed" in msg and "'other'" in msg
+        assert inst._load_registry() == {}
+        assert not (tmp_path / "installed" / "test_skill").exists()
+
+    @pytest.mark.parametrize("body", ["not json", "[1, 2]"])
+    def test_malformed_manifest_is_refused(self, tmp_path, body):
+        z, h = self._zip_with(tmp_path, {"skill.json": body})
+        ok, msg = SkillInstaller(tmp_path / "installed").install_skill(
+            z, h, {"skill_id": "test_skill", "version": "1.0.0"})
+        assert not ok and "Manifest check failed" in msg
+
+    def test_manifest_that_names_nothing_is_recorded_as_incomplete_not_consistent(self, tmp_path):
+        z, h = self._zip_with(tmp_path, {"skill.json": "{}"})
+        inst = SkillInstaller(tmp_path / "installed")
+        ok, msg = inst.install_skill(z, h, {"skill_id": "test_skill", "version": "1.0.0"})
+        assert ok, msg
+        assert inst._load_registry()["test_skill"][0]["verification"]["manifest"] == "incomplete"
+
+    def test_package_without_a_manifest_installs_but_is_recorded_as_such(self, tmp_path):
+        z, h = self._zip_with(tmp_path, {"README.md": "x"})
+        inst = SkillInstaller(tmp_path / "installed")
+        ok, msg = inst.install_skill(z, h, {"skill_id": "test_skill", "version": "1.0.0"})
+        assert ok, msg
+        rec = inst._load_registry()["test_skill"][0]
+        assert rec["verified"] is False and rec["verification"]["manifest"] == "absent"
 
     def test_unsafe_ids_refused(self, tmp_path):
         zip_path, zip_hash = self._pkg(tmp_path)
@@ -188,7 +233,7 @@ class TestHTTPEndpoints:
         assert r.status_code == 200, r.text
         assert r.json()["skills"] == [{
             "skill_id": "test_skill", "version": "1.0.0", "boot_layer": "installed",
-            "verified": True, "status": "healthy",
+            "verified": False, "status": "healthy",
         }]
 
         chain = home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
