@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass
 import logging
 
 from core.skills.manifest_v2 import SkillManifestV2
+from core.skills import package_signing
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,11 @@ class SkillPackager:
         # Create ZIP archive
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             self._add_folder_to_zip(skill_folder, zf, Path(manifest.skill_id))
+            # Signed only when this install's operator has generated a key (ADR-2252);
+            # otherwise the package is unsigned and the installer will say so.
+            signature = self._sign_package(skill_folder, checksum_path)
+            if signature:
+                zf.writestr(f"{manifest.skill_id}/{package_signing.SIGNATURE_NAME}", signature)
 
         # Compute ZIP hash
         zip_hash = self._compute_file_hash(zip_path)
@@ -129,6 +135,7 @@ class SkillPackager:
             "generation_context": generation_context,
             "checksum_count": len(checksums),
             "audit_trail_events": len(audit_trail),
+            "signed": bool(signature),
         }
 
         logger.info(f"Packaged Skill: {manifest.skill_id} v{manifest.version} → {zip_path}")
@@ -151,6 +158,20 @@ class SkillPackager:
             file_path = skill_folder / file_name
             if not file_path.exists():
                 raise ValueError(f"Missing required file: {file_path}")
+
+    @staticmethod
+    def _sign_package(skill_folder: Path, checksum_path: Path) -> Optional[str]:
+        """Signature over manifest + checksum list, or None when no usable operator key."""
+        key = package_signing.signing_key()
+        if key is None:
+            return None
+        try:
+            return package_signing.sign(
+                (skill_folder / package_signing.MANIFEST_NAME).read_bytes(),
+                checksum_path.read_bytes(), key)
+        except Exception as exc:  # noqa: BLE001 — never lose the package over a signing fault
+            logger.warning("package left unsigned: %s", type(exc).__name__)
+            return None
 
     def _create_generation_context(
         self, skill_folder: Path, manifest: SkillManifestV2

@@ -60,6 +60,14 @@ class SkillInstaller:
             if manifest_status.startswith("refused:"):
                 return False, f"Manifest check failed: {manifest_status[len('refused:'):]}"
 
+            signature_status = self._check_package_signature(zip_path)
+            if signature_status.startswith("refused:"):
+                return False, f"Signature check failed: {signature_status[len('refused:'):]}"
+            # verified means exactly this: a trusted operator key signed the manifest plus the
+            # checksum list, every file in the ZIP matches that list, and the manifest names
+            # the skill it is installed as. Anything less is recorded, never called verified.
+            verified = signature_status == "valid" and manifest_status == "consistent"
+
             target_dir = self._target_dir(skill_id, version)
             self._atomic_unzip(zip_path, target_dir)
 
@@ -68,13 +76,13 @@ class SkillInstaller:
             registry[skill_id].append({
                 "version": version, "boot_layer": "installed",
                 "dependencies": metadata.get("dependencies", []),
-                # Nothing here proves WHO built the package: the checksum is supplied by
-                # the same caller as the ZIP, and no package carries a signature. A flag
-                # that read True after only that check told the Installed tab "verified"
-                # for any ZIP; it is False until a real authenticity check exists.
-                "verified": False,
+                # The ZIP checksum comes from the same caller as the ZIP, so it proves nothing
+                # about who built the package. Only a valid operator signature does (ADR-2252);
+                # a flag that read True after the checksum alone told the Installed tab
+                # "verified" for any ZIP.
+                "verified": verified,
                 "verification": {"checksum": "caller_supplied", "manifest": manifest_status,
-                                 "signature": "absent"},
+                                 "signature": signature_status},
             })
             self._write_registry(registry)
             return True, f"✅ {skill_id}@{version} installed"
@@ -167,6 +175,57 @@ class SkillInstaller:
             return (f"refused:skill.json says {named_id!r}@{named_version!r}, "
                     f"installing as {skill_id}@{version}")
         return "consistent" if (named_id is not None and named_version is not None) else "incomplete"
+
+    _SIGNATURE_MAX_BYTES = 64 * 1024
+
+    def _check_package_signature(self, zip_path: Path) -> str:
+        """``absent`` | ``unverifiable`` | ``valid`` | ``refused:<reason>`` (ADR-2252).
+
+        ``absent``: the package carries no ``skill.sig``. ``unverifiable``: it does, but this
+        install has no operator key to check it against (never read from the ZIP itself).
+        ``refused``: a signature that does not verify, or a file the signature does not cover.
+        """
+        from core.skills import package_signing as ps  # noqa: PLC0415
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            infos = [i for i in zf.infolist() if not i.is_dir()]
+            manifests = [i for i in infos if i.filename.split("/")[-1] == ps.MANIFEST_NAME
+                         and i.filename.count("/") <= 1]
+            if len(manifests) != 1:
+                return "absent" if not any(i.filename.endswith(ps.SIGNATURE_NAME) for i in infos) \
+                    else "refused:signature without exactly one skill.json"
+            pref = manifests[0].filename[: -len(ps.MANIFEST_NAME)]
+            sig_info = next((i for i in infos if i.filename == pref + ps.SIGNATURE_NAME), None)
+            if sig_info is None:
+                return "absent"
+            keys = ps.trusted_public_keys()
+            if not keys:
+                return "unverifiable"
+            self._validate_zip_size(zf)
+            if sig_info.file_size > self._SIGNATURE_MAX_BYTES:
+                return "refused:signature file too large"
+            by_name = {i.filename: i for i in infos}
+            checksum_info = by_name.get(pref + ps.CHECKSUM_REL)
+            if checksum_info is None:
+                return "refused:signed package has no checksum list"
+            manifest_raw = zf.read(manifests[0])
+            checksum_raw = zf.read(checksum_info)
+            signature = zf.read(sig_info).decode("ascii", errors="replace")
+            if not ps.verify(manifest_raw, checksum_raw, signature, keys):
+                return "refused:signature does not verify against any trusted operator key"
+            listed = ps.parse_checksums(checksum_raw)
+            for rel, digest in listed.items():
+                info = by_name.get(pref + rel)
+                if info is None:
+                    return f"refused:listed file missing: {rel}"
+                if ps.sha256_tag(zf.read(info)) != digest:
+                    return f"refused:file changed after signing: {rel}"
+            for info in infos:
+                rel = info.filename[len(pref):]
+                if rel == ps.SIGNATURE_NAME or rel in ps.ALLOWED_FORGE_ENTRIES or rel in listed:
+                    continue
+                return f"refused:file not covered by the signature: {rel}"
+        return "valid"
 
     def _resolve_dependencies(self, deps: List[Dict], registry: Dict) -> List[str]:
         unmet = []

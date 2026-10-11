@@ -111,12 +111,20 @@ refused/failed (JSON on stdout), 2 usage error.
 | plugin | `StagingManager.validate_zip_file` + `store_staged_upload` as `<id>-<version>.zip`; an identical package already pending is reported, not re-staged; one **already decided** (approved or rejected — `StagingManager.get_decision`, remembered under `plugin_staging/decisions/<upload_id>.json`, keyed on the package's content hash; see [Plugin decision memory](#plugin-decision-memory)) is refused: "already been decided (approved\|rejected)". The memory is a record, not a lock: the owner's manual `/plugin-uploads` re-upload stays possible, and rejection writes the record BEFORE deleting (a failed write leaves the upload pending) | `pending_approval` — approve at `/plugin-uploads/{id}/approve` |
 | tool | `ToolQuarantine.stage` — a name that already exists here (case-insensitively) is refused (`failed`, "already exists"); an entry identical in EVERYTHING the operator reviews (version, description, schema, runtime, code, meta, bundle) is reused, anything else is a new entry | `quarantined` |
 
-The installer (`core/skills/skill_installer.py`) records `verified: false` plus a
-`verification` map (`checksum: caller_supplied`, `manifest`, `signature: absent`) for every
-install: the checksum comes from the same caller as the ZIP and no package carries a
-signature, so nothing proves who built it. It does refuse a package whose own `skill.json`
-names a different `skill_id`/`version` than it is installed as; a manifest that names nothing
-is recorded `incomplete`, a package without one `absent`.
+The installer (`core/skills/skill_installer.py`) records `verified` plus a `verification`
+map (`checksum: caller_supplied`, `manifest`, `signature`) for every install. The ZIP checksum
+comes from the same caller as the ZIP, so it proves nothing about who built the package.
+`verified: true` means exactly: the package carries `skill.sig`, a trusted operator key of THIS
+install verifies it over the manifest plus the package's checksum list, every file in the ZIP
+matches that list, and the manifest names the skill it is installed as (ADR-2252,
+`core/skills/package_signing.py`). `signature` is `absent` (no `skill.sig`), `unverifiable`
+(signed, but this install has no operator key; installs, flagged), `valid`, or the install is
+refused (signature does not verify, a listed file is missing or changed, or a file exists that
+the signature does not cover). A manifest that names a different `skill_id`/`version` than the
+install is refused; one that names nothing is recorded `incomplete`, a package without one
+`absent`. The packager signs only when the operator has generated a key
+(`OperatorKeyManager(<corvin_home>).generate_keypair()`; never done implicitly), so Forge
+Bundle imports from other instances stay unverified.
 
 ### Tool quarantine — `core/forge_bundle/tool_quarantine.py`
 

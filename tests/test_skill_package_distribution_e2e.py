@@ -275,3 +275,128 @@ class TestHTTPEndpoints:
         r = client.get(f"{BASE}/installed")
         assert r.status_code == 200
         assert r.json() == {"skills": []}
+
+
+# ── signed packages (ADR-2252): real keys, real packager, real installer ────
+
+
+def _generate_operator_key(home: Path) -> None:
+    from core.skills.signature.key_manager import OperatorKeyManager
+    OperatorKeyManager(home).generate_keypair()
+
+
+def _rewrite_zip(src: Path, dst: Path, edit) -> tuple:
+    """Copy ``src`` to ``dst`` entry by entry; ``edit(name, data) -> data|None`` may change or drop."""
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+        for info in zin.infolist():
+            data = edit(info.filename, zin.read(info))
+            if data is not None:
+                zout.writestr(info.filename, data)
+        extra = edit(None, None)
+        for name, data in (extra or {}).items():
+            zout.writestr(name, data)
+    return dst, hashlib.sha256(dst.read_bytes()).hexdigest()
+
+
+class TestSignedPackages:
+    def _signed(self, tmp_path, home):
+        _generate_operator_key(home)
+        skill = _make_skill(tmp_path / "gen")
+        zip_path, zip_hash, meta = SkillPackager(tmp_path / "pkgs").package(
+            skill, SkillManifestV2.from_dict(_MANIFEST))
+        assert meta["signed"] is True
+        return zip_path, zip_hash
+
+    def _install(self, tmp_path, zip_path, digest):
+        inst = SkillInstaller(tmp_path / "installed")
+        ok, msg = inst.install_skill(zip_path, digest, {"skill_id": "test_skill", "version": "1.0.0"})
+        return inst, ok, msg
+
+    def test_a_package_signed_by_this_installs_key_is_verified(self, tmp_path, home):
+        zip_path, zip_hash = self._signed(tmp_path, home)
+        inst, ok, msg = self._install(tmp_path, zip_path, zip_hash)
+        assert ok, msg
+        rec = inst._load_registry()["test_skill"][0]
+        assert rec["verified"] is True
+        assert rec["verification"] == {"checksum": "caller_supplied", "manifest": "consistent",
+                                       "signature": "valid"}
+
+    def test_a_package_built_without_a_key_is_unsigned_and_unverified(self, tmp_path, home):
+        skill = _make_skill(tmp_path / "gen")
+        zip_path, zip_hash, meta = SkillPackager(tmp_path / "pkgs").package(
+            skill, SkillManifestV2.from_dict(_MANIFEST))
+        assert meta["signed"] is False
+        assert not (home / "tenants" / "_default" / "global" / "operator_keys").exists(), (
+            "asking whether packages can be signed must not create a key store")
+        inst, ok, msg = self._install(tmp_path, zip_path, zip_hash)
+        assert ok, msg
+        rec = inst._load_registry()["test_skill"][0]
+        assert rec["verified"] is False and rec["verification"]["signature"] == "absent"
+
+    def test_a_file_changed_after_signing_is_refused(self, tmp_path, home):
+        zip_path, _ = self._signed(tmp_path, home)
+        bad, digest = _rewrite_zip(zip_path, tmp_path / "bad.zip", lambda n, d: (
+            b"import os\nos.system('x')\n" if n == "test_skill/src/skill.py" else d))
+        inst, ok, msg = self._install(tmp_path, bad, digest)
+        assert not ok and "file changed after signing: src/skill.py" in msg, msg
+        assert inst._load_registry() == {}
+
+    def test_a_file_added_after_signing_is_refused(self, tmp_path, home):
+        zip_path, _ = self._signed(tmp_path, home)
+        bad, digest = _rewrite_zip(zip_path, tmp_path / "bad.zip", lambda n, d: (
+            {"test_skill/src/extra.py": b"print('payload')"} if n is None else d))
+        _, ok, msg = self._install(tmp_path, bad, digest)
+        assert not ok and "not covered by the signature: src/extra.py" in msg, msg
+
+    def test_a_listed_file_removed_after_signing_is_refused(self, tmp_path, home):
+        zip_path, _ = self._signed(tmp_path, home)
+        bad, digest = _rewrite_zip(zip_path, tmp_path / "bad.zip", lambda n, d: (
+            None if n == "test_skill/README.md" else d))
+        _, ok, msg = self._install(tmp_path, bad, digest)
+        assert not ok and "listed file missing: README.md" in msg, msg
+
+    def test_a_tampered_manifest_is_refused(self, tmp_path, home):
+        zip_path, _ = self._signed(tmp_path, home)
+        def edit(n, d):
+            if n == "test_skill/skill.json":
+                return json.dumps({**_MANIFEST, "description": "changed"}).encode()
+            return d
+        bad, digest = _rewrite_zip(zip_path, tmp_path / "bad.zip", edit)
+        _, ok, msg = self._install(tmp_path, bad, digest)
+        assert not ok and "does not verify" in msg, msg
+
+    def test_a_signature_by_an_untrusted_key_is_refused(self, tmp_path, home):
+        zip_path, _ = self._signed(tmp_path, home)
+        # Same package, signed by a key this install never trusted.
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from core.skills import package_signing as ps
+        stranger = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        with zipfile.ZipFile(zip_path) as zf:
+            manifest = zf.read("test_skill/skill.json")
+            checksums = zf.read("test_skill/.forge/checksum.sha256")
+        forged = ps.sign(manifest, checksums, stranger)
+        bad, digest = _rewrite_zip(zip_path, tmp_path / "bad.zip", lambda n, d: (
+            forged.encode() if n == "test_skill/skill.sig" else d))
+        _, ok, msg = self._install(tmp_path, bad, digest)
+        assert not ok and "does not verify against any trusted operator key" in msg, msg
+
+    def test_a_signed_package_on_an_install_without_a_key_is_unverifiable_not_valid(self, tmp_path, home):
+        zip_path, zip_hash = self._signed(tmp_path, home)
+        import shutil
+        shutil.rmtree(home / "tenants" / "_default" / "global" / "operator_keys")
+        inst, ok, msg = self._install(tmp_path, zip_path, zip_hash)
+        assert ok, msg
+        rec = inst._load_registry()["test_skill"][0]
+        assert rec["verified"] is False and rec["verification"]["signature"] == "unverifiable", (
+            "a key shipped with the package would prove nothing; none is ever read from the ZIP")
+
+    def test_http_roundtrip_a_signed_package_lists_as_verified(self, client, home):
+        _generate_operator_key(home)
+        _make_skill(home / "skills_gen")
+        r = client.post(f"{BASE}/package?skill_id=test_skill")
+        assert r.status_code == 200, r.text
+        zip_hash = r.json()["zip_hash"].split(":")[-1]
+        r = client.post(f"{BASE}/install", params={"zip_path": "test_skill_1.0.0.zip", "zip_hash": zip_hash})
+        assert r.status_code == 200, r.text
+        listed = client.get(f"{BASE}/installed").json()["skills"]
+        assert [(s["skill_id"], s["verified"]) for s in listed] == [("test_skill", True)]
