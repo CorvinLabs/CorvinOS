@@ -148,6 +148,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "plugin_builder.build": "INFO",
     "routing.rollback_triggered": "WARNING",
     "routing.rollback_reset":    "INFO",
+    # ADR-2253 - one record when a forge run (skill/tool/plugin/layer) starts and one when it finishes.
+    "forge_run.started":         "INFO",
+    "forge_run.finished":        "INFO",
     # registry lifecycle (past-tense canonical names, emitted by registry.py)
     "tool.created":              "INFO",
     "tool.deleted":              "INFO",
@@ -3162,6 +3165,11 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "tenant_id", "skill_n", "bundled_n", "skill_success_rate", "bundled_success_rate",
     }),
     "routing.rollback_reset": frozenset({"tenant_id"}),
+    # ADR-2253: closed enums, an opaque run id, a count and a flag. NEVER: the request, a file name, a message.
+    "forge_run.started": frozenset({"tenant_id", "run_id", "run_kind"}),
+    "forge_run.finished": frozenset({
+        "tenant_id", "run_id", "run_kind", "status", "artifact_kind", "artifact_id", "event_count", "truncated",
+    }),
     # ADR-0171 M1 — universal engine-span audit (engine-agnostic, every path).
     # Canonical here so the allowlist is load-bearing regardless of import order;
     # engine_span._register_allowlists() unions the same set (idempotent).

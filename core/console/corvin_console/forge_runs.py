@@ -487,7 +487,22 @@ def new_run(*, tenant_id: str, kind: str, phases: tuple[str, ...],
         snapshot = dict(record)
     _prune(tenant_id)
     _persist(run_id, snapshot)
+    _audit_run("started", tenant_id, run_id, kind)
     return run_id
+
+
+def _audit_run(what: str, tenant_id: str, run_id: str, kind: str, **extra: Any) -> None:
+    """The run's start/end on the hash chain (ADR-2253). A failing chain write never fails the run."""
+    try:
+        if what == "started":
+            console_audit.forge_run_started(tenant_id=tenant_id, run_id=run_id, run_kind=kind)
+        else:
+            with _event_lock:
+                st = _event_state.get(run_id) or {}
+            console_audit.forge_run_finished(tenant_id=tenant_id, run_id=run_id, run_kind=kind,
+                                             event_count=st.get("seq", 0), truncated=bool(st.get("dropped", 0)), **extra)
+    except Exception:  # noqa: BLE001
+        logger.warning("forge run %s: could not audit %s", run_id, what, exc_info=True)
 
 
 def _evict_locked() -> None:
@@ -584,6 +599,59 @@ def get_run(run_id: str, tenant_id: str, kind: Optional[str] = None, *,
     return copy
 
 
+#: What a client may see of a run. Never ``resume`` (it carries the request and drafts), ``sid_fingerprint`` or the
+#: owner's pid/host - this is an allowlist, so a field added to the record later is private until named here.
+PUBLIC_RUN_FIELDS = (
+    "kind", "status", "phase", "phases", "progress", "message", "engine", "model", "started_at", "ended_at",
+    "artifact_ref", "request_digest", "error", "failure_code", "operation", "base_skill", "tool", "plugin", "skill",
+    "interrupted", "resumes",
+)
+
+
+def public_view(run_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"run_id": run_id}
+    for k in PUBLIC_RUN_FIELDS:
+        if k in record:
+            out[k] = record[k]
+    out.setdefault("started_at", record.get("created_at"))
+    out["live"] = record.get("status") == "running" and _fresh(record)
+    return out
+
+
+def peek_run(run_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+    """A READ-ONLY copy of a run: no resume, no failure marking, no caching. For viewers (the run API); the
+    polling routes use ``get_run``, which may recover an orphan."""
+    with runs_lock:
+        run = runs.get(run_id)
+        if run is not None:
+            return dict(run) if run.get("tenant_id") == tenant_id else None
+    return _load(run_id, tenant_id)
+
+
+def list_runs(tenant_id: str, *, kind: Optional[str] = None, status: Optional[str] = None,
+              limit: int = 50) -> list[Dict[str, Any]]:
+    """The tenant's runs, newest first. Listing is also a reason to prune (a quiet tenant is pruned here too)."""
+    prune(tenant_id)
+    seen: Dict[str, Dict[str, Any]] = {}
+    with runs_lock:
+        for rid, r in runs.items():
+            if r.get("tenant_id") == tenant_id:
+                seen[rid] = dict(r)
+    try:
+        for f in _runs_dir(tenant_id).glob("run-*.json"):
+            if f.stem in seen or not _RUN_ID_RE.match(f.stem) or f.is_symlink():
+                continue
+            rec = _load(f.stem, tenant_id)
+            if rec is not None:
+                seen[f.stem] = rec
+    except OSError:
+        pass
+    rows = [(rid, r) for rid, r in seen.items()
+            if (kind is None or r.get("kind") == kind) and (status is None or r.get("status") == status)]
+    rows.sort(key=lambda x: str(x[1].get("started_at") or x[1].get("created_at") or ""), reverse=True)
+    return [public_view(rid, r) for rid, r in rows[: max(1, min(int(limit), 200))]]
+
+
 def spawn(*, run_id: str, kind: str, tenant_id: str, sid_fingerprint: Optional[str],
           work: Callable[[ProgressCb], Dict[str, Any]],
           success_action: str, failure_action: str,
@@ -632,6 +700,7 @@ def spawn(*, run_id: str, kind: str, tenant_id: str, sid_fingerprint: Optional[s
                        artifact_ref={"kind": kind, "id": target_id}, **result)
             emit_event(run_id, "progress", str(result.get("message") or "finished"), phase=None, data={"progress": 100})
             finalize_events(run_id)
+            _audit_run("finished", tenant_id, run_id, kind, status="success", artifact_kind=kind, artifact_id=target_id)
             if sid_fingerprint:
                 console_audit.action_performed(
                     tenant_id=tenant_id, sid_fingerprint=sid_fingerprint,
@@ -652,5 +721,6 @@ def spawn(*, run_id: str, kind: str, tenant_id: str, sid_fingerprint: Optional[s
                        **(extra if isinstance(extra, dict) else {}))
             emit_event(run_id, "error", hint(exc), level="error", data={"error_class": type(exc).__name__})
             finalize_events(run_id)
+            _audit_run("finished", tenant_id, run_id, kind, status="failed", artifact_kind=kind)
 
     threading.Thread(target=run_task, name=f"forge-{kind}-{run_id}", daemon=True).start()

@@ -410,6 +410,22 @@ def action_failed(
     )
 
 
+def forge_run_started(*, tenant_id: str, run_id: str, run_kind: str) -> None:
+    """ADR-2253: a forge run began. Metadata only - never the request."""
+    _emit("forge_run.started", tenant_id=tenant_id,
+          details={"tenant_id": tenant_id, "run_id": run_id, "run_kind": run_kind})
+
+
+def forge_run_finished(*, tenant_id: str, run_id: str, run_kind: str, status: str,
+                       artifact_kind: str = "", artifact_id: str = "", event_count: int = 0,
+                       truncated: bool = False) -> None:
+    """ADR-2253: a forge run ended (success or failed). Counts and ids only."""
+    _emit("forge_run.finished", tenant_id=tenant_id,
+          details={"tenant_id": tenant_id, "run_id": run_id, "run_kind": run_kind, "status": status,
+                   "artifact_kind": artifact_kind, "artifact_id": artifact_id,
+                   "event_count": int(event_count), "truncated": bool(truncated)})
+
+
 def session_denied(
     *,
     reason: str,

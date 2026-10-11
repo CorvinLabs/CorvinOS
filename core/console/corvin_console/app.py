@@ -100,6 +100,7 @@ from .routes import (
     task_tracking as task_tracking_route,
     skill_creator_api as skill_creator_route,
     forge_creator as forge_creator_route,
+    forge_runs_api as forge_runs_route,
     chat as chat_route,
     chat_groups as chat_groups_route,
     voice as voice_route,
@@ -291,6 +292,7 @@ router.include_router(monitoring_route.router, prefix="/monitoring", tags=["cons
 router.include_router(skills.router, tags=["console-skills"])
 # Unified Forge panel (consolidates tools, skills, os-skills, graph, audit)
 router.include_router(forge_unified_route.router, prefix="/forge", tags=["console-forge-unified"])
+router.include_router(forge_runs_route.router, prefix="/forge", tags=["console-forge-runs"])  # ADR-2253
 # ADR-2229 Phase 3/4 — Forge Bundle export/import/quarantine. Paths are
 # relative ("/forge-bundles/..."): this console router is wrapped in ANOTHER
 # "/v1/console" prefix in corvin_gateway/app.py, so a router-level
@@ -879,6 +881,18 @@ def create_app() -> FastAPI:
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("kb projection not started: %s", exc)
+
+        # Data Hub learning loop (PLAN-0948): the daemon's supervised host - persisted state, durable
+        # inbox, idle back-off, audited regeneration. Same call as corvin_gateway.app.
+        try:
+            import os as _os
+
+            from core.background import learning_host
+
+            learning_host.start(_os.environ.get("CORVIN_TENANT_ID") or "_default")
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("learning host not started: %s", exc)
 
         # Standard plugins (corvin_console/default_plugins.yaml) — same call as corvin_gateway.app.
         try:
