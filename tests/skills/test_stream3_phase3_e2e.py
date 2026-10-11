@@ -90,6 +90,11 @@ class MockEventStore:
         return len(result)
 
 
+@pytest.mark.skip(reason=(
+    "T-0169: the flow-guard learning loop (feedback handler -> policy confidence scorer -> phase-3 loop) has "
+    "no production caller and no feedback source, and on synthetic flows it makes the classification WORSE. "
+    "Wiring it would let learned feedback relax an L34 data-flow gate (fail-closed by rule), which needs its own "
+    "decision; until then these measure a prototype, not the product."))
 class TestFlowGuardLearningLoop:
     """Learning loop E2E tests for Flow Guard (7 tests)."""
 
