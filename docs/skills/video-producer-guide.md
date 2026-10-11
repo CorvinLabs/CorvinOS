@@ -93,8 +93,21 @@ Quality tab does not read it yet (PLAN-0946 R2c).
   `POST /v1/console/video/jobs/{id}/cancel` (session + CSRF, your workspace's jobs only): the job's process
   group gets SIGTERM, then SIGKILL after 5 s, and the job ends `cancelled`. A cancel of a queued job just
   removes it. The answer is `cancelled`, or `cancelling` if the record had not settled after 8 s. A finished
-  job answers 409; another workspace's job id answers 404. Each cancel is an audit event
-  (`video_producer.job_cancelled`: job id, runner, outcome - never the task text).
+  job answers 409; another workspace's job id answers 404. A cancel is recorded as the job's one
+  terminal audit event (`video_producer.job_cancelled`, below).
+* **Lifecycle audit (T-0090).** The console - never the plugin - writes each job's lifecycle into the
+  workspace's hash-chained audit log, from what it observes: `video_producer.job_started` when the runner
+  accepted the job; exactly **one** terminal event - `job_completed`, `job_failed` or `job_cancelled` - when
+  the job's record turns terminal (written by the cancel route, the host's job watcher, or at console start);
+  and `job_degraded` after a completed job whose report lists degradations. `job_failed` carries a closed
+  `reason`: `interrupted` (the console died mid-job; closed and audited by a background pass at the next
+  console start, `start_boot_audit`, in both hosts), `child_exit`, `budget`, `job_error`, `start_failed`.
+  Fields are ids, counts, durations and closed names read from the job's `report.json` (plugin version,
+  scene count, web/Pillow scenes, TTS tiers, degradation count and kinds, verdict, failed stage, error
+  class) - never the task, a narration or an error message. The events are **best-effort**: a chain write
+  that does not commit is logged and counted (`lifecycle_audit_failures` in `GET /v1/console/video/overview`)
+  and never fails or stops the video. Proof: `core/console/tests/test_video_producer_lifecycle_audit_e2e.py`
+  (real router, session + CSRF, the plugin's real process runner, two tenants, chain verified).
 * **Fallback.** `_JOB_RUNNER = "thread"` in `routes/video_producer_api.py` runs jobs on threads again. Cancel
   then stops the job's in-flight external process and ends it at the next step; a blocking SDK call (a
   TTS or model request) cannot be killed and is abandoned until it returns or its deadline passes.

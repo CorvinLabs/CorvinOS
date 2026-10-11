@@ -530,6 +530,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # noqa: BLE001
         logging.getLogger(__name__).warning("default plugins not started: %s", exc)
 
+    # ADR-2247 R2b — Video Producer: close and audit (job_failed reason=interrupted) every job a
+    # killed console left running, at boot rather than on the first panel visit. Background thread.
+    try:
+        import corvin_console  # noqa: F401
+        from corvin_console.routes import video_producer_api as _vpa
+        _vpa.start_boot_audit()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("video producer boot audit not started: %s", exc)
+
     # ADR-0191/ADR-0193 — idempotently seed the built-in zero-config tools
     # (image-generation, native browser) into the mcp_manager catalog on
     # every boot, so a genuinely fresh install has them active with no

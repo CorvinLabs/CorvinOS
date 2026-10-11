@@ -173,7 +173,10 @@ def _store(rec):
     _ensure_plugin()  # also reached from video_learning_api, which has no router gate
     if not _get_storage:
         raise HTTPException(status_code=503, detail=_UNAVAILABLE)
-    return _get_storage(str(_tenant_base(rec)))
+    store = _get_storage(str(_tenant_base(rec)))
+    if getattr(store, "interrupted_ids", None):  # a route opened the store before the boot audit did
+        _drain_interrupted(rec.tenant_id, store)
+    return store
 
 
 def _check_job_id(job_id: str) -> None:
@@ -549,6 +552,10 @@ def _record_job_execution(tenant_id: str, job_id: str, storage_base: str) -> Non
         else:
             logger.warning("[%s] job did not end within the watch window; no execution recorded", job_id)
             return
+        try:
+            _audit_job_end(tenant_id, job, storage, "watcher")
+        except Exception as e:  # noqa: BLE001 - best-effort: the learning record below still runs
+            logger.error("[%s] lifecycle record failed (%s)", job_id, type(e).__name__)
         out = storage.get_video_output(job_id)
         ref = _write_execution_event(tenant_id, job, getattr(out, "metadata", None))
         if not ref:
@@ -560,6 +567,195 @@ def _record_job_execution(tenant_id: str, job_id: str, storage_base: str) -> Non
 def _watch_job_execution(tenant_id: str, job_id: str, storage_base: str) -> None:
     threading.Thread(target=_record_job_execution, args=(tenant_id, job_id, storage_base),
                      name=f"vp-exec-{job_id}", daemon=True).start()
+
+
+# ── Job lifecycle audit (ADR-2247 R2b) ───────────────────────────────────────
+# The HOST writes video_producer.job_started|completed|failed|cancelled|degraded to the tenant's
+# chain from what it observes: the runner accepted the job, the job's record became terminal (the
+# record is written by the job process or by the runner's reaper - the host only reads it), the
+# job's own report.json, and the closed reason vocabulary of the store. The plugin never gets audit
+# access. Ids, counts, durations and closed enums only - never the task, a narration or a message.
+# Best-effort, unlike the grounding events: a chain write that does not commit is logged and counted
+# (``lifecycle_audit_failures`` in /video/overview) and never stops or fails a video.
+_LIFECYCLE_REASONS = frozenset({"interrupted", "cancelled", "child_exit", "budget", "job_error", "start_failed"})
+_LIFECYCLE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:+\-]{1,64}$")
+_LIFECYCLE_MAX_REPORT_BYTES = 128 * 1024
+_LIFECYCLE_SEEN_MAX = 4096
+_lifecycle_lock = threading.Lock()
+# (tenant, job) pairs whose terminal record THIS process wrote: one terminal event per job
+_lifecycle_terminal: "collections.OrderedDict[tuple, str]" = collections.OrderedDict()
+_lifecycle_failures = 0
+
+
+def _lifecycle_audit(tenant_id: str, event: str, details: Dict[str, Any]) -> bool:
+    global _lifecycle_failures
+    ok = _audit(tenant_id, event, {k: v for k, v in details.items() if v is not None})
+    if not ok:
+        with _lifecycle_lock:
+            _lifecycle_failures += 1
+        logger.error("[%s] lifecycle record %s not written to the chain (counted; the job is unaffected)",
+                     details.get("job_id"), event)
+    return ok
+
+
+def lifecycle_audit_failures() -> int:
+    with _lifecycle_lock:
+        return _lifecycle_failures
+
+
+def _claim_terminal(tenant_id: str, job_id: str, event: str) -> Optional[str]:
+    """Reserve the one terminal record of a job. Returns None when the claim is new, else the event
+    an earlier observer already wrote."""
+    key = (tenant_id, job_id)
+    with _lifecycle_lock:
+        prev = _lifecycle_terminal.get(key)
+        if prev is not None:
+            return prev
+        _lifecycle_terminal[key] = event
+        while len(_lifecycle_terminal) > _LIFECYCLE_SEEN_MAX:
+            _lifecycle_terminal.popitem(last=False)
+    return None
+
+
+def _lc_token(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and _LIFECYCLE_TOKEN_RE.match(value) else None
+
+
+def _lc_int(value: Any) -> Optional[int]:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _report_facts(storage, job_id: str) -> Dict[str, Any]:
+    """Numbers and closed identifiers from the job's own report.json (schema 1). A missing,
+    oversized or malformed report gives nothing - never an exception, never text."""
+    import json  # noqa: PLC0415
+
+    path = Path(storage.videos_dir) / job_id / "report.json"
+    try:
+        if path.is_symlink() or path.stat().st_size > _LIFECYCLE_MAX_REPORT_BYTES:
+            return {}
+        rep = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(rep, dict) or rep.get("job_id") != job_id:
+        return {}
+    scenes = [s for s in rep.get("scenes") or [] if isinstance(s, dict)]
+    degr = [d for d in rep.get("degradations") or [] if isinstance(d, dict)]
+    verdicts = {s.get("verdict") for s in rep.get("signals") or [] if isinstance(s, dict)}
+    verdict = next((v for v in ("fail", "warn", "pass") if v in verdicts), None)
+    tiers = sorted({t for t in (_lc_token(s.get("tts_tier")) for s in scenes) if t})
+    kinds = sorted({k for k in (_lc_token(d.get("kind")) for d in degr) if k})
+    ds = rep.get("degraded_scenes") if isinstance(rep.get("degraded_scenes"), dict) else {}
+    total = rep.get("total_seconds")
+    return {
+        "plugin_version": _lc_token(rep.get("plugin_version")),
+        "scene_count": len(scenes),
+        "web_scenes": sum(1 for s in scenes if s.get("renderer") == "web"),
+        "pillow_scenes": sum(1 for s in scenes if s.get("renderer") == "pillow"),
+        "tts_tiers": ",".join(tiers) or None,
+        "degradation_count": len(degr),
+        "degraded_scenes": _lc_int(ds.get("n")),
+        "degradation_kinds": ",".join(kinds) or None,
+        "verdict": verdict,
+        "failed_stage": _lc_token(rep.get("failed_stage")),
+        "error_class": _lc_token(rep.get("error_class")),
+        "report_seconds": round(float(total), 1) if isinstance(total, (int, float)) and not isinstance(total, bool) else None,
+    }
+
+
+def _audit_job_end(tenant_id: str, job, storage, observed_by: str) -> Optional[str]:
+    """Write the one terminal lifecycle record of ``job`` (its record is terminal). Returns the event
+    written, or None when another observer had already written it."""
+    status = getattr(job, "status", None)
+    if status not in _TERMINAL:
+        return None
+    event = {"complete": "video_producer.job_completed", "cancelled": "video_producer.job_cancelled"}.get(
+        status, "video_producer.job_failed")
+    prev = _claim_terminal(tenant_id, job.id, event)
+    if prev is not None and (prev == event or status == "cancelled"):
+        return None  # the cancel route already recorded this end
+    reason = getattr(job, "reason", None)
+    if status == "error":
+        reason = reason if reason in _LIFECYCLE_REASONS else "job_error"
+    elif status == "cancelled":
+        reason = "cancelled"
+    else:
+        reason = None
+    facts = _report_facts(storage, job.id)
+    started, done = getattr(job, "started_at", None), getattr(job, "completed_at", None)
+    duration = round((done - started).total_seconds(), 1) if started and done else facts.get("report_seconds")
+    details = {"job_id": job.id, "runner": _JOB_RUNNER, "status": status, "reason": reason,
+               "duration_s": duration, "observed_by": observed_by,
+               **{k: v for k, v in facts.items() if k not in ("report_seconds", "degradation_kinds")}}
+    _lifecycle_audit(tenant_id, event, details)
+    if status == "complete" and facts.get("degradation_count"):
+        _lifecycle_audit(tenant_id, "video_producer.job_degraded", {
+            "job_id": job.id, "degradation_count": facts["degradation_count"],
+            "degraded_scenes": facts.get("degraded_scenes"), "scene_count": facts.get("scene_count"),
+            "degradation_kinds": facts.get("degradation_kinds"), "verdict": facts.get("verdict")})
+    return event
+
+
+def _drain_interrupted(tenant_id: str, storage) -> int:
+    """Audit every job the store's first open in this process closed as ``interrupted`` (its console
+    died mid-job). ``take_interrupted_ids`` hands each id out once, so a job gets exactly one record."""
+    take = getattr(storage, "take_interrupted_ids", None)
+    if take is None:  # an installed plugin older than R2b
+        return 0
+    n = 0
+    for job_id in take():
+        if not _JOB_ID_RE.match(str(job_id)) or _claim_terminal(tenant_id, job_id, "video_producer.job_failed"):
+            continue
+        job = storage.get_job(job_id)
+        started, done = getattr(job, "started_at", None), getattr(job, "completed_at", None)
+        _lifecycle_audit(tenant_id, "video_producer.job_failed", {
+            "job_id": job_id, "runner": _JOB_RUNNER, "status": "error", "reason": "interrupted",
+            "observed_by": "boot",
+            "duration_s": round((done - started).total_seconds(), 1) if started and done else None})
+        n += 1
+    return n
+
+
+def audit_interrupted_jobs() -> int:
+    """At host start: open every tenant's existing video store once, which closes the jobs a killed
+    console left running, and audit each one (``job_failed reason=interrupted``). Both hosts call this
+    at boot (``start_boot_audit``) - not lazily on the first route, which would leave the record
+    unwritten until somebody opened the panel. Returns the number of records written."""
+    from core.paths.tenant import corvin_home, tenant_home  # noqa: PLC0415
+
+    _ensure_plugin()
+    if not _get_storage:
+        return 0
+    root = corvin_home() / "tenants"
+    if not root.is_dir():
+        return 0
+    n = 0
+    for d in sorted(root.iterdir()):
+        base = d / "video_producer"
+        if not (base / "jobs").is_dir():
+            continue  # never create a store for a tenant that has none
+        try:
+            tenant_id = d.name
+            if tenant_home(tenant_id).resolve() != d.resolve():  # validates the id
+                continue
+            n += _drain_interrupted(tenant_id, _get_storage(str(base)))
+        except Exception as e:  # noqa: BLE001 - one tenant's damaged store must not stop the others
+            logger.warning("video producer: boot lifecycle audit skipped a tenant (%s)", type(e).__name__)
+    return n
+
+
+def start_boot_audit() -> None:
+    """Run ``audit_interrupted_jobs`` on a daemon thread: a held job lock costs the store open up to
+    the plugin's INTERRUPT_GRACE_S, which must not delay the host's start."""
+    def _run() -> None:
+        try:
+            n = audit_interrupted_jobs()
+            if n:
+                logger.warning("video producer: %d interrupted job(s) closed and audited at start", n)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("video producer: boot lifecycle audit failed (%s)", type(e).__name__)
+
+    threading.Thread(target=_run, name="vp-boot-audit", daemon=True).start()
 
 
 def _feedback_refusal_detail(job) -> str:
@@ -776,8 +972,18 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
         job.error_message = "The job could not be started."
         job.completed_at = datetime.now()
         storage.save_job(job)
+        if _claim_terminal(rec.tenant_id, job_id, "video_producer.job_failed") is None:
+            await asyncio.to_thread(_lifecycle_audit, rec.tenant_id, "video_producer.job_failed", {
+                "job_id": job_id, "runner": _JOB_RUNNER, "status": "error", "reason": "start_failed",
+                "observed_by": "route"})
         raise HTTPException(status_code=500, detail="Failed to start the job") from None
 
+    # the runner accepted the job (process mode: spawned or queued behind the cap) - lifecycle start
+    await asyncio.to_thread(_lifecycle_audit, rec.tenant_id, "video_producer.job_started", {
+        "job_id": job_id, "runner": _JOB_RUNNER, "tts_engine": settings["tts_engine"],
+        "storyboard_backend": backend, "is_revision": bool(req.base_job_id),
+        "grounded": grounding_pack is not None, "styled": web_style is not None,
+        "max_duration_minutes": settings["max_duration_minutes"]})
     _watch_job_execution(rec.tenant_id, job_id, config["storage_base"])
     return {"job_id": job_id, "status": "pending", "created_at": job.created_at.isoformat()}
 
@@ -888,9 +1094,15 @@ async def cancel_video_job(job_id: str, rec=_SessionRec):
             break
         await asyncio.sleep(0.1)
     outcome = state if state in _TERMINAL else "cancelling"
-    # lifecycle audit is best-effort (ADR-2247): a failed chain write never un-cancels a job
-    await asyncio.to_thread(_audit, rec.tenant_id, "video_producer.job_cancelled",
-                            {"job_id": job_id, "runner": _JOB_RUNNER, "outcome": outcome})
+    # One terminal record per job (ADR-2247 R2b): the route writes job_cancelled when the kill is
+    # done or under way and claims the job's end, so the watcher does not write it twice. A job that
+    # finished before the kill landed ("complete"/"error") is left to the watcher, which records what
+    # really happened. Best-effort: a failed chain write never un-cancels a job.
+    if outcome in ("cancelled", "cancelling") and \
+            _claim_terminal(rec.tenant_id, job_id, "video_producer.job_cancelled") is None:
+        await asyncio.to_thread(_lifecycle_audit, rec.tenant_id, "video_producer.job_cancelled", {
+            "job_id": job_id, "runner": _JOB_RUNNER, "outcome": outcome, "status": "cancelled",
+            "reason": "cancelled", "observed_by": "route"})
     return {"job_id": job_id, "status": outcome}
 
 
@@ -1006,6 +1218,8 @@ def get_overview(rec=_SessionRec):
         "last_activity": last.isoformat() if hasattr(last, "isoformat") else last,
         "ffprobe_available": ffprobe_available(),
         "plugin_source": PLUGIN_SOURCE,
+        # lifecycle records that did not reach the chain since this console started (ADR-2247 R2b)
+        "lifecycle_audit_failures": lifecycle_audit_failures(),
     }
 
 

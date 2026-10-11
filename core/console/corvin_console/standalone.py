@@ -371,6 +371,14 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             log.warning("default plugins not started: %s", exc)
 
+        # Video Producer (ADR-2247 R2b): close and audit every job a killed console left running,
+        # at boot, on a background thread. corvin_gateway.app does the same.
+        try:
+            from corvin_console.routes import video_producer_api as _vpa
+            _vpa.start_boot_audit()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("video producer boot audit not started: %s", exc)
+
         # ── Phase 1a: Voice config migration (best-effort — never blocks startup) ─
         # Auto-migrate voice configuration from legacy ~/.config/corvin-voice/
         # to tenant-scoped <corvin_home>/tenants/<tenant_id>/voice/ on first access.

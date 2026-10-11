@@ -1151,7 +1151,13 @@ EVENT_SEVERITY: dict[str, str] = {
     "video_producer.style_saved":        "INFO",
     "video_producer.style_deleted":      "INFO",
     "video_producer.style_applied":      "INFO",
+    # ADR-2247 R2b: the HOST's record of a video job's lifecycle (start, the one terminal state, a
+    # completed job's degradations). Ids, counts, durations and closed enums - never task text.
+    "video_producer.job_started":        "INFO",
+    "video_producer.job_completed":      "INFO",
+    "video_producer.job_failed":         "WARNING",
     "video_producer.job_cancelled":      "INFO",
+    "video_producer.job_degraded":       "WARNING",
     # ADR validation framework (core/deployment/adr_validation_framework.py via
     # core/deployment/audit_sink — mirrored statically so the floor does not
     # depend on import order)
@@ -3115,6 +3121,15 @@ def _audit_value_pii(v: str) -> bool:
     return False
 
 
+# ADR-2247 R2b: every terminal video-job record (completed / failed / cancelled) carries these.
+# "reason" is a closed vocabulary (interrupted|cancelled|child_exit|budget|job_error|start_failed),
+# "error_class" an exception CLASS name read from the job's report (never its message).
+_VP_JOB_END_FIELDS: frozenset[str] = frozenset({
+    "tenant_id", "job_id", "runner", "status", "reason", "duration_s", "observed_by", "plugin_version",
+    "scene_count", "web_scenes", "pillow_scenes", "tts_tiers", "degradation_count", "degraded_scenes",
+    "verdict", "failed_stage", "error_class",
+})
+
 _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # ADR-2092 — L5 routing loop. Engines/surfaces/reasons are closed enums,
     # counts and rates are numbers, turn_id is an opaque random id. NEVER text.
@@ -4351,7 +4366,17 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "video_producer.style_deleted": frozenset({"tenant_id", "style_id"}),
     "video_producer.style_applied": frozenset({"tenant_id", "job_id", "style_id"}),
-    "video_producer.job_cancelled": frozenset({"tenant_id", "job_id", "runner", "outcome"}),
+    "video_producer.job_started": frozenset({
+        "tenant_id", "job_id", "runner", "tts_engine", "storyboard_backend", "is_revision", "grounded",
+        "styled", "max_duration_minutes",
+    }),
+    "video_producer.job_completed": _VP_JOB_END_FIELDS,
+    "video_producer.job_failed": _VP_JOB_END_FIELDS,
+    "video_producer.job_cancelled": _VP_JOB_END_FIELDS | {"outcome"},
+    "video_producer.job_degraded": frozenset({
+        "tenant_id", "job_id", "degradation_count", "degraded_scenes", "scene_count", "degradation_kinds",
+        "verdict",
+    }),
     # "violations" holds "ADR-NNNN/check_name" codes, never free text.
     "deployment.adr_violation_detected": frozenset({
         "week", "violation_count", "violations", "tenant_id", "lom", "component",
