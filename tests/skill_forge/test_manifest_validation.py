@@ -168,7 +168,7 @@ class TestSchemaValidation:
                 description="Test skill",
                 entry_point="test.skill",
                 input_schema={"type": "object"},
-                output_schema={"required": ["missing_type_field"]},  # missing type
+                output_schema={"type": "object", "required": "not-a-list"},  # "required" must be an array (a schema without "type" is valid)
             )
 
 

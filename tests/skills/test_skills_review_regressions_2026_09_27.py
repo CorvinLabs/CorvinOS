@@ -136,9 +136,6 @@ def booted(tmp_path, monkeypatch):
     from core.skills.boot import boot_skills
 
     assert "os.delegation_router" in boot_skills("_default", wire_learning=False)
-    from core.skills.os_skills.monitoring import dual_write
-
-    dual_write.initialize_dual_write(storage_dir=tmp_path / "metrics")
     return chain
 
 
@@ -153,78 +150,64 @@ def _events(chain: Path, event_type: str) -> list[dict]:
     return out
 
 
-def test_dual_write_fetch_consults_the_skill(booted):
-    from core.skills.os_skills.monitoring.dual_write import _fetch_skill_decision
-
-    out = _fetch_skill_decision(complexity=3, task_type="chat", force_delegate=False,
-                                is_big_data=False, tenant_id="_default")
-    assert out["decision"] == "native"
-    assert out["confidence"] > 0.0, out  # 0.0 == the error fallback
+# The Phase 2a module's own entry points (_fetch_skill_decision, resolve_worker_engine_dual_write,
+# initialize_dual_write) were removed with the ADR-2092 rewrite; the gated Phase 2 path is covered
+# by the tests below and tests/e2e/test_os_skills_l5_l10_wiring.py.
 
 
-def test_dual_write_routing_is_audited_to_tenant_chain(booted):
-    """The Phase 2a module itself (not reachable from routing while the
-    rollback guard is unwired) still chains its decisions."""
-    from core.skills.os_skills.monitoring.dual_write import resolve_worker_engine_dual_write
-
-    engine = resolve_worker_engine_dual_write(
-        request_id="r1", bundled_engine="acs", task_type="chat", complexity=3,
-        force_delegate=False, is_big_data=False, tenant_id="_default",
-    )
-    assert engine == "native"
-    recs = _events(booted, "l5_routing_dual_write")
-    assert recs, "Phase 2a routing decision missing from the audit chain"
-    rec = recs[-1]
-    assert rec["decision_source"] == "skill"
-    assert rec["used_engine"] == "native"
-    assert rec["bundled_engine"] == "acs"
-    assert rec["skill_engine"] == "native"
-    assert rec["tenant_id"] == "_default"
-    assert _events(booted, "l5_routing_metrics")
-
-
-@pytest.mark.parametrize("phase", ["phase2_dual_write", "phase2_real"])
-def test_phase2_env_cannot_change_served_routing(booted, monkeypatch, phase):
-    """Round 2: CORVIN_ACP_PHASE=phase2_* used to serve the Skill's engine
-    ("native") over the operator's selection ("acs") with an auto-rollback
-    that had no input (record_routing_outcome: zero callers). The request is
-    now refused — bundled engine served, refusal audited, shadow record kept."""
+@pytest.mark.parametrize("phase,reason", [
+    ("phase2_real", "phase2_real_unsupported"),
+    ("phase2_dual_write", None),   # refused by the readiness gate on a fresh install
+])
+def test_phase2_env_cannot_change_served_routing(booted, monkeypatch, phase, reason):
+    """Round 2: CORVIN_ACP_PHASE=phase2_* used to serve the Skill's engine ("native")
+    over the operator's selection ("acs") with no recovery path. Since ADR-2092 the
+    request is honoured only when every gate clears; here none does, so the bundled
+    engine is served, the refusal is audited once per process (not once per turn),
+    and the shadow record is still kept."""
+    from core.skills.os_skills.monitoring import dual_write
     from corvin_operator.bridges.shared import delegation_policy as dp
 
-    monkeypatch.setattr(dp, "_phase2_refusals_audited", set())
+    dual_write.reset_for_tests()
     monkeypatch.setenv("CORVIN_ACP_PHASE", phase)
     for _ in range(3):
         engine = dp.resolve_worker_engine(mode="acs", force_delegate=False, is_big_data=False,
-                                          tde_available=True, quota_ok=True, tenant_id="_default")
+                                          tde_available=True, quota_ok=True, tenant_id="_default",
+                                          sink={})
         assert engine == "acs"
-    assert _events(booted, "l5_routing_dual_write") == []
-    refused = _events(booted, "l5_routing_phase_refused")
-    assert len(refused) == 1, refused  # once per process, not once per turn
-    assert refused[0]["requested_phase"] == phase
-    assert refused[0]["effective_phase"] == "phase1_shadow"
-    assert refused[0]["reason_code"] == "rollback_guard_not_wired"
+    assert _events(booted, "routing.phase2_decision") == []
+    refused = _events(booted, "routing.phase2_refused")
+    # Once per process PER REASON, never once per turn. The readiness gate may name two
+    # reasons across three turns ("evaluating" while its cache warms, then the verdict).
+    reasons = [r["reason"] for r in refused]
+    assert refused and len(reasons) == len(set(reasons)) <= (1 if reason else 2), refused
+    assert all(r["phase_requested"] == phase for r in refused)
+    if reason:
+        assert reasons == [reason]
     shadow = [r for r in _events(booted, "skill.executed")
-              if "delegation_policy.py:_acp_shadow_route" in json.dumps(r)]
+              if "delegation_policy.py" in json.dumps(r)]
     assert len(shadow) == 3
 
 
-def test_phase2_is_reachable_only_through_the_guard_flag(booted, monkeypatch):
-    """The Phase 2 path itself is intact; only the guard admits it."""
-    from corvin_operator.bridges.shared import delegation_policy as dp
+def test_phase2_is_reachable_only_through_the_gates(booted, monkeypatch):
+    """An unknown phase value degrades to shadow; a cleared request still needs the
+    Skill booted in this process."""
+    from core.skills.os_skills.monitoring import dual_write
 
-    monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
-    assert dp._get_phase_mode() == "phase1_shadow"
-    monkeypatch.setattr(dp, "_PHASE2_ROLLBACK_GUARD_WIRED", True)
-    assert dp._get_phase_mode() == "phase2_dual_write"
+    dual_write.reset_for_tests()
     monkeypatch.setenv("CORVIN_ACP_PHASE", "phase3_bogus")
-    assert dp._get_phase_mode() == "phase1_shadow"
+    assert dual_write.requested_phase() == "phase1_shadow"
+    monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
+    assert dual_write.requested_phase() == "phase2_dual_write"
+    assert dual_write.effective_phase(tenant_id="_default", surface="console",
+                                      skill_available=False) == "shadow"
 
 
 @pytest.mark.parametrize("force,big", [(True, False), (False, True)])
 def test_shadow_route_passes_delegate_and_big_data_signals(booted, force, big):
-    """Round 2: _acp_shadow_route dropped force_delegate / is_big_data, so the
-    Skill answered "native" where the bundled rule (correctly) chose "acs" —
-    a fabricated disagreement fed into the learning signal."""
+    """Round 2: the shadow route dropped force_delegate / is_big_data, so the Skill
+    answered "native" where the bundled rule (correctly) chose "acs" — a fabricated
+    disagreement fed into the learning signal."""
     from core.skills import skill_registry_phase1 as reg
     from corvin_operator.bridges.shared import delegation_policy as dp
 
@@ -239,8 +222,11 @@ def test_shadow_route_passes_delegate_and_big_data_signals(booted, force, big):
 
     reg._global_registry.execute = spy
     try:
+        # ``sink`` makes this a recorded turn; without it the call is a pure query
+        # that never executes the Skill.
         engine = dp.resolve_worker_engine(mode="native", force_delegate=force, is_big_data=big,
-                                          tde_available=False, quota_ok=True, tenant_id="_default")
+                                          tde_available=False, quota_ok=True, tenant_id="_default",
+                                          sink={})
     finally:
         reg._global_registry.execute = real_execute
     assert engine == "acs"
@@ -255,7 +241,7 @@ def test_context_adapter_executes_after_router_key_change(booted):
         "os.context_adapter",
         {"complexity": 5, "task_type": "chat", "task_description": "x", "tenant_id": "_default"},
         timeout_ms=5000,
-        lom="corvin_operator/bridges/shared/delegation_policy.py:_acp_shadow_route",
+        lom="corvin_operator/bridges/shared/delegation_policy.py:route_and_record",
         tenant_id="_default",
     )
     assert res.status == "success", res.error_message

@@ -194,14 +194,15 @@ class TestAdversarialTenantIsolationBreach:
                     for evt in result2.audit_events:
                         assert evt.get("tenant_id") == "tenant_2"
 
-    def test_3_2_tenant_id_none_rejected(self):
-        """Test 3.2: Verify tenant_id=None is rejected."""
+    def test_3_2_tenant_id_none_resolves_to_current_tenant(self):
+        """Test 3.2: tenant_id=None is resolved to the process tenant (documented default),
+        never left unset; an invalid explicit tenant_id is rejected."""
+        plan = PluginDevelopmentPlan(plugin_id="test.no_tenant", plugin_name="No Tenant Test",
+                                     tenant_id=None)
+        assert plan.tenant_id is not None
         with pytest.raises(ValueError, match="Invalid tenant_id"):
-            PluginDevelopmentPlan(
-                plugin_id="test.no_tenant",
-                plugin_name="No Tenant Test",
-                tenant_id=None,
-            )
+            PluginDevelopmentPlan(plugin_id="test.bad_tenant", plugin_name="Bad Tenant",
+                                  tenant_id="../other")
 
     def test_3_3_tenant_id_forgery_in_events(self):
         """Test 3.3: Verify audit events cannot forge tenant_id."""

@@ -62,6 +62,12 @@ files = bootstrap_scaffold(
 )
 ```
 
+`plugin_id` must match `[a-z0-9][a-z0-9_.-]{0,63}` and may not contain `..`; anything else
+raises `ValueError` before a file is written (it names the scaffold directory and the
+distribution). `description` and `author` are written into `setup.py` / `pyproject.toml` as
+escaped string literals and into docstrings with quotes and control characters neutralised,
+so free text can never become code in a generated package.
+
 ### 2. Testing Framework (`testing_framework/`)
 
 Provides pytest fixtures and test infrastructure for plugins.

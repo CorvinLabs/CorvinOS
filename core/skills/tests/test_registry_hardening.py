@@ -119,12 +119,13 @@ class TestDecisionReachesTheChain:
             lom=LOM,
         )
         rec = [c for c in _chain() if c["event_type"] == "skill.executed"][-1]["details"]
-        # The router names its advice ``decision`` (manifest output_schema,
-        # 2026-09-27); ``engine`` is no longer an output key.
+        # The router names its advice ``decision`` (manifest output_schema, 2026-09-27).
         assert r.status == "success", r.error_message
+        # ``engine`` is kept next to ``decision`` (both are identifier tokens); the learned
+        # ``confidence_threshold`` appears only once a config was learned for the tenant.
         assert rec["decision"] == {
-            "decision": r.output["decision"], "bundled_engine": "native", "shadow": True,
-            "confidence": r.output["confidence"], "confidence_threshold": 0.7,
+            "engine": r.output["engine"], "decision": r.output["decision"],
+            "bundled_engine": "native", "shadow": True, "confidence": r.output["confidence"],
         }
         assert "reasoning" not in rec["decision"]
         assert "a@b.de" not in json.dumps(rec)

@@ -121,6 +121,9 @@ class PluginScaffoldConfig:
         return True
 
 
+_PLUGIN_ID_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
+
+
 @dataclass
 class LifecycleHookTemplate:
     """Template for a plugin with lifecycle hooks.
@@ -144,6 +147,25 @@ class LifecycleHookTemplate:
     include_on_load: bool = True
     include_on_execute: bool = True
     include_on_unload: bool = True
+
+    def __post_init__(self) -> None:
+        # plugin_id becomes a directory name, a distribution name and appears inside
+        # generated code; anything outside this charset (path separators, "..", quotes)
+        # would escape the scaffold directory or the string literal it is written into.
+        if not isinstance(self.plugin_id, str) or not _PLUGIN_ID_RE.fullmatch(self.plugin_id) \
+                or ".." in self.plugin_id:
+            raise ValueError(f"Invalid plugin_id {self.plugin_id!r}: expected [a-z0-9][a-z0-9_.-]{{0,63}}")
+
+    @staticmethod
+    def _lit(value: object) -> str:
+        """A string literal valid in both Python and TOML (JSON, ASCII-escaped)."""
+        return json.dumps(str(value))
+
+    @staticmethod
+    def _doc(value: object) -> str:
+        """Text that is safe inside a triple-quoted docstring or a comment line."""
+        text = "".join(ch if ch.isprintable() else " " for ch in str(value))
+        return text.replace("\\", "/").replace('"', "'")
 
     def generate_plugin_code(self) -> str:
         """Generate plugin.py code with lifecycle hooks.
@@ -204,11 +226,11 @@ class LifecycleHookTemplate:
 
         hooks_code = "\n".join(hooks)
 
-        return f'''"""Plugin implementation for {self.plugin_name}.
+        return f'''"""Plugin implementation for {self._doc(self.plugin_name)}.
 
 Plugin ID: {self.plugin_id}
-Type: {self.plugin_type}
-Author: {self.author}
+Type: {self._doc(self.plugin_type)}
+Author: {self._doc(self.author)}
 """
 from __future__ import annotations
 
@@ -771,7 +793,7 @@ class EnhancedScaffolder:
         # Generate __init__.py
         init_file = plugin_dir / "__init__.py"
         init_file.write_text(
-            f'"""Plugin: {template.plugin_name}."""\n'
+            f'"""Plugin: {template._doc(template.plugin_name)}."""\n'
             f'from .plugin import {template._class_name()}Plugin\n'
             f"\n__version__ = '0.1.0'\n"
             f"__all__ = ['{template._class_name()}Plugin']\n",
@@ -806,8 +828,8 @@ from setuptools import setup, find_packages
 setup(
     name="corvin-{template.plugin_id.replace('.', '-')}",
     version="0.1.0",
-    description="{template.description}",
-    author="{template.author}",
+    description={template._lit(template.description)},
+    author={template._lit(template.author)},
     packages=find_packages(include=["*"]),
     python_requires=">=3.10",
     install_requires=[
@@ -833,10 +855,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "corvin-{template.plugin_id.replace('.', '-')}"
 version = "0.1.0"
-description = "{template.description}"
+description = {template._lit(template.description)}
 requires-python = ">=3.10"
 authors = [
-    {{name = "{template.author}"}},
+    {{name = {template._lit(template.author)}}},
 ]
 dependencies = [
     "corvin-plugins",

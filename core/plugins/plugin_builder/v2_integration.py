@@ -115,6 +115,13 @@ class PluginDevelopmentPlan:
         if self.tenant_id is None:
             self.tenant_id = current_tenant()
 
+        # plugin_id names the scaffold directory and the distribution: reject path
+        # separators / ".." / quotes up front, before anything is written.
+        from .scaffolding.enhanced_scaffolder import _PLUGIN_ID_RE
+        if not isinstance(self.plugin_id, str) or not _PLUGIN_ID_RE.fullmatch(self.plugin_id) \
+                or ".." in self.plugin_id:
+            raise ValueError(f"Invalid plugin_id {self.plugin_id!r}")
+
         # Validate tenant_id
         try:
             validate_tenant_id(self.tenant_id)

@@ -86,6 +86,7 @@ def test_grade_pattern_goes_through_the_chained_store(tmp_path: Path):
     assert disk[0].signal == {
         "kind": "pattern_grade", "pattern_id": "pattern_a", "grade": 0.4,
         "has_reason": True, "reason_length": len("private operator remark"), "source": "operator",
+        "trust_weight": 1.0,
     }
     chain = Path(os.environ["VOICE_AUDIT_PATH"]).read_text()
     assert disk[0].audit_ref in chain and "operator remark" not in chain

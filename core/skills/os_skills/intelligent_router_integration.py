@@ -37,7 +37,10 @@ def _routing_strategy_for_tenant(tenant_id: str) -> tuple[str, bool]:
     try:
         cfg = _load_tenant_config(tenant_id)
         routing = cfg.spec.routing
-        return routing.strategy, routing.judge_enabled
+        # The judge is only ever consulted under phase3_judge; the schema default is
+        # judge_enabled=True, so a tenant that never configured routing would otherwise
+        # report an opt-in it did not make.
+        return routing.strategy, bool(routing.judge_enabled) and routing.strategy == "phase3_judge"
     except Exception as e:  # noqa: BLE001 — config load must never break routing
         logger.warning(f"tenant routing config load failed for {tenant_id!r}: {e}; using phase2_conservative")
         return "phase2_conservative", False
