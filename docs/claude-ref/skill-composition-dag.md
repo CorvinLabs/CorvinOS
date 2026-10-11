@@ -55,6 +55,7 @@ metadata = SkillMetadata(
 |---|---|
 | `name` | Skill ID (e.g., "os.delegation_router") |
 | `version` | Semver constraint (e.g., ">=1.0.0") |
+|  | grammar | terms `>=` `<=` `>` `<` `==` `!=` followed by `X[.Y[.Z]]`, with or without a space, joined by spaces or commas (`">=1.0.0 <2.0.0"`); a bare `X.Y.Z` means `==`; `1.0` equals `1.0.0`. **Fail-closed:** any text that is not a term (`^1.0`, `>=1.0.0-beta`, an empty string) or an unparseable installed version is NOT satisfied. Until 2026-10-11 an operator written without a space (`">=1.0.0"`, `"<2.0.0"`) was silently ignored and every version satisfied it. |
 | `constraint_type` | EXACT, SEMVER_RANGE, or ANY |
 | `required` | true → missing dep = fail install/execution; false → degrade gracefully |
 | `call_pattern` | once, per_worker, on_demand (hint for budgeting) |
@@ -346,3 +347,7 @@ pytest core/skills/tests/test_skill_dag_e2e_integration.py -xvs
 - **ADR-0314**: Learning Infrastructure (feedback events, optimizer loop)
 - **ADR-0232/0233**: Audit Chain Boot Tripwire (immutable audit trail, hash-chaining)
 - **ADR-0537**: Personas Elimination & Skills Migration (LoM cryptographic binding)
+
+## Loader semantics
+
+`SkillDAGLoader.load_with_dag(ids)` validates and orders the skills it is ASKED for, dependencies first; it does not pull in their dependencies (declared-but-unlisted ones are reported as not installed when missing from the registry). A skill named twice is one skill (deduplicated; a duplicate used to be reported as a cycle).

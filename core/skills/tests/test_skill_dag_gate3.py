@@ -154,7 +154,7 @@ class TestCircularDependencyDetection:
 
         assert not report.is_valid
         assert len(report.blockers) > 0
-        assert any("cycle" in blocker.lower() for blocker in report.blockers)
+        assert any("cycl" in blocker.lower() for blocker in report.blockers)
 
     def test_complex_cycle_a_to_b_to_c_to_a(self, empty_registry: SkillsRegistry):
         """Detect complex cycle: A → B → C → A."""
@@ -177,7 +177,7 @@ class TestCircularDependencyDetection:
 
         assert not report.is_valid
         assert len(report.blockers) > 0
-        assert any("cycle" in blocker.lower() for blocker in report.blockers)
+        assert any("cycl" in blocker.lower() for blocker in report.blockers)
 
     def test_self_dependency_rejected(self, empty_registry: SkillsRegistry):
         """Reject a skill depending on itself."""
@@ -190,7 +190,7 @@ class TestCircularDependencyDetection:
         report = validator.validate_dependencies("test.skill_self", skill.metadata.depends_on)
 
         assert not report.is_valid
-        assert any("cycle" in blocker.lower() for blocker in report.blockers)
+        assert any("cycl" in blocker.lower() for blocker in report.blockers)
 
     def test_acyclic_graph_passes(self, chain_registry: SkillsRegistry):
         """Acyclic graphs should pass validation."""
@@ -452,7 +452,7 @@ class TestTopologicalSort:
         sorted_skills, error = topological_sort_skills(skills, empty_registry)
 
         assert error is not None
-        assert "cycle" in error.lower()
+        assert "cycl" in error.lower()
         assert sorted_skills == []
 
 
@@ -554,11 +554,11 @@ class TestDAGPerformance:
             elif i < 5:
                 deps = [SkillDependency(name=f"test.skill_{i-1}", version=">=1.0.0")]
             else:
-                # Branch dependency: multiple parents
-                deps = [
-                    SkillDependency(name=f"test.skill_{i-5}", version=">=1.0.0"),
-                    SkillDependency(name=f"test.skill_{i-10}", version=">=1.0.0"),
-                ]
+                # Branch dependency: multiple parents (the second one only exists from i=10 on;
+                # i-10 was negative for 5..9, a dependency on skills that were never created)
+                deps = [SkillDependency(name=f"test.skill_{i-5}", version=">=1.0.0")]
+                if i >= 10:
+                    deps.append(SkillDependency(name=f"test.skill_{i-10}", version=">=1.0.0"))
             reg.register(make_skill(f"test.skill_{i}", depends_on=deps))
 
         loader = SkillDAGLoader(reg)

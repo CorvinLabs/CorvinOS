@@ -360,8 +360,11 @@ class TestSkillsDAGEndToEnd:
         # This is already set up in setup_method, so just load it
         loader = SkillDAGLoader(self.registry)
 
+        # The loader orders and validates the skills it is ASKED for; it does not pull in
+        # their dependencies (DAG checking is an invariant, not composition: ADR-2250). So
+        # all three are requested, in the worst order, and must come back dependency-first.
         loaded, errors = loader.load_with_dag(
-            ["os.workflow_optimizer"],
+            ["os.workflow_optimizer", "os.context_adapter", "os.delegation_router"],
             strict_mode=True,
         )
 

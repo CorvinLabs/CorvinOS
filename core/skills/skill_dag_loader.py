@@ -16,6 +16,7 @@ Compliance:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -143,42 +144,57 @@ class DependencyValidator:
 
         return False
 
+    _RANGE_TERM = re.compile(r"\s*(>=|<=|==|!=|>|<)\s*(\d+(?:\.\d+)*)\s*")
+
     @staticmethod
-    def _semver_range_satisfies(installed: str, constraint: str) -> bool:
-        """Parse semver range and check if installed version satisfies it.
+    def _version_tuple(text: str) -> tuple:
+        """``"1.2"`` -> ``(1, 2, 0)``: pad to three parts so ``1.0`` equals ``1.0.0``."""
+        parts = tuple(int(p) for p in text.strip().split("."))
+        return parts + (0,) * (3 - len(parts)) if len(parts) < 3 else parts
 
-        Supports: >=X.Y.Z, <A.B.C, >=X.Y.Z <A.B.C, etc.
+    @classmethod
+    def _semver_range_satisfies(cls, installed: str, constraint: str) -> bool:
+        """True iff ``installed`` satisfies EVERY term of ``constraint``.
 
-        Args:
-            installed: Version string
-            constraint: Range specification
-
-        Returns:
-            True if installed satisfies all constraints in the range
+        Terms: ``>=X.Y.Z``, ``<=``, ``>``, ``<``, ``==``, ``!=``, with or without a space after
+        the operator, joined by whitespace or commas (``">=1.0.0 <2.0.0"``). A bare ``X.Y.Z``
+        means ``==``. FAIL-CLOSED: a constraint with any text that is not a term, or an
+        unparseable ``installed`` version, is NOT satisfied. The previous version only
+        recognised an operator as a separate token (``">= 1.0.0"``), so ``">=1.0.0"`` matched
+        no branch and the function returned True for every version: a constraint written
+        without a space was silently ignored.
         """
         try:
-            parts = [p.strip() for p in constraint.split()]
-            installed_tuple = tuple(map(int, installed.split(".")))
-
-            for i, part in enumerate(parts):
-                if part in (">=", "<=", ">", "<", "==", "!="):
-                    op = part
-                    version_str = parts[i + 1]
-                    version_tuple = tuple(map(int, version_str.split(".")))
-
-                    if op == ">=" and not (installed_tuple >= version_tuple):
-                        return False
-                    elif op == "<=" and not (installed_tuple <= version_tuple):
-                        return False
-                    elif op == ">" and not (installed_tuple > version_tuple):
-                        return False
-                    elif op == "<" and not (installed_tuple < version_tuple):
-                        return False
-                    elif op == "==" and not (installed_tuple == version_tuple):
-                        return False
-                    elif op == "!=" and not (installed_tuple != version_tuple):
-                        return False
-
+            text = constraint.replace(",", " ").strip()
+            if not text:
+                return False
+            installed_t = cls._version_tuple(installed)
+            pos, terms = 0, []
+            while pos < len(text):
+                m = cls._RANGE_TERM.match(text, pos)
+                if m is None:
+                    bare = re.match(r"\s*(\d+(?:\.\d+)*)\s*", text[pos:])
+                    if bare is None:
+                        raise ValueError(f"unparseable constraint near {text[pos:pos + 12]!r}")
+                    terms.append(("==", bare.group(1)))
+                    pos += bare.end()
+                    continue
+                terms.append((m.group(1), m.group(2)))
+                pos = m.end()
+            for op, ver in terms:
+                want = cls._version_tuple(ver)
+                if op == ">=" and not installed_t >= want:
+                    return False
+                if op == "<=" and not installed_t <= want:
+                    return False
+                if op == ">" and not installed_t > want:
+                    return False
+                if op == "<" and not installed_t < want:
+                    return False
+                if op == "==" and not installed_t == want:
+                    return False
+                if op == "!=" and not installed_t != want:
+                    return False
             return True
         except (ValueError, IndexError):
             logger.warning(f"Invalid version constraint: {constraint}")
@@ -309,6 +325,9 @@ class SkillDAGLoader:
             - error_messages: Any validation errors encountered
         """
         errors = []
+        # A skill named twice is still one skill. Left in, the duplicate made the topological
+        # sort count the node twice and report a cycle that does not exist.
+        skill_ids = list(dict.fromkeys(skill_ids))
 
         # Step 1: Check all skills exist
         missing = [sid for sid in skill_ids if sid not in self.registry._skills]

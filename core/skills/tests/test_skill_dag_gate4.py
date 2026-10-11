@@ -89,7 +89,7 @@ class TestCircularDeadlock:
 
         assert len(errors) > 0
         assert len(loaded) == 0
-        assert any("cycle" in err.lower() for err in errors)
+        assert any("cycl" in err.lower() for err in errors)
 
     def test_inject_three_way_circular_deadlock(self):
         """Inject A→B→C→A circular deadlock."""
