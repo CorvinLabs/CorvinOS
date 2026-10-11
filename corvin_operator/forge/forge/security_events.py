@@ -5389,6 +5389,24 @@ _TAIL_BLOCK = 8192
 _TAIL_ANCHOR_WINDOW = 2000
 
 
+def _tail_unterminated(path: Path) -> bool:
+    """True when ``path`` is non-empty and its last byte is not a newline.
+
+    That is what a write cut short by a full disk (or a killed process) leaves
+    behind. Read-only; any error reads as False, so a failure here can never
+    block an audit write.
+    """
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() == 0:
+                return False
+            fh.seek(-1, os.SEEK_END)
+            return fh.read(1) != b"\n"
+    except OSError:
+        return False
+
+
 def _last_hash(path: Path) -> str:
     """Return the ``hash`` of the last chain entry, or "".
 
@@ -5808,7 +5826,15 @@ def write_event(
                                     _ak, current_tail.encode("utf-8") + b"\n" + _canon,
                                     hashlib.sha256,
                                 ).hexdigest()[:16]
-                    fh.write(json.dumps(rec, allow_nan=False) + "\n")
+                    # A previous writer that died mid-record (disk full: a short write
+                    # leaves a partial line with no newline) must not swallow THIS
+                    # record: appended behind it, both end up on one unparseable line
+                    # and the new event is lost too (live chain, 2026-10-04: an
+                    # aco.integrity_alert vanished behind a torn engine.span.end). We
+                    # hold the exclusive lock, so an unterminated tail is a dead
+                    # writer's. Start on a fresh line; the torn bytes stay untouched.
+                    _lead = "\n" if _tail_unterminated(path) else ""
+                    fh.write(_lead + json.dumps(rec, allow_nan=False) + "\n")
                     fh.flush()
                     os.fsync(fh.fileno())
                     if hash_chain:

@@ -270,6 +270,15 @@ prevent the very mechanism we use to record the corruption.
 The event lists the first 20 problems (line + issue) and
 `problem_count` so operators see the failure on the next
 `voice-audit verify` run rather than on manual inspection only.
+
+**Torn writes (ADR-2251).** A write cut short by a full disk or a killed process
+leaves a partial record with no newline. Under its exclusive lock `write_event`
+checks the file's last byte (`_tail_unterminated`) and, if it is not `\n`, starts
+the new record on its own line, so a tear costs only the record being written, never
+the next one (on 2026-10-04 two records were lost behind two such tears: chain lines
+180567 and 183691). The torn bytes are never truncated or rewritten (seam rule); they
+stay as one `invalid_json` line that `verify_chain` keeps reporting. Disk headroom is
+guarded only by `audit_write_or_die`, not by `write_event` itself.
 Daily systemd-timer with a Bridge-notification on chain break is
 **Roadmap** (not in Phase 1).
 
