@@ -89,6 +89,7 @@ import {
 import { useAuth } from "@/lib/auth";
 import TemplateSkillForm from "@/components/forge/TemplateSkillForm";
 import ForgeComposer, { FORGE_REQUEST_MIN } from "@/components/forge/ForgeComposer";
+import RunFeed from "@/components/forge/RunFeed";
 
 /**
  * The five phases SkillCreatorOrchestrator.create_skill reports. The backend
@@ -511,6 +512,8 @@ export const SkillForgePanel: React.FC = () => {
             </div>
 
             <p className="text-xs text-muted-foreground">{run.data.message}</p>
+
+            {runId && <RunFeed runId={runId} running={run.data.status === "running"} />}
 
             {run.data.status === "success" && run.data.skill && (
               <SkillResult

@@ -17,6 +17,7 @@ import { AlertCircle, CheckCircle, Cpu, Hammer, Package, XCircle } from "lucide-
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import ForgeComposer, { FORGE_REQUEST_MIN } from "@/components/forge/ForgeComposer";
+import RunFeed from "@/components/forge/RunFeed";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/lib/auth";
@@ -227,6 +228,7 @@ export default function ForgeCreatorPanel({
               })}
             </ol>
             <p className="text-xs" data-testid={`${kind}-run-message`}>{status.message}</p>
+            {runId && <RunFeed runId={runId} running={status.status === "running"} />}
             {status.tool && (
               <ToolResult
                 tool={status.tool}
