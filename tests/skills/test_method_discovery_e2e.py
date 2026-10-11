@@ -33,7 +33,9 @@ from core.skills.os_skills.method_discovery import MethodDiscovery
 from core.skills.os_skills.observability import GENESIS_HASH
 
 TENANT = "tenant_gate"
-NOW = datetime(2026, 9, 5, 12, 0, 0, tzinfo=timezone.utc)
+# Relative to the wall clock: the recency boost decays with the age of the last observation, so a
+# fixed date turned the "5 patterns >= 0.78" gate red on its own after ~a month.
+NOW = datetime.now(timezone.utc).replace(microsecond=0)
 
 #: Five real tasks as an operator would actually run them (ADR-0548's own
 #: worked example workflow), each a feature task that succeeded.
