@@ -564,6 +564,52 @@ class TestL10ProductionCallSite:
         ok, problems = verify_chain(chain)
         assert ok, problems
 
+    def test_authored_pipeline_without_l10_never_runs_it_and_warns_once(
+            self, booted_l10, monkeypatch, caplog):
+        """Live install had 0 context.adapted: a hand-authored pipeline REPLACES the
+        defaults, so l10_adapter never ran. The omission must be visible, once."""
+        import logging
+        from corvin_operator.context_engineering import pipeline
+        from corvin_operator.context_engineering.stages import config as ce_config
+
+        monkeypatch.setattr(ce_config, "_read_pipeline_config",
+                            lambda tenant_id: [{"stage": "memory"}, {"stage": "graph"}])
+        monkeypatch.setattr(ce_config, "_WARNED_NO_L10", set())
+        chain = booted_l10
+        before = len(_chain_records(chain))
+        with caplog.at_level(logging.WARNING, logger=ce_config.logger.name):
+            _, trace = pipeline.build_brief(_L10_TASK, "_default", None, meter=False)
+            pipeline.build_brief(_L10_TASK, "_default", None, meter=False)
+
+        assert not [s for s in trace.get("stages", []) if s.get("stage") == "l10_adapter"]
+        warned = [r for r in caplog.records if "omits 'l10_adapter'" in r.getMessage()]
+        assert len(warned) == 1, [r.getMessage() for r in caplog.records]
+        assert not [r for r in _chain_records(chain)[before:]
+                    if r.get("event_type") == "context.adapted"]
+
+    def test_authored_pipeline_with_l10_executes_and_audits(self, booted_l10, monkeypatch):
+        """The shape the live tenant.corvin.yaml now has (l10_adapter after
+        approach_synthesis): the real per-turn boundary writes context.adapted."""
+        from corvin_operator.context_engineering import pipeline
+        from corvin_operator.context_engineering.stages import config as ce_config
+        from forge.security_events import verify_chain
+
+        monkeypatch.setattr(ce_config, "_read_pipeline_config", lambda tenant_id: [
+            {"stage": "memory"}, {"stage": "graph"}, {"stage": "skill"},
+            {"stage": "approach_synthesis"}, {"stage": "l10_adapter"},
+            {"stage": "blocker_id"}])
+        chain = booted_l10
+        before = len(_chain_records(chain))
+        _, trace = pipeline.build_brief(_L10_TASK, "_default", None, meter=False)
+
+        tel = _l10_trace(trace)
+        assert tel["status"] == "ok" and tel.get("reason") == "shadow", tel
+        adapted = [r for r in _chain_records(chain)[before:]
+                   if r.get("event_type") == "context.adapted"]
+        assert len(adapted) == 1
+        ok, problems = verify_chain(chain)
+        assert ok, problems
+
     def test_shadow_mode_never_changes_the_served_brief(self, booted_l10, monkeypatch):
         from corvin_operator.context_engineering import pipeline
         from core.skills import skill_registry_phase1 as reg_mod

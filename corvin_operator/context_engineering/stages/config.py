@@ -8,10 +8,16 @@ config reorder can never break the dependency chain (memory is the root).
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from .registry import get_stage
+
+logger = logging.getLogger(__name__)
+
+# Tenants already warned that their hand-authored pipeline omits l10_adapter.
+_WARNED_NO_L10: set = set()
 
 DEFAULT_PIPELINE = ["memory", "context_priority", "graph", "skill", "approach_synthesis",
                     "l10_adapter", "blocker_id"]
@@ -134,6 +140,17 @@ def resolve_pipeline(tenant_id: str = "_default",
     authored = raw is not None
     if authored:
         entries = raw
+        # An authored pipeline REPLACES the defaults, so a stage added to them later
+        # (l10_adapter, ADR-0686) silently never runs for that tenant: the live
+        # install had 0 context.adapted records for exactly this reason. Say so once.
+        ids = {s for s in ((e.get("stage") if isinstance(e, dict) else e) for e in raw)
+               if isinstance(s, str)}   # malformed entries are dropped+audited below
+        if "l10_adapter" not in ids and tenant_id not in _WARNED_NO_L10:
+            _WARNED_NO_L10.add(tenant_id)
+            logger.warning(
+                "tenant %s: hand-authored context_engineering.pipeline omits 'l10_adapter'; "
+                "the L10 context-adapter skill will never run (add '- stage: l10_adapter')",
+                tenant_id)
     elif active:
         entries = ACTIVE_PIPELINE
     else:

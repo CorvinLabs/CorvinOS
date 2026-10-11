@@ -364,8 +364,13 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   (`adaptation_type=l10_shadow`) and never changes the served brief. The Skill
   receives content-free inputs only (no task text), so its advice carries almost
   no signal yet. It runs only in a process where `boot_skills` booted an audited
-  registry for the turn tenant; the bridge adapter does not boot Skills, so its
-  turns record `skipped: skills_not_booted` rather than an unaudited execution.
+  registry for the turn tenant (gateway/console, and the bridge adapter via
+  `adapter._boot_acp_skills`); a process without one records
+  `skipped: skills_not_booted` rather than an unaudited execution. **A
+  hand-authored `spec.context_engineering.pipeline` REPLACES the defaults**, so it
+  must list `- stage: l10_adapter` itself or the stage never runs for that tenant
+  (the live install had 0 `context.adapted` records for exactly this reason until
+  2026-10-11); `resolve_pipeline` logs a one-time warning when it is missing.
 * `DelegationRouterSkill` advises in model tiers (`claude-haiku-4 / sonnet-4 /
   opus-5`), not in `delegation_policy` engine ids (`native / acs / tde`); the
   shadow record carries both so agreement is measurable, but the advice cannot
