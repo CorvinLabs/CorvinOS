@@ -42,7 +42,7 @@ JOB_DELETE, JOB_RUNNING, JOB_KEEP, JOB_OTHER = "job_de1e0001", "job_c0de0002", "
 def _seed() -> dict:
     from corvin_console.routes import video_producer_api as vpa
 
-    vpa._ensure_plugin()
+    assert vpa._ensure_plugin("_default"), "plugin not enabled for _default"
     models = sys.modules[vpa.VideoJob.__module__]
     runner_mod = sys.modules[f"{vpa._PLUGIN_PKG}.async_runner"]
     vjs = vpa._vjs()

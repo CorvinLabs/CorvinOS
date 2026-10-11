@@ -100,7 +100,7 @@ def _encode_mp4(path: Path) -> None:
 def _seed() -> dict:
     from corvin_console.routes import video_producer_api as vpa
 
-    vpa._ensure_plugin()
+    assert vpa._ensure_plugin("_default"), "plugin not enabled for _default"
     models = sys.modules[vpa.VideoJob.__module__]
 
     def job(tenant: str, job_id: str, *, video: bool, report: bool) -> None:

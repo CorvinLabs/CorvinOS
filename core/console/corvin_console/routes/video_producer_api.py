@@ -106,27 +106,41 @@ def _load_plugin():
     return None, None, None, None
 
 
-VideoJob, _get_storage, get_runner, PLUGIN_SOURCE = _load_plugin()
+# F3 (ADR-2247, T-0093): NOTHING is loaded at import. The plugin is third-party-style code; importing the
+# console must not execute it, and no tenant may cause it to be executed without having enabled it. The
+# only way in is ``_ensure_plugin(tenant_id)``, which loads the source once - and only for a tenant whose
+# registry has the plugin installed AND enabled. Until then these stay None and every route answers 404
+# (the router gate) or 503 (the source is missing).
+VideoJob = _get_storage = get_runner = PLUGIN_SOURCE = None
 _load_lock = threading.Lock()
 
+PLUGIN_ID = "video_producer"
 
-def _ensure_plugin() -> None:
-    """Load the plugin source on demand.
 
-    ``_load_plugin()`` above runs once, at import — i.e. BEFORE an operator has
-    installed anything on a fresh install, so the source was never there to find and
-    stayed missing until a restart. Retry whenever a request arrives and nothing is
-    loaded yet. Cheap when loaded (one truthiness check), and a no-op once it succeeds.
+def _enabled_for(tenant_id: str) -> bool:
+    """Installed AND enabled in THIS tenant's registry. Fail-closed: an unreadable registry is "no"."""
+    from .capabilities import _plugin_is_enabled  # noqa: PLC0415
+
+    return bool(tenant_id) and _plugin_is_enabled(tenant_id, PLUGIN_ID)
+
+
+def _ensure_plugin(tenant_id: str) -> bool:
+    """Load the plugin source on demand, for a tenant that enabled it; True iff ``tenant_id`` did.
+
+    The gate is here, in the one primitive every path goes through (router gate, ``_store`` - also reached
+    from ``video_learning_api``, which has no router gate -, the style module loader and the boot audit),
+    not at each caller. Loading is retried while nothing is loaded (a fresh install has no source until
+    the marketplace sync) and is a no-op once it succeeded. A tenant that did not enable the plugin never
+    triggers a load - even when another tenant already did, it gets False and no access.
     """
     global VideoJob, _get_storage, get_runner, PLUGIN_SOURCE
-    if _get_storage is not None:
-        return
-    with _load_lock:
-        if _get_storage is None:
-            VideoJob, _get_storage, get_runner, PLUGIN_SOURCE = _load_plugin()
-
-
-PLUGIN_ID = "video_producer"
+    if not _enabled_for(tenant_id):
+        return False
+    if _get_storage is None:
+        with _load_lock:
+            if _get_storage is None:
+                VideoJob, _get_storage, get_runner, PLUGIN_SOURCE = _load_plugin()
+    return True
 
 
 async def _require_plugin_enabled(rec=Depends(require_session_csrf_on_mutation)):
@@ -137,11 +151,8 @@ async def _require_plugin_enabled(rec=Depends(require_session_csrf_on_mutation))
     every job sends its narration text to Google TTS. Fail-closed: an unreadable
     registry means "not enabled". 404, like every other absent surface.
     """
-    from .capabilities import _plugin_is_enabled  # noqa: PLC0415
-
-    if not await asyncio.to_thread(_plugin_is_enabled, rec.tenant_id, PLUGIN_ID):
+    if not await asyncio.to_thread(_ensure_plugin, rec.tenant_id):
         raise HTTPException(status_code=404, detail="The Video Producer plugin is not installed and enabled for this tenant")
-    await asyncio.to_thread(_ensure_plugin)
     return rec
 
 
@@ -170,7 +181,9 @@ def _tenant_base(rec) -> Path:
 
 
 def _store(rec):
-    _ensure_plugin()  # also reached from video_learning_api, which has no router gate
+    # also reached from video_learning_api, which has no router gate: the enabled check is in _ensure_plugin
+    if not _ensure_plugin(rec.tenant_id):
+        raise HTTPException(status_code=404, detail="The Video Producer plugin is not installed and enabled for this tenant")
     if not _get_storage:
         raise HTTPException(status_code=503, detail=_UNAVAILABLE)
     store = _get_storage(str(_tenant_base(rec)))
@@ -759,9 +772,6 @@ def audit_interrupted_jobs() -> int:
     unwritten until somebody opened the panel. Returns the number of records written."""
     from core.paths.tenant import corvin_home, tenant_home  # noqa: PLC0415
 
-    _ensure_plugin()
-    if not _get_storage:
-        return 0
     root = corvin_home() / "tenants"
     if not root.is_dir():
         return 0
@@ -773,6 +783,10 @@ def audit_interrupted_jobs() -> int:
         try:
             tenant_id = d.name
             if tenant_home(tenant_id).resolve() != d.resolve():  # validates the id
+                continue
+            # F3: only a tenant that has the plugin enabled loads it; a disabled tenant's interrupted jobs
+            # are closed and audited by the first store open after it enables the plugin again (_store)
+            if not _ensure_plugin(tenant_id) or not _get_storage:
                 continue
             n += _drain_interrupted(tenant_id, _get_storage(str(base)))
         except Exception as e:  # noqa: BLE001 - one tenant's damaged store must not stop the others
@@ -1416,7 +1430,7 @@ _gate_cache_lock = threading.Lock()
 
 
 def _style_mod(name: str):
-    _ensure_plugin()
+    # every caller is a route behind the router gate, which already loaded the plugin for its tenant
     if not _get_storage:
         raise HTTPException(status_code=503, detail=_UNAVAILABLE)
     try:

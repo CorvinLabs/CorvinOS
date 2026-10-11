@@ -163,14 +163,48 @@ on :8796 with a throwaway `CORVIN_HOME`, the real report, light and dark theme, 
   browser against an isolated console: cancel, delete with confirmation, storage tile, full store refusing a
   production; `npx playwright test -c playwright.video-lifecycle.config.ts`).
 
+## Tenant isolation (unreleased 1.5.0, ADR-2247 R4)
+
+* **No scene can make anything fetch a page (F1).** Up to plugin 1.4.0 a model-written `screenshot_url`
+  was opened by a browser on the console's loopback, where `GET /v1/console/auth/local-login` hands any
+  loopback peer an owner session of tenant `_default` - so one workspace's video job was logged into
+  another workspace's console. Since 1.4.1 the capture path is gone: `Scene.from_dict` drops
+  `screenshot_url` from every storyboard (model output, operator storyboard, stored record) - always, not
+  only when the task did not name the URL, because nothing would read it - and a `screenshot` scene renders
+  as an ordinary slide; the web-slide browser aborts every request. Capturing a website is a separate,
+  user-initiated design (ADR-2249 D4), not built.
+  Proof: `core/console/tests/test_video_producer_tenant_isolation_e2e.py` - the real console served on a real
+  loopback socket, two tenants, the requesting tenant's job created through the real route, the storyboard
+  delivered as model output by a stand-in `claude` CLI. It is red against plugin 1.4.0 (the job's Chromium
+  called `local-login`, was given a `_default` session cookie and the URL was persisted in the job record;
+  run it with `VP_F1_PLUGIN_SRC=<1.4.0 src>`) and green from 1.4.1 on (no request reached the console, no URL
+  stored, the video completes).
+* **The plugin is loaded only for a workspace that enabled it (F3).** Importing the console executes no
+  plugin code. The source is loaded on the first request of a workspace whose registry has the plugin
+  installed **and** enabled (`_ensure_plugin(tenant_id)` in `routes/video_producer_api.py`, the one loader
+  every path goes through - the router, the learning route `POST /video/jobs/{id}/feedback`, the boot audit).
+  A workspace that did not enable it gets 404 and never causes a load, also after another workspace loaded
+  it. The boot audit closes interrupted jobs only of workspaces that have the plugin enabled; another
+  workspace's are closed at its first store open after enabling it again.
+  Proof: `core/console/tests/test_video_producer_plugin_import_e2e.py` - a fresh interpreter imports the
+  console with the plugin directory absent (an empty directory bind-mounted over it in a private mount
+  namespace) and with it present: nothing of the plugin is imported, opened or written; over HTTP, a
+  workspace with the plugin installed but not enabled gets 404 on both routers and the plugin stays unloaded.
+* Not changed: once loaded, the plugin is one module set in the console process for every enabling workspace,
+  and the first loader location, `<CORVIN_HOME>/tenants/_default/plugins/instances/…`, is the `_default`
+  workspace's install - it serves every workspace. Jobs run in their own process (R1), which still inherits
+  the console's whole environment (REVIEW-0039 F6).
+
 ## Troubleshooting
 
 * **"The Video Producer plugin is not available on this build."** The
   console could not import the plugin's `src/` (`models.py`, `storage.py`).
   The loader tries, in order: `<CORVIN_HOME>/tenants/_default/plugins/instances/video_producer/src`,
-  `<CORVIN_HOME>/plugins/media/video_producer/src`, `~/.corvin/plugins/…`,
+  `<CORVIN_HOME>/plugins/media/video_producer/src`, `<CORVIN_HOME>/plugins/video_producer/src`,
   the sibling checkout `../Corvin-Marketplace/plugins/contributor/media/video_producer/src`,
-  then `CORVIN_MARKETPLACE_ROOT`. The overview reports which one loaded
+  then `CORVIN_MARKETPLACE_ROOT`, then the marketplace cache `<CORVIN_HOME>/marketplace-cache/…`. It runs on
+  the first request of a workspace that has the plugin enabled - never at console start, never for a
+  workspace that did not enable it (that one gets 404). The overview reports which one loaded
   (`plugin_source`).
 * **Quality tab says "not measurable"** — no `output.mp4` for the job, or
   `ffprobe` is missing (`which ffprobe`).

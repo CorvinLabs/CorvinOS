@@ -62,6 +62,10 @@ def _sandbox(tmp_path, *, tenants=("_default",), plugin: str = "enabled", keep_k
         # third job of any test; the cap itself is proven in test_video_producer_review_2026_10_10_e2e.
         # The execution watcher polls fast so a test that "finishes" a job sees its event within moments.
         mod = sys.modules.get(_MOD)
+        # The console never loads the plugin at import (F3, T-0093): load it now, through the same gated
+        # primitive a request uses, so a test can patch the runner or open a store before its first call.
+        if mod is not None and plugin == "enabled" and hasattr(mod, "_enabled_for"):
+            assert mod._ensure_plugin(tenants[0]), "plugin not enabled for the sandbox tenant"
         with contextlib.ExitStack() as stack:
             if mod is not None:
                 if hasattr(mod, "_MAX_ACTIVE_JOBS_PER_TENANT"):
@@ -178,6 +182,24 @@ class VideoProducerRoutesE2E(unittest.TestCase):
             self.assertEqual(ca.get(f"/v1/console/video/jobs/{job_id}").json()["status"], "pending")
             self.assertEqual(ca.get("/v1/console/video/overview").json()["jobs_total"], 1)
             self.assertEqual(cb.get("/v1/console/video/overview").json()["jobs_total"], 0)
+
+    # ── list paging + unknown job (took over from the plugin's deleted tests/test_api_routes.py,
+    #    which exercised a copy of these routes written inside the test file — T-0086 R0) ──
+    def test_list_pages_validates_bounds_and_unknown_job_is_404(self):
+        with _sandbox(self._tmp) as (client, csrf, _home, _clients):
+            mod = _route_module()
+            mod.get_runner = lambda: _RecordingRunner()
+            ids = [self._create(client, csrf, task=f"Explain topic number {i} in one short scene.").json()["job_id"]
+                   for i in range(3)]
+            self.assertEqual(len(set(ids)), 3, "job ids must be unique")
+            p1 = client.get("/v1/console/video/jobs?limit=2&offset=0").json()
+            p2 = client.get("/v1/console/video/jobs?limit=2&offset=2").json()
+            self.assertEqual((p1["count"], p1["total"], p1["limit"], p1["offset"]), (2, 3, 2, 0))
+            self.assertEqual((p2["count"], p2["total"], p2["offset"]), (1, 3, 2))
+            self.assertEqual({j["id"] for j in p1["jobs"] + p2["jobs"]}, set(ids))
+            for bad in ("limit=0", "limit=101", "offset=-1"):
+                self.assertEqual(client.get(f"/v1/console/video/jobs?{bad}").status_code, 400, bad)
+            self.assertEqual(client.get("/v1/console/video/jobs/job_deadbeef").status_code, 404)
 
     # ── A2 ──────────────────────────────────────────────────────────────────
     def test_settings_are_per_tenant_and_cannot_redirect_output(self):
