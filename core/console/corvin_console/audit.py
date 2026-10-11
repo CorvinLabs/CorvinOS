@@ -55,6 +55,7 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "console.action_failed": frozenset({
         "action", "target_kind", "target_id",
         "sid_fingerprint", "tenant_id", "reason",
+        "run_id",          # optional - the forge run this failure belongs to (ADR-2253)
     }),
     # ADR-0120 — engine auto-detection + onboarding
     "setup.engine_probe_run": frozenset({
@@ -389,18 +390,22 @@ def action_failed(
     target_kind: str,
     target_id: str,
     reason: str,
+    run_id: str | None = None,
 ) -> None:
+    details: dict[str, Any] = {
+        "action":          action,
+        "target_kind":     target_kind,
+        "target_id":       target_id,
+        "sid_fingerprint": sid_fingerprint,
+        "tenant_id":       tenant_id,
+        "reason":          reason,
+    }
+    if run_id is not None:
+        details["run_id"] = run_id
     _emit(
         "console.action_failed",
         tenant_id=tenant_id,
-        details={
-            "action":          action,
-            "target_kind":     target_kind,
-            "target_id":       target_id,
-            "sid_fingerprint": sid_fingerprint,
-            "tenant_id":       tenant_id,
-            "reason":          reason,
-        },
+        details=details,
         severity="WARNING",
     )
 

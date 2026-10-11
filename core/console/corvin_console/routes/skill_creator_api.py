@@ -185,6 +185,14 @@ async def require_skill_forge_quota(
     return rec
 
 
+class _SyncRunFailed(Exception):
+    """Carries the original error out of the synchronous run after its record and audit are written."""
+
+    def __init__(self, cause: BaseException):
+        super().__init__(str(cause))
+        self.cause = cause
+
+
 router = APIRouter(prefix="/skill-creator", tags=["skill-creator"])
 
 # Canonical phase order of the 5-phase orchestrator. The console renders
@@ -350,46 +358,62 @@ async def generate_skill(
         except forge_runs.GenerationBusy as busy:
             raise HTTPException(status_code=429, detail=str(busy))
 
+        # Same ``work`` the asynchronous path runs (one primitive, not two copies): it builds the orchestrator
+        # inside the call, so a constructor failure is caught like any other, and it reports its phase and
+        # engine through the run record - so the record this path leaves is the TRUTH, not "success, 5 %,
+        # Initializing..., engine unknown" (ADR-2253 D7).
+        def progress(phase: str, pct: int, message: str) -> None:
+            forge_runs.update_run(sync_run_id, phase=phase, progress=pct, message=message)
+
+        kwargs = _skill_spawn_kwargs(sync_run_id, rec.tenant_id, user_request, base)
         try:
-            # Orchestrator initialization must be inside the try block so that
-            # constructor exceptions (e.g., ClaudeCodeUnavailable) are caught
-            # and the run is marked as "failed" rather than left orphaned in
-            # "running" status (which would block the concurrency limit forever).
-            orchestrator = SkillCreatorOrchestrator(
-                registry_root=str(_registry_root(rec.tenant_id))
+            result = await asyncio.to_thread(kwargs["work"], progress)
+        except BaseException as exc:
+            # status/error only: the phase stays what the last progress call reported, i.e. where it really failed.
+            forge_runs.update_run(sync_run_id, status="failed", error=str(exc),
+                                  message=_operator_hint(exc) if isinstance(exc, Exception) else str(exc))
+            console_audit.action_failed(
+                tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+                action="skill.generated_creation_failed", target_kind="generated_skill",
+                target_id=kwargs["failure_target_id"], reason=str(exc)[:200], run_id=sync_run_id,
             )
-            artifact = await asyncio.to_thread(
-                lambda: asyncio.run(orchestrator.create_skill(user_request, base=base))
-            )
-        except BaseException:
-            forge_runs.update_run(sync_run_id, status="failed", phase=PHASES[-1])
-            raise
-        forge_runs.update_run(sync_run_id, status="success", phase=PHASES[-1],
-                              target_id=artifact.spec.name)
+            raise _SyncRunFailed(exc) from exc
+        skill_fields = result["skill"]
+        forge_runs.update_run(sync_run_id, status="success", progress=100, error=None,
+                              **{k: v for k, v in result.items() if k != "target_id"})
         # AUDIT: Log skill creation (ADR-0232 compliance — every mutation audited)
         console_audit.action_performed(
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
             action="skill.generated_created",
             target_kind="generated_skill",
-            target_id=artifact.spec.name,
+            target_id=result["target_id"],
+            run_id=sync_run_id,
         )
+        finished = forge_runs.get_run(sync_run_id, rec.tenant_id, kind="skill") or {}
         return {
             "status": "success",
-            "engine": orchestrator.engine_id,
+            "run_id": sync_run_id,
+            "engine": finished.get("engine", "unknown"),
             "skill": {
-                "name": artifact.spec.name,
-                "purpose": artifact.spec.purpose,
-                "scope": artifact.spec.scope.value,
-                "dependencies": artifact.spec.dependencies,
-                "quality": artifact.quality_score,
-                "iterations": artifact.ldd_iterations,
+                "name": skill_fields["name"],
+                "purpose": skill_fields["purpose"],
+                "scope": skill_fields["scope"],
+                "dependencies": skill_fields["dependencies"],
+                "quality": skill_fields["quality"],
+                "iterations": skill_fields["iterations"],
             },
-            "message": f"Skill '{artifact.spec.name}' generated successfully."
+            "message": result["message"],
         }
 
     except HTTPException:
         raise
+    except _SyncRunFailed as wrapped:
+        # The run record and the failure audit are already written (with the run id); surface the real error.
+        e = wrapped.cause
+        if isinstance(e, SkillCreatorError):
+            raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
     except SkillCreatorError as e:
         logger.error(f"Skill generation failed: {e}")
         # AUDIT: Log skill generation failure

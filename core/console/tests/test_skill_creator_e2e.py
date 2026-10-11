@@ -680,3 +680,64 @@ def test_name_guard_rejects_traversal_on_every_route(tmp_path):
             f"/v1/console/skill-creator/skills/{bad}",
             headers=csrf_headers(client.session_record),
         ).status_code in (400, 404)
+
+
+# ── ADR-2253 D7 / T-0160: the synchronous path leaves a TRUTHFUL run record ─────────────────────────
+
+def _only_run(route):
+    runs = list(route.forge_runs.runs.values()) if hasattr(route, "forge_runs") else list(route._generation_runs.values())
+    assert len(runs) == 1, runs
+    return runs[0]
+
+
+def _chain_records(tmp_path, action):
+    import json
+    chain = tmp_path / "corvin_home" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+    out = []
+    if chain.exists():
+        for line in chain.read_text().splitlines():
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if (rec.get("details") or {}).get("action") == action:
+                out.append(rec["details"])
+    return out
+
+
+def test_sync_success_leaves_a_finished_truthful_record(tmp_path):
+    with console_client(tmp_path, fake_engine()) as (client, route):
+        r = client.post("/v1/console/skill-creator/generate", json={
+            "user_request": "erzeuge einen Skill der JSON validiert", "async": False},
+            headers=csrf_headers(client.session_record))
+        assert r.status_code == 202, r.text
+        body = r.json()
+        run = _only_run(route)
+        assert run["status"] == "success"
+        assert run["progress"] == 100, run                       # was 5 ("Initializing…") before the fix
+        assert "Initializing" not in run["message"] and "generated successfully" in run["message"]
+        assert run["engine"] == "claude_code"                    # was "unknown"
+        assert run["skill"]["name"] == body["skill"]["name"]
+        assert body["run_id"].startswith("run-")                 # the caller can find its run
+        ok = _chain_records(tmp_path, "skill.generated_created")
+        assert ok and ok[-1].get("run_id") == body["run_id"], ok
+
+
+def test_sync_failure_records_the_real_phase_the_error_and_the_run_id(tmp_path):
+    with console_client(tmp_path, fake_engine(fail_with=RuntimeError("engine exploded"))) as (client, route):
+        r = client.post("/v1/console/skill-creator/generate", json={
+            "user_request": "erzeuge einen Skill der JSON validiert", "async": False},
+            headers=csrf_headers(client.session_record))
+        assert r.status_code >= 400
+        run = _only_run(route)
+        assert run["status"] == "failed"
+        assert run["error"] and "engine exploded" in run["error"], run   # was None
+        assert run["engine"] == "claude_code"
+        # the REAL failing phase: the engine fails in the first phase, not in 'promotion' (PHASES[-1])
+        assert run["phase"] == route.PHASES[0] and run["phase"] != route.PHASES[-1], run
+        bad = _chain_records(tmp_path, "skill.generated_creation_failed")
+        assert bad and bad[-1].get("run_id") == run_id_of(route), bad
+
+
+def run_id_of(route):
+    return next(iter(route.forge_runs.runs))
