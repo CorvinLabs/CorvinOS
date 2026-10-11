@@ -78,67 +78,6 @@ class TestFinding1DataHubConcurrency:
         assert len(results) == 15, f"Expected 15 results, got {len(results)}"
 
 
-class TestFinding2FeedbackBatcherConcurrency:
-    """Finding 2: Learning daemon thread-safe feedback batching."""
-
-    def test_feedback_batcher_has_lock(self):
-        """MEDIUM FIX #2: FeedbackBatcher must have threading.Lock."""
-        from core.learning.feedback_batcher import FeedbackBatcher
-
-        batcher = FeedbackBatcher(batch_size=100)
-        assert hasattr(batcher, "_lock"), "FeedbackBatcher missing _lock attribute"
-        assert isinstance(batcher._lock, type(threading.Lock())), "_lock must be threading.Lock"
-
-    def test_add_outcome_thread_safe(self):
-        """MEDIUM FIX #2: add_outcome must be thread-safe."""
-        from core.learning.feedback_batcher import FeedbackBatcher
-        from core.learning.event_persistence import TaskOutcome
-
-        batcher = FeedbackBatcher(batch_size=100)
-
-        # Mock outcome
-        outcome = Mock(spec=TaskOutcome)
-        outcome.tenant_id = "_default"
-        outcome.decision_skill_id = "os.test_skill"
-        outcome.timestamp = time.time()
-        outcome.success = True
-        outcome.partial = False
-
-        # Should not deadlock
-        result = batcher.add_outcome(outcome)
-        assert result is None, "Single outcome should not trigger flush"
-
-    def test_concurrent_feedback_batching_no_race(self):
-        """MEDIUM FIX #2: Concurrent feedback additions should not race."""
-        from core.learning.feedback_batcher import FeedbackBatcher
-        from core.learning.event_persistence import TaskOutcome
-
-        batcher = FeedbackBatcher(batch_size=1000)
-        errors = []
-        outcomes_added = []
-
-        def add_many_outcomes():
-            try:
-                for i in range(50):
-                    outcome = Mock(spec=TaskOutcome)
-                    outcome.tenant_id = "_default"
-                    outcome.decision_skill_id = f"skill_{i % 5}"
-                    outcome.timestamp = time.time()
-                    outcome.success = i % 2 == 0
-                    outcome.partial = False
-                    batcher.add_outcome(outcome)
-                    outcomes_added.append(outcome)
-            except Exception as e:
-                errors.append(e)
-
-        threads = [threading.Thread(target=add_many_outcomes) for _ in range(4)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert len(errors) == 0, f"Concurrent feedback raised errors: {errors}"
-        assert len(outcomes_added) == 200, "Should have 200 outcomes added"
 
 
 class TestFinding3QualityGatesDAGMutex:

@@ -33,24 +33,8 @@ def _collector(tenant: str = "_default"):
     return LiveExperimentCollector(tenant)
 
 
-def _dashboard(tenant: str = "_default"):
-    from core.learning.live_collection_dashboard import LiveCollectionDashboard
-
-    return LiveCollectionDashboard(tenant)
 
 
-def test_collector_output_is_readable_by_the_dashboard(home: Path):
-    """The writer's schema and the reader's schema are the same schema."""
-    collector = _collector()
-    collector.save_measurement(collector.collect_all_metrics())
-
-    report = _dashboard().generate_text_report(hours=1)
-
-    assert "LIVE COLLECTION DASHBOARD" in report
-    assert "No measurements collected yet" not in report
-    assert "1 measurement(s)" in report
-    # Provenance is surfaced, not silently dropped.
-    assert "event_store" in report
 
 
 def test_every_record_is_self_identifying(home: Path):
@@ -66,51 +50,5 @@ def test_every_record_is_self_identifying(home: Path):
     assert record["provenance"]["generator"] == "core.learning.live_experiment_collector"
 
 
-def test_pre_fix_synthetic_records_are_ignored_not_aggregated(home: Path):
-    """A record with no ``schema`` marker is ``random.gauss`` output — quarantine it.
-
-    This is the file that actually sits on the operator's disk
-    (``measurements_20260906.jsonl``): nothing in it distinguishes it from a
-    measurement, and it is the dataset the documented "export for papers" path
-    would consume.
-    """
-    collector = _collector()
-    synthetic = {
-        "timestamp": collector.collect_all_metrics()["timestamp"],
-        "unix_time": 1,
-        "learning": {"loss_total": 0.1, "accuracy_routing": 0.95, "convergence_rate": 0.81},
-        "system": {"latency_p99_ms": 48.2, "cpu_usage_percent": 52.8},
-    }
-    collector.get_today_file().write_text(json.dumps(synthetic) + "\n")
-
-    dash = _dashboard()
-    assert dash.load_recent_measurements(hours=1) == []
-    # ...and the reader says so instead of crashing on the legacy keys.
-    assert "No measurements collected yet" in dash.generate_text_report(hours=1)
 
 
-def test_a_real_outcome_reaches_the_dashboard_as_a_measured_loss(home: Path):
-    """One recorded task failure ⇒ outcome_loss 1.0 in the rendered report."""
-    from core.learning.event_store import EventStore
-    from core.learning.learning_events import EventType, LearningEvent
-    from core.paths.tenant import tenant_home
-
-    store = EventStore(tenant_home("_default"), tenant_id="_default")
-    store.write_event(
-        LearningEvent.create(
-            event_type=EventType.OUTCOME,
-            skill_id="os.delegation_router",
-            tenant_id="_default",
-            signal={"task_id": "t1", "status": "failed", "success": False},
-            lom="core/learning/tests/test_live_collector_dashboard_e2e.py",
-        )
-    )
-
-    collector = _collector()
-    measurement = collector.collect_all_metrics()
-    assert measurement["learning"]["outcome_loss"] == 1.0
-    collector.save_measurement(measurement)
-
-    report = _dashboard().generate_text_report(hours=1)
-    assert "1.0000" in report
-    assert "outcome" in report

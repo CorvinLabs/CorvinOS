@@ -1,5 +1,7 @@
 # Track E: Learning→Skill Integration (ADR-0675 + ADR-0676 Amendment)
 
+> **Removed 2026-10-11 (T-0125):** the modules this document describes were never wired into a production path (no importer outside tests; measured by an import-closure from every production root) and have been deleted from `core/learning/`. The document is kept only as a record of the earlier design. What actually runs is in [learning-loop.md](learning-loop.md).
+
 **Status:** IMPLEMENTED (Gates 1-5 Complete)  
 **Date:** 2026-09-18  
 **Related:** ADR-0675 (Skill Forge v2.0), ADR-0676 (Learning Daemon)  

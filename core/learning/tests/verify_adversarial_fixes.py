@@ -18,86 +18,8 @@ from pathlib import Path
 from unittest.mock import Mock
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-def test_imports():
-    """Verify all modules can be imported."""
-    print("\n" + "="*70)
-    print("TESTING IMPORTS")
-    print("="*70)
-
-    try:
-        # F1: weight_updater
-        print("Importing weight_updater...", end=" ")
-        from core.learning.weight_updater import WeightUpdater, WeightAuditFailedError
-        print("✅")
-
-        # F2: event_store
-        print("Importing event_store...", end=" ")
-        from core.learning.event_store import _scrub_pii, _scrub_pii_deep
-        print("✅")
-
-        # F3: feedback_ingestion
-        print("Importing feedback_ingestion...", end=" ")
-        from core.learning.feedback_ingestion import SkillFeedback, FeedbackType, FeedbackIngestionValidator
-        print("✅")
-
-        # F4: event_schema
-        print("Importing event_schema...", end=" ")
-        from core.learning.event_schema import MAX_PAYLOAD_SIZE_BYTES
-        print("✅")
-
-        return True
-    except ImportError as e:
-        print(f"\n❌ Import failed: {e}")
-        return False
 
 
-def test_f1_lock_exists():
-    """F1: Verify RLock exists in WeightUpdater."""
-    print("\n" + "="*70)
-    print("F1: RACE CONDITION FIX VERIFICATION")
-    print("="*70)
-
-    try:
-        from core.learning.weight_updater import WeightUpdater
-        import threading
-
-        updater = WeightUpdater()
-
-        # Check lock exists
-        if not hasattr(updater, '_lock'):
-            print("❌ F1: _lock attribute missing!")
-            return False
-
-        # Check it's an RLock
-        if not isinstance(updater._lock, threading.RLock):
-            print(f"❌ F1: _lock is {type(updater._lock)}, expected RLock")
-            return False
-
-        print("✅ F1: Threading.RLock present in WeightUpdater")
-
-        # Check that update_weight has lock context
-        import inspect
-        source = inspect.getsource(updater.update_weight)
-        if "with self._lock:" not in source:
-            print("❌ F1: update_weight doesn't use lock!")
-            return False
-
-        print("✅ F1: update_weight uses lock protection")
-
-        # Check other methods
-        for method_name in ['is_oscillation_clamped', 'get_oscillation_status', 'get_update_history']:
-            method = getattr(updater, method_name)
-            source = inspect.getsource(method)
-            if "with self._lock:" not in source:
-                print(f"❌ F1: {method_name} doesn't use lock!")
-                return False
-
-        print("✅ F1: All dict-access methods use lock protection")
-        return True
-
-    except Exception as e:
-        print(f"❌ F1 verification failed: {e}")
-        return False
 
 
 def test_f2_pii_scrubbing():
@@ -157,76 +79,6 @@ def test_f2_pii_scrubbing():
         return False
 
 
-def test_f3_signature_validation():
-    """F3: Verify signature validation for feedback."""
-    print("\n" + "="*70)
-    print("F3: SIGNATURE VALIDATION FIX VERIFICATION")
-    print("="*70)
-
-    try:
-        from core.learning.feedback_ingestion import SkillFeedback, FeedbackType, FeedbackIngestionValidator
-        import os
-
-        secret = "test_secret_key"
-        os.environ["CORVIN_FEEDBACK_SECRET"] = secret
-
-        # Test signature computation
-        feedback = SkillFeedback(
-            skill_id="test.skill",
-            task_id="task_1",
-            feedback_type=FeedbackType.GOOD
-        )
-
-        sig = feedback.compute_signature(secret=secret)
-        if not sig or len(sig) != 64:
-            print(f"❌ F3: Signature invalid (got {sig})")
-            return False
-        print("✅ F3: Signature computation works (SHA256, 64 chars)")
-
-        # Test validator rejects unsigned feedback
-        validator = FeedbackIngestionValidator(feedback_secret=secret)
-        is_valid, error = validator.validate(feedback)
-        if is_valid:
-            print("❌ F3: Validator should reject unsigned feedback!")
-            return False
-        if "signature" not in error.lower():
-            print(f"❌ F3: Error should mention signature: {error}")
-            return False
-        print("✅ F3: Validator rejects unsigned feedback")
-
-        # Test validator accepts valid signature
-        feedback_signed = SkillFeedback(
-            skill_id="test.skill",
-            task_id="task_1",
-            feedback_type=FeedbackType.GOOD,
-            signature=sig
-        )
-        is_valid, error = validator.validate(feedback_signed)
-        if not is_valid:
-            print(f"❌ F3: Validator should accept valid signature: {error}")
-            return False
-        print("✅ F3: Validator accepts valid signature")
-
-        # Test validator rejects wrong signature
-        feedback_wrong = SkillFeedback(
-            skill_id="test.skill",
-            task_id="task_1",
-            feedback_type=FeedbackType.GOOD,
-            signature="wrong_signature_123456789012345678901234567890123456"
-        )
-        is_valid, error = validator.validate(feedback_wrong)
-        if is_valid:
-            print("❌ F3: Validator should reject wrong signature!")
-            return False
-        print("✅ F3: Validator rejects wrong signature")
-
-        return True
-
-    except Exception as e:
-        print(f"❌ F3 verification failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
 
 
 def test_f4_payload_size_limit():
@@ -294,65 +146,6 @@ def test_f4_payload_size_limit():
         return False
 
 
-def test_concurrent_weight_updates():
-    """F1: Stress test concurrent weight updates."""
-    print("\n" + "="*70)
-    print("F1: CONCURRENT STRESS TEST")
-    print("="*70)
-
-    try:
-        from core.learning.weight_updater import WeightUpdater
-        from unittest.mock import Mock
-
-        updater = WeightUpdater()
-        audit_backend = Mock()
-        audit_backend.write_event = Mock(return_value=None)
-
-        results = []
-        errors = []
-
-        def update_task(delta):
-            try:
-                record = updater.update_weight(
-                    weight_id="test.weight",
-                    delta=delta,
-                    audit_backend=audit_backend,
-                    tenant_id="test"
-                )
-                results.append(record)
-            except Exception as e:
-                errors.append(e)
-
-        # Launch concurrent tasks
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [
-                executor.submit(update_task, 0.01 * i)
-                for i in range(20)
-            ]
-            for f in as_completed(futures):
-                try:
-                    f.result()
-                except Exception as e:
-                    errors.append(e)
-
-        if errors:
-            print(f"❌ F1: Concurrent test had errors: {errors}")
-            return False
-
-        if len(results) != 20:
-            print(f"❌ F1: Expected 20 results, got {len(results)}")
-            return False
-
-        if audit_backend.write_event.call_count != 20:
-            print(f"❌ F1: Expected 20 audit writes, got {audit_backend.write_event.call_count}")
-            return False
-
-        print(f"✅ F1: Concurrent stress test passed (20 ops, 0 errors, 0 races)")
-        return True
-
-    except Exception as e:
-        print(f"❌ F1 stress test failed: {e}")
-        return False
 
 
 def main():

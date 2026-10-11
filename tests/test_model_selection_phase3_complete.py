@@ -18,12 +18,6 @@ import math
 from typing import Dict, Any
 from unittest.mock import Mock, MagicMock, patch
 
-from core.learning.model_selection_outcome_detector import (
-    OutcomeDetector,
-    OutcomeType,
-    ModelSelectionFeedbackEvent,
-    emit_feedback,
-)
 from core.learning.model_selection_optimizer import (
     ConfidenceOptimizer,
     ModelStats,
@@ -34,228 +28,6 @@ from core.learning.model_selection_optimizer import (
 # OUTCOME DETECTOR TESTS (15 tests)
 # ────────────────────────────────────────────────────────────────────────
 
-class TestOutcomeDetectorBasic:
-    """Basic outcome detection tests."""
-
-    def test_detector_init(self):
-        """Test detector initialization."""
-        detector = OutcomeDetector()
-        assert detector.audit_backend is None
-        assert detector.learning_store is None
-
-    def test_detector_with_backends(self):
-        """Test detector with mock backends."""
-        mock_audit = Mock()
-        mock_store = Mock()
-        detector = OutcomeDetector(mock_audit, mock_store)
-        assert detector.audit_backend is mock_audit
-        assert detector.learning_store is mock_store
-
-    def test_outcome_success(self):
-        """Test SUCCESS outcome."""
-        detector = OutcomeDetector()
-        event = detector.on_task_completed(
-            task_id="task-1",
-            model_used="claude-opus",
-            outcome=OutcomeType.SUCCESS,
-            cost=0.05,
-            latency_ms=2000,
-            task_type="code_gen",
-            tenant_id="tenant1",
-        )
-        assert event.quality_score >= 0.9  # Base 1.0 + penalties
-        assert event.outcome == "success"
-
-    def test_outcome_partial(self):
-        """Test PARTIAL outcome."""
-        detector = OutcomeDetector()
-        event = detector.on_task_completed(
-            task_id="task-2",
-            model_used="claude-haiku",
-            outcome=OutcomeType.PARTIAL,
-            cost=0.02,
-            latency_ms=1000,
-            task_type="analysis",
-            tenant_id="tenant1",
-        )
-        assert 0.4 <= event.quality_score <= 0.65  # Base 0.5 + bonuses
-        assert event.outcome == "partial"
-
-    def test_outcome_fail(self):
-        """Test FAIL outcome."""
-        detector = OutcomeDetector()
-        event = detector.on_task_completed(
-            task_id="task-3",
-            model_used="claude-sonnet",
-            outcome=OutcomeType.FAIL,
-            cost=0.01,
-            latency_ms=5000,
-            task_type="unknown",
-            tenant_id="tenant1",
-        )
-        assert event.quality_score <= 0.1  # Base 0.0 + penalties
-        assert event.outcome == "fail"
-
-    def test_outcome_string_outcome(self):
-        """Test passing outcome as string."""
-        detector = OutcomeDetector()
-        event = detector.on_task_completed(
-            task_id="task-4",
-            model_used="claude-opus",
-            outcome="success",  # string, not enum
-            task_type="code_gen",
-        )
-        assert event.outcome == "success"
-
-    def test_outcome_quality_bonus(self):
-        """Test quality bonus parameter."""
-        detector = OutcomeDetector()
-        event1 = detector.on_task_completed(
-            task_id="task-5a",
-            model_used="claude-opus",
-            outcome="partial",
-            quality_bonus=0.0,
-        )
-        event2 = detector.on_task_completed(
-            task_id="task-5b",
-            model_used="claude-opus",
-            outcome="partial",
-            quality_bonus=0.1,
-        )
-        # Bonus should add to quality score
-        assert event2.quality_score > event1.quality_score
-
-    def test_outcome_latency_bonus(self):
-        """Test latency optimization (fast=bonus, slow=penalty)."""
-        detector = OutcomeDetector()
-        fast = detector.on_task_completed(
-            task_id="task-6a",
-            model_used="claude-opus",
-            outcome="success",
-            latency_ms=500,  # very fast
-        )
-        slow = detector.on_task_completed(
-            task_id="task-6b",
-            model_used="claude-opus",
-            outcome="success",
-            latency_ms=10000,  # very slow
-        )
-        # Fast should have higher quality due to latency bonus
-        assert fast.quality_score > slow.quality_score
-
-    def test_outcome_cost_bonus(self):
-        """Test cost optimization (cheap=bonus, expensive=penalty)."""
-        detector = OutcomeDetector()
-        cheap = detector.on_task_completed(
-            task_id="task-7a",
-            model_used="claude-haiku",
-            outcome="success",
-            cost=0.001,  # very cheap
-        )
-        expensive = detector.on_task_completed(
-            task_id="task-7b",
-            model_used="claude-opus",
-            outcome="success",
-            cost=1.0,  # expensive
-        )
-        assert cheap.quality_score > expensive.quality_score
-
-    def test_outcome_tenant_isolation(self):
-        """Test tenant_id isolation."""
-        detector = OutcomeDetector()
-        event1 = detector.on_task_completed(
-            task_id="task-8a",
-            model_used="claude-opus",
-            outcome="success",
-            tenant_id="tenant1",
-        )
-        event2 = detector.on_task_completed(
-            task_id="task-8b",
-            model_used="claude-opus",
-            outcome="fail",
-            tenant_id="tenant2",
-        )
-        assert event1.tenant_id == "tenant1"
-        assert event2.tenant_id == "tenant2"
-
-    def test_outcome_audit_first(self):
-        """Test audit-first design: must write audit before learning."""
-        mock_audit = Mock()
-        mock_store = Mock()
-        detector = OutcomeDetector(mock_audit, mock_store)
-
-        detector.on_task_completed(
-            task_id="task-9",
-            model_used="claude-opus",
-            outcome="success",
-        )
-
-        # Audit should be called
-        assert mock_audit.write_event.called
-        # Store should also be called
-        assert mock_store.store_event.called
-
-    def test_outcome_audit_failure_raises(self):
-        """Test audit failure raises RuntimeError."""
-        mock_audit = Mock()
-        mock_audit.write_event.side_effect = Exception("Audit chain broken")
-        detector = OutcomeDetector(mock_audit)
-
-        with pytest.raises(RuntimeError, match="Audit chain write failed"):
-            detector.on_task_completed(
-                task_id="task-10",
-                model_used="claude-opus",
-                outcome="success",
-            )
-
-    def test_outcome_store_failure_logs_only(self):
-        """Test store failure is logged but doesn't raise."""
-        mock_audit = Mock()
-        mock_store = Mock()
-        mock_store.store_event.side_effect = Exception("Store error")
-        detector = OutcomeDetector(mock_audit, mock_store)
-
-        # Should not raise
-        event = detector.on_task_completed(
-            task_id="task-11",
-            model_used="claude-opus",
-            outcome="success",
-        )
-        assert event is not None
-
-    def test_outcome_event_immutability(self):
-        """Test feedback events are immutable (frozen)."""
-        event = ModelSelectionFeedbackEvent(
-            task_id="task-12",
-            task_type="code_gen",
-            model_used="claude-opus",
-            outcome="success",
-            quality_score=0.95,
-        )
-        with pytest.raises(AttributeError):
-            event.quality_score = 0.5
-
-    def test_outcome_to_dict(self):
-        """Test event serialization."""
-        event = ModelSelectionFeedbackEvent(
-            task_id="task-13",
-            outcome="success",
-            quality_score=0.95,
-        )
-        data = event.to_dict()
-        assert isinstance(data, dict)
-        assert data["task_id"] == "task-13"
-        assert data["quality_score"] == 0.95
-
-    def test_outcome_invalid_outcome_raises(self):
-        """Test invalid outcome raises ValueError."""
-        detector = OutcomeDetector()
-        with pytest.raises(ValueError, match="Invalid outcome"):
-            detector.on_task_completed(
-                task_id="task-14",
-                model_used="claude-opus",
-                outcome="invalid",
-            )
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -546,36 +318,6 @@ class TestConfidenceOptimizer:
 class TestLearningLoopIntegration:
     """Full learning loop integration tests."""
 
-    def test_end_to_end_loop_single_model(self):
-        """Test complete loop: emit feedback -> update confidence."""
-        mock_audit = Mock()
-        store = {}
-
-        detector = OutcomeDetector(mock_audit, Mock())
-        optimizer = ConfidenceOptimizer(store, mock_audit)
-
-        # Emit feedback
-        for i in range(20):
-            quality = 0.9 if i % 2 == 0 else 0.8
-            event = detector.on_task_completed(
-                task_id=f"task-{i}",
-                model_used="claude-opus",
-                outcome="success" if quality > 0.85 else "partial",
-                cost=0.05,
-                latency_ms=2000,
-                task_type="code_gen",
-            )
-
-            # Process feedback
-            optimizer.process_feedback(
-                task_type="code_gen",
-                model="claude-opus",
-                quality_score=event.quality_score,
-            )
-
-        # Confidence should be high (avg quality 0.85+)
-        conf = optimizer.get_confidence("code_gen", "claude-opus")
-        assert conf >= 0.8
 
     def test_end_to_end_loop_model_comparison(self):
         """Test loop with multiple models competing."""
@@ -758,53 +500,7 @@ class TestAdversarial:
         recovered_conf = optimizer.get_confidence("code_gen", "haiku")
         assert recovered_conf < 0.8  # Should not flip completely
 
-    def test_cost_explosion_attack(self):
-        """Adversary tries to make a model seem expensive by spoofing cost."""
-        detector = OutcomeDetector()
 
-        # Normal cost
-        event_normal = detector.on_task_completed(
-            task_id="task-n",
-            model_used="opus",
-            outcome="success",
-            cost=0.05,
-            latency_ms=2000,
-        )
-
-        # Adversary claims massive cost
-        event_expensive = detector.on_task_completed(
-            task_id="task-e",
-            model_used="opus",
-            outcome="success",
-            cost=100.0,  # $100!
-            latency_ms=2000,
-        )
-
-        # Cost bonus should prevent complete quality collapse
-        assert event_expensive.quality_score > 0.5
-
-    def test_latency_inflation_attack(self):
-        """Adversary tries to make a model seem slow."""
-        detector = OutcomeDetector()
-
-        event_fast = detector.on_task_completed(
-            task_id="task-f",
-            model_used="opus",
-            outcome="success",
-            cost=0.05,
-            latency_ms=500,
-        )
-
-        event_slow = detector.on_task_completed(
-            task_id="task-s",
-            model_used="opus",
-            outcome="success",
-            cost=0.05,
-            latency_ms=60000,  # 60 seconds
-        )
-
-        # Latency penalty should be bounded
-        assert event_slow.quality_score > 0.5
 
     def test_oscillation_attack(self):
         """Adversary tries to make confidence oscillate wildly."""
@@ -979,20 +675,6 @@ class TestAdversarial:
         # Confidence should remain stable (minimal change)
         assert abs(conf_after - conf_before) < 0.05
 
-    def test_zero_cost_scenario(self):
-        """Test system handles zero/negative cost gracefully."""
-        detector = OutcomeDetector()
-
-        event = detector.on_task_completed(
-            task_id="task-zero",
-            model_used="opus",
-            outcome="success",
-            cost=0.0,  # Free
-            latency_ms=0,  # Instant
-        )
-
-        # Should still produce valid quality score
-        assert 0.0 <= event.quality_score <= 1.0
 
     def test_nan_handling_in_variance(self):
         """Test system handles NaN in variance calculations."""

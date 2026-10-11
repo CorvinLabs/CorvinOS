@@ -229,7 +229,7 @@ class RendererBase(ABC):
 
 ### 7. AlertDispatcher
 
-**Location:** `core/learning/alert_dispatcher.py`
+**Location:** `core/learning/alert_dispatcher.py` (module removed 2026-10-11, T-0125: no production caller)
 
 **Purpose:** Alert routing with signature verification (security)
 

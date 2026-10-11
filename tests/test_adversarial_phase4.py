@@ -25,7 +25,6 @@ from core.learning.feedback_sink import (
     FeedbackBuffer,
     OutcomeFeedbackType,
 )
-from core.learning.meta_optimizer import MetaOptimizer
 
 
 # ============================================================================
@@ -130,23 +129,6 @@ class TestAttack2_DelayedFeedback:
 class TestAttack3_ConflictingFeedback:
     """Attack: Multiple users give contradictory feedback on same task."""
 
-    def test_conflicting_feedback_detected(self):
-        """Mitigated by: contradiction detection + conservative mode.
-
-        When feedback contains both yes and no on same task,
-        conservative mode is activated to prevent divergence.
-        """
-        optimizer = MetaOptimizer()
-
-        conflicting_feedback = [
-            {"outcome_feedback": "yes", "confidence": 0.9} for _ in range(5)
-        ] + [
-            {"outcome_feedback": "no", "confidence": 0.9} for _ in range(5)
-        ]
-
-        optimizer.process_feedback_signal(conflicting_feedback)
-        # Contradictions detected
-        assert optimizer.conservative_mode is True
 
     def test_conflicting_feedback_cancels_out(self):
         """Conflicting signals cancel each other (weak net signal)."""
@@ -225,51 +207,6 @@ class TestAttack4_WrongConfidence:
 # Attack Vector 5: Feedback Loop Amplifies (Bad → Worse)
 # ============================================================================
 
-class TestAttack5_LoopAmplification:
-    """Attack: Feedback-guided tuning makes performance worse (divergence)."""
-
-    def test_detect_loss_divergence(self):
-        """Mitigated by: divergence detection + conservative mode + rollback.
-
-        If loss increases after applying feedback, divergence is detected
-        and conservative mode prevents further divergence.
-        """
-        optimizer = MetaOptimizer()
-        saved_state = optimizer.get_state()
-
-        # Simulate tuning based on feedback
-        old_loss = 0.25
-        new_loss = 0.35  # Worsened!
-
-        diverged = optimizer.detect_feedback_divergence(old_loss, new_loss)
-        assert diverged is True
-        assert optimizer.conservative_mode is True
-
-    def test_conservative_mode_halves_learning_rate(self):
-        """Conservative mode prevents rapid divergence."""
-        optimizer = MetaOptimizer()
-        base_lr = optimizer.learning_rate_meta
-
-        optimizer.conservative_mode = True
-        conservative_lr = base_lr * 0.5
-
-        assert conservative_lr < base_lr  # Slower adaptation
-
-    def test_rollback_on_persistent_divergence(self):
-        """Rollback to last known good state if divergence persists."""
-        optimizer = MetaOptimizer()
-        state_before = optimizer.get_state()
-
-        # Multiple worsening steps
-        for loss_delta in [0.05, 0.1, 0.15]:
-            old = 0.3
-            new = old + loss_delta
-            optimizer.detect_feedback_divergence(old, new)
-
-        # Persistent worsening → rollback
-        if optimizer.consecutive_worsening > 2:
-            optimizer.rollback_to_state(state_before)
-            assert optimizer.get_state() == state_before
 
 
 # ============================================================================
@@ -448,24 +385,6 @@ class TestAttack9_UnknownMetric:
 class TestAttack10_FeedbackCrash:
     """Attack: Feedback system crashes during processing."""
 
-    def test_crash_doesnt_corrupt_state(self):
-        """Mitigated by: immutable events + rollback capability.
-
-        If feedback processing crashes, state is rolled back
-        to pre-feedback checkpoint (never partial/corrupted state).
-        """
-        optimizer = MetaOptimizer()
-        state_before = optimizer.get_state()
-
-        # Simulate crash during feedback processing
-        try:
-            # This would crash
-            raise RuntimeError("Feedback system crash!")
-        except RuntimeError:
-            # Rollback on crash
-            optimizer.rollback_to_state(state_before)
-
-        assert optimizer.get_state() == state_before
 
     def test_emitter_failure_doesnt_break_flow(self):
         """Emitter failure is caught and handled (fail-soft).

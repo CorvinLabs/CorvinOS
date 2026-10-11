@@ -99,106 +99,27 @@ def test_grade_pattern_goes_through_the_chained_store(tmp_path: Path):
 # ── F-L7: negative feedback is negative ─────────────────────────────────────
 
 
-def test_negative_user_feedback_lowers_relevance():
-    from core.learning.confidence_scorer import ConfidenceScorer
-
-    neg = ConfidenceScorer.score_decision("s", "_default", feedback_count=1, user_feedback_positive=False)
-    pos = ConfidenceScorer.score_decision("s", "_default", feedback_count=1, user_feedback_positive=True)
-    none = ConfidenceScorer.score_decision("s", "_default", feedback_count=0, user_feedback_positive=None)
-    assert neg.relevance_score < none.relevance_score < pos.relevance_score
 
 
 # ── F-L8: user_id cannot escape the profiles directory ──────────────────────
 
 
-@pytest.mark.parametrize("bad", ["../escape", "/etc/passwd", "a/b", "", "..", ".hidden", "x" * 200])
-def test_profile_manager_rejects_path_like_user_ids(bad):
-    from core.learning.user_profile import UserProfileManager
-
-    mgr = UserProfileManager()
-    with pytest.raises(ValueError):
-        mgr.get_profile(bad, "_default")
-    assert not (tenant_home("_default") / "learning" / "profiles").exists() or not list(
-        (tenant_home("_default") / "learning" / "profiles").glob("*")
-    )
 
 
-def test_profile_manager_accepts_plain_ids():
-    from core.learning.user_profile import UserProfileManager
-
-    p = UserProfileManager().get_profile("user.name@example-1", "_default")
-    assert p.user_id == "user.name@example-1"
-    assert (tenant_home("_default") / "learning" / "profiles" / "user.name@example-1.json").is_file()
 
 
 # ── F-L10: unified loss — validated weights, no prod mock, no div-by-zero ───
 
 
-def test_unified_loss_validates_weights_and_has_no_prod_mock():
-    from core.learning import unified_loss
-    from core.learning.unified_loss import UnifiedLossOptimizer, validate_weights
-    from tests.learning.mock_audit_backend import MockAuditBackend
-
-    assert not hasattr(unified_loss, "MockAuditBackend")
-    audit = MockAuditBackend()
-    opt = UnifiedLossOptimizer("_default", audit)
-    base = dict(opt.weights)
-    for bad in (
-        {**base, "routing": float("nan")},
-        {**base, "routing": -0.1, "latency": base["latency"] + 0.1},
-        {k: v for k, v in base.items() if k != "diversity"},
-        {**base, "routing": 0.9},
-    ):
-        with pytest.raises(ValueError):
-            opt.update_weights(bad)
-        assert opt.weights == base
-    with pytest.raises(ValueError):
-        validate_weights({**base, "extra": 0.0})
-    with pytest.raises(ValueError):
-        UnifiedLossOptimizer("_default", None)
-
-    # zero budget must not divide by zero
-    loss = opt._compute_L_attention([{"tokens_used": 10, "budget_allocated": 0}, {"tokens_used": 500}])
-    assert loss >= 0.0
 
 
-def test_duplicate_backprop_modules_are_gone():
-    import importlib
-
-    for name in ("core.learning.loss_backprop", "core.learning.unified_loss_simple"):
-        with pytest.raises(ModuleNotFoundError):
-            importlib.import_module(name)
-    from core.learning.gradient_backprop import LossBackpropagator  # the one with callers
-
-    assert LossBackpropagator
 
 
 # ── F-L11: no asserts, plugin gradients recorded ────────────────────────────
 
 
-def test_normalize_components_raises_instead_of_asserting():
-    from core.learning.memory_optimizer import MemoryOptimizer
-
-    loop = MemoryOptimizer(tenant_id="_default")
-    with pytest.raises(ValueError):
-        loop.normalize_components({"a": 1.5}, {"a": 1.0})
-    with pytest.raises(ValueError):
-        loop.normalize_components({"a": 0.5}, {"a": 0.5})
-    with pytest.raises(ValueError):
-        loop.normalize_components({"a": 0.5}, {"b": 1.0})
 
 
-def test_plugin_orchestrator_records_gradients_and_can_converge():
-    from core.learning.plugin_optimizer import PluginOrchestrator
-
-    loop = PluginOrchestrator()
-    fb = {"quality_gain": 0.8, "execution_time_ms": 50, "error_rate": 0.0, "conflict_score": 0.0}
-    for _ in range(101):
-        loss = loop.compute_loss(fb)
-        g = loop.compute_gradients(loss, loss)
-        loop.apply_gradients(g)
-    assert loop.gradient_history["plugin_priority"]
-    assert loop.check_convergence() is True
 
 
 # ── F-L12: everything under CORVIN_HOME ─────────────────────────────────────

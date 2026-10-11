@@ -189,35 +189,6 @@ def test_R4_R1_validate_rejects_a_jwt_glued_to_a_non_ascii_letter():
     validate._scan_text("harmless text without credentials", "tool x")   # positive control
 
 
-def test_R4_I9_every_migrated_call_site_still_redacts_or_flags_a_jwt():
-    """A unit test of the matcher proves the matcher; this proves each production
-    function still uses it (the 35 failing tool_ranking tests cannot say so — they
-    fail on a missing pytest-asyncio before reaching it)."""
-    from core.learning import tool_ranking
-    from core.learning.outcome_feedback import OutcomeFeedbackStore  # noqa: F401
-    from core.pii.sensitive import detect_sensitive_types
-
-    assert "REDACTED" in tool_ranking._scrub_text(f"failed with {TOKEN}")
-    assert TOKEN not in tool_ranking._scrub_text(f"failed with {TOKEN}")
-    assert "jwt" in detect_sensitive_types(f"Authorization: {TOKEN}")
-    from core.skills import skill_registry_phase1 as reg
-    assert reg._PII_PATTERNS["jwt"].search(TOKEN)
-
-    sys.path[:0] = [str(__import__("pathlib").Path(__file__).resolve().parents[2] / p)
-                    for p in ("core/console", "core/observability", "corvin_operator/bridges/shared")]
-    from corvin_core.aco import error_signature
-    from corvin_logging import scrubber
-    import debug_logging
-    assert TOKEN not in error_signature.scrub(f"boom {TOKEN}")
-    assert TOKEN not in scrubber.scrub_text(f"boom {TOKEN}")[0]
-    assert TOKEN not in debug_logging.redact(f"boom {TOKEN}")
-
-    from core.skills.os_skills.data_hub.security.scanner import SecurityScanner
-    _, issues = SecurityScanner().scan_text(f"key {TOKEN.upper().replace('EYJ', 'eyJ')}")
-    assert any(i.pattern_name == "jwt_token" for i in issues)
-    from core.learning.outcome_feedback import OutcomeRecorder
-    assert OutcomeRecorder._contains_potential_secret(None, TOKEN.upper().replace("EYJ", "eyJ"))
-    assert not OutcomeRecorder._contains_potential_secret(None, "all good, thanks")
 
 
 def test_R4_R2_the_migrated_scanners_are_linear_on_eyJ_dash_runs():

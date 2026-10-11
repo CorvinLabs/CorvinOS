@@ -6,7 +6,6 @@ from core.learning import (
     TreeNode, LearningEventStore, LearningIntegration, 
     update_confidence, ActiveLearningLoop
 )
-from core.learning.migration import MigrationPlanner
 
 
 def test_e2e_full_pipeline():
@@ -119,41 +118,6 @@ def test_e2e_antipattern_detection():
         assert node.confidence < 0.5, "Antipattern should reduce confidence"
 
 
-def test_e2e_migration_workflow():
-    """E2E: Migrate 3 Concepts → Frameworks."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = LearningEventStore(Path(tmpdir) / "events")
-        planner = MigrationPlanner(store)
-        
-        # Create mock concept files
-        concept_dir = Path(tmpdir) / "concepts"
-        concept_dir.mkdir()
-        
-        # Concept 1: Voice Synthesis
-        (concept_dir / "voice_synthesis.md").write_text("""
-# Voice Synthesis Framework
-
-## When
-- Need to generate audio from text
-- Production quality required
-
-## When NOT to use
-- Offline environments
-""")
-        
-        # Migrate it
-        result = planner.migrate_concept_to_framework(
-            concept_dir / "voice_synthesis.md",
-            "framework_voice_synthesis"
-        )
-        
-        assert result is not None, "Migration should succeed"
-        assert result.level == "framework"
-        
-        # Verify it's in the store
-        node = store.get_node("framework_voice_synthesis")
-        assert node is not None
-        assert node.name == "Voice Synthesis Framework"
 
 
 def test_e2e_operator_feedback_loop():

@@ -1,5 +1,7 @@
 # Phase 2b Learning Loop Optimization
 
+> **Removed 2026-10-11 (T-0125):** the modules this document describes were never wired into a production path (no importer outside tests; measured by an import-closure from every production root) and have been deleted from `core/learning/`. The document is kept only as a record of the earlier design. What actually runs is in [learning-loop.md](learning-loop.md).
+
 **Status:** Phase 2b (in development)  
 **Status note (2026-09-27, adversarial review):** `convergence_detector.py` and
 `phase2b_integration.py` carry "NOT WIRED: no production caller" — only tests

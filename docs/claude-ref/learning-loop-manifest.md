@@ -251,7 +251,7 @@ Plugins currently **do NOT emit events** for learning loops. Phase 1 computes he
 - Operator discovery via KG search
 
 **Files Added (k=4):**
-- `core/learning/learning_loop_kg_indexer.py` (+60 LoC)
+- `core/learning/learning_loop_kg_indexer.py` (+60 LoC; module removed 2026-10-11, T-0125)
 
 ### k=5: Final Documentation + Routing (2026-09-25)
 

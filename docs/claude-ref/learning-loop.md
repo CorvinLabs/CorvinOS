@@ -371,6 +371,17 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   must list `- stage: l10_adapter` itself or the stage never runs for that tenant
   (the live install had 0 `context.adapted` records for exactly this reason until
   2026-10-11); `resolve_pipeline` logs a one-time warning when it is missing.
+* **Unwired learning scaffolding was deleted (2026-10-11, T-0125).** 117 of the 184 modules
+  in `core/learning/` (about 39 000 lines, e.g. `unified_loss_optimizer`, `feedback_batcher`,
+  `phase2b_*`, `nine_d_loss`, variants such as `confidence_scorer_a3`, `meta_optimizer_a4`,
+  `phase7_orchestrator_bridge` and the ADR-0393 classifier family) had no path from any production root and were removed together with the
+  tests that exercised only them. The live loop is: `EventStore` / `outcome_sink` (events),
+  `stream4_skill_feedback` -> `loop_closure.apply_outcome_to_skill` -> `SkillAdapter` (the one
+  closed feedback path), `model_selection_*` (descriptive statistics) and the dashboards. There
+  is no automatic optimizer: nothing reads a learned router threshold outside the gated Phase 2
+  path, so an optimizer for it would close no loop. Method note: a plain importer graph MISSES
+  names re-exported by `core/learning/__init__.py` (`from core.learning import LearningIntegration`
+  is a production import of `integration`); resolve re-exports before calling anything dead.
 * **Phase 2 readiness has a structural dead end, and says so.** The Skill may only
   de-escalate TO `native`, so a surface where the bundled rule never delegates has
   nothing to change. `monitoring/readiness.py` reports that as

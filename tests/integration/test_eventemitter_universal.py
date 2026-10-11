@@ -27,8 +27,6 @@ from core.learning.event_emitter import EventEmitter
 from core.learning.event_store import EventStore
 from core.learning.learning_events import EventType, LearningEvent
 from core.learning.operator_feedback import OperatorFeedbackHandler
-from core.learning.skill_attribution import AttributionModel, SkillAttributionEngine
-from core.learning.user_profile import DecisionStyle, UserProfile, UserProfileManager
 
 TENANT = "_default"
 
@@ -81,87 +79,8 @@ class TestEventEmitterUniversalWiring:
         for ev in event_store.query_events(tenant_id=TENANT):
             assert ev.tenant_id == TENANT
 
-    @pytest.mark.asyncio
-    async def test_skill_attribution_event_persistence(self, event_emitter, event_store):
-        engine = SkillAttributionEngine(
-            tenant_id=TENANT,
-            event_store=event_store,
-            model=AttributionModel.EQUAL,
-            emit_events=True,
-            event_emitter=event_emitter,
-        )
-        before = _count(event_store, event_type=EventType.OUTCOME)
 
-        payload = await engine.attribute_outcome(
-            strategy_id="pipeline-v1",
-            decision_id="task-123",
-            skills=["prompt-builder", "json-parser", "validator"],
-            outcome="success",
-            rating=5,
-        )
-        assert payload.attribution_id
-        assert len(payload.credits) == 3
 
-        await engine.attribute_outcome(
-            strategy_id="pipeline-v1",
-            decision_id="task-124",
-            skills=["prompt-builder", "json-parser"],
-            outcome="partial",
-            rating=3,
-        )
-
-        event_emitter.stop()
-        assert event_emitter.write_failures == 0
-        outcomes = event_store.query_events(tenant_id=TENANT, event_type=EventType.OUTCOME)
-        assert len(outcomes) == before + 2
-        assert {e.skill_id for e in outcomes} == {"strategy:pipeline-v1"}
-
-    def test_user_preference_event_emission(self, event_emitter, event_store):
-        manager = UserProfileManager(event_store=event_store, event_emitter=event_emitter)
-        profile = UserProfile(
-            user_id="bob",
-            tenant_id=TENANT,
-            decision_style=DecisionStyle.BALANCED,
-            conciseness_preference=0.5,
-        )
-        before = _count(event_store)
-
-        manager._emit_preference_updated(profile, {"decision_style": "pragmatic", "conciseness": 0.8})
-
-        event_emitter.stop()
-        assert event_emitter.write_failures == 0
-        assert _count(event_store) == before + 1
-
-    @pytest.mark.asyncio
-    async def test_concurrent_emission_across_modules(self, event_emitter, event_store):
-        handler = OperatorFeedbackHandler(
-            event_store=event_store, min_sample_size=1, event_emitter=event_emitter
-        )
-        engine = SkillAttributionEngine(
-            tenant_id=TENANT,
-            event_store=event_store,
-            model=AttributionModel.EQUAL,
-            emit_events=True,
-            event_emitter=event_emitter,
-        )
-        before = _count(event_store)
-
-        for i in range(5):
-            handler.record_tool_rating(
-                tool_id=f"tool-{i}", tool_name=f"Tool {i}", rating=min(5, i + 1), tenant_id=TENANT
-            )
-        for i in range(5):
-            await engine.attribute_outcome(
-                strategy_id=f"strategy-{i}",
-                decision_id=f"decision-{i}",
-                skills=["s1", "s2"],
-                outcome="success" if i % 2 == 0 else "partial",
-            )
-
-        event_emitter.stop()
-        assert event_emitter.write_failures == 0
-        assert event_emitter.dropped == 0
-        assert _count(event_store) == before + 10
 
     def test_event_emitter_fallback_to_event_store(self, event_store):
         """No emitter → the handler writes to the SAME store directly."""

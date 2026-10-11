@@ -3,31 +3,8 @@ from pathlib import Path
 import tempfile
 
 
-def test_migration_runner_exists():
-    """E2E: Migration runner can be imported and executed."""
-    try:
-        from core.learning.migration_runner import run_migration
-        print("✅ Migration runner exists")
-    except ImportError as e:
-        raise AssertionError(f"Failed to import migration_runner: {e}")
 
 
-def test_migration_output_format():
-    """E2E: Migration returns expected output format."""
-    try:
-        from core.learning.migration_runner import run_migration
-        
-        # Run in temp environment
-        result = run_migration()
-        
-        # Verify output structure
-        required_fields = ["success", "concepts_migrated", "metaphers_migrated", "issues", "migration_report"]
-        for field in required_fields:
-            assert field in result, f"Missing field: {field}"
-        
-        print(f"✅ Migration returned valid structure: {result['total_migrated']} items migrated")
-    except Exception as e:
-        print(f"⚠️  Migration test (can fail if Corvin-Knowledge not accessible): {e}")
 
 
 def test_dashboard_api_returns_migrated_nodes():

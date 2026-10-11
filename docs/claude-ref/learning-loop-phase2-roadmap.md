@@ -68,7 +68,7 @@ Learning Loop health is computed, but there are zero real events in the audit ch
 
 | Component | Scope | Files |
 |-----------|-------|-------|
-| **Event Schema** | Define `SkillExecutedEvent` + `LearningLoopEvent` structures (ADR-0314) | Update `core/learning/task_features.py` or new `learning_loop_events.py` |
+| **Event Schema** | Define `SkillExecutedEvent` + `LearningLoopEvent` structures (ADR-0314) | Update `core/learning/task_features.py` (removed 2026-10-11, T-0125) or new `learning_loop_events.py` |
 | **Event Emitter** | Plugins emit events via audit backend (when they execute skills + feedback) | New: `core/learning/loop_event_emitter.py` |
 | **Seed Data** | One test plugin emits seed events for 7 days (synthetic but realistic) | Update test fixture + seed script |
 | **Tests** | E2E: Emit event → query audit → verify health score changes | Add 5+ E2E tests |

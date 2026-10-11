@@ -1,5 +1,7 @@
 # Track B: Learning Loop Integration (ADR-0676)
 
+> **Removed 2026-10-11 (T-0125):** the modules this document describes were never wired into a production path (no importer outside tests; measured by an import-closure from every production root) and have been deleted from `core/learning/`. The document is kept only as a record of the earlier design. What actually runs is in [learning-loop.md](learning-loop.md).
+
 ## Overview
 
 Track B implements the complete Learning Loop infrastructure for CorvinOS Skills, enabling continuous improvement through user feedback, automated config optimization, and convergence detection.

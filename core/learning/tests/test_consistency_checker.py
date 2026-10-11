@@ -29,7 +29,6 @@ from pathlib import Path
 
 import pytest
 
-from core.learning.consistency_checker import FeedbackConsistencyValidator, FeedbackSignal
 from core.learning.event_store import EventStore
 from core.learning.learning_events import EventType, LearningEvent
 
@@ -101,30 +100,6 @@ class TestNewestFirstSelection:
         assert after[0].signal["total_loss"] == 0.1, "the newest event must be in the window"
 
 
-class TestValidatorSeesTheRecentTrend:
-    def test_a_long_improving_history_is_read_as_improving(self, store):
-        # Ancient history (more than one full window): loss CLIMBING.
-        window = FeedbackConsistencyValidator.LOSS_WINDOW_SAMPLES
-        for seq in range(1, window + 6):
-            _write(store, "2026-01-01", seq, 0.30 + 0.02 * seq)
-        # Recent history (exactly one window): loss FALLING.
-        for seq in range(1, window + 1):
-            _write(store, "2026-09-06", seq, 0.70 - 0.02 * seq)
-
-        validator = FeedbackConsistencyValidator(event_store=store)
-        result = validator.validate_consistency(
-            feedback_id="fb_recent",
-            skill_id=SKILL,
-            task_id="task_recent",
-            feedback_signal=FeedbackSignal.GOOD,
-            tenant_id=TENANT,
-        )
-        # GOOD feedback while loss is FALLING is consistent. Reading the oldest
-        # window instead (the pre-fix behaviour) reports "increasing" and rates
-        # this same feedback as a contradiction.
-        assert result.loss_trend == "decreasing", result
-        assert result.is_consistent, result
-        assert result.consistency_score > 0.5
 
 
 class TestOneBadLineDoesNotBlindTheQuery:
@@ -157,29 +132,6 @@ class TestOneBadLineDoesNotBlindTheQuery:
         events = store.query_events(TENANT)
         assert [e.signal["total_loss"] for e in events] == [0.5, 0.3]
 
-    def test_validator_still_sees_a_history_through_a_bad_line(self, store):
-        for seq in range(1, 4):
-            _write(store, "2026-09-06", seq, 0.70 - 0.05 * seq)
-        self._corrupt(store, "2026-09-06", json.dumps({
-            "event_id": "ev_future",
-            "event_type": "a_type_from_a_newer_schema",
-            "skill_id": SKILL,
-            "tenant_id": TENANT,
-            "timestamp": "2026-09-06T04:00:00Z",
-        }))
-        for seq in range(5, 8):
-            _write(store, "2026-09-06", seq, 0.70 - 0.05 * seq)
-
-        validator = FeedbackConsistencyValidator(event_store=store)
-        result = validator.validate_consistency(
-            feedback_id="fb_bad_line",
-            skill_id=SKILL,
-            task_id="task_bad_line",
-            feedback_signal=FeedbackSignal.GOOD,
-            tenant_id=TENANT,
-        )
-        assert result.loss_trend == "decreasing", result
-        assert result.loss_trend != "unknown"
 
 
 # ── round-4 F8: the "chronological" sort was a plain string sort ─────────────
@@ -214,36 +166,11 @@ class _NewestFirstStore:
 _FALLING = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1]
 
 
-def _trend(timestamps):
-    validator = FeedbackConsistencyValidator(
-        event_store=_NewestFirstStore(_FALLING, timestamps)
-    )
-    result = validator.validate_consistency(
-        feedback_id="fb1", skill_id=SKILL, task_id="t1",
-        feedback_signal=FeedbackSignal.GOOD, tenant_id=TENANT,
-    )
-    return result.loss_trend
 
 
-def test_well_formed_utc_timestamps_read_as_decreasing():
-    stamps = [f"2026-09-06T00:{i:02d}:00Z" for i in range(10)]
-    assert _trend(stamps) == "decreasing"
 
 
-def test_missing_timestamps_do_not_invert_the_trend():
-    assert _trend([None] * 10) == "decreasing"
 
 
-def test_identical_timestamps_do_not_invert_the_trend():
-    assert _trend(["2026-09-06T00:00:00Z"] * 10) == "decreasing"
 
 
-def test_mixed_utc_offsets_are_ordered_by_instant_not_by_string():
-    # Alternating Z / +02:00 stamps whose real instants are still increasing.
-    stamps = []
-    for i in range(10):
-        if i % 2 == 0:
-            stamps.append(f"2026-09-06T02:{i:02d}:00Z")
-        else:
-            stamps.append(f"2026-09-06T04:{i:02d}:00+02:00")  # == 02:0i UTC
-    assert _trend(stamps) == "decreasing"
