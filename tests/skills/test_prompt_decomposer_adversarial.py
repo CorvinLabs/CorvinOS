@@ -46,8 +46,11 @@ class TestContextPreservation:
         # Sequential steps should reference prior steps
         for step in plan.steps:
             if step.depends_on:
-                # Should have context explaining dependency
-                assert "design" in step.instruction.lower() or "implement" in step.instruction.lower() or "phase" in step.context.lower()
+                # A dependent step names only EARLIER steps and carries its own context (the
+                # old check grepped the wording for "design"/"implement"/"phase", which the
+                # refactoring template never promised).
+                assert step.context, f"Step {step.name} depends on earlier work but has no context"
+                assert all(d < step.index for d in step.depends_on), (step.name, step.depends_on)
 
     def test_synthesis_references_all_steps(self):
         """Test that synthesis step references all prior steps."""

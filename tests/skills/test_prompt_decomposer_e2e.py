@@ -76,7 +76,7 @@ class QualityMeasurement:
     def estimate_haiku_tokens(plan: DecompositionPlan) -> int:
         """Estimate tokens needed for Haiku to execute plan."""
         # Decomposition overhead + step execution
-        overhead_tokens = len(plan.to_dict().__str__())  # Rough estimate
+        overhead_tokens = len(str(plan.to_dict())) // 4  # characters -> tokens (~4 chars per token)
 
         step_tokens = 0
         for step in plan.steps:
