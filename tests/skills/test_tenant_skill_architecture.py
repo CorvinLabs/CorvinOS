@@ -190,6 +190,26 @@ class TestVersionManager:
         assert mgr._active_version == "1.0.0"
         assert mgr.get_active_version() is not None
 
+    def test_rollback_still_refuses_a_corrupted_target(self, temp_skill_dir):
+        """The checksum must stay a real integrity check: it is computed over the version's
+        identity AFTER it is stored (it used to be computed over an empty record, so every
+        genuine rollback failed), and a tampered record is still refused."""
+        import dataclasses
+
+        mgr = TenantSkillVersionManager(tenant_id="_default", skill_id="os.router")
+        for v in ("1.0.0", "2.0.0"):
+            mgr.register_version(
+                v, SkillContract(skill_id="os.router", version=v, tier=SkillTier.PRIMITIVE,
+                                 input_schema={"type": "object"}, output_schema={"type": "object"}),
+                {"threshold": 0.7}, "system")
+        good = mgr._versions["1.0.0"]
+        mgr._versions["1.0.0"] = dataclasses.replace(good, config_hash="0" * 64)
+        ok, msg = mgr.rollback_to_version("1.0.0", "tampered")
+        assert ok is False and "checksum" in msg
+        mgr._versions["1.0.0"] = good
+        ok, _ = mgr.rollback_to_version("1.0.0", "genuine")
+        assert ok is True
+
     def test_rollback_to_version(self, temp_skill_dir):
         """Rollback to a previous version."""
         mgr = TenantSkillVersionManager(

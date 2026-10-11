@@ -107,7 +107,7 @@ class TestPhase10Integration:
 
         # Evaluate credential data
         eval_result = guard.evaluate_flow(
-            data="api_key=sk-abc123xyz",
+            data="api_key=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",
             destination_engine="anthropic/claude-opus-5"
         )
 

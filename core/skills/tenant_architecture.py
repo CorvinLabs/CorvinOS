@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import dataclasses
 import json
 import os
 from dataclasses import dataclass, field, asdict
@@ -319,7 +320,9 @@ class TenantSkillVersionManager:
             created_at=datetime.now(timezone.utc).isoformat(),
             created_by=created_by,
             supersedes_version=supersedes,
-            rollback_checksum=self._compute_rollback_checksum(version),
+        )
+        skill_version = dataclasses.replace(
+            skill_version, rollback_checksum=self._compute_rollback_checksum(skill_version)
         )
 
         self._versions[version] = skill_version
@@ -368,8 +371,10 @@ class TenantSkillVersionManager:
             return False, f"Version {target_version} is not rollbackable (state={target.state})"
 
         # Verify rollback checksum
-        expected_checksum = self._compute_rollback_checksum(target_version)
-        if target.rollback_checksum != expected_checksum:
+        expected_checksum = self._compute_rollback_checksum(target)
+        # Records written before 2026-10-12 carry the checksum of an EMPTY dict (it was
+        # computed before the version was stored), which no version can match.
+        if target.rollback_checksum not in (expected_checksum, self._LEGACY_EMPTY_CHECKSUM):
             return False, f"Rollback checksum mismatch for {target_version} (data corruption)"
 
         old_active = self._active_version
@@ -412,11 +417,25 @@ class TenantSkillVersionManager:
         """List all registered versions (in order)."""
         return sorted(self._versions.values(), key=lambda v: v.created_at, reverse=True)
 
-    def _compute_rollback_checksum(self, version: str) -> str:
-        """Compute CRC32 checksum for rollback verification."""
+    _LEGACY_EMPTY_CHECKSUM = "a3a6bf43"  # crc32(b"{}")
+
+    @staticmethod
+    def _compute_rollback_checksum(version: SkillVersion) -> str:
+        """CRC32 over the version's immutable identity.
+
+        ``state`` (flips ACTIVE -> ROLLBACK_READY -> DEPRECATED) and the checksum itself are
+        excluded: hashing them would invalidate every checksum the moment the version is
+        superseded, i.e. exactly when a rollback needs it.
+        """
         import zlib
-        version_data = json.dumps(self._versions.get(version, {}).to_dict() if version in self._versions else {}, sort_keys=True).encode()
-        return format(zlib.crc32(version_data) & 0xffffffff, '08x')
+        identity = {
+            "skill_id": version.skill_id, "version": version.version,
+            "contract_hash": version.contract_hash, "config_hash": version.config_hash,
+            "created_at": version.created_at, "created_by": version.created_by,
+            "supersedes_version": version.supersedes_version,
+        }
+        data = json.dumps(identity, sort_keys=True).encode()
+        return format(zlib.crc32(data) & 0xffffffff, "08x")
 
 
 @dataclass
