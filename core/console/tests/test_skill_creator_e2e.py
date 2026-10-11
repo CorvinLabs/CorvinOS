@@ -764,3 +764,40 @@ def test_a_skill_run_has_the_complete_envelope_and_an_event_log(tmp_path):
         types = {e["type"] for e in events}
         assert {"progress", "iteration"} <= types, types
         assert "erzeuge einen Skill" not in json.dumps(events), "the request is never logged"
+
+
+def test_a_refine_run_diffs_the_previous_body_against_the_refined_one(tmp_path):
+    """ADR-2253 D3 / T-0150 for skills: 'previous version' is the body the refine started from, and the run's diff
+    shows what the refine changed. (Tools cannot be refined: the contract refuses a second tool of the same name.)"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from corvin_console.routes import forge_runs_api
+
+    with console_client(tmp_path, fake_engine()) as (client, route):
+        first = _generate(client)
+        name = first["skill"]["name"]
+        from skill_creator import skill_creator as sc
+        sc.resolve_llm_client = lambda explicit=None: refine_engine_for(name)
+        second = _generate(client, "ergaenze eine Pruefung auf doppelte Schluessel", base=name)
+        assert second["status"] == "success", second
+        rid = next(i for i, r in route.forge_runs.runs.items() if r.get("base_skill") == name)
+
+        app2 = FastAPI()
+        app2.include_router(forge_runs_api.router, prefix="/v1/console/forge")
+        api = TestClient(app2, raise_server_exceptions=False)
+        api.cookies.set("corvin_console_sid", client.session_record.sid)
+
+        snaps = api.get(f"/v1/console/forge/runs/{rid}/snapshots").json()["snapshots"]
+        assert snaps[0]["label"] == "previous version" and snaps[-1]["label"].startswith("iteration")
+        ev = api.get(f"/v1/console/forge/runs/{rid}/events").json()["events"]
+        its = [e for e in ev if e["type"] == "iteration" and "loss" in e["data"]]
+        assert its and its[0]["data"]["k"] == 1 and isinstance(its[0]["data"]["loss"], float)
+        d = api.get(f"/v1/console/forge/runs/{rid}/diff", params={"from": "previous version"}).json()
+        skill_md = next(f for f in d["files"] if f["path"] == "SKILL.md")
+        assert skill_md["status"] == "changed"
+        assert any(line.startswith("+") and ("duplicate" in line or "doppelte" in line) for line in skill_md["diff"].splitlines()), skill_md["diff"]
+
+        # a FRESH skill (no base) has no previous version: its first snapshot is an iteration
+        fresh = next(i for i, r in route.forge_runs.runs.items() if not r.get("base_skill"))
+        first_snaps = api.get(f"/v1/console/forge/runs/{fresh}/snapshots").json()["snapshots"]
+        assert first_snaps and first_snaps[0]["label"].startswith("iteration")

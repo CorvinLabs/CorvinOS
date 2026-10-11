@@ -164,12 +164,15 @@ class ToolCreatorOrchestrator:
     def __init__(self, *, tenant_id: str,
                  progress_cb: Optional[Callable[[str, int, str], None]] = None,
                  client: Any = None,
-                 draft_cb: Optional[Callable[[Dict[str, Any]], None]] = None):
+                 draft_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+                 iteration_cb: Optional[Callable[[int, Dict[str, Any], Dict[str, Any]], None]] = None):
         self.tenant_id = tenant_id
         self.progress_cb = progress_cb
         #: Called with the draft as soon as it passed validation, so the run record
         #: holds it before the (fallible) review phase.
         self.draft_cb = draft_cb
+        # ``iteration_cb(k, draft_dict, tests)`` after each sandbox test iteration (additive observation only).
+        self.iteration_cb = iteration_cb
         self.client = client if client is not None else ar.resolve_engine()
         self.engine_id = ar.engine_id(self.client)
 
@@ -350,6 +353,11 @@ class ToolCreatorOrchestrator:
             self._progress("sandbox_test", 45 + 8 * (k - 1),
                            f"Running {len(draft.test_cases)} test case(s) in the sandbox (k={k})…")
             tests = await asyncio.to_thread(self.run_test_cases, draft)
+            if self.iteration_cb is not None:
+                try:
+                    self.iteration_cb(k, json.loads(_draft_json(draft)), tests)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("iteration callback failed: %s", exc)
             if tests["passed"] == tests["total"]:
                 converged = True
                 break

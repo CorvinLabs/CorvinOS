@@ -984,8 +984,12 @@ class SkillTester:
     convergence_threshold = 0.15
 
     def __init__(self, claude_client=None, max_iterations: int = 5,
-                 escalate_on_k_max: bool = True):
+                 escalate_on_k_max: bool = True,
+                 iteration_cb: Optional[Callable[[int, float, "SkillSpec"], None]] = None):
         """Initialize tester (Claude Code CLI by default — no API key needed).
+
+        ``iteration_cb(k, loss, spec)`` is called after each MEASURED LDD iteration with the spec that was tested
+        (additive: it never changes the loop; a failing callback is logged and ignored).
 
         ``escalate_on_k_max``: raise ``LDDIterationError`` when the loop hits
         k_max without converging (the LDD contract — default). The console
@@ -996,6 +1000,7 @@ class SkillTester:
         self.client = resolve_llm_client(claude_client)
         self.max_iterations = max_iterations
         self.escalate_on_k_max = escalate_on_k_max
+        self.iteration_cb = iteration_cb
         # Set by ldd_iterate(); read by the orchestrator for quality scoring.
         self.converged: bool = True
         self.final_loss: float = 0.0
@@ -1036,6 +1041,11 @@ class SkillTester:
                 # 3. Measure loss
                 loss = self._measure_loss(test_result, current_spec)
                 loss_history.append(loss)
+                if self.iteration_cb is not None:
+                    try:
+                        self.iteration_cb(k, loss, current_spec)
+                    except Exception:  # noqa: BLE001 - observation must never break the loop
+                        logger.warning("LDD iteration callback failed", exc_info=True)
                 if loss <= best_loss:
                     best_spec, best_loss = current_spec, loss
 
@@ -1572,6 +1582,7 @@ class SkillCreatorOrchestrator:
 
     def __init__(self, claude_client=None, registry_root: str = None,
                  progress_cb: Optional[Callable[[str, int, str], None]] = None,
+                 iteration_cb: Optional[Callable[[int, float, "SkillSpec"], None]] = None,
                  escalate_on_k_max: bool = False):
         """Initialize orchestrator.
 
@@ -1597,7 +1608,7 @@ class SkillCreatorOrchestrator:
         self.progress_cb = progress_cb
         self.planner = SkillPlanner(self.client)
         self.validator = SkillValidator()
-        self.tester = SkillTester(self.client, escalate_on_k_max=escalate_on_k_max)
+        self.tester = SkillTester(self.client, escalate_on_k_max=escalate_on_k_max, iteration_cb=iteration_cb)
         self.reviewer = AdversarialReviewer(self.client)
         self.promoter = SkillPromoter(registry_root)
 

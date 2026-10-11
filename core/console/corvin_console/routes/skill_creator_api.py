@@ -675,8 +675,16 @@ def _skill_spawn_kwargs(run_id: str, tenant_id: str, user_request: str,
     """The ``forge_runs.spawn`` arguments of a skill run — shared by the POST
     and by the resume of a run a console restart interrupted."""
     def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
+        def on_iteration(k: int, loss: float, spec: Any) -> None:
+            forge_runs.emit_event(run_id, "iteration", f"LDD iteration {k}: loss {loss:.3f}",
+                                  phase="ldd_iteration", data={"k": k, "loss": round(float(loss), 4)})
+            forge_runs.snapshot(run_id, f"iteration {k}", {"SKILL.md": str(spec.method)})
+
+        if base:  # a refine starts from an existing skill: that body is the PREVIOUS version for the run's diff
+            forge_runs.snapshot(run_id, "previous version", {"SKILL.md": str(base.get("body", ""))})
         orchestrator = SkillCreatorOrchestrator(
             progress_cb=progress,
+            iteration_cb=on_iteration,
             registry_root=str(_registry_root(tenant_id)),
         )
         _update_run(run_id, engine=orchestrator.engine_id,

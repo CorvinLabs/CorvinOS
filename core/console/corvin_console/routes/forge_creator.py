@@ -90,12 +90,23 @@ def _spawn_kwargs(kind: str, tenant_id: str, run_id: str, payload: Dict[str, Any
     if kind == "tool":
         def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
             from skill_creator.tool_creator import ToolCreatorOrchestrator  # noqa: PLC0415
+            def tool_files(d: Dict[str, Any]) -> Dict[str, str]:
+                return {f"{d.get('name', 'tool')}.py": str(d.get("impl", "")),
+                        "input_schema.json": json.dumps(d.get("input_schema", {}), indent=2, sort_keys=True)}
+
             def keep_draft(draft: Dict[str, Any]) -> None:
                 # The validated draft rides in the resume payload: a console restart or a
                 # retry continues from it instead of regenerating the tool.
                 forge_runs.update_run(run_id, resume={**payload, "draft": draft})
+
+            def on_iteration(k: int, draft: Dict[str, Any], tests: Dict[str, Any]) -> None:
+                passed, total = tests.get("passed"), tests.get("total")
+                forge_runs.emit_event(run_id, "iteration", f"iteration {k}: {passed} of {total} sandbox tests passed",
+                                      phase="sandbox_test", data={"k": k, "passed": passed, "total": total})
+                forge_runs.snapshot(run_id, f"iteration {k}", tool_files(draft))
+
             orch = ToolCreatorOrchestrator(tenant_id=tenant_id, progress_cb=progress,
-                                           draft_cb=keep_draft)
+                                           draft_cb=keep_draft, iteration_cb=on_iteration)
             forge_runs.update_run(run_id, engine=orch.engine_id,
                                   model=str(getattr(orch.client, "model", None) or "unknown"))
             tool = asyncio.run(orch.create_tool(request, resume_draft=payload.get("draft")))
@@ -109,6 +120,13 @@ def _spawn_kwargs(kind: str, tenant_id: str, run_id: str, payload: Dict[str, Any
             forge_runs.update_run(run_id, engine=orch.engine_id,
                                   model=str(getattr(orch.client, "model", None) or "unknown"))
             plugin = asyncio.run(orch.create_plugin(request, panel_request=panel_request))
+            try:  # the staged files as one snapshot: what the run produced, readable without leaving the console
+                staged = _forged_root(tenant_id) / str(plugin.get("dirname", ""))
+                forge_runs.snapshot(run_id, "staged", {
+                    rel: (staged / rel).read_text(encoding="utf-8", errors="replace")
+                    for rel in (plugin.get("files") or [])[:60] if (staged / rel).is_file() and not (staged / rel).is_symlink()})
+            except Exception:  # noqa: BLE001
+                logger.debug("staged plugin not snapshotted", exc_info=True)
             return {"target_id": plugin["plugin_id"], "phase": "staging", "plugin": plugin,
                     "message": (f"Plugin '{plugin['plugin_id']}' is staged under Marketplace → "
                                 "Forged. It is not installed.")}

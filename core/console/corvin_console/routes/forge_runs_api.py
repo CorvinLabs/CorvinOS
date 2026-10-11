@@ -60,3 +60,30 @@ async def get_run_events(
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
     events = forge_runs.read_events(rec.tenant_id, run_id, after=after, limit=limit)
     return {"run_id": run_id, "events": events, "next_after": events[-1]["seq"] if events else after}
+
+
+@router.get("/runs/{run_id}/snapshots")
+async def get_run_snapshots(
+    run_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> Dict[str, Any]:
+    if forge_runs.peek_run(run_id, rec.tenant_id) is None:
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+    snaps = forge_runs.read_snapshots(rec.tenant_id, run_id)
+    return {"run_id": run_id, "snapshots": [{"n": x["n"], "label": x["label"], "ts": x["ts"], "files": sorted(x["files"])} for x in snaps]}
+
+
+@router.get("/runs/{run_id}/diff")
+async def get_run_diff(
+    run_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    from_: Annotated[Optional[str], Query(alias="from", max_length=80)] = None,
+    to: Annotated[Optional[str], Query(max_length=80)] = None,
+) -> Dict[str, Any]:
+    """Unified diff between two snapshots of a run (an index or a label); default: the last two."""
+    if forge_runs.peek_run(run_id, rec.tenant_id) is None:
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+    result = forge_runs.diff_snapshots(rec.tenant_id, run_id, from_, to)
+    if result is None:
+        raise HTTPException(status_code=404, detail="This run has no two snapshots to compare")
+    return {"run_id": run_id, **result}

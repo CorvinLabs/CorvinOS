@@ -39,6 +39,36 @@ email/phone shape (the audit PII scan). Prompts and engine output are never stor
 `MAX_EVENT_BYTES_PER_RUN` 512 KiB — initial values) count what they drop and end with one `truncated` event, never an
 `error`. Today progress is live; tests, written files, findings and iterations are emitted from the result at the end.
 
+## Snapshots and diff (D3)
+
+`forge_runs.snapshot(run_id, label, files)` stores the files of one moment content-addressed under
+`<run>/snapshots/blobs/<sha256>` with an append-only `index.jsonl` (`n`, `label`, `ts`, `files{path: sha}`); identical content
+is stored once; only the owner writes; an absolute, `..`-bearing or over-long path is not stored; a file over
+`MAX_SNAPSHOT_FILE_BYTES` (128 KiB) is cut **with a visible marker**; over `MAX_SNAPSHOTS_PER_RUN` (40) a snapshot is skipped
+and an event says so. Emit points: the tool's sandbox-test loop (`iteration k`, plus an `iteration` event with passed/total),
+the skill's LDD loop (`iteration k`, plus an `iteration` event with the loss), a refine's starting body (`previous version`),
+the plugin's staged files (`staged`). Both orchestrators got an additive `iteration_cb` (default `None`, a failing callback
+is logged and ignored, the loop is unchanged). **Tools have no "previous version"**: the tool contract refuses a second tool
+of an existing name, so there is nothing to refine.
+`GET /forge/runs/{id}/snapshots` lists labels and file names (never content);
+`GET /forge/runs/{id}/diff?from=&to=` returns a unified diff per file between two snapshots (an index or a label; default: the
+last two); 404 when the run has fewer than two.
+
+## Measured on real runs (T-0146, claude-opus-5, 2026-10-12)
+
+| Run | Duration | Events | Log bytes | Largest event | Longest silence between progress events |
+|---|---|---|---|---|---|
+| tool (failed at review) | 91 s | 5 | 1 160 | 331 B | 35 s |
+| plugin | 48 s | 36 | 9 276 | 305 B | 35 s |
+| skill (LDD, 1 iteration) | 429 s | 29 | 7 963 | 317 B | **162 s** |
+
+Events are 230–320 bytes; the worst measured log is 9 KB against a 512 KiB cap (55×) and 36 events against 2 000. Artifacts:
+a skill body ≈ 3.7 KB, a tool implementation ≈ 3 KB, a plugin 9 files / 27 KB (largest 8.3 KB) — far under the 128 KiB file cap.
+The 162 s silence is why the heartbeat is a separate thread: a run that is only silent in `progress` terms would have been
+declared orphaned by `ORPHAN_AFTER_S` = 90 s had progress been its only signal. What the orchestrators can hand over mid-run:
+the LDD loss per iteration and the tool's test counts per iteration (now emitted); review verdicts and per-case test results
+arrive only when the phase ends.
+
 ## Retention (D8)
 
 `prune(tenant)`: a finished record goes with its run directory after 14 days; a record whose owner is alive is never
@@ -48,7 +78,7 @@ foreign names are ignored. It runs when a run starts, when runs are listed, and 
 
 ## API (read-only, session-gated, tenant-bound)
 
-`GET /v1/console/forge/runs?kind=&status=&limit=` · `GET /forge/runs/{id}` · `GET /forge/runs/{id}/events?after=&limit=`.
+`GET /v1/console/forge/runs?kind=&status=&limit=` · `GET /forge/runs/{id}` · `GET /forge/runs/{id}/events?after=&limit=` · `GET /forge/runs/{id}/snapshots` · `GET /forge/runs/{id}/diff?from=&to=`.
 Another tenant's id and an unknown id are both 404. Filters are closed vocabularies (422 otherwise).
 
 ## Audit

@@ -351,6 +351,142 @@ def _events_from_result(run_id: str, kind: str, result: Dict[str, Any]) -> None:
                            data={"dimension": f.get("dimension"), "verdict": f.get("verdict")})
 
 
+# ── Snapshots and diff (ADR-2253 D3) ──────────────────────────────────────────────────────────────
+#: Initial caps - bounded so a run directory cannot grow without limit; T-0146 may amend them.
+MAX_SNAPSHOTS_PER_RUN = 40
+MAX_SNAPSHOT_FILES = 60
+MAX_SNAPSHOT_FILE_BYTES = 128 * 1024
+_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+_snap_lock = threading.Lock()
+
+
+def _clean_snapshot_path(path: str) -> Optional[str]:
+    """A relative, forward-slash path with no traversal; anything else is not stored."""
+    p = str(path).replace("\\", "/").strip()
+    if p.startswith("/"):
+        return None  # an absolute path is a caller bug, not something to quietly re-root
+    if not p or len(p) > 200 or any(part in ("", ".", "..") for part in p.split("/")) or "\x00" in p:
+        return None
+    return p
+
+
+def snapshot(run_id: str, label: str, files: Dict[str, str]) -> Optional[int]:
+    """Store the files of one moment of the artifact, content-addressed, and return its 1-based index.
+
+    Only the owning process writes. Identical content is stored once (blobs are named by their sha256), so an
+    iteration that changed one file costs one blob. Over a cap the snapshot is skipped and an event says so -
+    never a silent loss. The files are the user's own artifact: they stay in the tenant's run directory and
+    only hashes ever reach the audit chain.
+    """
+    import hashlib  # noqa: PLC0415
+    with runs_lock:
+        run = runs.get(run_id)
+        if run is None or run.get("boot_id") != BOOT_ID:
+            return None
+        tenant_id = str(run.get("tenant_id") or "")
+    try:
+        base = run_dir(tenant_id, run_id) / "snapshots"
+        if base.parent.is_symlink() or base.is_symlink():
+            return None
+        entries: Dict[str, str] = {}
+        for raw_path, text in list(files.items())[:MAX_SNAPSHOT_FILES]:
+            path = _clean_snapshot_path(raw_path)
+            if path is None:
+                continue
+            data = str(text).encode("utf-8", "replace")
+            if len(data) > MAX_SNAPSHOT_FILE_BYTES:
+                data = data[:MAX_SNAPSHOT_FILE_BYTES] + b"\n[truncated: file larger than the snapshot cap]\n"
+            sha = hashlib.sha256(data).hexdigest()
+            entries[path] = sha
+            blob = base / "blobs" / sha
+            if not blob.exists():
+                blob.parent.mkdir(parents=True, exist_ok=True)
+                fd = os.open(blob, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                try:
+                    os.write(fd, data)
+                finally:
+                    os.close(fd)
+        with _snap_lock:
+            index = base / "index.jsonl"
+            n = sum(1 for _ in open(index, "rb")) if index.exists() else 0
+            if n >= MAX_SNAPSHOTS_PER_RUN:
+                emit_event(run_id, "progress", "a snapshot was skipped (per-run snapshot cap)", data={"cap": MAX_SNAPSHOTS_PER_RUN})
+                return None
+            base.mkdir(parents=True, exist_ok=True)
+            line = json.dumps({"n": n + 1, "label": _scrub(label, 80), "ts": datetime.now(timezone.utc).isoformat(),
+                               "files": entries}) + "\n"
+            fd = os.open(index, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            try:
+                os.write(fd, line.encode("utf-8"))
+            finally:
+                os.close(fd)
+            return n + 1
+    except Exception:  # noqa: BLE001 - a snapshot never fails a run
+        logger.warning("forge run %s: could not write a snapshot", run_id, exc_info=True)
+        return None
+
+
+def read_snapshots(tenant_id: str, run_id: str) -> list[Dict[str, Any]]:
+    """The snapshot index, oldest first; files are listed by path and hash, never inlined."""
+    out: list[Dict[str, Any]] = []
+    try:
+        with open(run_dir(tenant_id, run_id) / "snapshots" / "index.jsonl", "rb") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict):
+                    out.append(rec)
+    except (OSError, ValueError):
+        return []
+    return out
+
+
+def _blob(tenant_id: str, run_id: str, sha: str) -> str:
+    if not _SHA_RE.match(str(sha)):
+        return ""
+    try:
+        return (run_dir(tenant_id, run_id) / "snapshots" / "blobs" / sha).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _pick(snaps: list[Dict[str, Any]], ref: Optional[str]) -> Optional[Dict[str, Any]]:
+    if ref is None or ref == "":
+        return None
+    if ref.isdigit():
+        return next((x for x in snaps if x.get("n") == int(ref)), None)
+    return next((x for x in snaps if x.get("label") == ref), None)
+
+
+def diff_snapshots(tenant_id: str, run_id: str, frm: Optional[str] = None, to: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """A unified diff between two snapshots of one run, per file.
+
+    ``to`` defaults to the last snapshot and ``frm`` to the one before it; either may be an index or a label.
+    None when the run has fewer than two snapshots to compare (nothing is invented).
+    """
+    import difflib  # noqa: PLC0415
+    snaps = read_snapshots(tenant_id, run_id)
+    b = _pick(snaps, to) if to else (snaps[-1] if snaps else None)
+    a = _pick(snaps, frm) if frm else (snaps[snaps.index(b) - 1] if b is not None and snaps.index(b) > 0 else None)
+    if a is None or b is None or a is b:
+        return None
+    files: list[Dict[str, Any]] = []
+    for path in sorted(set(a["files"]) | set(b["files"])):
+        old = _blob(tenant_id, run_id, a["files"].get(path, "")) if path in a["files"] else None
+        new = _blob(tenant_id, run_id, b["files"].get(path, "")) if path in b["files"] else None
+        if old == new:
+            status = "same"
+        else:
+            status = "added" if old is None else "removed" if new is None else "changed"
+        text = "" if status == "same" else "".join(difflib.unified_diff(
+            (old or "").splitlines(keepends=True), (new or "").splitlines(keepends=True),
+            fromfile=f"{a['label']}/{path}", tofile=f"{b['label']}/{path}", n=3))
+        files.append({"path": path, "status": status, "diff": text})
+    return {"from": {"n": a["n"], "label": a["label"]}, "to": {"n": b["n"], "label": b["label"]}, "files": files}
+
+
 class GenerationRefused(Exception):
     """A console pre-spawn gate refused the engine spawn; ``str()`` is user-facing."""
 
