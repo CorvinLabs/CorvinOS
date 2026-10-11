@@ -1,7 +1,7 @@
 """Tests for DataHub SecurityScanner."""
 
 import pytest
-from data_hub.security.scanner import SecurityScanner
+from core.skills.os_skills.data_hub.security.scanner import SecurityScanner
 
 
 class TestSecurityScanner:
@@ -58,7 +58,7 @@ class TestQualityScorer:
 
     def test_quality_score_reproducible(self):
         """Same inputs → same score."""
-        from data_hub.quality.scorer import QualityScorer
+        from core.skills.os_skills.data_hub.quality.scorer import QualityScorer
 
         scorer = QualityScorer()
         score1 = scorer.compute_document_quality(0.8, 0.6, 0.9, 0.7)
@@ -67,7 +67,7 @@ class TestQualityScorer:
 
     def test_quality_score_bounds(self):
         """Quality scores are always in [0, 1]."""
-        from data_hub.quality.scorer import QualityScorer
+        from core.skills.os_skills.data_hub.quality.scorer import QualityScorer
 
         scorer = QualityScorer()
         score = scorer.compute_document_quality(0.5, 0.5, 0.5, 0.5)
@@ -79,7 +79,7 @@ class TestManifest:
 
     def test_manifest_immutable(self):
         """Manifest is frozen (immutable)."""
-        from data_hub.manifest import DataManifest, Document
+        from core.skills.os_skills.data_hub.manifest import DataManifest, Document
 
         doc = Document(
             id="d1",
