@@ -406,6 +406,69 @@ class VideoProducerRoutesE2E(unittest.TestCase):
             r = self._create(client, csrf, task="x" * 4001)
             self.assertEqual(r.status_code, 422, r.text)
 
+    # ── Cancel route (ADR-2247, PLAN-0946 R1b) ──────────────────────────────
+    def test_cancel_job_via_http_api_audits_and_returns_status(self):
+        """The cancel route (POST /video/jobs/{job_id}/cancel) checks tenant isolation,
+        job existence, terminal status guard, and audits the outcome."""
+        with _sandbox(self._tmp, tenants=("tenant_a", "tenant_b")) as (_c, _t, home, clients):
+            mod = _route_module()
+
+            # A mock runner that tracks cancel calls
+            class CancelTrackingRunner(_RecordingRunner):
+                def __init__(self):
+                    super().__init__()
+                    self.cancelled_jobs = []
+                    self._running = {"job_test_01"}  # simulate this job running
+
+                def cancel_job(self, job_id: str) -> bool:
+                    if job_id in self._running:
+                        self.cancelled_jobs.append(job_id)
+                        self._running.discard(job_id)
+                        return True
+                    return False
+
+            runner = CancelTrackingRunner()
+            mod.get_runner = lambda: runner
+            (ca, csrf_a), (cb, csrf_b) = clients["tenant_a"], clients["tenant_b"]
+
+            # Create a job in tenant_a
+            r = self._create(ca, csrf_a)
+            self.assertEqual(r.status_code, 200, r.text)
+            job_a = r.json()["job_id"]
+
+            # Tenant B cannot cancel tenant A's job
+            r = cb.post(f"/v1/console/video/jobs/{job_a}/cancel", headers={"X-CSRF-Token": csrf_b})
+            self.assertEqual(r.status_code, 404, "Cross-tenant cancel should fail")
+
+            # Bad job ID is rejected
+            r = ca.post("/v1/console/video/jobs/job_badid/cancel", headers={"X-CSRF-Token": csrf_a})
+            self.assertEqual(r.status_code, 404, r.text)
+
+            # Cancel a non-existent job → 404
+            r = ca.post("/v1/console/video/jobs/job_00000000/cancel", headers={"X-CSRF-Token": csrf_a})
+            self.assertEqual(r.status_code, 404, r.text)
+
+            # Create and cancel a job that exists but is not running locally
+            job_b = self._create(ca, csrf_a).json()["job_id"]
+            r = ca.post(f"/v1/console/video/jobs/{job_b}/cancel", headers={"X-CSRF-Token": csrf_a})
+            self.assertEqual(r.status_code, 409, "Job not running → 409")
+            self.assertIn("not running", r.json()["detail"])
+
+            # Cancel a job that is actually running
+            runner._running.add(job_a)  # simulate it running
+            r = ca.post(f"/v1/console/video/jobs/{job_a}/cancel", headers={"X-CSRF-Token": csrf_a})
+            self.assertEqual(r.status_code, 200, r.text)
+            result = r.json()
+            self.assertEqual(result["job_id"], job_a)
+            # Outcome is either "cancelled" (terminal) or "cancelling" (in-flight)
+            self.assertIn(result["status"], ("cancelled", "cancelling"))
+            self.assertIn(job_a, runner.cancelled_jobs)
+
+            # Audit record was written (video_producer.job_cancelled event)
+            chain = _chain_text(home)
+            self.assertIn("video_producer.job_cancelled", chain)
+            self.assertIn(job_a, chain)
+
 
 class VideoProducerPluginGateE2E(unittest.TestCase):
     """The API lives and dies with the plugin: installed + enabled for the tenant."""
