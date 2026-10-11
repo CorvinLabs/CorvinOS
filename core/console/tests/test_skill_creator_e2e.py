@@ -741,3 +741,26 @@ def test_sync_failure_records_the_real_phase_the_error_and_the_run_id(tmp_path):
 
 def run_id_of(route):
     return next(iter(route.forge_runs.runs))
+
+
+def test_a_skill_run_has_the_complete_envelope_and_an_event_log(tmp_path):
+    """ADR-2253 D1/D2 for the third kind (T-0147): started/ended, the model the engine reported, the artifact, a request digest."""
+    import json
+    with console_client(tmp_path, fake_engine()) as (client, route):
+        r = client.post("/v1/console/skill-creator/generate", json={
+            "user_request": "erzeuge einen Skill der JSON validiert", "async": True},
+            headers=csrf_headers(client.session_record))
+        run_id = r.json()["run_id"]
+        body = poll_until_done(client, run_id)
+        assert body["status"] == "success", body
+        rec = json.loads((tmp_path / "corvin_home/tenants/_default/global/forge_runs" / f"{run_id}.json").read_text())
+        for field in ("started_at", "ended_at", "engine", "artifact_ref", "request_digest"):
+            assert rec.get(field) not in (None, ""), (field, rec)
+        assert rec["artifact_ref"] == {"kind": "skill", "id": rec["artifact_ref"]["id"]} and rec["artifact_ref"]["id"].startswith("assistant.")
+        assert "JSON validiert" not in json.dumps(rec["request_digest"])
+        log = (tmp_path / "corvin_home/tenants/_default/global/forge_runs" / run_id / "events.jsonl").read_text().splitlines()
+        events = [json.loads(line) for line in log]
+        assert [e["seq"] for e in events] == list(range(1, len(events) + 1))
+        types = {e["type"] for e in events}
+        assert {"progress", "iteration"} <= types, types
+        assert "erzeuge einen Skill" not in json.dumps(events), "the request is never logged"

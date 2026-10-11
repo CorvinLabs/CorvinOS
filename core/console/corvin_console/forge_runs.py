@@ -197,6 +197,160 @@ def _boot_prune() -> None:
 threading.Thread(target=_boot_prune, name="forge-runs-boot-prune", daemon=True).start()
 
 
+# ── Event log (ADR-2253 D2) ───────────────────────────────────────────────────────────────────────
+#: Initial caps - the measurement task (T-0146) may amend them. Excess is COUNTED, never silently dropped: a final
+#: ``truncated`` event states how many were left out.
+MAX_EVENTS_PER_RUN = 2000
+MAX_EVENT_BYTES_PER_RUN = 512 * 1024
+EVENT_TYPES = frozenset({"progress", "iteration", "file_written", "test_result", "finding", "gate", "intake",
+                         "error", "truncated"})
+_EVENT_LEVELS = frozenset({"info", "warning", "error"})
+_event_lock = threading.Lock()
+_event_state: Dict[str, Dict[str, int]] = {}
+
+
+def _pii_shaped(text: str) -> bool:
+    try:
+        from forge.security_events import _audit_value_pii  # noqa: PLC0415
+        return bool(_audit_value_pii(text))
+    except Exception:  # noqa: BLE001 - never let the scrubber's import break a run; fall back to a strict check
+        return bool(re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", text)) or bool(re.search(r"\+?\d[\d ()./-]{8,}\d", text))
+
+
+def _scrub(text: Any, limit: int = 500) -> str:
+    """Free text in an event: bounded, and withheld entirely when it carries a personal-data shape."""
+    s = str(text if text is not None else "")
+    s = " ".join(s.split())[:limit]
+    return "[withheld: looks like personal data]" if _pii_shaped(s) else s
+
+
+def _safe_data(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Scalars only, at most 16 keys, strings scrubbed - structured detail without room for payloads."""
+    out: Dict[str, Any] = {}
+    for k, v in list((data or {}).items())[:16]:
+        key = _scrub(k, 40)
+        if isinstance(v, (bool, int, float)) or v is None:
+            out[key] = v
+        elif isinstance(v, str):
+            out[key] = _scrub(v, 200)
+    return out
+
+
+def _events_path(tenant_id: str, run_id: str) -> Path:
+    return run_dir(tenant_id, run_id) / "events.jsonl"
+
+
+def _state_for(path: Path, run_id: str) -> Dict[str, int]:
+    st = _event_state.get(run_id)
+    if st is None:
+        seq = size = 0
+        try:  # a resumed run continues the sequence it had
+            with open(path, "rb") as fh:
+                for line in fh:
+                    seq += 1
+                    size += len(line)
+        except OSError:
+            pass
+        st = _event_state[run_id] = {"seq": seq, "bytes": size, "dropped": 0, "truncated_written": 0}
+    return st
+
+
+def emit_event(run_id: str, type_: str, message: str, *, phase: Optional[str] = None, level: str = "info",
+               data: Optional[Dict[str, Any]] = None) -> Optional[int]:
+    """Append one event to a run's log; returns its ``seq`` or None when nothing was written.
+
+    Only the OWNING process appends (a peer host only reads), the writer is serialised per process, the file is
+    opened ``O_APPEND|O_NOFOLLOW`` at 0600, and a failure to write never fails the run. Prompts and engine
+    output are not events: callers pass what the Forge DID, and free text is scrubbed here regardless.
+    """
+    if type_ not in EVENT_TYPES or level not in _EVENT_LEVELS:
+        raise ValueError(f"unknown event type or level: {type_!r}/{level!r}")
+    with runs_lock:
+        run = runs.get(run_id)
+        if run is None or run.get("boot_id") != BOOT_ID:
+            return None
+        tenant_id = str(run.get("tenant_id") or "")
+        phase = phase if phase is not None else run.get("phase")
+    try:
+        path = _events_path(tenant_id, run_id)
+        with _event_lock:
+            st = _state_for(path, run_id)
+            if type_ != "truncated" and (st["seq"] >= MAX_EVENTS_PER_RUN or st["bytes"] >= MAX_EVENT_BYTES_PER_RUN):
+                st["dropped"] += 1
+                return None
+            rec = {"seq": st["seq"] + 1, "ts": datetime.now(timezone.utc).isoformat(), "phase": phase,
+                   "level": level, "type": type_, "message": _scrub(message), "data": _safe_data(data)}
+            line = (json.dumps(rec, default=str) + "\n").encode("utf-8")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.parent.is_symlink():
+                return None
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            try:
+                os.write(fd, line)
+            finally:
+                os.close(fd)
+            st["seq"] += 1
+            st["bytes"] += len(line)
+            return rec["seq"]
+    except Exception:  # noqa: BLE001
+        logger.warning("forge run %s: could not write an event", run_id, exc_info=True)
+        return None
+
+
+def finalize_events(run_id: str) -> None:
+    """Write the final ``truncated`` marker once, if the caps left events out."""
+    with _event_lock:
+        st = _event_state.get(run_id)
+        dropped = st["dropped"] if st else 0
+        if not st or not dropped or st["truncated_written"]:
+            return
+        st["truncated_written"] = 1
+    emit_event(run_id, "truncated", f"{dropped} events were left out (per-run cap)",
+               data={"dropped": dropped, "max_events": MAX_EVENTS_PER_RUN, "max_bytes": MAX_EVENT_BYTES_PER_RUN})
+
+
+def read_events(tenant_id: str, run_id: str, after: int = 0, limit: int = 500) -> list[Dict[str, Any]]:
+    """Events with ``seq > after``, oldest first, at most ``limit``. A missing log is an empty list."""
+    out: list[Dict[str, Any]] = []
+    try:
+        with open(_events_path(tenant_id, run_id), "rb") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict) and int(rec.get("seq") or 0) > after:
+                    out.append(rec)
+                    if len(out) >= limit:
+                        break
+    except (OSError, ValueError):
+        return []
+    return out
+
+
+def _events_from_result(run_id: str, kind: str, result: Dict[str, Any]) -> None:
+    """What the Forge produced, as events: tests, files, findings, iterations - from fields every kind already returns."""
+    tool = result.get("tool") if isinstance(result.get("tool"), dict) else None
+    plugin = result.get("plugin") if isinstance(result.get("plugin"), dict) else None
+    skill = result.get("skill") if isinstance(result.get("skill"), dict) else None
+    if tool and isinstance(tool.get("tests"), dict):
+        t = tool["tests"]
+        emit_event(run_id, "test_result", f"sandbox tests: {t.get('passed')}/{t.get('total')} passed",
+                   data={"passed": t.get("passed"), "total": t.get("total")})
+    if plugin:
+        for path in (plugin.get("files") or [])[:200]:
+            emit_event(run_id, "file_written", str(path), data={"path": str(path)})
+    if skill:
+        emit_event(run_id, "iteration", f"{skill.get('iterations')} LDD iterations, quality {skill.get('quality')}",
+                   data={"iterations": skill.get("iterations"), "quality": skill.get("quality")})
+    for src in (tool, plugin, skill):
+        for f in ((src or {}).get("findings") or [])[:100]:
+            if isinstance(f, dict):
+                emit_event(run_id, "finding", str(f.get("summary") or ""),
+                           level="warning" if f.get("verdict") == "confirmed" else "info",
+                           data={"dimension": f.get("dimension"), "verdict": f.get("verdict")})
+
+
 class GenerationRefused(Exception):
     """A console pre-spawn gate refused the engine spawn; ``str()`` is user-facing."""
 
@@ -280,6 +434,18 @@ def _owner() -> Dict[str, Any]:
     return {"boot_id": BOOT_ID, "pid": os.getpid(), "host": socket.gethostname()}
 
 
+def _request_digest(resume: Optional[Dict[str, Any]]) -> Optional[str]:
+    """A short hash of the request text, never the text itself (ADR-2253 D1): enough to tell two runs of the
+    same request apart from two different ones, nothing that can leak what was asked."""
+    import hashlib  # noqa: PLC0415
+    if not isinstance(resume, dict):
+        return None
+    text = resume.get("request") or resume.get("user_request")
+    if not isinstance(text, str) or not text:
+        return None
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 def new_run(*, tenant_id: str, kind: str, phases: tuple[str, ...],
             sid_fingerprint: Optional[str], resume: Optional[Dict[str, Any]] = None,
             **extra: Any) -> str:
@@ -300,6 +466,11 @@ def new_run(*, tenant_id: str, kind: str, phases: tuple[str, ...],
         "boot_id": BOOT_ID,
         "owner": _owner(),
         "heartbeat_at": time.time(),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "ended_at": None,
+        "model": "unknown",          # what the engine REPORTS, filled in once it is known (never a guess)
+        "artifact_ref": None,
+        "request_digest": _request_digest(resume),
         "resume": resume,
         "resumes": 0,
     }
@@ -428,8 +599,13 @@ def spawn(*, run_id: str, kind: str, tenant_id: str, sid_fingerprint: Optional[s
     has no session, and reading an env var there is the console tenant-routing
     violation CLAUDE.md forbids.
     """
+    last_progress: list = [None]
+
     def progress(phase: str, pct: int, message: str) -> None:
         update_run(run_id, phase=phase, progress=pct, message=message)
+        if last_progress[0] != (phase, message):  # the same line repeated is one event, not many
+            last_progress[0] = (phase, message)
+            emit_event(run_id, "progress", message, phase=phase, data={"progress": pct})
 
     def run_task() -> None:
         # The engine can be silent for minutes between progress calls; the heartbeat tells a peer host this
@@ -450,7 +626,12 @@ def spawn(*, run_id: str, kind: str, tenant_id: str, sid_fingerprint: Optional[s
         try:
             result = work(progress)
             target_id = str(result.pop("target_id", "") or "unknown")
-            update_run(run_id, status="success", progress=100, error=None, **result)
+            _events_from_result(run_id, kind, result)
+            update_run(run_id, status="success", progress=100, error=None,
+                       ended_at=datetime.now(timezone.utc).isoformat(),
+                       artifact_ref={"kind": kind, "id": target_id}, **result)
+            emit_event(run_id, "progress", str(result.get("message") or "finished"), phase=None, data={"progress": 100})
+            finalize_events(run_id)
             if sid_fingerprint:
                 console_audit.action_performed(
                     tenant_id=tenant_id, sid_fingerprint=sid_fingerprint,
@@ -467,6 +648,9 @@ def spawn(*, run_id: str, kind: str, tenant_id: str, sid_fingerprint: Optional[s
                 )
             extra = getattr(exc, "result_fields", None)
             update_run(run_id, status="failed", error=str(exc), message=hint(exc),
+                       ended_at=datetime.now(timezone.utc).isoformat(),
                        **(extra if isinstance(extra, dict) else {}))
+            emit_event(run_id, "error", hint(exc), level="error", data={"error_class": type(exc).__name__})
+            finalize_events(run_id)
 
     threading.Thread(target=run_task, name=f"forge-{kind}-{run_id}", daemon=True).start()

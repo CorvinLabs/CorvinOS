@@ -96,7 +96,8 @@ def _spawn_kwargs(kind: str, tenant_id: str, run_id: str, payload: Dict[str, Any
                 forge_runs.update_run(run_id, resume={**payload, "draft": draft})
             orch = ToolCreatorOrchestrator(tenant_id=tenant_id, progress_cb=progress,
                                            draft_cb=keep_draft)
-            forge_runs.update_run(run_id, engine=orch.engine_id)
+            forge_runs.update_run(run_id, engine=orch.engine_id,
+                                  model=str(getattr(orch.client, "model", None) or "unknown"))
             tool = asyncio.run(orch.create_tool(request, resume_draft=payload.get("draft")))
             return {"target_id": tool["name"], "phase": "promotion", "tool": tool,
                     "message": f"Tool '{tool['name']}' passed its sandbox tests and is registered."}
@@ -105,7 +106,8 @@ def _spawn_kwargs(kind: str, tenant_id: str, run_id: str, payload: Dict[str, Any
         def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
             from skill_creator.plugin_creator import PluginCreatorOrchestrator  # noqa: PLC0415
             orch = PluginCreatorOrchestrator(tenant_id=tenant_id, progress_cb=progress)
-            forge_runs.update_run(run_id, engine=orch.engine_id)
+            forge_runs.update_run(run_id, engine=orch.engine_id,
+                                  model=str(getattr(orch.client, "model", None) or "unknown"))
             plugin = asyncio.run(orch.create_plugin(request, panel_request=panel_request))
             return {"target_id": plugin["plugin_id"], "phase": "staging", "plugin": plugin,
                     "message": (f"Plugin '{plugin['plugin_id']}' is staged under Marketplace → "

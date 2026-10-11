@@ -680,6 +680,7 @@ def _skill_spawn_kwargs(run_id: str, tenant_id: str, user_request: str,
             registry_root=str(_registry_root(tenant_id)),
         )
         _update_run(run_id, engine=orchestrator.engine_id,
+                    model=str(getattr(getattr(orchestrator, "client", None), "model", None) or "unknown"),
                     message=f"Generating via {orchestrator.engine_id}…")
         artifact = asyncio.run(orchestrator.create_skill(user_request, base=base))
         _record_stats(artifact)
