@@ -38,6 +38,12 @@ class EventEmitter:
         self.store = event_store
         self._queue: queue.Queue[Optional[LearningEvent]] = queue.Queue(maxsize=queue_size)
         self._stopped = False
+        # One lock makes "is the emitter still accepting?" and "put the event in the queue" a single
+        # step, and makes stop() flip the flag atomically with respect to both. Without it an emit
+        # that passed the _stopped check could put its event BEHIND stop()'s sentinel: emit() said
+        # True, the worker had already exited, the event was never written.
+        self._lifecycle_lock = threading.Lock()
+        self._stats_lock = threading.Lock()
         self.dropped = 0  # queue-full drops (observable, never silent)
         self.write_failures = 0
         self._worker_thread = threading.Thread(
@@ -57,7 +63,8 @@ class EventEmitter:
                     self.store.write_event(event)
                 except Exception as e:
                     # FIX #12: Log data loss instead of silent fail
-                    self.write_failures += 1
+                    with self._stats_lock:
+                        self.write_failures += 1
                     logger.error(f"Failed to write learning event (LOST): {event.event_id} — {e}")
             except queue.Empty:
                 pass
@@ -73,24 +80,31 @@ class EventEmitter:
             logger.error(f"Rejected event: invalid tenant_id={event.tenant_id!r}")
             return False
 
-        if self._stopped:
-            logger.error(f"Rejected event after stop(): {event.event_id}")
-            return False
-
-        try:
-            self._queue.put_nowait(event)
-            return True
-        except queue.Full:
-            self.dropped += 1
-            logger.warning(f"Queue full, dropping event {event.event_id} (dropped so far: {self.dropped})")
-            return False  # Queue full, drop event
+        with self._lifecycle_lock:
+            if self._stopped:
+                logger.error(f"Rejected event after stop(): {event.event_id}")
+                return False
+            try:
+                self._queue.put_nowait(event)
+                return True
+            except queue.Full:
+                with self._stats_lock:
+                    self.dropped += 1
+                    dropped = self.dropped
+        logger.warning(f"Queue full, dropping event {event.event_id} (dropped so far: {dropped})")
+        return False  # Queue full, drop event
 
     def stop(self, timeout: float = 5.0) -> None:
         """Stop emitter (wait for queue to flush)."""
-        if self._stopped:
-            return
-        self._stopped = True
-        self._queue.put(None)  # Sentinel
+        with self._lifecycle_lock:
+            if self._stopped:
+                return
+            self._stopped = True   # from here no emit() can enqueue: every accepted event precedes the sentinel
+        try:
+            # Bounded: with a full queue and a stuck worker a plain put() blocked forever.
+            self._queue.put(None, timeout=timeout)  # Sentinel
+        except queue.Full:
+            raise RuntimeError("EventEmitter queue is full and its worker is not draining it") from None
         self._worker_thread.join(timeout=timeout)
         if self._worker_thread.is_alive():
             raise RuntimeError("EventEmitter worker thread failed to shut down within timeout")
