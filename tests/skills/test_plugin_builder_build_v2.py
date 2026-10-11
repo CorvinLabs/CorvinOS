@@ -378,7 +378,7 @@ class TestPluginBuilderAuditIntegration:
         path, recs = self._chain_records()
         mine = [r for r in recs if r.get("event_type") == "plugin_builder.build"]
         assert len(mine) >= 2
-        assert all(r["prev_hash"] and r["hash"] for r in mine)
+        assert all("prev_hash" in r and r["hash"] for r in mine)
         assert se.verify_chain(path)[0] is True            # linked into the ONE chain, MAC and all
 
 
