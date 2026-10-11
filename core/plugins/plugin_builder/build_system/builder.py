@@ -276,45 +276,34 @@ class PluginBuilder:
         """
         event_id = str(uuid.uuid4())
 
-        # Ensure audit chain directory exists
-        self.audit_chain_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Read previous hash (for chain integrity)
-        prev_hash = ""
-        if self.audit_chain_path.exists():
-            try:
-                with open(self.audit_chain_path, 'r') as f:
-                    lines = f.readlines()
-                    if lines:
-                        last_event = json.loads(lines[-1])
-                        prev_hash = last_event.get('hash', '')
-            except Exception:
-                pass  # Best-effort previous hash
-
-        # Create audit event
-        event_data = {
-            "event_type": event_type,
-            "event_id": event_id,
+        # The record goes through the core writer (audit.audit_event -> security_events.write_event),
+        # which owns the HMAC chain, the tenant path and the allowlist. This method used to read the
+        # chain's last line and append its own sha256-linked JSON: a line the writer did not produce
+        # fails the chain's MAC check. Content-free: closed identifiers and counts only — the
+        # validation issue list, stderr and exception text stay out of the permanent record.
+        details: dict[str, Any] = {
             "tenant_id": self.config.tenant_id,
             "skill_id": self.config.skill_id,
-            "audit_id": data.get("audit_id", ""),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "data": data,
-            "prev_hash": prev_hash,
+            "event_id": event_id,
+            "stage": event_type,
+            "audit_id": str(data.get("audit_id", "")),
         }
-
-        # Compute hash of this event
-        event_str = json.dumps(event_data, sort_keys=True, default=str)
-        event_data["hash"] = hashlib.sha256(event_str.encode()).hexdigest()
-
-        # Write to audit chain (append-only)
+        for key in ("manifest_id", "version", "reason", "wheel_hash"):
+            if isinstance(data.get(key), str):
+                details[key] = data[key][:128]
+        if isinstance(data.get("wheel_size"), int) and not isinstance(data.get("wheel_size"), bool):
+            details["wheel_size"] = data["wheel_size"]
+        if isinstance(data.get("issues"), (list, tuple)):
+            details["issue_count"] = len(data["issues"])
         try:
-            with open(self.audit_chain_path, 'a') as f:
-                f.write(json.dumps(event_data) + '\n')
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to write audit event to {self.audit_chain_path}: {e}"
-            )
+            from audit import audit_event  # noqa: PLC0415
+
+            committed = bool(audit_event("plugin_builder.build", details=details,
+                                         tenant_id=self.config.tenant_id))
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"Failed to write audit event '{event_type}': {type(e).__name__}") from e
+        if not committed:
+            raise RuntimeError(f"Audit event '{event_type}' was not committed to the tenant chain (fail-closed)")
 
         return event_id
 

@@ -145,6 +145,7 @@ EVENT_SEVERITY: dict[str, str] = {
     "routing.phase2_refused":    "INFO",
     # Plugin-Builder development workflow (core/plugins/plugin_builder/v2_integration.py)
     "plugin_builder.development": "INFO",
+    "plugin_builder.build": "INFO",
     "routing.rollback_triggered": "WARNING",
     "routing.rollback_reset":    "INFO",
     # registry lifecycle (past-tense canonical names, emitted by registry.py)
@@ -3148,6 +3149,11 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # One record per stage of a Plugin-Builder development run. ``stage`` is a closed identifier
     # (development_started, phase_<step>_started|completed|failed, development_completed);
     # nothing here is free text — no plan, description, author or exception message.
+    # PackageBuilder (build_started | build_failed | build_completed): closed identifiers and counts.
+    "plugin_builder.build": frozenset({
+        "tenant_id", "skill_id", "event_id", "stage", "audit_id", "manifest_id", "version",
+        "reason", "wheel_hash", "wheel_size", "issue_count",
+    }),
     "plugin_builder.development": frozenset({
         "tenant_id", "development_id", "plugin_id", "stage", "phase", "success",
         "scaffold_preserved", "error_class",
