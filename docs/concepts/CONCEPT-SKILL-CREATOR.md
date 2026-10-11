@@ -488,7 +488,7 @@ File: ~/.claude/skills/assistant.analyze_local_files.md
   containing a single angle bracket (ADR-0405).
 - ✅ No embedded secrets (scan for API keys, passwords)
 - ✅ Dependencies can be resolved (or auto-installed if safe)
-- ✅ Name matches `SKILL_NAME_RE` = `^(assistant|project)\.[a-z_]+$`
+- ✅ Name matches `SKILL_NAME_RE` = `^(assistant|project)\.[a-z][a-z0-9_]*$`
 - ✅ Purpose within `PURPOSE_LEN` (20–200), method within `METHOD_LEN` (100–5000)
 - ✅ SkillForge's own linter (fail-closed) at registration time
 

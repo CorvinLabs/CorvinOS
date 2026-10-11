@@ -1049,3 +1049,15 @@ class TestDeleteAndBody:
 
     def test_strip_front_matter_is_a_noop_without_one(self):
         assert strip_front_matter("# Title\n\nStep one.") == "# Title\n\nStep one."
+
+
+def test_skill_names_may_carry_digits_but_must_start_with_a_letter():
+    """e2e_test_skill / sha256_check used to lose their digits silently ("ee_test_skill")."""
+    import re
+    from corvin_operator.skill_creator.skill_creator import SKILL_NAME_RE, normalize_skill_name
+
+    assert normalize_skill_name("assistant.e2e_test_skill") == "assistant.e2e_test_skill"
+    assert normalize_skill_name("sha256-check") == "assistant.sha256_check"
+    assert normalize_skill_name("9lives") == "assistant.lives"          # must start with a letter
+    assert re.match(SKILL_NAME_RE, "assistant.e2e_test_skill")
+    assert not re.match(SKILL_NAME_RE, "assistant.2fast")

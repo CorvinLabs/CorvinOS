@@ -39,13 +39,20 @@ def _client(tmp_path: Path):
     th = home / "tenants" / TENANT
     for sub in ("global/auth", "global/forge", "global/console/sessions"):
         (th / sub).mkdir(parents=True)
-    keys = ("CORVIN_HOME", "CORVIN_TENANT_ID", "VOICE_AUDIT_PATH")
+    keys = ("CORVIN_HOME", "CORVIN_TENANT_ID", "VOICE_AUDIT_PATH", "ANTHROPIC_API_KEY")
     prev = {k: os.environ.get(k) for k in keys}
     os.environ["CORVIN_HOME"] = str(home)
     os.environ["CORVIN_TENANT_ID"] = TENANT
+    os.environ["ANTHROPIC_API_KEY"] = "sk-test-not-real"  # keep the REVIEW off the real engine
     os.environ["VOICE_AUDIT_PATH"] = str(home / "audit.jsonl")
     try:
         _reset_modules()
+        # REVIEW is the one external (LLM) boundary of Layer Forge: stub it so the lifecycle
+        # does not depend on a live model's mood — the contract is a ReviewVerdict, never a raise.
+        from core.orchestration.layer_forge import orchestrator as _orch
+        from core.orchestration.layer_forge.review import ReviewVerdict as _RV
+        _orig_review = _orch.review_layer_definition
+        _orch.review_layer_definition = lambda manifest, enforcement, **_k: _RV("PASS", flags=[])
         from corvin_console import auth as _auth
         from corvin_console.app import router
         from fastapi import FastAPI
@@ -59,6 +66,10 @@ def _client(tmp_path: Path):
         client.cookies.set("corvin_console_sid", rec.sid)
         yield client, csrf, home
     finally:
+        try:
+            _orch.review_layer_definition = _orig_review
+        except NameError:
+            pass
         for k, v in prev.items():
             if v is None:
                 os.environ.pop(k, None)

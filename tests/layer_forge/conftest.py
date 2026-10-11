@@ -23,6 +23,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TENANT_ID = "_default"
 
 
+@pytest.fixture(autouse=True)
+def _no_real_engine_in_layer_forge_tests(monkeypatch):
+    """Without a key, Layer Forge falls back to the operator's real engine (llm_client.get_client).
+    A test must never reach that: it would spend subscription budget and make the review
+    verdict non-deterministic. A placeholder key keeps these tests on the API path, where the
+    SDK is either patched or fails without network (-> ERROR verdict), as before the fallback."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
+
+
 @pytest.fixture
 def tmp_corvin_home(tmp_path: Path) -> Generator[Path, None, None]:
     """Sandboxed CORVIN_HOME with tenant structure.

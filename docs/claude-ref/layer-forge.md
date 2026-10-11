@@ -2,7 +2,8 @@
 
 **Source:** `core/orchestration/layer_forge/` · **Entry points:** `scripts/layer_forge_cli.py`,
 console routes `core/console/corvin_console/routes/layer_forge.py`
-**Tests:** `tests/layer_forge/` (CLI subprocess E2E), `core/console/tests/test_layer_forge_routes_e2e.py` (HTTP E2E)
+**Tests:** `tests/layer_forge/` (CLI subprocess E2E), `core/console/tests/test_layer_forge_routes_e2e.py` (HTTP E2E),
+`core/console/corvin_console/web-next/tests/e2e-live/forge-live/` (live Playwright, all four Forges — see its `E2E_TEST_MANIFEST.md`)
 
 Layer Forge is the fourth Forge system (alongside Skill/Tool/Plugin Forge,
 ADR-2217). It produces versioned *configuration* artifacts — Layer-Definitions
@@ -25,6 +26,24 @@ A run that fails VALIDATE/TEST/ENFORCE writes **no registry entry**, only one
 `layer_forge.definition_rejected` record naming the `phase`. The caller may
 always supply a hand-written manifest directly to CREATE, skipping PLAN
 entirely — PLAN only exists to draft one from an intent description.
+
+## Which LLM PLAN and REVIEW use (`llm_client.py`)
+
+The other three Forges run on the operator's configured engine — on most installs the Claude
+subscription (Claude Code CLI) with no API key anywhere. Layer Forge used to build
+`anthropic.Anthropic()` unconditionally, so on exactly that install PLAN failed with the SDK's
+"Could not resolve authentication method" and REVIEW ended `ERROR` — Layer Forge was the one
+Forge a fresh install could not use (found by the live Playwright suite, 2026-10-11).
+
+`llm_client.get_client()`: an explicit `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` wins
+(unchanged); otherwise the configured engine client (`artifact_review.resolve_engine()`, the same
+one Skill/Plugin Forge use); with neither, a plain error naming both ways out. The engine client
+carries its own model; `reply_text()` reads either reply shape.
+
+**Tests must never reach the real engine.** `tests/layer_forge/conftest.py` sets a placeholder
+`ANTHROPIC_API_KEY` (autouse) so every test stays on the patched/offline API path, and
+`core/console/tests/test_layer_forge_routes_e2e.py` stubs the REVIEW phase. Without that the
+fallback quietly spent subscription budget and made review verdicts non-deterministic.
 
 ## Audit (ADR-2222 D6)
 
@@ -80,7 +99,7 @@ semantic version. Lifecycle: `proposed → accepted → deployed → superseded`
 
 ## Input confinement
 
-Manifests arrive over HTTP, so: `id` must fully match `^[a-z0-9][a-z0-9._-]*$`
+Manifests arrive over HTTP, so: `id` must fully match `^[a-z0-9][a-z0-9._-]{0,99}$` (at most 100 characters — an unbounded id reached the filesystem and answered 500 with ENAMETOOLONG)
 (also checked on every registry lookup — a URL id cannot reach a file path or
 glob), `version` is semver, gate `test_path` must be repo-relative under
 `tests/` with no `..` (re-checked after symlink resolution before pytest runs),

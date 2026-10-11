@@ -181,6 +181,9 @@ export const SkillForgePanel: React.FC = () => {
   // skill has to appear without the operator reloading the page.
   useEffect(() => {
     if (run.data?.status === "success") {
+      // The request is kept while the run is in flight and after a failure, so a
+      // failed run (minutes of subscription time) can be retried without retyping.
+      setUserRequest("");
       void qc.invalidateQueries({ queryKey: ["skill-creator", "skills"] });
       void qc.invalidateQueries({ queryKey: ["skill-creator", "quota"] });
       void qc.invalidateQueries({ queryKey: ["skill-creator", "skill"] });
@@ -194,7 +197,6 @@ export const SkillForgePanel: React.FC = () => {
       startSkillGeneration(request, base, session?.csrf_token ?? ""),
     onSuccess: (data) => {
       setRunId(data.run_id);
-      setUserRequest("");
       setError(null);
     },
     onError: (e: Error) => {

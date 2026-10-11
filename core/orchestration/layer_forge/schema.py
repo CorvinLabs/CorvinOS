@@ -18,7 +18,7 @@ JSON_SCHEMA: dict = {
     "type": "object",
     "required": ["id", "version", "targets"],
     "properties": {
-        "id": {"type": "string", "pattern": r"^[a-z0-9][a-z0-9._-]*$"},
+        "id": {"type": "string", "pattern": r"^[a-z0-9][a-z0-9._-]{0,99}$"},
         "version": {"type": "string", "pattern": r"^\d+\.\d+\.\d+$"},
         "type": {"type": "string", "enum": ["layer_definition"]},
         "targets": {

@@ -28,3 +28,5 @@ dist.prev/
 .tsc-failed
 playwright-report-fresh-install
 playwright-report-forge-system
+playwright-report-forge-live
+test-results-forge-live-evidence.json

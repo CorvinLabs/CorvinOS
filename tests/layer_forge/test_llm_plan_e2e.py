@@ -47,6 +47,39 @@ class TestLayerPlanPrompt:
         assert inp.intent == "audit L10"
 
 
+@pytest.fixture(autouse=True)
+def _api_key(monkeypatch):
+    # These tests exercise the API-key path (anthropic.Anthropic is patched); the engine
+    # path has its own tests in TestEngineFallback.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
+
+
+class TestEngineFallback:
+    """No API key (a Claude-subscription install): PLAN must use the configured engine."""
+
+    MANIFEST = {"id": "l34-audit", "version": "1.0.0", "targets": [{"layer_id": "L34"}],
+                "dependencies": [], "quality_gates": [], "enforcement_rules": []}
+
+    def test_plan_uses_the_engine_client_when_there_is_no_api_key(self, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+        engine = MagicMock()
+        engine.model = "engine-default-model"
+        engine.messages.create.return_value = MagicMock(text=json.dumps(self.MANIFEST))
+        with patch("corvin_operator.skill_creator.artifact_review.resolve_engine", return_value=engine), \
+             patch("anthropic.Anthropic") as api:
+            assert generate_manifest_from_intent("L34", "audit L10") == self.MANIFEST
+        api.assert_not_called()
+        assert engine.messages.create.call_args.kwargs["model"] == "engine-default-model"
+
+    def test_no_key_and_no_engine_says_how_to_fix_it(self, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+        with patch("corvin_operator.skill_creator.artifact_review.resolve_engine", return_value=None):
+            with pytest.raises(LLMPlanError, match="ANTHROPIC_API_KEY"):
+                generate_manifest_from_intent("L34", "audit L10")
+
+
 class TestLLMManifestGeneration:
     """Test LLM manifest generation (mock + real)."""
 

@@ -121,12 +121,13 @@ def review_layer_definition(
             prompt_version = REVIEW_PROMPT_VERSION
 
     try:
-        from anthropic import Anthropic
+        from . import llm_client
+        import anthropic  # noqa: F401 - the SDK types are needed even when an engine client is used
     except ImportError:
         return ReviewVerdict("ERROR", reason="anthropic SDK not installed", prompt_version=prompt_version)
 
     try:
-        client = Anthropic(timeout=REVIEW_TIMEOUT_S, max_retries=REVIEW_MAX_RETRIES)
+        client = llm_client.get_client(timeout=REVIEW_TIMEOUT_S, max_retries=REVIEW_MAX_RETRIES)
         flags = _adversarial_review(client, manifest, enforcement_verdicts, prompt_version=prompt_version)
 
         if not flags:
@@ -138,6 +139,12 @@ def review_layer_definition(
         return ReviewVerdict("ERROR", reason=f"Review LLM error: {str(e)[:100]}", prompt_version=prompt_version)
     except Exception as e:
         return ReviewVerdict("ERROR", reason=f"Unexpected review error: {type(e).__name__}", prompt_version=prompt_version)
+
+
+def _review_model(client) -> str:
+    from . import llm_client
+
+    return llm_client.model_for(client, "claude-opus-5")
 
 
 def select_canary_version(entry_id: str, *, tenant_id: str = "_default", storage_root: Optional[Path] = None) -> str:
@@ -273,7 +280,7 @@ Your response:"""
 
     try:
         response = client.messages.create(
-            model="claude-opus-5",
+            model=_review_model(client),
             max_tokens=200,
             messages=[{"role": "user", "content": full_prompt}],
         )
@@ -282,8 +289,8 @@ Your response:"""
 
     try:
         import json
-        text = response.content[0].text if response.content else ""
-        text = text.strip()
+        from . import llm_client as _lc
+        text = _lc.reply_text(response).strip()
         if not text:
             raise ReviewLLMError("LLM returned empty response")
 

@@ -70,12 +70,24 @@ The manifest describes how a new security/compliance layer integrates into Corvi
 CRITICAL CONSTRAINTS:
 1. Output ONLY valid JSON, no markdown, no explanation
 2. Use semver (x.y.z) for version
-3. layer_id must match "^[a-z0-9][a-z0-9._-]*$"
+3. layer_id must match "^[a-z0-9][a-z0-9._-]{0,99}$ (at most 100 characters)"
 4. test_path must be under tests/ (repo-relative)
 5. All file paths are repo-relative, no "..", no absolute paths
 6. targets must be a non-empty list of {{layer_id, layer_name}}
 7. Never include user_input or unvalidated text in the manifest
 8. Empty arrays ({{}}) are valid for optional fields
+9. Use EXACTLY these field names — CREATE rejects any other spelling:
+   quality_gates[]: {"gate_id": str, "test_path": "tests/...py", "description": str, "severity": "CRITICAL"|"WARNING"}
+   enforcement_rules[]: {"rule_id": str, "type": "compile_time"|"boot_time", "description": str}
+   dependencies[]: {"id": str, "type": "layer_definition"|"skill"|"tool"}
+   targets[]: {"layer_id": str, "layer_name": str}
+
+Example of the exact shape (values are illustrative):
+{"id": "l34-audit", "version": "1.0.0", "type": "layer_definition",
+ "targets": [{"layer_id": "L34", "layer_name": "Data Flow Guard"}],
+ "dependencies": [],
+ "quality_gates": [{"gate_id": "schema", "test_path": "tests/layer_forge/test_schema.py", "description": "manifest schema holds", "severity": "CRITICAL"}],
+ "enforcement_rules": [{"rule_id": "schema-validation", "type": "compile_time", "description": "reject invalid manifests at build time"}]}
 """
 
     USER_PROMPT_TEMPLATE = """Generate a layer-definition manifest for:
@@ -129,16 +141,18 @@ def generate_manifest_from_intent(
     Raises:
         LLMPlanError: if the LLM output is invalid JSON or the call fails
     """
+    from . import llm_client
+
     try:
-        client = anthropic.Anthropic(timeout=PLAN_TIMEOUT_S, max_retries=PLAN_MAX_RETRIES)
+        client = llm_client.get_client(timeout=PLAN_TIMEOUT_S, max_retries=PLAN_MAX_RETRIES)
     except Exception as e:
-        raise LLMPlanError(f"cannot initialize Anthropic client: {e}") from e
+        raise LLMPlanError(f"cannot initialize LLM client: {e}") from e
 
     user_prompt = LayerPlanPrompt.build_user_prompt(layer_id, intent)
 
     try:
         message = client.messages.create(
-            model=model,
+            model=llm_client.model_for(client, model),
             max_tokens=max_tokens,
             system=LayerPlanPrompt.SYSTEM_PROMPT,
             messages=[
@@ -149,12 +163,9 @@ def generate_manifest_from_intent(
         raise LLMPlanError(f"LLM call failed: {e}") from e
 
     # Extract the response text
-    if not message.content or not message.content[0]:
+    response_text = llm_client.reply_text(message)
+    if not response_text.strip():
         raise LLMPlanError("LLM returned empty response")
-
-    response_text = message.content[0].text if hasattr(message.content[0], "text") else str(
-        message.content[0]
-    )
 
     # Parse JSON (fail-closed: invalid JSON is an error, never repaired)
     try:

@@ -144,7 +144,7 @@ class PromotionError(SkillCreatorError):
 
 # The one canonical skill-name contract, enforced fail-closed by
 # SkillValidator (Phase 2) and used to normalise Phase 1 output.
-SKILL_NAME_RE = r"^(assistant|project)\.[a-z_]+$"
+SKILL_NAME_RE = r"^(assistant|project)\.[a-z][a-z0-9_]*$"
 
 
 def _coerce_scope(raw: Any) -> SkillScope:
@@ -179,7 +179,8 @@ def normalize_skill_name(raw: Any, scope: Any = None) -> str:
 
     # Separators → underscore; drop everything the contract forbids.
     local = re.sub(r"[\s\-.]+", "_", text)
-    local = re.sub(r"[^a-z_]", "", local)
+    local = re.sub(r"[^a-z0-9_]", "", local)
+    local = re.sub(r"^[0-9_]+", "", local)
     local = re.sub(r"_+", "_", local).strip("_")
 
     return f"{prefix}.{local or 'generated_skill'}"
@@ -517,7 +518,7 @@ class SkillPlanner:
         This mode allows skill creation without ANTHROPIC_API_KEY.
         Uses heuristics and templates to infer skill structure.
 
-        CRITICAL: Skill names MUST match ^(assistant|project)\.[a-z_]+$
+        CRITICAL: Skill names MUST match ^(assistant|project)\.[a-z][a-z0-9_]*$
         """
         import re
         from datetime import datetime
@@ -764,7 +765,7 @@ Rules:
   "keywords": ["<keyword1>"]
 }}
 
-"name" MUST match ^(assistant|project)\\.[a-z_]+$ (lowercase + underscores only)."""
+"name" MUST match ^(assistant|project)\\.[a-z][a-z0-9_]*$ (lowercase letters, digits and underscores; must start with a letter)."""
 
         response = self.client.messages.create(
             model="claude-opus-5",
@@ -791,7 +792,7 @@ Original user request: "{user_request}"
 
 SYNTHESIS: Create a SkillSpec that balances both viewpoints. Generate JSON:
 {{
-  "name": "assistant.snake_case_name",  // MUST match ^(assistant|project)\\.[a-z_]+$
+  "name": "assistant.snake_case_name",  // MUST match ^(assistant|project)\\.[a-z][a-z0-9_]*$
                                         // lowercase + underscores ONLY — no hyphens,
                                         // no digits, e.g. "assistant.validate_json"
   "scope": "assistant",      // or "project"
