@@ -57,8 +57,13 @@ def test_a_failed_run_logs_an_error_event(tmp_path):
     with console(tmp_path, engine) as client:
         run_id = start(client, "tool", "count the words in a text")
         assert poll(client, run_id)["status"] == "failed"
-        last = _log(client, run_id)[-1]
+        ev = _log(client, run_id)
+        last = ev[-1]
         assert last["type"] == "error" and last["level"] == "error"
+        # a failed run still shows what it DID: the sandbox tests that ran (and failed), before the error
+        tr = next(e for e in ev if e["type"] == "test_result")
+        assert tr["data"]["passed"] < tr["data"]["total"], tr
+        assert tr["seq"] < last["seq"]
 
 
 @pytest.mark.parametrize("kind,request_text", [("tool", "count the words in a text"), ("plugin", "a weather digest plugin")])

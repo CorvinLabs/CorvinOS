@@ -719,6 +719,8 @@ def spawn(*, run_id: str, kind: str, tenant_id: str, sid_fingerprint: Optional[s
             update_run(run_id, status="failed", error=str(exc), message=hint(exc),
                        ended_at=datetime.now(timezone.utc).isoformat(),
                        **(extra if isinstance(extra, dict) else {}))
+            if isinstance(extra, dict):  # what the run DID before it failed: the tests that ran, the findings that blocked it
+                _events_from_result(run_id, kind, extra)
             emit_event(run_id, "error", hint(exc), level="error", data={"error_class": type(exc).__name__})
             finalize_events(run_id)
             _audit_run("finished", tenant_id, run_id, kind, status="failed", artifact_kind=kind)
