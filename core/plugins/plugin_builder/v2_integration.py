@@ -24,7 +24,6 @@ Each step is independent and can be run separately.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 from dataclasses import dataclass, field, asdict
@@ -66,16 +65,11 @@ except ImportError:
         )
 
 try:
-    from core.compliance.audit_chain_writer import AuditChainWriter, AuditEvent
-    from core.paths import tenant as tenant_paths
     from core.skills.tenant_architecture import (
         TenantSkillVersionManager,
         TenantSkillStateManager,
     )
 except ImportError:
-    AuditChainWriter = None
-    AuditEvent = None
-    tenant_paths = None
     TenantSkillVersionManager = None
     TenantSkillStateManager = None
 
@@ -202,20 +196,20 @@ class PluginDeveloper:
         )
         result = developer.develop(plan, Path("/tmp/plugins"))
 
-        # Audit trail available via:
-        # result.audit_events  # List of emitted events
-        # grep "development_started\|development_completed" ~/.corvin/audit.jsonl
+        # Audit trail: one ``plugin_builder.development`` record per stage on the tenant's core
+        # chain (``details.stage`` = development_started, phase_<step>_started|completed|failed,
+        # development_completed); ``result.audit_events`` lists the ones the chain committed.
     """
 
     def __init__(self):
         """Initialize the plugin developer."""
+        self._plugin_id = ""
         self.steps = {
             "scaffold": self._step_scaffold,
             "test": self._step_test,
             "build": self._step_build,
             "register": self._step_register,
         }
-        self._audit_writer = None
         self._version_manager = None
         self._state_manager = None
 
@@ -250,6 +244,7 @@ class PluginDeveloper:
         start_time = time.time()
         result = DevelopmentResult()
         result.tenant_id = plan.tenant_id
+        self._plugin_id = plan.plugin_id  # validated identifier ([a-z0-9._-]), safe to audit
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -313,7 +308,7 @@ class PluginDeveloper:
                             result,
                             event_type=f"phase_{step_name}_failed",
                             phase=step_name,
-                            error=str(e),
+                            error_class=type(e).__name__,
                             scaffold_preserved=result.scaffold_dir is not None,
                         )
                     break
@@ -334,21 +329,8 @@ class PluginDeveloper:
         return result
 
     def _init_audit(self, plan: PluginDevelopmentPlan, result: DevelopmentResult) -> None:
-        """Initialize audit infrastructure for this development workflow.
-
-        Args:
-            plan: Development plan with tenant_id
-            result: Result to populate with audit chain path
-        """
-        if not tenant_paths or not AuditChainWriter:
-            return  # Audit infrastructure not available
-
-        try:
-            # Get tenant-specific audit chain path
-            audit_chain_path = tenant_paths.tenant_audit_chain(plan.tenant_id)
-            self._audit_writer = AuditChainWriter(audit_chain_path)
-        except Exception as e:
-            result.warnings.append(f"Failed to initialize audit writer: {e}")
+        """Kept for callers/tests: audit goes through the core writer per event (no state)."""
+        return None
 
     def _emit_audit_event(
         self,
@@ -356,59 +338,42 @@ class PluginDeveloper:
         event_type: str,
         **event_data: Any,
     ) -> None:
-        """Emit an audit event for this development workflow.
+        """Record one development stage on the tenant's core audit chain (GDPR Art. 30, 32).
 
-        Events are hash-chained and immutable (GDPR Art. 30, 32).
-        ADV-004: Audit events MUST be written to tenant audit chain.
+        The record goes through the core writer (``audit.audit_event`` ->
+        ``security_events.write_event``), which owns the HMAC chain, the tenant path and the
+        allowlist. This method used to append its own ``sha256`` line straight into the chain
+        file: a record the writer did not produce fails the chain's MAC check, i.e. it would
+        have turned the tenant's trail into ``mac_tampered`` on first use.
 
-        Args:
-            result: Development result to update with event
-            event_type: Type of event (development_started, phase_scaffold_started, etc.)
-            **event_data: Additional event data (plan, phase, error, etc.)
+        The record is content-free: closed identifiers only (stage, phase, success,
+        scaffold_preserved, the error CLASS) — never the plan, the description, the author or
+        an exception message. Appended to ``result.audit_events`` only when the chain COMMITTED it.
         """
-        if not self._audit_writer or not tenant_paths:
-            return
-
+        details = {
+            "tenant_id": result.tenant_id,
+            "development_id": result.development_id,
+            "plugin_id": str(event_data.get("plugin_id") or self._plugin_id),
+            "stage": event_type,
+        }
+        for key in ("phase", "success", "scaffold_preserved"):
+            if key in event_data:
+                details[key] = event_data[key]
+        if isinstance(event_data.get("error_class"), str):
+            details["error_class"] = event_data["error_class"][:64]
         try:
-            event = {
-                "event_type": event_type,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "tenant_id": result.tenant_id,
-                "development_id": result.development_id,
-                "plugin_id": event_data.get("plugin_id", ""),
-                **event_data,
-            }
+            from audit import audit_event  # noqa: PLC0415
 
-            # ADV-004: Write to tenant audit chain (GDPR Art. 30, 32)
-            audit_chain_path = tenant_paths.tenant_audit_chain(result.tenant_id)
-            audit_chain_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Read previous hash for chain integrity
-            prev_hash = ""
-            if audit_chain_path.exists():
-                try:
-                    with open(audit_chain_path, 'r') as f:
-                        lines = f.readlines()
-                        if lines:
-                            last_event = json.loads(lines[-1])
-                            prev_hash = last_event.get('hash', '')
-                except Exception:
-                    pass  # Best-effort previous hash
-
-            # Add chain link
-            event["prev_hash"] = prev_hash
-            event["hash"] = hashlib.sha256(
-                json.dumps(event, sort_keys=True, default=str).encode()
-            ).hexdigest()
-
-            # Write to audit chain (append-only, GDPR Art. 30 compliant)
-            with open(audit_chain_path, 'a') as f:
-                f.write(json.dumps(event) + '\n')
-
-            result.audit_events.append(event)
-
-        except Exception as e:
-            result.warnings.append(f"Failed to emit audit event '{event_type}': {e}")
+            committed = bool(audit_event("plugin_builder.development", details=details,
+                                         tenant_id=result.tenant_id))
+        except Exception as e:  # noqa: BLE001 — a missing writer must not abort a build
+            committed = False
+            result.warnings.append(f"Audit writer unavailable for '{event_type}': {type(e).__name__}")
+        if committed:
+            result.audit_events.append({
+                "event_type": event_type, "timestamp": datetime.now(timezone.utc).isoformat(), **details})
+        else:
+            result.warnings.append(f"Audit event '{event_type}' was not committed to the chain")
 
     def _step_scaffold(
         self,

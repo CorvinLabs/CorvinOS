@@ -18,6 +18,7 @@ Each build:
 """
 from __future__ import annotations
 
+import re
 import hashlib
 import json
 import subprocess
@@ -219,7 +220,9 @@ class PluginBuilder:
             PluginManifest with sensible defaults
         """
         return PluginManifest(
-            id=f"plugin-{self.metadata.name.replace('_', '-')}-ADR-0001",
+            # A plugin id is dotted ("my.data_connector"); the manifest id grammar is
+            # ``plugin-[\w-]+-ADR-NNNN`` and has no dot, so every dotted plugin failed the build step.
+            id=f"plugin-{re.sub(r'[^A-Za-z0-9-]', '-', self.metadata.name)}-ADR-0001",
             name=self.metadata.name,
             version=self.metadata.version,
             status=ManifestStatus.PROPOSED,

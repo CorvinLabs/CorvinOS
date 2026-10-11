@@ -414,6 +414,7 @@ def test_e2e_parallel_tenants_isolation() -> None:
     ✅ No cross-tenant contamination
     ✅ Both workflows complete successfully
     """
+    pytest.importorskip("build")  # the wheel build shells out to `python -m build`
 
     async def develop_for_tenant(tenant_id: str):
         """Develop a plugin for a specific tenant."""
@@ -635,6 +636,7 @@ def test_e2e_wheel_validity() -> None:
     ✅ Wheel metadata present (WHEEL, METADATA)
     ✅ Can be extracted without errors
     """
+    pytest.importorskip("build")  # the wheel build shells out to `python -m build`
     with tempfile.TemporaryDirectory() as tmpdir:
         developer = PluginDeveloper()
         plan = PluginDevelopmentPlan(

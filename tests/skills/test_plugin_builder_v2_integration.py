@@ -32,6 +32,18 @@ from core.plugins.plugin_builder.v2_integration import (
 )
 
 
+
+def _fake_scaffold(*, output_dir, plugin_id, **_kw):
+    """Stand-in for bootstrap_scaffold with its real return shape: the files it wrote, keyed by
+    role. The developer takes the scaffold directory from the written ``plugin.py`` (it used to
+    reconstruct a path that never existed), so a mock must write one."""
+    scaffold = Path(output_dir) / f"{plugin_id.replace('.', '_')}_scaffold"
+    scaffold.mkdir(parents=True, exist_ok=True)
+    plugin = scaffold / "plugin.py"
+    plugin.write_text("# fake\n")
+    return {"plugin": plugin}
+
+
 class TestPluginDevelopmentPlan:
     """Test PluginDevelopmentPlan initialization and validation."""
 
@@ -140,7 +152,7 @@ class TestPluginDeveloper:
     @patch("core.plugins.plugin_builder.v2_integration.bootstrap_scaffold")
     def test_develop_scaffold_only(self, mock_scaffold):
         """Test develop() with scaffold-only step."""
-        mock_scaffold.return_value = ["file1.py", "file2.json"]
+        mock_scaffold.side_effect = _fake_scaffold
 
         with tempfile.TemporaryDirectory() as tmpdir:
             developer = PluginDeveloper()
@@ -223,86 +235,98 @@ class TestPluginDeveloper:
             assert result.elapsed_seconds <= elapsed + 1  # Allow 1s tolerance
 
 
+def _stage_records(tenant_id: str) -> list[dict]:
+    """The plugin_builder.development records on THIS tenant's core chain (not a mock)."""
+    chain = _chain_path(tenant_id)
+    if not chain.exists():
+        return []
+    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    return [r for r in recs if r.get("event_type") == "plugin_builder.development"
+            and (r.get("details") or {}).get("tenant_id") == tenant_id]
+
+
+def _chain_path(tenant_id: str) -> Path:
+    """The file the sandboxed core writer appends to (the test harness points VOICE_AUDIT_PATH at
+    the sandbox's chain; outside a harness it is the tenant's chain)."""
+    from core.paths import tenant as tenant_paths
+
+    override = os.environ.get("VOICE_AUDIT_PATH")
+    return Path(override) if override else tenant_paths.tenant_audit_chain(tenant_id)
+
+
+@pytest.fixture
+def chain_tenant(monkeypatch):
+    """The process tenant decides whose chain may be written (a cross-tenant write is refused),
+    so a development run for tenant X is audited from a process that IS tenant X."""
+    def _use(tenant_id: str) -> str:
+        monkeypatch.setenv("CORVIN_TENANT_ID", tenant_id)
+        return tenant_id
+    return _use
+
+
 class TestAuditIntegration:
-    """Test audit event generation and tenant isolation."""
+    """Audit goes through the core writer onto the tenant chain (ADR-0654), content-free."""
 
-    @patch("core.plugins.plugin_builder.v2_integration.AuditChainWriter")
-    @patch("core.plugins.plugin_builder.v2_integration.tenant_paths")
     @patch("core.plugins.plugin_builder.v2_integration.bootstrap_scaffold")
-    def test_audit_events_emitted(self, mock_scaffold, mock_paths, mock_writer_class):
-        """Test audit events are emitted for each phase."""
-        mock_scaffold.return_value = ["file.py"]
-        mock_paths.tenant_audit_chain.return_value = "/tmp/audit.jsonl"
-        mock_writer = MagicMock()
-        mock_writer_class.return_value = mock_writer
+    def test_audit_events_emitted(self, mock_scaffold, chain_tenant):
+        mock_scaffold.side_effect = _fake_scaffold
+        tenant = chain_tenant("tenant_1")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            developer = PluginDeveloper()
-            plan = PluginDevelopmentPlan(
-                plugin_id="test.plugin",
-                plugin_name="Test",
-                tenant_id="tenant_1",
-                steps=["scaffold"],
-                audit_enabled=True,
-            )
+            result = PluginDeveloper().develop(
+                PluginDevelopmentPlan(plugin_id="test.plugin", plugin_name="Test", tenant_id=tenant,
+                                      steps=["scaffold"], audit_enabled=True), tmpdir)
 
-            result = developer.develop(plan, tmpdir)
+        # development_started, phase_scaffold_started, phase_scaffold_completed, development_completed
+        stages = [e["event_type"] for e in result.audit_events]
+        assert stages == ["development_started", "phase_scaffold_started",
+                          "phase_scaffold_completed", "development_completed"]
+        on_chain = [r["details"]["stage"] for r in _stage_records(tenant)]
+        assert on_chain == stages  # what the result reports is what the chain holds
 
-            # Should emit: development_started, phase_scaffold_started, phase_scaffold_completed, development_completed
-            assert len(result.audit_events) >= 3
-            event_types = [e["event_type"] for e in result.audit_events]
-            assert "development_started" in event_types
-            assert "development_completed" in event_types
+    @patch("core.plugins.plugin_builder.v2_integration.bootstrap_scaffold")
+    def test_audit_records_are_content_free_and_the_chain_still_verifies(self, mock_scaffold, chain_tenant):
+        from corvin_operator.forge.forge import security_events as se
 
-    @patch("core.plugins.plugin_builder.v2_integration.AuditChainWriter")
-    @patch("core.plugins.plugin_builder.v2_integration.tenant_paths")
-    def test_audit_events_include_tenant_id(self, mock_paths, mock_writer_class):
-        """Test all audit events include tenant_id."""
-        mock_paths.tenant_audit_chain.return_value = "/tmp/audit.jsonl"
-        mock_writer = MagicMock()
-        mock_writer_class.return_value = mock_writer
-
+        mock_scaffold.side_effect = _fake_scaffold
+        tenant = chain_tenant("_default")
         with tempfile.TemporaryDirectory() as tmpdir:
-            developer = PluginDeveloper()
-            plan = PluginDevelopmentPlan(
-                plugin_id="test.plugin",
-                plugin_name="Test",
-                tenant_id="tenant_xyz",
-                steps=[],
-                audit_enabled=True,
-            )
+            PluginDeveloper().develop(
+                PluginDevelopmentPlan(plugin_id="test.plugin", plugin_name="Test", tenant_id=tenant,
+                                      description="SENTINEL_DESCRIPTION", author="SENTINEL_AUTHOR",
+                                      steps=["scaffold"], audit_enabled=True), tmpdir)
+        chain = _chain_path(tenant)
+        text = chain.read_text()
+        assert "plugin_builder.development" in text
+        assert "SENTINEL_DESCRIPTION" not in text and "SENTINEL_AUTHOR" not in text
+        # The previous implementation appended its own sha256 line: not a record the writer
+        # produced, so the MAC check failed. A writer-produced record leaves the chain intact.
+        assert se.verify_chain(chain)[0] is True
 
-            result = developer.develop(plan, tmpdir)
-
-            # All events should have tenant_id
-            for event in result.audit_events:
-                assert event["tenant_id"] == "tenant_xyz"
-
-    @patch("core.plugins.plugin_builder.v2_integration.AuditChainWriter")
-    @patch("core.plugins.plugin_builder.v2_integration.tenant_paths")
-    def test_audit_writer_initialization(self, mock_paths, mock_writer_class):
-        """Test audit writer is initialized with tenant-specific chain path."""
-        expected_path = "/tmp/tenant_1/audit.jsonl"
-        mock_paths.tenant_audit_chain.return_value = expected_path
-        mock_writer = MagicMock()
-        mock_writer_class.return_value = mock_writer
-
+    @patch("core.plugins.plugin_builder.v2_integration.bootstrap_scaffold")
+    def test_audit_events_include_tenant_id(self, mock_scaffold, chain_tenant):
+        mock_scaffold.side_effect = _fake_scaffold
+        tenant = chain_tenant("tenant_2")
         with tempfile.TemporaryDirectory() as tmpdir:
-            developer = PluginDeveloper()
-            plan = PluginDevelopmentPlan(
-                plugin_id="test.plugin",
-                plugin_name="Test",
-                tenant_id="tenant_1",
-                steps=[],
-                audit_enabled=True,
-            )
+            result = PluginDeveloper().develop(
+                PluginDevelopmentPlan(plugin_id="test.plugin", plugin_name="Test", tenant_id=tenant,
+                                      steps=["scaffold"], audit_enabled=True), tmpdir)
+        assert result.audit_events and all(e["tenant_id"] == tenant for e in result.audit_events)
+        assert all(r["details"]["tenant_id"] == tenant for r in _stage_records(tenant))
 
-            result = developer.develop(plan, tmpdir)
-
-            # Verify tenant_audit_chain() was called with correct tenant_id
-            mock_paths.tenant_audit_chain.assert_called_with("tenant_1")
-            # Verify AuditChainWriter was initialized with the path
-            mock_writer_class.assert_called_with(expected_path)
+    @patch("core.plugins.plugin_builder.v2_integration.bootstrap_scaffold")
+    def test_a_plan_for_another_tenant_is_not_written_to_this_chain(self, mock_scaffold, chain_tenant):
+        """Cross-tenant isolation: the core writer refuses a record for a tenant other than the
+        process's. The run still completes; the refusal is a warning, never a forged record."""
+        mock_scaffold.side_effect = _fake_scaffold
+        chain_tenant("_default")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = PluginDeveloper().develop(
+                PluginDevelopmentPlan(plugin_id="test.plugin", plugin_name="Test", tenant_id="tenant_9",
+                                      steps=["scaffold"], audit_enabled=True), tmpdir)
+        assert result.success is True and result.audit_events == []
+        assert any("not committed" in w or "unavailable" in w for w in result.warnings)
+        assert _stage_records("tenant_9") == []
 
 
 class TestTenantIsolation:
@@ -311,7 +335,7 @@ class TestTenantIsolation:
     @patch("core.plugins.plugin_builder.v2_integration.bootstrap_scaffold")
     def test_concurrent_workflows_isolation(self, mock_scaffold):
         """Test concurrent workflows with different tenant_ids don't cross-contaminate."""
-        mock_scaffold.return_value = ["file.py"]
+        mock_scaffold.side_effect = _fake_scaffold
 
         with tempfile.TemporaryDirectory() as tmpdir:
             developer = PluginDeveloper()
@@ -365,7 +389,7 @@ class TestErrorRecovery:
     @patch("core.plugins.plugin_builder.v2_integration.bootstrap_scaffold")
     def test_scaffold_preserved_on_test_failure(self, mock_scaffold):
         """Test scaffold is preserved when test fails."""
-        mock_scaffold.return_value = ["file.py"]
+        mock_scaffold.side_effect = _fake_scaffold
 
         with tempfile.TemporaryDirectory() as tmpdir:
             developer = PluginDeveloper()
@@ -393,7 +417,7 @@ class TestErrorRecovery:
     @patch("core.plugins.plugin_builder.v2_integration.bootstrap_scaffold")
     def test_scaffold_preserved_on_build_failure(self, mock_scaffold):
         """Test scaffold is preserved when build fails."""
-        mock_scaffold.return_value = ["file.py"]
+        mock_scaffold.side_effect = _fake_scaffold
 
         with tempfile.TemporaryDirectory() as tmpdir:
             developer = PluginDeveloper()
@@ -423,32 +447,18 @@ class TestErrorRecovery:
                         assert result.scaffold_dir is not None
                         assert result.scaffold_dir.exists()
 
-    @patch("core.plugins.plugin_builder.v2_integration.AuditChainWriter")
-    @patch("core.plugins.plugin_builder.v2_integration.tenant_paths")
     @patch("core.plugins.plugin_builder.v2_integration.bootstrap_scaffold")
-    def test_audit_events_on_failure(self, mock_scaffold, mock_paths, mock_writer_class):
-        """Test audit events are emitted even on failure."""
-        mock_scaffold.return_value = ["file.py"]
-        mock_paths.tenant_audit_chain.return_value = "/tmp/audit.jsonl"
-        mock_writer = MagicMock()
-        mock_writer_class.return_value = mock_writer
-
+    def test_audit_events_on_failure(self, mock_scaffold, chain_tenant):
+        """Events are recorded even when a step fails."""
+        mock_scaffold.side_effect = _fake_scaffold
+        tenant = chain_tenant("_default")
         with tempfile.TemporaryDirectory() as tmpdir:
-            developer = PluginDeveloper()
-            plan = PluginDevelopmentPlan(
-                plugin_id="test.plugin",
-                plugin_name="Test",
-                steps=["scaffold", "unknown_step"],
-                audit_enabled=True,
-            )
-
-            result = developer.develop(plan, tmpdir)
-
-            # Should still emit events even on failure
-            assert len(result.audit_events) >= 2
-            # Should have development_failed event
-            event_types = [e["event_type"] for e in result.audit_events]
-            assert "development_failed" in event_types or "development_completed" in event_types
+            result = PluginDeveloper().develop(
+                PluginDevelopmentPlan(plugin_id="test.plugin", plugin_name="Test", tenant_id=tenant,
+                                      steps=["scaffold", "unknown_step"], audit_enabled=True), tmpdir)
+        stages = [e["event_type"] for e in result.audit_events]
+        assert len(stages) >= 2
+        assert "development_failed" in stages or "development_completed" in stages
 
 
 class TestDevelopPluginFunction:
@@ -488,61 +498,28 @@ class TestDevelopPluginFunction:
 
 
 class TestE2EWiringProof:
-    """Test E2E wiring proof (all phases traceable via audit)."""
+    """Developer -> scaffold phase -> core audit writer -> tenant chain."""
 
-    @patch("core.plugins.plugin_builder.v2_integration.AuditChainWriter")
-    @patch("core.plugins.plugin_builder.v2_integration.tenant_paths")
     @patch("core.plugins.plugin_builder.v2_integration.bootstrap_scaffold")
-    def test_e2e_scaffold_phase_wired(self, mock_scaffold, mock_paths, mock_writer_class):
-        """Test scaffold phase is wired and audited end-to-end."""
-        mock_scaffold.return_value = ["file.py"]
-        mock_paths.tenant_audit_chain.return_value = "/tmp/audit.jsonl"
-        mock_writer = MagicMock()
-        mock_writer_class.return_value = mock_writer
-
+    def test_e2e_scaffold_phase_wired(self, mock_scaffold, chain_tenant):
+        mock_scaffold.side_effect = _fake_scaffold
+        tenant = chain_tenant("tenant_1")
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = develop_plugin(
-                plugin_id="test.plugin",
-                plugin_name="Test",
-                output_dir=tmpdir,
-                tenant_id="tenant_1",
-                steps=["scaffold"],
-                audit_enabled=True,
-            )
-
-            # Verify audit writer was called
-            assert mock_writer.write.call_count >= 3  # started, phase_started, phase_completed
-            # Verify scaffold was executed
+            result = develop_plugin(plugin_id="test.plugin", plugin_name="Test", output_dir=tmpdir,
+                                    tenant_id=tenant, steps=["scaffold"], audit_enabled=True)
             mock_scaffold.assert_called_once()
-            # Verify result reflects success
-            assert result.success is True
-            assert result.scaffold_dir is not None
+            assert result.success is True and result.scaffold_dir is not None
+        assert len(_stage_records(tenant)) >= 3  # started, phase_started, phase_completed (+ completed)
 
-    @patch("core.plugins.plugin_builder.v2_integration.AuditChainWriter")
-    @patch("core.plugins.plugin_builder.v2_integration.tenant_paths")
-    def test_e2e_audit_chain_events_have_ids(self, mock_paths, mock_writer_class):
-        """Test all audit events have tracking IDs (development_id, tenant_id)."""
-        mock_paths.tenant_audit_chain.return_value = "/tmp/audit.jsonl"
-        mock_writer = MagicMock()
-        mock_writer_class.return_value = mock_writer
-
+    @patch("core.plugins.plugin_builder.v2_integration.bootstrap_scaffold")
+    def test_e2e_audit_chain_events_have_ids(self, mock_scaffold, chain_tenant):
+        mock_scaffold.side_effect = _fake_scaffold
+        tenant = chain_tenant("tenant_1")
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = develop_plugin(
-                plugin_id="test.plugin",
-                plugin_name="Test",
-                output_dir=tmpdir,
-                tenant_id="tenant_1",
-                steps=[],
-                audit_enabled=True,
-            )
-
-            # All events should have development_id and tenant_id
-            for event in result.audit_events:
-                assert "development_id" in event
-                assert "tenant_id" in event
-                assert event["development_id"] == result.development_id
-                assert event["tenant_id"] == "tenant_1"
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+            result = develop_plugin(plugin_id="test.plugin", plugin_name="Test", output_dir=tmpdir,
+                                    tenant_id=tenant, steps=["scaffold"], audit_enabled=True)
+        records = _stage_records(tenant)
+        assert records
+        for r in records:
+            assert r["details"]["development_id"] == result.development_id
+            assert r["details"]["tenant_id"] == tenant

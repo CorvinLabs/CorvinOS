@@ -428,3 +428,11 @@ This implementation fulfills ADR-0262 requirements:
 - ADR-0244: Plugin System Boundaries
 - ADR-0245: Extension Surface Map
 - ADR-0314: Learning Infrastructure
+
+## Audit
+
+`PluginDeveloper` records every stage as a content-free `plugin_builder.development` event
+(`details.stage`, `phase`, `success`, `scaffold_preserved`, `error_class`, ids) through the core audit
+writer onto the tenant's chain. It never appends to the chain file itself: a line the writer did not
+produce fails the chain's MAC check. A plan for a tenant other than the process's is refused by the
+writer (cross-tenant isolation) and surfaces as a warning, not as a forged record.

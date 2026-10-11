@@ -143,6 +143,8 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-2092 — L5 routing loop (delegation_policy.route_and_record + monitoring/)
     "routing.phase2_decision":   "INFO",
     "routing.phase2_refused":    "INFO",
+    # Plugin-Builder development workflow (core/plugins/plugin_builder/v2_integration.py)
+    "plugin_builder.development": "INFO",
     "routing.rollback_triggered": "WARNING",
     "routing.rollback_reset":    "INFO",
     # registry lifecycle (past-tense canonical names, emitted by registry.py)
@@ -3142,6 +3144,13 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "routing.phase2_refused": frozenset({
         "tenant_id", "surface", "phase_requested", "reason",
+    }),
+    # One record per stage of a Plugin-Builder development run. ``stage`` is a closed identifier
+    # (development_started, phase_<step>_started|completed|failed, development_completed);
+    # nothing here is free text — no plan, description, author or exception message.
+    "plugin_builder.development": frozenset({
+        "tenant_id", "development_id", "plugin_id", "stage", "phase", "success",
+        "scaffold_preserved", "error_class",
     }),
     "routing.rollback_triggered": frozenset({
         "tenant_id", "skill_n", "bundled_n", "skill_success_rate", "bundled_success_rate",
