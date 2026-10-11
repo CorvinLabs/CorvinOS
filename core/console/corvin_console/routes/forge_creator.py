@@ -191,8 +191,8 @@ async def status(
     run_id: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> Dict[str, Any]:
-    run = forge_runs.get_run(run_id, rec.tenant_id)
-    if run is None or run.get("kind") not in ("tool", "plugin"):
+    run = forge_runs.get_run(run_id, rec.tenant_id, kinds=("tool", "plugin"))
+    if run is None:
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
     return {
         "run_id": run_id,

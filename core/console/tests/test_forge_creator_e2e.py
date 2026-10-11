@@ -496,12 +496,12 @@ def _run_file(client, run_id: str) -> Path:
 
 
 def _simulate_restart(client, run_id: str, **patch) -> None:
-    """What a restart leaves behind: the record on disk, a dead process's boot id,
-    and an empty in-memory store."""
+    """What a restart leaves behind: the record on disk, a dead process's boot id and a heartbeat that
+    stopped long ago (a live peer would keep refreshing it, ADR-2253 D6), and an empty in-memory store."""
     from corvin_console import forge_runs
     path = _run_file(client, run_id)
     rec = json.loads(path.read_text())
-    rec.update({"boot_id": "previous-process", **patch})
+    rec.update({"boot_id": "previous-process", "heartbeat_at": 0, **patch})
     path.write_text(json.dumps(rec))
     with forge_runs.runs_lock:
         forge_runs.runs.clear()

@@ -17,7 +17,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Collection, Dict, Optional, Tuple
 from uuid import uuid4
 
 from . import audit as console_audit
@@ -44,6 +44,12 @@ BOOT_ID = uuid4().hex
 #: An interrupted run is re-spawned from its persisted request at most this
 #: many times, so a request that crashes the console cannot restart-loop.
 MAX_RESUMES = 2
+#: The owning writer refreshes ``heartbeat_at`` this often while its worker runs (ADR-2253 D6). The console and the
+#: gateway are two processes sharing these files: a record under a FOREIGN boot id is a dead owner's only when its
+#: heartbeat is older than ``ORPHAN_AFTER_S``; a fresher one belongs to a live peer and must be left alone.
+#: Initial values - the measurement task (T-0146) may amend them.
+HEARTBEAT_S = 10.0
+ORPHAN_AFTER_S = 90.0
 #: Finished run files older than this are pruned when a new run starts.
 _FINISHED_TTL_S = 14 * 86400
 _RUN_ID_RE = re.compile(r"^run-[0-9a-f]{12}$")
@@ -146,6 +152,56 @@ def check_spawn_gates(prompt: str, *, tenant_id: str, sid_fingerprint: str,
         raise GenerationRefused(refusal)
 
 
+def _fresh(record: Dict[str, Any]) -> bool:
+    """True when a record's owner is still alive: this process, or a peer with a recent heartbeat."""
+    if record.get("boot_id") == BOOT_ID:
+        return True
+    try:
+        return time.time() - float(record.get("heartbeat_at") or 0.0) < ORPHAN_AFTER_S
+    except (TypeError, ValueError):
+        return False
+
+
+def _running_count_locked(tenant_id: str) -> int:
+    """Live running runs of a tenant across every host sharing its run files (caller holds ``runs_lock``).
+
+    In-memory records of this process are authoritative; the rest come from disk and count only while their
+    owner's heartbeat is fresh, so a dead process's leftovers never fill the cap forever."""
+    owned: set[str] = set()
+    count = 0
+    for rid, r in runs.items():
+        if r.get("tenant_id") != tenant_id:
+            continue
+        owned.add(rid)
+        if r.get("status") == "running" and _fresh(r):
+            count += 1
+    try:
+        files = list(_runs_dir(tenant_id).glob("run-*.json"))
+    except OSError:
+        files = []
+    for f in files:
+        if f.stem in owned:
+            continue
+        try:
+            rec = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if (isinstance(rec, dict) and rec.get("tenant_id") == tenant_id
+                and rec.get("status") == "running" and _fresh(rec)):
+            count += 1
+    return count
+
+
+def running_count(tenant_id: str) -> int:
+    with runs_lock:
+        return _running_count_locked(tenant_id)
+
+
+def _owner() -> Dict[str, Any]:
+    import socket  # noqa: PLC0415
+    return {"boot_id": BOOT_ID, "pid": os.getpid(), "host": socket.gethostname()}
+
+
 def new_run(*, tenant_id: str, kind: str, phases: tuple[str, ...],
             sid_fingerprint: Optional[str], resume: Optional[Dict[str, Any]] = None,
             **extra: Any) -> str:
@@ -164,13 +220,14 @@ def new_run(*, tenant_id: str, kind: str, phases: tuple[str, ...],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "sid_fingerprint": sid_fingerprint,
         "boot_id": BOOT_ID,
+        "owner": _owner(),
+        "heartbeat_at": time.time(),
         "resume": resume,
         "resumes": 0,
     }
     record.update(extra)
     with runs_lock:
-        running = sum(1 for r in runs.values()
-                      if r.get("tenant_id") == tenant_id and r.get("status") == "running")
+        running = _running_count_locked(tenant_id)
         if running >= MAX_RUNNING_PER_TENANT:
             raise GenerationBusy(
                 f"{running} generation runs are already in progress — wait for one to finish.")
@@ -198,52 +255,82 @@ def update_run(run_id: str, **fields: Any) -> None:
         if run is None:
             return
         run.update(fields)
+        if run.get("status") == "running" and run.get("boot_id") == BOOT_ID:
+            run["heartbeat_at"] = time.time()
         snapshot = dict(run)
     _persist(run_id, snapshot)
 
 
-def get_run(run_id: str, tenant_id: str, kind: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """A copy of the run, or None when it is unknown, another tenant's, or another kind's.
+def _fail_locked(run: Dict[str, Any], code: str, error: str, message: str) -> None:
+    run.update(status="failed", boot_id=BOOT_ID, interrupted=True, error=error, message=message, failure_code=code)
 
-    A run unknown to this process is looked up on disk (the console restarted).
-    One that was still running then is re-spawned from its persisted request
-    (at most ``MAX_RESUMES`` times) or, when that is impossible, reported as
-    failed with an explicit "interrupted" message — never a bare 404.
+
+def get_run(run_id: str, tenant_id: str, kind: Optional[str] = None, *,
+            kinds: Optional[Collection[str]] = None) -> Optional[Dict[str, Any]]:
+    """A copy of the run, or None when it is unknown, another tenant's, or not one of the allowed kinds.
+
+    ``kind`` / ``kinds`` name what the CALLER may see. They are checked BEFORE anything else happens: a caller
+    who may not see a run must not be able to resume it (the status route of the tool/plugin forge used to
+    re-spawn a skill run it then answered 404 for).
+
+    A run unknown to this process is looked up on disk (the console restarted, or another host owns it):
+      * owner alive (a peer's fresh heartbeat) -> returned read-only, never cached, never resumed or failed;
+      * owner dead -> re-spawned from its persisted request (at most ``MAX_RESUMES`` times, and only under the
+        tenant's concurrency cap) or reported ``failed`` with an explicit code - never a bare 404. The resume is
+        atomic: a resumer that raises leaves the record ``failed: resume_failed``, never ``running``.
     """
+    allowed = set(kinds) if kinds else ({kind} if kind else None)
     resume_args: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None
-    newly_interrupted = False
+    changed = False
     with runs_lock:
         run = runs.get(run_id)
         if run is None:
             loaded = _load(run_id, tenant_id)
-            if loaded is not None:
-                run = loaded
-                runs[run_id] = run
-                if run.get("status") == "running" and run.get("boot_id") != BOOT_ID:
-                    builder = _resumers.get(str(run.get("kind")))
-                    if builder and run.get("resume") and int(run.get("resumes") or 0) < MAX_RESUMES:
-                        run.update(boot_id=BOOT_ID, resumes=int(run.get("resumes") or 0) + 1,
-                                   message="The console restarted — resuming this run…")
-                        resume_args = (dict(run), builder(run_id, dict(run)))
+            if loaded is None:
+                return None
+            if allowed is not None and loaded.get("kind") not in allowed:
+                return None  # not this caller's to see: no side effect at all
+            if loaded.get("status") == "running" and loaded.get("boot_id") != BOOT_ID:
+                if _fresh(loaded):
+                    return dict(loaded)  # a live peer owns it; we only read
+                builder = _resumers.get(str(loaded.get("kind")))
+                if builder and loaded.get("resume") and int(loaded.get("resumes") or 0) < MAX_RESUMES:
+                    if _running_count_locked(tenant_id) >= MAX_RUNNING_PER_TENANT:
+                        _fail_locked(loaded, "resume_over_cap", "not resumed: the concurrency cap is reached",
+                                     "This run was interrupted and cannot be resumed while the tenant already has "
+                                     f"{MAX_RUNNING_PER_TENANT} runs in progress. Start it again later.")
                     else:
-                        run.update(status="failed", boot_id=BOOT_ID, interrupted=True,
-                                   error="interrupted by a console restart",
-                                   message="The console restarted while this run was in progress "
-                                           "and it could not be resumed. Start it again.")
-                        newly_interrupted = True
+                        try:
+                            kwargs = builder(run_id, dict(loaded))
+                        except Exception:  # noqa: BLE001 - atomic: a failing resumer must not leave 'running'
+                            logger.exception("forge %s run %s: resumer raised", loaded.get("kind"), run_id)
+                            _fail_locked(loaded, "resume_failed", "the run could not be resumed",
+                                         "The run was interrupted and its saved request could not be rebuilt. "
+                                         "Start it again.")
+                        else:
+                            loaded.update(boot_id=BOOT_ID, owner=_owner(), heartbeat_at=time.time(),
+                                          resumes=int(loaded.get("resumes") or 0) + 1,
+                                          message="The console restarted — resuming this run…")
+                            resume_args = (dict(loaded), kwargs)
+                else:
+                    _fail_locked(loaded, "interrupted", "interrupted by a console restart",
+                                 "The console restarted while this run was in progress and it could not be "
+                                 "resumed. Start it again.")
+                changed = True
+            runs[run_id] = loaded
+            run = loaded
         copy = dict(run or {})
-    if copy and resume_args is not None:
+    if copy and (resume_args is not None or changed):
         _persist(run_id, copy)
+    if resume_args is not None:
         record, kwargs = resume_args
         logger.warning("forge %s run %s: resuming after console restart (attempt %s)",
                        record.get("kind"), run_id, copy.get("resumes"))
         spawn(run_id=run_id, kind=str(record["kind"]), tenant_id=tenant_id,
               sid_fingerprint=record.get("sid_fingerprint"), **kwargs)
-    elif copy and newly_interrupted:
-        _persist(run_id, copy)
     if not copy or copy.get("tenant_id") != tenant_id:
         return None
-    if kind is not None and copy.get("kind") != kind:
+    if allowed is not None and copy.get("kind") not in allowed:
         return None
     return copy
 
@@ -267,6 +354,21 @@ def spawn(*, run_id: str, kind: str, tenant_id: str, sid_fingerprint: Optional[s
         update_run(run_id, phase=phase, progress=pct, message=message)
 
     def run_task() -> None:
+        # The engine can be silent for minutes between progress calls; the heartbeat tells a peer host this
+        # run's owner is alive, so it is not mistaken for an orphan (ADR-2253 D6).
+        done = threading.Event()
+
+        def beat() -> None:
+            while not done.wait(HEARTBEAT_S):
+                update_run(run_id)
+
+        threading.Thread(target=beat, name=f"forge-{kind}-{run_id}-heartbeat", daemon=True).start()
+        try:
+            _run_body()
+        finally:
+            done.set()
+
+    def _run_body() -> None:
         try:
             result = work(progress)
             target_id = str(result.pop("target_id", "") or "unknown")
