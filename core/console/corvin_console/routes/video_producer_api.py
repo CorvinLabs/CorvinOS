@@ -1020,6 +1020,10 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
     }
     if web_style is not None:
         config["web_style"] = web_style
+    if base_job is not None:
+        # revision_locality (ADR-2247, information): the job compares its storyboard with the base video's
+        config["revision_base_narrations"] = [str(getattr(sc, "narration_text", "") or "")
+                                              for sc in (getattr(getattr(base_job, "storyboard", None), "scenes", None) or [])]
     if grounding_pack is not None:
         config["grounding_pack"] = grounding_pack
     elif grounding_status is not None:
@@ -1278,6 +1282,112 @@ def get_quality_metrics(job_id: str, rec=_SessionRec):
     if not _inside(job_dir, _tenant_base(rec)):
         job_dir = None
     return measure(_job_dict(job), _output_dict(storage.get_video_output(job_id)), job_dir=job_dir, with_report=True)
+
+
+# ── Post-hoc measurement (ADR-2247 cue_alignment, PLAN-0946 R5, T-0094) ─────────────────────
+
+# whisper-1 receives the narration AUDIO of the job: the gate runs under the OpenAI speech profile -
+# the same engine id the job's own OpenAI TTS is gated under (``_TTS_GATE_ENGINE["openai"]``).
+_MEASURE_GATE_ENGINE = _TTS_GATE_ENGINE["openai"]
+_MEASURE_SIGNALS = ("cue_alignment",)
+_MEASURING: set = set()
+_MEASURING_LOCK = threading.Lock()
+_REFUSED_REASON = "refused by the pre-spawn gates (L44/L34/L35)"
+
+
+def _plugin_signals():
+    try:
+        sg = importlib.import_module(f"{_PLUGIN_PKG}.signals")
+    except Exception:  # noqa: BLE001 - an older plugin without post-hoc signals
+        return None
+    return sg if hasattr(sg, "measure_posthoc") else None
+
+
+def _openai_key() -> Optional[str]:
+    return os.environ.get("CORVIN_TTS_OPENAI_KEY") or os.environ.get("OPENAI_API_KEY") or None
+
+
+def _ms(value: Any) -> Optional[int]:
+    return int(round(float(value) * 1000)) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+@router.post("/jobs/{job_id}/measure")
+async def measure_video_job(job_id: str, rec=_SessionRec):
+    """Run the post-hoc ``cue_alignment`` signal on a finished job, on the operator's explicit request.
+
+    The narration audio of every scene goes to OpenAI whisper-1, so the request passes the SAME pre-spawn
+    gates as the job's own OpenAI TTS (L44 acceptable use, capabilities, L34 classification of the
+    narration, L35 egress to the OpenAI host); a grounded job's narration is classified ``INTERNAL``, the
+    class its pack was released under, so its audio goes only where its text already went. A refusal is
+    not an error: the signal is recorded as ``skip`` with the reason, in the report and in the answer.
+    Audit-first: ``video_producer.measure_started`` commits before any audio leaves (no commit, no call);
+    ``measure_refused`` / ``measure_completed`` close it. Ids, counts and numbers only - never narration.
+    Session + CSRF (router dependency); the tenant comes from the session, another tenant's job is a 404."""
+    _check_job_id(job_id)
+    storage = _store(rec)
+    job = storage.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "complete":
+        raise HTTPException(status_code=409, detail="Only a produced video can be measured")
+    job_dir = Path(storage.videos_dir) / job_id
+    if not _inside(job_dir, _tenant_base(rec)) or not job_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Video not found")
+    sg = _plugin_signals()
+    if sg is None:
+        raise HTTPException(status_code=501, detail="This build of the Video Producer has no post-hoc measurement")
+    out = storage.get_video_output(job_id)
+    metadata = dict(getattr(out, "metadata", None) or {}) if out else {}
+    scenes = sg.storyboard_scene_dicts(getattr(job, "storyboard", None))
+    if not scenes:
+        raise HTTPException(status_code=409, detail="The video has no storyboard to measure against")
+    grounded = (metadata.get("grounding") or {}).get("status") in ("grounded", "grounded_with_unverified")
+    base = {"job_id": job_id, "signal": "cue_alignment"}
+    key = (rec.tenant_id, job_id)
+    with _MEASURING_LOCK:
+        if key in _MEASURING:
+            raise HTTPException(status_code=409, detail="This video is already being measured")
+        _MEASURING.add(key)
+    try:
+        refusal = None
+        gate = None
+        if not _openai_key():
+            refusal, gate = "No OpenAI key is configured on this host (CORVIN_TTS_OPENAI_KEY or OPENAI_API_KEY).", "no_key"
+        else:
+            from .._spawn_gates import check_console_spawn_or_refusal  # noqa: PLC0415
+
+            narration = "\n".join(s["narration_text"] for s in scenes if s["narration_text"])
+            refusal = await asyncio.to_thread(
+                check_console_spawn_or_refusal, narration, tenant_id=rec.tenant_id, persona="assistant",
+                channel="web", chat_key=f"video:{job_id}:measure", engine_id=_MEASURE_GATE_ENGINE,
+                classification="INTERNAL" if grounded else None,
+            )
+            gate = "pre_spawn" if refusal is not None else None
+        if refusal is not None:
+            reason = "no OpenAI key on this host" if gate == "no_key" else _REFUSED_REASON
+            result = await asyncio.to_thread(sg.measure_posthoc, job_dir, job.storyboard, metadata,
+                                             only=_MEASURE_SIGNALS, refused=reason)
+            await asyncio.to_thread(_audit, rec.tenant_id, "video_producer.measure_refused",
+                                    {**base, "gate": gate, "stored": bool(result.get("stored"))})
+            return {"job_id": job_id, "measured": False, "refusal": refusal, "signals": result["signals"],
+                    "stored": bool(result.get("stored"))}
+        if not await asyncio.to_thread(_audit, rec.tenant_id, "video_producer.measure_started", {
+                **base, "engine": _MEASURE_GATE_ENGINE, "classification": "INTERNAL" if grounded else "classified",
+                "scenes": len(scenes)}):
+            raise HTTPException(status_code=503, detail="The measurement could not be recorded; nothing was sent")
+        api_key = _openai_key()
+        result = await asyncio.to_thread(sg.measure_posthoc, job_dir, job.storyboard, metadata,
+                                         transcribe=lambda mp3: sg.whisper_words(mp3, api_key), only=_MEASURE_SIGNALS)
+        recd = next((r for r in result["signals"] if r.get("id") == "cue_alignment"), {})
+        detail = recd.get("detail") or {}
+        await asyncio.to_thread(_audit, rec.tenant_id, "video_producer.measure_completed", {
+            **base, "verdict": recd.get("verdict"), "matched": (recd.get("basis") or {}).get("n"),
+            "items": (recd.get("basis") or {}).get("of"), "median_ms": _ms(recd.get("value")),
+            "p90_ms": _ms(detail.get("p90_s")), "stored": bool(result.get("stored"))})
+        return {"job_id": job_id, "measured": True, "signals": result["signals"], "stored": bool(result.get("stored"))}
+    finally:
+        with _MEASURING_LOCK:
+            _MEASURING.discard(key)
 
 
 @router.get("/overview")

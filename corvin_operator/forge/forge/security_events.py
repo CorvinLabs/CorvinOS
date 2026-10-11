@@ -1168,6 +1168,12 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-2247 R3: an operator deleted a finished job (record, video directory, report, sidecar
     # entries). Ids, the job's end status and counts only - never task text, never a user id.
     "video_producer.job_deleted":        "INFO",
+    # ADR-2247 R5 (T-0094): the operator asked for the post-hoc cue_alignment measurement of a job -
+    # started (audit-first, before the narration audio goes to whisper-1), refused by a gate, completed.
+    # Ids, a closed gate/verdict vocabulary and numbers only - never narration, never an exception text.
+    "video_producer.measure_started":    "INFO",
+    "video_producer.measure_refused":    "WARNING",
+    "video_producer.measure_completed":  "INFO",
     # ADR validation framework (core/deployment/adr_validation_framework.py via
     # core/deployment/audit_sink — mirrored statically so the floor does not
     # depend on import order)
@@ -4411,6 +4417,15 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "video_producer.job_deleted": frozenset({
         "tenant_id", "job_id", "status", "files_removed", "bytes_freed",
+    }),
+    "video_producer.measure_started": frozenset({
+        "tenant_id", "job_id", "signal", "engine", "classification", "scenes",
+    }),
+    "video_producer.measure_refused": frozenset({
+        "tenant_id", "job_id", "signal", "gate", "stored",
+    }),
+    "video_producer.measure_completed": frozenset({
+        "tenant_id", "job_id", "signal", "verdict", "matched", "items", "median_ms", "p90_ms", "stored",
     }),
     # "violations" holds "ADR-NNNN/check_name" codes, never free text.
     "deployment.adr_violation_detected": frozenset({

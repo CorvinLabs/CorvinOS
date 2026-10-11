@@ -1,0 +1,696 @@
+{
+ "provenance": {
+  "what": "Real OpenAI whisper-1 responses (verbose_json, word timestamps), recorded once - never fetched in a test.",
+  "recorded_at": "2026-10-11T22:53:03+00:00",
+  "request": {
+   "url": "https://api.openai.com/v1/audio/transcriptions",
+   "model": "whisper-1",
+   "response_format": "verbose_json",
+   "timestamp_granularities[]": "word"
+  },
+  "audio": "scene_003.mp3 and scene_004.mp3 of job_de64411e (the published German LDD video, Corvin-Videos/ldd-bei-architekturentscheidungen), renumbered here as scenes 1 and 2",
+  "storyboard_and_cues": "the job's own storyboard scenes 3-4 (template, narration_text, beats, data) and metadata.cues of those scenes, renumbered 1 and 2",
+  "audio_not_stored": "the MP3s are not in the repository; audio_sha256 identifies what was transcribed"
+ },
+ "storyboard": {
+  "scenes": [
+   {
+    "template": "diagram",
+    "narration_text": "Loss-Driven Development misst Fortschritt, statt ihn zu behaupten. Ein Loss-Signal ist alles, was messbar sagt: Das ist noch nicht gut. Das kann ein roter Test sein. Auch eine gemessene Kennzahl zählt. Ebenso ein Befund aus einem Gegen-Review. Und die Abweichung zwischen Code und Dokumentation.",
+    "beats": [
+     null,
+     null,
+     0,
+     1,
+     2,
+     3
+    ],
+    "data": {
+     "eyebrow": "Die Idee von LDD",
+     "title": "Vier Arten von Loss-Signalen",
+     "nodes": [
+      {
+       "label": "Roter Test",
+       "sub": "schlägt fehl"
+      },
+      {
+       "label": "Kennzahl",
+       "sub": "gemessen"
+      },
+      {
+       "label": "Gegen-Review",
+       "sub": "Befund"
+      },
+      {
+       "label": "Code ≠ Doku",
+       "sub": "Abweichung"
+      }
+     ],
+     "highlight": null
+    }
+   },
+   {
+    "template": "flow",
+    "narration_text": "Ein Loss-Signal wird zur Entscheidung über das ADR-Gate. Das ADR-Gate stellt zwei Fragen. Erstens: Gab es eine echte Wahl zwischen Alternativen? Zweitens: Bindet die Entscheidung die Struktur, etwa als Protokoll, Sicherheitsmechanismus, schwer umkehrbarer Default oder über mehrere Repos? Nur wenn beides zutrifft, entsteht eine ADR.",
+    "beats": [
+     1,
+     1,
+     2,
+     3,
+     4
+    ],
+    "data": {
+     "eyebrow": "Vom Signal zur Entscheidung",
+     "title": "Das ADR-Gate: zwei Fragen",
+     "nodes": [
+      {
+       "id": "signal",
+       "label": "Loss-Signal",
+       "sub": null
+      },
+      {
+       "id": "gate",
+       "label": "ADR-Gate",
+       "sub": null
+      },
+      {
+       "id": "wahl",
+       "label": "Echte Wahl?",
+       "sub": "Alternativen"
+      },
+      {
+       "id": "struktur",
+       "label": "Bindet Struktur?",
+       "sub": "Protokoll, Sicherheit, Repos"
+      },
+      {
+       "id": "adr",
+       "label": "ADR entsteht",
+       "sub": null
+      }
+     ],
+     "edges": [
+      {
+       "from": "signal",
+       "to": "gate",
+       "label": null
+      },
+      {
+       "from": "gate",
+       "to": "wahl",
+       "label": null
+      },
+      {
+       "from": "gate",
+       "to": "struktur",
+       "label": null
+      },
+      {
+       "from": "wahl",
+       "to": "adr",
+       "label": null
+      },
+      {
+       "from": "struktur",
+       "to": "adr",
+       "label": null
+      }
+     ],
+     "highlight": "gate"
+    }
+   }
+  ]
+ },
+ "cues": [
+  {
+   "scene": 1,
+   "template": "diagram",
+   "beats_source": "llm",
+   "items": [
+    {
+     "label": "Roter Test",
+     "at": 8.469
+    },
+    {
+     "label": "Kennzahl",
+     "at": 10.316
+    },
+    {
+     "label": "Gegen-Review",
+     "at": 12.774
+    },
+    {
+     "label": "Code ≠ Doku",
+     "at": 15.227
+    }
+   ],
+   "focus_at": [
+    10.566,
+    15.477
+   ],
+   "chips_at": []
+  },
+  {
+   "scene": 2,
+   "template": "flow",
+   "beats_source": "llm",
+   "items": [
+    {
+     "label": "Loss-Signal",
+     "at": 1.0
+    },
+    {
+     "label": "ADR-Gate",
+     "at": 1.0
+    },
+    {
+     "label": "Echte Wahl?",
+     "at": 5.693
+    },
+    {
+     "label": "Bindet Struktur?",
+     "at": 5.693
+    },
+    {
+     "label": "ADR entsteht",
+     "at": 17.199
+    }
+   ],
+   "focus_at": [
+    3.158,
+    5.943,
+    17.449
+   ],
+   "chips_at": []
+  }
+ ],
+ "responses": {
+  "1": {
+   "source_scene": 3,
+   "audio_sha256": "3ff6b885310e563d22b74393b2c66021f39dddcfa0c35297caaedc58c952dbde",
+   "response": {
+    "task": "transcribe",
+    "language": "german",
+    "duration": 18.260000228881836,
+    "text": "Loss-Driven Development misst Fortschritt, statt ihn zu behaupten. Ein Loss-Signal ist alles, was messbar sagt, das ist noch nicht gut. Das kann ein roter Test sein. Auch eine gemessene Kennzahl zählt. Ebenso ein Befund aus einem Gegen-Review und die Abweichung zwischen Code und Dokumentation.",
+    "words": [
+     {
+      "word": "Loss",
+      "start": 0.0,
+      "end": 0.41999998688697815
+     },
+     {
+      "word": "Driven",
+      "start": 0.41999998688697815,
+      "end": 0.6600000262260437
+     },
+     {
+      "word": "Development",
+      "start": 0.6600000262260437,
+      "end": 1.3200000524520874
+     },
+     {
+      "word": "misst",
+      "start": 1.3200000524520874,
+      "end": 1.7400000095367432
+     },
+     {
+      "word": "Fortschritt",
+      "start": 1.7400000095367432,
+      "end": 2.359999895095825
+     },
+     {
+      "word": "statt",
+      "start": 2.8399999141693115,
+      "end": 3.0199999809265137
+     },
+     {
+      "word": "ihn",
+      "start": 3.0199999809265137,
+      "end": 3.180000066757202
+     },
+     {
+      "word": "zu",
+      "start": 3.180000066757202,
+      "end": 3.380000114440918
+     },
+     {
+      "word": "behaupten",
+      "start": 3.380000114440918,
+      "end": 3.880000114440918
+     },
+     {
+      "word": "Ein",
+      "start": 4.599999904632568,
+      "end": 4.639999866485596
+     },
+     {
+      "word": "Loss",
+      "start": 4.639999866485596,
+      "end": 4.940000057220459
+     },
+     {
+      "word": "Signal",
+      "start": 4.940000057220459,
+      "end": 5.320000171661377
+     },
+     {
+      "word": "ist",
+      "start": 5.320000171661377,
+      "end": 5.5
+     },
+     {
+      "word": "alles",
+      "start": 5.5,
+      "end": 5.820000171661377
+     },
+     {
+      "word": "was",
+      "start": 5.880000114440918,
+      "end": 6.099999904632568
+     },
+     {
+      "word": "messbar",
+      "start": 6.099999904632568,
+      "end": 6.579999923706055
+     },
+     {
+      "word": "sagt",
+      "start": 6.579999923706055,
+      "end": 6.960000038146973
+     },
+     {
+      "word": "das",
+      "start": 7.199999809265137,
+      "end": 7.340000152587891
+     },
+     {
+      "word": "ist",
+      "start": 7.340000152587891,
+      "end": 7.539999961853027
+     },
+     {
+      "word": "noch",
+      "start": 7.539999961853027,
+      "end": 7.71999979019165
+     },
+     {
+      "word": "nicht",
+      "start": 7.71999979019165,
+      "end": 7.880000114440918
+     },
+     {
+      "word": "gut",
+      "start": 7.880000114440918,
+      "end": 8.220000267028809
+     },
+     {
+      "word": "Das",
+      "start": 8.760000228881836,
+      "end": 8.880000114440918
+     },
+     {
+      "word": "kann",
+      "start": 8.880000114440918,
+      "end": 9.0600004196167
+     },
+     {
+      "word": "ein",
+      "start": 9.0600004196167,
+      "end": 9.199999809265137
+     },
+     {
+      "word": "roter",
+      "start": 9.199999809265137,
+      "end": 9.5
+     },
+     {
+      "word": "Test",
+      "start": 9.5,
+      "end": 9.760000228881836
+     },
+     {
+      "word": "sein",
+      "start": 9.760000228881836,
+      "end": 10.100000381469727
+     },
+     {
+      "word": "Auch",
+      "start": 10.619999885559082,
+      "end": 10.699999809265137
+     },
+     {
+      "word": "eine",
+      "start": 10.699999809265137,
+      "end": 10.9399995803833
+     },
+     {
+      "word": "gemessene",
+      "start": 10.9399995803833,
+      "end": 11.300000190734863
+     },
+     {
+      "word": "Kennzahl",
+      "start": 11.300000190734863,
+      "end": 11.779999732971191
+     },
+     {
+      "word": "zählt",
+      "start": 11.779999732971191,
+      "end": 12.199999809265137
+     },
+     {
+      "word": "Ebenso",
+      "start": 13.199999809265137,
+      "end": 13.399999618530273
+     },
+     {
+      "word": "ein",
+      "start": 13.399999618530273,
+      "end": 13.539999961853027
+     },
+     {
+      "word": "Befund",
+      "start": 13.539999961853027,
+      "end": 13.880000114440918
+     },
+     {
+      "word": "aus",
+      "start": 13.880000114440918,
+      "end": 14.0600004196167
+     },
+     {
+      "word": "einem",
+      "start": 14.0600004196167,
+      "end": 14.319999694824219
+     },
+     {
+      "word": "Gegen",
+      "start": 14.319999694824219,
+      "end": 14.65999984741211
+     },
+     {
+      "word": "Review",
+      "start": 14.65999984741211,
+      "end": 15.020000457763672
+     },
+     {
+      "word": "und",
+      "start": 15.020000457763672,
+      "end": 15.579999923706055
+     },
+     {
+      "word": "die",
+      "start": 15.579999923706055,
+      "end": 15.739999771118164
+     },
+     {
+      "word": "Abweichung",
+      "start": 15.739999771118164,
+      "end": 16.219999313354492
+     },
+     {
+      "word": "zwischen",
+      "start": 16.219999313354492,
+      "end": 16.520000457763672
+     },
+     {
+      "word": "Code",
+      "start": 16.520000457763672,
+      "end": 16.920000076293945
+     },
+     {
+      "word": "und",
+      "start": 16.920000076293945,
+      "end": 17.18000030517578
+     },
+     {
+      "word": "Dokumentation",
+      "start": 17.18000030517578,
+      "end": 18.0
+     }
+    ],
+    "usage": {
+     "type": "duration",
+     "seconds": 19
+    }
+   }
+  },
+  "2": {
+   "source_scene": 4,
+   "audio_sha256": "2b9d646969fcca1c9fea4b9ea6645e8f8e2fca35f498d2db9dfc4c8fe36e73e8",
+   "response": {
+    "task": "transcribe",
+    "language": "german",
+    "duration": 20.610000610351562,
+    "text": "Ein Loss-Signal wird zur Entscheidung über das ADR-Gate. Das ADR-Gate stellt zwei Fragen. Erstens, gab es eine echte Wahl zwischen Alternativen? Zweitens, bindet die Entscheidung die Struktur, etwa als Protokoll, Sicherheitsmechanismus, schwer umkehrbarer Default oder über mehrere Repos? Nur wenn beides zutrifft, entsteht eine ADR.",
+    "words": [
+     {
+      "word": "Ein",
+      "start": 0.0,
+      "end": 0.20000000298023224
+     },
+     {
+      "word": "Loss",
+      "start": 0.20000000298023224,
+      "end": 0.5799999833106995
+     },
+     {
+      "word": "Signal",
+      "start": 0.5799999833106995,
+      "end": 0.8199999928474426
+     },
+     {
+      "word": "wird",
+      "start": 0.8199999928474426,
+      "end": 1.0199999809265137
+     },
+     {
+      "word": "zur",
+      "start": 1.0199999809265137,
+      "end": 1.1799999475479126
+     },
+     {
+      "word": "Entscheidung",
+      "start": 1.1799999475479126,
+      "end": 1.6200000047683716
+     },
+     {
+      "word": "über",
+      "start": 1.6200000047683716,
+      "end": 1.8799999952316284
+     },
+     {
+      "word": "das",
+      "start": 1.8799999952316284,
+      "end": 2.0799999237060547
+     },
+     {
+      "word": "ADR",
+      "start": 2.0799999237060547,
+      "end": 2.4600000381469727
+     },
+     {
+      "word": "Gate",
+      "start": 2.4600000381469727,
+      "end": 2.7200000286102295
+     },
+     {
+      "word": "Das",
+      "start": 3.1600000858306885,
+      "end": 3.3399999141693115
+     },
+     {
+      "word": "ADR",
+      "start": 3.3399999141693115,
+      "end": 3.759999990463257
+     },
+     {
+      "word": "Gate",
+      "start": 3.759999990463257,
+      "end": 4.0
+     },
+     {
+      "word": "stellt",
+      "start": 4.0,
+      "end": 4.199999809265137
+     },
+     {
+      "word": "zwei",
+      "start": 4.199999809265137,
+      "end": 4.539999961853027
+     },
+     {
+      "word": "Fragen",
+      "start": 4.539999961853027,
+      "end": 4.860000133514404
+     },
+     {
+      "word": "Erstens",
+      "start": 5.420000076293945,
+      "end": 5.840000152587891
+     },
+     {
+      "word": "gab",
+      "start": 5.960000038146973,
+      "end": 6.139999866485596
+     },
+     {
+      "word": "es",
+      "start": 6.139999866485596,
+      "end": 6.320000171661377
+     },
+     {
+      "word": "eine",
+      "start": 6.320000171661377,
+      "end": 6.480000019073486
+     },
+     {
+      "word": "echte",
+      "start": 6.480000019073486,
+      "end": 6.820000171661377
+     },
+     {
+      "word": "Wahl",
+      "start": 6.820000171661377,
+      "end": 7.059999942779541
+     },
+     {
+      "word": "zwischen",
+      "start": 7.059999942779541,
+      "end": 7.400000095367432
+     },
+     {
+      "word": "Alternativen",
+      "start": 7.400000095367432,
+      "end": 8.380000114440918
+     },
+     {
+      "word": "Zweitens",
+      "start": 8.800000190734863,
+      "end": 9.300000190734863
+     },
+     {
+      "word": "bindet",
+      "start": 9.579999923706055,
+      "end": 9.760000228881836
+     },
+     {
+      "word": "die",
+      "start": 9.760000228881836,
+      "end": 9.960000038146973
+     },
+     {
+      "word": "Entscheidung",
+      "start": 9.960000038146973,
+      "end": 10.34000015258789
+     },
+     {
+      "word": "die",
+      "start": 10.34000015258789,
+      "end": 11.260000228881836
+     },
+     {
+      "word": "Struktur",
+      "start": 11.260000228881836,
+      "end": 11.260000228881836
+     },
+     {
+      "word": "etwa",
+      "start": 11.5600004196167,
+      "end": 11.65999984741211
+     },
+     {
+      "word": "als",
+      "start": 11.65999984741211,
+      "end": 11.979999542236328
+     },
+     {
+      "word": "Protokoll",
+      "start": 11.979999542236328,
+      "end": 12.5
+     },
+     {
+      "word": "Sicherheitsmechanismus",
+      "start": 13.119999885559082,
+      "end": 14.140000343322754
+     },
+     {
+      "word": "schwer",
+      "start": 14.520000457763672,
+      "end": 14.699999809265137
+     },
+     {
+      "word": "umkehrbarer",
+      "start": 14.699999809265137,
+      "end": 15.319999694824219
+     },
+     {
+      "word": "Default",
+      "start": 15.319999694824219,
+      "end": 15.739999771118164
+     },
+     {
+      "word": "oder",
+      "start": 15.739999771118164,
+      "end": 16.059999465942383
+     },
+     {
+      "word": "über",
+      "start": 16.059999465942383,
+      "end": 16.360000610351562
+     },
+     {
+      "word": "mehrere",
+      "start": 16.360000610351562,
+      "end": 16.68000030517578
+     },
+     {
+      "word": "Repos",
+      "start": 16.68000030517578,
+      "end": 17.18000030517578
+     },
+     {
+      "word": "Nur",
+      "start": 17.399999618530273,
+      "end": 17.600000381469727
+     },
+     {
+      "word": "wenn",
+      "start": 17.600000381469727,
+      "end": 17.719999313354492
+     },
+     {
+      "word": "beides",
+      "start": 17.719999313354492,
+      "end": 18.100000381469727
+     },
+     {
+      "word": "zutrifft",
+      "start": 18.100000381469727,
+      "end": 18.68000030517578
+     },
+     {
+      "word": "entsteht",
+      "start": 19.0,
+      "end": 19.079999923706055
+     },
+     {
+      "word": "eine",
+      "start": 19.079999923706055,
+      "end": 19.360000610351562
+     },
+     {
+      "word": "ADR",
+      "start": 19.360000610351562,
+      "end": 19.780000686645508
+     }
+    ],
+    "usage": {
+     "type": "duration",
+     "seconds": 21
+    }
+   }
+  }
+ }
+}

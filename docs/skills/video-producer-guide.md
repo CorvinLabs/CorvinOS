@@ -76,7 +76,8 @@ class). It records stage timings, one entry per scene (TTS tier, narrated second
 source), the storyboard model's token usage as the backend reported it, every fallback the pipeline took (a
 Pillow slide, a quote in place of a template, a lower TTS tier, a storyboard backend fallback, lost grounding,
 a repaired storyboard) and the runtime **signals** — `degradation_rate`, `layout_clean`, `fact_support`,
-`mux_integrity`, `style_fidelity`, plus `plan_estimate_error` and `beats_provenance` as information — each
+`mux_integrity`, `style_fidelity`, `still_time`, plus `plan_estimate_error`, `beats_provenance` and
+`revision_locality` as information (and, on request, the post-hoc `cue_alignment`, below) — each
 with value, threshold, verdict and `n of N`. When `degradation_rate` fails, the other gated signals are marked
 `valid: false`. The report never contains the task or narration text. Jobs from before 1.5.0 have none.
 
@@ -194,6 +195,53 @@ on :8796 with a throwaway `CORVIN_HOME`, the real report, light and dark theme, 
   and the first loader location, `<CORVIN_HOME>/tenants/_default/plugins/instances/…`, is the `_default`
   workspace's install - it serves every workspace. Jobs run in their own process (R1), which still inherits
   the console's whole environment (REVIEW-0039 F6).
+
+## Post-hoc signals and the release lint (unreleased 1.5.0, ADR-2247 R5)
+
+* **`still_time`** is a runtime signal now (it runs at the end of every job and is in the report): the share
+  of the video's runtime in still stretches of at least 5 s (ADR-2245 definition), with the p90 over scenes of
+  the longest still stretch. Verdict `warn` above 20 % dead share or above 8 s p90; `skip` without numpy. The
+  code moved from the plugin's `scripts/measure_engagement.py` into its `src/signals.py`; the script calls it.
+  Measured on the nine corpus videos of `tests/corpus/baseline.json` (2026-10-12, plugin
+  `scripts/still_time_agreement.py`, 16 CPUs, load 3-13): the signal agrees with the pre-move script and
+  with the recorded baseline to 0.0 points on all 9; it took 2.32-2.92 s per minute of video (pooled 2.58 s;
+  the DoD limit is 15 s). The numbers are in the plugin's `tests/corpus/still_time_agreement.json`.
+* **`cue_alignment`** - seconds between a reveal and the spoken word, median and p90, plus **coverage**
+  (matched items / all items with a cue; a scene that fell back to a classic slide counts its items as
+  unmatched) - is **post-hoc and on demand**: `POST /v1/console/video/jobs/{id}/measure` (session + CSRF,
+  your workspace's finished jobs only; another workspace's job id is 404, an unfinished job 409, a second
+  request while one runs 409). Every scene's narration audio is sent to OpenAI whisper-1, so the request
+  passes the same pre-spawn gates as the job's own OpenAI TTS: L44 acceptable use, capabilities, L34 on the
+  narration, L35 egress to the OpenAI host - and a grounded job's narration is classified `INTERNAL`, the
+  class its knowledge pack was released under. A refusal (or no OpenAI key on the host) is not an error: the
+  signal is stored in the report as `skip` with the reason and the answer carries the refusal text. The
+  spoken time of an item is its first occurrence after the start of the sentence that names it (the beat
+  sentence its cue was placed on), not the first mention in the scene. Audit: `video_producer.measure_started`
+  is written **before** any audio leaves (no commit, nothing is sent: 503), then `measure_completed` (verdict,
+  matched/items, median and p90 in ms) or `measure_refused` (`gate`: `pre_spawn` or `no_key`); ids and numbers
+  only. Not built: a button in the Quality tab - the measurement is an API call today.
+  Proof: `core/console/tests/test_video_producer_measure_e2e.py` (real router, session + CSRF, two tenants;
+  whisper-1 answers from a recorded response of two scenes of the published German LDD video, the network is
+  cut; L35 and L34 refusals, no key, chain verified).
+* **`revision_locality`** (information): for a revision, the share of the base video's scenes whose narration
+  the revision kept word-identical. The console hands the base video's narrations to the job
+  (`revision_base_narrations`); the number is in the report, never the text.
+* **`language_parity`** is checked when a video pair is stored (Corvin-Videos convention: every video in German
+  and English): the plugin's `scripts/store_video_pair.py <videos> --de <job> --en <job> --dest
+  <Corvin-Videos/<name>>` compares scene counts (within one), template sequence (at least 80 % identical
+  positions) and the numeric facts of both narrations (locale-normalised: `77 %` = `77%` = `77 Prozent`,
+  `1.234,5` = `1,234.5`), writes a "Language parity" block into `sources.md` and copies the two MP4s only when
+  the pair passes; a failing pair is not stored (exit 1). The published LDD pair of 2026-10-09/10 fails it (4 of
+  10 template positions; the German narration carries 1.5, 2 and 4.5 that the English one does not, the
+  English a 4) - its `sources.md` now carries that block.
+* **Release lint.** The plugin's `scripts/release_lint.py` (GitHub workflow
+  `.github/workflows/video-producer-release-lint.yml` in Corvin-Marketplace) checks one version across
+  `plugin.json`, `plugin.yaml`, `provider.py`, `setup.py` and the four marketplace index blocks, no placeholder
+  token in the README, user guide and current release notes, and that every backticked test or plugin path in
+  them exists. Its fixtures reproduce the three historical defects (index 1.0.0 against 1.1.0, provider/yaml
+  1.0.0 inside 1.2.0, a `RESULTS_PLACEHOLDER`, a note naming
+  `tests/test_api_routes.py::test_video_job_end_to_end`). Not checked yet: limits quoted in a guide against
+  their constants.
 
 ## Troubleshooting
 
