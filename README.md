@@ -52,6 +52,11 @@ A short walkthrough of how CorvinOS keeps AI work compliant with GDPR and the EU
 
 **TL;DR** — you need `git`; the installer brings everything else (Python via `uv`, Node.js, Claude Code).
 Everything runs from your clone of this repository: there is no download installer and no PyPI package.
+The one-liners below are bootstrappers only: they `git clone` (or fast-forward) the repository into `~/CorvinOS` / `%USERPROFILE%\CorvinOS` and hand over to the repo's own installer.
+
+- Linux · macOS · WSL: `curl -fsSL https://corvin-labs.com/install.sh | sh`
+- Windows (PowerShell): `irm https://corvin-labs.com/install.ps1 | iex`
+
 
 | | Linux · macOS · WSL | Windows (PowerShell) | Claude Code |
 |---|---|---|---|
