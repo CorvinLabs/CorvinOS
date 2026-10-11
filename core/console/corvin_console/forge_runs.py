@@ -109,14 +109,92 @@ def _load(run_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
     return record
 
 
-def _prune(tenant_id: str) -> None:
+def run_dir(tenant_id: str, run_id: str) -> Path:
+    """The per-run directory for events and snapshots (ADR-2253 D8). Only a well-formed run id maps to a path."""
+    if not _RUN_ID_RE.match(run_id):
+        raise ValueError("malformed run id")
+    return _runs_dir(tenant_id) / run_id
+
+
+def prune(tenant_id: str) -> None:
+    """Age out one tenant's run files (ADR-2253 D8).
+
+    * a FINISHED record older than the TTL is removed together with its run directory;
+    * a record still ``running`` whose owner's heartbeat is fresh is NEVER touched, however old its file is;
+    * a ``running`` record whose owner is dead and that is older than the TTL is first marked ``failed``
+      (``interrupted``) - which makes it a fresh finished record - and is removed one TTL later.
+    Only files named like a run are looked at, and a symlinked run directory is never followed or removed.
+    """
+    import shutil  # noqa: PLC0415
     try:
+        d = _runs_dir(tenant_id)
         cutoff = time.time() - _FINISHED_TTL_S
-        for f in _runs_dir(tenant_id).glob("run-*.json"):
-            if f.stat().st_mtime < cutoff:
-                f.unlink(missing_ok=True)
+        for f in d.glob("run-*.json"):
+            run_id = f.stem
+            if not _RUN_ID_RE.match(run_id) or f.is_symlink():
+                continue
+            try:
+                if f.stat().st_mtime >= cutoff:
+                    continue
+                rec = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(rec, dict):
+                continue
+            if rec.get("status") == "running":
+                if _fresh(rec):
+                    continue
+                rec.update(status="failed", interrupted=True, failure_code="interrupted",
+                           error="interrupted: its owner stopped and it never finished",
+                           message="This run's owner stopped and it never finished. Start it again.")
+                with runs_lock:
+                    mem = runs.get(run_id)
+                    if mem is not None:
+                        mem.update(rec)
+                _persist(run_id, rec)
+                continue
+            with runs_lock:
+                runs.pop(run_id, None)
+            sub = d / run_id
+            if sub.is_dir() and not sub.is_symlink():
+                shutil.rmtree(sub, ignore_errors=True)
+            f.unlink(missing_ok=True)
     except Exception:  # noqa: BLE001
         logger.debug("forge run prune failed", exc_info=True)
+
+
+_prune = prune  # the name new_run has always called
+
+
+def prune_all() -> None:
+    """Prune every tenant that has run files - what a console boot does, so a tenant that never starts another
+    run (and never lists its runs) is not left with files forever."""
+    try:
+        from core.paths.tenant import corvin_home  # noqa: PLC0415
+        for t in sorted((corvin_home() / "tenants").iterdir()):
+            if t.is_dir() and not t.is_symlink():
+                prune(t.name)
+    except Exception:  # noqa: BLE001
+        logger.debug("forge run boot prune failed", exc_info=True)
+
+
+_boot_prune_done = threading.Event()
+
+
+def boot_prune_done() -> bool:
+    return _boot_prune_done.is_set()
+
+
+def _boot_prune() -> None:
+    try:
+        prune_all()
+    finally:
+        _boot_prune_done.set()
+
+
+# Every host (console standalone, gateway, app) imports this module; one background pass at import is the
+# single boot hook, instead of one call per host's lifespan.
+threading.Thread(target=_boot_prune, name="forge-runs-boot-prune", daemon=True).start()
 
 
 class GenerationRefused(Exception):
