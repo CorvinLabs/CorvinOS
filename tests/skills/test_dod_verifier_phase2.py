@@ -5,13 +5,12 @@ from pathlib import Path
 import sys
 import tempfile
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "core" / "skills" / "os_skills"))
 
-from definition_of_done_verifier.loss_signal import DoD_LossSignal
-from definition_of_done_verifier.feedback_event import DoD_FeedbackEvent
-from definition_of_done_verifier.weight_optimizer import DoD_WeightOptimizer, OptimizationResult
-from definition_of_done_verifier.weight_persistence import WeightPersistence
-from definition_of_done_verifier.api_handlers import DoD_OutcomeSink, DoD_FeedbackCollector
+from core.skills.os_skills.definition_of_done_verifier.loss_signal import DoD_LossSignal
+from core.skills.os_skills.definition_of_done_verifier.feedback_event import DoD_FeedbackEvent
+from core.skills.os_skills.definition_of_done_verifier.weight_optimizer import DoD_WeightOptimizer, OptimizationResult
+from core.skills.os_skills.definition_of_done_verifier.weight_persistence import WeightPersistence
+from core.skills.os_skills.definition_of_done_verifier.api_handlers import DoD_OutcomeSink, DoD_FeedbackCollector
 
 
 # ============================================================================

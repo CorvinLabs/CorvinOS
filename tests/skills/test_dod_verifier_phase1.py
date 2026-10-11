@@ -6,13 +6,11 @@ from pathlib import Path
 from unittest.mock import patch, mock_open
 import sys
 
-# Add skill to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "core" / "skills" / "os_skills"))
 
-from definition_of_done_verifier.skill import DoD_VerifierSkill, DoD_VerificationResult
-from definition_of_done_verifier.checks.reachability import ReachabilityCheck
-from definition_of_done_verifier.checks.audit_trail import AuditTrailCheck
-from definition_of_done_verifier.scoring import ScoringEngine
+from core.skills.os_skills.definition_of_done_verifier.skill import DoD_VerifierSkill, DoD_VerificationResult
+from core.skills.os_skills.definition_of_done_verifier.checks.reachability import ReachabilityCheck
+from core.skills.os_skills.definition_of_done_verifier.checks.audit_trail import AuditTrailCheck
+from core.skills.os_skills.definition_of_done_verifier.scoring import ScoringEngine
 
 
 # ============================================================================
@@ -194,7 +192,7 @@ class TestPhase1Gate:
     @pytest.mark.gate
     def test_audit_trail_has_event_count(self):
         """Verify event counting is implemented."""
-        from definition_of_done_verifier.checks.audit_trail import AuditTrailCheck
+        from core.skills.os_skills.definition_of_done_verifier.checks.audit_trail import AuditTrailCheck
         check = AuditTrailCheck()
         # Must return CheckResult with event_count field
         # (tested above in TestAuditTrailCheckUnit)

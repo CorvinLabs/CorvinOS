@@ -8,12 +8,11 @@ from unittest.mock import patch, MagicMock
 import sys
 import time
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "core" / "skills" / "os_skills"))
 
-from definition_of_done_verifier.skill import DoD_VerifierSkill
-from definition_of_done_verifier.checks.reachability import ReachabilityCheck
-from definition_of_done_verifier.weight_optimizer import DoD_WeightOptimizer
-from definition_of_done_verifier.hardening import CircuitBreaker, ConcurrencyHardeningMonitor
+from core.skills.os_skills.definition_of_done_verifier.skill import DoD_VerifierSkill
+from core.skills.os_skills.definition_of_done_verifier.checks.reachability import ReachabilityCheck
+from core.skills.os_skills.definition_of_done_verifier.weight_optimizer import DoD_WeightOptimizer
+from core.skills.os_skills.definition_of_done_verifier.hardening import CircuitBreaker, ConcurrencyHardeningMonitor
 
 
 # ============================================================================
@@ -38,7 +37,7 @@ class TestAdversarialPhase1:
     @pytest.mark.adversarial
     def test_audit_bypass_no_events_logged(self):
         """Attack: Audit event not emitted → skill should fail."""
-        from definition_of_done_verifier.checks.audit_trail import AuditTrailCheck
+        from core.skills.os_skills.definition_of_done_verifier.checks.audit_trail import AuditTrailCheck
 
         check = AuditTrailCheck()
         # Mock: no matching events in audit trail
@@ -52,7 +51,7 @@ class TestAdversarialPhase1:
     @pytest.mark.adversarial
     def test_false_positive_all_checks_fail(self):
         """Attack: Hallucinated task tries to pass → all checks fail → score < 0.80."""
-        from definition_of_done_verifier.scoring import ScoringEngine
+        from core.skills.os_skills.definition_of_done_verifier.scoring import ScoringEngine
 
         engine = ScoringEngine()
         checks = {
@@ -180,7 +179,7 @@ class TestAdversarialPhase3:
     @pytest.mark.adversarial
     def test_monitoring_bypass_metrics_tracked(self):
         """Attack: Attacker tries to bypass monitoring → all metrics recorded."""
-        from definition_of_done_verifier.hardening import MonitoringMetrics
+        from core.skills.os_skills.definition_of_done_verifier.hardening import MonitoringMetrics
 
         metrics = MonitoringMetrics(
             total_checks=100,
@@ -197,7 +196,7 @@ class TestAdversarialPhase3:
     @pytest.mark.adversarial
     def test_malformed_json_in_audit_trail_handled(self):
         """Attack: Corrupt audit.jsonl with malformed JSON → parser should skip gracefully."""
-        from definition_of_done_verifier.checks.audit_trail import AuditTrailCheck
+        from core.skills.os_skills.definition_of_done_verifier.checks.audit_trail import AuditTrailCheck
 
         check = AuditTrailCheck()
         # A REAL file, not a mocked `open`. The check reads the chain with
@@ -226,7 +225,7 @@ class TestAdversarialPhase3:
     @pytest.mark.adversarial
     def test_permission_denied_on_audit_file_fail_closed(self):
         """Attack: Attacker removes read permissions on audit.jsonl → check should fail."""
-        from definition_of_done_verifier.checks.audit_trail import AuditTrailCheck
+        from core.skills.os_skills.definition_of_done_verifier.checks.audit_trail import AuditTrailCheck
 
         check = AuditTrailCheck()
         with patch("builtins.open") as mock_file:
@@ -249,7 +248,7 @@ class TestAdversarialCrossPhase:
     @pytest.mark.adversarial
     def test_phase1_phase2_feedback_poisoning(self):
         """Attack: Phase 1 score artificially low → Phase 2 feedback tries to compensate wrong."""
-        from definition_of_done_verifier.api_handlers import DoD_FeedbackCollector
+        from core.skills.os_skills.definition_of_done_verifier.api_handlers import DoD_FeedbackCollector
 
         collector = DoD_FeedbackCollector()
 
@@ -273,7 +272,7 @@ class TestAdversarialCrossPhase:
     @pytest.mark.adversarial
     def test_phase2_phase3_weight_persistence_corruption(self):
         """Attack: Corrupted weights.json on disk → Phase 3 should handle gracefully."""
-        from definition_of_done_verifier.weight_persistence import WeightPersistence
+        from core.skills.os_skills.definition_of_done_verifier.weight_persistence import WeightPersistence
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -315,7 +314,7 @@ class TestPhase3Gate:
     @pytest.mark.gate
     def test_monitoring_metrics_exist(self):
         """Monitoring metrics implemented for observability."""
-        from definition_of_done_verifier.hardening import MonitoringMetrics
+        from core.skills.os_skills.definition_of_done_verifier.hardening import MonitoringMetrics
         metrics = MonitoringMetrics()
         assert hasattr(metrics, 'compute_error_rate')
 

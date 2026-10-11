@@ -6,11 +6,10 @@ import sys
 import json
 import tempfile
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "core" / "skills" / "os_skills"))
 
-from datahub_unified.models import DataSourceType, CreationType, DataIngestion, CreationRequest
-from datahub_unified.datahub import DataHubSkill
-from datahub_unified.creator import UnifiedCreator
+from core.skills.os_skills.datahub_unified.models import DataSourceType, CreationType, DataIngestion, CreationRequest
+from core.skills.os_skills.datahub_unified.datahub import DataHubSkill
+from core.skills.os_skills.datahub_unified.creator import UnifiedCreator
 
 
 class TestPhase1DataHub:
