@@ -6,7 +6,8 @@
  * starts a NEW video or sends a change request that produces a REVISION of the selected
  * one (the original stays), then the library of produced videos. Quality / Learning /
  * Settings sit in a collapsible section underneath:
- *   Quality   what ffprobe measured on the real artifacts
+ *   Quality   the production signals the job recorded in its report (value, threshold,
+ *             verdict, "n of N"), then what ffprobe measured on the real artifacts
  *             (routes/video_producer_api.py → video_quality.py): stream facts,
  *             a checklist with a named denominator (incl. "no subtitles"), and every scene's
  *             planned vs rendered seconds;
@@ -33,6 +34,8 @@ import { useVoiceInput } from "@/hooks/use-voice-input";
 import { extractVideoSources, MAX_VIDEO_SOURCES, VIDEO_SOURCE_ACCEPT, type VideoSource } from "@/lib/api/video-sources";
 import { BUILTIN_STYLE_ID, STYLE_DECK_ACCEPT, isDeckFile, type StyleList } from "@/lib/api/video-styles";
 import { StyleChip, StyleImportDialog, StylesSection } from "@/components/video-styles";
+import { ProductionSignals } from "@/components/video-quality-report";
+import type { ProductionReport } from "@/lib/video-quality-signals";
 
 // ── Types (routes/video_producer_api.py, video_quality.py, video_learning_api.py) ──
 
@@ -62,6 +65,7 @@ export interface Quality {
   production: { started_at: string | null; completed_at: string | null; seconds: number | null };
   checks: Check[];
   score: { passed: number; warned: number; failed: number; total: number; skipped: number; share: number | null };
+  report?: ProductionReport;
 }
 export interface Learning {
   job_id: string; total_feedback_events: number; approved: number; rejected: number; average_confidence: number | null;
@@ -76,6 +80,7 @@ const TTS_LABELS: Record<string, string> = {
   gtts: "Google TTS (gTTS, legacy)",
 };
 const ACTIVE = ["pending", "storyboard_generating", "skills_running"];
+const TERMINAL = ["complete", "error", "cancelled"];
 
 /** Rendered caption — also the deploy marker. */
 export const MARKER_VIDEO = "Produce a video from a task, watch it, see what ffprobe measured on the real artifacts, and teach the producer scene by scene.";
@@ -136,6 +141,8 @@ function QualityTab({ q }: { q: Quality }) {
   const groups: Array<[string, Check["status"][]]> = [["Needs attention", ["fail", "warn"]], ["Passed", ["pass"]], ["Not measurable", ["skip"]]];
   return (
     <div className="space-y-5" data-testid="quality-tab">
+      <ProductionSignals report={q.report} />
+      {q.status !== "complete" ? null : <>
       <div className="grid gap-4 lg:grid-cols-[auto_1fr] items-start">
         <ScoreRing score={q.score} />
         <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
@@ -236,6 +243,7 @@ function QualityTab({ q }: { q: Quality }) {
           </CardContent>
         </Card>
       )}
+      </>}
       <div className="text-xs text-muted-foreground">Measured {fmtWhen(q.measured_at)}{q.source.video ? <> from <span className="font-mono">{q.source.video}</span></> : " — no output file"}.</div>
     </div>
   );
@@ -512,7 +520,7 @@ export function VideoProducerPage() {
 
   const job = useQuery({ queryKey: ["video", "job", selected], queryFn: ({ signal }) => api<Job>(`${BASE}/jobs/${selected}`, { signal }), enabled: !!selected, retry: false,
     refetchInterval: (q) => (q.state.data && ACTIVE.includes(q.state.data.status) ? 1000 : false) });
-  const quality = useQuery({ queryKey: ["video", "quality", selected, job.data?.status], queryFn: ({ signal }) => api<Quality>(`${BASE}/jobs/${selected}/quality-metrics`, { signal }), enabled: !!selected && job.data?.status === "complete", retry: false });
+  const quality = useQuery({ queryKey: ["video", "quality", selected, job.data?.status], queryFn: ({ signal }) => api<Quality>(`${BASE}/jobs/${selected}/quality-metrics`, { signal }), enabled: !!selected && TERMINAL.includes(job.data?.status ?? ""), retry: false });
   const styles = useQuery({ queryKey: ["video", "styles"], queryFn: ({ signal }) => api<StyleList>(`${BASE}/styles`, { signal }), retry: false });
   // A deleted style can no longer be the session choice.
   useEffect(() => {
@@ -635,7 +643,7 @@ export function VideoProducerPage() {
                         className={`px-3 py-1.5 rounded-md text-sm capitalize ${tab === t ? "bg-accent/15 text-foreground font-medium" : "text-muted-foreground hover:text-foreground"}`}>{t}</button>
                     ))}
                   </div>
-                  {tab === "quality" && (j.status !== "complete" ? <p className="text-sm text-muted-foreground" data-testid="quality-pending">Quality is measured once the video is produced.</p>
+                  {tab === "quality" && (!TERMINAL.includes(j.status) ? <p className="text-sm text-muted-foreground" data-testid="quality-pending">Quality is measured once the job has finished.</p>
                     : quality.isLoading ? <Loader2 className="w-6 h-6 animate-spin" /> : quality.isError ? <p className="text-sm text-destructive">The quality measurement failed.</p> : quality.data ? <QualityTab q={quality.data} /> : null)}
                   {tab === "learning" && <LearningTab job={j} scenes={quality.data?.scenes ?? []} />}
                 </>

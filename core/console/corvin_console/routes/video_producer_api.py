@@ -1180,7 +1180,12 @@ def get_quality_metrics(job_id: str, rec=_SessionRec):
         raise HTTPException(status_code=404, detail="Job not found")
     from ..video_quality import measure  # noqa: PLC0415
 
-    return measure(_job_dict(job), _output_dict(storage.get_video_output(job_id)))
+    # The job's production report lives in THIS tenant's store (the session's tenant, never env);
+    # a directory that resolves outside it is not read.
+    job_dir = Path(storage.videos_dir) / job_id
+    if not _inside(job_dir, _tenant_base(rec)):
+        job_dir = None
+    return measure(_job_dict(job), _output_dict(storage.get_video_output(job_id)), job_dir=job_dir, with_report=True)
 
 
 @router.get("/overview")

@@ -18,12 +18,21 @@ measures it with ``ffprobe``:
 
 ``ffprobe`` results are cached per (path, size, mtime). No ffprobe on the host
 → the stream facts are absent and the checks that need them are ``skip``.
+
+The plugin's Production Report (``<store>/videos/<job>/report.json``, schema 1,
+ADR-2247) is merged into the same record under ``report``: its named signals
+(value, unit, threshold, verdict, basis "n of N", validity) are passed through
+as the job measured them, never recomputed here. A job without a report says
+so (``report.state``: ``missing`` / ``not_written`` / ``unreadable``) - nothing
+is filled in for it.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import stat
 import shutil
 import subprocess
 import threading
@@ -216,19 +225,10 @@ def checks_for(container: Optional[dict], video: Optional[dict], audio: Optional
     if storyboard:
         out.append(_check("scenes", "Every storyboard scene rendered",
                           "pass" if rendered == len(storyboard) else "fail", f"{rendered} of {len(storyboard)}"))
-        # A clip is as long as its narration (the storyboard's duration_ms is a hint the pipeline
-        # does not follow), so timing is measured against the voice track, never the plan.
-        drifts = [abs(s["voice_drift_pct"]) for s in scenes if s.get("voice_drift_pct") is not None]
-        if drifts:
-            worst = max(drifts)
-            out.append(_check("timing", "Every scene is as long as its narration",
-                              "pass" if worst <= 10 else "warn" if worst <= 25 else "fail", f"largest difference {worst} %"))
-        clips = sum(s["actual_s"] or 0 for s in scenes)
-        if clips and container and container.get("duration_s"):
-            diff = abs(container["duration_s"] - clips) / clips * 100
-            out.append(_check("runtime", "Runtime equals the sum of the scenes",
-                              "pass" if diff <= 5 else "warn" if diff <= 15 else "fail",
-                              f"scenes {round(clips, 1)} s · video {round(container['duration_s'], 1)} s"))
+        # No `timing`/`runtime` check (ADR-2247): both compared the storyboard model's length
+        # ESTIMATE with the voice-driven real length, so they failed on every real video and were
+        # ignored. That number is now `plan_estimate_error` in the production report - information,
+        # never a verdict.
         voiced = sum(1 for s in scenes if s["has_voice"])
         provider = str(metadata.get("tts_provider_used") or "")
         if "mock" in provider:
@@ -246,10 +246,150 @@ def checks_for(container: Optional[dict], video: Optional[dict], audio: Optional
     return out
 
 
-def measure(job: dict, video_output: Optional[dict]) -> dict:
+# ── the production report (plugin's report.json, schema 1) ──────────────────
+
+REPORT_NAME = "report.json"
+REPORT_SCHEMA = 1
+MAX_REPORT_BYTES = 64 * 1024  # the plugin refuses to write a larger one (src/report.py)
+SIGNAL_VERDICTS = ("pass", "warn", "fail", "skip", "info")
+
+
+def _num(v: Any) -> Optional[float]:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return v
+
+
+def _int_or_none(v: Any) -> Optional[int]:
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+
+
+def _short(v: Any, limit: int = 80) -> Optional[str]:
+    return str(v)[:limit] if isinstance(v, (str, int, float)) and not isinstance(v, bool) and str(v) else None
+
+
+def _threshold(v: Any) -> Any:
+    """A number, a flat map of numbers, or None - nothing else reaches the panel."""
+    if _num(v) is not None:
+        return v
+    if isinstance(v, dict):
+        out = {str(k)[:40]: v[k] for k in v if _num(v[k]) is not None}
+        return out or None
+    return None
+
+
+def _signal(rec: Any) -> Optional[dict]:
+    """One signal record as the job wrote it, reduced to the fields the panel shows.
+    An unrecognised verdict is shown as ``unknown``, never mapped to a pass."""
+    if not isinstance(rec, dict) or not isinstance(rec.get("id"), str) or not rec["id"]:
+        return None
+    basis = rec.get("basis") if isinstance(rec.get("basis"), dict) else {}
+    verdict = rec.get("verdict") if rec.get("verdict") in SIGNAL_VERDICTS else "unknown"
+    value = rec.get("value")
+    return {
+        "id": rec["id"][:60],
+        "kind": rec.get("kind") if rec.get("kind") in ("runtime", "posthoc") else None,
+        "value": value if _num(value) is not None else None,
+        "unit": _short(rec.get("unit")) or "",
+        "threshold": _threshold(rec.get("threshold")),
+        "verdict": verdict,
+        "basis": {"n": _int_or_none(basis.get("n")), "of": _int_or_none(basis.get("of"))},
+        "valid": rec.get("valid") is not False,
+        "invalidated_by": _short(rec.get("invalidated_by"), 60),
+        "reason": _short(rec.get("reason")),
+        "detail": rec.get("detail") if isinstance(rec.get("detail"), dict) else None,
+    }
+
+
+def _read_report_file(path: Path) -> Tuple[Optional[dict], Optional[str]]:
+    """``(data, None)`` or ``(None, why)``. Never follows a symlink, never reads more than the cap."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return None, "missing"
+    except OSError:
+        return None, "unreadable"
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None, "unreadable"
+        if st.st_size > MAX_REPORT_BYTES:
+            return None, "too_large"
+        with os.fdopen(fd, "rb") as f:
+            fd = -1
+            raw = f.read(MAX_REPORT_BYTES + 1)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None, "not_json"
+    return (data, None) if isinstance(data, dict) else (None, "not_json")
+
+
+def read_report(job_dir: Optional[Path], job_id: str, metadata: Optional[dict] = None) -> dict:
+    """The job's production report for the panel. ``state``:
+
+    * ``present``     - read, schema 1, written for this job;
+    * ``missing``     - no report file (jobs produced before reports existed have none);
+    * ``not_written`` - the job ran with reports but its report was refused on write;
+    * ``unreadable``  - a file exists but is not a schema-1 report of this job (``reason`` says why).
+    """
+    metadata = metadata if isinstance(metadata, dict) else {}
+    if job_dir is None:
+        return {"state": "missing", "signals": []}
+    data, why = _read_report_file(Path(job_dir) / REPORT_NAME)
+    if data is None:
+        if why == "missing":
+            state = "not_written" if "report" in metadata and metadata.get("report") is None else "missing"
+            return {"state": state, "signals": []}
+        return {"state": "unreadable", "reason": why, "signals": []}
+    if data.get("schema") != REPORT_SCHEMA:
+        return {"state": "unreadable", "reason": "unknown_schema", "signals": []}
+    if data.get("job_id") != job_id:
+        return {"state": "unreadable", "reason": "other_job", "signals": []}
+    signals = [s for s in (_signal(r) for r in (data.get("signals") or [])) if s is not None]
+    by_kind: Dict[str, int] = {}
+    for d in data.get("degradations") or []:
+        if isinstance(d, dict) and isinstance(d.get("kind"), str):
+            by_kind[d["kind"][:60]] = by_kind.get(d["kind"][:60], 0) + 1
+    ds = data.get("degraded_scenes") if isinstance(data.get("degraded_scenes"), dict) else {}
+    stages = [{"name": _short(st.get("name"), 40), "seconds": _num(st.get("seconds"))}
+              for st in (data.get("stages") or []) if isinstance(st, dict)]
+    usage = data.get("llm_usage") if isinstance(data.get("llm_usage"), dict) else {}
+    tools = data.get("tools") if isinstance(data.get("tools"), dict) else {}
+    counts = {v: sum(1 for s in signals if s["verdict"] == v) for v in SIGNAL_VERDICTS + ("unknown",)}
+    return {
+        "state": "present",
+        "schema": REPORT_SCHEMA,
+        "plugin_version": _short(data.get("plugin_version"), 40),
+        "status": _short(data.get("status"), 20),
+        "failed_stage": _short(data.get("failed_stage"), 20),
+        "error_class": _short(data.get("error_class"), 60),
+        "language": _short(data.get("language"), 10),
+        "style_id": _short(data.get("style_id"), 60),
+        "storyboard_llm": _short(data.get("storyboard_llm"), 60),
+        "created_at": _short(data.get("created_at"), 40),
+        "finished_at": _short(data.get("finished_at"), 40),
+        "total_seconds": _num(data.get("total_seconds")),
+        "stages": stages,
+        "degraded_scenes": {"n": _int_or_none(ds.get("n")), "of": _int_or_none(ds.get("of"))},
+        "degradations_by_kind": by_kind,
+        "llm_usage": {k: v for k, v in usage.items() if _int_or_none(v) is not None},
+        "tools": {str(k)[:20]: _short(v, 40) for k, v in tools.items()},
+        "signals": signals,
+        "verdicts": counts,
+    }
+
+
+def measure(job: dict, video_output: Optional[dict], *, job_dir: Optional[Path] = None,
+            with_report: bool = False) -> dict:
     """The measured quality record for one job. ``job`` is the stored job as a
     dict (``id``, ``status``, ``storyboard``, timestamps, ``video_output_path``),
-    ``video_output`` the stored output record (``video_path``, ``metadata``) or ``None``."""
+    ``video_output`` the stored output record (``video_path``, ``metadata``) or ``None``.
+    ``with_report``: also merge the job's production report from ``job_dir`` (the caller
+    has already confined ``job_dir`` to the tenant's store)."""
     job_id = str(job.get("id"))
     video_path = Path(str((video_output or {}).get("video_path") or job.get("video_output_path") or "")).expanduser()
     video_ok = bool(str(video_path)) and video_path.is_file()
@@ -299,4 +439,5 @@ def measure(job: dict, video_output: Optional[dict]) -> dict:
                   "failed": sum(1 for c in ran if c["status"] == "fail"), "total": len(ran),
                   "skipped": len(checks) - len(ran),
                   "share": round(passed / len(ran), 3) if ran else None},
+        **({"report": read_report(job_dir, job_id, (video_output or {}).get("metadata"))} if with_report else {}),
     }

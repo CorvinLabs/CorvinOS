@@ -48,9 +48,18 @@ const QUALITY = {
   checks: [
     { id: "playable", label: "Container readable", status: "pass", detail: "mov · 44.35 s" },
     { id: "subtitles", label: "No subtitles", status: "pass", detail: "no subtitle stream, no caption file" },
-    { id: "timing", label: "Every scene is as long as its narration", status: "fail", detail: "largest difference 31.2 %" },
+    { id: "voice", label: "Every scene has a voice track", status: "fail", detail: "silent placeholder voice (no narration provider was available)" },
   ],
   score: { passed: 1, warned: 1, failed: 1, total: 3, skipped: 0, share: 0.333 },
+  report: {
+    state: "present", schema: 1, plugin_version: "1.4.1", status: "complete", storyboard_llm: "operator", total_seconds: 17.7,
+    verdicts: { fail: 1, info: 1, pass: 1 },
+    signals: [
+      { id: "plan_estimate_error", kind: "runtime", value: -0.425, unit: "share", threshold: null, verdict: "info", basis: { n: 2, of: 2 }, valid: true, invalidated_by: null, reason: null, detail: { narrated_s: 9.2, plan_s: 16.0 } },
+      { id: "layout_clean", kind: "runtime", value: 0, unit: "collisions kept", threshold: 0, verdict: "pass", basis: { n: 2, of: 2 }, valid: false, invalidated_by: "degradation_rate", reason: null, detail: null },
+      { id: "degradation_rate", kind: "runtime", value: 1.0, unit: "share of scenes", threshold: { max_share: 0.1, pillow: 0 }, verdict: "fail", basis: { n: 2, of: 2 }, valid: true, invalidated_by: null, reason: "scene share above 10 %", detail: null },
+    ],
+  },
 };
 const seen: Array<{ path: string; csrf: string | null; body: unknown }> = [];
 const posted: Array<{ csrf: string | null; body: Record<string, unknown> }> = [];
@@ -221,13 +230,42 @@ describe("Video Producer studio", () => {
     renderIt("?job=job_2626f1e8&tab=quality");
     await screen.findByTestId("quality-tab");
     expect(screen.getByTestId("score-ring").textContent).toMatch(/1 of 3 checks passed/);
-    expect(screen.getByTestId("check-timing").textContent).toMatch(/largest difference 31.2 %/);
+    expect(screen.getByTestId("check-voice").textContent).toMatch(/silent placeholder voice/);
+    expect(screen.queryByTestId("check-timing")).toBeNull();
     expect(screen.getByTestId("check-subtitles").textContent).toMatch(/no subtitle stream, no caption file/);
     expect(screen.queryByText(/Captions/)).toBeNull();
     expect(screen.getByTestId("timing-caption").textContent).toMatch(/2 scenes, one shared scale/);
     expect(screen.getByTestId("quality-tab").textContent).toMatch(/1280×720 · 60 fps · h264/);
     expect(screen.getByTestId("quality-tab").textContent).toMatch(/aac · 24\.0 kHz · mono/);
     expect(screen.getByTestId("filmstrip").querySelectorAll("img")).toHaveLength(2);
+  });
+
+  it("the Quality tab shows each production signal with value, threshold, verdict and n of N - gate first", async () => {
+    server.use(...handlers());
+    renderIt("?job=job_2626f1e8&tab=quality");
+    await screen.findByTestId("signals-table");
+    const rows = screen.getByTestId("signals-table").querySelectorAll("tbody tr");
+    expect(rows[0].getAttribute("data-testid")).toBe("signal-degradation_rate");
+    expect(screen.getByTestId("signal-value-degradation_rate").textContent).toBe("2 of 2 scenes");
+    expect(screen.getByTestId("signal-threshold-degradation_rate").textContent).toBe("at most 10 % of scenes · no fallback slide");
+    expect(screen.getByTestId("signal-verdict-degradation_rate").textContent).toBe("Fail");
+    expect(screen.getByTestId("signal-basis-degradation_rate").textContent).toBe("2 of 2");
+    expect(screen.getByTestId("signal-note-degradation_rate").textContent).toMatch(/too few to state as a percentage/);
+    expect(screen.getByTestId("signal-verdict-layout_clean").textContent).toBe("Pass · not valid");
+    expect(screen.getByTestId("signal-value-plan_estimate_error").textContent).toBe("9.2 s narrated · 16 s planned");
+    expect(screen.getByTestId("signal-verdict-plan_estimate_error").textContent).toBe("Information");
+    expect(screen.getByTestId("signals-gate-note").textContent).toMatch(/Degraded scenes" failed/);
+    expect(screen.getByTestId("signals-summary").textContent).toMatch(/3 signals · 1 fail · 1 pass · 1 information/);
+    expect(screen.getByTestId("signals-card").textContent).not.toMatch(/ADR-\d/);
+  });
+
+  it("an old job without a report says so and shows no signal", async () => {
+    server.use(http.get(`${B}/jobs/job_2626f1e8/quality-metrics`, () => HttpResponse.json({ ...QUALITY, report: { state: "missing", signals: [] } })), ...handlers());
+    renderIt("?job=job_2626f1e8&tab=quality");
+    const absent = await screen.findByTestId("signals-absent");
+    expect(absent.textContent).toMatch(/No production report for this job/);
+    expect(screen.queryByTestId("signals-table")).toBeNull();
+    expect(screen.getByTestId("score-ring")).toBeInTheDocument();
   });
 
   it("the Learning tab is honest about zero events and posts scene feedback with CSRF", async () => {

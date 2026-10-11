@@ -330,11 +330,16 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
 
     // ── verify the artefact itself, not just that a file came back ────────────────────────────
     const qm = await (await page.request.get(`${API}/video/jobs/${jobId}/quality-metrics`)).json();
-    // Every check must pass — timing and runtime included: since 1.4.1 they compare each clip with its
-    // narration and the video with its clips, not with the model's duration guess (review 2026-10-10).
+    // Every check must pass. The estimate-based `timing`/`runtime` checks are gone (T-0091): that number
+    // is the production report's `plan_estimate_error` signal now - information, never a verdict.
     const failed = qm.checks.filter((c: any) => c.status === "fail");
     expect(failed, `quality checks failed: ${JSON.stringify(failed)}`).toEqual([]);
-    expect(qm.checks.map((c: any) => c.id), "the voice and layout checks ran").toEqual(expect.arrayContaining(["voice", "layout", "timing"]));
+    expect(qm.checks.map((c: any) => c.id), "the voice and layout checks ran").toEqual(expect.arrayContaining(["voice", "layout"]));
+    expect(qm.checks.map((c: any) => c.id)).not.toContain("timing");
+    // the job's own production report is merged in, with its named signals
+    expect(qm.report?.state, "the production report was written and read").toBe("present");
+    expect(qm.report.signals.map((s: any) => s.id)).toEqual(expect.arrayContaining(["degradation_rate", "mux_integrity", "plan_estimate_error"]));
+    expect(qm.report.signals.find((s: any) => s.id === "plan_estimate_error").verdict).toBe("info");
     expect(md0(qm).language, "the measured narration language is recorded").toMatch(/^(de|en)$/);
     expect(qm.video).toMatchObject({ codec: "h264", width: 1920, height: 1080 });
     expect(qm.audio, "narration track present").toBeTruthy();

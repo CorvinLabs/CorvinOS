@@ -76,6 +76,13 @@
     --viz-status-progress: #c08a1e;
     --viz-status-blocked: #b0306a;
     --viz-status-complete: #2a78c6;
+    /* Verdict marks (Video Producer quality signals): pass / warn / fail. Blue, not green, for
+       pass - a green/amber/red set fails the CVD check. Validated with the dataviz validator
+       against #ffffff, --pairs all: band, chroma, CVD (worst 15.3), normal-vision, contrast pass.
+       Always drawn beside a text label. */
+    --viz-verdict-pass: #2a78c6;
+    --viz-verdict-warn: #c08a1e;
+    --viz-verdict-fail: #b0306a;
     /* ADR-2241 chat diff (text ≥ 4.5:1 on card/background) */
     --diff-add: 138 71% 23%;
     --diff-del: 4 76% 40%;
@@ -120,6 +127,10 @@
     --viz-status-progress: #b88422;
     --viz-status-blocked: #d05a9c;
     --viz-status-complete: #2a8fd6;
+    /* Verdict marks, dark steps - validated against #0e1320, --pairs all, every check passes. */
+    --viz-verdict-pass: #2a8fd6;
+    --viz-verdict-warn: #b88422;
+    --viz-verdict-fail: #d05a9c;
     --diff-add: 136 50% 53%;
     --diff-del: 4 100% 72%;
   }

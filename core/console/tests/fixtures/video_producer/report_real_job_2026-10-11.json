@@ -1,0 +1,224 @@
+{
+ "configured": {
+  "storyboard_backend": "operator",
+  "tts": "auto"
+ },
+ "created_at": "2026-10-11T19:44:38+00:00",
+ "degradations": [
+  {
+   "kind": "tts_tier_below",
+   "scene": 1,
+   "tier": "mock"
+  },
+  {
+   "kind": "tts_tier_below",
+   "scene": 2,
+   "tier": "mock"
+  }
+ ],
+ "degraded_scenes": {
+  "indexes": [
+   1,
+   2
+  ],
+  "n": 2,
+  "of": 2
+ },
+ "error_class": null,
+ "failed_stage": null,
+ "finished_at": "2026-10-11T19:44:56+00:00",
+ "job_id": "job_rep",
+ "language": "de",
+ "llm_usage": {
+  "cache_read_tokens": 0,
+  "cache_write_tokens": 0,
+  "calls": 0,
+  "calls_without_usage": 0,
+  "input_tokens": 0,
+  "output_tokens": 0
+ },
+ "media": {
+  "duration_s": 9,
+  "file_size_mb": 0.56,
+  "scenes": 2
+ },
+ "plugin_version": "1.4.1",
+ "scenes": [
+  {
+   "audio_s": 3.6,
+   "beats_source": "fallback",
+   "index": 1,
+   "planned_s": 8.0,
+   "renderer": "web",
+   "template": "hero",
+   "tts_tier": "mock"
+  },
+  {
+   "audio_s": 5.6,
+   "beats_source": "fallback",
+   "index": 2,
+   "planned_s": 8.0,
+   "renderer": "web",
+   "template": "diagram",
+   "tts_tier": "mock"
+  }
+ ],
+ "schema": 1,
+ "signals": [
+  {
+   "basis": {
+    "n": 2,
+    "of": 2
+   },
+   "detail": {
+    "by_kind": {
+     "tts_tier_below": 2
+    }
+   },
+   "id": "degradation_rate",
+   "kind": "runtime",
+   "reason": "scene share above 10 %",
+   "threshold": {
+    "backend_fallback": 0,
+    "grounding_lost": 0,
+    "max_share": 0.1,
+    "pillow": 0
+   },
+   "unit": "share of scenes",
+   "valid": true,
+   "value": 1.0,
+   "verdict": "fail"
+  },
+  {
+   "basis": {
+    "n": 2,
+    "of": 2
+   },
+   "id": "layout_clean",
+   "invalidated_by": "degradation_rate",
+   "kind": "runtime",
+   "threshold": 0,
+   "unit": "collisions kept",
+   "valid": false,
+   "value": 0,
+   "verdict": "pass"
+  },
+  {
+   "basis": {
+    "n": null,
+    "of": null
+   },
+   "id": "fact_support",
+   "invalidated_by": "degradation_rate",
+   "kind": "runtime",
+   "reason": "not a grounded task",
+   "threshold": 0,
+   "unit": "unsupported claims",
+   "valid": false,
+   "value": null,
+   "verdict": "skip"
+  },
+  {
+   "basis": {
+    "n": 2,
+    "of": 2
+   },
+   "detail": {
+    "final_av_share": 0.0023,
+    "problems": []
+   },
+   "id": "mux_integrity",
+   "kind": "runtime",
+   "threshold": {
+    "clip_vs_voice_s": 0.1,
+    "final_av_share": 0.03
+   },
+   "unit": "scenes intact",
+   "valid": true,
+   "value": 2,
+   "verdict": "pass"
+  },
+  {
+   "basis": {
+    "n": 2,
+    "of": 2
+   },
+   "detail": {
+    "narrated_s": 9.2,
+    "plan_s": 16.0
+   },
+   "id": "plan_estimate_error",
+   "kind": "runtime",
+   "threshold": null,
+   "unit": "share",
+   "valid": true,
+   "value": -0.425,
+   "verdict": "info"
+  },
+  {
+   "basis": {
+    "n": 2,
+    "of": 2
+   },
+   "detail": {
+    "by_source": {
+     "fallback": 2
+    }
+   },
+   "id": "beats_provenance",
+   "invalidated_by": "degradation_rate",
+   "kind": "runtime",
+   "threshold": null,
+   "unit": "share of web scenes on fallback beats",
+   "valid": false,
+   "value": 1.0,
+   "verdict": "info"
+  },
+  {
+   "basis": {
+    "n": null,
+    "of": null
+   },
+   "id": "style_fidelity",
+   "invalidated_by": "degradation_rate",
+   "kind": "runtime",
+   "reason": "no custom style",
+   "threshold": 3.0,
+   "unit": "delta E (CIE76)",
+   "valid": false,
+   "value": null,
+   "verdict": "skip"
+  }
+ ],
+ "stages": [
+  {
+   "name": "setup",
+   "seconds": 0.0
+  },
+  {
+   "name": "storyboard",
+   "seconds": 0.003
+  },
+  {
+   "name": "scenes",
+   "seconds": 17.596
+  },
+  {
+   "name": "assemble",
+   "seconds": 0.05
+  },
+  {
+   "name": "signals",
+   "seconds": 0.05
+  }
+ ],
+ "status": "complete",
+ "storyboard_llm": "operator",
+ "style_id": null,
+ "tools": {
+  "ffmpeg": "7.0.2-static",
+  "playwright": "1.63.0",
+  "python": "3.11.15"
+ },
+ "total_seconds": 17.699
+}

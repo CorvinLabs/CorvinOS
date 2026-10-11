@@ -229,10 +229,12 @@ class QualityChecksMeasureTheRightThing(unittest.TestCase):
         self.assertEqual(self._checks({"tts_provider_used": "mock"})["voice"]["status"], "fail")
         self.assertEqual(self._checks({"tts_provider_used": "openai"})["voice"]["status"], "pass")
 
-    def test_timing_follows_the_narration_not_the_storyboard_hint(self):
+    def test_the_estimate_based_timing_checks_are_gone(self):
+        # ADR-2247 / T-0091: `timing` and `runtime` compared the model's length estimate with the
+        # voice-driven length; that number is the report's `plan_estimate_error` (information) now.
         c = self._checks({"tts_provider_used": "openai"})
-        self.assertEqual(c["timing"]["status"], "pass", c["timing"])
-        self.assertEqual(c["runtime"]["status"], "pass", c["runtime"])
+        self.assertNotIn("timing", c)
+        self.assertNotIn("runtime", c)
 
     def test_a_slide_kept_with_overlaps_fails_the_layout_check(self):
         c = self._checks({"layout_collisions": [{"scene": "s2", "action": "kept"}]})

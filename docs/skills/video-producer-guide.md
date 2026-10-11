@@ -15,7 +15,7 @@ One column, top to bottom (ADR-2246):
 | Composer | directly under the stage: a text box with **attachment**, **microphone** and **hold Space to dictate** (hold ≥ 0.4 s, release to stop; a short tap types a space), **Enter** sends. Two modes: **New video** and **Revise: <selected video>** | `POST /v1/console/video/jobs` (CSRF) |
 | Produced videos | every job as a card with poster, status, creation time, progress while rendering, a *revision* badge, and **Revise** on finished videos | `GET /v1/console/video/jobs`, `/videos/{id}/poster` |
 | Tiles | videos produced (of all jobs), total runtime and size, mean checklist share **over measured videos only**, last activity | `GET /v1/console/video/overview` |
-| Quality and learning · Quality | what `ffprobe` measured on the real artifacts (below) | `GET /v1/console/video/jobs/{id}/quality-metrics` |
+| Quality and learning · Quality | the job's **production signals** (value, threshold, verdict, `n of N`) from its report, then what `ffprobe` measured on the real artifacts (below); for a failed or cancelled job only the signals and the stage that failed | `GET /v1/console/video/jobs/{id}/quality-metrics` |
 | Quality and learning · Learning | the ADR-0314 feedback events recorded for this job; approve / reject per scene | `/jobs/{id}/learning-metrics`, `POST /jobs/{id}/scenes/{scene}/feedback` (CSRF) |
 | Settings | output folder, text-to-speech engine, max duration | `/settings` |
 
@@ -52,8 +52,11 @@ Deep links: `/app/video-producer?job=<id>&tab=quality`. The former page
 * **Checklist:** container readable · resolution ≥ 720p · fps ≥ 24 · pixel
   format yuv420p · audio present · sample rate ≥ 22.05 kHz · captions
   present and ≥ 80 % coverage · no repeated cues · every scene rendered ·
-  scene timing within 10 % · runtime within 10 % of the plan · every scene
-  voiced. Each is `pass`, `warn`, `fail` or `skip`.
+  every scene voiced. Each is `pass`, `warn`, `fail` or `skip`. The former
+  `timing` and `runtime` checks are gone (unreleased 1.5.0): they compared
+  the storyboard model's length estimate with the voice-driven real length
+  and failed on every real video. That number is the report's
+  `plan_estimate_error` signal — shown as information, never a verdict.
 * **Score:** `passed / checks that could run` — the denominator is shown
   ("9 of 12 checks"). A check without its input is `skip`, never a pass.
   Without `ffprobe` on the host the stream facts are absent and the page
@@ -75,8 +78,21 @@ Pillow slide, a quote in place of a template, a lower TTS tier, a storyboard bac
 a repaired storyboard) and the runtime **signals** — `degradation_rate`, `layout_clean`, `fact_support`,
 `mux_integrity`, `style_fidelity`, plus `plan_estimate_error` and `beats_provenance` as information — each
 with value, threshold, verdict and `n of N`. When `degradation_rate` fails, the other gated signals are marked
-`valid: false`. The report never contains the task or narration text. Jobs from before 1.5.0 have none. The
-Quality tab does not read it yet (PLAN-0946 R2c).
+`valid: false`. The report never contains the task or narration text. Jobs from before 1.5.0 have none.
+
+**In the console (T-0091).** `GET /v1/console/video/jobs/{id}/quality-metrics` merges the report into the
+measured record under `report`, read from the session tenant's own store only (a second tenant asking for the
+job id gets 404). `report.state` is `present`, `missing` (no report — jobs from before 1.5.0), `not_written`
+(the job refused its own report on write) or `unreadable` (`reason`: `not_json`, `too_large`, `unknown_schema`,
+`other_job`, or a symlink, which is never followed). Signals pass through as the job recorded them; an unknown
+verdict reads `unknown`, never a pass. The Quality tab draws one row per signal — **Value**, **Threshold**,
+**Verdict** (a colour mark plus its word), **n of N** — with the gate `degradation_rate` first; a signal it
+invalidated reads "not valid". A share over fewer than 10 scenes is written `n of N`, not as a percentage, and
+says so. A job without a report shows "No production report for this job" and no signal.
+Proof: `core/console/tests/test_video_producer_quality_report_e2e.py` (real router, session, two tenants, the
+report a real job wrote, a real MP4), `web-next/tests/unit/video-quality-signals.test.ts` (encodings),
+and in a real browser `npx playwright test -c playwright.video-quality.config.ts` (web-next; an isolated console
+on :8796 with a throwaway `CORVIN_HOME`, the real report, light and dark theme, another tenant's job 404).
 
 ## Running, budget and cancel (unreleased 1.5.0, ADR-2247)
 
