@@ -340,60 +340,46 @@ class TestPluginBuilderSetupFileGeneration:
 class TestPluginBuilderAuditIntegration:
     """Test audit-chain integration (ADR-0232, ADR-0262)."""
 
+    @staticmethod
+    def _chain_records():
+        """The records of the sandboxed core chain (the harness points the writer at it)."""
+        import os
+        from pathlib import Path
+
+        path = Path(os.environ["VOICE_AUDIT_PATH"])
+        return path, [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+
     def test_audit_event_written_to_chain(self, tmp_path):
-        """Audit events are written to tenant_audit_chain."""
-        config = BuildConfig(
-            tenant_id="_default",
-            skill_id="plugin-test-audit",
-            audit_enabled=True,
-        )
-        metadata = PackageMetadata(name="test-plugin")
+        """Audit events go through the core writer onto the tenant chain, content-free."""
+        config = BuildConfig(tenant_id="_default", skill_id="plugin-test-audit", audit_enabled=True)
+        builder = PluginBuilder(tmp_path, config=config, metadata=PackageMetadata(name="test-plugin"))
 
-        builder = PluginBuilder(tmp_path, config=config, metadata=metadata)
+        event_id = builder._write_audit_event("build_started", {"audit_id": "a1", "test": "data"})
+        assert event_id
 
-        # Write test audit event
-        event_id = builder._write_audit_event("test_event", {"test": "data"})
-
-        assert event_id  # Should return event ID
-
-        # Verify event was written to audit chain
-        assert builder.audit_chain_path.exists()
-
-        lines = builder.audit_chain_path.read_text().strip().split('\n')
-        assert len(lines) > 0
-
-        # Parse last event
-        last_event = json.loads(lines[-1])
-        assert last_event["event_type"] == "test_event"
-        assert last_event["event_id"] == event_id
-        assert last_event["tenant_id"] == "_default"
-        assert "hash" in last_event
-        assert "prev_hash" in last_event
+        _path, recs = self._chain_records()
+        last = [r for r in recs if r.get("event_type") == "plugin_builder.build"][-1]
+        assert last["details"]["stage"] == "build_started"
+        assert last["details"]["event_id"] == event_id
+        assert last["details"]["tenant_id"] == "_default"
+        assert "test" not in last["details"]          # unknown keys never reach the chain
+        assert "hash" in last and "prev_hash" in last
 
     def test_audit_events_hash_chained(self, tmp_path):
-        """Audit events form a hash chain (immutable)."""
-        config = BuildConfig(
-            tenant_id="_default",
-            skill_id="plugin-test-chain",
-            audit_enabled=True,
-        )
-        metadata = PackageMetadata(name="test-plugin")
+        """Audit events form the core hash chain (immutable) and it verifies."""
+        from corvin_operator.forge.forge import security_events as se
 
-        builder = PluginBuilder(tmp_path, config=config, metadata=metadata)
+        config = BuildConfig(tenant_id="_default", skill_id="plugin-test-chain", audit_enabled=True)
+        builder = PluginBuilder(tmp_path, config=config, metadata=PackageMetadata(name="test-plugin"))
 
-        # Write two events
-        builder._write_audit_event("event1", {"data": "1"})
-        builder._write_audit_event("event2", {"data": "2"})
+        builder._write_audit_event("build_started", {"audit_id": "a1"})
+        builder._write_audit_event("build_completed", {"audit_id": "a1"})
 
-        # Verify chain integrity
-        lines = builder.audit_chain_path.read_text().strip().split('\n')
-        assert len(lines) >= 2
-
-        event1 = json.loads(lines[0])
-        event2 = json.loads(lines[1])
-
-        # event2's prev_hash should match event1's hash
-        assert event2["prev_hash"] == event1["hash"]
+        path, recs = self._chain_records()
+        mine = [r for r in recs if r.get("event_type") == "plugin_builder.build"]
+        assert len(mine) >= 2
+        assert all(r["prev_hash"] and r["hash"] for r in mine)
+        assert se.verify_chain(path)[0] is True            # linked into the ONE chain, MAC and all
 
 
 class TestPluginBuilderWheelValidation:
