@@ -44,6 +44,37 @@ class SkillDependency:
     timeout_handling: str = "fail_parent"  # or degrade_gracefully
 
 
+def coerce_dependency(dep: Any) -> SkillDependency:
+    """The ONE place a declared dependency becomes a :class:`SkillDependency`.
+
+    Accepts a ``SkillDependency`` (the documented form), a bare skill id (``"os.x"`` = any
+    version) and a mapping with any of the dataclass fields. Anything else raises: a declaration
+    that cannot be read must BLOCK, never vanish. ``SkillsRegistry.execute`` used to convert only
+    ``str`` and ``dict`` entries and silently dropped everything else, so a skill declaring
+    ``depends_on=[SkillDependency(...)]`` was run with no dependency check at all, and the dict
+    form lost ``required`` and ``constraint_type``.
+    """
+    if isinstance(dep, SkillDependency):
+        return dep
+    if isinstance(dep, str):
+        if not dep:
+            raise ValueError("empty dependency name")
+        return SkillDependency(name=dep, version="*")
+    if isinstance(dep, dict):
+        name = dep.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"dependency without a name: {dep!r}")
+        version = dep.get("version")
+        extra: Dict[str, Any] = {}
+        if "constraint_type" in dep:
+            extra["constraint_type"] = VersionConstraint(dep["constraint_type"])  # ValueError if unknown
+        for key in ("required", "call_pattern", "call_budget_ms", "timeout_handling"):
+            if key in dep:
+                extra[key] = dep[key]
+        return SkillDependency(name=name, version="*" if version is None else str(version), **extra)
+    raise TypeError(f"unsupported dependency declaration: {type(dep).__name__}")
+
+
 @dataclass(frozen=True)
 class ValidationReport:
     """Result of dependency validation."""
@@ -84,6 +115,12 @@ class DependencyValidator:
         """
         blockers: List[str] = []
         warnings: List[str] = []
+
+        try:
+            depends_on = [coerce_dependency(d) for d in depends_on]
+        except (TypeError, ValueError) as exc:
+            return ValidationReport(
+                is_valid=False, blockers=[f"Unreadable dependency declaration: {exc}"], warnings=warnings)
 
         # Step 1: Existence check
         for dep in depends_on:
@@ -221,7 +258,13 @@ class DependencyValidator:
         visited.add(skill_id)
         rec_stack.add(skill_id)
 
-        for dep in depends_on:
+        readable: List[SkillDependency] = []
+        for raw in depends_on:
+            try:
+                readable.append(coerce_dependency(raw))
+            except (TypeError, ValueError):
+                continue  # reported by that skill's own validate_dependencies
+        for dep in readable:
             if dep.name not in self.registry._skills:
                 continue  # Skip missing dependencies (already reported)
 

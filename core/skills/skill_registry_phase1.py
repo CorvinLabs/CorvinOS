@@ -1067,24 +1067,12 @@ class SkillsRegistry:
         # Before execution, check that all declared dependencies are available.
         # This prevents a Skill from starting if its dependencies are missing/incompatible.
         if skill.metadata.depends_on:
-            from core.skills.skill_dag_loader import (  # noqa: PLC0415
-                DependencyValidator,
-                SkillDependency,
-            )
+            from core.skills.skill_dag_loader import DependencyValidator  # noqa: PLC0415
 
             validator = DependencyValidator(self)
-            # Convert metadata depends_on (list of strings or dicts) to SkillDependency objects
-            dep_specs = []
-            for dep in skill.metadata.depends_on:
-                if isinstance(dep, str):
-                    dep_specs.append(SkillDependency(name=dep, version="*"))
-                elif isinstance(dep, dict):
-                    dep_specs.append(
-                        SkillDependency(
-                            name=dep.get("name", ""),
-                            version=dep.get("version", "*"),
-                        )
-                    )
+            # The validator reads every declaration form (SkillDependency, str, dict) and BLOCKS on
+            # one it cannot read; converting here dropped anything that was not a str or a dict.
+            dep_specs = list(skill.metadata.depends_on)
 
             report = validator.validate_dependencies(skill_id, dep_specs)
             if not report.is_valid:

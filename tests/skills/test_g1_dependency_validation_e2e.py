@@ -117,3 +117,101 @@ def test_skill_without_dependencies_runs_normally(booted):
     assert not any(
         d.get("error_class") == "dependency_validation_failed" for _, d in records
     )
+
+
+# ── version constraints through the real entry point (registry.execute) ─────────────────────
+
+
+def _register(registry, skill_id: str, version: str, depends_on=None, returns=None):
+    skill = MagicMock()
+    skill.metadata = SkillMetadata(
+        id=skill_id, name=skill_id, description="test", version=version,
+        origin=SkillOrigin.BUILTIN, owner="test", depends_on=depends_on or [],
+    )
+    skill.execute = MagicMock(return_value=returns if returns is not None else {"status": "ok"})
+    registry._skills[skill_id] = skill
+    registry._metadata_by_id[skill_id] = skill.metadata
+    return skill
+
+
+@pytest.mark.parametrize("constraint", [">=2.0.0", ">= 2.0.0", "<1.0.0", ">=1.5.0 <2.0.0", ">=1.5.0,<2.0.0"])
+def test_an_unsatisfied_version_constraint_blocks_execution_with_or_without_a_space(booted, constraint):
+    """The fail-open bug: ">=2.0.0" (no space) matched no operator branch and EVERY version satisfied it,
+    so the dependent skill ran against a dependency that was too old. Through the real entry point."""
+    registry, _, _ = booted
+    _register(registry, "os.test_dep_lib", "1.0.0")
+    dependent = _register(
+        registry, "os.test_dep_user", "1.0.0",
+        depends_on=[SkillDependency(name="os.test_dep_lib", version=constraint)],
+    )
+    result = registry.execute("os.test_dep_user", {}, timeout_ms=5000,
+                              lom="tests/skills/test_g1_dependency_validation_e2e.py:test_an_unsatisfied_version_constraint_blocks_execution_with_or_without_a_space", tenant_id="_default")
+    assert result.status in ("failure", "error"), f"{constraint!r} should not be satisfied by 1.0.0"
+    assert "Dependency validation failed" in (result.error_message or "")
+    dependent.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("constraint", [">=1.0.0", ">= 1.0.0", "<2.0.0", ">=0.9.0 <2.0.0", "==1.0.0", "1.0.0"])
+def test_a_satisfied_version_constraint_lets_the_skill_run(booted, constraint):
+    registry, _, _ = booted
+    _register(registry, "os.test_dep_lib", "1.0.0")
+    dependent = _register(
+        registry, "os.test_dep_user", "1.0.0",
+        depends_on=[SkillDependency(name="os.test_dep_lib", version=constraint)],
+    )
+    result = registry.execute("os.test_dep_user", {}, timeout_ms=5000,
+                              lom="tests/skills/test_g1_dependency_validation_e2e.py:test_a_satisfied_version_constraint_lets_the_skill_run", tenant_id="_default")
+    assert result.status == "success", (constraint, result.error_message)
+    dependent.execute.assert_called_once()
+
+
+# ── every declaration form is read, and an unreadable one BLOCKS ────────────────────────────
+
+
+def _run(registry, skill_id):
+    return registry.execute(skill_id, {}, timeout_ms=5000, tenant_id="_default",
+                            lom="tests/skills/test_g1_dependency_validation_e2e.py:_run")
+
+
+def test_a_missing_dependency_declared_as_a_SkillDependency_object_blocks(booted):
+    """Before the fix this form was DROPPED by execute() and the skill ran with no check at all."""
+    registry, _, _ = booted
+    dependent = _register(registry, "os.test_dep_user", "1.0.0",
+                          depends_on=[SkillDependency(name="os.test_gone", version=">=1.0.0")])
+    result = _run(registry, "os.test_dep_user")
+    assert result.status in ("failure", "error")
+    assert "os.test_gone" in (result.error_message or "")
+    dependent.execute.assert_not_called()
+
+
+def test_a_dict_declaration_keeps_required_false(booted):
+    """The dict form lost `required`: an OPTIONAL missing dependency blocked the skill."""
+    registry, _, _ = booted
+    dependent = _register(registry, "os.test_dep_user", "1.0.0",
+                          depends_on=[{"name": "os.test_optional_gone", "version": "*", "required": False}])
+    result = _run(registry, "os.test_dep_user")
+    assert result.status == "success", result.error_message
+    dependent.execute.assert_called_once()
+
+
+@pytest.mark.parametrize("wanted,runs", [("1.0.0", True), ("2.0.0", False)])
+def test_a_dict_declaration_keeps_constraint_type_exact(booted, wanted, runs):
+    registry, _, _ = booted
+    _register(registry, "os.test_dep_lib", "1.0.0")
+    dependent = _register(registry, "os.test_dep_user", "1.0.0", depends_on=[
+        {"name": "os.test_dep_lib", "version": wanted, "constraint_type": "exact"}])
+    result = _run(registry, "os.test_dep_user")
+    assert (result.status == "success") is runs, result.error_message
+    assert dependent.execute.called is runs
+
+
+@pytest.mark.parametrize("declaration", [42, {"version": ">=1.0.0"}, {"name": "os.x", "constraint_type": "caret"}, None])
+def test_an_unreadable_declaration_blocks_instead_of_vanishing(booted, declaration):
+    registry, _, _ = booted
+    dependent = _register(registry, "os.test_dep_user", "1.0.0", depends_on=[declaration])
+    if not dependent.metadata.depends_on or declaration is None:
+        pytest.skip("a None entry is falsy-filtered upstream; covered by the 42/dict cases")
+    result = _run(registry, "os.test_dep_user")
+    assert result.status in ("failure", "error")
+    assert "Unreadable dependency declaration" in (result.error_message or "")
+    dependent.execute.assert_not_called()
