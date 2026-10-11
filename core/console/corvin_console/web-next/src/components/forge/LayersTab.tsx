@@ -54,9 +54,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { api, ApiError } from "@/lib/api/client";
+import ForgeComposer from "@/components/forge/ForgeComposer";
 import { useAuth } from "@/lib/auth";
 
 // api() already prepends "/v1/console" — see the file-level comment above.
@@ -145,6 +145,7 @@ export function ForgeLayerPanel({ onCreated }: { onCreated?: () => void }) {
   const [intent, setIntent] = useState("");
   const [manifest, setManifest] = useState<Record<string, unknown> | null>(null);
   const [created, setCreated] = useState<{ id: string; version: string } | null>(null);
+  const [inputError, setInputError] = useState<string | null>(null);
 
   const plan = useMutation({
     mutationFn: () =>
@@ -195,43 +196,39 @@ export function ForgeLayerPanel({ onCreated }: { onCreated?: () => void }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid grid-cols-[160px_1fr] gap-3 items-start">
-          <div className="space-y-1.5">
-            <Label htmlFor="layer-id">Layer ID</Label>
-            <Input
-              id="layer-id"
-              data-testid="layer-id-input"
-              placeholder="L34"
-              value={layerId}
-              onChange={(e) => setLayerId(e.target.value)}
-              disabled={plan.isPending || create.isPending}
-              className="font-mono text-sm"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="layer-intent">Intent</Label>
-            <Textarea
-              id="layer-intent"
-              data-testid="layer-intent-input"
-              placeholder="Audit downstream of L10 and enforce the boundary at build time"
-              value={intent}
-              onChange={(e) => setIntent(e.target.value)}
-              disabled={plan.isPending || create.isPending}
-              rows={2}
-              className="text-sm"
-            />
-          </div>
+        <div className="space-y-1.5 max-w-[200px]">
+          <Label htmlFor="layer-id">Layer ID</Label>
+          <Input
+            id="layer-id"
+            data-testid="layer-id-input"
+            placeholder="L34"
+            value={layerId}
+            onChange={(e) => setLayerId(e.target.value)}
+            disabled={plan.isPending || create.isPending}
+            className="font-mono text-sm"
+          />
         </div>
-
-        <Button
-          size="sm"
-          disabled={!canPlan}
-          onClick={() => plan.mutate()}
-          data-testid="plan-layer-button"
-        >
-          {plan.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-          Plan
-        </Button>
+        {/* Enter runs PLAN, which is a preview that writes nothing; Create stays an explicit button below. */}
+        <ForgeComposer
+          value={intent}
+          onChange={setIntent}
+          onSubmit={() => plan.mutate()}
+          busy={plan.isPending || create.isPending}
+          submitDisabled={!canPlan}
+          csrf={session?.csrf_token ?? ""}
+          onError={setInputError}
+          textareaTestId="layer-intent-input"
+          submitTestId="plan-layer-button"
+          textareaId="layer-intent"
+          label="Intent"
+          placeholder="Audit downstream of L10 and enforce the boundary at build time"
+          submitLabel="Plan"
+          busyLabel="Planning…"
+          rows={2}
+        />
+        {inputError && (
+          <p className="text-sm text-destructive" data-testid="layer-input-error">{inputError}</p>
+        )}
 
         {plan.isError && (
           <p className="text-sm text-destructive" data-testid="plan-layer-error">

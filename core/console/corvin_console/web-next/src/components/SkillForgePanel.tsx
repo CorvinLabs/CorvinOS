@@ -66,9 +66,7 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -90,6 +88,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import TemplateSkillForm from "@/components/forge/TemplateSkillForm";
+import ForgeComposer, { FORGE_REQUEST_MIN } from "@/components/forge/ForgeComposer";
 
 /**
  * The five phases SkillCreatorOrchestrator.create_skill reports. The backend
@@ -262,6 +261,11 @@ export const SkillForgePanel: React.FC = () => {
       );
       return;
     }
+    // The server refuses anything under the minimum; say so here, like the tool and plugin generators, instead of sending it.
+    if (userRequest.trim().length < FORGE_REQUEST_MIN) {
+      setError("Describe it in at least 10 characters");
+      return;
+    }
     generate.mutate({ request: userRequest.trim(), base: refineTarget });
   };
 
@@ -368,40 +372,26 @@ export const SkillForgePanel: React.FC = () => {
             </div>
           )}
 
-          <Label htmlFor="skill-request" className="text-sm font-medium">
-            {refineTarget ? "What should change?" : "What skill do you want to create?"}
-          </Label>
-          <Textarea
-            id="skill-request"
-            data-testid="skill-request"
+          <ForgeComposer
+            value={userRequest}
+            onChange={setUserRequest}
+            onSubmit={submit}
+            busy={isRunning || generate.isPending}
+            submitDisabled={isRunning || generate.isPending || !userRequest.trim() || quotaExhausted}
+            csrf={session?.csrf_token ?? ""}
+            onError={setError}
+            textareaTestId="skill-request"
+            submitTestId="submit-generation"
+            textareaId="skill-request"
+            label={refineTarget ? "What should change?" : "What skill do you want to create?"}
             placeholder={
               refineTarget
                 ? "e.g., 'also report duplicate keys as warnings' or 'shorten the instructions to 5 steps'"
                 : "e.g., 'Create a skill that validates JSON files and reports errors' or 'build a skill for CSV analysis'"
             }
-            value={userRequest}
-            onChange={(e) => setUserRequest(e.target.value)}
-            disabled={isRunning}
-            rows={3}
-            className="font-mono text-xs"
+            submitLabel={refineTarget ? "Refine Skill" : "Generate Skill"}
+            busyLabel={refineTarget ? "Refining Skill..." : "Generating Skill..."}
           />
-          <Button
-            onClick={submit}
-            disabled={isRunning || generate.isPending || !userRequest.trim() || quotaExhausted}
-            className="w-full"
-            data-testid="submit-generation"
-          >
-            {(isRunning || generate.isPending) && (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            )}
-            {isRunning
-              ? refineTarget
-                ? "Refining Skill..."
-                : "Generating Skill..."
-              : refineTarget
-                ? "Refine Skill"
-                : "Generate Skill"}
-          </Button>
           <p className="text-[10px] text-muted-foreground">
             A run takes several minutes and is charged to your Claude subscription.
           </p>
@@ -437,7 +427,7 @@ export const SkillForgePanel: React.FC = () => {
 
         {/* ── Error ─────────────────────────────────────────────────────── */}
         {error && (
-          <div className="flex items-start justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+          <div role="alert" className="flex items-start justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
             <div className="flex items-start gap-3">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{error}</span>

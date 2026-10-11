@@ -13,10 +13,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle, Cpu, Hammer, Loader2, Package, XCircle } from "lucide-react";
+import { AlertCircle, CheckCircle, Cpu, Hammer, Package, XCircle } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import ForgeComposer, { FORGE_REQUEST_MIN } from "@/components/forge/ForgeComposer";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/lib/auth";
@@ -149,45 +149,41 @@ export default function ForgeCreatorPanel({
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="space-y-3">
-          <Label htmlFor={`${kind}-request`} className="text-sm font-medium">{copy.label}</Label>
-          <Textarea
-            id={`${kind}-request`}
-            data-testid={`${kind}-request`}
-            placeholder={copy.placeholder}
+          <ForgeComposer
             value={request}
-            onChange={(e) => setRequest(e.target.value)}
-            disabled={isRunning}
-            rows={3}
-            className="font-mono text-xs"
-          />
-          {kind === "plugin" && (
-            <>
-              <Label htmlFor="plugin-panel-request" className="text-sm font-medium">
-                Console panel (optional)
-              </Label>
-              <Textarea
-                id="plugin-panel-request"
-                data-testid="plugin-panel-request"
-                placeholder="Leave empty for no panel, or describe what the plugin's panel should show"
-                value={panelRequest}
-                onChange={(e) => setPanelRequest(e.target.value)}
-                disabled={isRunning}
-                rows={2}
-                className="font-mono text-xs"
-              />
-            </>
-          )}
-          <Button
-            onClick={() => (request.trim().length < 10
+            onChange={setRequest}
+            onSubmit={() => (request.trim().length < FORGE_REQUEST_MIN
               ? setError("Describe it in at least 10 characters")
               : start.mutate())}
-            disabled={isRunning || start.isPending || !request.trim() || !session}
-            className="w-full"
-            data-testid={`${kind}-submit`}
-          >
-            {(isRunning || start.isPending) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {isRunning ? "Generating…" : copy.cta}
-          </Button>
+            busy={isRunning || start.isPending}
+            submitDisabled={isRunning || start.isPending || !request.trim() || !session}
+            csrf={session?.csrf_token ?? ""}
+            onError={setError}
+            textareaTestId={`${kind}-request`}
+            submitTestId={`${kind}-submit`}
+            textareaId={`${kind}-request`}
+            label={copy.label}
+            placeholder={copy.placeholder}
+            submitLabel={copy.cta}
+            busyLabel="Generating…"
+            extras={kind === "plugin" ? (
+              <div className="space-y-2">
+                <Label htmlFor="plugin-panel-request" className="text-sm font-medium">
+                  Console panel (optional)
+                </Label>
+                <Textarea
+                  id="plugin-panel-request"
+                  data-testid="plugin-panel-request"
+                  placeholder="Leave empty for no panel, or describe what the plugin's panel should show"
+                  value={panelRequest}
+                  onChange={(e) => setPanelRequest(e.target.value)}
+                  disabled={isRunning}
+                  rows={2}
+                  className="font-mono text-xs"
+                />
+              </div>
+            ) : null}
+          />
           <p className="text-[10px] text-muted-foreground">
             A run takes several minutes and is charged to your configured engine (Claude subscription
             or API key). Member feature.
