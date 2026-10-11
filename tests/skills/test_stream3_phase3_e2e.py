@@ -350,7 +350,7 @@ class TestExceptionSystem:
             policy_decision="deny",
             reason="Testing expiry",
             created_by="op_3",
-            ttl_hours=0.01,  # Very short: ~36 seconds
+            ttl_hours=1,  # the shortest TTL the manager admits (1-24 h)
             tenant_id="_default",
         )
 

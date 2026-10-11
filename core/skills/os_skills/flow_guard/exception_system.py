@@ -22,7 +22,7 @@ import json
 import logging
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple, Any
@@ -30,6 +30,15 @@ from uuid import uuid4
 
 from core.learning.event_store import EventStore
 from core.learning.learning_events import LearningEvent, EventType
+
+
+def _parse_utc(value: str) -> datetime:
+    """An ISO-8601 timestamp as a timezone-aware UTC datetime ("Z" or an explicit offset)."""
+    text = str(value)
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    dt_ = datetime.fromisoformat(text)
+    return dt_ if dt_.tzinfo else dt_.replace(tzinfo=timezone.utc)
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +102,12 @@ class ExceptionRequest:
         if not self.expires_at:
             # Auto-calculate expires_at
             import datetime as dt
-            ts = datetime.fromisoformat(self.timestamp.replace("Z", "+00:00"))
+            ts = _parse_utc(self.timestamp)
             expires = ts + timedelta(hours=self.ttl_hours)
-            object.__setattr__(self, "expires_at", expires.isoformat() + "Z")
+            # Stored as naive-UTC + "Z" like ``timestamp``. ``expires`` is timezone-aware, so
+            # ``expires.isoformat() + "Z"`` produced "...+00:00Z", which no parser reads back.
+            object.__setattr__(self, "expires_at",
+                               expires.astimezone(timezone.utc).replace(tzinfo=None).isoformat() + "Z")
 
     @staticmethod
     def _scrub_pii(text: str) -> str:
@@ -439,11 +451,11 @@ class ExceptionManager:
         Returns:
             True if expired, False if still active
         """
-        from datetime import timezone
-
-        expires = datetime.fromisoformat(exc.expires_at.replace("Z", "+00:00"))
-        now = datetime.now(timezone.utc)  # Timezone-aware UTC now
-        return now > expires
+        try:
+            expires = _parse_utc(exc.expires_at)
+        except (ValueError, TypeError):
+            return True  # an expiry nobody can read is an exception that must not keep allowing
+        return datetime.now(timezone.utc) > expires
 
     def _persist_exception(self, exc: ExceptionRequest) -> None:
         """Persist exception to disk (JSONL append, atomic).

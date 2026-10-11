@@ -174,8 +174,11 @@ class FlowGuardLearningLoop:
 
         # Phase 4: Recompute thresholds based on feedback
         logger.info("Phase 4: Recomputing policy thresholds...")
-        learned_thresholds = self.confidence_scorer.recompute_thresholds_from_feedback()
-        logger.info(f"Policy thresholds updated (n={len(learned_thresholds)} data classes)")
+        # update_from_feedback() is the scorer's one entry point (versioned, audited); it returns
+        # (PolicyThresholds, feedback_count_used). The loop only needs the threshold map.
+        policy_thresholds, _feedback_used = self.confidence_scorer.update_from_feedback()
+        learned_thresholds = dict(policy_thresholds.thresholds)
+        logger.info(f"Policy thresholds updated (n={len(learned_thresholds)} policy cells)")
 
         # Phase 5: Generate remeasure flows
         logger.info("Phase 5: Generating remeasure flows...")
