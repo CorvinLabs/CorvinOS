@@ -11,23 +11,36 @@ from unittest.mock import Mock
 import pytest
 
 from core.learning.event_store import EventStore
-from core.learning.learning_events import EventType
+from core.learning.learning_events import EventType, LearningEvent
 from core.skills.os_skills.workflow_optimizer_skill.confidence_calculator import (
     ConfidenceCalculator,
     RoutingWeights,
 )
 
 
-
-
-
-
-
-
-
-
-
-
+def _calc_with_feedback(tmp_path, outcomes, model="sonnet-5", complexity="medium"):
+    """A calculator over a REAL EventStore holding one FEEDBACK event per outcome (the event
+    shape the calculator reads; the module that used to write them has no production path)."""
+    store = EventStore(tmp_path / "t", tenant_id="_default")
+    # ADR-0534: feedback is only accepted for a skill that actually executed in the last 24 h.
+    store.write_event(LearningEvent.create(
+        event_type=EventType.SKILL_EXECUTED, skill_id="os.workflow_optimizer_l5",
+        tenant_id="_default", signal={"output": {"model": model}},
+        lom="tests/skills/test_phase10_workflow_optimizer_regressions.py:_calc_with_feedback",
+    ))
+    for i, ok in enumerate(outcomes):
+        store.write_event(LearningEvent.create(
+            event_type=EventType.FEEDBACK,
+            skill_id="os.workflow_optimizer_l5",
+            tenant_id="_default",
+            signal={
+                "feedback_type": "correct" if ok else "incorrect",
+                "task_id": f"t{i}", "routed_model": model, "task_complexity": complexity,
+            },
+            lom="tests/skills/test_phase10_workflow_optimizer_regressions.py:_calc_with_feedback",
+        ))
+    return ConfidenceCalculator(event_store=store, tenant_id="_default",
+                                config_dir=tmp_path / "cfg")
 
 
 def test_single_incorrect_does_not_discard_prior(tmp_path, monkeypatch):
@@ -44,8 +57,6 @@ def test_repeated_update_does_not_recount_feedback(tmp_path, monkeypatch):
     w1, _ = calc.update_from_feedback()
     w2, _ = calc.update_from_feedback()
     assert w1.weights["medium_sonnet"] == pytest.approx(w2.weights["medium_sonnet"])
-
-
 
 
 def test_save_weights_is_audited_and_versioned(tmp_path, monkeypatch):

@@ -68,17 +68,27 @@ class TestEmitLatency:
         assert max(samples) < 5.0, f"emit() blocked on the store write: max {max(samples):.3f} ms"
         assert slow.written == 50
 
-    def test_handler_record_latency_with_emitter_vs_direct(self, event_store: EventStore):
-        emitter = EventEmitter(event_store, queue_size=10_000)
-        via_emitter = OperatorFeedbackHandler(event_store=event_store, event_emitter=emitter)
-        direct = OperatorFeedbackHandler(event_store=event_store)
+    def test_handler_record_latency_with_emitter_vs_direct(self):
+        # A counting store, not the real one: the real EventStore now puts every FEEDBACK event
+        # through the ADR-0534 gate (5 signals per window, subject must have executed), which
+        # would reject a 100-rating benchmark. What is measured here is the handler's own cost.
+        class _CountingStore:
+            written = 0
+
+            def write_event(self, event):
+                type(self).written += 1
+
+        store = _CountingStore()
+        emitter = EventEmitter(store, queue_size=10_000)
+        via_emitter = OperatorFeedbackHandler(event_store=store, event_emitter=emitter)
+        direct = OperatorFeedbackHandler(event_store=store)
         try:
             s_emit = _measure(lambda i: via_emitter.record_tool_rating("t", "T", 5), 50)
             s_direct = _measure(lambda i: direct.record_tool_rating("t", "T", 5), 50)
         finally:
             emitter.stop(timeout=10.0)
         # both paths persist everything
-        assert event_store.count_events("_default") == 100
+        assert store.written == 100
         # emitter path never slower than 5 ms per call on average
         assert mean(s_emit) < 5.0, f"mean {mean(s_emit):.3f} ms"
         assert mean(s_direct) < 50.0

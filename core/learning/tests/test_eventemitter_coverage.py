@@ -26,7 +26,7 @@ import pytest
 from core.learning.event_emitter import EventEmitter
 from core.learning.event_store import EventStore
 from core.learning.learning_events import EventType, LearningEvent
-from core.learning.operator_feedback import OperatorFeedbackHandler, tool_subject_id
+from core.learning.operator_feedback import OperatorFeedbackHandler, skill_subject_id
 
 
 @pytest.fixture
@@ -160,11 +160,16 @@ class TestEventEmitterContract:
 
 class TestEmitterWiring:
     def test_operator_feedback_handler_uses_emitter(self, event_emitter: EventEmitter, event_store: EventStore):
+        # ADR-0534: a rating is accepted only for a subject that executed (tool ratings have no
+        # execution record and are rejected), so the rated skill runs once first.
+        event_store.write_event(LearningEvent.create(
+            EventType.SKILL_EXECUTED, skill_id="os.rated", tenant_id="_default", signal={"output": {}}))
         handler = OperatorFeedbackHandler(event_store=event_store, event_emitter=event_emitter)
-        handler.record_tool_rating(tool_id="tool_1", tool_name="T", rating=5)
-        assert _wait_for(lambda: event_store.count_events("_default") == 1)
+        handler.record_skill_rating(skill_id="os.rated", skill_name="Rated", rating=5)
+        assert _wait_for(lambda: len(event_store.query_events(
+            "_default", event_type=EventType.FEEDBACK, skill_id=skill_subject_id("os.rated"))) == 1)
         events = event_store.query_events("_default", event_type=EventType.FEEDBACK,
-                                          skill_id=tool_subject_id("tool_1"))
+                                          skill_id=skill_subject_id("os.rated"))
         assert len(events) == 1 and events[0].signal["rating"] == 5
 
     def test_production_construction_sites_use_the_real_signature(self):
