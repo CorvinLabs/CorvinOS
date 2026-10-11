@@ -63,6 +63,10 @@ class ArtifactMetadata(BaseModel):
     status: str  # "completed" | "failed"
     row_count: int = 0
     validation_errors: list[str] = []
+    #: SkillForge skill this artifact is registered as (SKILL artifacts only) and the
+    #: data sources it is attributed to - the subject of the Data Hub learning loop.
+    skill_name: Optional[str] = None
+    data_sources: list[str] = []
 
 
 class ArtifactDetail(ArtifactMetadata):
@@ -130,6 +134,50 @@ def _live_artifacts(tenant_id: str) -> list[dict]:
 
 def _metadata(artifact: dict) -> ArtifactMetadata:
     return ArtifactMetadata(**{k: artifact[k] for k in ArtifactMetadata.model_fields if k in artifact})
+
+
+# ── Skill registration (PLAN-0948 D1) ───────────────────────────────────────
+
+def _file_sha256(path: str) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return ""
+    return h.hexdigest()
+
+
+def _register_skill(tenant_id: str, artifact: dict, description: str) -> None:
+    """Make a SKILL artifact an attributable SkillForge skill. Best effort: the artifact exists
+    either way; ``skill_name`` is set only when the registry actually holds the skill."""
+    try:
+        from core.skills.os_skills.datahub_unified.register import register_skill_artifact
+
+        reg = register_skill_artifact(
+            tenant_id, artifact_id=artifact["artifact_id"], name=artifact["name"],
+            description=description, body=artifact.get("body", ""))
+        artifact["skill_name"] = reg.name
+        artifact["data_sources"] = list(reg.data_sources)
+    except Exception as exc:  # noqa: BLE001 - SkillForge absent, linter refusal, quota, ...
+        artifact["skill_name"] = None
+        artifact["data_sources"] = []
+        artifact["skill_error"] = type(exc).__name__
+
+
+def _unregister_skill(tenant_id: str, artifact: dict) -> None:
+    name = artifact.get("skill_name")
+    if not name:
+        return
+    try:
+        from core.skills.os_skills.datahub_unified.register import _registry
+
+        _registry(tenant_id).delete(name, reason="datahub artifact deleted")
+    except Exception:  # noqa: BLE001 - the artifact is deleted regardless
+        pass
 
 
 # ── Source handling ──────────────────────────────────────────────────────────
@@ -244,6 +292,15 @@ def create_artifact(
         "body": result.artifact_body,
         "tenant_id": rec.tenant_id,
     }
+    # What a later regeneration and the source-change check need: where the rows came from and the
+    # hash they had. The path stays in the tenant-private artifact file, never in the audit record.
+    artifact["source"] = {
+        "type": ingestion.source_type.value, "path": ingestion.source_path,
+        "sample_rows": req.sample_rows, "sha256": _file_sha256(ingestion.source_path),
+        "complexity": req.complexity,
+    }
+    if creation_type == CreationType.SKILL and result.success:
+        _register_skill(rec.tenant_id, artifact, req.description)
     _write_artifact(rec.tenant_id, artifact)
     _audit(rec, "datahub.create", artifact_id)
 
@@ -286,6 +343,7 @@ def delete_artifact(
     artifact = _read_artifact(rec.tenant_id, artifact_id)
     if not artifact or artifact.get("status") == "deleted":
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Artifact not found")
+    _unregister_skill(rec.tenant_id, artifact)
     artifact["status"] = "deleted"
     artifact["deleted_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     _write_artifact(rec.tenant_id, artifact)

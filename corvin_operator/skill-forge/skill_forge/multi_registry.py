@@ -125,6 +125,7 @@ class MultiSkillRegistry:
         claim: dict[str, Any] | None = None,
         overwrite: bool = False,
         created_by: str = "",
+        meta: dict[str, Any] | None = None,
     ) -> SkillSpec:
         ws_scope = scope or detect_scope()
         return self._registry(ws_scope).create(
@@ -136,6 +137,7 @@ class MultiSkillRegistry:
             scope=ws_scope,
             overwrite=overwrite,
             created_by=created_by,
+            meta=meta,
         )
 
     def update_body(
