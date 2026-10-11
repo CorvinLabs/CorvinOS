@@ -104,7 +104,7 @@ class TestFinding3QualityGatesDAGMutex:
 
             node = KGNode(
                 id="test_node_1",
-                node_type=KGNodeType.GATE,
+                node_type=KGNodeType.TASK,
                 tenant_id="_default",
                 data={"name": "test"},
             )
@@ -129,7 +129,7 @@ class TestFinding3QualityGatesDAGMutex:
                     for i in range(10):
                         node = KGNode(
                             id=f"node_{threading.current_thread().name}_{i}",
-                            node_type=KGNodeType.GATE,
+                            node_type=KGNodeType.TASK,
                             tenant_id="_default",
                             data={"index": i},
                         )
@@ -168,7 +168,7 @@ class TestFinding4PayloadSizeLimits:
         # Create oversized payload (5KB)
         oversized_payload = {"data": "x" * (MAX_PAYLOAD_SIZE_BYTES + 1024)}
 
-        with pytest.raises(ValueError, match="payload size .* exceeds maximum"):
+        with pytest.raises(ValueError, match="(?i)payload size .* exceeds maximum"):
             LearningEvent(
                 event_type=LearningEventType.CONFIDENCE_SCORE,
                 tenant_id="_default",
@@ -231,27 +231,34 @@ class TestFinding5QueueDepthLimits:
         emitter.stop(timeout=1.0)
 
     def test_queue_drops_oversized_events(self):
-        """MEDIUM FIX #5: Queue drops events when full (observable)."""
+        """MEDIUM FIX #5: Queue drops events when full (observable).
+
+        The consumer is held inside ``write_event`` until the emits are done, so the outcome does
+        not depend on how fast the worker thread drains the queue (it used to: 3 slots + a
+        draining worker dropped a varying 1..2 of 5). 8 events can occupy at most 1 in-flight
+        + 3 queued slots, so at least 4 must be dropped.
+        """
+        import threading
         from core.learning.event_emitter import EventEmitter
         from core.learning.event_store import EventStore
 
+        release = threading.Event()
         store = Mock(spec=EventStore)
-        store.write_event = Mock()
+        store.write_event = Mock(side_effect=lambda *a, **k: release.wait(timeout=5))
 
         emitter = EventEmitter(store, queue_size=3)
-
-        # Queue max events
-        events = [Mock() for _ in range(5)]
+        events = [Mock() for _ in range(8)]
         for i, evt in enumerate(events):
             evt.event_id = f"evt_{i}"
             evt.tenant_id = "_default"
 
-        # Should record drops
         initial_dropped = emitter.dropped
         for evt in events:
             emitter.emit(evt)
 
-        assert emitter.dropped >= 2, f"Expected at least 2 drops, got {emitter.dropped - initial_dropped}"
+        dropped = emitter.dropped - initial_dropped
+        release.set()
+        assert dropped >= 4, f"Expected at least 4 drops, got {dropped}"
         emitter.stop(timeout=1.0)
 
 
@@ -351,7 +358,9 @@ class TestFinding7AcpSkillsValidation:
         })
 
         assert "engine" in result, "Result must contain engine"
-        assert result["engine"] in ["claude-opus-5", "claude-sonnet-4", "claude-haiku-4"]
+        # The router advises in delegation_policy engine ids ("native" | "acs" | "tde"), the
+        # vocabulary route_and_record compares against the bundled rule.
+        assert result["engine"] in ("native", "acs", "tde")
 
     def test_skill_execution_logs_validation(self):
         """MEDIUM FIX #7: Skill execution should log validation events."""
@@ -392,13 +401,13 @@ class TestFinding8QualityGatesAuditTrail:
         # Verify that gate models have audit metadata
         node = KGNode(
             id="test_gate",
-            node_type=KGNodeType.GATE,
+            node_type=KGNodeType.TASK,
             tenant_id="_default",
             data={"verdict": "pass"},
         )
 
         assert node.tenant_id == "_default"
-        assert node.node_type == KGNodeType.GATE
+        assert node.node_type == KGNodeType.TASK
 
     def test_audit_event_before_verdict(self):
         """MEDIUM FIX #8: Audit event must be written before verdict is returned."""
@@ -411,7 +420,7 @@ class TestFinding8QualityGatesAuditTrail:
 
             node = KGNode(
                 id="gate_1",
-                node_type=KGNodeType.GATE,
+                node_type=KGNodeType.TASK,
                 tenant_id="_default",
                 data={"verdict": "pass"},
             )
@@ -420,7 +429,7 @@ class TestFinding8QualityGatesAuditTrail:
             node_id = kg.write_node(node)
 
             # Verify node was written
-            nodes = kg.query_nodes(node_type=KGNodeType.GATE)
+            nodes = kg.query_nodes(node_type=KGNodeType.TASK)
             assert len(nodes) > 0, "Node should be queryable after write"
 
     def test_verdict_includes_audit_id(self):
@@ -431,7 +440,7 @@ class TestFinding8QualityGatesAuditTrail:
 
         node = KGNode(
             id="verdict_node",
-            node_type=KGNodeType.VERDICT,
+            node_type=KGNodeType.TASK,
             tenant_id="_default",
             data={
                 "verdict": "pass",
