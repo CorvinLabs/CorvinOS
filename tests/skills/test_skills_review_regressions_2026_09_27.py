@@ -120,21 +120,6 @@ def test_skill_manager_upload_route_cannot_escape_install_root(tmp_path, monkeyp
 # A/B testing
 # --------------------------------------------------------------------------- #
 
-def test_ab_metrics_are_true_running_means(tmp_path):
-    from core.skills.ab_testing import ABTestingFramework, ExperimentConfig
-
-    fw = ABTestingFramework(test_dir=tmp_path, audit_emit=lambda *_a, **_k: None)
-    fw.create_experiment(ExperimentConfig(
-        experiment_id="exp1", skill_id="os.x", baseline_version="1.0.0",
-        variant_version="1.1.0", variant_name="v", rollout_percentage=0,
-    ))
-    for _ in range(20):  # rollout 0% → every tenant is CONTROL
-        fw.record_metric("exp1", "_default", latency_ms=10.0,
-                         cost_per_token=0.5, quality_score=0.8)
-    m = fw.metrics["exp1"]
-    assert m.sample_size_control == 20
-    assert m.quality_score_control == pytest.approx(0.8)
-    assert m.cost_per_token_control == pytest.approx(0.5)
 
 
 # --------------------------------------------------------------------------- #

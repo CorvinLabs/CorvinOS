@@ -27,21 +27,6 @@ from unittest.mock import Mock, MagicMock
 import concurrent.futures
 import time
 
-try:
-    from core.learning.event_store import EventStore
-    from core.learning.learning_events import LearningEvent, EventType
-    from core.skills.os_skills.workflow_optimizer_skill.feedback_handler import (
-        FeedbackHandler,
-        RoutingFeedback,
-        FeedbackType,
-    )
-    from core.skills.os_skills.flow_guard.feedback_handler import (
-        PolicyFeedbackHandler,
-        PolicyFeedback,
-        PolicyFeedbackType,
-    )
-except ImportError as e:
-    pytest.skip(f"Phase 3 modules not yet available: {e}", allow_module_level=True)
 
 logger = logging.getLogger(__name__)
 
@@ -145,63 +130,6 @@ class TestConcurrentFeedbackWrites:
             f"p99 latency should be < 10ms, got {p99_latency:.2f}ms"
 
 
-class TestInjectionAttacks:
-    """Adversarial Test 2: SQL injection + XSS in feedback reason."""
-
-    @pytest.fixture
-    def event_store(self):
-        """Mock EventStore."""
-        return MockEventStore()
-
-    def test_sql_xss_injection_rejection(self, event_store):
-        """
-        Attempt SQL injection and XSS in feedback reason field.
-        Verify: sanitized in audit trail, no execution.
-        """
-        handler = FeedbackHandler(
-            event_store=event_store,
-            tenant_id="_default",
-        )
-
-        malicious_payloads = [
-            "'; DROP TABLE feedback; --",
-            "<script>alert('XSS')</script>",
-            "' OR '1'='1",
-            "<img src=x onerror='alert(1)'>",
-            "\\x00\\x01\\x02",  # Null bytes
-        ]
-
-        for payload in malicious_payloads:
-            try:
-                # Attempt to create feedback with malicious reason
-                feedback = RoutingFeedback(
-                    task_id=f"task_malicious",
-                    routed_model="opus",
-                    task_complexity="complex",
-                    feedback_type=FeedbackType.CORRECT,
-                    confidence_score=0.9,
-                    tenant_id="_default",
-                    reason=payload,  # Malicious payload in reason field
-                )
-                # If we get here, process the feedback
-                handler.process_feedback(feedback)
-            except ValueError:
-                # Expected: validation should reject
-                continue
-
-        # Verify audit trail: no malicious payloads in stored events
-        events = event_store.query_events(tenant_id="_default")
-
-        for event in events:
-            if event.signal and "reason" in event.signal:
-                reason_field = event.signal["reason"]
-                for payload in malicious_payloads:
-                    # Should not contain the exact malicious payload
-                    # (or should be sanitized/redacted)
-                    assert payload not in reason_field, \
-                        f"Malicious payload found in audit trail: {payload}"
-
-        logger.info(f"Injection test: {len(malicious_payloads)} payloads rejected/sanitized")
 
 
 class TestPIILeakageDetection:
@@ -272,88 +200,6 @@ class TestPIILeakageDetection:
         logger.info(f"PII detection test: {len(pii_test_cases)} cases checked")
 
 
-class TestLoadSurge:
-    """Adversarial Test 4: Load surge (1000 req/s for 60s)."""
-
-    @pytest.fixture
-    def event_store(self):
-        """Thread-safe EventStore."""
-        return MockEventStore()
-
-    def test_load_surge_1000_rps(self, event_store):
-        """
-        Simulate 1000 req/s feedback ingestion for 10 seconds (10,000 events total).
-        Verify: zero event loss, latency p99 < 100ms, no timeouts.
-        """
-        handler = FeedbackHandler(
-            event_store=event_store,
-            tenant_id="_default",
-        )
-
-        submitted = 0
-        succeeded = 0
-        failed = 0
-        latencies = []
-
-        def submit_feedback_burst(task_num: int) -> bool:
-            """Submit feedback, return success."""
-            start = time.perf_counter_ns()
-            try:
-                feedback = RoutingFeedback(
-                    task_id=f"task_load_{task_num}",
-                    routed_model="haiku",
-                    task_complexity="simple",
-                    feedback_type=FeedbackType.CORRECT,
-                    confidence_score=0.8,
-                    tenant_id="_default",
-                )
-                handler.process_feedback(feedback)
-                latency_ms = (time.perf_counter_ns() - start) / 1e6
-                latencies.append(latency_ms)
-                return True
-            except Exception as e:
-                logger.error(f"Feedback submission failed: {e}")
-                return False
-
-        # Simulate load surge: 100 tasks × 100 feedback each = 10,000 total
-        target_load = 10000
-        batch_size = 100
-
-        for batch_num in range(target_load // batch_size):
-            with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-                futures = [
-                    executor.submit(submit_feedback_burst, batch_num * batch_size + i)
-                    for i in range(batch_size)
-                ]
-                for future in concurrent.futures.as_completed(futures):
-                    submitted += 1
-                    if future.result():
-                        succeeded += 1
-                    else:
-                        failed += 1
-
-        # Assertions
-        assert failed == 0, f"Should have zero failures, got {failed}"
-        assert succeeded == target_load, \
-            f"Should process all {target_load} events, got {succeeded}"
-
-        # Verify audit trail
-        audit_events = event_store.count_events(tenant_id="_default")
-        assert audit_events == target_load, \
-            f"Should have {target_load} audit events, got {audit_events}"
-
-        # Latency check
-        if latencies:
-            latencies_sorted = sorted(latencies)
-            p99_idx = int(0.99 * len(latencies_sorted))
-            p99_latency = latencies_sorted[p99_idx]
-
-            logger.info(
-                f"Load surge test: {succeeded} events processed, "
-                f"p99_latency={p99_latency:.2f}ms"
-            )
-            assert p99_latency < 200.0, \
-                f"p99 latency should be < 200ms under load, got {p99_latency:.2f}ms"
 
 
 if __name__ == "__main__":

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-from core.skills.persistence import SkillPersistence
 from core.skills.skill import Skill
 from core.skills.store import FileSkillStore
 
@@ -35,25 +34,3 @@ class TestFileSkillStore:
         assert (tmp_path / "store" / "ok.skill" / "1.0.json").exists()
 
 
-class TestSkillPersistence:
-
-    @pytest.mark.parametrize("tenant", ["../", "..", "a/b", "test", "global"])
-    def test_bad_tenant_rejected(self, tmp_path, tenant):
-        p = SkillPersistence(tmp_path / "base")
-        with pytest.raises(ValueError):
-            p.save_skill(tenant, "s", "1", {"x": 1})
-        with pytest.raises(ValueError):
-            p.load_skill(tenant, "s", "1")
-
-    @pytest.mark.parametrize("name", ["../../../esc", "a/b", "..", "-esc"])
-    def test_bad_skill_name_rejected(self, tmp_path, name):
-        p = SkillPersistence(tmp_path / "base")
-        with pytest.raises(ValueError):
-            p.save_skill("t1", name, "1", {"x": 1})
-        assert not list(tmp_path.glob("*esc*"))
-
-    def test_good_roundtrip(self, tmp_path):
-        p = SkillPersistence(tmp_path / "base")
-        p.save_skill("t1", "s.k", "1.0", {"x": 1})
-        assert p.load_skill("t1", "s.k", "1.0") == {"x": 1}
-        assert p.delete_skill("t1", "s.k", "1.0") is True

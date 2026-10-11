@@ -18,13 +18,8 @@ from tempfile import TemporaryDirectory
 import pytest
 
 from core.learning.learning_events import EventType, LearningEvent
-from core.skills.integration import SkillSystemIntegration
-from core.skills.grader import GradingManager
 from core.skills.learning_loop import SkillLearningManager
 from core.skills.store import InMemorySkillStore
-from core.skills.telemetry import MetricsCollector, NoOpPublisher
-from core.skills.telemetry_manager import TelemetryManager
-from core.skills.graders.heuristic import HeuristicGrader
 
 TENANT = "_default"
 
@@ -38,13 +33,6 @@ def temp_tenant_home():
         yield tenant_home
 
 
-def _system(tenant_home: Path) -> SkillSystemIntegration:
-    store = InMemorySkillStore()
-    learning = SkillLearningManager(store)
-    grading = GradingManager(store, HeuristicGrader())
-    collector = MetricsCollector("test", "1.0")
-    telemetry = TelemetryManager(collector, NoOpPublisher())
-    return SkillSystemIntegration(learning, grading, telemetry, tenant_home=tenant_home, tenant_id=TENANT)
 
 
 def _ev(event_type: EventType, skill_id: str, session_id: str = "session_1", **signal) -> LearningEvent:
@@ -65,27 +53,6 @@ def _on_disk(tenant_home: Path) -> list[dict]:
 class TestLearningE2E:
     """End-to-end tests for learning infrastructure."""
 
-    def test_emit_event_through_integration(self, temp_tenant_home):
-        """Emit a learning event through SkillSystemIntegration; it lands on disk."""
-        system = _system(temp_tenant_home)
-        try:
-            queued = system.emit_learning_event(
-                _ev(EventType.CONFIDENCE, "ranking", relevance_score=0.95, reliability_score=0.87)
-            )
-            assert queued is True
-        finally:
-            system.stop_event_emitter()
-
-        persisted = system.read_learning_events()
-        assert len(persisted) == 1
-        assert persisted[0].event_type == EventType.CONFIDENCE
-        assert persisted[0].skill_id == "ranking"
-        assert persisted[0].signal["relevance_score"] == 0.95
-
-        disk = _on_disk(temp_tenant_home)
-        assert len(disk) == 1
-        assert disk[0]["event_type"] == "confidence"
-        assert disk[0]["tenant_id"] == TENANT
 
     def test_multiple_event_types(self, temp_tenant_home):
         """Emit multiple event types and verify all persist."""
@@ -125,35 +92,5 @@ class TestLearningE2E:
         s2 = system.read_learning_events(session_id="session_2")
         assert [e.skill_id for e in s2] == ["code_review"]
 
-    def test_emit_confidence_score_helper(self, temp_tenant_home):
-        """ADR-0315 helper emits a CONFIDENCE event with the band + scores."""
-        system = _system(temp_tenant_home)
-        try:
-            assert system.emit_confidence_score("ranking", "s9", 0.9, 0.8, 0.85, "high", "ok") is True
-        finally:
-            system.stop_event_emitter()
-        (ev,) = system.read_learning_events(event_type=EventType.CONFIDENCE)
-        assert ev.signal["band"] == "high"
-        assert ev.signal["session_id"] == "s9"
-        assert ev.lom
 
-    def test_wrong_tenant_event_is_not_readable_as_this_tenant(self, temp_tenant_home):
-        """The store filters by tenant on read (GDPR Art. 32)."""
-        system = _system(temp_tenant_home)
-        try:
-            other = LearningEvent.create(EventType.FEEDBACK, "x", tenant_id="tenant_b", signal={})
-            system.emit_learning_event(other)
-        finally:
-            system.stop_event_emitter()
-        assert system.read_learning_events() == []
 
-    def test_no_tenant_home_means_no_emitter(self):
-        """Without a tenant_home the integration reports the emitter disabled and drops."""
-        store = InMemorySkillStore()
-        system = SkillSystemIntegration(
-            SkillLearningManager(store), GradingManager(store, HeuristicGrader()),
-            TelemetryManager(MetricsCollector("t", "1.0"), NoOpPublisher()),
-        )
-        assert system.emit_learning_event(_ev(EventType.FEEDBACK, "x")) is False
-        assert system.get_system_status()["event_emitter"]["enabled"] is False
-        assert system.read_learning_events() == []

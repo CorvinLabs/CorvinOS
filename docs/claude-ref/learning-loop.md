@@ -382,6 +382,17 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   path, so an optimizer for it would close no loop. Method note: a plain importer graph MISSES
   names re-exported by `core/learning/__init__.py` (`from core.learning import LearningIntegration`
   is a production import of `integration`); resolve re-exports before calling anything dead.
+* **Second clean-up round in `core/skills` (2026-10-11, T-0140).** 66 more modules (about 15 000
+  lines: the marketplace installer/core/skill integration, A/B-testing framework, batch approval,
+  config applier/tuner, the `graders/`, `orchestration/` and `feedback/` packages, the
+  `context_filter*` and `knowledge_graph` skills, older copies inside `flow_guard/`,
+  `workflow_optimizer_skill/` and `security_orchestrator/`) and the tests that exercised only them
+  were removed. NOT removed, on purpose: anything an ACCEPTED ADR names by file or by its own
+  directory (decided, not yet wired: e.g. `skill_validator`/`compiler` for ADR-0533, `executor`,
+  `health`), the Data Hub learning group (PLAN-0948), the Video Producer, and everything those
+  import. Method note: a package's `__init__` runs when ANY child is imported, so a live module
+  also makes its parents' eager imports live; the first draft of this round missed that and
+  would have broken four live packages (caught by a dangling-import check before any commit).
 * **Phase 2 readiness has a structural dead end, and says so.** The Skill may only
   de-escalate TO `native`, so a surface where the bundled rule never delegates has
   nothing to change. `monitoring/readiness.py` reports that as

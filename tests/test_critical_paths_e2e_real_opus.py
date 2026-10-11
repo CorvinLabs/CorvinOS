@@ -49,16 +49,6 @@ try:
 except ImportError as e:
     print(f"Warning: Could not import Skills: {e}")
 
-try:
-    from core.skills.graders.confidence import ConfidenceGrader
-except ImportError as e:
-    print(f"Warning: Could not import ConfidenceGrader: {e}")
-    # Provide a fallback
-    class ConfidenceGrader:
-        def __init__(self, *args, **kwargs):
-            pass
-        async def grade(self, request):
-            return None
 
 
 # ============================================================================

@@ -1,5 +1,7 @@
 # Context Filtering (L10 Refinement) — ADR-0528
 
+> **Removed 2026-10-11 (T-0140):** `core/skills/os_skills/context_filter*.py` had no path from any production root (no importer outside tests) and was deleted. This document describes the removed design and is kept only as a record; the context pipeline that actually runs is the CEL (`corvin_operator/context_engineering`).
+
 ## Overview
 
 **Purpose:** Reduce injected context noise by ~30% → improve routing accuracy → faster turns, lower cost.
