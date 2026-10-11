@@ -297,6 +297,7 @@ class SkillAdapter:
         self.state.hypotheses_tested = int(opt.get("hypotheses_tested", 0))
         self.state.hypotheses_accepted = int(opt.get("hypotheses_accepted", 0))
         versions: list[SkillConfigVersion] = []
+        unparsed: list = []
         for v in data.get("versions") or []:
             try:
                 versions.append(
@@ -311,8 +312,12 @@ class SkillAdapter:
                     )
                 )
             except (KeyError, ValueError, TypeError):
-                logger.warning("skipping malformed skill config version: %r", v)
+                # Kept VERBATIM and written back: dropping it lost history and let the next id
+                # collide with it (review SC-05).
+                logger.warning("keeping malformed skill config version as-is: %r", v)
+                unparsed.append(v)
         self.state.config_versions = versions
+        self._unparsed_versions = unparsed
         active = data.get("active_version")
         self.state.active_version = active if isinstance(active, str) else (
             versions[-1].version_id if versions else None)
@@ -341,7 +346,7 @@ class SkillAdapter:
                     "config": v.config.to_dict(),
                 }
                 for v in self.state.config_versions
-            ],
+            ] + list(getattr(self, "_unparsed_versions", []) or []),
         }
         tmp = self.config_file.with_suffix(".tmp")
         try:
@@ -420,7 +425,7 @@ class SkillAdapter:
 
                 # Record version
                 version = SkillConfigVersion(
-                    version_id=f"v{len(self.state.config_versions) + 1}",
+                    version_id=self._next_version_id(),
                     skill_id=self.skill_id,
                     timestamp=datetime.now(timezone.utc),
                     config=new_config,
@@ -455,10 +460,24 @@ class SkillAdapter:
         self._persist()
         return False, "no_action"
 
+    def _next_version_id(self) -> str:
+        """``v<max+1>`` over every known id (parsed AND kept-verbatim): ``v{len+1}`` re-issued an
+        existing id once an entry was unreadable, so two versions shared one name (review SC-05)."""
+        nums = []
+        for vid in [v.version_id for v in self.state.config_versions] + [
+                str((u or {}).get("version_id", "")) for u in getattr(self, "_unparsed_versions", []) or []
+                if isinstance(u, dict)]:
+            if vid.startswith("v") and vid[1:].isdigit():
+                nums.append(int(vid[1:]))
+        return f"v{(max(nums) if nums else 0) + 1}"
+
     def rollback(self, to_version: str) -> SkillConfig:
         """Rollback to a prior version (user override, GDPR Art. 21)."""
         with self._locked():
-            for v in self.state.config_versions:
+            matches = [v for v in self.state.config_versions if v.version_id == to_version]
+            if len(matches) > 1:
+                raise ValueError(f"Version {to_version} is ambiguous ({len(matches)} entries)")
+            for v in matches:
                 if v.version_id == to_version:
                     self.state.best_config = v.config
                     self.state.active_version = v.version_id
@@ -528,7 +547,7 @@ class SkillAdapter:
 
         # 4. Create version entry
         version = SkillConfigVersion(
-            version_id=f"v{len(self.state.config_versions) + 1}",
+            version_id=self._next_version_id(),
             skill_id=self.skill_id,
             timestamp=datetime.now(timezone.utc),
             config=updated,

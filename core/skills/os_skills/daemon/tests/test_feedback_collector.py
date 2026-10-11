@@ -1,7 +1,7 @@
 """Tests for FeedbackCollector."""
 
 import pytest
-from daemon.feedback_collector import FeedbackCollector, FeedbackEvent
+from core.skills.os_skills.daemon.feedback_collector import FeedbackCollector, FeedbackEvent
 
 
 def test_record_feedback():

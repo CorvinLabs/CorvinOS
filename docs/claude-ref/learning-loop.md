@@ -452,6 +452,26 @@ A second, separate loop - not the L5 router loop above. Its subject is a **Data 
 | Act | `datahub_unified/regenerate.py` | re-read the source (secret -> refused), regenerate via `UnifiedCreator`, `learning.regeneration` `applying` on the chain FIRST, `update_body(quota_exempt)` (grades + meta kept), `finished` |
 | See | `os.learning_daemon` (registry Skill, read-only), `GET /v1/console/api/learning/daemon` | persisted summary: weights, queue, regenerations, decisions |
 
+**Hardened 2026-10-12 (adversarial review, 44 findings across Epic I-11).** The skill id is
+`assistant.datahub_<artifact_id>` - never derived from the artifact NAME (two similar names shared one
+skill, and the name, possibly personal, became an id in the permanent chain); delete removes only the
+skill whose `meta.artifact_id` matches. Regeneration re-checks the stored source path on every read (a
+symlink or a path that no longer resolves to itself, or one inside another tenant's home, is refused)
+and records EVERY terminal outcome (`completed`, `refused`, `failed`, `partial`, `no_artifact`); a
+failed artifact write rolls the registry body back. The inbox keeps a read offset PER day file, so a
+line finished in yesterday's file after the reader moved on is not lost. One host per tenant across
+processes: an exclusive lease on `daemon/host.lock`; a second process stands by and takes over when
+the holder exits. A failed or refused regeneration is retried (1 h / 24 h), not counted as done. A
+state file that cannot be restored is recorded (`learning.state_refused`) and kept aside as
+`state.json.refused-<ts>`. State of deleted artifacts is evicted (`learning.sources_evicted`) - but
+only when the artifact listing could be READ (an unreadable listing evicts nothing). All three host
+lifespans stop the host on shutdown.
+
+**Single-tenant per process, by construction.** The core audit writer refuses a record for any tenant
+other than the process tenant (ADR-0562), so a learning host can only audit - and therefore only run -
+for `CORVIN_TENANT_ID`. Producers drop events for any other tenant instead of letting an unread inbox
+grow.
+
 **Limits, stated.** Operator *ratings* of these skills do not feed the daemon (the ADR-0534 gate admits a rating only for a subject
 with a recorded execution; prompt skills record none) - the live feedback source is the operator's follow-up in the next turn.
 The generator is the template `UnifiedCreator`: regenerating from the same data rebuilds the same text. `os.data_hub` /

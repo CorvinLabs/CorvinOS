@@ -113,3 +113,27 @@ def test_drop_counter_is_exact_under_concurrent_producers():
         sys.setswitchinterval(old)
         release.set()
         em.stop(timeout=3)
+
+
+def test_a_second_stop_still_waits_and_exit_writes_every_accepted_event():
+    """Review SC-11: after a first stop() timed out, a second stop() and the atexit flush returned at
+    once with the worker still writing; events accepted with True were lost at exit."""
+    import time as _t
+    from core.learning.event_emitter import EventEmitter
+
+    class _Slow:
+        def __init__(self):
+            self.n = 0
+
+        def write_event(self, ev):
+            _t.sleep(0.01)
+            self.n += 1
+
+    store = _Slow()
+    em = EventEmitter(store, queue_size=1000)
+    accepted = sum(em.emit(_Ev(i)) for i in range(100))
+    with pytest.raises(RuntimeError):
+        em.stop(timeout=0.05)                     # too short: the worker is still writing
+    em._atexit_flush()                            # must WAIT, not return at once
+    assert store.n == accepted == 100
+    assert em.lost_at_exit == 0

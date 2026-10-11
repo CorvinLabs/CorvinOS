@@ -1,7 +1,7 @@
 """Tests for WeightLearner — gradient descent learning."""
 
 import pytest
-from daemon.weight_learner import (
+from core.skills.os_skills.daemon.weight_learner import (
     WeightLearner,
     WeightUpdateEvent,
     ConvergenceStatus,

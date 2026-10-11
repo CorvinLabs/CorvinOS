@@ -1,7 +1,7 @@
 """Tests for DataSourceChangeDetector."""
 
 import pytest
-from daemon.change_detector import DataSourceChangeDetector, SourceChangedEvent
+from core.skills.os_skills.daemon.change_detector import DataSourceChangeDetector, SourceChangedEvent
 
 
 def test_detect_added_source():

@@ -210,6 +210,28 @@ class TestVersionManager:
         ok, _ = mgr.rollback_to_version("1.0.0", "genuine")
         assert ok is True
 
+    def test_rollback_refuses_the_legacy_constant_and_an_edited_state(self, temp_skill_dir):
+        """Review SC-04: the legacy checksum constant was accepted for ANY record, and the state was
+        outside the (unkeyed) checksum, so a hand-edited record rolled back."""
+        import dataclasses
+
+        mgr = TenantSkillVersionManager(tenant_id="_default", skill_id="os.router_sc04")
+        for v in ("1.0.0", "2.0.0", "3.0.0"):
+            mgr.register_version(
+                v, SkillContract(skill_id="os.router_sc04", version=v, tier=SkillTier.PRIMITIVE,
+                                 input_schema={"type": "object"}, output_schema={"type": "object"}),
+                {"threshold": v}, "system")
+        good = mgr._versions["1.0.0"]
+        mgr._versions["1.0.0"] = dataclasses.replace(good, config_hash="f" * 64, rollback_checksum="a3a6bf43")
+        assert mgr.rollback_to_version("1.0.0")[0] is False
+        mgr._versions["1.0.0"] = good
+        ok, _ = mgr.rollback_to_version("1.0.0")          # 3.0.0 becomes DEPRECATED
+        assert ok
+        dep = mgr._versions["3.0.0"]
+        assert dep.state == VersionState.DEPRECATED
+        mgr._versions["3.0.0"] = dataclasses.replace(dep, state=VersionState.ROLLBACK_READY)
+        assert mgr.rollback_to_version("3.0.0")[0] is False
+
     def test_rollback_to_version(self, temp_skill_dir):
         """Rollback to a previous version."""
         mgr = TenantSkillVersionManager(

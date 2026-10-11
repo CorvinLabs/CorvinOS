@@ -122,8 +122,16 @@ class OperatorKeyManager:
         if "old_keys" in metadata:
             now = datetime.now(timezone.utc)
             for old_key_data in metadata["old_keys"]:
-                rotated_at = datetime.fromisoformat(old_key_data["rotated_at"])
-                age = now - rotated_at
+                # One malformed entry (missing field, tz-naive timestamp) is skipped on its own;
+                # it must not take the current key and every other old key down with it.
+                try:
+                    rotated_at = datetime.fromisoformat(old_key_data["rotated_at"])
+                    if rotated_at.tzinfo is None:
+                        rotated_at = rotated_at.replace(tzinfo=timezone.utc)
+                    age = now - rotated_at
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"Skipping malformed rotated key entry: {type(e).__name__}")
+                    continue
 
                 if age <= timedelta(days=self.TRUST_WINDOW_DAYS):
                     try:

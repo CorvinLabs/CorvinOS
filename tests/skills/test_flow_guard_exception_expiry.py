@@ -54,3 +54,11 @@ def test_ttl_outside_one_to_twenty_four_hours_is_refused():
     for bad in (0, 25, 0.01):
         with pytest.raises(ValueError, match="ttl_hours"):
             _request(ttl_hours=bad)
+
+
+def test_a_stored_expiry_beyond_the_ttl_or_a_future_creation_counts_as_expired(tmp_path):
+    """Review SC-10: a persisted record could carry any expires_at."""
+    mgr = _manager(tmp_path)
+    assert mgr._is_expired(dataclasses.replace(_request(ttl_hours=1), expires_at="9999-12-31T23:59:59Z")) is True
+    future = (datetime.now(timezone.utc) + timedelta(days=30)).replace(tzinfo=None).isoformat() + "Z"
+    assert mgr._is_expired(_request(timestamp=future, ttl_hours=1)) is True

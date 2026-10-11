@@ -1,7 +1,7 @@
 """Tests for RegenerationScheduler."""
 
 import pytest
-from daemon.regeneration_scheduler import RegenerationScheduler, RegenerationQueueItem
+from core.skills.os_skills.daemon.regeneration_scheduler import RegenerationScheduler, RegenerationQueueItem
 
 
 def test_should_regenerate():

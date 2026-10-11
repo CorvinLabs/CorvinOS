@@ -215,3 +215,51 @@ def test_an_unreadable_declaration_blocks_instead_of_vanishing(booted, declarati
     assert result.status in ("failure", "error")
     assert "Unreadable dependency declaration" in (result.error_message or "")
     dependent.execute.assert_not_called()
+
+
+def test_a_dependency_refusal_never_leaks_an_in_flight_slot(booted):
+    """Review SC-01: the refusal returned after the slot was taken; 8 refusals saturated the skill
+    for every tenant even after the dependency was installed."""
+    from core.skills.skill_dag_loader import SkillDependency
+
+    registry, _, _ = booted
+    _register(registry, "test.leaky", "1.0.0", depends_on=[SkillDependency(name="test.later", version="*")])
+    for _ in range(registry.MAX_IN_FLIGHT_PER_SKILL + 2):
+        res = registry.execute("test.leaky", {}, lom="tests/skills/test_g1_dependency_validation_e2e.py:test_a_dependency_refusal_never_leaks_an_in_flight_slot", tenant_id="_default")
+        assert res.status != "success"
+    assert registry._in_flight.get("test.leaky", 0) == 0
+    _register(registry, "test.later", "1.0.0")
+    assert registry.execute("test.leaky", {}, lom="tests/skills/test_g1_dependency_validation_e2e.py:test_a_dependency_refusal_never_leaks_an_in_flight_slot", tenant_id="_default").status == "success"
+
+
+def test_a_validator_exception_is_an_audited_refusal_not_an_escape(booted):
+    """Review SC-02: an installed dependency with version None raised AttributeError out of execute."""
+    from core.skills.skill_dag_loader import SkillDependency
+
+    registry, _, records = booted
+    dep = _register(registry, "test.broken_dep", "1.0.0")
+    import dataclasses
+    dep.metadata = dataclasses.replace(dep.metadata, version=None)
+    registry._metadata_by_id["test.broken_dep"] = dep.metadata
+    _register(registry, "test.uses_broken", "1.0.0",
+              depends_on=[SkillDependency(name="test.broken_dep", version=">=1.0.0")])
+    res = registry.execute("test.uses_broken", {}, lom="tests/skills/test_g1_dependency_validation_e2e.py:test_a_validator_exception_is_an_audited_refusal_not_an_escape", tenant_id="_default")
+    assert res.status != "success" and "Dependency validation failed" in (res.error_message or "")
+    assert registry._in_flight.get("test.uses_broken", 0) == 0
+    _register(registry, "test.unhashable", "1.0.0", depends_on=[SkillDependency(name=["x"], version="*")])
+    res = registry.execute("test.unhashable", {}, lom="tests/skills/test_g1_dependency_validation_e2e.py:test_a_validator_exception_is_an_audited_refusal_not_an_escape", tenant_id="_default")
+    assert res.status != "success"
+
+
+@pytest.mark.parametrize("form", ["str", "dict"])
+def test_topological_sort_reads_every_declaration_form(booted, form):
+    """Review SC-03: topological_sort_skills read dep.name and crashed on str/dict declarations."""
+    from core.skills.skill_dag_loader import topological_sort_skills
+
+    registry, _, _ = booted
+    decl = "test.base" if form == "str" else {"name": "test.base", "version": "*"}
+    base = _register(registry, "test.base", "1.0.0")
+    top = _register(registry, "test.top", "1.0.0", depends_on=[decl])
+    order, err = topological_sort_skills([top, base], registry)
+    assert err is None, err
+    assert [s.metadata.id for s in order] == ["test.base", "test.top"]

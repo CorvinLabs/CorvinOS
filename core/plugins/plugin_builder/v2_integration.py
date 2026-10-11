@@ -251,23 +251,32 @@ class PluginDeveloper:
         # Initialize audit infrastructure
         if plan.audit_enabled:
             self._init_audit(plan, result)
-            self._emit_audit_event(
+            started = self._emit_audit_event(
                 result,
                 event_type="development_started",
                 plan=asdict(plan),
                 development_id=result.development_id,
             )
+            if not started:
+                # Audit-first: an audited run whose opening record did not commit does not run.
+                # This is also how a plan for another tenant ends - the core writer refuses a
+                # record for a tenant other than the process's (ADR-0562) - instead of doing
+                # the work with no record at all (review 2026-10-12, AUD-3).
+                result.errors.append("development_started was not committed to the audit chain; nothing ran")
+                result.success = False
+                result.elapsed_seconds = time.time() - start_time
+                return result
 
         try:
             for step_name in plan.steps:
                 if step_name not in self.steps:
                     result.errors.append(f"Unknown step: {step_name}")
                     if plan.audit_enabled:
+                        # The caller's step name is free text: it never reaches the chain.
                         self._emit_audit_event(
                             result,
                             event_type="development_failed",
-                            reason=f"Unknown step: {step_name}",
-                            phase=step_name,
+                            phase="unknown",
                         )
                     continue
 
@@ -337,7 +346,7 @@ class PluginDeveloper:
         result: DevelopmentResult,
         event_type: str,
         **event_data: Any,
-    ) -> None:
+    ) -> bool:
         """Record one development stage on the tenant's core audit chain (GDPR Art. 30, 32).
 
         The record goes through the core writer (``audit.audit_event`` ->
@@ -359,6 +368,8 @@ class PluginDeveloper:
         for key in ("phase", "success", "scaffold_preserved"):
             if key in event_data:
                 details[key] = event_data[key]
+        if details.get("phase") not in (None, "unknown", *self.steps):
+            details["phase"] = "unknown"   # closed vocabulary only
         if isinstance(event_data.get("error_class"), str):
             details["error_class"] = event_data["error_class"][:64]
         try:
@@ -374,6 +385,7 @@ class PluginDeveloper:
                 "event_type": event_type, "timestamp": datetime.now(timezone.utc).isoformat(), **details})
         else:
             result.warnings.append(f"Audit event '{event_type}' was not committed to the chain")
+        return committed
 
     def _step_scaffold(
         self,
@@ -403,6 +415,7 @@ class PluginDeveloper:
                 plugin_type=plan.plugin_type,
                 description=plan.description,
                 author=plan.author,
+                tenant_id=plan.tenant_id,
             )
 
             # The directory the generator ACTUALLY wrote (it appends

@@ -9,6 +9,7 @@ License: Apache-2.0
 """
 
 import json
+import os
 import zipfile
 import hashlib
 import shutil
@@ -98,9 +99,10 @@ class SkillPackager:
         # Generate metadata
         generation_context = self._create_generation_context(skill_folder, manifest)
         audit_trail = self._create_audit_trail(skill_folder, manifest)
-        checksums = self._compute_checksums(skill_folder)
 
-        # Write metadata files (fixes H2: File Permissions)
+        # Write metadata files (fixes H2: File Permissions) BEFORE hashing: the checksum list -
+        # and so the signature - must cover them, or a "verified" install carries files anyone
+        # could have rewritten after signing (ADR-2252 review, PKG-6).
         gen_ctx_path = forge_dir / "generation_context.json"
         gen_ctx_path.write_text(json.dumps(generation_context, indent=2))
         gen_ctx_path.chmod(0o600)  # owner read+write only
@@ -109,13 +111,19 @@ class SkillPackager:
         audit_path.write_text("\n".join(json.dumps(e) for e in audit_trail))
         audit_path.chmod(0o600)
 
+        checksums = self._compute_checksums(skill_folder)
         checksum_path = forge_dir / "checksum.sha256"
         checksum_path.write_text("\n".join(f"{h} {p}" for p, h in checksums.items()))
         checksum_path.chmod(0o600)
 
-        # Create ZIP archive
+        # Create ZIP archive from EXACTLY the hashed set (plus the checksum list and the
+        # signature): a file the list does not name - a symlink target, a nested .forge/ - is
+        # never shipped, so the packager cannot sign what its own installer must refuse.
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            self._add_folder_to_zip(skill_folder, zf, Path(manifest.skill_id))
+            arc = manifest.skill_id
+            for rel in checksums:
+                zf.write(skill_folder / rel, arcname=f"{arc}/{rel}")
+            zf.write(checksum_path, arcname=f"{arc}/{package_signing.CHECKSUM_REL}")
             # Signed only when this install's operator has generated a key (ADR-2252);
             # otherwise the package is unsigned and the installer will say so.
             signature = self._sign_package(skill_folder, checksum_path)
@@ -221,35 +229,27 @@ class SkillPackager:
         return events
 
     def _compute_checksums(self, skill_folder: Path) -> Dict[str, str]:
-        """Compute SHA256 checksums for all files in Skill folder (fixes C4: Symlink Traversal)."""
+        """SHA-256 of every regular file in the skill folder, keyed by POSIX relative path.
+
+        Symlinks are never followed or listed (C4). Only the top-level ``.forge/checksum.sha256``
+        (the list itself) is excluded; ``.forge`` metadata is covered. Keys are ``as_posix()``:
+        ``str()`` of a Windows path uses backslashes, which no ZIP arcname does (PKG-5).
+        """
         checksums = {}
-        skill_folder_resolved = skill_folder.resolve()
-
-        for file_path in skill_folder.rglob("*"):
-            if ".forge" in file_path.parts:
-                # Exclude .forge dir from checksum computation (it's being generated)
-                continue
-
-            # FIX C4: Reject symlinks (prevent symlink traversal)
-            if file_path.is_symlink():
-                logger.warning(f"Skipping symlink (not allowed): {file_path}")
-                continue
-
-            if file_path.is_file():
-                # Verify resolved path stays within skill_folder (redundant but safe)
-                try:
-                    file_path_resolved = file_path.resolve()
-                    if not str(file_path_resolved).startswith(str(skill_folder_resolved)):
-                        logger.warning(f"Skipping file outside skill folder: {file_path}")
-                        continue
-                except (OSError, RuntimeError):
-                    logger.warning(f"Cannot resolve path: {file_path}")
+        root = skill_folder.resolve()
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            dirnames[:] = sorted(d for d in dirnames if not (Path(dirpath) / d).is_symlink())
+            for name in sorted(filenames):
+                file_path = Path(dirpath) / name
+                if file_path.is_symlink():
+                    logger.warning(f"Skipping symlink (not allowed): {file_path}")
                     continue
-
-                relative_path = file_path.relative_to(skill_folder)
-                checksum = self._compute_file_hash(file_path)
-                checksums[str(relative_path)] = checksum
-
+                if not file_path.is_file():
+                    continue
+                rel = file_path.relative_to(root).as_posix()
+                if rel == package_signing.CHECKSUM_REL:
+                    continue
+                checksums[rel] = self._compute_file_hash(file_path)
         return checksums
 
     @staticmethod
@@ -259,84 +259,6 @@ class SkillPackager:
         with open(file_path, "rb") as f:
             for chunk in iter(lambda: f.read(4096), b""):
                 sha256.update(chunk)
-        return f"sha256:{sha256.hexdigest()}"
-
-    @staticmethod
-    def _add_folder_to_zip(folder: Path, zf: zipfile.ZipFile, arcname: Path) -> None:
-        """Recursively add folder contents to ZIP archive."""
-        for file_path in folder.rglob("*"):
-            if file_path.is_file():
-                relative_path = file_path.relative_to(folder)
-                archive_path = arcname / relative_path
-                zf.write(file_path, arcname=str(archive_path))
-
-    def verify_package(self, zip_path: Path, checksum_file: Optional[Path] = None) -> bool:
-        """
-        Verify package integrity using checksums.
-
-        Args:
-            zip_path: Path to ZIP file
-            checksum_file: Path to checksum.sha256 file (if None, read from ZIP)
-
-        Returns:
-            True if all checksums verify
-
-        Raises:
-            ChecksumVerificationError: If verification fails
-        """
-        if not zip_path.exists():
-            raise FileNotFoundError(f"ZIP not found: {zip_path}")
-
-        # Extract checksums from .forge/checksum.sha256 inside ZIP
-        if checksum_file is None:
-            try:
-                with zipfile.ZipFile(zip_path, "r") as zf:
-                    checksum_content = zf.read(".forge/checksum.sha256").decode("utf-8")
-            except KeyError:
-                logger.warning(f"No checksum file in {zip_path}, skipping verification")
-                return True
-        else:
-            if not checksum_file.exists():
-                raise FileNotFoundError(f"Checksum file not found: {checksum_file}")
-            checksum_content = checksum_file.read_text()
-
-        # Parse checksums (format: "sha256:hash path")
-        checksums = {}
-        for line in checksum_content.strip().split("\n"):
-            if not line:
-                continue
-            parts = line.split(maxsplit=1)
-            if len(parts) != 2:
-                raise ChecksumVerificationError(f"Invalid checksum line: {line}")
-            hash_value, file_path = parts
-            checksums[file_path] = hash_value
-
-        # Verify each file in ZIP
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            for arcname in zf.namelist():
-                # Skip .forge directory from verification (it's metadata)
-                if arcname.startswith(".forge/") or arcname == ".forge":
-                    continue
-
-                file_data = zf.read(arcname)
-                computed_hash = self._compute_hash(file_data)
-
-                if arcname in checksums:
-                    expected_hash = checksums[arcname]
-                    if computed_hash != expected_hash:
-                        raise ChecksumVerificationError(
-                            f"Checksum mismatch for {arcname}: "
-                            f"expected {expected_hash}, got {computed_hash}"
-                        )
-
-        logger.info(f"Package verification passed: {zip_path}")
-        return True
-
-    @staticmethod
-    def _compute_hash(data: bytes) -> str:
-        """Compute SHA256 hash of data."""
-        sha256 = hashlib.sha256()
-        sha256.update(data)
         return f"sha256:{sha256.hexdigest()}"
 
 

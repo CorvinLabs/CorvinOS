@@ -397,16 +397,6 @@ _ASYNC_HANDLERS = [
         resource_type="task",
     ),
     EntryPoint(
-        name="async_skill_execution",
-        category=EntryPointCategory.ASYNC_HANDLER,
-        module_path="core.learning.skill_integration",
-        function_name="execute_skill",
-        capability_required="execute_skill",
-        action_name="execute_skill_async",
-        resource_type="skill",
-        is_experimental=True,
-    ),
-    EntryPoint(
         name="async_delegation_task",
         category=EntryPointCategory.ASYNC_HANDLER,
         module_path="core.delegation.worker",

@@ -453,9 +453,17 @@ class ExceptionManager:
         """
         try:
             expires = _parse_utc(exc.expires_at)
+            created = _parse_utc(exc.timestamp)
+            ttl = timedelta(hours=float(exc.ttl_hours))
         except (ValueError, TypeError):
             return True  # an expiry nobody can read is an exception that must not keep allowing
-        return datetime.now(timezone.utc) > expires
+        now = datetime.now(timezone.utc)
+        # The stored expires_at is not trusted on its own: a record loaded from disk can carry any
+        # value. It must lie within ttl_hours of a creation time that is not in the future
+        # (review SC-10: ttl_hours=1 with expires_at=9999-12-31 stayed valid).
+        if created > now + timedelta(minutes=5) or expires > created + ttl:
+            return True
+        return now > expires
 
     def _persist_exception(self, exc: ExceptionRequest) -> None:
         """Persist exception to disk (JSONL append, atomic).

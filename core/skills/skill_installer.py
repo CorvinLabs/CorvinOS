@@ -24,6 +24,13 @@ class InstallationError(Exception):
     """
 
 
+def _clean_rel(rel: str) -> bool:
+    """A relative POSIX path with no empty, '.' or '..' segment and no leading slash."""
+    if not rel or rel.startswith("/"):
+        return False
+    return all(seg not in ("", ".", "..") for seg in rel.split("/"))
+
+
 class SkillInstaller:
     """Atomic skill installation with dependency resolution."""
     
@@ -198,7 +205,12 @@ class SkillInstaller:
             sig_info = next((i for i in infos if i.filename == pref + ps.SIGNATURE_NAME), None)
             if sig_info is None:
                 return "absent"
-            keys = ps.trusted_public_keys()
+            try:
+                keys = ps.trusted_public_keys()
+            except ps.KeyStoreUnreadable:
+                # ADR-0562: a trust check that cannot decide REFUSES. Only "this install never
+                # generated a key" is "unverifiable".
+                return "refused:operator key store exists but is unreadable"
             if not keys:
                 return "unverifiable"
             self._validate_zip_size(zf)
@@ -214,14 +226,29 @@ class SkillInstaller:
             if not ps.verify(manifest_raw, checksum_raw, signature, keys):
                 return "refused:signature does not verify against any trusted operator key"
             listed = ps.parse_checksums(checksum_raw)
+            for rel in listed:
+                if "\\" in rel or not _clean_rel(rel):
+                    return f"refused:checksum list names an unsafe path: {rel[:80]}"
             for rel, digest in listed.items():
                 info = by_name.get(pref + rel)
                 if info is None:
                     return f"refused:listed file missing: {rel}"
                 if ps.sha256_tag(zf.read(info)) != digest:
                     return f"refused:file changed after signing: {rel}"
+            seen_folded: set[str] = set()
             for info in infos:
+                # An entry outside the signed folder, or one a case-insensitive / backslash-
+                # separated file system would map onto a signed file, is NOT covered - it would
+                # be extracted next to (or over) the verified code.
+                if not info.filename.startswith(pref):
+                    return f"refused:file outside the signed package: {info.filename[:80]}"
                 rel = info.filename[len(pref):]
+                folded = info.filename.casefold()
+                if folded in seen_folded:
+                    return f"refused:two entries differ only in case: {info.filename[:80]}"
+                seen_folded.add(folded)
+                if "\\" in info.filename or not _clean_rel(rel):
+                    return f"refused:unsafe entry name: {info.filename[:80]}"
                 if rel == ps.SIGNATURE_NAME or rel in ps.ALLOWED_FORGE_ENTRIES or rel in listed:
                     continue
                 return f"refused:file not covered by the signature: {rel}"
@@ -266,10 +293,19 @@ class SkillInstaller:
     def _validate_zip_entries(self, zf: zipfile.ZipFile, target_dir: Path) -> None:
         """Validate ZIP entries don't escape target_dir (C1: Path Traversal)."""
         target_dir = target_dir.resolve()
+        seen_folded: set = set()
         for info in zf.infolist():
             # Check for path traversal attempts
             if ".." in info.filename or info.filename.startswith("/"):
                 raise InstallationError(f"Unsafe path in ZIP: {info.filename}")
+            # A backslash is a separator on Windows and two names that differ only in case are
+            # one file on Windows/macOS: either lets a later entry overwrite an earlier one.
+            if "\\" in info.filename:
+                raise InstallationError(f"Backslash in ZIP entry name: {info.filename}")
+            folded = info.filename.casefold()
+            if folded in seen_folded:
+                raise InstallationError(f"ZIP entries differ only in case: {info.filename}")
+            seen_folded.add(folded)
 
             # Check resolved path stays within target
             entry_path = (target_dir / info.filename).resolve()

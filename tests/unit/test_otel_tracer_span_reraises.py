@@ -49,3 +49,29 @@ def test_a_tracer_that_cannot_start_a_span_is_absorbed(monkeypatch):
     with t.span("skill.x.execute") as span:
         ran.append(span)
     assert ran == [None], "tracing failed to start: the body still runs, with no span"
+
+
+def test_a_failing_span_end_never_replaces_the_bodys_outcome(monkeypatch):
+    """Review SC-12: an exception from the span's __exit__ turned a successful body into an error
+    and replaced a body's own exception."""
+    t = _tracer()
+    real = t.tracer.start_as_current_span
+
+    class _ExitFails:
+        def __init__(self, cm):
+            self.cm = cm
+
+        def __enter__(self):
+            return self.cm.__enter__()
+
+        def __exit__(self, *a):
+            self.cm.__exit__(*a)
+            raise RuntimeError("span end failed")
+
+    monkeypatch.setattr(t.tracer, "start_as_current_span", lambda name, **k: _ExitFails(real(name, **k)))
+    with t.span("ok.body"):
+        result = "done"
+    assert result == "done"
+    with pytest.raises(ValueError, match="body"):
+        with t.span("bad.body"):
+            raise ValueError("body")

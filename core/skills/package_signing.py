@@ -30,9 +30,10 @@ SIGNATURE_NAME = "skill.sig"
 MANIFEST_NAME = "skill.json"
 CHECKSUM_REL = ".forge/checksum.sha256"
 #: Entries a verified package may carry besides the files its checksum list names.
-ALLOWED_FORGE_ENTRIES = frozenset({
-    ".forge/checksum.sha256", ".forge/generation_context.json", ".forge/audit_trail.jsonl",
-})
+ALLOWED_FORGE_ENTRIES = frozenset({".forge/checksum.sha256"})
+#: Metadata the packager writes BEFORE hashing, so the signature covers it (a verified install
+#: must not carry files anyone could have rewritten after signing).
+SIGNED_FORGE_ENTRIES = (".forge/generation_context.json", ".forge/audit_trail.jsonl")
 _DOMAIN = b"corvin-skill-package-v1\n"
 _PSS = padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH)
 
@@ -57,16 +58,36 @@ def _manager(corvin_home: Optional[Path] = None):
     return OperatorKeyManager(home)
 
 
+class KeyStoreUnreadable(RuntimeError):
+    """A key store exists but cannot be read. Distinct from "no key store": a signed package
+    must then be REFUSED (ADR-0562: a trust check that cannot decide refuses), not installed
+    as "unverifiable"."""
+
+
+def key_store_present(corvin_home: Optional[Path] = None) -> bool:
+    home = _home(corvin_home)
+    return (home / "tenants" / "_default" / "global" / "operator_keys" / "metadata.json").exists()
+
+
 def trusted_public_keys(corvin_home: Optional[Path] = None) -> List:
-    """Current + recently rotated operator public keys; ``[]`` when none exist."""
+    """Current + recently rotated operator public keys.
+
+    ``[]`` only when this install never generated a key. A store that exists but cannot be read
+    (or yields no usable key) raises :class:`KeyStoreUnreadable`.
+    """
     mgr = _manager(corvin_home)
     if mgr is None:
+        if key_store_present(corvin_home):
+            raise KeyStoreUnreadable("operator key store metadata is not a readable file")
         return []
     try:
-        return list(mgr.all_trusted_public_keys())
-    except Exception as exc:  # noqa: BLE001 — an unreadable store verifies nothing
+        keys = list(mgr.all_trusted_public_keys())
+    except Exception as exc:  # noqa: BLE001
         logger.warning("operator key store unreadable (%s)", type(exc).__name__)
-        return []
+        raise KeyStoreUnreadable(type(exc).__name__) from exc
+    if not keys:
+        raise KeyStoreUnreadable("operator key store holds no usable key")
+    return keys
 
 
 def signing_key(corvin_home: Optional[Path] = None):

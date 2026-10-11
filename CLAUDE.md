@@ -820,10 +820,12 @@ bash corvin_operator/bridges/run-all-tests.sh
 one is refused by the audit writer and fails `verify_chain`) and `FORGE_ROOT`; otherwise
 records land in the live hash-chained audit log (it happened 2026-09-27). The repo-root
 `conftest.py` enforces the first three for every pytest run and trips on live-chain
-appends; it does NOT set `FORGE_ROOT` — set it yourself, INSIDE the sandboxed `CORVIN_HOME`
-(e.g. `$CORVIN_HOME/forge`): the boot tripwire refuses a chain redirected outside the home root, and
-tests that move `CORVIN_HOME` themselves (method-discovery e2e) need `FORGE_ROOT` unset, or they
-fail with `audit_path_not_redirected` (20+ spurious failures measured 2026-10-11). Plain-script (non-pytest) suites
+appends; it does NOT set `FORGE_ROOT`. For anything that boots the tripwire either leave it UNSET or
+point it at the resolver's own chain directory, `$CORVIN_HOME/tenants/<tid>/global/forge` — the
+`audit_path_not_redirected` check refuses any other path, inside the home root (`$CORVIN_HOME/forge`)
+or outside it (verified 2026-10-12). Tests that move `CORVIN_HOME` themselves (method-discovery e2e)
+need it unset (20+ spurious failures measured 2026-10-11). Suites that never boot the tripwire
+(`run-all-tests.sh` sets a sibling sandbox path) are unaffected. Plain-script (non-pytest) suites
 must run via `run-all-tests.sh`, which sets all four. A worktree sharing the main `.venv`
 imports the LIVE checkout through the editable `.pth` unless `PYTHONPATH` puts the worktree
 first.

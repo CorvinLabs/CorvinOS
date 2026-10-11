@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import dataclasses
+import hmac
 import json
 import os
 from dataclasses import dataclass, field, asdict
@@ -321,9 +322,7 @@ class TenantSkillVersionManager:
             created_by=created_by,
             supersedes_version=supersedes,
         )
-        skill_version = dataclasses.replace(
-            skill_version, rollback_checksum=self._compute_rollback_checksum(skill_version)
-        )
+        skill_version = self._stamped(skill_version)
 
         self._versions[version] = skill_version
         old_active = self._active_version
@@ -341,8 +340,8 @@ class TenantSkillVersionManager:
                 created_at=self._versions[old_active].created_at,
                 created_by=self._versions[old_active].created_by,
                 supersedes_version=self._versions[old_active].supersedes_version,
-                rollback_checksum=self._versions[old_active].rollback_checksum,
             )
+            self._versions[old_active] = self._stamped(self._versions[old_active])
 
         self._save_versions()
         return True, f"Version {version} registered and activated"
@@ -370,15 +369,15 @@ class TenantSkillVersionManager:
         if not target.is_rollbackable():
             return False, f"Version {target_version} is not rollbackable (state={target.state})"
 
-        # Verify rollback checksum
-        expected_checksum = self._compute_rollback_checksum(target)
-        # Records written before 2026-10-12 carry the checksum of an EMPTY dict (it was
-        # computed before the version was stored), which no version can match.
-        if target.rollback_checksum not in (expected_checksum, self._LEGACY_EMPTY_CHECKSUM):
+        # Verify rollback checksum (HMAC over identity AND state). No legacy exemption: records
+        # written before 2026-10-12 carried a checksum of an EMPTY record and could never be rolled
+        # back anyway; accepting that constant let ANY hand-edited record through (review SC-04).
+        if not hmac.compare_digest(str(target.rollback_checksum), self._compute_rollback_checksum(target)):
             return False, f"Rollback checksum mismatch for {target_version} (data corruption)"
 
         old_active = self._active_version
         self._active_version = target_version
+        self._versions[target_version] = self._stamped(dataclasses.replace(target, state=VersionState.ACTIVE))
 
         # Mark old version as deprecated
         if old_active:
@@ -391,8 +390,8 @@ class TenantSkillVersionManager:
                 created_at=self._versions[old_active].created_at,
                 created_by=self._versions[old_active].created_by,
                 supersedes_version=self._versions[old_active].supersedes_version,
-                rollback_checksum=self._versions[old_active].rollback_checksum,
             )
+            self._versions[old_active] = self._stamped(self._versions[old_active])
 
         # Record in history
         action = f"rollback to {target_version}"
@@ -417,25 +416,45 @@ class TenantSkillVersionManager:
         """List all registered versions (in order)."""
         return sorted(self._versions.values(), key=lambda v: v.created_at, reverse=True)
 
-    _LEGACY_EMPTY_CHECKSUM = "a3a6bf43"  # crc32(b"{}")
+    def _stamped(self, version: SkillVersion) -> SkillVersion:
+        return dataclasses.replace(version, rollback_checksum=self._compute_rollback_checksum(version))
 
-    @staticmethod
-    def _compute_rollback_checksum(version: SkillVersion) -> str:
-        """CRC32 over the version's immutable identity.
+    def _checksum_key(self) -> bytes:
+        """Per-tenant secret for the version checksums (``<skill dir>/.versions.key``, 0600).
 
-        ``state`` (flips ACTIVE -> ROLLBACK_READY -> DEPRECATED) and the checksum itself are
-        excluded: hashing them would invalidate every checksum the moment the version is
-        superseded, i.e. exactly when a rollback needs it.
+        Integrity against corruption and hand edits of ``versions.json``. Not against a hostile
+        process running as the same OS user - it can read this key too; that needs OS isolation.
         """
-        import zlib
+        key_path = tenant_paths.tenant_skill_dir(self.tenant_id) / ".versions.key"
+        try:
+            data = key_path.read_bytes()
+            if len(data) >= 32:
+                return data
+        except OSError:
+            pass
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        data = os.urandom(32)
+        fd = os.open(str(key_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        return data
+
+    def _compute_rollback_checksum(self, version: SkillVersion) -> str:
+        """HMAC-SHA256 over the version's identity AND state (truncated to 16 hex).
+
+        Every legitimate state change (superseded -> rollback_ready, -> deprecated, rollback ->
+        active) re-stamps it, so an edited state or field without the key does not verify. The CRC32
+        it replaces was unkeyed and excluded the state (review 2026-10-12, SC-04).
+        """
         identity = {
             "skill_id": version.skill_id, "version": version.version,
             "contract_hash": version.contract_hash, "config_hash": version.config_hash,
             "created_at": version.created_at, "created_by": version.created_by,
             "supersedes_version": version.supersedes_version,
+            "state": getattr(version.state, "value", str(version.state)),
         }
         data = json.dumps(identity, sort_keys=True).encode()
-        return format(zlib.crc32(data) & 0xffffffff, "08x")
+        return hmac.new(self._checksum_key(), data, hashlib.sha256).hexdigest()[:16]
 
 
 @dataclass

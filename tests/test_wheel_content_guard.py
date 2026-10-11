@@ -79,7 +79,6 @@ _CHECKOUT_ONLY_IMPORT = re.compile(
 # the entry the moment the file is fixed so the guard starts covering it.
 KNOWN_CHECKOUT_ONLY_IMPORTS: dict[str, str] = {
     # TODO(core/learning owner): example module, `core.console.corvin_core.feature_flags`.
-    "core/learning/tool_cost_learning_integration_example.py": "learning subsystem owner",
     # TODO(console routes owners): `core.console.corvin_console.auth` /
     # `.routes.auth` → `corvin_console.auth` / `corvin_console.routes.auth`.
     # TODO(telemetry/pipeline): `audit_writer.write_audit_event` never existed

@@ -400,3 +400,75 @@ class TestSignedPackages:
         assert r.status_code == 200, r.text
         listed = client.get(f"{BASE}/installed").json()["skills"]
         assert [(s["skill_id"], s["verified"]) for s in listed] == [("test_skill", True)]
+
+
+class TestSignedPackagesReview2026_10_12:
+    """Adversarial review of ADR-2252 (2026-10-12): each test failed against the first version."""
+
+    _signed = TestSignedPackages._signed
+    _install = TestSignedPackages._install
+
+    @pytest.mark.parametrize("smuggled", [
+        "TEST_SKILL/src/skill.py",            # case-folds onto the signed file (Windows/macOS)
+        "test_skill\\src/skill.py",           # a backslash is a separator on Windows
+        "XXXXXXXXXXREADME.md",                # outside the signed folder, suffix matches a listed path
+    ])
+    def test_an_entry_that_only_resembles_a_signed_file_is_refused(self, tmp_path, home, smuggled):
+        zip_path, _ = self._signed(tmp_path, home)
+        bad, digest = _rewrite_zip(zip_path, tmp_path / "bad.zip", lambda n, d: (
+            {smuggled: b"import os; os.system('id')"} if n is None else d))
+        inst, ok, msg = self._install(tmp_path, bad, digest)
+        assert not ok, msg
+        assert inst._load_registry() == {}
+
+    def test_an_unreadable_key_store_refuses_instead_of_installing_unverifiable(self, tmp_path, home):
+        zip_path, _ = self._signed(tmp_path, home)
+        meta = home / "tenants" / "_default" / "global" / "operator_keys" / "metadata.json"
+        meta.write_text("{not json")
+        bad, digest = _rewrite_zip(zip_path, tmp_path / "bad.zip", lambda n, d: (
+            b"tampered" if n == "test_skill/src/skill.py" else d))
+        inst, ok, msg = self._install(tmp_path, bad, digest)
+        assert not ok and "unreadable" in msg, msg
+
+    def test_one_malformed_rotated_key_does_not_discard_the_current_key(self, tmp_path, home):
+        zip_path, zip_hash = self._signed(tmp_path, home)
+        meta = home / "tenants" / "_default" / "global" / "operator_keys" / "metadata.json"
+        data = json.loads(meta.read_text())
+        data["old_keys"] = [{"rotated_at": "2026-10-01T00:00:00", "public_key_pem": "garbage"},
+                            {"rotated_at": "not a date"}]
+        meta.write_text(json.dumps(data))
+        inst, ok, msg = self._install(tmp_path, zip_path, zip_hash)
+        assert ok, msg
+        assert inst._load_registry()["test_skill"][0]["verification"]["signature"] == "valid"
+
+    def test_symlinks_and_nested_forge_dirs_are_never_shipped(self, tmp_path, home):
+        _generate_operator_key(home)
+        skill = _make_skill(tmp_path / "gen")
+        secret = tmp_path / "secret.txt"
+        secret.write_text("OPERATOR-SECRET")
+        (skill / "docs" / "link.txt").symlink_to(secret)
+        (skill / "src" / ".forge").mkdir()
+        (skill / "src" / ".forge" / "helper.py").write_text("x = 1\n")
+        zip_path, zip_hash, _ = SkillPackager(tmp_path / "pkgs").package(
+            skill, SkillManifestV2.from_dict(_MANIFEST))
+        with zipfile.ZipFile(zip_path) as zf:
+            names = zf.namelist()
+            assert "test_skill/docs/link.txt" not in names
+            assert all(b"OPERATOR-SECRET" not in zf.read(n) for n in names)
+            listed = zf.read("test_skill/.forge/checksum.sha256").decode()
+        assert "src/.forge/helper.py" in listed            # covered, so it may ship
+        inst, ok, msg = self._install(tmp_path, zip_path, zip_hash)
+        assert ok, msg                                     # what the packager signs installs
+
+    def test_forge_metadata_is_covered_by_the_signature(self, tmp_path, home):
+        zip_path, _ = self._signed(tmp_path, home)
+        bad, digest = _rewrite_zip(zip_path, tmp_path / "bad.zip", lambda n, d: (
+            b'{"boot_layer": "compliance"}' if n == "test_skill/.forge/generation_context.json" else d))
+        _, ok, msg = self._install(tmp_path, bad, digest)
+        assert not ok and "generation_context.json" in msg, msg
+
+    def test_checksum_keys_are_posix_paths(self, tmp_path, home):
+        skill = _make_skill(tmp_path / "gen")
+        sums = SkillPackager(tmp_path / "pkgs")._compute_checksums(skill)
+        assert sums and all("\\" not in k for k in sums)
+        assert "src/skill.py" in sums

@@ -36,10 +36,24 @@ from core.background.learning_daemon import DaemonEvent, DataHubLearningDaemon
 
 logger = logging.getLogger(__name__)
 
+from core.deployment import audit_sink  # noqa: E402
+
+audit_sink.register_events({
+    # A persisted state the host would not load (other tenant / other version): recorded, and the
+    # file is kept aside instead of being overwritten by the next save.
+    "learning.state_refused": ("reason",),
+    # Inbox lines tagged with another tenant (never written by a producer of this tenant).
+    "learning.inbox_foreign_dropped": ("dropped_count",),
+    # Daemon state of sources whose artifact no longer exists (deleted) was removed.
+    "learning.sources_evicted": ("evicted_count",),
+})
+
 MIN_INTERVAL_S = 2.0
 MAX_INTERVAL_S = 30.0
 SOURCE_CHECK_S = 300.0
 SAVE_EVERY_TICKS_WHEN_IDLE = 10
+RETRY_FAILED_S = 3600.0          # a failed/partial regeneration is retried after an hour
+RETRY_REFUSED_S = 24 * 3600.0    # a refused one (secret in the source, ...) after a day
 
 
 def state_path(tenant_id: str) -> Path:
@@ -47,12 +61,63 @@ def state_path(tenant_id: str) -> Path:
 
 
 def _atomic_write(path: Path, data: dict) -> None:
+    import tempfile
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump(data, f, separators=(",", ":"))
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(prefix=".state.", suffix=".tmp", dir=str(path.parent))
+    try:
+        os.fchmod(fd, 0o600) if hasattr(os, "fchmod") else None
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, separators=(",", ":"))
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+class _Lease:
+    """One host per tenant ACROSS processes: an exclusive, non-blocking lock on
+    ``daemon/host.lock`` held for the host's lifetime. Both shipped hosts start a learning host;
+    without this, two processes consumed the same inbox and regenerated twice (review DH-4)."""
+
+    def __init__(self, tenant_id: str):
+        self.path = learning_inbox.daemon_dir(tenant_id) / "host.lock"
+        self._fh = None
+
+    @property
+    def held(self) -> bool:
+        return self._fh is not None
+
+    def try_acquire(self) -> bool:
+        if self._fh is not None:
+            return True
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(self.path, "a+")
+        try:
+            try:
+                import fcntl  # noqa: PLC0415
+
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except ImportError:  # Windows
+                import msvcrt  # noqa: PLC0415
+
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            fh.close()
+            return False
+        self._fh = fh
+        return True
+
+    def release(self) -> None:
+        if self._fh is not None:
+            try:
+                self._fh.close()   # closing drops flock / msvcrt lock
+            finally:
+                self._fh = None
 
 
 class LearningHost:
@@ -73,16 +138,36 @@ class LearningHost:
         self.errors = 0
         self.last_error = ""
         self.regenerations: list[dict[str, Any]] = []
+        self.lease = _Lease(tenant_id)
         self._restored = self._load()
 
     # ── persistence ──────────────────────────────────────────────────────────
 
     def _load(self) -> bool:
-        try:
-            raw = json.loads(state_path(self.tenant_id).read_text())
-        except (OSError, ValueError):
+        path = state_path(self.tenant_id)
+        if not path.exists():
             return False
-        if not self.daemon.restore(raw.get("daemon") or {}):
+        try:
+            raw = json.loads(path.read_text())
+            refused_reason = None if isinstance(raw, dict) else "not_an_object"
+        except (OSError, ValueError):
+            raw, refused_reason = {}, "unreadable"
+        if refused_reason is None and not self.daemon.restore(raw.get("daemon") or {}):
+            d = raw.get("daemon") or {}
+            refused_reason = ("tenant_mismatch" if d.get("tenant_id") not in (None, self.tenant_id)
+                              else "version_mismatch")
+        if refused_reason is not None:
+            # Recorded and kept aside: the next save must not silently overwrite what was refused
+            # (review 2026-10-12, DH-7, ADR-0562 "refused AND chained").
+            try:
+                audit_sink.emit("learning.state_refused", {"reason": refused_reason},
+                                tenant_id=self.tenant_id)
+            except audit_sink.AuditWriteFailed:
+                logger.warning("learning.state_refused did not commit (%s)", refused_reason)
+            try:
+                path.rename(path.with_name(f"state.json.refused-{int(time.time())}"))
+            except OSError:
+                pass
             return False
         self.cursor = dict(raw.get("cursor") or {})
         self.regenerations = list(raw.get("regenerations") or [])[-50:]
@@ -108,7 +193,14 @@ class LearningHost:
                 event_type=ev["event_type"], timestamp=ev.get("timestamp", ""),
                 payload=ev.get("payload") or {}, tenant_id=self.tenant_id))
             work += 1
-        if new_cursor.get("file") and new_cursor != self.cursor:
+        foreign = int(new_cursor.pop("foreign", 0) or 0)
+        if foreign:
+            try:
+                audit_sink.emit("learning.inbox_foreign_dropped", {"dropped_count": foreign},
+                                tenant_id=self.tenant_id)
+            except audit_sink.AuditWriteFailed:
+                logger.warning("%d foreign inbox lines dropped; record did not commit", foreign)
+        if new_cursor.get("files") and new_cursor.get("files") != (self.cursor or {}).get("files"):
             self.cursor = new_cursor
             self._dirty = True
 
@@ -136,14 +228,14 @@ class LearningHost:
         except Exception as exc:  # noqa: BLE001
             logger.debug("source provider failed (%s)", type(exc).__name__)
             return 0
-        work = 0
+        work = self._evict_dead_sources({r.source_id for r in refs}, {r.skill_id for r in refs})
         for ref in refs:
             sid = ref.source_id
             if sid not in self.daemon.change_detector.last_manifest_hash and ref.sha256:
                 # first sight: the hash the artifact was built from is the baseline
                 await self.daemon.change_detector.check_for_changes(
                     {"manifest_id": sid, "sha256": ref.sha256})
-            current = _default_hash(ref.path)
+            current = _default_hash(ref.path, self.tenant_id)
             if not current:
                 continue
             before = self.daemon.change_detector.last_manifest_hash.get(sid)
@@ -156,6 +248,36 @@ class LearningHost:
                 work += 1
         return work
 
+    def _evict_dead_sources(self, live_sources: set, live_skills: set) -> int:
+        """Forget the daemon state of Data Hub sources/skills whose artifact is gone: weights,
+        hashes, edges, cooldowns and queue entries of deleted artifacts filled the source cap
+        until no new skill could learn (review 2026-10-12, DH-9)."""
+        d = self.daemon
+        dead = [k for k in list(d.weight_learner.weights) if k.startswith("datahub:") and k not in live_sources]
+        dead += [k for k in list(d.change_detector.last_manifest_hash)
+                 if k.startswith("datahub:") and k not in live_sources and k not in dead]
+        for k in dead:
+            d.weight_learner.weights.pop(k, None)
+            d.change_detector.last_manifest_hash.pop(k, None)
+            d.causal_graph.edges.pop(k, None)
+        sched = d.regeneration_scheduler
+        dead_skills = [k for k in set(sched.last_regenerated) | sched.deferred | set(sched.regeneration_queue)
+                       if k.startswith("assistant.datahub_") and k not in live_skills]
+        for k in dead_skills:
+            sched.last_regenerated.pop(k, None)
+            sched.deferred.discard(k)
+            sched.queued_skills.discard(k)
+            if k in sched.regeneration_queue:
+                sched.regeneration_queue.remove(k)
+        n = len(dead) + len(dead_skills)
+        if n:
+            self._dirty = True
+            try:
+                audit_sink.emit("learning.sources_evicted", {"evicted_count": n}, tenant_id=self.tenant_id)
+            except audit_sink.AuditWriteFailed:
+                logger.warning("source eviction record did not commit")
+        return n
+
     async def _regenerate_one(self, skill_id: str) -> None:
         fn = self._regenerate or _default_regenerate
         try:
@@ -164,7 +286,14 @@ class LearningHost:
         except Exception as exc:  # noqa: BLE001 - the host outlives a failed regeneration
             outcome = type("O", (), {"skill_id": skill_id, "outcome": "failed",
                                      "detail": type(exc).__name__, "generation": 0})()
-        self.daemon.regeneration_scheduler.mark_regenerated(skill_id)
+        sched = self.daemon.regeneration_scheduler
+        kind = getattr(outcome, "outcome", "failed")
+        if kind == "completed":
+            sched.mark_regenerated(skill_id)
+        elif kind != "no_artifact":
+            # Not done: try again later instead of counting a failure as a regeneration - the
+            # change that asked for it is already consumed (review 2026-10-12, DH-5).
+            sched.defer_retry(skill_id, RETRY_REFUSED_S if kind == "refused" else RETRY_FAILED_S)
         self.regenerations.append({
             "skill_id": skill_id, "outcome": getattr(outcome, "outcome", "failed"),
             "detail": str(getattr(outcome, "detail", ""))[:120],
@@ -187,12 +316,22 @@ class LearningHost:
             "weights": dict(d.weight_learner.weights),
             "queue": list(d.regeneration_scheduler.regeneration_queue),
             "regenerations": self.regenerations[-10:], "cursor": dict(self.cursor),
+            "standby": bool(getattr(self, "standby", False)), "lease": self.lease.held,
             "decisions": len(d.audit_trail),
         }
 
     async def run(self, stop: threading.Event) -> None:
         interval = MIN_INTERVAL_S
         while not stop.is_set():
+            if not self.lease.try_acquire():
+                # Another process hosts this tenant: stand by, try again later (takes over when
+                # that process exits and the OS drops its lock).
+                self.standby = True
+                stop.wait(MAX_INTERVAL_S)
+                continue
+            if getattr(self, "standby", False):
+                self.standby = False
+                self._restored = self._load()   # pick up what the previous holder saved
             try:
                 work = await self.tick()
             except Exception as exc:  # noqa: BLE001 - supervised: log, count, continue
@@ -204,6 +343,13 @@ class LearningHost:
             interval = MIN_INTERVAL_S if work else min(MAX_INTERVAL_S, interval * 2)
             await asyncio.sleep(0)  # let waiting tasks run
             stop.wait(interval)
+        # Persist on the way out - but only as the lease holder, so a standby host never
+        # overwrites the state another process is maintaining.
+        if self.lease.try_acquire():
+            try:
+                self.save()
+            finally:
+                self.lease.release()
 
 
 def _default_sources(tenant_id: str) -> list:
@@ -212,10 +358,10 @@ def _default_sources(tenant_id: str) -> list:
     return sources(tenant_id)
 
 
-def _default_hash(path: str) -> str:
+def _default_hash(path: str, tenant_id: str) -> str:
     from core.skills.os_skills.datahub_unified.regenerate import current_sha256
 
-    return current_sha256(path) if path else ""
+    return current_sha256(path, tenant_id) if path else ""
 
 
 def _default_regenerate(tenant_id: str, skill_id: str, *, reason: str):
@@ -286,11 +432,7 @@ def stop(tenant_id: str = "_default", *, timeout: float = 5.0) -> None:
     if entry:
         host, ev, thread = entry
         ev.set()
-        thread.join(timeout)
-        try:
-            host.save()
-        except OSError:
-            pass
+        thread.join(timeout)   # the host thread saves and releases its lease on the way out
 
 
 def status(tenant_id: str = "_default") -> Optional[dict[str, Any]]:

@@ -130,16 +130,14 @@ def check_migration_complete():
     """Verify migration runner exists and can be called."""
     print("\n📊 Checking Phase 7d migration...")
 
-    runner_file = Path("/home/shumway/projects/CorvinOS/core/learning/migration_runner.py")
-    assert runner_file.exists()
-
+    # core/learning/migration_runner.py was removed with the other unreachable learning modules
+    # (T-0125, 2026-10-11); only the store is checked.
     store_file = Path("/home/shumway/projects/CorvinOS/core/learning/storage.py")
     assert store_file.exists()
 
     store_content = store_file.read_text()
 
     checks = {
-        "Migration runner exists": True,
         "EventStore exists": "class LearningEventStore" in store_content,
         "Register node method": "def register_node" in store_content or "def save_node" in store_content,
     }

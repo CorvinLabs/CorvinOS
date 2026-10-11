@@ -55,6 +55,12 @@ def coerce_dependency(dep: Any) -> SkillDependency:
     form lost ``required`` and ``constraint_type``.
     """
     if isinstance(dep, SkillDependency):
+        # A SkillDependency built by hand can carry anything; the name keys dict/set lookups and
+        # the version is parsed - check both, so the validator never raises on it (review SC-02).
+        if not isinstance(dep.name, str) or not dep.name:
+            raise TypeError(f"dependency name must be a non-empty str: {dep.name!r}")
+        if not isinstance(dep.version, str):
+            raise TypeError(f"dependency version must be a str: {dep.version!r}")
         return dep
     if isinstance(dep, str):
         if not dep:
@@ -185,7 +191,12 @@ class DependencyValidator:
 
     @staticmethod
     def _version_tuple(text: str) -> tuple:
-        """``"1.2"`` -> ``(1, 2, 0)``: pad to three parts so ``1.0`` equals ``1.0.0``."""
+        """``"1.2"`` -> ``(1, 2, 0)``: pad to three parts so ``1.0`` equals ``1.0.0``.
+
+        Raises ValueError for anything that is not a version string (``None`` included), which
+        every caller treats as "not satisfied" (fail-closed)."""
+        if not isinstance(text, str):
+            raise ValueError(f"not a version string: {text!r}")
         parts = tuple(int(p) for p in text.strip().split("."))
         return parts + (0,) * (3 - len(parts)) if len(parts) < 3 else parts
 
@@ -312,7 +323,13 @@ def topological_sort_skills(
             continue
 
         depends_on = getattr(metadata, "depends_on", [])
-        for dep in depends_on:
+        for raw_dep in depends_on:
+            # Every declaration form the validator accepts (SkillDependency, str, dict) - this
+            # read ``dep.name`` and crashed on the other two (review SC-03).
+            try:
+                dep = coerce_dependency(raw_dep)
+            except (TypeError, ValueError) as exc:
+                return [], f"Unreadable dependency declaration in {skill_id}: {exc}"
             if dep.name in skill_names:
                 # dep.name is a dependency of skill_id
                 # So: dep.name → skill_id (dep must come first)

@@ -26,10 +26,13 @@ def _run(coro):
 
 def test_an_event_in_the_inbox_is_consumed_once_and_survives_a_restart():
     li.emit("_default", "user_feedback", {"skill_id": "s1", "signal": -0.8, "data_sources": ["datahub:aa"]})
-    host = lh.LearningHost("_default")
+    from core.skills.os_skills.datahub_unified.regenerate import SourceRef
+
+    live = lambda t: [SourceRef("datahub:aa", "s1", "aa", "", "")]   # noqa: E731 - the artifact exists
+    host = lh.LearningHost("_default", sources=live)
     assert _run(host.tick()) == 1
     assert host.daemon.weight_learner.weights["datahub:aa"] < 0.5
-    again = lh.LearningHost("_default")
+    again = lh.LearningHost("_default", sources=live)
     assert again._restored and _run(again.tick()) == 0
     assert again.daemon.weight_learner.weights["datahub:aa"] == host.daemon.weight_learner.weights["datahub:aa"]
 
@@ -103,3 +106,73 @@ def test_start_is_idempotent_and_stop_persists(monkeypatch):
 
 def test_the_host_does_not_start_under_pytest_by_default():
     assert lh.start("_default") is False
+
+
+def test_state_of_a_deleted_artifact_is_evicted_but_an_unreadable_listing_evicts_nothing():
+    from core.skills.os_skills.datahub_unified.regenerate import SourceRef
+
+    li.emit("_default", "user_feedback", {"skill_id": "assistant.datahub_aa", "signal": -0.5,
+                                          "data_sources": ["datahub:aa"]})
+    def broken(_t):
+        raise OSError("listing failed")
+    host = lh.LearningHost("_default", sources=broken)
+    _run(host.tick())
+    assert "datahub:aa" in host.daemon.weight_learner.weights      # could not look: keep
+    host._sources = lambda t: []                                     # looked: artifact is gone
+    host._last_source_check = 0
+    _run(host.tick())
+    assert "datahub:aa" not in host.daemon.weight_learner.weights
+
+
+def test_a_second_host_on_the_same_tenant_stands_by(monkeypatch):
+    first = lh.LearningHost("_default")
+    assert first.lease.try_acquire()
+    second = lh.LearningHost("_default")
+    assert second.lease.try_acquire() is False       # flock is per open file description
+    first.lease.release()
+    assert second.lease.try_acquire() is True
+    second.lease.release()
+
+
+def test_a_line_finished_in_yesterdays_file_after_the_reader_moved_on_is_not_lost():
+    d = li.daemon_dir("_default")
+    d.mkdir(parents=True)
+    (d / "inbox-20261010.jsonl").write_bytes(
+        b'{"event_type":"user_feedback","tenant_id":"_default","payload":{"skill_id":"a1"}}\n'
+        b'{"event_type":"user_feedback","tenant_id":"_default","payload":{"skill_id":"a2"')
+    (d / "inbox-20261011.jsonl").write_bytes(
+        b'{"event_type":"user_feedback","tenant_id":"_default","payload":{"skill_id":"b1"}}\n')
+    ev, cur = li.read_from("_default", None)
+    assert [e["payload"]["skill_id"] for e in ev] == ["a1", "b1"]
+    with open(d / "inbox-20261010.jsonl", "ab") as f:
+        f.write(b'}}\n')
+    ev2, _ = li.read_from("_default", cur)
+    assert [e["payload"]["skill_id"] for e in ev2] == ["a2"]
+
+
+def test_a_failed_regeneration_is_retried_not_counted_as_done():
+    host = lh.LearningHost("_default", regenerate=lambda t, s, reason: type(
+        "O", (), {"outcome": "failed", "detail": "x", "generation": 0})())
+    _run(host._regenerate_one("assistant.datahub_ab"))
+    sched = host.daemon.regeneration_scheduler
+    assert "assistant.datahub_ab" in sched.deferred
+    from datetime import datetime, timedelta
+    sched.last_regenerated["assistant.datahub_ab"] = (datetime.utcnow() - timedelta(days=2)).isoformat()
+    sched.batch_window_seconds = 0
+    assert _run(sched.get_ready_batch()) == ["assistant.datahub_ab"]
+
+
+def test_a_refused_state_file_is_recorded_and_kept_aside():
+    path = lh.state_path("_default")
+    path.parent.mkdir(parents=True)
+    path.write_text('{"daemon": {"version": 99, "tenant_id": "_default"}}')
+    host = lh.LearningHost("_default")
+    assert host._restored is False
+    assert not path.exists()
+    assert list(path.parent.glob("state.json.refused-*"))
+
+
+def test_an_event_for_another_tenant_is_not_written(monkeypatch):
+    monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
+    assert li.emit("acme", "user_feedback", {"skill_id": "s", "signal": 1}) is False
+    assert li.day_files("acme") == []

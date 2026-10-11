@@ -56,18 +56,6 @@ def test_dashboard_page_exists():
     print("✅ Dashboard frontend page wired")
 
 
-def test_migration_runner_exists():
-    """E2E: Migration runner for Phase 7d exists."""
-    runner_file = Path("/home/shumway/projects/CorvinOS/core/learning/migration_runner.py")
-    assert runner_file.exists(), "Migration runner should exist"
-
-    content = runner_file.read_text()
-    assert "run_migration" in content
-    assert "concepts_migrated" in content
-
-    print("✅ Migration runner ready for Phase 7d")
-
-
 if __name__ == "__main__":
     import sys
 
@@ -79,7 +67,6 @@ if __name__ == "__main__":
         test_learning_integration_api_exists,
         test_console_learning_route_exists,
         test_dashboard_page_exists,
-        test_migration_runner_exists,
     ]
 
     passed = 0

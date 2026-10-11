@@ -158,8 +158,26 @@ class LifecycleHookTemplate:
 
     @staticmethod
     def _lit(value: object) -> str:
-        """A string literal valid in both Python and TOML (JSON, ASCII-escaped)."""
-        return json.dumps(str(value))
+        """A double-quoted string literal valid in both Python and TOML.
+
+        ``json.dumps`` (ASCII) wrote non-BMP characters as surrogate pairs (``\\ud83d\\ude80``),
+        which TOML rejects (review SC-09). Here: printable characters as themselves, ``"`` and ``\\``
+        escaped, every control character as ``\\uXXXX`` (valid in both)."""
+        out = []
+        for ch in str(value):
+            if ch == "\\":
+                out.append("\\\\")
+            elif ch == '"':
+                out.append('\\"')
+            elif 0xD800 <= ord(ch) <= 0xDFFF:
+                out.append(" ")               # a lone surrogate is valid in neither
+            elif not ch.isprintable() and ord(ch) <= 0xFFFF:
+                out.append("\\u%04x" % ord(ch))
+            elif not ch.isprintable():
+                out.append(" ")
+            else:
+                out.append(ch)
+        return '"' + "".join(out) + '"'
 
     @staticmethod
     def _doc(value: object) -> str:
@@ -239,7 +257,7 @@ from typing import Any
 
 
 class {self._class_name()}Plugin:
-    """Implementation of {self.plugin_name} plugin.
+    """Implementation of {self._doc(self.plugin_name)} plugin.
 
     Attributes:
         plugin_id: Unique plugin identifier
@@ -250,8 +268,8 @@ class {self._class_name()}Plugin:
     def __init__(self) -> None:
         """Initialize the plugin."""
         self.plugin_id = "{self.plugin_id}"
-        self.display_name = "{self.plugin_name}"
-        self.plugin_type = "{self.plugin_type}"
+        self.display_name = {self._lit(self.plugin_name)}
+        self.plugin_type = {self._lit(self.plugin_type)}
         self.logger = logging.getLogger(__name__)
         self._initialized = False
 
@@ -277,7 +295,9 @@ class {self._class_name()}Plugin:
             str: PEP-8 compliant class name
         """
         parts = re.split(r"[._-]+", self.plugin_id)
-        return "".join(p.capitalize() for p in parts if p) + "Plugin"
+        name = "".join(p.capitalize() for p in parts if p) + "Plugin"
+        # plugin_id may start with a digit ("1password"); a Python class name may not (review SC-08)
+        return name if name[:1].isalpha() else "P" + name
 
     def generate_conftest(self) -> str:
         """Generate conftest.py for plugin tests.
@@ -318,7 +338,7 @@ __all__ = [
             str: Python code for test module
         """
         class_name = self._class_name()
-        return f'''"""Unit tests for {self.plugin_name} plugin.
+        return f'''"""Unit tests for {self._doc(self.plugin_name)} plugin.
 
 Tests verify:
 - Plugin initialization and lifecycle
@@ -337,8 +357,8 @@ class TestPluginLifecycle:
         """Test plugin initialization."""
         plugin = {class_name}Plugin()
         assert plugin.plugin_id == "{self.plugin_id}"
-        assert plugin.display_name == "{self.plugin_name}"
-        assert plugin.plugin_type == "{self.plugin_type}"
+        assert plugin.display_name == {self._lit(self.plugin_name)}
+        assert plugin.plugin_type == {self._lit(self.plugin_type)}
 
     def test_health_check(self) -> None:
         """Test plugin health check."""
@@ -471,61 +491,41 @@ class AuditEventEmitter:
         }
         self._write_audit_event(event)
 
-    def _write_audit_event(self, event: Dict[str, Any]) -> None:
-        """Write audit event to tenant audit chain (fail-closed).
+    #: Closed, content-free field set of the ``plugin_builder.scaffold`` record.
+    _FIELDS = ("plugin_id", "plugin_type", "config_hash", "hooks_n", "error_class")
 
-        Args:
-            event: Audit event dictionary
+    def _write_audit_event(self, event: Dict[str, Any]) -> None:
+        """Record one scaffold stage on the tenant's core audit chain (fail-closed).
+
+        Goes through the core writer (``audit.audit_event`` -> ``security_events.write_event``),
+        which owns the HMAC chain, the lock, the tenant path and the allowlist. This method used
+        to read the chain's last line and append its own sha256-linked JSON (no lock, no MAC):
+        every scaffold turned the tenant chain into ``tampered``/``mac_missing`` (review
+        2026-10-12, AUD-1). Content-free: the scaffold directory (a filesystem path) and the
+        exception text never reach the record - only the error CLASS and a hook count.
 
         Raises:
-            RuntimeError: If write fails
+            RuntimeError: If the record did not commit
         """
+        details: Dict[str, Any] = {"tenant_id": self.tenant_id, "stage": str(event.get("type", ""))}
+        for key in ("plugin_id", "plugin_type", "config_hash"):
+            if isinstance(event.get(key), str):
+                details[key] = event[key][:128]
+        if isinstance(event.get("hooks"), list):
+            details["hooks_n"] = len(event["hooks"])
+        if isinstance(event.get("error_type"), str):
+            details["error_class"] = event["error_type"][:64]
         try:
-            # Import here to avoid circular deps
-            from core.paths import tenant as tenant_paths
+            from audit import audit_event  # noqa: PLC0415
 
-            audit_chain = tenant_paths.tenant_audit_chain(self.tenant_id)
-
-            # Ensure directory exists
-            audit_chain.parent.mkdir(parents=True, exist_ok=True)
-
-            # Read previous hash for chaining
-            prev_hash = self._get_previous_hash(audit_chain)
-
-            # Add chain link
-            event["prev_hash"] = prev_hash
-            event["hash"] = hashlib.sha256(
-                json.dumps(event, sort_keys=True, default=str).encode()
-            ).hexdigest()
-
-            # Append to audit chain (atomic-ish)
-            with open(audit_chain, "a") as f:
-                f.write(json.dumps(event) + "\n")
-
-            self.logger.debug(f"Audit event emitted: {event['type']}")
-        except Exception as e:
-            self.logger.error(f"Audit event emission failed: {e}")
-            raise RuntimeError(f"Failed to emit audit event: {e}")
-
-    def _get_previous_hash(self, audit_chain: Path) -> str:
-        """Get hash of last event in chain."""
-        if not audit_chain.exists():
-            return ""
-
-        try:
-            with open(audit_chain, "r") as f:
-                last_line = None
-                for line in f:
-                    if line.strip():
-                        last_line = line
-
-                if last_line:
-                    last_event = json.loads(last_line)
-                    return last_event.get("hash", "")
-        except Exception:
-            pass
-
-        return ""
+            committed = bool(audit_event("plugin_builder.scaffold", details=details,
+                                         tenant_id=self.tenant_id))
+        except Exception as e:  # noqa: BLE001
+            self.logger.error(f"Audit event emission failed: {type(e).__name__}")
+            raise RuntimeError(f"Failed to emit audit event: {type(e).__name__}") from e
+        if not committed:
+            raise RuntimeError(f"Audit event {details['stage']!r} was not committed (fail-closed)")
+        self.logger.debug(f"Audit event emitted: {details['stage']}")
 
 
 class PluginScaffoldGenerator:

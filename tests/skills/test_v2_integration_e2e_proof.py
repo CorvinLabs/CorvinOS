@@ -160,9 +160,11 @@ def test_develop_workflow_minimal():
         print(f"   - elapsed_seconds: {result.elapsed_seconds:.3f}s")
 
 
-def test_develop_plugin_function():
-    """Proof: Convenience function develop_plugin() works."""
+def test_develop_plugin_function(monkeypatch):
+    """Proof: Convenience function develop_plugin() works (run as the plan's tenant: the scaffold
+    step records on that tenant's chain and a process cannot write another tenant's)."""
     print("\n[Test 6] develop_plugin() Convenience Function")
+    monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_demo")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         result = develop_plugin(

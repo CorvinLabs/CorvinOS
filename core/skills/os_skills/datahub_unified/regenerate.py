@@ -54,7 +54,7 @@ class SourceRef:
 @dataclass(frozen=True)
 class RegenOutcome:
     skill_id: str
-    outcome: str          # completed | refused | failed | no_artifact | skipped
+    outcome: str          # completed | refused | failed | partial | no_artifact
     detail: str = ""
     generation: int = 0
 
@@ -84,13 +84,15 @@ def _write(tenant_id: str, artifact: dict) -> None:
 def live_skill_artifacts(tenant_id: str) -> list[dict]:
     """Artifacts that are registered skills and still live (not deleted)."""
     out = []
-    try:
-        for path in sorted(_artifacts_dir(tenant_id).glob("*.json")):
-            art = _read(path)
-            if art and art.get("status") != "deleted" and art.get("skill_name") and art.get("source"):
-                out.append(art)
-    except OSError:
-        pass
+    directory = _artifacts_dir(tenant_id)
+    if not directory.exists():
+        return out
+    # An unreadable directory RAISES: the host evicts state of sources missing from this list, and
+    # "could not look" must never read as "everything was deleted".
+    for path in sorted(directory.glob("*.json")):
+        art = _read(path)
+        if art and art.get("status") != "deleted" and art.get("skill_name") and art.get("source"):
+            out.append(art)
     return out
 
 
@@ -104,7 +106,35 @@ def sources(tenant_id: str) -> list[SourceRef]:
     return refs
 
 
-def current_sha256(path: str) -> str:
+def safe_source_path(tenant_id: str, stored: str) -> Optional[Path]:
+    """The stored source path if it may still be read for ``tenant_id``, else None.
+
+    Create resolved and checked the path once; the file can be swapped for a symlink afterwards
+    (review 2026-10-12, DH-1: a skill rebuilt from ANOTHER tenant's file). Re-check on every read:
+    no symlink, still resolving to exactly the stored path, and not inside another tenant's home.
+    """
+    from core.paths.tenant import tenant_home
+
+    if not stored:
+        return None
+    p = Path(stored)
+    try:
+        if p.is_symlink() or p.resolve() != p:
+            return None
+        own = tenant_home(tenant_id).resolve()
+        home = own.parent.parent
+        rp = p.resolve()
+        if rp.is_relative_to(home) and not rp.is_relative_to(own):
+            return None
+    except (OSError, ValueError):
+        return None
+    return p
+
+
+def current_sha256(path: str, tenant_id: Optional[str] = None) -> str:
+    """Content hash of a source; ``""`` when it cannot (or, for ``tenant_id``, may not) be read."""
+    if tenant_id is not None and safe_source_path(tenant_id, path) is None:
+        return ""
     h = hashlib.sha256()
     try:
         with open(path, "rb") as f:
@@ -121,11 +151,12 @@ def _emit(tenant_id: str, details: dict[str, Any]) -> None:
 
 def regenerate_skill(tenant_id: str, skill_id: str, *, reason: str = "manual") -> RegenOutcome:
     """Regenerate one Data Hub skill from its source. Never raises (a failed regeneration is an
-    outcome with a record, not a crashed host)."""
+    outcome with a record, not a crashed host). Every terminal outcome is recorded."""
     reason = reason if reason in REASONS else "manual"
     art = next((a for a in live_skill_artifacts(tenant_id) if a.get("skill_name") == skill_id), None)
     base = {"skill_id": skill_id, "reason": reason}
     if art is None:
+        _try_record(tenant_id, {**base, "stage": "finished", "outcome": "no_artifact"})
         return RegenOutcome(skill_id, "no_artifact")
     base["artifact_id"] = art["artifact_id"]
     src = art["source"]
@@ -134,58 +165,69 @@ def regenerate_skill(tenant_id: str, skill_id: str, *, reason: str = "manual") -
     def _record(stage: str, outcome: str, **extra: Any) -> None:
         _emit(tenant_id, {**base, "stage": stage, "outcome": outcome, "generation": generation, **extra})
 
-    # 2. re-read the source
+    def _finish(outcome: str, detail: str, **extra: Any) -> RegenOutcome:
+        _try_record(tenant_id, {**base, "stage": "finished", "outcome": outcome,
+                                "generation": generation, **extra})
+        return RegenOutcome(skill_id, outcome, detail, generation if outcome == "completed" else 0)
+
+    # 2. re-read the source - re-checked: it may have been swapped since create
+    path = safe_source_path(tenant_id, src.get("path", ""))
+    if path is None:
+        return _finish("refused", "source path is no longer a plain file of this tenant")
     hub = DataHubSkill()
     try:
-        hub.ingest(DataIngestion(source_type=DataSourceType(src["type"]), source_path=src["path"],
+        hub.ingest(DataIngestion(source_type=DataSourceType(src["type"]), source_path=str(path),
                                  sample_rows=int(src.get("sample_rows", 100)), infer_schema=True))
     except (IngestionError, OSError, ValueError) as exc:
-        try:
-            _record("finished", "failed", reason=reason)
-        except audit_sink.AuditWriteFailed:
-            pass
-        return RegenOutcome(skill_id, "failed", f"source: {type(exc).__name__}")
+        return _finish("failed", f"source: {type(exc).__name__}")
     if hub.security.get("secret", 0) > 0:
-        try:
-            _record("finished", "refused")
-        except audit_sink.AuditWriteFailed:
-            pass
-        return RegenOutcome(skill_id, "refused", "source now contains a secret")
+        return _finish("refused", "source now contains a secret")
     rows = len(hub.ingested_data or [])
     if rows == 0:
-        return RegenOutcome(skill_id, "refused", "source has no rows")
+        return _finish("refused", "source has no rows")
 
     # 3. regenerate
     result = UnifiedCreator().create(CreationRequest(
-        data=DataIngestion(source_type=DataSourceType(src["type"]), source_path=src["path"],
+        data=DataIngestion(source_type=DataSourceType(src["type"]), source_path=str(path),
                            sample_rows=rows, infer_schema=False),
         creation_type=CreationType.SKILL, name=art["name"], description=art["description"],
         complexity=src.get("complexity", "medium"), fail_closed=True))
     if not result.success:
-        return RegenOutcome(skill_id, "failed", "validation")
+        return _finish("failed", "validation", sample_size=rows)
     body_hash = hashlib.sha256(result.artifact_body.encode("utf-8")).hexdigest()[:16]
 
-    # 4. audit-first, then apply
+    # 4. audit-first, then apply BOTH halves or neither
     try:
         _record("applying", "pending", sample_size=rows, body_hash=body_hash)
     except audit_sink.AuditWriteFailed:
         return RegenOutcome(skill_id, "failed", "audit chain did not commit; nothing applied")
+    reg = _registry(tenant_id)
+    old_body = reg.get_body(skill_id)
     try:
-        _registry(tenant_id).update_body(skill_id, scope=SCOPE, body_md=result.artifact_body,
-                                           quota_exempt=True)
-        art.update({
+        reg.update_body(skill_id, scope=SCOPE, body_md=result.artifact_body, quota_exempt=True)
+    except Exception as exc:  # noqa: BLE001 - nothing changed
+        return _finish("failed", f"apply: {type(exc).__name__}", sample_size=rows, body_hash=body_hash)
+    try:
+        updated = dict(art)
+        updated.update({
             "body": result.artifact_body, "row_count": rows, "generation": generation,
             "regenerated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "status": "completed", "validation_errors": result.validation_errors,
+            "source": {**src, "sha256": current_sha256(str(path))},
         })
-        art["source"] = {**src, "sha256": current_sha256(src["path"])}
-        _write(tenant_id, art)
-    except Exception as exc:  # noqa: BLE001 - recorded, not raised
-        try:
-            _record("finished", "failed", sample_size=rows, body_hash=body_hash)
-        except audit_sink.AuditWriteFailed:
-            pass
-        return RegenOutcome(skill_id, "failed", f"apply: {type(exc).__name__}", generation)
+        _write(tenant_id, updated)
+    except Exception as exc:  # noqa: BLE001 - roll the registry back: the two halves agree
+        restored = False
+        if old_body is not None:
+            try:
+                reg.update_body(skill_id, scope=SCOPE, body_md=_strip_front_matter(old_body),
+                                quota_exempt=True)
+                restored = True
+            except Exception:  # noqa: BLE001
+                restored = False
+        return _finish("failed" if restored else "partial",
+                       f"artifact write: {type(exc).__name__}; registry {'restored' if restored else 'NOT restored'}",
+                       sample_size=rows, body_hash=body_hash)
     try:
         _record("finished", "completed", sample_size=rows, body_hash=body_hash)
     except audit_sink.AuditWriteFailed:
@@ -193,5 +235,20 @@ def regenerate_skill(tenant_id: str, skill_id: str, *, reason: str = "manual") -
     return RegenOutcome(skill_id, "completed", generation=generation)
 
 
+def _try_record(tenant_id: str, details: dict[str, Any]) -> None:
+    try:
+        _emit(tenant_id, details)
+    except audit_sink.AuditWriteFailed:
+        logger.warning("learning.regeneration record did not commit (%s)", details.get("outcome"))
+
+
+def _strip_front_matter(text: str) -> str:
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            return text[end + 4:].lstrip("\n")
+    return text
+
+
 __all__ = ["SourceRef", "RegenOutcome", "sources", "regenerate_skill", "live_skill_artifacts",
-           "current_sha256", "REASONS"]
+           "current_sha256", "safe_source_path", "REASONS"]

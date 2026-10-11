@@ -228,9 +228,15 @@ class TestReadiness:
         assert readiness.evaluate(TENANT, "console").reason == "insufficient_samples"
 
     def test_console_soak_reports_the_real_counts_not_zero(self):
-        _seed(120, surface="bridge")
+        _seed(100, surface="bridge")
+        _seed(20, surface="bridge", bundled="acs", used="acs", skill="native")
         r = readiness.evaluate(TENANT, "bridge")
         assert r.reason == "console_soak_incomplete" and r.decisions == 120, r
+
+    def test_a_bridge_that_never_delegates_says_so_before_the_soak_gate(self):
+        """Review ACP-6: the console-soak gate answered first forever on a never-delegating bridge."""
+        _seed(560, surface="bridge")
+        assert readiness.evaluate(TENANT, "bridge").reason == "no_delegation_subject"
 
     def test_disagreements_with_supporting_evidence_are_ready(self):
         _seed(470)

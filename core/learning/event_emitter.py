@@ -38,6 +38,8 @@ class EventEmitter:
         self.store = event_store
         self._queue: queue.Queue[Optional[LearningEvent]] = queue.Queue(maxsize=queue_size)
         self._stopped = False
+        self._sentinel_sent = False
+        self.lost_at_exit = 0
         # One lock makes "is the emitter still accepting?" and "put the event in the queue" a single
         # step, and makes stop() flip the flag atomically with respect to both. Without it an emit
         # that passed the _stopped check could put its event BEHIND stop()'s sentinel: emit() said
@@ -95,23 +97,40 @@ class EventEmitter:
         return False  # Queue full, drop event
 
     def stop(self, timeout: float = 5.0) -> None:
-        """Stop emitter (wait for queue to flush)."""
+        """Stop accepting, then wait for every accepted event to be written.
+
+        Idempotent and still WAITING on a repeat call: a first call that timed out used to leave a
+        second call (and the atexit flush) returning at once with the worker still writing - events
+        accepted with True were cut off at exit (review 2026-10-12, SC-11).
+        """
         with self._lifecycle_lock:
-            if self._stopped:
-                return
             self._stopped = True   # from here no emit() can enqueue: every accepted event precedes the sentinel
-        try:
-            # Bounded: with a full queue and a stuck worker a plain put() blocked forever.
-            self._queue.put(None, timeout=timeout)  # Sentinel
-        except queue.Full:
-            raise RuntimeError("EventEmitter queue is full and its worker is not draining it") from None
+            send_sentinel = not self._sentinel_sent
+            self._sentinel_sent = True
+        if send_sentinel:
+            try:
+                # Bounded: with a full queue and a stuck worker a plain put() blocked forever.
+                self._queue.put(None, timeout=timeout)  # Sentinel
+            except queue.Full:
+                with self._lifecycle_lock:
+                    self._sentinel_sent = False   # a later stop() may still deliver it
+                raise RuntimeError("EventEmitter queue is full and its worker is not draining it") from None
         self._worker_thread.join(timeout=timeout)
         if self._worker_thread.is_alive():
             raise RuntimeError("EventEmitter worker thread failed to shut down within timeout")
 
+    #: How long interpreter exit waits for accepted events to be written.
+    EXIT_FLUSH_S = 30.0
+
     def _atexit_flush(self) -> None:
-        """Best-effort flush at interpreter exit (daemon thread would otherwise be cut mid-write)."""
+        """Flush at interpreter exit (the daemon worker would otherwise be cut mid-queue). What
+        still cannot be written in ``EXIT_FLUSH_S`` is COUNTED and logged, never lost silently."""
         try:
-            self.stop(timeout=2.0)
-        except Exception:  # noqa: BLE001 — exit path, nothing left to report to
+            self.stop(timeout=self.EXIT_FLUSH_S)
+        except Exception:  # noqa: BLE001 - exit path
             pass
+        if self._worker_thread.is_alive():
+            left = self._queue.qsize()
+            with self._stats_lock:
+                self.lost_at_exit = left
+            logger.error("EventEmitter: %d accepted learning event(s) not written at exit", left)

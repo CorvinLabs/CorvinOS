@@ -132,25 +132,35 @@ class OtelTracer:
         if audit_ref:
             attrs["audit_ref"] = audit_ref
 
-        entered = False
+        # Enter and exit the span BY HAND so the three failure sources stay apart (review SC-12):
+        #   * the tracer cannot start a span      -> absorbed, the body runs untraced
+        #   * the traced BODY raises              -> re-raised unchanged
+        #   * ending the span / a processor fails -> logged, never replaces the body's outcome
         try:
-            with self.tracer.start_as_current_span(name) as span:
-                entered = True
-                for key, value in attrs.items():
-                    try:
-                        span.set_attribute(key, value)
-                    except Exception:  # noqa: BLE001 — a bad attribute never breaks the traced call
-                        logger.debug("OtelTracer.span(): attribute %r not set", key)
-                yield span
-        except Exception as e:
-            if entered:
-                # Thrown into the generator by the TRACED BODY. Swallowing it and yielding a
-                # second time made contextlib raise "generator didn't stop after throw()",
-                # which replaced the body's real exception (a skill's ValueError) with a
-                # RuntimeError. Only a failure to start the tracer is ours to absorb.
-                raise
+            cm = self.tracer.start_as_current_span(name)
+            span = cm.__enter__()
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error in OtelTracer.span(): {e}", exc_info=True)
             yield None
+            return
+        for key, value in attrs.items():
+            try:
+                span.set_attribute(key, value)
+            except Exception:  # noqa: BLE001 - a bad attribute never breaks the traced call
+                logger.debug("OtelTracer.span(): attribute %r not set", key)
+        try:
+            yield span
+        except BaseException as body_exc:
+            try:
+                cm.__exit__(type(body_exc), body_exc, body_exc.__traceback__)
+            except Exception as exit_exc:  # noqa: BLE001
+                logger.error("OtelTracer.span(): ending the span failed: %s", exit_exc)
+            raise
+        else:
+            try:
+                cm.__exit__(None, None, None)
+            except Exception as exit_exc:  # noqa: BLE001
+                logger.error("OtelTracer.span(): ending the span failed: %s", exit_exc)
 
 
 # Global tracer instance

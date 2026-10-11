@@ -792,9 +792,12 @@ _DB_RE = re.compile(
     r"sqlite|mongodb|clickhouse|bigquery|redshift|snowflake|duckdb|oracle[\s\-]?db|"
     r"dwh|olap)\b"
     r"|\bselect\b(?=.{0,80}?\bfrom\b)"
-    r"|\binsert\s+into\b(?=.{0,80}?\b(?:values|select)\b)"
-    r"|\bupdate\b(?=.{0,80}?\bset\b)"
-    r"|\bdelete\s+from\b(?=.{0,80}?\bwhere\b)"
+    # Statement SHAPE, not just the verbs: "update my calendar and set a reminder", "delete from the
+    # draft the paragraph where ..." and "insert into the deck a chart and select ..." are prose
+    # (review 2026-10-12, SC-13). An identifier must follow, then `=` / `(` / VALUES / SELECT.
+    r"|\binsert\s+into\s+[\w.`\"\[\]]+\s*(?:\(|values\b|select\b)"
+    r"|\bupdate\s+[\w.`\"\[\]]+\s+set\s+[\w.`\"\[\]]+\s*="
+    r"|\bdelete\s+from\s+[\w.`\"\[\]]+\s+where\s+[\w.`\"\[\]]+\s*(?:[=<>!]|\bin\b|\blike\b|\bis\b|\bbetween\b)"
     r"|\b(?:inner|left|right|outer|cross)\s+joins?\b"
     r"|\bgroup\s+by\b|\border\s+by\b"
     r"|\b(?:db|sql|datenbank)[\s\-]?(?:tabellen?|tables?|schemas?|queries|query|"

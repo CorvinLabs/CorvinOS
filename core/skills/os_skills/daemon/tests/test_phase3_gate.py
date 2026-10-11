@@ -1,10 +1,10 @@
 """Phase 3 Gate Tests — validate all 8 gate criteria."""
 
 import pytest
-from daemon.integration import DaemonIntegration
-from daemon.execution_listener import SkillExecutedEvent
-from daemon.feedback_collector import FeedbackEvent
-from daemon.weight_learner import ConvergenceStatus
+from core.skills.os_skills.daemon.integration import DaemonIntegration
+from core.skills.os_skills.daemon.execution_listener import SkillExecutedEvent
+from core.skills.os_skills.daemon.feedback_collector import FeedbackEvent
+from core.skills.os_skills.daemon.weight_learner import ConvergenceStatus
 
 
 class TestPhase3Gate:

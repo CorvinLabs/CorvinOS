@@ -14,12 +14,12 @@ import json
 from pathlib import Path
 from datetime import datetime
 
-from daemon.integration import DaemonIntegration, DaemonState
-from daemon.execution_listener import SkillExecutedEvent
-from daemon.feedback_collector import FeedbackEvent
-from daemon.change_detector import SourceChangedEvent
-from daemon.weight_learner import ConvergenceStatus, WeightLearner
-from daemon.causal_graph import CausalGraph
+from core.skills.os_skills.daemon.integration import DaemonIntegration, DaemonState
+from core.skills.os_skills.daemon.execution_listener import SkillExecutedEvent
+from core.skills.os_skills.daemon.feedback_collector import FeedbackEvent
+from core.skills.os_skills.daemon.change_detector import SourceChangedEvent
+from core.skills.os_skills.daemon.weight_learner import ConvergenceStatus, WeightLearner
+from core.skills.os_skills.daemon.causal_graph import CausalGraph
 
 
 class TestAuditIntegration:

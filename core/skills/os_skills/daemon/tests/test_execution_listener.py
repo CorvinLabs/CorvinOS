@@ -1,7 +1,7 @@
 """Tests for SkillExecutionListener."""
 
 import pytest
-from daemon.execution_listener import SkillExecutionListener, SkillExecutedEvent
+from core.skills.os_skills.daemon.execution_listener import SkillExecutionListener, SkillExecutedEvent
 
 
 def test_record_execution():

@@ -208,101 +208,64 @@ class TestPluginScaffoldConfig:
             assert is_valid, f"Tenant {tid} should be valid"
 
 
+def _scaffold_records(tenant_id: str = "_default") -> list:
+    """``plugin_builder.scaffold`` records the CORE writer committed (the harness points it at the
+    sandbox chain via VOICE_AUDIT_PATH). The emitter used to append its own hash lines to whatever
+    path ``tenant_audit_chain`` returned - which is what these tests mocked (review AUD-1)."""
+    import os
+
+    chain = Path(os.environ["VOICE_AUDIT_PATH"])
+    if not chain.exists():
+        return []
+    recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+    return [r for r in recs if r.get("event_type") == "plugin_builder.scaffold"
+            and (r.get("details") or {}).get("tenant_id") == tenant_id]
+
+
 class TestAuditEventEmitter:
-    """Test AuditEventEmitter with tenant isolation."""
+    """AuditEventEmitter writes through the core writer: content-free, chained, fail-closed."""
 
-    @patch('core.paths.tenant.tenant_audit_chain')
-    def test_emit_scaffold_generated(self, mock_tenant_audit_chain):
-        """Test emitting scaffold_generated audit event."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            audit_file = Path(tmpdir) / "audit.jsonl"
-            mock_tenant_audit_chain.return_value = audit_file
+    def test_emit_scaffold_generated(self):
+        AuditEventEmitter("_default").emit_scaffold_generated(
+            plugin_id="test.plugin", plugin_type="data_connector",
+            scaffold_dir=Path("/tmp/SENTINEL_DIR"), config_hash="abc123")
+        rec = _scaffold_records()[-1]
+        assert rec["details"]["stage"] == "scaffold_generated"
+        assert rec["details"]["plugin_id"] == "test.plugin"
+        assert rec["details"]["tenant_id"] == "_default"
+        assert "SENTINEL_DIR" not in json.dumps(rec)            # no filesystem path in the record
 
-            emitter = AuditEventEmitter("_default")
-            emitter.emit_scaffold_generated(
-                plugin_id="test.plugin",
-                plugin_type="data_connector",
-                scaffold_dir=Path("/tmp/test"),
-                config_hash="abc123",
-            )
+    def test_emit_lifecycle_hooks_created(self):
+        AuditEventEmitter("_default").emit_lifecycle_hooks_created(
+            plugin_id="test.plugin", hooks=["on_load", "on_execute", "on_unload"])
+        rec = _scaffold_records()[-1]
+        assert rec["details"]["stage"] == "lifecycle_hooks_created"
+        assert rec["details"]["hooks_n"] == 3
 
-            assert audit_file.exists()
-            lines = audit_file.read_text().strip().split("\n")
-            assert len(lines) == 1
-            event = json.loads(lines[0])
-            assert event["type"] == "scaffold_generated"
-            assert event["plugin_id"] == "test.plugin"
-            assert event["tenant_id"] == "_default"
+    def test_emit_scaffold_generation_failed(self):
+        AuditEventEmitter("_default").emit_scaffold_generation_failed(
+            plugin_id="test.plugin", error_message="SENTINEL secret detail", error_type="ValueError")
+        rec = _scaffold_records()[-1]
+        assert rec["details"]["stage"] == "scaffold_generation_failed"
+        assert rec["details"]["error_class"] == "ValueError"
+        assert "SENTINEL" not in json.dumps(rec)                # the message never reaches the chain
 
-    @patch('core.paths.tenant.tenant_audit_chain')
-    def test_emit_lifecycle_hooks_created(self, mock_tenant_audit_chain):
-        """Test emitting lifecycle_hooks_created audit event."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            audit_file = Path(tmpdir) / "audit.jsonl"
-            mock_tenant_audit_chain.return_value = audit_file
+    def test_audit_chain_hash_link(self):
+        """The records are links of THE chain - it still verifies after them."""
+        import os
+        from corvin_operator.forge.forge import security_events as se
 
-            emitter = AuditEventEmitter("_default")
-            emitter.emit_lifecycle_hooks_created(
-                plugin_id="test.plugin",
-                hooks=["on_load", "on_execute", "on_unload"],
-            )
+        em = AuditEventEmitter("_default")
+        em.emit_scaffold_generated(plugin_id="test.plugin", plugin_type="data_connector",
+                                   scaffold_dir=Path("/tmp/test"), config_hash="abc123")
+        em.emit_lifecycle_hooks_created(plugin_id="test.plugin", hooks=["on_load"])
+        assert len(_scaffold_records()) >= 2
+        assert se.verify_chain(Path(os.environ["VOICE_AUDIT_PATH"]))[0] is True
 
-            lines = audit_file.read_text().strip().split("\n")
-            event = json.loads(lines[0])
-            assert event["type"] == "lifecycle_hooks_created"
-            assert event["hooks"] == ["on_load", "on_execute", "on_unload"]
-
-    @patch('core.paths.tenant.tenant_audit_chain')
-    def test_emit_scaffold_generation_failed(self, mock_tenant_audit_chain):
-        """Test emitting scaffold_generation_failed audit event."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            audit_file = Path(tmpdir) / "audit.jsonl"
-            mock_tenant_audit_chain.return_value = audit_file
-
-            emitter = AuditEventEmitter("_default")
-            emitter.emit_scaffold_generation_failed(
-                plugin_id="test.plugin",
-                error_message="Test error",
-                error_type="ValueError",
-            )
-
-            lines = audit_file.read_text().strip().split("\n")
-            event = json.loads(lines[0])
-            assert event["type"] == "scaffold_generation_failed"
-            assert event["error_message"] == "Test error"
-
-    @patch('core.paths.tenant.tenant_audit_chain')
-    def test_audit_chain_hash_link(self, mock_tenant_audit_chain):
-        """Test that audit events form a hash chain."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            audit_file = Path(tmpdir) / "audit.jsonl"
-            mock_tenant_audit_chain.return_value = audit_file
-
-            emitter = AuditEventEmitter("_default")
-
-            # Emit first event
-            emitter.emit_scaffold_generated(
-                plugin_id="test.plugin",
-                plugin_type="data_connector",
-                scaffold_dir=Path("/tmp/test"),
-                config_hash="abc123",
-            )
-
-            # Emit second event
-            emitter.emit_lifecycle_hooks_created(
-                plugin_id="test.plugin",
-                hooks=["on_load"],
-            )
-
-            lines = audit_file.read_text().strip().split("\n")
-            assert len(lines) == 2
-
-            event1 = json.loads(lines[0])
-            event2 = json.loads(lines[1])
-
-            # Check hash chaining
-            assert event1.get("hash")
-            assert event2.get("prev_hash") == event1.get("hash")
+    def test_a_record_for_another_tenant_is_refused(self):
+        with pytest.raises(RuntimeError):
+            AuditEventEmitter("tenant_not_this_process").emit_lifecycle_hooks_created(
+                plugin_id="test.plugin", hooks=["on_load"])
 
 
 class TestPluginScaffoldGenerator:
@@ -397,86 +360,27 @@ class TestPluginScaffoldGenerator:
             assert "credentials.json" in gitignore_content
             assert "audit.jsonl" in gitignore_content
 
-    @patch('core.paths.tenant.tenant_audit_chain')
-    def test_generator_emits_audit_events(self, mock_tenant_audit_chain):
-        """Test that generator emits audit events."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            audit_file = Path(tmpdir) / "audit.jsonl"
-            mock_tenant_audit_chain.return_value = audit_file
+    def test_generator_emits_audit_events(self, tmp_path):
+        config = PluginScaffoldConfig(tenant_id="_default", plugin_id="test.plugin",
+                                      plugin_name="Test Plugin", plugin_type="data_connector")
+        PluginScaffoldGenerator(config).generate(tmp_path)
+        stages = [r["details"]["stage"] for r in _scaffold_records()]
+        assert "scaffold_generated" in stages and "lifecycle_hooks_created" in stages
 
-            config = PluginScaffoldConfig(
-                tenant_id="_default",
-                plugin_id="test.plugin",
-                plugin_name="Test Plugin",
-                plugin_type="data_connector",
-            )
-
-            generator = PluginScaffoldGenerator(config)
-            generator.generate(tmpdir)
-
-            # Verify audit events were written
-            assert audit_file.exists()
-            lines = audit_file.read_text().strip().split("\n")
-            assert len(lines) >= 2  # At least scaffold_generated + lifecycle_hooks_created
-
-            events = [json.loads(line) for line in lines]
-            event_types = [e["type"] for e in events]
-            assert "scaffold_generated" in event_types
-            assert "lifecycle_hooks_created" in event_types
-
-    @patch('core.paths.tenant.tenant_audit_chain')
-    def test_generator_tenant_isolation(self, mock_tenant_audit_chain):
-        """Test that generator respects tenant isolation."""
-        with tempfile.TemporaryDirectory() as tmpdir1:
-            with tempfile.TemporaryDirectory() as tmpdir2:
-                audit_file1 = Path(tmpdir1) / "audit.jsonl"
-                audit_file2 = Path(tmpdir2) / "audit.jsonl"
-
-                def tenant_chain_side_effect(tenant_id):
-                    if tenant_id == "tenant_1":
-                        return audit_file1
-                    elif tenant_id == "tenant_2":
-                        return audit_file2
-                    else:
-                        return Path(tmpdir1) / "audit.jsonl"
-
-                mock_tenant_audit_chain.side_effect = tenant_chain_side_effect
-
-                # Generate for tenant_1
-                config1 = PluginScaffoldConfig(
-                    tenant_id="tenant_1",
-                    plugin_id="plugin.one",
-                    plugin_name="Plugin One",
-                    plugin_type="data_connector",
-                )
-                generator1 = PluginScaffoldGenerator(config1)
-                generator1.generate(tmpdir1)
-
-                # Generate for tenant_2
-                config2 = PluginScaffoldConfig(
-                    tenant_id="tenant_2",
-                    plugin_id="plugin.two",
-                    plugin_name="Plugin Two",
-                    plugin_type="data_connector",
-                )
-                generator2 = PluginScaffoldGenerator(config2)
-                generator2.generate(tmpdir2)
-
-                # Verify tenant isolation
-                assert audit_file1.exists()
-                assert audit_file2.exists()
-
-                lines1 = audit_file1.read_text().strip().split("\n")
-                lines2 = audit_file2.read_text().strip().split("\n")
-
-                # Each audit file should only contain events for its own tenant
-                for line in lines1:
-                    event = json.loads(line)
-                    assert event["tenant_id"] == "tenant_1"
-
-                for line in lines2:
-                    event = json.loads(line)
-                    assert event["tenant_id"] == "tenant_2"
+    def test_generator_tenant_isolation(self, tmp_path, monkeypatch):
+        """Each tenant's scaffold is recorded as that tenant - run as that tenant. A process cannot
+        write another tenant's records (ADR-0562), so a foreign-tenant scaffold fails closed."""
+        for tid, pid in (("tenant_1", "plugin.one"), ("tenant_2", "plugin.two")):
+            monkeypatch.setenv("CORVIN_TENANT_ID", tid)
+            PluginScaffoldGenerator(PluginScaffoldConfig(
+                tenant_id=tid, plugin_id=pid, plugin_name=pid, plugin_type="data_connector",
+            )).generate(tmp_path / tid)
+            assert _scaffold_records(tid), f"no record for {tid}"
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_1")
+        with pytest.raises(RuntimeError):
+            PluginScaffoldGenerator(PluginScaffoldConfig(
+                tenant_id="tenant_2", plugin_id="plugin.three", plugin_name="x", plugin_type="data_connector",
+            )).generate(tmp_path / "x")
 
 
 class TestBootstrapScaffold:
@@ -500,27 +404,12 @@ class TestBootstrapScaffold:
             assert "plugin_json" in files
             assert "gitignore" in files
 
-    @patch('core.paths.tenant.tenant_audit_chain')
-    def test_bootstrap_scaffold_with_custom_tenant(self, mock_tenant_audit_chain):
-        """Test bootstrap_scaffold with custom tenant_id."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            audit_file = Path(tmpdir) / "audit.jsonl"
-            mock_tenant_audit_chain.return_value = audit_file
-
-            files = bootstrap_scaffold(
-                output_dir=tmpdir,
-                plugin_id="test.plugin",
-                plugin_name="Test Plugin",
-                plugin_type="skill_plugin",
-                tenant_id="custom_tenant",
-                version="2.0.0",
-            )
-
-            # Verify audit events have correct tenant_id
-            lines = audit_file.read_text().strip().split("\n")
-            events = [json.loads(line) for line in lines]
-            for event in events:
-                assert event["tenant_id"] == "custom_tenant"
+    def test_bootstrap_scaffold_with_custom_tenant(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CORVIN_TENANT_ID", "custom_tenant")
+        bootstrap_scaffold(output_dir=tmp_path, plugin_id="test.plugin", plugin_name="Test Plugin",
+                           plugin_type="skill_plugin", tenant_id="custom_tenant", version="2.0.0")
+        recs = _scaffold_records("custom_tenant")
+        assert recs and all(r["details"]["tenant_id"] == "custom_tenant" for r in recs)
 
     @patch('core.paths.tenant.tenant_audit_chain')
     def test_bootstrap_scaffold_invalid_config(self, mock_tenant_audit_chain):

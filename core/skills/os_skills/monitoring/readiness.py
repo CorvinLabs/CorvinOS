@@ -59,6 +59,13 @@ def evaluate(tenant_id: str, surface: str, *, now: Optional[float] = None) -> Re
     delegating = sum(1 for r in joined if r.get("bundled") != "native")
     disagree = [r for r in joined if r.get("skill") == "native" and r.get("bundled") != "native"
                 and not (r.get("features") or {}).get("force_delegate")]
+    if delegating == 0 and n >= MIN_BUCKET_SAMPLES:
+        # Checked BEFORE the bridge's console-soak gate: a bridge that never delegates has no
+        # subject either, and the soak gate answered first forever (review 2026-10-12, ACP-6).
+        # The bundled rule never delegated, so there is nothing to de-escalate: more
+        # samples cannot change this, so say so before asking for more. Distinct from
+        # a Skill that had the chance to disagree and never did.
+        return Readiness(False, "no_delegation_subject", n, join_rate, 0, 0)
     if surface == "bridge":
         console_live = [r["ts"] for r in records if r.get("kind") == "decision"
                         and r.get("surface") == "console" and r.get("phase") == "dual_write"]
@@ -67,11 +74,6 @@ def evaluate(tenant_id: str, surface: str, *, now: Optional[float] = None) -> Re
             # produced no decisions" when it had hundreds.
             return Readiness(False, "console_soak_incomplete", n, join_rate,
                              len(disagree), delegating)
-    if delegating == 0 and n >= MIN_BUCKET_SAMPLES:
-        # The bundled rule never delegated, so there is nothing to de-escalate: more
-        # samples cannot change this, so say so before asking for more. Distinct from
-        # a Skill that had the chance to disagree and never did.
-        return Readiness(False, "no_delegation_subject", n, join_rate, 0, 0)
     if n < MIN_READY_SAMPLES:
         return Readiness(False, "insufficient_samples", n, join_rate, len(disagree), delegating)
     if join_rate is None or join_rate < MIN_JOIN_RATE:

@@ -29,3 +29,29 @@ def test_no_test_file_shadows_the_core_audit_module():
                 offenders.append(str(path.relative_to(ROOT)))
     assert files > 100, f"positive control: the scan only reached {files} files"
     assert not offenders, f"sys.path insert of core/skills/os_skills (shadows `audit`): {offenders}"
+
+
+def test_os_skills_is_a_regular_package():
+    """Review ACP-1: without core/skills/os_skills/__init__.py pytest's import mode itself put the
+    directory on sys.path for every os_skills/<pkg>/tests package - the regex above cannot see that."""
+    assert (ROOT / "core" / "skills" / "os_skills" / "__init__.py").is_file()
+
+
+def test_collecting_an_os_skills_test_package_does_not_put_os_skills_on_sys_path():
+    """The runtime check behind the static ones: collecting os_skills test packages must not leave
+    the os_skills directory on sys.path (where its ``audit`` package shadows the core writer)."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, pytest, os; "
+        "pytest.main(['-q', '--co', '-p', 'no:cacheprovider', '-o', 'addopts=', "
+        "'core/skills/os_skills/daemon/tests', 'core/skills/os_skills/audit/tests']); "
+        "target = os.path.realpath('core/skills/os_skills'); "
+        "print('HITS=' + str(sum(1 for p in sys.path if p and os.path.realpath(p) == target)))"
+    )
+    out = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), capture_output=True, text=True,
+                         timeout=120)
+    line = [l for l in out.stdout.splitlines() if l.startswith("HITS=")]
+    assert line, out.stdout[-2000:] + out.stderr[-2000:]
+    assert line[0] == "HITS=0", line[0]

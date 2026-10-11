@@ -1,7 +1,7 @@
 """Tests for CausalGraph."""
 
 import pytest
-from daemon.causal_graph import CausalGraph, CausalNode, CausalEdge
+from core.skills.os_skills.daemon.causal_graph import CausalGraph, CausalNode, CausalEdge
 
 
 def test_add_nodes():

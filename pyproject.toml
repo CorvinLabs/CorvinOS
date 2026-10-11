@@ -40,7 +40,6 @@ dependencies = [
     "numpy >= 1.20",
     "scikit-learn >= 1.3",
     # Process/host metrics. Imported UNGUARDED at module import time by
-    # core/learning/measurement_collector.py and
     # core/quality/health_monitor_realtime.py, and inside functions by
     # core/quality/{auto_optimizer,quality_gates_autonomous}.py — it was
     # declared in no dependency group at all, so those modules raised

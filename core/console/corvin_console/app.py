@@ -943,6 +943,13 @@ def create_app() -> FastAPI:
             )
 
         yield
+        # Data Hub learning loop: persist state + release the per-tenant lease (review DH-6).
+        try:
+            import os as _os_lhs
+            from core.background import learning_host as _lhs
+            _lhs.stop(_os_lhs.environ.get("CORVIN_TENANT_ID") or "_default")
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            pass
 
         # Shutdown: cleanup task (optional — can be extended for graceful cleanup)
         try:

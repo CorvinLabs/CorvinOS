@@ -472,6 +472,13 @@ class RegenerationScheduler:
     def mark_regenerated(self, skill_id: str, now: Optional[datetime] = None) -> None:
         self.last_regenerated[skill_id] = (now or datetime.utcnow()).isoformat()
 
+    def defer_retry(self, skill_id: str, after_seconds: float, now: Optional[datetime] = None) -> None:
+        """Keep a skill wanted after a failed attempt: re-queued once ``after_seconds`` have passed."""
+        now = now or datetime.utcnow()
+        start = now - timedelta(seconds=self.COOLDOWN_SECONDS - max(0.0, float(after_seconds)))
+        self.last_regenerated[skill_id] = start.isoformat()
+        self.deferred.add(skill_id)
+
     async def should_queue_regeneration(self, skill_id: str, current_quality: float) -> bool:
         """Check if regeneration should be queued."""
         if skill_id in self.queued_skills:

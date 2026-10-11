@@ -1,10 +1,10 @@
 """Tests for DaemonIntegration."""
 
 import pytest
-from daemon.integration import DaemonIntegration, DaemonState
-from daemon.execution_listener import SkillExecutedEvent
-from daemon.feedback_collector import FeedbackEvent
-from daemon.change_detector import SourceChangedEvent
+from core.skills.os_skills.daemon.integration import DaemonIntegration, DaemonState
+from core.skills.os_skills.daemon.execution_listener import SkillExecutedEvent
+from core.skills.os_skills.daemon.feedback_collector import FeedbackEvent
+from core.skills.os_skills.daemon.change_detector import SourceChangedEvent
 import tempfile
 import json
 

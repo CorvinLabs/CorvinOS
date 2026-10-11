@@ -56,7 +56,10 @@ def booted(tmp_path: Path, monkeypatch):
 
 
 def _call(**kw) -> str:
-    base = dict(mode="native", force_delegate=False, is_big_data=False, tde_available=False, quota_ok=False, tenant_id=TENANT)
+    # ``sink`` makes it a recorded turn: without a sink or turn id resolve_worker_engine is a pure
+    # query (the console's engine guard) and never executes the Skill (ADR-2092).
+    base = dict(mode="native", force_delegate=False, is_big_data=False, tde_available=False, quota_ok=False,
+                tenant_id=TENANT, sink={})
     base.update(kw)
     return dp.resolve_worker_engine(**base)
 

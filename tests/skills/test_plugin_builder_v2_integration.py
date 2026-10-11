@@ -317,15 +317,18 @@ class TestAuditIntegration:
     @patch("core.plugins.plugin_builder.v2_integration.bootstrap_scaffold")
     def test_a_plan_for_another_tenant_is_not_written_to_this_chain(self, mock_scaffold, chain_tenant):
         """Cross-tenant isolation: the core writer refuses a record for a tenant other than the
-        process's. The run still completes; the refusal is a warning, never a forged record."""
+        process's. An audited run whose opening record cannot commit does not run at all (review AUD-3)."""
         mock_scaffold.side_effect = _fake_scaffold
         chain_tenant("_default")
         with tempfile.TemporaryDirectory() as tmpdir:
             result = PluginDeveloper().develop(
                 PluginDevelopmentPlan(plugin_id="test.plugin", plugin_name="Test", tenant_id="tenant_9",
                                       steps=["scaffold"], audit_enabled=True), tmpdir)
-        assert result.success is True and result.audit_events == []
-        assert any("not committed" in w or "unavailable" in w for w in result.warnings)
+        # Audit-first: the opening record is refused, so NOTHING runs (no work without a record).
+        assert result.success is False and result.audit_events == []
+        assert result.scaffold_dir is None
+        mock_scaffold.assert_not_called()
+        assert any("nothing ran" in e for e in result.errors), result.errors
         assert _stage_records("tenant_9") == []
 
 
@@ -523,3 +526,30 @@ class TestE2EWiringProof:
         for r in records:
             assert r["details"]["development_id"] == result.development_id
             assert r["details"]["tenant_id"] == tenant
+
+
+class TestRealScaffoldKeepsTheChainIntact:
+    """Review 2026-10-12 AUD-1: the REAL scaffold step (not a mock) wrote its own hash lines."""
+
+    def test_default_steps_leave_a_verifying_chain_and_no_paths_in_it(self, chain_tenant, tmp_path):
+        from corvin_operator.forge.forge import security_events as se
+
+        tenant = chain_tenant("_default")
+        result = PluginDeveloper().develop(
+            PluginDevelopmentPlan(plugin_id="my.plugin", plugin_name="My Plugin", tenant_id=tenant,
+                                  steps=["scaffold"], audit_enabled=True), tmp_path / "out")
+        assert result.success is True, result.errors
+        chain = _chain_path(tenant)
+        recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+        stages = [r["details"]["stage"] for r in recs if r.get("event_type") == "plugin_builder.scaffold"]
+        assert "scaffold_generated" in stages
+        assert str(tmp_path) not in chain.read_text()          # no scaffold directory in the record
+        assert se.verify_chain(chain)[0] is True
+
+    def test_an_unknown_step_name_never_reaches_the_chain(self, chain_tenant, tmp_path):
+        tenant = chain_tenant("_default")
+        PluginDeveloper().develop(
+            PluginDevelopmentPlan(plugin_id="my.plugin", plugin_name="P", tenant_id=tenant,
+                                  steps=["confidential merger with Acme"], audit_enabled=True),
+            tmp_path / "out")
+        assert "confidential merger" not in _chain_path(tenant).read_text()

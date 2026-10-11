@@ -31,3 +31,14 @@ def test_a_bulk_request_phrased_as_sql_is_big_data(prompt):
 ])
 def test_ordinary_prose_with_the_same_verbs_is_not(prompt):
     assert is_big_data_task(prompt) is False
+
+
+@pytest.mark.parametrize("prompt", [
+    "Update my calendar and set a reminder to analyse the quarterly report",
+    "Delete from the draft the paragraph where I analyze the budget",
+    "Insert into the slide deck a chart and select a nicer color, then analyze the layout",
+    "Hilf mir das Update zu analysieren, set the flag",
+])
+def test_prose_with_the_verbs_and_an_analysis_verb_is_not_a_database(prompt):
+    """Review SC-13: the per-verb anchors matched ordinary prose once an analysis verb was present."""
+    assert is_big_data_task(prompt) is False

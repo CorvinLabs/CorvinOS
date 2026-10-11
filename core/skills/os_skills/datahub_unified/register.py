@@ -38,9 +38,18 @@ def source_id(artifact_id: str) -> str:
     return f"datahub:{artifact_id}"
 
 
-def skill_name_for(artifact_name: str) -> str:
-    slug = re.sub(r"[^a-z0-9_]+", "_", artifact_name.lower()).strip("_") or "artifact"
-    return (SKILL_PREFIX + slug)[:128]
+def skill_name_for(artifact_id: str) -> str:
+    """The skill id of one artifact: derived from its random id, never from its NAME.
+
+    A name-derived slug let two artifacts ('Orders', 'orders!') share one skill (the second
+    overwrote the first, deleting either deleted both) and wrote whatever the operator typed as a
+    name - a patient's name, a deal - into skill ids that land in the permanent audit chain
+    (review 2026-10-12, DH-2/DH-10). The human name stays in the description.
+    """
+    aid = re.sub(r"[^a-f0-9]", "", str(artifact_id).lower())[:32]
+    if not aid:
+        raise ValueError("artifact_id must be a hex id")
+    return SKILL_PREFIX + aid
 
 
 @dataclass(frozen=True)
@@ -69,10 +78,12 @@ def register_skill_artifact(
 ) -> Registered:
     """Write the artifact as a SkillForge skill (or refresh it), attributed to its data source."""
     reg = _registry(tenant_id)
-    skill = skill_name_for(name)
+    skill = skill_name_for(artifact_id)
     sources = [source_id(artifact_id)]
     meta = {"data_sources": sources, "origin": "datahub_unified", "artifact_id": artifact_id}
     existing = reg.get(skill)
+    if existing is not None and (getattr(existing, "meta", None) or {}).get("artifact_id") != artifact_id:
+        raise ValueError(f"skill {skill} belongs to another artifact")
     created = existing is None
     if created:
         spec = reg.create(scope=SCOPE, name=skill, type="learned-experience", body_md=body,
@@ -90,6 +101,15 @@ def register_skill_artifact(
     return Registered(name=skill, data_sources=tuple(sources), injectable=injectable, created=created)
 
 
+def unregister_skill_artifact(tenant_id: str, *, artifact_id: str, skill_name: str) -> bool:
+    """Delete the skill of THIS artifact only (its ``meta.artifact_id`` must match)."""
+    reg = _registry(tenant_id)
+    spec = reg.get(skill_name)
+    if spec is None or (getattr(spec, "meta", None) or {}).get("artifact_id") != artifact_id:
+        return False
+    return bool(reg.delete(skill_name, reason="datahub artifact deleted"))
+
+
 def data_sources_of(spec: Any) -> list[str]:
     """The attribution ids a SkillSpec carries (empty for every ordinary skill)."""
     from core.background.learning_inbox import sources_of
@@ -97,4 +117,4 @@ def data_sources_of(spec: Any) -> list[str]:
     return sources_of(spec)
 
 
-__all__ = ["Registered", "register_skill_artifact", "skill_name_for", "source_id", "data_sources_of"]
+__all__ = ["Registered", "register_skill_artifact", "unregister_skill_artifact", "skill_name_for", "source_id", "data_sources_of"]

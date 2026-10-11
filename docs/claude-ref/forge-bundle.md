@@ -126,6 +126,16 @@ install is refused; one that names nothing is recorded `incomplete`, a package w
 (`OperatorKeyManager(<corvin_home>).generate_keypair()`; never done implicitly), so Forge
 Bundle imports from other instances stay unverified.
 
+Hardened after the 2026-10-12 adversarial review: a key store that EXISTS but cannot be read refuses
+a signed package (`refused:operator key store exists but is unreadable`) instead of installing it as
+`unverifiable`, and one malformed rotated key no longer discards the current key; every ZIP entry must
+lie inside the signed folder, carry no backslash, no empty/`.`/`..` segment and no case-folded twin
+(each could be extracted next to or over a verified file on Windows/macOS); the packager builds the
+ZIP from exactly the hashed set (symlinks are never followed or shipped), hashes POSIX paths, and
+covers `.forge/generation_context.json` and `.forge/audit_trail.jsonl` with the signature - only the
+checksum list itself and `skill.sig` sit outside it. `SkillPackager.verify_package` (no caller, and it
+returned True for a tampered package) was removed.
+
 ### Tool quarantine — `core/forge_bundle/tool_quarantine.py`
 
 `<tenant_home>/global/forge_bundle/quarantine/tools/<qid>/{meta.json, impl.py|impl.sh}`,

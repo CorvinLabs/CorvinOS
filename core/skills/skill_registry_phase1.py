@@ -1048,6 +1048,36 @@ class SkillsRegistry:
 
         skill = self._skills[skill_id]
 
+        # G1 Wiring: Validate dependencies (ADR-0535 Gate 3, DAG validation) BEFORE taking an
+        # in-flight slot: a refusal returned after the slot was taken never gave it back, so eight
+        # refusals saturated the skill for every tenant (review 2026-10-12, SC-01). An exception in
+        # the validator is a refusal through the normal, audited path - never an escape (ADR-0562,
+        # SC-02).
+        if skill.metadata.depends_on:
+            try:
+                from core.skills.skill_dag_loader import DependencyValidator  # noqa: PLC0415
+
+                validator = DependencyValidator(self)
+                # The validator reads every declaration form (SkillDependency, str, dict) and BLOCKS
+                # on one it cannot read; converting here dropped anything not a str or a dict.
+                report = validator.validate_dependencies(skill_id, list(skill.metadata.depends_on))
+                blocker_msg = "; ".join(report.blockers) if not report.is_valid else ""
+            except Exception as exc:  # noqa: BLE001 - a check that cannot decide refuses
+                blocker_msg = f"dependency check raised {type(exc).__name__}"
+            if blocker_msg:
+                # Not counted toward auto-disable: a missing dependency is the install's state, not
+                # the skill failing - counting it left the skill disabled after the dependency
+                # arrived (review SC-01). Still audited like every refusal.
+                return self._finish_error(
+                    skill_id,
+                    f"Dependency validation failed: {blocker_msg}",
+                    effective_tenant_id,
+                    lom,
+                    start_time,
+                    track=False,
+                    error_class="dependency_validation_failed",
+                )
+
         with self._in_flight_lock:
             if self._in_flight.get(skill_id, 0) >= self.MAX_IN_FLIGHT_PER_SKILL:
                 saturated = True
@@ -1062,30 +1092,6 @@ class SkillsRegistry:
                 effective_tenant_id, lom, start_time, track=True,
                 error_class="skill_saturated",
             )
-
-        # G1 Wiring: Validate dependencies (ADR-0535 Gate 3, DAG validation)
-        # Before execution, check that all declared dependencies are available.
-        # This prevents a Skill from starting if its dependencies are missing/incompatible.
-        if skill.metadata.depends_on:
-            from core.skills.skill_dag_loader import DependencyValidator  # noqa: PLC0415
-
-            validator = DependencyValidator(self)
-            # The validator reads every declaration form (SkillDependency, str, dict) and BLOCKS on
-            # one it cannot read; converting here dropped anything that was not a str or a dict.
-            dep_specs = list(skill.metadata.depends_on)
-
-            report = validator.validate_dependencies(skill_id, dep_specs)
-            if not report.is_valid:
-                blocker_msg = "; ".join(report.blockers)
-                return self._finish_error(
-                    skill_id,
-                    f"Dependency validation failed: {blocker_msg}",
-                    effective_tenant_id,
-                    lom,
-                    start_time,
-                    track=True,
-                    error_class="dependency_validation_failed",
-                )
 
         # FIX #10: Scrub PII from input before Skill execution (GDPR Art. 32)
         scrubbed_input = self._scrub_pii_from_output(input)

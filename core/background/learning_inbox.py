@@ -38,6 +38,12 @@ _MAX_SOURCES = 8
 RETENTION_DAYS = 3
 
 
+def process_tenant() -> str:
+    """The tenant this process acts for (``CORVIN_TENANT_ID`` -> ``_default``) - the one tenant whose
+    audit chain this process may write, hence the one tenant a learning host can run for."""
+    return os.environ.get("CORVIN_TENANT_ID") or "_default"
+
+
 def daemon_dir(tenant_id: str) -> Path:
     from core.paths.tenant import tenant_home  # honours CORVIN_HOME
 
@@ -90,6 +96,11 @@ def emit(tenant_id: str, event_type: str, payload: dict[str, Any]) -> bool:
         clean = _clean(event_type, payload)
         if not clean.get("skill_id"):
             return False
+        # Only the process tenant has a host (its audit writer refuses any other tenant's
+        # decisions, ADR-0562), so an event for another tenant would sit unread forever and the
+        # inbox would grow without bound (review 2026-10-12, DH-8).
+        if tenant_id != process_tenant():
+            return False
         now = datetime.now(timezone.utc)
         line = json.dumps({
             "event_type": event_type, "tenant_id": tenant_id,
@@ -120,61 +131,89 @@ def day_files(tenant_id: str) -> list[Path]:
         return []
 
 
+def _offsets(cursor: Optional[dict[str, Any]]) -> dict[str, int]:
+    """Per-file read offsets. A legacy single ``{file, offset}`` cursor means: files before
+    ``file`` are done, ``file`` is read up to ``offset``."""
+    cursor = dict(cursor or {})
+    if isinstance(cursor.get("files"), dict):
+        return {str(k): int(v) for k, v in cursor["files"].items()}
+    out: dict[str, int] = {}
+    legacy = cursor.get("file")
+    if legacy:
+        out[str(legacy)] = int(cursor.get("offset", 0) or 0)
+    return out
+
+
 def read_from(tenant_id: str, cursor: Optional[dict[str, Any]], *, limit: int = 500
               ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Events after ``cursor`` ({file, offset}), at most ``limit``; and the advanced cursor.
+    """Events after ``cursor``, at most ``limit``; and the advanced cursor ``{"files": {name: offset}}``.
 
-    Only complete (newline-terminated) lines are consumed: a producer mid-write is read next time.
-    A malformed line is skipped, not fatal.
+    Every day file keeps its OWN offset. A single (file, offset) cursor lost a line a producer
+    finished - or wrote - in yesterday's file after the reader had moved on to today's (review
+    2026-10-12, DH-3). Only complete (newline-terminated) lines are consumed; a malformed line is
+    skipped. ``foreign`` in the cursor counts lines tagged with another tenant (dropped).
     """
-    cursor = dict(cursor or {})
-    cur_file = cursor.get("file", "")
-    cur_off = int(cursor.get("offset", 0) or 0)
+    offsets = _offsets(cursor)
+    legacy_file = (cursor or {}).get("file") if not isinstance((cursor or {}).get("files"), dict) else None
     events: list[dict[str, Any]] = []
+    foreign = 0
     for path in day_files(tenant_id):
-        if cur_file and path.name < cur_file:
+        if legacy_file and path.name < legacy_file and path.name not in offsets:
+            try:
+                offsets[path.name] = path.stat().st_size   # legacy cursor: already consumed
+            except OSError:
+                pass
             continue
-        offset = cur_off if path.name == cur_file else 0
+        offset = offsets.get(path.name, 0)
         try:
             with open(path, "rb") as f:
                 f.seek(offset)
                 while len(events) < limit:
-                    raw = f.readline()
+                    raw = f.readline(_MAX_LINE + 2)
                     if not raw:
                         break
                     if not raw.endswith(b"\n"):
-                        break  # a partial tail: not yet complete
+                        if len(raw) > _MAX_LINE:     # no producer writes this: skip the junk line
+                            rest = f.readline()
+                            offset += len(raw) + len(rest)
+                            continue
+                        break  # a partial tail: not yet complete, read again next time
                     offset += len(raw)
                     try:
                         ev = json.loads(raw)
                     except ValueError:
                         continue
-                    if isinstance(ev, dict) and ev.get("tenant_id") == tenant_id \
-                            and ev.get("event_type") in _FIELDS:
-                        events.append(ev)
+                    if not isinstance(ev, dict) or ev.get("event_type") not in _FIELDS:
+                        continue
+                    if ev.get("tenant_id") != tenant_id:
+                        foreign += 1
+                        continue
+                    events.append(ev)
         except OSError:
             continue
-        cur_file, cur_off = path.name, offset
+        offsets[path.name] = offset
         if len(events) >= limit:
             break
-    return events, {"file": cur_file, "offset": cur_off}
+    return events, {"files": offsets, "foreign": foreign}
 
 
 def prune(tenant_id: str, cursor: dict[str, Any], *, now: Optional[float] = None) -> int:
     """Remove day files that are fully consumed and older than ``RETENTION_DAYS``."""
     removed = 0
     cutoff = (now if now is not None else time.time()) - RETENTION_DAYS * 86400
-    cur_file = cursor.get("file", "")
+    offsets = _offsets(cursor)
     for path in day_files(tenant_id):
-        if not cur_file or path.name >= cur_file:
-            continue  # unread or the file being read
         try:
-            if path.stat().st_mtime < cutoff:
+            st = path.stat()
+            if offsets.get(path.name, -1) >= st.st_size and st.st_mtime < cutoff:
                 path.unlink()
+                offsets.pop(path.name, None)
                 removed += 1
         except OSError:
             continue
+    if isinstance(cursor.get("files"), dict):
+        cursor["files"] = offsets
     return removed
 
 
-__all__ = ["EVENT_TYPES", "sources_of", "signal_for_score", "emit", "read_from", "prune", "day_files", "daemon_dir", "mask_user"]
+__all__ = ["EVENT_TYPES", "sources_of", "signal_for_score", "emit", "read_from", "prune", "day_files", "daemon_dir", "mask_user", "process_tenant"]

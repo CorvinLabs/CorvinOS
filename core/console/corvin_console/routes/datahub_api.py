@@ -173,9 +173,9 @@ def _unregister_skill(tenant_id: str, artifact: dict) -> None:
     if not name:
         return
     try:
-        from core.skills.os_skills.datahub_unified.register import _registry
+        from core.skills.os_skills.datahub_unified.register import unregister_skill_artifact
 
-        _registry(tenant_id).delete(name, reason="datahub artifact deleted")
+        unregister_skill_artifact(tenant_id, artifact_id=artifact["artifact_id"], skill_name=name)
     except Exception:  # noqa: BLE001 - the artifact is deleted regardless
         pass
 

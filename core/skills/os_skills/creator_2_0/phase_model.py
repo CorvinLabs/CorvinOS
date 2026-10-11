@@ -7,6 +7,7 @@ CRITICAL FIX #2 (2026-09-12): Transactional Guarantees
 - Recovery on restart via WAL replay
 """
 
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -119,7 +120,10 @@ class PhaseModelOrchestrator:
         user_clarifications: Optional[Dict[str, str]] = None,
     ) -> Creator20State:
         """Execute the full 12-phase pipeline with WAL transactional guarantees (FIX #2)."""
-        state = Creator20State(skill_id="unknown")
+        # Per RUN placeholder: a shared "unknown" let one run complete or clear ANOTHER run's phase-0
+        # WAL entry (concurrent runs; a crashed run's recovery entry wiped by the next success),
+        # review SC-06. It matches the WAL id grammar like a real skill id.
+        state = Creator20State(skill_id=f"pending_{uuid.uuid4().hex[:12]}")
 
         try:
             # Phase 0: Intake
@@ -302,7 +306,7 @@ class PhaseModelOrchestrator:
             )
             # FIX #2: Mark error in WAL for debugging
             try:
-                if state.skill_id != "unknown":
+                if not state.skill_id.startswith("pending_"):
                     self.wal.mark_error(state.skill_id, -1, str(e))
             except Exception:
                 pass  # WAL error marking failed; continue
