@@ -21,7 +21,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Clapperboard, Download, Film, Loader2, Maximize2, Mic, Minimize2, Paperclip, Pencil, RefreshCw, Send, Square, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Clapperboard, Download, Film, Loader2, Maximize2, Mic, Minimize2, Paperclip, Pencil, RefreshCw, Send, Square, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -47,6 +47,8 @@ export interface Job {
 export interface Overview {
   jobs_total: number; by_status: Record<string, number>; videos: number; runtime_s: number; size_bytes: number;
   measured_videos: number; mean_score_share: number | null; last_activity: string | null; ffprobe_available: boolean; plugin_source: string | null;
+  /** the tenant's whole video store against its quota (tenant.corvin.yaml spec.video_producer.storage_quota_gb) */
+  storage?: { used_bytes: number; quota_bytes: number; quota_gb: number; full: boolean };
 }
 export interface Check { id: string; label: string; status: "pass" | "warn" | "fail" | "skip"; detail: string }
 export interface SceneRow {
@@ -89,7 +91,10 @@ export const MARKER_VIDEO = "Produce a video from a task, watch it, see what ffp
 
 const fmtWhen = (iso?: string | null) => (iso ? new Date(iso).toLocaleString("en-US") : "—");
 const fmtDur = (s?: number | null) => (s === null || s === undefined ? "—" : s >= 60 ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")} min` : `${s.toFixed(1)} s`);
-const fmtBytes = (n?: number | null) => (n === null || n === undefined ? "—" : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(2)} MB`);
+const fmtBytes = (n?: number | null) => (n === null || n === undefined ? "—" : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(2)} MB` : `${(n / 1073741824).toFixed(2)} GB`);
+/** "1.2 GB of 5 GB" — what the store holds against the tenant's quota. */
+export const storageLine = (s: NonNullable<Overview["storage"]>) => `${fmtBytes(s.used_bytes)} of ${fmtBytes(s.quota_bytes)}`;
+export const storageShare = (s: NonNullable<Overview["storage"]>) => (s.quota_bytes > 0 ? Math.min(1, s.used_bytes / s.quota_bytes) : 1);
 const pct = (v?: number | null) => (v === null || v === undefined ? "—" : `${Math.round(v * 100)} %`);
 const STATUS_LABEL: Record<string, string> = { pending: "queued", storyboard_generating: "writing storyboard", skills_running: "rendering", complete: "produced", error: "failed", cancelled: "cancelled" };
 
@@ -486,6 +491,43 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
   );
 }
 
+// ── Delete a finished video (with confirmation) ──────────────────────────────
+
+function DeleteJob({ job, csrf, onDeleted }: { job: Job; csrf: string; onDeleted: (id: string) => void }) {
+  const qc = useQueryClient();
+  const [confirm, setConfirm] = useState(false);
+  const del = useMutation({
+    mutationFn: () => api<{ job_id: string; deleted: boolean }>(`${BASE}/jobs/${job.id}`, { method: "DELETE", csrf }),
+    onSuccess: () => {
+      setConfirm(false);
+      qc.removeQueries({ queryKey: ["video", "job", job.id] });
+      qc.removeQueries({ queryKey: ["video", "quality", job.id] });
+      onDeleted(job.id);
+      void qc.invalidateQueries({ queryKey: ["video"] });
+    },
+  });
+  if (!confirm) {
+    return (
+      <Button variant="ghost" size="sm" className="absolute top-3 left-3 h-7 px-2 bg-black/60 text-white hover:bg-black/80" aria-label={`Delete ${job.task}`} title="Delete this video"
+        data-testid={`delete-${job.id}`} disabled={!csrf} onClick={() => { del.reset(); setConfirm(true); }}><Trash2 className="w-3 h-3" /></Button>
+    );
+  }
+  return (
+    <div role="alertdialog" aria-label="Confirm deletion" data-testid={`delete-dialog-${job.id}`}
+      className="absolute inset-0 z-20 rounded-lg border border-destructive/40 bg-background p-3 flex flex-col justify-center gap-2 text-sm">
+      <div className="font-medium">Delete this video?</div>
+      <p className="text-xs text-muted-foreground">Deletes the video, its scenes, audio and production report. This cannot be undone.</p>
+      {del.isError ? <p className="text-xs text-destructive" role="alert" data-testid={`delete-error-${job.id}`}>{del.error instanceof ApiError && del.error.message ? del.error.message : "The video could not be deleted."}</p> : null}
+      <div className="flex gap-2">
+        <Button type="button" variant="destructive" size="sm" data-testid={`delete-confirm-${job.id}`} disabled={del.isPending || !csrf} onClick={() => del.mutate()}>
+          {del.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Trash2 className="w-3.5 h-3.5 mr-1" />}Delete
+        </Button>
+        <Button type="button" variant="ghost" size="sm" data-testid={`delete-keep-${job.id}`} disabled={del.isPending} onClick={() => setConfirm(false)}>Keep</Button>
+      </div>
+    </div>
+  );
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export function VideoProducerPage() {
@@ -603,6 +645,7 @@ export function VideoProducerPage() {
                       </div>
                       {ACTIVE.includes(it.status) && <div className="mt-1"><Progress value={it.percent ?? 0} /></div>}
                     </button>
+                    {TERMINAL.includes(it.status) && <DeleteJob job={it} csrf={csrf} onDeleted={(id) => { if (selected === id) setSelected(null); }} />}
                     {it.status === "complete" && (
                       <Button variant="ghost" size="sm" className="absolute top-3 right-3 h-7 px-2 bg-black/60 text-white hover:bg-black/80" aria-label={`Revise ${it.task}`} data-testid={`revise-${it.id}`}
                         onClick={() => { setSelected(it.id); setMode("revise"); inputRef.current?.focus(); }}><Pencil className="w-3 h-3" /> Revise</Button>
@@ -614,7 +657,12 @@ export function VideoProducerPage() {
           )}
         </section>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3" data-testid="overview-tiles">
+        {ov?.storage?.full ? (
+          <div className="text-sm rounded-md border border-amber-500/30 bg-amber-500/10 p-3" role="status" data-testid="storage-full">
+            Video storage is full ({storageLine(ov.storage)}). New productions are refused until you delete videos you no longer need.
+          </div>
+        ) : null}
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3" data-testid="overview-tiles">
           {[
             ["Videos produced", ov ? String(ov.videos) : "—", ov ? `${ov.jobs_total} jobs in total` : ""],
             ["Total runtime", ov ? fmtDur(ov.runtime_s) : "—", ov ? fmtBytes(ov.size_bytes) : ""],
@@ -626,6 +674,13 @@ export function VideoProducerPage() {
               <div className="text-xs text-muted-foreground">{label}{sub ? ` · ${sub}` : ""}</div>
             </CardContent></Card>
           ))}
+          <Card data-testid="storage-tile"><CardContent className="pt-4 pb-3">
+            <div className="text-xl font-bold tabular-nums" data-testid="storage-used">{ov?.storage ? fmtBytes(ov.storage.used_bytes) : "—"}</div>
+            <div className="text-xs text-muted-foreground" data-testid="storage-caption">
+              Storage{ov?.storage ? ` · ${Math.round(storageShare(ov.storage) * 100)} % of the ${fmtBytes(ov.storage.quota_bytes)} quota` : ""}
+            </div>
+            {ov?.storage ? <div className="mt-2"><Progress value={Math.round(storageShare(ov.storage) * 100)} /></div> : null}
+          </CardContent></Card>
         </div>
 
         <Card>

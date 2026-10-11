@@ -13,8 +13,8 @@ One column, top to bottom (ADR-2246):
 |---|---|---|
 | Stage | the selected video at full panel width, with progress while it renders; **Fullscreen** button (or `F`, not while typing); download | `/videos/{id}/download`, `/videos/{id}/poster` |
 | Composer | directly under the stage: a text box with **attachment**, **microphone** and **hold Space to dictate** (hold ≥ 0.4 s, release to stop; a short tap types a space), **Enter** sends. Two modes: **New video** and **Revise: <selected video>** | `POST /v1/console/video/jobs` (CSRF) |
-| Produced videos | every job as a card with poster, status, creation time, progress while rendering, a *revision* badge, and **Revise** on finished videos | `GET /v1/console/video/jobs`, `/videos/{id}/poster` |
-| Tiles | videos produced (of all jobs), total runtime and size, mean checklist share **over measured videos only**, last activity | `GET /v1/console/video/overview` |
+| Produced videos | every job as a card with poster, status, creation time, progress while rendering, a *revision* badge, **Revise** on finished videos and **Delete** (bin icon, with a confirmation) on finished, failed and cancelled ones | `GET /v1/console/video/jobs`, `/videos/{id}/poster`, `DELETE /v1/console/video/jobs/{id}` (CSRF) |
+| Tiles | videos produced (of all jobs), total runtime and size, mean checklist share **over measured videos only**, last activity, **storage** used against the workspace's quota (a banner when it is full) | `GET /v1/console/video/overview` (`storage`) |
 | Quality and learning · Quality | the job's **production signals** (value, threshold, verdict, `n of N`) from its report, then what `ffprobe` measured on the real artifacts (below); for a failed or cancelled job only the signals and the stage that failed | `GET /v1/console/video/jobs/{id}/quality-metrics` |
 | Quality and learning · Learning | the ADR-0314 feedback events recorded for this job; approve / reject per scene | `/jobs/{id}/learning-metrics`, `POST /jobs/{id}/scenes/{scene}/feedback` (CSRF) |
 | Settings | output folder, text-to-speech engine, max duration | `/settings` |
@@ -127,7 +127,41 @@ on :8796 with a throwaway `CORVIN_HOME`, the real report, light and dark theme, 
 * **Fallback.** `_JOB_RUNNER = "thread"` in `routes/video_producer_api.py` runs jobs on threads again. Cancel
   then stops the job's in-flight external process and ends it at the next step; a blocking SDK call (a
   TTS or model request) cannot be killed and is abandoned until it returns or its deadline passes.
-* **Not done yet:** Art. 17 erasure does not stop a running job; there is no delete (PLAN-0946 R3).
+
+## Deleting videos, storage quota and erasure (unreleased 1.5.0, ADR-2247 R3)
+
+* **Owner.** When a job is created the console writes who created it to `owners.json` in the workspace's
+  store (job id → principal). The console has no per-user login - local-login is the workspace's owner - so a
+  console job's owner is `console-owner:<tenant>`. `owners.json` and `revisions.json` are written through one
+  locked read-modify-write with an atomic replace (`corvin_operator/bridges/shared/video_job_store.py`).
+* **Delete.** The bin icon on a finished, failed or cancelled card asks *Delete this video?* (**Delete** /
+  **Keep**). `DELETE /v1/console/video/jobs/{id}` (session + CSRF) removes the job record and its locks, the
+  whole `videos/<id>/` directory (scenes, audio, posters, caches, the MP4, `metadata.json`, the production
+  report), the run directory and thumbnails, and the job's entries in `owners.json` and `revisions.json` (a
+  revision of a deleted video is then shown as a plain video). A job that is still being produced answers
+  409 (cancel it first); another workspace's job id answers 404. The deletion is recorded **first**:
+  `video_producer.job_deleted` (job id, end status, files and bytes removed - never the task) is written to
+  the workspace's audit chain before anything is removed; if that record does not commit the answer is 503
+  and the video stays. One job per request; there is no bulk delete.
+* **Storage quota.** `spec.video_producer.storage_quota_gb` in the workspace's `tenant.corvin.yaml`, default
+  **5** GB. The whole store counts (records, videos, styles). While the store holds as much as the quota or
+  more, a new production (also a revision) is refused with 409 *Video storage is full (… of … used). Delete
+  videos you no longer need to produce a new one.* - before any gate or model call. `GET
+  /v1/console/video/overview` returns `storage` (`used_bytes`, `quota_bytes`, `quota_gb`, `full`); the panel
+  shows it as a tile and a banner. A value that is not a positive number is ignored (the default applies).
+  Not built: a retention period (`retention_days`).
+* **Erasure (GDPR Art. 17).** The erasure layer `L-video-producer` deletes **whole** - through the same
+  function as the delete route - every job owned by the subject or whose record names the subject under an
+  identity key, and leaves every other job. The task text is never searched; jobs from before 1.5.0 have no
+  owner entry. A matching job that is still being produced is not deleted under it: the layer fails and says
+  how many, cancel and run the erasure again. The subject *being the workspace* removes the whole store.
+  Details: `docs/claude-ref/layer-36-erasure.md`.
+* Proof: `core/console/tests/test_video_producer_data_lifecycle_e2e.py` (real router, session + CSRF, two
+  tenants: B deleting A's job is 404, a running job 409, every file gone from disk, chain verified; quota;
+  erasure through the real `/erase` dispatch removing exactly the matching jobs; concurrent sidecar writers
+  from threads and processes) and `web-next/tests/e2e/video-lifecycle/data-lifecycle.spec.ts` (a real
+  browser against an isolated console: cancel, delete with confirmation, storage tile, full store refusing a
+  production; `npx playwright test -c playwright.video-lifecycle.config.ts`).
 
 ## Troubleshooting
 

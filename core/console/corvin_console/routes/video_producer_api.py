@@ -462,45 +462,79 @@ def _missing_runtime_dependencies(tts_engine: str = "openai") -> List[str]:
 
 # ── Revisions, sources, attachments ──────────────────────────────────────────
 
-_REVISIONS_FILE = "revisions.json"
+def _vjs():
+    """The host's job-store module (``corvin_operator/bridges/shared/video_job_store.py``): the two
+    sidecars (owners, revisions) under one locked read-modify-write, a job's files, its deletion and
+    the store's size. The GDPR erasure layer ``L-video-producer`` uses the same module, so a job is
+    deleted the same way by the operator and by an Art. 17 request (ADR-2247 R3)."""
+    shared = str(_repo_root / "corvin_operator" / "bridges" / "shared")
+    if shared not in sys.path:
+        sys.path.insert(0, shared)
+    import video_job_store  # type: ignore[import-not-found]  # noqa: PLC0415
+
+    return video_job_store
 
 
 def _revisions(rec) -> Dict[str, str]:
     """job id -> the job it revises (tenant-scoped sidecar; the plugin's job record is untouched)."""
-    import json  # noqa: PLC0415
-
-    try:
-        data = json.loads((_tenant_base(rec) / _REVISIONS_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return {k: v for k, v in data.items() if _JOB_ID_RE.match(str(k)) and _JOB_ID_RE.match(str(v))} if isinstance(data, dict) else {}
+    return {k: v for k, v in _vjs().read_map(_tenant_base(rec), _vjs().REVISIONS_FILE).items()
+            if _JOB_ID_RE.match(v)}
 
 
 def _record_revision(rec, job_id: str, base_job_id: str) -> None:
-    import json  # noqa: PLC0415
-    import tempfile  # noqa: PLC0415
+    _vjs().record_revision(_tenant_base(rec), job_id, base_job_id)
 
-    base = _tenant_base(rec)
-    base.mkdir(parents=True, exist_ok=True)
-    # read-modify-write under a cross-process lock where the platform has one (two host processes can share a tenant)
-    with open(base / ".revisions.lock", "a") as lock_fh:
-        try:
-            import fcntl  # noqa: PLC0415
 
-            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
-        except ImportError:  # Windows: the single-process event loop already serialises this function
-            pass
-        data = _revisions(rec)
-        data[job_id] = base_job_id
-        fd, tmp = tempfile.mkstemp(dir=base, prefix=".revisions.", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(data, fh)
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, base / _REVISIONS_FILE)
-        except BaseException:
-            Path(tmp).unlink(missing_ok=True)
-            raise
+def _job_owner(rec) -> str:
+    """The principal that creates a job, as written to ``owners.json`` and matched by the erasure
+    layer. The console has no per-user login today: the only live login is local-login, the tenant's
+    owner (tier ``owner``), so a console job belongs to ``console-owner:<tenant>``. The first
+    credential login that gets built must name its user here. Never a name, never an e-mail."""
+    return f"console-owner:{rec.tenant_id}"
+
+
+# ── Storage quota (ADR-2247 R3) ──────────────────────────────────────────────
+# Per tenant, from tenant.corvin.yaml ``spec.video_producer.storage_quota_gb`` (default 5). The whole
+# store counts (records, videos, styles). A new job is refused while the store is at or above it.
+_DEFAULT_QUOTA_GB = 5.0
+_MAX_QUOTA_GB = 100_000.0
+
+
+def _storage_quota_gb(tenant_id: str) -> float:
+    from core.paths.tenant import tenant_home  # noqa: PLC0415
+
+    path = tenant_home(tenant_id) / "global" / "tenant.corvin.yaml"
+    try:
+        if not path.is_file():
+            return _DEFAULT_QUOTA_GB
+        import yaml  # noqa: PLC0415
+
+        spec = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("spec") or {}
+        raw = (spec.get("video_producer") or {}).get("storage_quota_gb") if isinstance(spec, dict) else None
+    except Exception as e:  # noqa: BLE001 - an unreadable file must not lift the quota
+        logger.warning("video producer: tenant config unreadable (%s); default storage quota", type(e).__name__)
+        return _DEFAULT_QUOTA_GB
+    if raw is None:
+        return _DEFAULT_QUOTA_GB
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not (0 < raw <= _MAX_QUOTA_GB):
+        logger.warning("video producer: spec.video_producer.storage_quota_gb is not a positive number; default used")
+        return _DEFAULT_QUOTA_GB
+    return float(raw)
+
+
+def _storage(rec) -> Dict[str, Any]:
+    quota_gb = _storage_quota_gb(rec.tenant_id)
+    quota = int(quota_gb * 1024 ** 3)
+    used = _vjs().store_usage_bytes(_tenant_base(rec))
+    return {"used_bytes": used, "quota_bytes": quota, "quota_gb": quota_gb, "full": used >= quota}
+
+
+def _fmt_size(n: int) -> str:
+    if n < 1024 ** 2:
+        return f"{n / 1024:.0f} KB"
+    if n < 1024 ** 3:
+        return f"{n / 1024 ** 2:.2f} MB"
+    return f"{n / 1024 ** 3:.2f} GB"
 
 
 _SKILL_ID = "os.video_producer"
@@ -546,7 +580,9 @@ def _record_job_execution(tenant_id: str, job_id: str, storage_base: str) -> Non
         job = None
         while time.monotonic() < deadline:
             job = storage.get_job(job_id)
-            if job is not None and job.status in _TERMINAL:
+            if job is None:
+                return  # deleted (DELETE /jobs/{id} or an erasure): nothing left to record
+            if job.status in _TERMINAL:
                 break
             time.sleep(_EXEC_POLL_S)
         else:
@@ -903,6 +939,11 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
         base_lang = ((getattr(base_out, "metadata", None) or {}).get("language")) if base_out else None
         task = _revision_brief(base_job, shown, base_lang)
     task += _sources_block(req.sources)
+    store_use = await asyncio.to_thread(_storage, rec)
+    if store_use["full"]:
+        raise HTTPException(status_code=409, detail=(
+            f"Video storage is full ({_fmt_size(store_use['used_bytes'])} of {_fmt_size(store_use['quota_bytes'])} used). "
+            "Delete videos you no longer need to produce a new one."))
     web_style = await asyncio.to_thread(_resolve_job_style, rec, req.style_id, req.base_job_id)
     settings = _tenant_settings(rec)
     missing = await asyncio.to_thread(_missing_runtime_dependencies, settings["tts_engine"])
@@ -946,8 +987,15 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
                 f"{_MAX_ACTIVE_JOBS_PER_TENANT} videos are already being produced for this workspace; "
                 "start the next one when one of them has finished"))
         storage.save_job(job)
-    if req.base_job_id:
-        _record_revision(rec, job_id, req.base_job_id)
+    try:
+        # who created it: per-user erasure attributes the job by this entry, never by its free text
+        await asyncio.to_thread(_vjs().record_owner, _tenant_base(rec), job_id, _job_owner(rec))
+        if req.base_job_id:
+            await asyncio.to_thread(_record_revision, rec, job_id, req.base_job_id)
+    except Exception as e:  # noqa: BLE001 - a job without an owner could not be erased per user
+        logger.error("[%s] owner not recorded (%s); job withdrawn", job_id, type(e).__name__)
+        await asyncio.to_thread(_vjs().delete_job, _tenant_base(rec), job_id)
+        raise HTTPException(status_code=503, detail="The job could not be recorded; it was not started") from None
 
     config = {
         "storage_base": str(_tenant_base(rec)),
@@ -1106,6 +1154,36 @@ async def cancel_video_job(job_id: str, rec=_SessionRec):
     return {"job_id": job_id, "status": outcome}
 
 
+@router.delete("/jobs/{job_id}")
+def delete_video_job(job_id: str, rec=_SessionRec):
+    """Delete a finished job whole (ADR-2247 R3): its record, ``videos/<id>/`` (scenes, audio,
+    posters, caches, the MP4 and the report), run directory, thumbnails and its entries in the
+    ``owners.json`` / ``revisions.json`` sidecars. Session + CSRF (router dependency); the tenant
+    comes from the session, so another tenant's job id is a 404 like any absent job. A job that is
+    still being produced is a 409 - cancel it first. Audit-first: ``video_producer.job_deleted`` is
+    written to the tenant chain before anything is removed; a record that does not commit keeps the
+    job (503). No bulk delete."""
+    _check_job_id(job_id)
+    storage = _store(rec)
+    job = storage.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    base = _tenant_base(rec)
+    vjs = _vjs()
+    if job.status not in _TERMINAL or vjs.job_is_live(base, job_id):
+        raise HTTPException(status_code=409, detail="The video is still being produced; cancel it first")
+    files, size = vjs.job_footprint(base, job_id)
+    if not _audit(rec.tenant_id, "video_producer.job_deleted",
+                  {"job_id": job_id, "status": job.status, "files_removed": files, "bytes_freed": size}):
+        raise HTTPException(status_code=503, detail="The deletion could not be recorded; the video was kept")
+    try:
+        files, size = vjs.delete_job(base, job_id)
+    except Exception as e:  # noqa: BLE001 - the record goes last, so the job is still listed and can be retried
+        logger.error("[%s] deletion incomplete (%s)", job_id, type(e).__name__)
+        raise HTTPException(status_code=500, detail="The video could not be deleted completely; try again") from None
+    return {"job_id": job_id, "deleted": True, "files_removed": files, "bytes_freed": size}
+
+
 # ── Settings ─────────────────────────────────────────────────────────────────
 
 @router.get("/settings")
@@ -1225,6 +1303,8 @@ def get_overview(rec=_SessionRec):
         "plugin_source": PLUGIN_SOURCE,
         # lifecycle records that did not reach the chain since this console started (ADR-2247 R2b)
         "lifecycle_audit_failures": lifecycle_audit_failures(),
+        # the whole store against the tenant's quota (spec.video_producer.storage_quota_gb, default 5)
+        "storage": _storage(rec),
     }
 
 

@@ -1158,6 +1158,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "video_producer.job_failed":         "WARNING",
     "video_producer.job_cancelled":      "INFO",
     "video_producer.job_degraded":       "WARNING",
+    # ADR-2247 R3: an operator deleted a finished job (record, video directory, report, sidecar
+    # entries). Ids, the job's end status and counts only - never task text, never a user id.
+    "video_producer.job_deleted":        "INFO",
     # ADR validation framework (core/deployment/adr_validation_framework.py via
     # core/deployment/audit_sink — mirrored statically so the floor does not
     # depend on import order)
@@ -4376,6 +4379,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "video_producer.job_degraded": frozenset({
         "tenant_id", "job_id", "degradation_count", "degraded_scenes", "scene_count", "degradation_kinds",
         "verdict",
+    }),
+    "video_producer.job_deleted": frozenset({
+        "tenant_id", "job_id", "status", "files_removed", "bytes_freed",
     }),
     # "violations" holds "ADR-NNNN/check_name" codes, never free text.
     "deployment.adr_violation_detected": frozenset({

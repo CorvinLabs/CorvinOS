@@ -2421,18 +2421,26 @@ class TenantStoreHandler:
 class VideoProducerHandler:
     """GDPR Art. 17 for the Video Producer store (``<tenant>/video_producer``): the tenant's
     saved styles (palette, fonts, logo, background plate), jobs and their task text, rendered
-    videos, thumbnails and the revisions sidecar.
+    videos (scenes, audio, posters, caches, report), thumbnails and the two host sidecars
+    ``owners.json`` / ``revisions.json``.
 
-    OWNERSHIP SEMANTICS (stated, not hidden): none of these records carries a per-user owner -
-    a job belongs to the console tenant that started it. So there are two routes:
+    ATTRIBUTION (ADR-2247 R3):
 
-    * the documented attribution rule of :func:`_purge_path` runs over the store (a directory or
-      file named after the subject, a JSON/JSONL record naming it under an identity key) - the
-      same rule every generic store honours;
-    * when the subject IS the tenant (``subject_id == tenant_id``: the whole tenant is erased),
-      the entire store goes - styles, jobs, videos, thumbnails, sidecars. Any other subject
-      leaves un-attributed jobs and styles alone, because deleting them would destroy other
-      people's work on a guess.
+    * the subject IS the tenant (``subject_id == tenant_id``: the whole tenant is erased) - the
+      entire store goes;
+    * otherwise a JOB is the subject's when ``owners.json`` names the subject as the principal that
+      created it (written by the console route at creation), or when the job's record or its
+      ``videos/<id>/metadata.json`` names the subject under an identity key (:data:`_SUBJECT_KEYS`,
+      the documented rule). Such a job is deleted WHOLE through ``video_job_store.delete_job`` -
+      the same function ``DELETE /v1/console/video/jobs/{id}`` uses - so no scene, audio file,
+      report or sidecar entry of it survives. Free text (the task) is never searched: a substring
+      hunt would delete other people's videos. Jobs made before owners were recorded (before 1.5.0)
+      carry no owner and stay unless their record names the subject.
+    * a matching job that is still being produced (its process holds ``jobs/<id>.lock``) is NOT
+      deleted under it: the layer FAILS and says how many, so the operator cancels and re-runs -
+      never a COMPLETED with the job still on disk;
+    * the rest of the store (styles, thumbnails, other files) runs through the generic rule of
+      :func:`_purge_path`.
     """
     tenant_id: str = "_default"
     layer_id: str = "L-video-producer"
@@ -2447,6 +2455,7 @@ class VideoProducerHandler:
         import shutil  # noqa: PLC0415
 
         removed = 0
+        live: list[str] = []
         try:
             if subject_id == self.tenant_id:
                 if root.is_symlink():
@@ -2455,12 +2464,48 @@ class VideoProducerHandler:
                 else:
                     removed = sum(1 for p in root.rglob("*") if p.is_file())
                     shutil.rmtree(root)
+            elif root.is_symlink() or not root.is_dir():
+                removed = 0
             else:
-                removed = _purge_path(root, subject_id)
+                import video_job_store as vjs  # noqa: PLC0415 - bridges/shared, stdlib only
+
+                owners = vjs.read_map(root, vjs.OWNERS_FILE)
+                matched = {jid for jid, who in owners.items() if who == subject_id}
+                for jid in vjs.list_job_ids(root):
+                    if jid in matched:
+                        continue
+                    docs = [_load_json(root / "jobs" / f"{jid}.json")]
+                    meta = root / "videos" / jid / "metadata.json"
+                    if meta.is_file() and not meta.is_symlink():
+                        docs.append(_load_json(meta))
+                    if any(_mentions_subject(d, subject_id) for d in docs):
+                        matched.add(jid)
+                for jid in sorted(matched):
+                    if vjs.job_is_live(root, jid):
+                        live.append(jid)
+                        continue
+                    files, _size = vjs.delete_job(root, jid)
+                    removed += max(files, 1)
+                # styles, thumbnails and anything else: the documented generic rule. jobs/ and
+                # videos/ are attributed per JOB above (a partial per-file delete there would leave
+                # the scenes of a job whose record went), the sidecars hold no subject but owners.
+                for entry in sorted(root.iterdir()):
+                    if entry.name in ("jobs", "videos", vjs.OWNERS_FILE, vjs.REVISIONS_FILE) \
+                            or entry.name.startswith("."):
+                        continue
+                    removed += _purge_path(entry, subject_id)
         except Exception as exc:  # noqa: BLE001
             return ErasureLayerResult(
                 layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
                 reason=f"video producer purge error: {type(exc).__name__}: {str(exc)[:200]}",
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+        if live:
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.FAILED, count=removed,
+                reason=(f"{len(live)} video job(s) of the subject are still being produced; "
+                        "cancel them and run the erasure again"),
                 code=ReasonCode.STORE_ERROR.value,
                 duration_ms=int((time.time() - t0) * 1000),
             )
@@ -2583,7 +2628,8 @@ COVERED_DIRS: dict[str, frozenset[str]] = {
     "L-chat-groups":         frozenset({"global/chat_groups"}),
     "L-federation-conversations": frozenset({"global/federation/conversations"}),
     "L-voice":               frozenset({"voice"}),
-    # 2026-10-10 (PLAN-0945) - styles, jobs, videos; no per-user owner, see VideoProducerHandler.
+    # 2026-10-10 (PLAN-0945) - styles, jobs, videos; per-job owner since ADR-2247 R3 (owners.json),
+    # jobs deleted whole through video_job_store - see VideoProducerHandler.
     "L-video-producer":      frozenset({"video_producer"}),
     # R4-F1/F4: the format-specific handlers above own the sqlite tables and the
     # file shapes they were written for; this layer runs the generic attribution
