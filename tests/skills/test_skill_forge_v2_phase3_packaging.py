@@ -18,7 +18,7 @@ from pathlib import Path
 from datetime import datetime
 
 from core.skills.skill_packager import SkillPackager
-from core.skills.manifest_v2 import SkillManifestV2, BootLayer, SkillDomain
+from core.skills.manifest_v2 import SkillManifestV2
 
 
 @pytest.fixture
@@ -119,12 +119,9 @@ class TestSkillPackager:
         """Packaging non-existent folder should raise ValueError."""
         manifest = SkillManifestV2(
             skill_id="nonexistent",
-            name="Nonexistent",
             version="1.0.0",
-            description="Test",
+            boot_layer="installed",
             entry_point="test:Test.execute",
-            input_schema={},
-            output_schema={},
         )
 
         packager = SkillPackager()
