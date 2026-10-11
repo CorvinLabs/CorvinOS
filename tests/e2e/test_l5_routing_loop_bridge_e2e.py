@@ -358,7 +358,7 @@ def test_live_shaped_history_never_disagrees_so_phase2_stays_shadow(bridge, monk
         routing_ledger.record_outcome(tenant_id=TENANT, turn_id=tid, surface="console",
                                       used="native", ok=True, latency_ms=5)
     verdict = readiness.cached_evaluate(TENANT, "console", background=False)
-    assert (verdict.ready, verdict.reason, verdict.decisions) == (False, "skill_never_disagrees", 600)
+    assert (verdict.ready, verdict.reason, verdict.decisions) == (False, "no_delegation_subject", 600)
 
     monkeypatch.setenv("CORVIN_ACP_PHASE", "phase2_dual_write")
     _send(adapter, base, "Wie spät ist es?")

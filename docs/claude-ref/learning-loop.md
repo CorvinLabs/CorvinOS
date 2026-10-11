@@ -371,6 +371,16 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   must list `- stage: l10_adapter` itself or the stage never runs for that tenant
   (the live install had 0 `context.adapted` records for exactly this reason until
   2026-10-11); `resolve_pipeline` logs a one-time warning when it is missing.
+* **Phase 2 readiness has a structural dead end, and says so.** The Skill may only
+  de-escalate TO `native`, so a surface where the bundled rule never delegates has
+  nothing to change. `monitoring/readiness.py` reports that as
+  `no_delegation_subject` (with `delegating_decisions == 0`) as soon as 30 decisions
+  exist, instead of `insufficient_samples`, because more samples cannot help.
+  `skill_never_disagrees` now means the Skill HAD delegations to question and never
+  disagreed. On 2026-10-11 both live surfaces were in the first state (console 131
+  decisions, bridge 560, 0 delegating); `console_soak_incomplete` now carries the
+  bridge's real counts instead of a hard 0. Unblocking Phase 2 therefore needs
+  delegating traffic (an operator decision on `web_chat.worker_engine`), not time.
 * `DelegationRouterSkill` advises in model tiers (`claude-haiku-4 / sonnet-4 /
   opus-5`), not in `delegation_policy` engine ids (`native / acs / tde`); the
   shadow record carries both so agreement is measurable, but the advice cannot

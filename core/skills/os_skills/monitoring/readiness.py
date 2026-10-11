@@ -39,6 +39,9 @@ class Readiness:
     decisions: int
     join_rate: Optional[float]
     disagreements: int
+    #: Decisions whose bundled rule chose a non-native engine. Zero means Phase 2
+    #: has no subject on this surface: it can only de-escalate TO native.
+    delegating_decisions: int = 0
 
 
 def _complexity(row: dict) -> str:
@@ -50,34 +53,43 @@ def evaluate(tenant_id: str, surface: str, *, now: Optional[float] = None) -> Re
     if rollback_detector.rollback_active(tenant_id):
         return Readiness(False, "rollback_active", 0, None, 0)
     records = routing_ledger.read_records(tenant_id, since_ts=now - WINDOW_S)
+    joined = routing_ledger.join(records, surface=surface)
+    summary = routing_ledger.summarize(records, surface=surface)
+    n, join_rate = summary["decisions"], summary["join_rate"]
+    delegating = sum(1 for r in joined if r.get("bundled") != "native")
+    disagree = [r for r in joined if r.get("skill") == "native" and r.get("bundled") != "native"
+                and not (r.get("features") or {}).get("force_delegate")]
     if surface == "bridge":
         console_live = [r["ts"] for r in records if r.get("kind") == "decision"
                         and r.get("surface") == "console" and r.get("phase") == "dual_write"]
         if not console_live or now - min(console_live) < CONSOLE_SOAK_S:
-            return Readiness(False, "console_soak_incomplete", 0, None, 0)
-    joined = routing_ledger.join(records, surface=surface)
-    summary = routing_ledger.summarize(records, surface=surface)
-    n, join_rate = summary["decisions"], summary["join_rate"]
-    disagree = [r for r in joined if r.get("skill") == "native" and r.get("bundled") != "native"
-                and not (r.get("features") or {}).get("force_delegate")]
+            # Report the surface's REAL counts: a hard 0 here read as "the bridge
+            # produced no decisions" when it had hundreds.
+            return Readiness(False, "console_soak_incomplete", n, join_rate,
+                             len(disagree), delegating)
+    if delegating == 0 and n >= MIN_BUCKET_SAMPLES:
+        # The bundled rule never delegated, so there is nothing to de-escalate: more
+        # samples cannot change this, so say so before asking for more. Distinct from
+        # a Skill that had the chance to disagree and never did.
+        return Readiness(False, "no_delegation_subject", n, join_rate, 0, 0)
     if n < MIN_READY_SAMPLES:
-        return Readiness(False, "insufficient_samples", n, join_rate, len(disagree))
+        return Readiness(False, "insufficient_samples", n, join_rate, len(disagree), delegating)
     if join_rate is None or join_rate < MIN_JOIN_RATE:
-        return Readiness(False, "join_rate_below_floor", n, join_rate, len(disagree))
+        return Readiness(False, "join_rate_below_floor", n, join_rate, len(disagree), delegating)
     if not disagree:
-        return Readiness(False, "skill_never_disagrees", n, join_rate, 0)
+        return Readiness(False, "skill_never_disagrees", n, join_rate, 0, delegating)
     for bucket in sorted({_complexity(r) for r in disagree}):
         delegated = [r for r in disagree if _complexity(r) == bucket and r["outcome"] is not None
                      and r["outcome"].get("used") != "native"]
         native = [r for r in joined if r["outcome"] is not None
                   and r["outcome"].get("used") == "native" and _complexity(r) == bucket]
         if len(delegated) < MIN_BUCKET_SAMPLES or len(native) < MIN_BUCKET_SAMPLES:
-            return Readiness(False, f"insufficient_bucket_samples:{bucket}", n, join_rate, len(disagree))
+            return Readiness(False, f"insufficient_bucket_samples:{bucket}", n, join_rate, len(disagree), delegating)
         d_rate = sum(1 for r in delegated if r["outcome"]["ok"]) / len(delegated)
         n_rate = sum(1 for r in native if r["outcome"]["ok"]) / len(native)
         if d_rate - n_rate > MAX_PROXY_DROP:
-            return Readiness(False, f"native_trails_delegated:{bucket}", n, join_rate, len(disagree))
-    return Readiness(True, "ready", n, join_rate, len(disagree))
+            return Readiness(False, f"native_trails_delegated:{bucket}", n, join_rate, len(disagree), delegating)
+    return Readiness(True, "ready", n, join_rate, len(disagree), delegating)
 
 
 _refreshing: set[tuple[str, str]] = set()

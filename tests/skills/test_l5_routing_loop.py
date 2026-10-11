@@ -202,7 +202,7 @@ class TestReadiness:
         assert not r.ready and r.reason == "insufficient_samples"
 
     def test_low_join_rate_is_not_ready(self):
-        _seed(400)
+        _seed(400, bundled="acs", used="acs", skill="acs")
         for _ in range(200):
             routing_ledger.record_decision(
                 tenant_id=TENANT, turn_id=routing_ledger.new_turn_id(), surface="console",
@@ -210,9 +210,27 @@ class TestReadiness:
             )
         assert readiness.evaluate(TENANT, "console").reason == "join_rate_below_floor"
 
-    def test_a_skill_that_never_disagrees_is_not_ready(self):
+    def test_a_surface_where_the_bundled_rule_never_delegates_has_no_subject(self):
         _seed(500)
-        assert readiness.evaluate(TENANT, "console").reason == "skill_never_disagrees"
+        r = readiness.evaluate(TENANT, "console")
+        assert (r.ready, r.reason, r.delegating_decisions) == (False, "no_delegation_subject", 0)
+
+    def test_a_skill_that_never_disagrees_is_not_ready(self):
+        _seed(470)
+        _seed(40, bundled="acs", used="acs", skill="acs")  # delegated, Skill agreed
+        r = readiness.evaluate(TENANT, "console")
+        assert (r.reason, r.delegating_decisions) == ("skill_never_disagrees", 40)
+
+    def test_no_subject_is_reported_before_asking_for_more_samples(self):
+        _seed(60)  # far below the 500 floor, but the bundled rule never delegates
+        assert readiness.evaluate(TENANT, "console").reason == "no_delegation_subject"
+        _seed(5, bundled="acs", used="acs", skill="native")
+        assert readiness.evaluate(TENANT, "console").reason == "insufficient_samples"
+
+    def test_console_soak_reports_the_real_counts_not_zero(self):
+        _seed(120, surface="bridge")
+        r = readiness.evaluate(TENANT, "bridge")
+        assert r.reason == "console_soak_incomplete" and r.decisions == 120, r
 
     def test_disagreements_with_supporting_evidence_are_ready(self):
         _seed(470)
