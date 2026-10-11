@@ -126,18 +126,29 @@ class OtelTracer:
             yield None
             return
 
-        try:
-            attrs = attributes or {}
-            if tenant_id:
-                attrs["tenant_id"] = tenant_id
-            if audit_ref:
-                attrs["audit_ref"] = audit_ref
+        attrs = dict(attributes or {})
+        if tenant_id:
+            attrs["tenant_id"] = tenant_id
+        if audit_ref:
+            attrs["audit_ref"] = audit_ref
 
+        entered = False
+        try:
             with self.tracer.start_as_current_span(name) as span:
+                entered = True
                 for key, value in attrs.items():
-                    span.set_attribute(key, value)
+                    try:
+                        span.set_attribute(key, value)
+                    except Exception:  # noqa: BLE001 — a bad attribute never breaks the traced call
+                        logger.debug("OtelTracer.span(): attribute %r not set", key)
                 yield span
         except Exception as e:
+            if entered:
+                # Thrown into the generator by the TRACED BODY. Swallowing it and yielding a
+                # second time made contextlib raise "generator didn't stop after throw()",
+                # which replaced the body's real exception (a skill's ValueError) with a
+                # RuntimeError. Only a failure to start the tracer is ours to absorb.
+                raise
             logger.error(f"Error in OtelTracer.span(): {e}", exc_info=True)
             yield None
 

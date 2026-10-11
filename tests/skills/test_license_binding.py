@@ -181,8 +181,12 @@ class TestBindingSignatureValidation:
             license_binding=binding,
         )
 
-        # Placeholder: should return True (real implementation would verify signature)
-        assert validator.validate_binding_signature(skill, operator_public_key=None) is True
+        # A binding whose signature cannot be decoded/verified must be REFUSED. (This test used
+        # to assert True, from a placeholder implementation that accepted any signature: that
+        # would be fail-open. The real verifier raises.)
+        from core.skills.signature.validator import ManifestTamperedError
+        with pytest.raises(ManifestTamperedError):
+            validator.validate_binding_signature(skill, operator_public_key=None)
 
 
 class TestBindingSignatureValidationWithRealKeys:
@@ -200,6 +204,8 @@ class TestBindingSignatureValidationWithRealKeys:
 
         CRITICAL: This proves that tampering detection is not a placeholder.
         """
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
         from core.skills.signature.signer import SkillManifestSigner
         from cryptography.hazmat.primitives.asymmetric import rsa
 
