@@ -26,6 +26,7 @@ from .os_skills.delegation_router import DelegationRouterSkill  # L5 routing ski
 from .os_skills.flow_guard_skill import FlowGuardSkill  # L34 shadow skill (ADR-0532 Phase 1)
 from .os_skills.security_orchestrator_skill import SecurityOrchestratorSkill  # L16 shadow skill (ADR-0532 Phase 1)
 from .os_skills.workflow_optimizer_wrapper import WorkflowOptimizerSkill  # L22 shadow skill (ADR-0532 Phase 1)
+from .os_skills.learning_daemon_skill import LearningDaemonSkill  # Data Hub learning loop status (PLAN-0948 D5)
 
 logger = logging.getLogger(__name__)
 
@@ -660,6 +661,7 @@ def register_builtin_skills(skills_registry: Any) -> None:
         FlowGuardSkill(),
         SecurityOrchestratorSkill(),
         WorkflowOptimizerSkill(),
+        LearningDaemonSkill(),
     ]
 
     # Idempotent: a second boot in the same process (tests, hot reload) must not
@@ -686,15 +688,21 @@ BUILTIN_SKILL_IDS: tuple[str, ...] = (
     "os.flow_guard",
     "os.security_orchestrator",
     "os.workflow_optimizer",
+    "os.learning_daemon",
 )
 
 # Phase 2 Skills: lazy-load, not booted at startup (ADR-0314 learning infrastructure)
 # See: Corvin-Knowledge/decisions/ADR-2175-skills-2-0-migration.md
 # Gap G4: These skills are in MANIFEST.json but have no call-site from boot_skills().
 # Sync decision (2026-10-10): keep in registry, mark as optional until Phase 2 wiring.
+#
+# 2026-10-12 (PLAN-0948): ``os.learning_daemon`` is booted - the daemon has producers, a persisted
+# host and a regeneration consumer, and the Skill is its audited status face. The rest stay optional
+# for stated reasons: ``os.data_hub`` / ``os.skill_tool_creator`` are the 12-phase generator that the
+# plan puts out of scope (regeneration runs through ``datahub_unified.UnifiedCreator``), and
+# ``os.learning_dashboard`` is a console ROUTE (``/api/learning``), not a Skill.
 OPTIONAL_SKILLS: tuple[str, ...] = (
     "os.data_hub",
     "os.skill_tool_creator",
-    "os.learning_daemon",
     "os.learning_dashboard",
 )

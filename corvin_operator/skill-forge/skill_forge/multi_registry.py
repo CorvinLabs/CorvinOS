@@ -142,12 +142,15 @@ class MultiSkillRegistry:
 
     def update_body(
         self, name: str, *, scope: str, body_md: str, description: str | None = None,
+        quota_exempt: bool = False,
     ) -> SkillSpec:
         """Replace the body of an existing skill IN PLACE (same scope).
 
         Grades, type, claim and created_by are preserved; ``meta.updated_at``
         is stamped. Lint + content-hash + ``skill.create`` audit run through
         ``SkillRegistry.create(overwrite=True)`` exactly as for a new skill.
+        ``quota_exempt`` is for a rewrite that is not new authoring by the operator (a regeneration
+        by the learning daemon): it must not spend the free tier's daily authoring quota.
         """
         import time as _time
         reg = self._registry(scope)
@@ -160,6 +163,7 @@ class MultiSkillRegistry:
             claim=old.claim, scope=scope, overwrite=True,
             created_by=old.created_by,
             meta={**(old.meta or {}), "updated_at": _time.time()},
+            quota_exempt=quota_exempt,
         )
         if old.grades:
             reg.set_grades(name, list(old.grades))

@@ -437,3 +437,26 @@ change nothing; for every other skill the feedback is audited and stored only, a
 says the skill reads no learned config yet. A config write that cannot be audited fails and the
 feedback stays stored.
 Proof: `tests/e2e/test_stream4_skill_feedback_console_e2e.py`.
+
+## Data Hub learning loop (PLAN-0948, ADR-2255, 2026-10-12)
+
+A second, separate loop - not the L5 router loop above. Its subject is a **Data Hub SKILL artifact**: created through
+`POST /v1/console/datahub/create` it is registered in SkillForge as `assistant.datahub_<slug>` with
+`meta.data_sources = ["datahub:<artifact_id>"]` (`datahub_unified/register.py`).
+
+| Stage | Where | What |
+|---|---|---|
+| Produce | `skill_inject.collect_active_skills` / `grade_from_user_followup` | a content-free line in `<tenant>/learning/daemon/inbox-YYYYMMDD.jsonl` (`core/background/learning_inbox.py`; closed fields; producers never raise) |
+| Host | `core/background/learning_host.py`, started by `corvin_gateway.app`, `corvin_console.app`, `corvin_console.standalone` | drains the inbox from a persisted cursor, checks watched sources by hash every 300 s, runs the regeneration batch, snapshots `state.json`; 2 s -> 30 s idle back-off; a failing tick is counted, not fatal |
+| Learn | `learning_daemon.py` | per-source weights (unseen source = 0.5), feedback consensus, causal edges; consensus mean < 0 over >= 3 events, or a changed source, queues the skill; 24 h cooldown, a request during cooldown is deferred not dropped |
+| Act | `datahub_unified/regenerate.py` | re-read the source (secret -> refused), regenerate via `UnifiedCreator`, `learning.regeneration` `applying` on the chain FIRST, `update_body(quota_exempt)` (grades + meta kept), `finished` |
+| See | `os.learning_daemon` (registry Skill, read-only), `GET /v1/console/api/learning/daemon` | persisted summary: weights, queue, regenerations, decisions |
+
+**Limits, stated.** Operator *ratings* of these skills do not feed the daemon (the ADR-0534 gate admits a rating only for a subject
+with a recorded execution; prompt skills record none) - the live feedback source is the operator's follow-up in the next turn.
+The generator is the template `UnifiedCreator`: regenerating from the same data rebuilds the same text. `os.data_hub` /
+`os.skill_tool_creator` (the 12-phase generator) stay optional and out of scope.
+
+**Must NOT do:** put user text, a path or a skill body into an inbox line or a `learning.regeneration` record · let a producer raise into a
+turn · regenerate before the `applying` record committed · spend the operator's authoring quota on a daemon rewrite ·
+start the host from a request path (it is started once per host process).

@@ -87,6 +87,25 @@ def get_dashboard(tenant_id: str, audit_backend=None) -> LearningDashboard:
     return _dashboards[tenant_id]
 
 
+@router.get("/daemon", summary="Data Hub learning daemon: what it learned, queued and regenerated")
+async def get_daemon_status(
+    rec: session_auth.SessionRecord = Depends(require_session),
+) -> Dict[str, Any]:
+    """The daemon's persisted state for the authenticated tenant (content-free: ids, weights,
+    counts). ``running`` is true only when THIS process hosts the daemon thread; the state is
+    whatever the host last saved, so a console that does not host it still shows the truth."""
+    from core.background import learning_host
+
+    live = learning_host.status(rec.tenant_id)
+    return {
+        "status": "ok",
+        "running": bool(live and live.get("alive")),
+        "ticks": (live or {}).get("ticks"),
+        "errors": (live or {}).get("errors"),
+        "data": learning_host.read_state_summary(rec.tenant_id),
+    }
+
+
 @router.get("/summary", summary="Get system-wide learning metrics")
 async def get_learning_summary(
     rec: session_auth.SessionRecord = Depends(require_session),

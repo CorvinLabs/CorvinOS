@@ -10,8 +10,10 @@ Components:
 6. RegenerationScheduler — batching + threshold-based queuing
 7. DaemonIntegration — event loop, subprocess lifecycle
 
-NOT WIRED: no production caller as of 2026-09-27 (adversarial review) —
-nothing constructs ``DataHubLearningDaemon`` or runs its loop.
+WIRED since 2026-10-12 (PLAN-0948, ADR-2255): ``learning_host.LearningHost`` constructs it, feeds it from
+the durable ``learning_inbox`` (producers: ``skill_inject``), persists its state, runs its regeneration
+batch through ``datahub_unified.regenerate`` and is started by both shipped hosts. The ``run()`` loop below
+is the original standalone loop and is not what production runs.
 
 Every daemon DECISION (weight update, regeneration queued, convergence) is
 written audit-first to the tenant audit chain as ``learning.daemon_decision``
@@ -164,6 +166,7 @@ class DataSourceChangeDetector:
                 "significance": self._assess_significance(manifest_dict),
             }
             self.change_history.append(change_event)
+            del self.change_history[:-200]
             return change_event
 
         return None
@@ -191,6 +194,9 @@ class DataSourceChangeDetector:
 class SkillExecutionListener:
     """Track real skill executions and feed into CausalGraph."""
 
+    MAX_HISTORY = 1000
+    MAX_PER_SKILL = 200
+
     def __init__(self, tenant_id: str = "_default"):
         self.tenant_id = tenant_id
         self.execution_history: List[UsageEvent] = []
@@ -204,6 +210,11 @@ class SkillExecutionListener:
 
         self.execution_history.append(event)
         self.skill_success_rate[event.skill_id].append(event.success)
+        # A host that runs for weeks must not grow without bound: keep a window, not the history.
+        if len(self.execution_history) > self.MAX_HISTORY:
+            del self.execution_history[:-self.MAX_HISTORY]
+        if len(self.skill_success_rate[event.skill_id]) > self.MAX_PER_SKILL:
+            del self.skill_success_rate[event.skill_id][:-self.MAX_PER_SKILL]
 
     def get_success_rate(self, skill_id: str) -> float:
         """Compute success rate for a skill (if enough data)."""
@@ -228,6 +239,8 @@ class SkillExecutionListener:
 class FeedbackCollector:
     """Aggregate user feedback signals and compute consensus scores."""
 
+    MAX_HISTORY = 1000
+
     def __init__(self, tenant_id: str = "_default"):
         self.tenant_id = tenant_id
         self.feedback_history: List[FeedbackEvent] = []
@@ -240,6 +253,8 @@ class FeedbackCollector:
             return
 
         self.feedback_history.append(event)
+        if len(self.feedback_history) > self.MAX_HISTORY:
+            del self.feedback_history[:-self.MAX_HISTORY]
         self._update_consensus(event.skill_id)
 
     def _update_consensus(self, skill_id: str) -> None:
@@ -341,6 +356,9 @@ class CausalGraph:
 class WeightLearner:
     """Gradient descent on data-source weights with convergence detection."""
 
+    MAX_SOURCES = 256       # bound on tracked sources (state size, attribution fan-out)
+    MAX_HISTORY = 200
+
     def __init__(self, tenant_id: str = "_default"):
         self.tenant_id = tenant_id
         self.weights = {
@@ -361,12 +379,19 @@ class WeightLearner:
         before = self.weights.copy()
 
         for source, delta in attribution.items():
+            # A source the learner has not seen (every Data Hub artifact is its own source,
+            # ``datahub:<artifact_id>``) starts neutral instead of being silently ignored -
+            # feedback about it was dropped before this and nothing could ever be learned.
+            if source not in self.weights and len(self.weights) < self.MAX_SOURCES:
+                self.weights[source] = 0.5
             if source in self.weights:
                 self.weights[source] += self.learning_rate * delta
                 # Clamp to [0, 1]
                 self.weights[source] = max(0.0, min(1.0, self.weights[source]))
 
         self.weight_history.append(self.weights.copy())
+        if len(self.weight_history) > self.MAX_HISTORY:
+            del self.weight_history[:-self.MAX_HISTORY]
 
         return {
             "before": before,
@@ -422,6 +447,8 @@ class WeightLearner:
 class RegenerationScheduler:
     """Batch skill regenerations, threshold-based queuing."""
 
+    COOLDOWN_SECONDS = 24 * 3600.0   # a skill is regenerated at most once a day
+
     def __init__(self, tenant_id: str = "_default"):
         self.tenant_id = tenant_id
         self.regeneration_queue: List[str] = []
@@ -429,11 +456,33 @@ class RegenerationScheduler:
         self.last_batch_time = datetime.utcnow()
         self.batch_window_seconds = 60.0  # wait 60s before executing batch
         self.regeneration_threshold = 0.80  # regenerate if quality drops below this
+        self.last_regenerated: Dict[str, str] = {}   # skill_id -> ISO time of the last regeneration
+        self.deferred: Set[str] = set()              # wanted while cooling down; queued when it ends
+
+    def in_cooldown(self, skill_id: str, now: Optional[datetime] = None) -> bool:
+        stamp = self.last_regenerated.get(skill_id)
+        if not stamp:
+            return False
+        try:
+            age = ((now or datetime.utcnow()) - datetime.fromisoformat(stamp)).total_seconds()
+        except ValueError:
+            return False
+        return age < self.COOLDOWN_SECONDS
+
+    def mark_regenerated(self, skill_id: str, now: Optional[datetime] = None) -> None:
+        self.last_regenerated[skill_id] = (now or datetime.utcnow()).isoformat()
 
     async def should_queue_regeneration(self, skill_id: str, current_quality: float) -> bool:
         """Check if regeneration should be queued."""
         if skill_id in self.queued_skills:
             return False  # Already queued, idempotent
+        if self.in_cooldown(skill_id):
+            # Regenerated recently: do not churn a skill on every wobble - but remember it. The
+            # change that asked for this is already consumed (the detector holds the new hash), so
+            # forgetting it would leave the skill stale until the source changed AGAIN.
+            if current_quality < self.regeneration_threshold:
+                self.deferred.add(skill_id)
+            return False
 
         if current_quality < self.regeneration_threshold:
             self.regeneration_queue.append(skill_id)
@@ -446,6 +495,11 @@ class RegenerationScheduler:
     async def get_ready_batch(self) -> List[str]:
         """Check if batch is ready to execute (quiet window elapsed)."""
         now = datetime.utcnow()
+        for sid in sorted(self.deferred):
+            if not self.in_cooldown(sid, now) and sid not in self.queued_skills:
+                self.regeneration_queue.append(sid)
+                self.queued_skills.add(sid)
+                self.deferred.discard(sid)
         elapsed = (now - self.last_batch_time).total_seconds()
 
         if elapsed >= self.batch_window_seconds and self.regeneration_queue:
@@ -471,6 +525,9 @@ class DataHubLearningDaemon:
 
     Phase 4 Integration: Reads feedback from Write-Ahead Log (WAL) for crash recovery.
     """
+
+    FEEDBACK_MIN_COUNT = 3          # feedback events before a consensus may trigger anything
+    FEEDBACK_REGEN_SIGNAL = 0.0     # mean signal below this = net-negative
 
     def __init__(self, tenant_id: str = "_default", feedback_wal=None):
         self.tenant_id = tenant_id
@@ -516,7 +573,10 @@ class DataHubLearningDaemon:
 
         # Decide: should we queue regeneration?
         for skill_id in affected_skills:
-            quality = payload.get(f"quality_{skill_id}", 0.8)
+            # A changed source means the artifact derived from it is stale: unless the caller
+            # measured a quality, treat it as failing the bar (the old default of exactly the
+            # threshold - 0.8, "not below" - meant a real change never queued anything).
+            quality = payload.get(f"quality_{skill_id}", 0.0)
             should_queue = await self.regeneration_scheduler.should_queue_regeneration(skill_id, quality)
 
             if should_queue:
@@ -549,6 +609,9 @@ class DataHubLearningDaemon:
             tenant_id=self.tenant_id,
         )
         await self.execution_listener.record_execution(usage_event)
+        for source in payload.get("data_sources") or ([payload["data_source_used"]]
+                                                       if payload.get("data_source_used") else []):
+            await self.causal_graph.add_edge(source, skill_id, "data_source")
 
     async def on_user_feedback(self, event: DaemonEvent) -> None:
         """Handle UserFeedbackEvent."""
@@ -570,6 +633,21 @@ class DataHubLearningDaemon:
             tenant_id=self.tenant_id,
         )
         await self.feedback_collector.record_feedback(feedback_event)
+        for source in sources:
+            await self.causal_graph.add_edge(source, skill_id, "data_source")
+
+        # A consensus that is clearly net-negative (enough feedback, mean signal below 0) queues
+        # the skill for regeneration from its sources; the scheduler dedups and rate-limits.
+        consensus = self.feedback_collector.get_consensus(skill_id)
+        if (sources and consensus["count"] >= self.FEEDBACK_MIN_COUNT
+                and consensus["signal"] < self.FEEDBACK_REGEN_SIGNAL):
+            quality = (consensus["signal"] + 1.0) / 2.0
+            if await self.regeneration_scheduler.should_queue_regeneration(skill_id, min(quality, 0.79)):
+                await self._emit_learning_event(
+                    "regeneration_queued", input_events=[event],
+                    decision={"skill_id": skill_id, "reason": "negative_feedback_consensus",
+                              "quality": round(quality, 3), "count": consensus["count"]},
+                )
 
         # Attribute feedback to sources and learn
         if sources:
@@ -749,3 +827,60 @@ class DataHubLearningDaemon:
     async def emit_event(self, event: DaemonEvent) -> None:
         """Public API: emit event for daemon to process."""
         await self.event_queue.put(event)
+
+    # ── persistence (PLAN-0948 D3) ──────────────────────────────────────────
+
+    STATE_VERSION = 1
+
+    def snapshot(self) -> Dict[str, Any]:
+        """Everything the daemon has learned, as plain JSON. Content-free by construction: ids,
+        numbers, hashes and masked pseudonyms - no user text, no paths, no skill bodies."""
+        wl, sched = self.weight_learner, self.regeneration_scheduler
+        return {
+            "version": self.STATE_VERSION,
+            "tenant_id": self.tenant_id,
+            "audit_chain_hash": self.audit_chain_hash,
+            "weights": dict(wl.weights),
+            "weight_history": [dict(w) for w in wl.weight_history[-wl.MAX_HISTORY:]],
+            "success": {k: list(v) for k, v in self.execution_listener.skill_success_rate.items()},
+            "feedback": [asdict(f) for f in self.feedback_collector.feedback_history],
+            "manifest_hashes": dict(self.change_detector.last_manifest_hash),
+            "edges": {k: sorted(v) for k, v in self.causal_graph.edges.items()},
+            "queue": list(sched.regeneration_queue),
+            "last_regenerated": dict(sched.last_regenerated),
+            "deferred": sorted(sched.deferred),
+            "decisions": list(self.audit_trail[-200:]),
+        }
+
+    def restore(self, state: Dict[str, Any]) -> bool:
+        """Load a snapshot; False (and nothing changed) for a foreign tenant or version."""
+        if not isinstance(state, dict) or state.get("version") != self.STATE_VERSION \
+                or state.get("tenant_id") != self.tenant_id:
+            return False
+        wl, sched = self.weight_learner, self.regeneration_scheduler
+        weights = state.get("weights") or {}
+        wl.weights = {str(k): max(0.0, min(1.0, float(v))) for k, v in weights.items()}
+        wl.weight_history = [
+            {str(k): float(v) for k, v in w.items()} for w in (state.get("weight_history") or [])
+        ] or [wl.weights.copy()]
+        for skill, runs in (state.get("success") or {}).items():
+            self.execution_listener.skill_success_rate[str(skill)] = [bool(x) for x in runs][-200:]
+        self.feedback_collector.feedback_history = []
+        for raw in state.get("feedback") or []:
+            try:
+                self.feedback_collector.feedback_history.append(FeedbackEvent(**raw))
+            except TypeError:
+                continue
+        for skill in {f.skill_id for f in self.feedback_collector.feedback_history}:
+            self.feedback_collector._update_consensus(skill)
+        self.change_detector.last_manifest_hash = {
+            str(k): str(v) for k, v in (state.get("manifest_hashes") or {}).items()}
+        self.causal_graph.edges = defaultdict(set, {
+            str(k): set(map(str, v)) for k, v in (state.get("edges") or {}).items()})
+        sched.regeneration_queue = [str(x) for x in state.get("queue") or []]
+        sched.queued_skills = set(sched.regeneration_queue)
+        sched.last_regenerated = {str(k): str(v) for k, v in (state.get("last_regenerated") or {}).items()}
+        sched.deferred = {str(x) for x in state.get("deferred") or []}
+        self.audit_trail = list(state.get("decisions") or [])
+        self.audit_chain_hash = str(state.get("audit_chain_hash") or "genesis")
+        return True

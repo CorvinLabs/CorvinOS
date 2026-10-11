@@ -521,6 +521,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # noqa: BLE001
         logging.getLogger(__name__).warning("kb projection not started: %s", exc)
 
+    # Data Hub learning loop (PLAN-0948): the daemon's supervised host (persisted state, durable
+    # inbox, idle back-off, audited regeneration). Both hosts start it; idempotent per tenant.
+    try:
+        import os as _os_lh
+        from core.background import learning_host as _lh
+        _lh.start(_os_lh.environ.get("CORVIN_TENANT_ID") or "_default")
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("learning host not started: %s", exc)
+
     # Standard plugins — install the plugins listed in corvin_console/default_plugins.yaml
     # (background thread, once per tenant; docs/claude-ref/default-plugins.md).
     try:

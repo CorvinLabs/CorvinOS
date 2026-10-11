@@ -1,0 +1,179 @@
+"""PLAN-0948 D2-D4 end to end through the production entry points.
+
+create (console route) -> inject (skill_inject.collect_active_skills) -> operator follow-up
+(skill_inject.grade_from_user_followup) -> durable inbox -> LearningHost tick -> weights/consensus ->
+regeneration queued -> regenerated from the SOURCE (audit-first) -> state persisted and restored.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_admin_route import _sandbox  # noqa: E402
+
+_BASE = "/v1/console/datahub"
+SKILL = "assistant.datahub_orders"
+
+
+def _run(coro):
+    return asyncio.new_event_loop().run_until_complete(coro)
+
+
+class DataHubLearningLoopTest(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.src = self.tmp / "data" / "rows.json"
+        self.src.parent.mkdir(parents=True)
+        self.src.write_text(json.dumps([{"name": "a", "score": 1}, {"name": "b", "score": 2}]))
+
+    def _create(self, client, csrf):
+        r = client.post(f"{_BASE}/create", headers={"X-CSRF-Token": csrf}, json={
+            "name": "orders", "description": "Order rows", "creation_type": "skill",
+            "data_source": "json", "data_path": str(self.src)})
+        self.assertEqual(r.status_code, 201, r.text)
+        return r.json()["artifact_id"]
+
+    def _inject(self):
+        from corvin_operator.bridges.shared import skill_inject
+        return skill_inject.collect_active_skills(
+            channel_id=None, profile={}, task_text="show me the order rows", tenant_id="_default")
+
+    def _followup(self, text):
+        from corvin_operator.bridges.shared import skill_inject
+        return skill_inject.grade_from_user_followup(
+            channel_id=None, profile={}, user_text=text, prev_run_id="run-1",
+            prev_skill_names=[SKILL])
+
+    def test_producers_write_content_free_events_to_the_inbox(self):
+        with _sandbox(self.tmp) as (client, csrf, _home, _):
+            aid = self._create(client, csrf)
+            block = self._inject()
+            self.assertIn(SKILL, block or "", "the Data Hub skill was not offered to the turn")
+            self.assertTrue(self._followup("falsch, das stimmt nicht"))
+
+            from core.background import learning_inbox as li
+            events, _cursor = li.read_from("_default", None)
+            kinds = [e["event_type"] for e in events]
+            self.assertEqual(kinds, ["skill_executed", "user_feedback"])
+            for e in events:
+                self.assertEqual(e["payload"]["skill_id"], SKILL)
+                self.assertEqual(e["payload"]["data_sources"], [f"datahub:{aid}"])
+            self.assertLess(events[1]["payload"]["signal"], 0)          # rejection
+            self.assertNotIn("falsch", json.dumps(events))               # no user text
+
+    def test_ordinary_skills_produce_nothing(self):
+        with _sandbox(self.tmp) as (client, csrf, _home, _):
+            from corvin_operator.bridges.shared import skill_inject
+            skill_inject.grade_from_user_followup(
+                channel_id=None, profile={}, user_text="falsch", prev_run_id="r",
+                prev_skill_names=["adr_gate"])
+            from core.background import learning_inbox as li
+            self.assertEqual(li.read_from("_default", None)[0], [])
+
+    def test_negative_feedback_learns_queues_regenerates_and_survives_a_restart(self):
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            aid = self._create(client, csrf)
+            self._inject()
+            for _ in range(3):
+                self._followup("falsch, nochmal")
+
+            from core.background.learning_host import LearningHost, state_path
+            from core.skills.os_skills.datahub_unified import regenerate
+
+            host = LearningHost("_default")
+            self.assertGreaterEqual(_run(host.tick()), 4)
+            sid = f"datahub:{aid}"
+            # learned: the source it was attributed to moved below neutral, and it is a NEW source
+            self.assertLess(host.daemon.weight_learner.weights[sid], 0.5)
+            # net-negative consensus over 3 events queued the skill, exactly once
+            self.assertEqual(host.daemon.regeneration_scheduler.regeneration_queue, [SKILL])
+            decisions = [d["event_type"] for d in host.daemon.audit_trail]
+            self.assertIn("weight_updated", decisions)
+            self.assertIn("regeneration_queued", decisions)
+            self.assertTrue(state_path("_default").is_file())
+
+            # persisted and restored: a fresh host (the process restarted) knows all of it
+            again = LearningHost("_default")
+            self.assertTrue(again._restored)
+            self.assertEqual(again.daemon.weight_learner.weights[sid], host.daemon.weight_learner.weights[sid])
+            self.assertEqual(again.daemon.regeneration_scheduler.regeneration_queue, [SKILL])
+            self.assertEqual(again.cursor, host.cursor)
+            self.assertEqual(_run(again.tick()), 0, "nothing new: the cursor must not replay the inbox")
+
+            # the source changes, then the queued regeneration runs (batch window elapsed)
+            self.src.write_text(json.dumps([{"name": "a", "score": 1}, {"name": "b", "score": 2},
+                                            {"name": "c", "score": 3}]))
+            again.daemon.regeneration_scheduler.batch_window_seconds = 0.0
+            work = _run(again.tick(now=10**12))      # far in the future: the source check is due
+            self.assertGreaterEqual(work, 1)
+            self.assertEqual(again.regenerations[-1]["outcome"], "completed", again.regenerations)
+
+            art = next(a for a in regenerate.live_skill_artifacts("_default") if a["artifact_id"] == aid)
+            self.assertEqual(art["row_count"], 3)
+            self.assertEqual(art["generation"], 2)
+            self.assertIn("Based on analysis of 3 rows", art["body"])
+            from core.skills.os_skills.datahub_unified.register import _registry
+            spec = _registry("_default").get(SKILL)
+            self.assertEqual(spec.meta["data_sources"], [sid])        # meta preserved
+            self.assertGreaterEqual(spec.n_grades, 1)                  # grades preserved
+            self.assertIn("3 rows", _registry("_default").get_body(SKILL) or "")
+
+            # audit-first: intent then outcome on the tenant chain, and the chain still verifies
+            from core.paths.tenant import tenant_audit_chain
+            chain = tenant_audit_chain("_default")     # audit_sink writes THE tenant chain
+            recs = [json.loads(l) for l in chain.read_text().splitlines() if l.strip()]
+            regen = [r["details"]["stage"] for r in recs if r.get("event_type") == "learning.regeneration"]
+            self.assertEqual(regen, ["applying", "finished"])
+            from corvin_operator.forge.forge import security_events as se
+            self.assertTrue(se.verify_chain(chain)[0])
+
+    def test_a_source_that_now_holds_a_secret_is_refused_not_regenerated(self):
+        with _sandbox(self.tmp) as (client, csrf, _home, _):
+            aid = self._create(client, csrf)
+            from core.skills.os_skills.datahub_unified import regenerate
+            self.src.write_text(json.dumps([{"note": "key AKIAIOSFODNN7EXAMPLE secret_access=" + "x" * 30}]))
+            out = regenerate.regenerate_skill("_default", SKILL, reason="source_changed")
+            self.assertEqual(out.outcome, "refused", out)
+            art = next(a for a in regenerate.live_skill_artifacts("_default") if a["artifact_id"] == aid)
+            self.assertEqual(art["row_count"], 2)                      # untouched
+
+    def test_an_idle_host_backs_off_and_does_nothing(self):
+        with _sandbox(self.tmp) as (_client, _csrf, _home, _):
+            from core.background import learning_host as lh
+            host = lh.LearningHost("_default")
+            self.assertEqual(_run(host.tick()), 0)
+            self.assertFalse(lh.state_path("_default").exists(), "an idle tick must not write state")
+
+    def test_the_daemon_is_visible_through_the_registry_skill_and_the_dashboard_route(self):
+        with _sandbox(self.tmp) as (client, csrf, _home, _):
+            self._create(client, csrf)
+            self._inject()
+            for _ in range(3):
+                self._followup("falsch")
+            from core.background.learning_host import LearningHost
+            _run(LearningHost("_default").tick())
+
+            # the dashboard route (real session) shows what the host saved
+            r = client.get("/v1/console/api/learning/daemon")
+            self.assertEqual(r.status_code, 200, r.text)
+            body = r.json()
+            self.assertEqual(body["data"]["state"], "saved")
+            self.assertEqual(body["data"]["queue"], [SKILL])
+            self.assertGreaterEqual(body["data"]["decisions"], 2)
+            self.assertFalse(body["running"], "no host thread runs in a test process")
+            self.assertNotIn("falsch", r.text)
+
+            # ...and the registry Skill reports the same, audited like any Skill run
+            from core.skills.os_skills.learning_daemon_skill import LearningDaemonSkill
+            out = LearningDaemonSkill().execute({"tenant_id": "_default"})
+            self.assertEqual((out["state"], out["queued"]), ("saved", 1))
+
+
+if __name__ == "__main__":
+    unittest.main()

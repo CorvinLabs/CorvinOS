@@ -92,11 +92,9 @@ def register_skill_artifact(
 
 def data_sources_of(spec: Any) -> list[str]:
     """The attribution ids a SkillSpec carries (empty for every ordinary skill)."""
-    meta = getattr(spec, "meta", None) or {}
-    value = meta.get("data_sources") if isinstance(meta, dict) else None
-    if not isinstance(value, (list, tuple)):
-        return []
-    return [str(v) for v in value if isinstance(v, str) and v][:16]
+    from core.background.learning_inbox import sources_of
+
+    return sources_of(spec)
 
 
 __all__ = ["Registered", "register_skill_artifact", "skill_name_for", "source_id", "data_sources_of"]

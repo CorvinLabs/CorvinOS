@@ -363,6 +363,14 @@ def create_app() -> FastAPI:
         except Exception:
             pass  # best-effort — license daemon failure does not block console startup
 
+        # Data Hub learning loop (PLAN-0948): the daemon's supervised host. Idempotent per tenant.
+        try:
+            import os as _os_lh
+            from core.background import learning_host as _lh
+            _lh.start(_os_lh.environ.get("CORVIN_TENANT_ID") or "_default")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("learning host not started: %s", exc)
+
         # Standard plugins (default_plugins.yaml): what a fresh install gets. Background
         # thread, once per tenant, never blocks startup.
         try:
@@ -570,6 +578,13 @@ def create_app() -> FastAPI:
             log.exception("A2A connectivity manager failed to start (non-fatal)")
 
         yield
+        # Persist the learning daemon's state and stop its thread (best-effort).
+        try:
+            import os as _os_lh2
+            from core.background import learning_host as _lh2
+            _lh2.stop(_os_lh2.environ.get("CORVIN_TENANT_ID") or "_default")
+        except Exception:
+            pass
         # Detach provider slots so a draining request cannot be routed into a
         # half-torn-down plugin. Best-effort: shutdown must not raise.
         if _plugins_loaded:

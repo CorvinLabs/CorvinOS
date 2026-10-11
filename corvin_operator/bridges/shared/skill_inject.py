@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -667,6 +668,8 @@ def collect_active_skills(
     if not eligible:
         return None
 
+    _emit_usage_for_learning(eligible, tenant_id)
+
     parts: list[str] = [_HEADER, ""]
     for scope, spec in eligible:
         if spec.name in pinned_bodies:
@@ -1119,6 +1122,7 @@ def grade_from_user_followup(
                 "name": name, "signal": signal,
                 "score": float(score), "result": res,
             })
+            _emit_feedback_for_learning(reg, name, float(score), None)
         except Exception:  # noqa: BLE001
             continue
     return graded
@@ -1164,6 +1168,47 @@ def _gate_through_registry(eligible: list[tuple[str, Any]], *, reg: Any,
         return eligible, {}
     allowed = set(gate.allowed)
     return [(scope, spec) for scope, spec in eligible if spec.name in allowed], dict(gate.bodies)
+
+
+def _learning_tenant(tenant_id: str | None) -> str:
+    if tenant_id:
+        return tenant_id
+    return os.environ.get("CORVIN_TENANT_ID") or "_default"
+
+
+def _emit_usage_for_learning(eligible: list, tenant_id: str | None) -> None:
+    """PLAN-0948 D2: a skill carrying ``meta.data_sources`` (a Data Hub skill) was offered to
+    this turn - tell the learning daemon. Content-free (ids only), never raises, and a no-op for
+    every ordinary skill."""
+    try:
+        from core.background import learning_inbox  # noqa: PLC0415
+
+        for _scope, spec in eligible:
+            sources = learning_inbox.sources_of(spec)
+            if sources:
+                learning_inbox.emit(_learning_tenant(tenant_id), "skill_executed", {
+                    "skill_id": spec.name, "success": True, "data_sources": sources,
+                    "execution_id": f"inj-{uuid.uuid4().hex[:12]}",
+                })
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _emit_feedback_for_learning(reg: Any, name: str, score: float, tenant_id: str | None) -> None:
+    """PLAN-0948 D2: the operator's follow-up graded a Data Hub skill - feed the daemon."""
+    try:
+        from core.background import learning_inbox  # noqa: PLC0415
+
+        spec = reg.get(name)
+        sources = learning_inbox.sources_of(spec) if spec is not None else []
+        if sources:
+            learning_inbox.emit(_learning_tenant(tenant_id), "user_feedback", {
+                "skill_id": name, "signal": learning_inbox.signal_for_score(score),
+                "dimension": "overall", "data_sources": sources,
+                "feedback_id": f"fu-{uuid.uuid4().hex[:12]}",
+            })
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _load_body(reg: Any, name: str) -> str | None:
