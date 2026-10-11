@@ -123,13 +123,18 @@ class PhaseModelOrchestrator:
 
         try:
             # Phase 0: Intake
+            # The skill id does not exist yet: the phase-0 WAL entry is written under the
+            # placeholder and must be completed (and later cleared) under THAT id. Marking it under
+            # the id intake just produced raised "WAL entry not found" and aborted every run after
+            # phase 0, so no skill was ever generated.
+            placeholder_id = state.skill_id
             self._persist_state_to_wal(state, 0)  # FIX #2: WAL before phase
             state.intake_result = self.phases[0].execute(
                 IntakeRequest(query=query, mode=mode),
                 self.emitter,
             )
             state.skill_id = state.intake_result.skill_id
-            self.wal.mark_processed(state.skill_id, 0)  # FIX #2: Mark complete
+            self.wal.mark_processed(placeholder_id, 0)  # FIX #2: Mark complete
 
             # Phase 1: Ingestion
             self._persist_state_to_wal(state, 1)  # FIX #2: WAL before phase
@@ -283,6 +288,7 @@ class PhaseModelOrchestrator:
 
             # FIX #2: Clear WAL entries on successful completion
             self.wal.clear_skill_entries(state.skill_id)
+            self.wal.clear_skill_entries(placeholder_id)
 
         except Exception as e:
             # Record error but don't crash

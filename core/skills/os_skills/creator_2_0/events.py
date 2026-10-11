@@ -56,7 +56,10 @@ class PhaseCompletedEvent:
         """Convert to JSON-serializable dict."""
         d = asdict(self)
         if self.loss_components:
-            d["loss_components"] = asdict(self.loss_components)
+            # The weighted overall is derived, not a field - but it is what every reader of the
+            # serialized event (the gate, the dashboard) means by "the loss", so it is part of it.
+            d["loss_components"] = {**asdict(self.loss_components),
+                                    "overall": self.loss_components.overall()}
         return d
 
     def to_json(self) -> str:

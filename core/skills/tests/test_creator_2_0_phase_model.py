@@ -247,3 +247,21 @@ class TestLossComponents:
 
         overall = components.overall(weights=weights)
         assert abs(overall - 1.0) < 0.01
+
+
+class TestPlaceholderWalEntry:
+    """Phase 0 runs before a skill id exists: its WAL entry is written under the placeholder and
+    must be completed and cleared under that id. Completing it under the id intake produced raised
+    'WAL entry not found' and aborted every run after phase 0 (no skill was ever generated)."""
+
+    def test_a_full_run_has_no_error_event_and_leaves_no_wal_entries(self):
+        from core.skills.os_skills.creator_2_0.skill import Creator20Skill
+
+        skill = Creator20Skill(mode="skill")
+        result = skill.execute("Email validator")
+        events = skill.get_events()
+        assert result["success"] is True
+        assert all(not e["errors"] for e in events), [e for e in events if e["errors"]]
+        assert all(e["phase_num"] >= 0 for e in events)
+        wal = skill.orchestrator.wal
+        assert wal.wal_file.read_text().strip() == "", "a successful run must leave the WAL empty"

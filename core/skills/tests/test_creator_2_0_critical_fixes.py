@@ -149,7 +149,7 @@ class TestCreator20AuditIntegrationF1:
         is_valid = audit_integration.validate_feedback_chain("test_skill_4", 3)
         assert is_valid is True
 
-    def test_f1_tenant_isolation_in_audit_events(self, tenant_home):
+    def test_f1_tenant_isolation_in_audit_events(self, tenant_home, monkeypatch):
         """F1.5: Feedback events are tenant-scoped (GDPR Art. 32)."""
         # Create two integrations with different tenants
         integration_1 = Creator20AuditIntegration(tenant_home=tenant_home, tenant_id="tenant_1")
@@ -182,7 +182,11 @@ class TestCreator20AuditIntegrationF1:
             ),
         )
 
+        # The core chain writer refuses a record for a tenant other than the process's
+        # (cross-tenant isolation), so each tenant's events are written as that tenant.
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_1")
         integration_1.emit_feedback_event_with_audit(phase_event_1)
+        monkeypatch.setenv("CORVIN_TENANT_ID", "tenant_2")
         integration_2.emit_feedback_event_with_audit(phase_event_2)
 
         # Verify tenant isolation: tenant_1 should not see tenant_2 events

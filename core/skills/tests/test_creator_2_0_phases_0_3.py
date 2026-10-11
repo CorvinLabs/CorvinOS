@@ -319,9 +319,8 @@ class TestPlanningPhase:
             emitter2,
         )
 
-        # Different intents should produce different function counts or types
-        # (at least they should be different objects)
-        assert result1.intent != result2.intent
+        # Different intents must plan different functions (PlanningResult carries no ``intent``)
+        assert result1.functions != result2.functions
 
     def test_planning_emits_event(self):
         """Test that planning emits event."""
