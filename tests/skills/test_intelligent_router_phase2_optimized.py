@@ -101,7 +101,8 @@ class TestPhase2ConservativeKeywords:
         assert decision.tier == "medium"  # Should NOT bump (too short)
 
         # Longer analysis request (> 80 chars) → COMPLEX
-        long_analysis = "debug this Python function to find the memory leak causing slow performance"
+        long_analysis = "debug this Python function to find the memory leak that is causing the slow performance"
+        assert len(long_analysis) > 80
         decision = router.route_task(long_analysis, token_count=80)
         assert decision.tier == "complex"  # BUMPED to COMPLEX (has keyword + depth)
 

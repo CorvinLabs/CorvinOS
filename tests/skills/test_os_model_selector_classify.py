@@ -269,7 +269,7 @@ class TestModelSelectorClassifyWithDecomposition:
     def test_very_long_task_non_decomposable(self):
         """Test very long task (> 8000 tokens, not decomposable)."""
         # Create a task with ~10000 tokens
-        task = "Analyze this: " + ("word " * 2000)
+        task = "Analyze this: " + ("word " * 12000)
 
         result, hint = self.selector.classify_with_decomposition_hint(
             task_input=task,

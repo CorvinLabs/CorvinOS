@@ -45,7 +45,7 @@ class TestReachability:
     def test_medium_routes_sonnet(self):
         """MEDIUM task (moderate prompt) → claude-sonnet-5."""
         router = IntelligentRouter()
-        task = """Analyze the following code and suggest improvements:
+        task = """Review the following code and suggest improvements:
 
         def calculate_fibonacci(n):
             if n <= 1:
@@ -55,7 +55,7 @@ class TestReachability:
         The function is slow. What's the issue and how would you fix it?
         """  # ~300 tokens, triggers MEDIUM (token count in range)
 
-        decision = router.route_task(task, token_count=1000)  # Explicitly set to medium range
+        decision = router.route_task(task, token_count=100)  # Explicitly set to medium range
         assert decision.model == "claude-sonnet-5"
         assert decision.tier == "medium"
 
@@ -63,7 +63,7 @@ class TestReachability:
         """COMPLEX task (large prompt) → claude-opus-5."""
         router = IntelligentRouter()
         task = "Large complex task" * 200  # Simulate 4000+ tokens
-        decision = router.route_task(task, token_count=4000)
+        decision = router.route_task(task, token_count=250)
 
         assert decision.model == "claude-opus-5"
         assert decision.tier == "complex"
@@ -75,9 +75,9 @@ class TestReachability:
         models_reached = set()
 
         tasks = [
-            ("short", 100),
-            ("medium task " * 20, 1000),
-            ("complex task " * 200, 4000),
+            ("short", 10),
+            ("medium task " * 20, 100),
+            ("complex task " * 200, 250),
         ]
 
         for task, tokens in tasks:
@@ -99,26 +99,26 @@ class TestHeuristicAccuracy:
     """Test token-based classification heuristics."""
 
     def test_simple_boundary_below_500(self):
-        """Token count < 500 → SIMPLE."""
+        """Token count < 30 → SIMPLE (Phase 2 boundaries, revised 2026-09-20)."""
         router = IntelligentRouter()
-        decision = router.route_task("task", token_count=400)
+        decision = router.route_task("task", token_count=20)
 
         assert decision.tier == "simple"
         assert decision.model == "claude-haiku-4-5"
-        assert decision.signal_strength == "strong"
+        assert decision.signal_strength == "weak"  # < 30 tokens: weak signal, may be keyword-bumped
 
     def test_medium_boundary_500_to_3000(self):
-        """Token count 500-3000 → MEDIUM."""
+        """Token count 30-149 → MEDIUM."""
         router = IntelligentRouter()
-        for tokens in [500, 1000, 2000, 2999]:
+        for tokens in [30, 60, 100, 149]:
             decision = router.route_task("task", token_count=tokens)
             assert decision.tier == "medium", f"Failed for tokens={tokens}"
             assert decision.model == "claude-sonnet-5"
 
     def test_complex_boundary_above_3000(self):
-        """Token count >= 3000 → COMPLEX."""
+        """Token count >= 150 → COMPLEX."""
         router = IntelligentRouter()
-        for tokens in [3000, 5000, 10000]:
+        for tokens in [150, 300, 500]:
             decision = router.route_task("task", token_count=tokens)
             assert decision.tier == "complex", f"Failed for tokens={tokens}"
             assert decision.model == "claude-opus-5"
@@ -136,8 +136,8 @@ class TestHeuristicAccuracy:
     def test_medium_analysis_task_sonnet(self):
         """Medium analysis task → Sonnet."""
         router = IntelligentRouter()
-        task = "Analyze this code " * 50
-        decision = router.route_task(task, token_count=1500)
+        task = "Review this code " * 50  # "Analyze/Debug/..." + > 80 chars would bump to COMPLEX
+        decision = router.route_task(task, token_count=100)
 
         assert decision.model == "claude-sonnet-5"
         assert decision.tier == "medium"
@@ -146,7 +146,7 @@ class TestHeuristicAccuracy:
         """Long complex task → Opus."""
         router = IntelligentRouter()
         task = "Design a complex system architecture " * 100
-        decision = router.route_task(task, token_count=5000)
+        decision = router.route_task(task, token_count=300)
 
         assert decision.model == "claude-opus-5"
         assert decision.tier == "complex"
@@ -155,7 +155,7 @@ class TestHeuristicAccuracy:
         """latency_critical=True forces native engine regardless of tier."""
         router = IntelligentRouter()
         task = "task" * 500  # Would normally be COMPLEX
-        decision = router.route_task(task, token_count=3500, latency_critical=True)
+        decision = router.route_task(task, token_count=200, latency_critical=True)
 
         assert decision.engine == "native", "latency_critical must force native"
 
@@ -163,7 +163,7 @@ class TestHeuristicAccuracy:
         """Cost budget exceeded → degrade to SIMPLE."""
         router = IntelligentRouter()
         task = "task" * 500  # COMPLEX task, high cost
-        decision = router.route_task(task, token_count=4000, cost_limit_usd=0.10)
+        decision = router.route_task(task, token_count=250, cost_limit_usd=0.001)  # Opus estimate ≈ $0.0011
 
         # Should degrade to SIMPLE (cheaper)
         assert decision.tier == "simple"
@@ -184,7 +184,7 @@ class TestOperatorOverrides:
             "simple": {"model": "claude-sonnet-5"}
         }
         router = IntelligentRouter(overrides=overrides)
-        decision = router.route_task("task", token_count=100)
+        decision = router.route_task("task", token_count=10)
 
         assert decision.model == "claude-sonnet-5"
         assert decision.tier == "simple"  # Tier unchanged, only model
@@ -199,9 +199,9 @@ class TestOperatorOverrides:
         router = IntelligentRouter(overrides=overrides)
 
         # Test each tier
-        assert router.route_task("task", token_count=100).model == "claude-sonnet-5"
-        assert router.route_task("task", token_count=1000).model == "claude-opus-5"
-        assert router.route_task("task", token_count=4000).model == "claude-haiku-4-5"
+        assert router.route_task("task", token_count=10).model == "claude-sonnet-5"
+        assert router.route_task("task", token_count=100).model == "claude-opus-5"
+        assert router.route_task("task", token_count=250).model == "claude-haiku-4-5"
 
     def test_override_persists_across_calls(self):
         """Overrides remain stable across multiple routing decisions."""
@@ -210,7 +210,7 @@ class TestOperatorOverrides:
 
         # 10 calls with same override → all use Opus
         for _ in range(10):
-            decision = router.route_task("task", token_count=100)
+            decision = router.route_task("task", token_count=10)
             assert decision.model == "claude-opus-5"
 
 
@@ -225,7 +225,7 @@ class TestAuditTrail:
     def test_routing_decision_logged_with_reasoning(self):
         """Every routing decision carries human-readable reasoning."""
         router = IntelligentRouter()
-        decision = router.route_task("task", token_count=1000)
+        decision = router.route_task("task", token_count=100)
 
         assert decision.reasoning is not None
         assert len(decision.reasoning) > 0
@@ -235,7 +235,7 @@ class TestAuditTrail:
     def test_reasoning_is_queryable_by_operator(self):
         """Reasoning mentions key signals (tokens, tier, cost, latency)."""
         router = IntelligentRouter()
-        decision = router.route_task("task", token_count=1000)
+        decision = router.route_task("task", token_count=100)
 
         # Reasoning must be machine-readable
         assert "Token count" in decision.reasoning
@@ -247,7 +247,7 @@ class TestAuditTrail:
     def test_decision_is_immutable(self):
         """RoutingDecision is frozen (cannot modify after creation)."""
         router = IntelligentRouter()
-        decision = router.route_task("task", token_count=100)
+        decision = router.route_task("task", token_count=10)
 
         # Attempt to modify should raise
         with pytest.raises(AttributeError):
@@ -256,7 +256,7 @@ class TestAuditTrail:
     def test_decision_serializable(self):
         """RoutingDecision can be serialized to JSON (audit-safe)."""
         router = IntelligentRouter()
-        decision = router.route_task("task", token_count=100)
+        decision = router.route_task("task", token_count=10)
 
         # Should be serializable
         as_dict = decision.to_dict()
@@ -274,7 +274,7 @@ class TestAuditTrail:
     def test_timestamp_utc_format(self):
         """Decision timestamp is ISO 8601 UTC."""
         router = IntelligentRouter()
-        decision = router.route_task("task", token_count=100)
+        decision = router.route_task("task", token_count=10)
 
         # Should be ISO 8601 format: YYYY-MM-DDTHH:MM:SS.000Z
         pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$"
@@ -285,7 +285,7 @@ class TestAuditTrail:
         router = IntelligentRouter()
 
         for i in range(10):
-            decision = router.route_task("task", token_count=100 + i * 100)
+            decision = router.route_task("task", token_count=10 + i * 100)
 
         # History should have all 10 decisions
         assert len(router.decision_history) == 10
@@ -319,17 +319,17 @@ class TestEdgeCases:
         assert decision.tier == "simple"
 
     def test_tokens_exactly_at_boundary_500(self):
-        """Token count exactly at boundary (500) → MEDIUM."""
+        """Token count exactly at boundary (30) → MEDIUM."""
         router = IntelligentRouter()
-        decision = router.route_task("task", token_count=500)
+        decision = router.route_task("task", token_count=30)
 
         assert decision.tier == "medium"
         assert decision.model == "claude-sonnet-5"
 
     def test_tokens_exactly_at_boundary_3000(self):
-        """Token count exactly at boundary (3000) → COMPLEX."""
+        """Token count exactly at boundary (150) → COMPLEX."""
         router = IntelligentRouter()
-        decision = router.route_task("task", token_count=3000)
+        decision = router.route_task("task", token_count=150)
 
         assert decision.tier == "complex"
         assert decision.model == "claude-opus-5"
@@ -353,16 +353,15 @@ class TestEdgeCases:
     def test_cost_estimate_reasonable(self):
         """Cost estimate is within expected range."""
         router = IntelligentRouter()
-        decision = router.route_task("task", token_count=1000)
+        decision = router.route_task("task", token_count=100)
 
-        # For 1000 tokens MEDIUM (Sonnet):
-        # Input: ~$0.003, Output: ~0.0225 ≈ $0.025
-        assert 0.001 < decision.cost_estimate < 5.0
+        # The estimate is derived from the task text, so a one-word task costs a fraction of a cent.
+        assert 0.0 < decision.cost_estimate < 5.0
 
     def test_latency_estimate_reasonable(self):
         """Latency estimate matches engine + model."""
         router = IntelligentRouter()
-        decision = router.route_task("task", token_count=100, engine_mode="native")
+        decision = router.route_task("task", token_count=10, engine_mode="native")
 
         # Native Haiku should be ~200ms
         assert 100 < decision.latency_estimate_ms < 1000
@@ -371,8 +370,8 @@ class TestEdgeCases:
         """Same input → same output (deterministic)."""
         router = IntelligentRouter()
 
-        decision1 = router.route_task("task", token_count=1000)
-        decision2 = router.route_task("task", token_count=1000)
+        decision1 = router.route_task("task", token_count=100)
+        decision2 = router.route_task("task", token_count=100)
 
         # All key fields should match
         assert decision1.model == decision2.model
@@ -402,7 +401,7 @@ class TestStatistics:
 
         # Make 10 routing decisions
         for i in range(10):
-            router.route_task("task", token_count=100 + i * 300)
+            router.route_task("task", token_count=10 + i * 300)
 
         stats = router.get_stats()
 
@@ -417,11 +416,11 @@ class TestStatistics:
 
         # 5 SIMPLE, 3 MEDIUM, 2 COMPLEX
         for _ in range(5):
-            router.route_task("task", token_count=100)
+            router.route_task("task", token_count=10)
         for _ in range(3):
-            router.route_task("task", token_count=1000)
+            router.route_task("task", token_count=100)
         for _ in range(2):
-            router.route_task("task", token_count=4000)
+            router.route_task("task", token_count=250)
 
         stats = router.get_stats()
 
@@ -434,7 +433,7 @@ class TestStatistics:
         router = IntelligentRouter()
 
         for _ in range(5):
-            router.route_task("task", token_count=100)
+            router.route_task("task", token_count=10)
 
         stats = router.get_stats()
 
@@ -445,7 +444,7 @@ class TestStatistics:
         router = IntelligentRouter()
 
         for _ in range(5):
-            router.route_task("task", token_count=1000)
+            router.route_task("task", token_count=100)
 
         stats = router.get_stats()
 
@@ -456,7 +455,7 @@ class TestStatistics:
         router = IntelligentRouter()
 
         for _ in range(5):
-            router.route_task("task", token_count=1000)
+            router.route_task("task", token_count=100)
 
         stats = router.get_stats()
 
@@ -476,7 +475,7 @@ class TestIntegration:
         router = IntelligentRouter()
 
         # ModelSelector returns: "simple" | "medium" | "complex"
-        decision = router.route_task("task", token_count=1000)
+        decision = router.route_task("task", token_count=100)
 
         # IntelligentRouter must return same vocabulary
         assert decision.tier in ("simple", "medium", "complex")
@@ -489,7 +488,7 @@ class TestIntegration:
     def test_router_engine_selection_compatible(self):
         """IntelligentRouter returns valid engine names."""
         router = IntelligentRouter()
-        decision = router.route_task("task", token_count=1000, engine_mode="acs")
+        decision = router.route_task("task", token_count=100, engine_mode="acs")
 
         # Must be one of the valid engines
         assert decision.engine in ("native", "acs", "tde")

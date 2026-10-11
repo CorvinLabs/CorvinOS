@@ -26,7 +26,7 @@ class TestModelSelectorClassification:
 
         assert result.complexity == "simple"
         assert result.confidence >= 0.5
-        assert result.recommended_provider == "openrouter"  # cheapest remote (ADR-2091)
+        assert result.recommended_provider == "anthropic"  # ADR-0845 k=2: Anthropic for every tier (Haiku for simple)
 
     def test_medium_task_classification(self):
         """Test classification of a medium task."""
@@ -40,7 +40,7 @@ class TestModelSelectorClassification:
         result = self.selector.classify(task)
 
         assert result.complexity == "medium"
-        assert result.recommended_provider == "openrouter"  # Cost/quality balance
+        assert result.recommended_provider == "anthropic"  # ADR-0845 k=2: Anthropic for every tier (Sonnet for medium)
 
     def test_complex_task_classification(self):
         """Test classification of a complex task."""
@@ -268,19 +268,19 @@ class TestModelSelectorClassification:
 class TestModelSelectorProviderMapping:
     """Test provider selection logic."""
 
-    def test_simple_to_openrouter(self):
-        """Simple tasks map to OpenRouter (local Ollama removed, ADR-2091)."""
+    def test_simple_to_anthropic(self):
+        """Simple tasks map to Anthropic/Haiku (ADR-0845 k=2)."""
         selector = ModelSelector()
         result = selector.classify("Simple task")
 
-        assert result.recommended_provider == "openrouter"
+        assert result.recommended_provider == "anthropic"
 
-    def test_medium_to_openrouter(self):
-        """Test that medium tasks map to OpenRouter."""
+    def test_medium_to_anthropic(self):
+        """Medium tasks map to Anthropic/Sonnet (ADR-0845 k=2)."""
         selector = ModelSelector()
         result = selector.classify("Write a function for " * 20)
 
-        assert result.recommended_provider == "openrouter"
+        assert result.recommended_provider == "anthropic"
 
     def test_complex_to_anthropic(self):
         """Test that complex tasks map to Anthropic."""
@@ -296,20 +296,20 @@ class TestModelSelectorProviderMapping:
 
         result = selector.classify("Simple task")
 
-        # Without local preference, should fallback to OpenRouter
-        assert result.recommended_provider == "openrouter"
+        # The flag is legacy; the provider is Anthropic regardless (ADR-0845 k=2)
+        assert result.recommended_provider == "anthropic"
 
     def test_provider_cost_optimization(self):
         """Test that provider selection optimizes cost."""
         selector = ModelSelector()
 
-        # Simple → cheapest remote provider (no local model since ADR-2091)
+        # Simple → Anthropic/Haiku (ADR-0845 k=2: one provider, tiered by model)
         simple_result = selector.classify("Translate")
-        assert simple_result.recommended_provider == "openrouter"
+        assert simple_result.recommended_provider == "anthropic"
 
-        # Medium → balanced (OpenRouter cost-effective)
+        # Medium → Anthropic/Sonnet
         medium_result = selector.classify("Write a function " * 10)
-        assert medium_result.recommended_provider == "openrouter"
+        assert medium_result.recommended_provider == "anthropic"
 
         # Complex → quality (Anthropic best)
         complex_result = selector.classify("Design a system " * 50)
