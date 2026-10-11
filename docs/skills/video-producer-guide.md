@@ -65,6 +65,19 @@ the video. On the maintainer host the first measured job showed 10 of 10
 scenes rendered, captions 99.9 % covered with 2 repeated cues, and 44 s
 rendered against 14 s planned — real findings about the pipeline.
 
+## Production report (unreleased 1.5.0, ADR-2247)
+
+Every job writes `videos/<job>/report.json` (schema 1, at most 64 KB) next to its video — when it completes,
+and also when it fails or is cancelled inside the job (then it names the stage that failed and the exception
+class). It records stage timings, one entry per scene (TTS tier, narrated seconds, renderer, template, beats
+source), the storyboard model's token usage as the backend reported it, every fallback the pipeline took (a
+Pillow slide, a quote in place of a template, a lower TTS tier, a storyboard backend fallback, lost grounding,
+a repaired storyboard) and the runtime **signals** — `degradation_rate`, `layout_clean`, `fact_support`,
+`mux_integrity`, `style_fidelity`, plus `plan_estimate_error` and `beats_provenance` as information — each
+with value, threshold, verdict and `n of N`. When `degradation_rate` fails, the other gated signals are marked
+`valid: false`. The report never contains the task or narration text. Jobs from before 1.5.0 have none. The
+Quality tab does not read it yet (PLAN-0946 R2c).
+
 ## Running, budget and cancel (unreleased 1.5.0, ADR-2247)
 
 * **Each production runs in its own process** (its own process group, started by the console with its
