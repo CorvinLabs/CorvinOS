@@ -393,6 +393,13 @@ grep -c '"learning.skill_executed"' "$CORVIN_HOME/audit.jsonl"
   import. Method note: a package's `__init__` runs when ANY child is imported, so a live module
   also makes its parents' eager imports live; the first draft of this round missed that and
   would have broken four live packages (caught by a dangling-import check before any commit).
+* **The one closed feedback path is race-tested across processes.** `SkillAdapter.apply_config_delta`
+  is a read-modify-write of `<skill>_config.json` shared by the console and the bridge;
+  `tests/skills/test_skill_adapter_cross_process_race.py` runs 4 real processes x 6 deltas and
+  requires 24 unique gapless versions and the exact end value (with the `flock` removed only 6-7
+  of 24 survive). An HTTP-level concurrency test cannot show this: requests share one event loop
+  and the handler has no `await` between read and write. `EventEmitter` accepts an event only if
+  it precedes `stop()`'s sentinel (one lifecycle lock; `tests/unit/test_event_emitter_races.py`).
 * **Phase 2 readiness has a structural dead end, and says so.** The Skill may only
   de-escalate TO `native`, so a surface where the bundled rule never delegates has
   nothing to change. `monitoring/readiness.py` reports that as

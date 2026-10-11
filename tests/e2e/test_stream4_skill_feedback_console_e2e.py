@@ -240,3 +240,79 @@ def test_low_trust_shrinks_the_config_step(client, tmp_path):
     assert r["trust_weight"] == pytest.approx(0.1)  # 4/4 rejected → the 0.1 floor
     after = load_skill_config("os.delegation_router", "_default")[0].confidence_threshold
     assert abs(after - before) == pytest.approx(0.05 * 0.1)
+
+
+# ── concurrency: the one closed loop must not lose or duplicate a config version ─────────────
+
+
+def test_concurrent_feedback_yields_gapless_unique_versions_and_an_intact_chain(client):
+    """12 simultaneous clients over HTTP against the real mounted router: the observable contract.
+
+    What this pins: the ADR-0534 rate throttle admits at most its limit (5) however many clients
+    arrive at once, every ACCEPTED update gets its own version id (gapless v1..vN), the stored
+    threshold is exactly 0.70 + 0.05 * (applied ups - applied downs), each version has exactly one
+    chain record, the chain verifies, and a rejection is a clean 422 `rate_limit_exceeded`, never
+    a 500.
+
+    What it does NOT prove: that the adapter's `flock` works. All requests run on ONE event loop and
+    the handler has no `await` between read and write, so they are effectively serialised (this test
+    still passes with the flock removed). The cross-process proof is
+    `tests/skills/test_skill_adapter_cross_process_race.py`.
+    """
+    import concurrent.futures
+    import json
+    import os
+    import sys
+    from pathlib import Path
+
+    from core.learning.feedback_throttle import DEFAULT_RATE_LIMIT
+    from core.skills.os_skills.skill_adapter import load_skill_config
+
+    ratings = [2, -1] * 6
+    jobs = [(f"conc-{i}", r) for i, r in enumerate(ratings)]
+
+    def post(job):
+        subject, rating = job
+        r = client.post(BASE, json=_body("os.delegation_router", subject, rating=rating))
+        return job, r.status_code, r.json()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+        results = list(pool.map(post, jobs))
+
+    statuses = [st for _, st, _ in results]
+    assert set(statuses) <= {200, 422}, f"a request failed with a server error: {statuses}"
+    accepted = [(j, b) for j, st, b in results if st == 200]
+    assert len(accepted) <= DEFAULT_RATE_LIMIT.max_per_window, (
+        f"{len(accepted)} concurrent requests were admitted through a limit of "
+        f"{DEFAULT_RATE_LIMIT.max_per_window}: the throttle's check and record are not atomic")
+    assert len(accepted) >= 3, f"too few accepted to say anything about versions: {statuses}"
+
+    applied = [(j, b) for j, b in accepted if b["config_applied"]]
+    versions = [b["config_version"] for _, b in applied]
+    assert len(set(versions)) == len(versions), f"two requests were handed the same version: {sorted(versions)}"
+    assert sorted(versions, key=lambda v: int(v[1:])) == [f"v{i}" for i in range(1, len(applied) + 1)], versions
+
+    cfg, version = load_skill_config("os.delegation_router", "_default")
+    assert version == (f"v{len(applied)}" if applied else None)
+    ups = sum(1 for (_, r), _ in applied if r > 0)
+    downs = sum(1 for (_, r), _ in applied if r < 0)
+    assert round(cfg.confidence_threshold, 2) == round(0.70 + 0.05 * (ups - downs), 2)
+
+    from core.learning.event_persistence import _resolve_core_audit
+    from core.paths.tenant import tenant_home
+
+    # One `config_updated` learning event per applied version, each pointing at its chain record.
+    events = list((tenant_home("_default") / "learning" / "events").glob("*.jsonl"))
+    recs = [json.loads(line) for f in events for line in f.read_text().splitlines() if line.strip()]
+    cfg = [r for r in recs if r.get("event_type") == "config_updated" and r.get("skill_id") == "os.delegation_router"]
+    assert len(cfg) == len(applied), f"{len(cfg)} config_updated events for {len(applied)} versions"
+    chain = _resolve_core_audit().audit_path()
+    text = Path(chain).read_text()
+    refs = [r["audit_ref"] for r in cfg]
+    assert len(set(refs)) == len(refs), "two versions point at the same chain record"
+    assert all(text.count(ref) == 1 for ref in refs), "every version needs exactly one chain record"
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "corvin_operator" / "forge"))
+    from forge.security_events import verify_chain
+
+    ok, problems = verify_chain(Path(chain))
+    assert ok, problems
