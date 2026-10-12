@@ -16,6 +16,7 @@ runs sync handlers in its threadpool instead of on the event loop.
 """
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status as http_status
@@ -39,6 +40,18 @@ def _orchestrator(tenant_id: str, observer=None):
     from core.orchestration.layer_forge.orchestrator import LayerForgeOrchestrator
 
     return LayerForgeOrchestrator(tenant_id, actor="console", observer=observer)
+
+
+_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,99}$")
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+def _identifiable(manifest: Any) -> bool:
+    """True when a manifest at least names an artifact (a well-formed id and semver). A request that does not is
+    garbage, not a Forge operation: it records no run and no artifact reference (the same rule as a promote of an
+    unknown definition) - otherwise the history fills with whatever text a caller posts."""
+    return (isinstance(manifest, dict) and isinstance(manifest.get("id"), str) and isinstance(manifest.get("version"), str)
+            and bool(_ID_RE.match(manifest["id"])) and bool(_VERSION_RE.match(manifest["version"])))
 
 
 def _start_run(rec: session_auth.SessionRecord, operation: str, phases: tuple[str, ...]):
@@ -153,9 +166,10 @@ def create_definition(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
     manifest: Annotated[dict[str, Any], Body()],
 ) -> dict[str, Any]:
-    run, observe = _start_run(rec, "create", _CREATE_PHASES)
+    identifiable = _identifiable(manifest)
+    run, observe = _start_run(rec, "create", _CREATE_PHASES) if identifiable else (None, None)
     result = _orchestrator(rec.tenant_id, observe).create_layer_definition(manifest, skip_gates=False)
-    artifact = f"{manifest.get('id')}@{manifest.get('version')}" if manifest.get("id") else ""
+    artifact = f"{manifest['id']}@{manifest['version']}" if identifiable else ""
     _finish_run(run, result, own_phase="create", artifact_id=artifact)
     body = result.to_dict()
     if run is not None:

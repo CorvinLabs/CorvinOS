@@ -49,11 +49,19 @@ verdict, a failing observer is ignored); every quality-gate, enforcement and rev
 The synchronous routes keep their response shapes; `run_id` is one additive field (also in a 4xx/503 `detail`).
 **An audit failure is reported in the operation's own phase** (`plan`, `create` or `promote`) with
 `failure_code: audit_unavailable` — the orchestrator's own `phase: audit` is not one of the run's `phases`, and a stepper
-cannot mark a phase it does not know. An unknown definition on promote is a 404 and records **no** run (garbage ids must not
-fill the history). Layer runs are exempt from the generation cap (they are not engine generations): they neither count
+cannot mark a phase it does not know. An unknown definition on promote is a 404, and a CREATE whose manifest names no artifact (no well-formed id and semver) is a 4xx,
+and both record **no** run (garbage ids must not fill the history; request text never becomes an artifact reference). Layer runs are exempt from the generation cap (they are not engine generations): they neither count
 against `MAX_RUNNING_PER_TENANT` nor are refused by it. `forge_runs.InlineRun` is the synchronous counterpart of `spawn`
 (no thread, heartbeat or resume). The Layer panel attaches to the running layer run while its request is going (the id only
 arrives with the response) and shows the feed.
+
+## The Runs tab (T-0152)
+
+Forge page → **Runs**: one table from `GET /forge/runs` across skill, tool, plugin and layer — started (UTC), kind (+ operation for
+layers), status, duration, `engine · model`, artifact (a link to the list that shows it) — with kind/status filters, a row that opens
+the same Production feed, and **Retry** only where the API says `retryable` (a failed tool run that kept its draft; the draft is never
+shown, only that it exists). Nothing is invented: an unreported engine/model reads `unknown`, a missing duration `—`, and an
+unreachable API reads "Run history is not available on this build".
 
 ## Snapshots and diff (D3)
 

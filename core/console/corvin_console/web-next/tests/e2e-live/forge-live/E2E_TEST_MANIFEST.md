@@ -4,10 +4,10 @@ Playwright suite that drives the **real console** through all four Forge generat
 user does right after installing CorvinOS, and keeps the artifacts it forges.
 Config: `../../../playwright.forge-live.config.ts` · Helpers: `live.ts`.
 
-Suite size (2026-10-12): **81 tests** — 10: 36 · 15: 22 · 16: 5 · 17: 1 · 20: 9 · 30: 8.
+Suite size (2026-10-12): **86 tests** — 10: 36 · 15: 22 · 16: 5 · 17: 1 · 18: 5 · 20: 9 · 30: 8.
 Measured on 2026-10-12 against the live console :8765: specs 10 + 15 + 16 together (without the 12-minute refine) **62 passed** in
 2.4 min; the real-engine tests passed in their own runs — the refine in spec 16 (11.8 min), spec 17 (23 s), and 20/30 (earlier, see
-the run ids below). Real-engine runs use the Claude Code CLI (subscription), no API key. Specs 15–17 belong to the composer / run feed work.
+the run ids below). Real-engine runs use the Claude Code CLI (subscription), no API key. Specs 15–18 belong to the composer / run feed / run history work; spec 18 passed 5/5 on its own run against the live console.
 
 ## 1. The e2e_test_* artifacts (kept on purpose)
 
@@ -82,6 +82,12 @@ from the UI by keyboard (11.8 min) and the feed shows the diff `previous version
 A keyboard PLAN shows the feed while the request is going, Create runs the real gate, plan and create are two runs with their phases,
 the gate and review verdicts are events, the layer ends accepted.
 
+### 18-runs-history.spec.ts (5) — the Runs tab (history across all four Forges)
+REAL: the table equals the live API's runs (count, newest first, all four kinds); the kind/status filters narrow it to exactly what the API
+says and a combination with no match says so; a row opens the same Production feed with the real event count and an artifact links to
+where it lives. At the browser boundary only: Retry is offered only where the API says `retryable`, sends the CSRF token and lands on
+the Tool generator; an unreachable API says "not available on this build" and a missing model/duration reads `unknown` / `—`.
+
 ### 30-fresh-install.spec.ts (8) — empty install B
 | Test | Result |
 |---|---|
@@ -113,6 +119,9 @@ the gate and review verdicts are events, the layer ends accepted.
 6. **Two latent run-store defects** found by the adversarial reviews of the run ADR: a second live host re-spawned or failed a run another
    host still owned, and `get_run` resumed a run before checking the caller may see it. Both fixed with route-level tests.
 7. **A failed run showed no tests and no findings** in its log; they are now emitted from the failure result too.
+8. **The run history filled with request text** (found by looking at the new Runs tab): the API negative tests posted malformed layer
+   manifests and each became a failed run whose "artifact" was the hostile id (`../x@1.0.0`, 300×`x`). A manifest that names no artifact (no
+   well-formed id and semver) now records **no run and no artifact reference**, like a promote of an unknown definition.
 4. Layer manifest `id` had no length cap (ENAMETOOLONG → 500); the Skill panel cleared the request after a
    failed run (minutes of work lost). Both fixed earlier in this effort (see git history).
 

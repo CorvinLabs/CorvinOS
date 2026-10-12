@@ -67,12 +67,31 @@ def test_a_failing_gate_fails_the_run_in_the_test_phase_and_the_run_id_is_in_the
         assert gate["data"]["gate_id"] == "missing" and gate["data"]["status"] != "PASS"
 
 
-def test_an_invalid_manifest_fails_in_validate(tmp_path):
+def test_a_manifest_that_names_an_artifact_but_is_invalid_fails_in_validate(tmp_path):
     with _client(tmp_path) as (client, csrf, home):
-        r = client.post(BASE, json={"id": "x", "version": "banana", "targets": []}, headers={"X-CSRF-Token": csrf})
+        r = client.post(BASE, json={"id": "console.bad", "version": "1.0.0", "targets": []}, headers={"X-CSRF-Token": csrf})
         assert r.status_code == 422
         run = _run(client, r.json()["detail"]["run_id"])
         assert run["status"] == "failed" and run["phase"] == "validate"
+        assert run["artifact_ref"] == {"kind": "layer", "id": "console.bad@1.0.0"}
+
+
+@pytest.mark.parametrize("junk", [
+    {"id": "../x", "version": "1.0.0", "targets": [{"layer_id": "L34"}]},
+    {"id": "UPPER", "version": "1.0.0", "targets": [{"layer_id": "L34"}]},
+    {"id": "x" * 300, "version": "1.0.0", "targets": [{"layer_id": "L34"}]},
+    {"id": "console.ok", "version": "banana", "targets": [{"layer_id": "L34"}]},
+    {"id": 123, "version": "1.0.0", "targets": []},
+    {},
+])
+def test_a_manifest_that_names_no_artifact_records_no_run_and_no_artifact_reference(tmp_path, junk):
+    """Garbage ids must not fill the history, and request text never becomes an artifact reference."""
+    with _client(tmp_path) as (client, csrf, home):
+        before = client.get(f"{F}/runs", params={"kind": "layer"}).json()["count"]
+        r = client.post(BASE, json=junk, headers={"X-CSRF-Token": csrf})
+        assert 400 <= r.status_code < 500
+        assert "run_id" not in json.dumps(r.json()), "the error body is unchanged: no run, no run_id"
+        assert client.get(f"{F}/runs", params={"kind": "layer"}).json()["count"] == before
 
 
 def test_a_promote_is_its_own_run_linked_to_the_create_by_artifact_ref(tmp_path):
