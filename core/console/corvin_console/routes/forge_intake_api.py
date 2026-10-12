@@ -19,9 +19,10 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Annotated, Any, Dict, List
+from typing import Annotated, Any, Dict, List, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from pydantic import BaseModel, ConfigDict
 
 from .. import audit as console_audit
 from .. import auth as session_auth
@@ -118,11 +119,67 @@ async def upload(
     except Exception:
         shutil.rmtree(d, ignore_errors=True)
         raise
+    return _finish(rec, att_id, d, stored_ext, item)
+
+
+def _finish(rec: session_auth.SessionRecord, att_id: str, d: Path, stored_ext: str, item: Any) -> Dict[str, Any]:
     report = item.report.to_dict()
     (d / "meta.json").write_text(json.dumps({"owner": rec.sid_fingerprint, "ext": stored_ext, "sha256_prefix": report["sha256_prefix"],
                                              "verdict": report["verdict"], "used": False}))
-    console_audit.forge_intake_item(tenant_id=tenant_id, report=report)
+    console_audit.forge_intake_item(tenant_id=rec.tenant_id, report=report)
     return report
+
+
+_REF_NAME_RE = re.compile(r"^[a-z][a-z0-9_.]{0,119}$")
+
+
+class ReferenceBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["skill", "tool"]
+    name: str
+
+
+def _reference_text(tenant_id: str, kind: str, name: str) -> str:
+    """The source of one of the tenant's OWN forged artifacts. A name outside the artifact grammar, or one that does not exist
+    in this tenant, is a 404 - there is no path a caller can steer."""
+    if not _REF_NAME_RE.match(name):
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    if kind == "skill":
+        from .skill_creator_api import _registry_root, skill_body, strip_front_matter  # noqa: PLC0415
+        body = skill_body(_registry_root(tenant_id), name) if skill_body else None
+        if body is None:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        return strip_front_matter(body)
+    from core.paths.tenant import tenant_home  # noqa: PLC0415
+    f = tenant_home(tenant_id) / "forge" / "tools" / f"{name}.py"
+    if f.is_symlink() or not f.is_file():
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return "# Tool source (python)\n\n" + f.read_text(encoding="utf-8", errors="replace")[:1_000_000]
+
+
+@router.post("/references", status_code=201)
+async def reference(
+    body: ReferenceBody,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    _lic: Annotated[session_auth.SessionRecord, Depends(require_forge_capability)],
+) -> Dict[str, Any]:
+    """Attach one of the tenant's own forged skills or tools by name. Its source goes through the same document stages as an
+    upload (secret scan, redaction, gate) - an artifact is not trusted just because the tenant made it."""
+    tenant_id = rec.tenant_id
+    _prune(tenant_id)
+    text = _reference_text(tenant_id, body.kind, body.name)
+    att_id = "att-" + secrets.token_hex(8)
+    d = _dir(tenant_id, att_id)
+    d.mkdir(parents=True, mode=0o700)
+    try:
+        target = d / "data.md"
+        target.write_text(text, encoding="utf-8")
+        os.chmod(target, 0o600)
+        item = _analyze(tenant_id, rec.sid_fingerprint, att_id, d, ".md")
+    except Exception:
+        shutil.rmtree(d, ignore_errors=True)
+        raise
+    return _finish(rec, att_id, d, ".md", item)
 
 
 @router.delete("/attachments/{att_id}")

@@ -157,3 +157,22 @@ def test_the_layer_plan_receives_only_the_redacted_projection_of_an_attachment(t
         assert r.status_code < 600 and engine.prompts, "the PLAN reached the engine"
         prompts = "\n".join(engine.prompts)
         assert "Boundary rule" in prompts and "lena.k@example.org" not in prompts
+
+
+def test_an_own_forged_tool_can_be_attached_by_name_and_goes_through_the_same_stages(tmp_path):
+    with console(tmp_path, ScriptedEngine(plan=tool_plan(GOOD_IMPL))) as client:
+        tools = client.home / "tenants/_default/forge/tools"
+        tools.mkdir(parents=True, exist_ok=True)
+        (tools / "assistant.word_count.py").write_text("import json, sys\n# owner: ops.team@example.org\nprint(json.dumps({'words': 1}))\n")
+        (tools / "assistant.leaky.py").write_text("KEY = 'AKIAIOSFODNN7EXAMPLE'\n")
+        ok = client.post("/v1/console/forge-intake/references", json={"kind": "tool", "name": "assistant.word_count"})
+        assert ok.status_code == 201, ok.text
+        rep = ok.json()
+        assert rep["verdict"] == "admitted_redacted" and "email" in rep["pii_kinds"] and "word_count" not in ok.text
+        assert client.post("/v1/console/forge-intake/references", json={"kind": "tool", "name": "assistant.leaky"}
+                           ).json()["reason_code"] == "contains_secret"
+        for bad in ("../../etc/passwd", "assistant.missing", "ASSISTANT", ""):
+            assert client.post("/v1/console/forge-intake/references", json={"kind": "tool", "name": bad}).status_code == 404
+        assert client.post("/v1/console/forge-intake/references", json={"kind": "tool", "name": "x", "extra": 1}).status_code == 422
+        g = client.post(GEN, json={"user_request": "improve the attached tool please", "attachment_ids": [rep["item_id"]]})
+        assert g.status_code == 202, g.text

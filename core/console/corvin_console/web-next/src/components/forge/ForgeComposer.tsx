@@ -48,6 +48,8 @@ export interface ComposerAttachments {
   error?: string | null;
   /** Only the first N dropped files are taken; the rest are reported, never silently lost. */
   maxItems?: number;
+  /** The tenant's own forged skills and tools, attachable by name. */
+  references?: { options: { kind: "skill" | "tool"; name: string }[]; add: (kind: "skill" | "tool", name: string) => void | Promise<void> };
 }
 
 export const VERDICT_LABEL: Record<AttachmentVerdict, string> = {
@@ -176,6 +178,24 @@ export default function ForgeComposer({
           {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
         </Button>
       </div>
+      {attachments?.references && attachments.references.options.length > 0 && (
+        <select
+          className="h-7 rounded-md border bg-background px-2 text-xs"
+          aria-label="Attach an existing skill or tool"
+          data-testid={`${textareaTestId}-attach-existing`}
+          value=""
+          disabled={busy || attachments.uploading || attachments.items.length >= (attachments.maxItems ?? 5)}
+          onChange={(e) => {
+            const [kind, ...rest] = e.target.value.split(":");
+            if (kind && rest.length) void attachments.references?.add(kind as "skill" | "tool", rest.join(":"));
+          }}
+        >
+          <option value="">Attach existing…</option>
+          {attachments.references.options.map((o) => (
+            <option key={`${o.kind}:${o.name}`} value={`${o.kind}:${o.name}`}>{o.kind}: {o.name}</option>
+          ))}
+        </select>
+      )}
       {attachments && attachments.items.length > 0 && (
         <ul className="flex flex-wrap gap-1.5" data-testid={`${textareaTestId}-chips`}>
           {attachments.items.map((a) => (

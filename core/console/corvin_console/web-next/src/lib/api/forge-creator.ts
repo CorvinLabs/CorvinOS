@@ -204,3 +204,19 @@ export async function uploadForgeAttachment(file: File, csrf: string): Promise<I
 export function removeForgeAttachment(id: string, csrf: string): Promise<{ status: string }> {
   return api(`/forge-intake/attachments/${encodeURIComponent(id)}`, { method: "DELETE", csrf });
 }
+
+export function attachForgeReference(kind: "skill" | "tool", name: string, csrf: string): Promise<IntakeReport> {
+  return api("/forge-intake/references", { method: "POST", csrf, body: { kind, name } });
+}
+
+/** The tenant's own forged skills and tools, for the "Attach existing" choice. */
+export async function listAttachableArtifacts(): Promise<{ kind: "skill" | "tool"; name: string }[]> {
+  const [tools, skills] = await Promise.all([
+    api<{ tools?: { name?: string; tool_id?: string }[] }>("/forge/tools").catch(() => ({ tools: [] })),
+    api<{ skills?: { name?: string; skill_id?: string }[] }>("/forge/skills").catch(() => ({ skills: [] })),
+  ]);
+  return [
+    ...(tools.tools ?? []).map((t) => ({ kind: "tool" as const, name: String(t.name ?? t.tool_id ?? "") })),
+    ...(skills.skills ?? []).map((k) => ({ kind: "skill" as const, name: String(k.name ?? k.skill_id ?? "") })),
+  ].filter((a) => a.name);
+}
