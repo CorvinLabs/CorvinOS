@@ -3159,7 +3159,8 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     # One record per stage of a Plugin-Builder development run. ``stage`` is a closed identifier
     # (development_started, phase_<step>_started|completed|failed, development_completed);
     # nothing here is free text — no plan, description, author or exception message.
-    # Scaffold generator (scaffold_generated | lifecycle_hooks_created | scaffold_generation_failed):
+    # Scaffold generator (scaffold_started | scaffold_generated | lifecycle_hooks_created |
+    # scaffold_generation_failed):
     # no scaffold directory, no exception text - the error class and a hook count only.
     "plugin_builder.scaffold": frozenset({
         "tenant_id", "stage", "plugin_id", "plugin_type", "config_hash", "hooks_n", "error_class",
@@ -5603,7 +5604,10 @@ def write_event(
                     from .paths import tenant_audit_chain as _tac  # type: ignore[import]
                 except ImportError:
                     from forge.paths import tenant_audit_chain as _tac  # type: ignore[import]
-                if Path(path).resolve() == Path(_tac(str(_tid))).resolve():
+                # Anywhere under the foreign tenant's root counts, not only its canonical chain
+                # file: a legacy/sibling chain of that tenant is still its trail (R2-AP-08).
+                _foreign_root = Path(_tac(str(_tid))).resolve().parents[2]
+                if Path(path).resolve().is_relative_to(_foreign_root):
                     _refusal_path = Path(_tac(_ctx))
                     _refusal_path.parent.mkdir(parents=True, exist_ok=True)
             except Exception:  # noqa: BLE001 - resolution failure keeps the given path

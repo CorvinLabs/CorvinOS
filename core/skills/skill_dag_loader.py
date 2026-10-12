@@ -44,6 +44,20 @@ class SkillDependency:
     timeout_handling: str = "fail_parent"  # or degrade_gracefully
 
 
+def dependency_list(raw: Any) -> List[SkillDependency]:
+    """A whole ``depends_on`` declaration -> its dependencies; raises on anything not a list/tuple.
+
+    A ``str`` iterated as its characters (``"os.a"`` -> four one-letter dependencies) and a dict
+    as its keys, so a mis-shaped declaration was read as something else instead of refused
+    (review R2-SC-12). ``None`` means "no dependencies".
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise TypeError(f"depends_on must be a list, got {type(raw).__name__}")
+    return [coerce_dependency(d) for d in raw]
+
+
 def coerce_dependency(dep: Any) -> SkillDependency:
     """The ONE place a declared dependency becomes a :class:`SkillDependency`.
 
@@ -123,7 +137,7 @@ class DependencyValidator:
         warnings: List[str] = []
 
         try:
-            depends_on = [coerce_dependency(d) for d in depends_on]
+            depends_on = dependency_list(depends_on)
         except (TypeError, ValueError) as exc:
             return ValidationReport(
                 is_valid=False, blockers=[f"Unreadable dependency declaration: {exc}"], warnings=warnings)
@@ -270,6 +284,8 @@ class DependencyValidator:
         rec_stack.add(skill_id)
 
         readable: List[SkillDependency] = []
+        if not isinstance(depends_on, (list, tuple)):
+            depends_on = []  # unreadable as a whole; that skill's own validation refuses it
         for raw in depends_on:
             try:
                 readable.append(coerce_dependency(raw))
@@ -322,14 +338,14 @@ def topological_sort_skills(
         if metadata is None:
             continue
 
-        depends_on = getattr(metadata, "depends_on", [])
-        for raw_dep in depends_on:
-            # Every declaration form the validator accepts (SkillDependency, str, dict) - this
-            # read ``dep.name`` and crashed on the other two (review SC-03).
-            try:
-                dep = coerce_dependency(raw_dep)
-            except (TypeError, ValueError) as exc:
-                return [], f"Unreadable dependency declaration in {skill_id}: {exc}"
+        # Every declaration form the validator accepts (SkillDependency, str, dict) - this read
+        # ``dep.name`` and crashed on the other two (review SC-03); a non-list declaration is
+        # unreadable too, not iterated (review R2-SC-12).
+        try:
+            deps = dependency_list(getattr(metadata, "depends_on", []))
+        except (TypeError, ValueError) as exc:
+            return [], f"Unreadable dependency declaration in {skill_id}: {exc}"
+        for dep in deps:
             if dep.name in skill_names:
                 # dep.name is a dependency of skill_id
                 # So: dep.name → skill_id (dep must come first)

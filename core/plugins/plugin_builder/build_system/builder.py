@@ -510,7 +510,7 @@ disallow_untyped_defs = false
         audit_id = result.audit_id
 
         # AUDIT-FIRST: Emit build_started event
-        if self.config.audit_enabled:
+        if True:  # always audited - audit_enabled never turns a build record off (R2-AP-05)
             try:
                 event_id = self._write_audit_event(
                     "build_started",
@@ -536,7 +536,7 @@ disallow_untyped_defs = false
             result.success = False
 
             # Emit build_failed event
-            if self.config.audit_enabled:
+            if True:  # always audited - audit_enabled never turns a build record off (R2-AP-05)
                 try:
                     event_id = self._write_audit_event(
                         "build_failed",
@@ -547,8 +547,10 @@ disallow_untyped_defs = false
                         }
                     )
                     result.audit_event_ids.append(event_id)
-                except Exception:
-                    pass  # Audit event failure is best-effort after build failure
+                except Exception as audit_exc:  # noqa: BLE001
+                    # The build already failed; the missing record is reported, never swallowed (R2-AP-05).
+                    result.warnings = list(result.warnings or []) + [
+                        f"build_failed was not committed to the audit chain: {type(audit_exc).__name__}"]
 
             return result
 
@@ -561,7 +563,7 @@ disallow_untyped_defs = false
             result.success = False
 
             # Emit build_failed event
-            if self.config.audit_enabled:
+            if True:  # always audited - audit_enabled never turns a build record off (R2-AP-05)
                 try:
                     event_id = self._write_audit_event(
                         "build_failed",
@@ -572,8 +574,10 @@ disallow_untyped_defs = false
                         }
                     )
                     result.audit_event_ids.append(event_id)
-                except Exception:
-                    pass
+                except Exception as audit_exc:  # noqa: BLE001
+                    # The build already failed; the missing record is reported, never swallowed (R2-AP-05).
+                    result.warnings = list(result.warnings or []) + [
+                        f"build_failed was not committed to the audit chain: {type(audit_exc).__name__}"]
 
             return result
 
@@ -596,7 +600,7 @@ disallow_untyped_defs = false
                 result.success = False
 
                 # Emit build_failed event
-                if self.config.audit_enabled:
+                if True:  # always audited - audit_enabled never turns a build record off (R2-AP-05)
                     try:
                         event_id = self._write_audit_event(
                             "build_failed",
@@ -607,8 +611,10 @@ disallow_untyped_defs = false
                             }
                         )
                         result.audit_event_ids.append(event_id)
-                    except Exception:
-                        pass
+                    except Exception as audit_exc:  # noqa: BLE001
+                        # The build already failed; the missing record is reported, never swallowed (R2-AP-05).
+                        result.warnings = list(result.warnings or []) + [
+                            f"build_failed was not committed to the audit chain: {type(audit_exc).__name__}"]
 
                 return result
 
@@ -620,7 +626,7 @@ disallow_untyped_defs = false
                 result.success = False
 
                 # Emit build_failed event
-                if self.config.audit_enabled:
+                if True:  # always audited - audit_enabled never turns a build record off (R2-AP-05)
                     try:
                         event_id = self._write_audit_event(
                             "build_failed",
@@ -630,8 +636,10 @@ disallow_untyped_defs = false
                             }
                         )
                         result.audit_event_ids.append(event_id)
-                    except Exception:
-                        pass
+                    except Exception as audit_exc:  # noqa: BLE001
+                        # The build already failed; the missing record is reported, never swallowed (R2-AP-05).
+                        result.warnings = list(result.warnings or []) + [
+                            f"build_failed was not committed to the audit chain: {type(audit_exc).__name__}"]
 
                 return result
 
@@ -645,7 +653,7 @@ disallow_untyped_defs = false
                 result.success = False
 
                 # Emit build_failed event
-                if self.config.audit_enabled:
+                if True:  # always audited - audit_enabled never turns a build record off (R2-AP-05)
                     try:
                         event_id = self._write_audit_event(
                             "build_failed",
@@ -656,8 +664,10 @@ disallow_untyped_defs = false
                             }
                         )
                         result.audit_event_ids.append(event_id)
-                    except Exception:
-                        pass
+                    except Exception as audit_exc:  # noqa: BLE001
+                        # The build already failed; the missing record is reported, never swallowed (R2-AP-05).
+                        result.warnings = list(result.warnings or []) + [
+                            f"build_failed was not committed to the audit chain: {type(audit_exc).__name__}"]
 
                 return result
 
@@ -674,7 +684,7 @@ disallow_untyped_defs = false
             result.wheel_hash = wheel_hash
             result.warnings = warnings
 
-            if self.config.audit_enabled:
+            if True:  # always audited - audit_enabled never turns a build record off (R2-AP-05)
                 try:
                     event_id = self._write_audit_event(
                         "build_completed",
@@ -686,8 +696,11 @@ disallow_untyped_defs = false
                         }
                     )
                     result.audit_event_ids.append(event_id)
-                except Exception:
-                    pass  # Audit event failure after success is best-effort
+                except Exception as audit_exc:  # noqa: BLE001
+                    # A success the chain does not show is not a success (review R2-AP-05).
+                    result.success = False
+                    errors.append(f"build_completed was not committed to the audit chain: {type(audit_exc).__name__}")
+                    result.errors = errors
 
             return result
 
@@ -696,7 +709,7 @@ disallow_untyped_defs = false
             result.errors = errors
             result.success = False
 
-            if self.config.audit_enabled:
+            if True:  # always audited - audit_enabled never turns a build record off (R2-AP-05)
                 try:
                     event_id = self._write_audit_event(
                         "build_failed",
@@ -706,8 +719,10 @@ disallow_untyped_defs = false
                         }
                     )
                     result.audit_event_ids.append(event_id)
-                except Exception:
-                    pass
+                except Exception as audit_exc:  # noqa: BLE001
+                    # The build already failed; the missing record is reported, never swallowed (R2-AP-05).
+                    result.warnings = list(result.warnings or []) + [
+                        f"build_failed was not committed to the audit chain: {type(audit_exc).__name__}"]
 
             return result
 
@@ -718,7 +733,7 @@ disallow_untyped_defs = false
             result.errors = errors
             result.success = False
 
-            if self.config.audit_enabled:
+            if True:  # always audited - audit_enabled never turns a build record off (R2-AP-05)
                 try:
                     event_id = self._write_audit_event(
                         "build_failed",
@@ -728,8 +743,10 @@ disallow_untyped_defs = false
                         }
                     )
                     result.audit_event_ids.append(event_id)
-                except Exception:
-                    pass
+                except Exception as audit_exc:  # noqa: BLE001
+                    # The build already failed; the missing record is reported, never swallowed (R2-AP-05).
+                    result.warnings = list(result.warnings or []) + [
+                        f"build_failed was not committed to the audit chain: {type(audit_exc).__name__}"]
 
             return result
 
@@ -738,7 +755,7 @@ disallow_untyped_defs = false
             result.errors = errors
             result.success = False
 
-            if self.config.audit_enabled:
+            if True:  # always audited - audit_enabled never turns a build record off (R2-AP-05)
                 try:
                     event_id = self._write_audit_event(
                         "build_failed",
@@ -749,8 +766,10 @@ disallow_untyped_defs = false
                         }
                     )
                     result.audit_event_ids.append(event_id)
-                except Exception:
-                    pass
+                except Exception as audit_exc:  # noqa: BLE001
+                    # The build already failed; the missing record is reported, never swallowed (R2-AP-05).
+                    result.warnings = list(result.warnings or []) + [
+                        f"build_failed was not committed to the audit chain: {type(audit_exc).__name__}"]
 
             return result
 

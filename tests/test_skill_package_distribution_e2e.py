@@ -472,3 +472,92 @@ class TestSignedPackagesReview2026_10_12:
         sums = SkillPackager(tmp_path / "pkgs")._compute_checksums(skill)
         assert sums and all("\\" not in k for k in sums)
         assert "src/skill.py" in sums
+
+
+class TestPackagesReviewRound2:
+    """Refutation round 2026-10-12: each failed against round 1's fixes."""
+
+    _signed = TestSignedPackages._signed
+    _install = TestSignedPackages._install
+
+    def test_a_stale_skill_sig_in_the_folder_is_not_shipped_twice(self, tmp_path, home):
+        """ACP2-7: re-packaging an installed signed skill hashed its old skill.sig and shipped two."""
+        import zipfile
+        _generate_operator_key(home)
+        skill = _make_skill(tmp_path / "gen")
+        (skill / "skill.sig").write_text("stale signature from an earlier install")
+        zip_path, digest, meta = SkillPackager(tmp_path / "pkgs").package(
+            skill, SkillManifestV2.from_dict(_MANIFEST))
+        names = zipfile.ZipFile(zip_path).namelist()
+        assert names.count("test_skill/skill.sig") == 1
+        checksums = zipfile.ZipFile(zip_path).read("test_skill/.forge/checksum.sha256").decode()
+        assert "skill.sig" not in checksums
+        _, ok, msg = self._install(tmp_path, zip_path, digest)
+        assert ok, msg
+
+    def test_duplicate_entry_names_are_refused(self, tmp_path, home):
+        import zipfile
+        zip_path, _ = self._signed(tmp_path, home)
+        dup = tmp_path / "dup.zip"
+        with zipfile.ZipFile(zip_path) as src, zipfile.ZipFile(dup, "w") as out:
+            for i in src.infolist():
+                out.writestr(i, src.read(i))
+            out.writestr("test_skill/skill.sig", b"second")
+        import hashlib
+        _, ok, msg = self._install(tmp_path, dup, hashlib.sha256(dup.read_bytes()).hexdigest())
+        assert not ok, msg
+
+    def test_a_symlinked_forge_dir_is_refused_and_nothing_is_written_through_it(self, tmp_path, home):
+        from core.skills.skill_packager import PackagingError
+        skill = _make_skill(tmp_path / "gen")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "keep.txt").write_text("operator data")
+        (skill / ".forge").symlink_to(outside)
+        with pytest.raises(PackagingError):
+            SkillPackager(tmp_path / "pkgs").package(skill, SkillManifestV2.from_dict(_MANIFEST))
+        assert sorted(p.name for p in outside.iterdir()) == ["keep.txt"]
+
+    def test_a_planted_checksum_symlink_is_replaced_not_followed(self, tmp_path, home):
+        skill = _make_skill(tmp_path / "gen")
+        victim = tmp_path / "victim.txt"
+        victim.write_text("do not touch")
+        (skill / ".forge").mkdir()
+        (skill / ".forge" / "checksum.sha256").symlink_to(victim)
+        SkillPackager(tmp_path / "pkgs").package(skill, SkillManifestV2.from_dict(_MANIFEST))
+        assert victim.read_text() == "do not touch"
+
+    def test_a_hard_link_is_refused(self, tmp_path, home):
+        from core.skills.skill_packager import PackagingError
+        skill = _make_skill(tmp_path / "gen")
+        secret = tmp_path / "secret.env"
+        secret.write_text("DISCORD_TOKEN=live")
+        import os
+        os.link(secret, skill / "docs" / "notes.txt")
+        with pytest.raises(PackagingError, match="hard link"):
+            SkillPackager(tmp_path / "pkgs").package(skill, SkillManifestV2.from_dict(_MANIFEST))
+
+    def test_a_dangling_metadata_link_or_keys_without_metadata_refuse_a_signed_package(self, tmp_path, home):
+        zip_path, _ = self._signed(tmp_path, home)
+        bad, digest = _rewrite_zip(zip_path, tmp_path / "bad.zip", lambda n, d: (
+            b"tampered" if n == "test_skill/src/skill.py" else d))
+        meta = home / "tenants" / "_default" / "global" / "operator_keys" / "metadata.json"
+        meta.unlink()
+        _, ok, msg = self._install(tmp_path, bad, digest)
+        assert not ok and "unreadable" in msg, msg
+        meta.symlink_to(tmp_path / "nowhere.json")
+        _, ok, msg = self._install(tmp_path, bad, digest)
+        assert not ok and "unreadable" in msg, msg
+
+    def test_what_the_packager_signs_its_installer_accepts(self, tmp_path, home):
+        """A stray root skill.sig and names that only casefold() merges ('straße'/'strasse')."""
+        _generate_operator_key(home)
+        skill = _make_skill(tmp_path / "gen")
+        (skill / "skill.sig").write_text("stale")
+        (skill / "docs" / "straße.md").write_text("a")
+        (skill / "docs" / "strasse.md").write_text("b")
+        zip_path, zip_hash, meta = SkillPackager(tmp_path / "pkgs").package(
+            skill, SkillManifestV2.from_dict(_MANIFEST))
+        inst, ok, msg = self._install(tmp_path, zip_path, zip_hash)
+        assert ok, msg
+        assert inst._load_registry()["test_skill"][0]["verification"]["signature"] == "valid"

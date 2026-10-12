@@ -31,7 +31,6 @@ PHASE9_COMPONENTS=(
   "core/console/corvin_console/routes/control_plane_subsystems.py"
   "core/console/corvin_console/routes/control_plane_overrides.py"
   "core/console/corvin_console/routes/control_plane_snapshots.py"
-  "core/skills/os_skills/intent_classifier_skill.py"
 )
 
 # Health check configuration
@@ -448,7 +447,6 @@ generate_deployment_report() {
 - ✅ Control Plane Subsystems (core/console/corvin_console/routes/control_plane_subsystems.py)
 - ✅ Override Authority (core/console/corvin_console/routes/control_plane_overrides.py)
 - ✅ Snapshots System (core/console/corvin_console/routes/control_plane_snapshots.py)
-- ✅ Intent Classification Skill (core/skills/os_skills/intent_classifier_skill.py)
 
 ### Endpoints
 - POST /v1/console/intents/classify

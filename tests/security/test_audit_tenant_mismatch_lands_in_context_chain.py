@@ -25,3 +25,19 @@ def test_refusal_goes_to_the_process_tenants_chain(tmp_path, monkeypatch):
     assert [r["event_type"] for r in recs][-1] == "audit.tenant_mismatch"
     assert recs[-1]["details"]["dropped_event_type"] == "learning.regeneration"
     assert se.verify_chain(own)[0] is True
+
+
+def test_refusal_never_lands_in_any_file_under_the_foreign_tenant(tmp_path, monkeypatch):
+    """R2-AP-08: a sibling/legacy chain of the foreign tenant is that tenant's trail as well."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.delenv("VOICE_AUDIT_PATH", raising=False)
+    monkeypatch.setenv("CORVIN_TENANT_ID", "other")
+    from corvin_operator.forge.forge import paths, security_events as se
+
+    sibling = paths.tenant_audit_chain("_default").parent.parent / "legacy" / "audit.jsonl"
+    sibling.parent.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(se.AuditTenantMismatch):
+        se.write_event(sibling, "learning.regeneration", details={"tenant_id": "_default", "stage": "x"})
+    assert not sibling.exists() or "audit.tenant_mismatch" not in sibling.read_text()
+    own = paths.tenant_audit_chain("other")
+    assert "audit.tenant_mismatch" in own.read_text()

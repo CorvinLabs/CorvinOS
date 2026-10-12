@@ -124,6 +124,10 @@ class SkillSelection:
             work = Path(tmp) / "src" / self.skill_id
             _require(not any(p.is_symlink() for p in skill_folder.rglob("*")),
                      f"skill {self.skill_id}: contains a symbolic link; export refuses to follow it")
+            # copytree copies a hard link's CONTENT into a fresh file, so the packager cannot see
+            # it any more - refuse here (review R2-AP-02: a hard link to a secret was shipped).
+            _require(not any(p.is_file() and p.stat().st_nlink > 1 for p in skill_folder.rglob("*")),
+                     f"skill {self.skill_id}: contains a hard-linked file; export refuses to ship it")
             try:
                 shutil.copytree(skill_folder, work, symlinks=False)
                 zip_path, _zip_hash, _metadata = SkillPackager(Path(tmp) / "out").package(work, manifest)

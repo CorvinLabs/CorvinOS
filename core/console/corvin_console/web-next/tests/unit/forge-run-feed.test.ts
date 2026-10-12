@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunEvent } from "@/lib/api/forge-runs";
 import {
-  clock, droppedCount, filesWritten, groupByPhase, iterationRows, mergeEvents, summarizeFindings, testSummary,
+  chooseDiff, classifyDiffLines, clock, droppedCount, filesWritten, groupByPhase, iterationRows, mergeEvents, summarizeFindings, testSummary,
 } from "@/lib/forge-run-feed";
 
 const ev = (seq: number, type: RunEvent["type"], over: Partial<RunEvent> = {}): RunEvent => ({
@@ -88,5 +88,41 @@ describe("clock", () => {
   it("is pinned to UTC HH:MM:SS and survives a bad timestamp", () => {
     expect(clock("2026-10-12T00:34:38.123+00:00")).toBe("00:34:38");
     expect(clock("not a time")).toBe("—");
+  });
+});
+
+describe("chooseDiff", () => {
+  it("is null with fewer than two snapshots (nothing to compare, nothing drawn)", () => {
+    expect(chooseDiff([])).toBeNull();
+    expect(chooseDiff([{ n: 1, label: "iteration 1" }])).toBeNull();
+  });
+  it("compares the last two iterations when there is no previous version", () => {
+    expect(chooseDiff([{ n: 1, label: "iteration 1" }, { n: 2, label: "iteration 2" }, { n: 3, label: "iteration 3" }]))
+      .toEqual({ from: "2", to: "3" });
+  });
+  it("compares the previous version against the latest for a refine", () => {
+    expect(chooseDiff([{ n: 1, label: "previous version" }, { n: 2, label: "iteration 1" }, { n: 3, label: "iteration 2" }]))
+      .toEqual({ from: "1", to: "3" });
+  });
+  it("a previous version that is also the last snapshot falls back to the last two", () => {
+    expect(chooseDiff([{ n: 1, label: "iteration 1" }, { n: 2, label: "previous version" }])).toEqual({ from: "1", to: "2" });
+  });
+});
+
+describe("classifyDiffLines", () => {
+  it("colours additions and deletions but treats the --- / +++ headers as meta", () => {
+    const rows = classifyDiffLines("--- a/f.py\n+++ b/f.py\n@@ -1 +1 @@\n-old\n+new\n same\n");
+    expect(rows.map((r) => r.kind)).toEqual(["meta", "meta", "hunk", "del", "add", "context"]);
+  });
+  it("drops only the trailing empty line a final newline leaves", () => {
+    expect(classifyDiffLines("+a\n")).toHaveLength(1);
+    expect(classifyDiffLines("")).toEqual([]);
+  });
+  it("inside a hunk, a deleted '-- comment' (shown as '--- comment') is a deletion, not a file header", () => {
+    const rows = classifyDiffLines("--- a/q.sql\n+++ b/q.sql\n@@ -1 +1 @@\n--- a SQL comment\n+++ a new line starting with ++\n");
+    expect(rows.map((r) => r.kind)).toEqual(["meta", "meta", "hunk", "del", "add"]);
+  });
+  it("a diff with no hunk yet treats --- and +++ as headers", () => {
+    expect(classifyDiffLines("--- a\n+++ b").map((r) => r.kind)).toEqual(["meta", "meta"]);
   });
 });

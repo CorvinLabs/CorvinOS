@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import logging
 from pathlib import Path
 from typing import List, Optional
@@ -65,8 +66,23 @@ class KeyStoreUnreadable(RuntimeError):
 
 
 def key_store_present(corvin_home: Optional[Path] = None) -> bool:
-    home = _home(corvin_home)
-    return (home / "tenants" / "_default" / "global" / "operator_keys" / "metadata.json").exists()
+    """True when ANY trace of a key store exists - a dangling/symlinked metadata.json or a key file
+    without metadata included. Only a store with no trace at all means "never generated a key";
+    anything else that cannot be read must refuse (review R2-AP-03)."""
+    d = _home(corvin_home) / "tenants" / "_default" / "global" / "operator_keys"
+    try:
+        return os.path.lexists(d) and (not d.is_dir() or any(True for _ in d.iterdir()))
+    except OSError:
+        return True
+
+
+def collision_key(name: str) -> str:
+    """The key under which two archive names land on the SAME file on a case-insensitive /
+    normalising file system (Windows, macOS). One definition for packager and installer, so the
+    packager never signs what the installer refuses (review R2-AP-07)."""
+    import unicodedata
+
+    return unicodedata.normalize("NFC", name).lower()
 
 
 def trusted_public_keys(corvin_home: Optional[Path] = None) -> List:
@@ -76,6 +92,9 @@ def trusted_public_keys(corvin_home: Optional[Path] = None) -> List:
     (or yields no usable key) raises :class:`KeyStoreUnreadable`.
     """
     mgr = _manager(corvin_home)
+    meta = _home(corvin_home) / "tenants" / "_default" / "global" / "operator_keys" / "metadata.json"
+    if mgr is not None and meta.is_symlink():
+        raise KeyStoreUnreadable("operator key store metadata is a symbolic link")
     if mgr is None:
         if key_store_present(corvin_home):
             raise KeyStoreUnreadable("operator key store metadata is not a readable file")

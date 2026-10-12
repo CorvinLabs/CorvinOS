@@ -316,7 +316,10 @@ def test_plugin_entry_guarded():
 
 
 def test_call_site_registry_has_all_entry_points():
-    """Verify all 42 entry points are registered in the registry."""
+    """Verify the registry holds its entry points, by NAME as well as by count.
+
+    41 since 2026-10-12: ``async_skill_execution`` named ``core/learning/skill_integration.py``,
+    which no longer exists (review ACP2-1)."""
     from core.pipeline.call_site_registry import get_registry
 
     registry = get_registry()
@@ -326,7 +329,8 @@ def test_call_site_registry_has_all_entry_points():
 
     # Verify we have entry points
     assert stats["total"] > 0, "Call-site registry is empty"
-    assert stats["total"] >= 42, f"Expected at least 42 entry points, got {stats['total']}"
+    assert stats["total"] >= 41, f"Expected at least 41 entry points, got {stats['total']}"
+    assert registry.get("async_skill_execution") is None  # its module is gone
 
     # Verify they're properly categorized
     flask_routes = registry.by_category(

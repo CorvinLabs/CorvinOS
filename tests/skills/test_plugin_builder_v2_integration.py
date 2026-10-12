@@ -360,8 +360,20 @@ class TestTenantIsolation:
                 audit_enabled=False,
             )
 
-            result_1 = developer.develop(plan_1, tmpdir)
-            result_2 = developer.develop(plan_2, tmpdir)
+            # Plugin development is always audited (review R2-AP-06), and the core writer refuses a
+            # record for a tenant other than the process's (ADR-0562) - so each run is made in its
+            # own tenant's context, as a real tenant-scoped process would.
+            _prev = os.environ.get("CORVIN_TENANT_ID")
+            try:
+                os.environ["CORVIN_TENANT_ID"] = "tenant_1"
+                result_1 = developer.develop(plan_1, tmpdir)
+                os.environ["CORVIN_TENANT_ID"] = "tenant_2"
+                result_2 = developer.develop(plan_2, tmpdir)
+            finally:
+                if _prev is None:
+                    os.environ.pop("CORVIN_TENANT_ID", None)
+                else:
+                    os.environ["CORVIN_TENANT_ID"] = _prev
 
             # Results should be independent
             assert result_1.tenant_id == "tenant_1"

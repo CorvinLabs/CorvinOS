@@ -787,6 +787,7 @@ _DATA_FILE_RE = re.compile(
 # INSERT INTO..VALUES/SELECT, UPDATE..SET, DELETE FROM..WHERE. A single shared "..FROM"
 # lookahead (the earlier form) could never match UPDATE/INSERT/DELETE statements, which
 # contain no second FROM.
+_SQL_ID = r"(?:[\w.]+|`[^`\n]{1,64}`|\"[^\"\n]{1,64}\"|\[[^\]\n]{1,64}\])"
 _DB_RE = re.compile(
     r"\b(?:datenbank\w*|databases?|sql|nosql|postgre(?:s|sql)?|mysql|mariadb|"
     r"sqlite|mongodb|clickhouse|bigquery|redshift|snowflake|duckdb|oracle[\s\-]?db|"
@@ -795,9 +796,15 @@ _DB_RE = re.compile(
     # Statement SHAPE, not just the verbs: "update my calendar and set a reminder", "delete from the
     # draft the paragraph where ..." and "insert into the deck a chart and select ..." are prose
     # (review 2026-10-12, SC-13). An identifier must follow, then `=` / `(` / VALUES / SELECT.
-    r"|\binsert\s+into\s+[\w.`\"\[\]]+\s*(?:\(|values\b|select\b)"
-    r"|\bupdate\s+[\w.`\"\[\]]+\s+set\s+[\w.`\"\[\]]+\s*="
-    r"|\bdelete\s+from\s+[\w.`\"\[\]]+\s+where\s+[\w.`\"\[\]]+\s*(?:[=<>!]|\bin\b|\blike\b|\bis\b|\bbetween\b)"
+    # Identifiers may be quoted (`x`, "x", [x]); modifiers (OR REPLACE, IGNORE, ONLY, ...), aliases,
+    # ``SET (a, b) =``, ``DEFAULT VALUES``, ``NOT IN`` and a function call on the left were all
+    # missed (review R2-SC-11, corpus in tests/test_delegation_policy_sql_corpus.py).
+    r"|\binsert\s+(?:(?:or\s+\w+|ignore|low_priority|high_priority|delayed)\s+)*into\s+" + _SQL_ID
+    + r"\s*(?:\(|values\b|select\b|default\s+values\b)"
+    r"|\bupdate\s+(?:(?:only|low_priority|ignore)\s+)*" + _SQL_ID + r"(?:\s+(?:as\s+)?" + _SQL_ID + r")?"
+    r"\s+set\s+(?:\(|" + _SQL_ID + r"\s*=)"
+    r"|\bdelete\s+from\s+(?:only\s+)?" + _SQL_ID + r"(?:\s+(?:as\s+)?" + _SQL_ID + r")?\s+where\s+(?:not\s+)?"
+    r"(?:\w+\s*\(\s*)?" + _SQL_ID + r"\s*\)?\s*(?:[=<>!]|(?:not\s+)?(?:in|like|between)\b|is\b)"
     r"|\b(?:inner|left|right|outer|cross)\s+joins?\b"
     r"|\bgroup\s+by\b|\border\s+by\b"
     r"|\b(?:db|sql|datenbank)[\s\-]?(?:tabellen?|tables?|schemas?|queries|query|"

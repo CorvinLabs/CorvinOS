@@ -7,6 +7,7 @@ CRITICAL FIX #2 (2026-09-12): Transactional Guarantees
 - Recovery on restart via WAL replay
 """
 
+import logging
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,8 @@ from .phases.phase_7 import OptimizationPhase, OptimizationRequest
 from .phases.phase_8 import ValidationPhase, ValidationRequest
 from .phases.phase_9 import PackagingPhase, PackagingRequest
 from .phases.phase_10 import DeliveryPhase, DeliveryRequest
+
+logger = logging.getLogger(__name__)
 from .wal import SkillCreationWAL
 
 
@@ -112,6 +115,8 @@ class PhaseModelOrchestrator:
 
         # Write to WAL BEFORE phase execution
         self.wal.write_state(state.skill_id, phase_num, state_dict)
+        # The entry a failure must be recorded against (review R2-SC-10).
+        self._wal_inflight = (state.skill_id, phase_num)
 
     def execute(
         self,
@@ -124,6 +129,8 @@ class PhaseModelOrchestrator:
         # WAL entry (concurrent runs; a crashed run's recovery entry wiped by the next success),
         # review SC-06. It matches the WAL id grammar like a real skill id.
         state = Creator20State(skill_id=f"pending_{uuid.uuid4().hex[:12]}")
+        placeholder_id = state.skill_id
+        self._wal_inflight = None
 
         try:
             # Phase 0: Intake
@@ -304,12 +311,19 @@ class PhaseModelOrchestrator:
                     errors=[str(e)],
                 )
             )
-            # FIX #2: Mark error in WAL for debugging
+            # Mark the IN-FLIGHT entry, under the id it was written with. ``mark_error(id, -1)``
+            # matched no entry (phases are 0..11), so a failed run left its entry looking merely
+            # pending - and a run failing in intake left its placeholder entry behind for good
+            # (review R2-SC-10).
             try:
-                if not state.skill_id.startswith("pending_"):
-                    self.wal.mark_error(state.skill_id, -1, str(e))
+                inflight = getattr(self, "_wal_inflight", None)
+                if inflight is not None:
+                    self.wal.mark_error(inflight[0], inflight[1], f"{type(e).__name__}: {e}")
+                if state.skill_id != placeholder_id:
+                    # The placeholder's phase-0 entry is complete; it belongs to this run only.
+                    self.wal.clear_skill_entries(placeholder_id)
             except Exception:
-                pass  # WAL error marking failed; continue
+                logger.warning("creator_2_0: could not record the failed run in the WAL")
 
         return state
 

@@ -22,6 +22,7 @@ a service:
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import logging
 import os
@@ -110,7 +111,24 @@ class _Lease:
             fh.close()
             return False
         self._fh = fh
+        if not self.still_valid():
+            # The lock is on a file that is no longer ``host.lock`` (unlinked or replaced between
+            # open and flock): a second process opening the new file would get its own "exclusive"
+            # lock - two hosts again (review R2-DH-8).
+            self.release()
+            return False
         return True
+
+    def still_valid(self) -> bool:
+        """The locked file is still the one at ``path`` (same device + inode)."""
+        if self._fh is None:
+            return False
+        try:
+            a = os.fstat(self._fh.fileno())
+            b = os.stat(self.path)
+        except OSError:
+            return False
+        return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
 
     def release(self) -> None:
         if self._fh is not None:
@@ -209,7 +227,17 @@ class LearningHost:
             work += await self._check_sources()
 
         batch = await self.daemon.regeneration_scheduler.get_ready_batch()
-        for skill_id in batch:
+        for i, skill_id in enumerate(batch):
+            if self._stop_requested():
+                # Shutting down: start no further regeneration; the rest stay queued for the next
+                # holder instead of being dropped from the batch (review R2-DH-6).
+                sched = self.daemon.regeneration_scheduler
+                for rest in batch[i:]:
+                    if rest not in sched.queued_skills:
+                        sched.regeneration_queue.append(rest)
+                        sched.queued_skills.add(rest)
+                self._dirty = True
+                break
             work += 1
             await self._regenerate_one(skill_id)
 
@@ -320,9 +348,18 @@ class LearningHost:
             "decisions": len(d.audit_trail),
         }
 
+    def _stop_requested(self) -> bool:
+        ev = getattr(self, "_stop_ev", None)
+        return bool(ev is not None and ev.is_set())
+
     async def run(self, stop: threading.Event) -> None:
         interval = MIN_INTERVAL_S
+        self._stop_ev = stop
         while not stop.is_set():
+            if self.lease.held and not self.lease.still_valid():
+                # Our lock file was replaced/removed: we no longer exclude anyone (R2-DH-8).
+                self.lease.release()
+                logger.warning("learning host lease file changed; re-acquiring")
             if not self.lease.try_acquire():
                 # Another process hosts this tenant: stand by, try again later (takes over when
                 # that process exits and the OS drops its lock).
@@ -343,13 +380,16 @@ class LearningHost:
             interval = MIN_INTERVAL_S if work else min(MAX_INTERVAL_S, interval * 2)
             await asyncio.sleep(0)  # let waiting tasks run
             stop.wait(interval)
-        # Persist on the way out - but only as the lease holder, so a standby host never
-        # overwrites the state another process is maintaining.
-        if self.lease.try_acquire():
+        # Persist on the way out - only if this host HOLDS the lease now. Acquiring it here just to
+        # save let a host that never ran (or stood by) overwrite the newer state another process
+        # had saved with its own stale snapshot from start-up (review R2-DH-2).
+        if self.lease.held and self.lease.still_valid():
             try:
                 self.save()
             finally:
                 self.lease.release()
+        else:
+            self.lease.release()
 
 
 def _default_sources(tenant_id: str) -> list:
@@ -426,13 +466,35 @@ def start(tenant_id: str = "_default") -> bool:
         return True
 
 
-def stop(tenant_id: str = "_default", *, timeout: float = 5.0) -> None:
+#: Upper bound for waiting on an in-flight regeneration at stop/exit. The host starts no new
+#: regeneration once stop is set, so this only covers the one already running.
+STOP_WAIT_S = 120.0
+
+
+def stop(tenant_id: str = "_default", *, timeout: Optional[float] = STOP_WAIT_S) -> bool:
+    """Stop the host and WAIT for its in-flight tick (review R2-DH-6: a 5 s join returned while a
+    regeneration was still writing, and interpreter exit then killed the daemon thread between the
+    registry write and the artifact write). Returns False if it did not finish in ``timeout``."""
     with _lock:
         entry = _hosts.pop(tenant_id, None)
-    if entry:
-        host, ev, thread = entry
-        ev.set()
-        thread.join(timeout)   # the host thread saves and releases its lease on the way out
+    if not entry:
+        return True
+    host, ev, thread = entry
+    ev.set()
+    thread.join(timeout)   # the host thread saves and releases its lease on the way out
+    if thread.is_alive():
+        logger.error("learning host %s did not stop within %ss (regeneration in flight)", tenant_id, timeout)
+        return False
+    return True
+
+
+def _stop_all_at_exit() -> None:
+    # atexit runs BEFORE daemon threads are torn down: stop every host that a lifespan did not.
+    for tid in list(_hosts):
+        stop(tid)
+
+
+atexit.register(_stop_all_at_exit)
 
 
 def status(tenant_id: str = "_default") -> Optional[dict[str, Any]]:

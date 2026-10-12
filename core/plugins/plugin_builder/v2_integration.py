@@ -246,94 +246,90 @@ class PluginDeveloper:
         result.tenant_id = plan.tenant_id
         self._plugin_id = plan.plugin_id  # validated identifier ([a-z0-9._-]), safe to audit
         output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # ``audit_enabled`` no longer turns the record off: a run is ALWAYS audited (CLAUDE.md:
+        # "don't use feature flags to disable audit"). The field stays for callers; False only
+        # adds a warning (review R2-AP-06).
+        if not plan.audit_enabled:
+            result.warnings.append("audit_enabled=False is ignored: plugin development is always audited")
 
-        # Initialize audit infrastructure
-        if plan.audit_enabled:
-            self._init_audit(plan, result)
-            started = self._emit_audit_event(
-                result,
-                event_type="development_started",
-                plan=asdict(plan),
-                development_id=result.development_id,
-            )
-            if not started:
-                # Audit-first: an audited run whose opening record did not commit does not run.
-                # This is also how a plan for another tenant ends - the core writer refuses a
-                # record for a tenant other than the process's (ADR-0562) - instead of doing
-                # the work with no record at all (review 2026-10-12, AUD-3).
-                result.errors.append("development_started was not committed to the audit chain; nothing ran")
-                result.success = False
-                result.elapsed_seconds = time.time() - start_time
-                return result
+        self._init_audit(plan, result)
+        started = self._emit_audit_event(
+            result,
+            event_type="development_started",
+            development_id=result.development_id,
+        )
+        if not started:
+            # Audit-first: an audited run whose opening record did not commit does not run - and
+            # creates nothing, not even the output directory (review R2-AP-06). This is also how a
+            # plan for another tenant ends: the core writer refuses a record for a tenant other
+            # than the process's (ADR-0562; review 2026-10-12, AUD-3).
+            result.errors.append("development_started was not committed to the audit chain; nothing ran")
+            result.success = False
+            result.elapsed_seconds = time.time() - start_time
+            return result
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             for step_name in plan.steps:
                 if step_name not in self.steps:
                     result.errors.append(f"Unknown step: {step_name}")
-                    if plan.audit_enabled:
-                        # The caller's step name is free text: it never reaches the chain.
-                        self._emit_audit_event(
-                            result,
-                            event_type="development_failed",
-                            phase="unknown",
-                        )
+                    # The caller's step name is free text: it never reaches the chain.
+                    self._emit_audit_event(result, event_type="development_failed", phase="unknown")
                     continue
 
                 step_fn = self.steps[step_name]
                 try:
-                    if plan.audit_enabled:
-                        self._emit_audit_event(
-                            result,
-                            event_type=f"phase_{step_name}_started",
-                            development_id=result.development_id,
-                        )
+                    # Every phase record is a precondition, not a courtesy: a phase whose start did
+                    # not commit does not run, and one whose completion did not commit ends the
+                    # run as failed (review R2-AP-06).
+                    if not self._emit_audit_event(
+                        result, event_type=f"phase_{step_name}_started", phase=step_name,
+                        development_id=result.development_id,
+                    ):
+                        result.errors.append(f"phase_{step_name}_started was not committed; '{step_name}' did not run")
+                        break
 
                     step_result = step_fn(plan, output_dir, result)
                     result.phase_completed = step_name
 
                     if not step_result:
                         result.errors.append(f"Step '{step_name}' failed")
-                        if plan.audit_enabled:
-                            self._emit_audit_event(
-                                result,
-                                event_type=f"phase_{step_name}_failed",
-                                phase=step_name,
-                                scaffold_preserved=result.scaffold_dir is not None,
-                            )
-                        break
-                    else:
-                        if plan.audit_enabled:
-                            self._emit_audit_event(
-                                result,
-                                event_type=f"phase_{step_name}_completed",
-                                phase=step_name,
-                            )
-
-                except Exception as e:
-                    result.errors.append(f"Step '{step_name}' raised: {e}")
-                    if plan.audit_enabled:
                         self._emit_audit_event(
                             result,
                             event_type=f"phase_{step_name}_failed",
                             phase=step_name,
-                            error_class=type(e).__name__,
                             scaffold_preserved=result.scaffold_dir is not None,
                         )
+                        break
+                    if not self._emit_audit_event(
+                        result, event_type=f"phase_{step_name}_completed", phase=step_name,
+                    ):
+                        result.errors.append(f"phase_{step_name}_completed was not committed; run stopped")
+                        break
+
+                except Exception as e:
+                    result.errors.append(f"Step '{step_name}' raised: {e}")
+                    self._emit_audit_event(
+                        result,
+                        event_type=f"phase_{step_name}_failed",
+                        phase=step_name,
+                        error_class=type(e).__name__,
+                        scaffold_preserved=result.scaffold_dir is not None,
+                    )
                     break
 
         finally:
             result.elapsed_seconds = time.time() - start_time
             result.success = len(result.errors) == 0
-
-            if plan.audit_enabled:
-                self._emit_audit_event(
-                    result,
-                    event_type="development_completed",
-                    success=result.success,
-                    development_id=result.development_id,
-                    data=result.to_dict(),
-                )
+            if not self._emit_audit_event(
+                result,
+                event_type="development_completed",
+                success=result.success,
+                development_id=result.development_id,
+            ):
+                # A success the chain does not show is not reported as one.
+                result.success = False
+                result.errors.append("development_completed was not committed to the audit chain")
 
         return result
 

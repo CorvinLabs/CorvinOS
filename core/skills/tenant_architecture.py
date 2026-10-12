@@ -37,6 +37,10 @@ from core.tenants import validate_tenant_id
 from core.skills.contract import SkillContract, SKILL_REGISTRY
 
 
+class ChecksumKeyUnavailable(RuntimeError):
+    """The per-tenant version checksum key cannot be read or established."""
+
+
 class VersionState(str, Enum):
     """State of a skill version."""
     ACTIVE = "active"          # Currently in use
@@ -253,6 +257,15 @@ class TenantSkillVersionManager:
                     self._versions[version.version] = version
 
                 self._active_version = data.get("active_version")
+                # The history was written but never read back, so every save after a restart
+                # replaced it with only the new entries (review R2 unproven list) and the
+                # deprecation check below had nothing to look at.
+                for h in data.get("history", []) or []:
+                    try:
+                        self._version_history.append(
+                            (str(h["version"]), datetime.fromisoformat(h["timestamp"]), str(h["action"])))
+                    except (KeyError, TypeError, ValueError):
+                        continue
         except Exception as e:
             raise RuntimeError(f"Failed to load skill versions for {self.skill_id}: {e}")
 
@@ -322,7 +335,10 @@ class TenantSkillVersionManager:
             created_by=created_by,
             supersedes_version=supersedes,
         )
-        skill_version = self._stamped(skill_version)
+        try:
+            skill_version = self._stamped(skill_version)
+        except ChecksumKeyUnavailable as exc:
+            return False, f"checksum key unavailable: {exc}"
 
         self._versions[version] = skill_version
         old_active = self._active_version
@@ -368,16 +384,32 @@ class TenantSkillVersionManager:
         target = self._versions[target_version]
         if not target.is_rollbackable():
             return False, f"Version {target_version} is not rollbackable (state={target.state})"
+        if target_version == self._active_version:
+            # Rolling back onto the active version used to restamp it ACTIVE and then deprecate it
+            # as the "old active" - an active pointer to a DEPRECATED version (review R2-SC-02).
+            return False, f"Version {target_version} is already active"
 
         # Verify rollback checksum (HMAC over identity AND state). No legacy exemption: records
         # written before 2026-10-12 carried a checksum of an EMPTY record and could never be rolled
         # back anyway; accepting that constant let ANY hand-edited record through (review SC-04).
-        if not hmac.compare_digest(str(target.rollback_checksum), self._compute_rollback_checksum(target)):
+        try:
+            expected = self._compute_rollback_checksum(target)
+            restamped_target = self._stamped(dataclasses.replace(target, state=VersionState.ACTIVE))
+        except ChecksumKeyUnavailable as exc:
+            return False, f"Rollback refused: checksum key unavailable ({exc})"
+        if not hmac.compare_digest(str(target.rollback_checksum), expected):
             return False, f"Rollback checksum mismatch for {target_version} (data corruption)"
+        # A replayed older genuine record (ROLLBACK_READY copied back over its later DEPRECATED
+        # self) carries a valid MAC; the history says the version was deprecated since. Refuse it
+        # (review R2-SC-03). Limit, stated: an actor who can rewrite versions.json can rewrite the
+        # history too - replay of a whole older FILE is not detectable without a trusted
+        # monotonic store; this guards against corruption, hand edits and partial restores.
+        if self._deprecated_after_last_activation(target_version):
+            return False, f"Version {target_version} was deprecated after it was last ready"
 
         old_active = self._active_version
         self._active_version = target_version
-        self._versions[target_version] = self._stamped(dataclasses.replace(target, state=VersionState.ACTIVE))
+        self._versions[target_version] = restamped_target
 
         # Mark old version as deprecated
         if old_active:
@@ -416,6 +448,20 @@ class TenantSkillVersionManager:
         """List all registered versions (in order)."""
         return sorted(self._versions.values(), key=lambda v: v.created_at, reverse=True)
 
+    def _deprecated_after_last_activation(self, version: str) -> bool:
+        """True when the history shows ``version`` was rolled away from (deprecated) after it was
+        last activated or made rollback-ready."""
+        last_ready = None
+        last_deprecated = None
+        active_before = None
+        for v, ts, action in self._version_history:
+            if action.startswith("rollback to") and active_before == version and v != version:
+                last_deprecated = ts
+            if v == version and (action == "activate" or action.startswith("rollback to")):
+                last_ready = ts
+            active_before = v
+        return last_deprecated is not None and (last_ready is None or last_deprecated > last_ready)
+
     def _stamped(self, version: SkillVersion) -> SkillVersion:
         return dataclasses.replace(version, rollback_checksum=self._compute_rollback_checksum(version))
 
@@ -424,20 +470,47 @@ class TenantSkillVersionManager:
 
         Integrity against corruption and hand edits of ``versions.json``. Not against a hostile
         process running as the same OS user - it can read this key too; that needs OS isolation.
+
+        Created atomically (temp file, fsync, then ``os.link`` - which fails if another manager
+        won the race, whose key is then read). Created ONLY when no version record exists yet: a
+        key that vanished under existing stamps is reported as missing, never silently replaced
+        by a fresh one that would read every stamp as "data corruption" (review R2-SC-01/04).
+        Raises :class:`ChecksumKeyUnavailable`; callers turn it into a refusal.
         """
+        import tempfile
+
         key_path = tenant_paths.tenant_skill_dir(self.tenant_id) / ".versions.key"
-        try:
-            data = key_path.read_bytes()
-            if len(data) >= 32:
-                return data
-        except OSError:
-            pass
-        key_path.parent.mkdir(parents=True, exist_ok=True)
-        data = os.urandom(32)
-        fd = os.open(str(key_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-        return data
+        for _ in range(50):
+            try:
+                data = key_path.read_bytes()
+            except FileNotFoundError:
+                data = None
+            except OSError as exc:
+                raise ChecksumKeyUnavailable(f"unreadable ({type(exc).__name__})") from exc
+            if data is not None:
+                if len(data) >= 32:
+                    return data
+                raise ChecksumKeyUnavailable("too short")
+            if any(v.rollback_checksum for v in self._versions.values()):
+                raise ChecksumKeyUnavailable("missing while stamped versions exist")
+            key_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(prefix=".versions.key.", dir=str(key_path.parent))
+            try:
+                os.write(fd, os.urandom(32))
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            try:
+                os.chmod(tmp, 0o600)
+                os.link(tmp, key_path)          # atomic create-if-absent
+            except FileExistsError:
+                pass                            # another manager won: read its key
+            finally:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+        raise ChecksumKeyUnavailable("could not be established")
 
     def _compute_rollback_checksum(self, version: SkillVersion) -> str:
         """HMAC-SHA256 over the version's identity AND state (truncated to 16 hex).

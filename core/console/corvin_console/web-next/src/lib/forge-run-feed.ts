@@ -96,3 +96,38 @@ export function clock(ts: string): string {
   const d = new Date(ts);
   return Number.isNaN(d.getTime()) ? "—" : d.toISOString().slice(11, 19);
 }
+
+export interface DiffChoice {
+  from: string;
+  to: string;
+}
+
+/**
+ * Which two snapshots to compare. A refine has a "previous version": show what the whole run changed against it.
+ * Otherwise the last two iterations. `null` when there is nothing to compare - the view says so instead of drawing
+ * an empty diff.
+ */
+export function chooseDiff(snapshots: { n: number; label: string }[]): DiffChoice | null {
+  if (snapshots.length < 2) return null;
+  const last = snapshots[snapshots.length - 1];
+  const prev = snapshots.find((s) => s.label === "previous version");
+  if (prev && prev.n !== last.n) return { from: String(prev.n), to: String(last.n) };
+  return { from: String(snapshots[snapshots.length - 2].n), to: String(last.n) };
+}
+
+export type DiffLineKind = "add" | "del" | "hunk" | "meta" | "context";
+
+/**
+ * Classify the lines of a unified diff for colouring. The `---` / `+++` file headers exist only BEFORE the first hunk; inside
+ * a hunk a line starting `---` is a deleted line whose content starts with `--` (e.g. an SQL comment), not a header.
+ */
+export function classifyDiffLines(diff: string): { kind: DiffLineKind; text: string }[] {
+  let inHunk = false;
+  return diff.split("\n").filter((l, i, a) => !(i === a.length - 1 && l === "")).map((text) => {
+    if (text.startsWith("@@")) { inHunk = true; return { kind: "hunk" as const, text }; }
+    if (!inHunk && (text.startsWith("+++") || text.startsWith("---"))) return { kind: "meta" as const, text };
+    if (text.startsWith("+")) return { kind: "add" as const, text };
+    if (text.startsWith("-")) return { kind: "del" as const, text };
+    return { kind: "context" as const, text };
+  });
+}

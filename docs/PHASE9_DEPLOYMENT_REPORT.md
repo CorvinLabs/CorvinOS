@@ -16,7 +16,7 @@
 - ✅ Control Plane Subsystems (core/console/corvin_console/routes/control_plane_subsystems.py)
 - ✅ Override Authority (core/console/corvin_console/routes/control_plane_overrides.py)
 - ✅ Snapshots System (core/console/corvin_console/routes/control_plane_snapshots.py)
-- ✅ Intent Classification Skill (core/skills/os_skills/intent_classifier_skill.py)
+- ~~Intent Classification Skill (`core/skills/os_skills/intent_classifier_skill.py`)~~ — deleted 2026-10-12 (334203538): unreachable from production, and its only importer `context_filter_skill.py` could not be imported.
 
 ### Endpoints
 - POST /v1/console/intents/classify

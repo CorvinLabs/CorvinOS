@@ -44,6 +44,9 @@ export CORVIN_AUDIT_ANCHOR_KEY="$_SUITE_SANDBOX/audit_anchor.key"
 # chain) is FORGE_ROOT, else the scope of the cwd — for a cwd in this checkout
 # `<checkout>/.corvin/forge`, whatever CORVIN_HOME says. core/delegate's live
 # E2E spawned the real server from the repo and appended to that live file.
+# Suites that boot the ADR-0232 tripwire run with FORGE_ROOT UNSET (see the L4 plugin suite below):
+# the tripwire refuses any FORGE_ROOT that is not the resolver's own chain directory, and those tests
+# move CORVIN_HOME themselves, so no fixed value can be right for them (review 2026-10-12, ACP2-4).
 export FORGE_ROOT="$_SUITE_SANDBOX/forge_root"
 mkdir -p "$FORGE_ROOT"
 unset VOICE_AUDIT_PATH
@@ -871,7 +874,7 @@ run "Python: compliance gaps G-006/G-008/G-009/G-010 (ADR-0073)" python3 shared/
 #   cd operator/rag-integration && PYTHONPATH=../.. python3 tests/test_rag_basic.py
 # Skipping from run-all-tests.sh for now as other test failures are unrelated to RAG code.
 
-run "Python: plugin system (L4, ADR-0233/0345)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../../core/plugins/tests -q --import-mode=importlib >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: plugin system (L4, ADR-0233/0345)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; env -u FORGE_ROOT "$PYTEST" ../../core/plugins/tests -q --import-mode=importlib >/dev/null 2>&1' || fails=$((fails+1))
 
 run "daemon boot smoke-test"     bash test_daemon_boot.sh >/dev/null                  || fails=$((fails+1))
 

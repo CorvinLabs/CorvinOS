@@ -10,16 +10,15 @@ def _scratch_corvin_home(tmp_path, monkeypatch):
 
 
 def _unshadow_core_audit() -> None:
-    """Give the top-level name ``audit`` back to the core writer.
+    """Defence in depth: give the top-level name ``audit`` back to the core writer.
 
-    ``core/skills/os_skills/`` has no ``__init__.py``, so pytest's rootdir
-    import registers THIS package as the top-level module ``audit`` (and puts
-    ``core/skills/os_skills/`` on sys.path) while collecting these tests.
-    ``core.learning.event_persistence`` resolves the core hash-chain writer
-    (``corvin_operator/bridges/shared/audit.py``) as exactly ``import audit``
-    — so every learning test in the same session failed with "core audit
-    writer unavailable". The tests here are imported by then (their relative
-    imports are bound), so dropping the alias is safe.
+    Until 2026-10-12 ``core/skills/os_skills/`` had no ``__init__.py``, so pytest's rootdir import
+    registered THIS package as the top-level module ``audit`` (and put ``core/skills/os_skills/`` on
+    sys.path); ``core.learning.event_persistence`` resolves the core hash-chain writer
+    (``corvin_operator/bridges/shared/audit.py``) as exactly ``import audit`` and every learning test
+    in the same session failed. With the regular package that cause is gone (guarded by
+    ``tests/skills/test_no_shadowing_syspath_inserts.py``); this hook only acts if some other path
+    re-creates the alias, and is a no-op otherwise.
     """
     import sys
     from pathlib import Path

@@ -1060,7 +1060,7 @@ class SkillsRegistry:
                 validator = DependencyValidator(self)
                 # The validator reads every declaration form (SkillDependency, str, dict) and BLOCKS
                 # on one it cannot read; converting here dropped anything not a str or a dict.
-                report = validator.validate_dependencies(skill_id, list(skill.metadata.depends_on))
+                report = validator.validate_dependencies(skill_id, skill.metadata.depends_on)
                 blocker_msg = "; ".join(report.blockers) if not report.is_valid else ""
             except Exception as exc:  # noqa: BLE001 - a check that cannot decide refuses
                 blocker_msg = f"dependency check raised {type(exc).__name__}"

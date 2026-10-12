@@ -27,7 +27,7 @@ from core.skills import package_signing
 logger = logging.getLogger(__name__)
 
 
-class PackagingError(Exception):
+class PackagingError(ValueError):
     """Raised when skill packaging fails."""
     pass
 
@@ -92,41 +92,40 @@ class SkillPackager:
         if zip_path.exists():
             raise FileExistsError(f"Package already exists: {zip_path}")
 
-        # Create .forge metadata directory (if not already present)
+        # Create .forge metadata directory (if not already present). Never through a link: the
+        # packager used to write (and chmod) its metadata into whatever .forge or one of its files
+        # pointed at, outside the skill (review R2-AP-01).
         forge_dir = skill_folder / ".forge"
+        if forge_dir.is_symlink() or (forge_dir.exists() and not forge_dir.is_dir()):
+            raise PackagingError(".forge must be a real directory inside the skill folder")
         forge_dir.mkdir(exist_ok=True)
 
         # Generate metadata
         generation_context = self._create_generation_context(skill_folder, manifest)
         audit_trail = self._create_audit_trail(skill_folder, manifest)
 
-        # Write metadata files (fixes H2: File Permissions) BEFORE hashing: the checksum list -
-        # and so the signature - must cover them, or a "verified" install carries files anyone
-        # could have rewritten after signing (ADR-2252 review, PKG-6).
-        gen_ctx_path = forge_dir / "generation_context.json"
-        gen_ctx_path.write_text(json.dumps(generation_context, indent=2))
-        gen_ctx_path.chmod(0o600)  # owner read+write only
+        # Write metadata files BEFORE hashing: the checksum list - and so the signature - must
+        # cover them (ADR-2252 review, PKG-6). Written via a fresh temp file + replace, which
+        # replaces a planted link instead of following it.
+        self._write_private(forge_dir, "generation_context.json", json.dumps(generation_context, indent=2))
+        self._write_private(forge_dir, "audit_trail.jsonl", "\n".join(json.dumps(e) for e in audit_trail))
 
-        audit_path = forge_dir / "audit_trail.jsonl"
-        audit_path.write_text("\n".join(json.dumps(e) for e in audit_trail))
-        audit_path.chmod(0o600)
+        payload = self._collect_payload(skill_folder)
+        checksums = {rel: self._compute_hash(data) for rel, data in payload.items()}
+        checksum_text = "\n".join(f"{h} {p}" for p, h in checksums.items())
+        checksum_path = self._write_private(forge_dir, "checksum.sha256", checksum_text)
 
-        checksums = self._compute_checksums(skill_folder)
-        checksum_path = forge_dir / "checksum.sha256"
-        checksum_path.write_text("\n".join(f"{h} {p}" for p, h in checksums.items()))
-        checksum_path.chmod(0o600)
-
-        # Create ZIP archive from EXACTLY the hashed set (plus the checksum list and the
-        # signature): a file the list does not name - a symlink target, a nested .forge/ - is
-        # never shipped, so the packager cannot sign what its own installer must refuse.
+        # Create the ZIP from EXACTLY the bytes that were hashed (one read per file - no
+        # hash-then-reopen window), plus the checksum list and the signature.
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             arc = manifest.skill_id
-            for rel in checksums:
-                zf.write(skill_folder / rel, arcname=f"{arc}/{rel}")
-            zf.write(checksum_path, arcname=f"{arc}/{package_signing.CHECKSUM_REL}")
+            for rel, data in payload.items():
+                zf.writestr(f"{arc}/{rel}", data)
+            zf.writestr(f"{arc}/{package_signing.CHECKSUM_REL}", checksum_text)
             # Signed only when this install's operator has generated a key (ADR-2252);
             # otherwise the package is unsigned and the installer will say so.
-            signature = self._sign_package(skill_folder, checksum_path)
+            signature = self._sign_payload(payload.get(package_signing.MANIFEST_NAME, b""),
+                                           checksum_text.encode("utf-8"))
             if signature:
                 zf.writestr(f"{manifest.skill_id}/{package_signing.SIGNATURE_NAME}", signature)
 
@@ -168,18 +167,34 @@ class SkillPackager:
                 raise ValueError(f"Missing required file: {file_path}")
 
     @staticmethod
-    def _sign_package(skill_folder: Path, checksum_path: Path) -> Optional[str]:
-        """Signature over manifest + checksum list, or None when no usable operator key."""
+    def _sign_payload(manifest_raw: bytes, checksum_raw: bytes) -> Optional[str]:
+        """Signature over manifest + checksum list (the bytes shipped), or None without a usable key."""
         key = package_signing.signing_key()
         if key is None:
             return None
         try:
-            return package_signing.sign(
-                (skill_folder / package_signing.MANIFEST_NAME).read_bytes(),
-                checksum_path.read_bytes(), key)
+            return package_signing.sign(manifest_raw, checksum_raw, key)
         except Exception as exc:  # noqa: BLE001 — never lose the package over a signing fault
             logger.warning("package left unsigned: %s", type(exc).__name__)
             return None
+
+    @staticmethod
+    def _write_private(directory: Path, name: str, text: str) -> Path:
+        import tempfile
+
+        fd, tmp = tempfile.mkstemp(prefix=f".{name}.", dir=str(directory))
+        try:
+            os.fchmod(fd, 0o600) if hasattr(os, "fchmod") else None
+            with os.fdopen(fd, "w") as f:
+                f.write(text)
+            os.replace(tmp, directory / name)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        return directory / name
 
     def _create_generation_context(
         self, skill_folder: Path, manifest: SkillManifestV2
@@ -229,28 +244,63 @@ class SkillPackager:
         return events
 
     def _compute_checksums(self, skill_folder: Path) -> Dict[str, str]:
-        """SHA-256 of every regular file in the skill folder, keyed by POSIX relative path.
+        """SHA-256 per shipped file (see :meth:`_collect_payload`)."""
+        return {rel: self._compute_hash(data) for rel, data in self._collect_payload(skill_folder).items()}
 
-        Symlinks are never followed or listed (C4). Only the top-level ``.forge/checksum.sha256``
-        (the list itself) is excluded; ``.forge`` metadata is covered. Keys are ``as_posix()``:
-        ``str()`` of a Windows path uses backslashes, which no ZIP arcname does (PKG-5).
+    def _collect_payload(self, skill_folder: Path) -> Dict[str, bytes]:
+        """Every file the package ships, read ONCE, keyed by POSIX relative path.
+
+        * symlinks are never followed or listed (C4); each file is opened with O_NOFOLLOW;
+        * a file with more than one hard link is refused - its content may live outside the
+          folder (review R2-AP-02);
+        * the checksum list itself and a stray root ``skill.sig`` are not part of the payload
+          (the packager writes its own; shipping both made a package its installer refuses);
+        * two names that collide on a case-insensitive/normalising file system are refused.
+        Keys are ``as_posix()``: ``str()`` of a Windows path uses backslashes (PKG-5).
         """
-        checksums = {}
+        import stat as _stat
+
+        payload: Dict[str, bytes] = {}
+        seen: Dict[str, str] = {}
         root = skill_folder.resolve()
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
             dirnames[:] = sorted(d for d in dirnames if not (Path(dirpath) / d).is_symlink())
             for name in sorted(filenames):
                 file_path = Path(dirpath) / name
+                rel = file_path.relative_to(root).as_posix()
+                if rel in (package_signing.CHECKSUM_REL, package_signing.SIGNATURE_NAME):
+                    continue
                 if file_path.is_symlink():
                     logger.warning(f"Skipping symlink (not allowed): {file_path}")
                     continue
-                if not file_path.is_file():
-                    continue
-                rel = file_path.relative_to(root).as_posix()
-                if rel == package_signing.CHECKSUM_REL:
-                    continue
-                checksums[rel] = self._compute_file_hash(file_path)
-        return checksums
+                try:
+                    fd = os.open(str(file_path), os.O_RDONLY | nofollow)
+                except OSError as exc:
+                    raise PackagingError(f"cannot read {rel}: {type(exc).__name__}") from exc
+                try:
+                    st = os.fstat(fd)
+                    if not _stat.S_ISREG(st.st_mode):
+                        continue
+                    if st.st_nlink != 1:
+                        raise PackagingError(f"{rel} has {st.st_nlink} hard links; refusing to ship it")
+                    with os.fdopen(fd, "rb") as f:
+                        fd = -1
+                        data = f.read()
+                finally:
+                    if fd != -1:
+                        os.close(fd)
+                key = package_signing.collision_key(rel)
+                if key in seen:
+                    raise PackagingError(f"{rel} and {seen[key]} name the same file on Windows/macOS")
+                seen[key] = rel
+                payload[rel] = data
+        return payload
+
+    @staticmethod
+    def _compute_hash(data: bytes) -> str:
+        """SHA-256 of bytes, ``sha256:<hex>``."""
+        return f"sha256:{hashlib.sha256(data).hexdigest()}"
 
     @staticmethod
     def _compute_file_hash(file_path: Path) -> str:

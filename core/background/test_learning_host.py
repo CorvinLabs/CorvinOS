@@ -99,9 +99,40 @@ def test_start_is_idempotent_and_stop_persists(monkeypatch):
     assert lh.start("_default") is True
     assert lh.start("_default") is False
     assert lh.status("_default")["alive"] is True
-    lh.stop("_default")
+    deadline = time.time() + 10
+    while not (lh.status("_default") or {}).get("lease") and time.time() < deadline:
+        time.sleep(0.05)   # a host saves on exit only once it HOLDS the lease (R2-DH-2)
+    assert lh.stop("_default") is True
     assert lh.status("_default") is None
     assert lh.state_path("_default").is_file()
+
+
+def test_a_host_that_never_held_the_lease_does_not_save_on_exit(tmp_path):
+    """R2-DH-2: a standby host must not overwrite the holder's newer state with its start-up copy."""
+    holder = lh._Lease("_default")
+    assert holder.try_acquire()
+    try:
+        host = lh.LearningHost("_default")
+        ev = threading.Event()
+        ev.set()
+        _run(host.run(ev))
+        assert not lh.state_path("_default").exists()
+        assert host.lease.held is False
+    finally:
+        holder.release()
+
+
+def test_lease_on_a_replaced_lock_file_is_not_held(tmp_path):
+    """R2-DH-8: a lock on an unlinked/replaced host.lock excludes nobody."""
+    lease = lh._Lease("_default")
+    assert lease.try_acquire() and lease.still_valid()
+    lease.path.unlink()
+    lease.path.write_text("")
+    assert not lease.still_valid()
+    other = lh._Lease("_default")
+    assert other.try_acquire()   # the new file is free - so the old holder must step down
+    lease.release()
+    other.release()
 
 
 def test_the_host_does_not_start_under_pytest_by_default():
@@ -176,3 +207,27 @@ def test_an_event_for_another_tenant_is_not_written(monkeypatch):
     monkeypatch.setenv("CORVIN_TENANT_ID", "_default")
     assert li.emit("acme", "user_feedback", {"skill_id": "s", "signal": 1}) is False
     assert li.day_files("acme") == []
+
+
+def test_stop_starts_no_further_regeneration_and_keeps_the_rest_queued():
+    """R2-DH-6: once stop is set the host finishes the one in flight and starts no other."""
+    calls = []
+    ev = threading.Event()
+
+    def regen(tenant, skill_id, *, reason):
+        calls.append(skill_id)
+        ev.set()   # shutdown arrives while this one runs
+        return type("O", (), {"skill_id": skill_id, "outcome": "completed", "detail": "",
+                              "generation": 1})()
+    def unreadable(_t):
+        raise OSError("not listing in this test")   # no eviction of the queued test skills
+    host = lh.LearningHost("_default", sources=unreadable, regenerate=regen)
+    host._stop_ev = ev
+    sched = host.daemon.regeneration_scheduler
+    for s in ("assistant.datahub_a1", "assistant.datahub_b2", "assistant.datahub_c3"):
+        sched.regeneration_queue.append(s)
+        sched.queued_skills.add(s)
+    sched.batch_window_seconds = 0
+    _run(host.tick())
+    assert calls == ["assistant.datahub_a1"]
+    assert sched.regeneration_queue == ["assistant.datahub_b2", "assistant.datahub_c3"]

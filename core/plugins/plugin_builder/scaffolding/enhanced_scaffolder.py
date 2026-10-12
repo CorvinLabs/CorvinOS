@@ -121,6 +121,22 @@ class PluginScaffoldConfig:
         return True
 
 
+
+def _md(value: object) -> str:
+    """One line of markdown text: newlines collapsed, HTML and markdown control characters escaped -
+    a name or author field cannot open a section, a link or a tag in the README (review R2-SC-07)."""
+    import html as _html
+
+    text = " ".join(str(value).split())
+    text = _html.escape(text, quote=True)
+    return re.sub(r"([\\`*_{}\[\]()#+!|>~-])", r"\\\1", text)
+
+
+def _md_block(value: object) -> str:
+    """Multi-line free text as a quoted block of escaped lines."""
+    lines = str(value).splitlines() or [""]
+    return "\n".join("> " + _md(line) for line in lines)
+
 _PLUGIN_ID_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
 
 
@@ -401,6 +417,10 @@ class TestPluginExecution:
             str: module name (e.g., 'my_plugin' for 'my.plugin' ID)
         """
         safe = self.plugin_id.replace(".", "_").replace("-", "_")
+        # A module name is an identifier: a digit-leading id ("1password") made the generated
+        # tests' `from 1password_scaffold import ...` a SyntaxError (review R2-SC-06).
+        if safe[:1].isdigit():
+            safe = "p_" + safe
         return f"{safe}_scaffold"
 
 
@@ -421,6 +441,15 @@ class AuditEventEmitter:
         self.logger = logging.getLogger(__name__)
         # Lazy-import to avoid circular deps
         self._audit_chain_path: Optional[Path] = None
+
+    def emit_scaffold_started(self, plugin_id: str, plugin_type: str, config_hash: str) -> None:
+        """Record that a scaffold is ABOUT to be written - raises unless it committed.
+
+        Audit-first (review R2-AP-04): the files used to be written before the first record, so
+        an audit that could not commit left a complete scaffold on disk with no trace of it.
+        """
+        self._write_audit_event({"type": "scaffold_started", "plugin_id": plugin_id,
+                                 "plugin_type": plugin_type, "config_hash": config_hash})
 
     def emit_scaffold_generated(
         self,
@@ -594,6 +623,13 @@ class PluginScaffoldGenerator:
                 include_on_load=self.config.include_on_load,
                 include_on_execute=self.config.include_on_execute,
                 include_on_unload=self.config.include_on_unload,
+            )
+
+            # Audit-first: nothing is written unless this record committed (review R2-AP-04).
+            self.audit_emitter.emit_scaffold_started(
+                plugin_id=self.config.plugin_id,
+                plugin_type=self.config.plugin_type,
+                config_hash=self._config_hash,
             )
 
             # Use existing scaffolder
@@ -875,15 +911,15 @@ dev = [
 
         # Generate README.md
         readme_file = plugin_dir / "README.md"
-        readme_content = f'''# {template.plugin_name}
+        readme_content = f'''# {_md(template.plugin_name)}
 
 **Plugin ID:** `{template.plugin_id}`
-**Type:** {template.plugin_type}
-**Author:** {template.author}
+**Type:** {_md(template.plugin_type)}
+**Author:** {_md(template.author)}
 
 ## Description
 
-{template.description}
+{_md_block(template.description)}
 
 ## Installation
 

@@ -205,6 +205,92 @@ class DataHubLearningLoopTest(unittest.TestCase):
             outcomes = [r["details"]["outcome"] for r in recs if r.get("event_type") == "learning.regeneration"]
             self.assertEqual(outcomes, ["refused", "no_artifact"])
 
+    # -- adversarial review round 2 (R2-DH-1/3/4/5/7) ------------------------------------------
+
+    def test_an_unreadable_artifact_record_raises_instead_of_shortening_the_list(self):
+        """R2-DH-1: a short list read as 'deleted' evicts the learned state of live skills."""
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            self._create(client, csrf)
+            from core.skills.os_skills.datahub_unified import regenerate
+            (regenerate._artifacts_dir("_default") / "broken.json").write_text("{not json")
+            with self.assertRaises(regenerate.ArtifactStoreUnreadable):
+                regenerate.live_skill_artifacts("_default")
+            self.assertEqual(regenerate.regenerate_skill("_default", self.skill).outcome, "failed")
+
+    def test_a_hard_linked_source_is_refused(self):
+        """R2-DH-3: a hard link to another tenant's file passes every path check."""
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            self._create(client, csrf)
+            other = Path(home) / "tenants" / "acme" / "global" / "acme_private.json"
+            other.parent.mkdir(parents=True, exist_ok=True)
+            other.write_text(json.dumps([{"name": "secret-ish"}] * 5))
+            self.src.unlink()
+            try:
+                import os
+                os.link(other, self.src)
+            except OSError:
+                self.skipTest("hard links not possible across these directories")
+            from core.skills.os_skills.datahub_unified import regenerate
+            out = regenerate.regenerate_skill("_default", self.skill, reason="source_changed")
+            self.assertEqual(out.outcome, "refused", out)
+
+    def test_the_stored_hash_is_the_hash_of_what_was_learned_from(self):
+        """R2-DH-4: hash and ingestion read the same bytes (one snapshot)."""
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            aid = self._create(client, csrf)
+            self.src.write_text(json.dumps([{"name": n, "score": i} for i, n in enumerate("abcde")]))
+            import hashlib
+            want = hashlib.sha256(self.src.read_bytes()).hexdigest()
+            from core.skills.os_skills.datahub_unified import regenerate
+            out = regenerate.regenerate_skill("_default", self.skill, reason="source_changed")
+            self.assertEqual(out.outcome, "completed", out)
+            art = next(a for a in regenerate.live_skill_artifacts("_default") if a["artifact_id"] == aid)
+            self.assertEqual(art["source"]["sha256"], want)
+            self.assertEqual(art["row_count"], 5)
+
+    def test_a_failed_registry_update_restores_body_and_grades(self):
+        """R2-DH-5: update_body writes the body, then the grades - a failure between them is undone."""
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            self._create(client, csrf)
+            from core.skills.os_skills.datahub_unified import regenerate
+            from core.skills.os_skills.datahub_unified.register import SCOPE
+            reg = regenerate._registry("_default")
+            reg._registry(SCOPE).set_grades(self.skill, [{"score": 0.4, "notes": "seed"}])
+            body_before = reg.get_body(self.skill)
+            self.src.write_text(json.dumps([{"name": "z", "score": 9}] * 3))
+            from skill_forge.registry import SkillRegistry
+            real = SkillRegistry.set_grades
+
+            def boom(self_, name, grades):
+                if grades and grades[0].get("notes") == "seed" and getattr(boom, "armed", True):
+                    boom.armed = False
+                    raise OSError("disk full")
+                return real(self_, name, grades)
+            SkillRegistry.set_grades = boom
+            try:
+                out = regenerate.regenerate_skill("_default", self.skill, reason="source_changed")
+            finally:
+                SkillRegistry.set_grades = real
+            self.assertEqual(out.outcome, "failed", out)
+            self.assertIn("restored", out.detail)
+            reg = regenerate._registry("_default")
+            self.assertEqual(regenerate._strip_front_matter(reg.get_body(self.skill)),
+                             regenerate._strip_front_matter(body_before))
+            self.assertEqual([g.get("notes") for g in reg.get_in_scope(self.skill, SCOPE).grades], ["seed"])
+
+    def test_a_record_naming_another_artifacts_skill_is_ignored(self):
+        """R2-DH-7: a planted record must not get another skill rebuilt from ITS source."""
+        with _sandbox(self.tmp) as (client, csrf, home, _):
+            aid = self._create(client, csrf)
+            from core.skills.os_skills.datahub_unified import regenerate
+            planted = dict(next(a for a in regenerate.live_skill_artifacts("_default")
+                                if a["artifact_id"] == aid))
+            planted["artifact_id"] = "ab" * 16
+            (regenerate._artifacts_dir("_default") / f"{planted['artifact_id']}.json").write_text(
+                json.dumps(planted))
+            ids = [a["artifact_id"] for a in regenerate.live_skill_artifacts("_default")]
+            self.assertEqual(ids, [aid])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,8 @@ import atexit
 import logging
 import queue
 import threading
+import time
+import weakref
 from typing import Optional
 
 from core.learning.learning_events import LearningEvent, EventType
@@ -40,6 +42,8 @@ class EventEmitter:
         self._stopped = False
         self._sentinel_sent = False
         self.lost_at_exit = 0
+        self.accepted = 0     # emit() returned True
+        self.written = 0      # store.write_event returned
         # One lock makes "is the emitter still accepting?" and "put the event in the queue" a single
         # step, and makes stop() flip the flag atomically with respect to both. Without it an emit
         # that passed the _stopped check could put its event BEHIND stop()'s sentinel: emit() said
@@ -52,7 +56,9 @@ class EventEmitter:
             target=self._worker, name="learning-event-emitter", daemon=True
         )
         self._worker_thread.start()
-        atexit.register(self._atexit_flush)
+        # ONE module-level exit hook stops every live emitter against ONE shared deadline - a hook
+        # per emitter waited EXIT_FLUSH_S each, one after another (review R2-SC-09).
+        _LIVE.add(self)
 
     def _worker(self) -> None:
         """Background worker: consume queue and write events."""
@@ -63,7 +69,19 @@ class EventEmitter:
                     break
                 try:
                     self.store.write_event(event)
-                except Exception as e:
+                    with self._stats_lock:
+                        self.written += 1
+                except BaseException as e:  # noqa: BLE001
+                    if not isinstance(e, Exception):
+                        # SystemExit/KeyboardInterrupt from a store: the worker is gone. Mark the
+                        # emitter dead so emit() refuses instead of accepting into a queue nobody
+                        # reads (review R2-SC-08).
+                        with self._lifecycle_lock:
+                            self._stopped = True
+                        with self._stats_lock:
+                            self.write_failures += 1
+                        logger.error(f"Learning event worker died ({type(e).__name__}); emitter stopped")
+                        return
                     # FIX #12: Log data loss instead of silent fail
                     with self._stats_lock:
                         self.write_failures += 1
@@ -83,11 +101,13 @@ class EventEmitter:
             return False
 
         with self._lifecycle_lock:
-            if self._stopped:
+            if self._stopped or not self._worker_thread.is_alive():
                 logger.error(f"Rejected event after stop(): {event.event_id}")
                 return False
             try:
                 self._queue.put_nowait(event)
+                with self._stats_lock:
+                    self.accepted += 1
                 return True
             except queue.Full:
                 with self._stats_lock:
@@ -119,18 +139,48 @@ class EventEmitter:
         if self._worker_thread.is_alive():
             raise RuntimeError("EventEmitter worker thread failed to shut down within timeout")
 
-    #: How long interpreter exit waits for accepted events to be written.
-    EXIT_FLUSH_S = 30.0
+    def _lost(self) -> int:
+        with self._stats_lock:
+            return max(0, self.accepted - self.written - self.write_failures)
 
-    def _atexit_flush(self) -> None:
-        """Flush at interpreter exit (the daemon worker would otherwise be cut mid-queue). What
-        still cannot be written in ``EXIT_FLUSH_S`` is COUNTED and logged, never lost silently."""
-        try:
-            self.stop(timeout=self.EXIT_FLUSH_S)
-        except Exception:  # noqa: BLE001 - exit path
-            pass
-        if self._worker_thread.is_alive():
-            left = self._queue.qsize()
-            with self._stats_lock:
-                self.lost_at_exit = left
-            logger.error("EventEmitter: %d accepted learning event(s) not written at exit", left)
+    def _atexit_flush(self, timeout: float | None = None) -> None:
+        """Flush this emitter (kept for callers/tests); the exit hook uses :func:`_flush_all`."""
+        _flush_all([self], timeout if timeout is not None else EXIT_FLUSH_S)
+
+
+#: How long interpreter exit waits - in TOTAL, across every live emitter - for accepted events.
+EXIT_FLUSH_S = 30.0
+_LIVE: "weakref.WeakSet[EventEmitter]" = weakref.WeakSet()
+
+
+def _flush_all(emitters=None, timeout: float = EXIT_FLUSH_S) -> None:
+    """Stop every emitter against ONE deadline: sentinels first, then join each with what is left.
+    Whatever is still unwritten is COUNTED (accepted - written - failures) and logged."""
+    emitters = list(_LIVE if emitters is None else emitters)
+    deadline = time.monotonic() + max(0.0, timeout)
+    for em in emitters:
+        with em._lifecycle_lock:
+            em._stopped = True
+            send = not em._sentinel_sent
+            em._sentinel_sent = True
+        if send:
+            try:
+                em._queue.put_nowait(None)
+            except queue.Full:
+                with em._lifecycle_lock:
+                    em._sentinel_sent = False
+    for em in emitters:
+        if not em._sentinel_sent:
+            try:
+                em._queue.put(None, timeout=max(0.0, deadline - time.monotonic()))
+                em._sentinel_sent = True
+            except queue.Full:
+                pass
+        em._worker_thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        lost = em._lost()
+        em.lost_at_exit = lost
+        if lost:
+            logger.error("EventEmitter: %d accepted learning event(s) not written at exit", lost)
+
+
+atexit.register(_flush_all)

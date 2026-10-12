@@ -196,6 +196,10 @@ class SkillInstaller:
 
         with zipfile.ZipFile(zip_path, "r") as zf:
             infos = [i for i in zf.infolist() if not i.is_dir()]
+            # Two entries under one name: which one is "the" signature/manifest depends on the reader
+            # (next() took the first, extraction keeps the last) - refuse (review ACP2-7).
+            if len({i.filename for i in infos}) != len(infos):
+                return "refused:duplicate entry names in the package"
             manifests = [i for i in infos if i.filename.split("/")[-1] == ps.MANIFEST_NAME
                          and i.filename.count("/") <= 1]
             if len(manifests) != 1:
@@ -243,7 +247,7 @@ class SkillInstaller:
                 if not info.filename.startswith(pref):
                     return f"refused:file outside the signed package: {info.filename[:80]}"
                 rel = info.filename[len(pref):]
-                folded = info.filename.casefold()
+                folded = ps.collision_key(info.filename)
                 if folded in seen_folded:
                     return f"refused:two entries differ only in case: {info.filename[:80]}"
                 seen_folded.add(folded)
@@ -302,7 +306,9 @@ class SkillInstaller:
             # one file on Windows/macOS: either lets a later entry overwrite an earlier one.
             if "\\" in info.filename:
                 raise InstallationError(f"Backslash in ZIP entry name: {info.filename}")
-            folded = info.filename.casefold()
+            from core.skills.package_signing import collision_key  # noqa: PLC0415
+
+            folded = collision_key(info.filename)
             if folded in seen_folded:
                 raise InstallationError(f"ZIP entries differ only in case: {info.filename}")
             seen_folded.add(folded)

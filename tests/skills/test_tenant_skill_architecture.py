@@ -577,3 +577,72 @@ class TestVersionRollbackImmutability:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestRollbackChecksumReviewRound2:
+    """Refutation round 2026-10-12 (R2-SC-01..04)."""
+
+    @pytest.fixture
+    def temp_skill_dir(self, tmp_path, monkeypatch):
+        import core.paths.tenant as tenant_paths
+        monkeypatch.setattr(tenant_paths, "tenant_skill_dir",
+                            lambda tenant_id: tmp_path / tenant_id / "skill-forge" / "skills")
+        return tmp_path
+
+    def _mgr(self, sid):
+        mgr = TenantSkillVersionManager(tenant_id="_default", skill_id=sid)
+        for v in ("1.0.0", "2.0.0"):
+            ok, msg = mgr.register_version(
+                v, SkillContract(skill_id=sid, version=v, tier=SkillTier.PRIMITIVE,
+                                 input_schema={"type": "object"}, output_schema={"type": "object"}),
+                {"v": v}, "system")
+            assert ok, msg
+        return mgr
+
+    def test_concurrent_first_use_never_raises(self, temp_skill_dir):
+        import threading
+        errors = []
+
+        def work(i):
+            try:
+                self._mgr(f"os.race{i}")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+        ts = [threading.Thread(target=work, args=(i,)) for i in range(8)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        assert errors == []
+
+    def test_a_short_or_missing_key_refuses_instead_of_raising_or_rekeying(self, temp_skill_dir):
+        mgr = self._mgr("os.keyloss")
+        from core.paths import tenant as tp
+        key = tp.tenant_skill_dir("_default") / ".versions.key"
+        key.write_bytes(b"short")
+        ok, msg = mgr.rollback_to_version("1.0.0")
+        assert ok is False and "checksum key" in msg
+        key.unlink()
+        ok, msg = mgr.rollback_to_version("1.0.0")
+        assert ok is False and "checksum key" in msg
+        assert not key.exists(), "a key under existing stamps must not be silently re-created"
+
+    def test_rolling_back_onto_the_active_version_is_refused(self, temp_skill_dir):
+        mgr = self._mgr("os.selfroll")
+        ok, msg = mgr.rollback_to_version("2.0.0")
+        assert ok is False and "already active" in msg
+        assert mgr._versions["2.0.0"].state == VersionState.ACTIVE
+
+    def test_a_replayed_ready_record_of_a_since_deprecated_version_is_refused(self, temp_skill_dir):
+        mgr = self._mgr("os.replay")
+        ready_v1 = mgr._versions["1.0.0"]
+        assert mgr.rollback_to_version("1.0.0")[0]          # 2.0.0 deprecated
+        ready_v2 = None
+        mgr2 = TenantSkillVersionManager(tenant_id="_default", skill_id="os.replay")
+        assert mgr2._version_history, "history must survive a reload"
+        # replay 2.0.0's earlier genuine ROLLBACK_READY-like record: not reachable without the key
+        # for a NEW record, but the old ACTIVE stamp of 2.0.0 is genuine
+        old = mgr2._versions["2.0.0"]
+        import dataclasses
+        stamped_ready = mgr2._stamped(dataclasses.replace(old, state=VersionState.ROLLBACK_READY))
+        mgr2._versions["2.0.0"] = stamped_ready
+        ok, msg = mgr2.rollback_to_version("2.0.0")
+        assert ok is False and "deprecated" in msg

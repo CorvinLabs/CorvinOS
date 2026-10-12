@@ -5,6 +5,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
+import RunDiff from "@/components/forge/RunDiff";
 import { ApiError } from "@/lib/api/client";
 import { getRunEvents, type RunEvent } from "@/lib/api/forge-runs";
 import {
@@ -113,6 +114,8 @@ export default function RunFeed({ runId, running }: { runId: string; running: bo
           </ul>
         </div>
       )}
+
+      <RunDiff runId={runId} running={running} refreshKey={events.length} />
 
       {groups.map((g, i) => (
         <details key={`${g.phase}-${i}`} open={running && i === groups.length - 1} className="text-[11px]" data-testid="run-feed-phase" data-phase={g.phase}>

@@ -824,8 +824,10 @@ appends; it does NOT set `FORGE_ROOT`. For anything that boots the tripwire eith
 point it at the resolver's own chain directory, `$CORVIN_HOME/tenants/<tid>/global/forge` — the
 `audit_path_not_redirected` check refuses any other path, inside the home root (`$CORVIN_HOME/forge`)
 or outside it (verified 2026-10-12). Tests that move `CORVIN_HOME` themselves (method-discovery e2e)
-need it unset (20+ spurious failures measured 2026-10-11). Suites that never boot the tripwire
-(`run-all-tests.sh` sets a sibling sandbox path) are unaffected. Plain-script (non-pytest) suites
+need it unset (20+ spurious failures measured 2026-10-11). `run-all-tests.sh` exports a
+sibling sandbox `FORGE_ROOT` for the forge suites and runs its L4 plugin suite (which boots the
+tripwire) with it UNSET — until 2026-10-12 that suite ran with the sibling path and failed 10 tests
+into /dev/null. Plain-script (non-pytest) suites
 must run via `run-all-tests.sh`, which sets all four. A worktree sharing the main `.venv`
 imports the LIVE checkout through the editable `.pth` unless `PYTHONPATH` puts the worktree
 first.

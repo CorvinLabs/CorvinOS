@@ -38,6 +38,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import json
+import re
 import logging
 import os
 import time
@@ -467,8 +468,9 @@ class SkillAdapter:
         for vid in [v.version_id for v in self.state.config_versions] + [
                 str((u or {}).get("version_id", "")) for u in getattr(self, "_unparsed_versions", []) or []
                 if isinstance(u, dict)]:
-            if vid.startswith("v") and vid[1:].isdigit():
-                nums.append(int(vid[1:]))
+            m = re.fullmatch(r"v([0-9]{1,9})", vid)   # ASCII digits only: '²'.isdigit() is True
+            if m:
+                nums.append(int(m.group(1)))
         return f"v{(max(nums) if nums else 0) + 1}"
 
     def rollback(self, to_version: str) -> SkillConfig:
