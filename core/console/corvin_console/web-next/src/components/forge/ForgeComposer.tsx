@@ -87,7 +87,7 @@ export interface ForgeComposerProps {
 
 export default function ForgeComposer({
   value, onChange, onSubmit, busy, submitDisabled, csrf, onError,
-  textareaTestId, submitTestId, textareaId, label, placeholder, submitLabel, busyLabel, rows = 3, extras, attachments,
+  textareaTestId, submitTestId, textareaId, label, placeholder, submitLabel, busyLabel, rows = 1, extras, attachments,
 }: ForgeComposerProps) {
   const ref = React.useRef<HTMLTextAreaElement | null>(null);
   useAutosizeTextarea(ref, value, 320);
@@ -137,7 +137,7 @@ export default function ForgeComposer({
           onKeyDown={onKeyDown}
           disabled={busy || recording}
           rows={rows}
-          className="font-mono text-xs"
+          className="min-h-[2rem] resize-none border-0 bg-transparent px-1 py-1 font-mono text-xs shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
         />
         {attachments && (
           <>
@@ -238,7 +238,8 @@ export default function ForgeComposer({
       <Button
         onClick={onSubmit}
         disabled={submitDisabled || over || blocked}
-        className="w-full"
+        variant="accent"
+        className="w-full forge-generate-button-amber"
         data-testid={submitTestId}
       >
         {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
