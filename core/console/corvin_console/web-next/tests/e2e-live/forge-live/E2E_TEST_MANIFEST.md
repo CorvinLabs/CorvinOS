@@ -4,10 +4,10 @@ Playwright suite that drives the **real console** through all four Forge generat
 user does right after installing CorvinOS, and keeps the artifacts it forges.
 Config: `../../../playwright.forge-live.config.ts` · Helpers: `live.ts`.
 
-Suite size (2026-10-12): **81 tests** — 10: 36 · 15: 22 · 16: 5 · 17: 1 · 20: 9 · 30: 8. Last measured results:
-10, 15, 16, 17, 20, 30 each green on their last run against the live console :8765 and the isolated empty install on :8798
-(15 and 16 together with 10: 63 passed; the real-engine specs 16-refine and 17 passed on their own runs, 11.8 min and 23 s).
-Real-engine runs use the Claude Code CLI (subscription), no API key. Specs 15–17 belong to the console composer / run feed work.
+Suite size (2026-10-12): **81 tests** — 10: 36 · 15: 22 · 16: 5 · 17: 1 · 20: 9 · 30: 8.
+Measured on 2026-10-12 against the live console :8765: specs 10 + 15 + 16 together (without the 12-minute refine) **62 passed** in
+2.4 min; the real-engine tests passed in their own runs — the refine in spec 16 (11.8 min), spec 17 (23 s), and 20/30 (earlier, see
+the run ids below). Real-engine runs use the Claude Code CLI (subscription), no API key. Specs 15–17 belong to the composer / run feed work.
 
 ## 1. The e2e_test_* artifacts (kept on purpose)
 
