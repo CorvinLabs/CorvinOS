@@ -68,6 +68,8 @@ class GenerateRequest(BaseModel):
     user_request: str = Field(..., min_length=10, max_length=4000)
     #: Plugin only — what the plugin's console panel should show. Empty = no panel.
     panel_request: str = Field(default="", max_length=2000)
+    #: Tool only (ADR-2254, slice 1) - ids returned by POST /forge-intake/attachments.
+    attachment_ids: List[str] = Field(default_factory=list, max_length=5)
 
 
 def _operator_hint(exc: Exception) -> str:
@@ -86,6 +88,9 @@ def _spawn_kwargs(kind: str, tenant_id: str, run_id: str, payload: Dict[str, Any
     """The ``forge_runs.spawn`` arguments for a run — shared by the POST and by
     the resume of a run a console restart interrupted."""
     request = str(payload["request"])
+    if payload.get("attachment_pack"):  # the redacted projection, never the raw file (ADR-2254)
+        from .forge_intake_api import pack_prompt_block  # noqa: PLC0415
+        request += pack_prompt_block(payload["attachment_pack"])
     panel_request = str(payload.get("panel_request") or "")
     if kind == "tool":
         def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
@@ -162,6 +167,11 @@ async def generate(
     tenant_id = rec.tenant_id
     panel_request = req.panel_request.strip()
     payload = {"request": request, "panel_request": panel_request}
+    if req.attachment_ids:
+        if kind != "tool":
+            raise HTTPException(status_code=422, detail="Attachments are supported for tools only")
+        from .forge_intake_api import resolve_pack  # noqa: PLC0415
+        payload["attachment_pack"] = resolve_pack(req.attachment_ids, tenant_id=tenant_id, sid_fingerprint=rec.sid_fingerprint)
     try:
         run_id = forge_runs.new_run(tenant_id=tenant_id, kind=kind, phases=_phases(kind),
                                     sid_fingerprint=rec.sid_fingerprint, resume=payload)
