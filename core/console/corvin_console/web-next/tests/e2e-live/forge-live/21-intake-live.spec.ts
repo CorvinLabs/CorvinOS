@@ -30,8 +30,10 @@ test('forge a tool from an attached, redacted table and prove the raw addresses 
   expect(r.status()).toBe(202);
   const runId = (await r.json()).run_id as string;
   const run = await until(async () => {
-    const j = await (await get(s, `/forge-creator/status/${runId}`)).json();
-    return ['success', 'failed'].includes(j.status) ? j : false;
+    try {
+      const j = await (await get(s, `/forge-creator/status/${runId}`)).json();
+      return ['success', 'failed'].includes(j.status) ? j : false;
+    } catch { return false; } // a reset socket under load is not a verdict on the run
   }, 'tool run to finish', 25 * 60_000, 3_000);
   expect(run.status, `tool run failed: ${run.error ?? ''}`).toBe('success');
   expect(run.tool?.name, 'the tool keeps the requested e2e_test_ name').toBe(NAME);
