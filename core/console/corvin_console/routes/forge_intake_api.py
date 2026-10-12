@@ -10,8 +10,8 @@ is refused rather than trusted. The report carries closed codes and counts, neve
 """
 from __future__ import annotations
 
-import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -32,6 +32,8 @@ from .license_gates import require_forge_capability
 _REPO = Path(__file__).resolve().parents[4]
 if str(_REPO) not in sys.path:
     sys.path.append(str(_REPO))
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/forge-intake", tags=["forge-intake"])
 
@@ -74,6 +76,8 @@ def _gate(tenant_id: str, sid_fingerprint: str):
         try:
             forge_runs.check_spawn_gates(text, tenant_id=tenant_id, sid_fingerprint=sid_fingerprint, kind="intake")
         except forge_runs.GenerationRefused as refused:
+            # The gate's own message (a policy sentence, no data) goes to the server log; the API shows a closed code only.
+            logger.warning("forge intake: gate refused a projection: %s", str(refused)[:300])
             return str(refused) or "refused"
         return None
     return gate
