@@ -49,7 +49,7 @@ test('a file with a secret is refused, blocks Send until removed, and Enter send
   await expect(page.getByTestId('tool-submit')).toBeEnabled();
 });
 
-test('a document is attached to the Skill Forge: personal data in it is hidden, a secret refuses it, the Layer Forge has no attach button', async ({ context }) => {
+test('a document is attached to the Skill Forge: personal data in it is hidden, a secret refuses it, the Layer Forge and Plugin Forge take attachments too', async ({ context }) => {
   const page = await uiLogin(context);
   const sent: any[] = [];
   await page.route('**/skill-creator/generate', (r) => {
@@ -70,7 +70,7 @@ test('a document is attached to the Skill Forge: personal data in it is hidden, 
   await expect(page.getByTestId('attachment-chip')).toHaveAttribute('data-verdict', 'refused', { timeout: 30_000 });
   await expect(page.getByTestId('skill-request-attach-note')).toBeVisible();
   await openGenerator(page, 'layer');
-  await expect(page.getByTestId('layer-intent-input-attach')).toHaveCount(0);
+  await expect(page.getByTestId('layer-intent-input-attach')).toBeVisible();
   await openGenerator(page, 'plugin');
   await expect(page.getByTestId('plugin-request-attach')).toBeVisible();
 });

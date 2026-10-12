@@ -91,6 +91,8 @@ class PlanBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     layer_id: str
     intent: str
+    #: ADR-2254: ids returned by POST /forge-intake/attachments; the PLAN sees only their redacted projection.
+    attachment_ids: list[str] = []
 
 
 class TransitionBody(BaseModel):
@@ -151,6 +153,9 @@ def plan_definition(
         {status: 'FAILED', error: '...', phase: 'plan'}
     """
     layer_id, intent = body_in.layer_id, body_in.intent
+    if body_in.attachment_ids:  # re-analysed from the stored bytes now; any problem fails the whole request
+        from .forge_intake_api import pack_prompt_block, resolve_pack  # noqa: PLC0415
+        intent += pack_prompt_block(resolve_pack(body_in.attachment_ids, tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint))
     run, observe = _start_run(rec, "plan", _PLAN_PHASES)
     if run is not None:
         run.progress("plan", 20, "Asking the engine for a manifest")

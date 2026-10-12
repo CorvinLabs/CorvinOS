@@ -116,8 +116,10 @@ def test_every_generator_path_rejects_an_unknown_field_with_422_and_starts_nothi
         # the skill and layer paths do not consume attachments: the id is an unknown field there, not silently dropped
         assert client.post("/v1/console/skill-creator/generate",
                            json={"user_request": "a skill that validates json", **junk}).status_code == 422
+        # the layer PLAN takes attachment ids now (slice 5); an unknown field is still refused, and a foreign id is a 404
         assert client.post("/v1/console/layer-forge/plan",
-                           json={"layer_id": "L34", "intent": "guard the boundary", **junk}).status_code == 422
+                           json={"layer_id": "L34", "intent": "guard the boundary", "attachment_ids": ["att-0123456789abcdef"]}
+                           ).status_code == 404
 
 
 def test_uploads_age_out_unused_after_24h_and_used_after_14d_and_foreign_names_are_left_alone(tmp_path):
@@ -141,3 +143,17 @@ def test_uploads_age_out_unused_after_24h_and_used_after_14d_and_foreign_names_a
         os.utime(root / b, (t, t))
         api._prune("_default")
         assert not (root / b).exists()
+
+
+def test_the_layer_plan_receives_only_the_redacted_projection_of_an_attachment(tmp_path, monkeypatch):
+    from core.orchestration.layer_forge import llm_client
+    engine = ScriptedEngine()
+    monkeypatch.setattr(llm_client, "get_client", lambda **kw: engine)
+    with console(tmp_path, engine) as client:
+        rep = _up(client, "policy.md", "Boundary rule: only the build may write to dist. Owner: lena.k@example.org\n", "text/markdown").json()
+        assert rep["verdict"] == "admitted_redacted"
+        r = client.post("/v1/console/layer-forge/plan", json={"layer_id": "L34", "intent": "enforce the attached boundary rule",
+                                                              "attachment_ids": [rep["item_id"]]})
+        assert r.status_code < 600 and engine.prompts, "the PLAN reached the engine"
+        prompts = "\n".join(engine.prompts)
+        assert "Boundary rule" in prompts and "lena.k@example.org" not in prompts

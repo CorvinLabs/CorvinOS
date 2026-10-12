@@ -57,6 +57,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, ApiError } from "@/lib/api/client";
 import ForgeComposer from "@/components/forge/ForgeComposer";
+import { useForgeAttachments } from "@/hooks/use-forge-attachments";
 import RunFeed from "@/components/forge/RunFeed";
 import { latestRun } from "@/lib/api/forge-runs";
 import { useAuth } from "@/lib/auth";
@@ -144,6 +145,7 @@ interface CreateResponse {
  *  where in the app this panel is rendered. */
 export function ForgeLayerPanel({ onCreated }: { onCreated?: () => void }) {
   const { session } = useAuth();
+  const attach = useForgeAttachments(session?.csrf_token ?? "");
   const qc = useQueryClient();
   const [layerId, setLayerId] = useState("");
   const [intent, setIntent] = useState("");
@@ -156,7 +158,7 @@ export function ForgeLayerPanel({ onCreated }: { onCreated?: () => void }) {
     mutationFn: () =>
       api<PlanResponse>(`${BASE}/plan`, {
         method: "POST",
-        body: { layer_id: layerId.trim(), intent: intent.trim() },
+        body: { layer_id: layerId.trim(), intent: intent.trim(), ...(attach.ids.length ? { attachment_ids: attach.ids } : {}) },
         csrf: session?.csrf_token ?? "",
       }),
     onSuccess: (data) => {
@@ -257,6 +259,7 @@ export function ForgeLayerPanel({ onCreated }: { onCreated?: () => void }) {
           submitDisabled={!canPlan}
           csrf={session?.csrf_token ?? ""}
           onError={setInputError}
+          attachments={attach.controller}
           textareaTestId="layer-intent-input"
           submitTestId="plan-layer-button"
           textareaId="layer-intent"
