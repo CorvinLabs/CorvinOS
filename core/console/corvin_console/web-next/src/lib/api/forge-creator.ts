@@ -3,7 +3,7 @@
  * as Skill Forge's /skill-creator: POST accepts a run, the panel polls its
  * tenant-bound status until success or failed.
  */
-import { api } from "./client";
+import { api, BASE } from "./client";
 
 export type ForgeKind = "tool" | "plugin";
 
@@ -94,6 +94,7 @@ export function startForgeGeneration(
   userRequest: string,
   csrf: string,
   panelRequest = "",
+  attachmentIds: string[] = [],
 ): Promise<{ status: string; run_id: string; kind: ForgeKind; message: string }> {
   return api(`/forge-creator/${kind}/generate`, {
     method: "POST",
@@ -101,6 +102,7 @@ export function startForgeGeneration(
     body: {
       user_request: userRequest,
       ...(kind === "plugin" && panelRequest.trim() ? { panel_request: panelRequest.trim() } : {}),
+      ...(kind === "tool" && attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
     },
   });
 }
@@ -157,4 +159,48 @@ export function previewDocument(html: string): string {
   const doctype = /^\s*<!doctype[^>]*>/i.exec(html);
   if (doctype) return doctype[0] + prefix + html.slice(doctype[0].length);
   return prefix + html;
+}
+
+/** What the intake service reports about one stored upload: closed codes and counts, never a file name or a value. */
+export interface IntakeReport {
+  item_id: string;
+  verdict: "admitted" | "admitted_redacted" | "refused";
+  reason_code: string;
+  pii_kinds: Record<string, number>;
+  redactions: Record<string, number>;
+  columns: number;
+  rows: number | null;
+}
+
+const REFUSAL_TEXT: Record<string, string> = {
+  contains_secret: "contains a secret",
+  unsupported_type: "type not supported",
+  archive_not_supported: "archives are not supported",
+  too_large: "too large",
+  format_mismatch: "content does not match its type",
+  classification_refused: "refused by the data policy",
+};
+
+export function intakeNote(r: IntakeReport): string {
+  if (r.verdict === "refused") return REFUSAL_TEXT[r.reason_code] ?? "could not be analysed";
+  const kinds = Object.keys(r.pii_kinds);
+  return kinds.length ? `${kinds.join(", ")} hidden` : "";
+}
+
+export async function uploadForgeAttachment(file: File, csrf: string): Promise<IntakeReport> {
+  const body = new FormData();
+  body.append("file", file);
+  const res = await fetch(`${BASE}/forge-intake/attachments`, {
+    method: "POST", credentials: "include", headers: { "X-CSRF-Token": csrf }, body,
+  });
+  if (!res.ok) {
+    let detail = `Upload failed (${res.status})`;
+    try { detail = ((await res.json()) as { detail?: string }).detail ?? detail; } catch { /* keep */ }
+    throw new Error(detail);
+  }
+  return (await res.json()) as IntakeReport;
+}
+
+export function removeForgeAttachment(id: string, csrf: string): Promise<{ status: string }> {
+  return api(`/forge-intake/attachments/${encodeURIComponent(id)}`, { method: "DELETE", csrf });
 }

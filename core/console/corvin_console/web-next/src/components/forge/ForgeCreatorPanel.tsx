@@ -16,7 +16,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle, Cpu, Hammer, Package, XCircle } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import ForgeComposer, { FORGE_REQUEST_MIN } from "@/components/forge/ForgeComposer";
+import ForgeComposer, { FORGE_REQUEST_MIN, type ComposerAttachment } from "@/components/forge/ForgeComposer";
 import RunFeed from "@/components/forge/RunFeed";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -25,6 +25,9 @@ import { isRunGone, usePersistedRunId } from "@/lib/forge-run";
 import {
   getForgeRunStatus,
   startForgeGeneration,
+  uploadForgeAttachment,
+  removeForgeAttachment,
+  intakeNote,
   type ForgeKind,
   type ForgeRunStatus,
 } from "@/lib/api/forge-creator";
@@ -90,6 +93,9 @@ export default function ForgeCreatorPanel({
   const [panelRequest, setPanelRequest] = useState("");
   const [runId, setRunId] = usePersistedRunId(runKey(kind));
   const [error, setError] = useState<string | null>(null);
+  const [files, setFiles] = useState<ComposerAttachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
   const copy = COPY[kind];
 
   const run = useQuery<ForgeRunStatus>({
@@ -125,9 +131,11 @@ export default function ForgeCreatorPanel({
   }, [run.data?.status, qc, onCreated]);
 
   const start = useMutation({
-    mutationFn: () => startForgeGeneration(kind, request.trim(), session?.csrf_token ?? "", panelRequest),
+    mutationFn: () => startForgeGeneration(kind, request.trim(), session?.csrf_token ?? "", panelRequest,
+      files.filter((f) => f.verdict !== "refused").map((f) => f.id)),
     onSuccess: (data) => {
       setRunId(data.run_id);
+      setFiles([]);
       setError(null);
     },
     onError: (e: Error) => setError(e.message),
@@ -167,6 +175,30 @@ export default function ForgeCreatorPanel({
             placeholder={copy.placeholder}
             submitLabel={copy.cta}
             busyLabel="Generating…"
+            attachments={kind === "tool" ? {
+              items: files,
+              maxItems: 5,
+              uploading,
+              error: attachError,
+              addFiles: async (list: File[]) => {
+                setUploading(true);
+                setAttachError(null);
+                try {
+                  for (const f of list) {
+                    const r = await uploadForgeAttachment(f, session?.csrf_token ?? "");
+                    setFiles((cur) => [...cur, { id: r.item_id, name: f.name, size: f.size, verdict: r.verdict, note: intakeNote(r) }]);
+                  }
+                } catch (e) {
+                  setAttachError((e as Error).message);
+                } finally {
+                  setUploading(false);
+                }
+              },
+              remove: (id: string) => {
+                setFiles((cur) => cur.filter((f) => f.id !== id));
+                void removeForgeAttachment(id, session?.csrf_token ?? "").catch(() => undefined);
+              },
+            } : undefined}
             extras={kind === "plugin" ? (
               <div className="space-y-2">
                 <Label htmlFor="plugin-panel-request" className="text-sm font-medium">
