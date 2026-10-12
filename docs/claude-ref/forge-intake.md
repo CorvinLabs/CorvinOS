@@ -1,6 +1,6 @@
 # Forge intake (ADR-2254, CONCEPT-0106)
 
-One fail-closed analysis stage for everything attached to a Forge. Slice 1: tabular files (csv, tsv, json, jsonl). Slice 2: documents (md, txt, docx, pptx, xlsx, pdf). Attachments reach the **Tool, Plugin and Skill Forge**; the Layer Forge takes none yet.
+One fail-closed analysis stage for everything attached to a Forge. Slice 1: tabular files (csv, tsv, json, jsonl). Slice 2: documents (md, txt, docx, pptx, xlsx, pdf). Attachments reach the **Tool, Plugin, Skill and Layer Forge** (the Layer PLAN: `attachment_ids` on `POST /layer-forge/plan`).
 
 - **Code:** `core/forge_intake/intake.py` (stages), `core/console/corvin_console/routes/forge_intake_api.py` (routes), `attachment_ids` on `POST /forge-creator/tool/generate`.
 - **Stages:** admit (no symlink, inside the upload area, size, archive by content) → sniff (Layer 24 plus an independent content check) → secret scan over every byte → projection (Layer 24 snapshot, PII detection, redaction under the operator's data policy) → the pre-spawn gate on the projection the engine will read.
@@ -10,4 +10,4 @@ One fail-closed analysis stage for everything attached to a Forge. Slice 1: tabu
 - **Audit:** `forge_intake.item_admitted | item_redacted | item_refused` - closed codes, counts and a hash prefix; never a file name or a value (`console_audit.forge_intake_item`).
 - **Tests:** `tests/forge_intake/`, `core/console/tests/test_forge_intake_route_e2e.py`, `test_forge_intake_audit_e2e.py`, live spec `19-intake.spec.ts`.
 - **Documents (slice 2, `core/forge_intake/documents.py`):** no extractor library is installed on a fresh host (checked 2026-10-12: no pypdf, python-docx, python-pptx, openpyxl), so docx/pptx/xlsx are read as zip+XML with hard caps (400 entries, 8 MiB per part, 40 MiB total, no DTD/entity), md/txt are read directly, and pdf needs the `pdftotext` binary (without it: `extractor_unavailable`, a clear refusal). The secret scan covers ALL extracted text (up to 2 MiB); only the first 16 KiB, with long unbroken runs cut to 256 characters (the PII regexes are not linear on a megabyte-long word) and PII replaced by `<redacted:class>`, can reach a generator. A skill run keeps its redacted pack in the resume payload, so a resumed run builds the same engine request.
-- **Not built yet:** connections, URLs, existing artifacts, KB documents; Layer attachments; images.
+- **Not built yet:** connections, URLs, existing artifacts, KB documents; images; per-forge enrichment with provenance tags.
