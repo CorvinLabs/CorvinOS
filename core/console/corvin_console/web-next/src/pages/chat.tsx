@@ -37,8 +37,7 @@ import { AudioPlayer } from "@/components/AudioPlayer";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
-import { ComposerBase } from "@/components/ui/composer-base";
+import { ComposerBase, type ComposerBaseHandle } from "@/components/ui/composer-base";
 import { CommandPalette, applyCommandInsertion, useSlashCommandPalette } from "@/components/chat/SlashCommandPalette";
 import {
   createChatSession,
@@ -103,7 +102,6 @@ import { AttachmentChip } from "@/components/chat/AttachmentChip";
 import { RecordingOverlay } from "@/components/chat/RecordingOverlay";
 import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
 import { useFileDrop, supportsDirectoryDrop, MAX_DROPPED_FILES } from "@/hooks/use-file-drop";
-import { useAutosizeTextarea } from "@/hooks/use-autosize-textarea";
 import { DropOverlay } from "@/components/chat/DropOverlay";
 import { PanelRight } from "lucide-react";
 
@@ -2244,7 +2242,7 @@ const ChatComposerField = React.memo(
     const [value, setValueState] = React.useState("");
     // Always current, also between a handle write and the next commit.
     const valueRef = React.useRef("");
-    const composerRef = React.useRef<any>(null); // Ref to ComposerBase to access textarea (UNIFIED_COMPOSER_IMPLEMENTATION)
+    const composerRef = React.useRef<ComposerBaseHandle>(null); // Ref to ComposerBase to access textarea (UNIFIED_COMPOSER_IMPLEMENTATION)
     const slashPalette = useSlashCommandPalette(value);
 
     const setValue = React.useCallback(
