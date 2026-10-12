@@ -4,8 +4,10 @@ Playwright suite that drives the **real console** through all four Forge generat
 user does right after installing CorvinOS, and keeps the artifacts it forges.
 Config: `../../../playwright.forge-live.config.ts` · Helpers: `live.ts`.
 
-Last full run (2026-10-11, live console :8765 + isolated empty install on :8798): **53 passed**
-(10: 36 · 20: 9 · 30: 8). Real-engine runs use the Claude Code CLI (subscription), no API key.
+Suite size (2026-10-12): **81 tests** — 10: 36 · 15: 22 · 16: 5 · 17: 1 · 20: 9 · 30: 8. Last measured results:
+10, 15, 16, 17, 20, 30 each green on their last run against the live console :8765 and the isolated empty install on :8798
+(15 and 16 together with 10: 63 passed; the real-engine specs 16-refine and 17 passed on their own runs, 11.8 min and 23 s).
+Real-engine runs use the Claude Code CLI (subscription), no API key. Specs 15–17 belong to the console composer / run feed work.
 
 ## 1. The e2e_test_* artifacts (kept on purpose)
 
@@ -15,6 +17,10 @@ Last full run (2026-10-11, live console :8765 + isolated empty install on :8798)
 | Skill | `assistant.e2e_test_skill` (depends on the tool above) | Generator → Skill panel | `run-c1ca8aefa2fc` | registered, bootstrap-graded (`injectable: true`), listed in the panel |
 | Plugin | `community.e2e-test-plugin` (dir `community_e2e_test_plugin`) | Generator → Plugin panel (+ panel request) | `run-cce81ed75154` | staged with provenance, `installed:false`, `signed:false`, `origin_on_install: community`, code contains `count_words` |
 | Layer | `e2e_test_layer@1.0.0` | Generator → Layer panel (PLAN → preview → Create) | — | quality gate `tests/layer_forge/test_schema.py` PASS (30 passed), enforcement PASS, status Accepted, exported + imported on a fresh install |
+| Layer | `e2e_test_layer_runs@1.0.0` | Layer panel by keyboard (Enter → PLAN, Create) — spec 17 | plan `run-8d60937a5233`, create `run-2f3fd79057db` | each operation is its own run with its phases; the real quality gate and the review verdict are events; live progress was visible while PLAN ran |
+| Plugin | `community.e2e-test-spike-plugin` | measurement run for the event log (T-0146) | — | staged; 36 events / 9 276 B |
+| Skill | `assistant.e2e_test_spike_skill` | measurement run (T-0146), 429 s | — | registered; 29 events / 7 963 B |
+| Tool | *(none)* `assistant.e2e_test_spike_tool` | measurement run | `run-3ea7323b1a9d` | **not registered**: the security reviewer confirmed a finding — a genuine refusal, kept as the failed-run example in spec 16 |
 
 Idempotent: an existing artifact is reused; `FORGE_LIVE_REGEN=1` deletes and re-forges.
 **Orphan, not an e2e_test_ artifact:** skill `assistant.data_change_review` came from the first run, before
@@ -60,6 +66,22 @@ npx playwright test -c playwright.forge-live.config.ts 30     # empty-install de
 | layer: registry + promotion | status accepted/deployed |
 | all four side by side | tool, skill, layer, plugin exist together |
 
+### 15-composer.spec.ts (22) — the shared composer, no engine
+Per generator (skill, tool, plugin): Enter sends a valid request once with the exact text; Shift+Enter inserts a newline and sends
+nothing; Enter on a too-short request shows the inline refusal; Enter on blank input sends nothing; the counter follows the text and
+an over-long request cannot be sent; hold-Space dictates (stubbed speech recognition) without sending and a tap types a space.
+Plus: switching the four sub-tabs never accumulates Space listeners (with a positive control that the count is > 0), and the layer
+composer (Enter runs PLAN only, never creates; no id sends nothing; dictation).
+
+### 16-run-feed.spec.ts (5) — the Production feed
+One REAL test against a real run's real event log, a live run that fills in and stops saying "live", a reload that re-attaches, a run
+with no log, a capped log with findings grouped by dimension and an error line; and the **REAL refine**: the e2e_test_skill is refined
+from the UI by keyboard (11.8 min) and the feed shows the diff `previous version → iteration` with an added line.
+
+### 17-layer-runs.spec.ts (1) — Layer Forge operations are runs, real engine
+A keyboard PLAN shows the feed while the request is going, Create runs the real gate, plan and create are two runs with their phases,
+the gate and review verdicts are events, the layer ends accepted.
+
 ### 30-fresh-install.spec.ts (8) — empty install B
 | Test | Result |
 |---|---|
@@ -86,6 +108,11 @@ npx playwright test -c playwright.forge-live.config.ts 30     # empty-install de
    misspelled is not recorded). The PLAN prompt named the constraints but never the exact field names;
    it now states the exact shapes with an example, and the next real PLAN created `e2e_test_layer` cleanly
    (one run — not a proof that the model never drifts again).
+5. **The synchronous skill path left an untruthful record** (`async: false`: "success, 5 %, Initializing…, engine unknown", or
+   "failed" pinned to the last phase with no error and no run id) — now the same work function as the async path.
+6. **Two latent run-store defects** found by the adversarial reviews of the run ADR: a second live host re-spawned or failed a run another
+   host still owned, and `get_run` resumed a run before checking the caller may see it. Both fixed with route-level tests.
+7. **A failed run showed no tests and no findings** in its log; they are now emitted from the failure result too.
 4. Layer manifest `id` had no length cap (ENAMETOOLONG → 500); the Skill panel cleared the request after a
    failed run (minutes of work lost). Both fixed earlier in this effort (see git history).
 
@@ -99,7 +126,9 @@ npx playwright test -c playwright.forge-live.config.ts 30     # empty-install de
    `plugin.py`, panel re-implements the logic in JS, tokenizer keeps apostrophes). The suite asserts the
    requested function exists, not that the review is clean.
 4. **Skill review** also scores `quality: 0` with confirmed findings; the skill is still injectable.
-5. Names cannot be forced: the skill/layer names are honoured only because the request states them exactly;
+5. **Tools have no "previous version" and cannot be refined**: the tool contract refuses a second tool of an existing name, so the diff
+   "against the previous version" exists only for a skill refine.
+6. Names cannot be forced: the skill/layer names are honoured only because the request states them exactly;
    the plugin id is derived from the display name (`community.<slug>`, `_` becomes `-`).
 6. A skill forge run takes 15+ minutes (5 LDD iterations + 3-dimension review); the suite allows 30.
 7. Skipped by design: Windows/macOS, multi-tenant isolation (covered by `tests/e2e/forge-system`), concurrency
