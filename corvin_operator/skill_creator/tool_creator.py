@@ -89,6 +89,8 @@ _PLAN_PROMPT = """Design a small, single-purpose tool for this request:
 
 {contract}
 
+If the request names the tool (e.g. "a tool named assistant.xyz"), use exactly that name; otherwise choose one.
+
 Reply with ONE JSON object and nothing else:
 {{"name": "assistant.<snake_case_name>", "description": "<one sentence>",
   "input_schema": {{...}}, "impl": "<full python source>", "test_cases": [...]}}"""

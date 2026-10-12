@@ -157,3 +157,4 @@ the Tool generator; an unreachable API says "not available on this build" and a 
 Related: `tests/e2e/forge-system/` (isolated, seeded suite), `docs/claude-ref/layer-forge.md`.
 
 - `19-intake.spec.ts` (3 tests): Tool Forge attachments - redacted table admitted and its id sent, secret file refused and blocks Send, no attach button on Skill/Plugin. Measured: 3 passed (27 s). Names use `e2e_test_`.
+- `21-intake-live.spec.ts` (1 test, real engine, ~2.5 min): table with an e-mail column attached to the Tool Forge -> `assistant.e2e_test_intake_tool` registered, 4/4 sandbox tests, the engine wrote its cases with the `<email>` placeholder, no raw address in the run record or its events. Reused unless FORGE_LIVE_REGEN=1 (a regen run needs the old tool removed first: the name must be unique).
