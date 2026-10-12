@@ -21,6 +21,11 @@ import { useVoiceInput } from "@/hooks/use-voice-input";
 import { useAutosizeTextarea } from "@/hooks/use-autosize-textarea";
 import { cn } from "@/lib/utils";
 
+export interface ComposerBaseHandle {
+  /** Get the underlying textarea element (for CommandPalette selection, etc.). */
+  getTextarea(): HTMLTextAreaElement | null;
+}
+
 export interface ComposerBaseProps {
   /** Current input value. */
   value: string;
@@ -127,7 +132,7 @@ function useLongPress(options: {
   return { handleMouseDown, handleMouseUp, handleTouchStart, handleTouchEnd };
 }
 
-export const ComposerBase = React.forwardRef<HTMLDivElement, ComposerBaseProps>(
+export const ComposerBase = React.forwardRef<ComposerBaseHandle, ComposerBaseProps>(
   function ComposerBase(
     {
       value,
@@ -155,6 +160,14 @@ export const ComposerBase = React.forwardRef<HTMLDivElement, ComposerBaseProps>(
     ref,
   ) {
     const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+
+    React.useImperativeHandle(
+      ref,
+      () => ({
+        getTextarea: () => textareaRef.current,
+      }),
+      [],
+    );
     useAutosizeTextarea(textareaRef, value, maxHeight);
 
     const { recording, startRecording, stopRecording } = useVoiceInput({
@@ -223,7 +236,7 @@ export const ComposerBase = React.forwardRef<HTMLDivElement, ComposerBaseProps>(
       );
 
     return (
-      <div ref={ref}>
+      <div>
         {beforeTextarea}
         <div
           className={cn(

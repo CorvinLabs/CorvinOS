@@ -40,6 +40,8 @@ const { subscribeEventsMock, capturedEventCallbacks } = vi.hoisted(() => {
 vi.mock('@/lib/chat-registry', () => ({
   ensureConnected: vi.fn(),
   loadHistory: vi.fn(),
+  registerHistoryReader: vi.fn(),
+  refreshHistory: vi.fn(),
   sendMessage: vi.fn(() => null),
   cancelTurn: vi.fn(),
   consumePendingTitle: vi.fn(),

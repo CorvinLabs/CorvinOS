@@ -38,6 +38,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { ComposerBase } from "@/components/ui/composer-base";
 import { CommandPalette, applyCommandInsertion, useSlashCommandPalette } from "@/components/chat/SlashCommandPalette";
 import {
   createChatSession,
@@ -2220,6 +2221,11 @@ function detectEntityHint(text: string): string | null {
   return null;
 }
 
+/**
+ * ChatComposerField — shared unified composer using ComposerBase (ADR-2252-WIRED).
+ * Features: voice input (Space-hold >=400ms, mic button long-press), touch targets 44px,
+ * Enter/Shift+Enter, IME-aware, pill-card layout, CommandPalette, entity hints.
+ */
 const ChatComposerField = React.memo(
   React.forwardRef<
     ComposerFieldHandle,
@@ -2229,17 +2235,17 @@ const ChatComposerField = React.memo(
       onSubmit: (text: string) => void;
       onHasTextChange: (hasText: boolean) => void;
       onEntityHintChange: (hint: string | null) => void;
+      csrf?: string; // Required for voice input in ComposerBase
     }
   >(function ChatComposerField(
-    { placeholder, disabled, onSubmit, onHasTextChange, onEntityHintChange },
+    { placeholder, disabled, onSubmit, onHasTextChange, onEntityHintChange, csrf = "" },
     ref,
   ) {
     const [value, setValueState] = React.useState("");
     // Always current, also between a handle write and the next commit.
     const valueRef = React.useRef("");
-    const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+    const composerRef = React.useRef<any>(null); // Ref to ComposerBase to access textarea (UNIFIED_COMPOSER_IMPLEMENTATION)
     const slashPalette = useSlashCommandPalette(value);
-    useAutosizeTextarea(textareaRef, value);
 
     const setValue = React.useCallback(
       (next: string | ((prev: string) => string)) => {
@@ -2271,39 +2277,42 @@ const ChatComposerField = React.memo(
     const shownHint = slashPalette.open ? null : entityHint;
     React.useEffect(() => { onEntityHintChange(shownHint); }, [shownHint, onEntityHintChange]);
 
+    // Wrapping onSubmit to also close the palette
+    const handleComposerSubmit = React.useCallback(() => {
+      slashPalette.close();
+      onSubmit(valueRef.current);
+    }, [slashPalette, onSubmit]);
+
     return (
       <div className="relative min-w-0 flex-1">
-        <CommandPalette
-          matches={slashPalette.matches}
-          selected={slashPalette.selected}
-          onSelect={(match) => {
-            applyCommandInsertion(match, setValue, textareaRef);
-            slashPalette.close();
-          }}
-        />
-        <Textarea
-          ref={textareaRef}
+        <ComposerBase
+          ref={composerRef}
           value={value}
-          onChange={(e) => {
-            const v = e.target.value;
+          onChange={(v) => {
             valueRef.current = v;
             setValueState(v);
             slashPalette.onChange(v);
           }}
-          onKeyDown={(e) => {
-            if (slashPalette.onKeyDown(e, (match) => applyCommandInsertion(match, setValue, textareaRef))) return;
-            if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
-              // IME candidate confirmation (CJK) is not a send.
-              if (e.nativeEvent.isComposing) return;
-              e.preventDefault();
-              slashPalette.close();
-              onSubmit(valueRef.current);
-            }
-          }}
-          placeholder={placeholder}
+          onSubmit={handleComposerSubmit}
           disabled={disabled}
-          className="min-h-[2rem] resize-none border-0 bg-transparent px-1 py-1 font-sans text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-          rows={1}
+          csrf={csrf}
+          placeholder={placeholder}
+          textareaId="chat-input"
+          textareaTestId="chat-composer-textarea"
+          micTestId="chat-composer-mic"
+          beforeTextarea={
+            <CommandPalette
+              matches={slashPalette.matches}
+              selected={slashPalette.selected}
+              onSelect={(match) => {
+                const textareaEl = composerRef.current?.getTextarea();
+                if (textareaEl) {
+                  applyCommandInsertion(match, setValue, { current: textareaEl });
+                }
+                slashPalette.close();
+              }}
+            />
+          }
         />
       </div>
     );
