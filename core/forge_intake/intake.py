@@ -23,6 +23,8 @@ ALLOWED_EXTENSIONS = {".csv": "csv", ".tsv": "tsv", ".json": "json", ".jsonl": "
 _SCAN_WINDOW = 1 << 20
 _SCAN_OVERLAP = 4096
 
+DOCUMENT_EXTENSIONS = {".md": "text", ".markdown": "text", ".txt": "text", ".docx": "docx", ".pptx": "pptx", ".xlsx": "xlsx", ".pdf": "pdf"}
+
 # Reason codes (closed vocabulary - the only text a refusal carries).
 R_NOT_FILE = "not_a_regular_file"
 R_OUTSIDE = "outside_upload_area"
@@ -143,9 +145,17 @@ def _analyze(path: Path, *, item_id: str, upload_root: Path, tenant_id: str,
     base = dict(ext=ext, size_bytes=size, sha256_prefix=sha.hexdigest()[:16])
     if size > MAX_ITEM_BYTES:
         return _refuse(item_id, R_TOO_BIG, **base)
-    # An archive is refused by its CONTENT, whatever its name says (a gzip renamed .csv is still a gzip).
+    doc_kind = DOCUMENT_EXTENSIONS.get(ext)
+    # An archive is refused by its CONTENT, whatever its name says (a gzip renamed .csv is still a gzip). The OOXML
+    # documents are zip containers by design: they are admitted to the document path, which checks their parts.
+    if doc_kind in ("docx", "pptx", "xlsx") and head[:2] == b"PK":
+        return _analyze_document(resolved, item_id=item_id, tenant_id=tenant_id, gate=gate, kind=doc_kind, base=base)
     if head[:2] in (b"PK", b"\x1f\x8b") or head[:3] == b"BZh" or head[:6] == b"\xfd7zXZ\x00" or head[:4] == b"7z\xbc\xaf":
         return _refuse(item_id, R_ARCHIVE, **base)
+    if doc_kind in ("text", "pdf"):
+        if doc_kind == "pdf" and head[:4] != b"%PDF":
+            return _refuse(item_id, R_MISMATCH, **base)
+        return _analyze_document(resolved, item_id=item_id, tenant_id=tenant_id, gate=gate, kind=doc_kind, base=base)
     expected = ALLOWED_EXTENSIONS.get(ext)
     if expected is None:
         return _refuse(item_id, R_ARCHIVE if ext in (".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".tar") else R_TYPE, **base)
@@ -195,6 +205,52 @@ def _analyze(path: Path, *, item_id: str, upload_root: Path, tenant_id: str,
         projection)
 
 
+def _analyze_document(path: Path, *, item_id: str, tenant_id: str, gate: Callable[[str], Optional[str]],
+                      kind: str, base: dict[str, Any]) -> AnalyzedItem:
+    """Documents: extract text (bounded) -> secret scan over ALL of it -> redact PII in the part a generator may see ->
+    gate on that projection. Same fail-closed rules as the tabular path."""
+    from . import documents as D  # noqa: PLC0415
+    try:
+        text = D.extract_text(path, kind)
+    except D.DocumentRefused as refused:
+        return _refuse(item_id, refused.code, **base)
+    if not text.strip():
+        return _refuse(item_id, R_UNREADABLE, **base)
+    if _secret_hits_text(text):
+        return _refuse(item_id, R_SECRET, **base)
+    from corvin_operator.bridges.shared.conversation_recall import redact_text  # noqa: PLC0415
+    shown = D.bound_runs(text)[: D.DOC_TEXT_MAX]
+    redacted, counts = redact_text(shown)
+    projection = {"item_id": item_id, "format": kind, "kind": "document", "chars_total": len(text),
+                  "truncated": len(text) > len(shown), "text": redacted}
+    refusal = gate(json.dumps(projection, ensure_ascii=False))
+    if refusal:
+        return _refuse(item_id, R_CLASSIFIED, **base)
+    base = {**base, "fmt": kind}
+    return AnalyzedItem(ItemReport(
+        item_id=item_id, verdict="admitted_redacted" if counts else "admitted", data_class="projection_cleared",
+        pii_kinds=dict(counts), redactions=({"redact": sum(counts.values())} if counts else {}), columns=0, rows=None, **base),
+        projection)
+
+
+def _secret_hits_text(text: str) -> set[str]:
+    from core.pii.jwt_scan import LinearJwtPattern
+    from core.pii.sensitive import detect_named_types
+    named = frozenset({"private_key_block", "aws_access_key", "aws_secret_key", "github_token", "github_pat",
+                       "slack_token", "google_api_key", "prefixed_secret_key"})
+    jwt = LinearJwtPattern(10, 10, 10, start_boundary=False, end_boundary=False)
+    hits: set[str] = set()
+    step = _SCAN_WINDOW - _SCAN_OVERLAP
+    for off in range(0, max(1, len(text)), step):
+        chunk = text[off: off + _SCAN_WINDOW]
+        hits.update(detect_named_types(chunk, named))
+        if jwt.search(chunk) is not None:
+            hits.add("jwt")
+        if off + _SCAN_WINDOW >= len(text):
+            break
+    return hits
+
+
 def _ensure_forge_path() -> None:
     """Layer 24 lives in ``corvin_operator/forge`` (importable as ``forge``); make sure that root is on the path."""
     root = str(Path(__file__).resolve().parents[2] / "corvin_operator" / "forge")
@@ -236,11 +292,26 @@ def build_pack(items: list[AnalyzedItem]) -> dict[str, Any]:
         if size(pack) <= PACK_MAX_BYTES:
             break
         for it in pack["items"]:
-            it[what] = [] if what == "sample" else {}
+            if what in it:
+                it[what] = [] if what == "sample" else {}
         pack["degraded"].append(what)
+    for _ in range(6):  # document text is the only thing left to shrink when a pack is all documents
+        if size(pack) <= PACK_MAX_BYTES:
+            break
+        shrunk = False
+        for it in pack["items"]:
+            if it.get("kind") == "document" and len(it["text"]) > 512:
+                it["text"] = it["text"][: len(it["text"]) // 2]
+                it["truncated"] = True
+                shrunk = True
+        if shrunk and "document_text" not in pack["degraded"]:
+            pack["degraded"].append("document_text")
+        if not shrunk:
+            break
     if size(pack) > PACK_MAX_BYTES:  # even the schema alone is too wide: cut columns, never silently
         keep = max(1, len(pack["items"]))
         for it in pack["items"]:
-            it["columns"] = it["columns"][: max(1, 60 // keep)]
+            if "columns" in it:
+                it["columns"] = it["columns"][: max(1, 60 // keep)]
         pack["degraded"].append("columns")
     return pack

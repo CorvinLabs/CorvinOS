@@ -299,6 +299,7 @@ export async function startSkillGeneration(
   userRequest: string,
   baseSkill: string | null | undefined,
   csrf: string,
+  attachmentIds: string[] = [],
 ): Promise<SkillGenerationAccepted> {
   // The route is CSRF-gated (require_csrf); without the token every run 403'd.
   return api<SkillGenerationAccepted>("/skill-creator/generate", {
@@ -308,6 +309,7 @@ export async function startSkillGeneration(
       user_request: userRequest,
       async: true,
       ...(baseSkill ? { base_skill: baseSkill } : {}),
+      ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
     },
     // A generation run takes minutes on the engine, but this call only
     // ACCEPTS the run and returns a run_id — the default timeout is fine.

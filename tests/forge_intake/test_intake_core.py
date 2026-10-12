@@ -115,7 +115,7 @@ def test_an_archive_is_refused_by_content_and_by_name(area, name, data):
     assert run(area, put(area, name, data)).report.reason_code == intake.R_ARCHIVE
 
 
-@pytest.mark.parametrize("name", ["notes.txt", "tool.exe", "doc.pdf", "noextension"])
+@pytest.mark.parametrize("name", ["tool.exe", "image.png", "noextension"])
 def test_an_unsupported_type_is_refused(area, name):
     assert run(area, put(area, name, "hello")).report.reason_code == intake.R_TYPE
 

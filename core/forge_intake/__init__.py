@@ -5,6 +5,6 @@ redaction), classify (the caller's gate on the projection the engine will actual
 plus, for an admitted item, the bounded projection. ``build_pack`` assembles the only thing a generator receives.
 """
 from .intake import (  # noqa: F401
-    ALLOWED_EXTENSIONS, MAX_ITEM_BYTES, MAX_ITEMS_PER_REQUEST, PACK_MAX_BYTES,
+    ALLOWED_EXTENSIONS, DOCUMENT_EXTENSIONS, MAX_ITEM_BYTES, MAX_ITEMS_PER_REQUEST, PACK_MAX_BYTES,
     AnalyzedItem, ItemReport, analyze_item, build_pack,
 )

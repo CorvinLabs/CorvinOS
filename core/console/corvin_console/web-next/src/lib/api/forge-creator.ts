@@ -102,7 +102,7 @@ export function startForgeGeneration(
     body: {
       user_request: userRequest,
       ...(kind === "plugin" && panelRequest.trim() ? { panel_request: panelRequest.trim() } : {}),
-      ...(kind === "tool" && attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
+      ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
     },
   });
 }

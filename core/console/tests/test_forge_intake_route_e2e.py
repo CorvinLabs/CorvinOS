@@ -64,12 +64,44 @@ def test_unknown_foreign_deleted_and_altered_attachments_fail_the_request(tmp_pa
         assert client.post(GEN, json=body([rep2["item_id"]])).status_code == 404
 
 
-def test_attachments_on_a_plugin_or_a_skill_request_are_422(tmp_path):
-    with console(tmp_path, ScriptedEngine()) as client:
-        rep = _up(client, "a.csv", CSV).json()
-        r = client.post("/v1/console/forge-creator/plugin/generate",
-                        json={"user_request": "a plugin with the attached file", "attachment_ids": [rep["item_id"]]})
-        assert r.status_code == 422
+def test_a_document_reaches_the_skill_and_plugin_forge_redacted_and_survives_a_skill_resume(tmp_path, monkeypatch):
+    from corvin_console import forge_runs
+    doc = "# Runbook\nPage anna.schmidt@example.org when the nightly job fails; see the checklist below.\n"
+    engine = ScriptedEngine()
+    with console(tmp_path, engine) as client:
+        rep = _up(client, "runbook.md", doc, "text/markdown").json()
+        assert rep["verdict"] == "admitted_redacted" and rep["fmt"] == "text" and "email" in rep["pii_kinds"]
+        spawned = []
+        monkeypatch.setattr(forge_runs, "spawn", lambda **kw: spawned.append(kw))
+        s = client.post("/v1/console/skill-creator/generate", json={"user_request": "a skill that follows the attached runbook",
+                                                                     "attachment_ids": [rep["item_id"]]})
+        assert s.status_code == 202, s.text
+        rec = json.loads((client.home / "tenants/_default/global/forge_runs" / f"{s.json()['run_id']}.json").read_text())
+        pack = rec["resume"]["attachment_pack"]
+        assert "anna.schmidt" not in json.dumps(pack) and "Runbook" in json.dumps(pack), "the resume payload carries the REDACTED pack"
+        # a resumed run builds its engine request from that stored pack
+        from corvin_console.routes import skill_creator_api as api
+        seen = []
+
+        class Stub:
+            engine_id = "stub"
+            client = None
+
+            def __init__(self, **kw): pass
+
+            async def create_skill(self, request, base=None):
+                seen.append(request)
+                raise RuntimeError("stop")
+        monkeypatch.setattr(api, "SkillCreatorOrchestrator", Stub)
+        resumed = forge_runs._resumers["skill"](s.json()["run_id"], rec)
+        try:
+            resumed["work"](lambda *a, **k: None)
+        except RuntimeError:
+            pass
+        assert seen and "Attached data" in seen[0] and "Runbook" in seen[0] and "anna.schmidt" not in seen[0]
+        p = client.post("/v1/console/forge-creator/plugin/generate",
+                        json={"user_request": "a plugin that follows the attached runbook", "attachment_ids": [rep["item_id"]]})
+        assert p.status_code == 202, p.text
 
 
 def test_every_generator_path_rejects_an_unknown_field_with_422_and_starts_nothing(tmp_path):

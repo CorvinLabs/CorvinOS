@@ -95,7 +95,7 @@ async def upload(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
     _lic: Annotated[session_auth.SessionRecord, Depends(require_forge_capability)],
 ) -> Dict[str, Any]:
-    from core.forge_intake import ALLOWED_EXTENSIONS, MAX_ITEM_BYTES  # noqa: PLC0415
+    from core.forge_intake import ALLOWED_EXTENSIONS, DOCUMENT_EXTENSIONS, MAX_ITEM_BYTES  # noqa: PLC0415
     tenant_id = rec.tenant_id
     _prune(tenant_id)
     ext = Path(file.filename or "").suffix.lower()
@@ -103,7 +103,7 @@ async def upload(
     d = _dir(tenant_id, att_id)
     d.mkdir(parents=True, mode=0o700)
     # An extension outside the allowlist is still stored under a neutral suffix so the analysis can REFUSE it with its code.
-    stored_ext = ext if ext in ALLOWED_EXTENSIONS or re.fullmatch(r"\.[a-z0-9]{1,6}", ext or "") else ".bin"
+    stored_ext = ext if ext in ALLOWED_EXTENSIONS or ext in DOCUMENT_EXTENSIONS or re.fullmatch(r"\.[a-z0-9]{1,6}", ext or "") else ".bin"
     target = d / f"data{stored_ext}"
     size = 0
     try:

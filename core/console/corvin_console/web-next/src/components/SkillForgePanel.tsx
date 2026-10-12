@@ -89,6 +89,7 @@ import {
 import { useAuth } from "@/lib/auth";
 import TemplateSkillForm from "@/components/forge/TemplateSkillForm";
 import ForgeComposer, { FORGE_REQUEST_MIN } from "@/components/forge/ForgeComposer";
+import { useForgeAttachments } from "@/hooks/use-forge-attachments";
 import RunFeed from "@/components/forge/RunFeed";
 
 /**
@@ -127,6 +128,7 @@ export const SkillForgePanel: React.FC = () => {
   const [runId, setRunId] = usePersistedRunId("skill-forge-run");
   const [refineTarget, setRefineTarget] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const attach = useForgeAttachments(session?.csrf_token ?? "");
   const [toast, setToast] = useState<Toast | null>(null);
   const [search, setSearch] = useState("");
   const [viewing, setViewing] = useState<string | null>(null);
@@ -194,9 +196,10 @@ export const SkillForgePanel: React.FC = () => {
   // ── Mutations ───────────────────────────────────────────────────────────
   const generate = useMutation({
     mutationFn: async ({ request, base }: { request: string; base: string | null }) =>
-      startSkillGeneration(request, base, session?.csrf_token ?? ""),
+      startSkillGeneration(request, base, session?.csrf_token ?? "", attach.ids),
     onSuccess: (data) => {
       setRunId(data.run_id);
+      attach.clear();
       setError(null);
     },
     onError: (e: Error) => {
@@ -381,6 +384,7 @@ export const SkillForgePanel: React.FC = () => {
             submitDisabled={isRunning || generate.isPending || !userRequest.trim() || quotaExhausted}
             csrf={session?.csrf_token ?? ""}
             onError={setError}
+            attachments={attach.controller}
             textareaTestId="skill-request"
             submitTestId="submit-generation"
             textareaId="skill-request"

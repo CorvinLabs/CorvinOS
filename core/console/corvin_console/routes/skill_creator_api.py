@@ -12,7 +12,7 @@ import logging
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Annotated, Dict, Any, Optional
+from typing import Annotated, Dict, Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -226,6 +226,8 @@ class SkillGenerationRequest(BaseModel):
         default=None, max_length=128,
         description="Name of an existing skill to refine",
     )
+    #: ADR-2254: ids returned by POST /forge-intake/attachments (documents and tables).
+    attachment_ids: List[str] = Field(default_factory=list, max_length=5)
 
 
 class ReviewFindingOut(BaseModel):
@@ -314,6 +316,10 @@ async def generate_skill(
             raise HTTPException(status_code=400, detail="Request must be at least 10 characters")
 
         base = _resolve_base_skill(rec.tenant_id, req.base_skill)
+        pack = None
+        if req.attachment_ids:  # re-analysed from the stored bytes now; any problem fails the whole request
+            from .forge_intake_api import resolve_pack  # noqa: PLC0415
+            pack = resolve_pack(req.attachment_ids, tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint)
 
         # A refine sends the base skill's body to the engine too — it is gated with the request.
         gate_text = user_request + ("\n\n" + base["body"] if base else "")
@@ -330,7 +336,7 @@ async def generate_skill(
             try:
                 run_id = _spawn_generation_task(
                     user_request, rec.tenant_id, base=base,
-                    sid_fingerprint=rec.sid_fingerprint
+                    sid_fingerprint=rec.sid_fingerprint, attachment_pack=pack,
                 )
             except forge_runs.GenerationBusy as busy:
                 raise HTTPException(status_code=429, detail=str(busy))
@@ -366,7 +372,7 @@ async def generate_skill(
         def progress(phase: str, pct: int, message: str) -> None:
             forge_runs.update_run(sync_run_id, phase=phase, progress=pct, message=message)
 
-        kwargs = _skill_spawn_kwargs(sync_run_id, rec.tenant_id, user_request, base)
+        kwargs = _skill_spawn_kwargs(sync_run_id, rec.tenant_id, user_request, base, pack)
         try:
             result = await asyncio.to_thread(kwargs["work"], progress)
         except BaseException as exc:
@@ -650,7 +656,8 @@ def _update_run(run_id: str, **fields: Any) -> None:
 
 def _spawn_generation_task(user_request: str, tenant_id: str,
                            base: Optional[Dict[str, str]] = None,
-                           sid_fingerprint: Optional[str] = None) -> str:
+                           sid_fingerprint: Optional[str] = None,
+                           attachment_pack: Optional[Dict[str, Any]] = None) -> str:
     """Spawn the generation worker thread through the shared run store; return its run_id.
 
     The orchestrator drives a `claude -p` subprocess per phase (Max
@@ -661,18 +668,19 @@ def _spawn_generation_task(user_request: str, tenant_id: str,
         tenant_id=tenant_id, kind="skill", phases=PHASES,
         sid_fingerprint=sid_fingerprint,
         base_skill=base["name"] if base else None,
-        resume={"user_request": user_request, "base": base},
+        resume={"user_request": user_request, "base": base, "attachment_pack": attachment_pack},
     )
     forge_runs.spawn(
         run_id=run_id, kind="skill", tenant_id=tenant_id,
         sid_fingerprint=sid_fingerprint,
-        **_skill_spawn_kwargs(run_id, tenant_id, user_request, base),
+        **_skill_spawn_kwargs(run_id, tenant_id, user_request, base, attachment_pack),
     )
     return run_id
 
 
 def _skill_spawn_kwargs(run_id: str, tenant_id: str, user_request: str,
-                        base: Optional[Dict[str, str]]) -> Dict[str, Any]:
+                        base: Optional[Dict[str, str]],
+                        attachment_pack: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The ``forge_runs.spawn`` arguments of a skill run — shared by the POST
     and by the resume of a run a console restart interrupted."""
     def work(progress: forge_runs.ProgressCb) -> Dict[str, Any]:
@@ -691,7 +699,11 @@ def _skill_spawn_kwargs(run_id: str, tenant_id: str, user_request: str,
         _update_run(run_id, engine=orchestrator.engine_id,
                     model=str(getattr(getattr(orchestrator, "client", None), "model", None) or "unknown"),
                     message=f"Generating via {orchestrator.engine_id}…")
-        artifact = asyncio.run(orchestrator.create_skill(user_request, base=base))
+        engine_request = user_request
+        if attachment_pack:  # the redacted projection, never the raw file (ADR-2254)
+            from .forge_intake_api import pack_prompt_block  # noqa: PLC0415
+            engine_request += pack_prompt_block(attachment_pack)
+        artifact = asyncio.run(orchestrator.create_skill(engine_request, base=base))
         _record_stats(artifact)
         return {
             "target_id": artifact.spec.name,
@@ -725,7 +737,8 @@ def _skill_spawn_kwargs(run_id: str, tenant_id: str, user_request: str,
 
 forge_runs.register_resumer(
     "skill", lambda run_id, rec: _skill_spawn_kwargs(
-        run_id, rec["tenant_id"], rec["resume"]["user_request"], rec["resume"].get("base")))
+        run_id, rec["tenant_id"], rec["resume"]["user_request"], rec["resume"].get("base"),
+        rec["resume"].get("attachment_pack")))
 
 
 def _operator_hint(exc: Exception) -> str:

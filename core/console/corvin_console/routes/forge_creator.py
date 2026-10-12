@@ -68,7 +68,7 @@ class GenerateRequest(BaseModel):
     user_request: str = Field(..., min_length=10, max_length=4000)
     #: Plugin only — what the plugin's console panel should show. Empty = no panel.
     panel_request: str = Field(default="", max_length=2000)
-    #: Tool only (ADR-2254, slice 1) - ids returned by POST /forge-intake/attachments.
+    #: ADR-2254 - ids returned by POST /forge-intake/attachments.
     attachment_ids: List[str] = Field(default_factory=list, max_length=5)
 
 
@@ -168,8 +168,6 @@ async def generate(
     panel_request = req.panel_request.strip()
     payload = {"request": request, "panel_request": panel_request}
     if req.attachment_ids:
-        if kind != "tool":
-            raise HTTPException(status_code=422, detail="Attachments are supported for tools only")
         from .forge_intake_api import resolve_pack  # noqa: PLC0415
         payload["attachment_pack"] = resolve_pack(req.attachment_ids, tenant_id=tenant_id, sid_fingerprint=rec.sid_fingerprint)
     try:
