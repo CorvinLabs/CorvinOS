@@ -152,6 +152,10 @@ EVENT_SEVERITY: dict[str, str] = {
     # ADR-2253 - one record when a forge run (skill/tool/plugin/layer) starts and one when it finishes.
     "forge_run.started":         "INFO",
     "forge_run.finished":        "INFO",
+    # ADR-2254 - one record per attachment the Forge intake analysed. item_enriched is NOT registered: nothing emits it yet.
+    "forge_intake.item_admitted": "INFO",
+    "forge_intake.item_redacted": "INFO",
+    "forge_intake.item_refused":  "WARNING",
     # registry lifecycle (past-tense canonical names, emitted by registry.py)
     "tool.created":              "INFO",
     "tool.deleted":              "INFO",
@@ -3180,6 +3184,19 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "routing.rollback_reset": frozenset({"tenant_id"}),
     # ADR-2253: closed enums, an opaque run id, a count and a flag. NEVER: the request, a file name, a message.
     "forge_run.started": frozenset({"tenant_id", "run_id", "run_kind"}),
+    # ADR-2254: closed enums, an opaque id, counts and a hash prefix. NEVER: a file name or any cell value.
+    "forge_intake.item_admitted": frozenset({
+        "tenant_id", "item_id", "run_id", "kind", "format", "data_class", "size_bytes", "sha256_prefix",
+        "pii_kinds_count", "columns", "reason_code",
+    }),
+    "forge_intake.item_redacted": frozenset({
+        "tenant_id", "item_id", "run_id", "kind", "format", "data_class", "size_bytes", "sha256_prefix",
+        "pii_kinds_count", "columns", "reason_code",
+    }),
+    "forge_intake.item_refused": frozenset({
+        "tenant_id", "item_id", "run_id", "kind", "format", "data_class", "size_bytes", "sha256_prefix",
+        "pii_kinds_count", "columns", "reason_code",
+    }),
     "forge_run.finished": frozenset({
         "tenant_id", "run_id", "run_kind", "status", "artifact_kind", "artifact_id", "event_count", "truncated",
     }),

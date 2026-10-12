@@ -426,6 +426,24 @@ def forge_run_finished(*, tenant_id: str, run_id: str, run_kind: str, status: st
                    "event_count": int(event_count), "truncated": bool(truncated)})
 
 
+def forge_intake_item(*, tenant_id: str, report: dict, run_id: str = "") -> None:
+    """ADR-2254: one record per analysed attachment. ``report`` is an ``ItemReport.to_dict()`` - closed codes, counts and a hash
+    prefix; it carries no file name and no cell value, and this function copies only the fields below."""
+    verdict = report.get("verdict")
+    event = {"admitted": "forge_intake.item_admitted", "admitted_redacted": "forge_intake.item_redacted"}.get(
+        verdict, "forge_intake.item_refused")
+    details = {
+        "tenant_id": tenant_id, "item_id": str(report.get("item_id", ""))[:40], "kind": "tabular",
+        "format": str(report.get("fmt", "")), "data_class": str(report.get("data_class", "")),
+        "size_bytes": int(report.get("size_bytes") or 0), "sha256_prefix": str(report.get("sha256_prefix", "")),
+        "pii_kinds_count": sum(int(v) for v in (report.get("pii_kinds") or {}).values()),
+        "columns": int(report.get("columns") or 0), "reason_code": str(report.get("reason_code", "")),
+    }
+    if run_id:
+        details["run_id"] = run_id
+    _emit(event, tenant_id=tenant_id, details=details, severity="WARNING" if event.endswith("refused") else None)
+
+
 def session_denied(
     *,
     reason: str,
