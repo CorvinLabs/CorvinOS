@@ -804,6 +804,11 @@ def public_view(run_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
             out[k] = record[k]
     out.setdefault("started_at", record.get("created_at"))
     out["live"] = record.get("status") == "running" and _fresh(record)
+    # Only a FAILED tool run that kept its validated draft can be retried (POST /forge-creator/tool/retry/{id}); the draft
+    # itself is never shown, only the fact that it exists.
+    resume = record.get("resume") if isinstance(record.get("resume"), dict) else {}
+    out["retryable"] = bool(record.get("kind") == "tool" and record.get("status") == "failed"
+                            and isinstance(resume.get("draft"), dict))
     return out
 
 

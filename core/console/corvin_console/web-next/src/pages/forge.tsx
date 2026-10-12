@@ -18,6 +18,7 @@ import AutonomousForgePanel from '@/components/forge/AutonomousForgePanel';
 import ForgeCreatorPanel from '@/components/forge/ForgeCreatorPanel';
 import { SkillForgePanel } from '@/components/SkillForgePanel';
 import ForgeBundlesPanel from '@/components/forge/ForgeBundlesPanel';
+import RunsTab from '@/components/forge/RunsTab';
 import {
   ForgeTool,
   ForgeSkill,
@@ -54,7 +55,7 @@ import {
  *  protocol matches; forging a layer is a single synchronous plan→create
  *  call, not a polled run, and needs none of the engine machinery the other
  *  three sub-tabs share — it only lives in the same tab group as them. */
-const FORGE_TABS = ['generator', 'autonomous-forge', 'tools', 'skills', 'os-skills', 'layers', 'graph', 'audit', 'bundles'] as const;
+const FORGE_TABS = ['generator', 'runs', 'autonomous-forge', 'tools', 'skills', 'os-skills', 'layers', 'graph', 'audit', 'bundles'] as const;
 type ForgeTab = (typeof FORGE_TABS)[number];
 
 const DEFAULT_TAB: ForgeTab = 'generator';
@@ -271,6 +272,7 @@ export default function ForgePage() {
               rehomed from /app/skill-forge-generator) are inside its
               sub-tab, unchanged. */}
           <TabsTrigger value="generator">Generator</TabsTrigger>
+          <TabsTrigger value="runs">Runs</TabsTrigger>
           <TabsTrigger value="autonomous-forge">Autonomous</TabsTrigger>
           <TabsTrigger value="tools">
             Tools
@@ -325,6 +327,10 @@ export default function ForgePage() {
               <ForgeLayerPanel onCreated={() => goToTab('layers')} />
             </TabsContent>
           </Tabs>
+        </TabsContent>
+
+        <TabsContent value="runs" className="flex-1 overflow-y-auto">
+          <RunsTab />
         </TabsContent>
 
         <TabsContent value="autonomous-forge" className="flex-1 overflow-y-auto">

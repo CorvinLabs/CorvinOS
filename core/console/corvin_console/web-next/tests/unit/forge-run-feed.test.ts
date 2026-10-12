@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunEvent } from "@/lib/api/forge-runs";
 import {
-  chooseDiff, classifyDiffLines, clock, droppedCount, filesWritten, groupByPhase, iterationRows, mergeEvents, summarizeFindings, testSummary,
+  artifactLink, chooseDiff, classifyDiffLines, clock, droppedCount, durationSeconds, engineLabel, formatDuration, filesWritten, groupByPhase, iterationRows, mergeEvents, summarizeFindings, testSummary,
 } from "@/lib/forge-run-feed";
 
 const ev = (seq: number, type: RunEvent["type"], over: Partial<RunEvent> = {}): RunEvent => ({
@@ -124,5 +124,32 @@ describe("classifyDiffLines", () => {
   });
   it("a diff with no hunk yet treats --- and +++ as headers", () => {
     expect(classifyDiffLines("--- a\n+++ b").map((r) => r.kind)).toEqual(["meta", "meta"]);
+  });
+});
+
+describe("run history helpers", () => {
+  it("durationSeconds is whole seconds and null when either end is missing, unreadable or reversed", () => {
+    expect(durationSeconds("2026-10-12T00:00:00+00:00", "2026-10-12T00:07:09+00:00")).toBe(429);
+    expect(durationSeconds(undefined, "2026-10-12T00:07:09+00:00")).toBeNull();
+    expect(durationSeconds("2026-10-12T00:00:00+00:00", null)).toBeNull();
+    expect(durationSeconds("nope", "also nope")).toBeNull();
+    expect(durationSeconds("2026-10-12T00:10:00+00:00", "2026-10-12T00:00:00+00:00")).toBeNull();
+  });
+  it("formatDuration reads naturally at each scale and shows a dash for unknown", () => {
+    expect(formatDuration(48)).toBe("48 s");
+    expect(formatDuration(429)).toBe("7 min 9 s");
+    expect(formatDuration(3720)).toBe("1 h 2 min");
+    expect(formatDuration(null)).toBe("—");
+    expect(formatDuration(0)).toBe("0 s");
+  });
+  it("engineLabel says unknown for what the run did not report - never a default engine or model", () => {
+    expect(engineLabel("claude_code", "claude-opus-5")).toBe("claude_code · claude-opus-5");
+    expect(engineLabel("unknown", "unknown")).toBe("unknown · unknown");
+    expect(engineLabel(undefined, undefined)).toBe("unknown · unknown");
+  });
+  it("artifactLink points each kind at the surface that lists it, and nothing for an unknown kind", () => {
+    expect(artifactLink("tool")).toBe("/app/forge?tab=tools");
+    expect(artifactLink("plugin")).toBe("/app/marketplace?tab=forged");
+    expect(artifactLink("banana")).toBeNull();
   });
 });

@@ -159,3 +159,21 @@ def test_run_start_and_finish_are_on_the_audit_chain_with_ids_and_counts_only(tm
         assert d["truncated"] is False
         assert "secret-marker-9876" not in chain.read_text()
         assert all("_dropped_fields" not in r.get("details", {}) for r in started + finished), "every field is allowlisted"
+
+
+def test_retryable_is_true_only_for_a_failed_tool_run_that_kept_its_draft(tmp_path):
+    from test_forge_creator_e2e import BROKEN_IMPL, tool_plan
+    engine = ScriptedEngine(tool_plan=tool_plan(BROKEN_IMPL), tool_fix=tool_plan(BROKEN_IMPL))
+    with console(tmp_path, engine) as client:
+        failed = start(client, "tool", REQ_TOOL)
+        assert poll(client, failed)["status"] == "failed"
+        row = client.get(f"{B}/runs/{failed}").json()
+        assert row["retryable"] is True
+        assert "draft" not in json.dumps(row), "the fact that a draft exists is shown, never the draft"
+    with console(tmp_path / "ok", ScriptedEngine()) as client:
+        ok = start(client, "tool", REQ_TOOL)
+        assert poll(client, ok)["status"] == "success"
+        assert client.get(f"{B}/runs/{ok}").json()["retryable"] is False          # finished fine: nothing to retry
+        plug = start(client, "plugin", "a weather digest plugin")
+        poll(client, plug)
+        assert client.get(f"{B}/runs/{plug}").json()["retryable"] is False         # only tool runs have a retry route

@@ -131,3 +131,38 @@ export function classifyDiffLines(diff: string): { kind: DiffLineKind; text: str
     return { kind: "context" as const, text };
   });
 }
+
+/** Whole seconds between two ISO timestamps, or null when either is missing or unreadable (never a guess). */
+export function durationSeconds(startedAt?: string | null, endedAt?: string | null): number | null {
+  if (!startedAt || !endedAt) return null;
+  const a = Date.parse(startedAt);
+  const b = Date.parse(endedAt);
+  if (Number.isNaN(a) || Number.isNaN(b) || b < a) return null;
+  return Math.round((b - a) / 1000);
+}
+
+/** "48 s", "7 min 9 s", "1 h 2 min"; "—" for unknown. */
+export function formatDuration(seconds: number | null): string {
+  if (seconds === null) return "—";
+  if (seconds < 60) return `${seconds} s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+  return `${Math.floor(seconds / 3600)} h ${Math.floor((seconds % 3600) / 60)} min`;
+}
+
+/** "claude_code · claude-opus-5"; an engine or model the run did not report reads "unknown", never a default. */
+export function engineLabel(engine?: string, model?: string): string {
+  const e = !engine || engine === "unknown" ? "unknown" : engine;
+  const m = !model || model === "unknown" ? "unknown" : model;
+  return `${e} · ${m}`;
+}
+
+/** Where to see the artifact a run produced. Layers and skills are listed in the Forge page; plugins under Marketplace. */
+export function artifactLink(kind: string): string | null {
+  switch (kind) {
+    case "tool": return "/app/forge?tab=tools";
+    case "skill": return "/app/forge?tab=skills";
+    case "layer": return "/app/forge?tab=layers";
+    case "plugin": return "/app/marketplace?tab=forged";
+    default: return null;
+  }
+}

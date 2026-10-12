@@ -39,7 +39,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 /** The top-level tab bar, left to right, as the page declares it. */
-const EXPECTED_ORDER = ['Generator', 'Autonomous', 'Tools', 'Skills', 'OS-Skills', 'Layers', 'Graph', 'Audit'];
+const EXPECTED_ORDER = ['Generator', 'Runs', 'Autonomous', 'Tools', 'Skills', 'OS-Skills', 'Layers', 'Graph', 'Audit', 'Bundles'];
 
 /** Generator's own sub-tab bar, left to right. */
 const EXPECTED_SUB_ORDER = ['Skill Forge', 'Tool Forge', 'Plugin Forge', 'Layer Forge'];

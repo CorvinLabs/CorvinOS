@@ -65,3 +65,37 @@ export async function latestRun(kind: string, status?: string, signal?: AbortSig
   const r = await api<{ runs: { run_id: string; status: string }[] }>(`/forge/runs?${q}`, { signal });
   return r.runs[0] ?? null;
 }
+
+export interface RunSummary {
+  run_id: string;
+  kind: "skill" | "tool" | "plugin" | "layer";
+  operation?: string;
+  status: "running" | "success" | "failed";
+  phase?: string;
+  progress?: number;
+  message?: string;
+  engine?: string;
+  model?: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  artifact_ref?: { kind: string; id: string } | null;
+  error?: string | null;
+  failure_code?: string | null;
+  live?: boolean;
+  retryable?: boolean;
+}
+
+export function listRuns(
+  filters: { kind?: string; status?: string; limit?: number },
+  signal?: AbortSignal,
+): Promise<{ runs: RunSummary[]; count: number }> {
+  const q = new URLSearchParams();
+  if (filters.kind) q.set("kind", filters.kind);
+  if (filters.status) q.set("status", filters.status);
+  q.set("limit", String(filters.limit ?? 100));
+  return api(`/forge/runs?${q.toString()}`, { signal });
+}
+
+export function retryToolRun(runId: string, csrf: string): Promise<{ run_id: string }> {
+  return api(`/forge-creator/tool/retry/${encodeURIComponent(runId)}`, { method: "POST", csrf });
+}
