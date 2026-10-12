@@ -20,7 +20,7 @@ import re
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status as http_status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from .. import auth as session_auth
 from .. import forge_runs
@@ -85,6 +85,14 @@ def _finish_run(run, result, *, own_phase: str, artifact_id: str = "") -> None:
              code="audit_unavailable" if audit_down else None, artifact_id=artifact_id)
 
 
+class PlanBody(BaseModel):
+    """``extra=forbid``: an unknown field is a 422, never silently dropped (ADR-2254 - a client that sends attachment ids
+    to a path that does not consume them must hear it)."""
+    model_config = ConfigDict(extra="forbid")
+    layer_id: str
+    intent: str
+
+
 class TransitionBody(BaseModel):
     to_status: Literal["accepted", "deployed", "superseded", "proposed"]
     override_review_flags: bool = False
@@ -128,8 +136,7 @@ def get_definition(
 @router.post("/layer-forge/plan")
 def plan_definition(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-    layer_id: Annotated[str, Body(embed=True)],
-    intent: Annotated[str, Body(embed=True)],
+    body_in: PlanBody,
 ) -> dict[str, Any]:
     """Generate a layer-definition manifest via LLM.
 
@@ -143,6 +150,7 @@ def plan_definition(
     Output (failure):
         {status: 'FAILED', error: '...', phase: 'plan'}
     """
+    layer_id, intent = body_in.layer_id, body_in.intent
     run, observe = _start_run(rec, "plan", _PLAN_PHASES)
     if run is not None:
         run.progress("plan", 20, "Asking the engine for a manifest")

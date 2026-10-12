@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Annotated, Dict, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .. import auth as session_auth
 from .. import audit as console_audit
@@ -216,6 +216,7 @@ _skill_stats = {
 # ============================================================================
 
 class SkillGenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
     user_request: str = Field(..., min_length=10, description="Description of skill to create")
     async_: bool = Field(default=True, alias="async", description="Run async and return run_id")
     # Refine an existing skill instead of creating a new one: the current

@@ -70,3 +70,42 @@ def test_attachments_on_a_plugin_or_a_skill_request_are_422(tmp_path):
         r = client.post("/v1/console/forge-creator/plugin/generate",
                         json={"user_request": "a plugin with the attached file", "attachment_ids": [rep["item_id"]]})
         assert r.status_code == 422
+
+
+def test_every_generator_path_rejects_an_unknown_field_with_422_and_starts_nothing(tmp_path):
+    with console(tmp_path, ScriptedEngine()) as client:
+        junk = {"attachment_ids": ["att-0123456789abcdef"], "bogus": 1}
+        for path, base in (("/v1/console/forge-creator/tool/generate", {"user_request": "count the words in a text"}),
+                           ("/v1/console/forge-creator/plugin/generate", {"user_request": "a weather digest plugin"}),
+                           ("/v1/console/skill-creator/generate", {"user_request": "a skill that validates json"}),
+                           ("/v1/console/layer-forge/plan", {"layer_id": "L34", "intent": "guard the boundary"})):
+            r = client.post(path, json={**base, "bogus": 1})
+            assert r.status_code == 422, (path, r.status_code, r.text[:200])
+        # the skill and layer paths do not consume attachments: the id is an unknown field there, not silently dropped
+        assert client.post("/v1/console/skill-creator/generate",
+                           json={"user_request": "a skill that validates json", **junk}).status_code == 422
+        assert client.post("/v1/console/layer-forge/plan",
+                           json={"layer_id": "L34", "intent": "guard the boundary", **junk}).status_code == 422
+
+
+def test_uploads_age_out_unused_after_24h_and_used_after_14d_and_foreign_names_are_left_alone(tmp_path):
+    import os
+    from corvin_console.routes import forge_intake_api as api
+    with console(tmp_path, ScriptedEngine()) as client:
+        a = _up(client, "a.csv", CSV).json()["item_id"]
+        b = _up(client, "b.csv", CSV).json()["item_id"]
+        root = client.home / "tenants/_default/global/forge_intake/uploads"
+        meta = root / b / "meta.json"
+        m = json.loads(meta.read_text()); m["used"] = True; meta.write_text(json.dumps(m))
+        stranger = root / "notes"; stranger.mkdir()
+        for d, age in ((root / a, 2 * 86400), (root / b, 2 * 86400), (stranger, 40 * 86400)):
+            t = time.time() - age
+            os.utime(d, (t, t))
+        api._prune("_default")
+        assert not (root / a).exists(), "unused and older than 24 h"
+        assert (root / b).exists(), "used by a run: kept for 14 days"
+        assert stranger.exists(), "only att-<hex> directories are ever touched"
+        t = time.time() - 15 * 86400
+        os.utime(root / b, (t, t))
+        api._prune("_default")
+        assert not (root / b).exists()

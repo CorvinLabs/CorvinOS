@@ -199,7 +199,8 @@ async def retry_tool(
     if old.get("status") != "failed" or not isinstance(draft, dict):
         raise HTTPException(status_code=409, detail="Only a failed run with a saved draft can be retried")
     payload = {"request": str((old.get("resume") or {}).get("request") or ""),
-               "panel_request": "", "draft": {k: v for k, v in draft.items() if k != "review_raw"}}
+               "panel_request": "", "attachment_pack": (old.get("resume") or {}).get("attachment_pack"),
+               "draft": {k: v for k, v in draft.items() if k != "review_raw"}}
     try:
         forge_runs.check_spawn_gates(payload["request"], tenant_id=rec.tenant_id,
                                      sid_fingerprint=rec.sid_fingerprint, kind="tool")
