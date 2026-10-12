@@ -155,3 +155,5 @@ the Tool generator; an unreachable API says "not available on this build" and a 
 | Cross-forge interplay | — | skill depends on tool | tool + layer in one bundle |
 
 Related: `tests/e2e/forge-system/` (isolated, seeded suite), `docs/claude-ref/layer-forge.md`.
+
+- `19-intake.spec.ts` (3 tests): Tool Forge attachments - redacted table admitted and its id sent, secret file refused and blocks Send, no attach button on Skill/Plugin. Measured: 3 passed (27 s). Names use `e2e_test_`.
