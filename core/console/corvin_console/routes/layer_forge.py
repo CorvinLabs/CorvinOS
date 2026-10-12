@@ -22,15 +22,54 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status as ht
 from pydantic import BaseModel
 
 from .. import auth as session_auth
+from .. import forge_runs
 from ..deps import require_csrf, require_session
 
 router = APIRouter()
 
+#: ADR-2253 D1: each layer operation is its own run with its own phases (the three requests are independent: a
+#: CREATE needs no PLAN and a promote can come days later), linked by ``artifact_ref`` ``id@version``.
+_PLAN_PHASES = ("plan",)
+_CREATE_PHASES = ("validate", "test", "enforce", "review", "create")
+_PROMOTE_PHASES = ("promote",)
+_PCT = {"plan": 50, "validate": 10, "test": 30, "enforce": 55, "review": 75, "create": 90, "promote": 50}
 
-def _orchestrator(tenant_id: str):
+
+def _orchestrator(tenant_id: str, observer=None):
     from core.orchestration.layer_forge.orchestrator import LayerForgeOrchestrator
 
-    return LayerForgeOrchestrator(tenant_id, actor="console")
+    return LayerForgeOrchestrator(tenant_id, actor="console", observer=observer)
+
+
+def _start_run(rec: session_auth.SessionRecord, operation: str, phases: tuple[str, ...]):
+    """A run for one synchronous layer operation, plus the observer that feeds it. A failing run store never
+    fails the operation: the pipeline is the product, the run record is its transcript."""
+    try:
+        run = forge_runs.InlineRun(tenant_id=rec.tenant_id, kind="layer", operation=operation, phases=phases,
+                                   sid_fingerprint=rec.sid_fingerprint)
+    except Exception:  # noqa: BLE001
+        return None, None
+
+    def observe(event: str, phase: str, message: str, data: dict) -> None:
+        if event == "phase":
+            run.progress(phase, _PCT.get(phase, 50), message)
+        else:
+            run.event("gate", message, phase=phase, data=data)
+
+    return run, observe
+
+
+def _finish_run(run, result, *, own_phase: str, artifact_id: str = "") -> None:
+    """Fold a LayerForgeResult into the run. An ``audit`` failure is reported in the operation's own phase (a failing
+    phase must always be one of the run's ``phases``) with ``failure_code: audit_unavailable``."""
+    if run is None:
+        return
+    if result.status == "SUCCESS":
+        run.succeed(artifact_id or str(result.registry_key or ""), f"{own_phase} succeeded")
+        return
+    audit_down = result.phase == "audit"
+    run.fail(own_phase if audit_down else str(result.phase or own_phase), str(result.error or "failed"),
+             code="audit_unavailable" if audit_down else None, artifact_id=artifact_id)
 
 
 class TransitionBody(BaseModel):
@@ -91,10 +130,17 @@ def plan_definition(
     Output (failure):
         {status: 'FAILED', error: '...', phase: 'plan'}
     """
-    manifest, result = _orchestrator(rec.tenant_id).plan_layer_definition(layer_id, intent)
+    run, observe = _start_run(rec, "plan", _PLAN_PHASES)
+    if run is not None:
+        run.progress("plan", 20, "Asking the engine for a manifest")
+    manifest, result = _orchestrator(rec.tenant_id, observe).plan_layer_definition(layer_id, intent)
     body = result.to_dict()
     if manifest:
         body["manifest"] = manifest
+    _finish_run(run, result, own_phase="plan",
+                artifact_id=f"{manifest.get('id')}@{manifest.get('version')}" if isinstance(manifest, dict) and manifest.get("id") else "")
+    if run is not None:
+        body["run_id"] = run.run_id
     if result.status == "SUCCESS":
         return body
     if result.phase == "audit":
@@ -107,8 +153,13 @@ def create_definition(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
     manifest: Annotated[dict[str, Any], Body()],
 ) -> dict[str, Any]:
-    result = _orchestrator(rec.tenant_id).create_layer_definition(manifest, skip_gates=False)
+    run, observe = _start_run(rec, "create", _CREATE_PHASES)
+    result = _orchestrator(rec.tenant_id, observe).create_layer_definition(manifest, skip_gates=False)
+    artifact = f"{manifest.get('id')}@{manifest.get('version')}" if manifest.get("id") else ""
+    _finish_run(run, result, own_phase="create", artifact_id=artifact)
     body = result.to_dict()
+    if run is not None:
+        body["run_id"] = run.run_id
     if result.status == "SUCCESS":
         return body
     if result.phase == "audit":
@@ -146,20 +197,42 @@ def transition_definition(
     from core.orchestration.layer_forge.audit import LayerForgeAuditError
     from core.orchestration.layer_forge.registry import LayerNotFoundError, LayerPromotionError
 
+    orch = _orchestrator(rec.tenant_id)
     try:
-        return _orchestrator(rec.tenant_id).promote(
+        orch.get(entry_id, version)  # an unknown definition is a 404 and records no run
+    except LayerNotFoundError:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND,
+                            detail="layer definition not found") from None
+    run, observe = _start_run(rec, "promote", _PROMOTE_PHASES)
+    orch.observer = observe
+    artifact = f"{entry_id}@{version}"
+    if run is not None:
+        run.progress("promote", 30, f"Moving {artifact} to {body.to_status}")
+    try:
+        out = orch.promote(
             entry_id, version, body.to_status,
             override_review_flags=body.override_review_flags,
             override_reason=body.override_reason,
         )
     except LayerNotFoundError:
+        if run is not None:
+            run.fail("promote", "layer definition not found", code="not_found", artifact_id=artifact)
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND,
                             detail="layer definition not found") from None
     except LayerPromotionError as e:
+        if run is not None:
+            run.fail("promote", str(e), code="promotion_refused", artifact_id=artifact)
         raise HTTPException(status_code=http_status.HTTP_409_CONFLICT, detail=str(e)) from None
     except LayerForgeAuditError:
+        if run is not None:
+            run.fail("promote", "audit chain write failed; nothing changed", code="audit_unavailable", artifact_id=artifact)
         raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
                             detail="audit chain write failed; nothing changed") from None
+    if run is not None:
+        run.succeed(artifact, f"{artifact} is now {body.to_status}")
+        if isinstance(out, dict):
+            out = {**out, "run_id": run.run_id}
+    return out
 
 
 @router.post("/layer-forge/gate-thresholds/analyze")

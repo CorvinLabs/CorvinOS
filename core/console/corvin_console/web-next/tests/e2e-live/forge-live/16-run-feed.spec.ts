@@ -100,3 +100,45 @@ test('a capped log reports how many events were left out; findings are grouped b
   await expect(page.locator('[data-type="error"]')).toContainText('Not registered');
   void BASE;
 });
+
+// ── REAL engine: refine the e2e_test_skill from the UI and read the diff in the Production feed (T-0172) ──────────
+test('REAL: refining the e2e_test_skill from the UI shows what changed in the Production feed', async ({ context }) => {
+  test.setTimeout(40 * 60_000);
+  const s = await apiSession();
+  const name = 'assistant.e2e_test_skill';
+  const before = (await (await get(s, '/forge/runs?kind=skill&limit=200')).json()).runs as any[];
+  const seen = new Set(before.map((r) => r.run_id));
+  const startedAt = Date.now();
+  const page = await uiLogin(context);
+  await openGenerator(page, 'skill');
+  await page.getByTestId('skill-filter').fill(name);
+  await page.getByTestId(`refine-${name}`).click();
+  const ta = page.getByTestId('skill-request');
+  const request = 'Add one final sentence to the method: always state the verdict (APPROVED or NOT APPROVED) on the first line of the reply.';
+  await ta.fill(request);
+  await ta.press('Enter');                                   // the keyboard path, not the button
+  // the run appears in the run API; wait for it to finish
+  const run = await (async () => {
+    const t0 = Date.now();
+    for (;;) {
+      // a minutes-long wait must survive a dropped connection: only a real answer counts, a transient error is retried
+      let rows: any[] | null = null;
+      try { rows = (await (await get(s, '/forge/runs?kind=skill&limit=200')).json()).runs as any[]; } catch { rows = null; }
+      const mine = rows?.find((r) => !seen.has(r.run_id));
+      if (mine && ['success', 'failed'].includes(mine.status)) return mine;
+      if (Date.now() - t0 > 35 * 60_000) throw new Error('the refine run did not finish in 35 minutes');
+      await new Promise((r) => setTimeout(r, 5_000));
+    }
+  })();
+  const snaps = (await (await get(s, `/forge/runs/${run.run_id}/snapshots`)).json()).snapshots as any[];
+  expect(snaps[0].label, 'a refine snapshots the body it started from').toBe('previous version');
+  expect(snaps.length).toBeGreaterThanOrEqual(2);
+  // the feed in the panel shows the same diff
+  const diff = page.getByTestId('run-diff');
+  await expect(diff).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('run-diff-range')).toContainText('previous version');
+  const file = diff.locator('[data-testid="run-diff-file"][data-path="SKILL.md"]');
+  await expect(file).toHaveAttribute('data-status', 'changed');
+  expect(await file.locator('[data-diff="add"]').count(), 'the refine added at least one line').toBeGreaterThan(0);
+  void BASE;
+});

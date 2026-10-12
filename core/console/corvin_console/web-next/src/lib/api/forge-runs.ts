@@ -57,3 +57,11 @@ export function getRunDiff(runId: string, from: string, to: string, signal?: Abo
     { signal },
   );
 }
+
+/** The newest run of a kind (optionally only a given status), or null. Used to attach to a synchronous operation
+ *  (a layer PLAN/CREATE) whose run id only arrives with the response, while it is still going. */
+export async function latestRun(kind: string, status?: string, signal?: AbortSignal): Promise<{ run_id: string; status: string } | null> {
+  const q = `kind=${encodeURIComponent(kind)}${status ? `&status=${encodeURIComponent(status)}` : ""}&limit=1`;
+  const r = await api<{ runs: { run_id: string; status: string }[] }>(`/forge/runs?${q}`, { signal });
+  return r.runs[0] ?? null;
+}

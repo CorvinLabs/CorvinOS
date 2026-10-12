@@ -83,6 +83,12 @@ registry — so every successful PLAN ended as "audit failed" and the optimizer'
 was never recorded.
 `actor` is `cli` or `console`.
 
+## Runs (ADR-2253)
+
+Every console PLAN / CREATE / promote is recorded as its own run (`GET /v1/console/forge/runs?kind=layer`), with the phases
+and one `gate` event per quality-gate, enforcement and review verdict; the response shapes are unchanged plus `run_id`.
+→ [forge-runs.md](forge-runs.md) § Layer Forge. The CLI is not recorded (it has no console session).
+
 ## Concurrency (ADR-2222 D4)
 
 Every registry read-modify-write (create, transition) and the audit record that

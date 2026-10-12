@@ -4,7 +4,7 @@
 `routes/forge_creator.py` (tool, plugin), `routes/skill_creator_api.py` (skill).
 **Tests:** `core/console/tests/test_forge_run_{ownership,retention,events}_e2e.py`, `test_forge_runs_api_e2e.py`.
 
-Skill, tool and plugin generation are minutes-long engine runs. Layer Forge has no run yet (planned, T-0151).
+Skill, tool and plugin generation are minutes-long engine runs. Layer Forge operations are runs too (below).
 
 ## The record
 
@@ -38,6 +38,22 @@ gate | intake | error | truncated`; `data` is scalars only; free text is bounded
 email/phone shape (the audit PII scan). Prompts and engine output are never stored. Caps (`MAX_EVENTS_PER_RUN` 2000,
 `MAX_EVENT_BYTES_PER_RUN` 512 KiB — initial values) count what they drop and end with one `truncated` event, never an
 `error`. Today progress is live; tests, written files, findings and iterations are emitted from the result at the end.
+
+## Layer Forge: one run per operation (D1)
+
+PLAN, CREATE and promote are three independent requests (a CREATE needs no PLAN; a promote can come days later or repeat),
+so no run spans them: each is its own run (`kind: layer`, `operation: plan | create | promote`), linked by
+`artifact_ref` = `{kind: layer, id: "<id>@<version>"}`. Phases: PLAN `plan`; CREATE `validate, test, enforce, review, create`;
+promote `promote`. `LayerForgeOrchestrator(observer=…)` is an additive callback (`phase` and `gate` events; it cannot change a
+verdict, a failing observer is ignored); every quality-gate, enforcement and review verdict becomes a `gate` event.
+The synchronous routes keep their response shapes; `run_id` is one additive field (also in a 4xx/503 `detail`).
+**An audit failure is reported in the operation's own phase** (`plan`, `create` or `promote`) with
+`failure_code: audit_unavailable` — the orchestrator's own `phase: audit` is not one of the run's `phases`, and a stepper
+cannot mark a phase it does not know. An unknown definition on promote is a 404 and records **no** run (garbage ids must not
+fill the history). Layer runs are exempt from the generation cap (they are not engine generations): they neither count
+against `MAX_RUNNING_PER_TENANT` nor are refused by it. `forge_runs.InlineRun` is the synchronous counterpart of `spawn`
+(no thread, heartbeat or resume). The Layer panel attaches to the running layer run while its request is going (the id only
+arrives with the response) and shows the feed.
 
 ## Snapshots and diff (D3)
 

@@ -46,7 +46,7 @@
  * List view: table of all definitions with status, gate count, versions
  * Detail view: manifest, all verdicts (gates, enforcement), transition buttons
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Loader2, AlertCircle, ChevronRight, Sparkles } from "lucide-react";
@@ -57,6 +57,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, ApiError } from "@/lib/api/client";
 import ForgeComposer from "@/components/forge/ForgeComposer";
+import RunFeed from "@/components/forge/RunFeed";
+import { latestRun } from "@/lib/api/forge-runs";
 import { useAuth } from "@/lib/auth";
 
 // api() already prepends "/v1/console" — see the file-level comment above.
@@ -108,6 +110,7 @@ function formatDate(timestamp?: number): string {
 }
 
 interface PlanResponse {
+  run_id?: string;
   status: "SUCCESS" | "FAILED";
   manifest?: Record<string, unknown>;
   error?: string;
@@ -115,6 +118,7 @@ interface PlanResponse {
 }
 
 interface CreateResponse {
+  run_id?: string;
   status: "SUCCESS" | "FAILED";
   error?: string;
   phase?: string;
@@ -146,6 +150,7 @@ export function ForgeLayerPanel({ onCreated }: { onCreated?: () => void }) {
   const [manifest, setManifest] = useState<Record<string, unknown> | null>(null);
   const [created, setCreated] = useState<{ id: string; version: string } | null>(null);
   const [inputError, setInputError] = useState<string | null>(null);
+  const [runId, setRunId] = useState<string | null>(null);
 
   const plan = useMutation({
     mutationFn: () =>
@@ -157,8 +162,12 @@ export function ForgeLayerPanel({ onCreated }: { onCreated?: () => void }) {
     onSuccess: (data) => {
       setCreated(null);
       setManifest(data.manifest ?? null);
+      if (data.run_id) setRunId(data.run_id);
     },
-    onError: () => setManifest(null),
+    onError: () => {
+      setManifest(null);
+      void showLatestRun();
+    },
   });
 
   const create = useMutation({
@@ -170,7 +179,8 @@ export function ForgeLayerPanel({ onCreated }: { onCreated?: () => void }) {
         body: manifest,
         csrf: session?.csrf_token ?? "",
       }),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      if (data.run_id) setRunId(data.run_id);
       const m = manifest as { id?: string; version?: string } | null;
       setCreated({ id: String(m?.id ?? layerId), version: String(m?.version ?? "") });
       setManifest(null);
@@ -179,7 +189,37 @@ export function ForgeLayerPanel({ onCreated }: { onCreated?: () => void }) {
       void qc.invalidateQueries({ queryKey: ["layer-forge", "definitions"] });
       onCreated?.();
     },
+    onError: () => void showLatestRun(),
   });
+
+  // A failed operation: show what its run did (the error body's run is the newest layer run).
+  async function showLatestRun() {
+    try {
+      const r = await latestRun("layer");
+      if (r) setRunId(r.run_id);
+    } catch {
+      /* the feed is a transcript; its absence never hides the error shown above */
+    }
+  }
+
+  // PLAN/CREATE are synchronous: the run id only arrives with the response, so while the request is going look for
+  // the running layer run and attach to it - that is the live progress.
+  const busy = plan.isPending || create.isPending;
+  useEffect(() => {
+    if (!busy) return;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const r = await latestRun("layer", "running");
+        if (!stopped && r) setRunId(r.run_id);
+      } catch {
+        /* transient: the next tick asks again */
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), 700);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [busy]);
 
   const canPlan = layerId.trim().length > 0 && intent.trim().length > 0 && !plan.isPending;
 
@@ -229,6 +269,7 @@ export function ForgeLayerPanel({ onCreated }: { onCreated?: () => void }) {
         {inputError && (
           <p className="text-sm text-destructive" data-testid="layer-input-error">{inputError}</p>
         )}
+        {runId && <RunFeed runId={runId} running={busy} />}
 
         {plan.isError && (
           <p className="text-sm text-destructive" data-testid="plan-layer-error">

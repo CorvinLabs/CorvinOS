@@ -487,6 +487,57 @@ def diff_snapshots(tenant_id: str, run_id: str, frm: Optional[str] = None, to: O
     return {"from": {"n": a["n"], "label": a["label"]}, "to": {"n": b["n"], "label": b["label"]}, "files": files}
 
 
+# ── Short synchronous operations as runs (Layer Forge, ADR-2253 D1) ───────────────────────────────────
+class InlineRun:
+    """One synchronous operation (a layer PLAN, CREATE or promote) recorded as a run.
+
+    The caller does its work in-request and reports phases, events and the outcome through this object; nothing
+    runs on another thread, so there is no heartbeat, no resume and no cap (``kind == "layer"`` is exempt).
+    A failure always names a phase that is one of the run's own ``phases`` - a stepper cannot mark anything else.
+    """
+
+    def __init__(self, *, tenant_id: str, kind: str, operation: str, phases: tuple[str, ...],
+                 sid_fingerprint: Optional[str]):
+        self.tenant_id, self.kind, self.operation, self.phases = tenant_id, kind, operation, tuple(phases)
+        self.run_id = new_run(tenant_id=tenant_id, kind=kind, phases=self.phases, sid_fingerprint=sid_fingerprint,
+                              operation=operation)
+        self._done = False
+
+    def progress(self, phase: str, pct: int, message: str) -> None:
+        if phase in self.phases:
+            update_run(self.run_id, phase=phase, progress=pct, message=message)
+        emit_event(self.run_id, "progress", message, phase=phase if phase in self.phases else None, data={"progress": pct})
+
+    def event(self, type_: str, message: str, *, phase: Optional[str] = None, level: str = "info",
+              data: Optional[Dict[str, Any]] = None) -> None:
+        emit_event(self.run_id, type_, message, phase=phase, level=level, data=data)
+
+    def succeed(self, artifact_id: str, message: str, **fields: Any) -> None:
+        if self._done:
+            return
+        self._done = True
+        update_run(self.run_id, status="success", progress=100, error=None, message=message,
+                   ended_at=datetime.now(timezone.utc).isoformat(),
+                   artifact_ref={"kind": self.kind, "id": artifact_id}, **fields)
+        emit_event(self.run_id, "progress", message, data={"progress": 100})
+        finalize_events(self.run_id)
+        _audit_run("finished", self.tenant_id, self.run_id, self.kind, status="success",
+                   artifact_kind=self.kind, artifact_id=artifact_id)
+
+    def fail(self, phase: str, error: str, *, code: Optional[str] = None, artifact_id: str = "") -> None:
+        if self._done:
+            return
+        self._done = True
+        failing = phase if phase in self.phases else self.phases[-1]
+        update_run(self.run_id, status="failed", phase=failing, error=_scrub(error, 500), message=_scrub(error, 500),
+                   failure_code=code, ended_at=datetime.now(timezone.utc).isoformat(),
+                   **({"artifact_ref": {"kind": self.kind, "id": artifact_id}} if artifact_id else {}))
+        emit_event(self.run_id, "error", error, phase=failing, level="error", data={"failure_code": code or ""})
+        finalize_events(self.run_id)
+        _audit_run("finished", self.tenant_id, self.run_id, self.kind, status="failed", artifact_kind=self.kind,
+                   artifact_id=artifact_id)
+
+
 class GenerationRefused(Exception):
     """A console pre-spawn gate refused the engine spawn; ``str()`` is user-facing."""
 
@@ -541,6 +592,8 @@ def _running_count_locked(tenant_id: str) -> int:
         if r.get("tenant_id") != tenant_id:
             continue
         owned.add(rid)
+        if r.get("kind") == "layer":
+            continue  # short synchronous operations are not engine generations (ADR-2253 D1)
         if r.get("status") == "running" and _fresh(r):
             count += 1
     try:
@@ -554,7 +607,7 @@ def _running_count_locked(tenant_id: str) -> int:
             rec = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if (isinstance(rec, dict) and rec.get("tenant_id") == tenant_id
+        if (isinstance(rec, dict) and rec.get("tenant_id") == tenant_id and rec.get("kind") != "layer"
                 and rec.get("status") == "running" and _fresh(rec)):
             count += 1
     return count
@@ -612,7 +665,7 @@ def new_run(*, tenant_id: str, kind: str, phases: tuple[str, ...],
     }
     record.update(extra)
     with runs_lock:
-        running = _running_count_locked(tenant_id)
+        running = 0 if kind == "layer" else _running_count_locked(tenant_id)
         if running >= MAX_RUNNING_PER_TENANT:
             raise GenerationBusy(
                 f"{running} generation runs are already in progress — wait for one to finish.")

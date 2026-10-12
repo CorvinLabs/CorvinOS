@@ -14,6 +14,7 @@ Output is JSON-validated fail-closed. The adversarial REVIEW phase is deferred
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 from pathlib import Path
 
 from . import audit
@@ -58,14 +59,26 @@ class LayerForgeResult:
 
 
 class LayerForgeOrchestrator:
-    def __init__(self, tenant_id: str, *, repo_root: Path = REPO_ROOT, actor: str = "cli"):
+    def __init__(self, tenant_id: str, *, repo_root: Path = REPO_ROOT, actor: str = "cli",
+                 observer: "Callable[[str, str, str, dict], None] | None" = None):
         self.tenant_id = tenant_id
         self.actor = actor
+        # ``observer(event, phase, message, data)`` is called as the pipeline moves (event: "phase" | "gate");
+        # additive observation only - it can never change a verdict, and a failing observer is ignored.
+        self.observer = observer
         home = layer_forge_home(tenant_id)
         self.registry = LayerRegistry(home / "registry")
         self._lock_dir = home / "locks"
         self.gate_runner = QualityGateRunner(Path(repo_root))
         self.enforcement = EnforcementChecker(Path(repo_root))
+
+    def _obs(self, event: str, phase: str, message: str, **data) -> None:
+        if self.observer is None:
+            return
+        try:
+            self.observer(event, phase, message, data)
+        except Exception:  # noqa: BLE001 - observation must never break the pipeline
+            pass
 
     def _audit(self, event: str, **details) -> str:
         return audit.emit(event, tenant_id=self.tenant_id, **details)
@@ -95,6 +108,7 @@ class LayerForgeOrchestrator:
                                 review_verdict=review)
 
     def create_layer_definition(self, manifest: dict, *, skip_gates: bool = False) -> LayerForgeResult:
+        self._obs("phase", "validate", "Validating the manifest")
         # VALIDATE (pure). An invalid id/version is never written to the chain.
         try:
             self.registry.validate(manifest)
@@ -111,9 +125,11 @@ class LayerForgeOrchestrator:
         # TEST: quality gates, fail-closed on FAIL/ERROR
         gates: list[QualityGateVerdict] = []
         if not skip_gates:
+            self._obs("phase", "test", f"Running {len(manifest.get('quality_gates', []))} quality gate(s)")
             gates = self.gate_runner.run_all_gates(manifest)
             try:
                 for v in gates:
+                    self._obs("gate", "test", f"quality gate {v.gate_id}: {v.status}", gate_id=v.gate_id, status=v.status)
                     self._audit("layer_forge.quality_gate_evaluated", entry_id=entry_id,
                                 version=version, gate_id=v.gate_id, status=v.status)
                     # Emit learning event: confidence score based on gate result
@@ -141,11 +157,13 @@ class LayerForgeOrchestrator:
             except Exception:
                 return None
 
+        self._obs("phase", "enforce", "Checking enforcement rules")
         enforcement: list[EnforcementVerdict] = self.enforcement.check_all_enforcement_rules(
             manifest, registry_lookup=registry_lookup
         )
         try:
             for v in enforcement:
+                self._obs("gate", "enforce", f"enforcement {v.rule_id}: {v.status}", rule_id=v.rule_id, status=v.status)
                 self._audit("layer_forge.enforcement_evaluated", entry_id=entry_id,
                             version=version, rule_id=v.rule_id, status=v.status)
                 # Emit learning event: confidence score based on enforcement result
@@ -166,7 +184,10 @@ class LayerForgeOrchestrator:
                                 enforcement=enforcement)
 
         # REVIEW: Adversarial review phase (M4, ADR-2227, Phase 4 A2: Canary sampling)
+        self._obs("phase", "review", "Adversarial review")
         review_verdict = review_layer_definition(manifest, enforcement, tenant_id=self.tenant_id)
+        self._obs("gate", "review", f"adversarial review: {review_verdict.status}",
+                  verdict=review_verdict.status, flags=len(review_verdict.flags or []))
         try:
             flags_list = [f.value for f in review_verdict.flags] if review_verdict.flags else []
             self._audit("layer_forge.review_evaluated", entry_id=entry_id, version=version,
@@ -207,6 +228,7 @@ class LayerForgeOrchestrator:
                                 enforcement=enforcement, review=review_verdict)
 
         # CREATE + PROMOTE, each audit-first under the entry lock
+        self._obs("phase", "create", "Recording the definition (audit first) and writing it")
         try:
             with LayerPrimitive(entry_id, self._lock_dir).locked():
                 self.registry.validate(manifest)  # re-check: another writer may have won
