@@ -29,7 +29,7 @@ from typing import Annotated, Any
 
 import json as _json
 
-from fastapi import APIRouter, Depends, HTTPException, status as http_status
+from fastapi import APIRouter, Body, Depends, HTTPException, status as http_status
 from pydantic import BaseModel, Field
 
 from .. import auth as session_auth
@@ -655,6 +655,132 @@ async def set_worker_engine(
     )
 
     return {"mode": mode, "ok": True}
+
+
+# ── Automatic-saving allowance (ADR-2259, PLAN-0955) ─────────────────────────
+# MUST stay ABOVE `PUT /settings/{label}` (Starlette matches in registration order).
+#
+# The Free ceiling lives in CAPABILITIES["cost.optimize"] and nowhere else; this
+# route stores only the operator's CHOICE and reports what is IN FORCE, so the UI
+# never shows a value that is not. Free may only make the cap stricter; Member may
+# set any value (null = unlimited). There is deliberately NO reset / quota
+# endpoint: the meter is derived from the audit chain, a reset button would be a
+# bypass (the context-engineering route has one — do not copy it).
+
+def _cost_optimize_cap():
+    """The bridge-shared evaluator (same module the model resolver uses)."""
+    import savings_cap  # type: ignore[import]  # noqa: PLC0415
+    return savings_cap
+
+
+def _cost_optimize_path(tenant_id: str) -> Path:
+    return _forge_paths.tenant_global_dir(tenant_id) / _cost_optimize_cap().SETTINGS_FILE
+
+
+def _cost_optimize_payload(tenant_id: str) -> dict:
+    cap = _cost_optimize_cap()
+    a = cap.resolve(tenant_id)
+    state = cap.evaluate(tenant_id, block=False)
+    measured = None
+    try:
+        from core.learning import savings_meter  # noqa: PLC0415
+        r = savings_meter.read(tenant_id, cap._default_model(tenant_id), block=False)
+        if r is not None:
+            measured = {
+                "month": r.month,
+                "window": {"unit": "utc_month", "month": r.month},
+                "ratio": r.ratio,
+                "saved_usd": round(r.saved_usd, 4),
+                "counterfactual_usd": round(r.counterfactual_usd, 4),
+                "actual_usd": round(r.actual_usd, 4),
+                "counted_turns": r.counted_turns,
+                "total_turns": r.total_turns,
+                "default_model": r.default_model,
+                "priced": r.priced,
+            }
+    except Exception:  # noqa: BLE001 — a measurement fault is "not measured", never a 500
+        measured = None
+    return {
+        "tier": a.tier,
+        "choice": {"cap_ratio": a.choice_ratio, "floor_usd": a.choice_floor},
+        "ceiling": {"ratio": a.ceiling_ratio, "floor_usd": a.ceiling_floor},
+        "effective": {"ratio": a.effective_ratio, "floor_usd": a.effective_floor},
+        "clamped": a.clamped,
+        "state": {"capped": state.capped, "reason": state.reason},
+        "measured": measured,
+        "meta": {k: {"min": lo, "max": hi} for k, (lo, hi) in cap.CHOICE_KEYS.items()},
+    }
+
+
+def _write_cost_optimize(tenant_id: str, values: dict) -> None:
+    path = _cost_optimize_path(tenant_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(_json.dumps(values, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.chmod(0o600)          # before replace: the mode travels with the file
+    tmp.replace(path)
+
+
+@router.get("/settings/cost-optimize")
+def get_cost_optimize(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict:
+    return _cost_optimize_payload(rec.tenant_id)
+
+
+@router.put("/settings/cost-optimize")
+def put_cost_optimize(
+    body: Annotated[dict, Body()],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict:
+    cap = _cost_optimize_cap()
+    clean, errors = cap.validate_choice(body)
+    if not clean and not errors:
+        errors = ["nothing to update"]
+    if errors:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="settings.write",
+            target_kind="settings_file",
+            target_id=cap.SETTINGS_FILE,
+            reason="validation-failed",
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="; ".join(errors),
+        )
+    allowance_before = cap.resolve(rec.tenant_id)
+    current = {k: v for k, v in cap.read_choice(rec.tenant_id).items() if v is not None}
+    merged = {k: v for k, v in {**current, **clean}.items() if v is not None}
+    try:
+        _write_cost_optimize(rec.tenant_id, merged)
+    except OSError as e:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="settings.write",
+            target_kind="settings_file",
+            target_id=cap.SETTINGS_FILE,
+            reason="io-error",
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="write_failed",
+        ) from e
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="settings.write",
+        target_kind="settings_file",
+        target_id=cap.SETTINGS_FILE,
+    )
+    try:
+        cap.emit_config_changed(rec.tenant_id, allowance_before, cap.resolve(rec.tenant_id))
+    except Exception:  # noqa: BLE001 — the console action record above already exists
+        pass
+    after = _cost_optimize_payload(rec.tenant_id)
+    return {**after, "ok": True}
 
 
 @router.put("/settings/{label}")

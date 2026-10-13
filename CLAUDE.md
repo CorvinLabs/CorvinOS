@@ -1093,6 +1093,15 @@ write a provider-qualified pin into the tenant YAML · collapse the per-verdict
 admission table back into one threshold · leave Tier 2.9 outside the autoselect
 kill-switch · import the classifier on the hot path.
 
+**Free-tier savings allowance (ADR-2259, `cost.optimize`).** `resolve_os_model` wraps the tiered
+decision (`resolve_os_model_with_source`) with `apply_savings_cap`: on Free, AUTOMATIC tiers may stop choosing
+a model cheaper than the default once the measured saving this UTC month reaches the allowance (default 10 %,
+the operator may only lower it; Member unlimited). Pins and upgrades are never capped. The ceiling lives in
+`CAPABILITIES["cost.optimize"]` only; the meter derives from the audit chain (`core/learning/savings_meter.py`).
+It is deterrence (class L), not a lock. **Must NOT do:** add a second ratio literal · cap a pin · add an env
+override or a reset endpoint · call `resolve_os_model_with_source` from production code outside the selector.
+→ [cost-optimize-allowance.md](docs/claude-ref/cost-optimize-allowance.md)
+
 → Full reference: [layer-engines.md](docs/claude-ref/layer-engines.md) § Three-tier OS-model routing
 → ADR: See Corvin-Knowledge for ADR-0952
 

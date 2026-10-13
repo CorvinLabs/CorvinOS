@@ -124,16 +124,16 @@ class TestIssue9_MissingCSRFFixed:
 class TestUnmountedLegacyRouters:
     """Issues #5, #8, #9 (stats / billing / quality export).
 
-    The P0 fixes to ``stats_api`` (tenant from session), ``billing_savings``
-    (user from session) and ``quality_metrics`` (CSRF on export) were
-    reverted by e2e7045d8: ``?tenant_id=`` is honoured again, the user is the
-    hard-coded ``"demo_user"``, and export has no session. None of the three
-    routers is mounted by any host, so none of that is reachable. The old
+    The P0 fixes to ``stats_api`` (tenant from session) and ``quality_metrics``
+    (CSRF on export) were reverted by e2e7045d8: ``?tenant_id=`` is honoured
+    again and export has no session. Neither router is mounted by any host, so
+    none of that is reachable. (``billing_savings`` — user hard-coded to
+    ``"demo_user"`` — was deleted with the dead savings tracker, ADR-2259.) The old
     signature checks here asserted fixes that no longer exist; this pins the
     fact that keeps it safe. (Adversarial review 2026-09-27; cross-area.)
     """
 
-    @pytest.mark.parametrize("module", ["stats_api", "billing_savings", "quality_metrics"])
+    @pytest.mark.parametrize("module", ["stats_api", "quality_metrics"])
     def test_router_is_not_mounted_anywhere(self, module):
         hits = [h for h in _production_importers(module)
                 if not h.endswith(f"routes/{module}.py")

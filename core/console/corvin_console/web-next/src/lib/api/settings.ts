@@ -224,6 +224,22 @@ export function setDelegationBudget(
   return api("/settings/delegation-budget", { method: "PUT", csrf, body: values });
 }
 
+// ── Automatic model saving allowance ────────────────────────────────
+
+import type { CostOptimizeResponse } from "../cost-optimize";
+
+export function getCostOptimize(signal?: AbortSignal): Promise<CostOptimizeResponse> {
+  return api("/settings/cost-optimize", { signal });
+}
+
+/** `cap_ratio: null` returns to the tier default; the server decides what is in force. */
+export function setCostOptimize(
+  values: { cap_ratio?: number | null; floor_usd?: number },
+  csrf: string,
+): Promise<CostOptimizeResponse & { ok: boolean }> {
+  return api("/settings/cost-optimize", { method: "PUT", csrf, body: values });
+}
+
 // ── Self-healing config (ACO L5 toggles + healing telemetry) ────────
 
 export interface HealingConfigResponse {

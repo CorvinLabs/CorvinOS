@@ -530,7 +530,6 @@ pytest tests/cost/test_cost_insights_stream3_all_stories.py -v
 
 **Dependencies:**
 - `core.licensing.billing.BillingSchema` — For model pricing (v1.0)
-- `core.storage.savings_store.SavingsStore` — For savings tracking (existing)
 - `core.learning.event_persistence.EventStore` — For learning events (Phase 3)
 
 **Consumers:**

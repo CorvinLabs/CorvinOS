@@ -304,6 +304,18 @@ CAPABILITIES: dict[str, dict[str, Any]] = {
         "free": {"limit": 0},         # MEMBER ONLY — Forge/Skill-Forge authoring
         "member": {"limit": None},
     },
+    # Automatic model downgrading (ADR-2259, PLAN-0955). Free has an ALLOWANCE,
+    # not a quantity: `limit: 0` keeps require_capability() well-defined (Free is
+    # not unlimited) while `ratio` / `floor_usd` are read by
+    # bridges/shared/savings_cap.py — the ONE place this number lives. The
+    # operator's Settings value can only make the cap stricter on Free; raising it
+    # needs a Member credential. Deterrence (class L), never a lock — stated in
+    # the licence terms.
+    "cost.optimize": {
+        "class": "L",
+        "free": {"limit": 0, "ratio": 0.10, "floor_usd": 5.0},
+        "member": {"limit": None},
+    },
 
     # ── Class N: Network-verified (Member Credential + CRL) ──
     "marketplace.publish": {

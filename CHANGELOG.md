@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added — Automatic model saving: a Free-tier allowance you can tune in Settings
+- Automatic choice of a cheaper model for simple turns is now measured and limited on the Free tier to a share of
+  saving per UTC month (default 10 %, floor USD 5); Member is unlimited. Only the **automatic** tiers are limited —
+  models you pin, upgrades to a stronger model and everything else are untouched. The share is computed from your
+  real completed turns (same tokens priced at the default model vs the model that ran), never from a constant.
+- Settings → *Automatic model saving*: set your own limit (Free can lower it or switch it off with 0, Member can set
+  any value or none), see this month's measured saving with its window, and why the automation is paused.
+  Changes apply to the next turn and are audited (`cost.optimize_capped` / `_resumed` / `_config_changed`).
+- Removed the unmounted `TokenSavingsTracker`, `SavingsStore` and `billing_savings` route: they were fed by nothing,
+  used fixed constants as "savings" and a made-up credit per token.
+
 ### Added — Agent conversations → "Your agents": register an agent and share it with peers from the console
 - A freshly installed instance could not use `/ask @peer`, `/ask @mine` or `/talk`: the console could only list
   local agents, so the refusal "this peer offers no federable agent — the peer must mark one as federable" named an

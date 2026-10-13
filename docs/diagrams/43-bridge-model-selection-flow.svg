@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="920" height="560" viewBox="0 0 920 560" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">
-  <title>ADR-2104 — Bridge model selection with workload routing (Tier 2.7)</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="660" viewBox="0 0 920 660" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">
+  <title>ADR-2104 / ADR-2259 — Model selection with workload routing (Tier 2.7) and the Free savings allowance</title>
   <style>
     .box { fill:#f6f8fa; stroke:#57606a; rx:8; }
     .gate { fill:#fff8c5; stroke:#9a6700; rx:8; }
@@ -62,4 +62,11 @@
   <text x="555" y="494" class="lbl" font-weight="bold">any other case → fall through</text>
   <text x="555" y="512" class="sub">code / uncertain / low confidence / flag off / unknown engine</text>
   <text x="555" y="527" class="sub">→ Tier 3 adaptive → Tier 4 None (user's model authority intact)</text>
+
+  <path class="arr" d="M460 540 V562"/>
+  <rect x="40" y="562" width="850" height="84" class="gate"/>
+  <text x="55" y="584" class="lbl" font-weight="bold">apply_savings_cap(model, source) — Free allowance for AUTOMATIC choices (ADR-2259)</text>
+  <text x="55" y="602" class="sub">capped only if source ∈ {workload, ato, classifier, autoselect} AND this UTC month's measured saving ≥ the limit (Free: min(setting, 10 %))</text>
+  <text x="55" y="617" class="sub">capped → a choice ranking below the default tier model becomes the default · pins (override, profile, persona, tenant) and upgrades always pass</text>
+  <text x="55" y="632" class="sub">audit on transitions only (cost.optimize_capped / _resumed) · meter derives from the audit chain · Member: unlimited · a fault never changes a turn</text>
 </svg>

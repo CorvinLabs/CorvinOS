@@ -991,7 +991,7 @@ def classify_os_model(
 # ── ADR-0119/0123/0251 — the single OS-model resolver for BOTH surfaces ───────
 
 
-def resolve_os_model(
+def resolve_os_model_with_source(
     profile: dict | None,
     *,
     payload_chars: int = 0,
@@ -1002,8 +1002,14 @@ def resolve_os_model(
     ato_plan_hint: dict | None = None,
     task_input: str | None = None,
     audit_fn=None,
-) -> str | None:
+) -> tuple[str | None, str]:
     """Layer 29.5 Phase 3 (ADR-0024) / ADR-0119 / ADR-0123 — 7-Tier adaptive OS model selection.
+
+    Returns ``(model, source)``: ``source`` names the tier that decided (``override`` /
+    ``profile_pin`` / ``persona_pin`` / ``tenant_pin`` are the OPERATOR'S choice;
+    ``workload`` / ``ato`` / ``classifier`` / ``autoselect`` are AUTOMATIC;
+    ``subscription_default`` is Tier 4). Callers that only need the model use
+    ``resolve_os_model`` below, which also applies the Free savings cap (ADR-2259).
 
     THE single source of truth for OS-turn model resolution. Both the console
     web-chat (``chat_runtime.py``) and the bridge adapter (``adapter.py``) call
@@ -1045,19 +1051,19 @@ def resolve_os_model(
     # Tier 1 — operator-wide kill-switch (wins even over explicit model:)
     override = os_model_override()
     if override:
-        return normalise_pin(override, engine_id) or override
+        return (normalise_pin(override, engine_id) or override), "override"
 
     # Tier 2 — explicit per-persona / per-chat-profile pin
     profile = profile or {}
     explicit = profile.get("model")
     if isinstance(explicit, str) and explicit.strip():
-        return normalise_pin(explicit, engine_id) or explicit.strip()
+        return (normalise_pin(explicit, engine_id) or explicit.strip()), "profile_pin"
 
     # Tier 1.5 — per-persona JSON pin (ADR-0123); injected by call_claude_streaming
     persona_os_model = profile.get("_persona_os_model")
     if isinstance(persona_os_model, str) and persona_os_model.strip():
-        return (normalise_pin(persona_os_model, engine_id)
-                or persona_os_model.strip())
+        return ((normalise_pin(persona_os_model, engine_id)
+                 or persona_os_model.strip()), "persona_pin")
 
     # Tier 2.5 — per-engine tenant default (ADR-0119)
     try:
@@ -1071,7 +1077,7 @@ def resolve_os_model(
         try:
             tenant_os_model = get_tenant_engine_model(tenant_id, engine_id, "os_model")
             if tenant_os_model:
-                return normalise_pin(tenant_os_model, engine_id) or tenant_os_model
+                return (normalise_pin(tenant_os_model, engine_id) or tenant_os_model), "tenant_pin"
         except Exception:  # noqa: BLE001
             pass
 
@@ -1164,7 +1170,7 @@ def resolve_os_model(
                                     )
                                 except Exception:  # noqa: BLE001
                                     pass  # audit failure is non-fatal
-                            return model
+                            return model, "workload"
             except Exception:  # noqa: BLE001
                 pass  # Tier 2.7 routing failure is non-fatal; fall through to Tier 3
 
@@ -1206,7 +1212,7 @@ def resolve_os_model(
                             )
                         except Exception:  # noqa: BLE001
                             pass  # audit failure is non-fatal
-                    return actual_model
+                    return actual_model, "ato"
         except Exception:  # noqa: BLE001
             pass  # Tier 2.8 routing failure is non-fatal; fall through to Tier 3
 
@@ -1233,7 +1239,7 @@ def resolve_os_model(
                 payload_chars=payload_chars,
             )
             if classified:
-                return apply_floor(classified, profile.get("os_model_floor"))
+                return apply_floor(classified, profile.get("os_model_floor")), "classifier"
         except Exception:  # noqa: BLE001 — advisory tier; never break the turn
             _mlog.debug("Tier 2.9 classifier skipped", exc_info=True)
 
@@ -1243,13 +1249,89 @@ def resolve_os_model(
             chosen = autoselect_os_model(payload_chars, tenant_id=tenant_id)
             floor = profile.get("os_model_floor")
             chosen = apply_floor(chosen, floor)
-            return chosen
+            return chosen, "autoselect"
         except Exception:  # noqa: BLE001
             # estimate_failed → safe-default HIGH (never silently pick LOW)
-            return high_model(tenant_id)
+            return high_model(tenant_id), "autoselect"
 
     # Tier 4 — fallthrough to CLI subscription default
-    return None
+    return None, "subscription_default"
+
+
+#: Sources chosen by the machine, not by the operator. ONLY these can be capped:
+#: a pin (override / profile / persona / tenant) is the operator's instruction and
+#: always wins — the Console model choice is binding (operator rule 2026-10-13).
+_AUTOMATIC_SOURCES: Final[frozenset[str]] = frozenset(
+    {"workload", "ato", "classifier", "autoselect"})
+
+
+def apply_savings_cap(model: str | None, source: str, *, tenant_id: str = "_default") -> str | None:
+    """ADR-2259 — the Free allowance for AUTOMATIC model downgrading.
+
+    Once the installation's measured saving this month has reached its allowance
+    (``savings_cap.evaluate``), an automatic tier may no longer pick a model that
+    ranks BELOW the default tier model; it gets the default instead. Upgrades
+    (e.g. Opus for a complex turn) and every pin pass through untouched, so the
+    cap removes savings, never quality. Never raises: any fault leaves ``model``
+    exactly as the tiers chose it.
+    """
+    if not model or source not in _AUTOMATIC_SOURCES:
+        return model
+    try:
+        try:
+            from savings_cap import evaluate as _cap_eval  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from .savings_cap import evaluate as _cap_eval  # type: ignore  # noqa: PLC0415
+        default = high_model(tenant_id)
+        state = _cap_eval(tenant_id, default_model=default, block=False)
+        try:
+            try:
+                from savings_cap import note_state as _cap_note  # type: ignore  # noqa: PLC0415
+            except ImportError:
+                from .savings_cap import note_state as _cap_note  # type: ignore  # noqa: PLC0415
+            _cap_note(tenant_id, state)        # recorded BEFORE the verdict applies
+        except Exception:  # noqa: BLE001
+            _mlog.debug("savings cap audit skipped", exc_info=True)
+        if not state.capped:
+            return model
+        chosen_rank, default_rank = _rank(model), _rank(default)
+        if chosen_rank > 0 and default_rank > 0 and chosen_rank < default_rank:
+            return default
+    except Exception:  # noqa: BLE001 — a cap fault must never break or change a turn
+        _mlog.debug("savings cap skipped", exc_info=True)
+    return model
+
+
+def resolve_os_model(
+    profile: dict | None,
+    *,
+    payload_chars: int = 0,
+    engine_id: str = "claude_code",
+    tenant_id: str = "_default",
+    workload_hint: dict | None = None,
+    chat_key: str | None = None,
+    ato_plan_hint: dict | None = None,
+    task_input: str | None = None,
+    audit_fn=None,
+) -> str | None:
+    """THE OS-turn model for both surfaces: the tiered decision of
+    ``resolve_os_model_with_source`` plus the Free savings cap (ADR-2259).
+
+    Same signature and return type as always; see ``resolve_os_model_with_source``
+    for the tier order.
+    """
+    model, source = resolve_os_model_with_source(
+        profile,
+        payload_chars=payload_chars,
+        engine_id=engine_id,
+        tenant_id=tenant_id,
+        workload_hint=workload_hint,
+        chat_key=chat_key,
+        ato_plan_hint=ato_plan_hint,
+        task_input=task_input,
+        audit_fn=audit_fn,
+    )
+    return apply_savings_cap(model, source, tenant_id=tenant_id)
 
 
 # ── ADR-0251 — the `engine.model_selection` call site ─────────────────────────

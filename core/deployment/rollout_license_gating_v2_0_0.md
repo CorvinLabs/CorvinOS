@@ -220,8 +220,6 @@ echo ""
 # 1. Skill Load Success Rate
 echo "1. Skill Load Success Rate (target: 99.9%)"
 SKILL_LOAD_SUCCESS=$(python3 -c "
-from core.learning.token_savings_tracker import TokenSavingsTracker
-tracker = TokenSavingsTracker()
 # Count successful skill loads from audit trail (last 5 min)
 success_count = len([e for e in get_audit_events() if e.event_type == 'skill_loaded' and e.skill_loaded == True])
 total_count = len([e for e in get_audit_events() if e.event_type == 'skill_loaded'])

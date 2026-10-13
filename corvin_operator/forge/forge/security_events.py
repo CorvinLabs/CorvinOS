@@ -433,6 +433,12 @@ EVENT_SEVERITY: dict[str, str] = {
     # Per-event allow-list + forbidden-fields in model_selector.py.
     "os_model.selected":            "INFO",
     "os_model.escalated":           "WARNING",
+    # ADR-2259 — Free-tier allowance for AUTOMATIC model downgrading. State
+    # TRANSITIONS only (never one record per turn) + operator config changes.
+    # Metadata only: ratios, USD totals, tier — never prompt text.
+    "cost.optimize_capped":         "INFO",
+    "cost.optimize_resumed":        "INFO",
+    "cost.optimize_config_changed": "INFO",
     # ADR-0017 Phase V — corvin-enterprise plugin mount lifecycle.
     # Emitted from the proprietary overlay; registered here so the
     # severity contract is the open-core's source of truth.
@@ -4686,6 +4692,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "console.session_denied": frozenset({"reason", "tenant_id", "token_fingerprint", "user_agent_class"}),
     "console.session_ended": frozenset({"reason", "sid_fingerprint", "tenant_id"}),
     "console.session_started": frozenset({"sid_fingerprint", "tenant_id", "token_fingerprint", "user_agent_class"}),
+    "cost.optimize_capped": frozenset({"cap", "counterfactual_usd", "month", "ratio", "reason", "tenant_id", "tier"}),
+    "cost.optimize_config_changed": frozenset({"cap_ratio_after", "cap_ratio_before", "clamped", "effective_ratio", "floor_usd_after", "floor_usd_before", "tenant_id", "tier"}),
+    "cost.optimize_resumed": frozenset({"cap", "counterfactual_usd", "month", "ratio", "reason", "tenant_id", "tier"}),
     "cost_variance_updated": frozenset({"cost_variance_observed", "is_converged", "n_samples", "new_threshold", "old_threshold", "quality_observed", "subsystem", "task_type"}),
     "data.anonymisation_rejected_pii_leak": frozenset({"advisory", "data_handle", "match_count", "reason"}),
     "data.policy_violated": frozenset({"format_hint", "reason"}),

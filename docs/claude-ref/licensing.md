@@ -64,6 +64,7 @@ Every entitlement is a **capability** with an enforcement class per CONCEPT-0041
 | `datasource.connections_concurrent` | L | 1 | ∞ | existing gates re-pointed |
 | `layers.custom_bc` | L | 1 | ∞ | `custom_layer_gate.py` |
 | `skill_forge_per_day` (skill authoring) | L | 5/day (UTC) | ∞ | `SkillRegistry.create` charges; console pre-checks (ADR-2095) |
+| `cost.optimize` (automatic model downgrading) | L | ≤ 10 % measured saving per UTC month (floor USD 5; operator may only lower it) | ∞ | `model_selector.resolve_os_model` via `bridges/shared/savings_cap.py` (ADR-2259) — deterrence, never a lock; pinned models are never capped |
 | **Member Only (Class L)** | | | | |
 | `forge.create` | L | ✗ | ∞ | ADR-0701 chokepoints — Tool Forge, panels, plugin builder; for SKILLS it is the member test only (ADR-2095) |
 | **Network Gates (Class N)** | | | | |

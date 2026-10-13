@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { A2AInstanceUrlCard } from "@/components/settings/A2AInstanceUrlCard";
 import { UpdateCard } from "@/components/settings/UpdateCard";
+import { CostOptimizeCard } from "@/components/settings/CostOptimizeCard";
 
 interface SettingsFile {
   label: string;
@@ -794,6 +795,11 @@ export function SettingsPage() {
       <div className="space-y-2">
         <h2 className="text-sm font-semibold text-foreground">Agentic Compute</h2>
         <DelegationBudgetCard csrf={session!.csrf_token} />
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-sm font-semibold text-foreground">Automatic model saving</h2>
+        <CostOptimizeCard csrf={session!.csrf_token} />
       </div>
 
       <div className="space-y-2">
