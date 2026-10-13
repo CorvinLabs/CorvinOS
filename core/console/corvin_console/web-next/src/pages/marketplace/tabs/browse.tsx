@@ -114,7 +114,8 @@ function EntryCard({ p, csrf, onGoTo, update }: {
     onError: (e) => {
       const esc = refusedEscalations(e);
       if (esc) { setPendingEscalations(esc); setOutcome(null); return; }
-      setOutcome({ kind: "error", text: "Not updated — the new version could not be installed; the installed version was kept." });
+      const reason = e instanceof Error && e.message ? ` Reason: ${e.message}` : "";
+      setOutcome({ kind: "error", text: `Not updated — the new version could not be installed; the installed version was kept.${reason}` });
     },
   });
   const community = tierKey(p.tier) === "contributor";
