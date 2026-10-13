@@ -49,7 +49,7 @@ test("actor glyphs, day separators and time tooltips render on the served bundle
   expect(marks).toEqual(["🧑", "🤖", "👤", "🤖", "🧑"]);
   await expect(rows.first().getByTestId("peer-message-role-mark")).toHaveAttribute("aria-hidden", "true");
 
-  const seps = page.getByTestId("peer-day-separator");
+  const seps = page.getByTestId("chat-day-separator");
   await expect(seps).toHaveCount(2);
   await expect(seps.nth(0)).toHaveText("Yesterday");
   await expect(seps.nth(1)).toHaveText("Today");

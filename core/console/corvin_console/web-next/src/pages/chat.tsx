@@ -98,6 +98,8 @@ import {
 } from "@/lib/streaming-state";
 import { useVoicePlayback, type VoiceState } from "@/lib/useVoicePlayback";
 import { ChatAvatar } from "@/components/chat/ChatAvatar";
+import { DaySeparator } from "@/components/chat/DaySeparator";
+import { CHAT_ROLE_MARK, messageTime, messageTimeFull, startsNewDay } from "@/lib/chat-time";
 import {
   btwFromTurn,
   btwStateLabel,
@@ -1520,13 +1522,17 @@ function ChatPane({
     scrollAnchorRef.current = null;
     el.scrollTop = a.top + (el.scrollHeight - a.height);
   }, [windowStart]);
-  const messageList = React.useMemo(
-    () =>
-      messages
-        .slice(windowStart)
-        .map((m) => <MessageBubble key={m.id} m={m} onViewTdeGraph={viewTdeGraph} onBtwAction={btwAction} />),
-    [messages, viewTdeGraph, btwAction, windowStart],
-  );
+  const messageList = React.useMemo(() => {
+    const visible = messages.slice(windowStart);
+    const stamps = visible.map((m) => m.ts);
+    const nowS = Math.floor(Date.now() / 1000);
+    return visible.map((m, i) => (
+      <React.Fragment key={m.id}>
+        {startsNewDay(stamps, i) && <DaySeparator ts={m.ts} nowS={nowS} />}
+        <MessageBubble m={m} onViewTdeGraph={viewTdeGraph} onBtwAction={btwAction} />
+      </React.Fragment>
+    ));
+  }, [messages, viewTdeGraph, btwAction, windowStart]);
 
   const handleVoiceToggle = React.useCallback(() => {
     const next = !voiceOutRef.current;
@@ -2339,7 +2345,17 @@ const MessageBubble = React.memo(function MessageBubble({
     <div className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>
       {!isUser && <div className="mt-5"><ChatAvatar label="Corvin" icon={Sparkles} /></div>}
       <div className={cn("flex min-w-0 max-w-[85%] flex-col", isUser ? "items-end" : "items-start")}>
-        <div className="mb-1 px-1 text-[11px] text-muted-foreground">{isUser ? "You" : "Corvin"}</div>
+        <div className="mb-1 flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
+          <span aria-hidden data-testid="chat-role-mark" className="text-sm leading-none">
+            {CHAT_ROLE_MARK[isUser ? "user" : "assistant"]}
+          </span>
+          <span className="font-medium text-foreground/80" data-testid="chat-role">{isUser ? "You" : "Corvin"}</span>
+          <span aria-hidden>·</span>
+          <time dateTime={new Date(m.ts * 1000).toISOString()} title={messageTimeFull(m.ts)}
+            data-testid="chat-message-time" className="cursor-help tabular-nums">
+            {messageTime(m.ts)}
+          </time>
+        </div>
         <div
           className={cn(
             "w-fit max-w-full rounded-2xl px-4 py-3 text-sm leading-relaxed",
