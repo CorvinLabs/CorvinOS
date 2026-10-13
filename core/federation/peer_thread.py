@@ -98,7 +98,7 @@ def _only_local_agent(tenant_id: str, agent_id: str | None) -> Any:
         agents = [registry.ensure_default_agent()[0]]
     if not agents:
         raise PeerThreadCommandError(
-            "no local agent registered — open Agent conversations → Your agents and register "
+            "no local agent registered — click Agents in this peer chat's header and register "
             "the Claude Code agent first (or set spec.federation.auto_register_default_agent: true "
             "in tenant.corvin.yaml)")
     if len(agents) > 1:
@@ -138,7 +138,7 @@ def _only_peer_agent(tenant_id: str, endpoint_id: str, agent_id: str | None) -> 
         return named[0]
     if not candidates:
         raise PeerThreadCommandError(
-            "this peer offers no federable agent — on the peer, open Agent conversations → Your agents "
+            "this peer offers no federable agent — on the peer, click Agents in a peer chat's header "
             "and turn on \"Share with paired peers\" (the peer needs the current version). "
             "A plain message without a slash is answered by the peer's default agent "
             "if it granted you Executor permission.")

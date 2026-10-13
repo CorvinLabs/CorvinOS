@@ -1,5 +1,5 @@
 /**
- * Fresh install, in the real browser on the served bundle: register the Claude Code agent with one click and
+ * (Peer chat header → Agents.) Fresh install, in the real browser on the served bundle: register the Claude Code agent with one click and
  * share it with paired peers by an explicit switch. The federation API is stubbed at the network boundary so the
  * state machine is deterministic; page, bundle, router, query layer and CSRF header handling are the real ones.
  * (Before this control existed `/ask @peer` could not work on a fresh install: the console could only LIST agents.)
@@ -31,7 +31,15 @@ test("fresh install: register the agent, then share it — nothing is shared by 
     return r.fulfill({ json: { agents } });
   });
 
-  await page.goto("/console/app/agent-conversations");
+  await page.route(/\/v1\/console\/a2a\/feed(\?.*)?$/, (r) => r.fulfill({ json: {
+    tenant_id: "_default", ts: Math.floor(Date.now() / 1000), retention_days: 30, has_more: false, last_seq: 0,
+    peers: [{ peer_id: "peer-e2e-agents", label: "E2E Peer", state: "ACTIVE", can_send: true, can_receive: true,
+      enabled: true, presence: "online", task_capacity: "ok" }],
+    messages: [], stages: {},
+  } }));
+  // "Your agents" lives in the peer chat header since the standalone page was removed.
+  await page.goto("/console/app/chat/peer/peer-e2e-agents");
+  await page.getByTestId("peer-agents-toggle").click();
   const panel = page.getByTestId("your-agents");
   await expect(panel).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("your-agents-empty")).toBeVisible();
@@ -56,4 +64,10 @@ test("fresh install: register the agent, then share it — nothing is shared by 
   const box = await panel.boundingBox();
   expect(box && box.width > 150 && box.height > 40).toBeTruthy();
   await page.screenshot({ path: "test-results/your-agents.png" });
+});
+
+test("the removed Agent conversations page redirects to the chat and is gone from the sidebar", async ({ page }) => {
+  await page.goto("/console/app/agent-conversations");
+  await expect(page).toHaveURL(/\/console\/app\/chat/, { timeout: 20_000 });
+  await expect(page.locator('nav a[href$="/app/agent-conversations"]')).toHaveCount(0);
 });

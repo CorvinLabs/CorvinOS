@@ -25,7 +25,7 @@ import {
   DataHubUnifiedPage,
   OTELTelemetryPage, VibeEngineeringPage, InitiativesPage, ModelsPage,
   ControlIntentRouterPage, ControlPlanePluginsPage, ControlSubsystemsPage, ControlOverridesPage, ControlSnapshotsPage,
-  LayerForgeAnalyticsPage, AgentConversationsPage,
+  LayerForgeAnalyticsPage,
 } from "@/lazy-pages";
 import type { ComponentType } from "react";
 import type { PanelDescriptor } from "@/adapters/capabilities";
@@ -127,11 +127,9 @@ export const PANELS: ConsolePanel[] = [
   // Console-native pages removed 2026-09-27 in favor of plugin-based UI.
   rc("files", "Files", FilesPage, { nav: { label: "Files", icon: "FolderOpen", group: "intelligence" } }),
   // REMOVED 2026-09-15: "space" panel (superseded by modern UI, no nav entry)
-  // agent-conversations is a core panel again (it was a Marketplace plugin panel 2026-10-09..13):
-  // the A2A surface — "Your agents", register/share, conversations — belongs to the core, and the
-  // peer chat points operators here. The plugin `agent_conversations` was removed; if a stale
-  // install still lists it, mergeManifestNav dedupes on the path.
-  rc("agent-conversations", "Agent conversations", AgentConversationsPage, { nav: { label: "Agent conversations", icon: "Users", group: "intelligence" } }),
+  // agent-conversations: no panel. The standalone page was removed 2026-10-13 (operator decision); "Your agents"
+  // moved into the peer chat header, conversations live in the peer thread. /app/agent-conversations redirects (App.tsx).
+  // (was a core panel again 2026-10-13, before that a Marketplace plugin panel)
   rc("memory", "Memory", MemoryPage, { nav: { label: "Memory", icon: "BookOpen", group: "intelligence" } }),
   // Agent Hub removed 2026-10-05 (Console navigation refactor, Phase 4) —
   // its 7 functions migrated to the chat sidebar (PeerManagementDialog),

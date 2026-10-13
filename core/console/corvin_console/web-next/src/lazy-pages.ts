@@ -244,6 +244,3 @@ export const LayerForgeAnalyticsPage = React.lazy(() =>
 // Vibe Engineering panels (ADR-0400 dashboard + secondary views)
 
 
-export const AgentConversationsPage = React.lazy(() =>
-  import("@/pages/agent-conversations").then((m) => ({ default: m.AgentConversationsPage }))
-);

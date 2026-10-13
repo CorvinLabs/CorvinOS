@@ -2283,15 +2283,17 @@ the selection in component state instead of the URL.
 
 ---
 
-## Agent Conversations — core console panel (CONCEPT-0001)
+## Agent Conversations — no standalone page (CONCEPT-0001, ADR-2258)
 
-The panel at `/console/app/agent-conversations` is a **core** panel: a static `PANELS` entry
-(`registry.tsx`) plus a `NAV_GROUPS` entry (`layout.tsx`, "Agent conversations" next to Memory). It was the
-console panel of the Marketplace plugin `agent_conversations` from 2026-10-09 until 2026-10-13, when the
-operator decided that everything A2A belongs in the core: the peer chat's own refusals point operators
-here ("Your agents": register, share with paired peers), so the panel can not depend on an optional
-plugin. The plugin was removed; its concept and ADR-0001 moved to Corvin-Knowledge. A stale install that
-still lists the plugin is deduped by `mergeManifestNav` on the path.
+There is **no** `/console/app/agent-conversations` page any more: it was a Marketplace plugin panel
+2026-10-09, a core panel for a few hours on 2026-10-13, and was removed the same day by operator decision
+("it does not belong here"). `/app/agent-conversations` redirects to the chat (`App.tsx`). What it held now lives
+in the peer chat: **Your agents** (register the Claude Code agent, share it with paired peers) behind the
+**Agents** button in the peer-chat header (`PeerConversation.tsx`, `YourAgents.tsx`); conversations are started
+with `/talk` and shown in the peer thread (`ConversationThread`). The plugin `agent_conversations` is gone from
+the Marketplace repo and was uninstalled on this host (`PluginLifecycle.disable` → `uninstall`; the marketplace
+uninstall route needs the plugin's source and returned 404 after the source was deleted — uninstall BEFORE
+deleting a plugin's source).
 
 The operator takes part in a running conversation (peer-chat style). **The transcript still has ONE
 writer — the moderator thread** (`core/federation/conversation.py`, ADR-2234). Everything the operator
@@ -2314,11 +2316,11 @@ never dropped. Audit (metadata only, never text): `federation.conversation_opera
 
 **Proof.** `tests/federation/test_agent_conversation_operator_e2e.py` (real console, real signed peer
 turns, real `spawn_a2a_worker` gates, stub engine only), `web-next/tests/unit/agent-conversation-view.test.ts`,
-`web-next/tests/e2e/agent-conversations.spec.ts` (real sidebar entry; thread/composer against a
+`web-next/tests/e2e/your-agents.spec.ts` (peer-chat Agents panel + the old URL redirects; thread/composer against a
 stubbed API — the live install has no agent or peer). A route change needs a console restart.
 
 **Must NOT do:** write operator input straight into the transcript file · parse slash commands in the
-client · move the panel back into a plugin · put message text into an audit record.
+client · bring back a standalone agent-conversations page (the peer chat owns it) · put message text into an audit record.
 
 
 

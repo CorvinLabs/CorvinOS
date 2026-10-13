@@ -1530,7 +1530,7 @@ conversations → Your agents*:
 Registering is never consenting. The refusals now say where to fix it: `/ask @peer` → "on the peer, open Agent
 conversations → Your agents and turn on *Share with paired peers* (the peer needs the current version) — a plain
 message without a slash is answered by the peer's default agent if it granted you Executor permission";
-`/ask @mine` → "open Agent conversations → Your agents and register the Claude Code agent first".
+`/ask @mine` → "click Agents in this peer chat's header and register the Claude Code agent first".
 **Module layout (2026-10-13, ADR-2258 option A):** twelve L38 modules without a standalone need live in
 `core/a2a/` (`a2a_audit`, `a2a_chat_friendship_token`, `a2a_chat_pending_send`, `a2a_compute_engine`,
 `a2a_connectivity`, `a2a_ingress`, `a2a_invite`, `a2a_invite_registry`, `a2a_live_probe`, `a2a_nonce_store`,

@@ -14,6 +14,7 @@
 import * as React from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Bot, Check, CheckCheck, CircleHelp, Clock, Globe2, Loader2, Paperclip, Send, Mic, MicOff, FolderUp, Square, XCircle, type LucideIcon } from "lucide-react";
+import { YourAgents } from "@/components/agent-conversations/YourAgents";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -252,6 +253,9 @@ function ActiveConversationBanner({
 }
 
 export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: string }) {
+  // "Your agents" (register / share with paired peers) lives here since the standalone
+  // Agent conversations page was removed — /talk and /ask need a registered agent.
+  const [agentsOpen, setAgentsOpen] = React.useState(false);
   const feed = useQuery({
     queryKey: ["a2a", "feed", "peer", peerId],
     queryFn: ({ signal }) => getA2AFeed({ peer_id: peerId, limit: 200, include_former: true }, signal),
@@ -452,7 +456,17 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
             </span>
           </div>
         </div>
+        <button type="button" onClick={() => setAgentsOpen((v) => !v)} aria-expanded={agentsOpen}
+          data-testid="peer-agents-toggle" title="Your agents: register, and share with paired peers"
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs hover:bg-muted">
+          <Bot className="h-3.5 w-3.5" /> Agents
+        </button>
       </header>
+      {agentsOpen && (
+        <div className="border-b border-border px-4 py-3" data-testid="peer-agents-panel">
+          <YourAgents csrf={csrf} />
+        </div>
+      )}
 
       {activeConversation && (
         <ActiveConversationBanner
