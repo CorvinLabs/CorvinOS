@@ -29,7 +29,10 @@ export function UpdateCard({ csrf }: UpdateCardProps) {
   const checkQuery = useQuery({
     queryKey: ["update-check"],
     queryFn: ({ signal }) => checkUpdate(signal),
-    refetchInterval: 60000, // Re-check every 60 seconds
+    // Re-check every minute; every 3s while the updater runs (the console restarts mid-way,
+    // so a failed poll is expected and simply retried).
+    refetchInterval: (q) => (q.state.data?.running || q.state.status === "error" ? 3000 : 60000),
+    retry: false,
   });
 
   // Auto-update state
@@ -98,6 +101,16 @@ export function UpdateCard({ csrf }: UpdateCardProps) {
     }
   };
 
+  const running = check?.running ?? false;
+  const last = check?.last_update ?? null;
+  const lastText = last?.at
+    ? `${new Date(last.at * 1000).toLocaleString()} - ${
+        last.status === "success" ? "succeeded"
+        : last.status === "failed" ? "failed"
+        : last.status === "interrupted" ? "interrupted"
+        : "in progress"}${last.version_after && last.version_before && last.version_after !== last.version_before
+        ? ` (v${last.version_before} -> v${last.version_after})` : ""}`
+    : "never";
   const hasUpdate = check?.has_update ?? false;
   const currentVersion = check?.current_version ?? "unknown";
   const availableVersion = check?.available_version ?? null;
@@ -145,10 +158,10 @@ export function UpdateCard({ csrf }: UpdateCardProps) {
               <Button
                 size="sm"
                 onClick={handleInstall}
-                disabled={installing || !hasUpdate || checkError !== null}
+                disabled={installing || running || !hasUpdate || !!checkError}
                 className="h-8 px-3 text-sm gap-1"
               >
-                {installing ? (
+                {installing || running ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     Updating...
@@ -167,6 +180,13 @@ export function UpdateCard({ csrf }: UpdateCardProps) {
               </Button>
             </div>
           </div>
+
+          <p className="text-[11px] text-muted-foreground" data-testid="last-update">
+            Last update: {lastText}
+          </p>
+          {last?.status === "failed" && last.detail && (
+            <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{last.detail}</p>
+          )}
 
           {/* Progress message */}
           {installProgress && (

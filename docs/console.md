@@ -261,11 +261,16 @@ once per logon/boot **before** launching the console, so an always-on machine st
 lands on the newest version; it is best-effort and never blocks startup (offline /
 timeout / missing `uv` just logs and continues). The default is **on** at every
 layer: no config file or no `auto_update` key means enabled; only an explicit
-`false` (written by the toggle) turns it off. The **Update** card also offers a manual
-"Check & Install" button (`GET /settings/update/check`, `POST /settings/update/install`)
-that runs `scripts/Update.sh` (Linux/macOS) or `scripts/Update.ps1` (Windows),
-resolved from `~/.corvin/scripts/`, `CORVIN_SCRIPT_DIR`, or the install dir; one update
-per tenant at a time (409 otherwise), start and end are audited. Also here: tenant config
+`false` (written by the toggle) turns it off. The **Update** card also offers a manual "Check & Install" button and shows when the
+updater last ran. It is a thin client for the install's own `update.sh` (Linux/macOS) /
+`update.ps1` (Windows) at the root of the source tree (ADR-2054, ADR-2215): the tree is
+found via `CORVIN_SRC_DIR`, the checkout the console runs from, or the installer-managed
+tree. Nothing is copied to `~/.corvin/scripts`, and there is no second updater.
+`GET /settings/update/check` returns `has_update`, `running` and `last_update`
+(`at`, `status`, `version_before`, `version_after`); `POST /settings/update/install`
+starts the updater detached and returns at once, because the updater restarts the console.
+One update runs per tenant at a time (409 otherwise); start and end are audited and the
+last run is kept in `update_state.json` under the tenant's global dir. Also here: tenant config
 (`tenant.corvin.yaml` viewer), and the `bridge.sh doctor` output on demand.
 Token revocation is available here.
 

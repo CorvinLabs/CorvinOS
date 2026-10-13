@@ -893,15 +893,10 @@ async def get_feature(
 
 
 # ── Update Management ────────────────────────────────────────────────────
-
-
-class UpdateCheckRequest(BaseModel):
-    """Request to check for available updates."""
-    model_config = {"extra": "forbid"}
+# Thin client for the repository's own updater (update.sh / update.ps1).
 
 
 class UpdateInstallRequest(BaseModel):
-    """Request to install available updates."""
     model_config = {"extra": "forbid"}
 
 
@@ -909,40 +904,17 @@ class UpdateInstallRequest(BaseModel):
 async def check_update(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
-    """Check if an update is available (non-blocking, no lock acquired).
-
-    Returns:
-        {
-            "has_update": bool,
-            "current_version": str,
-            "available_version": str | null,
-            "error": str | null,
-        }
-    """
-    try:
-        from ..update_manager import UpdateManager
-        manager = UpdateManager(rec.tenant_id)
-        result = await manager.check_update()
-
-        return {
-            "has_update": result.has_update,
-            "current_version": result.current_version,
-            "available_version": result.available_version,
-            "error": result.error,
-        }
-    except Exception as e:
-        console_audit.action_failed(
-            tenant_id=rec.tenant_id,
-            sid_fingerprint=rec.sid_fingerprint,
-            action="settings.update_check",
-            target_kind="system_update",
-            target_id="corvinOS_core",
-            reason="check_failed",
-        )
-        raise HTTPException(
-            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
-        ) from e
+    """Version check plus ``running`` and ``last_update`` (when the updater last ran)."""
+    from ..update_manager import UpdateManager
+    r = await UpdateManager(rec.tenant_id).check_update()
+    return {
+        "has_update": r.has_update,
+        "current_version": r.current_version,
+        "available_version": r.available_version,
+        "error": r.error,
+        "running": r.running,
+        "last_update": r.last_update,
+    }
 
 
 @router.post("/settings/update/install")
@@ -950,73 +922,23 @@ async def install_update(
     body: UpdateInstallRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
-    """Install available updates (blocking until completion or timeout).
+    """Start the updater detached and return at once (it restarts the console)."""
+    from ..update_manager import UpdateManager, UpdateNotAllowedError
 
-    Returns:
-        {
-            "success": bool,
-            "exit_code": int,
-            "final_message": str,
-        }
-
-    Raises:
-        HTTPException(409): If another update is already in progress
-        HTTPException(500): If update fails
-    """
-    try:
-        from ..update_manager import (
-            UpdateManager, UpdateNotAllowedError, UpdateFailedError
-        )
-        manager = UpdateManager(rec.tenant_id)
-
-        try:
-            result = await manager.run_update()
-            console_audit.action_performed(
-                tenant_id=rec.tenant_id,
-                sid_fingerprint=rec.sid_fingerprint,
-                action="settings.update_install",
-                target_kind="system_update",
-                target_id="corvinOS_core",
-            )
-            return result
-        except UpdateNotAllowedError as e:
-            console_audit.action_failed(
-                tenant_id=rec.tenant_id,
-                sid_fingerprint=rec.sid_fingerprint,
-                action="settings.update_install",
-                target_kind="system_update",
-                target_id="corvinOS_core",
-                reason="already_in_progress",
-            )
-            raise HTTPException(
-                status_code=http_status.HTTP_409_CONFLICT,
-                detail=str(e),
-            ) from e
-        except UpdateFailedError as e:
-            console_audit.action_failed(
-                tenant_id=rec.tenant_id,
-                sid_fingerprint=rec.sid_fingerprint,
-                action="settings.update_install",
-                target_kind="system_update",
-                target_id="corvinOS_core",
-                reason="update_failed",
-            )
-            raise HTTPException(
-                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=str(e),
-            ) from e
-    except HTTPException:
-        raise
-    except Exception as e:
+    def _fail(code: int, reason: str, detail: str) -> HTTPException:
         console_audit.action_failed(
-            tenant_id=rec.tenant_id,
-            sid_fingerprint=rec.sid_fingerprint,
-            action="settings.update_install",
-            target_kind="system_update",
-            target_id="corvinOS_core",
-            reason="unexpected_error",
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="settings.update_install", target_kind="system_update",
+            target_id="corvinOS_core", reason=reason,
         )
-        raise HTTPException(
-            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Update failed: {str(e)}",
-        ) from e
+        return HTTPException(status_code=code, detail=detail)
+
+    try:
+        return UpdateManager(rec.tenant_id).start_update(rec.sid_fingerprint)
+    except UpdateNotAllowedError as e:
+        in_progress = "in progress" in str(e)
+        raise _fail(http_status.HTTP_409_CONFLICT if in_progress else http_status.HTTP_404_NOT_FOUND,
+                    "already_in_progress" if in_progress else "updater_not_found", str(e)) from e
+    except OSError as e:
+        raise _fail(http_status.HTTP_500_INTERNAL_SERVER_ERROR, "spawn_failed",
+                    f"could not start the updater: {e}") from e

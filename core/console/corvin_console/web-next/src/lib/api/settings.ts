@@ -61,16 +61,27 @@ export function setAutoUpdate(enabled: boolean, csrf: string): Promise<{ enabled
 
 // ── Core Update Management ─────────────────────────────────────────
 
+export interface LastUpdate {
+  /** Unix seconds: when the updater finished (or started, if it was cut off by the restart). */
+  at: number | null;
+  status: "running" | "success" | "failed" | "interrupted" | null;
+  version_before: string | null;
+  version_after: string | null;
+  detail: string | null;
+}
+
 export interface UpdateCheckResult {
   has_update: boolean;
   current_version: string;
   available_version: string | null;
   error: string | null;
+  running: boolean;
+  last_update: LastUpdate | null;
 }
 
 export interface UpdateInstallResult {
   success: boolean;
-  exit_code: number;
+  exit_code: number | null;
   final_message: string;
 }
 

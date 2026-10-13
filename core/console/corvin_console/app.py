@@ -944,62 +944,6 @@ def create_app() -> FastAPI:
                 f"Failed to start drift detection service: {exc}"
             )
 
-        # Auto-update on startup — async background task (non-blocking boot)
-        # Checks if auto_update is enabled, then runs update script if new version available
-        try:
-            import asyncio
-            import logging as _auto_update_logger
-            from .update_manager import UpdateManager
-
-            async def _try_auto_update():
-                """Async auto-update task (fire-and-forget, non-blocking boot)."""
-                logger = _auto_update_logger.getLogger(__name__)
-                try:
-                    # Get tenant ID (default to _default for single-tenant installs)
-                    import os as _os_au
-                    tenant_id = _os_au.environ.get("CORVIN_TENANT_ID", "_default")
-
-                    # Check if auto-update is enabled
-                    from .routes.settings import _read_auto_update
-                    if not _read_auto_update():
-                        logger.debug("Auto-update is disabled")
-                        return
-
-                    logger.info("Auto-update enabled — checking for updates...")
-                    manager = UpdateManager(tenant_id)
-
-                    # Check (soft, non-blocking)
-                    result = await manager.check_update()
-                    if result.error:
-                        logger.warning("Auto-update check failed: %s", result.error)
-                        return
-
-                    if not result.has_update:
-                        logger.debug(f"No update available (current: {result.current_version})")
-                        return
-
-                    logger.info(
-                        "Update available: %s → %s. Installing in background...",
-                        result.current_version,
-                        result.available_version,
-                    )
-
-                    # Run update (300s timeout, non-blocking boot)
-                    await asyncio.wait_for(manager.run_update(), timeout=300)
-                    logger.info("Auto-update completed successfully")
-
-                except asyncio.TimeoutError:
-                    logger.warning("Auto-update timed out after 300s")
-                except Exception as exc:
-                    logger.warning("Auto-update failed: %s", exc)
-
-            # Schedule as async task (fire-and-forget)
-            asyncio.create_task(_try_auto_update())
-            _auto_update_logger.getLogger(__name__).info("Auto-update background task scheduled")
-        except Exception as exc:
-            import logging as _auto_update_err_logger
-            _auto_update_err_logger.getLogger(__name__).warning("Failed to schedule auto-update: %s", exc)
-
         yield
         # Data Hub learning loop: persist state + release the per-tenant lease (review DH-6).
         try:
