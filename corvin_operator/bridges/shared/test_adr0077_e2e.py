@@ -464,7 +464,11 @@ class TestCILint(unittest.TestCase):
 
     def _check_no_anthropic(self, filename: str) -> None:
         import ast
-        src = (_here / filename).read_text("utf-8")
+        # a2a_nonce_store moved to core/a2a (ADR-2258); read the REAL file, not the alias shim.
+        real = _here.parents[2] / "core" / "a2a" / filename
+        target = real if real.is_file() else _here / filename
+        src = target.read_text("utf-8")
+        self.assertGreater(len(src), 500, f"{target}: lint would pass vacuously on a shim")
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

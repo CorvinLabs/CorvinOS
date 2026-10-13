@@ -29,7 +29,7 @@ _PROBE_ALLOWLIST = {
     ("remote_trigger_sender.py", "_http_ping_probe"): "the probe transport",
 }
 _PROBE_FILES = [
-    _REPO / "corvin_operator/bridges/shared/a2a_connectivity.py",
+    _REPO / "core/a2a/a2a_connectivity.py",
     _REPO / "corvin_operator/bridges/shared/a2a_friendship.py",
     _REPO / "corvin_operator/bridges/shared/remote_trigger_sender.py",
     _REPO / "core/console/corvin_console/routes/a2a_pair.py",

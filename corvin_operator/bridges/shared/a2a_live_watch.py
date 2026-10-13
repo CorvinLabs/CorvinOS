@@ -57,6 +57,7 @@ LOG_KEEP_LINES = 2000
 SOURCE_GLOBS = (
     "corvin_operator/bridges/shared/remote_trigger_*.py",
     "corvin_operator/bridges/shared/a2a_*.py",
+    "core/a2a/*.py",
     "corvin_operator/license/compute_quota.py",
     "core/console/corvin_console/routes/a2a_*.py",
     "core/console/corvin_console/routes/federation_routes.py",

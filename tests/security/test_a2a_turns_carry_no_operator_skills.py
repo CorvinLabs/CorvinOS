@@ -22,7 +22,7 @@ if str(SHARED) not in sys.path:
 PEER_TURN_MODULES = [
     "corvin_operator/bridges/shared/a2a_worker.py",
     "corvin_operator/bridges/shared/a2a_feed.py",
-    "corvin_operator/bridges/shared/a2a_task_state.py",
+    "core/a2a/a2a_task_state.py",
     "core/federation/conversation.py",
 ]
 FORBIDDEN = {"skill_inject", "collect_active_skills", "gate_injection",

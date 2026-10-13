@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 _HERE = Path(__file__).parent
+_REAL = _HERE.resolve().parents[2] / "core" / "a2a"  # moved modules (ADR-2258); the shim is not the source
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
@@ -356,10 +357,10 @@ class CILintTests(unittest.TestCase):
                     )
 
     def test_a2a_invite_no_anthropic(self):
-        self._check_no_anthropic(_HERE / "a2a_invite.py")
+        self._check_no_anthropic(_REAL / "a2a_invite.py")
 
     def test_a2a_invite_registry_no_anthropic(self):
-        self._check_no_anthropic(_HERE / "a2a_invite_registry.py")
+        self._check_no_anthropic(_REAL / "a2a_invite_registry.py")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ on:
     paths:
       - 'corvin_operator/forge/forge/security_events.py'
       - 'core/compute/corvin_compute/audit.py'
-      - 'corvin_operator/bridges/shared/a2a_audit.py'
+      - 'core/a2a/a2a_audit.py'
       - 'core/plugins/corvin_plugins/audit.py'
       - 'tests/security/test_audit_phase2_events.py'
       - 'tests/security/test_audit_registry_round4.py'
@@ -18,7 +18,7 @@ on:
     paths:
       - 'corvin_operator/forge/forge/security_events.py'
       - 'core/compute/corvin_compute/audit.py'
-      - 'corvin_operator/bridges/shared/a2a_audit.py'
+      - 'core/a2a/a2a_audit.py'
       - 'core/plugins/corvin_plugins/audit.py'
       - 'tests/security/test_audit_phase2_events.py'
       - 'tests/security/test_audit_registry_round4.py'
