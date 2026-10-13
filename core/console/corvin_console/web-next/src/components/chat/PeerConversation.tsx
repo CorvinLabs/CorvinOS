@@ -29,8 +29,9 @@ import {
   formatAge, messageStatusView, type MessageStatusView, type StatusIcon, type StatusTone,
 } from "@/lib/a2a-message-status";
 import {
-  inlineImageNames, isMinePeerRole, isObserverModeEmptyReply, mediaKind, messageMarkdown,
-  peerMessageRole, peerRoleLabel, referencedImageAttachment,
+  PEER_ROLE_MARK, dayLabel, inlineImageNames, isMinePeerRole, isObserverModeEmptyReply, localDayKey,
+  mediaKind, messageMarkdown, messageTime, messageTimeFull, peerMessageRole, peerRoleLabel,
+  referencedImageAttachment,
 } from "@/lib/a2a-feed";
 import { listConversations, stopConversation, type ConversationSummary } from "@/lib/api/federation";
 import { Markdown } from "@/components/markdown";
@@ -49,15 +50,21 @@ const FEED_REFETCH_MS = 4_000;
 /** Faster while a message of ours is still on its way, so the symbol follows the peer. */
 const FEED_REFETCH_INFLIGHT_MS = 2_000;
 
-function fmtTime(ts: number): string {
-  return new Date(ts * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+/** Where the thread crosses into a new calendar day — the rows below it show only the time. */
+function DaySeparator({ ts, nowS }: { ts: number; nowS: number }) {
+  const label = dayLabel(ts, nowS);
+  return (
+    <div role="separator" aria-label={label} data-testid="peer-day-separator"
+      className="flex items-center gap-3 py-1 text-[11px] font-medium text-muted-foreground">
+      <span aria-hidden className="h-px flex-1 bg-border" />
+      <span>{label}</span>
+      <span aria-hidden className="h-px flex-1 bg-border" />
+    </div>
+  );
 }
 
 const STATUS_ICON: Record<StatusIcon, LucideIcon> = {
   clock: Clock, check: Check, "check-check": CheckCheck, spinner: Loader2, x: XCircle, help: CircleHelp,
-};
-const STATUS_EMOJI: Record<StatusIcon, string> = {
-  clock: "⏱", check: "✓", "check-check": "✓✓", spinner: "🔄", x: "🚫", help: "❓",
 };
 const STATUS_TONE: Record<StatusTone, string> = {
   muted: "text-muted-foreground",
@@ -66,10 +73,6 @@ const STATUS_TONE: Record<StatusTone, string> = {
   success: "text-emerald-600 dark:text-emerald-400",
   warning: "text-amber-700 dark:text-amber-400",
   danger: "text-destructive",
-};
-const MESSAGE_KIND_EMOJI: Record<"task" | "response", { emoji: string; label: string }> = {
-  task: { emoji: "📤", label: "Outgoing message" },
-  response: { emoji: "💬", label: "Response" },
 };
 const CHAIN_DOT: Record<string, string> = {
   done: "bg-current opacity-80", current: "bg-current ring-2 ring-current/30",
@@ -81,31 +84,20 @@ const CHAIN_DOT: Record<string, string> = {
  * spinner, a cross or a question mark — with the whole chain for messages we sent
  * (queued → sent → delivered → accepted → working → done). The mapping lives in
  * lib/a2a-message-status.ts; this only draws it.
- *
- * Phase 2 enhancement: uses emoji for better mobile readability + accessibility.
  */
 export function MessageStatusSymbol({ v, mine, onResend }: {
   v: MessageStatusView; mine: boolean; onResend?: () => void;
 }) {
   const Icon = STATUS_ICON[v.icon];
-  const emoji = STATUS_EMOJI[v.icon];
   const chainText = v.chain.length
     ? `\n${v.chain.map((c) => `${c.state === "done" ? "✓" : c.state === "current" ? "●" : c.state === "failed" ? "✗" : "○"} ${c.label}`).join("\n")}`
     : "";
   return (
     <div data-testid="peer-message-status" data-status={v.key}
       title={`${v.detail}${chainText}`}
-      className={cn("mt-1 flex items-center gap-1 px-1 text-xs", STATUS_TONE[v.tone], mine ? "justify-end" : "justify-start")}>
-      {/* Emoji for visual scanability, hidden label on mobile */}
-      <span
-        role="img"
-        aria-label={v.label}
-        className="text-sm leading-none"
-        data-testid="peer-message-status-emoji"
-      >
-        {emoji}
-      </span>
-      <span className="hidden md:inline text-[10px]">{v.label}</span>
+      className={cn("mt-1 flex items-center gap-1 px-1 text-[11px]", STATUS_TONE[v.tone], mine ? "justify-end" : "justify-start")}>
+      <Icon aria-hidden className={cn("h-3.5 w-3.5 shrink-0", v.icon === "spinner" && "motion-safe:animate-spin")} />
+      <span>{v.label}</span>
       {v.chain.length > 0 && (
         <span className="ml-0.5 flex items-center gap-[3px]" aria-hidden data-testid="peer-message-chain">
           {v.chain.map((c) => (
@@ -118,7 +110,7 @@ export function MessageStatusSymbol({ v, mine, onResend }: {
         </span>
       )}
       {v.observedAgeS !== null && v.icon !== "check-check" && v.tone !== "danger" && (
-        <span className="text-muted-foreground hidden md:inline">· {formatAge(v.observedAgeS)}</span>
+        <span className="text-muted-foreground">· {formatAge(v.observedAgeS)}</span>
       )}
       <span className="sr-only">{v.detail}</span>
       {onResend && (
@@ -175,23 +167,16 @@ const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, reply, sta
       {!mine && <div className="mt-5"><ChatAvatar label={label} icon={Globe2} /></div>}
       <div className={cn("flex min-w-0 max-w-[85%] flex-col", mine ? "items-end" : "items-start")}>
         <div className="mb-1 flex flex-wrap items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
-          {/* Phase 1: Message-type emoji for quick visual scanning */}
-          <span
-            role="img"
-            aria-label={MESSAGE_KIND_EMOJI[m.kind].label}
-            className="text-sm leading-none"
-            data-testid="peer-message-kind-emoji"
-          >
-            {MESSAGE_KIND_EMOJI[m.kind].emoji}
-          </span>
+          <span aria-hidden data-testid="peer-message-role-mark" className="text-sm leading-none">{PEER_ROLE_MARK[role]}</span>
           <span className="font-medium text-foreground/80" data-testid="peer-message-role">{roleLabel}</span>
-          {isAgent && <Bot className="h-3 w-3 text-muted-foreground" aria-label="agent-authored" />}
-          <span className="hidden md:inline">·</span>
-          <span className="hidden md:inline">{m.kind === "task" ? "message" : "reply"}</span>
-          <span className="hidden md:inline">·</span>
-          <span className="hidden md:inline text-[10px]" title={new Date(m.ts * 1000).toLocaleString()}>
-            {formatAge(Math.floor((Date.now() / 1000 - m.ts)))}
-          </span>
+          {isAgent && <span className="sr-only">(agent)</span>}
+          <span aria-hidden>·</span>
+          <span>{m.kind === "task" ? "message" : "reply"}</span>
+          <span aria-hidden>·</span>
+          <time dateTime={new Date(m.ts * 1000).toISOString()} title={messageTimeFull(m.ts)}
+            data-testid="peer-message-time" className="cursor-help tabular-nums">
+            {messageTime(m.ts)}
+          </time>
         </div>
         <div className={cn(
           "w-fit max-w-full rounded-2xl px-4 py-3 text-sm leading-relaxed",
@@ -208,11 +193,8 @@ const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, reply, sta
               className="break-words" />
           )}
           {m.error && (
-            <p className={cn("mt-1 flex items-start gap-1.5 text-xs", unconfirmed ? "text-amber-600 dark:text-amber-400" : "text-destructive")}>
-              <span role="img" aria-label={unconfirmed ? "Warning" : "Error"} className="text-sm leading-none shrink-0">
-                {unconfirmed ? "⚠️" : "🚫"}
-              </span>
-              <span>{m.error}</span>
+            <p className={cn("mt-1 flex items-start gap-1 text-[11px]", unconfirmed ? "text-amber-700 dark:text-amber-400" : "text-destructive")}>
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> {m.error}
             </p>
           )}
           {listed.length > 0 && (
@@ -502,10 +484,15 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
           {feed.data && msgs.length === 0 && (
             <p className="pt-10 text-center text-sm text-muted-foreground">No messages with this agent yet.</p>
           )}
-          {msgs.map((m) => <PeerMessageRow key={m.id} m={m} label={label}
-            reply={m.kind === "task" ? repliesByTask.get(m.task_id) ?? null : null}
-            stage={m.kind === "task" && m.direction === "out" ? stages?.[m.task_id] ?? null : null}
-            now={nowS} onResend={resend} />)}
+          {msgs.map((m, i) => (
+            <React.Fragment key={m.id}>
+              {(i === 0 || localDayKey(msgs[i - 1].ts) !== localDayKey(m.ts)) && <DaySeparator ts={m.ts} nowS={nowS} />}
+              <PeerMessageRow m={m} label={label}
+                reply={m.kind === "task" ? repliesByTask.get(m.task_id) ?? null : null}
+                stage={m.kind === "task" && m.direction === "out" ? stages?.[m.task_id] ?? null : null}
+                now={nowS} onResend={resend} />
+            </React.Fragment>
+          ))}
           {error && (
             <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {error}
