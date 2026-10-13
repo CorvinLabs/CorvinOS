@@ -47,6 +47,24 @@ export async function importPenpotBoard(file: File, csrf: string): Promise<{ ass
   return payload as { asset: Asset; notes: string[] };
 }
 
+/** Capture a website screenshot via forward proxy; hostile URLs are refused indistinguishably (ADR-2249 D4). */
+export async function captureAsset(
+  fields: { url: string; caption: string; hotspots: AssetHotspot[]; viewport?: string },
+  csrf: string
+): Promise<Asset> {
+  const res = await fetch(`${BASE}/video/capture`, {
+    method: "POST",
+    body: JSON.stringify(fields),
+    credentials: "include",
+    headers: { "X-CSRF-Token": csrf, "Content-Type": "application/json" },
+  });
+  const text = await res.text();
+  let payload: unknown = text;
+  try { payload = JSON.parse(text); } catch { /* keep text */ }
+  if (!res.ok) throw new ApiError(res.status, payload);
+  return (payload as { asset: Asset }).asset;
+}
+
 export const assetImageUrl = (id: string) => `${BASE}/video/assets/${encodeURIComponent(id)}/image`;
 export const sceneSlideUrl = (jobId: string, index: number) => `${BASE}/video/videos/${encodeURIComponent(jobId)}/scenes/${index}/slide`;
 
