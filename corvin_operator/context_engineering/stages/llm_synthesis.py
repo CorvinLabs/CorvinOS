@@ -54,7 +54,19 @@ except Exception:  # pragma: no cover - guard unavailable => refuse, never bypas
         )
 
 
-_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+_DEFAULT_MODEL = "claude-haiku-4-5-20251001"  # last-resort fallback only
+
+
+def _helper_default() -> str:
+    """Synthesis model when the stage config names none: the operator's Console
+    choice for the ``corvinOS`` row, else the newest Haiku (per call)."""
+    try:
+        from helper_model import default_helper_model  # type: ignore  # noqa: PLC0415
+        return default_helper_model()
+    except Exception:  # noqa: BLE001
+        return _DEFAULT_MODEL
+
+
 # 45s was the original budget; a real Haiku synthesis (thinking tokens + a ~7k
 # cache-creation prefix) measured 19–45s+ across six live tasks on 2026-08-18, so
 # one task in six hit the ceiling and degraded. 60s covers the observed spread
@@ -299,7 +311,7 @@ class LLMSynthesisStage:
             return bundle, StageTelemetry(stage=self.id, status="skipped",
                                           reason="gate_unavailable")
 
-        model = cfg.get("model") or _DEFAULT_MODEL
+        model = cfg.get("model") or _helper_default()
         try:
             timeout_s = float(cfg.get("timeout_s") or _TIMEOUT_S)
         except (TypeError, ValueError):

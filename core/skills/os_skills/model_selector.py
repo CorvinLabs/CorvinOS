@@ -960,6 +960,24 @@ class Tier1Router:
         ModelTier.OPUS: "claude-opus-5",
     }
     
+    _TIER_FAMILY = {ModelTier.HAIKU: "haiku", ModelTier.SONNET: "sonnet", ModelTier.OPUS: "opus"}
+
+    def _model_name(self, tier: "ModelTier") -> str:
+        """Newest available model of the tier's family (ADR-2090 lineage);
+        ``MODEL_NAMES`` is only the fallback when the registry is unreadable."""
+        try:
+            import sys  # noqa: PLC0415
+            from pathlib import Path  # noqa: PLC0415
+
+            shared = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
+            if shared.is_dir() and str(shared) not in sys.path:
+                sys.path.insert(0, str(shared))
+            import model_lineage  # type: ignore[import-not-found]  # noqa: PLC0415
+
+            return model_lineage.latest(self._TIER_FAMILY[tier]) or self.MODEL_NAMES[tier]
+        except Exception:  # noqa: BLE001
+            return self.MODEL_NAMES[tier]
+
     def route(self, task_id: str, complexity: str) -> ModelSelectionDecision:
         """Select model based on complexity."""
         if complexity not in [c.value for c in Complexity]:
@@ -968,7 +986,7 @@ class Tier1Router:
         bucket = self._hash_to_bucket(task_id)
         complexity_enum = Complexity(complexity)
         model_tier = self._select_tier(complexity_enum, bucket)
-        model_name = self.MODEL_NAMES[model_tier]
+        model_name = self._model_name(model_tier)
         
         return ModelSelectionDecision(
             task_id=task_id,

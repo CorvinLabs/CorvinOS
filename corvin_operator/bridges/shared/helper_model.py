@@ -9,9 +9,13 @@ prompts.
 
 Resolution order per call:
 
-1. ``CORVIN_HELPER_MODEL_<SITE_UPPER>`` env (per-site pin)
-2. ``CORVIN_HELPER_MODEL`` env (global helper default)
-3. ``DEFAULT_HELPER_MODEL`` (``claude-haiku-4-5-20251001``)
+0. an opt-out value in the env (``none``/``off``/empty) -> no ``--model``
+1. the operator's Console choice for the ``corvinOS`` row (Models page)
+2. ``CORVIN_HELPER_MODEL_<SITE_UPPER>`` env (per-site pin)
+3. ``CORVIN_HELPER_MODEL`` env (global helper default)
+4. :func:`default_helper_model` — the NEWEST available Haiku (ADR-2090 lineage);
+   ``DEFAULT_HELPER_MODEL`` (``claude-haiku-4-5-20251001``) only when the
+   registry offers none
 
 Opt-out: setting the env value to ``""`` or ``"none"`` returns ``None``,
 which causes ``claude_args(...)`` to emit no ``--model`` flag — the
@@ -32,7 +36,35 @@ import sys
 import threading
 from typing import Final
 
+#: Fallback ONLY — used when the model registry cannot be read. The model a
+#: helper actually gets is :func:`default_helper_model` (newest Haiku).
 DEFAULT_HELPER_MODEL: Final[str] = "claude-haiku-4-5-20251001"
+
+
+def default_helper_model(tenant_id: str | None = None) -> str:
+    """The model a helper gets when nothing pins it: the operator's Console
+    choice for the ``corvinOS`` row, else the NEWEST available Haiku
+    (ADR-2090 lineage), else the curated fallback. Never raises: a helper must
+    not fail because the registry or the config is unreadable."""
+    try:
+        try:
+            from console_selection import helper_model as _console  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from .console_selection import helper_model as _console  # type: ignore  # noqa: PLC0415
+        chosen = _console(tenant_id)
+        if chosen:
+            return chosen
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        try:
+            from model_lineage import latest  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from .model_lineage import latest  # type: ignore  # noqa: PLC0415
+        return latest("haiku") or DEFAULT_HELPER_MODEL
+    except Exception:  # noqa: BLE001
+        return DEFAULT_HELPER_MODEL
+
 
 # Known install locations probed when the CLI is not on PATH. The dominant
 # failure mode is a host running under systemd / launchd with a stripped PATH
@@ -251,15 +283,29 @@ def resolve_helper_model(site: str) -> str | None:
     """Return the Claude model string for this helper site, or ``None``
     when the operator opted out (then the caller emits no ``--model``).
 
-    Resolution: per-site env > global env > built-in default.
+    Resolution: env opt-out > Console ``corvinOS`` choice > per-site env >
+    global env > newest Haiku. The Console outranks a model-valued env pin -
+    "the models selected in the Console are always the ones used" - while an
+    explicit opt-out value (``none``/``off``/empty) stays the operator's escape
+    hatch to the CLI default.
     """
     per_site = os.environ.get(_per_site_env_var(site))
-    if per_site is not None:
-        return None if per_site.strip().lower() in _OPT_OUT_VALUES else per_site.strip()
-    glob = os.environ.get("CORVIN_HELPER_MODEL")
-    if glob is not None:
-        return None if glob.strip().lower() in _OPT_OUT_VALUES else glob.strip()
-    return DEFAULT_HELPER_MODEL
+    env_val = per_site if per_site is not None else os.environ.get("CORVIN_HELPER_MODEL")
+    if env_val is not None and env_val.strip().lower() in _OPT_OUT_VALUES:
+        return None
+    try:
+        try:
+            from console_selection import helper_model as _console  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from .console_selection import helper_model as _console  # type: ignore  # noqa: PLC0415
+        chosen = _console()
+        if chosen:
+            return chosen
+    except Exception:  # noqa: BLE001
+        pass
+    if env_val is not None:
+        return env_val.strip()
+    return default_helper_model()
 
 
 def claude_args(site: str) -> list[str]:

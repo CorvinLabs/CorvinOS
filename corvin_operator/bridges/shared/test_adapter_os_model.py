@@ -28,8 +28,14 @@ sys.path.insert(0, str(SHARED))
 
 import adapter  # type: ignore  # noqa: E402
 
-HAIKU = "claude-haiku-4-5-20251001"
-SONNET = "claude-sonnet-5"
+import model_selector as _ms  # type: ignore  # noqa: E402
+
+# The automatic LOW / HIGH tiers are the operator's Console SIMPLE / MEDIUM
+# choice, else the NEWEST Haiku / Sonnet (ADR-2090) - never a frozen id. The
+# suite runs in a sandboxed CORVIN_HOME, so nothing is saved and these are the
+# newest models.
+HAIKU = _ms.low_model()
+SONNET = _ms.high_model()
 OPUS = "claude-opus-4-7"
 
 

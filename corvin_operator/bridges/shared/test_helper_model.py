@@ -33,10 +33,10 @@ class ResolveOrderTests(unittest.TestCase):
                 del os.environ[k]
         os.environ.update(self._snapshot)
 
-    def test_default_is_haiku_4_5(self) -> None:
+    def test_default_is_newest_haiku(self) -> None:
         self.assertEqual(
             helper_model.resolve_helper_model(helper_model.SITE_VOICE_SUMMARY),
-            "claude-haiku-4-5-20251001",
+            helper_model.default_helper_model(),
         )
 
     def test_global_env_overrides_default(self) -> None:
@@ -59,7 +59,7 @@ class ResolveOrderTests(unittest.TestCase):
         # Different site → still falls through to default
         self.assertEqual(
             helper_model.resolve_helper_model(helper_model.SITE_DIALECTIC_CLI),
-            "claude-haiku-4-5-20251001",
+            helper_model.default_helper_model(),
         )
 
 
@@ -108,7 +108,7 @@ class OptOutTests(unittest.TestCase):
         )
         self.assertEqual(
             helper_model.resolve_helper_model(helper_model.SITE_DIALECTIC_CLI),
-            "claude-haiku-4-5-20251001",
+            helper_model.default_helper_model(),
         )
 
 
@@ -127,7 +127,7 @@ class ClaudeArgsTests(unittest.TestCase):
     def test_args_carries_haiku_by_default(self) -> None:
         self.assertEqual(
             helper_model.claude_args(helper_model.SITE_DIALECTIC_CLI),
-            ["--model", "claude-haiku-4-5-20251001"],
+            ["--model", helper_model.default_helper_model()],
         )
 
     def test_args_empty_on_opt_out(self) -> None:
@@ -167,7 +167,7 @@ class AnnounceTests(unittest.TestCase):
         lines = [l for l in buf.getvalue().splitlines() if l.strip()]
         self.assertEqual(len(lines), 1)
         self.assertIn("voice_summary", lines[0])
-        self.assertIn("claude-haiku-4-5-20251001", lines[0])
+        self.assertIn(helper_model.default_helper_model(), lines[0])
 
     def test_announce_emits_per_site(self) -> None:
         buf = io.StringIO()
@@ -397,3 +397,22 @@ class AllSitesCoverageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DefaultTracksLineageTests(unittest.TestCase):
+    """The default is the NEWEST Haiku the registry offers, not a frozen id."""
+
+    def test_default_is_never_older_than_the_curated_fallback(self) -> None:
+        import model_lineage  # noqa: PLC0415
+
+        got = model_lineage.parse(helper_model.default_helper_model())
+        floor = model_lineage.parse(helper_model.DEFAULT_HELPER_MODEL)
+        self.assertEqual(got[0], "haiku")
+        self.assertGreaterEqual(got[1], floor[1])
+
+    def test_falls_back_to_curated_id_when_registry_is_unreadable(self) -> None:
+        import model_lineage  # noqa: PLC0415
+
+        with mock.patch.object(model_lineage, "latest", side_effect=RuntimeError("boom")):
+            self.assertEqual(helper_model.default_helper_model(),
+                             helper_model.DEFAULT_HELPER_MODEL)

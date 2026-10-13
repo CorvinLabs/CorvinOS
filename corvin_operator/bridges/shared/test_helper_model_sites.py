@@ -102,7 +102,10 @@ class _StubPathFixture:
         shutil.rmtree(self._tmp, ignore_errors=True)
 
 
-HAIKU = "claude-haiku-4-5-20251001"
+import helper_model as _helper_model  # noqa: E402
+
+# The helper default is the NEWEST Haiku (ADR-2090 lineage), not a frozen id.
+HAIKU = _helper_model.default_helper_model()
 
 
 class SummarizeViaCliTests(_StubPathFixture, unittest.TestCase):

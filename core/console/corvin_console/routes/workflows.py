@@ -161,6 +161,23 @@ class WorkflowLockBusy(TimeoutError):
     """
 
 
+def _explain_model() -> str:
+    """Model for the workflow-explain helper call: the operator's Console choice
+    for the ``corvinOS`` row, else the newest Haiku (ADR-2090 lineage)."""
+    try:
+        import sys as _sys  # noqa: PLC0415
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        _shared = str(_Path(__file__).resolve().parents[4] / "corvin_operator" / "bridges" / "shared")
+        if _shared not in _sys.path:
+            _sys.path.insert(0, _shared)
+        from helper_model import default_helper_model  # type: ignore  # noqa: PLC0415
+
+        return default_helper_model()
+    except Exception:  # noqa: BLE001
+        return "claude-haiku-4-5"
+
+
 @contextmanager
 def _bounded_flock(lock_path: Path, what: str, *, timeout: float | None = None):
     """Exclusive advisory lock with a hard deadline (never blocks forever).
@@ -3699,7 +3716,7 @@ def explain_workflow(
     )
     try:
         result = subprocess.run(
-            ["claude", "-p", "--max-turns", "1", "--tools", "", "--model", "claude-haiku-4-5",
+            ["claude", "-p", "--max-turns", "1", "--tools", "", "--model", _explain_model(),
              # R4: the workflow YAML is user-authored and rides POSITIONALLY
              # in argv. Reply contract unaffected: stdout is the explanation.
              "--system-prompt", system, _guard_prompt_head(yaml_text)],

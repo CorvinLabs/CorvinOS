@@ -22,6 +22,43 @@ import sys
 from pathlib import Path
 
 
+_FALLBACK_HAIKU = "claude-haiku-4-5-20251001"
+
+
+def _newest_haiku() -> str:
+    """Newest available Haiku via helper_model (ADR-2090 lineage); the pinned
+    4.5 id only when bridges/shared is not importable (standalone invocation)."""
+    try:
+        shared = str(Path(__file__).resolve().parent.parent.parent / "bridges" / "shared")
+        if shared not in sys.path:
+            sys.path.insert(0, shared)
+        import helper_model as _hm  # type: ignore  # noqa: PLC0415
+        return _hm.default_helper_model()
+    except Exception:  # noqa: BLE001
+        return _FALLBACK_HAIKU
+
+
+_DEFAULT_HAIKU = _newest_haiku()  # signature default / display only - see _live_model
+
+
+def _live_model(fn):
+    """Resolve the default model at CALL time, not import time: a model chosen
+    on the Console Models page must apply to the next summary with no restart
+    (a signature default is frozen when this module is imported)."""
+    import functools  # noqa: PLC0415
+    import inspect  # noqa: PLC0415
+
+    sig = inspect.signature(fn)
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "model" not in sig.bind_partial(*args, **kwargs).arguments:
+            kwargs["model"] = _newest_haiku()
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
 def _force_utf8_stdio() -> None:
     """Read stdin and write stdout/stderr as UTF-8, whatever the locale says.
 
@@ -1726,8 +1763,9 @@ def _extract_appendix(raw: str) -> str:
     return ""
 
 
+@_live_model
 def generate_appendix(text: str, lang: str = "de",
-                      model: str = "claude-haiku-4-5-20251001") -> str:
+                      model: str = _DEFAULT_HAIKU) -> str:
     """Return the teaching appendix for *text*, or "" on any failure.
 
     Uses the `claude` CLI (Max-subscription OAuth) with a short timeout (45 s)
@@ -1746,8 +1784,9 @@ def generate_appendix(text: str, lang: str = "de",
     return _extract_appendix(raw)
 
 
+@_live_model
 def summarize_with_appendix(text: str, lang: str = "de",
-                            model: str = "claude-haiku-4-5") -> str:
+                            model: str = _DEFAULT_HAIKU) -> str:
     """Echo *text* verbatim plus a generated teaching appendix.
 
     Used by adapter.build_voice_summary in two paths that otherwise
@@ -1866,8 +1905,9 @@ def _extract_metapher(raw: str) -> str:
     return ""
 
 
+@_live_model
 def generate_metapher(text: str, lang: str = "de",
-                      model: str = "claude-haiku-4-5-20251001") -> str:
+                      model: str = _DEFAULT_HAIKU) -> str:
     """Return 1-2 metaphor sentences for *text*, or "" on any failure."""
     if not text or not text.strip():
         return ""
@@ -1879,8 +1919,9 @@ def generate_metapher(text: str, lang: str = "de",
     return _extract_metapher(raw)
 
 
+@_live_model
 def summarize_with_metapher(text: str, lang: str = "de",
-                             model: str = "claude-haiku-4-5-20251001") -> str:
+                             model: str = _DEFAULT_HAIKU) -> str:
     """Echo *text* verbatim plus 1-2 generated metaphor sentences.
 
     Used by adapter.build_voice_summary when voice_audience_metaphors="on"
@@ -2070,8 +2111,9 @@ def _session_recap_via_cli(transcript: str, lang: str, model: str,
         return None
 
 
+@_live_model
 def generate_session_recap(transcript: str, lang: str = "de", max_chars: int = 700,
-                           model: str = "claude-haiku-4-5-20251001",
+                           model: str = _DEFAULT_HAIKU,
                            angle: str = "", output_language: str = "") -> str:
     """Return a spoken recap of a whole session, or "" on any failure.
 
@@ -2113,7 +2155,8 @@ _SESSION_TITLE_SYSTEM = (
 )
 
 
-def generate_session_title(transcript: str, model: str = "claude-haiku-4-5-20251001",
+@_live_model
+def generate_session_title(transcript: str, model: str = _DEFAULT_HAIKU,
                            max_chars: int = 60) -> str:
     """Return a short topic title for a chat, or "" on any failure."""
     transcript = (transcript or "").strip()
@@ -2289,17 +2332,17 @@ def main() -> int:
     # Default resolves through helper_model (Layer-29.5 cost-split). Lazy
     # import keeps stop_hook fast in the no-helper-model path; if the
     # bridges/shared/ tree isn't on PYTHONPATH (standalone invocation),
-    # fall back to the canonical Haiku-4.5 model id.
+    # fall back to the newest Haiku resolved at import.
     try:
         sys.path.insert(0,
             str(Path(__file__).resolve().parent.parent.parent / "bridges" / "shared"))
         import helper_model as _helper_model  # type: ignore
         _default_model = (
             _helper_model.resolve_helper_model(_helper_model.SITE_VOICE_SUMMARY)
-            or "claude-haiku-4-5-20251001"
+            or _DEFAULT_HAIKU
         )
     except Exception:  # noqa: BLE001
-        _default_model = "claude-haiku-4-5-20251001"
+        _default_model = _DEFAULT_HAIKU
     ap.add_argument("--model", default=_default_model)
     ap.add_argument(
         "--stdin-json", action="store_true",

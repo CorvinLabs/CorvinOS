@@ -206,12 +206,12 @@ class FloorTests(unittest.TestCase):
     """Phase 29.5.3a: apply_floor."""
 
     def test_floor_sonnet_upgrades_haiku(self) -> None:
-        result = ms.apply_floor(ms.DEFAULT_LOW, "sonnet")
-        self.assertEqual(result, ms.DEFAULT_HIGH)
+        result = ms.apply_floor(ms.low_model(), "sonnet")
+        self.assertEqual(result, ms.high_model())
 
     def test_floor_haiku_keeps_sonnet(self) -> None:
-        result = ms.apply_floor(ms.DEFAULT_HIGH, "haiku")
-        self.assertEqual(result, ms.DEFAULT_HIGH)
+        result = ms.apply_floor(ms.high_model(), "haiku")
+        self.assertEqual(result, ms.high_model())
 
     def test_floor_none_returns_chosen(self) -> None:
         self.assertEqual(ms.apply_floor("anything", None), "anything")
@@ -231,7 +231,7 @@ class AuditValidationTests(unittest.TestCase):
         with self._fake_write() as w:
             ms.emit_selected(
                 persona="coder", channel="discord",
-                estimate_chars=1000, chosen=ms.DEFAULT_LOW,
+                estimate_chars=1000, chosen=ms.low_model(),
                 reason="autoselect_low",
             )
             w.assert_called_once()
@@ -255,14 +255,14 @@ class AuditValidationTests(unittest.TestCase):
         with self.assertRaises(ms.OsModelAuditFieldNotAllowed):
             ms.emit_selected(
                 persona="p", channel="c", estimate_chars=0,
-                chosen=ms.DEFAULT_LOW, reason="unknown_bad_reason",
+                chosen=ms.low_model(), reason="unknown_bad_reason",
             )
 
     def test_emit_escalated_happy_path(self) -> None:
         with self._fake_write() as w:
             ms.emit_escalated(
                 persona="forge", channel="discord",
-                from_model=ms.DEFAULT_LOW, to_model=ms.DEFAULT_HIGH,
+                from_model=ms.low_model(), to_model=ms.high_model(),
                 reason="autocompact-thrash",
             )
             w.assert_called_once()
@@ -274,7 +274,7 @@ class AuditValidationTests(unittest.TestCase):
         with self.assertRaises(ms.OsModelAuditFieldNotAllowed):
             ms.emit_escalated(
                 persona="p", channel="c",
-                from_model=ms.DEFAULT_LOW, to_model=ms.DEFAULT_HIGH,
+                from_model=ms.low_model(), to_model=ms.high_model(),
                 reason="bad_reason",
             )
 
@@ -318,18 +318,18 @@ class EscalateForErrorTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CORVIN_OS_MODEL_RETRY_ON_THRASH": "on"}):
             result = ms.escalate_for_error(
                 "Autocompact is thrashing",
-                current=ms.DEFAULT_LOW,
+                current=ms.low_model(),
             )
             self.assertEqual(result, ms.high_model())
 
     def test_non_context_error_no_escalation(self) -> None:
-        result = ms.escalate_for_error("network timeout", current=ms.DEFAULT_LOW)
+        result = ms.escalate_for_error("network timeout", current=ms.low_model())
         self.assertIsNone(result)
 
     def test_already_high_no_escalation(self) -> None:
         result = ms.escalate_for_error(
             "Autocompact is thrashing",
-            current=ms.DEFAULT_HIGH,
+            current=ms.high_model(),
         )
         self.assertIsNone(result)
 
@@ -337,7 +337,7 @@ class EscalateForErrorTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CORVIN_OS_MODEL_RETRY_ON_THRASH": "off"}):
             result = ms.escalate_for_error(
                 "Autocompact is thrashing",
-                current=ms.DEFAULT_LOW,
+                current=ms.low_model(),
             )
             self.assertIsNone(result)
 

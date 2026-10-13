@@ -3104,6 +3104,47 @@ of its family, which is Opus 5.5 for complex today. An explicit pin, or a per-ti
 choice the operator saved (`model_selection_config.saved_task_types`), is kept
 as long as its model exists.
 
+**Every default resolves through the lineage (2026-10-13).** The OS tier did, but
+helper calls, ACS workers, the workload "fast"/"full" tier map, the os_skills
+selector, the voice summariser, the compute narrator, the ACS critique gate and
+the dispatcher's cheapest-model fallback each carried their own literal
+`claude-haiku-4-5-20251001` and kept serving 4.5 after Haiku 5.5 shipped. They now
+call `model_lineage.latest("haiku")` (`helper_model.default_helper_model()`,
+`acs_runtime._default_worker_model()`, `engine_models._tier_mapping()`); the old
+id stays only as the last-resort fallback when the registry is unreadable.
+`tests/test_no_new_hardcoded_haiku.py` is a shrink-only ratchet over the
+remaining literals (rank/price/label tables, API-key paths) — lower its baseline
+when a file is fixed, never raise it. Left on 4.5 on purpose: the benchmarks
+(`benchmark/`, a frozen baseline), `core/cost/calculator.py` (placeholder rate
+card — Haiku 5.5 has no verified published rate, so unknown ids still fall back
+to the Opus rate there; the learner reports 5.5 unpriced instead), the Anthropic
+batch engine and the CI review (API-key paths, each needs its own review).
+
+**The Console selection is what runs (2026-10-13).** The Models page writes two
+stores and `corvin_operator/bridges/shared/console_selection.py` is the ONE
+reader of both (`saved_tier_model(row)`, `pinned_model(role)`, `helper_model()`).
+It returns CLI-ready ids (`provider/` stripped), ignores a row whose provider is
+not Anthropic (the CLI would 404), never raises, and re-reads the file on every
+call - a Console change applies to the NEXT call with no restart. Unsaved slots
+fall back to the newest-of-family model, never to a frozen id.
+
+| Console selection | Drives |
+|---|---|
+| Turn pin `os_model` | OS turn (Tier 2.5); ACS manager default |
+| Turn pin `worker_model` / `default_worker_model` | ACS workers - now ABOVE `ANTHROPIC_MODEL` |
+| Row `SIMPLE` | `low_model()`, classifier SIMPLE, workload `fast`, ACS worker default, dispatcher fallback |
+| Row `MEDIUM` | `high_model()` (the Tier 3 default turn), classifier MEDIUM, workload `full`, ACS manager default |
+| Row `COMPLEX` | `top_model()`, classifier COMPLEX |
+| Row `corvinOS` | CorvinOS' own helper steps: voice summary, narrator, critique gate, session titles, workflow explain, context synthesis |
+
+Helper precedence: env opt-out (`none`/`off`) -> Console `corvinOS` row ->
+per-site env -> global env -> newest Haiku. A model-valued env pin no longer
+beats the Console; the opt-out stays as the escape hatch to the CLI default.
+Proof: `core/console/tests/test_console_selection_runtime_e2e.py` saves through
+`PUT /v1/engine/config` and asks every path, each with an unsaved positive
+control. The Models page labels these rows "applied" - it used to call them
+advisory, which stopped being true when Tier 2.9 and Tier 3 began reading them.
+
 **Retired = hard evidence only.** When the Claude Code CLI answers
 `There's an issue with the selected model (<id>)`, the engine records `<id>` in
 `<corvin_home>/global/retired_models.json` (0600, 7-day TTL). From then on:

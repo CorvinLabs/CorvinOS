@@ -11,6 +11,10 @@ if str(_REPO / "corvin_operator" / "bridges" / "shared") not in sys.path:
     sys.path.insert(0, str(_REPO / "corvin_operator" / "bridges" / "shared"))
 
 from engine_models import get_model_tier_mapping, resolve_model_for_workload  # type: ignore
+from model_lineage import latest as _latest  # type: ignore
+
+# The fast tier is the NEWEST Haiku the registry offers (ADR-2090), not a frozen id.
+FAST = _latest("haiku") or "claude-haiku-4-5-20251001"
 
 
 class TestModelTierMapping:
@@ -29,8 +33,8 @@ class TestModelTierMapping:
         assert claude_tiers is not None
         assert "fast" in claude_tiers
         assert "full" in claude_tiers
-        assert claude_tiers["fast"] == "claude-haiku-4-5-20251001"
-        assert claude_tiers["full"] == "claude-sonnet-5"
+        assert claude_tiers["fast"] == FAST
+        assert claude_tiers["full"] == (_latest("sonnet") or "claude-sonnet-5")
 
     def test_no_phantom_engines(self) -> None:
         """The tier map must only carry REAL registry engine ids. Earlier
@@ -54,7 +58,7 @@ class TestResolveModelForWorkload:
     def test_chat_workload_routes_to_fast(self) -> None:
         """CHAT workload uses engine's fast tier when confidence is high and enabled."""
         model = resolve_model_for_workload("claude_code", "chat", None, confidence=0.9, fast_chat_enabled=True)
-        assert model == "claude-haiku-4-5-20251001"
+        assert model == FAST
 
     def test_code_workload_uses_user_choice(self) -> None:
         """CODE workload prefers user's chosen model."""
@@ -105,7 +109,7 @@ class TestResolveModelForWorkload:
         """CHAT workload uses fast tier even when user has a choice."""
         model = resolve_model_for_workload("claude_code", "chat", "claude-opus-4-1", confidence=0.85, fast_chat_enabled=True)
         # CHAT should use fast tier, not user choice
-        assert model == "claude-haiku-4-5-20251001"
+        assert model == FAST
 
     def test_unknown_engine_never_gets_tier_model(self) -> None:
         """Engines outside the tier map / registry keep the user's choice

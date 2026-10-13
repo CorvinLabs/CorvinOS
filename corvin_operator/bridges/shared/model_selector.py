@@ -114,9 +114,10 @@ def tier_model(family: str) -> str:
     return newest or _FLOOR_TO_MODEL.get(family, DEFAULT_HIGH)
 
 
-def top_model() -> str:
-    """Top-tier (COMPLEX) model id — newest Opus."""
-    return tier_model("opus")
+def top_model(tenant_id: str | None = None) -> str:
+    """Top-tier (COMPLEX) model id: the Console ``COMPLEX`` choice, else the
+    newest Opus."""
+    return _console_tier("COMPLEX", tenant_id) or tier_model("opus")
 
 # Curated values for audit fields — changing these requires an ADR amendment.
 _VALID_SELECTED_REASONS: Final[frozenset[str]] = frozenset({
@@ -204,10 +205,14 @@ def autoselect_os_model(
     threshold: int | None = None,
     low: str | None = None,
     high: str | None = None,
+    tenant_id: str | None = None,
 ) -> str:
-    """Return HIGH (Sonnet) by default. Only return LOW (Haiku) if CORVIN_OS_MODEL_ALLOW_HAIKU=1."""
-    hi = high if high is not None else high_model()
-    lo = low if low is not None else low_model()
+    """Return HIGH (Sonnet) by default. Only return LOW (Haiku) if CORVIN_OS_MODEL_ALLOW_HAIKU=1.
+
+    HIGH / LOW are the operator's Console ``MEDIUM`` / ``SIMPLE`` choices when
+    saved (see :func:`high_model` / :func:`low_model`)."""
+    hi = high if high is not None else high_model(tenant_id)
+    lo = low if low is not None else low_model(tenant_id)
 
     # Default to HIGH (Sonnet) unless user explicitly enables Haiku downgrade
     if not haiku_downgrade_allowed():
@@ -285,15 +290,29 @@ def threshold_chars() -> int:
     return max(_MIN_THRESHOLD, min(_MAX_THRESHOLD, val))
 
 
-def low_model() -> str:
-    """Low-tier model id (default Haiku 4.5)."""
-    val = os.environ.get("CORVIN_OS_MODEL_LOW", "").strip()
+def _console_tier(task_type: str, tenant_id: str | None) -> str | None:
+    """The operator's saved Console choice for a tier row (None if unsaved)."""
+    try:
+        try:
+            from console_selection import saved_tier_model  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from .console_selection import saved_tier_model  # type: ignore  # noqa: PLC0415
+        return saved_tier_model(task_type, tenant_id=tenant_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def low_model(tenant_id: str | None = None) -> str:
+    """Low-tier model id: the Console ``SIMPLE`` choice, else
+    ``CORVIN_OS_MODEL_LOW``, else the newest Haiku."""
+    val = _console_tier("SIMPLE", tenant_id) or os.environ.get("CORVIN_OS_MODEL_LOW", "").strip()
     return val if val else tier_model("haiku")
 
 
-def high_model() -> str:
-    """High-tier model id (default Sonnet 4.6)."""
-    val = os.environ.get("CORVIN_OS_MODEL_HIGH", "").strip()
+def high_model(tenant_id: str | None = None) -> str:
+    """High-tier (default) model id: the Console ``MEDIUM`` choice, else
+    ``CORVIN_OS_MODEL_HIGH``, else the newest Sonnet."""
+    val = _console_tier("MEDIUM", tenant_id) or os.environ.get("CORVIN_OS_MODEL_HIGH", "").strip()
     return val if val else tier_model("sonnet")
 
 
@@ -960,7 +979,7 @@ def classify_os_model(
                 registry_id = newest
 
     # Guard 3 — never de-escalate an already-large context (see docstring).
-    default_rank = _rank(high_model())
+    default_rank = _rank(high_model(tenant_id))
     if _rank(registry_id) < default_rank and payload_chars >= threshold_chars():
         _audit("abstain_cache_guard", registry_id)
         return None
@@ -1162,9 +1181,9 @@ def resolve_os_model(
             if recommended and confidence > 0.0:
                 # Map shorthand names to actual models
                 model_map = {
-                    "haiku": low_model(),
-                    "sonnet": high_model(),
-                    "opus": top_model(),
+                    "haiku": low_model(tenant_id),
+                    "sonnet": high_model(tenant_id),
+                    "opus": top_model(tenant_id),
                 }
                 actual_model = model_map.get(recommended.lower())
 
@@ -1221,13 +1240,13 @@ def resolve_os_model(
     # Tier 3 — adaptive autoselect (the new default path)
     if autoselect_enabled():
         try:
-            chosen = autoselect_os_model(payload_chars)
+            chosen = autoselect_os_model(payload_chars, tenant_id=tenant_id)
             floor = profile.get("os_model_floor")
             chosen = apply_floor(chosen, floor)
             return chosen
         except Exception:  # noqa: BLE001
             # estimate_failed → safe-default HIGH (never silently pick LOW)
-            return high_model()
+            return high_model(tenant_id)
 
     # Tier 4 — fallthrough to CLI subscription default
     return None

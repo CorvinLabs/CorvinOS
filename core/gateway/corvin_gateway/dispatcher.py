@@ -122,6 +122,18 @@ for _evt, _sev in _POLICY_EVENTS.items():
 # ── Engine protocol (minimal — for stub-in-test) ─────────────────────
 
 
+def _newest_haiku() -> str:
+    """Cheapest-model fallback: the operator's Console choice for the ``SIMPLE``
+    tier, else the newest available Haiku (ADR-2090 lineage)."""
+    try:
+        from console_selection import saved_tier_model  # type: ignore  # noqa: PLC0415
+        from model_lineage import latest  # type: ignore  # noqa: PLC0415
+
+        return saved_tier_model("SIMPLE") or latest("haiku") or "claude-haiku-4-5"
+    except Exception:  # noqa: BLE001
+        return "claude-haiku-4-5"
+
+
 @runtime_checkable
 class _EngineLike(Protocol):
     """Minimal slice of the engine surface the dispatcher consumes.
@@ -404,7 +416,7 @@ class RunDispatcher:
                         f"Selected model {selected_model} is unavailable; "
                         f"falling back to Haiku"
                     )
-                    return "claude-haiku-4-5"  # Fallback to cheapest model
+                    return _newest_haiku()  # Fallback to cheapest model
 
             except Exception as _ir_exc:  # noqa: BLE001 — IntelligentRouter unavailable or errored
                 import logging
@@ -449,7 +461,7 @@ class RunDispatcher:
             if default and _model_is_available(default):
                 return default
             # If engine default is also unavailable, fall back to Haiku
-            return "claude-haiku-4-5" if default else ""
+            return _newest_haiku() if default else ""
         except Exception:  # noqa: BLE001
             return ""
 

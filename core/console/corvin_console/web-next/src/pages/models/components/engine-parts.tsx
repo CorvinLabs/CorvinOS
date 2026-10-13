@@ -330,7 +330,7 @@ export const TaskTypeCard: React.FC<TaskTypeCardProps> = ({ config, totalClassif
   const isCorvinOS = config.task_type === 'corvinOS';
   const taskLabel = isCorvinOS ? 'CorvinOS' : config.task_type;
   const taskDescription = isCorvinOS
-    ? 'Used to classify incoming tasks — a deterministic rule (token count, code blocks, keywords), no model call needed. The choice below only matters if that ever changes.'
+    ? 'CorvinOS\'s own helper steps — voice summaries, run narration, critique gates, session titles and workflow explanations. Classifying incoming tasks stays a deterministic rule with no model call.'
     : config.task_type === 'SIMPLE'
       ? 'Fast, straightforward tasks (<500 tokens, <2 code snippets)'
       : config.task_type === 'MEDIUM'

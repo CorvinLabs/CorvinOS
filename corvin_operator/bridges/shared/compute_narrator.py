@@ -134,7 +134,19 @@ _SYSTEM_EN = (
 
 _SYSTEMS: dict[str, str] = {"de": _SYSTEM_DE, "en": _SYSTEM_EN}
 
-_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+_DEFAULT_MODEL = "claude-haiku-4-5-20251001"  # fallback only
+
+def _helper_default() -> str:
+    """Narrator model: the operator's Console choice for the ``corvinOS`` row,
+    else the newest Haiku (resolved per call, so a Console change applies at once)."""
+    try:
+        try:
+            from helper_model import default_helper_model  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from .helper_model import default_helper_model  # type: ignore  # noqa: PLC0415
+        return default_helper_model()
+    except Exception:  # noqa: BLE001
+        return _DEFAULT_MODEL
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────
@@ -266,7 +278,7 @@ def narrate_run(
     run_dir: Path,
     *,
     locale: str = "de",
-    model: str = _DEFAULT_MODEL,
+    model: str | None = None,
     force: bool = False,
 ) -> dict[str, Any] | None:
     """Generate (or load cached) narrative for a compute run.
@@ -304,6 +316,7 @@ def narrate_run(
 
     lang = "en" if locale.lower().startswith("en") else "de"
     system = _SYSTEMS[lang]
+    model = model or _helper_default()
     text = _run_haiku(system, input_text, model)
     if not text:
         return None

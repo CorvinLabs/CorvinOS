@@ -760,17 +760,49 @@ _MODEL_TIER_MAPPING: dict[str, dict[str, str]] = {
     # with retired/nonexistent model ids that _model_is_valid waved through
     # because the engines were unknown to the registry — pruned 2026-07-18.
     # New engines register here only together with a registry entry.
+    # "fast" below is the curated FALLBACK; _tier_mapping() swaps in the newest
+    # Haiku / Sonnet (ADR-2090 lineage) so a new release needs no edit here.
     "claude_code": {
         "fast": "claude-haiku-4-5-20251001",
         "full": "claude-sonnet-5",
     },
 }
 
+_TIER_FAMILY: dict[str, str] = {"fast": "haiku", "full": "sonnet"}
+#: Console tier row that drives each workload tier (Models page).
+_TIER_CONSOLE_ROW: dict[str, str] = {"fast": "SIMPLE", "full": "MEDIUM"}
+
+
+def _tier_mapping(tenant_id: str | None = None) -> dict[str, dict[str, str]]:
+    """``_MODEL_TIER_MAPPING`` with each tier pointed at what the operator
+    chose on the Models page (``SIMPLE`` -> fast, ``MEDIUM`` -> full); a tier
+    the operator did not save gets the newest available model of its family,
+    and one the registry cannot resolve keeps its curated id."""
+    out = {engine: dict(tiers) for engine, tiers in _MODEL_TIER_MAPPING.items()}
+    try:
+        try:
+            from model_lineage import latest  # type: ignore  # noqa: PLC0415
+            from console_selection import saved_tier_model  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from .model_lineage import latest  # type: ignore  # noqa: PLC0415
+            from .console_selection import saved_tier_model  # type: ignore  # noqa: PLC0415
+        for engine, tiers in out.items():
+            for tier, family in _TIER_FAMILY.items():
+                if tier in tiers:
+                    tiers[tier] = (
+                        saved_tier_model(_TIER_CONSOLE_ROW[tier], tenant_id=tenant_id, engine_id=engine)
+                        or latest(family, engine)
+                        or tiers[tier]
+                    )
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
 
 def get_model_tier_mapping() -> dict[str, dict[str, str]]:
     """Return a deep copy of the model tier mapping (callers must not be
     able to mutate the module state through the return value)."""
-    return {engine: dict(tiers) for engine, tiers in _MODEL_TIER_MAPPING.items()}
+    return _tier_mapping()
 
 
 def model_is_registered(model_id: str | None, engine: str) -> bool:
@@ -866,7 +898,7 @@ def resolve_model_for_workload(
         return user_chosen_model
 
     # Look up the engine's tier mapping
-    tiers = _MODEL_TIER_MAPPING.get(engine_id)
+    tiers = _tier_mapping().get(engine_id)
     if tiers is None:
         # Unknown engine: use user's choice, no tier-based routing
         return user_chosen_model

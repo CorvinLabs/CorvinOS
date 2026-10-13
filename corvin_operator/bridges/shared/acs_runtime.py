@@ -117,7 +117,7 @@ except Exception:  # noqa: BLE001
 # ---------------------------------------------------------------------------
 
 _DEFAULT_MODEL_MANAGER = "claude-sonnet-5"
-_DEFAULT_MODEL_WORKER = "claude-haiku-4-5-20251001"
+_DEFAULT_MODEL_WORKER = "claude-haiku-4-5-20251001"  # fallback ONLY — see _default_worker_model()
 _MANAGER_OUTPUT_CAP = 65536   # 64 KB max manager JSON response
 _WORKER_OUTPUT_CAP = 131072   # 128 KB max worker response
 
@@ -137,6 +137,55 @@ _DEFAULT_WORKER_TURNS = 5000     # per-worker turn cap when not configured (was 
 # by max_wall_time (BudgetEnvelope), so honoring the knob does not reopen the
 # worker-hours quota-defeat axis.
 _WORKER_TIMEOUT_CEILING = 86400
+
+
+def _default_manager_model(tenant_id: str | None = None) -> str:
+    """ACS manager model when the caller names none: the operator's Console OS
+    pin (``os_model``), else the Console ``MEDIUM`` choice, else the newest
+    Sonnet (ADR-2090 lineage); the constant above only if the registry is
+    unreadable."""
+    try:
+        try:
+            from console_selection import pinned_model, saved_tier_model  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from .console_selection import pinned_model, saved_tier_model  # type: ignore  # noqa: PLC0415
+        chosen = pinned_model("os_model", tenant_id=tenant_id) or saved_tier_model("MEDIUM", tenant_id=tenant_id)
+        if chosen:
+            return chosen
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        try:
+            from model_lineage import latest  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from .model_lineage import latest  # type: ignore  # noqa: PLC0415
+        return latest("sonnet") or _DEFAULT_MODEL_MANAGER
+    except Exception:  # noqa: BLE001
+        return _DEFAULT_MODEL_MANAGER
+
+
+def _default_worker_model(tenant_id: str | None = None) -> str:
+    """Worker default when nothing pins it: the operator's Console ``SIMPLE``
+    choice, else the newest Haiku (ADR-2090 lineage); the constant above only
+    when the registry cannot be read."""
+    try:
+        try:
+            from console_selection import saved_tier_model  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from .console_selection import saved_tier_model  # type: ignore  # noqa: PLC0415
+        chosen = saved_tier_model("SIMPLE", tenant_id=tenant_id)
+        if chosen:
+            return chosen
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        try:
+            from model_lineage import latest  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from .model_lineage import latest  # type: ignore  # noqa: PLC0415
+        return latest("haiku") or _DEFAULT_MODEL_WORKER
+    except Exception:  # noqa: BLE001
+        return _DEFAULT_MODEL_WORKER
 
 
 def _effective_worker_timeout(budget: dict) -> int:
@@ -521,53 +570,61 @@ def _audit_path(tenant_id: str) -> Path:
 
 
 def _resolve_worker_model(explicit: str | None, tenant_id: str) -> str:
-    """ADR-0112 M1 / ADR-0119: Six-step ACS worker model resolution.
-
+    """ADR-0112 M1 / ADR-0119: ACS worker model resolution.
     Priority:
     1. explicit per-call override (e.g. workflow body field)
     2. CORVIN_ACS_WORKER_MODEL env  (bridge injects from persona.engine_models or acs_worker_model)
-    3. ANTHROPIC_MODEL env          (inherits Claude Code model selection)
-    4. tenant.corvin.yaml::spec.engine_models.<engine_id>.worker_model  (per-engine tenant default)
-    5. tenant.corvin.yaml::spec.default_worker_model                    (global console-configurable)
-       tenant.corvin.yaml::spec.acs.default_worker_model                (legacy ACS-specific fallback)
-    6. _DEFAULT_MODEL_WORKER        (backward-compatible Haiku fallback)
+    3. Console pin tenant.corvin.yaml::spec.engine_models.<engine_id>.worker_model
+    4. Console default tenant.corvin.yaml::spec.default_worker_model
+       (legacy: spec.acs.default_worker_model)
+    5. ANTHROPIC_MODEL env          (inherits the OS-layer engine's model)
+    6. _default_worker_model()      (Console SIMPLE choice, else newest Haiku)
+
+    The Console pins (3, 4) outrank ANTHROPIC_MODEL: that variable is set by the
+    OS-layer engine for ITS turn and is not a worker override, so letting it win
+    meant the worker model chosen on the Models page was ignored whenever the
+    parent turn carried one (operator rule 2026-10-13: the Console selection is
+    always the one used).
     """
     if explicit:
         return explicit
     if m := os.environ.get("CORVIN_ACS_WORKER_MODEL", "").strip():
         return m
+    try:
+        try:
+            from console_selection import pinned_model, _normalise  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from .console_selection import pinned_model, _normalise  # type: ignore  # noqa: PLC0415
+        engine_id = os.environ.get("CORVIN_ENGINE_ID", "claude_code")
+        # Step 3: per-engine tenant pin (ADR-0119), normalised (the Console
+        # persists it provider-qualified, which the CLI rejects).
+        if per_engine := pinned_model("worker_model", tenant_id=tenant_id, engine_id=engine_id):
+            return per_engine
+        import yaml  # type: ignore[import-untyped]  # noqa: PLC0415
+        cfg = _corvin_home() / "tenants" / tenant_id / "global" / "tenant.corvin.yaml"
+        if cfg.is_file():
+            spec = (yaml.safe_load(cfg.read_text("utf-8")) or {}).get("spec") or {}
+            # Step 4: global tenant default - spec.default_worker_model is written
+            # by PUT /api/engine (console UI); spec.acs.default_worker_model is
+            # the legacy ACS-specific key (ADR-0112).
+            raw_val = spec.get("default_worker_model") or (spec.get("acs") or {}).get("default_worker_model")
+            # Guard against null/non-string YAML values (e.g. `default_worker_model: ~`)
+            if isinstance(raw_val, str) and raw_val.strip():
+                return _normalise(raw_val, engine_id) or raw_val.strip()
+    except Exception:  # noqa: BLE001
+        pass
     if m := os.environ.get("ANTHROPIC_MODEL", "").strip():
         # ANTHROPIC_MODEL is set by the outer OS-layer engine and is NOT a dedicated
         # ACS worker model override. Log so cost surprises are visible in the adapter log.
         log.warning(
             "_resolve_worker_model: falling through to ANTHROPIC_MODEL=%r for "
-            "ACS workers (tenant=%s). Set CORVIN_ACS_WORKER_MODEL to pin the worker "
-            "model independently of the OS-turn model.",
+            "ACS workers (tenant=%s). Pin a worker model on the Models page "
+            "(or set CORVIN_ACS_WORKER_MODEL) to choose it independently of the "
+            "OS-turn model.",
             m, tenant_id,
         )
         return m
-    try:
-        import yaml  # type: ignore[import-untyped]  # noqa: PLC0415
-        cfg = _corvin_home() / "tenants" / tenant_id / "global" / "tenant.corvin.yaml"
-        if cfg.is_file():
-            raw = yaml.safe_load(cfg.read_text("utf-8")) or {}
-            spec = raw.get("spec") or {}
-            # Step 4: per-engine tenant default (ADR-0119)
-            engine_id = os.environ.get("CORVIN_ENGINE_ID", "claude_code")
-            engine_models = spec.get("engine_models") or {}
-            per_engine_val = (engine_models.get(engine_id) or {}).get("worker_model")
-            if isinstance(per_engine_val, str) and per_engine_val.strip():
-                return per_engine_val.strip()
-            # Step 5: global tenant default — console-configurable key takes priority.
-            # spec.default_worker_model is written by PUT /api/engine (console UI).
-            # spec.acs.default_worker_model is the legacy ACS-specific key (ADR-0112).
-            raw_val = spec.get("default_worker_model") or (spec.get("acs") or {}).get("default_worker_model")
-            # Guard against null/non-string YAML values (e.g. `default_worker_model: ~`)
-            if isinstance(raw_val, str) and raw_val.strip():
-                return raw_val.strip()
-    except Exception:  # noqa: BLE001
-        pass
-    return _DEFAULT_MODEL_WORKER
+    return _default_worker_model(tenant_id)
 
 
 def _write_audit(tenant_id: str, event_type: str, details: dict) -> None:
@@ -2936,7 +2993,7 @@ class ACSRuntime:
         tenant_id: str = "_default",
         bridge: str = "cli",
         chat: str = "default",
-        manager_model: str = _DEFAULT_MODEL_MANAGER,
+        manager_model: str | None = None,
         worker_model: str | None = None,
         enable_gate_chain: bool = True,
         session_debug_log: "Path | None" = None,
@@ -2944,7 +3001,7 @@ class ACSRuntime:
         self._tenant_id = tenant_id
         self._bridge = bridge
         self._chat = chat
-        self._manager_model = manager_model
+        self._manager_model = manager_model or _default_manager_model(tenant_id)
         self._worker_model = _resolve_worker_model(worker_model, tenant_id)
         self._enable_gate_chain = enable_gate_chain
         # ACO Layer 1 extension: if a session workdir is provided, write

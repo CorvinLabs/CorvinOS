@@ -371,6 +371,20 @@ _CRITIQUE_SYSTEM = (
 )
 
 
+def _newest_haiku() -> str:
+    """Critique-model default: the operator's Console choice for the ``corvinOS``
+    row, else the newest Haiku (resolved per call)."""
+    fallback = "claude-haiku-4-5-20251001"
+    try:
+        try:
+            from helper_model import default_helper_model  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            from .helper_model import default_helper_model  # type: ignore  # noqa: PLC0415
+        return default_helper_model()
+    except Exception:  # noqa: BLE001
+        return fallback
+
+
 def _run_critique_sync(result_text: str, goal: str, model: str) -> dict[str, Any] | None:
     try:
         from helper_model import resolve_claude_bin as _resolve_bin  # type: ignore
@@ -422,7 +436,7 @@ async def _gate_llm_critique(
     goal: str,
     confidence: float,
     confidence_threshold: float = 0.95,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = "",
 ) -> GateResult:
     """Gate 3: LLM critique — skipped when confidence >= threshold."""
     if confidence >= confidence_threshold:
@@ -434,7 +448,7 @@ async def _gate_llm_critique(
         )
 
     critique = await asyncio.to_thread(
-        _run_critique_sync, result_text, goal, model
+        _run_critique_sync, result_text, goal, model or _newest_haiku()
     )
     if critique is None:
         # If critique fails (claude unavailable), pass by default
@@ -697,11 +711,11 @@ class ACSGateChain:
     def __init__(
         self,
         workflow_spec: dict | None = None,
-        critique_model: str = "claude-haiku-4-5-20251001",
+        critique_model: str = "",
         critique_confidence_threshold: float = 0.95,
     ) -> None:
         self._spec = workflow_spec or {}
-        self._critique_model = critique_model
+        self._critique_model = critique_model or _newest_haiku()
         self._critique_threshold = critique_confidence_threshold
 
     async def evaluate(

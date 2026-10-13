@@ -5,9 +5,12 @@
  *   (`spec.engine_models`, ADR-0759), written through the existing
  *   `PUT /settings/engine`. That route REPLACES the whole map, so this form
  *   always submits the full map it read. Its own dirty state, its own button.
- * Block 2 — Classifier overrides: the shadow classifier's per-tier choice
- *   (`PUT /v1/engine/config`). Advisory — it never decides what serves a turn;
- *   the label says so. Its own button, because the two routes validate and
+ * Block 2 — Tier choices: the model per tier (`PUT /v1/engine/config`).
+ *   APPLIED, not advisory: the runtime reads the saved rows (SIMPLE/MEDIUM/
+ *   COMPLEX drive the default OS turn, the classifier and the workload tiers;
+ *   corvinOS drives CorvinOS' own helper steps) and ACS workers fall back to
+ *   SIMPLE when no worker pin is set. A turn pin from Block 1 still wins.
+ *   Its own button, because the two routes validate and
  *   fail differently and one half-successful "Save" would hide which half.
  * Block 3 — External providers, from the ADR-0181 registry.
  *
@@ -161,7 +164,7 @@ export function RoutingTab({
     },
   });
 
-  // ── Block 2: classifier overrides (advisory) ──────────────────────────
+  // ── Block 2: tier choices (applied) ──────────────────────────
   const configQ = useQuery({
     queryKey: ["engine-config"],
     queryFn: ({ signal }) => getEngineConfig(signal),
@@ -300,13 +303,14 @@ export function RoutingTab({
       {/* ── Block 2 ── */}
       <div>
         <div className="flex items-baseline justify-between flex-wrap gap-2 mb-1">
-          <h2 className="text-xl font-semibold">Classifier overrides</h2>
-          <Badge variant="secondary" className="font-normal">advisory</Badge>
+          <h2 className="text-xl font-semibold">Tier choices</h2>
+          <Badge variant="secondary" className="font-normal">applied</Badge>
         </div>
         <p className="text-sm text-muted-foreground mb-4">
-          The shadow classifier's per-tier choice. It observes and records every turn; it does
-          not decide what serves one — the pins above do. Confidence reflects real classified
-          turns.
+          The model used for each tier. A saved choice is always the one that runs: the default
+          OS turn and the classifier use Simple / Medium / Complex, background workers use Simple
+          when no worker pin is set, and CorvinOS' own helper steps use the CorvinOS row. A pin
+          above still wins. Confidence reflects real classified turns.
         </p>
         {configQ.isLoading ? (
           <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
