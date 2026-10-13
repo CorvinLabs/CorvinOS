@@ -395,8 +395,8 @@ function VideoStage({ job, loading, csrf }: { job: Job | undefined; loading: boo
 
 type Mode = "new" | "revise";
 
-function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, pickedStyle, onPickStyle, onImportStyle, onUseDeckAsStyle, importBlocked, capture }: {
-  capture: CaptureSettings | undefined;
+function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, pickedStyle, onPickStyle, onImportStyle, onUseDeckAsStyle, importBlocked, capture, captureError }: {
+  capture: CaptureSettings | undefined; captureError: boolean;
   csrf: string; selected: Job | undefined; mode: Mode; setMode: (m: Mode) => void;
   inputRef: React.RefObject<HTMLTextAreaElement>; onCreated: (jobId: string) => void;
   styles: StyleList | undefined; pickedStyle: string | null; onPickStyle: (id: string) => void;
@@ -413,7 +413,12 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
   const [capturedFor, setCapturedFor] = useState<Record<string, { id: string; host: string }>>({});
   const fileRef = useRef<HTMLInputElement>(null);
   const found = firstUrlIn(text);
-  const captureOff = captureBlockedReason(capture);
+  const captureOff = captureError ? "Website capture is not available on this installation." : captureBlockedReason(capture);
+  // a note about a captured screenshot holds only while the image still exists (it may be deleted elsewhere)
+  const hasCaptured = Object.keys(capturedFor).length > 0;
+  const assetsNow = useQuery({ queryKey: ["video", "assets"], enabled: hasCaptured, retry: false,
+    queryFn: ({ signal }) => api<{ assets: Array<{ id: string }> }>(`${BASE}/assets`, { signal }) });
+  const stillThere = (id: string) => !assetsNow.data || assetsNow.data.assets.some((a) => a.id === id);
   const canRevise = selected?.status === "complete";
   const revising = mode === "revise" && canRevise;
 
@@ -469,7 +474,7 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
       )}
       {found && found.url !== dismissedUrl && !revising && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs" data-testid="capture-suggestion">
-          {capturedFor[found.url] ? (
+          {capturedFor[found.url] && stillThere(capturedFor[found.url].id) ? (
             <span data-testid="capture-suggestion-done">Screenshot of {capturedFor[found.url].host} added as <code>{capturedFor[found.url].id}</code>; the storyboard can show it.</span>
           ) : captureOff ? (
             <span className="text-muted-foreground" data-testid="capture-suggestion-off">Add a screenshot of {found.host} to this video? {captureOff}</span>
@@ -650,7 +655,7 @@ export function VideoProducerPage() {
         onCreated={(id) => { setSelected(id); }}
         styles={styles.data} pickedStyle={pickedStyle} onPickStyle={setPickedStyle} importBlocked={importBlocked}
         onImportStyle={() => deckPicker.current?.click()} onUseDeckAsStyle={setDeckFile}
-        capture={settings.isError ? undefined : settings.data} />
+        capture={settings.isError ? undefined : settings.data} captureError={settings.isError} />
       <input ref={deckPicker} type="file" accept={STYLE_DECK_ACCEPT} className="hidden" data-testid="deck-input" aria-label="PowerPoint deck or Penpot SVG to import as a style"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) setDeckFile(f); e.target.value = ""; }} />
       {deckFile && (

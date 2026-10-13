@@ -170,9 +170,15 @@ class CaptureRoutesE2E(unittest.TestCase):
             _write_tenant_yaml(home, "tenant_a", {"egress": {"enabled": True, "default_action": "allow",
                                                              "forbidden_hosts": ["blocked.example.org"]}})
             ca.put(f"{V}/settings", headers=H(csrf), json={"capture_enabled": True})
-            hostile = ["http://127.0.0.1:8765/v1/console/auth/local-login", "http://0x7f000001/",
-                       "http://[::ffff:127.0.0.1]/", "http://169.254.169.254/latest/meta-data/",
-                       "http://localhost/", "http://10.0.0.1/", "http://[64:ff9b::7f00:1]/"]
+            # a dotless name ("localhost", the hex literal 0x7f000001) is refused by its SYNTAX, at once and
+            # independent of any target - it says nothing about reachability
+            for url in ("http://localhost/", "http://0x7f000001/", "http://localhost.:8765/"):
+                r, dt = _capture(ca, csrf, url)
+                self.assertEqual((r.status_code, r.json()["detail"]), (422, "Enter a plain http:// or https:// address"))
+                self.assertLess(dt, 2.0)
+            hostile = ["http://127.0.0.1:8765/v1/console/auth/local-login", "http://[::ffff:127.0.0.1]/",
+                       "http://169.254.169.254/latest/meta-data/", "http://10.0.0.1/", "http://[64:ff9b::7f00:1]/",
+                       "http://127.1/", "http://metadata.google.internal/"]
             unreachable = ["http://capture-e2e-probe.invalid/", "http://example.com:81/"]
             seen = {}
             for url in hostile + unreachable:
@@ -190,6 +196,7 @@ class CaptureRoutesE2E(unittest.TestCase):
             self.assertLess(max(times) - min(times), 0.5, seen)
             self.assertEqual(_assets_on_disk(home, "tenant_a"), [])
             done = _chain_records(home, "tenant_a", "video_producer.capture_finished")
+            done = [d for d in done if d["details"]["refusal"] != "invalid_url"]
             self.assertEqual(len(done), len(seen))
             self.assertEqual({d["details"]["outcome"] for d in done}, {"failed"})
             # the tenant's own policy is no secret: a forbidden host is refused at once, and says why
@@ -283,6 +290,12 @@ class CaptureRoutesE2E(unittest.TestCase):
             done = _chain_records(home, "tenant_a", "video_producer.capture_finished")
             self.assertEqual(len(started), 3)
             self.assertEqual([d["details"]["refusal"] for d in done], ["timeout", "error", "refused"])
+            # the audit timestamps do not tell them apart either (audit/tail shows ts to the tenant)
+            ts = lambda r: float(r["ts"])  # noqa: E731 - the chain's unix timestamp
+            spans = [ts(f) - ts(s_) for s_, f in zip(started, done)]
+            print("audit-spans", [round(x, 3) for x in spans])
+            self.assertLess(max(spans) - min(spans), 0.5, spans)
+            self.assertGreaterEqual(min(spans), floor - 1.0, spans)
             self.assertEqual(done[0]["details"]["hosts_connected"], 3)
 
 

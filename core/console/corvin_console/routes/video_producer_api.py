@@ -2269,8 +2269,10 @@ async def capture_asset(req: CaptureRequest, request: Request, rec=_SessionRec):
         raise HTTPException(status_code=status, detail=message)
 
     async def not_capturable(code: str, **extra):
-        recorded = await finish("failed", code, **extra)
+        # the record is written AT the answer instant: its timestamp is readable (audit/tail), and written
+        # earlier it would tell a hang (12.5 s) from a refusal (ms) after all (refutation 2026-10-14)
         await asyncio.sleep(max(0.0, t0 + _capture_fail_floor(cap) - time.monotonic()))
+        recorded = await finish("failed", code, **extra)
         if not recorded:
             raise HTTPException(status_code=503, detail="The request could not be recorded")
         raise HTTPException(status_code=422, detail=_CAPTURE_NOT_POSSIBLE)

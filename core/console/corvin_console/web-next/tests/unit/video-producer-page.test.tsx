@@ -594,6 +594,34 @@ describe("Video Producer studio", () => {
     expect(screen.getByTestId("capture-suggestion-open")).toBeInTheDocument();
   });
 
+  it("the composer's note disappears when the screenshot is deleted from the image list; a settings error is said", async () => {
+    let assets = [{ id: "ast_feed0004", caption: "A", hotspots: [], width: 1920, height: 1080, bytes: 1, created: 1, source: "https://acme.example/" }];
+    server.use(
+      http.get(`${B}/settings`, () => HttpResponse.json({ ...CAP_SETTINGS, capture_enabled: true, capture_policy_configured: true })),
+      http.get(`${B}/assets`, () => HttpResponse.json({ assets, limits: LIMITS })),
+      http.post(`${B}/capture`, () => HttpResponse.json({ asset: assets[0] }, { status: 201 })),
+      ...handlers(),
+    );
+    const { unmount } = renderIt();
+    fireEvent.change(await screen.findByTestId("task-input"), { target: { value: "About https://acme.example" } });
+    fireEvent.click(await screen.findByTestId("capture-suggestion-open"));
+    fireEvent.change(await screen.findByTestId("capture-caption"), { target: { value: "A" } });
+    fireEvent.click(screen.getByTestId("capture-submit"));
+    await screen.findByTestId("capture-preview");
+    fireEvent.keyDown(window, { key: "Escape" });
+    await screen.findByTestId("capture-suggestion-done");
+    assets = [];  // deleted in the Images tab
+    fireEvent.click(screen.getByLabelText("Refresh"));
+    await waitFor(() => expect(screen.queryByTestId("capture-suggestion-done")).toBeNull());
+    expect(screen.getByTestId("capture-suggestion-open")).toBeInTheDocument();
+    unmount();
+
+    server.use(http.get(`${B}/settings`, () => HttpResponse.json({ detail: "boom" }, { status: 500 })), ...handlers());
+    renderIt();
+    fireEvent.change(await screen.findByTestId("task-input"), { target: { value: "About https://acme.example" } });
+    await waitFor(() => expect(screen.getByTestId("capture-suggestion-off").textContent).toMatch(/not available on this installation/));
+  });
+
   it("a refused upload shows the server's reason", async () => {
     server.use(
       http.get(`${B}/assets`, () => HttpResponse.json({ assets: [], limits: { max_assets: 50, max_image_bytes: 2097152, max_upload_bytes: 8388608, max_caption: 160, max_hotspots: 8 } })),
