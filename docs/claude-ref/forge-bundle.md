@@ -38,6 +38,100 @@ those fixes (five separate reviewers, executed repros required) found 20 more
 [Refutation round 4](#refutation-round-4-2026-10-08). That round's own fixes are
 verified by tests only, not by a further reviewer.
 
+**2026-10-13 — Per-Item Export (Phase 4b): Claude-Web Skill ZIP Format**
+
+Individual artifacts (skills, tools, os-skills, layers, plugins) are now downloadable as ZIPs
+from the Forge Console (`/app/forge?tab=...`). Skills are exported in **Claude Web format**
+to be directly importable into [claude.ai](https://claude.ai) custom skills (see
+[Claude Web Skill ZIP Format](#claude-web-skill-zip-format)).
+
+### Per-Item Export (Phase 4b) — Single artifacts as ZIPs
+
+`GET /v1/console/forge-bundles/export/{type}/{id}?version=…`
+
+Exports a single artifact (skill, tool, layer, plugin, os_skill) as a ZIP. Skills use Claude-Web-compatible format.
+
+| Artifact Type | Format | Structure |
+|---|---|---|
+| **skill** | Claude-Web (ADR-2229 Phase 4b) | `<skill-name>/SKILL.md` (frontmatter: name, description) + `.corvin-skill.json` (Corvin metadata) + optional scripts/, references/, assets/ |
+| **os_skill** | Claude-Web (read-only) | `<skill-id>/SKILL.md` (frontmatter, marked read-only) + `.corvin-skill.json` (includes `"read_only": true`) |
+| **tool** | Native format | `<tool-name>/spec.json` (name, description, input_schema, runtime, version, impl_filename, meta) + `<impl_filename>` (implementation) |
+| **layer** | Native format | `<layer-id>/manifest.json` (layer definition, no registry state) |
+| **plugin** | Pre-built | Pre-built plugin ZIP (already compressed, passed through as-is) |
+
+**Claude-Web Skill ZIP Format (Skills + OS-Skills):**
+
+```
+my-skill/
+  ├── SKILL.md                    (YAML frontmatter: name, description; body is markdown)
+  ├── .corvin-skill.json          (Corvin metadata: corvin_skill_id, corvin_version, exported_at, original_manifest [skills only])
+  ├── scripts/                    (optional)
+  │   ├── helper.py
+  │   └── …
+  ├── references/                 (optional)
+  │   └── …
+  └── assets/                     (optional)
+      └── …
+```
+
+**Frontmatter fields (Claude-Web compatible):**
+- `name` — Sanitized skill name (lowercase, alphanumerics + hyphens; max 64 chars; no `anthropic`/`claude` prefix)
+- `description` — Brief description of the skill
+
+**Corvin Metadata (.corvin-skill.json, not visible to Claude-Web):**
+- `corvin_skill_id` — Original skill ID in CorvinOS format
+- `corvin_version` — Skill version (semver)
+- `exported_at` — ISO 8601 timestamp
+- `skill_type` — "skill" or "os_skill"
+- `read_only` — Boolean; true for OS-Skills
+- `original_manifest` — Full skill.json manifest (skills only, for lossless re-import)
+
+**Name Sanitization Rules:**
+- Replace `_` and `.` with `-`
+- Remove non-alphanumeric characters (except `-`)
+- Lowercase
+- Strip leading/trailing `-`
+- If starts with `anthropic` or `claude`, prepend `user-`
+- If >64 chars, truncate to 52 chars + `--` + 8-char SHA256 hash suffix
+
+**Single-Item Import Detection**
+
+`POST /v1/console/forge-bundles/import` auto-detects single-item ZIPs and imports them directly:
+
+1. **Bundle ZIP** — Has `forge-bundle.json` at root → import_bundle() (existing logic)
+2. **Single Skill** — Single top-level folder with `SKILL.md` + `.corvin-skill.json` → _import_single_skill()
+3. **Single Tool** — Single top-level folder with `spec.json` + impl file → _import_single_tool()
+4. **Single Layer** — Single top-level folder with `manifest.json` → _import_single_layer()
+5. **Single Plugin** — Pre-built plugin ZIP → _import_single_plugin()
+
+Each type enters through its own forge's intake, passes the same gates as a locally forged artifact.
+
+### Audit Events (Per-Item Export/Import)
+
+Registered in `corvin_operator/forge/forge/security_events.py` (EVENT_SEVERITY + _EVENT_ALLOWLIST):
+
+| Event | Severity | Fields | Notes |
+|---|---|---|---|
+| `forge_bundle.item_exported` | INFO | artifact_type, artifact_id, artifact_version, size_bytes, sha256, tenant_id | Emitted after successful export |
+| `forge_bundle.artifact_intake_started` | INFO | bundle_id, artifact_kind, artifact_id, artifact_version, status, actor, tenant_id | Emitted at import start (before validation) |
+| `forge_bundle.artifact_staged` | INFO | bundle_id, artifact_kind, artifact_id, artifact_version, status, actor, tenant_id | Emitted after successful intake (skill installed, tool quarantined, layer forged, plugin staged) |
+| `forge_bundle.artifact_failed` | WARNING | bundle_id, artifact_kind, artifact_id, artifact_version, phase, error_class, actor, tenant_id | Emitted on import failure (phase: import, quarantine, forge, staging) |
+
+All events include `tenant_id` (fail-closed: null → denied). Metadata only; no manifest bodies, file contents, or exception messages. Hash-chained via `forge.security_events.audit_write_or_die()` using `core.paths.tenant_audit_chain(tenant_id)`.
+
+**Audit-First Semantics:**
+- Export: record after successful ZIP build
+- Import: record intake_started BEFORE validation, staged/failed AFTER result
+
+**Size and Count Limits:**
+- Max upload: 50 MiB
+- Max file count per ZIP: checked per forge (layer quarantine: max 16 gates per bundle, etc.)
+
+**Security:**
+- ZIP extraction uses `zipfile.ZipFile` with path validation (no symlinks, no hard links, no `..` escapes)
+- Tenant isolation: all reads/writes filtered by `tenant_id` from SessionRecord
+- Host-wide resources (skills, layers): restricted to install owner's tenant (owner/admin tier)
+
 ## Export (Phase 2) — `core/forge_bundle/export.py`
 
 `build_bundle(*, bundle_id, bundle_version, selections, tenant_id, description=None) -> BundleResult`
@@ -439,3 +533,128 @@ into a scope holding `foo.bar` is refused, uniqueness is per scope (A1-2/3).
 
 Run settings: `FORGE_E2E_PORT_A/B`, `FORGE_E2E_HOME_A/B`, `FORGE_E2E_KEEP`
 (Downloads run folders kept, default 10), `FORGE_E2E_LIVE_CHAIN`.
+
+## Claude Web Skill ZIP Format (Phase 4b)
+
+CorvinOS skills can be exported as ZIPs compatible with [Claude Web](https://claude.ai)
+custom skills upload (verified against
+[Anthropic Support](https://support.claude.com/en/articles/12512198-how-to-create-custom-skills),
+[Platform Docs](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview),
+and [Claude Code Docs](https://code.claude.com/docs/en/skills)).
+
+### ZIP Structure
+
+```
+skill-name.zip
+└── skill-name/
+    ├── SKILL.md (required: YAML frontmatter + Markdown)
+    ├── .corvin-skill.json (Corvin metadata, optional for Claude Web)
+    ├── scripts/ (optional: Python/JS deterministic processing)
+    ├── references/ (optional: static files loaded on demand)
+    └── assets/ (optional: templates, fonts, icons)
+```
+
+### SKILL.md Frontmatter (Claude Web Contract)
+
+```yaml
+---
+name: skill-name-in-kebab-case
+description: "Brief description (1-1024 characters)"
+---
+
+# Heading
+
+Markdown content with instructions for Claude...
+```
+
+**Constraints (from official Anthropic documentation):**
+- `name`: 1-64 characters, kebab-case (lowercase alphanumerics and hyphens)
+- `description`: 1-1024 characters
+- Folder name MUST match the `name` field
+- ZIP MUST contain the folder at its root (not nested)
+
+### CorvinOS Name Sanitization
+
+Corvin skill names (e.g., `os.delegation_router`, `assistant.foo_bar`) are converted to Claude Web format:
+
+- Dots (`.`) and underscores (`_`) → hyphens (`-`)
+- Uppercase → lowercase
+- Non-alphanumeric characters (except hyphens) → stripped
+- Length > 64 chars → truncated with SHA256 hash suffix (deterministic)
+- Prefix `anthropic` or `claude` → prepended with `user-`
+
+**Examples:**
+- `os.delegation_router` → `os-delegation-router`
+- `assistant.foo_bar_baz` → `assistant-foo-bar-baz`
+- `my_very_long_skill_name_that_exceeds_the_limit` → `my-very-long-skill-name-tha--<8-char-hash>`
+
+### Lossless Re-Import via `.corvin-skill.json`
+
+The exported ZIP includes a `.corvin-skill.json` file with Corvin-specific metadata:
+
+```json
+{
+  "corvin_skill_id": "assistant.original_name",
+  "corvin_version": "1.0.0",
+  "exported_at": "2026-10-13T12:34:56Z",
+  "original_manifest": { "name": "...", "description": "...", ... }
+}
+```
+
+When re-importing into a CorvinOS install, this metadata is restored, allowing round-trip
+export → (use in Claude Web) → import back with original identity and version.
+
+**Note:** Claude Web ignores `.corvin-skill.json`; it is only for CorvinOS imports.
+
+### Per-Artifact Types
+
+| Type | Export Format | Claude Web Compatible | Notes |
+|------|---|---|---|
+| **Skill** | SKILL.md + .corvin-skill.json + scripts/, references/, assets/ | ✅ Yes | Ready for claude.ai custom skills |
+| **OS-Skill** | SKILL.md (read-only description) + .corvin-skill.json | ⚠️ Read-only | System skills exported as documentation only |
+| **Tool** | spec.json + impl file (Python/Bash) | ❌ No | Tools are Forge-specific; import to quarantine |
+| **Layer** | manifest.json | ❌ No | Layers are CorvinOS-specific; import via Layer Forge |
+| **Plugin** | Pre-built ADR-0511 ZIP package | ❌ No | Plugins are staged for operator review |
+
+### Export Routes
+
+- **Console:** `GET /v1/console/forge-bundles/export/{artifact_type}/{artifact_id}?version=X`
+  - Returns ZIP file with `Content-Disposition: attachment`
+  - Audit event: `forge_bundle.item_exported` (tenant-scoped, hash-chained)
+
+- **CLI:** `scripts/forge_bundle_cli.py export --skill ID@VER` (not yet implemented for per-item; use bundle export for now)
+
+### Security Properties
+
+- **ZIP Slip Protection:** All path components validated; no `..`, absolute paths, or symlinks
+- **Symlink Rejection:** Skills containing symlinks are refused at export time
+- **Hard Link Rejection:** Hard links are detected and refused
+- **Audit-First:** Export events logged before response sent
+- **Tenant Isolation:** All events carry `tenant_id`; fail-closed if missing
+- **Rate Limiting:** Max 2 concurrent exports per type (via `_HEAVY_SLOTS` semaphore)
+
+### Import Detection
+
+The import handler (`item_import.py::detect_item_type_from_zip`) automatically detects:
+1. Bundle format (has `forge-bundle.json` → use bundle import)
+2. Single-item format (single top-level folder)
+   - **Skill:** `folder/SKILL.md` + `.corvin-skill.json` → read `corvin_skill_id` + `corvin_version`
+   - **Tool:** `folder/spec.json` + impl file → read `name` + `version`
+   - **Layer:** `folder/manifest.json` → read `id` + `version`
+   - **Plugin:** Pre-validated ADR-0511 ZIP → read manifest
+
+### Test Coverage
+
+- `tests/forge_bundle/test_item_export.py` — export tests for all artifact types
+- `tests/forge_bundle/test_item_import.py` — format detection and validation
+- `tests/forge_bundle/test_item_export_import_e2e.py` — round-trip export → import → verify
+
+Run with sandbox environment:
+```bash
+export CORVIN_HOME=$(mktemp -d)
+export XDG_CONFIG_HOME=$(mktemp -d)
+export CORVIN_AUDIT_ANCHOR_KEY=$(mktemp)
+pytest tests/forge_bundle/ -v
+```
+
+**Do NOT set `FORGE_ROOT`** for tests (breaks isolation).

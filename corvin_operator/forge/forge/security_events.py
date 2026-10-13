@@ -974,8 +974,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "layer_forge.plan_generated":     "INFO",
     "layer_forge.plan_failed":     "WARNING",
     "layer_forge.optimizer_config_updated":     "INFO",
-    # Forge Bundle (ADR-2229) — mirrored in core/forge_bundle/audit.py::SEVERITY.
+    # Forge Bundle (ADR-2229 + Phase 4 per-item export) — mirrored in core/forge_bundle/audit.py::SEVERITY.
     "forge_bundle.exported": "INFO",
+    "forge_bundle.item_exported": "INFO",
     "forge_bundle.import_validated": "INFO",
     "forge_bundle.import_rejected": "WARNING",
     "forge_bundle.artifact_intake_started": "INFO",
@@ -4100,9 +4101,12 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "layer_forge.optimizer_config_updated": frozenset({
         "new_version", "old_version", "reason", "signal", "success_rate", "tenant_id", "total_overrides"
     }),
-    # Forge Bundle (ADR-2229) — mirrored in core/forge_bundle/audit.py::ALLOWED_FIELDS.
+    # Forge Bundle (ADR-2229 + Phase 4 per-item export) — mirrored in core/forge_bundle/audit.py::ALLOWED_FIELDS.
     "forge_bundle.exported": frozenset({
         "bundle_id", "bundle_version", "artifact_count", "total_bytes", "tenant_id",
+    }),
+    "forge_bundle.item_exported": frozenset({
+        "artifact_type", "artifact_id", "artifact_version", "size_bytes", "sha256", "tenant_id",
     }),
     "forge_bundle.import_validated": frozenset({
         "bundle_id", "bundle_version", "artifact_count", "total_uncompressed_bytes",
