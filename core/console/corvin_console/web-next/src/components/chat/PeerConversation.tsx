@@ -29,8 +29,9 @@ import {
   formatAge, messageStatusView, type MessageStatusView, type StatusIcon, type StatusTone,
 } from "@/lib/a2a-message-status";
 import {
-  inlineImageNames, isMinePeerRole, isObserverModeEmptyReply, mediaKind, messageMarkdown,
-  peerMessageRole, peerRoleLabel, referencedImageAttachment,
+  PEER_ROLE_MARK, dayLabel, inlineImageNames, isMinePeerRole, isObserverModeEmptyReply, localDayKey,
+  mediaKind, messageMarkdown, messageTime, messageTimeFull, peerMessageRole, peerRoleLabel,
+  referencedImageAttachment,
 } from "@/lib/a2a-feed";
 import { listConversations, stopConversation, type ConversationSummary } from "@/lib/api/federation";
 import { Markdown } from "@/components/markdown";
@@ -49,8 +50,17 @@ const FEED_REFETCH_MS = 4_000;
 /** Faster while a message of ours is still on its way, so the symbol follows the peer. */
 const FEED_REFETCH_INFLIGHT_MS = 2_000;
 
-function fmtTime(ts: number): string {
-  return new Date(ts * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+/** Where the thread crosses into a new calendar day — the rows below it show only the time. */
+function DaySeparator({ ts, nowS }: { ts: number; nowS: number }) {
+  const label = dayLabel(ts, nowS);
+  return (
+    <div role="separator" aria-label={label} data-testid="peer-day-separator"
+      className="flex items-center gap-3 py-1 text-[11px] font-medium text-muted-foreground">
+      <span aria-hidden className="h-px flex-1 bg-border" />
+      <span>{label}</span>
+      <span aria-hidden className="h-px flex-1 bg-border" />
+    </div>
+  );
 }
 
 const STATUS_ICON: Record<StatusIcon, LucideIcon> = {
@@ -157,12 +167,16 @@ const PeerMessageRow = React.memo(function PeerMessageRow({ m, label, reply, sta
       {!mine && <div className="mt-5"><ChatAvatar label={label} icon={Globe2} /></div>}
       <div className={cn("flex min-w-0 max-w-[85%] flex-col", mine ? "items-end" : "items-start")}>
         <div className="mb-1 flex flex-wrap items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
+          <span aria-hidden data-testid="peer-message-role-mark" className="text-sm leading-none">{PEER_ROLE_MARK[role]}</span>
           <span className="font-medium text-foreground/80" data-testid="peer-message-role">{roleLabel}</span>
-          {isAgent && <Bot className="h-3 w-3 text-muted-foreground" aria-label="agent-authored" />}
-          <span>·</span>
+          {isAgent && <span className="sr-only">(agent)</span>}
+          <span aria-hidden>·</span>
           <span>{m.kind === "task" ? "message" : "reply"}</span>
-          <span>·</span>
-          <span>{fmtTime(m.ts)}</span>
+          <span aria-hidden>·</span>
+          <time dateTime={new Date(m.ts * 1000).toISOString()} title={messageTimeFull(m.ts)}
+            data-testid="peer-message-time" className="cursor-help tabular-nums">
+            {messageTime(m.ts)}
+          </time>
         </div>
         <div className={cn(
           "w-fit max-w-full rounded-2xl px-4 py-3 text-sm leading-relaxed",
@@ -470,10 +484,15 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
           {feed.data && msgs.length === 0 && (
             <p className="pt-10 text-center text-sm text-muted-foreground">No messages with this agent yet.</p>
           )}
-          {msgs.map((m) => <PeerMessageRow key={m.id} m={m} label={label}
-            reply={m.kind === "task" ? repliesByTask.get(m.task_id) ?? null : null}
-            stage={m.kind === "task" && m.direction === "out" ? stages?.[m.task_id] ?? null : null}
-            now={nowS} onResend={resend} />)}
+          {msgs.map((m, i) => (
+            <React.Fragment key={m.id}>
+              {(i === 0 || localDayKey(msgs[i - 1].ts) !== localDayKey(m.ts)) && <DaySeparator ts={m.ts} nowS={nowS} />}
+              <PeerMessageRow m={m} label={label}
+                reply={m.kind === "task" ? repliesByTask.get(m.task_id) ?? null : null}
+                stage={m.kind === "task" && m.direction === "out" ? stages?.[m.task_id] ?? null : null}
+                now={nowS} onResend={resend} />
+            </React.Fragment>
+          ))}
           {error && (
             <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {error}
