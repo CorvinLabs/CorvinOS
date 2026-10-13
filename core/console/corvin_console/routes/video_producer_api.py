@@ -2073,7 +2073,7 @@ class CaptureRequest(BaseModel):
     hotspots: List[Dict[str, Any]] = Field(default_factory=list, max_length=16)
 
 
-@router.post("/assets/capture", status_code=201)
+@router.post("/capture", status_code=201)
 async def capture_asset(req: CaptureRequest, request: Request, rec=_SessionRec):
     """"Add website screenshot": capture ``req.url`` once and store it as one of this tenant's assets.
     Session + CSRF (router dependency); 403 while the tenant switch is off or no egress policy exists."""

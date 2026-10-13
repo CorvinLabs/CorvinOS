@@ -33,7 +33,7 @@ _HAS_CHROME = any(shutil.which(b) for b in ("google-chrome", "google-chrome-stab
 
 def _capture(client, csrf, url, caption="The pricing page", headers=None, **extra):
     t0 = time.monotonic()
-    r = client.post(f"{V}/assets/capture", headers=H(csrf) if headers is None else headers,
+    r = client.post(f"{V}/capture", headers=H(csrf) if headers is None else headers,
                     json={"url": url, "viewport": "desktop", "caption": caption, **extra})
     return r, time.monotonic() - t0
 
