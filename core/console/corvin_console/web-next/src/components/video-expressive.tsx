@@ -14,12 +14,12 @@
  */
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Trash2, Upload, X } from "lucide-react";
+import { Globe, Loader2, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api/client";
 import {
-  ASSET_ACCEPT, assetImageUrl, canvasAuthoring, clickToPoint, fmtAssetBytes, nextSpotName, sceneSlideUrl,
+  ASSET_ACCEPT, assetImageUrl, canvasAuthoring, captureAsset, clickToPoint, fmtAssetBytes, nextSpotName, sceneSlideUrl,
   scenesWithTemplate, importPenpotBoard, uploadAsset, uploadProblem, type AssetHotspot, type AssetList,
 } from "@/lib/api/video-assets";
 import { signalRows, type ProductionReport } from "@/lib/video-quality-signals";
@@ -101,13 +101,25 @@ export function AssetsTab({ csrf }: { csrf: string }) {
   const [source, setSource] = useState("");
   const [spots, setSpots] = useState<AssetHotspot[]>([]);
   const [confirm, setConfirm] = useState<string | null>(null);
+  const [captureUrl, setCaptureUrl] = useState("");
+  const [captureCaption, setCaptureCaption] = useState("");
+  const [captureViewport, setCaptureViewport] = useState("desktop");
+  const [captureSpots, setCaptureSpots] = useState<AssetHotspot[]>([]);
+  const [capturePreview, setCapturePreview] = useState<string | null>(null);
+  const [showCaptureDialog, setShowCaptureDialog] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  const captureImgRef = useRef<HTMLImageElement>(null);
 
   const reset = () => { if (preview) URL.revokeObjectURL(preview); setFile(null); setPreview(null); setCaption(""); setSource(""); setSpots([]); };
+  const resetCapture = () => { if (capturePreview) URL.revokeObjectURL(capturePreview); setCaptureUrl(""); setCaptureCaption(""); setCaptureSpots([]); setCapturePreview(null); setShowCaptureDialog(false); };
   const upload = useMutation({
     mutationFn: () => uploadAsset(file!, { caption, source, hotspots: spots }, csrf),
     onSuccess: () => { reset(); void qc.invalidateQueries({ queryKey: ["video", "assets"] }); },
+  });
+  const capture = useMutation({
+    mutationFn: () => captureAsset({ url: captureUrl, caption: captureCaption, hotspots: captureSpots, viewport: captureViewport }, csrf),
+    onSuccess: () => { resetCapture(); void qc.invalidateQueries({ queryKey: ["video", "assets"] }); },
   });
   const penpotPicker = useRef<HTMLInputElement>(null);
   const penpot = useMutation({
@@ -146,6 +158,9 @@ export function AssetsTab({ csrf }: { csrf: string }) {
           </Button>
           <input ref={penpotPicker} type="file" accept=".svg,image/svg+xml" className="hidden" data-testid="penpot-input" aria-label="Penpot board exported as SVG"
             onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) { penpot.reset(); penpot.mutate(f); } }} />
+          <Button type="button" variant="outline" size="sm" disabled={!csrf || full || capture.isPending} onClick={() => setShowCaptureDialog(true)} data-testid="capture-pick">
+            {capture.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Globe className="w-3.5 h-3.5 mr-1" />}Capture from website
+          </Button>
           <span className="text-xs text-muted-foreground" data-testid="asset-count">
             {limits ? `${assets.length} of ${limits.max_assets} images` : list.isLoading ? "loading…" : ""}
           </span>
@@ -226,6 +241,61 @@ export function AssetsTab({ csrf }: { csrf: string }) {
             </li>
           ))}
         </ul>
+      )}
+      {showCaptureDialog && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" data-testid="capture-dialog-overlay" onClick={() => !capture.isPending && resetCapture()}>
+          <div className="bg-background rounded-lg border border-border p-4 max-w-sm w-full space-y-3" onClick={(e) => e.stopPropagation()} data-testid="capture-dialog">
+            <h3 className="font-semibold">Capture website screenshot</h3>
+            <label className="block text-sm">
+              <span className="text-xs text-muted-foreground">Website URL (must match the egress policy)</span>
+              <Input
+                value={captureUrl}
+                placeholder="https://example.com"
+                onChange={(e) => setCaptureUrl(e.target.value)}
+                disabled={capture.isPending}
+                data-testid="capture-url"
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="text-xs text-muted-foreground">Viewport size</span>
+              <select
+                value={captureViewport}
+                onChange={(e) => setCaptureViewport(e.target.value)}
+                disabled={capture.isPending}
+                className="w-full px-2 py-1.5 border border-border rounded-md bg-background text-sm"
+                data-testid="capture-viewport"
+              >
+                <option value="desktop">Desktop (1920×1080)</option>
+                <option value="mobile">Mobile (375×667)</option>
+              </select>
+            </label>
+            <label className="block text-sm">
+              <span className="text-xs text-muted-foreground">Caption (required)</span>
+              <Input
+                value={captureCaption}
+                maxLength={limits?.max_caption}
+                onChange={(e) => setCaptureCaption(e.target.value)}
+                placeholder="What the storyboard reads about this screenshot"
+                disabled={capture.isPending}
+                data-testid="capture-caption"
+              />
+            </label>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                disabled={!captureUrl.trim() || !captureCaption.trim() || capture.isPending || !csrf}
+                onClick={() => capture.mutate()}
+                data-testid="capture-submit"
+              >
+                {capture.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Globe className="w-3.5 h-3.5 mr-1" />}
+                Capture
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={resetCapture} disabled={capture.isPending}>Cancel</Button>
+            </div>
+            {capture.isError && <p className="text-xs text-destructive" role="alert" data-testid="capture-error">{err(capture.error, "The website could not be captured.")}</p>}
+          </div>
+        </div>
       )}
     </div>
   );

@@ -568,16 +568,6 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
                 <FolderUp className="h-4 w-4" />
               </Button>
             )}
-            <Button
-              variant={recording ? "destructive" : "ghost"}
-              size="icon"
-              className={cn("h-8 w-8 shrink-0", !recording && "text-muted-foreground")}
-              onClick={recording ? stopRecording : startRecording}
-              disabled={busy || peer?.can_send === false}
-              title={recording ? "Stop recording" : "Start recording"}
-            >
-              {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-            </Button>
             <div className="relative min-w-0 flex-1">
               <CommandPalette
                 matches={slashPalette.matches}
@@ -605,6 +595,19 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
                   handleSend();
                 }} />
             </div>
+            {/* Mic sits right of the field, like ComposerBase (chat + Forge); hold Space (≥400 ms) dictates too, via useVoiceInput. */}
+            <Button
+              variant={recording ? "destructive" : "ghost"}
+              size="icon"
+              className={cn("h-8 w-8 shrink-0", !recording && "text-muted-foreground")}
+              onClick={recording ? stopRecording : startRecording}
+              disabled={busy || peer?.can_send === false}
+              aria-label={recording ? "Stop recording" : "Start recording"}
+              title={recording ? "Stop recording (or release Space)" : "Start recording (or hold Space)"}
+              data-testid="peer-composer-mic"
+            >
+              {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+            </Button>
             <Button variant="accent" size="icon" className="h-8 w-8 shrink-0 rounded-full"
               disabled={busy || uploading || (!text.trim() && pendingAttachments.length === 0) || peer?.can_send === false}
               onClick={handleSend} aria-label="Send">
