@@ -11,6 +11,7 @@ import { api } from '@/lib/api';
 import ToolsTab from '@/components/forge/ToolsTab';
 import SkillsTab from '@/components/forge/SkillsTab';
 import OSSkillsTab from '@/components/forge/OSSkillsTab';
+import PluginsTab from '@/components/forge/PluginsTab';
 import LayersTab, { ForgeLayerPanel } from '@/components/forge/LayersTab';
 import GraphTab from '@/components/forge/GraphTab';
 import AuditTab from '@/components/forge/AuditTab';
@@ -55,7 +56,7 @@ import {
  *  protocol matches; forging a layer is a single synchronous plan→create
  *  call, not a polled run, and needs none of the engine machinery the other
  *  three sub-tabs share — it only lives in the same tab group as them. */
-const FORGE_TABS = ['generator', 'runs', 'autonomous-forge', 'tools', 'skills', 'os-skills', 'layers', 'graph', 'audit', 'bundles'] as const;
+const FORGE_TABS = ['generator', 'runs', 'autonomous-forge', 'tools', 'skills', 'os-skills', 'plugins', 'layers', 'graph', 'audit', 'bundles'] as const;
 type ForgeTab = (typeof FORGE_TABS)[number];
 
 const DEFAULT_TAB: ForgeTab = 'generator';
@@ -153,6 +154,7 @@ export default function ForgePage() {
   const [tools, setTools] = useState<ForgeTool[]>([]);
   const [skills, setSkills] = useState<ForgeSkill[]>([]);
   const [osSkills, setOSSkills] = useState<ForgeOSSkill[]>([]);
+  const [plugins, setPlugins] = useState<Array<{ id: string; name?: string; enabled?: boolean; description?: string; version?: string }>>([]);
   const [dependencies, setDependencies] = useState<ForgeDependency[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -181,16 +183,18 @@ export default function ForgePage() {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [toolsData, skillsData, osSkillsData, graphData] = await Promise.all([
+        const [toolsData, skillsData, osSkillsData, pluginsData, graphData] = await Promise.all([
           api<{ tools?: ForgeTool[] }>('/forge/tools'),
           api<{ skills?: ForgeSkill[] }>('/forge/skills'),
           api<{ os_skills?: ForgeOSSkill[] }>('/forge/os-skills'),
+          api<{ plugins?: Array<{ id: string; name?: string; enabled?: boolean; description?: string; version?: string }> }>('/forge/plugins').catch(() => ({ plugins: [] })),
           api<{ edges?: ForgeDependency[] }>('/forge/graph'),
         ]);
 
         setTools(toolsData.tools || []);
         setSkills(skillsData.skills || []);
         setOSSkills(osSkillsData.os_skills || []);
+        setPlugins(pluginsData.plugins || []);
         setDependencies(graphData.edges || []);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
@@ -292,6 +296,7 @@ export default function ForgePage() {
               {osSkills.length}
             </span>
           </TabsTrigger>
+          <TabsTrigger value="plugins">Plugins</TabsTrigger>
           <TabsTrigger value="layers">Layers</TabsTrigger>
           <TabsTrigger value="graph">Graph</TabsTrigger>
           <TabsTrigger value="audit">Audit</TabsTrigger>
@@ -360,6 +365,15 @@ export default function ForgePage() {
           <OSSkillsTab
             osSkills={osSkills}
             setOSSkills={setOSSkills}
+            searchQuery={searchQuery}
+            filterStatus={filterStatus}
+          />
+        </TabsContent>
+
+        <TabsContent value="plugins" className="flex-1 overflow-y-auto">
+          <PluginsTab
+            plugins={plugins}
+            setPlugins={setPlugins}
             searchQuery={searchQuery}
             filterStatus={filterStatus}
           />

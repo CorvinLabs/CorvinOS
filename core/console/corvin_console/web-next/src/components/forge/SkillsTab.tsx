@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ReauthDialog } from '@/components/reauth-dialog';
-import { Zap, Plus, Trash2 } from 'lucide-react';
+import { Zap, Plus, Trash2, Download, Upload } from 'lucide-react';
 import { ForgeSkill } from '@/types/forge';
 import {
   deleteManualSkill,
@@ -12,6 +12,12 @@ import {
   type PromoteTarget,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import {
+  exportSingleItem,
+  exportBatchItems,
+  importBundle,
+  isValidZipFile,
+} from '@/lib/forge-bundles';
 
 /**
  * SkillForge promotion gates per CLAUDE.md § Layer 7:
@@ -74,6 +80,9 @@ export default function SkillsTab({
   const [reauthOpen, setReauthOpen] = useState(false);
   const [pending, setPending] = useState<{ name: string; to: PromoteTarget; force: boolean } | null>(null);
   const [toast, setToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // The forge list is fetched by the parent page, so a mutation refreshes BOTH
   // that prop (via setSkills) and any react-query consumer of ["skills"].
@@ -159,14 +168,102 @@ export default function SkillsTab({
     }
   };
 
+  const handleDownloadSingle = async (skillId: string) => {
+    const result = await exportSingleItem('skills', skillId);
+    if (!result.success) {
+      setToast({ kind: 'err', msg: `Download failed: ${result.error}` });
+    }
+  };
+
+  const handleDownloadSelected = async () => {
+    if (selectedIds.size === 0) {
+      setToast({ kind: 'err', msg: 'No items selected' });
+      return;
+    }
+
+    const result = await exportBatchItems('skills', Array.from(selectedIds));
+    if (!result.success) {
+      setToast({ kind: 'err', msg: `Download failed: ${result.error}` });
+    } else {
+      setToast({ kind: 'ok', msg: `Downloaded ${selectedIds.size} skills` });
+      setSelectedIds(new Set());
+    }
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!isValidZipFile(file.name)) {
+      setToast({ kind: 'err', msg: 'Please select a .zip file' });
+      return;
+    }
+
+    setImporting(true);
+    try {
+      const result = await importBundle(file);
+      if (result.success) {
+        setToast({
+          kind: 'ok',
+          msg: `Imported successfully (${result.imported_count} skills)`,
+        });
+        await refresh();
+      } else {
+        setToast({ kind: 'err', msg: result.message });
+      }
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const toggleSelection = (skillId: string) => {
+    const newSelected = new Set(selectedIds);
+    if (newSelected.has(skillId)) {
+      newSelected.delete(skillId);
+    } else {
+      newSelected.add(skillId);
+    }
+    setSelectedIds(newSelected);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-semibold">SkillForge Skills</h2>
-        <Button size="sm" data-testid="new-skill-btn" onClick={onCreateSkill}>
-          <Plus className="w-4 h-4 mr-2" />
-          New Skill
-        </Button>
+        <div className="flex gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".zip"
+            onChange={handleImport}
+            className="hidden"
+            aria-label="Import skills bundle"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+          >
+            <Upload className="w-4 h-4 mr-2" />
+            {importing ? 'Importing...' : 'Import'}
+          </Button>
+          {selectedIds.size > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleDownloadSelected}
+            >
+              <Download className="w-4 h-4 mr-2" />
+              Download selected ({selectedIds.size})
+            </Button>
+          )}
+          <Button size="sm" data-testid="new-skill-btn" onClick={onCreateSkill}>
+            <Plus className="w-4 h-4 mr-2" />
+            New Skill
+          </Button>
+        </div>
       </div>
 
       {filtered.length === 0 ? (
@@ -187,34 +284,44 @@ export default function SkillsTab({
             >
               <CardContent className="py-4">
                 <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Zap className="w-4 h-4 text-accent" />
-                      <h3 className="font-semibold">{skill.name}</h3>
-                      <Badge variant={skill.enabled ? 'ok' : 'secondary'} className="text-[10px]">
-                        {skill.enabled ? 'Enabled' : 'Disabled'}
-                      </Badge>
-                      {skill.version && (
-                        <Badge variant="outline" className="text-[10px]">
-                          v{skill.version}
+                  <div className="flex items-start gap-3 flex-1">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(skill.id)}
+                      onChange={() => toggleSelection(skill.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="mt-1"
+                      aria-label={`Select ${skill.name}`}
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Zap className="w-4 h-4 text-accent" />
+                        <h3 className="font-semibold">{skill.name}</h3>
+                        <Badge variant={skill.enabled ? 'ok' : 'secondary'} className="text-[10px]">
+                          {skill.enabled ? 'Enabled' : 'Disabled'}
                         </Badge>
+                        {skill.version && (
+                          <Badge variant="outline" className="text-[10px]">
+                            v{skill.version}
+                          </Badge>
+                        )}
+                        {skill.learning_state && (
+                          <Badge variant="secondary" className="text-[10px]">
+                            {skill.learning_state.confidence.toFixed(2)} confidence
+                          </Badge>
+                        )}
+                      </div>
+                      {skill.description && (
+                        <p className="text-sm text-muted-foreground line-clamp-2">
+                          {skill.description}
+                        </p>
                       )}
-                      {skill.learning_state && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {skill.learning_state.confidence.toFixed(2)} confidence
-                        </Badge>
+                      {skill.versions && skill.versions.length > 1 && (
+                        <p className="text-xs text-muted-foreground mt-2">
+                          {skill.versions.length} version{skill.versions.length === 1 ? '' : 's'}
+                        </p>
                       )}
                     </div>
-                    {skill.description && (
-                      <p className="text-sm text-muted-foreground line-clamp-2">
-                        {skill.description}
-                      </p>
-                    )}
-                    {skill.versions && skill.versions.length > 1 && (
-                      <p className="text-xs text-muted-foreground mt-2">
-                        {skill.versions.length} version{skill.versions.length === 1 ? '' : 's'}
-                      </p>
-                    )}
                   </div>
                   <div className="flex gap-2">
                     {skill.versions && skill.versions.length > 1 && (
@@ -229,6 +336,17 @@ export default function SkillsTab({
                         Rollback
                       </Button>
                     )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={`Download ${skill.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDownloadSingle(skill.id);
+                      }}
+                    >
+                      <Download className="w-4 h-4" />
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"

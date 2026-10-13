@@ -46,10 +46,10 @@
  * List view: table of all definitions with status, gate count, versions
  * Detail view: manifest, all verdicts (gates, enforcement), transition buttons
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Loader2, AlertCircle, ChevronRight, Sparkles } from "lucide-react";
+import { Loader2, AlertCircle, ChevronRight, Sparkles, Download, Upload } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -61,6 +61,11 @@ import { useForgeAttachments } from "@/hooks/use-forge-attachments";
 import RunFeed from "@/components/forge/RunFeed";
 import { latestRun } from "@/lib/api/forge-runs";
 import { useAuth } from "@/lib/auth";
+import {
+  exportSingleItem,
+  importBundle,
+  isValidZipFile,
+} from "@/lib/forge-bundles";
 
 // api() already prepends "/v1/console" — see the file-level comment above.
 const BASE = "/layer-forge";
@@ -267,7 +272,6 @@ export function ForgeLayerPanel({ onCreated }: { onCreated?: () => void }) {
           placeholder="Audit downstream of L10 and enforce the boundary at build time"
           submitLabel="Plan"
           busyLabel="Planning…"
-          rows={2}
         />
         {inputError && (
           <p className="text-sm text-destructive" data-testid="layer-input-error">{inputError}</p>
@@ -328,7 +332,7 @@ export function ForgeLayerPanel({ onCreated }: { onCreated?: () => void }) {
   );
 }
 
-function ListView({ definitions, onSelect }: { definitions: LayerDefinition[]; onSelect: (d: LayerDefinition) => void }) {
+function ListView({ definitions, onSelect, onDownload }: { definitions: LayerDefinition[]; onSelect: (d: LayerDefinition) => void; onDownload: (id: string, version: string) => void }) {
   if (definitions.length === 0) {
     return (
       <div className="py-12 text-center">
@@ -340,37 +344,50 @@ function ListView({ definitions, onSelect }: { definitions: LayerDefinition[]; o
   return (
     <div className="space-y-2">
       {definitions.map((def) => (
-        <button
+        <div
           key={`${def.id}@${def.version}`}
-          onClick={() => onSelect(def)}
-          className="w-full text-left p-4 border rounded-lg hover:bg-accent/50 transition-colors"
+          className="w-full text-left p-4 border rounded-lg hover:bg-accent/50 transition-colors flex items-center justify-between"
         >
-          <div className="flex items-center justify-between">
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="font-mono text-sm font-semibold">{def.id}</span>
-                <span className="text-muted-foreground text-xs">v{def.version}</span>
-                <Badge variant={statusColors[def.status]}>
-                  {statusLabels[def.status]}
-                </Badge>
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {def.targets.length} target(s) · {def.quality_gates.length} gate(s) · {def.enforcement_rules.length} rule(s)
-              </div>
-              <div className="text-xs text-muted-foreground mt-1">
-                Created {formatDate(def._created_at)}
-                {def._promoted_at && ` · Promoted ${formatDate(def._promoted_at)}`}
-              </div>
+          <button
+            onClick={() => onSelect(def)}
+            className="flex-1 text-left"
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <span className="font-mono text-sm font-semibold">{def.id}</span>
+              <span className="text-muted-foreground text-xs">v{def.version}</span>
+              <Badge variant={statusColors[def.status]}>
+                {statusLabels[def.status]}
+              </Badge>
             </div>
+            <div className="text-xs text-muted-foreground">
+              {def.targets.length} target(s) · {def.quality_gates.length} gate(s) · {def.enforcement_rules.length} rule(s)
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Created {formatDate(def._created_at)}
+              {def._promoted_at && ` · Promoted ${formatDate(def._promoted_at)}`}
+            </div>
+          </button>
+          <div className="flex items-center gap-2 ml-4">
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={`Download layer ${def.id}@${def.version}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDownload(def.id, def.version);
+              }}
+            >
+              <Download className="w-4 h-4" />
+            </Button>
             <ChevronRight className="w-4 h-4 text-muted-foreground" />
           </div>
-        </button>
+        </div>
       ))}
     </div>
   );
 }
 
-function DetailView({ definition, onBack }: { definition: LayerDefinition | null; onBack: () => void }) {
+function DetailView({ definition, onBack, onDownload }: { definition: LayerDefinition | null; onBack: () => void; onDownload: (id: string, version: string) => void }) {
   if (!definition) return null;
 
   const transitionStates: Record<string, string[]> = {
@@ -395,9 +412,20 @@ function DetailView({ definition, onBack }: { definition: LayerDefinition | null
               <CardTitle className="font-mono">{definition.id}@{definition.version}</CardTitle>
               <CardDescription>Layer definition manifest</CardDescription>
             </div>
-            <Badge variant={statusColors[definition.status]}>
-              {statusLabels[definition.status]}
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label={`Download layer ${definition.id}@${definition.version}`}
+                onClick={() => onDownload(definition.id, definition.version)}
+              >
+                <Download className="w-4 h-4 mr-1" />
+                Download
+              </Button>
+              <Badge variant={statusColors[definition.status]}>
+                {statusLabels[definition.status]}
+              </Badge>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -503,12 +531,53 @@ export const MARKER_LAYER_FORGE =
 
 export default function LayersTab() {
   const [selectedDef, setSelectedDef] = useState<LayerDefinition | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const qc = useQueryClient();
+
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["layer-forge", "definitions"],
     queryFn: ({ signal }) => api<LayerForgeListResponse>(`${BASE}/definitions`, { signal }),
     refetchInterval: 60_000,
     retry: false,
   });
+
+  const handleDownloadSingle = async (layerId: string, version: string) => {
+    const result = await exportSingleItem('layers', layerId, version);
+    if (!result.success) {
+      setToast({ type: 'err', msg: `Download failed: ${result.error}` });
+    } else {
+      setToast({ type: 'ok', msg: `Downloaded ${layerId}@${version}` });
+    }
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!isValidZipFile(file.name)) {
+      setToast({ type: 'err', msg: 'Please select a .zip file' });
+      return;
+    }
+
+    setImporting(true);
+    try {
+      const result = await importBundle(file);
+      if (result.success) {
+        setToast({
+          type: 'ok',
+          msg: `Imported successfully (${result.imported_count} layers)`,
+        });
+        void qc.invalidateQueries({ queryKey: ["layer-forge", "definitions"] });
+      } else {
+        setToast({ type: 'err', msg: result.message });
+      }
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
   if (isLoading) {
     return (
@@ -543,7 +612,24 @@ export default function LayersTab() {
             Phase 3B analytics stayed a standalone panel (own route, own
             charts, no shared List+Detail surface) — both linked here for
             discoverability since neither has a sidebar entry of its own. */}
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".zip"
+            onChange={handleImport}
+            className="hidden"
+            aria-label="Import layers bundle"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+          >
+            <Upload className="w-4 h-4 mr-2" />
+            {importing ? 'Importing...' : 'Import'}
+          </Button>
           <Link
             to="/app/forge?tab=generator&sub=layer"
             className="text-xs text-primary hover:underline whitespace-nowrap"
@@ -560,7 +646,7 @@ export default function LayersTab() {
       </div>
 
       {selectedDef ? (
-        <DetailView definition={selectedDef} onBack={() => setSelectedDef(null)} />
+        <DetailView definition={selectedDef} onBack={() => setSelectedDef(null)} onDownload={handleDownloadSingle} />
       ) : (
         <Card>
           <CardHeader>
@@ -570,9 +656,22 @@ export default function LayersTab() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ListView definitions={data.items} onSelect={setSelectedDef} />
+            <ListView definitions={data.items} onSelect={setSelectedDef} onDownload={handleDownloadSingle} />
           </CardContent>
         </Card>
+      )}
+
+      {toast && (
+        <div
+          className={
+            toast.type === 'ok'
+              ? 'fixed bottom-6 right-6 z-50 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-700 shadow-lg dark:text-emerald-300'
+              : 'fixed bottom-6 right-6 z-50 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive shadow-lg'
+          }
+          onClick={() => setToast(null)}
+        >
+          {toast.msg}
+        </div>
       )}
     </div>
   );
