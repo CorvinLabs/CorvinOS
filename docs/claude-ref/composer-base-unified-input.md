@@ -190,6 +190,13 @@ ComposerBase
   A host mirrors the state with `onRecordingChange` and stops via the handle's
   `stopRecording()`; it passes `csrf` (the MediaRecorder fallback posts to `/voice/transcribe`).
   Proof: `web-next/tests/e2e/chat-stt-composer.spec.ts`.
+- **Voice commit (CONCEPT-0107).** `commitVoiceOnRelease()` (asked at release) +
+  `onVoiceCommit(text)`: when true the final transcript is handed to the host instead of staying
+  in the field (Web Speech: in `onend` after stop, so late final results are included;
+  MediaRecorder: after `/voice/transcribe`). The chat uses it to steer a running reply.
+- **Hold-Space trim.** The space typed by the hold is removed AND `valueRef` is updated
+  synchronously — the recording's base is read before React re-renders, so a stale `" "`
+  became a leading space in every dictation.
 
 ---
 

@@ -3,6 +3,7 @@ import { classifyDiffLines, diffCounts, DIFF_WITHHELD_TEXT } from "@/lib/diff-li
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
+  CornerDownRight,
   Cpu,
   Download,
   FileText,
@@ -11,6 +12,7 @@ import {
   Hammer,
   ListChecks,
   Loader2,
+  Mic,
   Paperclip,
   Pencil,
   Plus,
@@ -77,6 +79,9 @@ import {
   refreshHistory,
   registerHistoryReader,
   sendMessage as registrySend,
+  addSteerNote,
+  updateSteerNote,
+  removeSteerNote,
   subscribeEvents,
   consumePendingTitle,
   closeSession,
@@ -92,6 +97,17 @@ import {
 } from "@/lib/streaming-state";
 import { useVoicePlayback, type VoiceState } from "@/lib/useVoicePlayback";
 import { ChatAvatar } from "@/components/chat/ChatAvatar";
+import {
+  btwFromTurn,
+  btwStateLabel,
+  makeSteerMessage,
+  needsOperatorAction,
+  newClientId,
+  settleHydrated,
+  stateFromServer,
+  stripBtwPrefix,
+  type BtwVia,
+} from "@/lib/btw-steer";
 import { ChatContextSidebar, usePendingCount } from "@/components/chat/ChatContextSidebar";
 import { GroupConversation } from "@/components/chat/GroupConversation";
 import { PeerConversation } from "@/components/chat/PeerConversation";
@@ -180,6 +196,17 @@ export function hydrateChatTurn(t: ChatTurn, i: number, sid: string): ChatMessag
   const derivedEngine = hasTde
     ? (tde!.l34_forced === true ? "claude_code" : "tiered_delegation")
     : undefined;
+  const btw = t.role === "user" ? btwFromTurn(t, `h${i}`) : undefined;
+  if (btw) {
+    const text = (t.parts ?? []).filter((p) => p.kind === "text").map((p) => String(p.text ?? "")).join("");
+    return {
+      id: `h-${t.ts}-${i}`,
+      role: "user",
+      ts: t.ts,
+      parts: [{ kind: "text", text: stripBtwPrefix(text) }],
+      btw,
+    };
+  }
   return {
     id: `h-${t.ts}-${i}`,
     role: t.role === "system" ? "system" : t.role,
@@ -214,11 +241,17 @@ export function hydrateChatTurn(t: ChatTurn, i: number, sid: string): ChatMessag
   };
 }
 
+/** A whole persisted history → messages; a delivered /btw note followed by an
+ *  answer is shown as taken into account (CONCEPT-0107). */
+export function hydrateChatTurns(turns: ChatTurn[], sid: string): ChatMessage[] {
+  return settleHydrated(turns.map((t, i) => hydrateChatTurn(t, i, sid)));
+}
+
 // The registry reconciles an attached turn (live_turns.py) with the record when
 // it ends; it reads the history through the same hydration as a page load.
 registerHistoryReader(async (sid) => {
   const res = await getChatTurns(sid);
-  return res.turns.map((t: ChatTurn, i: number) => hydrateChatTurn(t, i, sid));
+  return hydrateChatTurns(res.turns, sid);
 });
 
 /** Read the history after a task ended, waiting out the gap between the task
@@ -229,7 +262,7 @@ async function readHistoryAfterTaskEnd(sid: string): Promise<ChatMessage[]> {
   let msgs: ChatMessage[] = [];
   for (let attempt = 0; attempt < 8; attempt++) {
     const res = await getChatTurns(sid);
-    msgs = res.turns.map((t: ChatTurn, i: number) => hydrateChatTurn(t, i, sid));
+    msgs = hydrateChatTurns(res.turns, sid);
     if (msgs.length === 0 || msgs[msgs.length - 1].role !== "user") return msgs;
     await new Promise((r) => setTimeout(r, 1500));
   }
@@ -935,9 +968,7 @@ function ChatPane({
     getChatTurns(sid)
       .then((res) => {
         if (cancelled) return;
-        const hydrated: ChatMessage[] = res.turns.map(
-          (t: ChatTurn, i: number) => hydrateChatTurn(t, i, sid),
-        );
+        const hydrated: ChatMessage[] = hydrateChatTurns(res.turns, sid);
         loadHistory(sid, hydrated);
       })
       .catch(() => { /* empty chat on first visit — expected */ });
@@ -1167,11 +1198,46 @@ function ChatPane({
   }, []);
 
 
+  // ── /btw steering (CONCEPT-0107) ──────────────────────────────────────────
+  // While a reply streams, whatever the operator submits — typed (Enter / the
+  // send button) or spoken (hold Space / mic) — steers that running turn. A
+  // leading `/btw ` is still accepted, never required. The note becomes a
+  // message in the history right away, before the running answer, and its
+  // chip says what actually happened to it. Its text is never lost: it lives
+  // in the bubble, and a refused / undelivered / failed note offers Edit and
+  // resend.
+  const deliverSteer = async (text: string, via: BtwVia, clientId: string) => {
+    try {
+      const res = await sendBtwNote(sid, text, csrf, { via, clientId });
+      updateSteerNote(sid, clientId, stateFromServer(res.status), res.reason);
+    } catch (err) {
+      updateSteerNote(sid, clientId, "failed", err instanceof ApiError ? err.message : undefined);
+    }
+  };
+
+  const sendSteer = (raw: string, via: BtwVia) => {
+    const text = stripBtwPrefix(raw);
+    if (!text) {
+      setError("Type a note to steer the running reply, or /stop to end it");
+      return;
+    }
+    if (text.length > 4000) {
+      setError("A note can be at most 4000 characters");
+      return;
+    }
+    const clientId = newClientId();
+    addSteerNote(sid, makeSteerMessage(text, via, clientId, Date.now() / 1000));
+    scrollToBottomOnSend();
+    setError(null);
+    if (via === "text") setInput("");   // the text now lives in the BTW bubble
+    void deliverSteer(text, via, clientId);
+  };
+
   // ── Send user message via registry ─────────────────────────────────────────
-  const sendUser = (text: string) => {
-    const hasText = text.trim().length > 0;
+  const sendUser = (raw: string) => {
+    let text = raw;
     const hasAttachments = pendingAttachments.length > 0;
-    if (!hasText && !hasAttachments) return;
+    if (!text.trim() && !hasAttachments) return;
     // A message sent while files are still uploading would go out without
     // them and drag them into the NEXT message instead.
     if (uploading) {
@@ -1180,51 +1246,24 @@ function ChatPane({
     }
     const trimmed = text.trim();
     if (streaming) {
-      // /btw exists to steer the RUNNING turn (ADR-2220), so it — and /stop —
-      // must be reachable while streaming; the composer stays enabled for
-      // exactly that. Any other message waits for the reply.
       if (/^\/(stop|cancel|halt)\s*$/i.test(trimmed)) {
         setInput("");
         cancelTurn();
         return;
       }
-      if (!trimmed.startsWith("/btw ")) {
-        setError("A reply is still streaming — wait for it, or send /btw <note> to steer it");
+      if (!trimmed) {
+        setError("Attachments go out with the next message — wait for the reply");
         return;
       }
-    }
-
-    // Handle /btw command (midstream steering)
-    if (hasText && trimmed.startsWith("/btw ")) {
-      const instruction = text.trim().substring(5); // Remove "/btw "
-      if (instruction.trim().length === 0) {
-        setError("Please provide a note for /btw");
-        return;
-      }
-
-      void (async () => {
-        try {
-          const res = await sendBtwNote(sid, instruction, csrf);
-          setInput("");
-          setError(null);
-          // ADR-2220: the backend now reports whether the note actually
-          // reached a live stream, so the flash message says which.
-          const flash = res.status === "injected"
-            ? "Note sent to active stream"
-            : res.status === "no_active_stream"
-              ? "No active stream right now — note was not sent"
-              : "Note was refused";
-          setError(flash);
-          setTimeout(() => setError(null), 3_000);
-        } catch (err) {
-          const msg = err instanceof ApiError
-            ? `Error sending note: ${err.message}`
-            : "Failed to send note to active stream";
-          setError(msg);
-        }
-      })();
+      sendSteer(text, "text");
       return;
     }
+    // No reply running: a `/btw` note is simply the next message.
+    if (/^\/btw(\s|$)/i.test(trimmed)) {
+      text = stripBtwPrefix(trimmed);
+      if (!text && !hasAttachments) return;
+    }
+    const hasText = text.trim().length > 0;
 
     let fullText = text;
     if (hasAttachments) {
@@ -1251,6 +1290,77 @@ function ChatPane({
     setInput("");
     clearAttachments();
   };
+
+  // A BTW bubble's own buttons: put the text back into the composer, or send
+  // it again (as a note while a reply runs, else as a normal message).
+  const onBtwAction = (clientId: string, action: "edit" | "resend") => {
+    const m = messages.find((x) => x.btw?.clientId === clientId);
+    if (!m?.btw) return;
+    const text = m.parts.map((p) => (p.kind === "text" ? p.text : "")).join("");
+    removeSteerNote(sid, clientId);
+    if (action === "edit") {
+      setInput((prev) => (prev.trim() ? `${prev} ${text}` : text));
+      return;
+    }
+    if (streaming) {
+      sendSteer(text, m.btw.via);
+    } else if (!registrySend(sid, text)) {
+      ensureConnected(sid);
+      setReconnectingVisible(true);
+      addSteerNote(sid, m);          // keep it until the socket is back
+    } else {
+      scrollToBottomOnSend();
+    }
+  };
+  const onBtwActionRef = React.useRef(onBtwAction);
+  React.useEffect(() => { onBtwActionRef.current = onBtwAction; });
+  const btwAction = React.useCallback(
+    (clientId: string, action: "edit" | "resend") => onBtwActionRef.current(clientId, action), []);
+
+  // Voice while a reply streams: the transcript is sent as a note after a
+  // short undo window — speech has no review step, and the note reaches an
+  // agent that may be running tools. Esc (or ✕) puts it in the composer instead.
+  const VOICE_STEER_UNDO_MS = 1500;
+  const [voiceSteer, setVoiceSteer] = React.useState<string | null>(null);
+  const voiceSteerRef = React.useRef<{ text: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const sendSteerRef = React.useRef(sendSteer);
+  React.useEffect(() => { sendSteerRef.current = sendSteer; });
+  const settleVoiceSteer = React.useCallback((how: "send" | "cancel") => {
+    const pending = voiceSteerRef.current;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    voiceSteerRef.current = null;
+    setVoiceSteer(null);
+    if (how === "send" && streamingRef.current) {
+      sendSteerRef.current(pending.text, "voice");
+    } else {
+      // Cancelled, or the reply finished meanwhile: never send by itself.
+      composerRef.current?.setValue((prev) => (prev.trim() ? `${prev} ${pending.text}` : pending.text));
+    }
+  }, []);
+  const onVoiceCommit = React.useCallback((spoken: string) => {
+    const t = spoken.trim();
+    if (!t) return;
+    const prev = voiceSteerRef.current;
+    if (prev) clearTimeout(prev.timer);
+    const text = prev ? `${prev.text} ${t}` : t;
+    voiceSteerRef.current = { text, timer: setTimeout(() => settleVoiceSteer("send"), VOICE_STEER_UNDO_MS) };
+    setVoiceSteer(text);
+  }, [settleVoiceSteer]);
+  const commitVoiceOnRelease = React.useCallback(() => streamingRef.current, []);
+  React.useEffect(() => {
+    if (voiceSteer === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      settleVoiceSteer("cancel");
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [voiceSteer, settleVoiceSteer]);
+  React.useEffect(() => () => {
+    if (voiceSteerRef.current) clearTimeout(voiceSteerRef.current.timer);
+  }, []);
 
   // ── Cancel a running engine turn via registry ────────────────────────────────
   const cancelTurn = () => {
@@ -1332,7 +1442,8 @@ function ChatPane({
       if (e.isComposing || (e as KeyboardEvent & { keyCode?: number }).keyCode === 229) return;
       if (e.defaultPrevented) return;
       if (isNativeEnterTarget(e.target)) return;
-      if (recordingRef.current || streamingRef.current) return;
+      // While a reply streams Enter still sends — the note steers it.
+      if (recordingRef.current) return;
       e.preventDefault();
       composerRef.current?.closePalette();
       sendUserRef.current(composerRef.current?.getValue() ?? "");
@@ -1383,8 +1494,8 @@ function ChatPane({
     () =>
       messages
         .slice(windowStart)
-        .map((m) => <MessageBubble key={m.id} m={m} onViewTdeGraph={viewTdeGraph} />),
-    [messages, viewTdeGraph, windowStart],
+        .map((m) => <MessageBubble key={m.id} m={m} onViewTdeGraph={viewTdeGraph} onBtwAction={btwAction} />),
+    [messages, viewTdeGraph, btwAction, windowStart],
   );
 
   const handleVoiceToggle = React.useCallback(() => {
@@ -1738,6 +1849,25 @@ function ChatPane({
               Detected as <span className="font-semibold text-accent-foreground">{cccEntityHint}</span> — the matching tab updates once sent
             </p>
           )}
+          {voiceSteer !== null && (
+            <div
+              className="flex items-center gap-2 rounded-md border border-accent/40 bg-accent/10 px-2 py-1 text-xs"
+              data-testid="voice-steer-undo"
+              role="status"
+            >
+              <Mic className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
+              <span className="min-w-0 flex-1 truncate">
+                Sending as BTW: <span className="font-medium">“{voiceSteer}”</span> — Esc to cancel
+              </span>
+              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => settleVoiceSteer("send")}>
+                Send now
+              </Button>
+              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => settleVoiceSteer("cancel")}
+                aria-label="Cancel and edit" data-testid="voice-steer-cancel">
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
           {/* Main input row — one pill card, same shape across the three
               conversation surfaces (session, group, peer) so they share
               one input language (originally matched to the now-deleted
@@ -1773,12 +1903,16 @@ function ChatPane({
             <ChatComposerField
               ref={composerRef}
               placeholder={recording
-                ? "Listening — release Space to send"
+                ? streaming
+                  ? "Listening — release Space to steer the reply"
+                  : "Listening — release Space to stop"
                 : streaming
-                  ? "Reply streaming — /btw <note> steers it, /stop ends it"
+                  ? "Reply streaming — type or hold Space to steer it · /stop ends it"
                   : "Message Corvin… (hold Space to speak)"}
               disabled={false}
               csrf={csrf}
+              commitVoiceOnRelease={commitVoiceOnRelease}
+              onVoiceCommit={onVoiceCommit}
               onRecordingChange={setRecording}
               onVoiceError={setError}
               onAuthExpired={refreshAuth}
@@ -1786,6 +1920,18 @@ function ChatPane({
               onHasTextChange={setComposerHasText}
               onEntityHintChange={setCccEntityHint}
             />
+            {streaming && composerHasText && (
+              <Button
+                variant="accent"
+                size="icon"
+                className="h-8 w-8 shrink-0 rounded-full"
+                onClick={() => sendUser(composerRef.current?.getValue() ?? "")}
+                title="Steer the running reply with this note (Enter)"
+                data-testid="steer-button"
+              >
+                <Send className="h-4 w-4" />
+              </Button>
+            )}
             {streaming ? (
               <Button
                 variant="destructive"
@@ -2006,10 +2152,12 @@ const ChatComposerField = React.memo(
       onRecordingChange?: (recording: boolean) => void;
       onVoiceError?: (message: string) => void;
       onAuthExpired?: () => void;
+      commitVoiceOnRelease?: () => boolean;
+      onVoiceCommit?: (text: string) => void;
     }
   >(function ChatComposerField(
     { placeholder, disabled, onSubmit, onHasTextChange, onEntityHintChange, csrf = "",
-      onRecordingChange, onVoiceError, onAuthExpired },
+      onRecordingChange, onVoiceError, onAuthExpired, commitVoiceOnRelease, onVoiceCommit },
     ref,
   ) {
     const [value, setValueState] = React.useState("");
@@ -2071,6 +2219,8 @@ const ChatComposerField = React.memo(
           onError={onVoiceError}
           onAuthExpired={onAuthExpired}
           onRecordingChange={onRecordingChange}
+          commitVoiceOnRelease={commitVoiceOnRelease}
+          onVoiceCommit={onVoiceCommit}
           placeholder={placeholder}
           textareaId="chat-input"
           textareaTestId="chat-composer-textarea"
@@ -2098,13 +2248,60 @@ const ChatComposerField = React.memo(
   }),
 );
 
+/** CONCEPT-0107: a /btw steering note — compact, labelled, with a state chip
+ *  that says what happened to it, and actions when it needs the operator. */
+function BtwBubble({ m, onAction }: {
+  m: ChatMessage;
+  onAction: (clientId: string, action: "edit" | "resend") => void;
+}) {
+  const b = m.btw!;
+  const text = m.parts.map((p) => (p.kind === "text" ? p.text : "")).join("");
+  const tone =
+    b.state === "answered" || b.state === "injected" ? "text-emerald-700 dark:text-emerald-400"
+    : b.state === "sending" || b.state === "queued" ? "text-muted-foreground"
+    : "text-amber-700 dark:text-amber-400";
+  return (
+    <div className="flex justify-end" data-testid="btw-bubble" data-btw-state={b.state} data-btw-via={b.via}
+      data-btw-reason={b.reason ?? ""}>
+      <div className="flex max-w-[75%] flex-col items-end">
+        <div className="w-fit max-w-full rounded-2xl rounded-tr-md border border-dashed border-accent/50 bg-accent/5 px-3 py-2 text-sm">
+          <div className="mb-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
+            {b.via === "voice" ? <Mic className="h-3 w-3" aria-hidden /> : <CornerDownRight className="h-3 w-3" aria-hidden />}
+            BTW
+          </div>
+          <p className="whitespace-pre-wrap leading-relaxed">{text}</p>
+        </div>
+        <div className={cn("mt-1 flex items-center gap-2 px-1 text-[11px]", tone)}>
+          {(b.state === "sending" || b.state === "queued") && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
+          <span data-testid="btw-state-label">{btwStateLabel(b)}</span>
+          {needsOperatorAction(b.state) && (
+            <>
+              <button type="button" className="underline-offset-2 hover:underline"
+                onClick={() => onAction(b.clientId, "resend")} data-testid="btw-resend">
+                {b.state === "undelivered" ? "Send as new message" : "Send again"}
+              </button>
+              <button type="button" className="underline-offset-2 hover:underline"
+                onClick={() => onAction(b.clientId, "edit")} data-testid="btw-edit">
+                Edit
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const MessageBubble = React.memo(function MessageBubble({
   m,
   onViewTdeGraph,
+  onBtwAction,
 }: {
   m: ChatMessage;
   onViewTdeGraph: () => void;
+  onBtwAction: (clientId: string, action: "edit" | "resend") => void;
 }) {
+  if (m.btw) return <BtwBubble m={m} onAction={onBtwAction} />;
   const isUser = m.role === "user";
   return (
     <div className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>

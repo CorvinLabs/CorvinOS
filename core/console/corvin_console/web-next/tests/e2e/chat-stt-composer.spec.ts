@@ -83,5 +83,5 @@ test("hold Space dictates into the composer (one live recognizer, text shown)", 
   // Exactly one start per hold: two listeners = two starts = the eviction loop.
   expect(starts, "recognizer starts for ONE Space hold").toBe(1);
   expect(delivered, "a live recognizer existed to receive speech").toBe(true);
-  await expect(composer).toHaveValue(/hallo welt/);
+  await expect(composer).toHaveValue("hallo welt");    // no stray leading space from the hold
 });

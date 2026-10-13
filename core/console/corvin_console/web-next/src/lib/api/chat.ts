@@ -67,6 +67,14 @@ export interface ChatTurn {
    *  ADR-0216 badge fields quota_used_today/quota_limit (limit `null` =
    *  unlimited tier) and the classification fields task_type/complexity. */
   tde_progress?: Record<string, unknown> | null;
+  /** CONCEPT-0107: a /btw steering note (user role) — what happened to it,
+   *  how it was given and the client's id for it. Legacy notes carry only
+   *  `btw` (+ `gate_refused` when a gate stopped them). */
+  btw?: boolean;
+  btw_status?: "injected" | "refused" | "undelivered";
+  via?: "text" | "voice";
+  client_id?: string;
+  gate_refused?: string;
 }
 
 export interface ChatTurnsResponse {
@@ -331,17 +339,31 @@ export function deleteUloObjective(
 
 export interface BtwResponse {
   ok: true;
-  status: "injected" | "no_active_stream" | "refused";
+  /** `queued`: the turn is open but its subprocess has not started reading
+   *  yet — delivered right after the turn's own first message, or reported
+   *  as `btw_undelivered` on the stream (CONCEPT-0107). */
+  status: "injected" | "queued" | "no_active_stream" | "refused";
+  /** `refused` only: empty, rate_limited, queue_full, gate, guard_unavailable. */
+  reason?: string;
+  client_id?: string;
 }
 
 export async function sendBtwNote(
   sid: string,
   instruction: string,
   csrf: string,
+  opts: { via?: "text" | "voice"; clientId?: string } = {},
 ): Promise<BtwResponse> {
   return api<BtwResponse>(`/chat/sessions/${encodeURIComponent(sid)}/btw`, {
     method: "POST",
     csrf,
-    body: { instruction },
+    // The note passes the same pre-spawn gates as a turn (L44 is a model
+    // call): seconds, not milliseconds. 30 s (the default) cut it off live.
+    timeoutMs: 90_000,
+    body: {
+      instruction,
+      ...(opts.via ? { via: opts.via } : {}),
+      ...(opts.clientId ? { client_id: opts.clientId } : {}),
+    },
   });
 }

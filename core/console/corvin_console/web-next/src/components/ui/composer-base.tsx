@@ -47,6 +47,9 @@ export interface ComposerBaseProps {
   onAuthExpired?: () => void;
   /** Called whenever the recording flag flips. */
   onRecordingChange?: (recording: boolean) => void;
+  /** Voice commit (see useVoiceInput): asked at release, receives the transcript. */
+  commitVoiceOnRelease?: () => boolean;
+  onVoiceCommit?: (text: string) => void;
   /** Placeholder text. */
   placeholder?: string;
   /** Textarea rows (defaults to 1). */
@@ -148,6 +151,8 @@ export const ComposerBase = React.forwardRef<ComposerBaseHandle, ComposerBasePro
       onError,
       onAuthExpired,
       onRecordingChange,
+      commitVoiceOnRelease,
+      onVoiceCommit,
       placeholder = "Message…",
       rows = 1,
       maxHeight = 320,
@@ -176,6 +181,8 @@ export const ComposerBase = React.forwardRef<ComposerBaseHandle, ComposerBasePro
       onError,
       onAuthExpired,
       onRecordingChange,
+      commitOnRelease: commitVoiceOnRelease,
+      onCommit: onVoiceCommit,
     });
 
     React.useImperativeHandle(

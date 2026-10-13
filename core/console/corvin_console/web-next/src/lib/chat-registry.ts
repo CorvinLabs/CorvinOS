@@ -14,6 +14,7 @@ import { useSyncExternalStore } from "react";
 import { emitCCCEvent } from "./ccc-bus";
 import { getBool, PREF_KEYS } from "./preferences";
 import { persistMessages, loadPersistedMessages, clearPersistedMessages } from "./chat-message-persistence";
+import { insertSteerNote, setSteerState, settleOnDone, type BtwInfo, type BtwState } from "./btw-steer";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -99,13 +100,19 @@ export interface ChatMessage {
    *  last SAW, not the record. Never live, and superseded by the server's
    *  history as soon as it arrives. */
   restored?: boolean;
+  /** CONCEPT-0107: this user message is a /btw steering note for a running
+   *  turn — its delivery state, how it was given and its client id. */
+  btw?: BtwInfo;
 }
 
 export interface StreamEvent {
   type: "ready" | "delta" | "tool_use" | "result" | "error" | "done" | "info" |
         "pong" | "session_title" | "artifact" | "ccc_action" | "voice" | "engine" |
         "engine_progress" | "notice" | "language" | "bg_status" | "tool_diff" |
-        "turn_started" | "turn_attach" | "turn_resync";
+        "turn_started" | "turn_attach" | "turn_resync" |
+        "btw_flushed" | "btw_undelivered";
+  /** `btw_flushed` / `btw_undelivered`: the steering note's client id. */
+  client_id?: string;
   /** `turn_started` / `turn_attach` / attached `done`: the live turn's id. */
   turn_id?: string;
   /** `done` only: this socket did not start the turn, it attached to it —
@@ -668,7 +675,19 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
       return;
     }
 
+    case "btw_flushed":
+    case "btw_undelivered": {
+      if (!evt.client_id) return;
+      entry.messages = setSteerState(
+        entry.messages, evt.client_id,
+        evt.type === "btw_flushed" ? "injected" : "undelivered",
+      );
+      return;
+    }
+
     case "done": {
+      // Every note the finished turn received has now been answered.
+      entry.messages = settleOnDone(entry.messages);
       if (evt.attached || entry.needsReconcile) {
         entry.needsReconcile = false;
         _reconcileWithServer(sid);
@@ -1054,6 +1073,36 @@ export function sendMessage(
   notifyState(sid);
 
   return { userMsg, placeholder };
+}
+
+/**
+ * CONCEPT-0107: put a steering note into the history, directly before the
+ * running turn's assistant bubble. False when there is no such session.
+ */
+export function addSteerNote(sid: string, note: ChatMessage): boolean {
+  const entry = sessions.get(sid);
+  if (!entry) return false;
+  entry.messages = insertSteerNote(entry.messages, entry.currentAssistantId, note);
+  notifyState(sid);
+  return true;
+}
+
+/** Move a steering note to *state* (transitions never go backwards). */
+export function updateSteerNote(sid: string, clientId: string, state: BtwState, reason?: string): void {
+  const entry = sessions.get(sid);
+  if (!entry) return;
+  const next = setSteerState(entry.messages, clientId, state, reason);
+  if (next === entry.messages) return;
+  entry.messages = next;
+  notifyState(sid);
+}
+
+/** Drop a steering note (voice undo, or resend as a new message). */
+export function removeSteerNote(sid: string, clientId: string): void {
+  const entry = sessions.get(sid);
+  if (!entry) return;
+  entry.messages = entry.messages.filter((m) => m.btw?.clientId !== clientId);
+  notifyState(sid);
 }
 
 /** Get the current state snapshot (used by useChatSession internally). */

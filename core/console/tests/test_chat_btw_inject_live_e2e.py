@@ -118,7 +118,7 @@ class BtwInjectRouteE2E(unittest.TestCase):
                                        return_value="[house-rules] refused"):
                     r = client.post(f"/v1/console/chat/sessions/{sid}/btw",
                                     json={"instruction": "forbidden note"})
-                self.assertEqual(r.json(), {"ok": True, "status": "refused"})
+                self.assertEqual(r.json(), {"ok": True, "status": "refused", "reason": "gate"})
                 self.assertEqual(fake.writes, [])
                 turns = chat_runtime.read_turns(tenant_id, sid)
                 self.assertEqual(turns[-1].get("gate_refused"), "btw")
@@ -214,7 +214,7 @@ class BtwInjectRouteE2E(unittest.TestCase):
                 json={"instruction": "   "},
             )
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(r.json(), {"ok": True, "status": "refused"})
+            self.assertEqual(r.json(), {"ok": True, "status": "refused", "reason": "empty"})
 
     def test_empty_instruction_is_rejected_by_schema(self):
         with _sandbox(Path(self._tmp)) as (client, home, tenant_id, emitter, chain):

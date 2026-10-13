@@ -207,6 +207,11 @@ def rename_chat_session(
 
 class BtwNoteRequest(BaseModel):
     instruction: str = Field(..., min_length=1, max_length=4000)
+    # CONCEPT-0107: how the note was given, and the client's id for it (a
+    # retried request with the same id within 60 s returns the first outcome).
+    via: Literal["text", "voice"] = "text"
+    client_id: str | None = Field(default=None, min_length=8, max_length=64,
+                                  pattern=r"^[A-Za-z0-9_-]+$")
     model_config = {"extra": "forbid"}
 
 @router.post("/chat/sessions/{sid}/btw")
@@ -233,22 +238,35 @@ async def send_btw_note(
       * ``"no_active_stream"`` — no turn is currently streaming for this
         chat, including the race where the turn's own ``result`` event just
         closed the pipe
-      * ``"refused"``          — empty instruction, or the prompt-guard
-        helper was unavailable (fail-closed — never a raw unguarded write)
+      * ``"queued"``           — the turn is open but its subprocess has not
+        registered stdin yet (pre-spawn gates); flushed after the turn's own
+        first message, or reported ``btw_undelivered`` on the WS if the turn
+        ends first (CONCEPT-0107)
+      * ``"refused"``          — with ``reason``: empty, rate_limited,
+        queue_full, gate (L44/L34/L35), guard_unavailable (fail-closed —
+        never a raw unguarded write)
+
+    The audit record carries ``trigger="<status>:<via>"`` — never the text.
     """
     sess = chat_runtime.get_session(rec.tenant_id, sid)
     if sess is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "session not found")
-    status_ = await chat_runtime.inject_btw_web(sess, body.instruction)
+    outcome = await chat_runtime.inject_btw_web(
+        sess, body.instruction, via=body.via, client_id=body.client_id)
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
         action="chat.btw.sent",
         target_kind="chat",
         target_id=sid,
-        trigger=status_,
+        trigger=f"{outcome.status}:{body.via}",
     )
-    return {"ok": True, "status": status_}
+    out: dict[str, Any] = {"ok": True, "status": outcome.status}
+    if outcome.reason:
+        out["reason"] = outcome.reason
+    if body.client_id:
+        out["client_id"] = body.client_id
+    return out
 
 @router.get("/chat/sessions/{sid}/turns")
 def get_chat_turns(

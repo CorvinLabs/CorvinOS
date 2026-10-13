@@ -77,6 +77,11 @@ export interface UseVoiceInputOptions {
   /** Mirrors the recording flag to a parent that must react to it (placeholder,
    *  overlay, global-Enter guard) without owning a second recorder. */
   onRecordingChange?: (recording: boolean) => void;
+  /** Asked when a recording stops: true ⇒ the final transcript goes to
+   *  `onCommit` instead of staying in the field (chat: a reply is streaming,
+   *  so the speech steers it — CONCEPT-0107). */
+  commitOnRelease?: () => boolean;
+  onCommit?: (text: string) => void;
 }
 
 export interface UseVoiceInputResult {
@@ -86,7 +91,8 @@ export interface UseVoiceInputResult {
 }
 
 export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
-  const { value, onChange, csrf, disabled = false, onError, onAuthExpired, onRecordingChange } = opts;
+  const { value, onChange, csrf, disabled = false, onError, onAuthExpired, onRecordingChange,
+    commitOnRelease, onCommit } = opts;
 
   const [recording, setRecording] = React.useState(false);
 
@@ -104,11 +110,17 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
   const valueRef = React.useRef(value);
   const onChangeRef = React.useRef(onChange);
   const onRecordingChangeRef = React.useRef(onRecordingChange);
+  const commitOnReleaseRef = React.useRef(commitOnRelease);
+  const onCommitRef = React.useRef(onCommit);
+  /** Decided at stop: this recording's transcript is committed, not kept. */
+  const commitRef = React.useRef(false);
 
   React.useEffect(() => { disabledRef.current = disabled; }, [disabled]);
   React.useEffect(() => { valueRef.current = value; }, [value]);
   React.useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
   React.useEffect(() => { onRecordingChangeRef.current = onRecordingChange; }, [onRecordingChange]);
+  React.useEffect(() => { commitOnReleaseRef.current = commitOnRelease; }, [commitOnRelease]);
+  React.useEffect(() => { onCommitRef.current = onCommit; }, [onCommit]);
   React.useEffect(() => {
     recordingRef.current = recording;
     if (recording) pttPendingRef.current = false;
@@ -130,6 +142,7 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
         pttBaseRef.current = valueRef.current;
         sttAccumRef.current = "";
         sttStoppingRef.current = false;
+        commitRef.current = false;
 
         const recognition = new SpeechRecognitionImpl();
         recognition.continuous = true;
@@ -142,6 +155,7 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
               sttAccumRef.current += res[0].transcript + " ";
             }
           }
+          if (commitRef.current) return;   // committed at release: the field keeps its text
           const base = pttBaseRef.current;
           const acc = sttAccumRef.current.trim();
           onChangeRef.current(base ? `${base} ${acc}` : acc);
@@ -157,6 +171,12 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
           }
           recognitionRef.current = null;
           setRecording(false);
+          // Final results can arrive between stop() and end — commit only now.
+          if (commitRef.current) {
+            commitRef.current = false;
+            const acc = sttAccumRef.current.trim();
+            if (acc && !unmountedRef.current) onCommitRef.current?.(acc);
+          }
         };
         recognition.start();
         recognitionRef.current = recognition;
@@ -170,6 +190,7 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       chunksRef.current = [];
+      commitRef.current = false;
       const mr = new MediaRecorder(stream, { mimeType: pickMime() });
       mr.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
@@ -180,7 +201,12 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
         const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
         try {
           const r = await transcribeAudio(blob, csrf);
-          onChangeRef.current(valueRef.current ? `${valueRef.current} ${r.text}` : r.text);
+          if (commitRef.current) {
+            commitRef.current = false;
+            if (r.text.trim()) onCommitRef.current?.(r.text.trim());
+          } else {
+            onChangeRef.current(valueRef.current ? `${valueRef.current} ${r.text}` : r.text);
+          }
         } catch (e) {
           if (e instanceof ApiError && e.status === 403) {
             onAuthExpired?.();
@@ -199,6 +225,11 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
   }, [csrf, onAuthExpired, onError]);
 
   const stopRecording = React.useCallback(() => {
+    // Commit instead of keeping the text? Decided now, at release.
+    commitRef.current = !!(onCommitRef.current && commitOnReleaseRef.current?.());
+    if (commitRef.current && recognitionRef.current) {
+      onChangeRef.current(pttBaseRef.current);   // the spoken text leaves the field
+    }
     if (recognitionRef.current) {
       sttStoppingRef.current = true;
       try { recognitionRef.current.stop(); } catch { /* already ended */ }
@@ -261,7 +292,13 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
         if (recordingRef.current || disabledRef.current) return;
         if (inTextarea) {
           const cur = valueRef.current;
-          if (cur.endsWith(" ")) onChangeRef.current(cur.slice(0, -1));
+          if (cur.endsWith(" ")) {
+            // Update the ref NOW: startRecording reads it as the recording's
+            // base before React re-renders, and a stale " " became a leading
+            // space in every dictation (and stayed behind after a voice note).
+            valueRef.current = cur.slice(0, -1);
+            onChangeRef.current(valueRef.current);
+          }
         }
         pttPendingRef.current = true;
         void startRecRef.current();

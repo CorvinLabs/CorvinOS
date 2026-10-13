@@ -1293,6 +1293,60 @@ This change is **structural** — adapter spawn shape changed (stream-json
 input, stdin pipe). After updating, `bash corvin_operator/bridges/bridge.sh
 restart` is required for the running adapter to pick it up.
 
+### Web console — /btw v2 (CONCEPT-0107, ADR-2220 amendment, 2026-10-13)
+
+The console's `/btw` is a **conversation event**, not an API call with a flash message.
+
+- **No prefix while a reply streams.** Every submit during a running turn — Enter (composer
+  or page-global), the send button that appears next to Stop when the composer has text, or a
+  voice note — is a steering note (`pages/chat.tsx::sendSteer`). A leading `/btw ` is accepted
+  and stripped; `/stop|/cancel|/halt` still end the turn. Not streaming ⇒ a `/btw x` is simply
+  the next message `x`.
+- **Visible.** The note becomes a `role: "user"` message with `btw: {state, via, clientId}`,
+  inserted directly before the running assistant bubble (the order the server persists) and
+  rendered as a dashed "BTW" bubble with a state chip: Sending… → Waiting for the turn to start
+  (`queued`) → Delivered to the running reply (`injected`) → Taken into account (`answered`, on
+  the turn's `done`); or Refused by a safety gate / one note every 2 s / too many waiting
+  (`refused` + reason), Not delivered (`undelivered`), Could not be sent (`failed`) — the last
+  three offer **Send again / Send as new message** and **Edit**. Transitions never go backwards
+  (`lib/btw-steer.ts::setSteerState`). The text moves from the composer into the bubble, so it
+  is never lost.
+- **Reload-identical.** Persisted note turns carry `btw: true`, `btw_status`
+  (`injected|refused|undelivered`), `via`, `client_id`; `hydrateChatTurns` maps them back and
+  marks a delivered note followed by an answer `answered`. Legacy notes (`btw: true` only)
+  hydrate as delivered/refused.
+- **Pre-spawn queue.** A turn is "open" from `stream_turn()` entry to close. A note arriving
+  while the turn is open but stdin is not registered yet (pre-spawn gates, CEL, spawn) is gated
+  at enqueue and answered `queued` (≤ 5 per chat, TTL 60 s); `_btw_write_pending` writes the
+  queue synchronously right after the turn's first message and before `_register_stdin_web`
+  (no direct note can overtake it) and yields `{"type":"btw_flushed","client_id"}`. Notes still
+  queued when the turn ends — delegated TDE/ACS turns never register stdin, a refused turn
+  never spawns — are recorded `undelivered` and announced with `btw_undelivered` **before**
+  `done`. After the first `result` closed stdin, a note is `no_active_stream` (client:
+  `undelivered`).
+- **Contract.** `POST /v1/console/chat/sessions/{sid}/btw` body `{instruction, via?:
+  "text"|"voice", client_id?}`; response `{ok, status, reason?, client_id?}`. Same `client_id`
+  within 60 s ⇒ the first outcome, nothing written twice. 1 accepted note / 2 s per chat
+  (`refused`/`rate_limited`). Audit `chat.btw.sent` with `trigger="<status>:<via>"` — never the
+  text. The client waits up to 90 s (the note's own gate includes the L44 model call).
+- **Ledger.** An `undelivered` note keeps the operator's words but is folded as
+  "(note NOT delivered — the turn ended first)", never as delivered.
+- **Voice.** Hold Space (or the mic) while a reply streams: `useVoiceInput` asks
+  `commitOnRelease()` at release; true ⇒ the spoken text leaves the field and goes to
+  `onCommit`. The chat shows "Sending as BTW: “…” — Esc to cancel" for 1.5 s (Send now / ✕);
+  Esc or ✕, or a reply that finished meanwhile, puts the text into the composer instead of
+  sending. Several voice notes inside the window are joined into one.
+- **Event loop.** The turn's pre-spawn gate (`check_console_spawn_or_refusal`, L44 is a model
+  call) now runs in `asyncio.to_thread`; inline it stalled every chat and request — a /btw sent
+  0.5 s into a turn was answered after 29 s, past the client timeout.
+
+Proof: `core/console/tests/test_chat_btw_v2_e2e.py` (real `stream_turn` + stand-in CLI: queued →
+flushed, order, undelivered before `done`, ledger, no_active_stream after close, loop not
+stalled; real HTTP route: idempotency, rate limit, `via`), `web-next/tests/unit/btw-steer.test.ts`
+(every state arrow), `web-next/tests/e2e/chat-btw-steer.spec.ts` (live `claude` turns: typed note
+without prefix `sending → queued → injected → answered`, reply contains the requested word, reload
+identical; voice with undo window, Esc keeps the text).
+
 ## Layer 13b — Discord-native slash-command registration
 
 Discord's client-side slash-command picker blocks any `/<name>` input
