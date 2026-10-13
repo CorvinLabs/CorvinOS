@@ -35,6 +35,18 @@ export async function uploadAsset(file: File, fields: { caption: string; source:
   return (payload as { asset: Asset }).asset;
 }
 
+/** A Penpot board exported as SVG, rendered server-side into an image asset (ADR-2257). */
+export async function importPenpotBoard(file: File, csrf: string): Promise<{ asset: Asset; notes: string[] }> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const res = await fetch(`${BASE}/video/assets/import-penpot`, { method: "POST", body: form, credentials: "include", headers: { "X-CSRF-Token": csrf } });
+  const text = await res.text();
+  let payload: unknown = text;
+  try { payload = JSON.parse(text); } catch { /* keep text */ }
+  if (!res.ok) throw new ApiError(res.status, payload);
+  return payload as { asset: Asset; notes: string[] };
+}
+
 export const assetImageUrl = (id: string) => `${BASE}/video/assets/${encodeURIComponent(id)}/image`;
 export const sceneSlideUrl = (jobId: string, index: number) => `${BASE}/video/videos/${encodeURIComponent(jobId)}/scenes/${index}/slide`;
 

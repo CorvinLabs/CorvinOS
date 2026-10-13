@@ -28,6 +28,7 @@ STYLE_BODY_CAPS = {
 VIDEO_BODY_CAPS = {
     **STYLE_BODY_CAPS,
     "/v1/console/video/attachments/extract": 8 * MIB + 256 * 1024,
+    "/v1/console/video/assets/import-penpot": 8 * MIB + 256 * 1024,
     "/v1/console/video/jobs": 1 * MIB,
 }
 

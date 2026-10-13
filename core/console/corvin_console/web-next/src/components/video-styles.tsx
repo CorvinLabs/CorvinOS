@@ -58,7 +58,7 @@ export function StyleChip({ list, label, picked, onPick, onImport, importDisable
             <button type="button" data-testid="style-import" disabled={!!importDisabledReason} title={importDisabledReason ?? undefined}
               onClick={() => { setOpen(false); onImport(); }}
               className="w-full flex items-center gap-2 text-left text-xs px-2 py-1.5 rounded hover:bg-muted/60 disabled:opacity-50 disabled:hover:bg-transparent">
-              <Upload className="w-3 h-3 shrink-0" /> Import from PowerPoint…
+              <Upload className="w-3 h-3 shrink-0" /> Import from PowerPoint or Penpot…
             </button>
             {importDisabledReason && <p className="px-2 pb-1 text-xs text-muted-foreground">{importDisabledReason}</p>}
           </div>
@@ -157,7 +157,7 @@ export function StyleImportDialog({ file, csrf, onClose, onSaved }: {
       <DialogContent className="max-w-3xl" data-testid="style-dialog">
         <DialogHeader>
           <DialogTitle>Use “{file.name}” as a video style</DialogTitle>
-          <DialogDescription>Colours, fonts and logo are read from the deck. Slide text and notes are never used.</DialogDescription>
+          <DialogDescription>Colours, fonts and logo are read from the deck or the Penpot design. Slide text and notes are never used.</DialogDescription>
         </DialogHeader>
 
         {loading && (
@@ -300,7 +300,7 @@ function StyleRow({ s, isDefault, csrf, onChanged }: { s: StyleSummary; isDefaul
       {s.mark_data_uri && <img src={s.mark_data_uri} alt={`${s.name} logo`} className="h-8 max-w-[4rem] object-contain" />}
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium truncate">{s.name}{isDefault && <span className="ml-2 text-xs font-normal text-muted-foreground">default</span>}</div>
-        <div className="text-xs text-muted-foreground">From {s.source.kind === "tokens" ? "design tokens" : `a .${s.source.kind} deck`}{s.warnings.length ? ` · ${s.warnings.length} note${s.warnings.length === 1 ? "" : "s"}` : ""}</div>
+        <div className="text-xs text-muted-foreground">From {s.source.kind === "tokens" ? "design tokens" : s.source.kind === "penpot" ? "a Penpot design" : `a .${s.source.kind} deck`}{s.warnings.length ? ` · ${s.warnings.length} note${s.warnings.length === 1 ? "" : "s"}` : ""}</div>
         {error && <div className="text-xs text-destructive" role="alert">{error}</div>}
       </div>
       {confirm ? (
@@ -328,9 +328,9 @@ export function StylesSection({ list, loading, unavailable, csrf, importDisabled
   return (
     <div className="space-y-3" data-testid="styles-section">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-xs text-muted-foreground">A style gives your videos your own colours, fonts and logo. Import a PowerPoint deck or template to create one.</p>
+        <p className="text-xs text-muted-foreground">A style gives your videos your own colours, fonts and logo. Import a PowerPoint deck or template, or a board exported from Penpot as SVG, to create one.</p>
         <Button type="button" variant="outline" size="sm" className="shrink-0" disabled={!!importDisabledReason || !csrf || unavailable} title={importDisabledReason ?? undefined} data-testid="styles-import" onClick={onImport}>
-          <Upload className="w-4 h-4" /> Import from PowerPoint…</Button>
+          <Upload className="w-4 h-4" /> Import from PowerPoint or Penpot…</Button>
       </div>
       {importDisabledReason && <p className="text-xs text-muted-foreground" data-testid="styles-quota">{importDisabledReason}</p>}
       {list?.default_style_error && <p className="text-xs text-destructive" role="alert" data-testid="styles-default-error">{list.default_style_error}</p>}

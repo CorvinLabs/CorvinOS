@@ -454,7 +454,7 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
       {deck && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs" data-testid="deck-offer">
           <Paperclip className="w-3 h-3" /><span className="max-w-[14rem] truncate">{deck.name}</span>
-          <span className="text-muted-foreground">PowerPoint files cannot be used as source material.</span>
+          <span className="text-muted-foreground">PowerPoint and Penpot SVG files cannot be used as source material.</span>
           <Button type="button" variant="outline" size="sm" className="h-6 px-2" disabled={!!importBlocked || !csrf} title={importBlocked ?? undefined} data-testid="use-as-style"
             onClick={() => { onUseDeckAsStyle(deck); setDeck(null); }}>Use as style</Button>
           <button type="button" aria-label={`Dismiss ${deck.name}`} onClick={() => setDeck(null)}><X className="w-3 h-3" /></button>
@@ -473,7 +473,7 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
       )}
       <div className="flex items-end gap-2 rounded-xl border border-border bg-background p-2 focus-within:border-accent">
         <input ref={fileRef} type="file" multiple accept={`${VIDEO_SOURCE_ACCEPT},${STYLE_DECK_ACCEPT}`} className="hidden" data-testid="attach-input" onChange={(e) => void attach(Array.from(e.target.files ?? []))} />
-        <Button type="button" variant="ghost" size="sm" aria-label="Attach files" title="Attach text, Markdown or PDF as source material, or a PowerPoint deck as a style" disabled={busy || sources.length >= MAX_VIDEO_SOURCES} onClick={() => fileRef.current?.click()}>
+        <Button type="button" variant="ghost" size="sm" aria-label="Attach files" title="Attach text, Markdown or PDF as source material, a PowerPoint deck or a Penpot SVG as a style" disabled={busy || sources.length >= MAX_VIDEO_SOURCES} onClick={() => fileRef.current?.click()}>
           {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
         </Button>
         <textarea ref={inputRef} value={text} onChange={(e) => setText(e.target.value)} rows={2} data-testid="task-input" maxLength={4000}
@@ -613,7 +613,7 @@ export function VideoProducerPage() {
         onCreated={(id) => { setSelected(id); }}
         styles={styles.data} pickedStyle={pickedStyle} onPickStyle={setPickedStyle} importBlocked={importBlocked}
         onImportStyle={() => deckPicker.current?.click()} onUseDeckAsStyle={setDeckFile} />
-      <input ref={deckPicker} type="file" accept={STYLE_DECK_ACCEPT} className="hidden" data-testid="deck-input" aria-label="PowerPoint deck to import as a style"
+      <input ref={deckPicker} type="file" accept={STYLE_DECK_ACCEPT} className="hidden" data-testid="deck-input" aria-label="PowerPoint deck or Penpot SVG to import as a style"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) setDeckFile(f); e.target.value = ""; }} />
       {deckFile && (
         <StyleImportDialog file={deckFile} csrf={csrf} onClose={() => setDeckFile(null)}

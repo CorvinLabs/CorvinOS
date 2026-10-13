@@ -20,7 +20,7 @@ import { Input } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api/client";
 import {
   ASSET_ACCEPT, assetImageUrl, canvasAuthoring, clickToPoint, fmtAssetBytes, nextSpotName, sceneSlideUrl,
-  scenesWithTemplate, uploadAsset, uploadProblem, type AssetHotspot, type AssetList,
+  scenesWithTemplate, importPenpotBoard, uploadAsset, uploadProblem, type AssetHotspot, type AssetList,
 } from "@/lib/api/video-assets";
 import { signalRows, type ProductionReport } from "@/lib/video-quality-signals";
 
@@ -109,6 +109,11 @@ export function AssetsTab({ csrf }: { csrf: string }) {
     mutationFn: () => uploadAsset(file!, { caption, source, hotspots: spots }, csrf),
     onSuccess: () => { reset(); void qc.invalidateQueries({ queryKey: ["video", "assets"] }); },
   });
+  const penpotPicker = useRef<HTMLInputElement>(null);
+  const penpot = useMutation({
+    mutationFn: (f: File) => importPenpotBoard(f, csrf),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["video", "assets"] }); },
+  });
   const del = useMutation({
     mutationFn: (id: string) => api(`${BASE}/assets/${encodeURIComponent(id)}`, { method: "DELETE", csrf }),
     onSuccess: () => { setConfirm(null); void qc.invalidateQueries({ queryKey: ["video", "assets"] }); },
@@ -136,6 +141,11 @@ export function AssetsTab({ csrf }: { csrf: string }) {
           </Button>
           <input ref={picker} type="file" accept={ASSET_ACCEPT} className="hidden" data-testid="asset-input" aria-label="PNG image to upload"
             onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) { if (preview) URL.revokeObjectURL(preview); setFile(f); setSpots([]); setPreview(URL.createObjectURL(f)); upload.reset(); } }} />
+          <Button type="button" variant="outline" size="sm" disabled={!csrf || full || penpot.isPending} onClick={() => penpotPicker.current?.click()} data-testid="penpot-pick">
+            {penpot.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1" />}Import Penpot board (SVG)
+          </Button>
+          <input ref={penpotPicker} type="file" accept=".svg,image/svg+xml" className="hidden" data-testid="penpot-input" aria-label="Penpot board exported as SVG"
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) { penpot.reset(); penpot.mutate(f); } }} />
           <span className="text-xs text-muted-foreground" data-testid="asset-count">
             {limits ? `${assets.length} of ${limits.max_assets} images` : list.isLoading ? "loading…" : ""}
           </span>
@@ -182,6 +192,12 @@ export function AssetsTab({ csrf }: { csrf: string }) {
               {problem && <span className="text-xs text-muted-foreground" data-testid="asset-problem">{problem}</span>}
             </div>
           </>
+        )}
+        {penpot.isError && <p className="text-xs text-destructive" role="alert" data-testid="penpot-error">{err(penpot.error, "The Penpot board could not be imported.")}</p>}
+        {penpot.isSuccess && (
+          <p className="text-xs text-muted-foreground" data-testid="penpot-done">
+            Board imported as an image{penpot.data.notes.length ? ` (not imported: ${penpot.data.notes.join(", ")})` : ""}. Components, constraints and animations are not part of an SVG export.
+          </p>
         )}
         {upload.isError && <p className="text-xs text-destructive" role="alert" data-testid="asset-upload-error">{err(upload.error, "The image could not be uploaded.")}</p>}
       </div>

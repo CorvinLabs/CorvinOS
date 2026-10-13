@@ -4433,7 +4433,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "tenant_id", "job_id", "entity_ids", "pack_sha256", "chars", "engines", "gate",
     }),
     "video_producer.style_imported": frozenset({
-        "tenant_id", "bytes", "warning_count", "sha256_prefix", "outcome",
+        "tenant_id", "bytes", "warning_count", "sha256_prefix", "outcome", "format",
     }),
     "video_producer.style_saved": frozenset({
         "tenant_id", "style_id", "source_kind", "has_plate", "has_mark",
@@ -4465,7 +4465,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "video_producer.asset_uploaded": frozenset({
         "tenant_id", "asset_id", "outcome", "refusal", "upload_bytes", "bytes", "width", "height",
-        "hotspot_count", "has_source", "sha256_prefix",
+        "hotspot_count", "has_source", "sha256_prefix", "format",
     }),
     "video_producer.asset_deleted": frozenset({"tenant_id", "asset_id", "bytes"}),
     "video_producer.asset_accessed": frozenset({"tenant_id", "asset_id", "purpose"}),

@@ -170,6 +170,19 @@ describe("attaching a deck", () => {
     expect(calls.extract).toBe(0);
   });
 
+  it("a Penpot SVG export is offered as a style too and never reaches text extraction", async () => {
+    renderIt();
+    fireEvent.change(await screen.findByTestId("attach-input"), { target: { files: [new File(["<svg/>"], "board.svg", { type: "image/svg+xml" })] } });
+    const offer = await screen.findByTestId("deck-offer");
+    expect(offer.textContent).toMatch(/Penpot SVG files cannot be used as source material/);
+    expect(screen.getByTestId("deck-input").getAttribute("accept")).toBe(".pptx,.potx,.svg");
+    expect(calls.extract).toBe(0);
+    fireEvent.click(screen.getByTestId("use-as-style"));
+    await screen.findByTestId("style-name");
+    expect(calls.imports).toBe(1);
+    expect(calls.extract).toBe(0);
+  });
+
   it("a mixed selection extracts the text files only", async () => {
     renderIt();
     fireEvent.change(await screen.findByTestId("attach-input"), { target: { files: [new File(["x"], "notes.md"), deck()] } });

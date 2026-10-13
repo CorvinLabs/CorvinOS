@@ -1707,6 +1707,11 @@ def list_styles(rec=_SessionRec):
     }
 
 
+def _looks_like_svg(data: bytes) -> bool:
+    head = data[:4096].lstrip(b"\xef\xbb\xbf \t\r\n")
+    return head.startswith(b"<svg") or (head.startswith(b"<?xml") and b"<svg" in head)
+
+
 @router.post("/styles/import")
 async def import_style(file: UploadFile = File(...), rec=_SessionRec):
     """Read a PowerPoint deck's look into a DRAFT. Stateless: the upload is held in memory for this
@@ -1714,7 +1719,6 @@ async def import_style(file: UploadFile = File(...), rec=_SessionRec):
     when the request closes) and nothing is stored until the draft is committed."""
     import hashlib  # noqa: PLC0415
 
-    imp = _style_mod("style_import_pptx")
     sp = _style_mod("style_pack")
     buf = bytearray()
     too_big = False
@@ -1729,11 +1733,15 @@ async def import_style(file: UploadFile = File(...), rec=_SessionRec):
     data = bytes(buf)
     size = len(data)
     digest = hashlib.sha256(data).hexdigest()[:12]
-    name = Path(file.filename or "deck.pptx").name[:120]
+    # ADR-2257: a Penpot board exported as SVG is the second source of a style; sniffed, never the extension
+    is_svg = _looks_like_svg(data)
+    fmt = "penpot_svg" if is_svg else "pptx"
+    name = Path(file.filename or ("board.svg" if is_svg else "deck.pptx")).name[:120]
 
     def refuse(status: int, message: str, warnings: int = 0):
         if not _audit(rec.tenant_id, "video_producer.style_imported",
-                      {"bytes": size, "warning_count": warnings, "sha256_prefix": digest, "outcome": "refused"}):
+                      {"bytes": size, "warning_count": warnings, "sha256_prefix": digest, "outcome": "refused",
+                       "format": fmt}):
             raise HTTPException(status_code=503, detail="The import could not be recorded")
         raise HTTPException(status_code=status, detail=message)
 
@@ -1741,8 +1749,10 @@ async def import_style(file: UploadFile = File(...), rec=_SessionRec):
         refuse(413, "The file is larger than 25 MB")
     if not data:
         refuse(400, "The file is empty")
-    if not data.startswith(b"PK\x03\x04"):
-        refuse(415, "This is not a PowerPoint (.pptx or .potx) file")
+    if not is_svg and not data.startswith(b"PK\x03\x04"):
+        refuse(415, "This is not a PowerPoint (.pptx or .potx) or a Penpot SVG file")
+    imp = _style_mod("penpot_import") if is_svg else _style_mod("style_import_pptx")
+    import_fn = imp.import_penpot if is_svg else imp.import_pptx
     global _import_inflight
     with _import_lock:
         busy = _import_inflight >= _IMPORT_MAX_INFLIGHT
@@ -1757,22 +1767,23 @@ async def import_style(file: UploadFile = File(...), rec=_SessionRec):
         global _import_inflight
         try:
             with _import_slots:
-                return imp.import_pptx(data, name)
+                return import_fn(data, name)
         finally:
             with _import_lock:
                 _import_inflight -= 1
 
     try:
         result = await asyncio.to_thread(_import_bounded)
-    except sp.StyleError as e:  # PptxImportError is one
+    except sp.StyleError as e:  # PptxImportError and PenpotImportError are ones
         refuse(422, str(e))
     except Exception as e:  # noqa: BLE001 - a hostile deck must not become a 500 with internals
         logger.warning("video producer: style import failed (%s)", type(e).__name__)
-        refuse(422, "The deck could not be read")
+        refuse(422, "The design could not be read" if is_svg else "The deck could not be read")
     del data, buf
     style = result.style
     if not _audit(rec.tenant_id, "video_producer.style_imported",
-                  {"bytes": size, "warning_count": len(style.warnings), "sha256_prefix": digest, "outcome": "accepted"}):
+                  {"bytes": size, "warning_count": len(style.warnings), "sha256_prefix": digest, "outcome": "accepted",
+                   "format": fmt}):
         raise HTTPException(status_code=503, detail="The import could not be recorded")
     pv = await _previews(style)
     return {"draft": sp.draft_to_wire(style), "previews": pv["previews"], "notes": [*result.notes, *pv["notes"]]}
@@ -1949,6 +1960,97 @@ async def upload_asset(file: UploadFile = File(...), caption: str = Form(""), ho
     except am.AssetError as e:
         refuse(422, str(e), _refusal_code(str(e)))
     return JSONResponse(status_code=201, content={"asset": _public_asset(doc)})
+
+
+@router.post("/assets/import-penpot", status_code=201)
+async def import_penpot_asset(file: UploadFile = File(...), caption: str = Form(""), rec=_SessionRec):
+    """A Penpot board (SVG export) as an image for `still` scenes (ADR-2257 strand A). The upload is
+    reduced to the plugin's closed shape model and only that model is rendered - by the producer's
+    hardened Chromium, JavaScript off, network aborted - so no byte of the upload reaches the browser.
+    The image is stored like any other asset, with the same audit-first order."""
+    import hashlib  # noqa: PLC0415
+
+    pim, am = _style_mod("penpot_import"), _asset_mod()
+    buf = bytearray()
+    too_big = False
+    while True:
+        chunk = await file.read(64 * 1024)
+        if not chunk:
+            break
+        buf += chunk
+        if len(buf) > _MAX_ASSET_UPLOAD_BYTES:
+            too_big = True
+            break
+    data = bytes(buf)
+    base = {"upload_bytes": len(data), "sha256_prefix": hashlib.sha256(data).hexdigest()[:12],
+            "format": "penpot_svg"}
+
+    def refuse(status: int, message: str, code: str):
+        if not _audit(rec.tenant_id, "video_producer.asset_uploaded", {**base, "outcome": "refused", "refusal": code}):
+            raise HTTPException(status_code=503, detail="The import could not be recorded")
+        raise HTTPException(status_code=status, detail=message)
+
+    if too_big:
+        refuse(413, f"The file is larger than {_MAX_ASSET_UPLOAD_BYTES // (1024 * 1024)} MB", "too_large")
+    if not data:
+        refuse(400, "The file is empty", "empty")
+    if len(caption) > _MAX_ASSET_FORM_CHARS:
+        refuse(413, "The form fields are too long", "invalid")
+    if not _looks_like_svg(data):
+        refuse(415, "This is not an SVG file. Export a board from Penpot as SVG.", "not_svg")
+    global _import_inflight
+    with _import_lock:
+        busy = _import_inflight >= _IMPORT_MAX_INFLIGHT
+        if not busy:
+            _import_inflight += 1
+    if busy:
+        raise HTTPException(status_code=429, detail="Too many imports are running; try again in a moment",
+                            headers={"Retry-After": "5"})
+
+    def _parse_bounded():
+        global _import_inflight
+        try:
+            with _import_slots:
+                return pim.parse_design(data)
+        finally:
+            with _import_lock:
+                _import_inflight -= 1
+
+    try:
+        design = await asyncio.to_thread(_parse_bounded)
+    except _style_mod("style_pack").StyleError as e:
+        refuse(422, str(e), "unreadable")
+    except Exception as e:  # noqa: BLE001 - a hostile file must not become a 500 with internals
+        logger.warning("video producer: penpot import failed (%s)", type(e).__name__)
+        refuse(422, "The design could not be read", "unreadable")
+    if not _preview_slots.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Rendering is busy right now; try again in a moment",
+                            headers={"Retry-After": "5"})
+    try:
+        png = await pim.render_png(design)
+    except _style_mod("web_renderer").WebRenderError as e:
+        logger.warning("video producer: penpot render failed (%s)", type(e).__name__)
+        refuse(503, "The design could not be rendered on this host (is Chromium installed?)", "render_failed")
+    finally:
+        _preview_slots.release()
+    text = caption.strip() or Path(file.filename or "Penpot board").stem[:60] or "Penpot board"
+
+    def record(doc: Dict[str, Any]) -> bool:
+        return _audit(rec.tenant_id, "video_producer.asset_uploaded", {
+            **base, "outcome": "accepted", "asset_id": doc["id"], "bytes": doc["bytes"], "width": doc["width"],
+            "height": doc["height"], "hotspot_count": 0, "has_source": False})
+
+    try:
+        doc = await asyncio.to_thread(_asset_store(rec).add, png, caption=text, uploaded_by=_job_owner(rec),
+                                      source=None, hotspots=[], before_commit=record)
+    except am.AssetNotRecorded:
+        raise HTTPException(status_code=503, detail="The import could not be recorded; nothing was stored") from None
+    except am.AssetQuotaExceeded as e:
+        refuse(409, str(e), "quota")
+    except am.AssetError as e:
+        refuse(422, str(e), _refusal_code(str(e)))
+    notes = [f"{n} {k} not imported" for k, n in sorted(design.dropped.items()) if n]
+    return JSONResponse(status_code=201, content={"asset": _public_asset(doc), "notes": notes})
 
 
 def _own_asset(rec, asset_id: str) -> Dict[str, Any]:

@@ -382,6 +382,31 @@ describe("Video Producer studio", () => {
     await waitFor(() => expect(deletes).toEqual(["csrf-test"]));
   });
 
+  it("a Penpot board (SVG) is posted for import with the CSRF token, reports what was dropped, and shows a refusal's reason", async () => {
+    const limits = { max_assets: 50, max_image_bytes: 2097152, max_upload_bytes: 8388608, max_caption: 160, max_hotspots: 8 };
+    const posts: Array<{ csrf: string | null; file: string }> = [];
+    let refuse = false;
+    server.use(
+      http.get(`${B}/assets`, () => HttpResponse.json({ assets: [], limits })),
+      http.post(`${B}/assets/import-penpot`, async ({ request }) => {
+        const f = await request.formData();
+        posts.push({ csrf: request.headers.get("x-csrf-token"), file: (f.get("file") as File).name });
+        if (refuse) return HttpResponse.json({ detail: "This is not an SVG file. Export a board from Penpot as SVG." }, { status: 415 });
+        return HttpResponse.json({ asset: { id: "ast_aaaa0000", caption: "board", hotspots: [], width: 1920, height: 1080, bytes: 9000, created: 1, source: null }, notes: ["1 image not imported"] }, { status: 201 });
+      }),
+      ...handlers(),
+    );
+    renderIt("?tab=assets");
+    await screen.findByTestId("assets-empty");
+    expect(screen.getByTestId("penpot-input").getAttribute("accept")).toBe(".svg,image/svg+xml");
+    fireEvent.change(screen.getByTestId("penpot-input"), { target: { files: [new File(["<svg/>"], "board.svg", { type: "image/svg+xml" })] } });
+    expect((await screen.findByTestId("penpot-done")).textContent).toMatch(/Board imported as an image \(not imported: 1 image not imported\)/);
+    expect(posts).toEqual([{ csrf: "csrf-test", file: "board.svg" }]);
+    refuse = true;
+    fireEvent.change(screen.getByTestId("penpot-input"), { target: { files: [new File(["x"], "other.svg", { type: "image/svg+xml" })] } });
+    expect((await screen.findByTestId("penpot-error")).textContent).toBe("This is not an SVG file. Export a board from Penpot as SVG.");
+  });
+
   it("a refused upload shows the server's reason", async () => {
     server.use(
       http.get(`${B}/assets`, () => HttpResponse.json({ assets: [], limits: { max_assets: 50, max_image_bytes: 2097152, max_upload_bytes: 8388608, max_caption: 160, max_hotspots: 8 } })),

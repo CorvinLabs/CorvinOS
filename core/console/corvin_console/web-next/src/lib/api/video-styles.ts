@@ -4,7 +4,7 @@
  */
 import { ApiError, BASE } from "@/lib/api/client";
 
-export const STYLE_DECK_ACCEPT = ".pptx,.potx";
+export const STYLE_DECK_ACCEPT = ".pptx,.potx,.svg";
 export const BUILTIN_STYLE_ID = "corvin";
 export const FONT_FAMILIES = ["Newsreader", "Instrument Sans", "JetBrains Mono"] as const;
 export const COLOUR_KEYS = ["bg", "bg_card", "border", "text", "text_muted", "text_faint", "accent", "accent_hi", "success"] as const;
@@ -28,7 +28,7 @@ export interface StylePreview { template: string; theme: string; data_uri: strin
 export type Draft = Record<string, any>;
 export interface ImportResult { draft: Draft; previews: StylePreview[]; notes: string[] }
 
-export const isDeckFile = (name: string) => /\.(pptx|potx)$/i.test(name);
+export const isDeckFile = (name: string) => /\.(pptx|potx|svg)$/i.test(name);
 
 /** Multipart upload; the generic api() helper is JSON-only. */
 export async function importStyleDeck(file: File, csrf: string, signal?: AbortSignal): Promise<ImportResult> {
