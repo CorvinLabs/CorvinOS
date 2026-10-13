@@ -2439,6 +2439,8 @@ class VideoProducerHandler:
     * a matching job that is still being produced (its process holds ``jobs/<id>.lock``) is NOT
       deleted under it: the layer FAILS and says how many, so the operator cancels and re-runs -
       never a COMPLETED with the job still on disk;
+    * an image asset (``assets/<ast_8hex>/``, ADR-2249 D3) is the subject's when its ``asset.json``
+      names the subject as ``uploaded_by``; it is removed whole (:func:`_purge_video_assets`);
     * the rest of the store (styles, thumbnails, other files) runs through the generic rule of
       :func:`_purge_path`.
     """
@@ -2486,11 +2488,15 @@ class VideoProducerHandler:
                         continue
                     files, _size = vjs.delete_job(root, jid)
                     removed += max(files, 1)
+                # image assets (ADR-2249 D3): one directory per asset, attributed by the
+                # ``uploaded_by`` its record carries - deleted WHOLE (record and image), never
+                # rewritten; an unreadable record is not guessed at.
+                removed += _purge_video_assets(root / "assets", subject_id)
                 # styles, thumbnails and anything else: the documented generic rule. jobs/ and
                 # videos/ are attributed per JOB above (a partial per-file delete there would leave
                 # the scenes of a job whose record went), the sidecars hold no subject but owners.
                 for entry in sorted(root.iterdir()):
-                    if entry.name in ("jobs", "videos", vjs.OWNERS_FILE, vjs.REVISIONS_FILE) \
+                    if entry.name in ("jobs", "videos", "assets", vjs.OWNERS_FILE, vjs.REVISIONS_FILE) \
                             or entry.name.startswith("."):
                         continue
                     removed += _purge_path(entry, subject_id)
@@ -2512,6 +2518,34 @@ class VideoProducerHandler:
         return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
                        empty_reason="no video producer record matched subject",
                        applied_reason="removed {n} video producer file(s) for subject")
+
+
+_VIDEO_ASSET_ID = re.compile(r"ast_[0-9a-f]{8}")
+
+
+def _purge_video_assets(assets: Path, subject_id: str) -> int:
+    """Per-user erasure of Video Producer image assets (ADR-2249 D3, T-0111): every
+    ``assets/<ast_8hex>/`` whose ``asset.json`` names the subject as ``uploaded_by`` is removed
+    whole. ``uploaded_by`` is THE attribution key of this store (not one of the generic
+    :data:`_SUBJECT_KEYS`), so the generic per-file rule would have rewritten the record and left
+    the image. A symlink is never followed; an unreadable record is left (its owner is unknown).
+    The stated limit: third parties visible in an uploaded image are not attributable."""
+    import shutil  # noqa: PLC0415
+
+    if assets.is_symlink() or not assets.is_dir():
+        return 0
+    removed = 0
+    for d in sorted(assets.iterdir()):
+        if d.is_symlink() or not d.is_dir() or not _VIDEO_ASSET_ID.fullmatch(d.name):
+            continue
+        rec = d / "asset.json"
+        if rec.is_symlink() or not rec.is_file():
+            continue
+        doc = _load_json(rec)
+        if isinstance(doc, dict) and doc.get("uploaded_by") == subject_id:
+            removed += sum(1 for f in d.iterdir() if f.is_file())
+            shutil.rmtree(d)
+    return removed
 
 
 @dataclass

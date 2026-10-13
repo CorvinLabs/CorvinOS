@@ -1178,6 +1178,13 @@ EVENT_SEVERITY: dict[str, str] = {
     "video_producer.measure_started":    "INFO",
     "video_producer.measure_refused":    "WARNING",
     "video_producer.measure_completed":  "INFO",
+    # ADR-2249 D3 (T-0111): the tenant's image assets for `still` scenes - an upload (accepted or
+    # refused, written BEFORE the asset is committed), a deletion (before the files go) and a read of
+    # the image bytes (before they are served). Ids, sizes, counts and closed enums only - never the
+    # caption, a hotspot text, the provenance URL, a filename or the uploading user's id.
+    "video_producer.asset_uploaded":     "INFO",
+    "video_producer.asset_deleted":      "INFO",
+    "video_producer.asset_accessed":     "INFO",
     # ADR validation framework (core/deployment/adr_validation_framework.py via
     # core/deployment/audit_sink — mirrored statically so the floor does not
     # depend on import order)
@@ -4445,6 +4452,12 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "video_producer.measure_completed": frozenset({
         "tenant_id", "job_id", "signal", "verdict", "matched", "items", "median_ms", "p90_ms", "stored",
     }),
+    "video_producer.asset_uploaded": frozenset({
+        "tenant_id", "asset_id", "outcome", "refusal", "upload_bytes", "bytes", "width", "height",
+        "hotspot_count", "has_source", "sha256_prefix",
+    }),
+    "video_producer.asset_deleted": frozenset({"tenant_id", "asset_id", "bytes"}),
+    "video_producer.asset_accessed": frozenset({"tenant_id", "asset_id", "purpose"}),
     # "violations" holds "ADR-NNNN/check_name" codes, never free text.
     "deployment.adr_violation_detected": frozenset({
         "week", "violation_count", "violations", "tenant_id", "lom", "component",
