@@ -59,6 +59,33 @@ export function setAutoUpdate(enabled: boolean, csrf: string): Promise<{ enabled
   });
 }
 
+// ── Core Update Management ─────────────────────────────────────────
+
+export interface UpdateCheckResult {
+  has_update: boolean;
+  current_version: string;
+  available_version: string | null;
+  error: string | null;
+}
+
+export interface UpdateInstallResult {
+  success: boolean;
+  exit_code: number;
+  final_message: string;
+}
+
+export async function checkUpdate(signal?: AbortSignal): Promise<UpdateCheckResult> {
+  return api("/settings/update/check", { signal });
+}
+
+export async function installUpdate(csrf: string): Promise<UpdateInstallResult> {
+  return api("/settings/update/install", {
+    method: "POST",
+    csrf,
+    body: {},
+  });
+}
+
 // ── Feature flags + worker engine (ship-dark registry) ───────────────
 
 export interface FeatureFlagState {

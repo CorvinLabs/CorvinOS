@@ -259,7 +259,13 @@ a `uv tool install` (the Windows one-line installer default) upgrades via
 the autostart supervisor (Scheduled Task `CorvinOS-Console`) also runs this upgrade
 once per logon/boot **before** launching the console, so an always-on machine still
 lands on the newest version; it is best-effort and never blocks startup (offline /
-timeout / missing `uv` just logs and continues). Also here: tenant config
+timeout / missing `uv` just logs and continues). The default is **on** at every
+layer: no config file or no `auto_update` key means enabled; only an explicit
+`false` (written by the toggle) turns it off. The **Update** card also offers a manual
+"Check & Install" button (`GET /settings/update/check`, `POST /settings/update/install`)
+that runs `scripts/Update.sh` (Linux/macOS) or `scripts/Update.ps1` (Windows),
+resolved from `~/.corvin/scripts/`, `CORVIN_SCRIPT_DIR`, or the install dir; one update
+per tenant at a time (409 otherwise), start and end are audited. Also here: tenant config
 (`tenant.corvin.yaml` viewer), and the `bridge.sh doctor` output on demand.
 Token revocation is available here.
 

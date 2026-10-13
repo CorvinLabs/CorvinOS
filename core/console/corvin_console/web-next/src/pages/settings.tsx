@@ -19,6 +19,7 @@ import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getServiceTier, 
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { A2AInstanceUrlCard } from "@/components/settings/A2AInstanceUrlCard";
+import { UpdateCard } from "@/components/settings/UpdateCard";
 
 interface SettingsFile {
   label: string;
@@ -772,7 +773,7 @@ export function SettingsPage() {
 
       <div className="space-y-2">
         <h2 className="text-sm font-semibold text-foreground">Updates</h2>
-        <AutoUpdateCard csrf={session!.csrf_token} />
+        <UpdateCard csrf={session!.csrf_token} />
       </div>
 
       <div className="space-y-2">

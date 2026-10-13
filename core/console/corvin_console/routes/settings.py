@@ -890,3 +890,133 @@ async def get_feature(
         "enabled": enabled,
         "release_tier": flag.release_tier,
     }
+
+
+# ── Update Management ────────────────────────────────────────────────────
+
+
+class UpdateCheckRequest(BaseModel):
+    """Request to check for available updates."""
+    model_config = {"extra": "forbid"}
+
+
+class UpdateInstallRequest(BaseModel):
+    """Request to install available updates."""
+    model_config = {"extra": "forbid"}
+
+
+@router.get("/settings/update/check")
+async def check_update(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Check if an update is available (non-blocking, no lock acquired).
+
+    Returns:
+        {
+            "has_update": bool,
+            "current_version": str,
+            "available_version": str | null,
+            "error": str | null,
+        }
+    """
+    try:
+        from ..update_manager import UpdateManager
+        manager = UpdateManager(rec.tenant_id)
+        result = await manager.check_update()
+
+        return {
+            "has_update": result.has_update,
+            "current_version": result.current_version,
+            "available_version": result.available_version,
+            "error": result.error,
+        }
+    except Exception as e:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="settings.update_check",
+            target_kind="system_update",
+            target_id="corvinOS_core",
+            reason="check_failed",
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        ) from e
+
+
+@router.post("/settings/update/install")
+async def install_update(
+    body: UpdateInstallRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """Install available updates (blocking until completion or timeout).
+
+    Returns:
+        {
+            "success": bool,
+            "exit_code": int,
+            "final_message": str,
+        }
+
+    Raises:
+        HTTPException(409): If another update is already in progress
+        HTTPException(500): If update fails
+    """
+    try:
+        from ..update_manager import (
+            UpdateManager, UpdateNotAllowedError, UpdateFailedError
+        )
+        manager = UpdateManager(rec.tenant_id)
+
+        try:
+            result = await manager.run_update()
+            console_audit.action_performed(
+                tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint,
+                action="settings.update_install",
+                target_kind="system_update",
+                target_id="corvinOS_core",
+            )
+            return result
+        except UpdateNotAllowedError as e:
+            console_audit.action_failed(
+                tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint,
+                action="settings.update_install",
+                target_kind="system_update",
+                target_id="corvinOS_core",
+                reason="already_in_progress",
+            )
+            raise HTTPException(
+                status_code=http_status.HTTP_409_CONFLICT,
+                detail=str(e),
+            ) from e
+        except UpdateFailedError as e:
+            console_audit.action_failed(
+                tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint,
+                action="settings.update_install",
+                target_kind="system_update",
+                target_id="corvinOS_core",
+                reason="update_failed",
+            )
+            raise HTTPException(
+                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e),
+            ) from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="settings.update_install",
+            target_kind="system_update",
+            target_id="corvinOS_core",
+            reason="unexpected_error",
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Update failed: {str(e)}",
+        ) from e
