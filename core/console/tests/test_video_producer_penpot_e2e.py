@@ -117,6 +117,27 @@ class PenpotRoutesE2E(unittest.TestCase):
             ok_chain, problems = se.verify_chain(home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl")
             self.assertTrue(ok_chain, problems)
 
+    def test_a_full_workspace_is_refused_before_any_browser_is_started(self):
+        with _sandbox(Path(tempfile.mkdtemp()), tenants=("tenant_a",)) as (_c, _t, home, clients):
+            ca, csrf_a = clients["tenant_a"]
+            am, pim = _plugin("asset_store"), _plugin("penpot_import")
+            started = []
+
+            async def must_not_render(design, **kw):
+                started.append(1)
+                raise AssertionError("a browser was started for a full workspace")
+
+            old_max, old_render = am.MAX_ASSETS, pim.render_png
+            am.MAX_ASSETS, pim.render_png = 0, must_not_render
+            try:
+                r = _post(ca, csrf_a, f"{V}/assets/import-penpot", _board(), "b.svg")
+            finally:
+                am.MAX_ASSETS, pim.render_png = old_max, old_render
+            self.assertEqual(r.status_code, 409, r.text)
+            self.assertEqual(started, [])
+            rec = _chain_records(home, "_default", "video_producer.asset_uploaded") or _chain_records(home, "tenant_a", "video_producer.asset_uploaded")
+            self.assertEqual([(x["details"]["outcome"], x["details"]["refusal"]) for x in rec], [("refused", "quota")])
+
     def test_oversized_body_is_refused_before_spooling_for_the_new_route(self):
         from corvin_console import body_cap
 

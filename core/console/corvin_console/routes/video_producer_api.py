@@ -2023,6 +2023,8 @@ async def import_penpot_asset(file: UploadFile = File(...), caption: str = Form(
     except Exception as e:  # noqa: BLE001 - a hostile file must not become a 500 with internals
         logger.warning("video producer: penpot import failed (%s)", type(e).__name__)
         refuse(422, "The design could not be read", "unreadable")
+    if len(await asyncio.to_thread(_asset_store(rec).ids)) >= am.MAX_ASSETS:  # before a browser is spent on it
+        refuse(409, f"At most {am.MAX_ASSETS} images per workspace; delete one first", "quota")
     if not _preview_slots.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="Rendering is busy right now; try again in a moment",
                             headers={"Retry-After": "5"})
