@@ -12,15 +12,16 @@
  * Nothing is invented: a video without such a scene says so, a missing report says so, and an
  * asset is exactly what the store returned.
  */
-import { useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe, Loader2, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api/client";
 import {
-  ASSET_ACCEPT, assetImageUrl, canvasAuthoring, captureAsset, clickToPoint, fmtAssetBytes, nextSpotName, sceneSlideUrl,
-  scenesWithTemplate, importPenpotBoard, uploadAsset, uploadProblem, type AssetHotspot, type AssetList,
+  ASSET_ACCEPT, assetImageUrl, CAPTURE_VIEWPORTS, CAPTURE_WAIT_S, canvasAuthoring, captureAsset, captureBlockedReason,
+  clickToPoint, fmtAssetBytes, nextSpotName, sceneSlideUrl, scenesWithTemplate, importPenpotBoard, updateAsset,
+  uploadAsset, uploadProblem, type Asset, type AssetHotspot, type AssetList, type CaptureSettings, type CaptureViewport,
 } from "@/lib/api/video-assets";
 import { signalRows, type ProductionReport } from "@/lib/video-quality-signals";
 
@@ -101,25 +102,16 @@ export function AssetsTab({ csrf }: { csrf: string }) {
   const [source, setSource] = useState("");
   const [spots, setSpots] = useState<AssetHotspot[]>([]);
   const [confirm, setConfirm] = useState<string | null>(null);
-  const [captureUrl, setCaptureUrl] = useState("");
-  const [captureCaption, setCaptureCaption] = useState("");
-  const [captureViewport, setCaptureViewport] = useState("desktop");
-  const [captureSpots, setCaptureSpots] = useState<AssetHotspot[]>([]);
-  const [capturePreview, setCapturePreview] = useState<string | null>(null);
   const [showCaptureDialog, setShowCaptureDialog] = useState(false);
+  const settings = useQuery({ queryKey: ["video", "settings"], queryFn: ({ signal }) => api<CaptureSettings>(`${BASE}/settings`, { signal }), retry: false });
+  const captureBlocked = settings.isError ? "Website capture is not available on this installation." : captureBlockedReason(settings.data);
   const picker = useRef<HTMLInputElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
-  const captureImgRef = useRef<HTMLImageElement>(null);
 
   const reset = () => { if (preview) URL.revokeObjectURL(preview); setFile(null); setPreview(null); setCaption(""); setSource(""); setSpots([]); };
-  const resetCapture = () => { if (capturePreview) URL.revokeObjectURL(capturePreview); setCaptureUrl(""); setCaptureCaption(""); setCaptureSpots([]); setCapturePreview(null); setShowCaptureDialog(false); };
   const upload = useMutation({
     mutationFn: () => uploadAsset(file!, { caption, source, hotspots: spots }, csrf),
     onSuccess: () => { reset(); void qc.invalidateQueries({ queryKey: ["video", "assets"] }); },
-  });
-  const capture = useMutation({
-    mutationFn: () => captureAsset({ url: captureUrl, caption: captureCaption, hotspots: captureSpots, viewport: captureViewport }, csrf),
-    onSuccess: () => { resetCapture(); void qc.invalidateQueries({ queryKey: ["video", "assets"] }); },
   });
   const penpotPicker = useRef<HTMLInputElement>(null);
   const penpot = useMutation({
@@ -158,14 +150,16 @@ export function AssetsTab({ csrf }: { csrf: string }) {
           </Button>
           <input ref={penpotPicker} type="file" accept=".svg,image/svg+xml" className="hidden" data-testid="penpot-input" aria-label="Penpot board exported as SVG"
             onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) { penpot.reset(); penpot.mutate(f); } }} />
-          <Button type="button" variant="outline" size="sm" disabled={!csrf || full || capture.isPending} onClick={() => setShowCaptureDialog(true)} data-testid="capture-pick">
-            {capture.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Globe className="w-3.5 h-3.5 mr-1" />}Capture from website
+          <Button type="button" variant="outline" size="sm" disabled={!csrf || full || !!captureBlocked} title={captureBlocked ?? undefined}
+            onClick={() => setShowCaptureDialog(true)} data-testid="capture-pick">
+            <Globe className="w-3.5 h-3.5 mr-1" />Add website screenshot
           </Button>
           <span className="text-xs text-muted-foreground" data-testid="asset-count">
             {limits ? `${assets.length} of ${limits.max_assets} images` : list.isLoading ? "loading…" : ""}
           </span>
           {full && <span className="text-xs text-amber-600" data-testid="asset-full">The limit is reached. Delete an image to upload another.</span>}
         </div>
+        {captureBlocked && !settings.isLoading && <p className="text-xs text-muted-foreground" data-testid="capture-blocked">{captureBlocked}</p>}
         {file && (
           <>
             <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="asset-third-party">
@@ -243,60 +237,145 @@ export function AssetsTab({ csrf }: { csrf: string }) {
         </ul>
       )}
       {showCaptureDialog && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" data-testid="capture-dialog-overlay" onClick={() => !capture.isPending && resetCapture()}>
-          <div className="bg-background rounded-lg border border-border p-4 max-w-sm w-full space-y-3" onClick={(e) => e.stopPropagation()} data-testid="capture-dialog">
-            <h3 className="font-semibold">Capture website screenshot</h3>
-            <label className="block text-sm">
-              <span className="text-xs text-muted-foreground">Website URL (must match the egress policy)</span>
-              <Input
-                value={captureUrl}
-                placeholder="https://example.com"
-                onChange={(e) => setCaptureUrl(e.target.value)}
-                disabled={capture.isPending}
-                data-testid="capture-url"
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="text-xs text-muted-foreground">Viewport size</span>
-              <select
-                value={captureViewport}
-                onChange={(e) => setCaptureViewport(e.target.value)}
-                disabled={capture.isPending}
-                className="w-full px-2 py-1.5 border border-border rounded-md bg-background text-sm"
-                data-testid="capture-viewport"
-              >
-                <option value="desktop">Desktop (1920×1080)</option>
-                <option value="mobile">Mobile (375×667)</option>
-              </select>
-            </label>
-            <label className="block text-sm">
-              <span className="text-xs text-muted-foreground">Caption (required)</span>
-              <Input
-                value={captureCaption}
-                maxLength={limits?.max_caption}
-                onChange={(e) => setCaptureCaption(e.target.value)}
-                placeholder="What the storyboard reads about this screenshot"
-                disabled={capture.isPending}
-                data-testid="capture-caption"
-              />
-            </label>
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                disabled={!captureUrl.trim() || !captureCaption.trim() || capture.isPending || !csrf}
-                onClick={() => capture.mutate()}
-                data-testid="capture-submit"
-              >
-                {capture.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Globe className="w-3.5 h-3.5 mr-1" />}
-                Capture
+        <CaptureDialog csrf={csrf} maxCaption={limits?.max_caption} maxSpots={limits?.max_hotspots}
+          onClose={() => setShowCaptureDialog(false)} onChanged={() => void qc.invalidateQueries({ queryKey: ["video", "assets"] })} />
+      )}
+    </div>
+  );
+}
+
+
+// ── "Add website screenshot": capture, then caption and hotspots on the stored picture ─────────────
+
+/**
+ * Step 1 asks for the address, the viewport and a caption and captures the page once (POST /video/capture).
+ * Step 2 shows the STORED picture: click it to place hotspots, edit the caption, then save (PATCH) - or
+ * delete the screenshot. The caption is always the user's: nothing is ever read off the page.
+ */
+export function CaptureDialog({ csrf, initialUrl = "", maxCaption, maxSpots = 8, onClose, onChanged, onCaptured }: {
+  csrf: string; initialUrl?: string; maxCaption?: number; maxSpots?: number;
+  onClose: () => void; onChanged: () => void; onCaptured?: (asset: Asset) => void;
+}) {
+  const titleId = useId();
+  const [url, setUrl] = useState(initialUrl);
+  const [viewport, setViewport] = useState<CaptureViewport>("desktop");
+  const [caption, setCaption] = useState("");
+  const [asset, setAsset] = useState<Asset | null>(null);
+  const [spots, setSpots] = useState<AssetHotspot[]>([]);
+  const [elapsed, setElapsed] = useState(0);
+  const first = useRef<HTMLInputElement>(null);
+  const err = (e: unknown, fallback: string) => (e instanceof ApiError && e.message ? e.message : fallback);
+
+  const capture = useMutation({
+    mutationFn: () => captureAsset({ url: url.trim(), caption, viewport }, csrf),
+    onSuccess: (a) => { setAsset(a); setSpots(a.hotspots); setCaption(a.caption); onChanged(); onCaptured?.(a); },
+  });
+  const save = useMutation({
+    mutationFn: () => updateAsset(asset!.id, { caption, hotspots: spots }, csrf),
+    onSuccess: () => { onChanged(); onClose(); },
+  });
+  const discard = useMutation({
+    mutationFn: () => api(`${BASE}/assets/${encodeURIComponent(asset!.id)}`, { method: "DELETE", csrf }),
+    onSuccess: () => { onChanged(); onClose(); },
+  });
+  const busy = capture.isPending || save.isPending || discard.isPending;
+
+  useEffect(() => { first.current?.focus(); }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+  useEffect(() => {
+    if (!capture.isPending) { setElapsed(0); return; }
+    const t0 = Date.now();
+    const id = window.setInterval(() => setElapsed(Math.round((Date.now() - t0) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, [capture.isPending]);
+
+  const names = spots.map((s) => s.name);
+  const spotProblem = names.some((n) => !/^[a-z0-9_]{2,32}$/.test(n)) ? "Hotspot names: 2-32 characters of a-z, 0-9 and _."
+    : new Set(names).size !== names.length ? "Two hotspots have the same name." : null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" data-testid="capture-overlay">
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid="capture-dialog"
+        className="bg-background rounded-lg border border-border p-4 w-full max-w-2xl max-h-[90vh] overflow-y-auto space-y-3">
+        <h3 id={titleId} className="font-semibold">{asset ? "Place hotspots on the screenshot" : "Add website screenshot"}</h3>
+        {!asset ? (
+          <>
+            <p className="text-xs text-muted-foreground">
+              The console opens the page once and stores what it shows as an image. A caption you write is all the storyboard
+              reads about it; nothing is read off the page. A page may contain other people&apos;s data: capture only what you may show.
+            </p>
+            <label className="block text-sm"><span className="text-xs text-muted-foreground">Address</span>
+              <Input ref={first} value={url} placeholder="https://example.com/pricing" onChange={(e) => setUrl(e.target.value)} disabled={busy} data-testid="capture-url" /></label>
+            <label className="block text-sm"><span className="text-xs text-muted-foreground">Viewport</span>
+              <select value={viewport} onChange={(e) => setViewport(e.target.value as CaptureViewport)} disabled={busy} data-testid="capture-viewport"
+                className="w-full mt-1 px-2 py-1.5 border border-border rounded-md bg-background text-sm">
+                {(Object.keys(CAPTURE_VIEWPORTS) as CaptureViewport[]).map((v) => <option key={v} value={v}>{CAPTURE_VIEWPORTS[v]}</option>)}
+              </select></label>
+            <label className="block text-sm"><span className="text-xs text-muted-foreground">Caption (required: what the storyboard reads about the screenshot)</span>
+              <Input value={caption} maxLength={maxCaption} onChange={(e) => setCaption(e.target.value)} disabled={busy} data-testid="capture-caption"
+                placeholder="The pricing page with the three plans" /></label>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button type="button" size="sm" disabled={!url.trim() || !caption.trim() || busy || !csrf} onClick={() => capture.mutate()} data-testid="capture-submit">
+                {capture.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Globe className="w-3.5 h-3.5 mr-1" />}Capture
               </Button>
-              <Button type="button" variant="ghost" size="sm" onClick={resetCapture} disabled={capture.isPending}>Cancel</Button>
+              <Button type="button" variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancel</Button>
+              {capture.isPending && (
+                <span className="text-xs text-muted-foreground" role="status" data-testid="capture-wait">
+                  Capturing… {elapsed} s. This takes up to about {CAPTURE_WAIT_S} s; an address that cannot be captured answers after the same time.
+                </span>
+              )}
             </div>
             {capture.isError && <p className="text-xs text-destructive" role="alert" data-testid="capture-error">{err(capture.error, "The website could not be captured.")}</p>}
-          </div>
-        </div>
-      )}
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-muted-foreground">
+              Stored as <code>{asset.id}</code> ({asset.width}×{asset.height}){asset.source ? ` from ${asset.source}` : ""}. Click the picture to place a
+              hotspot a callout can point at (at most {maxSpots}).
+            </p>
+            <div className="relative inline-block max-w-full">
+              <img src={assetImageUrl(asset.id)} alt={`Screenshot: ${asset.caption}`} data-testid="capture-preview"
+                className="max-h-[50vh] max-w-full rounded-md border border-border cursor-crosshair"
+                onClick={(e) => {
+                  if (spots.length >= maxSpots) return;
+                  const pt = clickToPoint(e.currentTarget.getBoundingClientRect(), e.clientX, e.clientY);
+                  if (pt) setSpots((s) => [...s, { name: nextSpotName(s), x: pt.x, y: pt.y, description: "" }]);
+                }} />
+              {spots.map((s) => (
+                <span key={s.name} className="absolute w-3 h-3 -ml-1.5 -mt-1.5 rounded-full border-2 border-white bg-[var(--viz-role-os)] pointer-events-none"
+                  style={{ left: `${s.x * 100}%`, top: `${s.y * 100}%` }} />
+              ))}
+            </div>
+            {spots.map((s, k) => (
+              <div key={k} className="flex gap-2 items-center" data-testid={`capture-spot-${k}`}>
+                <Input className="w-40" value={s.name} aria-label="Hotspot name" onChange={(e) => setSpots((all) => all.map((x, j) => (j === k ? { ...x, name: e.target.value } : x)))} />
+                <Input value={s.description} placeholder="What is here (optional)" aria-label="Hotspot description" onChange={(e) => setSpots((all) => all.map((x, j) => (j === k ? { ...x, description: e.target.value } : x)))} />
+                <Button type="button" variant="ghost" size="sm" aria-label={`Remove ${s.name}`} onClick={() => setSpots((all) => all.filter((_, j) => j !== k))}><X className="w-3.5 h-3.5" /></Button>
+              </div>
+            ))}
+            <label className="block text-sm"><span className="text-xs text-muted-foreground">Caption</span>
+              <Input value={caption} maxLength={maxCaption} onChange={(e) => setCaption(e.target.value)} data-testid="capture-caption-edit" /></label>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button type="button" size="sm" disabled={busy || !caption.trim() || !!spotProblem || !csrf} onClick={() => save.mutate()} data-testid="capture-save">
+                {save.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : null}Save
+              </Button>
+              <Button type="button" variant="ghost" size="sm" disabled={busy || !csrf} onClick={() => discard.mutate()} data-testid="capture-discard">
+                <Trash2 className="w-3.5 h-3.5 mr-1" />Delete screenshot
+              </Button>
+              {spotProblem && <span className="text-xs text-muted-foreground">{spotProblem}</span>}
+            </div>
+            {(save.isError || discard.isError) && (
+              <p className="text-xs text-destructive" role="alert" data-testid="capture-save-error">
+                {save.isError ? err(save.error, "The hotspots could not be saved.") : err(discard.error, "The screenshot could not be deleted.")}
+              </p>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

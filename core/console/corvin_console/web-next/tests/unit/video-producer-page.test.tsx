@@ -407,6 +407,135 @@ describe("Video Producer studio", () => {
     expect((await screen.findByTestId("penpot-error")).textContent).toBe("This is not an SVG file. Export a board from Penpot as SVG.");
   });
 
+  const CAP_SETTINGS = { output_folder: "x", tts_engine: "openai", tts_engines: ["openai"], max_duration_minutes: 60, openai_configured: true, web_slides_available: true };
+  const LIMITS = { max_assets: 50, max_image_bytes: 4194304, max_upload_bytes: 8388608, max_caption: 160, max_hotspots: 8 };
+
+  it("website capture is off by default: the button says why, and the Settings switch turns it on with CSRF", async () => {
+    let enabled = false;
+    const puts: Array<{ csrf: string | null; body: unknown }> = [];
+    server.use(
+      http.get(`${B}/settings`, () => HttpResponse.json({ ...CAP_SETTINGS, capture_enabled: enabled, capture_policy_configured: false })),
+      http.put(`${B}/settings`, async ({ request }) => {
+        const body = (await request.json()) as { capture_enabled?: boolean };
+        puts.push({ csrf: request.headers.get("x-csrf-token"), body });
+        enabled = !!body.capture_enabled;
+        return HttpResponse.json({ settings: { ...CAP_SETTINGS, capture_enabled: enabled, capture_policy_configured: false } });
+      }),
+      http.get(`${B}/assets`, () => HttpResponse.json({ assets: [], limits: LIMITS })),
+      ...handlers(),
+    );
+    renderIt("?job=job_2626f1e8&tab=assets");
+    const pick = await screen.findByTestId("capture-pick");
+    await waitFor(() => expect(screen.getByTestId("capture-blocked").textContent).toMatch(/off for this workspace.*Settings/));
+    expect(pick).toBeDisabled();
+    fireEvent.click(await screen.findByText("Settings"));
+    const box = (await screen.findByTestId("capture-enabled")) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    fireEvent.click(box);
+    await waitFor(() => expect(puts).toEqual([{ csrf: "csrf-test", body: { capture_enabled: true } }]));
+    await waitFor(() => expect(screen.getByTestId("capture-policy-missing").textContent).toMatch(/No egress policy/));
+    await waitFor(() => expect(screen.getByTestId("capture-blocked").textContent).toMatch(/needs an egress policy/));
+    expect(screen.getByTestId("capture-pick")).toBeDisabled();
+  });
+
+  it("add website screenshot: captured with CSRF, then hotspots placed on the STORED picture are saved with PATCH", async () => {
+    const captures: Array<{ csrf: string | null; body: Record<string, unknown> }> = [];
+    const patches: Array<{ csrf: string | null; id: string; body: Record<string, unknown> }> = [];
+    const shot = { id: "ast_cafe0001", caption: "Pricing", hotspots: [], width: 1920, height: 1080, bytes: 300000, created: 1, source: "https://www.acme.example/pricing" };
+    server.use(
+      http.get(`${B}/settings`, () => HttpResponse.json({ ...CAP_SETTINGS, capture_enabled: true, capture_policy_configured: true })),
+      http.get(`${B}/assets`, () => HttpResponse.json({ assets: [], limits: LIMITS })),
+      http.post(`${B}/capture`, async ({ request }) => {
+        captures.push({ csrf: request.headers.get("x-csrf-token"), body: (await request.json()) as Record<string, unknown> });
+        return HttpResponse.json({ asset: shot }, { status: 201 });
+      }),
+      http.patch(`${B}/assets/:id`, async ({ request, params }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        patches.push({ csrf: request.headers.get("x-csrf-token"), id: String(params.id), body });
+        return HttpResponse.json({ asset: { ...shot, ...body } });
+      }),
+      ...handlers(),
+    );
+    renderIt("?job=job_2626f1e8&tab=assets");
+    const pick = await screen.findByTestId("capture-pick");
+    await waitFor(() => expect(pick).not.toBeDisabled());
+    fireEvent.click(pick);
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByTestId("capture-viewport").textContent).toMatch(/412×915 at 2×/);
+    fireEvent.change(screen.getByTestId("capture-url"), { target: { value: "https://acme.example/pricing" } });
+    fireEvent.change(screen.getByTestId("capture-caption"), { target: { value: "Pricing" } });
+    fireEvent.click(screen.getByTestId("capture-overlay")); // the overlay never discards what was typed
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("capture-submit"));
+    await waitFor(() => expect(captures).toHaveLength(1));
+    expect(captures[0]).toEqual({ csrf: "csrf-test", body: { hotspots: [], url: "https://acme.example/pricing", caption: "Pricing", viewport: "desktop" } });
+    const img = await screen.findByTestId("capture-preview");
+    expect(img.getAttribute("src")).toMatch(/\/video\/assets\/ast_cafe0001\/image$/);
+    img.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 200, right: 400, bottom: 200, x: 0, y: 0, toJSON: () => ({}) });
+    fireEvent.click(img, { clientX: 100, clientY: 50 });
+    fireEvent.change(screen.getByTestId("capture-caption-edit"), { target: { value: "Pricing with three plans" } });
+    fireEvent.click(screen.getByTestId("capture-save"));
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toEqual({ csrf: "csrf-test", id: "ast_cafe0001",
+      body: { caption: "Pricing with three plans", hotspots: [{ name: "spot_1", x: 0.25, y: 0.25, description: "" }] } });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("Escape closes the capture dialog; a refused capture shows the server's reason", async () => {
+    server.use(
+      http.get(`${B}/settings`, () => HttpResponse.json({ ...CAP_SETTINGS, capture_enabled: true, capture_policy_configured: true })),
+      http.get(`${B}/assets`, () => HttpResponse.json({ assets: [], limits: LIMITS })),
+      http.post(`${B}/capture`, () => HttpResponse.json({ detail: "This address cannot be captured" }, { status: 422 })),
+      ...handlers(),
+    );
+    renderIt("?job=job_2626f1e8&tab=assets");
+    const pick = await screen.findByTestId("capture-pick");
+    await waitFor(() => expect(pick).not.toBeDisabled());
+    fireEvent.click(pick);
+    fireEvent.change(await screen.findByTestId("capture-url"), { target: { value: "http://10.0.0.1/" } });
+    fireEvent.change(screen.getByTestId("capture-caption"), { target: { value: "x" } });
+    fireEvent.click(screen.getByTestId("capture-overlay"));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("capture-submit"));
+    expect((await screen.findByTestId("capture-error")).textContent).toBe("This address cannot be captured");
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("the composer offers to capture an address in the task BEFORE the job is created, and says why when it cannot", async () => {
+    const captures: unknown[] = [];
+    let on = true;
+    server.use(
+      http.get(`${B}/settings`, () => HttpResponse.json({ ...CAP_SETTINGS, capture_enabled: on, capture_policy_configured: true })),
+      http.post(`${B}/capture`, async ({ request }) => {
+        captures.push(await request.json());
+        return HttpResponse.json({ asset: { id: "ast_beef0002", caption: "Acme", hotspots: [], width: 1920, height: 1080, bytes: 1, created: 1, source: "https://acme.example/" } }, { status: 201 });
+      }),
+      ...handlers(),
+    );
+    renderIt();
+    const input = await screen.findByTestId("task-input");
+    fireEvent.change(input, { target: { value: "Explain how https://acme.example/pricing works." } });
+    await waitFor(() => expect(screen.getByTestId("capture-suggestion").textContent).toMatch(/screenshot of acme\.example/));
+    fireEvent.click(screen.getByTestId("capture-suggestion-open"));
+    expect((await screen.findByTestId("capture-url") as HTMLInputElement).value).toBe("https://acme.example/pricing");
+    fireEvent.change(screen.getByTestId("capture-caption"), { target: { value: "Acme pricing" } });
+    fireEvent.click(screen.getByTestId("capture-submit"));
+    await waitFor(() => expect(captures).toHaveLength(1));
+    await screen.findByTestId("capture-preview");
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.getByTestId("capture-suggestion").textContent).toMatch(/added as ast_beef0002/));
+    expect(posted).toEqual([]); // nothing was produced yet
+
+    cleanup();
+    on = false;
+    renderIt();
+    fireEvent.change(await screen.findByTestId("task-input"), { target: { value: "See https://acme.example" } });
+    await waitFor(() => expect(screen.getByTestId("capture-suggestion-off").textContent).toMatch(/off for this workspace/));
+    expect(screen.queryByTestId("capture-suggestion-open")).toBeNull();
+  });
+
   it("a refused upload shows the server's reason", async () => {
     server.use(
       http.get(`${B}/assets`, () => HttpResponse.json({ assets: [], limits: { max_assets: 50, max_image_bytes: 2097152, max_upload_bytes: 8388608, max_caption: 160, max_hotspots: 8 } })),

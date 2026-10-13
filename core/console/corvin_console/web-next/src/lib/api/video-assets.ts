@@ -47,14 +47,15 @@ export async function importPenpotBoard(file: File, csrf: string): Promise<{ ass
   return payload as { asset: Asset; notes: string[] };
 }
 
-/** Capture a website screenshot via forward proxy; hostile URLs are refused indistinguishably (ADR-2249 D4). */
+/** "Add website screenshot" (POST /video/capture): the console captures the page once and stores it as
+ * an asset. Every failure that depends on the address answers the same message after the same time. */
 export async function captureAsset(
-  fields: { url: string; caption: string; hotspots: AssetHotspot[]; viewport?: string },
-  csrf: string
+  fields: { url: string; caption: string; viewport: CaptureViewport; hotspots?: AssetHotspot[] },
+  csrf: string,
 ): Promise<Asset> {
   const res = await fetch(`${BASE}/video/capture`, {
     method: "POST",
-    body: JSON.stringify(fields),
+    body: JSON.stringify({ hotspots: [], ...fields }),
     credentials: "include",
     headers: { "X-CSRF-Token": csrf, "Content-Type": "application/json" },
   });
@@ -63,6 +64,54 @@ export async function captureAsset(
   try { payload = JSON.parse(text); } catch { /* keep text */ }
   if (!res.ok) throw new ApiError(res.status, payload);
   return (payload as { asset: Asset }).asset;
+}
+
+/** Change a stored image's caption and/or hotspots (PATCH /video/assets/{id}); the image never changes. */
+export async function updateAsset(id: string, fields: { caption?: string; hotspots?: AssetHotspot[] }, csrf: string): Promise<Asset> {
+  const res = await fetch(`${BASE}/video/assets/${encodeURIComponent(id)}`, {
+    method: "PATCH", body: JSON.stringify(fields), credentials: "include",
+    headers: { "X-CSRF-Token": csrf, "Content-Type": "application/json" },
+  });
+  const text = await res.text();
+  let payload: unknown = text;
+  try { payload = JSON.parse(text); } catch { /* keep text */ }
+  if (!res.ok) throw new ApiError(res.status, payload);
+  return (payload as { asset: Asset }).asset;
+}
+
+// ── website capture ──────────────────────────────────────────────────────────
+
+export type CaptureViewport = "desktop" | "mobile";
+/** What the capture worker really renders (capture.VIEWPORTS: width, height, device scale factor). */
+export const CAPTURE_VIEWPORTS: Record<CaptureViewport, string> = {
+  desktop: "Desktop · 1920×1080",
+  mobile: "Phone · 412×915 at 2× (824×1830 px)",
+};
+/** Upper bound of one capture as the user experiences it: a failure answers at the console's floor (13 s). */
+export const CAPTURE_WAIT_S = 15;
+
+export interface CaptureSettings { capture_enabled?: boolean; capture_policy_configured?: boolean }
+
+/** Why the capture action cannot be used right now, or null. */
+export function captureBlockedReason(s: CaptureSettings | undefined): string | null {
+  if (!s) return "Loading the Video Producer settings…";
+  if (!s.capture_enabled) return "Website capture is off for this workspace. Turn it on under Settings.";
+  if (!s.capture_policy_configured) return "Website capture needs an egress policy for this workspace (spec.egress in tenant.corvin.yaml).";
+  return null;
+}
+
+/** The first plain http(s) address in a task text (what the composer offers to capture), or null. */
+export function firstUrlIn(text: string): { url: string; host: string } | null {
+  const m = /\bhttps?:\/\/[^\s<>"'`)\]]+/i.exec(text);
+  if (!m) return null;
+  const url = m[0].replace(/[.,;:!?]+$/, "");
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return { url, host: u.hostname };
+  } catch {
+    return null;
+  }
 }
 
 export const assetImageUrl = (id: string) => `${BASE}/video/assets/${encodeURIComponent(id)}/image`;

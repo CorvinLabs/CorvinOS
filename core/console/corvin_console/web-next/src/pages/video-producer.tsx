@@ -38,7 +38,8 @@ import { extractVideoSources, MAX_VIDEO_SOURCES, VIDEO_SOURCE_ACCEPT, type Video
 import { BUILTIN_STYLE_ID, STYLE_DECK_ACCEPT, isDeckFile, type StyleList } from "@/lib/api/video-styles";
 import { StyleChip, StyleImportDialog, StylesSection } from "@/components/video-styles";
 import { ProductionSignals } from "@/components/video-quality-report";
-import { AssetsTab, CanvasTab, CodeTab } from "@/components/video-expressive";
+import { AssetsTab, CanvasTab, CaptureDialog, CodeTab } from "@/components/video-expressive";
+import { captureBlockedReason, firstUrlIn, type CaptureSettings } from "@/lib/api/video-assets";
 import type { ProductionReport } from "@/lib/video-quality-signals";
 
 // ── Types (routes/video_producer_api.py, video_quality.py, video_learning_api.py) ──
@@ -394,7 +395,8 @@ function VideoStage({ job, loading, csrf }: { job: Job | undefined; loading: boo
 
 type Mode = "new" | "revise";
 
-function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, pickedStyle, onPickStyle, onImportStyle, onUseDeckAsStyle, importBlocked }: {
+function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, pickedStyle, onPickStyle, onImportStyle, onUseDeckAsStyle, importBlocked, capture }: {
+  capture: CaptureSettings | undefined;
   csrf: string; selected: Job | undefined; mode: Mode; setMode: (m: Mode) => void;
   inputRef: React.RefObject<HTMLTextAreaElement>; onCreated: (jobId: string) => void;
   styles: StyleList | undefined; pickedStyle: string | null; onPickStyle: (id: string) => void;
@@ -406,7 +408,12 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deck, setDeck] = useState<File | null>(null);
+  const [captureFor, setCaptureFor] = useState<string | null>(null);
+  const [dismissedUrl, setDismissedUrl] = useState<string | null>(null);
+  const [capturedFor, setCapturedFor] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
+  const found = firstUrlIn(text);
+  const captureOff = captureBlockedReason(capture);
   const canRevise = selected?.status === "complete";
   const revising = mode === "revise" && canRevise;
 
@@ -459,6 +466,27 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
             onClick={() => { onUseDeckAsStyle(deck); setDeck(null); }}>Use as style</Button>
           <button type="button" aria-label={`Dismiss ${deck.name}`} onClick={() => setDeck(null)}><X className="w-3 h-3" /></button>
         </div>
+      )}
+      {found && found.url !== dismissedUrl && !revising && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs" data-testid="capture-suggestion">
+          {capturedFor[found.url] ? (
+            <span>Screenshot of {found.host} added as <code>{capturedFor[found.url]}</code>; the storyboard can show it.</span>
+          ) : captureOff ? (
+            <span className="text-muted-foreground" data-testid="capture-suggestion-off">Add a screenshot of {found.host} to this video? {captureOff}</span>
+          ) : (
+            <>
+              <span>Add a screenshot of <strong>{found.host}</strong> before producing?</span>
+              <Button type="button" variant="outline" size="sm" className="h-6 px-2" disabled={!csrf} data-testid="capture-suggestion-open"
+                onClick={() => setCaptureFor(found.url)}>Capture</Button>
+            </>
+          )}
+          <button type="button" aria-label="Dismiss the suggestion" onClick={() => setDismissedUrl(found.url)}><X className="w-3 h-3" /></button>
+        </div>
+      )}
+      {captureFor && (
+        <CaptureDialog csrf={csrf} initialUrl={captureFor} onClose={() => setCaptureFor(null)}
+          onChanged={() => void qc.invalidateQueries({ queryKey: ["video", "assets"] })}
+          onCaptured={(a) => setCapturedFor((m) => ({ ...m, [captureFor]: a.id }))} />
       )}
       {sources.length > 0 && (
         <ul className="flex flex-wrap gap-1.5" data-testid="sources">
@@ -577,10 +605,14 @@ export function VideoProducerPage() {
   const styleFull = styles.data ? styles.data.styles.length >= styles.data.limits.max_styles : false;
   const importBlocked = styles.isError ? "Custom styles are not available on this installation."
     : styleFull ? `You have reached the limit of ${styles.data!.limits.max_styles} styles. Delete one to import another.` : null;
-  const settings = useQuery({ queryKey: ["video", "settings"], queryFn: ({ signal }) => api<{ output_folder: string; tts_engine: string; tts_engines: string[]; max_duration_minutes: number; openai_configured: boolean; web_slides_available: boolean }>(`${BASE}/settings`, { signal }), retry: false });
+  const settings = useQuery({ queryKey: ["video", "settings"], queryFn: ({ signal }) => api<{ output_folder: string; tts_engine: string; tts_engines: string[]; max_duration_minutes: number; openai_configured: boolean; web_slides_available: boolean } & CaptureSettings>(`${BASE}/settings`, { signal }), retry: false });
   const [form, setForm] = useState<{ tts_engine: string; max_duration_minutes: number } | null>(null);
   useEffect(() => { if (settings.data && !form) setForm({ tts_engine: settings.data.tts_engine, max_duration_minutes: settings.data.max_duration_minutes }); }, [settings.data, form]);
   const save = useMutation({ mutationFn: (f: NonNullable<typeof form>) => api(`${BASE}/settings`, { method: "PUT", csrf, body: f }) });
+  const captureSwitch = useMutation({
+    mutationFn: (on: boolean) => api(`${BASE}/settings`, { method: "PUT", csrf, body: { capture_enabled: on } }),
+    onSettled: () => void qc.invalidateQueries({ queryKey: ["video", "settings"] }),
+  });
 
   if (jobs.isError) {
     const off = jobs.error instanceof ApiError && (jobs.error.status === 503 || jobs.error.status === 404);
@@ -612,7 +644,8 @@ export function VideoProducerPage() {
       <Composer csrf={csrf} selected={j} mode={mode} setMode={setMode} inputRef={inputRef}
         onCreated={(id) => { setSelected(id); }}
         styles={styles.data} pickedStyle={pickedStyle} onPickStyle={setPickedStyle} importBlocked={importBlocked}
-        onImportStyle={() => deckPicker.current?.click()} onUseDeckAsStyle={setDeckFile} />
+        onImportStyle={() => deckPicker.current?.click()} onUseDeckAsStyle={setDeckFile}
+        capture={settings.isError ? undefined : settings.data} />
       <input ref={deckPicker} type="file" accept={STYLE_DECK_ACCEPT} className="hidden" data-testid="deck-input" aria-label="PowerPoint deck or Penpot SVG to import as a style"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) setDeckFile(f); e.target.value = ""; }} />
       {deckFile && (
@@ -747,6 +780,23 @@ export function VideoProducerPage() {
                 </span>
               ) : null}</label>
             <label className="text-sm"><span className="text-xs text-muted-foreground">Max duration (minutes, 1–60)</span><Input type="number" min={1} max={60} value={form.max_duration_minutes} onChange={(e) => setForm({ ...form, max_duration_minutes: Math.min(60, Math.max(1, parseInt(e.target.value) || 1)) })} /></label>
+            <div className="md:col-span-3 rounded-md border border-border p-3 space-y-1" data-testid="capture-setting">
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={!!settings.data?.capture_enabled} disabled={captureSwitch.isPending || !csrf || !settings.data}
+                  onChange={(e) => captureSwitch.mutate(e.target.checked)} data-testid="capture-enabled" />
+                Website capture: let users add a screenshot of a website as an image
+              </label>
+              <p className="text-xs text-muted-foreground">
+                Off by default. The console opens the address once, through a proxy that refuses this host, private networks and
+                anything the workspace&apos;s egress policy forbids. Every change is recorded in the audit log.
+              </p>
+              {settings.data?.capture_enabled && !settings.data.capture_policy_configured ? (
+                <p className="text-xs text-amber-600" data-testid="capture-policy-missing">
+                  No egress policy is configured for this workspace (spec.egress in tenant.corvin.yaml): capture stays unavailable until one is.
+                </p>
+              ) : null}
+              {captureSwitch.isError ? <p className="text-xs text-destructive" role="alert">The setting was not changed.</p> : null}
+            </div>
             {settings.data && !settings.data.web_slides_available ? (
               <p className="md:col-span-3 text-xs text-amber-600" data-testid="web-slides-note">Animated web slides need Playwright in the console environment; until it is installed every slide is the classic still.</p>
             ) : null}

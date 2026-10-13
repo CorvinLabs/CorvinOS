@@ -1,6 +1,6 @@
 /** Pure helpers of the expressive-scene tabs: scenes by rendered template, canvas authoring, hotspots, upload checks. */
 import { describe, expect, it } from "vitest";
-import { canvasAuthoring, clickToPoint, nextSpotName, scenesWithTemplate, uploadProblem } from "@/lib/api/video-assets";
+import { canvasAuthoring, captureBlockedReason, clickToPoint, firstUrlIn, nextSpotName, scenesWithTemplate, uploadProblem } from "@/lib/api/video-assets";
 
 const LIM = { max_assets: 50, max_image_bytes: 2097152, max_upload_bytes: 8388608, max_caption: 160, max_hotspots: 8 };
 const png = (name = "a.png", size = 10) => new File([new Uint8Array(size)], name, { type: name.endsWith(".png") ? "image/png" : "image/jpeg" });
@@ -41,5 +41,19 @@ describe("video-assets helpers", () => {
     expect(uploadProblem(png(), "c", [{ name: "A b", x: 0, y: 0, description: "" }], LIM)).toMatch(/2-32 characters/);
     expect(uploadProblem(png(), "c", [{ name: "ab", x: 0, y: 0, description: "" }, { name: "ab", x: 1, y: 1, description: "" }], LIM)).toMatch(/appears twice/);
     expect(uploadProblem(png(), "c", [{ name: "ab", x: 0, y: 0, description: "" }], LIM)).toBeNull();
+  });
+
+  it("firstUrlIn finds the first plain http(s) address in a task, without trailing punctuation", () => {
+    expect(firstUrlIn("Explain how https://acme.com/pricing works.")).toEqual({ url: "https://acme.com/pricing", host: "acme.com" });
+    expect(firstUrlIn("see (http://a.example/x?y=1), then https://b.example")).toEqual({ url: "http://a.example/x?y=1", host: "a.example" });
+    expect(firstUrlIn("ftp://x.example and file:///etc/passwd")).toBeNull();
+    expect(firstUrlIn("no address here")).toBeNull();
+  });
+
+  it("captureBlockedReason names why capture cannot be used: loading, switch off, no egress policy", () => {
+    expect(captureBlockedReason(undefined)).toMatch(/Loading/);
+    expect(captureBlockedReason({ capture_enabled: false, capture_policy_configured: true })).toMatch(/off for this workspace/);
+    expect(captureBlockedReason({ capture_enabled: true, capture_policy_configured: false })).toMatch(/egress policy/);
+    expect(captureBlockedReason({ capture_enabled: true, capture_policy_configured: true })).toBeNull();
   });
 });
