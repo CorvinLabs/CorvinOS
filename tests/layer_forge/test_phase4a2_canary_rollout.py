@@ -315,6 +315,33 @@ class TestCanaryRollback:
         assert result is True
         assert optimizer_engine.versions.current_version().version == "v1.0"
 
+    def test_rollback_is_audit_first_no_record_no_rollback(self, optimizer_engine):
+        """The rollback record is written BEFORE the pointer moves; a failed write leaves state unchanged."""
+        from core.orchestration.layer_forge import audit
+
+        v1_1 = PromptVersion(
+            version="v1.1", timestamp=datetime.utcnow().isoformat() + "Z", reason="overcautious",
+            prompt_text="Relaxed", parent_version="v1.0", rollout_percentage=10,
+        )
+        optimizer_engine.versions.add_version(v1_1)
+
+        with patch.object(audit, "emit", side_effect=audit.LayerForgeAuditError("chain down")):
+            assert optimizer_engine.rollback_canary("v1.1") is False
+        assert optimizer_engine.versions.current_version().version == "v1.1"
+
+        order = []
+        real_set = optimizer_engine.versions.set_current
+
+        def _set(v):
+            order.append("set_current")
+            return real_set(v)
+
+        with patch.object(audit, "emit", side_effect=lambda *a, **k: order.append("audit") or "h"), \
+                patch.object(optimizer_engine.versions, "set_current", side_effect=_set):
+            assert optimizer_engine.rollback_canary("v1.1") is True
+        assert order == ["audit", "set_current"]
+        assert optimizer_engine.versions.current_version().version == "v1.0"
+
     def test_rollback_canary_freezes_it(self, optimizer_engine):
         """After rollback, canary version is never promoted (frozen)."""
         # Add v1.1 and rollback

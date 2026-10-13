@@ -7,6 +7,7 @@ Unified feedback submission API for Phase 10 skills:
 
 Endpoints:
   POST   /v1/console/feedback/skill          - Submit skill feedback
+  GET    /v1/console/feedback/skill/recent   - Latest executions an operator can rate
   GET    /v1/console/feedback/skill/history  - Get feedback history by skill
   GET    /v1/console/feedback/skill/status   - Feedback processing status
 """
@@ -319,6 +320,41 @@ async def submit_skill_feedback(
     except Exception as e:
         logger.error("Feedback processing failed: %s", type(e).__name__)
         raise HTTPException(status_code=500, detail="Feedback processing failed")
+
+
+_DECISION_RE = __import__("re").compile(r"^[A-Za-z0-9_.:-]{1,40}$")
+
+
+@router.get("/recent")
+async def recent_skill_decisions(
+    skill_id: str = Query(..., description="One of VALID_SKILLS"),
+    limit: int = Query(10, ge=1, le=50),
+    rec: session_auth.SessionRecord = Depends(require_session),
+) -> dict:
+    """The skill's latest recorded executions, as the subjects an operator can rate.
+
+    Read from the tenant's learning store (the same ``skill_executed`` records the ADR-0534
+    reality check verifies against). Content-free: event id, time, and the decision only when it
+    is a short identifier — never inputs, outputs or reasoning text."""
+    if skill_id not in VALID_SKILLS:
+        raise HTTPException(status_code=400, detail=f"skill_id must be one of {VALID_SKILLS}")
+    from core.learning.event_store import EventStore  # noqa: PLC0415
+    from core.learning.learning_events import EventType  # noqa: PLC0415
+    from core.paths.tenant import tenant_home  # noqa: PLC0415
+
+    events = EventStore(tenant_home(rec.tenant_id), tenant_id=rec.tenant_id).query_events(
+        rec.tenant_id, event_type=EventType.SKILL_EXECUTED, skill_id=skill_id,
+        limit=limit, newest_first=True)
+    items = []
+    for ev in events:
+        output = ev.signal.get("output") if isinstance(ev.signal, dict) else None
+        decision = output.get("decision") if isinstance(output, dict) else None
+        items.append({
+            "event_id": ev.event_id,
+            "timestamp": ev.timestamp,
+            "decision": decision if isinstance(decision, str) and _DECISION_RE.match(decision) else None,
+        })
+    return {"skill_id": skill_id, "config_consumer": skill_id in CONFIG_CONSUMERS, "items": items}
 
 
 @router.get("/history", response_model=FeedbackHistoryResponse)

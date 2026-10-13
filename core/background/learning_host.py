@@ -49,9 +49,15 @@ audit_sink.register_events({
     "learning.sources_evicted": ("evicted_count",),
 })
 
+from core.learning import anomaly_monitor  # noqa: E402
+
+# ADR-2044 Phase 3: anomalies the host measures over the loop's own persisted data.
+audit_sink.register_events(anomaly_monitor.EVENTS)
+
 MIN_INTERVAL_S = 2.0
 MAX_INTERVAL_S = 30.0
 SOURCE_CHECK_S = 300.0
+ANOMALY_CHECK_S = 300.0
 SAVE_EVERY_TICKS_WHEN_IDLE = 10
 RETRY_FAILED_S = 3600.0          # a failed/partial regeneration is retried after an hour
 RETRY_REFUSED_S = 24 * 3600.0    # a refused one (secret in the source, ...) after a day
@@ -150,6 +156,8 @@ class LearningHost:
         self._sources = sources
         self._regenerate = regenerate
         self._last_source_check = 0.0
+        self._last_anomaly_check = 0.0
+        self.anomalies: dict[str, dict[str, Any]] = {}
         self._dirty = False
         self._idle_ticks = 0
         self.ticks = 0
@@ -189,6 +197,7 @@ class LearningHost:
             return False
         self.cursor = dict(raw.get("cursor") or {})
         self.regenerations = list(raw.get("regenerations") or [])[-50:]
+        self.anomalies = {str(k): v for k, v in (raw.get("anomalies") or {}).items() if isinstance(v, dict)}
         return True
 
     def save(self) -> None:
@@ -196,6 +205,7 @@ class LearningHost:
             "tenant_id": self.tenant_id, "saved_at": datetime.utcnow().isoformat(),
             "cursor": self.cursor, "daemon": self.daemon.snapshot(),
             "regenerations": self.regenerations[-50:],
+            "anomalies": self.anomalies,
         })
         self._dirty = False
 
@@ -226,6 +236,10 @@ class LearningHost:
             self._last_source_check = now
             work += await self._check_sources()
 
+        if now - self._last_anomaly_check >= ANOMALY_CHECK_S:
+            self._last_anomaly_check = now
+            work += self._check_anomalies(now)
+
         batch = await self.daemon.regeneration_scheduler.get_ready_batch()
         for i, skill_id in enumerate(batch):
             if self._stop_requested():
@@ -247,6 +261,38 @@ class LearningHost:
             self.save()
         learning_inbox.prune(self.tenant_id, self.cursor)
         return work
+
+    def _check_anomalies(self, now: float) -> int:
+        """Record each anomaly once when it starts; forget it when it clears (edge-triggered).
+
+        Audit-first: an anomaly is marked active only after its chain record committed, so a failed
+        write is retried on the next check instead of being silently considered reported."""
+        try:
+            found = anomaly_monitor.scan(self.tenant_id, now=now)
+        except Exception as exc:  # noqa: BLE001 — a scan failure must not stop the host
+            logger.warning("anomaly scan failed (%s)", type(exc).__name__)
+            return 0
+        current = {a.key: a for a in found}
+        changed = 0
+        for key in [k for k in self.anomalies if k not in current]:
+            del self.anomalies[key]
+            changed += 1
+        for key, a in current.items():
+            if key in self.anomalies:
+                continue
+            try:
+                audit_sink.emit(a.event, {"skill_id": a.skill_id, **a.details},
+                                tenant_id=self.tenant_id, severity="WARNING")
+            except audit_sink.AuditWriteFailed:
+                logger.warning("%s for %s did not commit; retried next check", a.event, a.skill_id)
+                continue
+            self.anomalies[key] = {"event": a.event, "skill_id": a.skill_id,
+                                   "since": datetime.utcfromtimestamp(now).isoformat() + "Z",
+                                   **a.details}
+            changed += 1
+        if changed:
+            self._dirty = True
+        return changed
 
     async def _check_sources(self) -> int:
         """A hash change of a watched source is a ``data_changed`` event for the skills built on it."""
@@ -420,7 +466,7 @@ def read_state_summary(tenant_id: str) -> dict[str, Any]:
         raw = json.loads(state_path(tenant_id).read_text())
     except (OSError, ValueError):
         return {"tenant_id": tenant_id, "state": "none", "saved_at": None, "weights": {},
-                "queue": [], "regenerations": [], "decisions": 0, "pending_inbox_files": len(
+                "queue": [], "regenerations": [], "decisions": 0, "anomalies": [], "pending_inbox_files": len(
                     learning_inbox.day_files(tenant_id))}
     daemon = raw.get("daemon") or {}
     decisions = daemon.get("decisions") or []
@@ -436,6 +482,7 @@ def read_state_summary(tenant_id: str) -> dict[str, Any]:
         "causal_edges": sum(len(v) for v in (daemon.get("edges") or {}).values()),
         "cursor": raw.get("cursor") or {},
         "pending_inbox_files": len(learning_inbox.day_files(tenant_id)),
+        "anomalies": [v for v in (raw.get("anomalies") or {}).values() if isinstance(v, dict)],
     }
 
 

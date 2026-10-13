@@ -231,8 +231,12 @@ orchestrator persists on the definition when a review is FLAGGED. They used to r
 ever wrote, so the weekly decision, flag and gate-correlation figures were always zero in production. A failed quality gate
 still refuses the definition rather than leaving a record to override, so the gate-threshold suggestion rests on flagged,
 overridden definitions only. Learning events are stored under the label `layer_forge` (not a registered Skill, not `os.*`:
-a run takes minutes, far beyond a `Skill.execute()` budget). The rollback audit event is written AFTER the
-pointer moves (the module's "audit-first" rule would reverse that) — a design decision left open.
+a run takes minutes, far beyond a `Skill.execute()` budget). Since 2026-10-13 the rollback is audit-first: `layer_forge.canary_rollback` commits BEFORE
+`set_current` moves the pointer, and a write that does not commit leaves the canary in place (`False`).
+`OptimizerEngine` (canary check, rollback, prompt updates) has NO production caller — nothing runs it on a schedule
+or from a route; wiring it would change a review prompt automatically, which the Phase 4 "operator-applied, never
+auto" line rules out. The gate-threshold figures read `review_flagged`, which is live, but the tenant has had no
+real forged definition yet (three test entries on 2026-10-13), so they have nothing to count.
 
 Tests: the REVIEW phase calls the Anthropic API, the one external boundary. `tests/layer_forge/conftest.py` stubs it
 (autouse; `@pytest.mark.real_review` opts out) and the CLI wiring tests start their subprocess through a wrapper

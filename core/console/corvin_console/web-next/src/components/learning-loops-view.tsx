@@ -4,6 +4,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LearningLoopGrid } from "@/components/learning-loop-grid";
 import { LearningLoopDetail } from "@/components/learning-loop-detail";
 import { useLoops } from "@/hooks/use-learning-loops";
+import { LearningAnomalies } from "@/components/learning-anomalies";
 
 /**
  * The Learning Loops surface, mounted in two places (ADR-0908):
@@ -44,7 +45,8 @@ export const LearningLoopsView: React.FC = () => {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="grid">
+        <TabsContent value="grid" className="space-y-4">
+          <LearningAnomalies />
           <Card>
             <CardHeader>
               <CardTitle>Learning loop status</CardTitle>

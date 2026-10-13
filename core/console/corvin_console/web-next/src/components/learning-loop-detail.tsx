@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useDetail } from "@/hooks/use-learning-loops-detail";
+import { LearningLoopRating, RATEABLE_SKILLS } from "@/components/learning-loop-rating";
 import { formatTime, getStatusColor } from "@/utils/learning-loop-formatting";
 import { ORIGIN_LABEL, type LoopEntry, type LoopOrigin, type TrendPoint } from "@/types/learning-loops";
 
@@ -183,6 +184,8 @@ export const LearningLoopDetail: React.FC<{ loop: LoopEntry }> = ({ loop }) => {
           )}
         </CardContent>
       </Card>
+
+      {loop.skill_id && RATEABLE_SKILLS.has(loop.skill_id) && <LearningLoopRating skillId={loop.skill_id} />}
 
       {error && (
         <Card className="border-destructive/40 bg-destructive/10">

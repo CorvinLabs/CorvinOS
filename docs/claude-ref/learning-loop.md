@@ -438,6 +438,32 @@ says the skill reads no learned config yet. A config write that cannot be audite
 feedback stays stored.
 Proof: `tests/e2e/test_stream4_skill_feedback_console_e2e.py`.
 
+**Where an operator rates (2026-10-13).** Until then no reachable console surface posted here — the
+four `pages/skill-feedback/*` pages and `components/learning/FeedbackModal.tsx` are mounted nowhere
+and call endpoints that do not exist — so the tenant had 0 feedback in two weeks. The Learning Loops
+detail view now shows "Rate recent decisions" for the four skills above
+(`components/learning-loop-rating.tsx`): `GET /v1/console/feedback/skill/recent?skill_id=` lists the
+latest `skill_executed` records (event id, time, and the decision only when it is a short identifier —
+never input, output or reasoning text), and Correct/Wrong posts `rating ±1, category accuracy` with
+the event id as `subject_id`. Proof: `core/console/tests/test_learning_anomalies_e2e.py`.
+
+## Learning anomalies (ADR-2044 Phase 3, 2026-10-13)
+
+`core/learning/anomaly_monitor.py` measures three conditions over data the loop already stores;
+`LearningHost.tick` runs it every 300 s (`ANOMALY_CHECK_S`), edge-triggered and audit-first: an
+anomaly is recorded once when it starts (`audit_sink.emit`, WARNING) and marked active only after
+the record committed; it is forgotten when the condition clears.
+
+| Event | Condition | Source |
+|---|---|---|
+| `skill.high_rejection_rate` | > 20 % of ≥ 10 gate decisions on one subject refused in 24 h | `<tenant>/learning/feedback_gate/decisions.jsonl` |
+| `skill.config_oscillation` | > 3 config versions of one skill in 1 h | `<tenant>/skills/*_config.json` |
+| `skill.confidence_regression` | mean `output.confidence` of the last 24 h ≥ 0.10 below the 6 days before (≥ 20 each) | `skill_executed` learning events |
+
+Consumer: the host's persisted state (`anomalies`), returned by `GET /v1/console/api/learning/daemon`
+and shown in the "Anomalies" card of the Learning Loops view. Nothing acts on them automatically.
+Proof: `tests/learning/test_anomaly_monitor.py`, `core/console/tests/test_learning_anomalies_e2e.py`.
+
 ## Data Hub learning loop (PLAN-0948, ADR-2255, 2026-10-12)
 
 A second, separate loop - not the L5 router loop above. Its subject is a **Data Hub SKILL artifact**: created through

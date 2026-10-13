@@ -485,8 +485,8 @@ class OptimizerEngine:
         """Rollback canary version to parent (Phase 4 A2).
 
         Freezes the canary version at current rollout_percentage (never promote further).
-        Emits audit event layer_forge.canary_rollback.
-        Returns True if successful.
+        Audit-first: writes layer_forge.canary_rollback, then moves the pointer. Returns False
+        (state unchanged) when the record does not commit.
 
         Args:
             canary_version: The canary version to rollback
@@ -505,27 +505,23 @@ class OptimizerEngine:
                 logger.error("Cannot rollback: parent %s not found", canary.parent_version)
                 return False
 
-            # Freeze canary at current rollout_percentage (do NOT promote). The pointer lives in
-            # ReviewPromptVersions: this method used to write ``self._data`` / call ``self._persist()``
-            # on the ENGINE, which has neither — every rollback raised AttributeError, was swallowed
-            # by the except below and returned False, so a regressing canary was never rolled back.
-            self.versions.set_current(parent.version)
+            # Audit-first (audit.py contract): the record commits BEFORE the pointer moves, and a
+            # write that does not commit raises out of here — no record, no rollback. This used to
+            # move the pointer first and swallow a failed write, leaving an unrecorded state change.
+            from core.orchestration.layer_forge import audit
+            audit.emit(
+                "layer_forge.canary_rollback",
+                tenant_id=self.tenant_id,
+                canary_version=canary_version,
+                parent_version=parent.version,
+                reason="canary_regression_detected",
+                canary_success_rate=canary_pattern.success_rate if canary_pattern else 0.0,
+                parent_success_rate=parent_pattern.success_rate if parent_pattern else 0.0,
+            )
 
-            # Emit audit event
-            try:
-                from core.orchestration.layer_forge import audit
-                audit.emit(
-                    "layer_forge.canary_rollback",
-                    tenant_id=self.tenant_id,
-                    canary_version=canary_version,
-                    parent_version=parent.version,
-                    reason="canary_regression_detected",
-                    canary_success_rate=canary_pattern.success_rate if canary_pattern else 0.0,
-                    parent_success_rate=parent_pattern.success_rate if parent_pattern else 0.0,
-                )
-            except Exception as e:
-                logger.warning("Failed to emit canary_rollback audit event: %s", type(e).__name__)
-                # Non-fatal: rollback already persisted, just audit failed
+            # Freeze the canary at its rollout_percentage (never promote) by moving the pointer,
+            # which lives in ReviewPromptVersions, back to the parent.
+            self.versions.set_current(parent.version)
 
             logger.info(
                 "Canary rollback complete (tenant %s): %s rolled back to %s",
