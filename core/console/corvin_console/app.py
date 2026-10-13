@@ -905,6 +905,15 @@ def create_app() -> FastAPI:
             import logging
             logging.getLogger(__name__).warning("default plugins not started: %s", exc)
 
+        # Auto-update on start (commit-based; same call as corvin_gateway.app).
+        try:
+            from . import update_manager
+
+            update_manager.schedule_auto_update()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("auto-update on start not scheduled: %s", exc)
+
         # ADR-2066 Phase 2 — Centralized Configuration Management
         # Initialize config manager for fail-closed config validation
         # NOT create_with_audit(tenant_audit_chain(...)): that binds an

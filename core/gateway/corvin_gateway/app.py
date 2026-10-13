@@ -530,6 +530,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # noqa: BLE001
         logging.getLogger(__name__).warning("learning host not started: %s", exc)
 
+    # Auto-update on start: update.sh/update.ps1 when origin/main has commits this checkout
+    # lacks (commit-based, once per remote commit). Both hosts schedule it; this one is live.
+    try:
+        import corvin_console  # noqa: F401
+        from corvin_console import update_manager as _um
+        _um.schedule_auto_update()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("auto-update on start not scheduled: %s", exc)
+
     # Standard plugins — install the plugins listed in corvin_console/default_plugins.yaml
     # (background thread, once per tenant; docs/claude-ref/default-plugins.md).
     try:

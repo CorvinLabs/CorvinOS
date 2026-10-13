@@ -77,6 +77,10 @@ export interface UpdateCheckResult {
   error: string | null;
   running: boolean;
   last_update: LastUpdate | null;
+  /** Commits on origin/main that this checkout lacks - an update is any of them, version bump or not. */
+  behind: number;
+  local_sha: string | null;
+  remote_sha: string | null;
 }
 
 export interface UpdateInstallResult {

@@ -251,22 +251,25 @@ the chat interface.
 ### Settings
 
 Account settings: your active tokens (IDs and expiry dates), consent history, and
-role assignments. Operator settings: **auto-update toggle** (enable/disable the
-automatic upgrade to the latest PyPI release at every startup — default on, stored
-in `~/.config/corvin-launcher/config.json`). The updater is install-flavour aware:
-a `uv tool install` (the Windows one-line installer default) upgrades via
-`uv tool upgrade corvinos`, a `pip install` upgrades via `pip install`. On Windows
-the autostart supervisor (Scheduled Task `CorvinOS-Console`) also runs this upgrade
-once per logon/boot **before** launching the console, so an always-on machine still
-lands on the newest version; it is best-effort and never blocks startup (offline /
-timeout / missing `uv` just logs and continues). The default is **on** at every
-layer: no config file or no `auto_update` key means enabled; only an explicit
-`false` (written by the toggle) turns it off. The **Update** card also offers a manual "Check & Install" button and shows when the
+role assignments. Operator settings: **auto-update toggle** (default on, stored in
+`~/.config/corvin-launcher/config.json`; no file or no `auto_update` key means enabled,
+only an explicit `false` turns it off). CorvinOS installs only from a local checkout
+(ADR-2215), so the toggle means: **after every start, if `origin/main` has commits this
+checkout lacks, run the checkout's own `update.sh` / `update.ps1`**. The trigger is
+commit-based, not version-based - a commit without a version bump is an update too.
+It is scheduled 60 s after startup by both hosts (`corvin_console.app` and
+`corvin_gateway.app`), tries each remote commit **once** (a rolled-back update leaves
+HEAD behind and would otherwise re-run on every restart), and never blocks startup.
+The launcher's PyPI/`uv tool upgrade` path only applies to non-checkout installs and is
+a no-op for a checkout. The **Update** card also offers a manual "Check & Install" button and shows when the
 updater last ran. It is a thin client for the install's own `update.sh` (Linux/macOS) /
 `update.ps1` (Windows) at the root of the source tree (ADR-2054, ADR-2215): the tree is
 found via `CORVIN_SRC_DIR`, the checkout the console runs from, or the installer-managed
-tree. Nothing is copied to `~/.corvin/scripts`, and there is no second updater.
-`GET /settings/update/check` returns `has_update`, `running` and `last_update`
+tree. On Linux with a systemd user session it runs as its own transient unit
+(`corvin-update-<ts>`) and records its exit code itself, because the updater restarts
+every `corvin-*.service` and would otherwise be killed with the unit it was started from.
+Nothing is copied to `~/.corvin/scripts`, and there is no second updater.
+`GET /settings/update/check` returns `has_update`, `behind`, `local_sha`, `remote_sha`, `running` and `last_update`
 (`at`, `status`, `version_before`, `version_after`); `POST /settings/update/install`
 starts the updater detached and returns at once, because the updater restarts the console.
 One update runs per tenant at a time (409 otherwise); start and end are audited and the

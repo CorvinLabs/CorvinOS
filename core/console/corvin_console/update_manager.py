@@ -55,6 +55,9 @@ class UpdateCheckResult:
     error: str | None = None
     running: bool = False
     last_update: dict[str, Any] | None = field(default=None)
+    behind: int = 0
+    local_sha: str | None = None
+    remote_sha: str | None = None
 
 
 def _script_name() -> str:
@@ -94,6 +97,48 @@ def updater_command(src: Path) -> list[str]:
         shell = "powershell"
         return [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(src / "update.ps1")]
     return ["sh", str(src / "update.sh")]
+
+
+def _use_systemd_run() -> bool:
+    """The updater restarts every corvin-*.service. Started from inside one of them it
+    shares that unit's cgroup and is killed with it, so on Linux it runs as its own
+    transient user unit."""
+    import shutil
+    if not sys.platform.startswith("linux") or not shutil.which("systemd-run"):
+        return False
+    try:
+        return subprocess.run(["systemctl", "--user", "show-environment"], capture_output=True,
+                              timeout=5, stdin=subprocess.DEVNULL).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def isolated_command(src: Path, state_path: Path, log: Path) -> list[str]:
+    """systemd-run wrapper: runs update.sh, then records its exit code in the state file
+    itself, so the outcome survives the console restarting mid-update."""
+    pkg_root = str(Path(__file__).resolve().parents[1])
+    script = ('sh "$1"; rc=$?; "$2" -m corvin_console.update_manager --record "$3" "$rc" "$4"; exit $rc')
+    return ["systemd-run", "--user", "--quiet", "--collect", "--wait",
+            f"--unit=corvin-update-{int(time.time())}", f"--working-directory={src}",
+            f"--setenv=PATH={os.environ.get('PATH', '')}", f"--setenv=PYTHONPATH={pkg_root}",
+            f"--property=StandardOutput=append:{log}", f"--property=StandardError=append:{log}",
+            "sh", "-c", script, "_", str(src / "update.sh"), sys.executable, str(state_path), str(src)]
+
+
+def record_result(state_path: Path, rc: int, src: Path | None = None) -> None:
+    """Stdlib-only: finalize a run in the state file (called by the isolated wrapper)."""
+    try:
+        st = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        st = {}
+    src = src or Path(__file__).resolve().parents[3]
+    st.update(status="success" if rc == 0 else "failed", finished_at=time.time(), exit_code=rc,
+              version_after=_local_version(src),
+              detail=None if rc == 0 else _EXIT_MEANING.get(rc, f"updater exited {rc}"))
+    tmp = state_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(st), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, state_path)
 
 
 def _git(src: Path, *args: str, timeout: float = 30.0) -> subprocess.CompletedProcess:
@@ -214,7 +259,11 @@ class UpdateManager:
             return UpdateCheckResult(False, current, None, f"cannot compare with origin/{BRANCH}", running, last)
         behind = int(counts.stdout.split()[0])
         remote = _pyproject_version(_git(src, "show", f"origin/{BRANCH}:pyproject.toml").stdout)
-        return UpdateCheckResult(behind > 0, current, remote if behind > 0 else None, None, running, last)
+        local_sha = _git(src, "rev-parse", "--short", "HEAD").stdout.strip() or None
+        remote_sha = _git(src, "rev-parse", "--short", f"origin/{BRANCH}").stdout.strip() or None
+        # Commit-based: ANY commit on origin/main that HEAD lacks is an update, version bump or not.
+        return UpdateCheckResult(behind > 0, current, remote if behind > 0 else None, None, running, last,
+                                 behind, local_sha, remote_sha)
 
     # ── run ───────────────────────────────────────────────────────────────
     def start_update(self, sid_fingerprint: str) -> dict[str, Any]:
@@ -233,10 +282,15 @@ class UpdateManager:
                                            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
             else:
                 kwargs["start_new_session"] = True
-            self._write_state({"status": "running", "started_at": time.time(),
+            keep = {k: v for k, v in (self._read_state() or {}).items() if k == "last_auto_target"}
+            self._write_state({**keep, "status": "running", "started_at": time.time(),
                                "version_before": before, "log": str(log)})
             self._audit(sid_fingerprint, ok=True, action="settings.update_install")
-            proc = subprocess.Popen(updater_command(src), **kwargs)  # noqa: S603
+            isolated = _use_systemd_run()
+            cmd = isolated_command(src, self.state_path(), log) if isolated else updater_command(src)
+            if isolated:
+                kwargs.pop("start_new_session", None)
+            proc = subprocess.Popen(cmd, **kwargs)  # noqa: S603
         except BaseException:
             self.lock.release()
             raise
@@ -257,13 +311,14 @@ class UpdateManager:
             rc = await asyncio.to_thread(proc.wait)
             after = _local_version(src)
             st = self._read_state() or {}
-            st.update(status="success" if rc == 0 else "failed", finished_at=time.time(),
-                      version_after=after, exit_code=rc,
-                      detail=None if rc == 0 else _EXIT_MEANING.get(rc, f"updater exited {rc}"))
-            try:
-                self._write_state(st)
-            except OSError:
-                logger.warning("could not persist update state")
+            if st.get("status") == "running":  # the isolated wrapper records its own result
+                st.update(status="success" if rc == 0 else "failed", finished_at=time.time(),
+                          version_after=after, exit_code=rc,
+                          detail=None if rc == 0 else _EXIT_MEANING.get(rc, f"updater exited {rc}"))
+                try:
+                    self._write_state(st)
+                except OSError:
+                    logger.warning("could not persist update state")
             self._audit(sid, ok=rc == 0, action="settings.update_completed",
                         reason=None if rc == 0 else f"exit-{rc}")
         finally:
@@ -280,3 +335,65 @@ class UpdateManager:
                 console_audit.action_failed(reason=reason or "failed", **kw)
         except Exception as e:  # noqa: BLE001 - never let auditing break the update, but say so
             logger.error("update audit event %s not written: %s", action, e)
+
+
+AUTO_START_DELAY_S = 60.0
+
+
+async def auto_update_on_start(tenant_id: str, *, enabled: bool, delay_s: float = AUTO_START_DELAY_S) -> str:
+    """After a start, update when origin/main has commits this checkout lacks.
+
+    Returns what it did (also logged): disabled | no-updater | up-to-date | already-tried |
+    check-failed | busy | started. The same remote commit is attempted ONCE: the updater
+    restarts this process, and a failed update (rolled back) leaves HEAD behind, so without
+    the marker every restart would re-run it."""
+    if not enabled:
+        return "disabled"
+    try:
+        find_source_tree()
+    except UpdateNotAllowedError:
+        return "no-updater"
+    await asyncio.sleep(delay_s)
+    mgr = UpdateManager(tenant_id)
+    res = await mgr.check_update()
+    if res.error:
+        logger.warning("auto-update: check failed: %s", res.error)
+        return "check-failed"
+    if not res.has_update:
+        return "up-to-date"
+    st = mgr._read_state() or {}
+    if st.get("last_auto_target") == res.remote_sha:
+        logger.warning("auto-update: origin/main %s was already attempted - not retrying", res.remote_sha)
+        return "already-tried"
+    try:
+        st = mgr._read_state() or {}
+        st["last_auto_target"] = res.remote_sha
+        mgr._write_state(st)
+        logger.info("auto-update: %d commit(s) behind origin/main (%s -> %s) - updating",
+                    res.behind, res.local_sha, res.remote_sha)
+        mgr.start_update("auto-update")
+    except UpdateNotAllowedError:
+        return "busy"
+    return "started"
+
+
+def schedule_auto_update(tenant_id: str | None = None) -> None:
+    """Fire-and-forget; called from the lifespan of BOTH hosts (console app, gateway app)."""
+    try:
+        from .routes.settings import _read_auto_update
+        tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+
+        async def _run() -> None:
+            try:
+                logger.info("auto-update on start: %s", await auto_update_on_start(tid, enabled=_read_auto_update()))
+            except Exception as exc:  # noqa: BLE001 - never affects startup
+                logger.warning("auto-update on start failed: %s", exc)
+
+        asyncio.get_running_loop().create_task(_run())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("auto-update on start not scheduled: %s", exc)
+
+
+if __name__ == "__main__":  # isolated wrapper: python -m corvin_console.update_manager --record STATE RC
+    if len(sys.argv) in (4, 5) and sys.argv[1] == "--record":
+        record_result(Path(sys.argv[2]), int(sys.argv[3]), Path(sys.argv[4]) if len(sys.argv) == 5 else None)

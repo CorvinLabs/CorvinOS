@@ -914,6 +914,9 @@ async def check_update(
         "error": r.error,
         "running": r.running,
         "last_update": r.last_update,
+        "behind": r.behind,
+        "local_sha": r.local_sha,
+        "remote_sha": r.remote_sha,
     }
 
 

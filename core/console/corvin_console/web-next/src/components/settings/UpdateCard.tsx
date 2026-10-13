@@ -142,7 +142,9 @@ export function UpdateCard({ csrf }: UpdateCardProps) {
                     </span>
                   ) : hasUpdate ? (
                     <span className="text-emerald-600 dark:text-emerald-400">
-                      Update available: v{availableVersion}
+                      Update available: {check?.behind ?? 0} new commit{(check?.behind ?? 0) === 1 ? "" : "s"} on main
+                      {check?.local_sha && check?.remote_sha ? ` (${check.local_sha} -> ${check.remote_sha})` : ""}
+                      {availableVersion && availableVersion !== currentVersion ? `, v${availableVersion}` : ""}
                     </span>
                   ) : (
                     "You are on the latest version."
