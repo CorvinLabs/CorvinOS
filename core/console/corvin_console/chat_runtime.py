@@ -1241,38 +1241,48 @@ def _btw_take_pending(chat_key: str) -> list[dict[str, Any]]:
         return _btw_pending.pop(chat_key, [])
 
 
-def _btw_write_pending(sess: "WebChatSession", stdin: Any) -> list[dict[str, Any]]:
-    """Write every queued note of this chat into *stdin* (synchronously, so no
-    direct /btw can interleave before registration) and record each one.
-    Returns ``[{"type": "btw_flushed"|"btw_undelivered", "client_id": …}]``.
+def _btw_write_pending(stdin: Any, chat_key: str) -> "tuple[list[dict[str, Any]], list[dict[str, Any]]]":
+    """Write every queued, unexpired note of this chat into *stdin*
+    (synchronously, so no direct /btw can interleave before registration).
+    Returns ``(written, not_written)``; nothing is recorded yet — the caller
+    records ``written`` as delivered only after ``drain()`` succeeded (a write
+    into a dead pipe does not raise) and everything else as undelivered.
     Must run BEFORE ``_register_stdin_web`` with no await in between."""
-    events: list[dict[str, Any]] = []
+    written: list[dict[str, Any]] = []
+    rest: list[dict[str, Any]] = []
     now = time.time()
-    for item in _btw_take_pending(sess.chat_key):
-        delivered = False
-        if now - item["ts"] <= BTW_QUEUE_TTL_S:
-            try:
-                stdin.write(_btw_frame(item["text"]))
-                delivered = True
-            except Exception as e:  # noqa: BLE001 — guard missing / pipe gone ⇒ undelivered
-                _log.info("btw flush failed for chat=%s: %s", sess.chat_key, e)
-        status = "injected" if delivered else "undelivered"
+    for item in _btw_take_pending(chat_key):
+        if now - item["ts"] > BTW_QUEUE_TTL_S:
+            rest.append(item)
+            continue
+        try:
+            stdin.write(_btw_frame(item["text"]))
+            written.append(item)
+        except Exception as e:  # noqa: BLE001 — guard missing / pipe gone ⇒ undelivered
+            _log.info("btw flush failed for chat=%s: %s", chat_key, e)
+            rest.append(item)
+    return written, rest
+
+
+def _btw_record(sess: "WebChatSession", items: list[dict[str, Any]], status: str) -> list[dict[str, Any]]:
+    """Record queued notes with *status* and return their client events."""
+    events: list[dict[str, Any]] = []
+    for item in items:
         _append_turn(sess, "user", _btw_note_parts(item["text"]), btw=True,
-                     btw_status=status, btw_via=item["via"], btw_client_id=item["client_id"])
-        events.append({"type": "btw_flushed" if delivered else "btw_undelivered",
+                     btw_status=status, btw_via=item["via"], btw_client_id=item["client_id"],
+                     btw_gated=True)
+        events.append({"type": "btw_flushed" if status == "injected" else "btw_undelivered",
                        "client_id": item["client_id"]})
     return events
 
 
 def _btw_drain_undelivered(sess: "WebChatSession") -> list[dict[str, Any]]:
-    """Record every note still queued when the turn ends as `undelivered`."""
-    events: list[dict[str, Any]] = []
-    for item in _btw_take_pending(sess.chat_key):
-        _append_turn(sess, "user", _btw_note_parts(item["text"]), btw=True,
-                     btw_status="undelivered", btw_via=item["via"],
-                     btw_client_id=item["client_id"])
-        events.append({"type": "btw_undelivered", "client_id": item["client_id"]})
-    return events
+    """Close the turn's steering window and record every note still queued as
+    `undelivered`. Closing first means a note whose gate finishes after this
+    point is answered `no_active_stream` instead of being queued for nobody."""
+    with _running_stdins_web_guard:
+        _btw_stdin_closed.add(sess.chat_key)
+    return _btw_record(sess, _btw_take_pending(sess.chat_key), "undelivered")
 
 
 async def inject_btw_web(sess: "WebChatSession", text: str, *, via: str = "text",
@@ -1286,7 +1296,9 @@ async def inject_btw_web(sess: "WebChatSession", text: str, *, via: str = "text"
     message, or recorded ``undelivered`` if the turn ends first),
     ``no_active_stream`` (no open turn, or it already closed stdin), or
     ``refused`` with a reason (empty, rate_limited, queue_full, gate,
-    guard_unavailable).
+    guard_unavailable). Every outcome but ``empty`` is recorded in the turn
+    log, so the chat shows the same note after a reload; only a note that
+    passed the gates (``btw_gated``) may ever be re-supplied by the ledger.
 
     Honesty note (operator instruction, 2026-10-05): this is the bridge's
     raw-stdin path only ("stage 3" of `inject_btw`). The console drives
@@ -1297,88 +1309,140 @@ async def inject_btw_web(sess: "WebChatSession", text: str, *, via: str = "text"
     via = via if via in ("text", "voice") else "text"
     if not text:
         return BtwOutcome("refused", "empty")
-    now = time.time()
     seen_key = (chat_key, client_id) if client_id else None
+    loop = asyncio.get_running_loop()
     with _running_stdins_web_guard:
-        for k, (ts, _o) in list(_btw_seen.items()):
-            if now - ts > BTW_IDEMPOTENCY_TTL_S:
+        now = time.time()
+        for k, (ts, o) in list(_btw_seen.items()):
+            if now - ts > BTW_IDEMPOTENCY_TTL_S and not isinstance(o, asyncio.Future):
                 del _btw_seen[k]
-        if seen_key is not None and seen_key in _btw_seen:
-            return _btw_seen[seen_key][1]   # a retried request is a no-op
-        last = _btw_last_accept.get(chat_key)
-        if last is not None and now - last < BTW_MIN_INTERVAL_S:
-            return BtwOutcome("refused", "rate_limited")
+        prior = _btw_seen.get(seen_key) if seen_key is not None else None
+        if prior is None:
+            last = _btw_last_accept.get(chat_key)
+            limited = last is not None and now - last < BTW_MIN_INTERVAL_S
+            if not limited:
+                # Reserved NOW, not after the gate: two concurrent notes must
+                # not both pass the 1-per-2 s limit across the gate's await.
+                _btw_last_accept[chat_key] = now
+            mine: "asyncio.Future[BtwOutcome] | None" = loop.create_future() if seen_key else None
+            if seen_key is not None:
+                _btw_seen[seen_key] = (now, mine)   # in flight: a duplicate waits for it
+    if prior is not None:
+        # A retried request with the same id is a no-op: the first outcome.
+        return await asyncio.shield(prior[1]) if isinstance(prior[1], asyncio.Future) else prior[1]
 
-    def _remember(o: BtwOutcome) -> BtwOutcome:
+    note_parts = _btw_note_parts(text)
+
+    def _done(o: BtwOutcome, *, record: str | None = None, gated: bool = False,
+              gate_refused: str | None = None) -> BtwOutcome:
+        if record is not None:
+            _append_turn(sess, "user", note_parts, btw=True, btw_status=record,
+                         btw_via=via, btw_client_id=client_id, btw_gated=gated,
+                         btw_reason=o.reason or (o.status if record != o.status else None),
+                         gate_refused=gate_refused)
+        if o.status in ("injected", "queued"):
+            with _running_stdins_web_guard:
+                # The 2 s count from the ACCEPT (the reservation above only
+                # closes the race while the gate runs).
+                _btw_last_accept[chat_key] = time.time()
         if seen_key is not None:
             with _running_stdins_web_guard:
                 _btw_seen[seen_key] = (time.time(), o)
+            if mine is not None and not mine.done():
+                mine.set_result(o)
         return o
 
-    with _running_stdins_web_guard:
-        live = chat_key in _running_stdins_web or (
-            chat_key in _btw_open_turns and chat_key not in _btw_stdin_closed)
-    if not live:
-        return _remember(BtwOutcome("no_active_stream"))
-    # A note reaches the model exactly like a turn does, so it passes the same
-    # fail-closed pre-spawn gates (L44 house rules, capabilities, L34, L35) —
-    # the bridge gates /btw too. Queued notes are gated HERE, at enqueue.
     try:
-        refusal = await asyncio.to_thread(
-            _spawn_gates.check_console_spawn_or_refusal, text,
-            tenant_id=sess.tenant_id, persona="assistant", channel=CHANNEL,
-            chat_key=chat_key, engine_id=_configured_os_engine(sess.tenant_id))
-    except Exception:  # noqa: BLE001 — fail closed
-        refusal = "gate unavailable"
-    note_parts = _btw_note_parts(text)
-    if refusal is not None:
-        _append_turn(sess, "user", note_parts, gate_refused="btw", btw=True,
-                     btw_status="refused", btw_via=via, btw_client_id=client_id)
-        return _remember(BtwOutcome("refused", "gate"))
-    # ADR-0648 amendment 2: frame the JSONL user message ourselves so
-    # `guard_prompt_head` runs on the EXACT bytes the CLI will parse — a
-    # leading "/cmd" or an "@<path>" in an un-guarded note is a client-side
-    # slash-command / file-read inside the live CLI, not inert chat text.
-    try:
-        frame = _btw_frame(text)
-    except Exception as e:  # noqa: BLE001 — guard unavailable ⇒ refuse, never raw-write
-        _log.warning("inject_btw_web: prompt guard unavailable for chat=%s: %s", chat_key, e)
-        return _remember(BtwOutcome("refused", "guard_unavailable"))
-    with _running_stdins_web_guard:
-        stdin = _running_stdins_web.get(chat_key)
-        if stdin is None:
-            if chat_key not in _btw_open_turns or chat_key in _btw_stdin_closed:
-                queued = None   # the turn closed while the gate ran
-            else:
+        if limited:
+            return _done(BtwOutcome("refused", "rate_limited"), record="refused")
+        with _running_stdins_web_guard:
+            live = chat_key in _running_stdins_web or (
+                chat_key in _btw_open_turns and chat_key not in _btw_stdin_closed)
+        if not live:
+            return _done(BtwOutcome("no_active_stream"), record="undelivered")
+        # A note reaches the model exactly like a turn does, so it passes the
+        # same fail-closed pre-spawn gates (L44 house rules, capabilities, L34,
+        # L35) — the bridge gates /btw too. Queued notes are gated HERE.
+        try:
+            refusal = await asyncio.to_thread(
+                _spawn_gates.check_console_spawn_or_refusal, text,
+                tenant_id=sess.tenant_id, persona="assistant", channel=CHANNEL,
+                chat_key=chat_key, engine_id=_configured_os_engine(sess.tenant_id))
+        except Exception:  # noqa: BLE001 — fail closed
+            refusal = "gate unavailable"
+        if refusal is not None:
+            return _done(BtwOutcome("refused", "gate"), record="refused", gate_refused="btw")
+        # ADR-0648 amendment 2: frame the JSONL user message ourselves so
+        # `guard_prompt_head` runs on the EXACT bytes the CLI will parse — a
+        # leading "/cmd" or an "@<path>" in an un-guarded note is a client-side
+        # slash-command / file-read inside the live CLI, not inert chat text.
+        try:
+            frame = _btw_frame(text)
+        except Exception as e:  # noqa: BLE001 — guard unavailable ⇒ refuse, never raw-write
+            _log.warning("inject_btw_web: prompt guard unavailable for chat=%s: %s", chat_key, e)
+            return _done(BtwOutcome("refused", "guard_unavailable"), record="refused")
+        with _running_stdins_web_guard:
+            stdin = _running_stdins_web.get(chat_key)
+            queued: "bool | None" = None
+            if stdin is None and chat_key in _btw_open_turns and chat_key not in _btw_stdin_closed:
                 q = _btw_pending.setdefault(chat_key, [])
-                q[:] = [i for i in q if now - i["ts"] <= BTW_QUEUE_TTL_S]
+                # No pruning here: an expired note is recorded `undelivered`
+                # at flush or at the turn's end — never silently dropped.
                 if len(q) >= BTW_QUEUE_MAX:
                     queued = False
                 else:
                     q.append({"text": text, "via": via, "ts": time.time(),
                               "client_id": client_id or uuid.uuid4().hex})
-                    _btw_last_accept[chat_key] = time.time()
                     queued = True
-    if stdin is None:
-        if queued is None:
-            return _remember(BtwOutcome("no_active_stream"))
-        if queued is False:
-            return _remember(BtwOutcome("refused", "queue_full"))
-        return _remember(BtwOutcome("queued"))
+        if stdin is None:
+            if queued is None:   # the turn closed its window while the gate ran
+                return _done(BtwOutcome("no_active_stream"), record="undelivered", gated=True)
+            if queued is False:
+                return _done(BtwOutcome("refused", "queue_full"), record="refused", gated=True)
+            return _done(BtwOutcome("queued"))          # recorded when flushed / drained
+        try:
+            stdin.write(frame)
+            await stdin.drain()
+        except (BrokenPipeError, ConnectionResetError, RuntimeError, OSError) as e:
+            _log.info("inject_btw_web: write failed (stream likely just ended) for chat=%s: %s",
+                       chat_key, e)
+            return _done(BtwOutcome("no_active_stream"), record="undelivered", gated=True)
+        # Session ledger (ADR-2102): the note's answer arrives inside the running
+        # turn's reply, so the note is folded into that turn, not a turn of its own.
+        return _done(BtwOutcome("injected"), record="injected", gated=True)
+    except BaseException:
+        if mine is not None and not mine.done():
+            mine.set_result(BtwOutcome("refused", "error"))
+            with _running_stdins_web_guard:
+                _btw_seen.pop(seen_key, None)
+        raise
+
+
+#: Recorded when a turn is cancelled while its pre-spawn gate is still deciding.
+_GATE_CANCELLED_TEXT = "[stopped before the safety check finished]"
+
+
+async def _gate_off_loop(sess: "WebChatSession", task_text: str, *, engine_id: str) -> str | None:
+    """The turn's pre-spawn gate, run in a thread (L44 is a model call — inline
+    it stalled every chat and request of the console for seconds).
+
+    Cancel-safe and fail-closed: the user line is already in the turn log when
+    this runs. A cancel that lands while the gate decides (before this ran
+    inline, nothing could interrupt there) would leave that line unmarked, and
+    the session ledger would re-supply text no gate ever cleared (ADR-2102,
+    review R4-1). So the line is marked withheld before the cancel propagates.
+    """
+    fut = asyncio.ensure_future(asyncio.to_thread(
+        _spawn_gates.check_console_spawn_or_refusal, task_text,
+        tenant_id=sess.tenant_id, persona="assistant", channel=CHANNEL,
+        chat_key=sess.chat_key, engine_id=engine_id))
     try:
-        stdin.write(frame)
-        await stdin.drain()
-    except (BrokenPipeError, ConnectionResetError, RuntimeError, OSError) as e:
-        _log.info("inject_btw_web: write failed (stream likely just ended) for chat=%s: %s",
-                   chat_key, e)
-        return _remember(BtwOutcome("no_active_stream"))
-    with _running_stdins_web_guard:
-        _btw_last_accept[chat_key] = time.time()
-    # Session ledger (ADR-2102): the note's answer arrives inside the running
-    # turn's reply, so the note is folded into that turn, not a turn of its own.
-    _append_turn(sess, "user", note_parts, btw=True, btw_status="injected",
-                 btw_via=via, btw_client_id=client_id)
-    return _remember(BtwOutcome("injected"))
+        return await asyncio.shield(fut)
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            _append_turn(sess, "assistant", [{"kind": "text", "text": _GATE_CANCELLED_TEXT}],
+                         gate_refused="pre_spawn_cancelled")
+        raise
 
 
 def _turn_text(turn: dict[str, Any]) -> str:
@@ -4180,7 +4244,8 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
                  execution_context: dict[str, Any] | None = None,
                  gate_refused: str | None = None, cli_spawned: bool = False,
                  btw: bool = False, btw_status: str | None = None,
-                 btw_via: str | None = None, btw_client_id: str | None = None) -> None:
+                 btw_via: str | None = None, btw_client_id: str | None = None,
+                 btw_gated: bool = False, btw_reason: str | None = None) -> None:
     """Append one turn (user or assistant) to the session's turns log.
 
     ``voice_key_hint`` (ADR-0194 Phase 1) pins the voice_key of the text this
@@ -4229,6 +4294,13 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
             payload["via"] = btw_via
         if btw_client_id:
             payload["client_id"] = btw_client_id
+        if btw_reason:
+            payload["btw_reason"] = btw_reason
+        # Only a note that passed the pre-spawn gates may ever be re-supplied
+        # to a worker by the session ledger (a rate-limited or too-late note
+        # never reached them).
+        if btw_gated:
+            payload["btw_gated"] = True
     if gate_refused:
         # A pre-spawn gate answered: the session ledger re-supplies this turn
         # with the user's text WITHHELD, never past the gate (ADR-2102).
@@ -6550,10 +6622,8 @@ async def _stream_turn_impl(
     # seconds, and run inline it stalled EVERY chat and request of the console
     # for that long — measured 2026-10-13: a /btw sent at t+0.5 s was answered
     # at t+29.6 s, past the client's 30 s timeout on the first try.
-    _gate_refusal = await asyncio.to_thread(
-        _spawn_gates.check_console_spawn_or_refusal,
-        _task_text, tenant_id=sess.tenant_id, persona="assistant",
-        channel=CHANNEL, chat_key=sess.chat_key,
+    _gate_refusal = await _gate_off_loop(
+        sess, _task_text,
         engine_id=(_spawn_gates.DELEGATION_ENGINE_ID
                    if (_will_delegate or (_tde_force and _worker_mode == "tde"))
                    else _os_engine),
@@ -7082,12 +7152,7 @@ async def _stream_turn_impl(
             # never evaluated the engine that will actually spawn. Fail-closed:
             # a refusal ends the turn. The gate runs BEFORE the quota notice so
             # a blocked turn never announces a fallback it will not perform.
-            _fb_gate = await asyncio.to_thread(   # off the loop, as above
-                _spawn_gates.check_console_spawn_or_refusal,
-                _task_text, tenant_id=sess.tenant_id, persona="assistant",
-                channel=CHANNEL, chat_key=sess.chat_key,
-                engine_id=_os_engine,
-            )
+            _fb_gate = await _gate_off_loop(sess, _task_text, engine_id=_os_engine)
             if _fb_gate is not None:
                 _os_audit("os_turn.started", {"model": _os_model_used})
                 tm.record_event(task_id, {
@@ -7764,6 +7829,8 @@ async def _stream_turn_impl(
     # handler and the `finally` block) — never left open past the turn.
     assert proc.stdin is not None
     _btw_stdin_registered = False
+    _btw_written: list[dict[str, Any]] = []
+    _btw_rest: list[dict[str, Any]] = []
     try:
         # ADR-0395: when cache-stable CEL is on, the volatile context rides here (in the
         # user message), not in the cached system prompt. Prefix it to the real prompt.
@@ -7783,13 +7850,17 @@ async def _stream_turn_impl(
         # yielding any events" ordering). Notes queued during the pre-spawn
         # window are written first, synchronously, so a direct /btw cannot
         # overtake them (CONCEPT-0107).
-        _btw_flush_events = _btw_write_pending(sess, proc.stdin)
+        _btw_written, _btw_rest = _btw_write_pending(proc.stdin, sess.chat_key)
         _register_stdin_web(sess.chat_key, proc.stdin)
         _btw_stdin_registered = True
-        if _btw_flush_events:
+        if _btw_written:
             await proc.stdin.drain()
     except (OSError, BrokenPipeError):
-        _btw_flush_events = []
+        # The pipe is gone: nothing written in this block reached the CLI.
+        _btw_rest = _btw_rest + _btw_written
+        _btw_written = []
+    _btw_flush_events = (_btw_record(sess, _btw_written, "injected")
+                         + _btw_record(sess, _btw_rest, "undelivered"))
     for _ev in _btw_flush_events:
         yield _ev
 
@@ -7957,6 +8028,10 @@ async def _stream_turn_impl(
                         _btw_stdin_closed.add(sess.chat_key)
                     with contextlib.suppress(OSError, BrokenPipeError, RuntimeError):
                         proc.stdin.close()
+                    # The reply may keep streaming (annotation, background
+                    # children), but it can no longer be steered: say so, so
+                    # the composer stops offering it (CONCEPT-0107).
+                    yield {"type": "btw_window_closed"}
                 # An injected /btw yields a SECOND result after the turn's own
                 # one; accumulate so TTS and the ledger keep the main answer.
                 _this_result = evt.get("result") or ""

@@ -14,7 +14,7 @@ import { useSyncExternalStore } from "react";
 import { emitCCCEvent } from "./ccc-bus";
 import { getBool, PREF_KEYS } from "./preferences";
 import { persistMessages, loadPersistedMessages, clearPersistedMessages } from "./chat-message-persistence";
-import { insertSteerNote, setSteerState, settleOnDone, type BtwInfo, type BtwState } from "./btw-steer";
+import { insertSteerNote, retrySteerState, setSteerState, settleOnDone, type BtwInfo, type BtwState } from "./btw-steer";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -110,7 +110,7 @@ export interface StreamEvent {
         "pong" | "session_title" | "artifact" | "ccc_action" | "voice" | "engine" |
         "engine_progress" | "notice" | "language" | "bg_status" | "tool_diff" |
         "turn_started" | "turn_attach" | "turn_resync" |
-        "btw_flushed" | "btw_undelivered";
+        "btw_flushed" | "btw_undelivered" | "btw_window_closed";
   /** `btw_flushed` / `btw_undelivered`: the steering note's client id. */
   client_id?: string;
   /** `turn_started` / `turn_attach` / attached `done`: the live turn's id. */
@@ -233,6 +233,9 @@ export interface SessionState {
   latestResultText: string | null;
   /** Pending title from a session_title event (so ChatPane can update React Query cache). */
   pendingTitle: string | null;
+  /** CONCEPT-0107: false once the running reply can no longer be steered
+   *  (`btw_window_closed` — its first answer closed the CLI's input). */
+  steerOpen: boolean;
 }
 
 // ── Frontend structured debug log ─────────────────────────────────────────────
@@ -312,6 +315,7 @@ interface SessionEntry {
   bgChildrenAt: number;
   latestResultText: string | null;
   pendingTitle: string | null;
+  steerOpen: boolean;
   /** Set when this view attached to a turn another socket started, or fell
    *  behind it: reconcile with the server's record when the turn ends. */
   needsReconcile: boolean;
@@ -366,6 +370,7 @@ function getOrCreate(sid: string): SessionEntry {
       bgChildrenAt: 0,
       latestResultText: null,
       pendingTitle: null,
+      steerOpen: true,
       currentAssistantId: null,
       lastAssistantId: null,
       historyLoaded: false,
@@ -405,6 +410,7 @@ function makeSnapshot(entry: SessionEntry): SessionState {
     reconnecting: entry.reconnecting,
     latestResultText: entry.latestResultText,
     pendingTitle: entry.pendingTitle,
+    steerOpen: entry.steerOpen,
   };
 }
 
@@ -675,6 +681,10 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
       return;
     }
 
+    case "btw_window_closed":
+      entry.steerOpen = false;
+      return;
+
     case "btw_flushed":
     case "btw_undelivered": {
       if (!evt.client_id) return;
@@ -686,8 +696,13 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
     }
 
     case "done": {
-      // Every note the finished turn received has now been answered.
-      entry.messages = settleOnDone(entry.messages);
+      {
+        // Delivered notes were answered — unless the turn ended in an error.
+        const cur = entry.currentAssistantId
+          ? entry.messages.find((m) => m.id === entry.currentAssistantId) : undefined;
+        entry.messages = settleOnDone(entry.messages, { answered: !cur?.error });
+      }
+      entry.steerOpen = true;
       if (evt.attached || entry.needsReconcile) {
         entry.needsReconcile = false;
         _reconcileWithServer(sid);
@@ -957,12 +972,25 @@ export function loadHistory(sid: string, messages: ChatMessage[]): void {
  *  message the record already holds (persisted at turn start) is not doubled. */
 function mergeLiveTail(record: ChatMessage[], live: ChatMessage[]): ChatMessage[] {
   if (live.length === 0) return record;
-  const last = record[record.length - 1];
-  const firstLive = live[0];
+  // Steering notes of the running turn may already be in the record after its
+  // user line (queued notes are recorded at spawn): compare the user lines.
+  let idx = record.length - 1;
+  while (idx >= 0 && record[idx].btw) idx--;
+  const last = idx >= 0 ? record[idx] : undefined;
+  const liveUserIdx = live.findIndex((m) => !m.btw);
+  const firstLive = liveUserIdx >= 0 ? live[liveUserIdx] : undefined;
   const sameUser =
     last && firstLive && last.role === "user" && firstLive.role === "user" &&
     textOf(last) === textOf(firstLive);
-  return sameUser ? [...record.slice(0, -1), ...live] : [...record, ...live];
+  if (!sameUser) return [...record, ...live];
+  const liveNotes = new Set(live.filter((m) => m.btw).map((m) => m.btw!.clientId));
+  const recordNotes = record.slice(idx + 1).filter((m) => m.btw && !liveNotes.has(m.btw.clientId));
+  return [
+    ...record.slice(0, idx),
+    ...live.slice(0, liveUserIdx + 1),
+    ...recordNotes,
+    ...live.slice(liveUserIdx + 1),
+  ];
 }
 
 function textOf(m: ChatMessage): string {
@@ -1067,6 +1095,7 @@ export function sendMessage(
   entry.bgOpen = 0;
   entry.bgChildren = [];
   entry.latestResultText = null;
+  entry.steerOpen = true;
 
   entry.ws.send(JSON.stringify({ type: "user", text, voice_on: getBool(PREF_KEYS.voiceOut, true) }));
   _dbg(sid, "msg.send", { len: text.length, force_delegate: text.trim().toLowerCase().startsWith("/delegate") });
@@ -1094,6 +1123,14 @@ export function updateSteerNote(sid: string, clientId: string, state: BtwState, 
   const next = setSteerState(entry.messages, clientId, state, reason);
   if (next === entry.messages) return;
   entry.messages = next;
+  notifyState(sid);
+}
+
+/** "Send again" after a network failure: the same note, the same id. */
+export function retrySteerNote(sid: string, clientId: string): void {
+  const entry = sessions.get(sid);
+  if (!entry) return;
+  entry.messages = retrySteerState(entry.messages, clientId);
   notifyState(sid);
 }
 
@@ -1139,6 +1176,10 @@ export function cancelTurn(sid: string): void {
 
   // Optimistically mark the streaming placeholder as done so the UI unlocks.
   entry.streaming = false;
+  // Notes still waiting die with the turn (the server records them
+  // undelivered); delivered ones stay "delivered" — a stopped turn did not answer.
+  entry.messages = settleOnDone(entry.messages, { answered: false });
+  entry.steerOpen = true;
   const aid = entry.currentAssistantId;
   if (aid) {
     entry.messages = entry.messages.map((m) =>

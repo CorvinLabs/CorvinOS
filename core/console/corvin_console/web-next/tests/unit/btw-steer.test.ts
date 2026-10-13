@@ -4,7 +4,7 @@
  */
 import { describe, expect, it, vi, afterEach } from "vitest";
 import {
-  btwFromTurn, insertSteerNote, makeSteerMessage, setSteerState, settleHydrated,
+  btwFromTurn, insertSteerNote, makeSteerMessage, retrySteerState, setSteerState, settleHydrated,
   settleOnDone, stateFromServer, stripBtwPrefix, needsOperatorAction,
 } from "@/lib/btw-steer";
 import type { ChatMessage } from "@/lib/chat-registry";
@@ -45,7 +45,7 @@ describe("btw-steer", () => {
     msgs = setSteerState(msgs, "c", "queued");          expect(st()).toBe("queued");
     msgs = setSteerState(msgs, "c", "injected");        expect(st()).toBe("injected");
     msgs = setSteerState(msgs, "c", "queued");          expect(st()).toBe("injected"); // late HTTP answer
-    msgs = settleOnDone(msgs);                           expect(st()).toBe("answered");
+    msgs = settleOnDone(msgs, { answered: true });      expect(st()).toBe("answered");
     msgs = setSteerState(msgs, "c", "undelivered");     expect(st()).toBe("answered"); // terminal stays
   });
 
@@ -54,10 +54,22 @@ describe("btw-steer", () => {
     msgs = setSteerState(msgs, "c", "queued");
     msgs = setSteerState(msgs, "c", "undelivered");
     expect(msgs[0].btw!.state).toBe("undelivered");
-    msgs = settleOnDone(msgs);
+    msgs = settleOnDone(msgs, { answered: true });
     expect(msgs[0].btw!.state).toBe("undelivered");   // done never claims it was answered
     const r = setSteerState([makeSteerMessage("y", "text", "d", 1)], "d", "refused", "rate_limited");
     expect(r[0].btw).toMatchObject({ state: "refused", reason: "rate_limited" });
+  });
+
+  it("turn end: a waiting note is undelivered; a delivered one is answered only on a clean end", () => {
+    const base = [makeSteerMessage("q", "text", "q1", 1), makeSteerMessage("i", "text", "i1", 1)];
+    let msgs = setSteerState(setSteerState(base, "q1", "queued"), "i1", "injected");
+    const clean = settleOnDone(msgs, { answered: true });
+    expect(clean.map((m) => m.btw!.state)).toEqual(["undelivered", "answered"]);
+    const failed = settleOnDone(msgs, { answered: false });          // error-done or /stop
+    expect(failed.map((m) => m.btw!.state)).toEqual(["undelivered", "injected"]);
+    msgs = setSteerState(base, "q1", "failed");
+    msgs = retrySteerState(msgs, "q1");                             // same note, same id
+    expect(msgs[0].btw).toMatchObject({ state: "sending", clientId: "q1" });
   });
 
   it("no-loss: the note's text survives every non-delivered terminal state, with actions", () => {
@@ -82,6 +94,12 @@ describe("btw-steer", () => {
     expect(settled[4].btw!.state).toBe("undelivered");
     // a delivered note whose turn has no answer yet is NOT marked answered
     expect(settleHydrated([user("u"), noteMsg("injected")])[1].btw!.state).toBe("injected");
+    // …nor one whose turn was stopped
+    const stopped: ChatMessage = { id: "a2", role: "assistant", ts: 3,
+      parts: [{ kind: "text", text: "half\n[answer cancelled here]" }] };
+    expect(settleHydrated([user("u"), noteMsg("injected"), stopped])[1].btw!.state).toBe("injected");
+    expect(btwFromTurn({ btw: true, btw_status: "refused", btw_reason: "rate_limited" }, "h4"))
+      .toMatchObject({ state: "refused", reason: "rate_limited" });
   });
 });
 

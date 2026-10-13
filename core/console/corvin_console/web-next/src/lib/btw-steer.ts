@@ -114,30 +114,49 @@ export function setSteerState(
   return changed ? next : messages;
 }
 
-/** The turn ended: every note it received has now been answered. */
-export function settleOnDone(messages: ChatMessage[]): ChatMessage[] {
-  if (!messages.some((m) => m.btw?.state === "injected")) return messages;
+/** The turn ended. A note still waiting can no longer be delivered (the
+ *  server records it undelivered); a delivered note counts as answered only
+ *  when the turn ended normally — after an error or a stop it stays
+ *  "delivered", since nobody knows whether the model got to it. */
+export function settleOnDone(messages: ChatMessage[], { answered }: { answered: boolean }): ChatMessage[] {
+  if (!messages.some((m) => m.btw?.state === "injected" || m.btw?.state === "queued")) return messages;
+  return messages.map((m) => {
+    if (m.btw?.state === "queued") return { ...m, btw: { ...m.btw, state: "undelivered" as const } };
+    if (m.btw?.state === "injected" && answered) return { ...m, btw: { ...m.btw, state: "answered" as const } };
+    return m;
+  });
+}
+
+/** "Send again" after a network failure reuses the note's id, so a request
+ *  that did reach the server is not injected twice (idempotent server side). */
+export function retrySteerState(messages: ChatMessage[], clientId: string): ChatMessage[] {
   return messages.map((m) =>
-    m.btw?.state === "injected" ? { ...m, btw: { ...m.btw, state: "answered" as const } } : m,
+    m.btw?.clientId === clientId && m.btw.state === "failed"
+      ? { ...m, btw: { ...m.btw, state: "sending" as const, reason: undefined } }
+      : m,
   );
 }
 
 /** Persisted turn → BtwInfo (history hydration). Legacy records (before v2)
  *  carry only `btw: true` (+ `gate_refused` when a gate stopped them). */
 export function btwFromTurn(t: {
-  btw?: boolean; btw_status?: string; via?: string; client_id?: string; gate_refused?: string;
+  btw?: boolean; btw_status?: string; btw_reason?: string; via?: string; client_id?: string;
+  gate_refused?: string;
 }, fallbackId: string): BtwInfo | undefined {
   if (!t.btw) return undefined;
   const status = t.btw_status ?? (t.gate_refused ? "refused" : "injected");
   const state: BtwState =
     status === "refused" ? "refused" : status === "undelivered" ? "undelivered" : "injected";
+  const reason = t.btw_reason ?? (t.gate_refused ? "gate" : undefined);
   return {
     state,
     via: t.via === "voice" ? "voice" : "text",
     clientId: t.client_id || fallbackId,
-    ...(state === "refused" ? { reason: "gate" } : {}),
+    ...(reason ? { reason } : {}),
   };
 }
+
+const CANCELLED_MARKS = ["[answer cancelled here]", "[stopped before the safety check finished]"];
 
 /** After hydrating a finished history: a delivered note followed by an
  *  assistant answer was answered. */
@@ -146,7 +165,10 @@ export function settleHydrated(messages: ChatMessage[]): ChatMessage[] {
   const out = messages.slice();
   for (let i = out.length - 1; i >= 0; i--) {
     const m = out[i];
-    if (m.role === "assistant" && !m.streaming) sawAnswer = true;
+    if (m.role === "assistant" && !m.streaming) {
+      const t = m.parts.map((p) => (p.kind === "text" ? p.text : "")).join("");
+      sawAnswer = !m.error && !CANCELLED_MARKS.some((c) => t.includes(c));
+    }
     else if (m.btw?.state === "injected" && sawAnswer) {
       out[i] = { ...m, btw: { ...m.btw, state: "answered" } };
     } else if (m.role === "user" && !m.btw) sawAnswer = false;
@@ -158,14 +180,14 @@ export function settleHydrated(messages: ChatMessage[]): ChatMessage[] {
 export function btwStateLabel(b: BtwInfo): string {
   switch (b.state) {
     case "sending": return "Sending…";
-    case "queued": return "Waiting for the turn to start";
+    case "queued": return "Waiting to be delivered";
     case "injected": return "Delivered to the running reply";
     case "answered": return "Taken into account";
     case "refused":
       return b.reason === "rate_limited" ? "Not sent — one note every 2 s"
         : b.reason === "queue_full" ? "Not sent — too many notes waiting"
         : "Refused by a safety gate";
-    case "undelivered": return "Not delivered — the reply had already finished";
+    case "undelivered": return "Not delivered — the reply could no longer take it";
     case "failed": return "Could not be sent";
   }
 }

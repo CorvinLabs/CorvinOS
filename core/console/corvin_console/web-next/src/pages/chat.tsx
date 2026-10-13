@@ -82,6 +82,7 @@ import {
   addSteerNote,
   updateSteerNote,
   removeSteerNote,
+  retrySteerNote,
   subscribeEvents,
   consumePendingTitle,
   closeSession,
@@ -719,6 +720,10 @@ function ChatPane({
   const chatSession = useChatSession(sid);
   const messages = chatSession.messages;
   const streaming = chatSession.streaming;
+  // CONCEPT-0107: a running reply can be steered until its first answer
+  // closes the CLI's input; it may keep streaming after that (annotation,
+  // background children), but a note could no longer reach it.
+  const steerOpen = chatSession.steerOpen;
   const bgOpen = chatSession.bgOpen;
 
   // The typed text is owned by <ChatComposerField> (keystrokes must not
@@ -1255,6 +1260,11 @@ function ChatPane({
         setError("Attachments go out with the next message — wait for the reply");
         return;
       }
+      if (!steerOpen) {
+        // Keep the text where it is: nothing can reach this reply any more.
+        setError("This reply can no longer be steered — send your message when it has finished");
+        return;
+      }
       sendSteer(text, "text");
       return;
     }
@@ -1297,6 +1307,17 @@ function ChatPane({
     const m = messages.find((x) => x.btw?.clientId === clientId);
     if (!m?.btw) return;
     const text = m.parts.map((p) => (p.kind === "text" ? p.text : "")).join("");
+    if (action === "resend" && m.btw.state === "failed") {
+      // Same note, same id: if the first request did land, the server answers
+      // with its first outcome instead of injecting the note twice.
+      retrySteerNote(sid, clientId);
+      void deliverSteer(text, m.btw.via, clientId);
+      return;
+    }
+    if (action === "resend" && streaming && !steerOpen) {
+      setError("This reply can no longer be steered — the note is in the composer, send it when the reply has finished");
+      action = "edit";
+    }
     removeSteerNote(sid, clientId);
     if (action === "edit") {
       setInput((prev) => (prev.trim() ? `${prev} ${text}` : text));
@@ -1331,7 +1352,7 @@ function ChatPane({
     clearTimeout(pending.timer);
     voiceSteerRef.current = null;
     setVoiceSteer(null);
-    if (how === "send" && streamingRef.current) {
+    if (how === "send" && streamingRef.current && steerOpenRef.current) {
       sendSteerRef.current(pending.text, "voice");
     } else {
       // Cancelled, or the reply finished meanwhile: never send by itself.
@@ -1347,7 +1368,10 @@ function ChatPane({
     voiceSteerRef.current = { text, timer: setTimeout(() => settleVoiceSteer("send"), VOICE_STEER_UNDO_MS) };
     setVoiceSteer(text);
   }, [settleVoiceSteer]);
-  const commitVoiceOnRelease = React.useCallback(() => streamingRef.current, []);
+  const steerOpenRef = React.useRef(steerOpen);
+  React.useEffect(() => { steerOpenRef.current = steerOpen; }, [steerOpen]);
+  const commitVoiceOnRelease = React.useCallback(
+    () => streamingRef.current && steerOpenRef.current, []);
   React.useEffect(() => {
     if (voiceSteer === null) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1359,7 +1383,13 @@ function ChatPane({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [voiceSteer, settleVoiceSteer]);
   React.useEffect(() => () => {
-    if (voiceSteerRef.current) clearTimeout(voiceSteerRef.current.timer);
+    // Leaving the chat inside the undo window: the operator did not cancel,
+    // so the note goes out now — the composer it would return to is gone.
+    const pending = voiceSteerRef.current;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    voiceSteerRef.current = null;
+    sendSteerRef.current(pending.text, "voice");
   }, []);
 
   // ── Cancel a running engine turn via registry ────────────────────────────────
@@ -1907,7 +1937,9 @@ function ChatPane({
                   ? "Listening — release Space to steer the reply"
                   : "Listening — release Space to stop"
                 : streaming
-                  ? "Reply streaming — type or hold Space to steer it · /stop ends it"
+                  ? steerOpen
+                    ? "Reply streaming — type or hold Space to steer it · /stop ends it"
+                    : "Reply finishing — it can no longer be steered · /stop ends it"
                   : "Message Corvin… (hold Space to speak)"}
               disabled={false}
               csrf={csrf}
@@ -1920,7 +1952,7 @@ function ChatPane({
               onHasTextChange={setComposerHasText}
               onEntityHintChange={setCccEntityHint}
             />
-            {streaming && composerHasText && (
+            {streaming && steerOpen && composerHasText && (
               <Button
                 variant="accent"
                 size="icon"

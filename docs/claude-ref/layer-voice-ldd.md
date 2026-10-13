@@ -1340,6 +1340,33 @@ The console's `/btw` is a **conversation event**, not an API call with a flash m
   call) now runs in `asyncio.to_thread`; inline it stalled every chat and request — a /btw sent
   0.5 s into a turn was answered after 29 s, past the client timeout.
 
+- **Adversarial review round 1 (2026-10-13, 12 findings, all fixed):**
+  - *Cancel during the turn's gate* (the gate now awaits a thread): `_gate_off_loop` marks the
+    already-recorded user line withheld (`gate_refused="pre_spawn_cancelled"`, text "[stopped
+    before the safety check finished]") before the cancel propagates — otherwise the ledger
+    re-supplied text no gate had cleared.
+  - *Every outcome is recorded* except `empty`: `no_active_stream`, `rate_limited`, `queue_full`,
+    `guard_unavailable` land in `turns.jsonl` with `btw_status` + `btw_reason`, so a note is never
+    lost on reload. Only a note that passed the gates carries `btw_gated: true`; the ledger
+    re-supplies a not-delivered note only when gated, never a rate-limited or too-late one.
+  - *No silent drop*: the queue is never pruned at enqueue; an expired note is recorded
+    `undelivered` at flush. A flushed note is recorded `injected` only after `drain()` succeeded.
+  - *Window close is announced*: the first `result` yields `{"type":"btw_window_closed"}`; the
+    client (`SessionState.steerOpen`) stops offering steering ("Reply finishing — it can no longer
+    be steered"), keeps typed text in the composer and does not voice-commit. The `done`-drain
+    closes the window too, so a note gated after it is `no_active_stream`, not queued for nobody.
+  - *Concurrency*: the 1-per-2 s slot is reserved before the gate's await and refreshed on accept;
+    a duplicate `client_id` in flight awaits the first request's outcome.
+  - *Honest end states*: on `done` a still-`queued` note becomes `undelivered`; `injected` becomes
+    `answered` only if the turn ended without an error (also on `/stop`: stays "delivered");
+    hydration does not mark a note answered when the following answer was cancelled.
+  - *Client*: "Send again" after `failed` reuses the note's `client_id` (idempotent); leaving the
+    chat inside the voice undo window sends the note instead of dropping it; `mergeLiveTail`
+    compares the user lines across recorded steering notes (no duplicated user/note on remount).
+  - Known, accepted: a note drained `undelivered` at the turn's end is recorded after the answer,
+    so after a reload it renders below the answer (live: above). A note whose HTTP request failed
+    (`failed`) exists only in the open tab until resent.
+
 Proof: `core/console/tests/test_chat_btw_v2_e2e.py` (real `stream_turn` + stand-in CLI: queued →
 flushed, order, undelivered before `done`, ledger, no_active_stream after close, loop not
 stalled; real HTTP route: idempotency, rate limit, `via`), `web-next/tests/unit/btw-steer.test.ts`

@@ -74,6 +74,10 @@ export interface ChatTurn {
   btw_status?: "injected" | "refused" | "undelivered";
   via?: "text" | "voice";
   client_id?: string;
+  /** Why a note was not delivered (rate_limited, no_active_stream, …). */
+  btw_reason?: string;
+  /** The note passed the pre-spawn gates (only those are ever re-supplied). */
+  btw_gated?: boolean;
   gate_refused?: string;
 }
 

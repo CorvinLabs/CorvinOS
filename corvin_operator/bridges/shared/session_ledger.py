@@ -1058,14 +1058,18 @@ def records_from_turn_log(turns: list[dict[str, Any]],
             # the turn's user text made the turn unmatchable and every later
             # spawn re-supplied the whole chat (review R2). A note a gate
             # refused is never re-supplied at all.
-            # A note the turn ended before delivering (CONCEPT-0107) keeps the
-            # operator's words but never claims the model saw them.
-            if not t.get("gate_refused"):
-                out.append({"kind": "turn", "ts": t.get("ts", 0), "user": _text(t),
-                            "assistant": ("(note NOT delivered — the turn ended first)"
-                                          if t.get("btw_status") == "undelivered"
-                                          else "(note delivered into the running turn)"),
-                            "spawned": False})
+            # CONCEPT-0107: a note that did not reach the turn keeps the
+            # operator's words but never claims the model saw them — and one
+            # that never passed the pre-spawn gates (rate-limited, sent after
+            # the reply closed) is never re-supplied at all, like a refusal.
+            status = t.get("btw_status")
+            delivered = status in (None, "injected")
+            if t.get("gate_refused") or (not delivered and not t.get("btw_gated")):
+                continue
+            out.append({"kind": "turn", "ts": t.get("ts", 0), "user": _text(t),
+                        "assistant": ("(note delivered into the running turn)" if delivered
+                                      else "(note NOT delivered — the turn ended first)"),
+                        "spawned": False})
             continue
         if role == "user":
             if pending is not None:

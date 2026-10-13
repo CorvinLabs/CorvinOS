@@ -46,6 +46,15 @@ FAKE_CLI = textwrap.dedent('''\
 ''')
 
 
+class _Sink:
+    """A stdin that accepts every write (the flush unit under test)."""
+    def __init__(self):
+        self.writes = []
+
+    def write(self, data):
+        self.writes.append(data)
+
+
 @unittest.skipIf(sys.platform.startswith("win"), "POSIX stand-in CLI")
 class BtwQueueStreamE2E(unittest.TestCase):
     @classmethod
@@ -181,6 +190,111 @@ class BtwQueueStreamE2E(unittest.TestCase):
             ticks, _evs = asyncio.run(go())
         self.assertGreaterEqual(ticks, 15, "the event loop stood still while the gate ran")
 
+    def test_the_client_is_told_when_the_steering_window_closes(self):
+        _sess, events, _o = self._run(notes_expected=0, note_texts=())
+        types = [e.get("type") for e in events]
+        self.assertIn("btw_window_closed", types)
+        self.assertLess(types.index("btw_window_closed"), types.index("done"))
+
+    def test_an_expired_queued_note_is_recorded_undelivered_not_dropped(self):
+        """Review #2: pruning at enqueue dropped an old queued note silently."""
+        cr = self.cr
+        sess = cr.create_session("_default")
+        cr._btw_turn_opened(sess.chat_key)
+        try:
+            with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal", return_value=None):
+                o1 = asyncio.run(cr.inject_btw_web(sess, "say ONE", client_id="exp00001"))
+                cr._btw_pending[sess.chat_key][0]["ts"] -= cr.BTW_QUEUE_TTL_S + 5
+                cr._btw_last_accept.pop(sess.chat_key, None)
+                o2 = asyncio.run(cr.inject_btw_web(sess, "say TWO", client_id="exp00002"))
+            self.assertEqual((o1.status, o2.status), ("queued", "queued"))
+            written, rest = cr._btw_write_pending(_Sink(), sess.chat_key)
+            self.assertEqual([i["client_id"] for i in written], ["exp00002"])
+            self.assertEqual([i["client_id"] for i in rest], ["exp00001"])
+            events = cr._btw_record(sess, written, "injected") + cr._btw_record(sess, rest, "undelivered")
+            self.assertIn({"type": "btw_undelivered", "client_id": "exp00001"}, events)
+            notes = {t["client_id"]: t["btw_status"] for t in cr.read_turns("_default", sess.sid) if t.get("btw")}
+            self.assertEqual(notes, {"exp00001": "undelivered", "exp00002": "injected"})
+        finally:
+            cr._btw_turn_closed(sess.chat_key)
+
+    def test_concurrent_notes_respect_idempotency_and_the_rate_limit(self):
+        """Review #7: both checks were check-then-act across the gate's await."""
+        cr = self.cr
+        sess = cr.create_session("_default")
+        cr._btw_turn_opened(sess.chat_key)
+
+        def slow_gate(text, **kw):
+            import time as _t
+            _t.sleep(0.2)
+            return None
+
+        async def go():
+            same = await asyncio.gather(*[cr.inject_btw_web(sess, "say SAME", client_id="dup00001")
+                                          for _ in range(3)])
+            cr._btw_last_accept.pop(sess.chat_key, None)
+            distinct = await asyncio.gather(*[cr.inject_btw_web(sess, f"say N{i}", client_id=f"dis0000{i}")
+                                              for i in range(4)])
+            return same, distinct
+        try:
+            with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal", side_effect=slow_gate):
+                same, distinct = asyncio.run(go())
+            self.assertEqual({o.status for o in same}, {"queued"})
+            self.assertEqual(len(cr._btw_pending[sess.chat_key]), 2)   # SAME once + one distinct
+            self.assertEqual(sorted(o.status for o in distinct), ["queued", "refused", "refused", "refused"])
+        finally:
+            cr._btw_take_pending(sess.chat_key)
+            cr._btw_turn_closed(sess.chat_key)
+
+    def test_a_note_after_the_done_drain_is_no_active_stream_and_recorded(self):
+        """Review #12/#3: accepted after the drain it waited for nobody; a
+        no_active_stream note was not recorded and vanished on reload."""
+        cr = self.cr
+        sess = cr.create_session("_default")
+        cr._btw_turn_opened(sess.chat_key)
+        try:
+            cr._btw_drain_undelivered(sess)
+            out = asyncio.run(cr.inject_btw_web(sess, "say AFTER", client_id="late0001"))
+            self.assertEqual(out.status, "no_active_stream")
+            note = [t for t in cr.read_turns("_default", sess.sid) if t.get("btw")][-1]
+            self.assertEqual((note["btw_status"], note.get("btw_gated")), ("undelivered", None))
+            import session_ledger  # type: ignore
+            self.assertNotIn("AFTER", json.dumps(session_ledger.records_from_turn_log(
+                cr.read_turns("_default", sess.sid))))
+        finally:
+            cr._btw_turn_closed(sess.chat_key)
+
+    def test_a_cancel_during_the_turn_gate_marks_the_line_withheld(self):
+        """Review #1: with the gate off the loop a cancel could land between the
+        recorded user line and the refusal, and the ledger re-supplied text no
+        gate had cleared."""
+        import time as _time
+        cr = self.cr
+        sess = cr.create_session("_default")
+
+        def slow_refusing_gate(text, **kw):
+            _time.sleep(0.6)
+            return "[house-rules] refused"
+
+        async def go():
+            async def consume():
+                return [ev async for ev in cr.stream_turn(sess, "forbidden question")]
+            task = asyncio.create_task(consume())
+            await asyncio.sleep(0.3)          # the gate is deciding now
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            await asyncio.sleep(0.5)          # let the gate thread finish
+        import contextlib
+        with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal",
+                               side_effect=slow_refusing_gate):
+            asyncio.run(go())
+        turns = cr.read_turns("_default", sess.sid)
+        self.assertTrue(any(t.get("gate_refused") for t in turns), turns)
+        import session_ledger  # type: ignore
+        recs = session_ledger.records_from_turn_log(turns)
+        self.assertTrue(all(r.get("refused") for r in recs if "forbidden" in r.get("user", "")), recs)
+
     def test_after_the_turn_closed_a_note_is_no_active_stream(self):
         sess, _events, _o = self._run(notes_expected=1)
         out = asyncio.run(self.cr.inject_btw_web(sess, "say LATE"))
@@ -217,7 +331,12 @@ class BtwRouteContractE2E(unittest.TestCase):
                 self.assertEqual((r3["status"], r3.get("reason")), ("refused", "rate_limited"))
                 self.assertEqual(len(fake.writes), 1)
                 note = [t for t in chat_runtime.read_turns(tenant_id, sid) if t.get("btw")]
-                self.assertEqual([(n["via"], n["btw_status"]) for n in note], [("voice", "injected")])
+                self.assertEqual([(n["via"], n["btw_status"], n.get("btw_reason")) for n in note],
+                                 [("voice", "injected", None), ("text", "refused", "rate_limited")])
+                # the rate-limited note never passed a gate: never re-supplied
+                from session_ledger import records_from_turn_log  # type: ignore
+                self.assertNotIn("another", json.dumps(records_from_turn_log(
+                    chat_runtime.read_turns(tenant_id, sid))))
                 self.assertEqual(client.post(url, json={"instruction": "x", "via": "smoke"}).status_code, 422)
             finally:
                 chat_runtime._unregister_stdin_web(sess.chat_key)
