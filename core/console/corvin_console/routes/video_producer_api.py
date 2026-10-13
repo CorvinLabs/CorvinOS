@@ -267,6 +267,8 @@ class SettingsRequest(BaseModel):
     output_folder: Optional[str] = None
     tts_engine: Optional[Literal["openai", "auto", "gtts"]] = None
     max_duration_minutes: Optional[int] = Field(None, ge=1, le=60)
+    # ADR-2249 D4 (T-0113): the tenant's website-capture switch; persisted, default off
+    capture_enabled: Optional[bool] = None
 
 
 # Narration engines the producer really has (skill.SUPPORTED_TTS_ENGINES):
@@ -293,6 +295,9 @@ def _tenant_settings(rec) -> Dict[str, Any]:
         # What this host can actually do, so the panel can say so instead of a job failing later.
         "openai_configured": _openai_configured(),
         "web_slides_available": importlib.util.find_spec("playwright") is not None,
+        # Website capture (ADR-2249 D4): usable only when the switch is on AND an egress policy exists
+        "capture_enabled": _capture_enabled(rec),
+        "capture_policy_configured": _capture_egress_gate(rec.tenant_id) is not None,
     }
 
 
@@ -1219,6 +1224,11 @@ def update_settings(req: SettingsRequest, rec=_SessionRec):
         s["tts_engine"] = req.tts_engine
     if req.max_duration_minutes is not None:
         s["max_duration_minutes"] = req.max_duration_minutes
+    if req.capture_enabled is not None and req.capture_enabled != _capture_enabled(rec):
+        # audit-first: the record exists before the switch changes
+        if not _audit(rec.tenant_id, "video_producer.capture_setting_changed", {"enabled": req.capture_enabled}):
+            raise HTTPException(status_code=503, detail="The change could not be recorded; the setting was kept")
+        _write_capture_switch(rec, req.capture_enabled)
     return {"status": "ok", "settings": _tenant_settings(rec)}
 
 
@@ -1979,3 +1989,163 @@ def delete_asset(asset_id: str, rec=_SessionRec):
     except _asset_mod().AssetNotFound:
         raise HTTPException(status_code=404, detail=_ASSET_NOT_FOUND) from None
     return Response(status_code=204)
+
+
+# ── Website capture as an asset (ADR-2249 D4, T-0113) ─────────────────────────
+# A user-initiated panel action, never a model decision. Off per tenant by default (a persisted switch),
+# and off wherever the tenant has no ENABLED egress policy (spec.egress in tenant.corvin.yaml) - the
+# policy's allowed/forbidden hosts can only narrow what may be captured; the address policy in the
+# plugin's capture proxy (allow-by-global, pinned connect) is never widened by it. The capture runs in a
+# worker process the plugin kills as a group at its deadline. Every failure that depends on the address
+# (refused by policy, refused by the egress spec, unreachable, timed out) answers the same 422 at the
+# same instant (``_CAPTURE_FAIL_FLOOR_S`` after the request arrived). Audit: host + sha256 prefix of the
+# URL only, never the URL, its path or its query; ``capture_started`` is written before any egress.
+_CAPTURE_SWITCH_FILE = "capture_settings.json"
+_CAPTURE_FAIL_FLOOR_S = 6.0   # > the slowest failure path measured (unreachable public port: 3.8 s)
+_CAPTURE_NOT_POSSIBLE = "This address cannot be captured"
+
+
+def _capture_switch_path(rec) -> Path:
+    return _tenant_base(rec) / _CAPTURE_SWITCH_FILE
+
+
+def _capture_enabled(rec) -> bool:
+    """The tenant's switch; anything but a readable ``{"enabled": true}`` is off (fail-closed)."""
+    import json  # noqa: PLC0415
+
+    try:
+        p = _capture_switch_path(rec)
+        if p.is_symlink() or not p.is_file() or p.stat().st_size > 1024:
+            return False
+        return json.loads(p.read_text("utf-8")).get("enabled") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _write_capture_switch(rec, enabled: bool) -> None:
+    import json  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    p = _capture_switch_path(rec)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump({"enabled": bool(enabled), "changed": _now_iso()}, f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _capture_egress_gate(tenant_id: str):
+    """The tenant's L35 egress gate when a policy is configured AND enabled, else None (= capture off).
+    Unlike the engine-spawn gate this is fail-CLOSED: no file, no spec, a disabled spec or an import
+    failure all mean "no policy"."""
+    try:
+        try:
+            from corvin_operator.bridges.shared.egress_gate import load_egress_gate_for_tenant  # noqa: PLC0415
+        except ImportError:
+            from egress_gate import load_egress_gate_for_tenant  # type: ignore[import]  # noqa: PLC0415
+        gate = load_egress_gate_for_tenant(tenant_id)
+    except Exception:  # noqa: BLE001
+        return None
+    if gate is None or not getattr(getattr(gate, "policy", None), "enabled", False):
+        return None
+    return gate
+
+
+def _console_names(request: Request) -> List[str]:
+    import socket  # noqa: PLC0415
+
+    names = {request.url.hostname or "", socket.gethostname(), socket.getfqdn()}
+    return sorted(n for n in names if n)
+
+
+class CaptureRequest(BaseModel):
+    url: str = Field(..., max_length=2048)
+    viewport: Literal["desktop", "mobile"] = "desktop"
+    caption: str = Field("", max_length=1000)
+    hotspots: List[Dict[str, Any]] = Field(default_factory=list, max_length=16)
+
+
+@router.post("/assets/capture", status_code=201)
+async def capture_asset(req: CaptureRequest, request: Request, rec=_SessionRec):
+    """"Add website screenshot": capture ``req.url`` once and store it as one of this tenant's assets.
+    Session + CSRF (router dependency); 403 while the tenant switch is off or no egress policy exists."""
+    import hashlib  # noqa: PLC0415
+
+    t0 = time.monotonic()
+    cap = _style_mod("capture")
+    am = _asset_mod()
+    tid = rec.tenant_id
+    try:
+        target = cap.check_url(req.url.strip())
+    except cap.CaptureRefused:
+        target = None
+    base = {"host": (target or {}).get("host", "")[:253], "viewport": req.viewport,
+            "url_sha256_prefix": hashlib.sha256(req.url.strip().encode("utf-8", "replace")).hexdigest()[:12]}
+
+    def finish(outcome: str, refusal: Optional[str] = None, **extra) -> bool:
+        return _audit(tid, "video_producer.capture_finished",
+                      {**base, "outcome": outcome, "refusal": refusal, **extra,
+                       "elapsed_ms": int((time.monotonic() - t0) * 1000)})
+
+    def refuse(status: int, message: str, code: str):
+        if not finish("refused", code):
+            raise HTTPException(status_code=503, detail="The request could not be recorded")
+        raise HTTPException(status_code=status, detail=message)
+
+    async def not_capturable(code: str):
+        recorded = await asyncio.to_thread(finish, "failed", code)
+        await asyncio.sleep(max(0.0, t0 + _CAPTURE_FAIL_FLOOR_S - time.monotonic()))
+        if not recorded:
+            raise HTTPException(status_code=503, detail="The request could not be recorded")
+        raise HTTPException(status_code=422, detail=_CAPTURE_NOT_POSSIBLE)
+
+    if not await asyncio.to_thread(_capture_enabled, rec):
+        refuse(403, "Website capture is off for this workspace; turn it on in the Video Producer settings", "switch_off")
+    gate = await asyncio.to_thread(_capture_egress_gate, tid)
+    if gate is None:
+        refuse(403, "Website capture needs an egress policy for this workspace (spec.egress in tenant.corvin.yaml)",
+               "no_egress_policy")
+    if target is None:
+        refuse(422, "Enter a plain http:// or https:// address", "invalid_url")
+    caption = " ".join(req.caption.split())
+    if not caption or len(caption) > am.MAX_CAPTION:
+        refuse(422, f"A caption of 1-{am.MAX_CAPTION} characters is required", "caption")
+    try:
+        allowed = (await asyncio.to_thread(gate.validate, target["host"], engine_id="video_producer_capture")).allowed
+    except Exception:  # noqa: BLE001 - a gate error is a denial
+        allowed = False
+    if not allowed:
+        await not_capturable("egress_denied")
+    if not await asyncio.to_thread(_audit, tid, "video_producer.capture_started", base):
+        raise HTTPException(status_code=503, detail="The capture could not be recorded; nothing was fetched")
+    res = await asyncio.to_thread(cap.capture_url, target["url"], viewport=req.viewport,
+                                  console_names=_console_names(request))
+    if not res["ok"]:
+        if res["reason"] == "busy":
+            refuse(429, "Two captures are already running on this host; try again in a moment", "busy")
+        if res["reason"] == "no_browser":
+            refuse(503, "Website capture is not available on this host (no Chrome or Chromium)", "no_browser")
+        await not_capturable(res["reason"])
+
+    def record(doc: Dict[str, Any]) -> bool:
+        return finish("accepted", None, asset_id=doc["id"], bytes=doc["bytes"], width=doc["width"],
+                      height=doc["height"])
+
+    try:
+        doc = await asyncio.to_thread(_asset_store(rec).add, res["png"], caption=caption, uploaded_by=_job_owner(rec),
+                                      source=target["url"], hotspots=req.hotspots, before_commit=record)
+    except am.AssetNotRecorded:
+        raise HTTPException(status_code=503, detail="The capture could not be recorded; nothing was stored") from None
+    except am.AssetQuotaExceeded as e:
+        refuse(409, str(e), "quota")
+    except am.AssetError as e:
+        refuse(422, str(e), _refusal_code(str(e)))
+    return JSONResponse(status_code=201, content={"asset": _public_asset(doc)})
