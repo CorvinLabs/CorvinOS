@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -1843,3 +1843,139 @@ def delete_style(style_id: str, rec=_SessionRec):
 async def preview_saved_style(style_id: str, rec=_SessionRec):
     style = await asyncio.to_thread(_load_own_style, rec, style_id)
     return await _previews(style)
+
+
+# ── Image assets for `still` scenes (ADR-2249 D3, T-0111) ────────────────────
+# <tenant>/video_producer/assets/<ast_8hex>/: PNG re-encoded by the plugin, caption and hotspots typed
+# and clicked by the user (never derived from the image), uploaded_by = the session's principal (the
+# key the L-video-producer erasure layer matches). Every mutation and every read of the image bytes is
+# recorded on the tenant chain FIRST; a record that cannot be written stops the action.
+_ASSET_NOT_FOUND = "Image not found"
+_MAX_ASSET_UPLOAD_BYTES = 8 * 1024 * 1024
+_MAX_ASSET_FORM_CHARS = 8 * 1024
+
+
+def _asset_mod():
+    return _style_mod("asset_store")
+
+
+def _asset_store(rec):
+    return _asset_mod().AssetStore(str(_tenant_base(rec)))
+
+
+def _public_asset(doc: Dict[str, Any]) -> Dict[str, Any]:
+    keep = ("id", "caption", "hotspots", "width", "height", "bytes", "created", "source")
+    return {k: doc.get(k) for k in keep}
+
+
+def _refusal_code(message: str) -> str:
+    m = message.lower()
+    for needle, code in (("larger than", "too_large"), ("only png", "not_png"), ("not a readable", "unreadable"),
+                         ("pixels per side", "dimensions"), ("animated", "animated"), ("empty", "empty"),
+                         ("per workspace", "quota"), ("caption", "caption"), ("hotspot", "hotspots"),
+                         ("source", "source")):
+        if needle in m:
+            return code
+    return "invalid"
+
+
+@router.get("/assets")
+def list_assets(rec=_SessionRec):
+    am = _asset_mod()
+    return {"assets": [_public_asset(a) for a in _asset_store(rec).list()],
+            "limits": {"max_assets": am.MAX_ASSETS, "max_image_bytes": am.MAX_IMAGE_BYTES,
+                       "max_upload_bytes": _MAX_ASSET_UPLOAD_BYTES, "max_caption": am.MAX_CAPTION,
+                       "max_hotspots": am.MAX_SPOTS}}
+
+
+@router.post("/assets", status_code=201)
+async def upload_asset(file: UploadFile = File(...), caption: str = Form(""), hotspots: str = Form("[]"),
+                       source: str = Form(""), rec=_SessionRec):
+    """One PNG plus what the user typed (caption, provenance) and clicked (hotspots). Nothing of the
+    upload is kept but its pixels; the record is written to the chain before the asset is visible."""
+    import hashlib  # noqa: PLC0415
+    import json  # noqa: PLC0415
+
+    am = _asset_mod()
+    buf = bytearray()
+    too_big = False
+    while True:
+        chunk = await file.read(64 * 1024)
+        if not chunk:
+            break
+        buf += chunk
+        if len(buf) > _MAX_ASSET_UPLOAD_BYTES:
+            too_big = True
+            break
+    data = bytes(buf)
+    base = {"upload_bytes": len(data), "sha256_prefix": hashlib.sha256(data).hexdigest()[:12]}
+
+    def refuse(status: int, message: str, code: str):
+        if not _audit(rec.tenant_id, "video_producer.asset_uploaded", {**base, "outcome": "refused", "refusal": code}):
+            raise HTTPException(status_code=503, detail="The upload could not be recorded")
+        raise HTTPException(status_code=status, detail=message)
+
+    if too_big:
+        refuse(413, f"The file is larger than {_MAX_ASSET_UPLOAD_BYTES // (1024 * 1024)} MB", "too_large")
+    if len(caption) > _MAX_ASSET_FORM_CHARS or len(hotspots) > _MAX_ASSET_FORM_CHARS or len(source) > _MAX_ASSET_FORM_CHARS:
+        refuse(413, "The form fields are too long", "invalid")
+    try:
+        spots = json.loads(hotspots or "[]")
+    except ValueError:
+        refuse(422, "hotspots must be a JSON list", "hotspots")
+
+    def record(doc: Dict[str, Any]) -> bool:
+        return _audit(rec.tenant_id, "video_producer.asset_uploaded", {
+            **base, "outcome": "accepted", "asset_id": doc["id"], "bytes": doc["bytes"], "width": doc["width"],
+            "height": doc["height"], "hotspot_count": len(doc["hotspots"]), "has_source": bool(doc["source"])})
+
+    try:
+        doc = await asyncio.to_thread(_asset_store(rec).add, data, caption=caption, uploaded_by=_job_owner(rec),
+                                      source=source or None, hotspots=spots, before_commit=record)
+    except am.AssetNotRecorded:
+        raise HTTPException(status_code=503, detail="The upload could not be recorded; nothing was stored") from None
+    except am.AssetQuotaExceeded as e:
+        refuse(409, str(e), "quota")
+    except am.AssetError as e:
+        refuse(422, str(e), _refusal_code(str(e)))
+    return JSONResponse(status_code=201, content={"asset": _public_asset(doc)})
+
+
+def _own_asset(rec, asset_id: str) -> Dict[str, Any]:
+    """One of THIS tenant's assets; the same 404 for an unknown, malformed or foreign id."""
+    am = _asset_mod()
+    if not isinstance(asset_id, str) or not am.ID_RE.fullmatch(asset_id):
+        raise HTTPException(status_code=404, detail=_ASSET_NOT_FOUND)
+    try:
+        return _asset_store(rec).public(asset_id)
+    except am.AssetNotFound:
+        raise HTTPException(status_code=404, detail=_ASSET_NOT_FOUND) from None
+    except am.AssetError:
+        raise HTTPException(status_code=409, detail="This image is damaged on disk; delete it and upload it again") from None
+
+
+@router.get("/assets/{asset_id}/image")
+def asset_image(asset_id: str, rec=_SessionRec):
+    doc = _own_asset(rec, asset_id)
+    am = _asset_mod()
+    if not _audit(rec.tenant_id, "video_producer.asset_accessed", {"asset_id": doc["id"], "purpose": "preview"}):
+        raise HTTPException(status_code=503, detail="The access could not be recorded")
+    try:
+        png = _asset_store(rec).get(asset_id)["png"]
+    except (am.AssetNotFound, am.AssetError):
+        raise HTTPException(status_code=404, detail=_ASSET_NOT_FOUND) from None
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+                             "Content-Security-Policy": "default-src 'none'"})
+
+
+@router.delete("/assets/{asset_id}", status_code=204)
+def delete_asset(asset_id: str, rec=_SessionRec):
+    doc = _own_asset(rec, asset_id)
+    if not _audit(rec.tenant_id, "video_producer.asset_deleted", {"asset_id": doc["id"], "bytes": doc["bytes"]}):
+        raise HTTPException(status_code=503, detail="The deletion could not be recorded; the image was kept")
+    try:
+        _asset_store(rec).delete(asset_id)
+    except _asset_mod().AssetNotFound:
+        raise HTTPException(status_code=404, detail=_ASSET_NOT_FOUND) from None
+    return Response(status_code=204)
