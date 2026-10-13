@@ -5,13 +5,24 @@
  *
  * Export contract:
  *   GET /v1/console/forge-bundles/export/{type}/{id}
- *   GET /v1/console/forge-bundles/export (POST with Content-Type: application/json body for batch)
+ *   (batch = several single-item downloads; the bundle POST needs a bundle id/version + CSRF)
  *
  * Import contract:
  *   POST /v1/console/forge-bundles/import (multipart/form-data)
  */
 
+import { getCurrentCsrf } from '@/lib/csrf-fetch';
+
 export type ForgeType = 'tools' | 'skills' | 'os_skills' | 'plugins' | 'layers';
+
+/** The backend names artifact kinds in the singular. */
+const KIND: Record<ForgeType, string> = {
+  tools: 'tool',
+  skills: 'skill',
+  os_skills: 'os_skill',
+  plugins: 'plugin',
+  layers: 'layer',
+};
 
 interface ImportResponse {
   success: boolean;
@@ -56,37 +67,11 @@ export function extractFilenameFromHeader(contentDisposition: string): string {
  * @returns Full URL path (e.g. /v1/console/forge-bundles/export/tools/my-tool?version=...)
  */
 export function buildExportUrl(type: ForgeType, id: string, version?: string): string {
-  const url = `/v1/console/forge-bundles/export/${type}/${encodeURIComponent(id)}`;
+  const url = `/v1/console/forge-bundles/export/${KIND[type]}/${encodeURIComponent(id)}`;
   if (version) {
     return `${url}?version=${encodeURIComponent(version)}`;
   }
   return url;
-}
-
-/**
- * Build the batch export request.
- *
- * @param type Forge type
- * @param ids Item IDs to export
- * @returns Request object for use with fetch
- */
-export function buildBatchExportRequest(
-  type: ForgeType,
-  ids: string[],
-): { url: string; init: RequestInit } {
-  return {
-    url: '/v1/console/forge-bundles/export',
-    init: {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        type,
-        ids,
-      }),
-    },
-  };
 }
 
 /**
@@ -127,7 +112,14 @@ export async function exportSingleItem(
       if (response.status === 404) {
         return { success: false, error: 'not available on this build' };
       }
-      return { success: false, error: `HTTP ${response.status}` };
+      let detail = '';
+      try {
+        const body = await response.json();
+        if (typeof body?.detail === 'string') detail = ` — ${body.detail}`;
+      } catch {
+        /* non-JSON body */
+      }
+      return { success: false, error: `HTTP ${response.status}${detail}` };
     }
 
     const blob = await response.blob();
@@ -158,30 +150,12 @@ export async function exportBatchItems(
   if (ids.length === 0) {
     return { success: false, error: 'No items selected' };
   }
-
-  try {
-    const { url, init } = buildBatchExportRequest(type, ids);
-    const response = await fetch(url, init);
-
-    if (!response.ok) {
-      if (response.status === 404) {
-        return { success: false, error: 'not available on this build' };
-      }
-      return { success: false, error: `HTTP ${response.status}` };
-    }
-
-    const blob = await response.blob();
-    const contentDisposition = response.headers.get('Content-Disposition') || '';
-    const filename = extractFilenameFromHeader(contentDisposition);
-
-    downloadBlob(blob, filename);
-    return { success: true, filename };
-  } catch (err) {
-    return {
-      success: false,
-      error: err instanceof Error ? err.message : 'Unknown error',
-    };
+  const failed: string[] = [];
+  for (const id of ids) {
+    const r = await exportSingleItem(type, id);
+    if (!r.success) failed.push(`${id}: ${r.error}`);
   }
+  return failed.length ? { success: false, error: failed.join('; ') } : { success: true };
 }
 
 /**
@@ -193,11 +167,13 @@ export async function exportBatchItems(
 export async function importBundle(file: File): Promise<ImportResponse> {
   try {
     const formData = new FormData();
-    formData.append('bundle', file);
+    formData.append('file', file);
 
     const response = await fetch('/v1/console/forge-bundles/import', {
       method: 'POST',
       body: formData,
+      credentials: 'include',
+      headers: { 'X-CSRF-Token': getCurrentCsrf() ?? '' },
     });
 
     if (!response.ok) {
@@ -208,13 +184,30 @@ export async function importBundle(file: File): Promise<ImportResponse> {
         };
       }
 
+      let detail = '';
+      try {
+        const body = await response.json();
+        if (typeof body?.detail === 'string') detail = `: ${body.detail}`;
+      } catch {
+        /* non-JSON body */
+      }
       return {
         success: false,
-        message: `Import failed: HTTP ${response.status}`,
+        message: `Import failed: HTTP ${response.status}${detail}`,
       };
     }
 
-    return await response.json();
+    const r = await response.json();
+    const failed = r.failed_count ?? 0;
+    return {
+      success: failed === 0,
+      message: failed === 0 ? 'Imported' : `${failed} item(s) were not imported`,
+      imported_count: (r.artifact_count ?? 0) - failed,
+      failed_count: failed,
+      errors: (r.outcomes ?? [])
+        .filter((o: { status?: string }) => o.status === 'failed' || o.status === 'refused')
+        .map((o: { id: string; detail?: string }) => `${o.id}: ${o.detail ?? ''}`),
+    };
   } catch (err) {
     return {
       success: false,

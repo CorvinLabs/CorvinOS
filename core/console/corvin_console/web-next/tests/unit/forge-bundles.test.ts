@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   extractFilenameFromHeader,
   buildExportUrl,
-  buildBatchExportRequest,
   isValidZipFile,
 } from '@/lib/forge-bundles';
 
@@ -40,53 +39,26 @@ describe('forge-bundles helpers', () => {
   describe('buildExportUrl', () => {
     it('builds single-item export URL for tools', () => {
       expect(buildExportUrl('tools', 'my-tool')).toBe(
-        '/v1/console/forge-bundles/export/tools/my-tool'
+        '/v1/console/forge-bundles/export/tool/my-tool'
       );
     });
 
     it('builds single-item export URL for skills', () => {
       expect(buildExportUrl('skills', 'my-skill')).toBe(
-        '/v1/console/forge-bundles/export/skills/my-skill'
+        '/v1/console/forge-bundles/export/skill/my-skill'
       );
     });
 
     it('URL-encodes special characters in ID', () => {
       expect(buildExportUrl('tools', 'my tool')).toBe(
-        '/v1/console/forge-bundles/export/tools/my%20tool'
+        '/v1/console/forge-bundles/export/tool/my%20tool'
       );
     });
 
     it('encodes slashes and other special chars', () => {
       expect(buildExportUrl('skills', 'org/skill@v1')).toBe(
-        '/v1/console/forge-bundles/export/skills/org%2Fskill%40v1'
+        '/v1/console/forge-bundles/export/skill/org%2Fskill%40v1'
       );
-    });
-  });
-
-  describe('buildBatchExportRequest', () => {
-    it('builds batch export request with correct headers', () => {
-      const req = buildBatchExportRequest('tools', ['tool-1', 'tool-2']);
-
-      expect(req.url).toBe('/v1/console/forge-bundles/export');
-      expect(req.init.method).toBe('POST');
-      expect(req.init.headers).toEqual({
-        'Content-Type': 'application/json',
-      });
-    });
-
-    it('includes type and ids in body', () => {
-      const req = buildBatchExportRequest('skills', ['skill-a', 'skill-b']);
-      const body = JSON.parse(req.init.body as string);
-
-      expect(body.type).toBe('skills');
-      expect(body.ids).toEqual(['skill-a', 'skill-b']);
-    });
-
-    it('handles empty array', () => {
-      const req = buildBatchExportRequest('plugins', []);
-      const body = JSON.parse(req.init.body as string);
-
-      expect(body.ids).toEqual([]);
     });
   });
 

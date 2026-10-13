@@ -619,7 +619,12 @@ export → (use in Claude Web) → import back with original identity and versio
 ### Export Routes
 
 - **Console:** `GET /v1/console/forge-bundles/export/{artifact_type}/{artifact_id}?version=X`
+  - `artifact_type` accepts singular (`tool`, `skill`, `os_skill`, `layer`, `plugin`) and plural (`tools`, …) spellings
+  - `version` is optional: skills/layers use the newest inventory version, tools/OS-Skills have none of their own and get `1.0.0`
+  - Plugins answer `400` (a built package on disk is needed; CLI only)
   - Returns ZIP file with `Content-Disposition: attachment`
+  - The forge tabs' "Download selected" fetches one ZIP per selected item (there is no multi-item single-ZIP route besides the bundle `POST /export`)
+  - Import (`POST /forge-bundles/import`, multipart field `file`, CSRF) auto-detects a single-item ZIP. Tools go to quarantine, layers pass the same `_check_imported_layer` checks as a bundle, skills are re-packed with `SkillPackager` and installed by `SkillInstaller` (owner/admin only)
   - Audit event: `forge_bundle.item_exported` (tenant-scoped, hash-chained)
 
 - **CLI:** `scripts/forge_bundle_cli.py export --skill ID@VER` (not yet implemented for per-item; use bundle export for now)

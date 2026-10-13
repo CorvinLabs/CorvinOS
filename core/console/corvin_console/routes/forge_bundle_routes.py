@@ -1,6 +1,7 @@
-"""Forge Bundle console routes (ADR-2229 Phase 3/4).
+"""Forge Bundle console routes (ADR-2229 Phase 3/4 + per-item export Phase 4).
 
     GET  /forge-bundles/exportable                  what this tenant can export (session)
+    GET  /forge-bundles/export/{type}/{id}          single-item download as ZIP (session)
     POST /forge-bundles/export                      build + download a bundle (session + CSRF)
     POST /forge-bundles/validate                    validate an upload, write nothing (session + CSRF)
     POST /forge-bundles/import                      validate + per-forge intake (session + CSRF)
@@ -151,6 +152,102 @@ def exportable(rec: Annotated[session_auth.SessionRecord, Depends(require_sessio
         raise HTTPException(status_code=503, detail=str(exc)) from None
 
 
+_KIND_ALIASES = {"tools": "tool", "skills": "skill", "os_skills": "os_skill", "layers": "layer", "plugins": "plugin"}
+
+
+def _default_item_version(artifact_type: str, artifact_id: str, rec: session_auth.SessionRecord) -> str:
+    """The version an export carries when the caller names none.
+
+    Skills and layers have one in the inventory (the newest listed wins); tools
+    and OS-Skills carry none of their own, so the file gets a fixed label."""
+    if artifact_type in ("skill", "layer"):
+        from core.forge_bundle.inventory import InventoryUnavailable, exportable
+        try:
+            inv = exportable(rec.tenant_id, include_skills=_may_touch_host_skills(rec))
+        except InventoryUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from None
+        found = [e["version"] for e in inv["skills" if artifact_type == "skill" else "layers"]
+                 if e["id"] == artifact_id and e.get("version")]
+        if not found:
+            raise HTTPException(status_code=404, detail=f"{artifact_type} {artifact_id} not found")
+        return sorted(found)[-1]
+    return "1.0.0"
+
+
+@router.get("/forge-bundles/export/{artifact_type}/{artifact_id}")
+def export_single_item(
+    artifact_type: str,
+    artifact_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    version: str | None = None,
+) -> Response:
+    """Download a single artifact as a ZIP.
+
+    For skills/os_skills: Claude-Web-compatible format with SKILL.md.
+    For other types: native format (tool: spec.json + impl, layer: manifest.json, plugin: pre-built ZIP).
+    """
+    from core.forge_bundle.audit import ForgeBundleAuditError
+    from core.forge_bundle.item_export import ItemExportError, export_single_item as _export_item
+
+    # Accept the plural spellings the forge tabs use as well.
+    artifact_type = _KIND_ALIASES.get(artifact_type, artifact_type)
+
+    # Skills are host-wide; only owner/admin may export them
+    if artifact_type == "skill" and not _may_touch_host_skills(rec):
+        raise HTTPException(
+            status_code=403,
+            detail="skills live in a host-wide store; only the install owner may export them",
+        )
+
+    # OS-Skills are read-only descriptions, accessible to all
+    if artifact_type == "os_skills":
+        artifact_type = "os_skill"  # normalize to singular for internal use
+
+    # Plugins require a package path on disk (CLI only for now)
+    if artifact_type == "plugin":
+        raise HTTPException(
+            status_code=400,
+            detail="plugin export requires a built package on disk; use the CLI: scripts/forge_bundle_cli.py export --plugin ID@VER:PATH",
+        )
+
+    if artifact_type not in ("skill", "os_skill", "tool", "layer", "plugin"):
+        raise HTTPException(status_code=400, detail=f"unknown artifact type: {artifact_type}")
+
+    if not version:
+        version = _default_item_version(artifact_type, artifact_id, rec)
+
+    try:
+        result = _export_item(artifact_type, artifact_id, version, rec.tenant_id, package_path=None)
+    except ItemExportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except ForgeBundleAuditError as exc:
+        raise _audit_unavailable(exc) from None
+
+    # Audit the per-item export
+    try:
+        from core.forge_bundle.audit import emit as audit_emit
+        audit_emit(
+            "forge_bundle.item_exported",
+            tenant_id=rec.tenant_id,
+            artifact_type=artifact_type,
+            artifact_id=artifact_id,
+            artifact_version=version,
+            size_bytes=result.size_bytes,
+            sha256=result.sha256,
+        )
+    except ForgeBundleAuditError:
+        # Log but don't fail the response — the export itself succeeded
+        pass
+
+    return Response(
+        content=result.data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{artifact_id}-{version}.zip"',
+        },
+    )
+
+
 @router.post("/forge-bundles/export")
 def export_bundle(
     body: ExportBody,
@@ -213,9 +310,51 @@ def import_upload(
 ) -> dict[str, Any]:
     from core.forge_bundle.audit import ForgeBundleAuditError
     from core.forge_bundle.import_module import BundleImportAborted, BundleImportError, import_bundle
+    from core.forge_bundle.item_import import ItemImportError, detect_item_type_from_zip, import_single_item
 
     with _heavy_slot("import"):
         data = _read_upload(file)
+
+        # Try to detect if this is a single-item ZIP (Phase 4 enhancement)
+        detected = None
+        try:
+            detected = detect_item_type_from_zip(data)
+        except ItemImportError:
+            # If detection fails, treat it as a bundle and let the bundle importer handle it
+            pass
+
+        # If detected as single-item, import it directly
+        if detected is not None:
+            # Single-item import (Phase 4)
+            if detected.item_type == "skill" and not _may_touch_host_skills(rec):
+                raise HTTPException(
+                    status_code=403,
+                    detail="skills live in a host-wide store; only the install owner may import them",
+                )
+            try:
+                outcome = import_single_item(detected, tenant_id=rec.tenant_id, actor=_ACTOR)
+                return {
+                    "bundle_id": "single-item",
+                    "bundle_version": detected.item_version,
+                    "artifact_count": 1,
+                    "failed_count": 0,
+                    "outcomes": [
+                        {
+                            "kind": detected.item_type,
+                            "id": detected.item_id,
+                            "version": detected.item_version,
+                            "status": outcome.get("status", "unknown"),
+                            "detail": outcome.get("detail", ""),
+                        }
+                    ],
+                    "origin_verified": False,
+                }
+            except ItemImportError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from None
+            except ForgeBundleAuditError as exc:
+                raise _audit_unavailable(exc) from None
+
+        # Otherwise, import as a bundle (existing logic)
         try:
             result = import_bundle(data, tenant_id=rec.tenant_id, actor=_ACTOR,
                                    may_install_skills=_may_touch_host_skills(rec))

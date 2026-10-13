@@ -461,3 +461,71 @@ def test_R4_A9_3_rejecting_a_reupload_of_an_installed_plugin_keeps_the_approval(
     assert _upload_plugin(client, csrf, data).json()["upload_id"] == uid
     assert client.post(f"{PLUGINS}/{uid}/reject", headers={"X-CSRF-Token": csrf}).status_code == 200
     assert StagingManager(T).get_decision(uid) == "approved"
+
+
+# --- per-item download, as the forge tabs call it (plural kinds, no version) ---
+
+
+@pytest.mark.parametrize("kind", ["tool", "tools"])
+def test_single_tool_download_without_version_returns_a_zip(console_client, make_tool, kind):
+    client, _csrf = console_client
+    make_tool("csv.count")
+    r = client.get(f"{BASE}/export/{kind}/csv.count")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "application/zip"
+    assert zipfile.ZipFile(io.BytesIO(r.content)).namelist()
+
+
+def test_single_layer_download_resolves_the_inventory_version(console_client, make_layer):
+    client, _csrf = console_client
+    make_layer("acme.audit-l34", "1.0.0")
+    r = client.get(f"{BASE}/export/layers/acme.audit-l34")
+    assert r.status_code == 200, r.text
+    assert 'filename="acme.audit-l34-1.0.0.zip"' in r.headers["content-disposition"]
+    assert client.get(f"{BASE}/export/layers/nope").status_code == 404
+
+
+def test_single_item_download_requires_a_session(console_client):
+    client, _csrf = console_client
+    client.cookies.clear()
+    assert client.get(f"{BASE}/export/tool/csv.count").status_code == 401
+
+
+def test_single_tool_zip_round_trips_through_the_import_route(console_client, make_tool):
+    client, csrf = console_client
+    make_tool("csv.count")
+    zip_bytes = client.get(f"{BASE}/export/tools/csv.count").content
+    from forge.multi_registry import MultiRegistry
+    MultiRegistry(tenant_id=T).delete("csv.count")
+
+    r = _upload(client, csrf, "import", zip_bytes)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["artifact_count"] == 1 and body["failed_count"] == 0
+    assert body["outcomes"][0]["kind"] == "tool" and body["outcomes"][0]["id"] == "csv.count"
+
+
+def test_single_layer_zip_round_trips_through_the_import_route(console_client, make_layer):
+    client, csrf = console_client
+    make_layer("acme.audit-l34", "1.0.0")
+    zip_bytes = client.get(f"{BASE}/export/layers/acme.audit-l34").content
+    from core.orchestration.layer_forge.orchestrator import layer_forge_home
+    (layer_forge_home(T) / "registry" / "acme.audit-l34@1.0.0.json").unlink()
+
+    r = _upload(client, csrf, "import", zip_bytes)
+    assert r.status_code == 200, r.text
+    assert r.json()["failed_count"] == 0
+
+
+def test_single_skill_zip_round_trips_through_the_import_route(console_client, make_skill):
+    client, csrf = console_client
+    make_skill("summarize", "1.0.0")
+    resp = client.get(f"{BASE}/export/skills/summarize")
+    assert resp.status_code == 200, resp.text
+    zip_bytes = resp.content
+    names = zipfile.ZipFile(io.BytesIO(zip_bytes)).namelist()
+    assert any(n.endswith("SKILL.md") for n in names)  # Claude-Web layout
+
+    r = _upload(client, csrf, "import", zip_bytes)
+    assert r.status_code == 200, r.text
+    assert r.json()["failed_count"] == 0
