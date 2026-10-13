@@ -4703,6 +4703,62 @@ def resume_owed_task_summaries(tenant_id: str) -> int:
     return started
 
 
+#: Tenants whose missing session summaries were already queued in this process.
+_BACKFILL_SWEPT: "set[str]" = set()
+
+#: Attempts per chat (the failure is usually a transient `claude -p` / TTS
+#: error), the pause between them (multiplied by the attempt number) and the
+#: pause between chats — the backfill is one SERIAL loop, so catching up on
+#: dozens of chats never becomes a burst of paid spawns.
+_BACKFILL_MAX_ATTEMPTS = 3
+_BACKFILL_RETRY_DELAY_S = 60.0
+_BACKFILL_GAP_S = 5.0
+
+
+async def _run_summary_backfill(tenant_id: str, sids: "list[str]") -> None:
+    from .routes import voice as _voice  # noqa: PLC0415 — avoid import cycle at module load
+    for sid in sids:
+        if (tenant_id, sid) in _SESSION_SUMMARY_INFLIGHT:
+            continue  # a turn-triggered regeneration is already on it
+        for attempt in range(1, _BACKFILL_MAX_ATTEMPTS + 1):
+            ok = await asyncio.to_thread(
+                _voice.generate_and_persist_session_summary, tenant_id, sid, trigger="backfill")
+            if ok:
+                break
+            if attempt < _BACKFILL_MAX_ATTEMPTS:
+                await asyncio.sleep(_BACKFILL_RETRY_DELAY_S * attempt)
+        await asyncio.sleep(_BACKFILL_GAP_S)
+
+
+def resume_missing_session_summaries(tenant_id: str) -> int:
+    """Once per process and tenant: queue a summary for every chat that has
+    answered turns but none persisted (chats that predate the feature, or whose
+    only attempt failed — a summary is otherwise triggered solely by the close
+    of a COMPLETED turn, so such a chat waits for a turn that may never come).
+    Returns how many chats were queued. Needs the running event loop."""
+    if tenant_id in _BACKFILL_SWEPT:
+        return 0
+    from .routes import voice as _voice  # noqa: PLC0415 — avoid import cycle at module load
+    try:
+        sids = _voice.sessions_missing_summary(tenant_id)
+    except Exception:  # noqa: BLE001 — the sweep must never break a connection
+        _log.warning("missing session summaries sweep failed for %s", tenant_id, exc_info=True)
+        return 0
+    _BACKFILL_SWEPT.add(tenant_id)
+    if not sids:
+        return 0
+    coro = _run_summary_backfill(tenant_id, sids)
+    try:
+        task = asyncio.create_task(coro)
+    except RuntimeError:
+        coro.close()
+        _BACKFILL_SWEPT.discard(tenant_id)
+        return 0
+    _SESSION_SUMMARY_TASKS.add(task)
+    task.add_done_callback(_SESSION_SUMMARY_TASKS.discard)
+    return len(sids)
+
+
 def _last_exchange(tenant_id: str, sid: str) -> tuple[str, str]:
     """(user text, assistant text) of the chat's most recent persisted exchange."""
     user = answer = ""
@@ -4758,8 +4814,10 @@ def _spawn_session_summary_auto(sess: "WebChatSession") -> None:
             _SESSION_SUMMARY_RERUN.add(key)  # latest turn not covered yet
         return
     if len(_SESSION_SUMMARY_TASKS) >= _SESSION_SUMMARY_MAX_CONCURRENT:
-        if forced:
-            _SESSION_SUMMARY_RERUN.add(key)
+        # Never just drop: an un-forced request used to vanish here, leaving the
+        # chat without a summary until another turn happened to close. Owe it
+        # to the next free slot (the gate below still decides whether it runs).
+        _SESSION_SUMMARY_RERUN.add(key)
         return
     from .routes import voice as _voice  # noqa: PLC0415
     try:
@@ -4784,9 +4842,15 @@ def _spawn_session_summary_auto(sess: "WebChatSession") -> None:
     def _done(t: "asyncio.Task[Any]") -> None:
         _SESSION_SUMMARY_TASKS.discard(t)
         _SESSION_SUMMARY_INFLIGHT.discard(key)
-        if key in _SESSION_SUMMARY_RERUN:
-            _SESSION_SUMMARY_RERUN.discard(key)
-            fresh = get_session(*key)
+        # Drain EVERY owed chat into the slots this finish freed, not only this
+        # chat: a request deferred at the concurrency cap belongs to another key.
+        for owed in list(_SESSION_SUMMARY_RERUN):
+            if owed in _SESSION_SUMMARY_INFLIGHT:
+                continue
+            if len(_SESSION_SUMMARY_TASKS) >= _SESSION_SUMMARY_MAX_CONCURRENT:
+                break
+            _SESSION_SUMMARY_RERUN.discard(owed)
+            fresh = get_session(*owed)
             if fresh is not None:
                 _spawn_session_summary_auto(fresh)
         if t.cancelled():

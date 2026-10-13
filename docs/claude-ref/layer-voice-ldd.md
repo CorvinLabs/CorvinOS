@@ -1010,6 +1010,21 @@ building the second scheme it warned against.
   best-effort, capped at `_SESSION_SUMMARY_MAX_CONCURRENT = 2` in flight and
   one regeneration per `(tenant_id, sid)` at a time
   (`_SESSION_SUMMARY_INFLIGHT`).
+- **Backfill + audited failures (2026-10-13).** A turn close was the ONLY trigger, so
+  every chat that predates the feature, or whose single attempt failed, waited for a turn
+  that might never come (measured: 10 of 38 chats without a summary, 3 failure records in
+  the audit chain — six of the eight `return False` exits were silent). Now:
+  `chat_runtime.resume_missing_session_summaries()` runs once per process and tenant when a
+  chat websocket connects (next to `resume_owed_task_summaries`) and works the list from
+  `voice.sessions_missing_summary()` in ONE serial loop (3 attempts, 60 s × attempt backoff,
+  5 s between chats, `trigger="backfill"`); a request deferred at the concurrency cap is
+  owed to the next free slot (`_SESSION_SUMMARY_RERUN`, drained for every key when a task
+  finishes) instead of being dropped; every failure exit of
+  `generate_and_persist_session_summary()` calls `_session_summary_failed()` →
+  `console.action_failed` with a reason (`no-session`, `license-gate`, `empty-transcript`,
+  `summarize-missing`, `summarize-exit-nonzero`, `summarize-empty-output`, `timeout`,
+  `tts-exit-nonzero`, `tts-empty-output`, `tts-timeout`, `persist-failed`). Proof:
+  `core/console/tests/test_voice_session_summary_auto.py::SessionSummaryBackfillTest`.
 - **Gate:** `routes/voice.py::should_auto_generate_session_summary()` skips
   regeneration unless the chat has gained at least
   `_AUTO_SUMMARY_MIN_TURN_DELTA = 3` turns since its last summary's

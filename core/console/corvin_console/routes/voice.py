@@ -2098,6 +2098,38 @@ def _session_summary_paths(tenant_id: str, sid: str) -> "tuple[Path, Path]":
     return d, d / _SESSION_SUMMARY_META_NAME
 
 
+def _session_summary_failed(tenant_id: str, sid: str, reason: str) -> bool:
+    """Audit a failed persisted-summary generation and return False.
+
+    Every `return False` path of generate_and_persist_session_summary goes
+    through here: before this, six of the eight exits were silent, so a chat
+    that never got a summary was indistinguishable from one that was never
+    tried (measured 2026-10-13: 10 of 38 chats without a summary, 3 failure
+    records in the whole audit chain).
+    """
+    console_audit.action_failed(
+        tenant_id=tenant_id, sid_fingerprint="system",
+        action="voice.session_summary", target_kind="voice", target_id=sid,
+        reason=reason,
+    )
+    return False
+
+
+def sessions_missing_summary(tenant_id: str) -> "list[str]":
+    """Sids of this tenant's chats that have answered turns but no persisted
+    summary, newest activity first — the backfill worklist."""
+    from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
+    owed = []
+    for sess in _cr.list_sessions(tenant_id):
+        if sess.turn_count <= 0:
+            continue
+        if _session_summary_paths(tenant_id, sess.sid)[1].exists():
+            continue
+        owed.append(sess)
+    owed.sort(key=lambda x: getattr(x, "last_active_at", 0) or 0, reverse=True)
+    return [x.sid for x in owed]
+
+
 def should_auto_generate_session_summary(tenant_id: str, sid: str, turn_count: int) -> bool:
     """True when this chat has no summary yet, or has gained enough new
     turns since the last one to justify the paid regeneration."""
@@ -2135,7 +2167,7 @@ def generate_and_persist_session_summary(
 
     sess = _cr.get_session(tenant_id, sid)
     if sess is None:
-        return False
+        return _session_summary_failed(tenant_id, sid, "no-session")
 
     try:
         # Same voice-axis metering as the on-demand route — see its call for
@@ -2145,15 +2177,15 @@ def generate_and_persist_session_summary(
         from ._compute_license_gate import enforce_voice_summaries  # noqa: PLC0415
         enforce_voice_summaries(tenant_id, "system", audit_action="voice.session_summary")
     except HTTPException:
-        return False
+        return _session_summary_failed(tenant_id, sid, "license-gate")
 
     transcript = _build_session_transcript(tenant_id, sid)
     if not transcript:
-        return False
+        return _session_summary_failed(tenant_id, sid, "empty-transcript")
 
     summarize_path = _VOICE_SCRIPTS / "summarize.py"
     if not summarize_path.exists():
-        return False
+        return _session_summary_failed(tenant_id, sid, "summarize-missing")
 
     resolved_lang = lang if lang in ("de", "en") else "de"
     angle = random.choice(
@@ -2171,20 +2203,11 @@ def generate_and_persist_session_summary(
             encoding="utf-8", errors="replace", timeout=_TTS_SUMMARIZE_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
-        console_audit.action_failed(
-            tenant_id=tenant_id, sid_fingerprint="system",
-            action="voice.session_summary", target_kind="voice", target_id=sid,
-            reason="timeout",
-        )
-        return False
+        return _session_summary_failed(tenant_id, sid, "timeout")
     if proc.returncode != 0 or not proc.stdout.strip():
-        console_audit.action_failed(
-            tenant_id=tenant_id, sid_fingerprint="system",
-            action="voice.session_summary", target_kind="voice", target_id=sid,
-            reason=("summarize-exit-nonzero" if proc.returncode != 0
-                    else "summarize-empty-output"),
-        )
-        return False
+        return _session_summary_failed(
+            tenant_id, sid,
+            "summarize-exit-nonzero" if proc.returncode != 0 else "summarize-empty-output")
     recap_text = proc.stdout.strip()[:_TTS_PROVIDER_CHAR_LIMIT]
 
     with tempfile.NamedTemporaryFile(prefix="corvin_tts_", suffix=".opus", delete=False) as fh:
@@ -2195,18 +2218,13 @@ def generate_and_persist_session_summary(
                                encoding="utf-8", errors="replace", env=_say_env(),
                                timeout=_tts_timeout_for(recap_text))
         if proc2.returncode != 0:
-            return False
+            return _session_summary_failed(tenant_id, sid, "tts-exit-nonzero")
         size = out_path.stat().st_size if out_path.exists() else 0
         if size == 0 or not proc2.stdout.strip():
-            return False
+            return _session_summary_failed(tenant_id, sid, "tts-empty-output")
         data = out_path.read_bytes()
     except subprocess.TimeoutExpired:
-        console_audit.action_failed(
-            tenant_id=tenant_id, sid_fingerprint="system",
-            action="voice.session_summary", target_kind="voice", target_id=sid,
-            reason="tts-timeout",
-        )
-        return False
+        return _session_summary_failed(tenant_id, sid, "tts-timeout")
     finally:
         _cleanup_tts_tmp(out_path)
 
@@ -2246,7 +2264,7 @@ def generate_and_persist_session_summary(
         meta_tmp.replace(meta_path)
     except OSError:
         _log.warning("session summary persist failed for %s:%s", tenant_id, sid, exc_info=True)
-        return False
+        return _session_summary_failed(tenant_id, sid, "persist-failed")
 
     # Full history: the fixed pair above is only the LATEST recap. Every
     # generation is also kept (timestamped audio + one JSONL row), never

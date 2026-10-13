@@ -563,6 +563,7 @@ async def chat_stream(
     # The operator is back: finish any voice summary a previous process (or a
     # failed attempt) still owed. Once per process and tenant; runs detached.
     chat_runtime.resume_owed_task_summaries(rec.tenant_id)
+    chat_runtime.resume_missing_session_summaries(rec.tenant_id)
     with contextlib.suppress(Exception):
         console_audit.action_performed(
             tenant_id=rec.tenant_id,

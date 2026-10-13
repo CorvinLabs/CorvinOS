@@ -309,3 +309,48 @@ class SpawnHookReachabilityTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SessionSummaryBackfillTest(SessionSummaryAutoTest):
+    """A chat that answered turns but has no persisted summary (it predates the
+    feature, or its only attempt failed) is summarised when the operator comes
+    back — through the REAL websocket connect, not by calling the helper —
+    and every failed attempt leaves an audit record naming the reason."""
+
+    def test_missing_summaries_listed_newest_first_and_only_when_owed(self) -> None:
+        done = self._make_session_with_turns(n_pairs=1)
+        owed = self._make_session_with_turns(n_pairs=2)
+        chat_runtime.create_session(self.tenant_id, title="never answered")
+        self._synth()
+        self.assertTrue(voice_routes.generate_and_persist_session_summary(self.tenant_id, done.sid))
+        self.assertEqual(voice_routes.sessions_missing_summary(self.tenant_id), [owed.sid])
+
+    def test_ws_connect_backfills_a_chat_with_no_summary(self) -> None:
+        sess = self._make_session_with_turns(n_pairs=2)
+        self._synth()
+        chat_runtime._BACKFILL_SWEPT.discard(self.tenant_id)
+        with patch.object(chat_runtime, "_BACKFILL_GAP_S", 0.0):
+            with self.client.websocket_connect(
+                    f"/v1/console/chat/sessions/{sess.sid}/stream") as ws:
+                self.assertEqual(ws.receive_json()["type"], "ready")
+                deadline = time.time() + 10
+                meta = voice_routes._session_summary_paths(self.tenant_id, sess.sid)[1]
+                while time.time() < deadline and not meta.exists():
+                    time.sleep(0.05)
+        self.assertTrue(meta.exists(), "WS connect did not backfill the missing summary")
+
+    def test_every_failure_exit_is_audited_with_its_reason(self) -> None:
+        sess = self._make_session_with_turns(n_pairs=1)
+        seen: list[str] = []
+        with patch.object(voice_routes.console_audit, "action_failed",
+                          lambda **kw: seen.append(kw["reason"])):
+            self.assertFalse(voice_routes.generate_and_persist_session_summary(
+                self.tenant_id, "does-not-exist"))
+            with patch.object(voice_routes, "_build_session_transcript", return_value=""):
+                self.assertFalse(voice_routes.generate_and_persist_session_summary(
+                    self.tenant_id, sess.sid))
+            with patch.object(voice_routes.subprocess, "run",
+                              lambda *a, **k: _completed(1)):
+                self.assertFalse(voice_routes.generate_and_persist_session_summary(
+                    self.tenant_id, sess.sid))
+        self.assertEqual(seen, ["no-session", "empty-transcript", "summarize-exit-nonzero"])

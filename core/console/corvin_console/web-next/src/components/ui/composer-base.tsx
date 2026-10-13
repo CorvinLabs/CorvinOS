@@ -24,6 +24,8 @@ import { cn } from "@/lib/utils";
 export interface ComposerBaseHandle {
   /** Get the underlying textarea element (for CommandPalette selection, etc.). */
   getTextarea(): HTMLTextAreaElement | null;
+  /** Stop a live recording (the transcript stays in the field). */
+  stopRecording(): void;
 }
 
 export interface ComposerBaseProps {
@@ -43,6 +45,8 @@ export interface ComposerBaseProps {
   onError?: (message: string) => void;
   /** Called when auth token expires during voice. */
   onAuthExpired?: () => void;
+  /** Called whenever the recording flag flips. */
+  onRecordingChange?: (recording: boolean) => void;
   /** Placeholder text. */
   placeholder?: string;
   /** Textarea rows (defaults to 1). */
@@ -143,6 +147,7 @@ export const ComposerBase = React.forwardRef<ComposerBaseHandle, ComposerBasePro
       submitDisabled = false,
       onError,
       onAuthExpired,
+      onRecordingChange,
       placeholder = "Message…",
       rows = 1,
       maxHeight = 320,
@@ -161,13 +166,6 @@ export const ComposerBase = React.forwardRef<ComposerBaseHandle, ComposerBasePro
   ) {
     const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
-    React.useImperativeHandle(
-      ref,
-      () => ({
-        getTextarea: () => textareaRef.current,
-      }),
-      [],
-    );
     useAutosizeTextarea(textareaRef, value, maxHeight);
 
     const { recording, startRecording, stopRecording } = useVoiceInput({
@@ -177,7 +175,17 @@ export const ComposerBase = React.forwardRef<ComposerBaseHandle, ComposerBasePro
       disabled,
       onError,
       onAuthExpired,
+      onRecordingChange,
     });
+
+    React.useImperativeHandle(
+      ref,
+      () => ({
+        getTextarea: () => textareaRef.current,
+        stopRecording,
+      }),
+      [stopRecording],
+    );
 
     // Long-press support on mic button (touch-friendly)
     const micLongPress = useLongPress({

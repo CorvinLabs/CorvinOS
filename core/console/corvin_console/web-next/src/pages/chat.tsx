@@ -11,8 +11,6 @@ import {
   Hammer,
   ListChecks,
   Loader2,
-  Mic,
-  MicOff,
   Paperclip,
   Pencil,
   Plus,
@@ -48,7 +46,6 @@ import {
   updateChatSessionTitle,
   openSessionWorkdir,
   uploadAttachments,
-  transcribeAudio,
   sendBtwNote,
   ApiError,
   type AttachmentMeta,
@@ -104,30 +101,6 @@ import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
 import { useFileDrop, supportsDirectoryDrop, MAX_DROPPED_FILES } from "@/hooks/use-file-drop";
 import { DropOverlay } from "@/components/chat/DropOverlay";
 import { PanelRight } from "lucide-react";
-
-// ── Web Speech API minimal surface (not in lib.dom.d.ts) ───────────────────
-interface SpeechRecognitionResultLike {
-  isFinal: boolean;
-  0?: { transcript: string };
-}
-interface SpeechRecognitionEventLike {
-  resultIndex: number;
-  results: ArrayLike<SpeechRecognitionResultLike>;
-}
-interface SpeechRecognitionErrorLike {
-  error?: string;
-}
-interface SpeechRecognitionLike {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onerror: ((event: SpeechRecognitionErrorLike) => void) | null;
-  onend: (() => void) | null;
-  start(): void;
-  stop(): void;
-}
-type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 
 /**
  * Detect the language of a text for TTS playback and return a BCP-47 code.
@@ -1313,221 +1286,27 @@ function ChatPane({
     }
   }, [sid, csrf]);
 
-  // ── Voice recording ──────────────────────────────────────────────
-  const mediaRef = React.useRef<MediaRecorder | null>(null);
-  const chunksRef = React.useRef<Blob[]>([]);
-  // Holds a live SpeechRecognition instance when the Web Speech API path is active.
-  const recognitionRef = React.useRef<SpeechRecognitionLike | null>(null);
+  // ── Voice input ───────────────────────────────────────────────────────────
+  // ONE push-to-talk implementation: the `useVoiceInput` hook inside
+  // <ComposerBase> (Space-hold, mic button, Web Speech → MediaRecorder
+  // fallback). ChatPane used to carry a second, private copy with its own
+  // window-level Space listener; two live SpeechRecognition instances evict
+  // each other (Chrome allows one), so a hold produced start/abort loops and
+  // no transcript ever reached the composer. ChatPane only mirrors the
+  // `recording` flag (via onRecordingChange) for the placeholder, overlay and
+  // global-Enter guard, and stops through the composer handle.
+  const stopRecording = React.useCallback(() => composerRef.current?.stopRecording(), []);
 
-  const startRecording = async () => {
-    // Prefer the browser's built-in Web Speech API: works on Chrome and Edge
-    // without any API key (audio goes to Google/Microsoft, no user credential
-    // required).  Falls back to MediaRecorder → Python STT for Firefox or if
-    // the browser API errors out.
-    const w = window as Window & {
-      SpeechRecognition?: SpeechRecognitionCtor;
-      webkitSpeechRecognition?: SpeechRecognitionCtor;
-    };
-    const SpeechRecognitionImpl = w.SpeechRecognition ?? w.webkitSpeechRecognition;
-
-    if (SpeechRecognitionImpl) {
-      try {
-        // Capture the text present before the hold, and reset the accumulator.
-        pttBaseRef.current = composerRef.current?.getValue() ?? "";
-        sttAccumRef.current = "";
-        sttStoppingRef.current = false;
-
-        const recognition = new SpeechRecognitionImpl();
-        recognition.continuous = true;        // don't stop on a speech pause
-        recognition.interimResults = false;
-        recognition.lang = navigator.language || "de-DE";
-        recognition.onresult = (event: SpeechRecognitionEventLike) => {
-          // Append only the NEW final results (event.resultIndex forward) so the
-          // accumulator survives the auto-restarts below without duplicating.
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const res = event.results[i];
-            if (res.isFinal && res[0]?.transcript) {
-              sttAccumRef.current += res[0].transcript + " ";
-            }
-          }
-          const base = pttBaseRef.current;
-          const acc = sttAccumRef.current.trim();
-          setInputRef.current(base ? `${base} ${acc}` : acc);
-        };
-        recognition.onerror = (ev: SpeechRecognitionErrorLike) => {
-          // A permissions/service error is terminal; a 'no-speech'/'aborted' during
-          // the hold is not — let onend decide whether to restart.
-          if (ev?.error === "not-allowed" || ev?.error === "service-not-allowed") {
-            sttStoppingRef.current = true;
-          }
-        };
-        recognition.onend = () => {
-          // Push-to-talk: Chrome ends recognition on silence, but the user is still
-          // holding Space — restart and keep listening until they release (which
-          // sets sttStoppingRef via stopRecording()).
-          if (!sttStoppingRef.current) {
-            try { recognition.start(); return; } catch (_e) { /* fall through */ }
-          }
-          recognitionRef.current = null;
-          setRecording(false);
-        };
-        recognition.start();
-        recognitionRef.current = recognition;
-        setRecording(true);
-        return;
-      } catch (_e) {
-        // Web Speech API start failed — fall through to MediaRecorder
-      }
-    }
-
-    // MediaRecorder → Python STT (Firefox, or Web Speech API unavailable)
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      chunksRef.current = [];
-      const mr = new MediaRecorder(stream, { mimeType: pickMime() });
-      mr.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      mr.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        if (voiceUnmountedRef.current) return;
-        const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
-        try {
-          const r = await transcribeAudio(blob, csrf);
-          setInput((prev) => (prev ? `${prev} ${r.text}` : r.text));
-        } catch (e) {
-          // 403 = stale CSRF token (e.g. console restart) — refresh session silently
-          if (e instanceof ApiError && e.status === 403) {
-            refreshAuth();
-            setError("Session expired — please record again.");
-          } else {
-            setError(e instanceof Error ? e.message : "Transcription failed");
-          }
-        }
-      };
-      mr.start();
-      mediaRef.current = mr;
-      setRecording(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "microphone access denied");
-    }
-  };
-
-  // Release the microphone when this pane unmounts mid-recording (switching
-  // conversation remounts the keyed pane): see use-voice-input.ts.
-  const voiceUnmountedRef = React.useRef(false);
-  React.useEffect(() => () => {
-    voiceUnmountedRef.current = true;
-    sttStoppingRef.current = true;
-    try { recognitionRef.current?.stop(); } catch (_e) { /* already ended */ }
-    recognitionRef.current = null;
-    const mr = mediaRef.current;
-    mediaRef.current = null;
-    if (mr) {
-      try { if (mr.state !== "inactive") mr.stop(); } catch (_e) { /* already stopped */ }
-      mr.stream.getTracks().forEach((t) => t.stop());
-    }
-  }, []);
-
-  const stopRecording = () => {
-    if (recognitionRef.current) {
-      // Signal the release FIRST so onend finalizes instead of auto-restarting.
-      sttStoppingRef.current = true;
-      try { recognitionRef.current.stop(); } catch (_e) { /* already ended */ }
-      recognitionRef.current = null;
-    } else {
-      mediaRef.current?.stop();
-      mediaRef.current = null;
-    }
-    setRecording(false);
-  };
-
-  // ── Push-to-talk: hold Space (≥400 ms) to record ────────────────
-  // Works even when the chat textarea has focus — a short tap types a
-  // normal space, a held press (≥400 ms) starts speech-to-text.
-  // When PTT activates from the textarea the stray space that landed
-  // during the hold is trimmed from the input before recording starts.
-  // Buttons, links, <select>, and contentEditable own Space natively
-  // (click / scroll / activation) and are never intercepted.
+  // Refs read by the global-Enter handler below.
   const recordingRef = React.useRef(false);
-  // Push-to-talk speech accumulation across Web-Speech auto-restarts: the browser
-  // recognizer ends on a pause, but we must keep listening until Space is released.
-  const sttAccumRef = React.useRef("");       // final transcript so far this hold
-  const pttBaseRef = React.useRef("");        // input text before the hold started
-  const sttStoppingRef = React.useRef(false); // true once the user released the key
-  // pttPendingRef is set synchronously in the hold-timer callback before the
-  // async startRecording() call.  onKeyUp checks it so that a keyUp arriving
-  // before React commits the recording state still stops the recording.
-  const pttPendingRef = React.useRef(false);
   const streamingRef = React.useRef(streaming);
-  const startRecRef = React.useRef(startRecording);
-  const stopRecRef = React.useRef(stopRecording);
-  const setInputRef = React.useRef(setInput);
   const sendUserRef = React.useRef(sendUser);
   const submitFromComposer = React.useCallback((text: string) => sendUserRef.current(text), []);
-  React.useEffect(() => {
-    recordingRef.current = recording;
-    if (recording) pttPendingRef.current = false; // recording confirmed — clear pending
-  }, [recording]);
+  React.useEffect(() => { recordingRef.current = recording; }, [recording]);
   React.useEffect(() => { streamingRef.current = streaming; }, [streaming]);
-  React.useEffect(() => { startRecRef.current = startRecording; });
-  React.useEffect(() => { stopRecRef.current = stopRecording; });
-  React.useEffect(() => { setInputRef.current = setInput; }, [setInput]);
   React.useEffect(() => { sendUserRef.current = sendUser; });
 
   React.useEffect(() => {
-    // Elements where Space has a native role we must not override.
-    const isNativeSpaceTarget = (el: EventTarget | null): boolean => {
-      if (!(el instanceof HTMLElement)) return false;
-      const tag = el.tagName.toLowerCase();
-      if (tag === "input" || tag === "select") return true;
-      if (el.isContentEditable) return true;
-      if (tag === "button" || tag === "a") return true;
-      return false;
-    };
-    const isTextarea = (el: EventTarget | null): boolean =>
-      el instanceof HTMLElement && el.tagName.toLowerCase() === "textarea";
-
-    let holdTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code !== "Space" || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (isNativeSpaceTarget(e.target)) return;
-      if (recordingRef.current || streamingRef.current) return;
-
-      // Outside textarea → prevent default immediately (no character typed).
-      // Inside textarea → let the space land; trim it if hold completes.
-      const inTextarea = isTextarea(e.target);
-      if (!inTextarea) e.preventDefault();
-
-      holdTimer = setTimeout(() => {
-        holdTimer = null;
-        if (recordingRef.current || streamingRef.current) return;
-        if (inTextarea) {
-          const cur = composerRef.current?.getValue() ?? "";
-          if (cur.endsWith(" ")) setInputRef.current(cur.slice(0, -1));
-        }
-        pttPendingRef.current = true; // mark pending synchronously before async call
-        void startRecRef.current();
-      }, 400);
-    };
-
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code !== "Space") return;
-      if (holdTimer !== null) {
-        // Short press — timer never fired, recording never started; nothing to do.
-        clearTimeout(holdTimer);
-        holdTimer = null;
-        return;
-      }
-      // Check both: recordingRef (committed state) and pttPendingRef (async gap
-      // where startRecording() was called but React hasn't committed yet).
-      if (!recordingRef.current && !pttPendingRef.current) return;
-      pttPendingRef.current = false;
-      e.preventDefault();
-      stopRecRef.current();
-    };
-
     // Elements where Enter has a native role we must not override — same
     // list as Space, plus ALL textareas (the main composer already sends
     // on Enter via its own onKeyDown; any other textarea on the page, e.g.
@@ -1559,14 +1338,9 @@ function ChatPane({
       sendUserRef.current(composerRef.current?.getValue() ?? "");
     };
 
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
     window.addEventListener("keydown", onGlobalEnter);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("keydown", onGlobalEnter);
-      if (holdTimer !== null) clearTimeout(holdTimer);
     };
   }, []);
 
@@ -1996,16 +1770,6 @@ function ChatPane({
                 <FolderUp className="h-4 w-4" />
               </Button>
             )}
-            <Button
-              variant={recording ? "destructive" : "ghost"}
-              size="icon"
-              className={cn("h-8 w-8 shrink-0", !recording && "text-muted-foreground")}
-              onClick={recording ? stopRecording : startRecording}
-              disabled={streaming}
-              title={recording ? "Stop recording (or release Space)" : "Start recording (or hold Space)"}
-            >
-              {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-            </Button>
             <ChatComposerField
               ref={composerRef}
               placeholder={recording
@@ -2013,7 +1777,11 @@ function ChatPane({
                 : streaming
                   ? "Reply streaming — /btw <note> steers it, /stop ends it"
                   : "Message Corvin… (hold Space to speak)"}
-              disabled={recording}
+              disabled={false}
+              csrf={csrf}
+              onRecordingChange={setRecording}
+              onVoiceError={setError}
+              onAuthExpired={refreshAuth}
               onSubmit={submitFromComposer}
               onHasTextChange={setComposerHasText}
               onEntityHintChange={setCccEntityHint}
@@ -2196,6 +1964,7 @@ interface ComposerFieldHandle {
   getValue: () => string;
   setValue: (next: string | ((prev: string) => string)) => void;
   closePalette: () => void;
+  stopRecording: () => void;
 }
 
 // Mirrors entity_extract.py heuristics; pure, so it lives outside the component.
@@ -2234,9 +2003,13 @@ const ChatComposerField = React.memo(
       onHasTextChange: (hasText: boolean) => void;
       onEntityHintChange: (hint: string | null) => void;
       csrf?: string; // Required for voice input in ComposerBase
+      onRecordingChange?: (recording: boolean) => void;
+      onVoiceError?: (message: string) => void;
+      onAuthExpired?: () => void;
     }
   >(function ChatComposerField(
-    { placeholder, disabled, onSubmit, onHasTextChange, onEntityHintChange, csrf = "" },
+    { placeholder, disabled, onSubmit, onHasTextChange, onEntityHintChange, csrf = "",
+      onRecordingChange, onVoiceError, onAuthExpired },
     ref,
   ) {
     const [value, setValueState] = React.useState("");
@@ -2262,6 +2035,7 @@ const ChatComposerField = React.memo(
         getValue: () => valueRef.current,
         setValue,
         closePalette: () => closePaletteRef.current(),
+        stopRecording: () => composerRef.current?.stopRecording(),
       }),
       [setValue],
     );
@@ -2294,10 +2068,17 @@ const ChatComposerField = React.memo(
           onSubmit={handleComposerSubmit}
           disabled={disabled}
           csrf={csrf}
+          onError={onVoiceError}
+          onAuthExpired={onAuthExpired}
+          onRecordingChange={onRecordingChange}
           placeholder={placeholder}
           textareaId="chat-input"
           textareaTestId="chat-composer-textarea"
           micTestId="chat-composer-mic"
+          // The chat row (attach / mic / send) already draws the one pill
+          // border and focus ring around this field. ComposerBase's own pill
+          // would paint a second border and ring inside it, so neutralise it.
+          pillCardClassName="border-0 bg-transparent p-0 shadow-none focus-within:border-transparent focus-within:ring-0"
           beforeTextarea={
             <CommandPalette
               matches={slashPalette.matches}
@@ -2785,17 +2566,4 @@ function EmptyChat({ onTry }: { onTry: (text: string) => void }) {
       </p>
     </div>
   );
-}
-
-function pickMime(): string {
-  const candidates = [
-    "audio/webm;codecs=opus",
-    "audio/webm",
-    "audio/ogg;codecs=opus",
-    "audio/mp4",
-  ];
-  for (const c of candidates) {
-    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(c)) return c;
-  }
-  return "";
 }

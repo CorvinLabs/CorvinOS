@@ -183,6 +183,13 @@ ComposerBase
 - **Release:** Stops recording and transcribes
 - **Short tap:** Inserts normal space (no recording triggered)
 - **On native Space targets:** Button/link/select/textarea context menu roles are never intercepted
+- **Exactly one recorder per page.** The `useVoiceInput` hook inside `ComposerBase` is the only
+  push-to-talk implementation; a host page must not add its own Space listener or
+  `SpeechRecognition` (Chrome allows one live instance — two evict each other and no
+  transcript arrives; the chat page did this until 2026-10-13: 11 recognizer starts per hold).
+  A host mirrors the state with `onRecordingChange` and stops via the handle's
+  `stopRecording()`; it passes `csrf` (the MediaRecorder fallback posts to `/voice/transcribe`).
+  Proof: `web-next/tests/e2e/chat-stt-composer.spec.ts`.
 
 ---
 

@@ -74,6 +74,9 @@ export interface UseVoiceInputOptions {
   onError?: (message: string) => void;
   /** Fired on a 403 from the MediaRecorder→STT fallback (stale CSRF token). */
   onAuthExpired?: () => void;
+  /** Mirrors the recording flag to a parent that must react to it (placeholder,
+   *  overlay, global-Enter guard) without owning a second recorder. */
+  onRecordingChange?: (recording: boolean) => void;
 }
 
 export interface UseVoiceInputResult {
@@ -83,7 +86,7 @@ export interface UseVoiceInputResult {
 }
 
 export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
-  const { value, onChange, csrf, disabled = false, onError, onAuthExpired } = opts;
+  const { value, onChange, csrf, disabled = false, onError, onAuthExpired, onRecordingChange } = opts;
 
   const [recording, setRecording] = React.useState(false);
 
@@ -100,16 +103,22 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
   const disabledRef = React.useRef(disabled);
   const valueRef = React.useRef(value);
   const onChangeRef = React.useRef(onChange);
+  const onRecordingChangeRef = React.useRef(onRecordingChange);
 
   React.useEffect(() => { disabledRef.current = disabled; }, [disabled]);
   React.useEffect(() => { valueRef.current = value; }, [value]);
   React.useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+  React.useEffect(() => { onRecordingChangeRef.current = onRecordingChange; }, [onRecordingChange]);
   React.useEffect(() => {
     recordingRef.current = recording;
     if (recording) pttPendingRef.current = false;
+    onRecordingChangeRef.current?.(recording);
   }, [recording]);
 
   const startRecording = React.useCallback(async () => {
+    // A second start while one is live (mic click racing a Space hold) would
+    // evict the live recognizer and restart-loop; one recorder at a time.
+    if (recognitionRef.current || mediaRef.current) return;
     const w = window as Window & {
       SpeechRecognition?: SpeechRecognitionCtor;
       webkitSpeechRecognition?: SpeechRecognitionCtor;
