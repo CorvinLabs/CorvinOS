@@ -687,7 +687,11 @@ def _withheld(rec: dict[str, Any]) -> str:
     label = {"observer_consent": "an observer's consent has ended",
              "consent_check_unavailable": "observer consent cannot be checked",
              "data_flow": "the tenant's data-classification policy does not allow it "
-                          "for this engine"}.get(why, f"refused by the {why} gate")
+                          "for this engine",
+             # A turn stopped while its safety check was still deciding: never
+             # cleared, so never re-supplied — but no gate refused it either.
+             "pre_spawn_cancelled": "the turn was stopped before its safety check "
+                                    "finished"}.get(why, f"refused by the {why} gate")
     return f"(message withheld: {label} — not re-supplied)"
 
 

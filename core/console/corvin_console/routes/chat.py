@@ -988,7 +988,9 @@ async def chat_stream(
                         with contextlib.suppress(Exception):
                             if not _operator_cancelled:
                                 await websocket.send_json({"type": "error", "message": "This chat was deleted."})
-                            await websocket.send_json({"type": "done"})
+                            # `cancelled`: the turn was stopped, it did not finish —
+                            # a steering note it received was not answered (CONCEPT-0107).
+                            await websocket.send_json({"type": "done", "cancelled": True})
                         _operator_cancelled = False
                     elif not _stream_task.cancelled():
                         # Propagate any exception from the turn task.

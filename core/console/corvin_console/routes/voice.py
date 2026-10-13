@@ -1850,7 +1850,9 @@ def _build_session_transcript(tenant_id: str, sid: str, *,
     is what gets dropped, never the start or the end.
     """
     from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
-    turns = _cr.read_turns(tenant_id, sid)
+    # Never feed the recap model text no gate cleared (refused turns, /btw
+    # notes that did not reach the model) — summarize.py has no gate.
+    turns = _cr.summarizable_turns(_cr.read_turns(tenant_id, sid))
     lines: list[str] = []
     for turn in turns:
         role = turn.get("role")

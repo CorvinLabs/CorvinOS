@@ -92,9 +92,11 @@ export function stateFromServer(status: BtwServerStatus): BtwState {
 }
 
 /** Allowed transitions — a late answer can never move a note backwards
- *  (e.g. a `btw_flushed` event racing the HTTP response that said `queued`). */
+ *  (e.g. a `btw_flushed` event racing the HTTP response that said `queued`).
+ *  `failed` is only the CLIENT's view (the request did not come back): what the
+ *  server reports later (`btw_flushed`, a retry's first outcome) overrides it. */
 const RANK: Record<BtwState, number> = {
-  sending: 0, queued: 1, injected: 2, answered: 3, refused: 3, undelivered: 3, failed: 3,
+  sending: 0, failed: 0, queued: 1, injected: 2, answered: 3, refused: 3, undelivered: 3,
 };
 
 export function setSteerState(

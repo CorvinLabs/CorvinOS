@@ -72,6 +72,14 @@ describe("btw-steer", () => {
     expect(msgs[0].btw).toMatchObject({ state: "sending", clientId: "q1" });
   });
 
+  it("a client-side failure yields to what the server reports later", () => {
+    let msgs = setSteerState([makeSteerMessage("x", "text", "f", 1)], "f", "failed");
+    msgs = setSteerState(msgs, "f", "injected");      // the request had landed after all
+    expect(msgs[0].btw!.state).toBe("injected");
+    msgs = settleOnDone(msgs, { answered: true });
+    expect(msgs[0].btw!.state).toBe("answered");
+  });
+
   it("no-loss: the note's text survives every non-delivered terminal state, with actions", () => {
     for (const s of ["refused", "undelivered", "failed"] as const) {
       const m = setSteerState([makeSteerMessage("keep me", "text", "c", 1)], "c", s);

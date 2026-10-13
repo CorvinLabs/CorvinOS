@@ -1363,6 +1363,27 @@ The console's `/btw` is a **conversation event**, not an API call with a flash m
   - *Client*: "Send again" after `failed` reuses the note's `client_id` (idempotent); leaving the
     chat inside the voice undo window sends the note instead of dropping it; `mergeLiveTail`
     compares the user lines across recorded steering notes (no duplicated user/note on remount).
+- **Refutation round (review 2, 2026-10-13) — fixes to the fixes:**
+  - *Turn identity*: `_btw_turn_gen[chat_key]` increments per turn; a note binds to the generation
+    open when it arrived, so a note whose gate outlives turn N is `no_active_stream`, never queued
+    into or written to turn N+1.
+  - *Summarizers*: `chat_runtime.summarizable_turns()` feeds `_last_exchange` (task summaries),
+    `_first_user_text` (title) and `voice._build_session_transcript` (recap): no un-gated or
+    undelivered note, no gate-refused note, and no user line whose turn a gate refused (also
+    pre-existing for refused turns — those spawns have no gate of their own).
+  - *Bounded log*: never-gated note records are capped at 20 per chat per 10 min.
+  - *Cancel mid-flush*: notes taken from the queue are recorded `undelivered`, the stdin is
+    unregistered and the CLI is killed before the cancel propagates; a direct note waits for an
+    in-progress flush (`_btw_flushing`) so the record keeps the wire order; a direct note
+    cancelled after its bytes went out is recorded `injected`.
+  - *Rate slot*: released when the note was not accepted. Expired queued notes no longer count
+    against the queue cap. A duplicate `client_id` in flight on another event loop answers
+    `refused`/`in_flight` instead of raising.
+  - *Stopped from another tab*: that `done` carries `cancelled: true`; delivered notes stay
+    "delivered", never "taken into account". A client-side `failed` yields to what the server
+    reports later (`btw_flushed`, a retry's first outcome).
+  - *Ledger label*: a `pre_spawn_cancelled` turn is withheld as "stopped before its safety check
+    finished", not as a gate refusal.
   - Known, accepted: a note drained `undelivered` at the turn's end is recorded after the answer,
     so after a reload it renders below the answer (live: above). A note whose HTTP request failed
     (`failed`) exists only in the open tab until resent.

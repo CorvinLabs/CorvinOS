@@ -113,6 +113,8 @@ export interface StreamEvent {
         "btw_flushed" | "btw_undelivered" | "btw_window_closed";
   /** `btw_flushed` / `btw_undelivered`: the steering note's client id. */
   client_id?: string;
+  /** `done` only: the turn was stopped (e.g. from another tab), not finished. */
+  cancelled?: boolean;
   /** `turn_started` / `turn_attach` / attached `done`: the live turn's id. */
   turn_id?: string;
   /** `done` only: this socket did not start the turn, it attached to it —
@@ -700,7 +702,7 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
         // Delivered notes were answered — unless the turn ended in an error.
         const cur = entry.currentAssistantId
           ? entry.messages.find((m) => m.id === entry.currentAssistantId) : undefined;
-        entry.messages = settleOnDone(entry.messages, { answered: !cur?.error });
+        entry.messages = settleOnDone(entry.messages, { answered: !cur?.error && !evt.cancelled });
       }
       entry.steerOpen = true;
       if (evt.attached || entry.needsReconcile) {
