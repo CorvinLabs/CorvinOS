@@ -1531,6 +1531,16 @@ Registering is never consenting. The refusals now say where to fix it: `/ask @pe
 conversations → Your agents and turn on *Share with paired peers* (the peer needs the current version) — a plain
 message without a slash is answered by the peer's default agent if it granted you Executor permission";
 `/ask @mine` → "open Agent conversations → Your agents and register the Claude Code agent first".
+**Module layout (2026-10-13, ADR-2258 option A):** twelve L38 modules without a standalone need live in
+`core/a2a/` (`a2a_audit`, `a2a_chat_friendship_token`, `a2a_chat_pending_send`, `a2a_compute_engine`,
+`a2a_connectivity`, `a2a_ingress`, `a2a_invite`, `a2a_invite_registry`, `a2a_live_probe`, `a2a_nonce_store`,
+`a2a_pending_claim`, `a2a_task_state`). Each old bare name in `corvin_operator/bridges/shared/` is an alias shim
+that swaps itself for the real module in `sys.modules` (same object; falls back to adding the repo root when
+run as a script). **Deliberately NOT moved:** relay (+ metrics; `ops/a2a-relay/deploy.sh` ships the single file),
+sender, receiver, `remote_trigger_client` (CLI), friendship, attachments, manifest, http_server (the portable
+stdlib-only set of `test_a2a_shallow_path_import`) and every module anchored on its own `__file__`. A test that
+reads a moved module's SOURCE must read `core/a2a/<name>.py`, never the shim (it would pass vacuously).
+
 **Setting (2026-10-13):** `spec.federation.auto_register_default_agent: true` in `tenant.corvin.yaml` (default
 off, strictly boolean) lets `/ask @mine` and `/talk` register the standard `claude-code` agent themselves instead
 of refusing; it never turns on sharing (`federable` stays false). Proof:
