@@ -2066,7 +2066,7 @@ async def import_penpot_asset(file: UploadFile = File(...), caption: str = Form(
         refuse(409, str(e), "quota")
     except am.AssetError as e:
         refuse(422, str(e), _refusal_code(str(e)))
-    notes = [f"{n} {k} not imported" for k, n in sorted(design.dropped.items()) if n]
+    notes = [f"{what} not imported" for what in pim.describe_dropped(design.dropped)]
     return JSONResponse(status_code=201, content={"asset": _public_asset(doc), "notes": notes})
 
 

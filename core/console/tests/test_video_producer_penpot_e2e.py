@@ -117,6 +117,53 @@ class PenpotRoutesE2E(unittest.TestCase):
             ok_chain, problems = se.verify_chain(home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl")
             self.assertTrue(ok_chain, problems)
 
+    def test_a_gradient_board_renders_as_a_gradient_and_a_hostile_one_is_counted(self):
+        try:
+            import playwright  # noqa: F401
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        from PIL import Image
+        from forge import security_events as se
+
+        ns = 'xmlns="http://www.w3.org/2000/svg"'
+        good = (f'<svg {ns} width="400" height="200" viewBox="0 0 400 200" fill="none"><defs>'
+                '<linearGradient id="g" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff0000"/>'
+                '<stop offset="1" stop-color="#0000ff"/></linearGradient></defs>'
+                '<rect x="20" y="20" width="360" height="160" fill="url(#g)"/></svg>').encode()
+        stops = "".join(f'<stop offset="{i / 11}" stop-color="#ff0000"/>' for i in range(12))
+        hostile = (f'<svg {ns} width="400" height="200" viewBox="0 0 400 200" fill="none"><defs>'
+                   f'<linearGradient id="g">{stops}</linearGradient></defs>'
+                   '<rect x="20" y="20" width="360" height="160" fill="url(#g)" stroke="url(#g)"/>'
+                   '<rect x="30" y="30" width="20" height="20" fill="url(http://127.0.0.1:9/x)"/></svg>').encode()
+        with _sandbox(Path(tempfile.mkdtemp()), tenants=("tenant_a",)) as (_c, _t, home, clients):
+            ca, csrf_a = clients["tenant_a"]
+            r = _post(ca, csrf_a, f"{V}/assets/import-penpot", good, "grad.svg", caption="Gradient")
+            if r.status_code == 503 and "rendered" in r.text:
+                self.skipTest("no usable Chromium on this host")
+            self.assertEqual(r.status_code, 201, r.text)
+            self.assertEqual(r.json()["notes"], [])
+            im = Image.open(io.BytesIO(ca.get(f"{V}/assets/{r.json()['asset']['id']}/image").content)).convert("RGB")
+            w, h = im.size
+            row = {im.getpixel((int(w * f), h // 2)) for f in (0.15, 0.3, 0.45, 0.6, 0.75, 0.9)}
+            self.assertGreater(len(row), 4, row)
+            self.assertGreater(im.getpixel((int(w * 0.1), h // 2))[0], 200)
+            self.assertGreater(im.getpixel((int(w * 0.9), h // 2))[2], 200)
+
+            bad = _post(ca, csrf_a, f"{V}/assets/import-penpot", hostile, "bad.svg", caption="Bad")
+            self.assertEqual(bad.status_code, 201, bad.text)
+            notes = " ".join(bad.json()["notes"])
+            self.assertIn("1 unreadable gradient not imported", notes)
+            self.assertIn("1 unreadable paint not imported", notes)
+            self.assertNotIn("_", notes)
+
+            recs = _chain_records(home, "tenant_a", "video_producer.asset_uploaded")
+            self.assertEqual([x["details"]["outcome"] for x in recs], ["accepted", "accepted"])
+            for rec in recs:
+                self.assertNotIn("_dropped_fields", rec["details"])
+                self.assertNotIn("127.0.0.1", json.dumps(rec))
+            ok_chain, problems = se.verify_chain(home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl")
+            self.assertTrue(ok_chain, problems)
+
     def test_a_full_workspace_is_refused_before_any_browser_is_started(self):
         with _sandbox(Path(tempfile.mkdtemp()), tenants=("tenant_a",)) as (_c, _t, home, clients):
             ca, csrf_a = clients["tenant_a"]
