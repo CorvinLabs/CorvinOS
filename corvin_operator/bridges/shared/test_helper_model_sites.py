@@ -14,7 +14,6 @@ default):
 5. user_style._default_judge               → SITE_USER_STYLE_JUDGE
 6. user_model._default_judge               → SITE_USER_MODEL_DISTILL
 7. corvin_delegate.output_judge runner    → SITE_DELEGATE_OUTPUT_JUDGE
-8. router._call_cli                        → SITE_ROUTER_CLI (DEFAULT_MODEL)
 """
 
 from __future__ import annotations
@@ -349,19 +348,6 @@ class DelegateOutputJudgeTests(_StubPathFixture, unittest.TestCase):
         with patch.object(self.output_judge.subprocess, "run", side_effect=fake_run):
             self.output_judge._real_judge_runner("prompt", 5.0)
         self.assertNotIn("--model", captured["args"])
-
-
-class RouterDefaultModelTests(unittest.TestCase):
-    """Router's DEFAULT_MODEL is module-level — it picks up the
-    Haiku default at import time. This test verifies the resolver
-    indirection actually fires."""
-
-    def test_default_model_is_haiku(self) -> None:
-        # Re-import in a clean environment to exercise the resolver
-        import importlib
-        import router  # type: ignore
-        importlib.reload(router)
-        self.assertEqual(router.DEFAULT_MODEL, HAIKU)
 
 
 if __name__ == "__main__":

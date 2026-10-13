@@ -220,7 +220,6 @@ SITE_DIALECTIC_SUMMARY_JUDGE: Final[str] = "dialectic_summary_judge"
 SITE_USER_STYLE_JUDGE: Final[str] = "user_style_judge"
 SITE_USER_MODEL_DISTILL: Final[str] = "user_model_distill"
 SITE_DELEGATE_OUTPUT_JUDGE: Final[str] = "delegate_output_judge"
-SITE_ROUTER_CLI: Final[str] = "router_cli"
 # L44 (ADR-0143) — house-rules acceptable-use adjudicator. Decides whether a
 # Tier-0 keyword hit is a genuine violation vs a false-positive / allowed
 # exception. Haiku by default (cheap, only runs on a pattern hit).
@@ -259,7 +258,6 @@ ALL_SITES: Final[tuple[str, ...]] = (
     SITE_USER_STYLE_JUDGE,
     SITE_USER_MODEL_DISTILL,
     SITE_DELEGATE_OUTPUT_JUDGE,
-    SITE_ROUTER_CLI,
     SITE_OS_TURN,
     SITE_HOUSE_RULES,
     SITE_ACS_CLASSIFY,
