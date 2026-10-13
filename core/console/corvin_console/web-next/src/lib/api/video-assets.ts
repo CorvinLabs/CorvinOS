@@ -90,11 +90,13 @@ export const CAPTURE_VIEWPORTS: Record<CaptureViewport, string> = {
 /** Upper bound of one capture as the user experiences it: a failure answers at the console's floor (13 s). */
 export const CAPTURE_WAIT_S = 15;
 
-export interface CaptureSettings { capture_enabled?: boolean; capture_policy_configured?: boolean }
+export interface CaptureSettings { capture_enabled?: boolean; capture_policy_configured?: boolean; capture_host_problem?: string | null }
 
 /** Why the capture action cannot be used right now, or null. */
 export function captureBlockedReason(s: CaptureSettings | undefined): string | null {
   if (!s) return "Loading the Video Producer settings…";
+  if (s.capture_host_problem === "no_browser") return "Website capture is not available on this host: Chrome or Chromium is not installed.";
+  if (s.capture_host_problem) return "Website capture is not available on this host (it needs Linux or macOS).";
   if (!s.capture_enabled) return "Website capture is off for this workspace. Turn it on under Settings.";
   if (!s.capture_policy_configured) return "Website capture needs an egress policy for this workspace (spec.egress in tenant.corvin.yaml).";
   return null;

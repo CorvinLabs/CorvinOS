@@ -70,6 +70,9 @@ class CaptureRoutesE2E(unittest.TestCase):
             s = ca.get(f"{V}/settings").json()
             self.assertIs(s["capture_enabled"], False)
             self.assertIs(s["capture_policy_configured"], False)
+            self.assertIn(s["capture_host_problem"], (None, "no_browser", "unsupported"))
+            if _HAS_CHROME:
+                self.assertIsNone(s["capture_host_problem"])
             # CSRF first: without the token nothing happens and nothing is recorded
             r, _ = _capture(ca, csrf, "https://example.com/", headers={})
             self.assertEqual(r.status_code, 403)
@@ -196,9 +199,16 @@ class CaptureRoutesE2E(unittest.TestCase):
             self.assertLess(dt, 2.0)
             last = _chain_records(home, "tenant_a", "video_producer.capture_finished")[-1]["details"]
             self.assertEqual((last["outcome"], last["refusal"]), ("refused", "egress_denied"))
+            # review 2: a trailing dot is the same host for the gate (it was 'default allow' before)
+            r, dt = _capture(ca, csrf, "https://BLOCKED.example.org./")
+            self.assertEqual(r.status_code, 403, r.text)
+            self.assertLess(dt, 2.0)
+            last = _chain_records(home, "tenant_a", "video_producer.capture_finished")[-1]["details"]
+            self.assertEqual((last["host"], last["refusal"]), ("blocked.example.org", "egress_denied"))
             # every capture that started (= reached the egress step) finished; the gate-refused ones never started
             fetched = [d for d in done if d["details"]["refusal"] != "egress_denied"]
-            self.assertEqual(len(_chain_records(home, "tenant_a", "video_producer.capture_started")), len(fetched))
+            self.assertEqual(len(_chain_records(home, "tenant_a", "video_producer.capture_started")),
+                             len([d for d in fetched if d["details"]["outcome"] != "refused"]))
             chain = (home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl").read_text()
             for leak in ("local-login", "meta-data", "capture-e2e-probe.invalid/"):
                 self.assertNotIn(leak, chain)
@@ -247,10 +257,10 @@ class CaptureRoutesE2E(unittest.TestCase):
             real = cap.capture_url
             floor = _route_module()._capture_fail_floor(cap)
 
-            def hang(*a, **k):
-                time.sleep(cap.CAPTURE_DEADLINE_S - 0.5)
+            def hang(*a, **k):  # what a real hang measured: the deadline plus the 0.5 s kill grace
+                time.sleep(cap.CAPTURE_DEADLINE_S + 0.5)
                 return {"ok": False, "reason": "timeout", "png": None, "final_url": None,
-                        "hosts": {"connected": 3}, "elapsed": cap.CAPTURE_DEADLINE_S - 0.5}
+                        "hosts": {"connected": 3}, "elapsed": cap.CAPTURE_DEADLINE_S + 0.5}
 
             def boom(*a, **k):
                 raise RuntimeError("worker could not start")

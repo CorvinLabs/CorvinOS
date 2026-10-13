@@ -103,6 +103,7 @@ export function AssetsTab({ csrf }: { csrf: string }) {
   const [spots, setSpots] = useState<AssetHotspot[]>([]);
   const [confirm, setConfirm] = useState<string | null>(null);
   const [showCaptureDialog, setShowCaptureDialog] = useState(false);
+  const [editing, setEditing] = useState<Asset | null>(null);
   const settings = useQuery({ queryKey: ["video", "settings"], queryFn: ({ signal }) => api<CaptureSettings>(`${BASE}/settings`, { signal }), retry: false });
   const captureBlocked = settings.isError ? "Website capture is not available on this installation." : captureBlockedReason(settings.data);
   const picker = useRef<HTMLInputElement>(null);
@@ -227,18 +228,24 @@ export function AssetsTab({ csrf }: { csrf: string }) {
                   <Button type="button" variant="ghost" size="sm" onClick={() => setConfirm(null)}>Keep</Button>
                 </div>
               ) : (
-                <Button type="button" variant="ghost" size="sm" className="mt-1 h-7 px-2" disabled={!csrf} onClick={() => { del.reset(); setConfirm(a.id); }} data-testid={`asset-delete-${a.id}`}>
-                  <Trash2 className="w-3 h-3 mr-1" />Delete
-                </Button>
+                <div className="flex gap-1 mt-1">
+                  <Button type="button" variant="ghost" size="sm" className="h-7 px-2" disabled={!csrf} onClick={() => setEditing(a)} data-testid={`asset-edit-${a.id}`}>
+                    Edit hotspots
+                  </Button>
+                  <Button type="button" variant="ghost" size="sm" className="h-7 px-2" disabled={!csrf} onClick={() => { del.reset(); setConfirm(a.id); }} data-testid={`asset-delete-${a.id}`}>
+                    <Trash2 className="w-3 h-3 mr-1" />Delete
+                  </Button>
+                </div>
               )}
               {del.isError && confirm === a.id && <p className="text-xs text-destructive" role="alert">{err(del.error, "The image could not be deleted.")}</p>}
             </li>
           ))}
         </ul>
       )}
-      {showCaptureDialog && (
-        <CaptureDialog csrf={csrf} maxCaption={limits?.max_caption} maxSpots={limits?.max_hotspots}
-          onClose={() => setShowCaptureDialog(false)} onChanged={() => void qc.invalidateQueries({ queryKey: ["video", "assets"] })} />
+      {(showCaptureDialog || editing) && (
+        <CaptureDialog csrf={csrf} maxCaption={limits?.max_caption} maxSpots={limits?.max_hotspots} existing={editing ?? undefined}
+          onClose={() => { setShowCaptureDialog(false); setEditing(null); }}
+          onChanged={() => void qc.invalidateQueries({ queryKey: ["video", "assets"] })} />
       )}
     </div>
   );
@@ -252,18 +259,21 @@ export function AssetsTab({ csrf }: { csrf: string }) {
  * Step 2 shows the STORED picture: click it to place hotspots, edit the caption, then save (PATCH) - or
  * delete the screenshot. The caption is always the user's: nothing is ever read off the page.
  */
-export function CaptureDialog({ csrf, initialUrl = "", maxCaption, maxSpots = 8, onClose, onChanged, onCaptured }: {
-  csrf: string; initialUrl?: string; maxCaption?: number; maxSpots?: number;
-  onClose: () => void; onChanged: () => void; onCaptured?: (asset: Asset) => void;
+export function CaptureDialog({ csrf, initialUrl = "", existing, maxCaption, maxSpots = 8, onClose, onChanged, onCaptured, onDeleted }: {
+  csrf: string; initialUrl?: string; existing?: Asset; maxCaption?: number; maxSpots?: number;
+  onClose: () => void; onChanged: () => void; onCaptured?: (asset: Asset) => void; onDeleted?: (id: string) => void;
 }) {
   const titleId = useId();
   const [url, setUrl] = useState(initialUrl);
   const [viewport, setViewport] = useState<CaptureViewport>("desktop");
-  const [caption, setCaption] = useState("");
-  const [asset, setAsset] = useState<Asset | null>(null);
-  const [spots, setSpots] = useState<AssetHotspot[]>([]);
+  const [caption, setCaption] = useState(existing?.caption ?? "");
+  const [asset, setAsset] = useState<Asset | null>(existing ?? null);
+  const [spots, setSpots] = useState<AssetHotspot[]>(existing?.hotspots ?? []);
   const [elapsed, setElapsed] = useState(0);
+  const [warnUnsaved, setWarnUnsaved] = useState(false);
   const first = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const dirty = !!asset && (caption !== asset.caption || JSON.stringify(spots) !== JSON.stringify(asset.hotspots));
   const err = (e: unknown, fallback: string) => (e instanceof ApiError && e.message ? e.message : fallback);
 
   const capture = useMutation({
@@ -276,16 +286,30 @@ export function CaptureDialog({ csrf, initialUrl = "", maxCaption, maxSpots = 8,
   });
   const discard = useMutation({
     mutationFn: () => api(`${BASE}/assets/${encodeURIComponent(asset!.id)}`, { method: "DELETE", csrf }),
-    onSuccess: () => { onChanged(); onClose(); },
+    onSuccess: () => { onDeleted?.(asset!.id); onChanged(); onClose(); },
   });
   const busy = capture.isPending || save.isPending || discard.isPending;
 
-  useEffect(() => { first.current?.focus(); }, []);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    const back = document.activeElement as HTMLElement | null;  // focus returns where it came from
+    (first.current ?? dialogRef.current)?.focus();
+    return () => { back?.focus?.(); };
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || busy) return;
+      if (dirty) { setWarnUnsaved(true); return; }  // never drop placed hotspots silently
+      onClose();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
+  }, [busy, dirty, onClose]);
+  const addSpot = (x: number, y: number) => {
+    if (spots.length >= maxSpots) return;
+    setSpots((s) => [...s, { name: nextSpotName(s), x, y, description: "" }]);
+    setWarnUnsaved(false);
+  };
+  const pct = (v: string) => Math.min(1, Math.max(0, Math.round((parseFloat(v) || 0) * 10) / 1000));
   useEffect(() => {
     if (!capture.isPending) { setElapsed(0); return; }
     const t0 = Date.now();
@@ -299,9 +323,9 @@ export function CaptureDialog({ csrf, initialUrl = "", maxCaption, maxSpots = 8,
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" data-testid="capture-overlay">
-      <div role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid="capture-dialog"
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid="capture-dialog" ref={dialogRef} tabIndex={-1}
         className="bg-background rounded-lg border border-border p-4 w-full max-w-2xl max-h-[90vh] overflow-y-auto space-y-3">
-        <h3 id={titleId} className="font-semibold">{asset ? "Place hotspots on the screenshot" : "Add website screenshot"}</h3>
+        <h3 id={titleId} className="font-semibold">{existing ? "Edit hotspots" : asset ? "Place hotspots on the screenshot" : "Add website screenshot"}</h3>
         {!asset ? (
           <>
             <p className="text-xs text-muted-foreground">
@@ -335,15 +359,14 @@ export function CaptureDialog({ csrf, initialUrl = "", maxCaption, maxSpots = 8,
           <>
             <p className="text-xs text-muted-foreground">
               Stored as <code>{asset.id}</code> ({asset.width}×{asset.height}){asset.source ? ` from ${asset.source}` : ""}. Click the picture to place a
-              hotspot a callout can point at (at most {maxSpots}).
+              hotspot a callout can point at (at most {maxSpots}), or add one and type its position.
             </p>
             <div className="relative inline-block max-w-full">
               <img src={assetImageUrl(asset.id)} alt={`Screenshot: ${asset.caption}`} data-testid="capture-preview"
                 className="max-h-[50vh] max-w-full rounded-md border border-border cursor-crosshair"
                 onClick={(e) => {
-                  if (spots.length >= maxSpots) return;
                   const pt = clickToPoint(e.currentTarget.getBoundingClientRect(), e.clientX, e.clientY);
-                  if (pt) setSpots((s) => [...s, { name: nextSpotName(s), x: pt.x, y: pt.y, description: "" }]);
+                  if (pt) addSpot(pt.x, pt.y);
                 }} />
               {spots.map((s) => (
                 <span key={s.name} className="absolute w-3 h-3 -ml-1.5 -mt-1.5 rounded-full border-2 border-white bg-[var(--viz-role-os)] pointer-events-none"
@@ -354,20 +377,37 @@ export function CaptureDialog({ csrf, initialUrl = "", maxCaption, maxSpots = 8,
               <div key={k} className="flex gap-2 items-center" data-testid={`capture-spot-${k}`}>
                 <Input className="w-40" value={s.name} aria-label="Hotspot name" onChange={(e) => setSpots((all) => all.map((x, j) => (j === k ? { ...x, name: e.target.value } : x)))} />
                 <Input value={s.description} placeholder="What is here (optional)" aria-label="Hotspot description" onChange={(e) => setSpots((all) => all.map((x, j) => (j === k ? { ...x, description: e.target.value } : x)))} />
+                <Input type="number" min={0} max={100} step={1} className="w-20" aria-label={`${s.name}: percent from the left`} value={Math.round(s.x * 100)}
+                  onChange={(e) => setSpots((all) => all.map((x, j) => (j === k ? { ...x, x: pct(e.target.value) } : x)))} data-testid={`capture-spot-x-${k}`} />
+                <Input type="number" min={0} max={100} step={1} className="w-20" aria-label={`${s.name}: percent from the top`} value={Math.round(s.y * 100)}
+                  onChange={(e) => setSpots((all) => all.map((x, j) => (j === k ? { ...x, y: pct(e.target.value) } : x)))} data-testid={`capture-spot-y-${k}`} />
                 <Button type="button" variant="ghost" size="sm" aria-label={`Remove ${s.name}`} onClick={() => setSpots((all) => all.filter((_, j) => j !== k))}><X className="w-3.5 h-3.5" /></Button>
               </div>
             ))}
+            <Button type="button" variant="outline" size="sm" disabled={spots.length >= maxSpots} onClick={() => addSpot(0.5, 0.5)} data-testid="capture-add-spot">
+              Add hotspot
+            </Button>
             <label className="block text-sm"><span className="text-xs text-muted-foreground">Caption</span>
               <Input value={caption} maxLength={maxCaption} onChange={(e) => setCaption(e.target.value)} data-testid="capture-caption-edit" /></label>
             <div className="flex items-center gap-2 flex-wrap">
               <Button type="button" size="sm" disabled={busy || !caption.trim() || !!spotProblem || !csrf} onClick={() => save.mutate()} data-testid="capture-save">
                 {save.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : null}Save
               </Button>
-              <Button type="button" variant="ghost" size="sm" disabled={busy || !csrf} onClick={() => discard.mutate()} data-testid="capture-discard">
-                <Trash2 className="w-3.5 h-3.5 mr-1" />Delete screenshot
+              <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onClose} data-testid="capture-close">
+                {dirty ? "Close without saving" : "Close"}
               </Button>
+              {!existing && (
+                <Button type="button" variant="ghost" size="sm" disabled={busy || !csrf} onClick={() => discard.mutate()} data-testid="capture-discard">
+                  <Trash2 className="w-3.5 h-3.5 mr-1" />Delete screenshot
+                </Button>
+              )}
               {spotProblem && <span className="text-xs text-muted-foreground">{spotProblem}</span>}
             </div>
+            {warnUnsaved && (
+              <p className="text-xs text-amber-600" role="status" data-testid="capture-unsaved">
+                You have unsaved changes: save them, or choose Close without saving.
+              </p>
+            )}
             {(save.isError || discard.isError) && (
               <p className="text-xs text-destructive" role="alert" data-testid="capture-save-error">
                 {save.isError ? err(save.error, "The hotspots could not be saved.") : err(discard.error, "The screenshot could not be deleted.")}

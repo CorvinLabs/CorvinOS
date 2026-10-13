@@ -536,6 +536,64 @@ describe("Video Producer studio", () => {
     expect(screen.queryByTestId("capture-suggestion-open")).toBeNull();
   });
 
+  it("a host without Chrome says so on the capture button, whatever the switch says", async () => {
+    server.use(
+      http.get(`${B}/settings`, () => HttpResponse.json({ ...CAP_SETTINGS, capture_enabled: true, capture_policy_configured: true, capture_host_problem: "no_browser" })),
+      http.get(`${B}/assets`, () => HttpResponse.json({ assets: [], limits: LIMITS })),
+      ...handlers(),
+    );
+    renderIt("?job=job_2626f1e8&tab=assets");
+    await waitFor(() => expect(screen.getByTestId("capture-blocked").textContent).toMatch(/Chrome or Chromium is not installed/));
+    expect(screen.getByTestId("capture-pick")).toBeDisabled();
+  });
+
+  it("an existing image's hotspots can be edited by keyboard; Escape never drops unsaved hotspots", async () => {
+    const asset = { id: "ast_0a0b0c0d", caption: "Home", hotspots: [], width: 1920, height: 1080, bytes: 1, created: 1, source: "https://acme.example/" };
+    const patches: Array<Record<string, unknown>> = [];
+    server.use(
+      http.get(`${B}/settings`, () => HttpResponse.json({ ...CAP_SETTINGS, capture_enabled: false, capture_policy_configured: false })),
+      http.get(`${B}/assets`, () => HttpResponse.json({ assets: [asset], limits: LIMITS })),
+      http.patch(`${B}/assets/:id`, async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        patches.push(body);
+        return HttpResponse.json({ asset: { ...asset, ...body } });
+      }),
+      ...handlers(),
+    );
+    renderIt("?job=job_2626f1e8&tab=assets");
+    fireEvent.click(await screen.findByTestId("asset-edit-ast_0a0b0c0d"));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("Edit hotspots");
+    expect(screen.queryByTestId("capture-discard")).toBeNull();
+    fireEvent.click(screen.getByTestId("capture-add-spot"));
+    fireEvent.change(screen.getByTestId("capture-spot-x-0"), { target: { value: "30" } });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByTestId("capture-unsaved").textContent).toMatch(/unsaved changes/);
+    fireEvent.click(screen.getByTestId("capture-save"));
+    await waitFor(() => expect(patches).toEqual([{ caption: "Home", hotspots: [{ name: "spot_1", x: 0.3, y: 0.5, description: "" }] }]));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("the composer's note is cleared when the screenshot is deleted again", async () => {
+    server.use(
+      http.get(`${B}/settings`, () => HttpResponse.json({ ...CAP_SETTINGS, capture_enabled: true, capture_policy_configured: true })),
+      http.post(`${B}/capture`, () => HttpResponse.json({ asset: { id: "ast_dead0003", caption: "A", hotspots: [], width: 1920, height: 1080, bytes: 1, created: 1, source: "https://www.acme.example/" } }, { status: 201 })),
+      http.delete(`${B}/assets/:id`, () => new HttpResponse(null, { status: 204 })),
+      ...handlers(),
+    );
+    renderIt();
+    fireEvent.change(await screen.findByTestId("task-input"), { target: { value: "About https://acme.example" } });
+    fireEvent.click(await screen.findByTestId("capture-suggestion-open"));
+    fireEvent.change(await screen.findByTestId("capture-caption"), { target: { value: "A" } });
+    fireEvent.click(screen.getByTestId("capture-submit"));
+    await screen.findByTestId("capture-preview");
+    expect(screen.getByTestId("capture-suggestion-done").textContent).toMatch(/www\.acme\.example added as ast_dead0003/);
+    fireEvent.click(screen.getByTestId("capture-discard"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByTestId("capture-suggestion-done")).toBeNull();
+    expect(screen.getByTestId("capture-suggestion-open")).toBeInTheDocument();
+  });
+
   it("a refused upload shows the server's reason", async () => {
     server.use(
       http.get(`${B}/assets`, () => HttpResponse.json({ assets: [], limits: { max_assets: 50, max_image_bytes: 2097152, max_upload_bytes: 8388608, max_caption: 160, max_hotspots: 8 } })),

@@ -298,7 +298,17 @@ def _tenant_settings(rec) -> Dict[str, Any]:
         # Website capture (ADR-2249 D4): usable only when the switch is on AND an egress policy exists
         "capture_enabled": _capture_enabled(rec),
         "capture_policy_configured": _capture_egress_gate(rec.tenant_id) is not None,
+        # ... and only on a host that can capture at all (Chrome, posix_spawn, own addresses known)
+        "capture_host_problem": _capture_host_problem(),
     }
+
+
+def _capture_host_problem() -> Optional[str]:
+    """None when this host can capture, else the plugin's closed reason (no_browser | unsupported)."""
+    try:
+        return importlib.import_module(f"{_PLUGIN_PKG}.capture").host_support()
+    except Exception:  # noqa: BLE001 - no capture module on this build
+        return "unsupported"
 
 
 # ── Jobs ─────────────────────────────────────────────────────────────────────
@@ -2143,12 +2153,14 @@ async def update_asset(asset_id: str, req: AssetUpdateRequest, rec=_SessionRec):
 # path or query; ``capture_started`` before any egress and always followed by ``capture_finished``.
 # Audit writes never run on the event loop.
 _CAPTURE_SWITCH_FILE = "capture_settings.json"
-_CAPTURE_FAIL_FLOOR_S = 13.0  # > capture.CAPTURE_DEADLINE_S (12 s: the worker is killed there)
+# > capture.CAPTURE_DEADLINE_S (12 s) + the kill grace (0.5 s, measured: a hung worker returns at 12.50 s)
+# + the steps before the fetch (gate, two audit writes, name lookups): review 2 measured 13 s as too tight
+_CAPTURE_FAIL_FLOOR_S = 14.0
 _CAPTURE_NOT_POSSIBLE = "This address cannot be captured"
 
 
 def _capture_fail_floor(cap) -> float:
-    return max(_CAPTURE_FAIL_FLOOR_S, float(getattr(cap, "CAPTURE_DEADLINE_S", 0.0)) + 1.0)
+    return max(_CAPTURE_FAIL_FLOOR_S, float(getattr(cap, "CAPTURE_DEADLINE_S", 0.0)) + 2.0)
 
 
 def _capture_switch_path(rec) -> Path:
@@ -2294,7 +2306,14 @@ async def capture_asset(req: CaptureRequest, request: Request, rec=_SessionRec):
         raise HTTPException(status_code=503, detail="The capture could not be recorded; nothing was fetched")
     try:
         res = await asyncio.to_thread(cap.capture_url, target["url"], viewport=req.viewport, console_names=names,
-                                      egress=_capture_egress_rules(gate), tenant=tid)
+                                      egress=_capture_egress_rules(gate), tenant=tid,
+                                      fail_hold_until=t0 + _capture_fail_floor(cap))
+    except asyncio.CancelledError:
+        # the client went away: close the record synchronously (one write; awaiting is no longer possible).
+        # The worker thread runs on to its own deadline (12 s) and is killed there as a group.
+        _audit(tid, "video_producer.capture_finished", {**base, "outcome": "failed", "refusal": "cancelled",
+                                                        "elapsed_ms": int((time.monotonic() - t0) * 1000)})
+        raise
     except Exception:  # noqa: BLE001 - started is always followed by finished
         await not_capturable("error")
     hosts = res.get("hosts") if isinstance(res.get("hosts"), dict) else {}

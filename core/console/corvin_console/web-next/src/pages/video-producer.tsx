@@ -410,7 +410,7 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
   const [deck, setDeck] = useState<File | null>(null);
   const [captureFor, setCaptureFor] = useState<string | null>(null);
   const [dismissedUrl, setDismissedUrl] = useState<string | null>(null);
-  const [capturedFor, setCapturedFor] = useState<Record<string, string>>({});
+  const [capturedFor, setCapturedFor] = useState<Record<string, { id: string; host: string }>>({});
   const fileRef = useRef<HTMLInputElement>(null);
   const found = firstUrlIn(text);
   const captureOff = captureBlockedReason(capture);
@@ -470,7 +470,7 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
       {found && found.url !== dismissedUrl && !revising && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs" data-testid="capture-suggestion">
           {capturedFor[found.url] ? (
-            <span>Screenshot of {found.host} added as <code>{capturedFor[found.url]}</code>; the storyboard can show it.</span>
+            <span data-testid="capture-suggestion-done">Screenshot of {capturedFor[found.url].host} added as <code>{capturedFor[found.url].id}</code>; the storyboard can show it.</span>
           ) : captureOff ? (
             <span className="text-muted-foreground" data-testid="capture-suggestion-off">Add a screenshot of {found.host} to this video? {captureOff}</span>
           ) : (
@@ -486,7 +486,12 @@ function Composer({ csrf, selected, mode, setMode, inputRef, onCreated, styles, 
       {captureFor && (
         <CaptureDialog csrf={csrf} initialUrl={captureFor} onClose={() => setCaptureFor(null)}
           onChanged={() => void qc.invalidateQueries({ queryKey: ["video", "assets"] })}
-          onCaptured={(a) => setCapturedFor((m) => ({ ...m, [captureFor]: a.id }))} />
+          onCaptured={(a) => setCapturedFor((m) => {
+            let host = captureFor;
+            try { host = new URL(a.source ?? captureFor).hostname; } catch { /* keep the task's address */ }
+            return { ...m, [captureFor]: { id: a.id, host } };
+          })}
+          onDeleted={(id) => setCapturedFor((m) => Object.fromEntries(Object.entries(m).filter(([, v]) => v.id !== id)))} />
       )}
       {sources.length > 0 && (
         <ul className="flex flex-wrap gap-1.5" data-testid="sources">
