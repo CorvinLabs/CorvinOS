@@ -1186,6 +1186,13 @@ EVENT_SEVERITY: dict[str, str] = {
     "video_producer.asset_uploaded":     "INFO",
     "video_producer.asset_deleted":      "INFO",
     "video_producer.asset_accessed":     "INFO",
+    # ADR-2249 D4 (T-0113): website capture as an asset - the tenant switch changed (before it changes),
+    # a capture started (before any egress) and finished (accepted / refused / failed; an accepted one
+    # BEFORE the asset is committed). The host and a sha256 prefix of the URL only - never the URL, its
+    # path or query, the caption, a hotspot text or the uploading user's id.
+    "video_producer.capture_setting_changed": "INFO",
+    "video_producer.capture_started":    "INFO",
+    "video_producer.capture_finished":   "INFO",
     # ADR validation framework (core/deployment/adr_validation_framework.py via
     # core/deployment/audit_sink — mirrored statically so the floor does not
     # depend on import order)
@@ -4462,6 +4469,12 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "video_producer.asset_deleted": frozenset({"tenant_id", "asset_id", "bytes"}),
     "video_producer.asset_accessed": frozenset({"tenant_id", "asset_id", "purpose"}),
+    "video_producer.capture_setting_changed": frozenset({"tenant_id", "enabled"}),
+    "video_producer.capture_started": frozenset({"tenant_id", "host", "url_sha256_prefix", "viewport"}),
+    "video_producer.capture_finished": frozenset({
+        "tenant_id", "host", "url_sha256_prefix", "viewport", "outcome", "refusal", "asset_id", "bytes",
+        "width", "height", "elapsed_ms",
+    }),
     # "violations" holds "ADR-NNNN/check_name" codes, never free text.
     "deployment.adr_violation_detected": frozenset({
         "week", "violation_count", "violations", "tenant_id", "lom", "component",
