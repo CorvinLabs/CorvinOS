@@ -12,7 +12,10 @@
  *             a checklist with a named denominator (incl. "no subtitles"), and every scene's
  *             planned vs rendered seconds;
  *   Learning  the feedback the operator gave on this job (ADR-0314 events)
- *             and the buttons to give more, per scene.
+ *             and the buttons to give more, per scene;
+ *   Code      the job's highlighted-code scenes, Canvas its pen-drawn canvas scenes and their
+ *             signals, Assets the workspace's uploaded images (ADR-2249,
+ *             components/video-expressive.tsx).
  *
  * Replaces the standalone "Video Quality" page (2026-09-20), which drew one
  * hard-coded record for any job id. Nothing here is invented: an unmeasured
@@ -35,6 +38,7 @@ import { extractVideoSources, MAX_VIDEO_SOURCES, VIDEO_SOURCE_ACCEPT, type Video
 import { BUILTIN_STYLE_ID, STYLE_DECK_ACCEPT, isDeckFile, type StyleList } from "@/lib/api/video-styles";
 import { StyleChip, StyleImportDialog, StylesSection } from "@/components/video-styles";
 import { ProductionSignals } from "@/components/video-quality-report";
+import { AssetsTab, CanvasTab, CodeTab } from "@/components/video-expressive";
 import type { ProductionReport } from "@/lib/video-quality-signals";
 
 // ── Types (routes/video_producer_api.py, video_quality.py, video_learning_api.py) ──
@@ -82,6 +86,8 @@ const TTS_LABELS: Record<string, string> = {
   gtts: "Google TTS (gTTS, legacy)",
 };
 const ACTIVE = ["pending", "storyboard_generating", "skills_running"];
+const STUDIO_TABS = ["quality", "learning", "code", "canvas", "assets"] as const;
+type StudioTab = (typeof STUDIO_TABS)[number];
 const TERMINAL = ["complete", "error", "cancelled"];
 
 /** Rendered caption — also the deploy marker. */
@@ -539,8 +545,8 @@ export function VideoProducerPage() {
   const params = useMemo(() => new URLSearchParams(search), [search]);
   const [selected, setSelected] = useState<string | null>(params.get("job"));
   const initialTab = params.get("tab");
-  const [tab, setTab] = useState<"quality" | "learning">(initialTab === "learning" ? "learning" : "quality");
-  const [detailsOpen, setDetailsOpen] = useState(initialTab === "quality" || initialTab === "learning");
+  const [tab, setTab] = useState<StudioTab>(STUDIO_TABS.includes(initialTab as StudioTab) ? (initialTab as StudioTab) : "quality");
+  const [detailsOpen, setDetailsOpen] = useState(STUDIO_TABS.includes(initialTab as StudioTab));
   const [mode, setMode] = useState<Mode>("new");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [stylesOpen, setStylesOpen] = useState(false);
@@ -685,22 +691,25 @@ export function VideoProducerPage() {
 
         <Card>
           <button type="button" onClick={() => setDetailsOpen((o) => !o)} aria-expanded={detailsOpen} data-testid="details-toggle" className="w-full text-left px-6 py-3 flex items-center gap-2 text-sm font-semibold">
-            {detailsOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />} Quality and learning
+            {detailsOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />} Quality, learning, code, canvas and images
             <span className="text-xs font-normal text-muted-foreground">{MARKER_VIDEO}</span>
           </button>
           {detailsOpen && (
             <CardContent>
-              {!j ? <p className="text-sm text-muted-foreground">Select a video.</p> : (
+              <div className="flex gap-1 mb-3 flex-wrap" role="tablist">
+                {STUDIO_TABS.map((t) => (
+                  <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} data-testid={`tab-${t}`}
+                    className={`px-3 py-1.5 rounded-md text-sm capitalize ${tab === t ? "bg-accent/15 text-foreground font-medium" : "text-muted-foreground hover:text-foreground"}`}>{t}</button>
+                ))}
+              </div>
+              {tab === "assets" ? <AssetsTab csrf={csrf} />
+                : !j ? <p className="text-sm text-muted-foreground">Select a video.</p> : (
                 <>
-                  <div className="flex gap-1 mb-3" role="tablist">
-                    {(["quality", "learning"] as const).map((t) => (
-                      <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} data-testid={`tab-${t}`}
-                        className={`px-3 py-1.5 rounded-md text-sm capitalize ${tab === t ? "bg-accent/15 text-foreground font-medium" : "text-muted-foreground hover:text-foreground"}`}>{t}</button>
-                    ))}
-                  </div>
                   {tab === "quality" && (!TERMINAL.includes(j.status) ? <p className="text-sm text-muted-foreground" data-testid="quality-pending">Quality is measured once the job has finished.</p>
                     : quality.isLoading ? <Loader2 className="w-6 h-6 animate-spin" /> : quality.isError ? <p className="text-sm text-destructive">The quality measurement failed.</p> : quality.data ? <QualityTab q={quality.data} /> : null)}
                   {tab === "learning" && <LearningTab job={j} scenes={quality.data?.scenes ?? []} />}
+                  {tab === "code" && <CodeTab jobId={j.id} metadata={quality.data ? quality.data.source.metadata : undefined} />}
+                  {tab === "canvas" && <CanvasTab jobId={j.id} metadata={quality.data ? quality.data.source.metadata : undefined} report={quality.data?.report} />}
                 </>
               )}
             </CardContent>

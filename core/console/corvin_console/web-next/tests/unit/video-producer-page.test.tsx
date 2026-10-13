@@ -315,6 +315,89 @@ describe("Video Producer studio", () => {
     expect(screen.queryByTestId("web-slides-note")).toBeNull();
   });
 
+  it("the Code and Canvas tabs show the job's own code and canvas scenes, read from its cue log, and the canvas signals", async () => {
+    const meta = { cues: [{ scene: 1, template: "hero" }, { scene: 2, template: "code" }, { scene: 3, template: "canvas" }, { scene: 4, template: "canvas" }],
+      canvas_authoring: { total: 2, first_try: 1, after_repair: 2 } };
+    const report = { ...QUALITY.report, degradations_by_kind: { canvas_degraded: 1 }, signals: [...QUALITY.report.signals,
+      { id: "canvas_clean", kind: "runtime", value: 0.5, unit: "canvas scenes clean after layout", threshold: 1, verdict: "fail", basis: { n: 1, of: 2 }, valid: true, invalidated_by: null, reason: null, detail: null }] };
+    server.use(http.get(`${B}/jobs/job_2626f1e8/quality-metrics`, () => HttpResponse.json({ ...QUALITY, source: { ...QUALITY.source, metadata: meta }, report })), ...handlers());
+    renderIt("?job=job_2626f1e8&tab=code");
+    await screen.findByTestId("code-scenes");
+    expect(screen.getByTestId("code-scene-2").querySelector("img")!.getAttribute("src")).toBe("/v1/console/video/videos/job_2626f1e8/scenes/2/slide");
+    expect(screen.queryByTestId("code-scene-1")).toBeNull();
+    fireEvent.click(screen.getByTestId("tab-canvas"));
+    await screen.findByTestId("canvas-scenes");
+    expect(screen.getByTestId("canvas-scenes").querySelectorAll("li")).toHaveLength(2);
+    expect(screen.getByTestId("canvas-signal-canvas_clean").textContent).toMatch(/Clean canvases.*Fail.*1 of 2/);
+    expect(screen.getByTestId("canvas-authoring").textContent).toMatch(/2 canvases: 1 valid on the first try, 2 after the repair round/);
+    expect(screen.getByTestId("canvas-ladder").textContent).toMatch(/1 canvas step walked the degrade ladder/);
+    expect(screen.getByTestId("canvas-tab").textContent).not.toMatch(/ADR-\d/);
+  });
+
+  it("a video without code or canvas scenes says so instead of an empty gallery", async () => {
+    server.use(http.get(`${B}/jobs/job_2626f1e8/quality-metrics`, () => HttpResponse.json({ ...QUALITY, source: { ...QUALITY.source, metadata: { cues: [{ scene: 1, template: "hero" }] } } })), ...handlers());
+    renderIt("?job=job_2626f1e8&tab=code");
+    await screen.findByTestId("code-none");
+    fireEvent.click(screen.getByTestId("tab-canvas"));
+    await screen.findByTestId("canvas-none");
+    expect(screen.queryByTestId("canvas-signals")).toBeNull();
+  });
+
+  it("the Assets tab lists the workspace's images, uploads a PNG with caption and clicked hotspot (CSRF), and deletes after confirmation", async () => {
+    const assets = [{ id: "ast_0123abcd", caption: "Pricing page", hotspots: [{ name: "plans", x: 0.4, y: 0.3, description: "" }], width: 1280, height: 720, bytes: 204800, created: 1, source: "https://example.com/pricing" }];
+    const uploads: Array<{ csrf: string | null; caption: string; hotspots: string; file: string }> = [];
+    const deletes: Array<string | null> = [];
+    server.use(
+      http.get(`${B}/assets`, () => HttpResponse.json({ assets, limits: { max_assets: 50, max_image_bytes: 2097152, max_upload_bytes: 8388608, max_caption: 160, max_hotspots: 8 } })),
+      http.post(`${B}/assets`, async ({ request }) => {
+        const f = await request.formData();
+        uploads.push({ csrf: request.headers.get("x-csrf-token"), caption: String(f.get("caption")), hotspots: String(f.get("hotspots")), file: (f.get("file") as File).name });
+        return HttpResponse.json({ asset: { ...assets[0], id: "ast_ffff0000" } }, { status: 201 });
+      }),
+      http.delete(`${B}/assets/:id`, ({ request }) => { deletes.push(request.headers.get("x-csrf-token")); return new HttpResponse(null, { status: 204 }); }),
+      ...handlers(),
+    );
+    renderIt("?job=job_2626f1e8&tab=assets");
+    await screen.findByTestId("asset-ast_0123abcd");
+    expect(screen.getByTestId("asset-ast_0123abcd").textContent).toMatch(/Pricing page.*1280×720.*200 KB.*1 hotspot: plans/);
+    expect(screen.getByTestId("asset-count").textContent).toBe("1 of 50 images");
+
+    const URLs = globalThis.URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown };
+    URLs.createObjectURL = () => "blob:preview"; URLs.revokeObjectURL = () => undefined;
+    fireEvent.change(screen.getByTestId("asset-input"), { target: { files: [new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" })] } });
+    expect(await screen.findByTestId("asset-third-party")).toBeInTheDocument();
+    expect(screen.getByTestId("asset-problem").textContent).toMatch(/caption is required/);
+    const img = screen.getByTestId("asset-preview");
+    img.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100, right: 200, bottom: 100, x: 0, y: 0, toJSON: () => ({}) });
+    fireEvent.click(img, { clientX: 50, clientY: 25 });
+    expect(screen.getByTestId("asset-spot-0").textContent).toMatch(/25 %, 25 %/);
+    fireEvent.change(screen.getByTestId("asset-caption"), { target: { value: "Checkout form" } });
+    fireEvent.click(screen.getByTestId("asset-upload"));
+    await waitFor(() => expect(uploads).toHaveLength(1));
+    expect(uploads[0]).toMatchObject({ csrf: "csrf-test", caption: "Checkout form", file: "shot.png" });
+    expect(JSON.parse(uploads[0].hotspots)).toEqual([{ name: "spot_1", x: 0.25, y: 0.25, description: "" }]);
+
+    fireEvent.click(screen.getByTestId("asset-delete-ast_0123abcd"));
+    fireEvent.click(screen.getByTestId("asset-delete-confirm-ast_0123abcd"));
+    await waitFor(() => expect(deletes).toEqual(["csrf-test"]));
+  });
+
+  it("a refused upload shows the server's reason", async () => {
+    server.use(
+      http.get(`${B}/assets`, () => HttpResponse.json({ assets: [], limits: { max_assets: 50, max_image_bytes: 2097152, max_upload_bytes: 8388608, max_caption: 160, max_hotspots: 8 } })),
+      http.post(`${B}/assets`, () => HttpResponse.json({ detail: "Only PNG images can be uploaded" }, { status: 422 })),
+      ...handlers(),
+    );
+    renderIt("?tab=assets");
+    await screen.findByTestId("assets-empty");
+    const URLs = globalThis.URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown };
+    URLs.createObjectURL = () => "blob:preview"; URLs.revokeObjectURL = () => undefined;
+    fireEvent.change(screen.getByTestId("asset-input"), { target: { files: [new File([new Uint8Array([1])], "a.png", { type: "image/png" })] } });
+    fireEvent.change(await screen.findByTestId("asset-caption"), { target: { value: "x" } });
+    fireEvent.click(screen.getByTestId("asset-upload"));
+    expect((await screen.findByTestId("asset-upload-error")).textContent).toBe("Only PNG images can be uploaded");
+  });
+
   it("a build without the plugin says so instead of an empty library", async () => {
     server.use(
       http.get(`${B}/overview`, () => HttpResponse.json({ detail: "Video Producer plugin not available" }, { status: 503 })),

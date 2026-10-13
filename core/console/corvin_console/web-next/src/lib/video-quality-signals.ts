@@ -69,6 +69,9 @@ const LABELS: Record<string, { label: string; what: string }> = {
   cue_alignment: { label: "Reveal-to-word alignment", what: "Seconds between a reveal and the spoken word." },
   language_parity: { label: "Language parity", what: "The two language versions carry the same scenes and numbers." },
   revision_locality: { label: "Revision locality", what: "Share of the base video's scenes kept unchanged in a revision." },
+  canvas_clean: { label: "Clean canvases", what: "Canvas scenes whose first render had no collision, nothing outside the drawing area and no detached arrow." },
+  canvas_authoring: { label: "Canvases valid first try", what: "Canvases the storyboard model wrote that validated on the first try (and after the one repair round). Information only." },
+  asset_hygiene: { label: "Uploaded images clean", what: "Uploaded images used in the video carry no metadata, stay inside the size caps and keep no query string in their source." },
 };
 
 export function signalLabel(id: string): string {
