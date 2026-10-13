@@ -1530,7 +1530,11 @@ conversations → Your agents*:
 Registering is never consenting. The refusals now say where to fix it: `/ask @peer` → "on the peer, open Agent
 conversations → Your agents and turn on *Share with paired peers* (the peer needs the current version) — a plain
 message without a slash is answered by the peer's default agent if it granted you Executor permission";
-`/ask @mine` → "open Agent conversations → Your agents and register the Claude Code agent first". Proof:
+`/ask @mine` → "open Agent conversations → Your agents and register the Claude Code agent first".
+**Setting (2026-10-13):** `spec.federation.auto_register_default_agent: true` in `tenant.corvin.yaml` (default
+off, strictly boolean) lets `/ask @mine` and `/talk` register the standard `claude-code` agent themselves instead
+of refusing; it never turns on sharing (`federable` stays false). Proof:
+`tests/federation/test_peer_thread_commands_e2e.py::test_talk_without_agent_is_refused_until_auto_register_is_set`. Proof:
 `tests/federation/test_local_agent_sharing_e2e.py` (two instances over real signed HTTP: nothing registered →
 refusals name the fix → one click → not shared → share → `/ask @peer` really spawns on the peer → unshare → refused),
 `web-next/tests/unit/your-agents.test.tsx`, `web-next/tests/e2e/your-agents.spec.ts` (real bundle, CSRF header checked). Only an

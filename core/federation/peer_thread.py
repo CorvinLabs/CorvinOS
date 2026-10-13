@@ -72,6 +72,20 @@ def commands_table() -> list[dict[str, str]]:
     return [{"cmd": c.cmd, "args": c.args, "desc": c.desc} for c in COMMANDS]
 
 
+def auto_register_enabled(tenant_id: str) -> bool:
+    """``spec.federation.auto_register_default_agent`` in tenant.corvin.yaml — default OFF.
+
+    Registration is an explicit operator decision (ADR-2234); this setting is how an
+    operator delegates it once, so ``/ask @mine`` and ``/talk`` register the standard
+    Claude Code agent instead of refusing. It never turns on sharing with peers."""
+    from core.paths import corvin_home
+    from core.plugins.corvin_plugins.bootstrap import load_tenant_spec
+
+    spec = (load_tenant_spec(tenant_id, corvin_home()).get("spec") or {})
+    fed = spec.get("federation") if isinstance(spec, dict) else None
+    return isinstance(fed, dict) and fed.get("auto_register_default_agent") is True
+
+
 def _only_local_agent(tenant_id: str, agent_id: str | None) -> Any:
     registry = LocalAgentRegistry(tenant_id)
     if agent_id:
@@ -80,10 +94,13 @@ def _only_local_agent(tenant_id: str, agent_id: str | None) -> Any:
             raise PeerThreadCommandError(f"no local agent named {agent_id!r}")
         return agent
     agents = registry.list_agents()
+    if not agents and auto_register_enabled(tenant_id):
+        agents = [registry.ensure_default_agent()[0]]
     if not agents:
         raise PeerThreadCommandError(
             "no local agent registered — open Agent conversations → Your agents and register "
-            "the Claude Code agent first")
+            "the Claude Code agent first (or set spec.federation.auto_register_default_agent: true "
+            "in tenant.corvin.yaml)")
     if len(agents) > 1:
         raise PeerThreadCommandError(
             "more than one local agent is registered — say which one with @mine/<agent_id>")

@@ -1,9 +1,9 @@
 /**
- * E2E: Agent conversations as a Marketplace plugin panel (agent_conversations plugin, CONCEPT-0001).
+ * E2E: Agent conversations as a CORE console panel (CONCEPT-0001; it was a Marketplace plugin
+ * panel until 2026-10-13).
  *
- * REAL against the live console: the plugin is installed + enabled through the real marketplace
- * route, its entry appears in the sidebar's Marketplace group (a manifest entry — the static panel
- * is gone), the page opens, and the New-conversation dialog loads its settings form.
+ * REAL against the live console: the entry is a static sidebar item (no plugin install, no
+ * Marketplace group), the page opens, and the New-conversation dialog loads its settings form.
  *
  * MOCKED (stated, not hidden): the live install has no registered agent and no paired peer, so a
  * running conversation cannot be produced here. The thread/composer behaviour is therefore driven
@@ -16,7 +16,6 @@ import { test, expect, type BrowserContext, type Page, type Route } from "@playw
 
 const ORIGIN = (process.env.CONSOLE_BASE_URL || "http://127.0.0.1:8765/console").replace(/\/console\/?$/, "");
 const BASE_URL = `${ORIGIN}/console`;
-const PLUGIN_ID = "plugin:contributor-integration-agent_conversations";
 const CID = "a".repeat(32);
 
 test.describe.configure({ mode: "serial" });
@@ -29,23 +28,14 @@ test.beforeAll(async ({ browser }) => {
   ctx = await browser.newContext({ storageState: "./tests/e2e/auth-state.json", viewport: { width: 1500, height: 950 } });
   page = await ctx.newPage();
   page.on("pageerror", (e) => { if (!/ResizeObserver loop|ChunkLoadError/.test(e.message)) errors.push(e.message); });
-  const who = await (await ctx.request.get(`${ORIGIN}/v1/console/auth/whoami`)).json();
-  // Idempotent: installing an installed plugin is fine; enabling records the operator's consent.
-  const r = await ctx.request.post(`${ORIGIN}/v1/console/api/v1/marketplace/plugins/${encodeURIComponent(PLUGIN_ID)}/install`, {
-    headers: { "X-CSRF-Token": who.csrf_token },
-    data: { wait: true, enable_after_install: true, consent_granted: true },
-  });
-  expect(r.status(), await r.text()).toBeLessThan(300);
 });
 test.afterAll(async () => { await ctx.close(); });
 
-test("the panel is a manifest entry in the sidebar's Marketplace group", async () => {
+test("the panel is a static sidebar entry (exactly one — a manifest duplicate would make two)", async () => {
   await page.goto(`${BASE_URL}/app/dashboard`);
   const link = page.locator('nav a[href$="/app/agent-conversations"]:visible');
   await expect(link).toHaveCount(1, { timeout: 20_000 });
   await expect(link).toHaveText(/Agent conversations/);
-  const group = link.locator("xpath=ancestor::div[.//button[starts-with(normalize-space(.), 'Marketplace')]][1]");
-  await expect(group.getByRole("button", { name: /^Marketplace/ })).toBeVisible();
 });
 
 test("opens, and the New dialog carries the settings form", async () => {

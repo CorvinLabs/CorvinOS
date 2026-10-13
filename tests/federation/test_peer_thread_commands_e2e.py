@@ -204,3 +204,23 @@ def test_ask_peer_reports_the_refresh_failure_reason(thread, monkeypatch):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["executed"] is False and "peer_unreachable" in body["reason"]
+
+
+def test_talk_without_agent_is_refused_until_auto_register_is_set(thread):
+    import yaml
+
+    from core.paths import corvin_home
+
+    c, h, _ = thread
+    for a in c.get(f"{FED_BASE}/agents", headers=h).json()["agents"]:
+        assert c.delete(f"{FED_BASE}/agents/{a['agent_id']}", headers=h).status_code == 200
+    r = _cmd(c, h, "/ask @mine hello")
+    assert r.json()["executed"] is False and "no local agent registered" in r.json()["reason"]
+
+    cfg = corvin_home() / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(yaml.safe_dump({"spec": {"federation": {"auto_register_default_agent": True}}}))
+    r = _cmd(c, h, "/ask @mine hello")
+    assert r.json().get("executed") is True, r.text
+    ids = [a["agent_id"] for a in c.get(f"{FED_BASE}/agents", headers=h).json()["agents"]]
+    assert ids == ["claude-code"]
