@@ -9,7 +9,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PeerConversation } from "@/components/chat/PeerConversation";
 import { getA2AFeed, getPeerThreadCommands, type A2AFeedMessage } from "@/lib/api/a2a";
 import { listConversations } from "@/lib/api/federation";
-import { PEER_ROLE_MARK, dayLabel, localDayKey } from "@/lib/a2a-feed";
+import { PEER_ROLE_MARK } from "@/lib/a2a-feed";
+import { dayLabel, localDayKey } from "@/lib/chat-time";
 
 vi.mock("@/lib/api/a2a", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api/a2a")>("@/lib/api/a2a");
@@ -78,7 +79,7 @@ describe("PeerConversation — readability", () => {
       feedMsg({ id: "4", task_id: "d", ts: NOW_S() - 30 }),
     ]);
     await screen.findAllByTestId("peer-message");
-    const seps = screen.getAllByTestId("peer-day-separator");
+    const seps = screen.getAllByTestId("chat-day-separator");
     expect(seps.map((s) => s.getAttribute("aria-label"))).toEqual([dayLabel(noon(3), NOW_S()), "Yesterday", "Today"]);
     for (const s of seps) expect(s.getAttribute("role")).toBe("separator");
   });

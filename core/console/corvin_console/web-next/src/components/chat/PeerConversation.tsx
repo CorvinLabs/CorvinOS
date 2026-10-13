@@ -29,13 +29,15 @@ import {
   formatAge, messageStatusView, type MessageStatusView, type StatusIcon, type StatusTone,
 } from "@/lib/a2a-message-status";
 import {
-  PEER_ROLE_MARK, dayLabel, inlineImageNames, isMinePeerRole, isObserverModeEmptyReply, localDayKey,
-  mediaKind, messageMarkdown, messageTime, messageTimeFull, peerMessageRole, peerRoleLabel,
+  PEER_ROLE_MARK, inlineImageNames, isMinePeerRole, isObserverModeEmptyReply,
+  mediaKind, messageMarkdown, peerMessageRole, peerRoleLabel,
   referencedImageAttachment,
 } from "@/lib/a2a-feed";
 import { listConversations, stopConversation, type ConversationSummary } from "@/lib/api/federation";
 import { Markdown } from "@/components/markdown";
 import { presenceView } from "@/lib/a2a-presence";
+import { localDayKey, messageTime, messageTimeFull } from "@/lib/chat-time";
+import { DaySeparator } from "./DaySeparator";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import { ChatAvatar } from "./ChatAvatar";
 import { AttachmentChip } from "./AttachmentChip";
@@ -49,19 +51,6 @@ const EMPTY_COMMANDS: readonly SlashCommand[] = [];
 const FEED_REFETCH_MS = 4_000;
 /** Faster while a message of ours is still on its way, so the symbol follows the peer. */
 const FEED_REFETCH_INFLIGHT_MS = 2_000;
-
-/** Where the thread crosses into a new calendar day — the rows below it show only the time. */
-function DaySeparator({ ts, nowS }: { ts: number; nowS: number }) {
-  const label = dayLabel(ts, nowS);
-  return (
-    <div role="separator" aria-label={label} data-testid="peer-day-separator"
-      className="flex items-center gap-3 py-1 text-[11px] font-medium text-muted-foreground">
-      <span aria-hidden className="h-px flex-1 bg-border" />
-      <span>{label}</span>
-      <span aria-hidden className="h-px flex-1 bg-border" />
-    </div>
-  );
-}
 
 const STATUS_ICON: Record<StatusIcon, LucideIcon> = {
   clock: Clock, check: Check, "check-check": CheckCheck, spinner: Loader2, x: XCircle, help: CircleHelp,
