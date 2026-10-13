@@ -67,7 +67,7 @@ class AssetRoutesE2E(unittest.TestCase):
             empty = ca.get(f"{V}/assets").json()
             self.assertEqual(empty["assets"], [])
             self.assertEqual(empty["limits"]["max_assets"], 50)
-            self.assertEqual(empty["limits"]["max_image_bytes"], 2 * 1024 * 1024)
+            self.assertEqual(empty["limits"]["max_image_bytes"], 4 * 1024 * 1024)
 
             r = self._upload(ca, csrf_a, source="https://user:pw@Example.com/pricing?token=SECRET#x")
             self.assertEqual(r.status_code, 201, r.text)
@@ -81,7 +81,7 @@ class AssetRoutesE2E(unittest.TestCase):
             doc = json.loads((on_disk / "asset.json").read_text())
             self.assertEqual(doc["uploaded_by"], "console-owner:tenant_a")
             raw = (on_disk / "image.png").read_bytes()
-            self.assertLessEqual(len(raw), 2 * 1024 * 1024)
+            self.assertLessEqual(len(raw), 4 * 1024 * 1024)
             self.assertEqual(set(_chunks(raw)) - {"IHDR", "IDAT", "IEND"}, set())
             for secret in (b"jane@example.com", b"EXIF-SECRET", b"TRAILING", b"48.137"):
                 self.assertNotIn(secret, raw)

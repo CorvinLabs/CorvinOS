@@ -1549,6 +1549,10 @@ _gate_cache: "collections.OrderedDict[tuple, tuple]" = collections.OrderedDict()
 _gate_cache_lock = threading.Lock()
 
 
+_MOD_UNAVAILABLE = {"asset_store": "Uploaded images are not available on this build",
+                    "capture": "Website capture is not available on this build"}
+
+
 def _style_mod(name: str):
     # every caller is a route behind the router gate, which already loaded the plugin for its tenant
     if not _get_storage:
@@ -1556,7 +1560,8 @@ def _style_mod(name: str):
     try:
         return importlib.import_module(f"{_PLUGIN_PKG}.{name}")
     except ImportError:
-        raise HTTPException(status_code=501, detail="Custom styles are not available on this build") from None
+        detail = _MOD_UNAVAILABLE.get(name, "Custom styles are not available on this build")
+        raise HTTPException(status_code=501, detail=detail) from None
 
 
 def _style_store(rec):
@@ -2095,18 +2100,55 @@ def delete_asset(asset_id: str, rec=_SessionRec):
     return Response(status_code=204)
 
 
-# ── Website capture as an asset (ADR-2249 D4, T-0113) ─────────────────────────
-# A user-initiated panel action, never a model decision. Off per tenant by default (a persisted switch),
-# and off wherever the tenant has no ENABLED egress policy (spec.egress in tenant.corvin.yaml) - the
-# policy's allowed/forbidden hosts can only narrow what may be captured; the address policy in the
-# plugin's capture proxy (allow-by-global, pinned connect) is never widened by it. The capture runs in a
-# worker process the plugin kills as a group at its deadline. Every failure that depends on the address
-# (refused by policy, refused by the egress spec, unreachable, timed out) answers the same 422 at the
-# same instant (``_CAPTURE_FAIL_FLOOR_S`` after the request arrived). Audit: host + sha256 prefix of the
-# URL only, never the URL, its path or its query; ``capture_started`` is written before any egress.
+class AssetUpdateRequest(BaseModel):
+    caption: Optional[str] = Field(None, max_length=1000)
+    hotspots: Optional[List[Dict[str, Any]]] = Field(None, max_length=8)
+
+
+@router.patch("/assets/{asset_id}")
+async def update_asset(asset_id: str, req: AssetUpdateRequest, rec=_SessionRec):
+    """Change a stored image's caption and/or hotspots (placed by clicking the picture); the image itself
+    never changes. Session + CSRF (router dependency); audit-first: no record, no change."""
+    am = _asset_mod()
+    doc = await asyncio.to_thread(_own_asset, rec, asset_id)
+
+    def record(new: Dict[str, Any]) -> bool:
+        return _audit(rec.tenant_id, "video_producer.asset_updated", {
+            "asset_id": doc["id"], "hotspot_count": len(new.get("hotspots") or []),
+            "caption_changed": new.get("caption") != doc.get("caption")})
+
+    try:
+        new = await asyncio.to_thread(_asset_store(rec).update, asset_id, caption=req.caption,
+                                      hotspots=req.hotspots, before_commit=record)
+    except am.AssetNotRecorded:
+        raise HTTPException(status_code=503, detail="The change could not be recorded; nothing was changed") from None
+    except am.AssetNotFound:
+        raise HTTPException(status_code=404, detail=_ASSET_NOT_FOUND) from None
+    except am.AssetError as e:
+        raise HTTPException(status_code=422, detail=str(e)[:200]) from None
+    return {"asset": _public_asset(new)}
+
+
+# ── Website capture as an asset (ADR-2249 D4, T-0113, T-0194) ─────────────────
+# A user-initiated panel action, never a model decision. Off per tenant by default (a persisted switch
+# the panel's Settings turn on), and off wherever the tenant has no ENABLED egress policy (spec.egress
+# in tenant.corvin.yaml). The named host must pass the tenant's real L35 gate (a refusal answers at once
+# and says so: the tenant's own policy is no secret). Every other host the page loads must be requested
+# by the page itself and pass the same rules (forbidden / allowed / default, handed to the plugin's proxy
+# as data) and the address policy (allow-by-global, pinned connect). Every failure that depends on the
+# TARGET - refused by the address policy, unreachable, hung, the page navigated to a refused address,
+# the browser failed - answers the same 422 at the same instant, ``_capture_fail_floor()`` after the
+# request arrived, which is longer than the plugin's whole capture budget. Input, quota and the switch
+# are checked before anything is fetched. Audit: host + sha256 prefix of the URL only, never the URL, its
+# path or query; ``capture_started`` before any egress and always followed by ``capture_finished``.
+# Audit writes never run on the event loop.
 _CAPTURE_SWITCH_FILE = "capture_settings.json"
-_CAPTURE_FAIL_FLOOR_S = 6.0   # > the slowest failure path measured (unreachable public port: 3.8 s)
+_CAPTURE_FAIL_FLOOR_S = 13.0  # > capture.CAPTURE_DEADLINE_S (12 s: the worker is killed there)
 _CAPTURE_NOT_POSSIBLE = "This address cannot be captured"
+
+
+def _capture_fail_floor(cap) -> float:
+    return max(_CAPTURE_FAIL_FLOOR_S, float(getattr(cap, "CAPTURE_DEADLINE_S", 0.0)) + 1.0)
 
 
 def _capture_switch_path(rec) -> Path:
@@ -2163,6 +2205,13 @@ def _capture_egress_gate(tenant_id: str):
     return gate
 
 
+def _capture_egress_rules(gate) -> Dict[str, Any]:
+    """The tenant's L35 rules as data for the capture proxy (exact host match, forbidden wins)."""
+    pol = gate.policy
+    return {"forbidden": sorted(pol.forbidden_hosts), "allowed": sorted(pol.allowed_hosts),
+            "default": pol.default_action}
+
+
 def _console_names(request: Request) -> List[str]:
     import socket  # noqa: PLC0415
 
@@ -2174,82 +2223,110 @@ class CaptureRequest(BaseModel):
     url: str = Field(..., max_length=2048)
     viewport: Literal["desktop", "mobile"] = "desktop"
     caption: str = Field("", max_length=1000)
-    hotspots: List[Dict[str, Any]] = Field(default_factory=list, max_length=16)
+    hotspots: List[Dict[str, Any]] = Field(default_factory=list, max_length=8)
 
 
 @router.post("/capture", status_code=201)
 async def capture_asset(req: CaptureRequest, request: Request, rec=_SessionRec):
     """"Add website screenshot": capture ``req.url`` once and store it as one of this tenant's assets.
-    Session + CSRF (router dependency); 403 while the tenant switch is off or no egress policy exists."""
+    Session + CSRF (router dependency); 403 while the tenant switch is off, no egress policy exists or
+    the policy does not allow the host."""
     import hashlib  # noqa: PLC0415
+    from urllib.parse import urlsplit  # noqa: PLC0415
 
     t0 = time.monotonic()
     cap = _style_mod("capture")
     am = _asset_mod()
     tid = rec.tenant_id
+    raw = req.url.strip()
     try:
-        target = cap.check_url(req.url.strip())
+        target = cap.check_url(raw)
     except cap.CaptureRefused:
         target = None
     base = {"host": (target or {}).get("host", "")[:253], "viewport": req.viewport,
-            "url_sha256_prefix": hashlib.sha256(req.url.strip().encode("utf-8", "replace")).hexdigest()[:12]}
+            "url_sha256_prefix": hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:12]}
 
-    def finish(outcome: str, refusal: Optional[str] = None, **extra) -> bool:
-        return _audit(tid, "video_producer.capture_finished",
-                      {**base, "outcome": outcome, "refusal": refusal, **extra,
-                       "elapsed_ms": int((time.monotonic() - t0) * 1000)})
+    async def finish(outcome: str, refusal: Optional[str] = None, **extra) -> bool:
+        details = {**base, "outcome": outcome, "refusal": refusal, **extra,
+                   "elapsed_ms": int((time.monotonic() - t0) * 1000)}
+        return await asyncio.to_thread(_audit, tid, "video_producer.capture_finished", details)
 
-    def refuse(status: int, message: str, code: str):
-        if not finish("refused", code):
+    async def refuse(status: int, message: str, code: str):
+        if not await finish("refused", code):
             raise HTTPException(status_code=503, detail="The request could not be recorded")
         raise HTTPException(status_code=status, detail=message)
 
-    async def not_capturable(code: str):
-        recorded = await asyncio.to_thread(finish, "failed", code)
-        await asyncio.sleep(max(0.0, t0 + _CAPTURE_FAIL_FLOOR_S - time.monotonic()))
+    async def not_capturable(code: str, **extra):
+        recorded = await finish("failed", code, **extra)
+        await asyncio.sleep(max(0.0, t0 + _capture_fail_floor(cap) - time.monotonic()))
         if not recorded:
             raise HTTPException(status_code=503, detail="The request could not be recorded")
         raise HTTPException(status_code=422, detail=_CAPTURE_NOT_POSSIBLE)
 
     if not await asyncio.to_thread(_capture_enabled, rec):
-        refuse(403, "Website capture is off for this workspace; turn it on in the Video Producer settings", "switch_off")
+        await refuse(403, "Website capture is off for this workspace; turn it on in the Video Producer settings",
+                     "switch_off")
     gate = await asyncio.to_thread(_capture_egress_gate, tid)
     if gate is None:
-        refuse(403, "Website capture needs an egress policy for this workspace (spec.egress in tenant.corvin.yaml)",
-               "no_egress_policy")
+        await refuse(403, "Website capture needs an egress policy for this workspace (spec.egress in "
+                          "tenant.corvin.yaml)", "no_egress_policy")
     if target is None:
-        refuse(422, "Enter a plain http:// or https:// address", "invalid_url")
-    caption = " ".join(req.caption.split())
-    if not caption or len(caption) > am.MAX_CAPTION:
-        refuse(422, f"A caption of 1-{am.MAX_CAPTION} characters is required", "caption")
+        await refuse(422, "Enter a plain http:// or https:// address", "invalid_url")
+    store = _asset_store(rec)
     try:
-        allowed = (await asyncio.to_thread(gate.validate, target["host"], engine_id="video_producer_capture")).allowed
+        meta = am.validate_meta(req.caption, req.hotspots)
+    except am.AssetError as e:
+        await refuse(422, str(e)[:200], _refusal_code(str(e)))
+    if not await asyncio.to_thread(store.has_room):
+        await refuse(409, f"At most {am.MAX_ASSETS} images per workspace; delete one first", "quota")
+    try:
+        decision = await asyncio.to_thread(gate.validate, target["host"], engine_id="video_producer_capture")
     except Exception:  # noqa: BLE001 - a gate error is a denial
-        allowed = False
-    if not allowed:
-        await not_capturable("egress_denied")
+        decision = None
+    if decision is None or not decision.allowed:
+        by_rule = decision is not None and not str(getattr(decision, "reason", "")).startswith("malformed") \
+            and getattr(decision, "matched_rule", "") in ("forbidden_explicit", "default_deny")
+        if by_rule:  # one of the tenant's own rules decided: no secret, say so at once
+            await refuse(403, "This workspace's egress policy does not allow this host", "egress_denied")
+        await not_capturable("egress_denied")  # e.g. an IP literal the gate cannot even parse
+    names = await asyncio.to_thread(_console_names, request)
     if not await asyncio.to_thread(_audit, tid, "video_producer.capture_started", base):
         raise HTTPException(status_code=503, detail="The capture could not be recorded; nothing was fetched")
-    res = await asyncio.to_thread(cap.capture_url, target["url"], viewport=req.viewport,
-                                  console_names=_console_names(request))
+    try:
+        res = await asyncio.to_thread(cap.capture_url, target["url"], viewport=req.viewport, console_names=names,
+                                      egress=_capture_egress_rules(gate), tenant=tid)
+    except Exception:  # noqa: BLE001 - started is always followed by finished
+        await not_capturable("error")
+    hosts = res.get("hosts") if isinstance(res.get("hosts"), dict) else {}
+    counts = {"hosts_connected": int(hosts.get("connected", 0)),
+              "hosts_refused": int(sum(v for k, v in hosts.items() if k != "connected"))}
     if not res["ok"]:
         if res["reason"] == "busy":
-            refuse(429, "Two captures are already running on this host; try again in a moment", "busy")
-        if res["reason"] == "no_browser":
-            refuse(503, "Website capture is not available on this host (no Chrome or Chromium)", "no_browser")
-        await not_capturable(res["reason"])
+            await refuse(429, "A capture of this workspace is already running, or two are running on this host; "
+                              "try again in a moment", "busy")
+        if res["reason"] in ("no_browser", "unsupported"):
+            await refuse(503, "Website capture is not available on this host", res["reason"])
+        await not_capturable(res["reason"], **counts)
+    final = res.get("final_url") or target["url"]
+    final_host = (urlsplit(final).hostname or "")[:253]
 
     def record(doc: Dict[str, Any]) -> bool:
-        return finish("accepted", None, asset_id=doc["id"], bytes=doc["bytes"], width=doc["width"],
-                      height=doc["height"])
+        return _audit(tid, "video_producer.capture_finished", {
+            **base, "outcome": "accepted", "refusal": None, "asset_id": doc["id"], "bytes": doc["bytes"],
+            "width": doc["width"], "height": doc["height"], "final_host": final_host, **counts,
+            "elapsed_ms": int((time.monotonic() - t0) * 1000)})
 
     try:
-        doc = await asyncio.to_thread(_asset_store(rec).add, res["png"], caption=caption, uploaded_by=_job_owner(rec),
-                                      source=target["url"], hotspots=req.hotspots, before_commit=record)
+        doc = await asyncio.to_thread(store.add, res["png"], caption=meta["caption"], uploaded_by=_job_owner(rec),
+                                      source=final, hotspots=meta["hotspots"], before_commit=record)
     except am.AssetNotRecorded:
+        await finish("failed", "not_recorded", **counts)
         raise HTTPException(status_code=503, detail="The capture could not be recorded; nothing was stored") from None
     except am.AssetQuotaExceeded as e:
-        refuse(409, str(e), "quota")
+        await refuse(409, str(e), "quota")
     except am.AssetError as e:
-        refuse(422, str(e), _refusal_code(str(e)))
+        await refuse(422, str(e)[:200], _refusal_code(str(e)))
+    except Exception:  # noqa: BLE001 - a disk error: recorded, never a capture_started without its end
+        await finish("failed", "store_error", **counts)
+        raise HTTPException(status_code=500, detail="The screenshot could not be stored") from None
     return JSONResponse(status_code=201, content={"asset": _public_asset(doc)})

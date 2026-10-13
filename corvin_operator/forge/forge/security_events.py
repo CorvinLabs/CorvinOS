@@ -1186,6 +1186,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "video_producer.asset_uploaded":     "INFO",
     "video_producer.asset_deleted":      "INFO",
     "video_producer.asset_accessed":     "INFO",
+    # T-0194: caption/hotspots of a stored asset changed (before the change is written)
+    "video_producer.asset_updated":      "INFO",
     # ADR-2249 D4 (T-0113): website capture as an asset - the tenant switch changed (before it changes),
     # a capture started (before any egress) and finished (accepted / refused / failed; an accepted one
     # BEFORE the asset is committed). The host and a sha256 prefix of the URL only - never the URL, its
@@ -4469,11 +4471,15 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "video_producer.asset_deleted": frozenset({"tenant_id", "asset_id", "bytes"}),
     "video_producer.asset_accessed": frozenset({"tenant_id", "asset_id", "purpose"}),
+    "video_producer.asset_updated": frozenset({"tenant_id", "asset_id", "hotspot_count", "caption_changed"}),
     "video_producer.capture_setting_changed": frozenset({"tenant_id", "enabled"}),
     "video_producer.capture_started": frozenset({"tenant_id", "host", "url_sha256_prefix", "viewport"}),
     "video_producer.capture_finished": frozenset({
         "tenant_id", "host", "url_sha256_prefix", "viewport", "outcome", "refusal", "asset_id", "bytes",
         "width", "height", "elapsed_ms",
+        # T-0194: the host of the document finally shown (a same-site redirect, e.g. www.) and how many
+        # distinct hosts the proxy connected to / refused for this capture - counts, never their names
+        "final_host", "hosts_connected", "hosts_refused",
     }),
     # "violations" holds "ADR-NNNN/check_name" codes, never free text.
     "deployment.adr_violation_detected": frozenset({
