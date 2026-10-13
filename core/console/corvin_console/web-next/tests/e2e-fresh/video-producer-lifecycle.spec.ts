@@ -481,6 +481,65 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
     await expect(page.getByTestId(`style-row-${styleId}`)).toHaveCount(0);
   });
 
+  test("6d. a Penpot board (SVG) becomes a style (accent read from the design) and a rendered image asset", async ({ page }) => {
+    test.setTimeout(240_000);
+    await ensure(page, "enabled");
+    const fixtures = process.env.CORVIN_STYLE_FIXTURES_DIR
+      ?? "/home/shumway/projects/Corvin-Marketplace/plugins/contributor/media/video_producer/tests";
+    const board = path.join(fixtures, "fixtures", "penpot_board.svg");
+    test.skip(!fs.existsSync(board), "the Penpot board fixture is not on this host; set CORVIN_STYLE_FIXTURES_DIR");
+
+    await page.goto("/console/app/video-producer", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("video-producer")).toBeVisible({ timeout: 45_000 });
+    const imported = page.waitForResponse((r) => r.url().endsWith("/video/styles/import") && r.request().method() === "POST");
+    await page.getByTestId("deck-input").setInputFiles(board);
+    const ires = await imported;
+    expect(ires.status(), `POST /video/styles/import: ${await ires.text()}`).toBe(200);
+    const draft = (await ires.json()).draft;
+    expect(draft.source.kind, "the SVG was read as a Penpot design, not as a deck").toBe("penpot");
+    expect(draft.tokens.light.accent, "the accent is the design's own blue").toBe("#0066cc");
+    await expect(page.getByTestId("style-name")).toBeVisible({ timeout: 60_000 });
+    const saved = page.waitForResponse((r) => r.url().endsWith("/video/styles") && r.request().method() === "POST");
+    await page.getByTestId("style-save").click();
+    const sres = await saved;
+    expect(sres.status(), `POST /video/styles: ${await sres.text()}`).toBe(201);
+    const styleId = (await sres.json()).style.id as string;
+    if (!(await page.getByTestId(`style-row-${styleId}`).isVisible())) await page.getByTestId("styles-toggle").click();
+    await expect(page.getByTestId(`style-row-${styleId}`)).toContainText("From a Penpot design");
+    await page.getByTestId(`style-delete-${styleId}`).click();
+    await page.getByTestId(`style-delete-confirm-${styleId}`).click();
+    await expect(page.getByTestId(`style-row-${styleId}`)).toHaveCount(0);
+
+    await page.goto("/console/app/video-producer?tab=assets", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("assets-tab")).toBeVisible({ timeout: 45_000 });
+    const asset = page.waitForResponse((r) => r.url().endsWith("/video/assets/import-penpot") && r.request().method() === "POST");
+    await page.getByTestId("penpot-input").setInputFiles(board);
+    const ares = await asset;
+    if (ares.status() === 503 && /rendered/.test(await ares.text())) {
+      test.info().annotations.push({ type: "skipped-check", description: "no Chromium on the test host: the board cannot be rendered" });
+      return;
+    }
+    expect(ares.status(), `POST /video/assets/import-penpot: ${await ares.text()}`).toBe(201);
+    const a = (await ares.json()).asset as { id: string; width: number; height: number };
+    expect([a.width, a.height]).toEqual([1920, 1080]);
+    await expect(page.getByTestId("penpot-done")).toBeVisible();
+    const img = await page.request.get(`${API}/video/assets/${a.id}/image`);
+    expect(img.status()).toBe(200);
+    expect(img.headers()["content-type"]).toBe("image/png");
+    try {
+      const png = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vp-penpot-")), "asset.png");
+      fs.writeFileSync(png, await img.body());
+      const px = execFileSync("ffmpeg", ["-v", "error", "-i", png, "-vf", "crop=1:1:200:200", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]);
+      expect([px[0], px[1], px[2]], "the logo ellipse is drawn in the design's blue").toEqual([0, 102, 204]);
+    } catch (e: any) {
+      if (e?.code !== "ENOENT") throw e;
+      test.info().annotations.push({ type: "skipped-check", description: "ffmpeg not installed on the test host" });
+    }
+    await page.getByTestId(`asset-delete-${a.id}`).click();
+    await page.getByTestId(`asset-delete-confirm-${a.id}`).click();
+    await expect(page.getByTestId(`asset-${a.id}`)).toHaveCount(0);
+  });
+
   test("7. disable removes the panel; uninstall via the UI removes everything, panel gone", async ({ page }) => {
     await ensure(page, "enabled");
     await page.goto("/console/app/marketplace?tab=installed", { waitUntil: "domcontentloaded" });
