@@ -332,10 +332,10 @@ class BtwQueueStreamE2E(unittest.TestCase):
         cr._append_turn(sess, "user", cr._btw_note_parts("DELIVERED-NOTE"), btw=True,
                         btw_status="injected", btw_gated=True)
         cr._append_turn(sess, "assistant", [{"kind": "text", "text": "the answer"}], cli_spawned=True)
+        self.assertEqual(cr._last_exchange("_default", sess.sid), ("real question", "the answer"))
         cr._append_turn(sess, "user", [{"kind": "text", "text": "REFUSED-QUESTION"}])
         cr._append_turn(sess, "assistant", [{"kind": "text", "text": "[house-rules] no"}],
                         gate_refused="pre_spawn")
-        self.assertEqual(cr._last_exchange("_default", sess.sid), ("real question", "the answer"))
         from corvin_console.routes import voice as voice_routes
         transcript = voice_routes._build_session_transcript("_default", sess.sid)
         self.assertNotIn("UNGATED-NOTE", transcript)
@@ -352,20 +352,19 @@ class BtwQueueStreamE2E(unittest.TestCase):
         notes = [t for t in cr.read_turns("_default", sess.sid) if t.get("btw")]
         self.assertEqual(len(notes), cr.BTW_UNGATED_RECORD_MAX)
 
-    def test_a_note_that_was_not_accepted_gives_its_rate_slot_back(self):
+    def test_a_note_that_never_reached_the_gate_gives_its_rate_slot_back(self):
         cr = self.cr
         sess = cr.create_session("_default")
-        cr._btw_turn_opened(sess.chat_key)
-        try:
-            with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal",
-                                   side_effect=lambda t, **k: "[refused]" if "NO" in t else None):
-                o1 = asyncio.run(cr.inject_btw_web(sess, "say NO", client_id="slot0001"))
-                o2 = asyncio.run(cr.inject_btw_web(sess, "say YES", client_id="slot0002"))
-            self.assertEqual((o1.status, o1.reason), ("refused", "gate"))
-            self.assertEqual(o2.status, "queued")
-        finally:
-            cr._btw_take_pending(sess.chat_key)
-            cr._btw_turn_closed(sess.chat_key)
+        with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal", return_value=None):
+            o1 = asyncio.run(cr.inject_btw_web(sess, "say IDLE", client_id="slot0001"))   # no open turn
+            cr._btw_turn_opened(sess.chat_key)
+            try:
+                o2 = asyncio.run(cr.inject_btw_web(sess, "say NOW", client_id="slot0002"))
+            finally:
+                cr._btw_take_pending(sess.chat_key)
+                cr._btw_turn_closed(sess.chat_key)
+        self.assertEqual(o1.status, "no_active_stream")
+        self.assertEqual(o2.status, "queued")
 
     def test_expired_queued_notes_do_not_fill_the_queue(self):
         cr = self.cr
@@ -387,6 +386,62 @@ class BtwQueueStreamE2E(unittest.TestCase):
         label = session_ledger._withheld({"refused": "pre_spawn_cancelled"})
         self.assertIn("stopped before its safety check finished", label)
         self.assertNotIn("refused by", label)
+
+    # ── final round (review 3) ─────────────────────────────────────────────
+
+    def test_a_gate_refused_loop_stays_rate_limited(self):
+        cr = self.cr
+        sess = cr.create_session("_default")
+        cr._btw_turn_opened(sess.chat_key)
+        calls = []
+
+        def gate(text, **kw):
+            calls.append(text)
+            return "[refused]"
+        try:
+            with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal", side_effect=gate):
+                outs = [asyncio.run(cr.inject_btw_web(sess, f"say N{i}", client_id=f"loop{i:05d}"))
+                        for i in range(10)]
+            self.assertEqual(len(calls), 1, "the gate (an L44 model call) ran once per 2 s, not per request")
+            self.assertEqual([o.reason for o in outs], ["gate"] + ["rate_limited"] * 9)
+        finally:
+            cr._btw_turn_closed(sess.chat_key)
+
+    def test_a_cancelled_request_gives_its_rate_slot_back(self):
+        import contextlib
+        cr = self.cr
+        sess = cr.create_session("_default")
+        cr._btw_turn_opened(sess.chat_key)
+
+        def slow_gate(text, **kw):
+            import time as _t
+            _t.sleep(0.5)
+            return None
+
+        async def go():
+            t = asyncio.create_task(cr.inject_btw_web(sess, "say GONE", client_id="canc0001"))
+            await asyncio.sleep(0.15)
+            t.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await t
+            return await cr.inject_btw_web(sess, "say RETRY", client_id="canc0002")
+        try:
+            with mock.patch.object(cr._spawn_gates, "check_console_spawn_or_refusal", side_effect=slow_gate):
+                out = asyncio.run(go())
+            self.assertEqual(out.status, "queued")
+        finally:
+            cr._btw_take_pending(sess.chat_key)
+            cr._btw_turn_closed(sess.chat_key)
+
+    def test_the_summary_of_a_refused_turn_is_not_the_previous_exchange(self):
+        cr = self.cr
+        sess = cr.create_session("_default")
+        cr._append_turn(sess, "user", [{"kind": "text", "text": "old q"}])
+        cr._append_turn(sess, "assistant", [{"kind": "text", "text": "old a"}], cli_spawned=True)
+        cr._append_turn(sess, "user", [{"kind": "text", "text": "refused q"}])
+        cr._append_turn(sess, "assistant", [{"kind": "text", "text": "[house-rules] no"}],
+                        gate_refused="pre_spawn")
+        self.assertEqual(cr._last_exchange("_default", sess.sid), ("", ""))
 
     def test_after_the_turn_closed_a_note_is_no_active_stream(self):
         sess, _events, _o = self._run(notes_expected=1)

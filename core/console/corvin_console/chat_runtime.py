@@ -1357,6 +1357,7 @@ async def inject_btw_web(sess: "WebChatSession", text: str, *, via: str = "text"
 
     note_parts = _btw_note_parts(text)
     wrote = False
+    release_slot = False
 
     def _done(o: BtwOutcome, *, record: str | None = None, gated: bool = False,
               gate_refused: str | None = None) -> BtwOutcome:
@@ -1381,8 +1382,12 @@ async def inject_btw_web(sess: "WebChatSession", text: str, *, via: str = "text"
                 # The 2 s count from the ACCEPT (the reservation above only
                 # closes the race while the gate runs).
                 _btw_last_accept[chat_key] = time.time()
-            elif reserved_at is not None and _btw_last_accept.get(chat_key) == reserved_at:
-                # Not accepted: give the slot back, a resend must not be "too soon".
+            elif (reserved_at is not None and _btw_last_accept.get(chat_key) == reserved_at
+                  and release_slot):
+                # Not accepted AND never run through the gate (idle chat): give
+                # the slot back, a resend must not be "too soon". A note the gate
+                # (or queue cap) turned down KEEPS it — otherwise a loop of
+                # refused notes runs the L44 model call unmetered.
                 if prev_accept is None:
                     _btw_last_accept.pop(chat_key, None)
                 else:
@@ -1402,6 +1407,7 @@ async def inject_btw_web(sess: "WebChatSession", text: str, *, via: str = "text"
                 gen is not None and chat_key in _btw_open_turns
                 and chat_key not in _btw_stdin_closed)
         if not live:
+            release_slot = True      # cheap, bounded by the ungated-record cap
             return _done(BtwOutcome("no_active_stream"), record="undelivered")
         # A note reaches the model exactly like a turn does, so it passes the
         # same fail-closed pre-spawn gates (L44 house rules, capabilities, L34,
@@ -1471,10 +1477,18 @@ async def inject_btw_web(sess: "WebChatSession", text: str, *, via: str = "text"
             # Cancelled after the bytes went out: the CLI has the note.
             with contextlib.suppress(Exception):
                 _done(BtwOutcome("injected"), record="injected", gated=True)
-        elif mine is not None and not mine.done():
-            mine.set_result(BtwOutcome("refused", "error"))
+        else:
             with _running_stdins_web_guard:
-                _btw_seen.pop(seen_key, None)
+                # Never accepted, nothing recorded: the slot goes back.
+                if reserved_at is not None and _btw_last_accept.get(chat_key) == reserved_at:
+                    if prev_accept is None:
+                        _btw_last_accept.pop(chat_key, None)
+                    else:
+                        _btw_last_accept[chat_key] = prev_accept
+            if mine is not None and not mine.done():
+                mine.set_result(BtwOutcome("refused", "error"))
+                with _running_stdins_web_guard:
+                    _btw_seen.pop(seen_key, None)
         raise
 
 
@@ -5061,6 +5075,9 @@ def summarizable_turns(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _last_exchange(tenant_id: str, sid: str) -> tuple[str, str]:
     """(user text, assistant text) of the chat's most recent persisted exchange."""
     user = answer = ""
+    recent = [t for t in read_turns(tenant_id, sid, limit=40) if not t.get("btw")]
+    if recent and recent[-1].get("role") == "assistant" and recent[-1].get("gate_refused"):
+        return "", ""   # the latest turn was refused/stopped by a gate: nothing to summarise
     for turn in reversed([t for t in summarizable_turns(read_turns(tenant_id, sid, limit=40))
                           if not t.get("btw")][-8:]):
         text = _turn_text(turn).strip()

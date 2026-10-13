@@ -702,7 +702,10 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
         // Delivered notes were answered — unless the turn ended in an error.
         const cur = entry.currentAssistantId
           ? entry.messages.find((m) => m.id === entry.currentAssistantId) : undefined;
-        entry.messages = settleOnDone(entry.messages, { answered: !cur?.error && !evt.cancelled });
+        // An attached socket did not see the turn run: whether a delivered note
+        // was answered is the record's to say (reconcile + settleHydrated).
+        entry.messages = settleOnDone(
+          entry.messages, { answered: !cur?.error && !evt.cancelled && !evt.attached });
       }
       entry.steerOpen = true;
       if (evt.attached || entry.needsReconcile) {
@@ -1003,7 +1006,8 @@ function textOf(m: ChatMessage): string {
  *  count per message. Replaces the old length comparison, which read a stale
  *  [user, empty placeholder] as equal to the finished [user, answer]. */
 function fingerprint(msgs: ChatMessage[]): string {
-  return msgs.map((m) => `${m.role}:${m.parts.length}:${textOf(m).length}:${textOf(m).slice(-64)}`).join("|");
+  return msgs.map((m) =>
+    `${m.role}:${m.btw?.state ?? ""}:${m.parts.length}:${textOf(m).length}:${textOf(m).slice(-64)}`).join("|");
 }
 
 /**

@@ -1384,6 +1384,17 @@ The console's `/btw` is a **conversation event**, not an API call with a flash m
     reports later (`btw_flushed`, a retry's first outcome).
   - *Ledger label*: a `pre_spawn_cancelled` turn is withheld as "stopped before its safety check
     finished", not as a gate refusal.
+- **Final round (review 3, 2026-10-13) — last four fixes:**
+  - *Rate slot*: only a note that never reached the gate (idle chat) or whose request was
+    cancelled gives its slot back; a gate- or queue-cap refusal KEEPS it, so a loop of refused
+    notes cannot run the L44 model call unmetered (`test_a_gate_refused_loop_stays_rate_limited`).
+  - *Task summary of a refused turn*: `_last_exchange` returns nothing when the latest turn was
+    stopped/refused by a gate, instead of describing the previous exchange.
+  - *Attached tabs*: a `done` with `attached: true` never settles a delivered note to "Taken into
+    account" — the record decides after the reconcile; the reconcile fingerprint now includes the
+    note state, so a stale chip is corrected.
+  - Known, accepted: with a gate slower than 2 s two notes arriving 2 s apart can be accepted close
+    together (the arrival rate is still 1 per 2 s).
   - Known, accepted: a note drained `undelivered` at the turn's end is recorded after the answer,
     so after a reload it renders below the answer (live: above). A note whose HTTP request failed
     (`failed`) exists only in the open tab until resent.
