@@ -403,6 +403,68 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
     }
   });
 
+  test("6a. the Quality tab shows the production report of a finished video", async ({ page }) => {
+    test.setTimeout(120_000);
+    await ensure(page, "enabled");
+    const list = await (await page.request.get(`${API}/video/jobs?limit=50`)).json();
+    const done = (list.jobs as any[]).find((j) => /^complete/.test(j.status));
+    expect(done, "test 6 left a finished video behind").toBeTruthy();
+    await page.goto("/console/app/video-producer", { waitUntil: "domcontentloaded" });
+    await page.getByTestId(`job-${done.id}`).click();
+    const toggle = page.getByTestId("details-toggle");   // the tabs sit behind "Quality, learning, code, canvas and images"
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+    await page.getByTestId("tab-quality").click();
+    await expect(page.getByTestId("signals-card"), "the production report is on screen").toBeVisible({ timeout: 60_000 });
+    for (const id of ["degradation_rate", "mux_integrity", "plan_estimate_error"]) {
+      await expect(page.getByTestId(`signal-${id}`), `signal ${id} is listed`).toBeVisible();
+    }
+    await expect(page.getByTestId("signal-verdict-plan_estimate_error"), "an estimate is information, never a verdict").toContainText(/info/i);
+    // what the panel shows is what the API serves
+    const qm = await (await page.request.get(`${API}/video/jobs/${done.id}/quality-metrics`)).json();
+    expect(qm.report?.state).toBe("present");
+    for (const s of qm.report.signals as any[]) await expect(page.getByTestId(`signal-${s.id}`)).toBeVisible();
+  });
+
+  test("6c. a production can be cancelled; a running one cannot be deleted, a cancelled one can, and it is audited", async ({ page }) => {
+    test.setTimeout(300_000);
+    await ensure(page, "enabled");
+    await page.goto("/console/app/video-producer", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("video-producer")).toBeVisible({ timeout: 45_000 });
+    await page.getByTestId("task-input").fill("Explain in two very short scenes why the sky is blue.");
+    const created = page.waitForResponse((r) => r.url().includes("/video/jobs") && r.request().method() === "POST");
+    await page.getByTestId("start-production").click();
+    const res = await created;
+    expect(res.status(), `POST /video/jobs: ${await res.text()}`).toBe(200);
+    const jobId = (await res.json()).job_id as string;
+
+    const early = await call(page, "DELETE", `${API}/video/jobs/${jobId}`);
+    expect(early.status, `a production in progress must not be deletable: ${early.text}`).toBe(409);
+
+    await expect(page.getByTestId("cancel-job")).toBeVisible({ timeout: 60_000 });
+    await page.getByTestId("cancel-job").click();
+    await expect(page.getByTestId("stage-cancelled"), "the panel says the production was cancelled").toBeVisible({ timeout: 60_000 });
+    await expect
+      .poll(async () => (await (await page.request.get(`${API}/video/jobs/${jobId}`)).json()).status, { timeout: 30_000 })
+      .toBe("cancelled");
+    expect((await call(page, "POST", `${API}/video/jobs/${jobId}/cancel`)).status, "cancelling a finished job is not an error that kills anything").toBeLessThan(500);
+
+    await page.getByTestId(`job-${jobId}`).hover();
+    await page.getByTestId(`delete-${jobId}`).click();
+    await expect(page.getByTestId(`delete-dialog-${jobId}`)).toBeVisible();
+    await page.getByTestId(`delete-confirm-${jobId}`).click();
+    await expect
+      .poll(async () => (await page.request.get(`${API}/video/jobs/${jobId}`)).status(), { timeout: 30_000, message: "the job is gone" })
+      .toBe(404);
+    await expect(page.getByTestId(`job-${jobId}`)).toHaveCount(0);
+    expect((await call(page, "DELETE", `${API}/video/jobs/${jobId}`)).status, "deleting twice is a 404, not a 500").toBe(404);
+
+    const chain = path.join(HOME, "tenants", "_default", "global", "forge", "audit.jsonl");
+    const records = fs.readFileSync(chain, "utf8").trim().split("\n").map((l) => JSON.parse(l))
+      .filter((e) => e.event_type === "video_producer.job_deleted" && e.details?.job_id === jobId);
+    expect(records.length, "the deletion is in the audit chain exactly once").toBe(1);
+    expect(records[0].details.status).toBe("cancelled");
+  });
+
   test("6b. a PowerPoint deck is imported as a style, previewed, saved, and the produced video carries ITS accent, not the Corvin mark", async ({ page }) => {
     test.setTimeout(600_000);
     await ensure(page, "enabled");
