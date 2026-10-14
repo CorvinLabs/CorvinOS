@@ -4,7 +4,7 @@ Skills Execution + Audit Integration — Emit audit events for all skill operati
 GDPR Art. 30 compliance: Every skill execution, feedback, and config change must be
 recorded in the immutable audit trail.
 
-Writes ``skill_executed`` / ``skill_feedback`` / ``skill_config_updated`` into THE
+Writes ``skill.executed`` / ``skill_feedback`` / ``skill_config_updated`` into THE
 tenant chain through :func:`core.skills.skill_audit.emit_skill_audit`
 (``forge.security_events.write_event`` on the tenant chain). Until the adversarial
 review round 5 (2026-09-28) this module imported ``core.compliance.audit_backend``,
@@ -27,7 +27,10 @@ logger = logging.getLogger(__name__)
 
 #: Event types this module writes (registered in ``EVENT_SEVERITY`` and
 #: ``_EVENT_ALLOWLIST`` in ``corvin_operator/forge/forge/security_events.py``).
-SKILL_AUDIT_EVENT_TYPES = ("skill_executed", "skill_feedback", "skill_config_updated")
+#: ``skill.executed`` is the one execution spelling on the chain (ADR-2044
+#: amendment); the legacy ``skill_executed`` is still READ by consumers but
+#: is no longer written.
+SKILL_AUDIT_EVENT_TYPES = ("skill.executed", "skill_feedback", "skill_config_updated")
 
 
 def _scalar_or_digest(prefix: str, value: Any) -> Dict[str, Any]:
@@ -61,7 +64,7 @@ def emit_skill_audit_event(
     (logged at ERROR) when it was not — never raises into the skill operation.
 
     Args:
-        event_type: 'skill_executed', 'skill_feedback', or 'skill_config_updated'
+        event_type: 'skill.executed', 'skill_feedback', or 'skill_config_updated'
         skill_id: Skill identifier (e.g., 'os.delegation_router')
         tenant_id: Tenant (must match the process tenant, fail-closed)
         input_hash: SHA256 of input (never store raw input)
@@ -125,7 +128,7 @@ def emit_skill_executed_event(
     error: Optional[str] = None
 ) -> bool:
     """
-    Emit skill_executed audit event (GDPR Art. 30 - records of processing).
+    Emit skill.executed audit event (GDPR Art. 30 - records of processing).
 
     Args:
         skill_id: Skill identifier
@@ -138,7 +141,7 @@ def emit_skill_executed_event(
     """
     try:
         return emit_skill_audit_event(
-            event_type="skill_executed",
+            event_type="skill.executed",
             skill_id=skill_id,
             tenant_id=tenant_id,
             input_hash=_hash_data(input_data),
@@ -148,7 +151,7 @@ def emit_skill_executed_event(
             error=error,
         )
     except Exception as e:  # noqa: BLE001
-        logger.error("Error emitting skill_executed event: %s", type(e).__name__)
+        logger.error("Error emitting skill.executed event: %s", type(e).__name__)
         return False
 
 

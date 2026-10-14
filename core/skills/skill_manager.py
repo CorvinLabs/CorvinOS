@@ -281,12 +281,21 @@ class SkillExecutor:
         version = str(self.manifest.get('version', ''))
         state_mgr = StateManager(self.skill_dir)
         safe_inputs = self.sanitize_inputs(inputs)
-        run_id = state_mgr.start_run(
-            skill_id=skill_id,
-            version=version,
-            trigger=trigger,
-            inputs=safe_inputs,
-        ).run_id
+        try:
+            run_id = state_mgr.start_run(
+                skill_id=skill_id,
+                version=version,
+                trigger=trigger,
+                inputs=safe_inputs,
+            ).run_id
+        except Exception as exc:
+            # No run exists yet, so there is no run_id; the failure is still a
+            # skill execution and must leave one chain record (PLAN-0957 S2).
+            self._audit("skill.executed", None, {
+                "skill_id": skill_id, "skill_version": version, "status": "error",
+                "latency_ms": 0, "error_type": type(exc).__name__,
+            })
+            raise
 
         started = time.monotonic()
         holder: Dict[str, Any] = {}

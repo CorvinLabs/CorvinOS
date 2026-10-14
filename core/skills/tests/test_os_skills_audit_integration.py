@@ -64,7 +64,7 @@ def test_skill_executed_is_chained_metadata_only(home: Path):
     )
     assert ok is True
     chain = _chain(home)
-    recs = _records(chain, "skill_executed")
+    recs = _records(chain, "skill.executed")
     assert len(recs) == 1, chain
     d = recs[0]["details"]
     assert d["skill_id"] == "os.definition_of_done_verifier"
@@ -114,7 +114,7 @@ def test_context_manager_records_the_exception_type(home: Path):
     with pytest.raises(RuntimeError):
         with ai.SkillExecutionAuditor("os.x", "_default", {"a": 1}, "x.py:1"):
             raise RuntimeError("boom with user text")
-    recs = _records(_chain(home), "skill_executed")
+    recs = _records(_chain(home), "skill.executed")
     assert len(recs) == 1
     assert recs[0]["details"]["error_type"] == "RuntimeError"
     assert "boom" not in _chain(home).read_text()

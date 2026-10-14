@@ -149,6 +149,31 @@ class TestExecutorContract:
         assert mgr.list_active_skills() == []
         assert mgr.execute_skill("before_delegation_decision", {}).success is False
 
+    def test_failure_before_run_start_is_still_audited(self, home, monkeypatch):
+        # PLAN-0957 S2: a run that fails before it has a run_id must leave one
+        # skill.executed record with status=error, and the error still propagates.
+        from core.skills.state_manager import StateManager
+
+        mgr = SkillManager(home, "_default")
+        assert mgr.install_skill(_bundle(home, "early.skill"))["success"]
+
+        def _boom(self, **kwargs):
+            raise RuntimeError("state store unavailable")
+
+        monkeypatch.setattr(StateManager, "start_run", _boom)
+        with pytest.raises(RuntimeError, match="state store unavailable"):
+            mgr.execute_skill("before_delegation_decision", {"task_shape": "x"})
+        events = [e for e in _chain_events(home) if e["event_type"] == "skill.executed"]
+        assert len(events) == 1
+        d = events[0]["details"]
+        assert d["status"] == "error" and d["error_type"] == "RuntimeError"
+        assert d["skill_id"] == "early.skill"
+        assert "run_id" not in d or d["run_id"] == ""
+        import corvin_core._bootstrap  # noqa: F401 — forge on sys.path
+        from forge.security_events import verify_chain  # type: ignore[import-not-found]
+        ok, problems = verify_chain(home / "tenants" / "_default" / "global" / "forge" / "audit.jsonl")
+        assert ok, problems
+
     def test_audit_event_is_metadata_only_and_chained(self, home):
         mgr = SkillManager(home, "_default")
         assert mgr.install_skill(_bundle(home, "aud.skill"))["success"]

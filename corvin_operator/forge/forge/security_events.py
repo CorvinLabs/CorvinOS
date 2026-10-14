@@ -4965,7 +4965,9 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
 _EVENT_ALLOWLIST_EXTENSIONS: dict[str, frozenset[str]] = {
     # core/skills/skill_audit.emit_skill_audit registers its fixed structural
     # field set for every event type it writes.
-    "skill.executed": frozenset({"audit_ref", "decision", "duration_ms", "enabled", "error_type", "flag_id", "latency_ms", "lom", "lom_hash", "operation", "reason_code", "run_id", "skill_id", "skill_version", "status", "tenant_id", "tier", "tool"}),
+    # input_hash / output_hash: SHA-256 digests written by os_skills/audit_integration.py
+    # (the same two names the legacy "skill_executed" entry already carries).
+    "skill.executed": frozenset({"audit_ref", "decision", "duration_ms", "enabled", "error_type", "flag_id", "input_hash", "latency_ms", "lom", "lom_hash", "operation", "output_hash", "reason_code", "run_id", "skill_id", "skill_version", "status", "tenant_id", "tier", "tool"}),
     "cost_variance_updated": frozenset({"audit_ref", "decision", "duration_ms", "enabled", "error_type", "flag_id", "latency_ms", "lom", "lom_hash", "operation", "reason_code", "run_id", "skill_id", "skill_version", "status", "tenant_id", "tier", "tool"}),
     "learned_threshold_updated": frozenset({"audit_ref", "decision", "duration_ms", "enabled", "error_type", "flag_id", "latency_ms", "lom", "lom_hash", "operation", "reason_code", "run_id", "skill_id", "skill_version", "status", "tenant_id", "tier", "tool"}),
     "confidence_updated": frozenset({"audit_ref", "decision", "duration_ms", "enabled", "error_type", "flag_id", "latency_ms", "lom", "lom_hash", "operation", "reason_code", "run_id", "skill_id", "skill_version", "status", "tenant_id", "tier", "tool"}),
