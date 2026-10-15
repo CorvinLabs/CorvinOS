@@ -539,6 +539,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # noqa: BLE001
         logging.getLogger(__name__).warning("auto-update on start not scheduled: %s", exc)
 
+    # Re-run a chat turn the previous shutdown cut off (corvin_console/turn_recovery.py).
+    try:
+        import corvin_console  # noqa: F401
+        from corvin_console import turn_recovery as _tr
+        _tr.schedule_recovery()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("turn recovery not scheduled: %s", exc)
+
     # Standard plugins — install the plugins listed in corvin_console/default_plugins.yaml
     # (background thread, once per tenant; docs/claude-ref/default-plugins.md).
     try:
@@ -658,6 +666,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:  # noqa: BLE001 - shutdown must not raise
             pass
     finally:
+        # Timestamp for the next start: a turn finalized by THIS shutdown is re-run there.
+        try:
+            from corvin_console import turn_recovery as _tr_down
+            _tr_down.note_shutdown()
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            pass
         # Stop KPI collector daemon first
         if _metrics_daemon_task is not None:
             try:

@@ -914,6 +914,15 @@ def create_app() -> FastAPI:
             import logging
             logging.getLogger(__name__).warning("auto-update on start not scheduled: %s", exc)
 
+        # Re-run a chat turn that the previous host shutdown cut off (turn_recovery.py).
+        try:
+            from . import turn_recovery
+
+            turn_recovery.schedule_recovery()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("turn recovery not scheduled: %s", exc)
+
         # ADR-2066 Phase 2 — Centralized Configuration Management
         # Initialize config manager for fail-closed config validation
         # NOT create_with_audit(tenant_audit_chain(...)): that binds an
@@ -954,6 +963,12 @@ def create_app() -> FastAPI:
             )
 
         yield
+        try:
+            from . import turn_recovery
+
+            turn_recovery.note_shutdown()
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            pass
         # Data Hub learning loop: persist state + release the per-tenant lease (review DH-6).
         try:
             import os as _os_lhs

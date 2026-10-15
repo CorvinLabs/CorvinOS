@@ -1,7 +1,9 @@
 /**
- * UpdateCard — Manual update trigger + auto-update toggle
+ * UpdateCard — Manual update trigger + auto-update toggle + update trace
  *
  * Features:
+ * - Update trace: phase, per-link proof (delivered / UI rebuilt / script / verified / current)
+ *   and the time of the last fully verified update
  * - Check for available updates (non-blocking)
  * - Install updates with progress feedback
  * - Toggle auto-update on startup
@@ -16,7 +18,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { checkUpdate, installUpdate, getAutoUpdate, setAutoUpdate, type UpdateCheckResult, type UpdateInstallResult } from "@/lib/api";
+import { traceRows, checkRows, headline, lastSuccessText } from "@/lib/update-trace";
+import { checkUpdate, installUpdate, getAutoUpdate, setAutoUpdate, type UpdateCheckResult } from "@/lib/api";
 
 interface UpdateCardProps {
   csrf: string;
@@ -104,10 +107,11 @@ export function UpdateCard({ csrf }: UpdateCardProps) {
   const running = check?.running ?? false;
   const last = check?.last_update ?? null;
   const lastText = last?.at
-    ? `${new Date(last.at * 1000).toLocaleString()} - ${
+    ? `${new Date(last.at * 1000).toLocaleString("en-US")} - ${
         last.status === "success" ? "succeeded"
         : last.status === "failed" ? "failed"
         : last.status === "interrupted" ? "interrupted"
+        : last.status === "unverified" ? "finished, not verified"
         : "in progress"}${last.version_after && last.version_before && last.version_after !== last.version_before
         ? ` (v${last.version_before} -> v${last.version_after})` : ""}`
     : "never";
@@ -116,6 +120,10 @@ export function UpdateCard({ csrf }: UpdateCardProps) {
   const availableVersion = check?.available_version ?? null;
   const checkError = check?.error;
   const autoUpdateEnabled = autoUpdateStatus?.enabled ?? true;
+  const trace = headline(last);
+  const toneClass = { ok: "text-emerald-600 dark:text-emerald-400", warn: "text-amber-600 dark:text-amber-400",
+                      bad: "text-destructive", info: "text-muted-foreground" }[trace.tone];
+  const stateMark: Record<string, string> = { pending: "·", running: "…", ok: "✓", failed: "✗", skipped: "–" };
 
   return (
     <>
@@ -186,8 +194,41 @@ export function UpdateCard({ csrf }: UpdateCardProps) {
           <p className="text-[11px] text-muted-foreground" data-testid="last-update">
             Last update: {lastText}
           </p>
-          {last?.status === "failed" && last.detail && (
+          {last?.status && last.detail && last.status !== "success" && last.status !== "running" && (
             <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{last.detail}</p>
+          )}
+
+          {/* Update trace: every stage of the last run, and what was actually proven */}
+          {last?.status && (
+            <div className="rounded border border-border/60 px-2.5 py-2 space-y-2" data-testid="update-trace">
+              <p className={`text-xs font-medium ${toneClass}`} data-testid="update-trace-headline">
+                {trace.text}{last.trigger ? ` (${last.trigger === "auto" ? "auto-update" : "manual"})` : ""}
+              </p>
+              <ol className="grid grid-cols-1 sm:grid-cols-5 gap-1.5" aria-label="Update phases">
+                {traceRows(last).map((r) => (
+                  <li key={r.phase} data-testid={`phase-${r.phase}`} data-state={r.state}
+                      className="text-[11px] rounded bg-muted/40 px-1.5 py-1">
+                    <span className="font-mono mr-1" aria-hidden>{stateMark[r.state]}</span>
+                    {r.label}
+                    <span className="sr-only"> {r.state}</span>
+                  </li>
+                ))}
+              </ol>
+              {checkRows(last).length > 0 && (
+                <ul className="text-[11px] space-y-0.5" data-testid="update-checks">
+                  {checkRows(last).map((c) => (
+                    <li key={c.key} data-ok={c.ok} className={c.ok ? "text-muted-foreground" : "text-destructive"}>
+                      <span className="font-mono mr-1" aria-hidden>{c.ok ? "✓" : "✗"}</span>{c.label}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {last.status !== "running" && check && !checkError && (
+                <p className="text-[11px] text-muted-foreground" data-testid="live-currency">
+                  Live check: {hasUpdate ? "newer commits are available on main" : "this install matches main"}
+                </p>
+              )}
+            </div>
           )}
 
           {/* Progress message */}
@@ -250,6 +291,9 @@ export function UpdateCard({ csrf }: UpdateCardProps) {
               )}
             </div>
           </div>
+          <p className="mt-2 text-[11px] text-muted-foreground" data-testid="last-success">
+            Last fully verified update: {lastSuccessText(last)}
+          </p>
           {autoUpdateError && (
             <p className="mt-2 text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">
               {autoUpdateError}

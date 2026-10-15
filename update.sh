@@ -68,6 +68,15 @@ ok()   { printf '  %s %s\n' "$(_g '✓')" "$*"; }
 warn() { printf '  %s %s\n' "$(_y '⚠')" "$*"; }
 step() { printf '\n%s\n' "$(_b "$*")"; }
 die()  { printf '  %s %s\n' "$(_r '✗')" "$*" >&2; exit "${2:-1}"; }
+# progress PHASE STATUS [DETAIL] — one JSON line for the console's Update card
+# (CORVIN_UPDATE_PROGRESS is set by the console; a manual run leaves it unset = no-op).
+PROGRESS="${CORVIN_UPDATE_PROGRESS:-}"
+progress() {
+    [ -n "$PROGRESS" ] || return 0
+    _pd="$(printf '%s' "${3:-}" | tr -cd 'A-Za-z0-9._/:@ >-' | cut -c1-120)"
+    printf '{"phase":"%s","status":"%s","detail":"%s","ts":%s}\n' "$1" "$2" "$_pd" "$(date +%s 2>/dev/null || echo 0)" \
+        >>"$PROGRESS" 2>/dev/null || true
+}
 log()  { printf '\n=== %s %s ===\n' "$(date '+%H:%M:%S' 2>/dev/null)" "$*" >>"$LOG" 2>/dev/null; }
 
 # _quiet MSG cmd… — run with output to the log, dots while it works.
@@ -266,13 +275,16 @@ fetch_checkout() {  # developer checkout — never lose work
 
 STASHED=0
 if [ "$REBUILD_ONLY" = 1 ]; then
+    progress delivery skipped "rebuild-only"
     ok "code unchanged (--rebuild-only)"
 else
+    progress delivery running
     case "$KIND" in
-        managed) _quiet "fetching $BRANCH" fetch_managed || die "could not download the update — nothing changed (see $LOG)" ;;
-        checkout) fetch_checkout || die "git update failed — nothing changed (see $LOG)" ;;
+        managed) _quiet "fetching $BRANCH" fetch_managed || { progress delivery failed "download failed"; die "could not download the update — nothing changed (see $LOG)"; } ;;
+        checkout) fetch_checkout || { progress delivery failed "git update failed"; die "git update failed — nothing changed (see $LOG)"; } ;;
     esac
     NEW_REV="$(_git rev-parse HEAD 2>/dev/null || echo tarball)"
+    progress delivery ok "$NEW_REV"
     if [ -n "$PREV_REV" ] && [ "$PREV_REV" = "$NEW_REV" ]; then
         ok "already at the latest $BRANCH ($(printf '%.8s' "$NEW_REV")) — refreshing anyway"
     else
@@ -300,6 +312,7 @@ TOOL_PY="$TOOL_ENV/bin/python"
 
 # ── 4. Console frontend: clean build into dist.next, atomic swap ────────────
 step "[4/6] Console frontend"
+progress ui_build running
 if [ -f "$SRC/scripts/ensure-node.sh" ]; then
     _quiet "Node.js runtime" bash "$SRC/scripts/ensure-node.sh" || warn "local Node.js bootstrap failed — trying the system Node.js"
 fi
@@ -346,6 +359,12 @@ if [ "$BUILD_OK" = 1 ]; then
     [ -d "$WEB/dist" ] && mv "$WEB/dist" "$WEB/dist.prev"
     if mv "$WEB/dist.next" "$WEB/dist"; then ok "new build in place ($(grep -o 'assets/index-[^"]*\.js' "$WEB/dist/index.html" | head -1))"
     else [ -d "$WEB/dist.prev" ] && mv "$WEB/dist.prev" "$WEB/dist"; BUILD_OK=0; warn "swap failed — previous build restored"; fi
+fi
+
+if [ "$BUILD_OK" = 1 ]; then
+    progress ui_build ok "$(grep -o 'assets/index-[^"]*\.js' "$WEB/dist/index.html" | head -1)"
+else
+    progress ui_build failed "frontend not rebuilt"
 fi
 
 # ── 5. Services: refresh, self-heal, restart ────────────────────────────────
@@ -411,6 +430,7 @@ wait_live() {  # wait_live SECONDS — /console/ must serve dist's entry bundle
 }
 
 if [ "$NO_RESTART" = 1 ]; then
+    progress verification skipped "no restart"
     ok "restart skipped (--no-restart) — restart the console to load the update"
     exit 0
 fi
@@ -420,6 +440,7 @@ if wait_live 180; then printf '%s\n' "$(_g '✓')"; LIVE=1; else printf '%s\n' "
 
 # ── 6. Verify (over the wire, like a browser) ───────────────────────────────
 step "[6/6] Verify"
+progress verification running
 VERIFY_OK=0
 if [ "$LIVE" = 1 ] && [ "$PKG_OK" = 1 ]; then
     _vpy="$TOOL_PY"; [ -x "$_vpy" ] || _vpy="$(command -v python3 || true)"
@@ -431,6 +452,7 @@ if [ "$LIVE" = 1 ] && [ "$PKG_OK" = 1 ]; then
 fi
 
 if [ "$VERIFY_OK" = 1 ]; then
+    progress verification ok
     printf '\n%s\n' "$(_g "$(_b 'CorvinOS is up to date and running.')")"
     printf '  %s/console/   (reload the tab: Ctrl+Shift+R / Cmd+Shift+R)\n' "$BASE_URL"
     [ -n "$BACKUP_REF" ] && printf '  previous code kept on branch: %s\n' "$BACKUP_REF"
@@ -439,6 +461,7 @@ if [ "$VERIFY_OK" = 1 ]; then
 fi
 
 # ── Rollback ────────────────────────────────────────────────────────────────
+progress verification failed "the updated console did not verify"
 printf '\n  %s\n' "$(_r 'The updated console did not verify.')"
 if [ "$ROLLBACK" != 1 ] || [ "$REBUILD_ONLY" = 1 ]; then
     echo "  Kept as is (--no-rollback / --rebuild-only). Log: $LOG"; exit 2

@@ -130,6 +130,17 @@ function Stop-Update {
     exit $Code
 }
 
+# One JSON line per stage for the console's Update card. CORVIN_UPDATE_PROGRESS is set by
+# the console; a manual run leaves it unset and this does nothing.
+function Send-UpdateProgress {
+    param([string]$Phase, [string]$Status, [string]$Detail = "")
+    if (-not $env:CORVIN_UPDATE_PROGRESS) { return }
+    $d = ($Detail -replace '[^A-Za-z0-9._/:@ >-]', '')
+    if ($d.Length -gt 120) { $d = $d.Substring(0, 120) }
+    $ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    try { Add-Content -LiteralPath $env:CORVIN_UPDATE_PROGRESS -Encoding ASCII -Value ('{{"phase":"{0}","status":"{1}","detail":"{2}","ts":{3}}}' -f $Phase, $Status, $d, $ts) } catch { }
+}
+
 # Runs a native command with its output going to the log only. Returns the exit
 # code (-1 when it could not be launched at all: missing, or AppLocker).
 $script:LastOutput = @()
@@ -606,16 +617,20 @@ function Update-Checkout {
 }
 
 if ($ConsoleOnly) {
+    Send-UpdateProgress delivery skipped "rebuild-only"
     Write-Ok "code unchanged (-ConsoleOnly)"
 } else {
+    Send-UpdateProgress delivery running
     Write-Host "  ... fetching $Branch"
     $fetched = if ($Kind -eq "checkout") { Update-Checkout } else { Update-Managed }
     if (-not $fetched) {
         if ($script:Stopped) { foreach ($t in $script:RestartTasks) { try { Start-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -ErrorAction Stop } catch { } } }
+        Send-UpdateProgress delivery failed "download failed"
         Stop-Update "could not download the update -- nothing changed (see $LogFile)"
     }
     if ($Kind -ne "checkout") { $null = New-Item -ItemType File -Path (Join-Path $Src ".corvin-managed") -Force }
     $NewRev = Get-Rev
+    Send-UpdateProgress delivery ok $(if ($NewRev) { $NewRev } else { "zip" })
     $shortPrev = if ($PrevRev) { $PrevRev.Substring(0, 8) } else { "none" }
     $shortNew = if ($NewRev) { $NewRev.Substring(0, 8) } else { "zip" }
     if ($PrevRev -and $PrevRev -eq $NewRev) { Write-Ok "already at the latest $Branch ($shortNew) -- refreshing anyway" }
@@ -632,6 +647,7 @@ if ($ConsoleOnly) {
 # -----------------------------------------------------------------------------
 
 Write-Step "[3/6] Console frontend"
+Send-UpdateProgress ui_build running
 $NodeExe = Join-Path (Join-Path $CorvinHome "node") "node.exe"
 $nvmrc = Join-Path $Src ".nvmrc"
 $NodeVersion = if (Test-Path -LiteralPath $nvmrc) { ((Get-Content -LiteralPath $nvmrc -Raw).Trim() -replace '^v', '') } else { $DefaultNodeVersion }
@@ -716,6 +732,8 @@ if (-not (Test-Path -LiteralPath (Join-Path $Web "package.json"))) {
     }
 }
 
+# ui_build is reported after the swap further down (the new dist is what gets served).
+
 # -----------------------------------------------------------------------------
 # 4. Python package (deps can change with the code)
 # -----------------------------------------------------------------------------
@@ -773,7 +791,9 @@ if ($BuildOk) {
         $BuildOk = $false
         Write-Warn "swap failed -- previous build restored"
     }
+    if ($BuildOk) { Send-UpdateProgress ui_build ok $entry } else { Send-UpdateProgress ui_build failed "swap failed" }
 }
+else { Send-UpdateProgress ui_build failed "frontend not rebuilt" }
 
 # -----------------------------------------------------------------------------
 # 5. Voice model + restart
@@ -938,6 +958,7 @@ function Wait-Live {
 }
 
 if ($NoRestart) {
+    Send-UpdateProgress verification skipped "no restart"
     Write-Ok "restart skipped (-NoRestart) -- restart the console to load the update"
     Exit-SetupLock
     exit 0
@@ -961,6 +982,7 @@ if ($Live) { Write-Ok "console is serving the new build" } else { Write-Warn "co
 # -----------------------------------------------------------------------------
 
 Write-Step "[6/6] Verify"
+Send-UpdateProgress verification running
 $VerifyOk = $false
 if ($Live -and $PkgOk) {
     $verifyScript = Join-Path $Src "scripts\verify_install.py"
@@ -980,6 +1002,7 @@ if ($Live -and $PkgOk) {
 }
 
 if ($VerifyOk) {
+    Send-UpdateProgress verification ok
     Write-Host ""
     Write-Host "CorvinOS is up to date and running." -ForegroundColor Green
     Write-Host "  $BaseUrl/console/   (reload the tab: Ctrl+Shift+R)"
@@ -994,6 +1017,7 @@ if ($VerifyOk) {
 # Rollback
 # -----------------------------------------------------------------------------
 
+Send-UpdateProgress verification failed "the updated console did not verify"
 Write-Host ""
 if ($script:ForeignPort) {
     Write-Warn "port $Port was taken by ANOTHER user's CorvinOS -- not verifying against it, not rolling back."

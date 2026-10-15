@@ -96,6 +96,7 @@ def test_isolated_wrapper_records_result_even_if_console_is_gone(tmp_path):
     st = json.loads(state.read_text())
     assert st["version_after"] == "7.7.7"
     assert st["status"] == "failed" and "rolled back" in st["detail"] and st["finished_at"] > 1.0
+    assert st["phase"] == "failed" and st["steps"]["update_script"]["status"] == "failed"
 
 
 def test_systemd_run_command_runs_updater_then_records(tmp_path):

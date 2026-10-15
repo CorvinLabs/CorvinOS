@@ -72,7 +72,9 @@ async def test_start_update_runs_script_and_records_last_update(tmp_path, monkey
         await _wait_unlocked(mgr)
     assert (src / "ran.txt").read_text().strip() == "ran"
     last = mgr.last_update("1.0.0")
-    assert last["status"] == "success" and before <= last["at"] <= time.time()
+    # exit 0 alone proves nothing: the script reported no delivery / UI build / verification
+    assert last["status"] == "unverified" and before <= last["at"] <= time.time()
+    assert last["last_success_at"] is None
     assert [c[1]["action"] for c in calls] == ["settings.update_install", "settings.update_completed"]
     assert all(c[1]["sid_fingerprint"] == "sidfp" for c in calls)
 
@@ -99,13 +101,12 @@ async def test_second_start_while_running_is_refused(tmp_path, monkeypatch):
     await _wait_unlocked(mgr)
 
 
-def test_run_cut_off_by_restart_is_resolved_from_the_version(tmp_path):
+def test_run_cut_off_by_restart_is_never_called_a_success_from_the_version(tmp_path):
     state = tmp_path / "state.json"
     state.write_text(json.dumps({"status": "running", "started_at": 1000.0, "version_before": "1.0.0"}))
     mgr = UpdateManager("_default", state_path=state)
-    assert mgr.last_update("2.0.0")["status"] == "success"
-    state.write_text(json.dumps({"status": "running", "started_at": 1000.0, "version_before": "1.0.0"}))
-    assert mgr.last_update("1.0.0")["status"] == "interrupted"
+    # a changed version number is no proof any more - nothing was verified
+    assert mgr.last_update("2.0.0", tmp_path)["status"] == "interrupted"
     assert UpdateManager("_default", state_path=tmp_path / "none.json").last_update("1.0.0") is None
 
 

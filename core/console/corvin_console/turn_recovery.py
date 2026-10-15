@@ -1,0 +1,261 @@
+"""Interrupted-turn recovery: a console turn cut off by a host restart is run again.
+
+Measured 2026-10-15: ``systemctl --user restart corvin-webui`` (KillMode=control-group)
+ended a running chat turn after 337 s - the ``claude`` child got SIGTERM, the task was
+finalized ``failed`` / exit 143 with an empty ``result_summary``, and nothing ever ran
+it again. The user got no output and no retry. ``TaskManager.reap_stale_running`` only
+finalizes such a task; it never re-runs it.
+
+Contract:
+
+* On host shutdown the lifespan calls :func:`note_shutdown` (one timestamp per tenant).
+* After the next start :func:`schedule_recovery` looks for the NEWEST task of each chat
+  that failed from a restart - signal exit code (143/137/-15/-9/-1), finalized inside the
+  shutdown window or reaped as an orphan - and produced no output. It is re-run on the
+  same chat through the normal ``stream_turn`` path, so persistence, ledger, L44 and
+  L34 gates apply exactly as for a typed message.
+* A run that again ends without a ``result`` is re-run, at most :data:`MAX_ATTEMPTS`
+  times per request in total (persisted per chat, so a crash loop cannot restart forever).
+* Deliberate stops (cancel, background-scope caps) are never matched: they are not
+  signal exits inside the shutdown window.
+"""
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import hashlib
+import json
+import logging
+import os
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+MAX_ATTEMPTS = 2
+WINDOW_S = 30 * 60               # only a recent interruption is worth re-running
+SHUTDOWN_SLACK_S = 120.0         # a turn finalized this long before the shutdown note belongs to it
+SHUTDOWN_AFTER_S = 10.0
+START_DELAY_S = 15.0
+# A signal death is 128+N from a shell wrapper (the 2026-10-15 incident: 143) and -N from asyncio
+# (measured: -15); -1 is the boot reaper's orphan marker.
+RESTART_EXIT_CODES = frozenset({143, 137, -15, -9, -1})
+SYSTEM_SID = "auto-recovery"
+PROMPT_PREFIX = (
+    "[Automatic restart: the previous attempt at this request was cut off by a service "
+    "restart before it produced an answer. Continue from the current state of the "
+    "workspace and do not repeat finished work.]\n\n"
+)
+
+_started = False
+
+
+@dataclass(frozen=True)
+class Candidate:
+    tenant_id: str
+    sid: str
+    task_id: str
+    instruction: str
+    key: str
+    attempts: int
+
+
+def _marker_path(tenant_id: str) -> Path:
+    from . import _bootstrap
+    return _bootstrap.forge_paths.tenant_global_dir(tenant_id) / "last_shutdown.json"
+
+
+def _atomic_write(path: Path, data: dict[str, Any]) -> None:
+    import tempfile
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def note_shutdown(tenant_id: str | None = None) -> None:
+    """Called from the host lifespan teardown; never raises."""
+    try:
+        tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+        _atomic_write(_marker_path(tid), {"at": time.time()})
+    except Exception as exc:  # noqa: BLE001 - shutdown must not fail
+        logger.warning("turn-recovery: shutdown not noted: %s", exc)
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _last_event(tasks_dir: Path, task_id: str) -> dict[str, Any]:
+    try:
+        lines = (tasks_dir / f"{task_id}.events.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    for line in reversed(lines):
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(ev, dict):
+            return ev
+    return {}
+
+
+def _key(instruction: str) -> str:
+    return hashlib.sha256(instruction.strip().encode("utf-8")).hexdigest()[:16]
+
+
+def _attempts(tasks_dir: Path) -> dict[str, int]:
+    raw = _read_json(tasks_dir / "recovery_attempts.json")
+    return {k: int(v) for k, v in raw.items() if isinstance(v, int)}
+
+
+def _bump(tasks_dir: Path, key: str) -> int:
+    data = _attempts(tasks_dir)
+    data[key] = data.get(key, 0) + 1
+    _atomic_write(tasks_dir / "recovery_attempts.json", data)
+    return data[key]
+
+
+def find_interrupted(tenant_id: str, now: float | None = None) -> list[Candidate]:
+    """Newest task per chat, if a restart cut it off before it produced output."""
+    from . import chat_runtime
+    now = now or time.time()
+    marker = _read_json(_marker_path(tenant_id)).get("at")
+    out: list[Candidate] = []
+    for sess in chat_runtime.list_sessions(tenant_id):
+        if sess.workdir is None:
+            continue
+        tasks_dir = Path(sess.workdir) / "tasks"
+        newest: dict[str, Any] | None = None
+        for meta_file in tasks_dir.glob("*.json"):
+            if meta_file.name == "recovery_attempts.json":
+                continue
+            meta = _read_json(meta_file)
+            if meta.get("task_id") and (newest is None or (meta.get("created_at") or 0) > (newest.get("created_at") or 0)):
+                newest = meta
+        if not newest or newest.get("status") != "failed" or newest.get("result_summary"):
+            continue
+        ended = newest.get("ended_at") or 0
+        if now - ended > WINDOW_S or newest.get("exit_code") not in RESTART_EXIT_CODES:
+            continue
+        last = _last_event(tasks_dir, newest["task_id"])
+        reaped = bool(last.get("reaped"))
+        in_window = isinstance(marker, (int, float)) and marker - SHUTDOWN_SLACK_S <= ended <= marker + SHUTDOWN_AFTER_S
+        if not (reaped or in_window):
+            continue
+        instruction = str((newest.get("input") or {}).get("instruction") or "").strip()
+        if not instruction:
+            continue
+        key = _key(instruction)
+        out.append(Candidate(tenant_id, sess.sid, newest["task_id"], instruction, key, _attempts(tasks_dir).get(key, 0)))
+    return out
+
+
+async def _run_once(cand: Candidate) -> bool:
+    """Run the request through the normal turn path. True iff it produced a result."""
+    from . import chat_runtime, live_turns
+    from .routes.chat import _session_turn_lock
+    got_output = False
+    async with _session_turn_lock(cand.tenant_id, cand.sid):
+        sess = chat_runtime.get_session(cand.tenant_id, cand.sid)
+        if sess is None:
+            return True            # the chat was deleted: nothing to recover
+        task = asyncio.current_task()
+        loop = asyncio.get_running_loop()
+        chat_runtime.register_live_turn(cand.tenant_id, cand.sid, loop, task)
+        turn_id = live_turns.begin(cand.tenant_id, cand.sid, live_turns.new_token())
+        try:
+            async with contextlib.aclosing(
+                chat_runtime.stream_turn(sess, PROMPT_PREFIX + cand.instruction, sid_fingerprint=SYSTEM_SID)
+            ) as gen:
+                async for event in gen:
+                    live_turns.publish(cand.tenant_id, cand.sid, turn_id, event)
+                    if event.get("type") == "result" and str(event.get("text") or "").strip():
+                        got_output = True
+        finally:
+            chat_runtime.unregister_live_turn(cand.tenant_id, cand.sid, loop, task)
+            live_turns.end(cand.tenant_id, cand.sid, turn_id)
+    return got_output
+
+
+def _audit(cand: Candidate, *, ok: bool, action: str, reason: str | None = None) -> None:
+    try:
+        from . import audit as console_audit
+        kw = dict(tenant_id=cand.tenant_id, sid_fingerprint=SYSTEM_SID, action=action,
+                  target_kind="chat", target_id=cand.sid)
+        if ok:
+            console_audit.action_performed(**kw)
+        else:
+            console_audit.action_failed(reason=reason or "failed", **kw)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("turn-recovery audit %s not written: %s", action, exc)
+
+
+async def recover_candidate(cand: Candidate) -> str:
+    """Re-run until it yields output or the attempt budget is spent. Returns the outcome."""
+    from . import chat_runtime
+    sess = chat_runtime.get_session(cand.tenant_id, cand.sid)
+    if sess is None or sess.workdir is None:
+        return "gone"
+    tasks_dir = Path(sess.workdir) / "tasks"
+    while _attempts(tasks_dir).get(cand.key, 0) < MAX_ATTEMPTS:
+        n = _bump(tasks_dir, cand.key)
+        logger.info("turn-recovery: re-running interrupted turn %s (chat %s, attempt %d/%d)",
+                    cand.task_id, cand.sid, n, MAX_ATTEMPTS)
+        _audit(cand, ok=True, action="chat.turn.recovery_started")
+        try:
+            if await _run_once(cand):
+                return "recovered"
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - one chat must not stop the others
+            logger.warning("turn-recovery: attempt %d for %s failed: %s", n, cand.sid, type(exc).__name__)
+    _audit(cand, ok=False, action="chat.turn.recovery_exhausted", reason="no_output_after_retries")
+    logger.warning("turn-recovery: chat %s gave no output after %d attempts - giving up", cand.sid, MAX_ATTEMPTS)
+    return "exhausted"
+
+
+async def recover_all(tenant_id: str, *, delay_s: float = START_DELAY_S) -> list[tuple[str, str]]:
+    await asyncio.sleep(delay_s)
+    results: list[tuple[str, str]] = []
+    for cand in find_interrupted(tenant_id):
+        if cand.attempts >= MAX_ATTEMPTS:
+            continue
+        results.append((cand.sid, await recover_candidate(cand)))
+    return results
+
+
+def schedule_recovery(tenant_id: str | None = None, *, delay_s: float = START_DELAY_S) -> None:
+    """Fire-and-forget; called from the lifespan of BOTH hosts (console app, gateway app)."""
+    global _started
+    if _started:
+        return
+    try:
+        tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+
+        async def _run() -> None:
+            try:
+                done = await recover_all(tid, delay_s=delay_s)
+                if done:
+                    logger.info("turn-recovery: %s", done)
+            except Exception as exc:  # noqa: BLE001 - never affects startup
+                logger.warning("turn-recovery failed: %s", exc)
+
+        asyncio.get_running_loop().create_task(_run())
+        _started = True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("turn-recovery not scheduled: %s", exc)

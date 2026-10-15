@@ -261,8 +261,15 @@ It is scheduled 60 s after startup by both hosts (`corvin_console.app` and
 `corvin_gateway.app`), tries each remote commit **once** (a rolled-back update leaves
 HEAD behind and would otherwise re-run on every restart), and never blocks startup.
 The launcher's PyPI/`uv tool upgrade` path only applies to non-checkout installs and is
-a no-op for a checkout. The **Update** card also offers a manual "Check & Install" button and shows when the
-updater last ran. It is a thin client for the install's own `update.sh` (Linux/macOS) /
+a no-op for a checkout. The **Update** card also offers a manual "Check & Install" button and a **trace** of the last run:
+the phase (triggered, delivery, UI rebuild, update script, verification, completed or failed),
+five proofs (delivered to this install, UI rebuilt, script finished, verified over the wire,
+installed commit current) and **Last fully verified update** (`last_success_at`, with its
+trigger). The updater reports each stage as a JSON line in `update_progress.jsonl`
+(`CORVIN_UPDATE_PROGRESS`, set by the console; a manual `update.sh` run is unaffected). Its claims
+are cross-checked against the tree (HEAD vs. the reported revision, the commit that was
+`origin/main` at start, the entry bundle in `dist/index.html`). A run with exit code 0 but an
+unproven link ends as `unverified` and never moves `last_success_at`. It is a thin client for the install's own `update.sh` (Linux/macOS) /
 `update.ps1` (Windows) at the root of the source tree (ADR-2054, ADR-2215): the tree is
 found via `CORVIN_SRC_DIR`, the checkout the console runs from, or the installer-managed
 tree. On Linux with a systemd user session it runs as its own transient unit
@@ -270,7 +277,7 @@ tree. On Linux with a systemd user session it runs as its own transient unit
 every `corvin-*.service` and would otherwise be killed with the unit it was started from.
 Nothing is copied to `~/.corvin/scripts`, and there is no second updater.
 `GET /settings/update/check` returns `has_update`, `behind`, `local_sha`, `remote_sha`, `running` and `last_update`
-(`at`, `status`, `version_before`, `version_after`); `POST /settings/update/install`
+(`at`, `status` = running|success|failed|interrupted|unverified, `phase`, `steps`, `checks`, `trigger`, `last_success_at`, `version_before`, `version_after`); `POST /settings/update/install`
 starts the updater detached and returns at once, because the updater restarts the console.
 One update runs per tenant at a time (409 otherwise); start and end are audited and the
 last run is kept in `update_state.json` under the tenant's global dir. Also here: tenant config

@@ -61,13 +61,45 @@ export function setAutoUpdate(enabled: boolean, csrf: string): Promise<{ enabled
 
 // ── Core Update Management ─────────────────────────────────────────
 
+export type UpdatePhase = "triggered" | "delivery" | "ui_build" | "update_script" | "verification";
+export type UpdateStepStatus = "running" | "ok" | "failed" | "skipped";
+
+export interface UpdateStep {
+  status: UpdateStepStatus;
+  at: number | null;
+  detail: string | null;
+}
+
+/** Each link the run must prove before it counts as a success. */
+export interface UpdateChecks {
+  delivered: boolean;
+  ui_rebuilt: boolean;
+  script_ok: boolean;
+  verified: boolean;
+  up_to_date: boolean;
+}
+
 export interface LastUpdate {
   /** Unix seconds: when the updater finished (or started, if it was cut off by the restart). */
   at: number | null;
-  status: "running" | "success" | "failed" | "interrupted" | null;
+  /** `unverified`: the updater exited 0 but a link of the chain could not be proven. */
+  status: "running" | "success" | "failed" | "interrupted" | "unverified" | null;
+  /** Current stage while running; `completed` / `failed` afterwards. */
+  phase?: UpdatePhase | "completed" | "failed" | null;
+  steps?: Partial<Record<UpdatePhase, UpdateStep>>;
+  checks?: UpdateChecks | null;
+  failed_phase?: string | null;
+  trigger?: "manual" | "auto" | null;
+  started_at?: number | null;
+  target_sha?: string | null;
+  head_after?: string | null;
   version_before: string | null;
   version_after: string | null;
   detail: string | null;
+  /** Unix seconds of the last run whose every link was proven; null = never. */
+  last_success_at?: number | null;
+  last_success_version?: string | null;
+  last_success_trigger?: "manual" | "auto" | null;
 }
 
 export interface UpdateCheckResult {

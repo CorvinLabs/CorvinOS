@@ -422,6 +422,22 @@ Two layers clean this up:
   console restart there is a genuine orphan). The adapter `main()` runs the
   reaper once per boot across all tenants/chats (logged as `task-reaper: …`).
 
+**A turn cut off by a host restart is re-run (2026-10-15).** The reaper only *finalizes* an
+orphan; it never ran it again. `systemctl --user restart corvin-webui` kills the unit's whole
+control group, so a running console turn ended `failed` / exit 143 (`-15` as asyncio reports
+it) with an empty `result_summary` and no retry. `corvin_console/turn_recovery.py` closes
+that: both host lifespans call `note_shutdown()` on stop (`last_shutdown.json` in the tenant's
+global dir) and `schedule_recovery()` on start. The newest task of a chat is re-run through the
+normal `stream_turn` path (same gates, ledger and persistence as a typed message, prompt
+prefixed `[Automatic restart: ...]`) only when it failed with a signal exit code, produced no
+output, ended inside the shutdown window (or was reaped as an orphan) and is under 30 min old.
+A re-run that again yields no `result` is repeated, at most `MAX_ATTEMPTS` (2) per request,
+counted in `tasks/recovery_attempts.json` so a crash loop cannot restart forever; exhaustion is
+audited (`chat.turn.recovery_exhausted`). Cancels and background-scope caps are not signal exits
+inside the shutdown window and are never re-run. Prevention is still `scripts/safe-restart.sh`.
+Proof: `core/console/tests/test_turn_recovery_e2e.py` (real `stream_turn`, real SIGTERM to the
+fake CLI, both host lifespans).
+
 **EVERY host reaps, not just the bridge (2026-09-21).** Until this date the sweep
 had exactly one caller — `adapter.py`'s boot — so an install that never started a
 messenger bridge never reaped at all. On a console-only install that is not a slow

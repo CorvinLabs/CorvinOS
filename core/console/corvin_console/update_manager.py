@@ -7,6 +7,12 @@ remembers when it last ran. It never copies or re-implements update logic.
 
 The updater restarts the console, so it is started in its own session and the
 request returns immediately; the outcome is read back from ``update_state.json``.
+
+Traceability (ADR-2256 amendment): the updater reports each stage as one JSON line in
+``update_progress.jsonl`` next to the state file (``CORVIN_UPDATE_PROGRESS``). A run only
+counts as a success when ``evaluate_run`` can PROVE every link - delivered, UI rebuilt,
+script exit 0, verified over the wire, installed commit current - and only then is
+``last_success_at`` written. The script's own claims are cross-checked against the tree.
 """
 from __future__ import annotations
 
@@ -14,6 +20,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -36,6 +43,114 @@ _EXIT_MEANING = {
     2: "update failed and the rollback failed too - re-run the installer from the checkout",
     3: "another CorvinOS install/update is running - try again when it has finished",
 }
+
+PHASES = ("triggered", "delivery", "ui_build", "update_script", "verification")
+_STEP_STATUSES = {"running", "ok", "failed", "skipped"}
+_CHECK_LABELS = {"delivered": "delivery", "ui_rebuilt": "ui_build", "script_ok": "update_script",
+                 "verified": "verification", "up_to_date": "verification"}
+_ENTRY_RE = re.compile(r"assets/index-[^\"'\s]*\.js")
+
+
+def progress_path_for(state_path: Path) -> Path:
+    return state_path.with_name("update_progress.jsonl")
+
+
+def read_progress(path: Path) -> list[dict[str, Any]]:
+    """Events the updater appended; a torn or foreign line is skipped, never fatal."""
+    events: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return events
+    for line in lines:
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(ev, dict) and ev.get("phase") in PHASES and ev.get("status") in _STEP_STATUSES:
+            events.append(ev)
+    return events
+
+
+def fold_progress(events: list[dict[str, Any]], base: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    """Latest event per phase -> ``{phase: {status, at, detail}}`` (``base`` seeds steps the manager owns)."""
+    steps = {k: dict(v) for k, v in (base or {}).items()}
+    for ev in events:
+        steps[ev["phase"]] = {"status": ev["status"], "at": ev.get("ts"),
+                              "detail": str(ev.get("detail") or "")[:120] or None}
+    return steps
+
+
+def _sha_matches(a: str | None, b: str | None) -> bool:
+    return bool(a and b and (a.startswith(b) or b.startswith(a)))
+
+
+def _tree_facts(src: Path | None) -> dict[str, Any]:
+    """What the tree says, independent of what the updater claimed."""
+    facts: dict[str, Any] = {"git": False, "head": None, "shallow": False, "dist_entry": None}
+    if src is None:
+        return facts
+    try:
+        head = _git(src, "rev-parse", "HEAD")
+        if head.returncode == 0 and head.stdout.strip():
+            facts.update(git=True, head=head.stdout.strip(),
+                         shallow=_git(src, "rev-parse", "--is-shallow-repository").stdout.strip() == "true")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        html = (src / "core" / "console" / "corvin_console" / "web-next" / "dist" / "index.html").read_text(
+            encoding="utf-8", errors="replace")
+        m = _ENTRY_RE.search(html)
+        facts["dist_entry"] = m.group(0) if m else None
+    except OSError:
+        pass
+    return facts
+
+
+def _target_reached(src: Path | None, facts: dict[str, Any], target: str | None, head_before: str | None) -> bool | None:
+    """Is the installed commit the target (or newer)? None = cannot be proven."""
+    head = facts.get("head")
+    if not facts.get("git") or not target:
+        return None
+    if _sha_matches(head, target):
+        return True
+    try:
+        if src is not None and _git(src, "merge-base", "--is-ancestor", target, head).returncode == 0:
+            return True
+    except (OSError, subprocess.SubprocessError):
+        pass
+    # A shallow tree may lack the target's ancestry: moving forward is the best offline proof.
+    return bool(facts.get("shallow") and head and not _sha_matches(head, head_before))
+
+
+def evaluate_run(steps: dict[str, dict[str, Any]], rc: int | None, facts: dict[str, Any],
+                 target: str | None, head_before: str | None, src: Path | None = None) -> dict[str, Any]:
+    """Decide how a finished run ends. Success needs ALL five links proven; a link that is
+    merely unproven ends the run as ``unverified``, never as success."""
+    st = lambda k: (steps.get(k) or {}).get("status")  # noqa: E731
+    claim = (steps.get("delivery") or {}).get("detail") or ""
+    delivered = st("delivery") == "ok"
+    if delivered and facts.get("git") and re.fullmatch(r"[0-9a-f]{7,40}", claim):
+        delivered = _sha_matches(facts.get("head"), claim)  # the script's claim must match the tree
+    entry = (steps.get("ui_build") or {}).get("detail") or ""
+    ui = st("ui_build") == "ok" and bool(facts.get("dist_entry")) and (not entry or entry == facts["dist_entry"])
+    verified = st("verification") == "ok"
+    script_ok = rc == 0 or (rc is None and verified)  # rc is unknown when the restart cut the watcher off
+    reached = _target_reached(src, facts, target, head_before)
+    up_to_date = reached if reached is not None else (not facts.get("git") and verified)
+    checks = {"delivered": delivered, "ui_rebuilt": ui, "script_ok": script_ok,
+              "verified": verified, "up_to_date": bool(up_to_date)}
+    failed_phase = next((p for p in PHASES if st(p) == "failed"), None)
+    if all(checks.values()):
+        return {"status": "success", "phase": "completed", "checks": checks, "failed_phase": None, "detail": None}
+    if rc not in (0, None) or failed_phase:
+        detail = _EXIT_MEANING.get(rc or 0) or ((steps.get(failed_phase) or {}).get("detail") if failed_phase else None)
+        return {"status": "failed", "phase": "failed", "checks": checks,
+                "failed_phase": failed_phase or "update_script",
+                "detail": detail or (f"updater exited {rc}" if rc else f"{failed_phase} failed")}
+    missing = [_CHECK_LABELS[k] for k, v in checks.items() if not v]
+    return {"status": "unverified", "phase": "failed", "checks": checks, "failed_phase": missing[0],
+            "detail": "the updater finished but this was not proven: " + ", ".join(sorted(set(missing)))}
 
 
 def _tenant_lock(tenant_id: str) -> Lock:
@@ -121,8 +236,27 @@ def isolated_command(src: Path, state_path: Path, log: Path) -> list[str]:
     return ["systemd-run", "--user", "--quiet", "--collect", "--wait",
             f"--unit=corvin-update-{int(time.time())}", f"--working-directory={src}",
             f"--setenv=PATH={os.environ.get('PATH', '')}", f"--setenv=PYTHONPATH={pkg_root}",
+            f"--setenv=CORVIN_UPDATE_PROGRESS={progress_path_for(state_path)}",
             f"--property=StandardOutput=append:{log}", f"--property=StandardError=append:{log}",
             "sh", "-c", script, "_", str(src / "update.sh"), sys.executable, str(state_path), str(src)]
+
+
+def finalize_state(st: dict[str, Any], events: list[dict[str, Any]], rc: int | None, src: Path | None) -> dict[str, Any]:
+    """Fold the updater's progress into ``st`` and decide the outcome (shared by the isolated
+    wrapper, the in-process watcher and the cut-off fallback)."""
+    steps = fold_progress(events, st.get("steps"))
+    facts = _tree_facts(src)
+    res = evaluate_run(steps, rc, facts, st.get("target_sha"), st.get("head_before"), src)
+    now = time.time()
+    steps["update_script"] = {"status": "ok" if res["checks"]["script_ok"] else "failed", "at": now,
+                              "detail": None if rc in (0, None) else f"exit {rc}"}
+    st.update(status=res["status"], phase=res["phase"], steps=steps, checks=res["checks"],
+              failed_phase=res["failed_phase"], finished_at=now, exit_code=rc, head_after=facts["head"],
+              version_after=_local_version(src) if src else st.get("version_after"), detail=res["detail"])
+    if res["status"] == "success":
+        st.update(last_success_at=now, last_success_sha=facts["head"], last_success_version=st["version_after"],
+                  last_success_trigger=st.get("trigger"))
+    return st
 
 
 def record_result(state_path: Path, rc: int, src: Path | None = None) -> None:
@@ -132,9 +266,7 @@ def record_result(state_path: Path, rc: int, src: Path | None = None) -> None:
     except (OSError, ValueError):
         st = {}
     src = src or Path(__file__).resolve().parents[3]
-    st.update(status="success" if rc == 0 else "failed", finished_at=time.time(), exit_code=rc,
-              version_after=_local_version(src),
-              detail=None if rc == 0 else _EXIT_MEANING.get(rc, f"updater exited {rc}"))
+    finalize_state(st, read_progress(progress_path_for(state_path)), rc, src)
     tmp = state_path.with_suffix(".tmp")
     tmp.write_text(json.dumps(st), encoding="utf-8")
     os.chmod(tmp, 0o600)
@@ -208,29 +340,52 @@ class UpdateManager:
                 pass
             raise
 
-    def last_update(self, current_version: str) -> dict[str, Any] | None:
-        """Last run as ``{at, status, version_before, version_after}``.
+    def last_update(self, current_version: str, src: Path | None = None) -> dict[str, Any] | None:
+        """Last run: ``{at, status, phase, steps, checks, ...}`` plus ``last_success_at``.
 
-        A run that is still ``running`` while nothing holds the lock was cut off
-        by the console restart the updater itself performs: it counts as done
-        when the installed version changed, otherwise as interrupted."""
+        While it runs, the updater's progress file is folded in live. A run still
+        ``running`` while nothing holds the lock was cut off by the console restart the
+        updater itself performs; it is settled from the progress it left and the tree
+        (``finalize_state``) - never from a bare version change."""
         st = self._read_state()
         if not st:
             return None
+        events = read_progress(progress_path_for(self.state_path()))
         if st.get("status") == "running" and not self.lock.locked():
-            changed = current_version not in ("unknown", st.get("version_before"))
-            st["status"] = "success" if changed else "interrupted"
-            st["version_after"] = current_version
+            if src is None:
+                try:
+                    src = find_source_tree()
+                except UpdateNotAllowedError:
+                    src = None
+            finalize_state(st, events, None, src)
+            if st["status"] == "unverified":  # a recorded failure stays a failure
+                st.update(status="interrupted", phase="failed",
+                          detail=st.get("detail") or "the update was cut off before it finished")
             try:
                 self._write_state(st)
             except OSError:
                 pass
+        steps, phase = st.get("steps") or {}, st.get("phase")
+        if st.get("status") == "running":
+            steps = fold_progress(events, steps)
+            phase = events[-1]["phase"] if events else "triggered"
         return {
             "at": st.get("finished_at") or st.get("started_at"),
             "status": st.get("status"),
+            "phase": phase,
+            "steps": steps,
+            "checks": st.get("checks"),
+            "failed_phase": st.get("failed_phase"),
+            "trigger": st.get("trigger"),
+            "started_at": st.get("started_at"),
+            "target_sha": st.get("target_sha"),
+            "head_after": st.get("head_after"),
             "version_before": st.get("version_before"),
             "version_after": st.get("version_after"),
             "detail": st.get("detail"),
+            "last_success_at": st.get("last_success_at"),
+            "last_success_version": st.get("last_success_version"),
+            "last_success_trigger": st.get("last_success_trigger"),
         }
 
     # ── check ─────────────────────────────────────────────────────────────
@@ -241,7 +396,7 @@ class UpdateManager:
         except UpdateNotAllowedError as e:
             return UpdateCheckResult(False, "unknown", None, str(e), running, self.last_update("unknown"))
         current = _local_version(src)
-        last = self.last_update(current)
+        last = self.last_update(current, src)
         try:
             return await asyncio.to_thread(self._check_blocking, src, current, running, last)
         except Exception as e:  # noqa: BLE001 - surfaced to the UI as a check error
@@ -266,7 +421,7 @@ class UpdateManager:
                                  behind, local_sha, remote_sha)
 
     # ── run ───────────────────────────────────────────────────────────────
-    def start_update(self, sid_fingerprint: str) -> dict[str, Any]:
+    def start_update(self, sid_fingerprint: str, trigger: str = "manual") -> dict[str, Any]:
         """Start the updater detached. Raises UpdateNotAllowedError if one is running."""
         src = find_source_tree()
         if not self.lock.acquire(blocking=False):
@@ -282,9 +437,22 @@ class UpdateManager:
                                            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
             else:
                 kwargs["start_new_session"] = True
-            keep = {k: v for k, v in (self._read_state() or {}).items() if k == "last_auto_target"}
-            self._write_state({**keep, "status": "running", "started_at": time.time(),
-                               "version_before": before, "log": str(log)})
+            keep = {k: v for k, v in (self._read_state() or {}).items()
+                    if k in ("last_auto_target", "last_success_at", "last_success_sha", "last_success_version",
+                             "last_success_trigger")}
+            facts = _tree_facts(src)
+            target = _git(src, "rev-parse", f"origin/{BRANCH}").stdout.strip() if facts["git"] else ""
+            progress = progress_path_for(self.state_path())
+            progress.parent.mkdir(parents=True, exist_ok=True)
+            progress.write_text("", encoding="utf-8")
+            os.chmod(progress, 0o600)
+            now = time.time()
+            self._write_state({**keep, "status": "running", "phase": "triggered", "trigger": trigger,
+                               "started_at": now, "version_before": before, "log": str(log),
+                               "head_before": facts["head"], "target_sha": target or None,
+                               "steps": {"triggered": {"status": "ok", "at": now, "detail": trigger},
+                                         "update_script": {"status": "running", "at": now, "detail": None}}})
+            kwargs["env"] = {**os.environ, "CORVIN_UPDATE_PROGRESS": str(progress)}
             self._audit(sid_fingerprint, ok=True, action="settings.update_install")
             isolated = _use_systemd_run()
             cmd = isolated_command(src, self.state_path(), log) if isolated else updater_command(src)
@@ -309,18 +477,16 @@ class UpdateManager:
     async def _watch(self, proc: subprocess.Popen, src: Path, before: str, sid: str) -> None:
         try:
             rc = await asyncio.to_thread(proc.wait)
-            after = _local_version(src)
             st = self._read_state() or {}
             if st.get("status") == "running":  # the isolated wrapper records its own result
-                st.update(status="success" if rc == 0 else "failed", finished_at=time.time(),
-                          version_after=after, exit_code=rc,
-                          detail=None if rc == 0 else _EXIT_MEANING.get(rc, f"updater exited {rc}"))
+                finalize_state(st, read_progress(progress_path_for(self.state_path())), rc, src)
                 try:
                     self._write_state(st)
                 except OSError:
                     logger.warning("could not persist update state")
-            self._audit(sid, ok=rc == 0, action="settings.update_completed",
-                        reason=None if rc == 0 else f"exit-{rc}")
+            ok = st.get("status") == "success"
+            self._audit(sid, ok=ok, action="settings.update_completed",
+                        reason=None if ok else f"{st.get('status')}-{st.get('failed_phase') or rc}")
         finally:
             self.lock.release()
 
@@ -371,7 +537,7 @@ async def auto_update_on_start(tenant_id: str, *, enabled: bool, delay_s: float 
         mgr._write_state(st)
         logger.info("auto-update: %d commit(s) behind origin/main (%s -> %s) - updating",
                     res.behind, res.local_sha, res.remote_sha)
-        mgr.start_update("auto-update")
+        mgr.start_update("auto-update", trigger="auto")
     except UpdateNotAllowedError:
         return "busy"
     return "started"
