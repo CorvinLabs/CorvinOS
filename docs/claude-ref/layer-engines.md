@@ -1795,7 +1795,11 @@ model split per turn.
 template; deny-by-default in code so existing installs without the key keep
 the direct path until they add it) the web OS turn triages each task
 (deterministic heuristic; `/delegate <task>` forces) and dispatches
-fan-out-shaped work to `ACSRuntime(bridge="web", chat=<sid>)`.
+fan-out-shaped work to `ACSRuntime(bridge="web", chat=<sid>)`. Files a delegated run
+writes are registered as artifacts by two paths (live poll during the run, post-run
+scan after it). The scan root is the whole run directory, and the post-run scan runs
+for every run status, not only success. Details, and the open no-stability-check gap,
+in [delegation-routing.md §7b](delegation-routing.md#7b-delegated-turn-artifacts-over-the-real-ws-and-http-boundary-adr-0114-m21).
 
 **Worker-engine selection.** `delegation_enabled` only says "fan-out is
 permitted at all"; **where** a delegation-worthy turn runs is the operator's
@@ -3462,6 +3466,37 @@ Recomputed independently from the chain: identical to four decimals.
 
 ---
 
+## Trend resolution and provider quota windows (Models → Usage & Cost, 2026-10-13)
+
+**Day / Week / Month.** The Daily-trend chart folds the SAME `cost_history` rows
+(`aggregateCostPeriods`, `web-next/src/panels/cost-viz.ts`); nothing is re-queried.
+Weeks start Monday (ISO), months are calendar months, both UTC like the route's day
+buckets. A dollar column sums its PRICED days only and stays `null` for a period with
+none (a gap, not $0); turn counts always sum, so the tooltip's `counted/total` says
+how much of the period the dollars rest on. The newest period is usually incomplete.
+
+**Quota reset times.** The only provider-sourced reset instants are the
+`rate_limit_event` windows (`five_hour`, `seven_day`: `resetsAt` unix seconds +
+`utilization`) in the Claude CLI stream. Both surfaces record them: the console chat
+(`chat_runtime._stream_turn_impl`) and the bridge adapter (`agents/claude_code.py`
+surfaces the event as `StreamEvent(type="rate_limit")` — only when it carries a
+`rate_limit_info` payload — and `adapter._call_claude_streaming_via_engine` records it
+for `_bridge_tenant()`). Both hand it to `corvin_console/rate_limit_windows.py`, which
+keeps the LAST observation per tenant in
+`<tenant>/global/rate_limit_windows.json` (mode 0o600; numbers and a closed name
+pattern only — no session id, uuid or overage reason) and `GET
+/v1/console/learning/model-cost-optimizer/status` returns it as `rate_limit_windows`.
+It is as fresh as the last Claude CLI turn on either surface (`observed_at`); Codex /
+OpenCode turns and delegated worker runs (ACS, A2A, gateway) do not record it. Both
+hosts resolve the file through `core.paths.tenant_home`, so they must share
+`CORVIN_HOME` (the live units do). A window whose reset has passed shows no utilisation (this is a frontend rule in
+`web-next/src/panels/cost-viz.ts::quotaWindowRows`: `passed = resets_at*1000 <= now` →
+`usedPct: null`; the backend returns the stored value unchanged). The license /
+skill-creator "reset" values are computed UTC midnights and are NOT these. Proof:
+`core/console/tests/test_rate_limit_windows_e2e.py`,
+`corvin_operator/bridges/shared/test_rate_limit_windows_bridge_e2e.py` (through
+`adapter.call_claude_streaming`), `web-next/tests/unit/usage-cost-trend.test.tsx`.
+
 ## Cost-visualisation encodings (ADR-0761, 2026-09-15)
 
 The Cost Efficiency card had ONE chart: four overlapping areas (OS actual, OS
@@ -3494,7 +3529,12 @@ vanished silently from the chart.
 families priced ABOVE the Opus reference (Fable, Mythos), so the saving can be
 negative, and a two-branch formatter falls through to `'Referenz'` for exactly
 those — labelling the most expensive turn on the install as the neutral
-baseline. `−80 %` / `Referenz` / `+23 % teurer`.
+baseline. `−80 %` / `reference` / `+23 % costlier`.
+
+**A $0 baseline is a gap, not a saving.** `toModelRows` sets `savedPct: null`
+when `baseline_usd` is 0 (nothing was priced). `savingLabel(null)` reads
+`no baseline`, and the tooltip shows `not priced` instead of a `0 %` saving.
+Pinned by `tests/unit/cost-viz.test.ts` ("reports a gap, not a zero saving").
 
 **Backend supplies per-model DOLLARS**, not only counts: `model_cost` /
 `acs_model_cost` = `{model_id: {actual_usd, baseline_usd, turns}}`. The mix

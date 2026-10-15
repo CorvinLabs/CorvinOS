@@ -399,10 +399,26 @@ without a subprocess) and applies `_is_session_internal()` plus the
 
 A delegated (ACS) web-chat turn registers the files its run wrote in two places:
 the live poll during the run (`_new_live_artifacts`, two stable sightings, label
-`live`) and a post-run scan of the ACS run directory, only for runs that end
-`success` or `budget_exhausted` (`ok or bounded_stop`). Both emit `artifact`
-events on the chat WebSocket before `done` and persist `artifact` parts on the
-turn, so `GET /chat/sessions/{sid}/turns` shows them after a reload.
+`live`) and a post-run scan of the ACS run directory (`chat_runtime.py`, M1 scan
+block after the result is awaited, in `chat_runtime.py`). The post-run scan
+runs for every run status, failed runs included (changed 2026-10-15; it was
+`ok or bounded_stop` before). The scan block has no status condition; its only
+guard is `if _scan_root.is_dir()` (`chat_runtime.py`).
+Both emit `artifact` events on the chat WebSocket before `done` and persist
+`artifact` parts on the turn, so `GET /chat/sessions/{sid}/turns` shows them after
+a reload.
+
+A file the live poll already sent is never registered twice: the post-run scan
+skips every path in `_live_emitted`. Each file gets exactly one chip, whichever
+path delivered it. The E2E tests assert that count.
+
+Why the live poll covers most of this, measured 2026-10-15: its final poll runs
+after the run task is done, and it is the second sighting for every file present
+at run end. So a stable file in a failed run is already delivered live (label
+`live`). The post-run scan on failed runs covers only files the live poll could
+not confirm, for example a file still growing at the last poll. The E2E
+`M21FailedRunArtifactE2E` shows the failed-run outcome but cannot reproduce a loss
+through the WS boundary, so it does not prove the scan is needed.
 
 ACS's own acceptance index `output/FINAL/manifest.json` (written on every
 accepted run) is bookkeeping and is excluded by `_ACS_SKIP_RUN_FILES` in both
@@ -410,18 +426,44 @@ scans. Before that, every delegated turn showed a `manifest.json` chip next to t
 real report. The skip is path-exact, not name-based, so a user file named
 `manifest.json` elsewhere still registers.
 
-Known deviations from the ADR-0114 text, not yet changed:
-- The ADR names `res.run_dir/output` as the scan root. The code scans the whole
-  run directory minus `_ACS_SKIP_DIRS` and the root bookkeeping files, so a
-  deliverable written outside `output/` still registers. Narrowing it would drop
-  such files; that needs an explicit decision.
-- The post-run scan skips non-`ok` runs (`status` other than `success` /
-  `budget_exhausted`). A file that is written and never seen as stable by the live
-  poll is therefore lost in a failed run. The live poll does not check run status,
-  so it covers the cases tested so far.
+Scan root (G1, decided 2026-10-15; deviates from the ADR-0114 text):
+- The ADR names `res.run_dir/output` as the scan root. The code uses
+  `_scan_root = Path(res.run_dir)` (`chat_runtime.py`), i.e. the whole run
+  directory, minus `_ACS_SKIP_DIRS`, `_ACS_SKIP_RUN_FILES` (`output/FINAL/
+  manifest.json`) and the root bookkeeping files `manifest.json` / `result.json`.
+  Workers write deliverables outside `output/` as well, so narrowing the root would
+  drop real deliverables. Revisit only if a worker is shown to write non-deliverable
+  MIME files outside `output/`.
+- The live poll uses the same root: `_new_live_artifacts()` (`chat_runtime.py`)
+  walks `run_dir` with the same skip sets.
+
+Status gating (G2, 2026-10-15): the post-run scan no longer depends on the run
+status. The former `ok or bounded_stop` gate left a silent gap for failed runs.
+
+Size stability (RT-02, fixed 2026-10-15): the post-run scan first sizes every
+candidate, then waits `_POST_RUN_STABLE_WINDOW_S` (0.5 s) and keeps only files whose
+size did not change; the chip cap is applied after that check. A file a worker is
+still writing after the window passes is registered with its size at that point,
+so a worker that keeps writing past 0.5 s can still leave a partial file. The live
+poll's two-sighting rule is stricter; the post-run window is the bound we accept.
+
+Status gate proof (RT-01, fixed 2026-10-15): `M21FailedRunArtifactE2E` now writes its
+deliverable inside `chat_runtime._render_acs_graph`, the thread the turn awaits between
+the final live poll and the post-run scan. The live poll sees a file only after two equal
+sightings, so the file reaches the chat only through the post-run scan. Mutation probe,
+2026-10-15: `(ok or bounded_stop) and` reinstated in front of the post-run scan →
+the test fails (`marktbericht.md` missing); reverted → green again. A file that first
+appears after the last loop-body poll gets only its first sighting in the final poll,
+so the post-run scan is its only path into the chat.
 
 Regression tests (HTTP/WS boundary, real `stream_turn` and `ACSRuntime`, only the
-model calls faked): `core/console/tests/test_m2_1_artifact_registration_e2e.py`.
+model calls faked): `core/console/tests/test_m2_1_artifact_registration_e2e.py`, together with
+`core/console/tests/test_adr0114_milestones_e2e.py` and
+`core/console/tests/test_turn_artifact_scan.py` (16 passed across the three files on
+2026-10-15: `test_m2_1_artifact_registration_e2e.py` 5, `test_adr0114_milestones_e2e.py` +
+`test_turn_artifact_scan.py` 11; sandboxed `CORVIN_HOME`). The failed-run case is
+`M21FailedRunArtifactE2E`; it proves the outcome AND that the post-run scan is needed
+(see the status gate proof above).
 
 ## 8. TDE inline badge (chat UI, ADR-0214/0216) (chat UI, ADR-0214/0216)
 
