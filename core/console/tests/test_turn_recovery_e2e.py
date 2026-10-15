@@ -161,6 +161,36 @@ class TurnRecoveryE2E(unittest.TestCase):
             self.assertEqual(rows[0]["state"], "pending")
             self.assertEqual(c.get(f"/chat/sessions/{self.sess.sid}/tasks/nope/timeline").status_code, 404)
 
+    def test_an_outbound_effect_is_never_repeated_silently(self):
+        """PLAN-0958 P4: the interrupted run had already called a send tool - the user is asked,
+        the request is NOT re-run (no second CLI spawn), and a later boot does not ask again."""
+        from corvin_core.task_manager import TaskManager
+
+        async def go():
+            await self._interrupted_turn("mail the report to the board")
+            failed = self._tasks()[-1]
+            TaskManager(Path(self.sess.workdir) / "tasks").record_event(
+                failed["task_id"], {"event": "tool_use", "tool_name": "mcp__claude_ai_Gmail__send_message"})
+            self.tr.note_shutdown("_default")
+            cand = self.tr.find_interrupted("_default")[0]
+            self.assertEqual(cand.outbound, ("mcp__claude_ai_Gmail__send_message",))
+            os.environ.update(kit.fake_env(self.home, "bash_bg_ok", speedup=4.0))
+            spawns_before = kit.spawn_count(self.home)
+            self.assertEqual(await self.tr.recover_all("_default", delay_s=0), [(self.sess.sid, "needs_user")])
+            self.assertEqual(kit.spawn_count(self.home), spawns_before, "the request was re-run")
+            notices = [t["notice"] for t in self.cr.read_turns("_default", self.sess.sid) if t.get("notice")]
+            self.assertEqual(notices, ["needs_user"])
+            self.assertEqual(await self.tr.recover_all("_default", delay_s=0), [])      # not asked twice
+        asyncio.run(go())
+
+    def test_a_read_only_tool_is_not_outbound(self):
+        names = ("Bash", "Read", "Write", "Edit", "mcp__forge__forge_list", "mcp__claude_ai_Gmail__search_threads")
+        tasks = Path(self.sess.workdir) / "tasks"
+        tasks.mkdir(exist_ok=True)
+        (tasks / "t1.events.jsonl").write_text("\n".join(
+            json.dumps({"event": "tool_use", "tool_name": n}) for n in names) + "\n")
+        self.assertEqual(self.tr.outbound_tools(tasks, "t1"), ())
+
     def test_operator_cancel_ends_the_child_and_is_final(self):
         """PLAN-0958 P5 / CONCEPT-0112 Q2: a stop from another tab (cancel_live_turn) must terminate the
         real claude child - not only the asyncio task - end the task as cancelled, tell the user

@@ -42,6 +42,15 @@ SHUTDOWN_SLACK_S = 120.0         # a turn finalized this long before the shutdow
 SHUTDOWN_AFTER_S = 10.0
 START_DELAY_S = 15.0
 SYSTEM_SID = "auto-recovery"
+# PLAN-0958 P4 / D1. A re-run is safe for workspace effects (the prompt says "continue from the
+# current state of the workspace"); it is NOT safe for an OUTBOUND effect that leaves the machine
+# and cannot be seen in the workspace - a sent message, mail, A2A task, share, push. Measured on
+# this install (scripts/task_interruption_report.py): 24 % of turns use Write/Edit/message tools,
+# up to 85 % call Bash - so "most interrupted turns are read-only" is false, and the tool names in
+# the task's own event log are the idempotency record. A turn with an outbound tool call goes to
+# the user instead of being re-run.
+OUTBOUND_MARKERS = ("send", "reply", "forward", "share", "notify", "notification", "push", "post",
+                    "publish", "respond", "a2a", "remotetrigger")
 PROMPT_PREFIX = (
     "[Automatic restart: the previous attempt at this request was cut off by a service "
     "restart before it produced an answer. Continue from the current state of the "
@@ -60,6 +69,7 @@ class Candidate:
     key: str
     attempts: int
     failure_class: str          # shared classifier verdict (corvin_core.failure_classes); always C1 here
+    outbound: tuple[str, ...] = ()   # outbound tool names the interrupted run already called (P4)
 
 
 def _marker_path(tenant_id: str) -> Path:
@@ -136,6 +146,27 @@ def interrupted_at(meta: dict[str, Any], last_event: dict[str, Any]) -> float:
     return float(meta.get("ended_at") or last_event.get("timestamp") or 0)
 
 
+def outbound_tools(tasks_dir: Path, task_id: str) -> tuple[str, ...]:
+    """Names of the outbound tools (send / reply / share / a2a ...) this task's run already called,
+    read from its append-only event log. Names only - never arguments or content."""
+    try:
+        lines = (tasks_dir / f"{task_id}.events.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ()
+    found: set[str] = set()
+    for line in lines:
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(ev, dict) and ev.get("event") == "tool_use":
+            name = str(ev.get("tool_name") or "")
+            low = name.rsplit("__", 1)[-1].lower()
+            if any(m in low for m in OUTBOUND_MARKERS):
+                found.add(name[:80])
+    return tuple(sorted(found))
+
+
 def is_restart_kill(meta: dict[str, Any], last_event: dict[str, Any], marker: Any) -> bool:
     """Cause test: the task was cut off with no output by a signal exit AND either the reaper
     found it dead or it ended inside the shutdown window. Pure - no I/O, no clock; the
@@ -184,7 +215,8 @@ def find_interrupted(tenant_id: str, now: float | None = None) -> list[Candidate
         key = _key(instruction)
         failure_class = classify_failure(exit_code=newest.get("exit_code")).code
         out.append(Candidate(tenant_id, sess.sid, newest["task_id"], instruction, key,
-                             _attempts(tasks_dir).get(key, 0), failure_class))
+                             _attempts(tasks_dir).get(key, 0), failure_class,
+                             outbound_tools(tasks_dir, newest["task_id"])))
     return out
 
 
@@ -262,6 +294,15 @@ async def recover_candidate(cand: Candidate) -> str:
     if sess is None or sess.workdir is None:
         return "gone"
     tasks_dir = Path(sess.workdir) / "tasks"
+    if cand.outbound:
+        # P4: an outbound effect may already exist - never repeat it silently. Closing the budget
+        # keeps a later boot from asking again; the user decides.
+        while _attempts(tasks_dir).get(cand.key, 0) < MAX_ATTEMPTS:
+            _bump(tasks_dir, cand.key)
+        _audit(cand, ok=False, action="chat.turn.recovery_needs_user", reason="outbound_effect_possible")
+        _notify(cand, "needs_user", 0)
+        logger.warning("turn-recovery: chat %s not re-run: outbound tool(s) %s already ran", cand.sid, cand.outbound)
+        return "needs_user"
     while _attempts(tasks_dir).get(cand.key, 0) < MAX_ATTEMPTS:
         n = _bump(tasks_dir, cand.key)
         logger.info("turn-recovery: re-running interrupted turn %s (chat %s, attempt %d/%d)",

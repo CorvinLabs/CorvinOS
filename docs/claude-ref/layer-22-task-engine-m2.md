@@ -466,6 +466,15 @@ re-run automatically (a timed-out turn would only time out again, and a step may
 Verified with a real child: `cancel_live_turn` terminates the `claude` process
 (`test_operator_cancel_ends_the_child_and_is_final`), which answers CONCEPT-0112 Q2.
 
+**An outbound effect is never repeated silently (PLAN-0958 P4).** `scripts/task_interruption_report.py`
+measured this install (214 finished turns, 68 interrupted): 24 % use Write/Edit/message tools and up to 85 %
+call Bash, so "most interrupted turns are read-only" is false. A workspace effect is safe to continue (the
+re-run prompt says "continue from the current state of the workspace"); an OUTBOUND one is not - a sent
+mail, A2A task, share or push cannot be seen in the workspace. `turn_recovery.outbound_tools()` reads the
+tool names the interrupted run already called from its own event log (names only, never arguments); a
+match (`OUTBOUND_MARKERS`) means the request is NOT re-run: the user gets a `needs_user` notice, the
+attempt budget is closed so a later boot does not ask again, and `chat.turn.recovery_needs_user` is audited.
+
 **EVERY host reaps, not just the bridge (2026-09-21).** Until this date the sweep
 had exactly one caller — `adapter.py`'s boot — so an install that never started a
 messenger bridge never reaped at all. On a console-only install that is not a slow
