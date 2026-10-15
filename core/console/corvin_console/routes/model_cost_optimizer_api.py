@@ -87,6 +87,9 @@ class DashboardStatusResponse(BaseModel):
     history: Optional[List[Dict[str, Any]]] = None
     cost_data_available: bool = False
     cost_history: List[Dict[str, Any]] = []
+    # Last provider quota windows seen in the Claude CLI stream ({} = none yet):
+    # {observed_at, status, windows: {five_hour|seven_day: {utilization, resets_at}}}.
+    rate_limit_windows: Dict[str, Any] = {}
     # ACS-delegated worker spend — the substantive-work path (full tool
     # access), tracked entirely separately from the OS-turn numbers above.
     # Zero when no acs.engine_completed event has usable token data.
@@ -425,6 +428,13 @@ async def get_learning_status(
         except Exception:  # noqa: BLE001
             window = {"active": False, "epoch_ts": None, "since_iso": None, "reason": ""}
 
+        try:
+            from .. import rate_limit_windows  # noqa: PLC0415
+
+            quota_windows = rate_limit_windows.read(rec.tenant_id)
+        except Exception:  # noqa: BLE001 — absent, never invented
+            quota_windows = {}
+
         return {
             "converged_count": converged,
             "total_count": total,
@@ -450,6 +460,7 @@ async def get_learning_status(
             "cost_current_usd": cost_current,
             "cost_data_available": cost_data_available,
             "cost_history": cost_history,
+            "rate_limit_windows": quota_windows,
             "cost_model_mix": cost_model_mix,
             "cost_counted_turns": cost_counted_turns,
             "cost_total_turns": cost_total_turns,

@@ -1273,9 +1273,14 @@ class ClaudeCodeEngine:
                 type="turn_completed", text=text, usage=usage, raw=obj,
             )]
 
-        # Hooks, rate-limit-events et al — surface as raw-only events
-        # so a future adapter consumer can inspect them without the
-        # engine spec growing a flag for every case.
+        # Provider quota windows (five_hour / seven_day reset instants). The
+        # adapter persists them for the Models page (corvin_console/
+        # rate_limit_windows.py); consumers that ignore unknown types are
+        # unaffected. An event without a payload stays dropped.
+        if kind == "rate_limit_event" and isinstance(obj.get("rate_limit_info"), dict):
+            return [StreamEvent(type="rate_limit", raw=obj)]
+
+        # Hooks et al — dropped.
         return []
 
     # Back-compat: the original single-event normaliser. Keeps the

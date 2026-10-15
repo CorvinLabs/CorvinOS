@@ -6102,6 +6102,16 @@ def _call_claude_streaming_via_engine(
 
                 if ev.type == "session_started":
                     _captured_session_id = (ev.raw or {}).get("session_id") or ""
+                elif ev.type == "rate_limit":
+                    # Same store the console chat writes (last observation per
+                    # tenant), so the Models page is as fresh as the last turn on
+                    # EITHER surface. Best effort: record() never raises.
+                    try:
+                        from corvin_console import rate_limit_windows as _rlw  # noqa: PLC0415
+                        if not _rlw.record(_scope.tenant_id, ev.raw or {}):
+                            log("rate_limit_event not recorded (no window or no tenant home)")
+                    except Exception as e:  # noqa: BLE001
+                        log(f"rate_limit_event record failed: {e!r}")
                 elif ev.type == "text_delta":
                     # Incremental assistant text — final value comes via
                     # turn_completed. ADR-0551 C1-B: live-scan it for bgstep
