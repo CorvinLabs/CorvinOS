@@ -30,6 +30,18 @@ class TestPosixRealTermination(unittest.TestCase):
     """Real subprocess.Popen + real killpg on this (Linux) CI box."""
 
     @unittest.skipUnless(hasattr(os, "killpg"), "POSIX-only")
+    def test_kill_is_logged_with_its_caller_and_recorded_on_the_proc(self):
+        # P0 (PLAN-0959): a 143 must say which Python function killed the group.
+        proc = subprocess.Popen(["sh", "-c", "trap 'exit 0' TERM; sleep 30"], start_new_session=True)
+        time.sleep(0.2)
+        with self.assertLogs("corvin.engine.process_kill", level="INFO") as logs:
+            agents_pkg.terminate_process_tree(proc, grace=3.0)
+        proc.wait(timeout=1)
+        self.assertEqual(proc.kill_caller, "test_kill_is_logged_with_its_caller_and_recorded_on_the_proc")
+        self.assertTrue(any(f"pid={proc.pid}" in m and "caller=test_kill_is_logged" in m
+                            for m in logs.output), logs.output)
+
+    @unittest.skipUnless(hasattr(os, "killpg"), "POSIX-only")
     def test_graceful_sigterm_stops_a_real_process_group(self):
         proc = subprocess.Popen(
             ["sh", "-c", "trap 'exit 0' TERM; sleep 30"],
@@ -76,6 +88,14 @@ class TestPosixRealTermination(unittest.TestCase):
             os.killpg(pgid, 0)  # signal 0 = existence probe
 
 
+def _agents():
+    """The CURRENT ``agents`` module. Other test files purge and re-import it (see
+    test_bg_scope_completion._adapter); a module object captured at import time would
+    then miss the patches below and run the POSIX branch."""
+    import importlib
+    return importlib.import_module("agents")
+
+
 class TestWindowsSimulatedTermination(unittest.TestCase):
     """No process groups on Windows — simulate via sys.platform patching
     plus removing os.killpg from view, and assert the CORRECT Windows-
@@ -104,13 +124,13 @@ class TestWindowsSimulatedTermination(unittest.TestCase):
 
     def test_graceful_path_sends_ctrl_break_event(self):
         proc, _state = self._make_fake_proc(dies_after_signal=True)
-        with mock.patch.multiple(agents_pkg.sys, platform="win32"), \
-             mock.patch.object(agents_pkg.signal, "CTRL_BREAK_EVENT", 21, create=True), \
+        with mock.patch.multiple(_agents().sys, platform="win32"), \
+             mock.patch.object(_agents().signal, "CTRL_BREAK_EVENT", 21, create=True), \
              mock.patch(
                  "agents.hasattr",
-                 side_effect=lambda o, n: False if (o is agents_pkg.os and n == "killpg") else hasattr(o, n),
+                 side_effect=lambda o, n: False if (o is _agents().os and n == "killpg") else hasattr(o, n),
              ):
-            agents_pkg.terminate_process_tree(proc, grace=1.0)
+            _agents().terminate_process_tree(proc, grace=1.0)
         proc.send_signal.assert_called_once_with(21)
         proc.terminate.assert_not_called()
 
@@ -119,14 +139,14 @@ class TestWindowsSimulatedTermination(unittest.TestCase):
         tracked cmd.exe PID, orphaning the real node.exe grandchild. The
         fallback MUST shell out to `taskkill /T /F /PID <pid>` instead."""
         proc, _state = self._make_fake_proc(dies_after_signal=False)
-        with mock.patch.multiple(agents_pkg.sys, platform="win32"), \
-             mock.patch.object(agents_pkg.signal, "CTRL_BREAK_EVENT", 21, create=True), \
+        with mock.patch.multiple(_agents().sys, platform="win32"), \
+             mock.patch.object(_agents().signal, "CTRL_BREAK_EVENT", 21, create=True), \
              mock.patch(
                  "agents.hasattr",
-                 side_effect=lambda o, n: False if (o is agents_pkg.os and n == "killpg") else hasattr(o, n),
+                 side_effect=lambda o, n: False if (o is _agents().os and n == "killpg") else hasattr(o, n),
              ), \
-             mock.patch.object(agents_pkg.subprocess, "run") as mock_run:
-            agents_pkg.terminate_process_tree(proc, grace=0.1)
+             mock.patch.object(_agents().subprocess, "run") as mock_run:
+            _agents().terminate_process_tree(proc, grace=0.1)
         proc.send_signal.assert_called_once_with(21)
         proc.kill.assert_not_called()  # bare kill() would orphan the grandchild
         mock_run.assert_called_once()

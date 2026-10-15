@@ -1091,6 +1091,29 @@ def _user_model_distill_async(channel: str, chat_key: str) -> None:
         pass
 
 CHAT_LOCK_IDLE_TTL = float(os.environ.get("ADAPTER_CHAT_LOCK_IDLE_TTL", str(24 * 3600)))
+# PLAN-0959 P1: a wall-clock step this much larger than the monotonic clock's is logged
+# as watchdog.clock_jump (host suspend / clock change). Logging only; never a kill.
+CLOCK_JUMP_LOG_S = 30.0
+
+
+def ended_by_label(*, user_cancel: bool, kill_caller: str | None, scope_end: str | None,
+                   timed_out: bool, rc: int) -> str:
+    """PLAN-0959 P0: name who ended a failed turn, for the task record's ``ended_by``.
+
+    Order matters: an operator cancel wins; a kill this process made names its caller;
+    a signal exit with no kill from this process was sent from outside (``signal_unattributed``).
+    """
+    if user_cancel:
+        return "operator_cancel"
+    if kill_caller:
+        return f"python_kill:{kill_caller}"
+    if scope_end:
+        return f"scope_end:{scope_end}"
+    if timed_out:
+        return "stream_idle_timeout"
+    if rc in (143, 137, -15, -9):
+        return "signal_unattributed"
+    return "exit"
 IN_FLIGHT_TTL      = float(os.environ.get("ADAPTER_IN_FLIGHT_TTL",      str(3600)))
 CLEANUP_INTERVAL   = float(os.environ.get("ADAPTER_CLEANUP_INTERVAL",   "300"))
 CANCEL_GRACE_SEC   = float(os.environ.get("ADAPTER_CANCEL_GRACE_SEC",   "2.0"))
@@ -5904,6 +5927,11 @@ def _call_claude_streaming_via_engine(
     final_usage: dict[str, Any] = {}
     start_t = time.time()
     last_event = start_t
+    # P1 (PLAN-0959): the idle watchdog measures silence on the monotonic clock.
+    # CLOCK_MONOTONIC does not advance while the host is suspended, so a laptop
+    # lid-close no longer reads as hours of silence and kills the turn on wake-up.
+    last_event_mono = time.monotonic()
+    _tick_wall, _tick_mono = start_t, last_event_mono   # for the clock-jump log below
     last_event_type = ""  # type of the most recent stream event
     last_alive_hb = start_t
     rc: int = 0
@@ -5984,10 +6012,13 @@ def _call_claude_streaming_via_engine(
             _scope_limit_s = _child_cap_s if _age > _child_cap_s else 2 * _child_cap_s
             log(f"background scope over its cap (child {_age:.0f}s, scope {_total:.0f}s, "
                 f"limit {_scope_limit_s:.0f}s) — ending it")
+            # PLAN-0959 P0: which kind of child hit the cap (bash / monitor / agent).
+            # A child PID is not in the CLI's background-task events, so it cannot be logged here.
+            _oldest = min(_open, key=lambda c: c.started_at)
             _bgs.emit_audit("bgscope.child_cap_exceeded",
                             tenant_id=_scope.tenant_id, scope_id=_scope.scope_id,
                             children_open=len(_open), limit_s=int(_scope_limit_s),
-                            age_s=int(max(_age, _total)))
+                            age_s=int(max(_age, _total)), oldest_kind=_oldest.kind)
             _scope_end = "child_cap"
             try:
                 engine.cancel()
@@ -6044,8 +6075,18 @@ def _call_claude_streaming_via_engine(
                         if _check_child_cap(now):
                             break
                         idle_limit = 0
-                    if idle_limit > 0 and (now - last_event) > idle_limit:
-                        log(f"engine stream idle {now - last_event:.0f}s "
+                    # P1: silence on the monotonic clock (see last_event_mono above).
+                    _mono_now = time.monotonic()
+                    _idle_s = _mono_now - last_event_mono
+                    # A wall-clock step the monotonic clock did not see (suspend, NTP
+                    # jump) is logged once per tick and never kills the turn.
+                    _jump = (now - _tick_wall) - (_mono_now - _tick_mono)
+                    if _jump > CLOCK_JUMP_LOG_S:
+                        log(f"watchdog.clock_jump: wall clock moved {_jump:.0f}s faster "
+                            f"than the monotonic clock — idle timer NOT advanced by the gap")
+                    _tick_wall, _tick_mono = now, _mono_now
+                    if idle_limit > 0 and _idle_s > idle_limit:
+                        log(f"engine stream idle {_idle_s:.0f}s "
                             f"(limit={idle_limit:.0f}s, "
                             f"{'awaiting tool result' if in_tool else 'awaiting tokens'}) "
                             f"— terminating subproc")
@@ -6096,6 +6137,7 @@ def _call_claude_streaming_via_engine(
 
                 ev = payload  # StreamEvent
                 last_event = time.time()
+                last_event_mono = time.monotonic()
                 last_event_type = ev.type
                 if _scope.open_children and _check_child_cap(last_event):
                     break
@@ -6748,6 +6790,17 @@ def _call_claude_streaming_via_engine(
                     # A kill is the operator's /cancel only when one was
                     # requested — an OOM kill or a service stop is a failure.
                     _user_cancel = _turn is not None and _cancel_requested(_turn.chat_key)
+                    # PLAN-0959 P0: name the ender, not only the exit code. kill_caller is
+                    # the Python function that signalled the process group
+                    # (agents.terminate_process_tree). A 143 without one was sent from
+                    # outside this process: that is what signal_unattributed means.
+                    try:
+                        _kill_caller = getattr(engine.proc, "kill_caller", None)
+                    except Exception:  # noqa: BLE001 — engine may not exist on early failure
+                        _kill_caller = None
+                    _failed_evt["ended_by"] = ended_by_label(
+                        user_cancel=_user_cancel, kill_caller=_kill_caller,
+                        scope_end=_scope_end, timed_out=timed_out, rc=rc)
                     if _turn is not None and _user_cancel:
                         # /cancel (SIGTERM/SIGKILL from _cancel_chat) — the
                         # operator stopped it; not a model failure.

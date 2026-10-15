@@ -4373,7 +4373,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "scope_id", "children_total", "wakeups", "duration_ms", "end_reason", "tenant_id",
     }),
     "bgscope.child_cap_exceeded": frozenset({
-        "scope_id", "children_open", "limit_s", "age_s", "tenant_id",
+        "scope_id", "children_open", "limit_s", "age_s", "tenant_id", "oldest_kind",
     }),
     "bgscope.wakeup_cap_exceeded": frozenset({
         "scope_id", "children_open", "wakeups", "limit", "tenant_id",

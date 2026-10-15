@@ -253,6 +253,22 @@ key the dedup on anything but `msg_id` (inbox filename stem).
 `ADAPTER_HEARTBEAT_INTERVAL` (default 90 s): "⏳ Noch dabei …" status during silence.
 Set to `0` to disable either. Tests override via env at re-import time.
 
+**Clock (PLAN-0959 P1).** Silence is measured on `time.monotonic()` (`last_event_mono`).
+`CLOCK_MONOTONIC` does not advance while the host is suspended, so a laptop lid-close
+no longer reads as hours of silence and kills the turn on wake-up (measured 2026-10-13:
+a 9.3 h task ended by an idle kill 33 298 s after its last event, right after resume).
+A wall-clock step the monotonic clock did not see is logged as `watchdog.clock_jump`
+(threshold `CLOCK_JUMP_LOG_S` = 30 s) and never kills. The child cap stays on wall-clock
+time because `bg_scope` stamps children with `time.time()`. Codex and OpenCode loops still
+use wall-clock silence (not yet changed).
+
+**Kill attribution (PLAN-0959 P0).** `agents.terminate_process_tree` logs one line per
+process-group kill: `corvin.engine.process_kill pid=… pgid=… caller=<function>`, and sets
+`proc.kill_caller`. The task record's `task.failed` carries `ended_by`:
+`operator_cancel` · `python_kill:<caller>` · `scope_end:<child_cap|wakeup_cap>` ·
+`stream_idle_timeout` · `signal_unattributed` (exit 143/137/-15/-9 with no Python-side kill:
+sent from outside this process) · `exit`.
+
 ### Tool-call awareness (`ADAPTER_TOOL_IDLE_TIMEOUT`)
 
 The idle clock (`last_event`) advances only on stream events. But claude's

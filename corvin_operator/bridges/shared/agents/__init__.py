@@ -30,6 +30,7 @@ Design notes
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -37,6 +38,10 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Protocol, runtime_checkable
+
+# One line per process-group kill: pid, pgid, and the function that asked for it.
+# The caller name is what tells a Python-side kill apart from a 143 nobody here sent.
+_kill_log = logging.getLogger("corvin.engine.process_kill")
 
 
 def _windows_kill_tree(pid: int) -> None:
@@ -82,6 +87,22 @@ def terminate_process_tree(proc: "subprocess.Popen", *, grace: float = 5.0) -> N
     """
     if proc.poll() is not None:
         return
+    # Who asked for this kill. Stored on the Popen object so the adapter can
+    # record it in the task record after the process is gone (ended_by).
+    try:
+        caller = sys._getframe(1).f_code.co_name
+    except (AttributeError, ValueError):  # pragma: no cover — non-CPython
+        caller = "unknown"
+    try:
+        proc.kill_caller = caller
+    except AttributeError:  # pragma: no cover — proc without __dict__
+        pass
+    try:
+        _pgid = os.getpgid(proc.pid)
+    except OSError:
+        _pgid = None
+    _kill_log.info("process-group kill pid=%s pgid=%s caller=%s grace=%.1fs",
+                   proc.pid, _pgid, caller, grace)
     if hasattr(os, "killpg"):
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
@@ -102,6 +123,8 @@ def terminate_process_tree(proc: "subprocess.Popen", *, grace: float = 5.0) -> N
     except subprocess.TimeoutExpired:
         pass
     if proc.poll() is None:
+        _kill_log.warning("process-group still alive after SIGTERM pid=%s — SIGKILL "
+                          "caller=%s", proc.pid, caller)
         if hasattr(os, "killpg"):
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
