@@ -451,7 +451,8 @@ so a worker never reads its own bookkeeping) and to the task's event log as `tas
 (`task.notice_sent` on the audit chain: kind and channel only). `GET
 /v1/console/chat/sessions/{sid}/tasks/{task_id}/timeline` returns the read model
 (`task_timeline.py`): one row per transition or notice, folded from the event log, never a second
-writer. A dedicated timeline panel in the SPA is NOT built yet; the notices appear in the chat.
+writer. The SPA panel **Task Timeline** (`/app/task-timeline`, System group; `pages/task-timeline.tsx`,
+model in `lib/task-timeline.ts`) lists a chat's tasks and shows each one's rows; the notices also appear in the chat.
 Proof: `core/console/tests/test_turn_recovery_e2e.py::test_user_is_told_in_the_chat_and_can_read_the_timeline`.
 
 **Cancel vs. cut-off, and what a disconnect really does (PLAN-0958 P5).** A client disconnect
