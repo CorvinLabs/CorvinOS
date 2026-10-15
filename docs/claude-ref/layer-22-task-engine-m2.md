@@ -454,6 +454,18 @@ so a worker never reads its own bookkeeping) and to the task's event log as `tas
 writer. A dedicated timeline panel in the SPA is NOT built yet; the notices appear in the chat.
 Proof: `core/console/tests/test_turn_recovery_e2e.py::test_user_is_told_in_the_chat_and_can_read_the_timeline`.
 
+**Cancel vs. cut-off, and what a disconnect really does (PLAN-0958 P5).** A client disconnect
+does NOT end a turn: `routes/chat.py::_detach_turn` lets it finish and only a watchdog
+(`CORVIN_DETACHED_TURN_MAX_S`) cancels it. CONCEPT-0112's class C2 ("disconnect = cancelled, turn
+gone") therefore describes a path that no longer exists. What reaches
+`chat_runtime._finalize_in_flight_task` is told apart by `note_cancel_reason()` (set BEFORE the
+cancel): an operator stop (own socket, another tab) ends as `task.cancelled`, silent and never
+resumed (ADR-2236 D14); the watchdog (`detached_timeout`, class C4) and any other close without a
+terminal event end as `task.interrupted` and the user gets a `needs_user` notice - these are NOT
+re-run automatically (a timed-out turn would only time out again, and a step may have had an effect).
+Verified with a real child: `cancel_live_turn` terminates the `claude` process
+(`test_operator_cancel_ends_the_child_and_is_final`), which answers CONCEPT-0112 Q2.
+
 **EVERY host reaps, not just the bridge (2026-09-21).** Until this date the sweep
 had exactly one caller — `adapter.py`'s boot — so an install that never started a
 messenger bridge never reaped at all. On a console-only install that is not a slow

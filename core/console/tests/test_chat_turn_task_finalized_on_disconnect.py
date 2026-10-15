@@ -54,6 +54,14 @@ from corvin_core.task_manager import TaskManager, TaskStatus  # noqa: E402
 _TERMINAL_EVENTS = ("task.completed", "task.failed", "task.cancelled")
 
 
+def _recv_until(ws, kind: str) -> dict:
+    """Next event of *kind* (the route announces ``turn_started`` before the impl's first event)."""
+    while True:
+        ev = ws.receive_json()
+        if ev["type"] == kind:
+            return ev
+
+
 def _app() -> FastAPI:
     app = FastAPI()
     app.include_router(chat_routes.router, prefix="/v1/console")
@@ -75,6 +83,11 @@ class _ChatTurnTaskTestBase(unittest.TestCase):
         )
         self.sess.workdir.mkdir(parents=True)
         self.tasks_dir = self.sess.workdir / "tasks"
+        # _append_turn (chat notices) only writes for a session that exists on disk.
+        _meta = chat_runtime._meta_path("_default", "s1")
+        _meta.parent.mkdir(parents=True, exist_ok=True)
+        _meta.write_text("{}", encoding="utf-8")
+        self.addCleanup(lambda: (_meta.unlink(missing_ok=True), chat_runtime.delete_turns("_default", "s1")))
         self.rec = MagicMock()
         self.rec.tenant_id = "_default"
         self.rec.sid_fingerprint = "fp"
@@ -123,19 +136,26 @@ class _ChatTurnTaskTestBase(unittest.TestCase):
             patch.object(chat_routes.session_auth, "load_session", return_value=self.rec),
             patch.object(chat_routes.chat_runtime, "get_session", return_value=self.sess),
             patch.object(chat_runtime, "_stream_turn_impl", impl),
+            # A disconnect no longer cancels the turn (routes/chat.py::_detach_turn lets it finish);
+            # only the detached-turn watchdog does. Shorten it so the test does not wait a minute.
+            patch.object(chat_routes, "_detached_turn_max_s", return_value=0.3),
         ):
-            c = self._client()
-            with c.websocket_connect("/v1/console/chat/sessions/s1/stream") as ws:
-                self.assertEqual(ws.receive_json()["type"], "ready")
-                ws.send_json({"type": "user", "text": "count slowly to forty"})
-                # The impl has begun and created its task.
-                self.assertEqual(ws.receive_json()["type"], "delta")
-                if not disconnect_mid_turn:
-                    while ws.receive_json()["type"] != "done":
-                        pass
-            # Leaving the context manager closes the socket. Mid-turn that is the
-            # reported failure mode: a refreshed/closed browser tab.
-        return self._await_terminal()
+            # `with c`: ONE event loop for the whole test. Without it every websocket_connect owns a
+            # portal that is torn down on exit and cancels the detached turn before its watchdog
+            # fires - which is shutdown, not a disconnect.
+            with self._client() as c:
+                with c.websocket_connect("/v1/console/chat/sessions/s1/stream") as ws:
+                    self.assertEqual(ws.receive_json()["type"], "ready")
+                    ws.send_json({"type": "user", "text": "count slowly to forty"})
+                    # The impl has begun and created its task.
+                    self.assertEqual(_recv_until(ws, "delta")["type"], "delta")
+                    if not disconnect_mid_turn:
+                        while ws.receive_json()["type"] != "done":
+                            pass
+                # Leaving the websocket closes the socket. Mid-turn that is the reported failure
+                # mode: a refreshed/closed browser tab. The turn is detached and finishes or is cut
+                # off by the watchdog.
+                return self._await_terminal()
 
     def _await_terminal(self, timeout: float = 5.0) -> str:
         """The disconnect is handled on the server's own task; give it a moment."""
@@ -158,7 +178,9 @@ class _ChatTurnTaskTestBase(unittest.TestCase):
 
 class TestAnInterruptedTurnIsFinalized(_ChatTurnTaskTestBase):
     def test_mid_turn_disconnect_finalizes_the_task_and_frees_the_quota(self) -> None:
-        """The reported bug, end to end over the real WebSocket."""
+        """The reported bug, end to end over the real WebSocket. PLAN-0958 P5: a system cut-off
+        (here the detached-turn watchdog) is INTERRUPTED and the user is told - not silently
+        cancelled."""
         base = self
 
         async def _impl(sess, prompt, **_kw):  # noqa: ANN001
@@ -172,24 +194,54 @@ class TestAnInterruptedTurnIsFinalized(_ChatTurnTaskTestBase):
         tm = self.tm()
         task = tm.get_task(task_id)
         self.assertEqual(
-            task.status, TaskStatus.CANCELLED,
-            "an abandoned turn is cancelled, not failed — it says nothing about "
-            "whether the engine did well (and so emits no ADR-0314 outcome)",
+            task.status, TaskStatus.INTERRUPTED,
+            "a turn the SYSTEM cut off is interrupted (resumable, not terminal) - only an "
+            "operator stop is cancelled",
         )
         self.assertEqual(
             tm._count_running_tasks(self.sess.chat_key), 0,
             "freeing the quota counter is the entire point of finalizing",
         )
-        # Append-only: the interruption is recorded, nothing is erased.
+        # Append-only: the interruption and the notice to the user are recorded, nothing is erased.
         self.assertEqual(
             self._events(task_id),
-            ["task.created", "task.started", "task.cancelled"],
+            ["task.created", "task.started", "task.interrupted", "task.notice"],
         )
+        notices = [t for t in chat_runtime.read_turns(self.sess.tenant_id, self.sess.sid) if t.get("notice")]
+        self.assertEqual([t["notice"] for t in notices], ["needs_user"])
+        self.assertIn("worker timeout", notices[0]["parts"][0]["text"])
         self.assertIsNone(
             self.sess.in_flight_task,
             "the slot must be cleared, or the next turn's finalizer would look at "
             "a task that is already over",
         )
+
+    def test_an_operator_stop_is_cancelled_and_silent(self) -> None:
+        """ADR-2236 D14: the operator's intent is final - cancelled, never resumed, no notice."""
+        base = self
+
+        async def _impl(sess, prompt, **_kw):  # noqa: ANN001
+            base._start_real_task(sess)
+            yield {"type": "delta", "text": "1\n"}
+            await asyncio.sleep(30)
+            yield {"type": "done"}
+
+        with (
+            patch.object(chat_routes.session_auth, "load_session", return_value=self.rec),
+            patch.object(chat_routes.chat_runtime, "get_session", return_value=self.sess),
+            patch.object(chat_runtime, "_stream_turn_impl", _impl),
+        ):
+            c = self._client()
+            with c.websocket_connect("/v1/console/chat/sessions/s1/stream") as ws:
+                self.assertEqual(ws.receive_json()["type"], "ready")
+                ws.send_json({"type": "user", "text": "count slowly to forty"})
+                _recv_until(ws, "delta")
+                ws.send_json({"type": "cancel"})
+                _recv_until(ws, "done")
+        task_id = self._await_terminal()
+        self.assertEqual(self.tm().get_task(task_id).status, TaskStatus.CANCELLED)
+        self.assertEqual(self._events(task_id), ["task.created", "task.started", "task.cancelled"])
+        self.assertFalse([t for t in chat_runtime.read_turns(self.sess.tenant_id, self.sess.sid) if t.get("notice")])
 
     def test_five_disconnects_do_not_kill_the_chat(self) -> None:
         """The actual user-visible failure: the FIFTH leak, not the first.
@@ -261,12 +313,13 @@ class TestAnInterruptedTurnIsFinalized(_ChatTurnTaskTestBase):
             with c.websocket_connect("/v1/console/chat/sessions/s1/stream") as ws:
                 self.assertEqual(ws.receive_json()["type"], "ready")
                 ws.send_json({"type": "user", "text": "do it"})
-                self.assertEqual(ws.receive_json()["type"], "delta")
-                self.assertEqual(ws.receive_json()["type"], "error")
+                self.assertEqual(_recv_until(ws, "delta")["type"], "delta")
+                self.assertEqual(_recv_until(ws, "error")["type"], "error")
                 self.assertEqual(ws.receive_json()["type"], "done")
 
         task_id = self._await_terminal()
-        self.assertEqual(self.tm().get_task(task_id).status, TaskStatus.CANCELLED)
+        # PLAN-0958 P5: a turn the SYSTEM ended (here: it raised) is interrupted, not cancelled.
+        self.assertEqual(self.tm().get_task(task_id).status, TaskStatus.INTERRUPTED)
         self.assertEqual(self.tm()._count_running_tasks(self.sess.chat_key), 0)
 
 
@@ -293,7 +346,7 @@ class TestQuotaExhaustionIsReportedAsItself(_ChatTurnTaskTestBase):
             with c.websocket_connect("/v1/console/chat/sessions/s1/stream") as ws:
                 self.assertEqual(ws.receive_json()["type"], "ready")
                 ws.send_json({"type": "user", "text": "one more turn"})
-                err = ws.receive_json()
+                err = _recv_until(ws, "error")
                 self.assertEqual(err["type"], "error")
                 msg = err["message"]
                 self.assertNotIn("unexpected", msg.lower(), msg)

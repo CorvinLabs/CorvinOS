@@ -1787,6 +1787,25 @@ def _cancel_live_turns(tenant_id: str, sid: str) -> None:
             pass
 
 
+# PLAN-0958 P5: WHY a live turn is being cancelled, so its finalizer can tell an operator's stop
+# (final, silent apart from the stop itself) from a system cut-off (interrupted, the user is told).
+_CANCEL_WHY: dict[tuple[str, str], tuple[str, float]] = {}
+_CANCEL_WHY_TTL_S = 120.0
+
+
+def note_cancel_reason(tenant_id: str, sid: str, why: str) -> None:
+    """Record why *sid*'s turn is about to be cancelled (``operator`` | ``detached_timeout``).
+    Must be called BEFORE ``task.cancel()``: the finalizer runs inside the cancellation."""
+    with _live_turns_guard:
+        _CANCEL_WHY[(tenant_id, sid)] = (why, time.time())
+
+
+def _take_cancel_reason(tenant_id: str, sid: str) -> str | None:
+    with _live_turns_guard:
+        why, at = _CANCEL_WHY.pop((tenant_id, sid), (None, 0.0))
+    return why if why and time.time() - at <= _CANCEL_WHY_TTL_S else None
+
+
 def cancel_live_turn(tenant_id: str, sid: str) -> bool:
     """Cancel *sid*'s running turn(s) without unregistering them — the turn's
     own teardown unregisters. Used when an operator presses stop in a tab that
@@ -1794,6 +1813,8 @@ def cancel_live_turn(tenant_id: str, sid: str) -> bool:
     nothing is running."""
     with _live_turns_guard:
         entries = list(_live_turns.get((tenant_id, sid), set()))
+    if entries:
+        note_cancel_reason(tenant_id, sid, "operator")
     for loop, task in entries:
         try:
             loop.call_soon_threadsafe(task.cancel)
@@ -5963,24 +5984,55 @@ def _finalize_in_flight_task(sess: WebChatSession) -> str | None:
             _task_manager.TaskStatus.RUNNING, _task_manager.TaskStatus.PENDING
         ):
             return None
-        # task.cancelled, not task.failed: the turn was abandoned, not broken.
-        # record_event() maps it to a terminal status (freeing the quota) and
-        # deliberately emits NO ADR-0314 outcome — an abandoned turn is not a
-        # signal about whether the engine did well.
+        # PLAN-0958 P5. An OPERATOR stop is final: task.cancelled, no notice, never
+        # resumed (ADR-2236 D14). Anything else that closed the turn - the detached-turn
+        # watchdog, a shutdown cancel, a vanished consumer - is a system cut-off:
+        # task.interrupted (resumable, not terminal) and the user is told. record_event()
+        # maps cancelled to a terminal status (freeing the quota) and emits NO ADR-0314
+        # outcome - an abandoned turn is not a signal about whether the engine did well.
+        why = _take_cancel_reason(sess.tenant_id, sess.sid)
+        if why == "operator":
+            tm.record_event(
+                task_id,
+                {"event": "task.cancelled", "reason": "operator_cancel"},
+                reason="turn cancelled by the operator",
+                tenant_id=sess.tenant_id,
+            )
+            _log.info("finalized task %s (chat=%s) as cancelled by the operator", task_id, sess.chat_key)
+            return task_id
+        reason_code = why or "turn_closed_without_terminal_event"
         tm.record_event(
             task_id,
-            {"event": "task.cancelled", "reason": "client_disconnected_mid_turn"},
+            {"event": "task.interrupted", "reason": reason_code, "exit_code": None},
             reason="turn interrupted before any terminal event",
             tenant_id=sess.tenant_id,
         )
+        _notify_system_interruption(sess, tm, task_id, reason_code)
     except Exception:  # noqa: BLE001 — bookkeeping must never break a turn
         _log.debug("could not finalize in-flight task %s", task_id, exc_info=True)
         return None
     _log.info(
-        "finalized interrupted task %s (chat=%s) as cancelled — quota freed",
-        task_id, sess.chat_key,
+        "finalized interrupted task %s (chat=%s) as interrupted (%s) — quota freed",
+        task_id, sess.chat_key, reason_code,
     )
     return task_id
+
+
+def _notify_system_interruption(sess: WebChatSession, tm: Any, task_id: str, reason_code: str) -> None:
+    """Tell the user a turn was cut off by the system and does NOT resume on its own (PLAN-0958 P5).
+    A detached turn that hit its time limit is class C4; any other unexplained close is C9.
+    Best-effort and synchronous (runs inside a cancellation); never raises."""
+    try:
+        from . import task_notices
+        task = tm.get_task(task_id)
+        instruction = str((getattr(task, "input", None) or {}).get("instruction") or "")
+        task_notices.emit(
+            sess, "needs_user", task_id=task_id,
+            failure_class="C4" if reason_code == "detached_timeout" else "C9",
+            instruction=instruction, attempt=0, max_attempts=0,
+        )
+    except Exception:  # noqa: BLE001
+        _log.debug("could not notify interruption of %s", task_id, exc_info=True)
 
 
 async def stream_turn(

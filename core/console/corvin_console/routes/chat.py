@@ -532,7 +532,11 @@ def _detach_turn(task: "asyncio.Task[None] | None", *, tenant_id: str,
     reload threw both away."""
     if task is None or task.done():
         return
-    watchdog = asyncio.get_running_loop().call_later(_detached_turn_max_s(), task.cancel)
+    def _watchdog_cancel() -> None:
+        chat_runtime.note_cancel_reason(tenant_id, sid, "detached_timeout")
+        task.cancel()
+
+    watchdog = asyncio.get_running_loop().call_later(_detached_turn_max_s(), _watchdog_cancel)
     _DETACHED_TURNS.add(task)
 
     def _done(t: "asyncio.Task[None]") -> None:
@@ -951,6 +955,7 @@ async def chat_stream(
                                 side_msg = {}
                             if side_msg.get("type") == "cancel":
                                 _user_cancelled = True
+                                chat_runtime.note_cancel_reason(rec.tenant_id, sid, "operator")
                                 _stream_task.cancel()
                                 with contextlib.suppress(asyncio.CancelledError):
                                     await _stream_task

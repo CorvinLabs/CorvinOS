@@ -161,6 +161,46 @@ class TurnRecoveryE2E(unittest.TestCase):
             self.assertEqual(rows[0]["state"], "pending")
             self.assertEqual(c.get(f"/chat/sessions/{self.sess.sid}/tasks/nope/timeline").status_code, 404)
 
+    def test_operator_cancel_ends_the_child_and_is_final(self):
+        """PLAN-0958 P5 / CONCEPT-0112 Q2: a stop from another tab (cancel_live_turn) must terminate the
+        real claude child - not only the asyncio task - end the task as cancelled, tell the user
+        nothing, and never be picked up by recovery."""
+        async def go():
+            os.environ.update(kit.fake_env(self.home, "bash_bg_ok", speedup=4.0, silent_s=30.0))
+            pidfile = self.home / "fake.pid"
+            pidfile.unlink(missing_ok=True)
+            loop = asyncio.get_running_loop()
+
+            async def drain():
+                async for _ in self.cr.stream_turn(self.sess, "stop me"):
+                    pass
+            t = asyncio.create_task(drain())
+            self.cr.register_live_turn(self.sess.tenant_id, self.sess.sid, loop, t)
+            for _ in range(200):
+                if pidfile.exists() and pidfile.read_text().strip():
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                raise AssertionError("fake CLI never started")
+            pid = int(pidfile.read_text().strip())
+            self.assertTrue(self.cr.cancel_live_turn(self.sess.tenant_id, self.sess.sid))
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(t, 30)
+            for _ in range(100):
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                raise AssertionError("the claude child outlived the cancel (orphaned process)")
+            meta = self._tasks()[-1]
+            self.assertEqual(meta["status"], "cancelled")
+            self.assertFalse([x for x in self.cr.read_turns("_default", self.sess.sid) if x.get("notice")])
+            self.tr.note_shutdown("_default")
+            self.assertEqual(self.tr.find_interrupted("_default"), [])      # final: never resumed
+        asyncio.run(go())
+
     def test_a_reaped_orphan_is_rerun_too(self):
         """PLAN-0958 P1 made the boot reaper write ``interrupted`` (no ended_at, not ``failed``).
         The 14:03 task of 2026-10-15 stayed interrupted forever because recovery only looked
