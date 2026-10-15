@@ -408,7 +408,9 @@ Two layers clean this up:
 - **M1 adapter TaskManager** (`task_manager.py`, ADR-0080): the bridge has no
   long-running worker daemon, so it reaps at **boot** instead.
   `TaskManager.reap_stale_running()` finalizes a `running`/`pending` orphan as
-  `FAILED` (`error="orphaned_on_restart"`, append-only `task.failed` event), but
+  `INTERRUPTED` (`error="orphaned_on_restart"`, append-only `task.interrupted`
+  event; before PLAN-0958 P1 it was `task.failed` with the same reason, which
+  is still READ as interrupted, see below), but
   **only when its recorded engine pid is no longer alive**
   (`_task_pid_alive` / `_last_started_pid`). The earlier "at boot nothing can
   legitimately be running" assumption was false — an engine subprocess can
@@ -529,9 +531,81 @@ a red→green reproduction that builds five orphans at the real
 `tenants/*/sessions/web_*/tasks` path, asserts `check_quota` raises, sweeps, and
 asserts it passes.
 
+## Task lifecycle states and the transition guard (PLAN-0958 P1)
+
+One declaration of the states: `core/console/corvin_core/task_states.py`
+(`TaskState`). `TaskManager` (`task_manager.py`, as `TaskStatus`) and `TaskQueue`
+(`task_queue.py`) alias it; no other module may declare a task-lifecycle enum
+without an entry in `REGISTERED` of `core/console/tests/test_task_state_enum_guard.py`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> RUNNING
+    RUNNING --> COMPLETED
+    RUNNING --> FAILED
+    RUNNING --> CANCELLED
+    RUNNING --> INTERRUPTED: process killed (137/143/-9/-15)
+    PENDING --> INTERRUPTED: boot reaper
+    INTERRUPTED --> RESUMING
+    INTERRUPTED --> WAITING_RETRY
+    INTERRUPTED --> NEEDS_USER
+    INTERRUPTED --> ABANDONED
+    INTERRUPTED --> CANCELLED
+    WAITING_RETRY --> RESUMING
+    NEEDS_USER --> RESUMING
+    RESUMING --> RUNNING
+    RESUMING --> COMPLETED
+    RESUMING --> FAILED
+    RESUMING --> INTERRUPTED
+    COMPLETED --> [*]
+    FAILED --> [*]
+    CANCELLED --> [*]
+    ABANDONED --> [*]
+```
+
+**Guard.** `TaskManager.record_event` checks the transition for `task.started`,
+`task.completed`, `task.failed`, `task.cancelled` and `task.interrupted` BEFORE it
+appends anything. A forbidden transition raises `InvalidTransitionError` and the
+log is untouched (for example `cancelled -> completed`, `completed -> failed`,
+`interrupted -> running`, `failed -> resuming`). Same-state writes are idempotent.
+`TaskQueue.update_status` refuses to move a terminal task to a different state.
+
+**Worker.** `TaskWorkerPool` maps a worker that exited with 137/143/-9/-15 to
+`INTERRUPTED` (queue and `TaskManager` alike). A user abort that landed first
+(the queue already holds `CANCELLED`) stays cancelled; a refused write is logged
+by `_finish_queue` and does not crash the worker.
+
+**HTTP.** `POST /v1/console/tasks/{id}/abort` maps a refused transition to
+`409 Conflict` (the body carries the `from -> to` pair). Terminal tasks keep the
+idempotent `200` for abort.
+
+**Read mapping (append-only).** A pre-P1 `task.failed` with
+`error="orphaned_on_restart"` is READ as `INTERRUPTED` (`_replay_task`,
+`list_task_summaries`). The event and the meta snapshot are never rewritten.
+
+**Audit.** `task.interrupted` is registered in `security_events.py`
+(`EVENT_SEVERITY` and `_EVENT_ALLOWLIST`). Interrupted tasks emit no learning
+outcome (only completed and failed do), so the learning loop no longer counts an
+orphaned task as a failed outcome.
+
+**Not yet in P1:** the other domain enums (orchestrator, vibe-engineering,
+inspection, nervous-system, orchestration subsystems) are registered with their
+reasons, not converted; the resume path (`RESUMING` from a real retry or the user)
+arrives with PLAN-0958 P2 and later.
+
 ## Testing
 
 **Unit tests:** `test_task_queue.py` (13 tests, all passing)
+
+**State machine and guard:** `test_task_state_machine.py` (transition table,
+refusal leaves the log untouched, read mapping of legacy orphans) and
+`test_task_state_enum_guard.py` (fails on a new unregistered task-state enum).
+
+**E2E (real boundary):** `test_task_interrupt_http_e2e.py` — the real tasks router
+through `TestClient`, the real `TaskWorkerPool._execute_task` spawning a fake
+`claude` that sleeps, SIGKILL on the engine pid, then `GET` shows `interrupted`;
+abort of an interrupted task works; a stale-read abort of a completed task returns 409.
 
 **E2E tests:** `test_task_engine_m2_e2e.py`
 - Multi-tenant task isolation

@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from corvin_core.failure_classes import FailureClass, classify_failure
+
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 2
@@ -39,9 +41,6 @@ WINDOW_S = 30 * 60               # only a recent interruption is worth re-runnin
 SHUTDOWN_SLACK_S = 120.0         # a turn finalized this long before the shutdown note belongs to it
 SHUTDOWN_AFTER_S = 10.0
 START_DELAY_S = 15.0
-# A signal death is 128+N from a shell wrapper (the 2026-10-15 incident: 143) and -N from asyncio
-# (measured: -15); -1 is the boot reaper's orphan marker.
-RESTART_EXIT_CODES = frozenset({143, 137, -15, -9, -1})
 SYSTEM_SID = "auto-recovery"
 PROMPT_PREFIX = (
     "[Automatic restart: the previous attempt at this request was cut off by a service "
@@ -60,6 +59,7 @@ class Candidate:
     instruction: str
     key: str
     attempts: int
+    failure_class: str          # shared classifier verdict (corvin_core.failure_classes); always C1 here
 
 
 def _marker_path(tenant_id: str) -> Path:
@@ -130,6 +130,30 @@ def _bump(tasks_dir: Path, key: str) -> int:
     return data[key]
 
 
+def interrupted_at(meta: dict[str, Any], last_event: dict[str, Any]) -> float:
+    """When the task was cut off. A FAILED task carries ``ended_at``; an INTERRUPTED one
+    (PLAN-0958 P1: reaper, killed worker) is not terminal and has none - its last event is."""
+    return float(meta.get("ended_at") or last_event.get("timestamp") or 0)
+
+
+def is_restart_kill(meta: dict[str, Any], last_event: dict[str, Any], marker: Any) -> bool:
+    """Cause test: the task was cut off with no output by a signal exit AND either the reaper
+    found it dead or it ended inside the shutdown window. Pure - no I/O, no clock; the
+    recovery window (:data:`WINDOW_S`) is a recoverability test and stays in find_interrupted.
+
+    Both ``failed`` (signal exit finalized in-process) and ``interrupted`` (reaped orphan,
+    killed worker) qualify: after P1 the reaper no longer writes ``failed``, so testing only
+    ``failed`` would silently stop re-running every reaped orphan.
+    """
+    if meta.get("status") not in ("failed", "interrupted") or meta.get("result_summary"):
+        return False
+    if classify_failure(exit_code=meta.get("exit_code")).failure_class is not FailureClass.C1:
+        return False
+    ended = interrupted_at(meta, last_event)
+    in_window = isinstance(marker, (int, float)) and marker - SHUTDOWN_SLACK_S <= ended <= marker + SHUTDOWN_AFTER_S
+    return bool(last_event.get("reaped")) or in_window
+
+
 def find_interrupted(tenant_id: str, now: float | None = None) -> list[Candidate]:
     """Newest task per chat, if a restart cut it off before it produced output."""
     from . import chat_runtime
@@ -147,21 +171,20 @@ def find_interrupted(tenant_id: str, now: float | None = None) -> list[Candidate
             meta = _read_json(meta_file)
             if meta.get("task_id") and (newest is None or (meta.get("created_at") or 0) > (newest.get("created_at") or 0)):
                 newest = meta
-        if not newest or newest.get("status") != "failed" or newest.get("result_summary"):
-            continue
-        ended = newest.get("ended_at") or 0
-        if now - ended > WINDOW_S or newest.get("exit_code") not in RESTART_EXIT_CODES:
+        if not newest:
             continue
         last = _last_event(tasks_dir, newest["task_id"])
-        reaped = bool(last.get("reaped"))
-        in_window = isinstance(marker, (int, float)) and marker - SHUTDOWN_SLACK_S <= ended <= marker + SHUTDOWN_AFTER_S
-        if not (reaped or in_window):
+        if now - interrupted_at(newest, last) > WINDOW_S:
+            continue
+        if not is_restart_kill(newest, last, marker):
             continue
         instruction = str((newest.get("input") or {}).get("instruction") or "").strip()
         if not instruction:
             continue
         key = _key(instruction)
-        out.append(Candidate(tenant_id, sess.sid, newest["task_id"], instruction, key, _attempts(tasks_dir).get(key, 0)))
+        failure_class = classify_failure(exit_code=newest.get("exit_code")).code
+        out.append(Candidate(tenant_id, sess.sid, newest["task_id"], instruction, key,
+                             _attempts(tasks_dir).get(key, 0), failure_class))
     return out
 
 
@@ -205,6 +228,20 @@ def _audit(cand: Candidate, *, ok: bool, action: str, reason: str | None = None)
         logger.error("turn-recovery audit %s not written: %s", action, exc)
 
 
+def _audit_failure_class(cand: Candidate, *, source: str) -> None:
+    """The class the shared classifier gave this interruption, on the chain (CONCEPT-0112).
+    Never raises: a failed audit write must not stop the recovery it describes."""
+    try:
+        from . import audit as console_audit
+        console_audit.system_event(
+            tenant_id=cand.tenant_id, event="turn.failure_classified",
+            details={"tenant_id": cand.tenant_id, "failure_class": cand.failure_class,
+                     "reason_code": "host_signal", "source": source},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("turn-recovery failure-class audit not written: %s", exc)
+
+
 async def recover_candidate(cand: Candidate) -> str:
     """Re-run until it yields output or the attempt budget is spent. Returns the outcome."""
     from . import chat_runtime
@@ -212,6 +249,7 @@ async def recover_candidate(cand: Candidate) -> str:
     if sess is None or sess.workdir is None:
         return "gone"
     tasks_dir = Path(sess.workdir) / "tasks"
+    _audit_failure_class(cand, source="console")
     while _attempts(tasks_dir).get(cand.key, 0) < MAX_ATTEMPTS:
         n = _bump(tasks_dir, cand.key)
         logger.info("turn-recovery: re-running interrupted turn %s (chat %s, attempt %d/%d)",

@@ -962,6 +962,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "plugin.initialization_failed":     "WARNING", # L4: plugin boot error
     "plugin.execution_timeout":         "WARNING", # L4: plugin execution timeout
     "plugin.health_check_failed":       "WARNING", # L4: plugin health check failed (ADR-0923)
+    # CONCEPT-0112 P3: the shared failure class of an interrupted turn (corvin_core/failure_classes.py).
+    # Metadata only: class code, reason code, which surface classified it, the exit status.
+    "turn.failure_classified":          "INFO",
     # Layer Forge (ADR-2222, core/orchestration/layer_forge/audit.py)
     # Metadata only: ids, versions, counts, statuses, exception class names.
     # NEVER: manifest bodies, gate output, file contents, exception messages.
@@ -1118,6 +1121,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "task.started":                     "INFO",
     "task.completed":                   "INFO",
     "task.failed":                      "WARNING",
+    # PLAN-0958 P1: a task whose process died without a terminal event (resumable, not terminal)
+    "task.interrupted":                 "WARNING",
     # Task supervision + retry classification (ADR-2107, task_supervisor.py)
     "task.retry_classified":            "INFO",
     # Background-child scope (ADR-2236, bridges/shared/bg_scope.py)
@@ -4059,6 +4064,10 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "a2a.nonce_collision_detected": frozenset({
         "tenant_id", "nonce_prefix", "epoch", "collision_count",
     }),
+    # CONCEPT-0112 P3 - mirrored by corvin_core/failure_classes.py (no prompt, no ids).
+    "turn.failure_classified": frozenset({
+        "tenant_id", "failure_class", "reason_code", "source", "exit_code",
+    }),
     # Layer 4 — Plugin Lifecycle (Phase 2).
     # Metadata only: plugin_id, error_class (name only). NEVER: error messages
     # with stack traces, plugin state, configuration.
@@ -4341,6 +4350,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "task.started": frozenset({"task_id", "engine_id", "tenant_id"}),
     "task.completed": frozenset({"task_id", "duration_ms", "exit_code", "tenant_id"}),
     "task.failed": frozenset({"task_id", "exit_code", "timed_out", "tenant_id"}),
+    "task.interrupted": frozenset({"task_id", "exit_code", "tenant_id"}),
     "task.retry_classified": frozenset({
         "task_id", "attempt", "failure_class", "reason_code", "next_attempt_in_s", "tenant_id",
     }),

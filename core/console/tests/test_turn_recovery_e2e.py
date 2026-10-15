@@ -113,6 +113,26 @@ class TurnRecoveryE2E(unittest.TestCase):
             self.assertEqual(self.tr.find_interrupted("_default"), [])
         asyncio.run(go())
 
+    def test_a_reaped_orphan_is_rerun_too(self):
+        """PLAN-0958 P1 made the boot reaper write ``interrupted`` (no ended_at, not ``failed``).
+        The 14:03 task of 2026-10-15 stayed interrupted forever because recovery only looked
+        at ``failed``. A real reap of a dead-pid task must lead to a re-run."""
+        from corvin_core.task_manager import TaskManager
+
+        async def go():
+            tasks_dir = Path(self.sess.workdir) / "tasks"
+            tm = TaskManager(tasks_dir)
+            tid = tm.create_task(self.sess.chat_key, "please finish the report", tenant_id="_default")
+            tm.record_event(tid, {"event": "task.started", "engine": "claude", "pid": 2 ** 22 + 12345})
+            self.assertEqual(TaskManager(tasks_dir).reap_stale_running(), [tid])
+            meta = json.loads((tasks_dir / f"{tid}.json").read_text())
+            self.assertEqual((meta["status"], meta["exit_code"]), ("interrupted", -1))
+            self.assertEqual([c.task_id for c in self.tr.find_interrupted("_default")], [tid])
+            os.environ.update(kit.fake_env(self.home, "bash_bg_ok", speedup=4.0))
+            self.assertEqual(await self.tr.recover_all("_default", delay_s=0), [(self.sess.sid, "recovered")])
+            self.assertEqual(self.tr.find_interrupted("_default"), [])
+        asyncio.run(go())
+
     def test_a_cancelled_or_unrelated_failure_is_not_rerun(self):
         async def go():
             await self._interrupted_turn("please do it")

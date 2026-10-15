@@ -1,7 +1,8 @@
 """Task lifecycle management for console chat.
 
 Each chat message spawn creates a Task — a durable, replayable execution context
-with task_id, state (PENDING → RUNNING → COMPLETED | FAILED | CANCELLED),
+with task_id, state (PENDING → RUNNING → COMPLETED | FAILED | CANCELLED, plus
+INTERRUPTED and the resume states; see ``task_states.py``, PLAN-0958 P1),
 and append-only event log.
 
 Storage:
@@ -33,9 +34,16 @@ import time
 import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
-from enum import Enum
 from pathlib import Path
 from typing import Any, Iterator, Optional
+
+from .task_states import (
+    CANCELLABLE_STATES,
+    EVENT_TARGET_STATE,
+    TaskState,
+    check_transition,
+    is_legacy_orphan_failure,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -56,12 +64,13 @@ ENGINE_START_EVENTS = ("task.started", "task.engine_started")
 ENGINE_CMDLINE_MARKERS: tuple[bytes, ...] = (b"claude", b"codex", b"opencode", b"copilot")
 
 
-class TaskStatus(str, Enum):
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+# PLAN-0958 P1: one state declaration for every task view. ``TaskStatus`` is an
+# alias so existing imports keep working; the transition table is enforced in
+# ``record_event`` (the guard) and read-mapped in ``_replay_task``.
+TaskStatus = TaskState
+
+#: States from which an operator cancel is accepted (was PENDING/RUNNING only).
+_CANCELLABLE = CANCELLABLE_STATES
 
 
 @dataclass
@@ -262,6 +271,14 @@ class TaskManager:
 
         # Attach event log for streaming
         task.output_events = self._read_events(task_id)
+
+        # Read mapping (PLAN-0958 P1): a pre-P1 boot-reaper ``task.failed``
+        # (error=orphaned_on_restart) is an interruption, not a failure. The
+        # stored event and meta stay as written; only the read changes.
+        if task.status == TaskState.FAILED and any(
+            is_legacy_orphan_failure(e) for e in task.output_events
+        ):
+            task.status = TaskState.INTERRUPTED
 
         return task
 
@@ -510,15 +527,41 @@ class TaskManager:
                     "children_open": _open_kids,
                 })
 
+        # PLAN-0958 P1 guard: refuse a forbidden transition BEFORE anything is
+        # appended, so a refused write leaves the event log untouched.
+        target = EVENT_TARGET_STATE.get(event["event"])
+        if target is not None:
+            current = self._replay_task(task_id)
+            if current is not None:
+                check_transition(current.status, target)
+
         seq = self._write_event(task_id, event)
 
         # Update metadata if this is a state-change event
-        if event["event"] in ("task.started", "task.completed", "task.failed", "task.cancelled"):
+        if event["event"] in ("task.started", "task.completed", "task.failed",
+                              "task.cancelled", "task.interrupted"):
             task = self._replay_task(task_id)
             if task:
                 old_status = task.status.value if task.status else None
 
-                if event["event"] == "task.started":
+                if event["event"] == "task.interrupted":
+                    # PLAN-0958 P1: the process died without a terminal event.
+                    # Not terminal: the task may be resumed, retried or handed
+                    # to the user, so there is no ended_at.
+                    task.status = TaskStatus.INTERRUPTED
+                    # Kept so the cause stays classifiable (corvin_core.failure_classes):
+                    # a reaped orphan is -1, a killed worker 137/143/-9/-15.
+                    task.exit_code = event.get("exit_code")
+                    self._write_audit_event(
+                        task_id=task_id,
+                        event_type="task.interrupted",
+                        old_state=old_status,
+                        new_state=TaskStatus.INTERRUPTED.value,
+                        executor_id=executor_id or "system",
+                        reason=reason or str(event.get("error") or "interrupted"),
+                        tenant_id=tenant_id,
+                    )
+                elif event["event"] == "task.started":
                     task.status = TaskStatus.RUNNING
                     task.started_at = time.time()
                     self._write_audit_event(
@@ -656,10 +699,15 @@ class TaskManager:
                 last_event_at: float | None = self._events_path(task_id).stat().st_mtime
             except OSError:
                 last_event_at = None
+            status = meta.get("status")
+            if status == TaskStatus.FAILED.value and any(
+                is_legacy_orphan_failure(e) for e in self._read_events(task_id)
+            ):
+                status = TaskStatus.INTERRUPTED.value  # read mapping, see _replay_task
             out.append({
                 "task_id": task_id,
                 "chat_key": chat_key,
-                "status": meta.get("status"),
+                "status": status,
                 "created_at": meta.get("created_at"),
                 "started_at": meta.get("started_at"),
                 "ended_at": meta.get("ended_at"),
@@ -714,7 +762,7 @@ class TaskManager:
         if not task:
             return False
 
-        if task.status not in (TaskStatus.PENDING, TaskStatus.RUNNING):
+        if task.status not in _CANCELLABLE:
             return False
 
         self.record_event(task_id, {"event": "task.cancelled"})
@@ -870,11 +918,11 @@ class TaskManager:
         2026-06-17 when an E2E test booted ``adapter.main()`` while that task's
         process was still streaming. Never reap a task whose process is alive.
 
-        Records an append-only ``task.failed`` event with ``error=reason`` so
-        the event log stays the single source of truth and the quota counter is
-        freed. ``task.failed`` is the canonical terminal transition (handled by
-        ``record_event``); a new event name would not update the meta status and
-        would leave the quota blocked.
+        Records an append-only ``task.interrupted`` event with ``error=reason``
+        (PLAN-0958 P1). Interrupted is not terminal, but it is not RUNNING
+        either, so the quota counter (``_count_running_tasks``) is freed. Events
+        written before P1 (``task.failed`` + ``orphaned_on_restart``) are read as
+        interrupted and are never rewritten.
 
         Returns: list of reaped task_ids (empty if none were stale).
         """
@@ -894,8 +942,11 @@ class TaskManager:
             if self._task_pid_alive(task_id) or self._owner_alive(task_id):
                 continue
             try:
+                # PLAN-0958 P1: the orphan is INTERRUPTED (resumable), not
+                # FAILED. Pre-P1 logs carry task.failed with the same reason;
+                # _replay_task reads those as interrupted too.
                 self.record_event(task_id, {
-                    "event": "task.failed",
+                    "event": "task.interrupted",
                     "exit_code": -1,
                     "error": reason,
                     "reaped": True,

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import AsyncIterator, Optional
 
 from corvin_console.task_queue import TaskQueue, TaskStatus
+from corvin_core.task_states import InvalidTransitionError
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,12 @@ except ImportError:
 # Maps task_id -> running asyncio.subprocess.Process.
 # abort_task_handler (tasks_impl.py) calls signal_abort() to terminate it.
 _active_procs: dict[str, "asyncio.subprocess.Process"] = {}
+
+# PLAN-0958 P1: exit codes of a worker that was KILLED from outside (SIGKILL
+# 137/-9, SIGTERM 143/-15) — the process is gone without a terminal event, so the
+# task is INTERRUPTED (resumable), not FAILED. A user abort moves the queue entry
+# to CANCELLED first; that terminal state wins (see _finish_queue).
+_INTERRUPT_EXIT_CODES: frozenset[int] = frozenset({-9, 137, 143, -15})
 
 
 def signal_abort(task_id: str) -> bool:
@@ -470,6 +477,21 @@ class TaskWorkerPool:
             return ("[security] Pre-spawn safety gate error — request blocked "
                     "(fail-closed).")
 
+    def _finish_queue(self, task_id: str, status: TaskStatus,
+                      exit_code: Optional[int] = None) -> bool:
+        """Write a terminal/interrupt status to the queue, or keep a final one.
+
+        PLAN-0958 P1: the queue refuses to move a terminal task (a user abort
+        raced the worker). That refusal means the outcome is already decided,
+        so it is logged and False is returned instead of crashing the worker.
+        """
+        try:
+            self.task_queue.update_status(task_id, status, exit_code=exit_code)
+            return True
+        except InvalidTransitionError as exc:
+            logger.info("Task %s: %s — kept the final state", task_id, exc)
+            return False
+
     async def _execute_task(self, task) -> None:
         """Execute a single task: audit-first → gates → spawn → stream → audit."""
         async with self.semaphore:
@@ -671,7 +693,7 @@ class TaskWorkerPool:
                 duration_ms = int((time.time() - start_time) * 1000)
 
                 if rc == 0:
-                    self.task_queue.update_status(task.task_id, TaskStatus.COMPLETED, exit_code=0)
+                    self._finish_queue(task.task_id, TaskStatus.COMPLETED, exit_code=0)
                     if tm:
                         tm.record_event(
                             task.task_id,
@@ -696,16 +718,27 @@ class TaskWorkerPool:
                                     f"({event_count} events)."))
                     logger.info("Task %s completed (%dms)", task.task_id, duration_ms)
                 else:
-                    state = "cancelled" if rc == -15 else "failed"
-                    final_status = (
-                        TaskStatus.CANCELLED if rc == -15 else TaskStatus.FAILED
-                    )
-                    self.task_queue.update_status(task.task_id, final_status, exit_code=rc)
+                    # A cancel that landed first (abort handler) is final: keep it.
+                    queue_now = self.task_queue.get_task(task.task_id)
+                    if queue_now is not None and queue_now.status == TaskStatus.CANCELLED:
+                        state, final_status = "cancelled", TaskStatus.CANCELLED
+                    elif rc in _INTERRUPT_EXIT_CODES:
+                        state, final_status = "interrupted", TaskStatus.INTERRUPTED
+                    else:
+                        state, final_status = "failed", TaskStatus.FAILED
+                    self._finish_queue(task.task_id, final_status, exit_code=rc)
                     if tm:
-                        tm.record_event(
-                            task.task_id,
-                            {"event": "task.failed", "exit_code": rc, "duration_ms": duration_ms},
-                        )
+                        if state == "interrupted":
+                            tm.record_event(
+                                task.task_id,
+                                {"event": "task.interrupted", "exit_code": rc,
+                                 "error": "worker_signalled", "duration_ms": duration_ms},
+                            )
+                        else:
+                            tm.record_event(
+                                task.task_id,
+                                {"event": "task.failed", "exit_code": rc, "duration_ms": duration_ms},
+                            )
                     _task_audit_emit(
                         "task.spawn_terminal", audit_path,
                         task_id=task.task_id, tenant_id=task.tenant_id,
@@ -723,7 +756,7 @@ class TaskWorkerPool:
 
             except asyncio.CancelledError:
                 logger.info("Task %s asyncio-cancelled", task.task_id)
-                self.task_queue.update_status(task.task_id, TaskStatus.CANCELLED)
+                self._finish_queue(task.task_id, TaskStatus.CANCELLED)
                 _notify_task_done(task.task_id, ok=False, summary="was cancelled.")
                 _task_audit_emit(
                     "task.spawn_terminal", audit_path,
@@ -743,7 +776,7 @@ class TaskWorkerPool:
                 raise
             except Exception:
                 logger.exception("Task %s error", task.task_id)
-                self.task_queue.update_status(task.task_id, TaskStatus.FAILED, exit_code=1)
+                self._finish_queue(task.task_id, TaskStatus.FAILED, exit_code=1)
                 _notify_task_done(task.task_id, ok=False,
                                   summary="failed with an internal error.")
                 _task_audit_emit(

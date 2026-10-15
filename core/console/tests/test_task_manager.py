@@ -119,7 +119,7 @@ def test_cancel_task(tm):
 
 
 def test_reap_stale_running_finalizes_orphans(tm):
-    """Boot reaper marks RUNNING/PENDING orphans as FAILED, frees the quota."""
+    """Boot reaper marks RUNNING/PENDING orphans as INTERRUPTED, frees the quota."""
     # Orphan 1: started but never terminated (the crash case).
     running_id = tm.create_task(chat_key="web:test", instruction="orphan")
     tm.record_event(running_id, {"event": "task.started"})
@@ -134,18 +134,19 @@ def test_reap_stale_running_finalizes_orphans(tm):
 
     running = tm.get_task(running_id)
     pending = tm.get_task(pending_id)
-    assert running.status == TaskStatus.FAILED
-    assert pending.status == TaskStatus.FAILED
-    assert running.ended_at is not None
+    assert running.status == TaskStatus.INTERRUPTED
+    assert pending.status == TaskStatus.INTERRUPTED
+    # Interrupted is not terminal: no ended_at, the task stays resumable.
+    assert running.ended_at is None
 
     # Quota counter freed.
     assert tm._count_running_tasks("web:test") == 0
 
     # Reason is preserved in the append-only event log.
     events = [e for _, e in tm.events_since(running_id)]
-    failed = [e for e in events if e["event"] == "task.failed"]
-    assert failed and failed[-1]["error"] == "orphaned_on_restart"
-    assert failed[-1]["reaped"] is True
+    interrupted = [e for e in events if e["event"] == "task.interrupted"]
+    assert interrupted and interrupted[-1]["error"] == "orphaned_on_restart"
+    assert interrupted[-1]["reaped"] is True
 
 
 def test_reap_stale_running_leaves_terminal_tasks_untouched(tm):
@@ -170,7 +171,7 @@ def test_reap_stale_running_idempotent(tm):
 
     assert tm.reap_stale_running() == [rid]
     assert tm.reap_stale_running() == []  # already terminal
-    assert tm.get_task(rid).status == TaskStatus.FAILED
+    assert tm.get_task(rid).status == TaskStatus.INTERRUPTED
 
 
 def test_reap_never_reaps_a_task_whose_process_is_alive(tm, monkeypatch):
@@ -195,7 +196,7 @@ def test_reap_finalizes_task_whose_process_is_dead(tm, monkeypatch):
     monkeypatch.setattr(tm, "_task_pid_alive", lambda task_id: False)
 
     assert tm.reap_stale_running() == [rid]
-    assert tm.get_task(rid).status == TaskStatus.FAILED
+    assert tm.get_task(rid).status == TaskStatus.INTERRUPTED
 
 
 def test_last_started_pid_extraction(tm):

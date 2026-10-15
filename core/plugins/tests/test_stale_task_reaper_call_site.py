@@ -136,7 +136,8 @@ class TestTheSweepReachesRealConsoleTaskDirs(unittest.TestCase):
 
         self.assertEqual(self._sweep(), 1)
 
-        self.assertEqual(tm.get_task(tid).status, TaskStatus.FAILED)
+        # PLAN-0958 P1: the reaper writes an interrupted transition, not a failure.
+        self.assertEqual(tm.get_task(tid).status, TaskStatus.INTERRUPTED)
         self.assertEqual(
             tm._count_running_tasks(chat_key), 0,
             "the quota counter must be freed — that is the only reason to reap",

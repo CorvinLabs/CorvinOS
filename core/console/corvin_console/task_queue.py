@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from corvin_core.task_states import TERMINAL_STATES, InvalidTransitionError, TaskState
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,29 +30,8 @@ class QuotaExceededError(Exception):
     pass
 
 
-class TaskStatus(str):
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-
-
-class TaskStatus(str):
-    pass
-
-
-# Re-define properly as a proper class
-from enum import Enum
-
-
-class TaskStatus(str, Enum):
-    """Task lifecycle states."""
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+# PLAN-0958 P1: the queue aliases the canonical state declaration (task_states.py).
+TaskStatus = TaskState
 
 
 @dataclass
@@ -91,7 +72,7 @@ class TaskQueueEntry:
     @property
     def is_terminal(self) -> bool:
         """Task in final state."""
-        return self.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED)
+        return self.status in TERMINAL_STATES
 
     @property
     def is_expired(self) -> bool:
@@ -355,10 +336,15 @@ class TaskQueue:
         """Update task status (idempotent).
 
         Cleans up the payload file when the task reaches a terminal state.
+        PLAN-0958 P1: a terminal task is final. Moving it to any other state
+        raises :class:`InvalidTransitionError` and writes nothing (a same-state
+        write stays an idempotent no-op).
         """
         task = self.get_task(task_id)
         if task is None:
             return
+        if task.status in TERMINAL_STATES and status != task.status:
+            raise InvalidTransitionError(task.status, status)
 
         now = time.time()
 
