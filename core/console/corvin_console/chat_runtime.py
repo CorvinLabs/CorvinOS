@@ -3495,6 +3495,11 @@ _SESSION_INTERNAL_DIRS = frozenset({
 # as "the turn produced nothing".
 _MAX_TURN_ARTIFACTS = 50
 
+# Seconds the post-run ACS scan waits before it re-reads each candidate's size.
+# The live poll needs two equal sightings; the post-run scan had none, so a worker
+# killed mid-write left a truncated deliverable in the turn history (RT-02).
+_POST_RUN_STABLE_WINDOW_S = 0.5
+
 
 def _artifacts_truncated_notice(*, emitted: int, suppressed: int) -> dict[str, Any]:
     """The one `artifacts_truncated` event, shared by both artifact branches.
@@ -6567,6 +6572,9 @@ async def _stream_turn_impl(
     # Requested model; overwritten with the subprocess-confirmed model from
     # the stream-json init event once it arrives.
     _os_model_used = _os_model or ""
+    # Model the CLI confirmed in its `init` event ONLY — what `turn_usage` reports.
+    # The requested model above must never leak into it (nothing is estimated).
+    _turn_model_confirmed: str | None = None
     # ADR-0171 — one engine.span per OS turn (role=os), engine-agnostic,
     # dual-emitted on the SAME chain as os_turn.* so the console can build
     # the OS graph from spans uniformly. Paired by a stable per-turn span_id.
@@ -7409,10 +7417,14 @@ async def _stream_turn_impl(
                 traces_dir = run_dir / "traces"
                 if not traces_dir.is_dir():
                     return []
-                fresh = [tf.stem for tf in sorted(traces_dir.glob("*.json"))
-                         if tf.name not in seen_traces]
-                for name in fresh:
-                    seen_traces.add(name + ".json")
+                fresh: list[str] = []
+                for tf in sorted(traces_dir.iterdir()):
+                    # ADR-0114 M2: with a WDAT key acs_runtime writes
+                    # ``<wid>.json.enc`` — a ``*.json`` glob missed every one.
+                    if tf.name in seen_traces or not tf.name.endswith((".json", ".json.enc")):
+                        continue
+                    seen_traces.add(tf.name)
+                    fresh.append(tf.name.split(".json", 1)[0])
                 return fresh
 
             # M2 (ADR-0170) — live artifact streaming.
@@ -7713,14 +7725,18 @@ async def _stream_turn_impl(
             # by the M2 live poll (_live_emitted deduplication).
             # _ACS_SKIP_DIRS / _ACS_SKIP_ROOT_FILES are module-level constants.
             _acs_artifact_parts: list[dict[str, Any]] = []
+            _acs_candidates: list[tuple[Path, int, dict[str, Any]]] = []
             _acs_suppressed_artifacts = 0
             _scan_root = Path(res.run_dir) if res.run_dir else run_dir
-            # bounded_stop included: "the partial results above remain valid"
-            # (the budget-stop message) was a lie while this gate was ok-only —
-            # files finished in the last poll window need TWO stable sightings
-            # to be live-emitted, so an abrupt budget stop routinely left the
-            # freshest artifacts undelivered and unpersisted.
-            if (ok or bounded_stop) and _scan_root.is_dir():
+            # Scan on EVERY status, not only ok/bounded_stop (ADR-0114 M2.1 gap,
+            # delegation-routing.md §7b): a failed run's worker may have written a
+            # deliverable that the live poll never saw as stable, and the file is
+            # on disk either way. Scan root stays run_dir, not run_dir/output:
+            # workers also write outside output/, and narrowing would drop them
+            # (§7b). Bookkeeping is excluded by the skip sets, and the
+            # _live_emitted check keeps a file the live poll already sent from
+            # being registered twice.
+            if _scan_root.is_dir():
                 for _fpath in sorted(_scan_root.rglob("*")):
                     if not _fpath.is_file() or _fpath.name.startswith("."):
                         continue
@@ -7761,17 +7777,30 @@ async def _stream_turn_impl(
                     }
                     if _label:
                         _part["label"] = _label
-                    if len(_acs_artifact_parts) >= _MAX_TURN_ARTIFACTS:
-                        # Same per-turn chip cap as the direct-turn scan — one
-                        # bound, both branches, so a run that writes hundreds of
-                        # renderable files cannot flood the chat here either.
-                        # COUNT the rest instead of `break`-ing: the cap is
-                        # announced, never silent (see _MAX_TURN_ARTIFACTS), and
-                        # a bare break made this branch the one place where a
-                        # dropped artifact read as "the run produced nothing".
-                        _acs_suppressed_artifacts += 1
-                        continue
-                    _acs_artifact_parts.append(_part)
+                    _acs_candidates.append((_fpath, _size, _part))
+
+            # Stability re-check (RT-02): the candidates were sized once, while the
+            # run may still have been writing them. Re-read after a short window and
+            # keep only files whose size did not change, then apply the chip cap.
+            if _acs_candidates:
+                await asyncio.sleep(_POST_RUN_STABLE_WINDOW_S)
+            for _fpath, _size, _part in _acs_candidates:
+                try:
+                    if _fpath.stat().st_size != _size:
+                        continue  # still being written: not a finished deliverable
+                except OSError:
+                    continue
+                if len(_acs_artifact_parts) >= _MAX_TURN_ARTIFACTS:
+                    # Same per-turn chip cap as the direct-turn scan — one
+                    # bound, both branches, so a run that writes hundreds of
+                    # renderable files cannot flood the chat here either.
+                    # COUNT the rest instead of `break`-ing: the cap is
+                    # announced, never silent (see _MAX_TURN_ARTIFACTS), and
+                    # a bare break made this branch the one place where a
+                    # dropped artifact read as "the run produced nothing".
+                    _acs_suppressed_artifacts += 1
+                    continue
+                _acs_artifact_parts.append(_part)
 
             yield {"type": "result", "text": final, "usage": None}
 
@@ -8125,6 +8154,11 @@ async def _stream_turn_impl(
                 # requested one (CLI may alias/upgrade model ids).
                 if evt.get("model"):
                     _os_model_used = str(evt["model"])
+                    _turn_model_confirmed = _os_model_used
+            elif etype == "rate_limit_event":
+                # Provider quota windows (five_hour / seven_day reset instants).
+                from . import rate_limit_windows as _rlw  # noqa: PLC0415
+                _rlw.record(sess.tenant_id, evt)
             elif etype == "assistant":
                 # Stream-json assistant event — extract text deltas.
                 msg = evt.get("message") or {}
@@ -8410,6 +8444,23 @@ async def _stream_turn_impl(
                "text": (result_text + "\n\n" + _ann_suffix) if _ann_suffix else result_text,
                "usage": last_usage,
                "annotation_pending": False}
+
+    # What actually served this turn: the model the CLI confirmed in its `init`
+    # event and the raw `usage` of its `result` event. Nothing is estimated —
+    # a turn without a usage object reports None and the UI says "unknown".
+    # A field the CLI did not report stays None: a 0 here would read as a measured
+    # zero in the UI, which is an estimate by another name.
+    def _raw_count(key: str) -> int | None:
+        v = last_usage.get(key)
+        return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    yield {"type": "turn_usage", "model": _turn_model_confirmed or None,
+           "usage": ({
+               "input_tokens": _raw_count("input_tokens"),
+               "output_tokens": _raw_count("output_tokens"),
+               "cache_read_input_tokens": _raw_count("cache_read_input_tokens"),
+               "cache_creation_input_tokens": _raw_count("cache_creation_input_tokens"),
+           } if last_usage else None)}
 
     touch(sess, increment_turn=True)
 

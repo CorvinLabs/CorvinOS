@@ -10,6 +10,7 @@
  * (for TTS and title side-effects). They never manage the WS lifecycle.
  */
 
+import { parseTurnUsage, type TurnUsage } from "@/lib/turn-usage";
 import { useSyncExternalStore } from "react";
 import { emitCCCEvent } from "./ccc-bus";
 import { getBool, PREF_KEYS } from "./preferences";
@@ -82,6 +83,11 @@ export interface ChatMessage {
   engine?: string;
   /** Human-readable engine label for the badge. */
   engineLabel?: string;
+  /** Model + token usage the engine reported for this turn (`turn_usage` event).
+   *  Live-only like `engine`; `null` = the engine reported none ("unknown"). */
+  turnModel?: string | null;
+  turnUsage?: TurnUsage | null;
+  turnUsageSeen?: boolean;
   /** ADR-0214: TDE turn correlation id ("tde-<epoch>-<hex>"), stamped from
    *  the `engine` stream event when this turn ran through the Tiered
    *  Delegation Engine. Lets the Audit panel's TDE Graph tab find the
@@ -110,7 +116,9 @@ export interface StreamEvent {
         "pong" | "session_title" | "artifact" | "ccc_action" | "voice" | "engine" |
         "engine_progress" | "notice" | "language" | "bg_status" | "tool_diff" |
         "turn_started" | "turn_attach" | "turn_resync" |
-        "btw_flushed" | "btw_undelivered" | "btw_window_closed";
+        "btw_flushed" | "btw_undelivered" | "btw_window_closed" | "turn_usage";
+  /** `turn_usage`: confirmed model id (null if unknown). */
+  model?: string | null;
   /** `btw_flushed` / `btw_undelivered`: the steering note's client id. */
   client_id?: string;
   /** `done` only: the turn was stopped (e.g. from another tab), not finished. */
@@ -574,6 +582,19 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
         ageS: Math.max(0, Number(c.age_s ?? 0)),
       }));
       entry.bgChildrenAt = Date.now();
+      return;
+    }
+
+    case "turn_usage": {
+      const aid = entry.currentAssistantId;
+      if (aid) {
+        const usage = parseTurnUsage(evt.usage);
+        entry.messages = entry.messages.map((m) =>
+          m.id === aid
+            ? { ...m, turnModel: evt.model ?? null, turnUsage: usage, turnUsageSeen: true }
+            : m
+        );
+      }
       return;
     }
 

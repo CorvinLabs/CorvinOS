@@ -58,6 +58,7 @@ import {
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { cn, formatDate } from "@/lib/utils";
+import { formatTurnUsage } from "@/lib/turn-usage";
 import {
   PREF_KEYS,
   setString as setPref,
@@ -2417,7 +2418,9 @@ const MessageBubble = React.memo(function MessageBubble({
             <p className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground">
               <Cpu className="h-3 w-3" aria-hidden />
               <span>
-                Engine: {AGENTIC_ENGINE_LABELS[m.engine] ?? m.engineLabel ?? m.engine}
+                {m.engine === "claude_code" && m.turnUsageSeen
+                  ? formatTurnUsage(m.turnModel, m.turnUsage)
+                  : `Engine: ${AGENTIC_ENGINE_LABELS[m.engine] ?? m.engineLabel ?? m.engine}`}
               </span>
             </p>
           )
