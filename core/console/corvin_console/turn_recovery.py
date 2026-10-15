@@ -242,27 +242,43 @@ def _audit_failure_class(cand: Candidate, *, source: str) -> None:
         logger.error("turn-recovery failure-class audit not written: %s", exc)
 
 
+def _notify(cand: Candidate, kind: str, attempt: int) -> None:
+    """Tell the user in the chat (PLAN-0958 P2). Never raises."""
+    try:
+        from . import chat_runtime, task_notices
+        sess = chat_runtime.get_session(cand.tenant_id, cand.sid)
+        if sess is not None and sess.workdir is not None:
+            task_notices.emit(sess, kind, task_id=cand.task_id, failure_class=cand.failure_class,
+                              instruction=cand.instruction, attempt=attempt, max_attempts=MAX_ATTEMPTS)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("turn-recovery notice %s not sent: %s", kind, type(exc).__name__)
+
+
 async def recover_candidate(cand: Candidate) -> str:
-    """Re-run until it yields output or the attempt budget is spent. Returns the outcome."""
+    """Re-run until it yields output or the attempt budget is spent. Returns the outcome.
+    The user gets one notice per step: resuming (before each attempt), recovered, or gave up."""
     from . import chat_runtime
     sess = chat_runtime.get_session(cand.tenant_id, cand.sid)
     if sess is None or sess.workdir is None:
         return "gone"
     tasks_dir = Path(sess.workdir) / "tasks"
-    _audit_failure_class(cand, source="console")
     while _attempts(tasks_dir).get(cand.key, 0) < MAX_ATTEMPTS:
         n = _bump(tasks_dir, cand.key)
         logger.info("turn-recovery: re-running interrupted turn %s (chat %s, attempt %d/%d)",
                     cand.task_id, cand.sid, n, MAX_ATTEMPTS)
         _audit(cand, ok=True, action="chat.turn.recovery_started")
+        _audit_failure_class(cand, source="console")
+        _notify(cand, "interrupted_resuming", n)
         try:
             if await _run_once(cand):
+                _notify(cand, "recovered", n)
                 return "recovered"
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - one chat must not stop the others
             logger.warning("turn-recovery: attempt %d for %s failed: %s", n, cand.sid, type(exc).__name__)
     _audit(cand, ok=False, action="chat.turn.recovery_exhausted", reason="no_output_after_retries")
+    _notify(cand, "gave_up", MAX_ATTEMPTS)
     logger.warning("turn-recovery: chat %s gave no output after %d attempts - giving up", cand.sid, MAX_ATTEMPTS)
     return "exhausted"
 

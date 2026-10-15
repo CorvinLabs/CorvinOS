@@ -4323,8 +4323,13 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
                  gate_refused: str | None = None, cli_spawned: bool = False,
                  btw: bool = False, btw_status: str | None = None,
                  btw_via: str | None = None, btw_client_id: str | None = None,
-                 btw_gated: bool = False, btw_reason: str | None = None) -> None:
+                 btw_gated: bool = False, btw_reason: str | None = None,
+                 notice: str | None = None) -> None:
     """Append one turn (user or assistant) to the session's turns log.
+
+    ``notice`` (PLAN-0958 P2): the kind of a system notice (interruption / resume / ending,
+    ``task_notices.py``). A notice is UI record only - ``session_ledger`` skips it, a worker
+    is never handed it.
 
     ``voice_key_hint`` (ADR-0194 Phase 1) pins the voice_key of the text this
     turn will actually be SPOKEN as, which is not always derivable from the
@@ -4379,6 +4384,8 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
         # never reached them).
         if btw_gated:
             payload["btw_gated"] = True
+    if notice:
+        payload["notice"] = notice
     if gate_refused:
         # A pre-spawn gate answered: the session ledger re-supplies this turn
         # with the user's text WITHHELD, never past the gate (ADR-2102).

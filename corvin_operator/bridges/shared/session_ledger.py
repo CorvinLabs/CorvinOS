@@ -1053,6 +1053,10 @@ def records_from_turn_log(turns: list[dict[str, Any]],
 
     for t in turns:
         role = t.get("role")
+        if t.get("notice"):
+            # PLAN-0958 P2: a system notice (interruption / resume / ending) is the UI's record of
+            # what the system did, not a turn of the conversation - never re-supplied to a worker.
+            continue
         if role == "user" and t.get("btw"):
             # A /btw note sent while a turn streamed (console) gets the
             # bridge's shape: its own "/btw …" record, never spawned, placed

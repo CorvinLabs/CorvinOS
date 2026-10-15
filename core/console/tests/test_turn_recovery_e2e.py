@@ -113,6 +113,54 @@ class TurnRecoveryE2E(unittest.TestCase):
             self.assertEqual(self.tr.find_interrupted("_default"), [])
         asyncio.run(go())
 
+    def test_user_is_told_in_the_chat_and_can_read_the_timeline(self):
+        """PLAN-0958 P2: one persisted notice per step, no ids, kept out of the worker's history,
+        and the per-task timeline route returns the same story over HTTP."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from corvin_console import deps as console_deps
+        from corvin_console.routes import chat as chat_route
+        from test_update_button_e2e import _fake_record
+        import session_ledger  # type: ignore
+
+        async def go():
+            await self._interrupted_turn("write the quarterly report for the board")
+            failed = self._tasks()[-1]
+            self.tr.note_shutdown("_default")
+            os.environ.update(kit.fake_env(self.home, "bash_bg_ok", speedup=4.0))
+            self.assertEqual(await self.tr.recover_all("_default", delay_s=0), [(self.sess.sid, "recovered")])
+            return failed
+        failed = asyncio.run(go())
+
+        notices = [t for t in self.cr.read_turns("_default", self.sess.sid) if t.get("notice")]
+        self.assertEqual([t["notice"] for t in notices], ["interrupted_resuming", "recovered"])
+        text = notices[0]["parts"][0]["text"]
+        self.assertIn("service restart", text)
+        self.assertIn("attempt 1 of 2", text)
+        self.assertIn("1 left", text)
+        self.assertIn("write the quarterly report", text)           # the user's own words as the label
+        import re
+        self.assertIsNone(re.search(r"[0-9a-f]{8}-[0-9a-f]{4}|\\d{10,}", " ".join(
+            t["parts"][0]["text"] for t in notices)), "a notice carried an id-shaped token")
+        # the worker's view of the chat never contains a notice
+        recs = session_ledger.records_from_turn_log(self.cr.read_turns("_default", self.sess.sid))
+        self.assertFalse([r for r in recs if "Your task '" in (r.get("assistant") or "") + (r.get("user") or "")])
+        self.assertTrue(recs, "control: the ledger view must still contain the real turns")
+
+        chat_route.chat_runtime = self.cr
+        app = FastAPI()
+        app.include_router(chat_route.router)
+        rec = _fake_record()
+        app.dependency_overrides[console_deps.require_session] = lambda: rec
+        app.dependency_overrides[console_deps.require_csrf] = lambda: rec
+        with TestClient(app) as c:
+            r = c.get(f"/chat/sessions/{self.sess.sid}/tasks/{failed['task_id']}/timeline")
+            self.assertEqual(r.status_code, 200, r.text)
+            rows = r.json()["rows"]
+            self.assertIn("interrupted_resuming", [x["kind"] for x in rows])
+            self.assertEqual(rows[0]["state"], "pending")
+            self.assertEqual(c.get(f"/chat/sessions/{self.sess.sid}/tasks/nope/timeline").status_code, 404)
+
     def test_a_reaped_orphan_is_rerun_too(self):
         """PLAN-0958 P1 made the boot reaper write ``interrupted`` (no ended_at, not ``failed``).
         The 14:03 task of 2026-10-15 stayed interrupted forever because recovery only looked

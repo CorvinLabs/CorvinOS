@@ -1176,6 +1176,28 @@ async def stream_task_events(
         },
     )
 
+@router.get("/chat/sessions/{sid}/tasks/{task_id}/timeline")
+def get_session_task_timeline(
+    sid: str,
+    task_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """What happened to this task, in order: transitions and the notices the user was sent
+    (PLAN-0958 P2). A read model of the task's event log; tenant comes from the session."""
+    from .. import task_timeline
+    sess = chat_runtime.get_session(rec.tenant_id, sid)
+    if sess is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "session not found")
+    tm = tm_module.TaskManager(sess.workdir / "tasks")
+    task = tm.get_task(task_id)
+    if task is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "task not found")
+    if task.chat_key != sess.chat_key:
+        raise HTTPException(http_status.HTTP_403_FORBIDDEN, "task not in this session")
+    return {"ok": True, "task_id": task_id, "status": task.status.value if task.status else None,
+            "rows": task_timeline.timeline(tm, task_id)}
+
+
 @router.delete("/chat/sessions/{sid}/tasks/{task_id}")
 def cancel_session_task(
     sid: str,

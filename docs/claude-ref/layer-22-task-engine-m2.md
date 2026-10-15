@@ -440,6 +440,20 @@ inside the shutdown window and are never re-run. Prevention is still `scripts/sa
 Proof: `core/console/tests/test_turn_recovery_e2e.py` (real `stream_turn`, real SIGTERM to the
 fake CLI, both host lifespans).
 
+**The user is told, and can read it back (PLAN-0958 P2).** Each step of a recovery emits one
+notice (`core/console/corvin_console/task_notices.py`): `interrupted_resuming` before every
+attempt, `recovered` when it produced an answer, `gave_up` after the last attempt. A notice
+is a fixed EN/DE template with a closed field set (task label = the user's own first 60
+characters with id-shaped tokens scrubbed, class label, attempt, remaining attempts); a text that
+still carries an id-shaped token fails closed. It is appended to the chat's `turns.jsonl` as an
+assistant turn flagged `notice` (survives reload; `session_ledger.records_from_turn_log` skips it,
+so a worker never reads its own bookkeeping) and to the task's event log as `task.notice`
+(`task.notice_sent` on the audit chain: kind and channel only). `GET
+/v1/console/chat/sessions/{sid}/tasks/{task_id}/timeline` returns the read model
+(`task_timeline.py`): one row per transition or notice, folded from the event log, never a second
+writer. A dedicated timeline panel in the SPA is NOT built yet; the notices appear in the chat.
+Proof: `core/console/tests/test_turn_recovery_e2e.py::test_user_is_told_in_the_chat_and_can_read_the_timeline`.
+
 **EVERY host reaps, not just the bridge (2026-09-21).** Until this date the sweep
 had exactly one caller — `adapter.py`'s boot — so an install that never started a
 messenger bridge never reaped at all. On a console-only install that is not a slow

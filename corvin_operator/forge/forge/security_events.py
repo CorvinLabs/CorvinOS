@@ -1123,6 +1123,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "task.failed":                      "WARNING",
     # PLAN-0958 P1: a task whose process died without a terminal event (resumable, not terminal)
     "task.interrupted":                 "WARNING",
+    # PLAN-0958 P2: the user was told about an interruption / resume / ending (kind + channel only)
+    "task.notice_sent":                 "INFO",
     # Task supervision + retry classification (ADR-2107, task_supervisor.py)
     "task.retry_classified":            "INFO",
     # Background-child scope (ADR-2236, bridges/shared/bg_scope.py)
@@ -4351,6 +4353,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "task.completed": frozenset({"task_id", "duration_ms", "exit_code", "tenant_id"}),
     "task.failed": frozenset({"task_id", "exit_code", "timed_out", "tenant_id"}),
     "task.interrupted": frozenset({"task_id", "exit_code", "tenant_id"}),
+    "task.notice_sent": frozenset({"task_id", "notice_kind", "channel", "tenant_id"}),
     "task.retry_classified": frozenset({
         "task_id", "attempt", "failure_class", "reason_code", "next_attempt_in_s", "tenant_id",
     }),
