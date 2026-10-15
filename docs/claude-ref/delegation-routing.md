@@ -395,7 +395,35 @@ without a subprocess) and applies `_is_session_internal()` plus the
 `_MAX_TURN_ARTIFACTS` cap. Regression tests:
 `core/console/tests/test_turn_artifact_scan.py`.
 
-## 8. TDE inline badge (chat UI, ADR-0214/0216)
+## 7b. Delegated-turn artifacts over the real WS and HTTP boundary (ADR-0114 M2.1)
+
+A delegated (ACS) web-chat turn registers the files its run wrote in two places:
+the live poll during the run (`_new_live_artifacts`, two stable sightings, label
+`live`) and a post-run scan of the ACS run directory, only for runs that end
+`success` or `budget_exhausted` (`ok or bounded_stop`). Both emit `artifact`
+events on the chat WebSocket before `done` and persist `artifact` parts on the
+turn, so `GET /chat/sessions/{sid}/turns` shows them after a reload.
+
+ACS's own acceptance index `output/FINAL/manifest.json` (written on every
+accepted run) is bookkeeping and is excluded by `_ACS_SKIP_RUN_FILES` in both
+scans. Before that, every delegated turn showed a `manifest.json` chip next to the
+real report. The skip is path-exact, not name-based, so a user file named
+`manifest.json` elsewhere still registers.
+
+Known deviations from the ADR-0114 text, not yet changed:
+- The ADR names `res.run_dir/output` as the scan root. The code scans the whole
+  run directory minus `_ACS_SKIP_DIRS` and the root bookkeeping files, so a
+  deliverable written outside `output/` still registers. Narrowing it would drop
+  such files; that needs an explicit decision.
+- The post-run scan skips non-`ok` runs (`status` other than `success` /
+  `budget_exhausted`). A file that is written and never seen as stable by the live
+  poll is therefore lost in a failed run. The live poll does not check run status,
+  so it covers the cases tested so far.
+
+Regression tests (HTTP/WS boundary, real `stream_turn` and `ACSRuntime`, only the
+model calls faked): `core/console/tests/test_m2_1_artifact_registration_e2e.py`.
+
+## 8. TDE inline badge (chat UI, ADR-0214/0216) (chat UI, ADR-0214/0216)
 
 For an assistant turn where `engine === "tiered_delegation"` AND the turn
 carries step data (`tdeProgress` present, `total_steps > 0`), the per-turn

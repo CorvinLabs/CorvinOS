@@ -3442,6 +3442,10 @@ _ACS_SKIP_DIRS = frozenset({
     "traces", "iterations", "workers", "gate_results", "subtasks",
 })
 _ACS_SKIP_ROOT_FILES = frozenset({"manifest.json", "result.json"})
+# ACS's own acceptance index (written under output/FINAL on every accepted run,
+# corvin_operator acs_runtime). Bookkeeping, not a deliverable: surfacing it made
+# every delegated turn show a "manifest.json" chip next to the real report.
+_ACS_SKIP_RUN_FILES = frozenset({("output", "FINAL", "manifest.json")})
 
 # ── Internal session bookkeeping — never a user-facing chat artifact ──────────
 # Session-workdir top-level trees the runtime writes for ITSELF. The direct
@@ -7379,6 +7383,8 @@ async def _stream_turn_impl(
                         continue
                     if _rel_parts and _rel_parts[0] in _ACS_SKIP_DIRS:
                         continue
+                    if _rel_parts in _ACS_SKIP_RUN_FILES:
+                        continue
                     if _fp.parent == run_dir and _fp.name in _ACS_SKIP_ROOT_FILES:
                         continue
                     _key = str(_fp)
@@ -7666,6 +7672,8 @@ async def _stream_turn_impl(
                     except ValueError:
                         continue
                     if _parts and _parts[0] in _ACS_SKIP_DIRS:
+                        continue
+                    if _parts in _ACS_SKIP_RUN_FILES:
                         continue
                     if _fpath.parent == _scan_root and _fpath.name in _ACS_SKIP_ROOT_FILES:
                         continue
