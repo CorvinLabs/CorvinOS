@@ -32,6 +32,8 @@ import {
   getEngineConfig, getProviderModels, setEngineConfig, setOsEngineSetting,
   type TaskType,
 } from "@/lib/api/engines";
+import { getCostOptimize } from "@/lib/api/settings";
+import { toPercent } from "@/lib/cost-optimize";
 import { ClaudeSourceLine, TaskTypeCard, fmtInt, useAuthLabel, useClaudeModels, useProviders }
   from "../components/engine-parts";
 import { ENGINE_SETTING_KEY, pinsOf, useOsEngineSetting } from "../hooks/use-pins";
@@ -170,6 +172,12 @@ export function RoutingTab({
     queryFn: ({ signal }) => getEngineConfig(signal),
     staleTime: 5_000,
     refetchInterval: active ? 30_000 : false,
+  });
+  const costOptimizeQ = useQuery({
+    queryKey: ["cost-optimize"],
+    queryFn: ({ signal }) => getCostOptimize(signal),
+    staleTime: 30_000,
+    refetchInterval: active ? 60_000 : false,
   });
   const saveOverride = useMutation({
     mutationFn: (args: { taskType: TaskType; selected_model: string; provider: string | null }) =>
@@ -358,6 +366,25 @@ export function RoutingTab({
                 />
               ))}
             </div>
+            {costOptimizeQ.data && costOptimizeQ.data.tier === "free" && costOptimizeQ.data.state.capped && (
+              <div className="border-l-4 border-amber-500 bg-amber-50 dark:bg-amber-950 p-4 rounded">
+                <p className="text-sm font-medium text-amber-900 dark:text-amber-100 mb-2">
+                  Automatic model saving paused — {toPercent(costOptimizeQ.data.ceiling.ratio)}% budget reached
+                </p>
+                <p className="text-xs text-amber-800 dark:text-amber-200 mb-3">
+                  Simple, Medium and Complex turns run on the default model until the month resets.
+                  Pinned models above keep working. A Member licence removes this limit.
+                </p>
+                <a href="/app/license" className="text-xs font-medium text-amber-700 dark:text-amber-300 hover:underline">
+                  Upgrade to Member →
+                </a>
+              </div>
+            )}
+            {costOptimizeQ.data && costOptimizeQ.data.tier === "free" && !costOptimizeQ.data.state.capped && costOptimizeQ.data.measured?.ratio != null && (
+              <p className="text-xs text-blue-800 dark:text-blue-200">
+                Automatic saving this month: {Math.round(costOptimizeQ.data.measured.ratio * 100)}% of {toPercent(costOptimizeQ.data.ceiling.ratio)}% allowance.
+              </p>
+            )}
             {saveOverride.isError && (
               <p className="text-xs text-destructive">
                 {saveOverride.error instanceof ApiError && saveOverride.error.status === 503

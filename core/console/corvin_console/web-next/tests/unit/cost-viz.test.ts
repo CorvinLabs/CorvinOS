@@ -23,6 +23,10 @@ import {
   toModelRows,
   savingLabel,
   sharedDomainMax,
+  periodKey,
+  aggregateCostPeriods,
+  quotaWindowRows,
+  untilLabel,
 } from '@/panels/cost-viz';
 
 describe('shortModel', () => {
@@ -146,10 +150,12 @@ describe('toModelRows', () => {
     expect(savingLabel(rows[0].savedPct)).toBe('+100% costlier');
   });
 
-  it('reports no saving rather than dividing by zero on a $0 baseline', () => {
+  it('reports a gap, not a zero saving, on a $0 baseline', () => {
+    // A $0 baseline means nothing was priced. 0 would read as "reference"
+    // (no saving) on the chart — a measured-looking claim with no measurement.
     const rows = toModelRows({ x: { actual_usd: 0, baseline_usd: 0, turns: 1 } });
-    expect(rows[0].savedPct).toBe(0);
-    expect(Number.isFinite(rows[0].savedPct)).toBe(true);
+    expect(rows[0].savedPct).toBeNull();
+    expect(savingLabel(rows[0].savedPct)).toBe('no baseline');
   });
 
   it('is empty for an absent map, never throws', () => {
@@ -182,5 +188,75 @@ describe('sharedDomainMax — the small-multiples trap', () => {
     expect(sharedDomainMax([])).toBeGreaterThan(0);
     expect(sharedDomainMax(toModelRows({ a: { actual_usd: 0, baseline_usd: 0, turns: 1 } })))
       .toBeGreaterThan(0);
+  });
+});
+
+describe('aggregateCostPeriods — weekly / monthly fold of the daily series', () => {
+  const day = (date: string, os: number | null, acs: number | null = null) => ({
+    date,
+    actual_usd: os, baseline_usd: os === null ? null : os * 5,
+    counted_turns: os === null ? 0 : 2, total_turns: 3,
+    acs_actual_usd: acs, acs_baseline_usd: acs === null ? null : acs * 5,
+    acs_counted_turns: acs === null ? 0 : 1, acs_total_turns: acs === null ? 0 : 1,
+  });
+  const days = [
+    day('2026-09-30', 1), day('2026-10-02', null), day('2026-10-04', 2, 4), // Wed, Fri, SUNDAY
+    day('2026-10-05', 3), day('2026-10-06', 4),                             // Mon, Tue
+  ];
+
+  it('starts weeks on Monday — a Sunday belongs to the week BEFORE', () => {
+    expect(periodKey('2026-10-04', 'week')).toBe('2026-09-28');
+    expect(periodKey('2026-10-05', 'week')).toBe('2026-10-05');
+    expect(periodKey('2026-10-05', 'month')).toBe('2026-10');
+  });
+
+  it('sums priced days, keeps a never-priced series null, and sums the counts', () => {
+    const w = aggregateCostPeriods(days, 'week');
+    expect(w.map((p) => p.date)).toEqual(['2026-09-28', '2026-10-05']);
+    expect(w[0].actual_usd).toBe(3);            // 1 + (gap) + 2
+    expect(w[0].baseline_usd).toBe(15);
+    expect(w[0].counted_turns).toBe(4);         // 2 + 0 + 2
+    expect(w[0].total_turns).toBe(9);           // the gap day still counts as recorded
+    expect(w[0].acs_actual_usd).toBe(4);
+    expect(w[1].acs_actual_usd).toBeNull();     // no priced worker run that week: gap, not $0
+    expect(w[1].acs_total_turns).toBe(0);
+  });
+
+  it('folds by calendar month and leaves the daily series untouched', () => {
+    const m = aggregateCostPeriods(days, 'month');
+    expect(m.map((p) => p.date)).toEqual(['2026-09', '2026-10']);
+    expect(m[1].actual_usd).toBe(9);
+    expect(aggregateCostPeriods(days, 'day')).toBe(days);
+  });
+});
+
+describe('quotaWindowRows — provider reset times', () => {
+  const now = Date.parse('2026-10-13T12:00:00Z');
+  const sec = (iso: string) => Date.parse(iso) / 1000;
+
+  it('sorts by next reset and labels the known windows', () => {
+    const rows = quotaWindowRows({
+      seven_day: { utilization: 0.16, resets_at: sec('2026-10-15T04:00:00Z') },
+      five_hour: { utilization: 0.08, resets_at: sec('2026-10-13T15:00:00Z') },
+    }, now);
+    expect(rows.map((r) => r.label)).toEqual(['5-hour window', '7-day window']);
+    expect(rows[0].usedPct).toBe(8);
+  });
+
+  it('drops the utilisation of a window that has already reset, keeps the row', () => {
+    const [r] = quotaWindowRows({ five_hour: { utilization: 0.9, resets_at: sec('2026-10-13T10:00:00Z') } }, now);
+    expect(r.passed).toBe(true);
+    expect(r.usedPct).toBeNull();
+  });
+
+  it('returns nothing rather than inventing a window', () => {
+    expect(quotaWindowRows(undefined, now)).toEqual([]);
+    expect(quotaWindowRows({ x: { utilization: null, resets_at: NaN } }, now)).toEqual([]);
+  });
+
+  it('formats the time until a reset', () => {
+    expect(untilLabel(sec('2026-10-15T10:00:00Z'), now)).toBe('in 1d 22h');
+    expect(untilLabel(sec('2026-10-13T15:05:00Z'), now)).toBe('in 3h 5m');
+    expect(untilLabel(sec('2026-10-13T12:12:00Z'), now)).toBe('in 12m');
   });
 });

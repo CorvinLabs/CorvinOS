@@ -70,12 +70,14 @@ export const usd = (n: number): string => `$${n.toFixed(n < 1 ? 4 : 2)}`;
  * the install as the neutral baseline. The floating bar has a positive length
  * either way, so only the sign says which side of the reference it sits on.
  */
-export const savingLabel = (savedPct: number): string =>
-  savedPct > 0.05
-    ? `−${savedPct.toFixed(0)}%`
-    : savedPct < -0.05
-      ? `+${Math.abs(savedPct).toFixed(0)}% costlier`
-      : 'reference';
+export const savingLabel = (savedPct: number | null): string =>
+  savedPct === null
+    ? 'no baseline'
+    : savedPct > 0.05
+      ? `−${savedPct.toFixed(0)}%`
+      : savedPct < -0.05
+        ? `+${Math.abs(savedPct).toFixed(0)}% costlier`
+        : 'reference';
 
 export interface ModelCostRow {
   model: string;
@@ -90,7 +92,8 @@ export interface ModelCostRow {
    */
   lo: number;
   span: number;
-  savedPct: number;
+  /** `null` when the baseline is $0 — a gap, never a zero saving. */
+  savedPct: number | null;
   turns: number;
   tier: number;
 }
@@ -110,8 +113,9 @@ export function toModelRows(costs: ModelCostMap | undefined): ModelCostRow[] {
       lo: Math.min(v.actual_usd, v.baseline_usd),
       span: Math.abs(v.baseline_usd - v.actual_usd),
       // A $0 baseline means nothing was measured, not that everything was
-      // saved. Reporting 0 keeps the row on the chart and off the headline.
-      savedPct: v.baseline_usd > 0 ? (1 - v.actual_usd / v.baseline_usd) * 100 : 0,
+      // saved, and not that the row is the reference. A gap (null), so the
+      // label reads "no baseline" instead of a claim.
+      savedPct: v.baseline_usd > 0 ? (1 - v.actual_usd / v.baseline_usd) * 100 : null,
       turns: v.turns,
       tier: tierOf(model),
     }))
@@ -185,6 +189,55 @@ export function dailyDomainMax(points: DailyPoint[], keys: string[], headroom = 
   return Math.max(peak, 0.0001) * headroom;
 }
 
+/** Resolution of the daily-trend chart. Weeks start on Monday (ISO 8601) and
+ *  months are calendar months — both in UTC, matching the route's day buckets. */
+export type TrendGranularity = 'day' | 'week' | 'month';
+
+/** Bucket label for one `YYYY-MM-DD` day: itself, the Monday of its week, or
+ *  `YYYY-MM`. */
+export function periodKey(date: string, g: TrendGranularity): string {
+  if (g === 'day') return date;
+  if (g === 'month') return date.slice(0, 7);
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+}
+
+const COST_COLS = ['actual_usd', 'baseline_usd', 'acs_actual_usd', 'acs_baseline_usd'] as const;
+const COUNT_COLS = ['counted_turns', 'total_turns', 'acs_counted_turns', 'acs_total_turns'] as const;
+
+/**
+ * Fold the daily series into weeks or months from the SAME rows the daily
+ * chart draws — nothing is re-queried. Per series a dollar column sums its
+ * PRICED days only and stays `null` when the period has none (a gap is not
+ * $0); the turn counts always sum, so `counted/total` in the tooltip says how
+ * much of the period the dollars rest on. The newest period is usually still
+ * running, so its total is smaller than a full one.
+ */
+export function aggregateCostPeriods<T extends DailyPoint>(points: T[], g: TrendGranularity): T[] {
+  if (g === 'day') return points;
+  const buckets = new Map<string, Record<string, unknown>>();
+  for (const p of [...points].sort((a, b) => a.date.localeCompare(b.date))) {
+    const key = periodKey(p.date, g);
+    let b = buckets.get(key);
+    if (!b) {
+      b = { date: key };
+      for (const c of COST_COLS) b[c] = null;
+      for (const c of COUNT_COLS) b[c] = 0;
+      buckets.set(key, b);
+    }
+    for (const c of COST_COLS) {
+      const v = col(p, c);
+      if (isPriced(v)) b[c] = (isPriced(b[c]) ? (b[c] as number) : 0) + v;
+    }
+    for (const c of COUNT_COLS) {
+      const v = col(p, c);
+      if (isPriced(v)) b[c] = (b[c] as number) + v;
+    }
+  }
+  return [...buckets.values()] as unknown as T[];
+}
+
 /** Why a day has no mark in a facet — rendered in its tooltip, never as $0. */
 export function dayGapNote(counted: number, total: number, noun = 'run'): string | null {
   if (counted > 0) return null;
@@ -231,4 +284,59 @@ export function fillActivityDays(days: ActivityDay[], endDate: string): Activity
     cur.setUTCDate(cur.getUTCDate() + 1);
   }
   return out;
+}
+
+/** One provider quota window, ready to render. */
+export interface QuotaWindowRow {
+  key: string;
+  label: string;
+  /** Unix seconds of the next reset, as the provider reported it. */
+  resetsAt: number;
+  /** The reported reset is already behind us: the window rolled over after the
+   *  last observation and nothing says what its utilisation is now. */
+  passed: boolean;
+  /** 0..100, from the last observation; null when the event carried none. */
+  usedPct: number | null;
+}
+
+const QUOTA_LABEL: Record<string, string> = {
+  five_hour: '5-hour window',
+  seven_day: '7-day window',
+};
+
+/**
+ * Rows for the provider quota windows, soonest reset first. A window whose
+ * reset has passed keeps its row but loses its utilisation — the old figure
+ * describes a window that no longer exists, and showing it would read as
+ * current.
+ */
+export function quotaWindowRows(
+  windows: Record<string, { utilization: number | null; resets_at: number }> | undefined,
+  nowMs: number,
+): QuotaWindowRow[] {
+  if (!windows) return [];
+  return Object.entries(windows)
+    .filter(([, w]) => isPriced(w?.resets_at) && w.resets_at > 0)
+    .map(([key, w]) => {
+      const passed = w.resets_at * 1000 <= nowMs;
+      return {
+        key,
+        label: QUOTA_LABEL[key] ?? key.replace(/_/g, ' '),
+        resetsAt: w.resets_at,
+        passed,
+        usedPct: !passed && isPriced(w.utilization) ? Math.round(w.utilization * 100) : null,
+      };
+    })
+    .sort((a, b) => a.resetsAt - b.resetsAt);
+}
+
+/** "in 1d 22h" / "in 3h 5m" / "in 12m" for a future instant. */
+export function untilLabel(resetsAtSec: number, nowMs: number): string {
+  const mins = Math.max(0, Math.round((resetsAtSec * 1000 - nowMs) / 60000));
+  const d = Math.floor(mins / 1440);
+  const h = Math.floor((mins % 1440) / 60);
+  const m = mins % 60;
+  if (d > 0) return `in ${d}d ${h}h`;
+  if (h > 0) return `in ${h}h ${m}m`;
+  return `in ${m}m`;
 }

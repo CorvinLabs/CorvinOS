@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import {
   TIER_VAR, usd, savingLabel,
-  dailyFacetShape, dayGapNote, fillActivityDays,
+  dailyFacetShape, dayGapNote, fillActivityDays, type TrendGranularity,
   type ActivityDay, type ActivityBar, type ModelCostRow,
 } from '@/panels/cost-viz';
 
@@ -71,6 +71,13 @@ export interface DashboardStatus {
   cost_current_usd: number;
   cost_data_available: boolean;
   cost_history: CostDayPoint[];
+  /** Last provider quota windows seen in the Claude CLI stream; `{}` until a
+   *  chat turn has run. Times are unix seconds. */
+  rate_limit_windows?: {
+    observed_at?: number;
+    status?: string | null;
+    windows?: Record<string, { utilization: number | null; resets_at: number }>;
+  };
   cost_model_mix: Record<string, number>;
   cost_os_model_pin: string | null;
   acs_cost_actual_usd: number;
@@ -206,10 +213,12 @@ export const ModelCostTooltip = ({ active, payload }: { active?: boolean; payloa
       </div>
       <div className="flex justify-between gap-4 mt-1 pt-1 border-t border-border">
         <span className="text-muted-foreground">
-          {r.savedPct < -0.05 ? 'extra cost:' : 'saved:'}
+          {r.savedPct === null ? 'baseline:' : r.savedPct < -0.05 ? 'extra cost:' : 'saved:'}
         </span>
         <span className="font-mono tabular-nums">
-          {usd(Math.abs(r.baseline - r.actual))} ({Math.abs(r.savedPct).toFixed(1)} %)
+          {r.savedPct === null
+            ? 'not priced'
+            : `${usd(Math.abs(r.baseline - r.actual))} (${Math.abs(r.savedPct).toFixed(1)} %)`}
         </span>
       </div>
       <div className="text-muted-foreground mt-1">
@@ -278,13 +287,15 @@ export const DailySource: React.FC<{
   noun: 'turn' | 'run';
   /** Shared across both facets — see ModelCostChart.domainMax. */
   domainMax: number;
-}> = ({ data, prefix, color, title, noun, domainMax }) => {
+  /** What one row of `data` spans; wording only (the rows are pre-folded). */
+  unit?: TrendGranularity;
+}> = ({ data, prefix, color, title, noun, domainMax, unit = 'day' }) => {
   const actualKey = `${prefix}actual_usd`;
   const baselineKey = `${prefix}baseline_usd`;
   const shape = dailyFacetShape(data, actualKey);
   const tip = (
     <Tooltip
-      content={<DailyTooltip prefix={prefix} noun={noun} />}
+      content={<DailyTooltip prefix={prefix} noun={noun} unit={unit} />}
       cursor={{ fill: 'hsl(var(--muted) / 0.4)' }}
     />
   );
@@ -303,8 +314,8 @@ export const DailySource: React.FC<{
   );
   const coverage =
     shape.pricedDays === shape.totalDays
-      ? `priced on ${shape.totalDays === 1 ? 'the one day' : `all ${shape.totalDays} days`}`
-      : `priced on ${shape.pricedDays} of ${shape.totalDays} days — the others are gaps, not $0`;
+      ? `priced on ${shape.totalDays === 1 ? `the one ${unit}` : `all ${shape.totalDays} ${unit}s`}`
+      : `priced on ${shape.pricedDays} of ${shape.totalDays} ${unit}s — the others are gaps, not $0`;
   return (
     <div>
       <div className="flex items-baseline justify-between gap-3 flex-wrap mb-2">
@@ -350,9 +361,9 @@ export const DailySource: React.FC<{
 
 /** The daily tooltip reads the ROW, not the series payload: a null day has no
  *  series entry at all, and the reason for the gap lives in the counts. */
-export const DailyTooltip = ({ active, payload, prefix, noun }: {
+export const DailyTooltip = ({ active, payload, prefix, noun, unit = 'day' }: {
   active?: boolean; payload?: Array<{ payload: CostDayPoint }>;
-  prefix: '' | 'acs_'; noun: 'turn' | 'run';
+  prefix: '' | 'acs_'; noun: 'turn' | 'run'; unit?: TrendGranularity;
 }) => {
   if (!active || !payload?.length) return null;
   const r = payload[0]?.payload;
@@ -364,7 +375,9 @@ export const DailyTooltip = ({ active, payload, prefix, noun }: {
   const gap = dayGapNote(counted, total, noun);
   return (
     <div className="rounded-md border border-border bg-background p-3 text-xs shadow-md">
-      <div className="font-semibold mb-1">{r.date}</div>
+      <div className="font-semibold mb-1">
+        {unit === 'week' ? `Week of ${r.date}` : r.date}
+      </div>
       {gap ? (
         <div className="text-muted-foreground">{gap}</div>
       ) : (

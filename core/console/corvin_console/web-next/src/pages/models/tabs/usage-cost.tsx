@@ -7,13 +7,17 @@
  * (ADR-0761). "Models routed to" keeps its role dimension, and the audit-chain
  * Model Usage panel keeps its own, named denominators.
  */
+import { useState } from "react";
 import { AlertCircle, CheckCircle, DollarSign, Loader2, TrendingDown } from "lucide-react";
 import {
   Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { TIER_VAR, savingLabel, usd } from "@/panels/cost-viz";
+import {
+  TIER_VAR, aggregateCostPeriods, dailyDomainMax as dailyDomain, quotaWindowRows, savingLabel, untilLabel, usd,
+  type TrendGranularity,
+} from "@/panels/cost-viz";
 import { CoverageMeter, DailySource, ModelCostChart, WorkerActivityChart } from "../components/cost-charts";
 import { ModelUsagePanel } from "../components/engine-parts";
 import { useCostOptimizerStatus } from "../hooks/use-cost-status";
@@ -22,6 +26,7 @@ import { MIN_SAMPLES_FOR_ADVICE, deriveCost, modelMixLabel } from "../hooks/use-
 export function UsageCostTab() {
   const q = useCostOptimizerStatus(true);
   const status = q.data;
+  const [trendUnit, setTrendUnit] = useState<TrendGranularity>("day");
 
   if (q.isLoading && !status) {
     return <div className="py-16 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>;
@@ -37,6 +42,17 @@ export function UsageCostTab() {
   }
 
   const d = deriveCost(status);
+  // Week / month are folded from the same daily rows; the shared domain is
+  // recomputed over the folded values (a month dwarfs a day on the daily one).
+  const trend = aggregateCostPeriods(status.cost_history, trendUnit);
+  const trendDomainMax = trendUnit === "day"
+    ? d.dailyDomainMax
+    : dailyDomain(trend, ["actual_usd", "baseline_usd", "acs_actual_usd", "acs_baseline_usd"]);
+  const nowMs = Date.now();
+  const quota = quotaWindowRows(status.rate_limit_windows?.windows, nowMs);
+  const quotaObserved = status.rate_limit_windows?.observed_at;
+  const trendCount = trend.length;
+  const trendSingle = trendCount < 2;
   const since = status.window?.active && status.window.since_iso
     ? `since ${new Date(status.window.since_iso).toLocaleString("en-US")}`
     : "full history";
@@ -251,20 +267,57 @@ export function UsageCostTab() {
 
           <div>
             <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
-              <h3 className="text-sm font-semibold">{d.singleDay ? "Cost on the recorded day" : "Daily trend"}</h3>
-              <span className="text-xs text-muted-foreground">
-                {d.singleDay
-                  ? `${d.dayCount === 0 ? "No day" : "Only one day"} in this window — shown as bars, not as a trend`
-                  : `${d.dayCount} days`} · both axes share one scale · a day a source did not price is a gap, not $0
+              <h3 className="text-sm font-semibold">
+                {trendSingle
+                  ? `Cost on the recorded ${trendUnit}`
+                  : { day: "Daily trend", week: "Weekly trend", month: "Monthly trend" }[trendUnit]}
+              </h3>
+              <div role="group" aria-label="Trend resolution" className="inline-flex rounded-md border border-border overflow-hidden text-xs">
+                {(["day", "week", "month"] as const).map((u) => (
+                  <button key={u} type="button" aria-pressed={trendUnit === u}
+                          data-testid={`trend-unit-${u}`}
+                          onClick={() => setTrendUnit(u)}
+                          className={`px-2.5 py-1 ${trendUnit === u ? "bg-muted font-semibold" : "text-muted-foreground"}`}>
+                    {{ day: "Day", week: "Week", month: "Month" }[u]}
+                  </button>
+                ))}
+              </div>
+              <span className="text-xs text-muted-foreground" data-testid="trend-caption">
+                {trendSingle
+                  ? `${trendCount === 0 ? `No ${trendUnit}` : `Only one ${trendUnit}`} in this window — shown as bars, not as a trend`
+                  : `${trendCount} ${trendUnit}s`} · both axes share one scale · a {trendUnit} a source did not price is a gap, not $0
+                {trendUnit === "week" && " · weeks start Monday (UTC), the newest may be incomplete"}
+                {trendUnit === "month" && " · calendar months (UTC), the newest may be incomplete"}
               </span>
             </div>
-            {d.dayCount > 0 ? (
+            <div className="mb-2 text-xs text-muted-foreground" data-testid="quota-windows">
+              {quota.length === 0 ? (
+                <>Quota reset times: not observed yet — they are read from the Claude CLI and appear after the next chat turn.</>
+              ) : (
+                <>
+                  Quota windows (from the Claude CLI
+                  {quotaObserved ? `, last seen ${new Date(quotaObserved * 1000).toLocaleString("en-US")}` : ""}):
+                  <ul className="mt-1 space-y-0.5">
+                    {quota.map((w) => (
+                      <li key={w.key} data-testid={`quota-${w.key}`}>
+                        <span className="font-medium text-foreground">{w.label}</span>{" "}
+                        {w.passed
+                          ? <>reset at {new Date(w.resetsAt * 1000).toLocaleString("en-US", { timeZoneName: "short" })} has passed — usage unknown until the next chat turn</>
+                          : <>resets {new Date(w.resetsAt * 1000).toLocaleString("en-US", { timeZoneName: "short" })} ({untilLabel(w.resetsAt, nowMs)})
+                              {w.usedPct !== null && <> · {w.usedPct}% used when last seen</>}</>}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+            {trendCount > 0 ? (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-3">
-                <DailySource data={status.cost_history} prefix="" noun="turn"
-                             color="var(--viz-role-os)" title="OS turns" domainMax={d.dailyDomainMax} />
+                <DailySource data={trend} prefix="" noun="turn" unit={trendUnit}
+                             color="var(--viz-role-os)" title="OS turns" domainMax={trendDomainMax} />
                 {status.acs_data_available ? (
-                  <DailySource data={status.cost_history} prefix="acs_" noun="run"
-                               color="var(--viz-role-worker)" title="Worker runs" domainMax={d.dailyDomainMax} />
+                  <DailySource data={trend} prefix="acs_" noun="run" unit={trendUnit}
+                               color="var(--viz-role-worker)" title="Worker runs" domainMax={trendDomainMax} />
                 ) : (
                   <div className="py-10 text-center text-xs text-muted-foreground border border-dashed border-border rounded-lg">
                     {(status.acs_total_turns ?? 0) > 0 ? (
