@@ -81,6 +81,15 @@ class _StreamTurnE2EBase(unittest.TestCase):
             pass
         self.cr = chat_runtime
         self.sess = self.cr.create_session("_default")
+        # Hermetic: the sign-in guard probes ~/.claude/.credentials.json, which a
+        # sandboxed HOME does not have, so every turn was refused before the
+        # engine spawn (no OAuth session → "nicht angemeldet"). These tests pin
+        # ROUTING, not the sign-in guard (covered by its own tests), so the guard
+        # is neutralised for the whole harness.
+        _guard = patch.object(self.cr, "_engine_unavailable_message",
+                              return_value=None)
+        _guard.start()
+        self.addCleanup(_guard.stop)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
