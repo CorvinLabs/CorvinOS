@@ -524,8 +524,27 @@ describe("subscribeState", () => {
     subscribeState("s1", listener);
     connect("s1");
     sendMessage("s1", "test");
-    mockWs.emit({ type: "delta", text: "hi" });
+    mockWs.emit({ type: "result", text: "hi" });
     expect(listener.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("coalesces a burst of deltas into one wake-up but keeps the snapshot current", () => {
+    vi.useFakeTimers();
+    try {
+      connect("s1");
+      sendMessage("s1", "test");
+      const listener = vi.fn();
+      subscribeState("s1", listener);
+      for (let i = 0; i < 50; i++) mockWs.emit({ type: "delta", text: "x" });
+      // No subscriber woke yet, but a read already sees every token.
+      expect(listener).not.toHaveBeenCalled();
+      const last = getSessionState("s1").messages.at(-1)!;
+      expect(last.parts[0]).toMatchObject({ kind: "text", text: "x".repeat(50) });
+      vi.advanceTimersByTime(100);
+      expect(listener).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns an unsubscribe function that stops further calls", () => {

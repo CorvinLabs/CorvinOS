@@ -417,6 +417,12 @@ function makeSnapshot(entry: SessionEntry): SessionState {
 }
 
 function notifyState(sid: string) {
+  // Any other state change delivers right now and supersedes a pending delta tick.
+  const pending = _deltaNotifyTimers.get(sid);
+  if (pending) {
+    clearTimeout(pending);
+    _deltaNotifyTimers.delete(sid);
+  }
   const entry = sessions.get(sid);
   if (entry) {
     // Replace snapshot with a new object so Object.is detects the change.
@@ -424,6 +430,26 @@ function notifyState(sid: string) {
     _schedulePersist(sid);
   }
   stateListeners.get(sid)?.forEach((fn) => fn());
+}
+
+// Streamed text arrives token by token. Re-rendering the whole chat pane
+// (and re-parsing the growing message's markdown) for every token competes
+// with the composer's keystrokes for the main thread, so deltas update the
+// snapshot at once (a read in between sees the latest text) but wake the
+// subscribers at most once per DELTA_NOTIFY_MS.
+const DELTA_NOTIFY_MS = 40;
+const _deltaNotifyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function notifyDelta(sid: string) {
+  const entry = sessions.get(sid);
+  if (!entry) return;
+  snapshots.set(sid, makeSnapshot(entry));
+  _schedulePersist(sid);
+  if (_deltaNotifyTimers.has(sid)) return;
+  _deltaNotifyTimers.set(sid, setTimeout(() => {
+    _deltaNotifyTimers.delete(sid);
+    stateListeners.get(sid)?.forEach((fn) => fn());
+  }, DELTA_NOTIFY_MS));
 }
 
 function notifyEvent(sid: string, evt: StreamEvent) {
@@ -859,7 +885,8 @@ export function ensureConnected(sid: string): void {
       });
     }
     applyEvent(entry, sid, payload);
-    notifyState(sid);
+    if (payload.type === "delta") notifyDelta(sid);
+    else notifyState(sid);
     notifyEvent(sid, payload);
   };
 
@@ -1303,6 +1330,8 @@ export function __resetForTests(): void {
   });
   _persistFlushTimers.forEach((t) => clearTimeout(t));
   _persistFlushTimers.clear();
+  _deltaNotifyTimers.forEach((t) => clearTimeout(t));
+  _deltaNotifyTimers.clear();
   sessions.clear();
   snapshots.clear();
   stateListeners.clear();
