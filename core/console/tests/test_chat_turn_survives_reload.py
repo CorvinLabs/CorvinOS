@@ -104,13 +104,17 @@ class ReloadSurvivalTest(unittest.TestCase):
                         f"/v1/console/chat/sessions/{self.sess.sid}/stream") as ws:
                     self.assertEqual(ws.receive_json()["type"], "ready")
                     ws.send_json({"type": "user", "text": "lange Aufgabe", "voice_on": True})
-                    self.assertEqual(ws.receive_json()["type"], "delta")
+                    # the route announces ``turn_started`` before the impl's first event
+                    first = ws.receive_json()
+                    while first["type"] != "delta":
+                        first = ws.receive_json()
+                    self.assertEqual(first["type"], "delta")
                 # socket closed here = reload. The turn is still running.
                 self.assertEqual(self._status(), "running")
-                yield_state = self._wait(lambda: self._status() in ("completed", "cancelled"))
+                yield_state = self._wait(lambda: self._status() in ("completed", "cancelled", "interrupted"))
                 self.assertTrue(yield_state, "task never reached a terminal status")
                 # leave time for the detached summary to be spawned and run
-                self._wait(lambda: bool(self.summaries) or self._status() == "cancelled", 3.0)
+                self._wait(lambda: bool(self.summaries) or self._status() in ("cancelled", "interrupted"), 3.0)
 
     def test_reload_mid_task_lets_the_task_complete_and_persist_its_answer(self) -> None:
         self._disconnect_mid_turn(self._impl(run_s=0.6))
@@ -125,8 +129,9 @@ class ReloadSurvivalTest(unittest.TestCase):
     def test_a_detached_turn_is_bounded_by_the_wall_clock_limit(self) -> None:
         with patch.object(chat_routes, "_detached_turn_max_s", return_value=0.3):
             self._disconnect_mid_turn(self._impl(run_s=30.0))
-        self.assertEqual(self._status(), "cancelled")
-        self.assertEqual(self.summaries, [], "a cancelled task must not be summarised")
+        # PLAN-0958 P5: the watchdog is a SYSTEM cut-off - interrupted (and announced), not cancelled
+        self.assertEqual(self._status(), "interrupted")
+        self.assertEqual(self.summaries, [], "an interrupted task must not be summarised")
 
     def test_no_detached_turn_is_left_registered_afterwards(self) -> None:
         self._disconnect_mid_turn(self._impl(run_s=0.3))
