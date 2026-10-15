@@ -314,7 +314,8 @@ CAPABILITIES: dict[str, dict[str, Any]] = {
     "cost.optimize": {
         "class": "L",
         "free": {"limit": 0, "ratio": 0.10, "floor_usd": 5.0},
-        "member": {"limit": None},
+        # Member: no ratio cap (1.0 = unlimited) and no floor.
+        "member": {"limit": None, "ratio": 1.0, "floor_usd": 0.0},
     },
 
     # ── Class N: Network-verified (Member Credential + CRL) ──

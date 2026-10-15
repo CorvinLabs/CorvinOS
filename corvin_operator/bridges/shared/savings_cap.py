@@ -37,6 +37,7 @@ import math
 import os
 import sys
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -76,8 +77,19 @@ def _capability() -> dict[str, Any]:
 
 
 def ceilings() -> tuple[float, float]:
-    """(ratio, floor_usd) of the Free allowance — read from the capability matrix."""
-    free = _capability()["free"]
+    """(ratio, floor_usd) ceiling — depends on license tier.
+
+    Both tiers are read from the capability matrix; no ratio literal lives here.
+    """
+    tier = _tier()
+    cap = _capability()
+    # A matrix without a complete "member" entry falls back to the Free ceiling
+    # (fail-safe): a missing key must never read as "unlimited".
+    member = cap.get("member")
+    if (tier == "member" and isinstance(member, Mapping)
+            and "ratio" in member and "floor_usd" in member):
+        return float(member["ratio"]), float(member["floor_usd"])
+    free = cap["free"]
     return float(free["ratio"]), float(free["floor_usd"])
 
 

@@ -222,3 +222,22 @@ def test_validate_choice_rejects_what_the_reader_ignores():
     assert errs
     ok, errs = sc.validate_choice({"cap_ratio": None})     # null = tier default
     assert ok == {"cap_ratio": None} and errs == []
+
+
+# ── ceilings(): tier branches and a missing "member" entry (fail-safe) ───────
+
+def test_ceilings_free_tier_is_the_matrix_free_entry(monkeypatch):
+    monkeypatch.setattr(sc, "_tier", lambda: "free")
+    assert sc.ceilings() == (0.10, 5.0)
+
+
+def test_ceilings_member_tier_is_unlimited(monkeypatch):
+    monkeypatch.setattr(sc, "_tier", lambda: "member")
+    assert sc.ceilings()[0] == 1.0
+
+
+def test_ceilings_missing_member_entry_behaves_like_free(monkeypatch):
+    monkeypatch.setattr(sc, "_tier", lambda: "member")
+    monkeypatch.setattr(sc, "_capability",
+                        lambda: {"free": {"limit": 0, "ratio": 0.10, "floor_usd": 5.0}})
+    assert sc.ceilings() == (0.10, 5.0)
