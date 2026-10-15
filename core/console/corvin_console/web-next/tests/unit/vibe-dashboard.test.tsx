@@ -21,6 +21,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { VibeDashboard } from '@/pages/vibe-engineering/VibeDashboard';
 
 // The tabs fetch live endpoints and recharts needs a layout box; the panel's
@@ -47,12 +48,18 @@ vi.mock('@/pages/vibe-engineering/tabs/MonitoringTab', () => ({
 const TABS = ['Maturity Metrics', 'Learning Loops', 'System Metrics'];
 
 describe('Vibe Engineering panel', () => {
-  const renderComponent = () =>
-    render(
-      <BrowserRouter>
-        <VibeDashboard />
-      </BrowserRouter>,
+  // The console root (src/main.tsx) provides the QueryClient; the Learning
+  // Loops tab reads it through LearningAnomalies' useQuery, so mount with one.
+  const renderComponent = () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <VibeDashboard />
+        </BrowserRouter>
+      </QueryClientProvider>,
     );
+  };
 
   it('mounts the dashboard container', () => {
     renderComponent();
