@@ -57,7 +57,9 @@ CANCELLABLE_STATES: frozenset[TaskState] = frozenset({
 _S = TaskState
 
 ALLOWED_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
-    _S.PENDING: frozenset({_S.RUNNING, _S.FAILED, _S.CANCELLED, _S.INTERRUPTED}),
+    # PENDING -> COMPLETED: inline paths finish a task without a distinct start (the guard raises in
+    # production, so refusing a flow that exists would turn a finished task into an exception).
+    _S.PENDING: frozenset({_S.RUNNING, _S.COMPLETED, _S.FAILED, _S.CANCELLED, _S.INTERRUPTED}),
     _S.RUNNING: frozenset({_S.COMPLETED, _S.FAILED, _S.CANCELLED, _S.INTERRUPTED}),
     _S.INTERRUPTED: frozenset({_S.WAITING_RETRY, _S.RESUMING, _S.NEEDS_USER,
                                _S.ABANDONED, _S.CANCELLED}),

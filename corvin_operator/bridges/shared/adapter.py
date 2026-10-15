@@ -6626,6 +6626,9 @@ def _call_claude_streaming_via_engine(
                     _retry_count=_retry_count + 1, msg_id=msg_id,
                     sender=(env or {}).get("CORVIN_ORIGIN_SENDER", ""),
                 )
+            # CONCEPT-0112 P3: the child's exit, for the shared classifier in process_one.
+            _TURN_OUTCOME.exit_code = rc
+            _TURN_OUTCOME.timed_out = bool(timed_out)
             if (
                 rc in _STOPPED_EXIT_CODES        # -15/-9 and the real CLI's 143/137
                 and not timed_out
@@ -6666,6 +6669,9 @@ def _call_claude_streaming_via_engine(
                 _mss.report_turn_outcome(chat_key, success=False)
             except Exception:  # noqa: BLE001
                 pass
+            # CONCEPT-0112 P3: the child's exit, for the shared classifier in process_one.
+            _TURN_OUTCOME.exit_code = rc
+            _TURN_OUTCOME.timed_out = bool(timed_out)
             if (
                 rc in _STOPPED_EXIT_CODES        # -15/-9 and the real CLI's 143/137
                 and not timed_out
@@ -7754,6 +7760,29 @@ def bg_interim_sink(cb):
         yield
     finally:
         _BG_INTERIM.cb = prev
+
+
+def _classify_turn_exit(chat_key: str) -> None:
+    """CONCEPT-0112 P3: classify a turn whose engine child ended without an answer, with the
+    SAME classifier the console's turn_recovery uses (corvin_core.failure_classes), and put
+    the verdict on the audit chain. No-op when no child exit was observed for this turn."""
+    rc = getattr(_TURN_OUTCOME, "exit_code", None)
+    if rc is None:
+        return
+    try:
+        from corvin_core.failure_classes import classify_failure  # noqa: PLC0415
+        verdict = classify_failure(
+            exit_code=int(rc),
+            cancelled=_cancel_requested(str(chat_key)),
+            timed_out=bool(getattr(_TURN_OUTCOME, "timed_out", False)),
+        )
+        _audit_event("turn.failure_classified", chat_key=str(chat_key), details={
+            "tenant_id": _bridge_tenant(), "failure_class": verdict.code,
+            "reason_code": verdict.reason_code, "source": "bridge", "exit_code": int(rc),
+        })
+        log(f"turn failure class {verdict.code} ({verdict.reason_code}), exit {rc}")
+    except Exception as e:  # noqa: BLE001 - classification must never break the turn
+        log(f"turn failure classification failed (non-fatal): {e!r}")
 
 
 def _turn_refused(reason: str, retry_count: "int | None" = None, *, cancelled: bool = False) -> None:
@@ -12596,6 +12625,8 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         _TURN_OUTCOME.refused = None
         _TURN_OUTCOME.failed = None
         _TURN_OUTCOME.cli_spawned = False
+        _TURN_OUTCOME.exit_code = None
+        _TURN_OUTCOME.timed_out = False
         # The turn's author, for the CEL session (anchor goal attribution).
         _TURN_OUTCOME.sender = str(sender or "")
         answer, prompt = _maybe_delegate_worker(
@@ -12641,6 +12672,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                     **media_kwargs,
                 )
         _report_route_outcome(_route_tid, _deleg_meta, answer, chat_key, _route_t0)
+        _classify_turn_exit(chat_key)
         # Delegation-transparency badge (flag `delegation_badge`, ships-dark):
         # append a compact "how was this task delegated" text-suffix so a bridge
         # user can always see which engine + orchestration mode ran their task.

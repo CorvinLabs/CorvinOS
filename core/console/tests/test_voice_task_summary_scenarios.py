@@ -8,7 +8,7 @@ native class, the CLI binary) and the two paid subprocesses are substituted:
 * two chats complete in parallel                          -> one summary each
 * success exit other than the native one (TDE / ACS)      -> summary
 * consumer closes right at the last ``done`` (reload)     -> summary
-* client vanishes MID-turn (reload / tab close)           -> task cancelled, NO summary
+* client vanishes MID-turn (reload / tab close)           -> task interrupted (PLAN-0958 P5), NO summary
 * Voice off                                               -> no task summary
 * console restarts before the summary was produced        -> resumed at next connect
 * summarizer fails twice, then works                      -> delivered; gives up after 3
@@ -159,14 +159,15 @@ class CompletionScenarios(_Base):
         asyncio.run(self.run_turn(sess, "x", self.impl(completes=True), close_after=2))
         self.assertEqual(len(calls), 1)
 
-    def test_client_vanishing_mid_turn_cancels_the_task_and_summarises_nothing(self) -> None:
+    def test_client_vanishing_mid_turn_interrupts_the_task_and_summarises_nothing(self) -> None:
         calls = self._recording_generate()
         sess = self.make_chat()
         impl = self.impl(completes=True)
         asyncio.run(self.run_turn(sess, "lange Aufgabe", impl, close_after=1))
         self.assertEqual(calls, [])
         task = TaskManager(sess.workdir / "tasks").get_task(impl.task_ids[0])
-        self.assertEqual(task.status.value, "cancelled")
+        # PLAN-0958 P5: only an OPERATOR stop is cancelled; a closed turn is a system cut-off.
+        self.assertEqual(task.status.value, "interrupted")
         self.assertEqual(voice_routes.pending_task_summaries(self.tenant_id), [])
 
     def test_voice_off_summarises_nothing(self) -> None:
