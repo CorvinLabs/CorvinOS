@@ -54,6 +54,9 @@ class M21ArtifactRegistrationE2E(unittest.TestCase):
 
     worker_fails = False
     worker_sleep_s = 3.0
+    # When set, the deliverable is written only after ACSRuntime.run has returned,
+    # i.e. after the live poll's final sighting: only the post-run scan can see it.
+    late_write = False
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -108,11 +111,12 @@ class M21ArtifactRegistrationE2E(unittest.TestCase):
 
     def _fake_worker(self, prompt, system, model, budget, extra_env=None,
                      tenant_id="_default", proc_holder=None):
-        runs = sorted((self.sess.workdir / "acs" / "runs").iterdir())
-        out = runs[-1] / "output"
-        out.mkdir(parents=True, exist_ok=True)
-        (out / "marktbericht.md").write_text("# Marktbericht\n\nE-Bikes wachsen.\n",
-                                             encoding="utf-8")
+        if not self.late_write:
+            runs = sorted((self.sess.workdir / "acs" / "runs").iterdir())
+            out = runs[-1] / "output"
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "marktbericht.md").write_text("# Marktbericht\n\nE-Bikes wachsen.\n",
+                                                 encoding="utf-8")
         # Long enough for the live poll to see the file as stable (two sightings).
         time.sleep(self.worker_sleep_s)
         return (
@@ -170,8 +174,23 @@ class M21ArtifactRegistrationE2E(unittest.TestCase):
             proc.stdin.drain = AsyncMock()
             return proc
 
+        orig_render = self.cr._render_acs_graph
+
+        def _render_then_late_write(scan_root, *args, **kwargs):
+            # Runs in the thread that the turn awaits between the final live poll and
+            # the post-run scan: the only window in which a file is invisible to the
+            # live poll (it sees a file only after two equal sightings) yet still
+            # on disk when the post-run scan runs.
+            if self.late_write:
+                out = Path(scan_root) / "output"
+                out.mkdir(parents=True, exist_ok=True)
+                (out / "marktbericht.md").write_text(
+                    "# Marktbericht\n\nE-Bikes wachsen.\n", encoding="utf-8")
+            return orig_render(scan_root, *args, **kwargs)
+
         rec = _Rec()
         return [
+            patch.object(self.cr, "_render_acs_graph", new=_render_then_late_write),
             patch.object(asyncio, "create_subprocess_exec", side_effect=_no_spawn),
             patch.object(self.cr, "_delegation_enabled", return_value=True),
             patch.object(self.cr._feature_flags, "worker_engine_mode", return_value="acs"),
@@ -231,6 +250,10 @@ class M21ArtifactRegistrationE2E(unittest.TestCase):
         self.assertLess(types_in_order.index("artifact"), types_in_order.index("done"))
         self.assertIn("marktbericht.md", self._persisted_artifact_names(payload),
                       f"artifact not visible in GET /turns: {payload}")
+        # Live poll and post-run scan both see the file; the dedup must keep one chip.
+        self.assertEqual(self._artifact_names(events).count("marktbericht.md"), 1, events)
+        self.assertEqual(self._persisted_artifact_names(payload).count("marktbericht.md"), 1,
+                         payload)
 
     def test_acs_bookkeeping_is_not_registered_as_an_artifact(self) -> None:
         # ACS writes output/FINAL/manifest.json on every accepted run; it is not a
@@ -242,17 +265,18 @@ class M21ArtifactRegistrationE2E(unittest.TestCase):
 
 
 class M21FailedRunArtifactE2E(M21ArtifactRegistrationE2E):
-    """A run that ends in status "failed" still registers the file its worker wrote.
+    """A run that ends in status "failed" still registers the file it left on disk.
 
-    The post-run scan is gated on ``ok or bounded_stop``, so a failed run skips
-    the scan and drops whatever its worker wrote that the live poll had not yet
-    seen as stable (the poll itself does not check run status).
+    The post-run scan used to run only for ``ok or bounded_stop``. The file is
+    written after ``ACSRuntime.run`` has returned, so the live poll's final
+    sighting is its first one (it needs two equal sightings) and the file reaches
+    the chat only through the post-run scan. Reinstating the status gate turns
+    this test red (mutation probe, 2026-10-15).
     """
 
     worker_fails = True
-    # The run fails right after the worker writes its file: no time for the
-    # live poll to see it stable, so only the post-run scan can register it.
     worker_sleep_s = 0.0
+    late_write = True
 
     def test_file_written_before_a_failed_run_is_registered(self) -> None:
         events, payload = self._run_over_http()
@@ -260,6 +284,9 @@ class M21FailedRunArtifactE2E(M21ArtifactRegistrationE2E):
                       f"failed run dropped its written deliverable: {events}")
         self.assertIn("marktbericht.md", self._persisted_artifact_names(payload),
                       f"failed run's artifact missing from GET /turns: {payload}")
+        self.assertEqual(self._artifact_names(events).count("marktbericht.md"), 1, events)
+        self.assertEqual(self._persisted_artifact_names(payload).count("marktbericht.md"), 1,
+                         payload)
 
 
 if __name__ == "__main__":

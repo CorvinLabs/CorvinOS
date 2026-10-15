@@ -10,6 +10,7 @@ from fastapi import HTTPException, WebSocket, WebSocketDisconnect, status as htt
 from pydantic import BaseModel
 
 from corvin_console.task_queue import TaskQueue, TaskStatus, QuotaExceededError
+from corvin_core.task_states import InvalidTransitionError
 from corvin_console.task_pubsub import get_pubsub
 
 # M6: real abort via subprocess signal
@@ -162,8 +163,12 @@ async def abort_task_handler(tenant_id: str, task_id: str) -> dict:
         # Already terminal: idempotent success
         return {"ok": True}
 
-    # Mark as CANCELLED in queue log first
-    queue.update_status(task_id, TaskStatus.CANCELLED)
+    # Mark as CANCELLED in queue log first. PLAN-0958 P1: a forbidden transition
+    # (the queue refuses to move a terminal task) is a 409 over HTTP, not a 500.
+    try:
+        queue.update_status(task_id, TaskStatus.CANCELLED)
+    except InvalidTransitionError as exc:
+        raise HTTPException(http_status.HTTP_409_CONFLICT, str(exc))
 
     # M6: Signal the running subprocess to terminate (best-effort)
     if _ABORT_SIGNAL_AVAILABLE and _signal_abort is not None:
