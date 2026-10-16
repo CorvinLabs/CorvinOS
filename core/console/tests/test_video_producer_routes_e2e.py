@@ -543,7 +543,7 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
             real_find, real_which = mod.importlib.util.find_spec, shutil.which
             # default engine (openai): its package, Pillow and ffmpeg — gTTS is NOT needed any more
             self._benign_l44()
-            for gone, needle in (("openai", "openai"), ("PIL", "Pillow"), ("ffmpeg", "ffmpeg")):
+            for gone, needle in (("PIL", "Pillow"), ("ffmpeg", "ffmpeg")):
                 with mock.patch.object(mod.importlib.util, "find_spec",
                                        lambda n, *a, _g=gone, **k: None if n == _g else real_find(n, *a, **k)), \
                      mock.patch.object(mod.shutil, "which",
@@ -569,24 +569,24 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
             # nothing was stored for the refused attempts
             self.assertEqual(client.get("/v1/console/video/jobs").json()["total"], 1)
 
-    def test_default_engine_without_an_openai_key_is_refused_with_the_way_out(self):
+    def test_default_engine_without_an_openai_key_falls_back_to_edge_tts(self):
+        from unittest import mock
+
         with _sandbox(self._tmp, plugin="enabled", keep_key=False) as (client, csrf, _home, _c):
             mod = _route_module()
             mod.get_runner = lambda: _RecordingRunner()
-            self.assertFalse(client.get("/v1/console/video/settings").json()["openai_configured"])
-            resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
-                               headers={"X-CSRF-Token": csrf})
-            self.assertEqual(resp.status_code, 503, resp.text)
-            self.assertIn("OpenAI TTS key", resp.text)
-            self.assertIn("settings", resp.text)
-            self.assertNotIn("sk-", resp.text)
-            self.assertEqual(client.get("/v1/console/video/jobs").json()["total"], 0)
-            # the other engines still work without it
-            client.put("/v1/console/video/settings", json={"tts_engine": "auto"}, headers={"X-CSRF-Token": csrf})
-            self._benign_l44()
-            resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
-                               headers={"X-CSRF-Token": csrf})
+            runner = mod.get_runner()
+            mod.get_runner = lambda: runner
+            with mock.patch.object(mod, "_adopt_stored_openai_key", lambda: None):
+                st = client.get("/v1/console/video/settings").json()
+                self.assertFalse(st["openai_configured"])
+                self.assertEqual(st["tts_engine"], "openai")
+                self.assertEqual(st["effective_tts_engine"], "auto")
+                self._benign_l44()
+                resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
+                                   headers={"X-CSRF-Token": csrf})
             self.assertEqual(resp.status_code, 200, resp.text)
+            self.assertEqual(runner.calls[-1][2]["tts_engine"], "auto")
 
     def test_captions_endpoint_is_gone_and_new_jobs_have_no_subtitle_output(self):
         with _sandbox(self._tmp) as (client, _csrf, _home, _c):

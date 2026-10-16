@@ -786,7 +786,7 @@ export function VideoProducerPage() {
               </select>
               {form.tts_engine !== "gtts" && settings.data && !settings.data.openai_configured ? (
                 <span className="block text-xs mt-1 text-amber-600" data-testid="tts-key-warning">
-                  {form.tts_engine === "openai" ? "No OpenAI key in the console's environment: jobs are refused until one is set or another engine is chosen." : "No OpenAI key in the console's environment: narration starts with edge-tts."}
+                  {form.tts_engine === "openai" ? "No OpenAI key configured: narration falls back to edge-tts (free, no key) until one is set." : "No OpenAI key in the console's environment: narration starts with edge-tts."}
                 </span>
               ) : null}</label>
             <label className="text-sm"><span className="text-xs text-muted-foreground">Max duration (minutes, 1–60)</span><Input type="number" min={1} max={60} value={form.max_duration_minutes} onChange={(e) => setForm({ ...form, max_duration_minutes: Math.min(60, Math.max(1, parseInt(e.target.value) || 1)) })} /></label>

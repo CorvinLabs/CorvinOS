@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -294,6 +295,8 @@ def _tenant_settings(rec) -> Dict[str, Any]:
         "tts_engines": list(_TTS_ENGINES),
         # What this host can actually do, so the panel can say so instead of a job failing later.
         "openai_configured": _openai_configured(),
+        # The engine jobs really run with: "openai" degrades to "auto" (edge-tts fallback) without a key
+        "effective_tts_engine": _effective_tts_engine(s["tts_engine"]),
         "web_slides_available": importlib.util.find_spec("playwright") is not None,
         # Website capture (ADR-2249 D4): usable only when the switch is on AND an egress policy exists
         "capture_enabled": _capture_enabled(rec),
@@ -461,9 +464,87 @@ def _grounding_for_job(tenant_id: str, chat_key: str, job_id: str, task: str, ba
     return pack, None
 
 
+def _adopt_stored_openai_key() -> None:
+    """The console's own stored TTS key (Setup / BYOK) into this process's environment, when the
+    environment does not already carry one — the plugin reads only the environment, and a job
+    must not depend on the operator having exported the key by hand. An explicit export wins."""
+    if (os.environ.get("CORVIN_TTS_OPENAI_KEY") or os.environ.get("OPENAI_API_KEY") or "").strip():
+        return
+    try:
+        shared = str(_repo_root / "corvin_operator" / "bridges" / "shared")
+        if shared not in sys.path:
+            sys.path.insert(0, shared)
+        import provider_keys  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        val = provider_keys.resolve_key("tts_openai_api_key")
+    except Exception:  # noqa: BLE001 - best effort; no key just means the edge-tts tier narrates
+        return
+    if val:
+        os.environ["CORVIN_TTS_OPENAI_KEY"] = val
+
+
 def _openai_configured() -> bool:
-    """A TTS key is in this process's environment (the same two names the plugin reads)."""
+    """A TTS key is available: in this process's environment (the two names the plugin reads)
+    or stored by the console itself."""
+    _adopt_stored_openai_key()
     return bool(os.environ.get("CORVIN_TTS_OPENAI_KEY") or os.environ.get("OPENAI_API_KEY"))
+
+
+def _effective_tts_engine(tts_engine: str) -> str:
+    """The engine a job really runs with. "openai" needs its package AND a key; on a host that
+    has neither, narration degrades to the "auto" chain (OpenAI -> edge-tts -> piper -> mock)
+    instead of refusing the job, so a fresh install produces video without any setup."""
+    if tts_engine == "openai" and (importlib.util.find_spec("openai") is None or not _openai_configured()):
+        return "auto"
+    return tts_engine
+
+
+_edge_install_tried = False
+
+
+def _ensure_edge_tts() -> bool:
+    """edge-tts importable? If not, install it once (pure Python, ~1 MB, no key) into the
+    console's own environment — the keyless narration fallback must exist on every install."""
+    global _edge_install_tried
+    if importlib.util.find_spec("edge_tts") is not None:
+        return True
+    if _edge_install_tried:
+        return False
+    _edge_install_tried = True
+    try:
+        subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "edge-tts>=6.1.8"],
+                       check=True, timeout=180, capture_output=True)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("video producer: edge-tts auto-install failed (%s)", type(e).__name__)
+        return False
+    importlib.invalidate_caches()
+    return importlib.util.find_spec("edge_tts") is not None
+
+
+def _ensure_ffmpeg() -> bool:
+    """ffmpeg on PATH? The plugin calls a bare ``ffmpeg``. When the system has none, expose the
+    static binary bundled with the ``imageio-ffmpeg`` wheel under that name (a console-local
+    bin directory prepended to PATH), so no system install is needed."""
+    if shutil.which("ffmpeg"):
+        return True
+    try:
+        import imageio_ffmpeg  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        exe = Path(imageio_ffmpeg.get_ffmpeg_exe())
+        home = Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))
+        shim_dir = home / "bin"
+        shim_dir.mkdir(parents=True, exist_ok=True)
+        shim = shim_dir / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+        if not shim.exists():
+            try:
+                os.symlink(exe, shim)
+            except (OSError, NotImplementedError, AttributeError):
+                shutil.copy2(exe, shim)
+                shim.chmod(0o755)
+        os.environ["PATH"] = str(shim_dir) + os.pathsep + os.environ.get("PATH", "")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("video producer: bundled ffmpeg unavailable (%s)", type(e).__name__)
+    return shutil.which("ffmpeg") is not None
 
 
 def _missing_runtime_dependencies(tts_engine: str = "openai") -> List[str]:
@@ -471,20 +552,21 @@ def _missing_runtime_dependencies(tts_engine: str = "openai") -> List[str]:
     (and key), Pillow (classic slides) and ffmpeg (assembly). The plugin runs inside the
     console process, so a marketplace install cannot add Python packages to it — better a
     named refusal now than a job that dies 40 s in. Playwright is NOT required: without it
-    web slides fall back to the classic slide, which the panel shows (``web_slides_available``)."""
+    web slides fall back to the classic slide, which the panel shows (``web_slides_available``).
+    Self-healing first: edge-tts is installed on demand and ffmpeg falls back to the bundled
+    imageio-ffmpeg binary, so only a truly unfixable gap is reported."""
     missing: List[str] = []
+    tts_engine = _effective_tts_engine(tts_engine)
     if tts_engine == "gtts" and importlib.util.find_spec("gtts") is None:
         missing.append("gTTS (pip install 'gTTS>=2.5.0' into the console environment)")
-    if tts_engine == "openai":
-        if importlib.util.find_spec("openai") is None:
-            missing.append("openai (pip install 'openai>=1.0.0' into the console environment)")
-        if not _openai_configured():
-            missing.append("an OpenAI TTS key (CORVIN_TTS_OPENAI_KEY or OPENAI_API_KEY in the console's environment) — "
-                           "or pick another narration engine in the Video Producer settings")
+    if tts_engine == "auto" and not _ensure_edge_tts() and not (
+            importlib.util.find_spec("openai") is not None and _openai_configured()):
+        missing.append("a narration engine: edge-tts (pip install 'edge-tts>=6.1.8' into the console environment) "
+                       "or an OpenAI TTS key")
     if importlib.util.find_spec("PIL") is None:
         missing.append("Pillow (pip install 'Pillow>=10.0.0' into the console environment)")
-    if shutil.which("ffmpeg") is None:
-        missing.append("ffmpeg (system binary, must be on PATH)")
+    if not _ensure_ffmpeg():
+        missing.append("ffmpeg (system binary on PATH, or pip install 'imageio-ffmpeg>=0.5.1' into the console environment)")
     return missing
 
 
@@ -975,6 +1057,7 @@ async def create_video_job(req: CreateJobRequest, rec=_SessionRec):
             "Delete videos you no longer need to produce a new one."))
     web_style = await asyncio.to_thread(_resolve_job_style, rec, req.style_id, req.base_job_id)
     settings = _tenant_settings(rec)
+    settings["tts_engine"] = await asyncio.to_thread(_effective_tts_engine, settings["tts_engine"])
     missing = await asyncio.to_thread(_missing_runtime_dependencies, settings["tts_engine"])
     if missing:
         raise HTTPException(status_code=503, detail="Video production needs: " + "; ".join(missing))
@@ -1324,6 +1407,7 @@ def _plugin_signals():
 
 
 def _openai_key() -> Optional[str]:
+    _adopt_stored_openai_key()
     return os.environ.get("CORVIN_TTS_OPENAI_KEY") or os.environ.get("OPENAI_API_KEY") or None
 
 

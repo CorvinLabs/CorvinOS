@@ -23,6 +23,9 @@ anthropic>=0.25
 # scene (verified on a fresh install).
 gTTS>=2.5.0
 Pillow>=10.0.0
+# ffmpeg for video assembly when the host has no system binary: static build in the wheel, found
+# by the Video Producer route (_ensure_ffmpeg) and exposed on PATH as `ffmpeg`.
+imageio-ffmpeg>=0.5.1
 # Animated web slides (ADR-2238) render in headless Chromium. Optional at runtime: without it
 # every slide falls back to the classic still and the Video Producer settings say so.
 # After installing, once: `python -m playwright install chromium`.

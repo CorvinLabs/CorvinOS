@@ -61,7 +61,7 @@ echo "[bootstrap] installing core dependencies"
 echo "[bootstrap] installing voice dependencies (TTS/STT, no API key required for edge-tts)"
 # edge-tts: Microsoft Edge TTS, no API key, pure-Python — universal TTS fallback.
 # openai + anthropic: SDK for cloud TTS/STT and Claude engine.
-"${VENV_DIR}/bin/python" -m pip install --quiet "edge-tts>=6.1.8" "openai>=1.0" "anthropic>=0.25"
+"${VENV_DIR}/bin/python" -m pip install --quiet "edge-tts>=6.1.8" "openai>=1.0" "anthropic>=0.25" "imageio-ffmpeg>=0.5.1" "Pillow>=10.0.0"
 
 # pywhispercpp: local STT (whisper.cpp binding), no API key, works offline.
 # ADR-0185 M1: replaces faster-whisper as the canonical local STT engine —
