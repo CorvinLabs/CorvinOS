@@ -149,7 +149,10 @@ authored in Corvin-Knowledge (`kb/`, `scripts/kb.py`) and projected onto the boa
 export → apply; drift is re-applied, a red KB blocks with a banner). KB-owned fields of a
 `kb:` item are writable only by actor `sync:kb` (409 `kb_owned`); a board move is
 `/kb-transition` → the KB state machine. Once a tenant has KB items the git sync archives
-its ADR cards. → `docs/claude-ref/task-tracking-ssot.md`
+its ADR cards. Every OTHER install (no `CORVIN_KB_REPO`, no sibling checkout) gets its
+own KB at `<tenant_home>/knowledge`, created by the projector from the standard Knowledge Graph
+plugin's `src/kb_init.py` once the operator enables it (consent) — ADR-2265.
+→ `docs/claude-ref/task-tracking-ssot.md`
 
 **Cutover done (2026-10-03, ADR-2205):** Corvin-ADR was merged into Corvin-Knowledge with its
 full history and every path kept; Corvin-ADR now holds only `MOVED.md` and is frozen — a commit

@@ -15,7 +15,7 @@
  * initiatives.json exists) — never sample data.
  */
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle, CalendarRange, Columns3, Download, FolderTree, Gavel, Link2, ListTree, Loader2, Network, Plus, RefreshCw,
@@ -405,11 +405,20 @@ export default function TasksPage() {
             <p role="status" data-testid="kb-projection-banner"
               className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
               {kbQ.data.state === "blocked"
-                ? `Knowledge base is inconsistent (${kbQ.data.blocking ?? "?"} blocking finding${kbQ.data.blocking === 1 ? "" : "s"}: ${Object.keys(kbQ.data.failing ?? {}).join(", ")}) — the board shows the last consistent state. Run "kb check" in Corvin-Knowledge.`
+                ? `Knowledge base is inconsistent (${kbQ.data.blocking ?? "?"} blocking finding${kbQ.data.blocking === 1 ? "" : "s"}: ${Object.keys(kbQ.data.failing ?? {}).join(", ")}) — the board shows the last consistent state. Run "kb check" in the knowledge base.`
                 : kbQ.data.state === "held"
                 ? `Uncommitted edits in the knowledge base (${(kbQ.data.pending_uncommitted ?? []).slice(0, 3).join(", ")}) — the board keeps its last consistent state and board moves are paused until they are committed.`
                 : kbQ.data.state === "error" ? `Knowledge-base sync failed: ${kbQ.data.error ?? "unknown error"}`
                 : kbQ.data.state === "diverged" ? "Knowledge-base sync could not repair every difference — see kb status." : null}
+            </p>
+          )}
+
+          {kbQ.data?.state === "off" && kbQ.data.hint === "enable_plugin" && (
+            <p role="status" data-testid="kb-enable-plugin-banner"
+              className="rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs">
+              The Knowledge Graph plugin is installed but not enabled. Enable it in the{" "}
+              <Link to="/app/marketplace" className="underline">Marketplace</Link> to create this
+              workspace&apos;s knowledge base and get the concept, ADR and implementation-plan gates on this board.
             </p>
           )}
 

@@ -658,13 +658,19 @@ class SandboxedHomeNeverProjectsIntoTheRealKb(unittest.TestCase):
             else:
                 os.environ[k] = v
 
-    def test_sandboxed_home_gets_no_kb_and_no_projector(self):
+    def test_sandboxed_home_gets_no_kb_and_projects_nothing(self):
         os.environ["CORVIN_HOME"] = tempfile.mkdtemp(prefix="kb-sandbox-")
         self.assertIsNone(self.kp.kb_repo())
-        self.assertFalse(self.kp.start("_adv10_probe"))
-        self.assertEqual(self.kp.status("_adv10_probe")["state"], "off")
-        # A forced tick (what a board move triggers) also refuses, and says why.
-        self.assertIn("sandboxed CORVIN_HOME", self.kp.sync("_adv10_probe", force=True)["reason"])
+        # The loop itself may start with no KB (a fresh install binds the tenant KB later,
+        # ADR-2265); what it must never do is resolve the operator's sibling checkout.
+        try:
+            self.kp.start("_adv10_probe")
+            self.assertIsNone(self.kp.kb_repo())
+            self.assertEqual(self.kp.status("_adv10_probe")["state"], "off")
+            # A forced tick (what a board move triggers) also refuses, and says why.
+            self.assertIn("sandboxed CORVIN_HOME", self.kp.sync("_adv10_probe", force=True)["reason"])
+        finally:
+            self.kp.stop("_adv10_probe")
 
     def test_canonical_home_keeps_the_sibling_default(self):
         if not (self.sibling / "scripts" / "kb.py").is_file():

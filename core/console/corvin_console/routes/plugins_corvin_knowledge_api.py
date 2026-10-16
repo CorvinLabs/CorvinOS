@@ -18,7 +18,6 @@ console from the gateway process on the next restart.
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import os
 import subprocess
@@ -43,11 +42,12 @@ router = APIRouter(
 
 CONFIG_FILE = Path.home() / ".claude" / "plugins" / "corvin-knowledge.json"
 DEFAULT_CONFIG: Dict[str, Any] = {
-    # ADR-2206: the knowledge home's real checkout (the one the board projector reads,
-    # CORVIN_KB_REPO or the sibling of this repo), not the unused mesh-era convention.
-    "repo_path": str(Path(os.environ.get("CORVIN_KB_REPO") or
-                          Path(__file__).resolve().parents[5] / "Corvin-Knowledge")),
-    "remote_url": "https://github.com/CorvinLabs/Corvin-Knowledge.git",
+    # Empty = the knowledge base bound to the task board (kb_projection.kb_repo(): CORVIN_KB_REPO,
+    # the operator's sibling Corvin-Knowledge, or the tenant's own <tenant_home>/knowledge that
+    # the plugin creates on enable) — resolved per request in effective_config().
+    "repo_path": "",
+    # a tenant knowledge base has no remote until the operator configures one
+    "remote_url": "",
     "auto_sync_on_query": True,
     "consistency_level": "warn",
 }
@@ -194,11 +194,25 @@ def _write_registry_settings(tenant_id: str, config: Dict[str, Any]) -> None:
         pass
 
 
+# The pre-1.1 manifest default: a mesh-era convention no knowledge base ever lived in. It is
+# stored in every registry record created from that manifest, so it means "unset" too.
+_UNSET_REPO_PATHS = {"", "~/.corvin-knowledge/", "~/.corvin-knowledge"}
+
+
+def bound_repo_path(tenant_id: str) -> str:
+    """The knowledge base the board projects for this tenant (or, before the first tick, the
+    place the tenant's own KB is created)."""
+    repo = kb_projection.kb_repo() if tenant_id == kb_projection.kb_tenant() else None
+    return str(repo or kb_projection.tenant_kb_path(tenant_id))
+
+
 def effective_config(tenant_id: str) -> Dict[str, Any]:
     config = load_config()
     stored = _registry_settings(tenant_id)
     if stored:
         config.update({k: v for k, v in stored.items() if k in _KEYS and v is not None})
+    if str(config.get("repo_path") or "").strip() in _UNSET_REPO_PATHS:
+        config["repo_path"] = bound_repo_path(tenant_id)
     return config
 
 
@@ -342,13 +356,28 @@ def _kb_lock(repo: Path):
     lock = repo / "kb" / ".lock"
     if not (repo / "kb").is_dir() or (repo / "kb").is_symlink() or lock.is_symlink():
         raise HTTPException(status_code=400, detail="not a knowledge-base checkout (kb/ missing or a symlink)")
-    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o644)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _lock_fd(fd, True)
         yield
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        _lock_fd(fd, False)
         os.close(fd)
+
+
+def _lock_fd(fd: int, lock: bool) -> None:
+    """Blocking exclusive lock of kb/.lock, compatible with kb.py on every platform: flock on
+    POSIX, the same one-byte msvcrt region lock kb.py takes on Windows (a no-op fcntl stub
+    there would exclude nothing)."""
+    if os.name == "nt":
+        import msvcrt  # noqa: PLC0415
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_LOCK if lock else msvcrt.LK_UNLCK, 1)
+        return
+    import fcntl  # noqa: PLC0415
+
+    fcntl.flock(fd, fcntl.LOCK_EX if lock else fcntl.LOCK_UN)
 
 
 @router.post("/sync")

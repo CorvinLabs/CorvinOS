@@ -209,6 +209,9 @@ export interface KbProjectionStatus {
   enabled: boolean;
   human_queue?: KbHumanQueue | null;
   state: "ok" | "blocked" | "held" | "diverged" | "error" | "off" | "idle";
+  /** Set with state "off": "enable_plugin" = the Knowledge Graph plugin is installed but not enabled. */
+  hint?: "enable_plugin";
+  reason?: string;
   pending_uncommitted?: string[];
   sha?: string;
   blocking?: number;

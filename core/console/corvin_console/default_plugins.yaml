@@ -28,3 +28,15 @@ plugins:
     reason: >-
       Turns a task description into a narrated MP4 (storyboard, narration, animated
       web slides). First bundled plugin.
+  - index_id: plugin:contributor-knowledge_management-corvin_knowledge
+    registry_id: corvin_knowledge
+    name: Knowledge Graph
+    min_version: "1.1.0"
+    enable: true
+    # community origin -> consent is required, so boot leaves it installed + disabled; the
+    # operator's enable (with consent) makes the board projector create the tenant's own
+    # knowledge base (<tenant_home>/knowledge) on its next tick — no restart
+    reason: >-
+      The tenant's own knowledge base (concepts, decisions, implementation plans) projected
+      onto the task board, with the concept, ADR and implementation-plan gates and the
+      Knowledge Graph panel.

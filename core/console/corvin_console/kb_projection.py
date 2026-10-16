@@ -24,7 +24,13 @@ so ``kb.py`` stays the only writer of KB files.
 The KB is located by ``CORVIN_KB_REPO`` or, by default, the ``Corvin-Knowledge``
 checkout next to this repo — the default applies only to a process on the
 install's canonical CORVIN_HOME (see ``_canonical_home``); a sandboxed home
-needs CORVIN_KB_REPO. No KB -> the projector is off and says so in its status.
+needs CORVIN_KB_REPO. Neither -> the TENANT's own knowledge base,
+``<tenant_home>/knowledge``, which exists on every install once the Knowledge Graph
+plugin (a standard plugin, ``default_plugins.yaml``) is ENABLED for the tenant: the tick
+then runs the plugin's ``kb_init.py`` (create, or refresh the engine once per process)
+and projects it like any other KB. Disabled plugin -> that KB is not read. No KB at all ->
+the projector is off and its status says why (``hint: enable_plugin`` when one click is
+all that is missing).
 """
 from __future__ import annotations
 
@@ -103,15 +109,101 @@ def _real_user_home() -> Path:
         return Path.home()
 
 
-def kb_repo() -> Optional[Path]:
+def _is_kb(p: Path) -> bool:
+    return (p / "scripts" / "kb.py").is_file() and (p / "kb" / "_meta" / "sources.yaml").is_file()
+
+
+def _explicit_repo() -> Optional[Path]:
+    """CORVIN_KB_REPO, else the sibling checkout on the canonical home — the operator's KB."""
     env = os.environ.get("CORVIN_KB_REPO")
     if env:
-        p = Path(env)
-    elif _canonical_home():
+        return Path(env) if _is_kb(Path(env)) else None
+    if _canonical_home():   # sandboxed CORVIN_HOME: never the operator's KB by default (ADV-10)
         p = _REPO_ROOT.parent / "Corvin-Knowledge"
-    else:
-        return None  # sandboxed CORVIN_HOME: never the operator's KB by default (ADV-10)
-    return p if (p / "scripts" / "kb.py").is_file() and (p / "kb" / "_meta" / "sources.yaml").is_file() else None
+        return p if _is_kb(p) else None
+    return None
+
+
+def kb_repo() -> Optional[Path]:
+    if os.environ.get("CORVIN_KB_REPO"):
+        return _explicit_repo()   # an explicit KB is never silently replaced by another one
+    p = _explicit_repo()
+    if p is not None:
+        return p
+    t = kb_tenant()
+    if kg_plugin_state(t) == "enabled":
+        tp = tenant_kb_path(t)
+        return tp if _is_kb(tp) else None
+    return None
+
+
+# --- the tenant's own knowledge base (Knowledge Graph plugin) --------------------------
+
+KG_PLUGIN_ID = "corvin_knowledge"
+KG_INDEX_ID = "plugin:contributor-knowledge_management-corvin_knowledge"
+_kg_ensured: set[str] = set()     # tenants whose KB was ensured (engine refreshed) by this process
+
+
+def tenant_kb_path(tenant_id: str) -> Path:
+    from core.paths.tenant import tenant_home  # honours CORVIN_HOME
+
+    return tenant_home(tenant_id) / "knowledge"
+
+
+def kg_plugin_state(tenant_id: str) -> str:
+    """``absent`` | ``installed`` | ``enabled`` for the Knowledge Graph plugin in the tenant
+    registry. Read on every call, never cached: an enable must bind the KB on the very next
+    tick, a disable must unbind it (one small YAML read per 2 s tick)."""
+    try:
+        from corvin_plugins.manifest import PluginError  # type: ignore[import-not-found]
+        from corvin_plugins.state import TenantRegistry  # type: ignore[import-not-found]
+    except ImportError:   # no plugin subsystem in this installation: nothing to bind
+        return "absent"
+    try:
+        rec = TenantRegistry.load(tenant_id=tenant_id).records.get(KG_PLUGIN_ID)
+    except (PluginError, OSError) as exc:   # RegistryCorrupt is a PluginError: fail closed, unbound
+        log.warning("plugin registry of %s unreadable (%s): knowledge base not bound", tenant_id,
+                    type(exc).__name__)
+        return "absent"
+    if rec is None:
+        return "absent"
+    return "enabled" if rec.enabled else "installed"
+
+
+def ensure_tenant_kb(tenant_id: str) -> dict[str, Any]:
+    """Create the tenant's knowledge base, or refresh its engine, by running the ENABLED
+    plugin's ``kb_init.py`` (a subprocess with the KB's minimal environment — plugin code
+    never runs in this process, and never for a tenant that did not enable it)."""
+    if kg_plugin_state(tenant_id) != "enabled":
+        return {"status": "skipped", "reason": "Knowledge Graph plugin not enabled"}
+    try:
+        from .routes import marketplace_resolve  # noqa: PLC0415
+
+        init = marketplace_resolve.resolve_builtin_dir(KG_INDEX_ID) / "src" / "kb_init.py"
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "error": f"plugin source not found: {type(exc).__name__}: {exc}"[:300]}
+    if not init.is_file():
+        return {"status": "error", "error": "the installed Knowledge Graph plugin predates kb_init.py — update it"}
+    r = subprocess.run([sys.executable, str(init), "--target", str(tenant_kb_path(tenant_id))],
+                       capture_output=True, text=True, timeout=120, env=_env("kb-init"))
+    try:
+        res = json.loads(r.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        res = {"status": "error", "error": (r.stderr or r.stdout).strip()[-300:]}
+    if res.get("status") in ("created", "ok", "upgraded"):
+        _kg_ensured.add(tenant_id)
+    if res.get("status") in ("created", "upgraded"):
+        try:
+            from . import audit as console_audit  # noqa: PLC0415
+
+            console_audit.action_performed(
+                tenant_id=tenant_id, sid_fingerprint="host:kb_projection",
+                action=f"kb.tenant_{res['status']}", target_kind="knowledge_base",
+                target_id=str(res.get("engine_commit") or "")[:12], trigger="kb_projection")
+        except Exception:  # noqa: BLE001 — the KB's own git history records it too
+            log.warning("tenant KB audit record failed", exc_info=True)
+    log.info("tenant knowledge base for %s: %s", tenant_id, res.get("status"))
+    return res
 
 
 def kb_tenant() -> str:
@@ -119,7 +211,10 @@ def kb_tenant() -> str:
 
 
 _WORK_FILE = __import__("re").compile(r"^kb/(initiatives|epics|tasks)/[^/]+\.md$")
-_ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND")
+_ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND",
+             # Windows: Python and git do not start without these (no secrets among them)
+             "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
+             "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA")
 
 
 def _env(actor: str) -> dict[str, str]:
@@ -200,8 +295,23 @@ def status(tenant_id: str) -> dict[str, Any]:
 def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
     """One projector tick. Serialised: the loop and a transition never interleave."""
     repo = kb_repo()
+    if (not os.environ.get("CORVIN_KB_REPO") and _explicit_repo() is None and tenant_id == kb_tenant()
+            and tenant_id not in _kg_ensured and kg_plugin_state(tenant_id) == "enabled"):
+        # the tenant's own KB: create it on the first tick after the plugin was enabled, and
+        # refresh its engine once per process (a plugin update ships a newer kb.py)
+        ens = ensure_tenant_kb(tenant_id)
+        repo = kb_repo()
+        if repo is None:
+            st = {"state": "error", "error": f"tenant knowledge base: {ens.get('error') or ens.get('status')}",
+                  "checked_at": time.time()}
+            _save(tenant_id, st)
+            return st
     if repo is None:
         st = {"state": "off", "reason": "no Corvin-Knowledge checkout, or a sandboxed CORVIN_HOME (set CORVIN_KB_REPO)"}
+        if kg_plugin_state(tenant_id) == "installed":
+            st = {"state": "off", "hint": "enable_plugin",
+                  "reason": "the Knowledge Graph plugin is installed but not enabled — enable it in the "
+                            "Marketplace to start this tenant's knowledge base"}
         _save(tenant_id, st)
         return st
     with _lock:
@@ -416,13 +526,18 @@ def _loop(tenant_id: str, stop: threading.Event) -> None:
 
 
 def start(tenant_id: Optional[str] = None) -> bool:
-    """Start the projector thread once per process. False when there is no KB."""
+    """Start the projector thread once per process and tenant (False: already running, or a
+    pytest process without CORVIN_KB_REPO)."""
     t = tenant_id or kb_tenant()
     # A test run must never heal-and-commit into the operator's real KB checkout;
     # tests that want a projector point CORVIN_KB_REPO at a fixture repo.
     if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("CORVIN_KB_REPO"):
         return False
-    if kb_repo() is None or t in _started:
+    # Started even with no KB yet: on a fresh install the Knowledge Graph plugin is provisioned
+    # AFTER this call (default_plugins runs in its own thread) and enabled whenever the operator
+    # consents — the tick then creates the tenant KB, no restart needed. Without a KB a tick is
+    # one cached registry read; it never resolves the operator's sibling KB on a sandboxed home.
+    if t in _started:
         return False
     _started.add(t)
     # the slow loops start PERIODIC_S after boot: the first ticks belong to the projection
@@ -430,7 +545,7 @@ def start(tenant_id: Optional[str] = None) -> bool:
     _last_periodic.setdefault(t, time.time())
     _stops[t] = threading.Event()
     threading.Thread(target=_loop, args=(t, _stops[t]), name=f"kb-projection-{t}", daemon=True).start()
-    log.info("kb projection started for tenant %s from %s", t, kb_repo())
+    log.info("kb projection started for tenant %s (KB: %s)", t, kb_repo() or "none yet")
     return True
 
 

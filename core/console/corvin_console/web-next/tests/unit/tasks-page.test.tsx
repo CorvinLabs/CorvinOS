@@ -247,6 +247,21 @@ describe("Tasks page", () => {
     expect(screen.queryByTestId("human-queue-banner")).toBeNull();
   });
 
+  it("says when only enabling the Knowledge Graph plugin is missing, and links to the Marketplace", async () => {
+    const kb = (body: object) => http.get("/v1/console/task-tracking/kb/status", () => HttpResponse.json(body));
+    server.use(kb({ enabled: false, state: "off", hint: "enable_plugin", reason: "installed but not enabled" }));
+    const first = renderIt();
+    const banner = await screen.findByTestId("kb-enable-plugin-banner");
+    expect(within(banner).getByText(/concept, ADR and implementation-plan gates/)).toBeTruthy();
+    expect(within(banner).getByRole("link", { name: "Marketplace" }).getAttribute("href")).toBe("/app/marketplace");
+    first.unmount();
+    // off for any other reason (no plugin, sandboxed home): no banner
+    server.use(kb({ enabled: false, state: "off", reason: "no Corvin-Knowledge checkout" }));
+    renderIt();
+    expect(await screen.findByText("Loop B — Phase 9 fixes")).toBeTruthy();
+    expect(screen.queryByTestId("kb-enable-plugin-banner")).toBeNull();
+  });
+
   it("renders the tree with rollups, KPIs and the decision banner", async () => {
     renderIt();
     expect(await screen.findByText("Loop B — Phase 9 fixes")).toBeTruthy();

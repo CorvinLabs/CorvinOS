@@ -161,8 +161,15 @@ label `kb`. One way only: nothing reads a status back into the KB.
 
 - **Projector** `corvin_console/kb_projection.py`, started by BOTH hosts
   (`corvin_console.app`, `corvin_gateway.app`), tenant `CORVIN_KB_TENANT` (default
-  `_default`), KB at `CORVIN_KB_REPO` or the sibling `Corvin-Knowledge` checkout; no KB →
-  `state: off`. Every 2 s: KB changed (git HEAD or a file under `kb/{initiatives,epics,tasks}`)
+  `_default`), KB at `CORVIN_KB_REPO`, else the sibling `Corvin-Knowledge` checkout (canonical
+  home only), else — every other install — the **tenant's own KB** `<tenant_home>/knowledge`
+  (ADR-2265): it exists once the standard Knowledge Graph plugin is ENABLED; the first tick
+  after the enable runs the plugin's `src/kb_init.py` (subprocess, minimal env) which creates
+  it (git + the plugin's kb engine, audited `console.action_performed` `kb.tenant_created`),
+  and once per process refreshes its engine (`kb.tenant_upgraded`). Plugin disabled → that KB
+  is not read (its files stay). The thread starts at boot even with no KB, so an enable binds
+  without a restart. No KB → `state: off`; `hint: enable_plugin` (+ a board banner linking the
+  Marketplace) when the plugin is installed but not enabled. Every 2 s: KB changed (git HEAD or a file under `kb/{initiatives,epics,tasks}`)
   → `kb heal` (derivable fixes only, committed + audited by the KB) → `kb export` →
   `core/task_tracking/projection.apply` (upsert by `external_ref`, parent-first, actor
   `sync:kb`; unchanged items untouched). KB unchanged → `projection.diff` against the last
@@ -246,8 +253,10 @@ were archived "moved into the knowledge base: <id>". Work items are authored onl
   is not projected into is refused.
 - **Subprocesses** (`kb.py`, the panel's `git`) get a minimal environment — the console's API
   keys are never handed to code read from the KB checkout — and `git` runs with hooks and
-  fsmonitor switched off. **Trust boundary:** the projector executes `scripts/kb.py` FROM the
-  KB checkout; whoever can push to Corvin-Knowledge `main` can run code as the console user.
+  fsmonitor switched off; on Windows the env keeps `SYSTEMROOT`, `TEMP`, `APPDATA` & co. (no
+  secrets), without which Python and git do not start. **Trust boundary:** the projector executes
+  `scripts/kb.py` FROM the KB checkout; whoever can push to Corvin-Knowledge `main` — or write the
+  tenant KB's `scripts/` — can run code as the console user.
   The panel's pull is `--ff-only` under the KB's own `kb/.lock`.
 - **Rollback** (`snapshots.rollback_to_version`) refuses a `kb:` item; the unmounted, unauthed
   `core/task_tracking/routes.py` that exposed it was deleted.
