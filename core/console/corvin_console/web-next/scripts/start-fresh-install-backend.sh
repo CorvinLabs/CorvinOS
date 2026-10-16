@@ -49,15 +49,16 @@ cp -r "$R/$WEB/dist" "$ROOT/CorvinOS/$WEB/dist"
 A="$ROOT/CorvinOS"
 unset CORVIN_MARKETPLACE_ROOT CORVIN_MARKETPLACE_INDEX ANTHROPIC_API_KEY
 # Pre-push check ONLY (opt-in): CORVIN_FRESH_MARKETPLACE_REF=<git ref of the Corvin-Marketplace
-# checkout next to this repo> takes the plugin SOURCE from a `git archive` of that commit
-# instead of GitHub, so a plugin change can be proven on a fresh install before it is
-# pushed. Everything else stays fresh (empty home, index from GitHub). The release gate
-# runs WITHOUT it.
+# checkout next to this repo> takes the plugin SOURCE and the INDEX from a `git archive` of that
+# commit instead of GitHub, so a plugin change (or a new/renamed index id) can be proven on a
+# fresh install before it is pushed. Everything else stays fresh (empty home). The release
+# gate runs WITHOUT it.
 if [ -n "${CORVIN_FRESH_MARKETPLACE_REF:-}" ]; then
   MP_SRC="$(cd "$R/.." && pwd)/Corvin-Marketplace"
   mkdir -p "$ROOT/marketplace"
-  ( cd "$MP_SRC" && git archive "$CORVIN_FRESH_MARKETPLACE_REF" plugins ) | tar -x -C "$ROOT/marketplace" || exit 1
+  ( cd "$MP_SRC" && git archive "$CORVIN_FRESH_MARKETPLACE_REF" plugins index ) | tar -x -C "$ROOT/marketplace" || exit 1
   export CORVIN_MARKETPLACE_ROOT="$ROOT/marketplace/plugins/buildin"
+  export CORVIN_MARKETPLACE_INDEX="$ROOT/marketplace/index/plugins.json"
   echo "fresh backend: plugin source from Corvin-Marketplace@$CORVIN_FRESH_MARKETPLACE_REF (pre-push mode)" >&2
 fi
 export CORVIN_HOME="$ROOT/home"

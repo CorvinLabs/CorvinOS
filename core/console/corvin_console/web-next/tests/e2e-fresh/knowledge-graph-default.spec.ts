@@ -1,17 +1,17 @@
 /**
- * Knowledge Graph — a standard plugin: on a FRESH install it is there without anyone clicking
- * install, one consent-click binds the tenant's own knowledge base to the task board, and the
- * concept / ADR / implementation-plan gates work on that board (ADR-2265).
+ * Knowledge Graph — a first-party standard plugin: on a FRESH install it is installed AND enabled by
+ * boot alone, with no operator step and no consent prompt, the tenant's own knowledge base is created
+ * and bound to the task board, and the concept / ADR / implementation-plan gates work on that board
+ * (ADR-2265).
  *
  *   boot (empty CORVIN_HOME, no local Corvin-Knowledge, no sibling marketplace)
- *     -> default_plugins.yaml installs the plugin (consent pending, NOT enabled)
- *     -> the board says one click is missing
- *     -> enable with consent -> the projector creates <tenant>/knowledge (git + kb engine)
+ *     -> default_plugins.yaml installs + enables the plugin (buildin tier: vetted, no consent)
+ *     -> the projector creates <tenant>/knowledge (git + kb engine) — nobody clicks anything
  *     -> the operator works in it with its own scripts/kb.py -> items on the board,
  *        gate findings shrink G2/G3 -> G4 only, the graph panel reads the same KB.
  *
  * Run (network + built SPA):  npx playwright test -c playwright.fresh-install.config.ts knowledge-graph
- * Nothing in this file installs the plugin; a missing plugin is the bug under test.
+ * Nothing in this file installs or enables the plugin; a missing or disabled plugin is the bug under test.
  */
 import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
@@ -25,7 +25,7 @@ const TENANT = path.join(HOME, "tenants", "_default");
 const KB = path.join(TENANT, "knowledge");
 const API = "/v1/console";
 const LIST = `${API}/api/v1/marketplace/default-plugins`;
-const KG = "plugin:contributor-knowledge_management-corvin_knowledge";
+const KG = "plugin:buildin-knowledge_management-corvin_knowledge";
 const WALK = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "kb_gate_walkthrough.py");
 
 async function login(page: Page): Promise<string> {
@@ -46,44 +46,32 @@ const kbItems = async (page: Page) =>
     .filter((i) => String(i.external_ref ?? "").startsWith("kb:"));
 
 test.describe.serial("Knowledge Graph on a fresh install", () => {
-  test("boot alone installs it — consent pending, not enabled", async ({ page }) => {
+  test("boot alone installs AND enables it — no consent, no click", async ({ page }) => {
     await login(page);
     await expect
       .poll(async () => JSON.stringify(await kg(page)), { timeout: 100_000, intervals: [2_000] })
       .toContain('"installed":true');
     const e = await kg(page);
     expect(e, JSON.stringify(e)).toMatchObject({ registry_id: "corvin_knowledge", offered: true, installed: true });
-    expect(e.installed_version >= "1.1.0", e.installed_version).toBe(true);
-    expect(e.enabled).toBe(false);
-    expect(fs.readFileSync(path.join(TENANT, "plugins", "registry.yaml"), "utf8")).toMatch(/^  corvin_knowledge:\s*$/m);
-    // no knowledge base before the operator consents
-    expect(fs.existsSync(KB)).toBe(false);
+    expect(e.installed_version >= "1.2.0", e.installed_version).toBe(true);
+    await expect.poll(async () => (await kg(page)).enabled, { timeout: 30_000, intervals: [1_000] }).toBe(true);
+    const registry = fs.readFileSync(path.join(TENANT, "plugins", "registry.yaml"), "utf8");
+    expect(registry).toMatch(/^  corvin_knowledge:\s*$/m);
+    // first-party: vetted origin, nothing asked of the operator
+    const rec = ((await (await page.request.get(`${API}/plugins`)).json()).plugins as any[])
+      .find((p) => p.plugin_id === "corvin_knowledge");
+    expect(rec, "corvin_knowledge in the plugin list").toBeTruthy();
+    expect(rec).toMatchObject({ origin: "vetted", requires_consent: false, enabled: true });
+    // the enable is on the audit chain, attributed to the boot provisioner
+    const audit = fs.readFileSync(path.join(TENANT, "global", "forge", "audit.jsonl"), "utf8");
+    expect(audit).toContain("marketplace.enable");
   });
 
-  test("the task board says that one click is missing, and where", async ({ page }) => {
+  test("the tenant knowledge base is created and bound with no restart and no operator step", async ({ page }) => {
     await login(page);
-    await expect.poll(async () => (await kbStatus(page)).hint, { timeout: 15_000 }).toBe("enable_plugin");
-    await page.goto("/console/app/initiatives", { waitUntil: "domcontentloaded" });
-    const banner = page.getByTestId("kb-enable-plugin-banner");
-    await expect(banner).toBeVisible({ timeout: 45_000 });
-    await expect(banner).toContainText("concept, ADR and implementation-plan gates");
-    await expect(banner.getByRole("link", { name: "Marketplace" })).toHaveAttribute("href", /\/app\/marketplace$/);
-  });
-
-  test("enable needs consent; with it, the tenant knowledge base is created and bound", async ({ page }) => {
-    const csrf = await login(page);
-    const url = `${API}/api/v1/marketplace/plugins/${encodeURIComponent(KG)}/enable`;
-    const refused = await page.request.fetch(url, { method: "PATCH", headers: { "x-csrf-token": csrf }, data: {} });
-    expect(refused.status(), "enable without consent must be refused").toBeGreaterThanOrEqual(400);
-    expect(fs.existsSync(KB)).toBe(false);
-    const ok = await page.request.fetch(url, {
-      method: "PATCH", headers: { "x-csrf-token": csrf }, data: { consent_granted: true },
-    });
-    expect(ok.status(), await ok.text()).toBe(200);
-    // no restart: the running projector binds it on its next tick
     await expect
       .poll(async () => { const s = await kbStatus(page); return `${s.enabled}/${s.state}`; },
-        { timeout: 30_000, intervals: [1_000] })
+        { timeout: 60_000, intervals: [1_000] })
       .toBe("true/ok");
     expect(fs.existsSync(path.join(KB, ".git"))).toBe(true);
     expect(fs.existsSync(path.join(KB, "scripts", "kb.py"))).toBe(true);
@@ -91,7 +79,7 @@ test.describe.serial("Knowledge Graph on a fresh install", () => {
     expect(marker.engine_commit).toMatch(/^[0-9a-f]{40}$/);
     const audit = fs.readFileSync(path.join(TENANT, "global", "forge", "audit.jsonl"), "utf8");
     expect(audit).toContain("kb.tenant_created");
-    // the banner is gone
+    // the task board has no "enable the plugin" banner: nothing is missing
     await page.goto("/console/app/initiatives", { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading").first()).toBeVisible({ timeout: 45_000 });
     await expect(page.getByTestId("kb-enable-plugin-banner")).toHaveCount(0);

@@ -374,20 +374,21 @@ def test_progress_of_another_tenants_job_is_404(client):
     assert client.get("/v1/console/api/v1/marketplace/install/install_foreign/progress").status_code == 404
 
 
-# ── 9. the Knowledge Graph (contributor/knowledge_management/corvin_knowledge) ──
+# ── 9. the Knowledge Graph (buildin/knowledge_management/corvin_knowledge) ──
 
-_KNOWLEDGE = "plugin:contributor-knowledge_management-corvin_knowledge"
+_KNOWLEDGE = "plugin:buildin-knowledge_management-corvin_knowledge"
 
 
 def test_knowledge_graph_plugin_installs_and_its_panel_follows_enable(client, home):
     entry = next(e for e in _index_entries(client) if e["id"] == _KNOWLEDGE)
-    assert entry["tier"] == "contributor" and entry["installable"], entry.get("install_blocker")
+    assert entry["tier"] == "buildin" and entry["installable"], entry.get("install_blocker")
     body = _install(client, _KNOWLEDGE)
-    assert body["status"] == "completed" and body["registry_id"] == "corvin_knowledge" and body["origin"] == "community"
+    assert body["status"] == "completed" and body["registry_id"] == "corvin_knowledge" and body["origin"] == "vetted"
     rec = {p["plugin_id"]: p for p in client.get("/v1/console/plugins").json()["plugins"]}["corvin_knowledge"]
-    assert rec["settings"]["repo_path"] == "~/.corvin-knowledge/" and rec["settings"]["consistency_level"] == "warn"
+    assert rec["settings"]["repo_path"] == "" and rec["settings"]["consistency_level"] == "warn"
+    assert rec["requires_consent"] is False
     assert "corvin-knowledge" not in _manifest_panel_routes(client)
-    assert client.post("/v1/console/plugins/corvin_knowledge/enable", json={"consent_granted": True}).status_code == 200
+    assert client.post("/v1/console/plugins/corvin_knowledge/enable", json={}).status_code == 200  # first-party: no consent step
     panel = next(p for p in client.get("/v1/console/capabilities/manifest").json()["panels"] if p["route"] == "corvin-knowledge")
     assert panel["id"] == "plugin-corvin_knowledge" and panel["nav_group"] == "marketplace"
     assert panel["element"] == {"kind": "react-component", "component": "CorvinKnowledgePage"}

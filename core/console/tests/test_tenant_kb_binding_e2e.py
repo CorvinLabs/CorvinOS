@@ -3,7 +3,9 @@
 A sandboxed console with NO Corvin-Knowledge checkout (sandboxed CORVIN_HOME, no
 CORVIN_KB_REPO) — what every fresh install is. Every step goes through HTTP:
 
-* marketplace install of the Knowledge Graph plugin -> the board says one click is
+* marketplace install of the Knowledge Graph plugin (a stand-in for "installed but disabled",
+  e.g. by the operator -- boot itself installs AND enables it, see
+  test_default_plugins_knowledge_graph_e2e.py) -> the board says one click is
   missing (``/kb/status``: state off, ``hint: enable_plugin``);
 * enable WITHOUT consent is refused, the KB stays absent;
 * enable with consent -> the next projector tick runs the plugin's ``kb_init.py``:
@@ -29,7 +31,7 @@ from test_admin_route import _audit_events, _sandbox  # noqa: E402
 
 _TT = "/v1/console/task-tracking"
 _MP = "/v1/console/api/v1/marketplace/plugins"
-_KG = "plugin:contributor-knowledge_management-corvin_knowledge"
+_KG = "plugin:buildin-knowledge_management-corvin_knowledge"
 
 
 def _kb(repo: Path, *args) -> dict:
@@ -85,13 +87,13 @@ class TenantKnowledgeBaseBinding(unittest.TestCase):
             self.assertEqual((st["state"], st.get("hint")), ("off", "enable_plugin"), st)
             self.assertEqual(client.get(f"{_TT}/kb/status").json().get("hint"), "enable_plugin")
 
-            r = client.patch(f"{_MP}/{_KG}/enable", headers=h, json={})
-            self.assertGreaterEqual(r.status_code, 400, "enable without consent must be refused")
-            self.assertEqual(self._sync(client, csrf)["state"], "off")
             self.assertFalse(kb.exists())
+            rec = {p["plugin_id"]: p for p in client.get("/v1/console/plugins").json()["plugins"]}["corvin_knowledge"]
+            self.assertEqual(rec["origin"], "vetted")
+            self.assertFalse(rec["requires_consent"], rec)
 
-            r = client.patch(f"{_MP}/{_KG}/enable", headers=h, json={"consent_granted": True})
-            self.assertEqual(r.status_code, 200, r.text)
+            r = client.patch(f"{_MP}/{_KG}/enable", headers=h, json={})
+            self.assertEqual(r.status_code, 200, r.text)   # no consent body: the plugin needs none
             st = self._sync(client, csrf)
             self.assertEqual(st["state"], "ok", st)
             self.assertEqual(self.kp.kb_repo(), kb)

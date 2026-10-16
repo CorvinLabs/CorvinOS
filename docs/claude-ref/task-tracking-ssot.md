@@ -163,8 +163,8 @@ label `kb`. One way only: nothing reads a status back into the KB.
   (`corvin_console.app`, `corvin_gateway.app`), tenant `CORVIN_KB_TENANT` (default
   `_default`), KB at `CORVIN_KB_REPO`, else the sibling `Corvin-Knowledge` checkout (canonical
   home only), else — every other install — the **tenant's own KB** `<tenant_home>/knowledge`
-  (ADR-2265): it exists once the standard Knowledge Graph plugin is ENABLED; the first tick
-  after the enable runs the plugin's `src/kb_init.py` (subprocess, minimal env) which creates
+  (ADR-2265): it exists once the standard Knowledge Graph plugin is ENABLED (boot enables it — it is a
+  first-party `buildin` plugin that needs no consent); the first tick after the enable runs the plugin's `src/kb_init.py` (subprocess, minimal env) which creates
   it (git + the plugin's kb engine, audited `console.action_performed` `kb.tenant_created`),
   and once per process refreshes its engine (`kb.tenant_upgraded`). Plugin disabled → that KB
   is not read (its files stay). The thread starts at boot even with no KB, so an enable binds

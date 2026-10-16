@@ -151,7 +151,8 @@ export → apply; drift is re-applied, a red KB blocks with a banner). KB-owned 
 `/kb-transition` → the KB state machine. Once a tenant has KB items the git sync archives
 its ADR cards. Every OTHER install (no `CORVIN_KB_REPO`, no sibling checkout) gets its
 own KB at `<tenant_home>/knowledge`, created by the projector from the standard Knowledge Graph
-plugin's `src/kb_init.py` once the operator enables it (consent) — ADR-2265.
+plugin's `src/kb_init.py` — the plugin is first-party (`buildin`, vetted, no consent) and boot
+enables it, so a new install has the gates with no operator step — ADR-2265.
 → `docs/claude-ref/task-tracking-ssot.md`
 
 **Cutover done (2026-10-03, ADR-2205):** Corvin-ADR was merged into Corvin-Knowledge with its

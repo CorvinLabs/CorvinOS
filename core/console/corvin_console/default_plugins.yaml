@@ -14,6 +14,8 @@
 #   * enable    true = enable after install, but only when the plugin needs no consent.
 #               A consent-gated plugin stays installed + disabled for the operator to
 #               enable; consent is never granted on someone's behalf
+#   * replaces  the index id this listing supersedes (a plugin that moved tier). An existing
+#               community record of it is upgraded; an operator's uninstall of it is kept
 #   * min_version  a marketplace listing older than this is refused (the entry is
 #               skipped and reported, not installed)
 # Documentation: docs/claude-ref/default-plugins.md
@@ -28,14 +30,17 @@ plugins:
     reason: >-
       Turns a task description into a narrated MP4 (storyboard, narration, animated
       web slides). First bundled plugin.
-  - index_id: plugin:contributor-knowledge_management-corvin_knowledge
+  - index_id: plugin:buildin-knowledge_management-corvin_knowledge
     registry_id: corvin_knowledge
     name: Knowledge Graph
-    min_version: "1.1.0"
+    min_version: "1.2.0"
     enable: true
-    # community origin -> consent is required, so boot leaves it installed + disabled; the
-    # operator's enable (with consent) makes the board projector create the tenant's own
-    # knowledge base (<tenant_home>/knowledge) on its next tick — no restart
+    # First-party (buildin tier -> origin vetted, requires_consent: false, local-only), so boot
+    # enables it: the board projector then creates the tenant's own knowledge base
+    # (<tenant_home>/knowledge) on its next tick — no restart, no operator step (ADR-2265).
+    # Until 1.1.0 it was the contributor listing below (community origin, consent on enable):
+    # an install that still carries that record is upgraded and enabled.
+    replaces: plugin:contributor-knowledge_management-corvin_knowledge
     reason: >-
       The tenant's own knowledge base (concepts, decisions, implementation plans) projected
       onto the task board, with the concept, ADR and implementation-plan gates and the

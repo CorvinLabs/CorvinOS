@@ -14,6 +14,13 @@ Rules that make this safe to run on every boot:
   second boot is a no-op.
 * **Never implies consent.** ``enable: true`` only enables a plugin whose record needs no
   consent (``PluginRecord.consent_required()``); otherwise it stays installed, disabled.
+  A first-party plugin that must work on day one (the Knowledge Graph) therefore ships in the
+  marketplace's ``buildin`` tier (origin ``vetted``, ``requires_consent: false``) — the rule is
+  not narrowed, the plugin is of a class that does not need the prompt (ADR-2265).
+* **A reclassified plugin follows its record.** An entry may name the index id it ``replaces``.
+  An existing community-origin record of the same plugin is upgraded to the vetted listing
+  (``PluginLifecycle.upgrade``: narrowing, never an escalation) and then enabled; a
+  predecessor the operator uninstalled stays uninstalled.
 * **Never blocks boot.** :func:`start` runs in a daemon thread (the source may have to be
   downloaded from GitHub); every failure is logged and recorded as a per-entry outcome.
 * **Retried until it sticks.** A failed entry (e.g. offline first boot) is NOT written to
@@ -70,7 +77,11 @@ def load_list(path: Optional[Path] = None) -> List[Dict[str, Any]]:
         if iid in seen:
             raise DefaultPluginsError(f"duplicate entry {iid}")
         seen.add(iid)
+        replaces = str(e.get("replaces") or "")
+        if replaces and (not _INDEX_ID_RE.match(replaces) or replaces == iid):
+            raise DefaultPluginsError(f"plugins[{i}].replaces {replaces!r} is not another marketplace index id")
         out.append({
+            "replaces": replaces,
             "index_id": iid,
             "registry_id": str(e.get("registry_id") or ""),
             "name": str(e.get("name") or iid),
@@ -137,7 +148,7 @@ def provision(tenant_id: str, *, entries: Optional[List[Dict[str, Any]]] = None)
     if not _mi._LIFECYCLE_AVAILABLE or not _resolve.available():
         return [{"index_id": e["index_id"], "status": "failed",
                  "error": "plugin subsystem unavailable in this installation"} for e in entries]
-    from corvin_plugins.manifest import PluginError  # type: ignore[import-not-found]
+    from corvin_plugins.manifest import PluginError, PluginOrigin  # type: ignore[import-not-found]
     from corvin_plugins.state import TenantRegistry  # type: ignore[import-not-found]
 
     with _lock:
@@ -156,6 +167,13 @@ def provision(tenant_id: str, *, entries: Optional[List[Dict[str, Any]]] = None)
                 res["status"] = "already_offered"
                 continue
             try:
+                if e["replaces"] and e["replaces"] in ledger["offered"] and \
+                        TenantRegistry.load(tenant_id=tenant_id).records.get(e["registry_id"]) is None:
+                    # the operator installed the predecessor and later uninstalled it: that stays
+                    res.update(status="skipped", error="the operator uninstalled the predecessor listing")
+                    ledger["offered"][iid] = {"registry_id": e["registry_id"], "version": "", "skipped": True}
+                    _write_ledger(tenant_id, ledger)
+                    continue
                 if not _mi._index_has(iid):
                     raise DefaultPluginsError(f"{iid} is not in the marketplace index")
                 plugin_dir, manifest = _resolve.load_manifest(iid)
@@ -174,14 +192,25 @@ def provision(tenant_id: str, *, entries: Optional[List[Dict[str, Any]]] = None)
                 except PluginError as exc:
                     if "already installed" not in str(exc):
                         raise
-                res.update(status="installed", registry_id=record.plugin_id, version=str(record.version),
-                           requires_consent=bool(record.consent_required()), enabled=False)
-                if e["enable"] and not record.consent_required():
-                    try:
-                        res["enabled"] = bool(life.enable(record.plugin_id).enabled)
-                        _audit(tenant_id, "marketplace.enable", iid)
-                    except Exception as exc:  # noqa: BLE001 — installed stays; operator can enable
-                        res["enable_error"] = f"{type(exc).__name__}: {exc}"[:300]
+                    stored = TenantRegistry.load(tenant_id=tenant_id).records.get(record.plugin_id)
+                    if stored is not None and stored.origin is PluginOrigin.COMMUNITY \
+                            and record.origin is not PluginOrigin.COMMUNITY \
+                            and _vtuple(str(record.version)) > _vtuple(str(stored.version)):
+                        # reclassified listing (community -> first-party): same plugin, narrower
+                        # declarations, so upgrade() needs no escalation approval
+                        life.upgrade(record.plugin_id, record, updated_by="default_plugins")
+                        res["upgraded_from"] = str(stored.version)
+                        _audit(tenant_id, "marketplace.upgrade", iid)
+                now = TenantRegistry.load(tenant_id=tenant_id).records.get(record.plugin_id) or record
+                res.update(status="installed", registry_id=record.plugin_id, version=str(now.version),
+                           requires_consent=bool(now.consent_required()), enabled=bool(now.enabled))
+                if e["enable"] and not now.consent_required():
+                    if not now.enabled:
+                        try:
+                            res["enabled"] = bool(life.enable(record.plugin_id).enabled)
+                            _audit(tenant_id, "marketplace.enable", iid)
+                        except Exception as exc:  # noqa: BLE001 — installed stays; operator can enable
+                            res["enable_error"] = f"{type(exc).__name__}: {exc}"[:300]
                 elif e["enable"]:
                     res["enable_error"] = "needs the operator's consent — left disabled"
                 ledger["offered"][iid] = {"registry_id": record.plugin_id, "version": str(record.version)}

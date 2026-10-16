@@ -140,7 +140,7 @@ def kb_repo() -> Optional[Path]:
 # --- the tenant's own knowledge base (Knowledge Graph plugin) --------------------------
 
 KG_PLUGIN_ID = "corvin_knowledge"
-KG_INDEX_ID = "plugin:contributor-knowledge_management-corvin_knowledge"
+KG_INDEX_ID = "plugin:buildin-knowledge_management-corvin_knowledge"
 _kg_ensured: set[str] = set()     # tenants whose KB was ensured (engine refreshed) by this process
 
 
