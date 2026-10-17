@@ -33,13 +33,17 @@ import adapter  # noqa: E402
 
 
 class SummarizerChoiceTest(unittest.TestCase):
-    """Read the source: spawning the real summarizer costs an LLM call."""
+    """Read the source: spawning the real summarizer costs an LLM call.
+
+    The summarizer logic lives in ``_build_voice_summary_pipeline``;
+    ``build_voice_summary`` is only its final spoken-output gate.
+    """
 
     @classmethod
     def setUpClass(cls):
         cls.src = (_HERE / "adapter.py").read_text(encoding="utf-8")
-        head = cls.src.split("def build_voice_summary", 1)
-        assert len(head) == 2, "build_voice_summary not found"
+        head = cls.src.split("def _build_voice_summary_pipeline", 1)
+        assert len(head) == 2, "_build_voice_summary_pipeline not found"
         # Bound the slice at the next top-level def so we only read this function.
         body = head[1]
         cls.body = body.split("\ndef ", 1)[0]
@@ -70,9 +74,9 @@ class SummarizerChoiceTest(unittest.TestCase):
 
         tree = ast.parse((_HERE / "adapter.py").read_text(encoding="utf-8"))
         fn = next((n for n in ast.walk(tree)
-                   if isinstance(n, ast.FunctionDef) and n.name == "build_voice_summary"),
+                   if isinstance(n, ast.FunctionDef) and n.name == "_build_voice_summary_pipeline"),
                   None)
-        self.assertIsNotNone(fn, "build_voice_summary not found")
+        self.assertIsNotNone(fn, "_build_voice_summary_pipeline not found")
 
         def _appends_task(node) -> bool:
             return any(
@@ -111,7 +115,7 @@ class SummarizerChoiceTest(unittest.TestCase):
         import ast
         tree = ast.parse((_HERE / "adapter.py").read_text(encoding="utf-8"))
         fn = next(n for n in ast.walk(tree)
-                  if isinstance(n, ast.FunctionDef) and n.name == "build_voice_summary")
+                  if isinstance(n, ast.FunctionDef) and n.name == "_build_voice_summary_pipeline")
         self.assertFalse(any(isinstance(c, ast.Constant) and c.value == "--task"
                              for c in ast.walk(fn)),
                          "--task argv reintroduced — user text leaks via /proc/<pid>/cmdline")
@@ -157,7 +161,7 @@ class StderrScrubTest(unittest.TestCase):
         the unit tests above green.)
         """
         src = (_HERE / "adapter.py").read_text(encoding="utf-8")
-        fn = src.split("def build_voice_summary", 1)[1].split("\ndef ", 1)[0]
+        fn = src.split("def _build_voice_summary_pipeline", 1)[1].split("\ndef ", 1)[0]
         handler = fn.split("except (subprocess.CalledProcessError", 1)
         self.assertEqual(len(handler), 2, "the summarizer error handler moved")
         handler_body = handler[1]

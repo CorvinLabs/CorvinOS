@@ -406,7 +406,9 @@ if not _IS_TEST_SANDBOX:
               f"{_tenant_exc}", file=sys.stderr, flush=True)
 
 # This adapter lives in bridges/shared/ — scripts dir is in operator/voice/scripts.
-SCRIPTS_DIR = ROOT.parent.parent / "voice" / "scripts"
+# _VOICE_SCRIPTS_DIR is never redirected; SCRIPTS_DIR is (tests point it at fakes).
+_VOICE_SCRIPTS_DIR = ROOT.parent.parent / "voice" / "scripts"
+SCRIPTS_DIR = _VOICE_SCRIPTS_DIR
 
 # MCP Plugin Manager (ADR-0096 M1) — optional, hot-reload via active.json mtime cache.
 _MCP_MANAGER_ROOT = ROOT.parent.parent / "mcp_manager"
@@ -9623,7 +9625,28 @@ def build_voice_summary(text: str, max_chars: int = 400,
     ADR-0033: if a non-default SummaryProvider is registered, hand the raw
     text off to it directly. The default (ClaudeCliSummaryProvider) falls
     through to the existing pipeline unchanged.
+
+    Every path ends at ONE final gate: the spoken text (provider output,
+    fallback head, appended annexes included) passes ``_guard_spoken``; if
+    nothing speakable is left, the fixed neutral announcement is spoken —
+    never the unguarded text.
     """
+    spoken = _build_voice_summary_pipeline(text, max_chars, override, task)
+    if not spoken:
+        return spoken
+    guarded = _guard_spoken(spoken)
+    if guarded:
+        return guarded
+    log("build_voice_summary: final spoken text was instruction/markup only "
+        "— speaking the neutral announcement")
+    lang = _resolve_voice_output_language(override or text) or ""
+    return _neutral_announcement(
+        "en" if lang.split("-", 1)[0].lower() == "en" else "de")
+
+
+def _build_voice_summary_pipeline(text: str, max_chars: int,
+                                  override: str | None, task: str) -> str:
+    """The summary pipeline behind :func:`build_voice_summary` (no final gate)."""
     if _summary_prov is not None:
         try:
             from corvin_plugins.providers.summary_provider import (  # type: ignore
@@ -9640,27 +9663,33 @@ def build_voice_summary(text: str, max_chars: int = 400,
     want_appendix = _audience_demands_appendix(audience_block)
     want_metapher = _audience_demands_metapher(audience_block)
 
+    def _with_annexes(spoken: str) -> str:
+        # LERN-ZUGABE + Metapher guarantee: if the LLM summarizer already
+        # followed the --audience instruction, the markers are present and we
+        # skip the extra calls. If it missed them (LLMs miss audience
+        # instructions for the learning annex as often as for the metaphor),
+        # backfill deterministically so voice_audience_learning>=1 and
+        # voice_audience_metaphors='on' are ALWAYS honoured on every path.
+        # Order matters: the LERN-ZUGABE first, then the metapher (the metapher
+        # bridge "follows the learning annex"). Previously only the metapher
+        # was backfilled — hence "Metaphern da, Learning fehlt".
+        if want_appendix and not _has_lern_zugabe_suffix(spoken):
+            spoken = _strip_for_speech(_append_lern_zugabe(spoken, lang=appendix_lang))
+        if want_metapher and not _has_metapher_suffix(spoken):
+            spoken = _strip_for_speech(_append_metapher(spoken, lang=appendix_lang))
+        return spoken
+
     # Minimum length guard: a <voice> override shorter than 10 chars after
     # stripping (e.g. a lone '…' placeholder) is useless for TTS and would
     # produce near-silent audio. Fall through to the summarizer in that case.
     _MIN_OVERRIDE_CHARS = 10
     if override is not None and len(override.strip()) >= _MIN_OVERRIDE_CHARS:
         spoken = _strip_for_speech(_guard_spoken(override.strip()))
-        if not spoken:
-            log("build_voice_summary: <voice> override was instruction/markup "
-                "text only — falling through to the summarizer")
-            override = None
-    if override is not None and len(override.strip()) >= _MIN_OVERRIDE_CHARS:
-        if want_appendix and not _has_lern_zugabe_suffix(spoken):
-            spoken = _strip_for_speech(
-                _append_lern_zugabe(spoken, lang=appendix_lang)
-            )
-        if want_metapher and not _has_metapher_suffix(spoken):
-            spoken = _strip_for_speech(
-                _append_metapher(spoken, lang=appendix_lang)
-            )
-        return spoken
-    if override is not None and override.strip():
+        if spoken:
+            return _with_annexes(spoken)
+        log("build_voice_summary: <voice> override was instruction/markup "
+            "text only — falling through to the summarizer")
+    elif override is not None and override.strip():
         log(f"build_voice_summary: override too short ({len(override.strip())} chars)"
             " — falling through to summarizer")
     text = text.strip()
@@ -9690,21 +9719,10 @@ def build_voice_summary(text: str, max_chars: int = 400,
         summarizer = summarizer_fallback
         use_smart = True
     else:
-        # Neither script available — use fallback
-        spoken = _strip_for_speech(_truncate_at_boundary(text, max_chars))
-        if want_appendix and not _has_lern_zugabe_suffix(spoken):
-            spoken = _strip_for_speech(_append_lern_zugabe(spoken, lang=appendix_lang))
-        if want_metapher and not _has_metapher_suffix(spoken):
-            spoken = _strip_for_speech(_append_metapher(spoken, lang=appendix_lang))
-        return spoken
+        summarizer = None  # neither script available
 
-    if not stripper.exists():
-        spoken = _strip_for_speech(_truncate_at_boundary(text, max_chars))
-        if want_appendix and not _has_lern_zugabe_suffix(spoken):
-            spoken = _strip_for_speech(_append_lern_zugabe(spoken, lang=appendix_lang))
-        if want_metapher and not _has_metapher_suffix(spoken):
-            spoken = _strip_for_speech(_append_metapher(spoken, lang=appendix_lang))
-        return spoken
+    if summarizer is None or not stripper.exists():
+        return _with_annexes(_strip_for_speech(_truncate_at_boundary(text, max_chars)))
     try:
         # Pre-strip code blocks so summarize.py sees clean prose.
         try:
@@ -9832,43 +9850,22 @@ def build_voice_summary(text: str, max_chars: int = 400,
         if "[summarize] degraded:" in proc.stderr:
             log("build_voice_summary: summarize.py used its degraded "
                 "(near-verbatim) fallback — both LLM backends were "
-                "unavailable this turn. stderr tail: "
-                + proc.stderr.strip()[-400:])
-        if out_raw and not out:
-            # The guard rejected everything summarize.py printed (instruction /
-            # markup text only). Never speak that and never fall back to the raw
-            # answer: speak the fixed neutral announcement instead.
-            log("build_voice_summary: summarizer output was instruction/markup "
-                "text only — speaking the neutral announcement")
-            return _strip_for_speech(_neutral_announcement(base_lang))
-        # Sanity check: summarize.py should never return empty unless input was empty.
-        # If it does, log and fall back to text head.
-        if out:
-            # LERN-ZUGABE + Metapher guarantee: if the LLM summarizer already
-            # followed the --audience instruction, the markers are present and
-            # we skip the extra calls. If it missed them (LLMs miss audience
-            # instructions for the learning annex as often as for the metaphor),
-            # backfill deterministically so voice_audience_learning>=1 and
-            # voice_audience_metaphors='on' are ALWAYS honoured. Order matters:
-            # the LERN-ZUGABE first, then the metapher (the metapher bridge
-            # "follows the learning annex"). Previously only the metapher was
-            # backfilled — hence "Metaphern da, Learning fehlt".
-            result = _strip_for_speech(out)
-            if want_appendix and not _has_lern_zugabe_suffix(result):
-                result = _strip_for_speech(
-                    _append_lern_zugabe(result, lang=appendix_lang)
-                )
-            if want_metapher and not _has_metapher_suffix(result):
-                result = _strip_for_speech(
-                    _append_metapher(result, lang=appendix_lang)
-                )
-            return result
-        # Empty stdout from summarize.py means its guard rejected everything (or
-        # it printed nothing). The raw answer is never spoken in that case: the
-        # fixed neutral line is. Same contract as the guard-rejected branch above.
-        log("build_voice_summary: summarize returned empty — speaking the neutral announcement"
-            + (f" — stderr tail: {proc.stderr.strip()[-400:]}" if proc.stderr.strip() else ""))
-        return _strip_for_speech(_neutral_announcement(base_lang))
+                "unavailable this turn. stderr: "
+                + _scrub_cli_stderr(proc.stderr))
+        if not out:
+            # Either our guard rejected everything summarize.py printed
+            # (instruction / markup text only), or summarize.py printed nothing
+            # (its own guard rejected it). The raw answer is never spoken in
+            # either case: the fixed neutral line is.
+            if out_raw:
+                log("build_voice_summary: summarizer output was instruction/markup "
+                    "text only — speaking the neutral announcement")
+            else:
+                stderr_tail = _scrub_cli_stderr(proc.stderr)
+                log("build_voice_summary: summarize returned empty — speaking the neutral announcement"
+                    + (f" — stderr: {stderr_tail}" if stderr_tail else ""))
+            return _neutral_announcement(base_lang)
+        return _with_annexes(_strip_for_speech(out))
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
         # OSError (e.g. FileNotFoundError spawning the summarizer) must degrade to
         # the answer head, not propagate out and drop the whole turn — this was
@@ -9894,19 +9891,13 @@ def build_voice_summary(text: str, max_chars: int = 400,
         if not head:
             log("build_voice_summary: answer head is instruction/markup text only "
                 "— speaking the neutral announcement")
-            return _strip_for_speech(_neutral_announcement(base_lang))
-        spoken = _strip_for_speech(head)
-        if want_appendix and not _has_lern_zugabe_suffix(spoken):
-            spoken = _strip_for_speech(_append_lern_zugabe(spoken, lang=appendix_lang))
-        if want_metapher and not _has_metapher_suffix(spoken):
-            spoken = _strip_for_speech(_append_metapher(spoken, lang=appendix_lang))
-        return spoken
+            return _neutral_announcement(base_lang)
+        return _with_annexes(_strip_for_speech(head))
 
 
-# The guard always comes from the real voice/scripts directory, not from
-# SCRIPTS_DIR: tests redirect SCRIPTS_DIR to a fake summarizer, and a guard that
-# followed that redirect would silently stop filtering.
-_GUARD_FILE = ROOT.parent.parent / "voice" / "scripts" / "voice_output_guard.py"
+# From _VOICE_SCRIPTS_DIR, not SCRIPTS_DIR: a guard that followed the test
+# redirect to a fake summarizer would silently stop filtering.
+_GUARD_FILE = _VOICE_SCRIPTS_DIR / "voice_output_guard.py"
 
 
 def _guard_module():

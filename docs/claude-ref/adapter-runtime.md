@@ -52,8 +52,11 @@ language. Two long-standing behaviours that broke this were removed:
   (stdlib-only) is applied at three points: `summarize.py::_run_claude_print` rejects a model
   reply that shares a 7-word run with the system prompt it was given (echo → `None` → the
   caller degrades to the structural fallback); `summarize.py` runs `sanitize_spoken` over every
-  LLM summary, appendix and metaphor; `adapter.py::_guard_spoken` is the final gate for
-  `summarize.py` output and `<voice>` overrides. `sanitize_spoken` drops meta/instruction lines,
+  LLM summary, appendix and metaphor; `adapter.py::build_voice_summary` ends at ONE final gate,
+  `_guard_spoken` over the complete spoken text of every path — `summarize.py` output, `<voice>`
+  overrides, a non-default `SummaryProvider`, the raw-head fallbacks (no summarizer script, no
+  `strip_for_tts.py`, summarizer crash) and the appended LERN-ZUGABE / metaphor. The pipeline itself
+  is `_build_voice_summary_pipeline`; nothing returns past the gate. `sanitize_spoken` drops meta/instruction lines,
   markup and unrendered placeholders and returns `""` when nothing speakable remains.
   - **Empty guard result speaks the neutral announcement, never the raw input.** `""` means "do not
     speak this", so the caller speaks `neutral_announcement(lang)`: one fixed text per language (de:
@@ -80,9 +83,13 @@ language. Two long-standing behaviours that broke this were removed:
     50 % rule counts lines and sentences: more than half scaffolding empties the whole result, and
     exactly half keeps the content. Prompt echo is caught by the 7-word overlap check, not by pattern
     lists.
+  - **Logged summarizer stderr is scrubbed.** Every `build_voice_summary` log line that carries
+    `summarize.py` stderr (crash, empty stdout, `degraded:` sentinel) passes `_scrub_cli_stderr`
+    first, so a CLI diagnostic that quotes the user's text never reaches `corvin.log`.
   - Test: `voice/scripts/test_voice_output_guard.py` (unit + real `summarize.py` subprocess with a fake
     `claude` that replays its system prompt, and a CLI-unavailable run with meta-only input) and
-    `bridges/shared/test_adapter_voice_guard.py` (adapter side: empty guard → neutral line or silence).
+    `bridges/shared/test_adapter_voice_guard.py` (adapter side: empty guard → neutral line or silence;
+    final gate over the no-stripper head, a custom provider and an appended annex; scrubbed stderr).
 - **No verbatim short-circuit.** Both `adapter.py::build_voice_summary` (the
   `len(text) <= max_chars` branch) and `summarize.py` (the in-budget fast-path)
   used to speak a reply as-is, markdown-stripped, whenever it fit the ~400-char

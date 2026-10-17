@@ -98,14 +98,18 @@ _force_utf8_stdio()
 # Sibling module, loaded by path so it works however this script is launched.
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from voice_output_guard import sanitize_spoken as _sanitize_spoken  # type: ignore
-    from voice_output_guard import echoes_prompt as _echoes_prompt  # type: ignore
-    from voice_output_guard import speak_or_announce as _speak_or_announce  # type: ignore
+    from voice_output_guard import (  # type: ignore
+        echoes_prompt as _echoes_prompt,
+        sanitize_spoken as _sanitize_spoken,
+        speak_or_announce as _speak_or_announce,
+    )
 except Exception:  # noqa: BLE001
     # Guard unavailable: fail CLOSED. Nothing is spoken unguarded, and no
     # announcement text is duplicated here: "" tells the caller to degrade
     # (adapter.py then speaks its own neutral line, or stays silent).
-    def _echoes_prompt(output: str, prompt: str) -> bool:
+    # _echoes_prompt → False is not fail-open: _sanitize_spoken → "" already
+    # rejects every output, so no echo can be spoken either.
+    def _echoes_prompt(output: str, prompt: str, window: int = 7) -> bool:
         return False
     def _sanitize_spoken(text: str) -> str:
         return ""

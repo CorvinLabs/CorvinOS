@@ -22,6 +22,18 @@ from __future__ import annotations
 
 import re
 
+# Prompt-form tokens shared by the line-start rules (_STRONG_META,
+# _PROTOCOL_HEADER) and the mid-line splitter (_PROTOCOL_BOUNDARY), so these
+# tokens cannot drift apart. All uppercase-only. The boundary deliberately
+# splits on a SUBSET: its tag list stays narrow and case-sensitive, and the
+# line-start-only labels (AUSGABE-FORMAT, TRANSCRIPT START/END, LERN-ZUGABE:)
+# are not split mid-line. A new token shared by both goes in a _TOK_* fragment.
+_TOK_SECTION_TAG = r"\[\s*(?:TASK|ANSWER|ANTWORT|AUFGABE)\s*\]"
+_TOK_ONLY_TASK = r"(?:DEINE\s+EINZIGE\s+AUFGABE|YOUR\s+ONLY\s+TASK)"
+_TOK_OUTPUT_LABEL = r"OUTPUT\s+(?:SHAPE|LANGUAGE|FORMAT)"
+_TOK_SELF_CHECK = r"(?:SELF-?CHECK|SELBSTPR[ÜU]FUNG)\s*(?::|—|–)"
+_TOK_RULES_DASH = r"(?:REGELN|RULES)\s*—"
+
 # Prompt/protocol LINES. A line counts as scaffolding only when it *starts* with
 # a tag, a protocol label followed by its separator, or a model-directed
 # imperative. A word that merely appears inside a sentence ("die Regeln für
@@ -30,11 +42,11 @@ import re
 # and the protocol tokens are uppercase-only.
 _STRONG_META = re.compile(
     r"^\s*(?:[-*•>]\s*)?(?:"
-    r"\[\s*(?:TASK|ANSWER|ANTWORT|AUFGABE)\s*\]"
-    r"|(?:DEINE\s+EINZIGE\s+AUFGABE|YOUR\s+ONLY\s+TASK)\b"
-    r"|(?:OUTPUT\s+(?:SHAPE|LANGUAGE|FORMAT)|AUSGABE-?FORMAT|TRANSCRIPT\s+(?:START|END)"
+    + _TOK_SECTION_TAG
+    + r"|" + _TOK_ONLY_TASK + r"\b"
+    r"|(?:" + _TOK_OUTPUT_LABEL + r"|AUSGABE-?FORMAT|TRANSCRIPT\s+(?:START|END)"
     r"|LERN-ZUGABE|LEARNING\s+ANNEX)\s*:"
-    r"|(?:SELF-?CHECK|SELBSTPR[ÜU]FUNG)\s*(?::|—|–)"
+    r"|" + _TOK_SELF_CHECK +
     r"|</?\s*(?i:system-reminder|system|instructions?|voice|assistant|user|task|answer)\s*>"
     r"|<\?claude|<<[A-Za-z_ ]+>>|\[\[\s*[A-Za-z_]+\s*\]\]"
     r"|VOICE_HOOK_RECURSION\b"
@@ -54,7 +66,7 @@ _INLINE_META = re.compile(
 # short line that ends in a colon. Other uppercase labels with a dash ("NOTE —
 # die Datei fehlt.", "WICHTIG — Wartung am Freitag") are ordinary speech.
 _PROTOCOL_HEADER = re.compile(
-    r"^\s*(?:REGELN|RULES)\s*—[^.!?]{0,40}:\s*$",
+    r"^\s*" + _TOK_RULES_DASH + r"[^.!?]{0,40}:\s*$",
 )
 
 # Imperatives addressed to a model, at the start of a line (case-insensitive).
@@ -82,13 +94,14 @@ _SENTENCE_END = re.compile(r"(?<=[.!?])[ \t]+")
 # a whole answer onto one line, so a header or tag can sit mid-line behind a
 # content sentence ("… grün. REGELN — load-bearing: [TASK]"): a line break is
 # put in front of each such token so the anchored patterns see it at its start.
-# Uppercase-only and the same forms as _STRONG_META, so prose never splits.
+# Uppercase-only and built from the same _TOK_* fragments as _STRONG_META, so
+# prose never splits.
 _PROTOCOL_BOUNDARY = re.compile(
-    r"(?<=\S)[ \t]*(?=(?:REGELN|RULES)\s*—"
-    r"|SELF-?CHECK\s*(?::|—|–)|SELBSTPR[ÜU]FUNG\s*(?::|—|–)"
-    r"|\[\s*(?:TASK|ANSWER|ANTWORT|AUFGABE)\s*\]"
-    r"|OUTPUT\s+(?:SHAPE|LANGUAGE|FORMAT)\s*:|DEINE\s+EINZIGE\s+AUFGABE|YOUR\s+ONLY\s+TASK"
-    r"|</?\s*(?:system-reminder|system|instructions?)\s*>)"
+    r"(?<=\S)[ \t]*(?=" + _TOK_RULES_DASH
+    + r"|" + _TOK_SELF_CHECK
+    + r"|" + _TOK_SECTION_TAG
+    + r"|" + _TOK_OUTPUT_LABEL + r"\s*:|" + _TOK_ONLY_TASK
+    + r"|</?\s*(?:system-reminder|system|instructions?)\s*>)"
 )
 _TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9_:-]*(?:\s[^<>]{0,120})?/?>")
 _PLACEHOLDER = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}|\$\{[^}]*\}|%\([A-Za-z_]+\)s|<[A-Z_]{3,}>")
@@ -158,7 +171,7 @@ def sanitize_spoken(text: str) -> str:
             dropped += 1
             continue
         kept.append(line)
-    if not kept or (total and dropped / total > _MAX_DROPPED_RATIO):
+    if not kept or dropped / total > _MAX_DROPPED_RATIO:
         return ""
 
     s = "\n".join(kept)
@@ -172,11 +185,6 @@ def sanitize_spoken(text: str) -> str:
     if len(s) < _MIN_SPEAKABLE_CHARS or not re.search(r"[^\W\d_]{2,}", s):
         return ""
     return s
-
-
-def is_speakable(text: str) -> bool:
-    """True when *text* would pass ``sanitize_spoken`` unchanged in substance."""
-    return bool(sanitize_spoken(text))
 
 
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)

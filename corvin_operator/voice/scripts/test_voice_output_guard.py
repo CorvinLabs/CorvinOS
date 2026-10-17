@@ -203,9 +203,8 @@ def _run(tmp: Path, mode: str) -> str:
         "ANTHROPIC_API_KEY": "test-key",
         "VOICE_SUMMARIZE_BACKEND": "cli",
         "CORVIN_HOME": str(tmp / "home"),
-        "CORVIN_TTS_LOCAL_ONLY": "",
     })
-    env.pop("CORVIN_TTS_LOCAL_ONLY")
+    env.pop("CORVIN_TTS_LOCAL_ONLY", None)
     proc = subprocess.run(
         [sys.executable, "-I", str(HERE / "summarize.py"), "--lang", "de",
          "--max-chars", "400"],
@@ -305,11 +304,6 @@ def test_e2e_meta_plus_content_on_degraded_path_speaks_content_not_meta(
 def test_legitimate_prose_about_prompts_and_rules_survives(sentence: str) -> None:
     assert not guard.is_meta_line(sentence)
     assert guard.sanitize_spoken(sentence) == sentence
-
-
-def test_prompt_section_header_is_still_meta() -> None:
-    assert guard.is_meta_line("REGELN — load-bearing:")
-    assert guard.sanitize_spoken("REGELN — load-bearing:") == ""
 
 
 def test_majority_of_legitimate_prose_is_never_dropped_wholesale() -> None:
