@@ -500,23 +500,50 @@ def _effective_tts_engine(tts_engine: str) -> str:
 
 
 _edge_install_tried = False
+# Microsoft changed the Read-Aloud handshake: edge-tts < 7.3.1 gets HTTP 403 and produces no
+# audio (measured 2026-10-17 with 7.2.8), so an importable but old package is NOT a working one.
+_EDGE_TTS_MIN = (7, 3, 1)
+
+
+def _edge_tts_current() -> bool:
+    """edge-tts is importable AND new enough to still be accepted by the service."""
+    if importlib.util.find_spec("edge_tts") is None:
+        return False
+    try:
+        from importlib.metadata import version  # noqa: PLC0415
+
+        parts = tuple(int(p) for p in re.findall(r"\d+", version("edge-tts"))[:3])
+    except Exception:  # noqa: BLE001 - unknown version: treat as current, the chain still falls through
+        return True
+    return parts >= _EDGE_TTS_MIN
+
+
+def _edge_install_commands() -> List[List[str]]:
+    """pip first; a uv-built venv ships no pip, so fall back to ``uv pip`` against this interpreter."""
+    spec = "edge-tts>=" + ".".join(str(n) for n in _EDGE_TTS_MIN)
+    cmds = [[sys.executable, "-m", "pip", "install", "--quiet", "--upgrade", spec]]
+    uv = shutil.which("uv")
+    if uv:
+        cmds.append([uv, "pip", "install", "--quiet", "--python", sys.executable, spec])
+    return cmds
 
 
 def _ensure_edge_tts() -> bool:
-    """edge-tts importable? If not, install it once (pure Python, ~1 MB, no key) into the
-    console's own environment — the keyless narration fallback must exist on every install."""
+    """edge-tts importable and current? If not, install/upgrade it once (pure Python, ~1 MB, no
+    key) into the console's own environment — the keyless narration fallback must exist on every
+    install and must be a version the service still accepts."""
     global _edge_install_tried
-    if importlib.util.find_spec("edge_tts") is not None:
+    if _edge_tts_current():
         return True
     if _edge_install_tried:
-        return False
+        return importlib.util.find_spec("edge_tts") is not None
     _edge_install_tried = True
-    try:
-        subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "edge-tts>=6.1.8"],
-                       check=True, timeout=180, capture_output=True)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("video producer: edge-tts auto-install failed (%s)", type(e).__name__)
-        return False
+    for cmd in _edge_install_commands():
+        try:
+            subprocess.run(cmd, check=True, timeout=180, capture_output=True)
+            break
+        except Exception as e:  # noqa: BLE001
+            logger.warning("video producer: edge-tts install via %s failed (%s)", cmd[0], type(e).__name__)
     importlib.invalidate_caches()
     return importlib.util.find_spec("edge_tts") is not None
 
@@ -561,7 +588,7 @@ def _missing_runtime_dependencies(tts_engine: str = "openai") -> List[str]:
         missing.append("gTTS (pip install 'gTTS>=2.5.0' into the console environment)")
     if tts_engine == "auto" and not _ensure_edge_tts() and not (
             importlib.util.find_spec("openai") is not None and _openai_configured()):
-        missing.append("a narration engine: edge-tts (pip install 'edge-tts>=6.1.8' into the console environment) "
+        missing.append("a narration engine: edge-tts (pip install 'edge-tts>=7.3.1' into the console environment) "
                        "or an OpenAI TTS key")
     if importlib.util.find_spec("PIL") is None:
         missing.append("Pillow (pip install 'Pillow>=10.0.0' into the console environment)")

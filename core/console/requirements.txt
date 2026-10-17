@@ -9,7 +9,7 @@ PyJWT[crypto]
 cryptography
 pytest
 # Voice: TTS + STT (no API key required for edge-tts)
-edge-tts>=6.1.8
+edge-tts>=7.3.1
 # OS trust store for outbound TLS — lets edge-tts/OpenAI verify against a
 # corporate proxy's internal root CA (absent from certifi). See
 # corvin_operator/voice/scripts/say.py::_use_os_trust_store. Guarded no-op if missing.

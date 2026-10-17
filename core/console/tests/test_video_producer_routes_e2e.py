@@ -588,6 +588,47 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
             self.assertEqual(resp.status_code, 200, resp.text)
             self.assertEqual(runner.calls[-1][2]["tts_engine"], "auto")
 
+    def test_a_stored_openai_key_keeps_openai_and_the_job_still_starts(self):
+        from unittest import mock
+
+        with _sandbox(self._tmp, plugin="enabled", keep_key=False) as (client, csrf, _home, _c):
+            mod = _route_module()
+            runner = _RecordingRunner()
+            mod.get_runner = lambda: runner
+            with mock.patch.dict(mod.os.environ, {"CORVIN_TTS_OPENAI_KEY": "sk-test-not-real"}), \
+                 mock.patch.object(mod.importlib.util, "find_spec", lambda n, *a, **k: object()):
+                st = client.get("/v1/console/video/settings").json()
+                self.assertTrue(st["openai_configured"])
+                self.assertEqual(st["effective_tts_engine"], "openai")
+                self._benign_l44()
+                resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
+                                   headers={"X-CSRF-Token": csrf})
+            self.assertEqual(resp.status_code, 200, resp.text)
+            self.assertEqual(runner.calls[-1][2]["tts_engine"], "openai")
+            self.assertNotIn("sk-test-not-real", resp.text)
+
+    def test_an_outdated_edge_tts_is_upgraded_before_the_job_instead_of_failing_with_403(self):
+        """edge-tts 7.2.8 is importable but the service answers it with HTTP 403 (measured
+        2026-10-17): the keyless fallback is only real if the installed version is current."""
+        from unittest import mock
+
+        with _sandbox(self._tmp, plugin="enabled", keep_key=False) as (client, csrf, _home, _c):
+            mod = _route_module()
+            runner = _RecordingRunner()
+            mod.get_runner = lambda: runner
+            mod._edge_install_tried = False
+            ran: list = []
+            with mock.patch.object(mod, "_adopt_stored_openai_key", lambda: None), \
+                 mock.patch("importlib.metadata.version", lambda n: "7.2.8" if n == "edge-tts" else "1.0"), \
+                 mock.patch.object(mod.subprocess, "run", lambda cmd, **k: ran.append(cmd)):
+                self._benign_l44()
+                resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
+                                   headers={"X-CSRF-Token": csrf})
+            self.assertEqual(resp.status_code, 200, resp.text)
+            self.assertTrue(ran, "an outdated edge-tts must trigger an install attempt")
+            self.assertIn("edge-tts>=7.3.1", ran[0])
+            self.assertEqual(runner.calls[-1][2]["tts_engine"], "auto")
+
     def test_captions_endpoint_is_gone_and_new_jobs_have_no_subtitle_output(self):
         with _sandbox(self._tmp) as (client, _csrf, _home, _c):
             r = client.get("/v1/console/video/videos/job_deadbeef/captions")
