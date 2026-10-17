@@ -433,7 +433,9 @@ class UpdateManager:
             kwargs: dict[str, Any] = {"cwd": str(src), "stdin": subprocess.DEVNULL,
                                       "stdout": logfh, "stderr": subprocess.STDOUT}
             if sys.platform == "win32":
-                kwargs["creationflags"] = (getattr(subprocess, "DETACHED_PROCESS", 0)
+                # CREATE_NO_WINDOW, not DETACHED_PROCESS: powershell.exe started without a
+                # console exits 0 at once without running the script (empty log, no progress).
+                kwargs["creationflags"] = (getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
                                            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
             else:
                 kwargs["start_new_session"] = True
