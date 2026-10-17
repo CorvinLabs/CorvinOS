@@ -248,6 +248,7 @@ run "Python: result overwrite"   python3 shared/test_adapter_result_overwrite.py
 run "Python: tts hard cap"       python3 shared/test_adapter_tts_cap.py >/dev/null || fails=$((fails+1))
 run "Python: voice audience"     python3 shared/test_adapter_voice_audience.py >/dev/null || fails=$((fails+1))
 run "Python: voice override"     python3 shared/test_adapter_voice_override.py >/dev/null || fails=$((fails+1))
+run "Python: voice output guard (adapter side, 2026-10-17)" python3 shared/test_adapter_voice_guard.py >/dev/null || fails=$((fails+1))
 run "Python: engine-fallback voice text (2026-07-12)" python3 shared/test_adapter_engine_fallback_voice.py >/dev/null || fails=$((fails+1))
 run "Python: no undefined names in adapter/session_reset/acs_validator (2026-09-27)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_bridge_undefined_names.py shared/test_session_reset_dialectic_tenant.py shared/test_acs_validator.py -q >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: voice output-language escape hatch (2026-07-12)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_adapter_voice_lang_detect.py -q >/dev/null 2>&1' || fails=$((fails+1))

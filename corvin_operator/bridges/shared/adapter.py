@@ -9645,7 +9645,12 @@ def build_voice_summary(text: str, max_chars: int = 400,
     # produce near-silent audio. Fall through to the summarizer in that case.
     _MIN_OVERRIDE_CHARS = 10
     if override is not None and len(override.strip()) >= _MIN_OVERRIDE_CHARS:
-        spoken = _strip_for_speech(override.strip())
+        spoken = _strip_for_speech(_guard_spoken(override.strip()))
+        if not spoken:
+            log("build_voice_summary: <voice> override was instruction/markup "
+                "text only — falling through to the summarizer")
+            override = None
+    if override is not None and len(override.strip()) >= _MIN_OVERRIDE_CHARS:
         if want_appendix and not _has_lern_zugabe_suffix(spoken):
             spoken = _strip_for_speech(
                 _append_lern_zugabe(spoken, lang=appendix_lang)
@@ -9812,7 +9817,8 @@ def build_voice_summary(text: str, max_chars: int = 400,
             # so every summary degraded to near-verbatim (23/23 in the field).
             env=env, timeout=150, check=True,
         )
-        out = proc.stdout.strip()
+        out_raw = proc.stdout.strip()
+        out = _guard_spoken(out_raw)
         # summarize.py always exits 0 and prints SOMETHING even when both LLM
         # backends failed and it fell through to its near-verbatim structural
         # fallback — that degraded result previously looked identical, from
@@ -9828,6 +9834,13 @@ def build_voice_summary(text: str, max_chars: int = 400,
                 "(near-verbatim) fallback — both LLM backends were "
                 "unavailable this turn. stderr tail: "
                 + proc.stderr.strip()[-400:])
+        if out_raw and not out:
+            # The guard rejected everything summarize.py printed (instruction /
+            # markup text only). Never speak that and never fall back to the raw
+            # answer: speak the fixed neutral announcement instead.
+            log("build_voice_summary: summarizer output was instruction/markup "
+                "text only — speaking the neutral announcement")
+            return _strip_for_speech(_neutral_announcement(base_lang))
         # Sanity check: summarize.py should never return empty unless input was empty.
         # If it does, log and fall back to text head.
         if out:
@@ -9850,14 +9863,12 @@ def build_voice_summary(text: str, max_chars: int = 400,
                     _append_metapher(result, lang=appendix_lang)
                 )
             return result
-        log("build_voice_summary: summarize returned empty — using head of answer"
+        # Empty stdout from summarize.py means its guard rejected everything (or
+        # it printed nothing). The raw answer is never spoken in that case: the
+        # fixed neutral line is. Same contract as the guard-rejected branch above.
+        log("build_voice_summary: summarize returned empty — speaking the neutral announcement"
             + (f" — stderr tail: {proc.stderr.strip()[-400:]}" if proc.stderr.strip() else ""))
-        spoken = _strip_for_speech(_truncate_at_boundary(text, max_chars))
-        if want_appendix and not _has_lern_zugabe_suffix(spoken):
-            spoken = _strip_for_speech(_append_lern_zugabe(spoken, lang=appendix_lang))
-        if want_metapher and not _has_metapher_suffix(spoken):
-            spoken = _strip_for_speech(_append_metapher(spoken, lang=appendix_lang))
-        return spoken
+        return _strip_for_speech(_neutral_announcement(base_lang))
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
         # OSError (e.g. FileNotFoundError spawning the summarizer) must degrade to
         # the answer head, not propagate out and drop the whole turn — this was
@@ -9877,12 +9888,67 @@ def build_voice_summary(text: str, max_chars: int = 400,
             + (f", rc={e.returncode}" if hasattr(e, "returncode") else "")
             + ") — using head of answer"
             + (f" — stderr: {stderr_tail}" if stderr_tail else ""))
-        spoken = _strip_for_speech(_truncate_at_boundary(text, max_chars))
+        # The head of the raw answer is spoken only after the guard has passed
+        # it; if the guard leaves nothing, the neutral line is spoken instead.
+        head = _guard_spoken(_truncate_at_boundary(text, max_chars))
+        if not head:
+            log("build_voice_summary: answer head is instruction/markup text only "
+                "— speaking the neutral announcement")
+            return _strip_for_speech(_neutral_announcement(base_lang))
+        spoken = _strip_for_speech(head)
         if want_appendix and not _has_lern_zugabe_suffix(spoken):
             spoken = _strip_for_speech(_append_lern_zugabe(spoken, lang=appendix_lang))
         if want_metapher and not _has_metapher_suffix(spoken):
             spoken = _strip_for_speech(_append_metapher(spoken, lang=appendix_lang))
         return spoken
+
+
+# The guard always comes from the real voice/scripts directory, not from
+# SCRIPTS_DIR: tests redirect SCRIPTS_DIR to a fake summarizer, and a guard that
+# followed that redirect would silently stop filtering.
+_GUARD_FILE = ROOT.parent.parent / "voice" / "scripts" / "voice_output_guard.py"
+
+
+def _guard_module():
+    """Load ``voice_output_guard.py`` by path once; ``None`` if it cannot load."""
+    try:
+        import importlib.util as _ilu  # noqa: PLC0415
+        mod = sys.modules.get("_corvin_voice_output_guard")
+        if mod is None:
+            spec = _ilu.spec_from_file_location(
+                "_corvin_voice_output_guard", str(_GUARD_FILE))
+            if not (spec and spec.loader):
+                return None
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            sys.modules["_corvin_voice_output_guard"] = mod
+        return mod
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _guard_spoken(s: str) -> str:
+    """Final gate before TTS: drop instruction/markup/placeholder text.
+
+    Returns "" when nothing human-speakable is left. The caller must then speak
+    ``_neutral_announcement`` — never the input. Fail-closed: if the guard module
+    cannot be loaded or raises, "" is returned, so nothing unguarded is spoken.
+    """
+    mod = _guard_module()
+    if mod is None:
+        return ""
+    try:
+        return mod.sanitize_spoken(s)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _neutral_announcement(lang: str) -> str:
+    """Fixed spoken fallback in *lang* ("de" | "en"); contains no input text."""
+    mod = _guard_module()
+    if mod is None:
+        return ""  # no guard, no safe text to speak: silence beats raw input
+    return mod.neutral_announcement(lang)
 
 
 def _strip_for_speech(s: str) -> str:

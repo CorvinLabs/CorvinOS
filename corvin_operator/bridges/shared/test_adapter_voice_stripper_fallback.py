@@ -11,7 +11,7 @@ or fails, build_voice_summary should:
 Three subtests:
   1. strip_for_tts returns empty → fallback uses raw text
   2. strip_for_tts times out → fallback uses raw text
-  3. summarize.py returns empty → fallback uses head of answer
+  3. summarize.py returns empty → neutral announcement (no raw head)
 """
 from __future__ import annotations
 
@@ -142,7 +142,7 @@ def test_stripper_timeout_fallback() -> None:
 
 
 def test_summarizer_empty_fallback() -> None:
-    _section("summarize.py returns empty → fallback uses head of answer")
+    _section("summarize.py returns empty → neutral announcement, never the raw head")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         scripts_dir, argv_dump, _ = _install_fakes(
@@ -163,12 +163,10 @@ def test_summarizer_empty_fallback() -> None:
         test_input = "Das ist ein Test. " * 100
         result = adapter.build_voice_summary(test_input, max_chars=400)
 
-        # Should fall back to text[:max_chars]
-        assert result, "Should return fallback"
-        assert len(result) <= 500, "Should be roughly max_chars or less"
-        assert "Test" in result or len(result) > 0
-        print(f"  Got fallback result: {result[:100]}...")
-        print("  OK — fallback to text head when summarizer returns empty")
+        # Empty summarizer output means the guard rejected everything: the raw
+        # answer head is never spoken, the fixed neutral line is.
+        assert result == "Die Antwort steht im Chat.", f"got {result[:100]!r}"
+        print("  OK — neutral announcement when summarizer returns empty")
 
 
 def test_degraded_fallback_marker_is_logged() -> None:

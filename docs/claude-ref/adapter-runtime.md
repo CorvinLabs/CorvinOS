@@ -48,6 +48,41 @@ structural daemon code changes. After structural changes, note:
 The spoken voice note is now **always** an LLM summary rendered in the profile
 language. Two long-standing behaviours that broke this were removed:
 
+- **Spoken-output guard.** No instruction text may reach TTS. `voice/scripts/voice_output_guard.py`
+  (stdlib-only) is applied at three points: `summarize.py::_run_claude_print` rejects a model
+  reply that shares a 7-word run with the system prompt it was given (echo → `None` → the
+  caller degrades to the structural fallback); `summarize.py` runs `sanitize_spoken` over every
+  LLM summary, appendix and metaphor; `adapter.py::_guard_spoken` is the final gate for
+  `summarize.py` output and `<voice>` overrides. `sanitize_spoken` drops meta/instruction lines,
+  markup and unrendered placeholders and returns `""` when nothing speakable remains.
+  - **Empty guard result speaks the neutral announcement, never the raw input.** `""` means "do not
+    speak this", so the caller speaks `neutral_announcement(lang)`: one fixed text per language (de:
+    "Die Antwort steht im Chat.", en: "The answer is in the chat.") that quotes no input. It is defined
+    once, in `voice_output_guard.py`. `summarize.py` reaches it through `speak_or_announce()` (the
+    structural fallback, also the `degraded: LLM backend unavailable` path). `adapter.py` reaches it
+    through `_neutral_announcement()` for any summarizer output the guard emptied, and for empty
+    summarizer stdout. The summarizer-crash path (CalledProcessError / timeout / OSError) speaks the
+    answer head only after the guard has passed it, and the neutral line if the guard empties it. A
+    `<voice>` override that is empty after the guard falls through to the summarizer instead. The
+    adapter always loads the guard from `voice/scripts/` (not from the `SCRIPTS_DIR` it may be
+    redirected to). If the guard module cannot be loaded or raises, both sides fail closed: nothing
+    is spoken unguarded, and the announcement is silence on the adapter side.
+  - **Narrow patterns (no false positives on prose).** A line or sentence is scaffolding only when it
+    starts with a prompt form: a literal tag (`<system-reminder>`, `<system>`, `<instructions>`, …),
+    an uppercase protocol label followed by its separator (`SELF-CHECK:`, `OUTPUT FORMAT:`,
+    `DEINE EINZIGE AUFGABE`, `[TASK]`, `REGELN — …:` ending in a colon), or a model-directed
+    imperative (`Antworte nur mit …`, `You are a summarizer`). `--append-system-prompt <arg>` is dropped
+    anywhere in a line, as an echoed command. Sentence ends count as line starts, and so does any
+    protocol token mid-line: the structural fallback joins a whole answer onto one line, so
+    `… grün. REGELN — load-bearing: [TASK]` is split before the header and the tag and both are dropped.
+    Other uppercase labels with a dash (`NOTE — …`, `WICHTIG — …`) are ordinary speech and kept. A word that only appears inside a sentence ("die Regeln für
+    Rechnungen", "der Self-Check ist grün", "SELF-CHECK in der Pipeline", "Hinweis: …") is kept. The
+    50 % rule counts lines and sentences: more than half scaffolding empties the whole result, and
+    exactly half keeps the content. Prompt echo is caught by the 7-word overlap check, not by pattern
+    lists.
+  - Test: `voice/scripts/test_voice_output_guard.py` (unit + real `summarize.py` subprocess with a fake
+    `claude` that replays its system prompt, and a CLI-unavailable run with meta-only input) and
+    `bridges/shared/test_adapter_voice_guard.py` (adapter side: empty guard → neutral line or silence).
 - **No verbatim short-circuit.** Both `adapter.py::build_voice_summary` (the
   `len(text) <= max_chars` branch) and `summarize.py` (the in-budget fast-path)
   used to speak a reply as-is, markdown-stripped, whenever it fit the ~400-char

@@ -94,6 +94,24 @@ def _force_utf8_stdio() -> None:
 # tests/test_voice_subprocess_encoding.py.
 _force_utf8_stdio()
 
+# Spoken-output guard: no instruction / markup / placeholder text may reach TTS.
+# Sibling module, loaded by path so it works however this script is launched.
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from voice_output_guard import sanitize_spoken as _sanitize_spoken  # type: ignore
+    from voice_output_guard import echoes_prompt as _echoes_prompt  # type: ignore
+    from voice_output_guard import speak_or_announce as _speak_or_announce  # type: ignore
+except Exception:  # noqa: BLE001
+    # Guard unavailable: fail CLOSED. Nothing is spoken unguarded, and no
+    # announcement text is duplicated here: "" tells the caller to degrade
+    # (adapter.py then speaks its own neutral line, or stays silent).
+    def _echoes_prompt(output: str, prompt: str) -> bool:
+        return False
+    def _sanitize_spoken(text: str) -> str:
+        return ""
+    def _speak_or_announce(text: str, lang: str = "de") -> str:
+        return ""
+
 # Optional Layer-11 dialectic integration. The voice_summary site is
 # default-off, so when the module is missing OR the user hasn't opted
 # in, this is a zero-cost no-op. Lazy-import keeps stop_hook calls fast
@@ -1597,7 +1615,14 @@ def _run_claude_print(payload: str, system_prompt: str, model: str, timeout_s: f
             encoding="utf-8", errors="replace",
             timeout=timeout_s, check=True,
         )
-        return out.stdout.strip() or None
+        result = out.stdout.strip()
+        if result and _echoes_prompt(result, system_prompt):
+            # The model replayed its own instructions instead of answering.
+            # Treat as a failed call so every caller degrades, never speaks it.
+            print("[summarize] rejected: model echoed its system prompt",
+                  file=sys.stderr)
+            return None
+        return result or None
     finally:
         try:
             os.unlink(sys_path)
@@ -1759,7 +1784,9 @@ def _extract_appendix(raw: str) -> str:
     for marker in _APPENDIX_MARKERS:
         idx = raw.find(marker)
         if idx >= 0:
-            return raw[idx:].strip()
+            # The marker may sit inside an echoed system prompt; everything
+            # after it would then be instructions. Sanitise what follows.
+            return _sanitize_spoken(raw[idx:])
     return ""
 
 
@@ -1901,7 +1928,7 @@ def _extract_metapher(raw: str) -> str:
     for marker in _METAPHER_MARKERS:
         idx = raw.find(marker)
         if idx >= 0:
-            return raw[idx:].strip()
+            return _sanitize_spoken(raw[idx:])
     return ""
 
 
@@ -2248,7 +2275,14 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
     if _backend in ("auto", "cli") and _summary_cloud_permitted():
         out = _summarize_via_cli(text, task, lang, target, model, persona, audience, output_language, speech_type)
         if out:
-            candidate = out
+            clean = _sanitize_spoken(out)
+            if clean:
+                candidate = clean
+            else:
+                # The model echoed its instructions / produced scaffolding only.
+                # Never speak it: degrade to the structural fallback below.
+                print("[summarize] rejected: LLM output was meta/instruction "
+                      "text, not a spoken summary", file=sys.stderr)
 
     # Backend 2: structural compression. Never drops list items. When a task
     # is given, prefix it manually since the structural fallback can't
@@ -2289,6 +2323,11 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
         else:
             body = _cap_to_budget(naive_truncate(text, max_chars), max_chars, lang)
         candidate = _task_prefix(task, lang) + body if task.strip() else body
+        # The fallback quotes the ORIGINAL text, which may itself contain
+        # prompt scaffolding. If the guard leaves nothing speakable, speak the
+        # fixed neutral announcement — never the unfiltered body (F1: the raw
+        # text used to be spoken here).
+        candidate = _speak_or_announce(candidate, lang)
 
     # Layer-11 dialectic faithfulness check (independent second-model
     # verification). The inline SELF-CHECK in the system prompt is the
@@ -2316,7 +2355,12 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
                 persona=persona, mode=persona_mode,
             )
             if verdict == "corrected":
-                return final
+                # `candidate` is already guarded on every path above (sanitised
+                # CLI output or speak_or_announce), so it is never raw text.
+                # A corrected text that the guard empties keeps the candidate.
+                corrected = _sanitize_spoken(final)
+                if corrected:
+                    return corrected
         except Exception:  # noqa: BLE001
             # Faithfulness check is observability + safety, never load-
             # bearing. Any error → ship the candidate as-is.
