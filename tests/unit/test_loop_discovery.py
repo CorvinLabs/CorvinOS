@@ -172,6 +172,64 @@ class TestCoreLoopTrend(unittest.TestCase):
         self.assertEqual(loop_discovery.core_loop_owner("core:os.x"), "os.x")
 
 
+class TestCelStageLoops(unittest.TestCase):
+    """CEL stage loops are dated by the ``ts`` of their grades."""
+
+    def setUp(self) -> None:
+        self.fx = _Fixture()
+        self.addCleanup(self.fx.close)
+        self.now = datetime.now(timezone.utc)
+
+    def _write(self, grades: list[dict]) -> None:
+        from corvin_operator.forge.forge.paths import tenant_global_dir
+
+        path = Path(tenant_global_dir("_default")) / "ce_stage_grades.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"memory": {"grades": grades}}))
+
+    def _memory(self):
+        from core.learning import loop_discovery
+
+        loops = loop_discovery.discover_core_loops("_default").loops
+        return next(l for l in loops if l.loop_id == "core:cel.memory")
+
+    @staticmethod
+    def _grade(when: datetime | None) -> dict:
+        g = {"score": 1.0, "notes": "turn_outcome", "grader": "__loop__"}
+        if when is not None:
+            g["ts"] = when.timestamp()
+        return g
+
+    def test_recent_dated_grade_makes_the_loop_active(self) -> None:
+        self._write([self._grade(self.now - timedelta(hours=1))])
+        loop = self._memory()
+        self.assertEqual(loop.status, "active")
+        self.assertEqual(loop.event_count_7d, 1)
+        self.assertIsNotNone(loop.last_event_ts)
+
+    def test_old_dated_grade_is_stale_and_outside_the_week(self) -> None:
+        self._write([self._grade(self.now - timedelta(days=30))])
+        loop = self._memory()
+        self.assertEqual(loop.status, "stale")
+        self.assertEqual(loop.event_count_7d, 0)
+        self.assertEqual(loop.event_count_total, 1)
+
+    def test_undated_legacy_grades_stay_unknown_and_never_count_as_weekly(self) -> None:
+        self._write([self._grade(None), self._grade(None)])
+        loop = self._memory()
+        self.assertEqual(loop.status, "unknown")
+        self.assertIsNone(loop.last_event_ts)
+        self.assertEqual(loop.event_count_7d, 0)
+        self.assertEqual(loop.event_count_total, 2)
+
+    def test_mixed_grades_use_only_the_dated_ones_for_recency(self) -> None:
+        self._write([self._grade(None), self._grade(self.now - timedelta(hours=2))])
+        loop = self._memory()
+        self.assertEqual(loop.status, "active")
+        self.assertEqual(loop.event_count_7d, 1)
+        self.assertEqual(loop.event_count_total, 2)
+
+
 class TestSignalRendering(unittest.TestCase):
     def test_only_allowlisted_scalars_are_rendered(self) -> None:
         """The signal dict is written by many emitters and is not guaranteed

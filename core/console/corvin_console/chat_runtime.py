@@ -7895,6 +7895,17 @@ async def _stream_turn_impl(
             _append_turn(sess, "assistant", _turn_parts,
                         execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
             _emit_execution_context_event(_exec_ctx, _os_turn_id, sess)
+            # Close the CEL outcome loop for delegated turns too. The CEL stages
+            # ran before this branch, but the hook at the end of the function is
+            # never reached from here. The signal is the run's real result, not
+            # a constant True. Best-effort, never raises.
+            try:
+                if (_cel_record_outcome is not None and _cel_ran_stage_ids
+                        and _feature_flags.is_enabled("outcome_feedback_loop", sess.tenant_id)):
+                    _cel_record_outcome(sess.tenant_id, _cel_ran_stage_ids,
+                                        bool(ok or bounded_stop))
+            except Exception:  # noqa: BLE001 — the loop never breaks a turn
+                pass
             yield {"type": "done"}
             return
 

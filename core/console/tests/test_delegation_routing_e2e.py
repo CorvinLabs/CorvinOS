@@ -429,5 +429,75 @@ class FallbackReGateE2ETest(_StreamTurnE2EBase):
         self.assertEqual(events[-1].get("type"), "done")
 
 
+class AcsOutcomeLoopE2ETest(_StreamTurnE2EBase):
+    """A delegated (ACS) turn must close the CEL outcome loop like a native one.
+
+    The hook used to sit only at the end of the native path; the ACS branch
+    returns earlier, so with worker_engine=acs no CEL stage grade was written
+    for weeks. Drives the REAL ``stream_turn`` and reads the real grade store.
+    """
+
+    PROMPT = (
+        "Erstelle einen ausführlichen Reiseplan für zwei Wochen Japan "
+        "und dann eine Packliste mit Empfehlungen für jede Jahreszeit "
+        "sowie einen Überblick über die wichtigsten Etikette-Regeln")
+
+    # Only the stage SOURCE is stubbed (the real brief build yields no stages in
+    # this harness); the outcome hook and the grade store under test are real.
+    TRACE = {"stages": [{"stage": "memory", "status": "ok"},
+                        {"stage": "graph", "status": "ok"},
+                        {"stage": "llm_synthesis", "status": "deferred"}]}
+
+    def _grades(self) -> dict:
+        import json
+        from corvin_operator.forge.forge.paths import tenant_global_dir
+        path = Path(tenant_global_dir("_default")) / "ce_stage_grades.json"
+        return json.loads(path.read_text("utf-8")) if path.is_file() else {}
+
+    def _turn(self, status: str):
+        self._pin_house_rules_allowed()
+        self._inject_license_ok()
+        self._inject_fake_acs()
+        self._no_spawn_guard()
+
+        async def _run(self_, spec, run_id=None, **kw):
+            res = _FakeACSResult()
+            res.status = status
+            return res
+
+        sys.modules["acs_runtime"].ACSRuntime.run = _run  # type: ignore[attr-defined]
+        real = self.cr._feature_flags.is_enabled
+        with patch.object(self.cr, "_delegation_enabled", return_value=True), \
+             patch.object(self.cr._feature_flags, "worker_engine_mode",
+                          return_value="acs"), \
+             patch.object(self.cr, "_cel_build_brief", return_value=("", self.TRACE)), \
+             patch.object(self.cr, "_cel_render", return_value=""), \
+             patch.object(self.cr._feature_flags, "is_enabled",
+                          side_effect=lambda f, t="_default": True
+                          if f in ("outcome_feedback_loop", "vibe_engineering")
+                          else real(f, t)):
+            return _drain(self.cr.stream_turn(self.sess, self.PROMPT))
+
+    def test_acs_success_writes_dated_loop_grades(self) -> None:
+        import time
+        events = self._turn("success")
+        self.assertTrue(self._took_acs(events))
+        grades = self._grades()
+        self.assertTrue(grades, "ACS turn wrote no CEL grades at all")
+        self.assertEqual(sorted(grades), ["graph", "memory"],
+                         "only stages that ran are graded (deferred is skipped)")
+        for stage, slot in grades.items():
+            last = slot["grades"][-1]
+            self.assertEqual(last["grader"], "__loop__", stage)
+            self.assertEqual(last["score"], 1.0, stage)
+            self.assertLess(abs(last["ts"] - time.time()), 120, stage)
+
+    def test_acs_failure_grades_zero(self) -> None:
+        self._turn("failed")
+        grades = self._grades()
+        self.assertTrue(grades, "failed ACS turn wrote no CEL grades")
+        self.assertTrue(all(s["grades"][-1]["score"] == 0.0 for s in grades.values()))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -86,8 +86,8 @@ class CoreLoopObservation:
         stale.
 
         ``unknown`` exists because one real source cannot support the others'
-        claim: the CEL stage-grade records carry no timestamp, so the age of the
-        newest grade is not knowable from the store. Every age-based status
+        claim: CEL stage-grade records written before they were dated carry no
+        timestamp, so a loop with only such grades has no knowable age. Every age-based status
         would be an assertion about a number that was never read. "Stale" is a
         statement that a loop stopped emitting; a store that does not date its
         records cannot be the evidence for it.
@@ -115,6 +115,16 @@ class DiscoveryResult:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _epoch_to_dt(raw: Any) -> Optional[datetime]:
+    """Epoch seconds (as ``grade_stage`` writes them) to an aware UTC datetime."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    try:
+        return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def _parse_ts(raw: Any) -> Optional[datetime]:
@@ -269,6 +279,16 @@ def _cel_stage_loops(tenant_id: str) -> list[CoreLoopObservation]:
         if by_operator:
             parts.append(f"{by_operator} graded by the operator")
 
+        # Only grades carrying a ``ts`` can be dated; older records are counted in
+        # the total but never in a window and never as the "last event".
+        now = _now()
+        dated = [
+            dt for g in grades if isinstance(g, dict)
+            for dt in [_epoch_to_dt(g.get("ts"))] if dt is not None
+        ]
+        last_ts = max(dated) if dated else None
+        count_7d = sum(1 for dt in dated if (now - dt).total_seconds() < 7 * 86400)
+
         loops.append(
             CoreLoopObservation(
                 loop_id=f"core:cel.{stage_id}",
@@ -280,11 +300,10 @@ def _cel_stage_loops(tenant_id: str) -> list[CoreLoopObservation]:
                 ),
                 event_source="CEL stage-grade store (ce_stage_grades.json)",
                 event_count_total=len(scores),
-                # The grade records carry no timestamp, so no 7-day slice of them
-                # can be computed. Reporting the total here would label an
-                # all-time count as a weekly one.
-                event_count_7d=0,
-                last_event_ts=None,
+                # Counted from dated grades only; undated legacy grades are in
+                # the total but cannot be placed in a window.
+                event_count_7d=count_7d,
+                last_event_ts=last_ts,
                 health_score=sum(scores) / len(scores),
                 health_basis=f"mean of {len(scores)} grades ({', '.join(parts)})",
                 outcome_total=0,
@@ -361,8 +380,8 @@ def _signal_summary(signal: Any) -> Optional[str]:
 def core_loop_events(tenant_id: str, loop_id: str, limit: int = 100) -> list[CoreLoopEvent]:
     """The most recent recorded events of one core loop, newest last.
 
-    Empty for a CEL stage loop: its grade records carry no timestamp, so they
-    cannot be presented as a dated event log without inventing the dates.
+    Empty for a CEL stage loop: a grade is a score with a date, not an event
+    with a signal, so it is not presented as an event log.
     """
     owner = core_loop_owner(loop_id)
     if not owner or owner.startswith("cel."):
@@ -409,7 +428,7 @@ def core_loop_trend(tenant_id: str, loop_id: str, days: int = 7) -> list[CoreLoo
     nothing, and carrying the previous day's score forward would draw a line
     through data that does not exist.
 
-    Empty for a CEL stage loop (undated grade records).
+    Empty for a CEL stage loop (no per-event detail to bucket).
     """
     owner = core_loop_owner(loop_id)
     if not owner or owner.startswith("cel."):

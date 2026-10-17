@@ -120,10 +120,22 @@ grades.
 
 ### `unknown` is not a fifth health state
 
-It is the absence of an age. The CEL stage-grade records carry no timestamp, so
-no age-based verdict about those loops can be read from the store — and "stale"
-is a claim that a loop stopped emitting. A status of `unknown` says the age was
-never recorded, not that something is wrong.
+It is the absence of an age. CEL stage-grade records written before 2026-10-17
+carry no `ts`, so a loop whose grades are all of that kind has no readable age —
+and "stale" is a claim that a loop stopped emitting. A status of `unknown` says
+the age was never recorded, not that something is wrong. Grades written since
+then carry `ts` (epoch seconds): the newest one gives `last_event`, the dated ones
+inside the last 7 days give `event_count_7d`, and the status follows the same
+24 h / 7 d thresholds as every other loop. Undated grades still count toward the
+all-time total, never toward a window.
+
+**Who writes CEL grades.** One `__loop__` grade per stage that ran, after every
+completed console turn — native (end of `_stream_turn_impl`) **and** delegated to
+ACS (before the early `return` of the delegation branch; the ACS run's own result
+is the success signal, bounded stops count as success). Before 2026-10-17 only the
+native path wrote, so with `worker_engine: acs` the CEL loops silently stopped.
+The native path still records `success=True` for every completed turn, so its
+health stays near 1.0; the ACS path records real failures.
 
 ### Windows travel with their totals
 
@@ -153,7 +165,7 @@ is what made every install answer 503.
 | **dormant** | last event 1–7 days old | may simply be idle |
 | **stale** | last event over 7 days old | check whether the loop still runs |
 | **degrading** | a **measured** score below 0.5, at any age | investigate; the score's basis says what it counts |
-| **unknown** | the source store does not date its records, so no age can be read | not a fault — see above |
+| **unknown** | the loop has only undated (pre-2026-10-17) records, so no age can be read | not a fault — see above |
 
 ## Event Types
 

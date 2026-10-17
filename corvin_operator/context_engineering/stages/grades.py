@@ -18,7 +18,8 @@ because they run in the subprocess sandbox. Was "dormant until P-G" (review R3
 finding B1) up to 2026-08-11.
 
 ``record_turn_outcome`` is wired as of G4 (ADR-0371): ``chat_runtime.stream_turn``
-calls it after a completed console turn, behind the default-off ``outcome_feedback_loop``
+calls it after a completed console turn (native AND ACS-delegated; the ACS branch
+returns early and calls it itself, with the run's real result as the signal), behind the default-off ``outcome_feedback_loop``
 flag. Those grades are ADVISORY (``grader="__loop__"``) — only an explicit ``operator``
 grade promotes. On a default install (flag off) grades still accrue only from operator
 grading + the bootstrap seed. NOTE: the loop records ``success=True`` for every completed
@@ -29,6 +30,7 @@ success signal (user 👍/👎 or task outcome) feeds it.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 _MIN_SAMPLE = 3
@@ -78,7 +80,11 @@ def grade_stage(tenant_id: str, stage_id: str, score: float, notes: str = "",
     score = max(0.0, min(1.0, float(score)))
     data = _load(tenant_id)
     rec = data.setdefault(stage_id, {"grades": []})
-    rec["grades"].append({"score": score, "notes": str(notes)[:200], "grader": grader})
+    # ``ts`` dates the grade so the Learning Loops view can tell a live loop from a
+    # stopped one. Grades written before this field existed stay undated and count
+    # only toward the all-time total.
+    rec["grades"].append({"score": score, "notes": str(notes)[:200], "grader": grader,
+                          "ts": round(time.time(), 3)})
     _save(tenant_id, data)
 
 
