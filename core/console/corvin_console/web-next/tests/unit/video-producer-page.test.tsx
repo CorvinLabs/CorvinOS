@@ -300,7 +300,7 @@ describe("Video Producer studio", () => {
     const select = (await screen.findByDisplayValue("OpenAI TTS (default)")) as HTMLSelectElement;
     expect(select.value).toBe("openai");
     expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
-      "OpenAI TTS (default)", "Automatic: OpenAI, then edge-tts, then Piper", "Google TTS (gTTS, legacy)",
+      "OpenAI TTS (default)", "Automatic: OpenAI, then edge-tts", "Google TTS (gTTS, legacy)",
     ]);
     expect(screen.queryByTestId("tts-key-warning")).toBeNull();
     expect(screen.getByTestId("web-slides-note").textContent).toMatch(/need Playwright/);
@@ -311,7 +311,7 @@ describe("Video Producer studio", () => {
     server.use(http.get(`${B}/settings`, () => HttpResponse.json({ output_folder: "x", tts_engine: "openai", tts_engines: ["openai", "auto", "gtts"], max_duration_minutes: 60, openai_configured: false, web_slides_available: true })), ...handlers());
     renderIt();
     fireEvent.click(await screen.findByText("Settings"));
-    await waitFor(() => expect(screen.getByTestId("tts-key-warning").textContent).toMatch(/jobs are refused/));
+    await waitFor(() => expect(screen.getByTestId("tts-key-warning").textContent).toMatch(/falls back to edge-tts/));
     expect(screen.queryByTestId("web-slides-note")).toBeNull();
   });
 

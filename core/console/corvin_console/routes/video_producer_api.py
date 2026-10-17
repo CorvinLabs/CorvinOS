@@ -275,7 +275,7 @@ class SettingsRequest(BaseModel):
 # Narration engines the producer really has (skill.SUPPORTED_TTS_ENGINES):
 #   openai  OpenAI TTS (tts-1-hd, voice onyx) — the default; a missing key or an API failure
 #           fails the job instead of silently switching the narrator
-#   auto    the fallback chain: OpenAI -> edge-tts -> piper -> silent mock (ADR-2211)
+#   auto    the fallback chain: OpenAI -> edge-tts (ADR-2211; no Piper, no silent mock)
 #   gtts    Google Translate TTS (legacy, no key)
 _TTS_ENGINES = ["openai", "auto", "gtts"]
 _DEFAULT_SETTINGS = {"tts_engine": "openai", "max_duration_minutes": 60}
@@ -492,7 +492,7 @@ def _openai_configured() -> bool:
 
 def _effective_tts_engine(tts_engine: str) -> str:
     """The engine a job really runs with. "openai" needs its package AND a key; on a host that
-    has neither, narration degrades to the "auto" chain (OpenAI -> edge-tts -> piper -> mock)
+    has neither, narration degrades to the "auto" chain (OpenAI -> edge-tts)
     instead of refusing the job, so a fresh install produces video without any setup."""
     if tts_engine == "openai" and (importlib.util.find_spec("openai") is None or not _openai_configured()):
         return "auto"

@@ -83,7 +83,7 @@ export interface Learning {
 const BASE = "/video";
 const TTS_LABELS: Record<string, string> = {
   openai: "OpenAI TTS (default)",
-  auto: "Automatic: OpenAI, then edge-tts, then Piper",
+  auto: "Automatic: OpenAI, then edge-tts",
   gtts: "Google TTS (gTTS, legacy)",
 };
 const ACTIVE = ["pending", "storyboard_generating", "skills_running"];
