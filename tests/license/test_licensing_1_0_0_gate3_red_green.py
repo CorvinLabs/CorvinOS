@@ -114,7 +114,10 @@ def test_matrix_shape_matches_limits_py():
         assert spec["class"] in ("B", "L", "N"), name
         assert set(spec) == {"class", "free", "member"}, name
         assert spec["member"]["limit"] is None, name   # member is unlimited everywhere
-    assert {n for n, s in limits.CAPABILITIES.items() if s["free"]["limit"] == 0} == set(MEMBER_ONLY)
+    # cost.optimize (ADR-2259) is free-limit 0 too, but it is a class-L savings
+    # allowance (ratio/floor), not a hard member-only capability: free gets the
+    # allowance, so it is listed beside MEMBER_ONLY rather than inside it.
+    assert {n for n, s in limits.CAPABILITIES.items() if s["free"]["limit"] == 0} == set(MEMBER_ONLY) | {"cost.optimize"}
     assert all(limits.CAPABILITIES[c]["class"] == "B" for c in BASELINE)
 
 

@@ -484,9 +484,10 @@ class _FailingEngine:
     """An engine whose spawn raises — the shape of a CLI that cannot run (usage limit, sign-in)."""
     name = "fake"
     capabilities: dict = {}
+    message = "engine crashed unexpectedly"
 
     def spawn(self, prompt, **kwargs):
-        raise RuntimeError("usage limit reached")
+        raise RuntimeError(self.message)
 
     def cancel(self):
         pass
@@ -525,6 +526,33 @@ class TestRefusalReasonTravelsToTheSender(_Base):
         tid = res.task_id
         self.assertEqual(ats.lookup(ORIGIN, tid)["stage"], "rejected")
         self.assertEqual(ats.lookup(ORIGIN, tid)["reason"], "engine_failed")
+
+    def _run_failing(self, message):
+        _write_origin(self.origins)
+        eng = _FailingEngine()
+        eng.message = message
+        recv = rtr.RemoteTriggerReceiver(origins_dir=self.origins, engine_factory=lambda: eng)
+        return self._loopback_sender(recv).send("ep-1", "do the thing", timeout_s=20)
+
+    def test_usage_limit_is_classified_and_terminal(self):
+        res = self._run_failing("Claude AI usage limit reached|1760000000")
+        self.assertEqual(res.status, "rejected")
+        self.assertEqual(res.data, {"reason": "engine_usage_limit"})
+        self.assertIn("usage limit", res.error_detail)
+        self.assertIn("do not retry right away", res.error_detail)
+        self.assertNotIn("1760000000", res.error_detail)         # engine text never travels
+        st = ats.lookup(ORIGIN, res.task_id)
+        self.assertEqual((st["stage"], st["reason"]), ("rejected", "engine_usage_limit"))
+
+    def test_sign_in_problem_is_classified_as_auth(self):
+        res = self._run_failing("Invalid API key - Please run /login")
+        self.assertEqual(res.data, {"reason": "engine_auth"})
+        self.assertIn("signed in", res.error_detail)
+        self.assertEqual(ats.lookup(ORIGIN, res.task_id)["reason"], "engine_auth")
+
+    def test_unclassified_failure_keeps_engine_failed(self):
+        res = self._run_failing("segfault in tokenizer")
+        self.assertEqual(res.data, {"reason": "engine_failed"})
 
     def test_engine_that_cannot_start_is_told_apart_from_one_that_fails(self):
         _write_origin(self.origins)

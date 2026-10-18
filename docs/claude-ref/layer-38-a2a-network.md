@@ -1140,7 +1140,9 @@ with exception names / gate wording stays on the peer), the receiver puts it int
 | Code | Meaning / who acts |
 |---|---|
 | `engine_unavailable` | the engine could not start — Claude Code missing or not signed in on the peer |
-| `engine_failed` | the engine failed to run (usage limit, sign-in) — transient, try again later |
+| `engine_usage_limit` | the engine hit its usage/rate limit — terminal for this `task_id`; resend (new task) after the limit resets, never immediately |
+| `engine_auth` | the engine is not signed in / login expired on the peer — the peer's operator must sign in; resending before that fails the same way |
+| `engine_failed` | the engine failed to run for an unclassified cause — transient, try again later |
 | `engine_error` | the engine ran and reported an error |
 | `house_rules` / `house_rules_unavailable` | L44 acceptable-use refusal / gate missing (fail-closed) |
 | `data_flow`, `egress`, `gate_error` | L34 / L35 refusals, or a gate that errored (fail-closed) |
@@ -1240,6 +1242,54 @@ real ping core answers `processing`, forged/re-aimed/foreign/oversized queries, 
 decisions), `test_a2a_zero_config_e2e.py::test_5…` (two fresh instance processes + a real relay),
 `core/console/tests/test_a2a_task_lifecycle_routes.py`, `web-next/tests/unit/a2a-message-status.test.ts`
 and `peer-conversation-status-symbols.test.tsx`.
+
+## a2a.network gate — member-only transport (ADR-0700 §2.1, ADR-0702, ADR-0703)
+
+A2A transport is a member capability (`a2a.network`). Free installs keep every other feature; they cannot
+send, ping or receive A2A traffic. The check is one module, `corvin_operator/bridges/shared/a2a_license_gate.py`
+(`require_a2a_network(entry_point=…)`, raises `A2ANetworkDenied`), and it is called at exactly
+three chokepoints:
+
+| Chokepoint | Call site (`corvin_operator/bridges/shared/`) | What a denial does |
+|---|---|---|
+| inbound | `RemoteTriggerReceiver.receive` → `RemoteTriggerReceiver._network_denied()` (`remote_trigger_receiver.py`, before `_receive_impl`) | every inbound transport (HTTP server, relay, Google adapter) funnels here; answers the unsigned rejection an unknown origin gets, audits `A2A.request_rejected` (`reason=license_required`) locally; no task is recorded, so no stage is written |
+| outbound | `RemoteTriggerSender.send` → `_network_denied("remote_trigger_sender.send")` | refused before anything is recorded or sent; returns `SendResult(status="rejected", error_category=REJECTED)` with the local detail `A2A network requires a member seat` |
+| outbound | `RemoteTriggerSender.ping` → `_network_denied("remote_trigger_sender.ping")` | no probe leaves the machine; `PingResult(reachable=False, error_category=REJECTED)` |
+| outbound | `RemoteTriggerSender.send_reconnect` → `_network_denied(…)` | nothing is pushed; returns `False` |
+
+**Fail-closed.** Every failure of the check resolves to a denial, never to a pass: a missing or broken
+`a2a_license_gate` module (`ImportError` in either the bare or the `corvin_operator.bridges.shared` import),
+a tenant or credential error, a `LicenseDenied`, or a verdict other than `Decision.ALLOW`. Inside the gate,
+an `ImportError` of the licensing modules raises `A2ANetworkDenied`; any other enforcement exception is logged
+(`a2a.network enforcement failure`) and denied the same way. "The checker is missing" never reads as "the check
+passed".
+
+**Refusal path on the wire.** The gate adds **no** reason code. A receiver denial is deliberately the same
+unsigned rejection an unknown origin gets (the peer cannot tell "not a member" from "not listening"); a sender
+denial is local and never leaves the machine. The signed reason vocabulary is unchanged by the gate.
+
+**Honest limit (ADR-0703 §2.4).** The local gate runs in-process on Apache-2.0 code and can be edited out of a
+fork: it is deterrence, not a lock. What holds in a fork is the peer verifying the other side's Member Credential
+with its own ring (ADR-0702) — a separate phase that is not built yet.
+
+**Engine reason codes that now travel (ADR-2242 amendment, 2026-10-19).** The closed set of signed
+`rejected` reasons gains `engine_usage_limit` and `engine_auth` (`REASONS` in `core/a2a/a2a_task_state.py`).
+The peer's worker classifies its engine error text in `_classify_engine_failure` (`a2a_worker.py`): auth is
+tested first, then usage limit; unmatched text keeps `engine_failed` / `engine_error`. Only the code travels;
+the engine text stays on the peer. Both are terminal `rejected` for the `task_id` — the user resends explicitly.
+
+| Code | Sender text (`_WORKER_REFUSAL_TEXT`, `remote_trigger_sender.py`) | Chat tooltip (`REASON_TEXT`, `web-next/src/lib/a2a-message-status.ts`) |
+|---|---|---|
+| `engine_usage_limit` | "The peer's agent engine hit its usage limit - the task was not run; send it again after the limit resets (do not retry right away)" | "the peer's agent engine hit its usage limit — send it again after the limit resets" |
+| `engine_auth` | "The peer's agent engine is not signed in or its login expired - the peer's operator has to sign in again before tasks can run" | "the peer's agent engine is not signed in (or its login expired) — the peer's operator has to sign in again" |
+
+The gate's own denial has no reason code and therefore no chat tooltip; the sender shows the local detail
+`A2A network requires a member seat`. An older sender without the two codes shows its generic rejection text.
+
+**Tests.** `corvin_operator/bridges/shared/test_a2a_task_lifecycle.py` (the two engine codes reach the receiver's
+rejection response and the stored stage as `rejected` with that reason), `core/console/corvin_console/web-next/tests/unit/a2a-message-status.test.ts`
+(tooltip texts for both codes). The shared bridge `conftest.py` sets the tier resolver to `member` for A2A test
+files, so the real gate runs unmodified and passes; tests of the gate's own verdict opt out of that default.
 
 ## Adversarial review + hardening (ADR-2064, 2026-09-25)
 

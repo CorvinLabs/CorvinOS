@@ -142,6 +142,8 @@ describe("robustness", () => {
   it.each([
     ["engine_failed", /usage limit or sign-in problem/],
     ["engine_unavailable", /installed and signed in/],
+    ["engine_usage_limit", /usage limit.*after the limit resets/],
+    ["engine_auth", /not signed in.*sign in again/],
     ["house_rules_unavailable", /unavailable \(fail-closed\)/],
     ["quota", /daily compute limit.*10 agent tasks per day.*00:00 UTC/],
   ])("the worker refusal %s is explained in the tooltip", (reason, re) => {

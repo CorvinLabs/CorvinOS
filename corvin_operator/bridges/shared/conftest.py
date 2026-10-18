@@ -159,3 +159,38 @@ def _isolated_audit_chain(monkeypatch, tmp_path):
     # And the instance's pairing binding key (a2a_binding): tests must never
     # create or read the live install's key.
     monkeypatch.setenv("CORVIN_A2A_BIND_KEY_PATH", str(tmp_path / "a2a-bind-key"))
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "licence_tier(name): tier the licensing API resolves for an A2A test "
+        "(default 'member')",
+    )
+
+
+# a2a.network is a member-only capability (ADR-0700 §2.1) and the A2A sender /
+# receiver run the REAL licence gate (a2a_license_gate.py). The protocol
+# mechanics these files test presuppose a licensed install, so for A2A test
+# files only, the tier RESOLVER reports ``member`` by default — the gate, limits
+# matrix and audit run unmodified. Tests of the gate's own verdict opt out with
+# ``@pytest.mark.licence_tier("free")``. Scoped by file name so that no other
+# test in this directory silently runs as a member.
+_A2A_TEST_FILE_MARKERS = ("a2a", "remote_trigger")
+
+
+@pytest.fixture(autouse=True)
+def _a2a_member_tier(request, monkeypatch):
+    name = Path(str(request.node.fspath)).name
+    if not any(m in name for m in _A2A_TEST_FILE_MARKERS):
+        yield
+        return
+    marker = request.node.get_closest_marker("licence_tier")
+    tier = marker.args[0] if marker else "member"
+    try:
+        from corvin_operator.license import capability_api
+    except ImportError:  # licensing absent → the gate refuses (fail-closed)
+        yield
+        return
+    monkeypatch.setattr(capability_api, "active_tier", lambda **_k: tier)
+    yield

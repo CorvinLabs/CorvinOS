@@ -934,6 +934,20 @@ class RemoteTriggerReceiver:
                  "duration_ms": _ms(start)},
             )
             return self._rejected_response("", "", None)
+        # a2a.network is member-only (ADR-0700 §2.1). Every inbound transport
+        # (HTTP server, relay, Google adapter) funnels into this method, so one
+        # check covers them all. The answer is the UNSIGNED rejection an unknown
+        # origin gets — a free install is indistinguishable from one that is not
+        # listening — and the real reason stays in our audit.
+        if self._network_denied():
+            task_id, origin_id = self._echo_ids(envelope_dict)
+            self._audit_best_effort(
+                "A2A.request_rejected", "WARNING",
+                {"task_id": task_id, "origin_id": origin_id,
+                 "reason": "license_required", "status": "rejected",
+                 "duration_ms": _ms(start)},
+            )
+            return self._rejected_response(task_id, origin_id, None)
         try:
             return self._receive_impl(envelope_dict, start)
         except Exception as exc:  # noqa: BLE001 — never-raises contract
@@ -955,6 +969,19 @@ class RemoteTriggerReceiver:
                     instance_id="", status="rejected", data={},
                     attachments=[], signature="",
                 )
+
+    @staticmethod
+    def _network_denied() -> bool:
+        """True iff this installation may NOT use the A2A network (fail-closed)."""
+        try:
+            try:
+                import a2a_license_gate as _gate  # type: ignore[import-not-found]  # noqa: PLC0415
+            except ImportError:
+                from corvin_operator.bridges.shared import a2a_license_gate as _gate  # noqa: PLC0415
+            _gate.require_a2a_network(entry_point="remote_trigger_receiver.receive")
+        except Exception:  # noqa: BLE001 — any failure, incl. a missing module, denies
+            return True
+        return False
 
     def _echo_ids(self, envelope_dict: dict) -> tuple[str, str]:
         """(task_id, origin_id) as echoed in a rejection — never raises."""

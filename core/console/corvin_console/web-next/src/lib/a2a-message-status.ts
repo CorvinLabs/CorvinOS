@@ -85,6 +85,8 @@ const REASON_TEXT: Record<string, string> = {
   engine_unavailable: "the peer's agent engine could not start — check Claude Code is installed and signed in there",
   engine_failed: "the peer's agent engine failed to run it (a usage limit or sign-in problem on the peer?) — try again later",
   engine_error: "the peer's agent engine reported an error",
+  engine_usage_limit: "the peer's agent engine hit its usage limit — send it again after the limit resets",
+  engine_auth: "the peer's agent engine is not signed in (or its login expired) — the peer's operator has to sign in again",
   refused: "the peer refused it",
 };
 

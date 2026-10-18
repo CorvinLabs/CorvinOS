@@ -699,6 +699,9 @@ _ERROR_DETAIL_TEMPLATES = frozenset({
     "Message exceeds relay size limit",
     "Relay response timeout",
     "Relay transport error",
+    # a2a.network is a member-only capability (ADR-0700 §2.1) — the local gate
+    # refused before anything left this machine.
+    "A2A network requires a member seat",
     _ERROR_DETAIL_GENERIC,
 })
 # WHY a peer's worker path refused a task (a2a_worker.WorkerResult.reason_code, carried in
@@ -720,6 +723,10 @@ _WORKER_REFUSAL_TEXT: dict[str, str] = {
     "engine_failed": "The peer's agent engine failed to run the task (for example a usage limit or a "
                      "sign-in problem on the peer) - try again later",
     "engine_error": "The peer's agent engine reported an error while working on the task",
+    "engine_usage_limit": "The peer's agent engine hit its usage limit - the task was not run; "
+                          "send it again after the limit resets (do not retry right away)",
+    "engine_auth": "The peer's agent engine is not signed in or its login expired - "
+                   "the peer's operator has to sign in again before tasks can run",
     "refused": "The peer refused the task",
 }
 #: A rejection that names no reason at all — an older peer build, or a refusal path that
@@ -793,6 +800,25 @@ def _sanitize_error(reason: str | None) -> str | None:
     if text == "internal_error":
         return text
     return _ERROR_DETAIL_GENERIC
+
+
+_NETWORK_DENIED_DETAIL = "A2A network requires a member seat"
+
+
+def _network_denied(entry_point: str) -> str | None:
+    """``a2a.network`` gate (ADR-0700 §2.1): a fixed error_detail, or None if allowed.
+
+    Fail-closed — a missing or broken gate module is a refusal, never a pass.
+    """
+    try:
+        try:
+            import a2a_license_gate as _gate  # type: ignore[import-not-found]  # noqa: PLC0415
+        except ImportError:
+            from corvin_operator.bridges.shared import a2a_license_gate as _gate  # noqa: PLC0415
+        _gate.require_a2a_network(entry_point=entry_point)
+    except Exception:  # noqa: BLE001 — any failure, incl. a missing module, denies
+        return _NETWORK_DENIED_DETAIL
+    return None
 
 
 # ── ADR-0197 fail-closed audit backstop (analogous to telemetry _assert_safe) ─
@@ -1074,6 +1100,17 @@ class RemoteTriggerSender:
         happens after the send on EVERY return path and is best-effort: it can
         never change the result.
         """
+        # a2a.network is member-only (ADR-0700 §2.1): refuse before anything is
+        # recorded or sent. Every outbound caller — console, MCP a2a_send, CLI,
+        # conversations, groups — comes through here.
+        _denied = _network_denied("remote_trigger_sender.send")
+        if _denied:
+            return SendResult(
+                ok=False, status="rejected", task_id=task_id or str(uuid.uuid4()),
+                instance_id="", instance_id_match=False, data={}, attachments=[],
+                duration_ms=0, error_category=ErrorCategory.REJECTED,
+                error_detail=_sanitize_error(_denied),
+            )
         # The receiver refuses instructions over 16 KiB (after NFKC) as an
         # "injection attempt" — refuse locally with a clear reason instead of
         # sending it and leaving a false security signal on the peer (round 7).
@@ -1530,6 +1567,9 @@ class RemoteTriggerSender:
         unbounded 5-minute re-broadcast storm growing both audit chains.
         """
         start = time.time()
+        # a2a.network is member-only (ADR-0700 §2.1): nothing is pushed to a peer.
+        if _network_denied("remote_trigger_sender.send_reconnect"):
+            return False
         try:
             cfg = self._registry.load(endpoint_id)
         except EndpointError as exc:
@@ -1628,6 +1668,15 @@ class RemoteTriggerSender:
         (``A2A.connection_state``) instead of every unchanged outcome.
         """
         start = time.time()
+
+        # a2a.network is member-only (ADR-0700 §2.1) — no probe leaves the machine.
+        _denied = _network_denied("remote_trigger_sender.ping")
+        if _denied:
+            return PingResult(
+                reachable=False, source="network_probe",
+                error_category=ErrorCategory.REJECTED,
+                error_detail=_sanitize_error(_denied), duration_ms=0,
+            )
 
         # Clamp timeout_s to [2, 10], default 5
         if timeout_s is None:

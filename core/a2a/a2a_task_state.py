@@ -47,6 +47,8 @@ REASONS = frozenset({
     # WHY the worker path refused a task (a2a_worker.WorkerResult.reason_code)
     "data_flow", "gate_error", "egress", "house_rules", "house_rules_unavailable", "quota",
     "license", "attachments", "engine_unavailable", "engine_failed", "engine_error", "refused",
+    # engine failure classes (ADR-2242 amendment): wait for a reset / sign in on the peer
+    "engine_usage_limit", "engine_auth",
 })
 
 _FILE = "task_state.jsonl"

@@ -1049,7 +1049,7 @@ def spawn_a2a_worker(
             status="rejected", raw_output="",
             parsed_output={}, duration_ms=_ms(start),
             persona=persona, engine_name=engine_name,
-            reason_code="engine_failed",
+            reason_code=_classify_engine_failure(exc, "engine_failed"),
             error=f"spawn_failed:{type(exc).__name__}",
         )
 
@@ -1090,7 +1090,7 @@ def spawn_a2a_worker(
                 status="rejected", raw_output="",
                 parsed_output={}, duration_ms=_ms(start),
                 persona=persona, engine_name=engine_name,
-                reason_code="engine_failed",
+                reason_code=_classify_engine_failure(exc2, "engine_failed"),
                 error=f"spawn_failed_after_eviction:{type(exc2).__name__}",
             )
 
@@ -1144,9 +1144,34 @@ def spawn_a2a_worker(
         persona=persona,
         engine_name=engine_name,
         out_attachments=out_attachments,
-        reason_code="engine_error" if err else "",
+        reason_code=_classify_engine_failure(err, "engine_error") if err else "",
         error=err,
     )
+
+
+#: ADR-2242 amendment: an engine failure the peer's operator has to act on (or wait out) is
+#: told apart from an unclassified one. Matched on the engine's own error text, which stays
+#: on the peer — only the closed reason code travels to the sender.
+_ENGINE_USAGE_LIMIT_RE = re.compile(
+    r"usage limit|limit reached|rate[_ -]?limit|quota (?:exceeded|exhausted)|\b429\b|"
+    r"credit balance|overloaded", re.I)
+_ENGINE_AUTH_RE = re.compile(
+    r"invalid api key|not logged in|please run /login|/login|oauth|token (?:has )?expired|"
+    r"authentication|unauthori[sz]ed|sign[ -]?in|\b401\b|\b403\b", re.I)
+
+
+def _classify_engine_failure(text: object, default: str) -> str:
+    """Closed reason code for an engine failure: ``engine_usage_limit``, ``engine_auth``
+    or ``default``. Auth is checked first (an expired login can mention "limit" in its
+    advice; the reverse is rare)."""
+    t = str(text or "")
+    if not t:
+        return default
+    if _ENGINE_AUTH_RE.search(t):
+        return "engine_auth"
+    if _ENGINE_USAGE_LIMIT_RE.search(t):
+        return "engine_usage_limit"
+    return default
 
 
 def _engine_timeout_error() -> str:
