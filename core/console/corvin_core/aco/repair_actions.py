@@ -672,12 +672,8 @@ def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
     try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True          # exists, owned by someone else
+        from corvin_core.task_manager import _os_pid_exists  # noqa: PLC0415 — os.kill(pid, 0) kills on Windows
+        return _os_pid_exists(pid)
     except (OSError, AttributeError, OverflowError):
         return True          # can't tell (e.g. Windows quirk) → assume alive
 

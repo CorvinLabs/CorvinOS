@@ -8575,12 +8575,17 @@ async def _stream_turn_impl(
 
     # ADR-0080 M1 — record task completion
     if rc == 0:
-        tm.record_event(task_id, {
-            "event": "task.completed",
-            "exit_code": 0,
-            "summary": f"{sum(len(p) for p in final_text_parts)} chars output",
-            "children_open": len(_bg.open_children) if _bg is not None else 0,  # ADR-2236 D4
-        })
+        try:
+            tm.record_event(task_id, {
+                "event": "task.completed",
+                "exit_code": 0,
+                "summary": f"{sum(len(p) for p in final_text_parts)} chars output",
+                "children_open": len(_bg.open_children) if _bg is not None else 0,  # ADR-2236 D4
+            })
+        except ValueError as _te:  # InvalidTransitionError: task was reaped/interrupted mid-turn
+            # The answer already exists — bookkeeping must not turn a finished turn into
+            # "The turn failed unexpectedly".
+            _log.warning("task.completed not recorded for %s: %s", task_id, _te)
     else:
         tm.record_event(task_id, {
             "event": "task.failed",

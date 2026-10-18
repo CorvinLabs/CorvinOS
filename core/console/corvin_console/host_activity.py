@@ -219,13 +219,8 @@ def _alive(entry: dict[str, Any]) -> bool:
             return False
         want = entry.get("procStart")
         return want is None or str(want) == start  # a reused pid is not the session
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    from corvin_core.task_manager import _os_pid_exists  # noqa: PLC0415 — os.kill(pid, 0) kills on Windows
+    return _os_pid_exists(pid)
 
 
 def _live_registry(root: Path) -> dict[str, dict[str, Any]]:

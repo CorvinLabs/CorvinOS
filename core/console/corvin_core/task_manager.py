@@ -37,6 +37,40 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+def _os_pid_exists(pid: int) -> bool:
+    """Non-destructive "does this pid exist" probe.
+
+    ``os.kill(pid, 0)`` is only a probe on POSIX. On Windows CPython maps any
+    signal other than CTRL_C/CTRL_BREAK to TerminateProcess, so it KILLS the
+    process it was meant to check — the adapter-boot reaper then terminated the
+    live engine of an in-flight chat turn and the turn died with
+    InvalidTransitionError (interrupted -> completed).
+    """
+    if os.name == "nt":
+        try:
+            import ctypes  # noqa: PLC0415
+            k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            h = k32.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED_INFORMATION
+            if not h:
+                # 5 = access denied: the process exists. Anything else: gone.
+                return ctypes.GetLastError() == 5
+            code = ctypes.c_ulong(0)
+            ok = k32.GetExitCodeProcess(h, ctypes.byref(code))
+            k32.CloseHandle(h)
+            return bool(ok) and code.value == 259  # STILL_ACTIVE
+        except Exception:  # noqa: BLE001 — unknown → assume alive, never reap
+            return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 from .task_states import (
     CANCELLABLE_STATES,
     EVENT_TARGET_STATE,
@@ -848,17 +882,7 @@ class TaskManager:
                 return False
 
         # Now check if the process is alive (start time already verified if available)
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            # Process exists but we don't have permission — treat as alive
-            pass
-        except OSError:
-            return False
-
-        return True
+        return _os_pid_exists(pid)
 
     def _task_pid_alive(self, task_id: str) -> bool:
         """True iff the task's recorded engine process is still alive.
@@ -884,14 +908,8 @@ class TaskManager:
         pid = self._last_started_pid(task_id)
         if pid is None or pid <= 0:
             return False
-        try:
-            os.kill(pid, 0)  # signal 0: probe only, never delivered
-        except ProcessLookupError:
+        if not _os_pid_exists(pid):  # never os.kill(pid, 0): it kills on Windows
             return False  # process gone — genuine orphan
-        except PermissionError:
-            return True   # alive but owned by another uid — still alive
-        except OSError:
-            return False
         # Linux hardening against pid-reuse — best-effort; non-Linux / races
         # fall back to trusting the os.kill liveness result above.
         try:

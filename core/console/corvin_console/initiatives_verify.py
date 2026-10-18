@@ -216,8 +216,8 @@ def is_running(tenant_id: str) -> bool:
         return False
     try:
         pid = int(lp.read_text().strip() or 0)
-        os.kill(pid, 0)
-        return True
+        from corvin_core.task_manager import _os_pid_exists  # noqa: PLC0415 — os.kill(pid, 0) kills on Windows
+        return _os_pid_exists(pid)
     except (ValueError, ProcessLookupError, PermissionError, OSError):
         return False
 
