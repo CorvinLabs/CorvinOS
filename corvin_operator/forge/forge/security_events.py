@@ -4490,7 +4490,8 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     "video_producer.asset_deleted": frozenset({"tenant_id", "asset_id", "bytes"}),
     "video_producer.asset_accessed": frozenset({"tenant_id", "asset_id", "purpose"}),
-    "video_producer.asset_updated": frozenset({"tenant_id", "asset_id", "hotspot_count", "caption_changed"}),
+    "video_producer.asset_updated": frozenset({"tenant_id", "asset_id", "hotspot_count", "caption_changed",
+                                               "step_count"}),  # ADR-2260: board reveal steps assigned
     "video_producer.capture_setting_changed": frozenset({"tenant_id", "enabled"}),
     "video_producer.capture_started": frozenset({"tenant_id", "host", "url_sha256_prefix", "viewport"}),
     "video_producer.capture_finished": frozenset({

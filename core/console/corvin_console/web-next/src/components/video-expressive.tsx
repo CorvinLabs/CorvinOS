@@ -24,6 +24,7 @@ import {
   uploadAsset, uploadProblem, type Asset, type AssetHotspot, type AssetList, type CaptureSettings, type CaptureViewport,
 } from "@/lib/api/video-assets";
 import { signalRows, type ProductionReport } from "@/lib/video-quality-signals";
+import { BoardStepsDialog } from "@/components/video-board";
 
 type Meta = Record<string, unknown> | null | undefined;
 
@@ -104,6 +105,7 @@ export function AssetsTab({ csrf }: { csrf: string }) {
   const [confirm, setConfirm] = useState<string | null>(null);
   const [showCaptureDialog, setShowCaptureDialog] = useState(false);
   const [editing, setEditing] = useState<Asset | null>(null);
+  const [boardFor, setBoardFor] = useState<Asset | null>(null);
   const settings = useQuery({ queryKey: ["video", "settings"], queryFn: ({ signal }) => api<CaptureSettings>(`${BASE}/settings`, { signal }), retry: false });
   const captureBlocked = settings.isError ? "Website capture is not available on this installation." : captureBlockedReason(settings.data);
   const picker = useRef<HTMLInputElement>(null);
@@ -206,7 +208,8 @@ export function AssetsTab({ csrf }: { csrf: string }) {
         {penpot.isError && <p className="text-xs text-destructive" role="alert" data-testid="penpot-error">{err(penpot.error, "The Penpot board could not be imported.")}</p>}
         {penpot.isSuccess && (
           <p className="text-xs text-muted-foreground" data-testid="penpot-done">
-            Board imported as an image{penpot.data.notes.length ? ` (not imported: ${penpot.data.notes.join(", ")})` : ""}. Components, constraints and animations are not part of an SVG export.
+            Board imported{penpot.data.notes.length ? ` (not imported: ${penpot.data.notes.join(", ")})` : ""}. A still scene can show it as a picture;
+            assign its steps (Board steps) to reveal it step by step. Components, constraints and animations are not part of an SVG export.
           </p>
         )}
         {upload.isError && <p className="text-xs text-destructive" role="alert" data-testid="asset-upload-error">{err(upload.error, "The image could not be uploaded.")}</p>}
@@ -222,6 +225,12 @@ export function AssetsTab({ csrf }: { csrf: string }) {
                 {a.hotspots.length ? `: ${a.hotspots.map((h) => h.name).join(", ")}` : ""}
               </div>
               {a.source && <div className="text-xs text-muted-foreground break-all">Source: {a.source}</div>}
+              {a.board?.has_design && (
+                <div className="text-xs text-muted-foreground" data-testid={`asset-board-${a.id}`}>
+                  {a.board.ready ? `Board: ${a.board.steps} step${a.board.steps === 1 ? "" : "s"}, ready for a board scene`
+                    : `Board: ${a.board.reason ?? "not ready"}`}
+                </div>
+              )}
               {confirm === a.id ? (
                 <div className="flex gap-2 mt-2" role="alertdialog" aria-label="Confirm deletion">
                   <Button type="button" variant="destructive" size="sm" disabled={del.isPending || !csrf} onClick={() => del.mutate(a.id)} data-testid={`asset-delete-confirm-${a.id}`}>Delete</Button>
@@ -232,6 +241,11 @@ export function AssetsTab({ csrf }: { csrf: string }) {
                   <Button type="button" variant="ghost" size="sm" className="h-7 px-2" disabled={!csrf} onClick={() => setEditing(a)} data-testid={`asset-edit-${a.id}`}>
                     Edit hotspots
                   </Button>
+                  {a.board?.has_design && (
+                    <Button type="button" variant="ghost" size="sm" className="h-7 px-2" disabled={!csrf} onClick={() => setBoardFor(a)} data-testid={`asset-board-steps-${a.id}`}>
+                      Board steps
+                    </Button>
+                  )}
                   <Button type="button" variant="ghost" size="sm" className="h-7 px-2" disabled={!csrf} onClick={() => { del.reset(); setConfirm(a.id); }} data-testid={`asset-delete-${a.id}`}>
                     <Trash2 className="w-3 h-3 mr-1" />Delete
                   </Button>
@@ -241,6 +255,10 @@ export function AssetsTab({ csrf }: { csrf: string }) {
             </li>
           ))}
         </ul>
+      )}
+      {boardFor && (
+        <BoardStepsDialog asset={boardFor} csrf={csrf} onClose={() => setBoardFor(null)}
+          onChanged={() => void qc.invalidateQueries({ queryKey: ["video", "assets"] })} />
       )}
       {(showCaptureDialog || editing) && (
         <CaptureDialog csrf={csrf} maxCaption={limits?.max_caption} maxSpots={limits?.max_hotspots} existing={editing ?? undefined}

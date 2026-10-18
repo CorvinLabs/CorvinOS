@@ -2010,9 +2010,29 @@ def _asset_store(rec):
     return _asset_mod().AssetStore(str(_tenant_base(rec)))
 
 
-def _public_asset(doc: Dict[str, Any]) -> Dict[str, Any]:
+def _public_asset(doc: Dict[str, Any], store=None) -> Dict[str, Any]:
     keep = ("id", "caption", "hotspots", "width", "height", "bytes", "created", "source")
-    return {k: doc.get(k) for k in keep}
+    out = {k: doc.get(k) for k in keep}
+    if store is not None:
+        out["board"] = _board_state(store, doc["id"])
+    return out
+
+
+def _board_state(store, asset_id: str) -> Dict[str, Any]:
+    """Whether an image can be a board (ADR-2260): it has a stored design, it is within every board bound and its
+    reveal steps are assigned. ``reason`` is the sentence the user sees when it cannot."""
+    am = _asset_mod()
+    try:
+        model = store.design(asset_id)
+    except (am.AssetError, am.AssetNotFound):
+        return {"has_design": False, "ready": False, "steps": 0, "reason": "The stored design is damaged"}
+    if model is None:
+        return {"has_design": False, "ready": False, "steps": 0, "reason": None}
+    try:
+        b = store.board(asset_id)
+        return {"has_design": True, "ready": True, "steps": len(b["steps"]), "reason": None}
+    except (am.AssetError, am.AssetNotFound) as e:
+        return {"has_design": True, "ready": False, "steps": 0, "reason": str(e)[:200]}
 
 
 def _refusal_code(message: str) -> str:
@@ -2029,7 +2049,8 @@ def _refusal_code(message: str) -> str:
 @router.get("/assets")
 def list_assets(rec=_SessionRec):
     am = _asset_mod()
-    return {"assets": [_public_asset(a) for a in _asset_store(rec).list()],
+    store = _asset_store(rec)
+    return {"assets": [_public_asset(a, store) for a in store.list()],
             "limits": {"max_assets": am.MAX_ASSETS, "max_image_bytes": am.MAX_IMAGE_BYTES,
                        "max_upload_bytes": _MAX_ASSET_UPLOAD_BYTES, "max_caption": am.MAX_CAPTION,
                        "max_hotspots": am.MAX_SPOTS}}
@@ -2169,8 +2190,10 @@ async def import_penpot_asset(file: UploadFile = File(...), caption: str = Form(
             "height": doc["height"], "hotspot_count": 0, "has_source": False})
 
     try:
+        # the validated typed model is stored beside the picture (ADR-2260 decision 2): the board template reveals it
+        # step by step; the original upload is still not kept
         doc = await asyncio.to_thread(_asset_store(rec).add, png, caption=text, uploaded_by=_job_owner(rec),
-                                      source=None, hotspots=[], before_commit=record)
+                                      source=None, hotspots=[], before_commit=record, design=design)
     except am.AssetNotRecorded:
         raise HTTPException(status_code=503, detail="The import could not be recorded; nothing was stored") from None
     except am.AssetQuotaExceeded as e:
@@ -2178,7 +2201,7 @@ async def import_penpot_asset(file: UploadFile = File(...), caption: str = Form(
     except am.AssetError as e:
         refuse(422, str(e), _refusal_code(str(e)))
     notes = [f"{what} not imported" for what in pim.describe_dropped(design.dropped)]
-    return JSONResponse(status_code=201, content={"asset": _public_asset(doc), "notes": notes})
+    return JSONResponse(status_code=201, content={"asset": _public_asset(doc, _asset_store(rec)), "notes": notes})
 
 
 def _own_asset(rec, asset_id: str) -> Dict[str, Any]:
@@ -2224,6 +2247,9 @@ def delete_asset(asset_id: str, rec=_SessionRec):
 class AssetUpdateRequest(BaseModel):
     caption: Optional[str] = Field(None, max_length=1000)
     hotspots: Optional[List[Dict[str, Any]]] = Field(None, max_length=8)
+    # board reveal steps (ADR-2260 decision 2): an ordered partition of the design's shapes; null clears them.
+    # Absent = unchanged (pydantic's fields_set tells absent from null).
+    steps: Optional[List[Dict[str, Any]]] = Field(None, max_length=12)
 
 
 @router.patch("/assets/{asset_id}")
@@ -2236,18 +2262,45 @@ async def update_asset(asset_id: str, req: AssetUpdateRequest, rec=_SessionRec):
     def record(new: Dict[str, Any]) -> bool:
         return _audit(rec.tenant_id, "video_producer.asset_updated", {
             "asset_id": doc["id"], "hotspot_count": len(new.get("hotspots") or []),
-            "caption_changed": new.get("caption") != doc.get("caption")})
+            "caption_changed": new.get("caption") != doc.get("caption"),
+            "step_count": len(new.get("steps") or [])})
 
+    kw: Dict[str, Any] = {}
+    if "steps" in req.model_fields_set:
+        kw["steps"] = req.steps  # None clears: the design is unassigned again
     try:
         new = await asyncio.to_thread(_asset_store(rec).update, asset_id, caption=req.caption,
-                                      hotspots=req.hotspots, before_commit=record)
+                                      hotspots=req.hotspots, before_commit=record, **kw)
     except am.AssetNotRecorded:
         raise HTTPException(status_code=503, detail="The change could not be recorded; nothing was changed") from None
     except am.AssetNotFound:
         raise HTTPException(status_code=404, detail=_ASSET_NOT_FOUND) from None
     except am.AssetError as e:
         raise HTTPException(status_code=422, detail=str(e)[:200]) from None
-    return {"asset": _public_asset(new)}
+    return {"asset": _public_asset(new, _asset_store(rec))}
+
+
+@router.get("/assets/{asset_id}/design")
+def asset_design(asset_id: str, rec=_SessionRec):
+    """The stored typed model of an imported design, for the Assets tab to show its steps and let the user assign
+    them by clicking shapes (ADR-2260 decisions 2 and 3). Typed fields only - never the upload."""
+    doc = _own_asset(rec, asset_id)
+    am, pim = _asset_mod(), _style_mod("penpot_import")
+    store = _asset_store(rec)
+    try:
+        model = store.design(asset_id)
+    except am.AssetError:
+        raise HTTPException(status_code=409, detail="The stored design is damaged; import it again") from None
+    if model is None:
+        raise HTTPException(status_code=404, detail="This image has no stored design")
+    if not _audit(rec.tenant_id, "video_producer.asset_accessed", {"asset_id": doc["id"], "purpose": "design"}):
+        raise HTTPException(status_code=503, detail="The access could not be recorded")
+    steps = store.get(asset_id, with_png=False).get("steps") or []
+    return {"design": pim.design_to_dict(model), "steps": steps,
+            "labels": pim.step_labels(model, steps) if steps else [],
+            "board": _board_state(store, asset_id),
+            "limits": {"max_steps": pim.MAX_STEPS, "max_label": pim.MAX_STEP_LABEL,
+                       "max_shapes": pim.BOARD_MAX_SHAPES}}
 
 
 # ── Website capture as an asset (ADR-2249 D4, T-0113, T-0194) ─────────────────

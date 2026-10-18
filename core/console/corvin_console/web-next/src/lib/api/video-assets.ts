@@ -11,9 +11,11 @@ import { ApiError, BASE } from "@/lib/api/client";
 export const ASSET_ACCEPT = ".png,image/png";
 
 export interface AssetHotspot { name: string; x: number; y: number; description: string }
+/** Whether an image can be a board: a stored design, within every board bound, reveal steps assigned. */
+export interface AssetBoardState { has_design: boolean; ready: boolean; steps: number; reason: string | null }
 export interface Asset {
   id: string; caption: string; hotspots: AssetHotspot[]; width: number; height: number; bytes: number;
-  created: string | number | null; source: string | null;
+  created: string | number | null; source: string | null; board?: AssetBoardState;
 }
 export interface AssetList {
   assets: Asset[];
@@ -66,8 +68,9 @@ export async function captureAsset(
   return (payload as { asset: Asset }).asset;
 }
 
-/** Change a stored image's caption and/or hotspots (PATCH /video/assets/{id}); the image never changes. */
-export async function updateAsset(id: string, fields: { caption?: string; hotspots?: AssetHotspot[] }, csrf: string): Promise<Asset> {
+/** Change a stored image's caption, hotspots and/or board steps (PATCH /video/assets/{id}); the image never
+ * changes. `steps: null` clears the steps (the design is unassigned again); an absent key keeps them. */
+export async function updateAsset(id: string, fields: { caption?: string; hotspots?: AssetHotspot[]; steps?: BoardStep[] | null }, csrf: string): Promise<Asset> {
   const res = await fetch(`${BASE}/video/assets/${encodeURIComponent(id)}`, {
     method: "PATCH", body: JSON.stringify(fields), credentials: "include",
     headers: { "X-CSRF-Token": csrf, "Content-Type": "application/json" },
@@ -177,3 +180,80 @@ export function canvasAuthoring(metadata: Record<string, unknown> | null | undef
 }
 
 export const fmtAssetBytes = (n: number) => (n < 1048576 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1048576).toFixed(2)} MB`);
+
+
+// ── board: an imported design revealed step by step ─────────────────────────
+
+/** One shape of the stored design: typed fields only, exactly what the server validated. */
+export interface BoardShape {
+  kind: "rect" | "ellipse" | "path" | "text";
+  x: number; y: number; w: number; h: number; rx: number; ry: number; d: string; text: string;
+  fill: string | null; fill_opacity: number; stroke: string | null; stroke_width: number; opacity: number;
+  font_family: string; font_size: number; font_weight: number; text_length: number; baseline: string; anchor: string;
+  matrix: number[]; group: number;
+}
+export interface BoardDesign { width: number; height: number; ox: number; oy: number; background: string | null; shapes: BoardShape[] }
+export interface BoardStep { shapes: number[]; label?: string }
+export interface BoardDesignResponse {
+  design: BoardDesign; steps: BoardStep[]; labels: (string | null)[]; board: AssetBoardState;
+  limits: { max_steps: number; max_label: number; max_shapes: number };
+}
+
+/** Path for api() (which prefixes the console base itself). */
+export const designPath = (id: string) => `/video/assets/${encodeURIComponent(id)}/design`;
+
+/** Put shape `shape` into step `step` (taking it out of any other step); clicking it again in the same step removes it. */
+export function toggleShape(steps: BoardStep[], step: number, shape: number): BoardStep[] {
+  const inThis = steps[step]?.shapes.includes(shape);
+  return steps.map((st, k) => ({
+    ...st,
+    shapes: k === step
+      ? (inThis ? st.shapes.filter((i) => i !== shape) : [...st.shapes.filter((i) => i !== shape), shape].sort((a, b) => a - b))
+      : st.shapes.filter((i) => i !== shape),
+  }));
+}
+
+/** Shapes no step contains yet, in shape order. */
+export function unassignedShapes(steps: BoardStep[], n: number): number[] {
+  const seen = new Set(steps.flatMap((s) => s.shapes));
+  return Array.from({ length: n }, (_, i) => i).filter((i) => !seen.has(i));
+}
+
+/** The step index of every shape (-1 = in no step). */
+export function stepOfShape(steps: BoardStep[], n: number): number[] {
+  const out = Array.from({ length: n }, () => -1);
+  steps.forEach((st, k) => st.shapes.forEach((i) => { if (i >= 0 && i < n) out[i] = k; }));
+  return out;
+}
+
+/** Why the steps cannot be saved yet (the server checks the same rules), or null. */
+export function stepsProblem(steps: BoardStep[], n: number, limits: { max_steps: number; max_label: number; max_shapes: number }): string | null {
+  if (n > limits.max_shapes) return `This design has ${n} shapes; a board can reveal at most ${limits.max_shapes}.`;
+  if (steps.length === 0) return "Add at least one step.";
+  if (steps.length > limits.max_steps) return `A board has at most ${limits.max_steps} steps.`;
+  if (steps.some((s) => s.shapes.length === 0)) return "Every step needs at least one shape (remove empty steps).";
+  const left = unassignedShapes(steps, n).length;
+  if (left) return `${left} shape${left === 1 ? " is" : "s are"} not in a step yet.`;
+  if (steps.some((s) => (s.label ?? "").length > limits.max_label)) return `A step label is at most ${limits.max_label} characters.`;
+  if (steps.some((s) => /[<>&"\\`{}]/.test(s.label ?? ""))) return "A step label is plain text: no markup characters.";
+  return null;
+}
+
+/** What the server stores: empty labels dropped, labels trimmed. */
+export function stepsPayload(steps: BoardStep[]): BoardStep[] {
+  return steps.map((s) => {
+    const label = (s.label ?? "").trim().replace(/\s+/g, " ");
+    return label ? { shapes: [...s.shapes], label } : { shapes: [...s.shapes] };
+  });
+}
+
+/** One step per top-level group of the design, in group order - a starting point the user edits, never saved unasked. */
+export function stepsFromGroups(design: BoardDesign, maxSteps: number): BoardStep[] {
+  const groups = Array.from(new Set(design.shapes.map((s) => s.group))).sort((a, b) => a - b);
+  const steps = groups.map((g) => ({ shapes: design.shapes.map((s, i) => (s.group === g ? i : -1)).filter((i) => i >= 0) }));
+  while (steps.length > maxSteps) {
+    const last = steps.pop()!;
+    steps[steps.length - 1].shapes.push(...last.shapes);
+  }
+  return steps;
+}
