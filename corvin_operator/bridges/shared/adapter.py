@@ -1453,8 +1453,10 @@ _TURN_CANCEL_LOCK = threading.Lock()
 #: Exit codes of a claude process that was STOPPED from outside. Popen reports a signal death as
 #: -N; but the real CLI (2.1.294, measured) catches SIGTERM while it owns a background child, ends
 #: the child itself and exits 128+N — so both shapes must be recognised (ADR-2236).
-_STOPPED_EXIT_CODES = frozenset({-int(signal.SIGTERM), -int(signal.SIGKILL),
-                                 128 + int(signal.SIGTERM), 128 + int(signal.SIGKILL)})
+#: signal.SIGKILL does not exist on Windows (AttributeError at import → adapter never started); 9 is its value everywhere.
+_SIGKILL_NUM = int(getattr(signal, "SIGKILL", 9))
+_STOPPED_EXIT_CODES = frozenset({-int(signal.SIGTERM), -_SIGKILL_NUM,
+                                 128 + int(signal.SIGTERM), 128 + _SIGKILL_NUM})
 
 
 def _cancel_chat(chat_key: str) -> int:
@@ -6399,7 +6401,7 @@ def _call_claude_streaming_via_engine(
                     proc.kill()
                     rc = proc.wait(timeout=5)
                 except Exception:  # noqa: BLE001
-                    rc = -int(signal.SIGKILL)
+                    rc = -_SIGKILL_NUM
             except Exception:  # noqa: BLE001
                 rc = proc.returncode if proc.returncode is not None else 1
             thread.join(timeout=5)
@@ -6435,10 +6437,14 @@ def _call_claude_streaming_via_engine(
         if _captured_session_id and not error_text and not timed_out:
             _msf = workdir / ".main_session.json"
             try:
-                import fcntl as _fcntl  # noqa: PLC0415
+                try:
+                    import fcntl as _fcntl  # noqa: PLC0415
+                except ImportError:  # Windows: no fcntl; the tmp+replace is still atomic
+                    _fcntl = None
                 _tmp = _msf.with_suffix(".tmp")
                 with open(_tmp, "w", encoding="utf-8") as _f:
-                    _fcntl.flock(_f, _fcntl.LOCK_EX)
+                    if _fcntl is not None:
+                        _fcntl.flock(_f, _fcntl.LOCK_EX)
                     json.dump(
                         {"session_id": _captured_session_id,
                          "saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},

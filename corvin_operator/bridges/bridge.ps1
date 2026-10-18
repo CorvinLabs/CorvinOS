@@ -127,6 +127,28 @@ if (-not $env:CORVIN_HOME) {
 $Subcommand = if ($args.Count -gt 0) { $args[0] } else { "up" }
 $Bridge     = if ($args.Count -gt 1) { $args[1] } else { "discord" }
 
+# Start shared/adapter.py (inbox poller / engine dispatcher) once. Idempotent:
+# a second call, or a supervisor restart of the node daemon, reuses the running
+# adapter instead of piling up duplicates.
+function Start-BridgeAdapter {
+    $adapter = Join-Path $ScriptDir "shared\adapter.py"
+    if (-not (Test-Path $adapter)) { Write-Warning "adapter.py not found: $adapter"; return }
+    $running = Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match 'adapter\.py' }
+    if ($running) { Write-Host "  Adapter already running (PID $($running[0].ProcessId))." -ForegroundColor DarkGray; return }
+    if (-not $env:CORVIN_CLAUDE_BIN) {
+        $cc = Get-Command claude -ErrorAction SilentlyContinue
+        if (-not $cc) { $cand = Join-Path $env:USERPROFILE ".local\bin\claude.exe"; if (Test-Path $cand) { $cc = Get-Item $cand } }
+        if ($cc) { $env:CORVIN_CLAUDE_BIN = if ($cc.Source) { $cc.Source } else { $cc.FullName } }
+    }
+    $logDir = Join-Path $env:CORVIN_HOME "logs"
+    $null = New-Item -ItemType Directory -Force -Path $logDir
+    $log = Join-Path $logDir "adapter.log"
+    $p = Start-Process -FilePath $Python -ArgumentList "`"$adapter`"" -WorkingDirectory (Join-Path $ScriptDir "shared") `
+        -WindowStyle Hidden -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+    Write-Host "  Adapter started (PID $($p.Id)). Output: $log" -ForegroundColor Green
+}
+
 switch ($Subcommand) {
 
     "up" {
@@ -154,6 +176,12 @@ switch ($Subcommand) {
             # with "Cannot find module 'discord.js'" and the supervisor gave up
             # after 5 restarts. Mirrors ensure_npm_modules() in bridge.sh.
             Install-BridgeNpmModules -Dir (Join-Path $ScriptDir $Bridge)
+
+            # The node daemon only WRITES envelopes to shared/inbox; shared/
+            # adapter.py is what polls the inbox, spawns the engine turn and
+            # writes the reply. bridge.sh starts it, but this script never did,
+            # so on Windows Discord was online yet no task was ever executed.
+            Start-BridgeAdapter
 
             # 2026-08-02: this used to invoke node via the call operator
             # ('&'), which runs it as a DIRECT CHILD of the current
@@ -243,6 +271,10 @@ else:
         Get-Process | Where-Object { $_.ProcessName -match "node" } | ForEach-Object {
             try { Stop-Process -Id $_.Id -Force; Write-Host "  Stopped: $($_.Id)" } catch {}
         }
+        Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -match 'shared\\adapter\.py|"adapter\.py"' } | ForEach-Object {
+                try { Stop-Process -Id $_.ProcessId -Force; Write-Host "  Stopped adapter: $($_.ProcessId)" } catch {}
+            }
         # Remove bridge port file
         $PortFile = Join-Path $env:CORVIN_HOME "global\bridge.port"
         if (Test-Path $PortFile) { Remove-Item $PortFile -Force }
