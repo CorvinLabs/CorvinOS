@@ -141,6 +141,16 @@ function Start-BridgeAdapter {
         if (-not $cc) { $cand = Join-Path $env:USERPROFILE ".local\bin\claude.exe"; if (Test-Path $cand) { $cc = Get-Item $cand } }
         if ($cc) { $env:CORVIN_CLAUDE_BIN = if ($cc.Source) { $cc.Source } else { $cc.FullName } }
     }
+    # Same PYTHONPATH bridge.sh builds. A bare system Python (the usual
+    # fallback when the uv-tool venv is missing) cannot import corvin_operator /
+    # license, which made every turn fail with "Chat-turn quota enforcement
+    # unavailable -- refusing turn (fail-closed)".
+    $repo = Split-Path -Parent (Split-Path -Parent $ScriptDir)
+    $paths = @($repo, "$repo\corvin_operator", "$repo\core\console", "$repo\core\gateway", "$repo\core\license",
+               "$repo\core\compliance", "$repo\corvin_operator\forge", "$repo\corvin_operator\skill-forge",
+               "$repo\corvin_operator\bridges\shared", "$repo\core\plugins") | Where-Object { Test-Path $_ }
+    if ($env:PYTHONPATH) { $paths += $env:PYTHONPATH }
+    $env:PYTHONPATH = $paths -join ";"
     $logDir = Join-Path $env:CORVIN_HOME "logs"
     $null = New-Item -ItemType Directory -Force -Path $logDir
     $log = Join-Path $logDir "adapter.log"
