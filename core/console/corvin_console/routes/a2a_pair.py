@@ -615,10 +615,23 @@ def pair_accept(body: AcceptRequest) -> dict[str, Any]:
         "redeemer_label": body.redeemer_label,
         "origin_id_for_us": body.origin_id_for_us,
     }
+    # A failed signature/timestamp check must NOT burn the invite: otherwise any
+    # unauthenticated caller who learns the (uuid4) accept_id can send one bad
+    # request and permanently break the legitimate redeemer's pairing. Restore
+    # the pending file so the real redeemer can still accept. A bad-signature
+    # caller gains nothing — it never learns the secret accept_key.
+    def _restore_pending() -> None:
+        try:
+            os.rename(processed_file, pending_file)
+        except OSError:
+            processed_file.unlink(missing_ok=True)
+
     if not _verify(accept_key, json.dumps(check_payload, sort_keys=True), body.signature):
+        _restore_pending()
         raise HTTPException(status_code=403, detail="Invalid signature")
 
     if abs(time.time() - body.ts) > 300:
+        _restore_pending()
         raise HTTPException(status_code=422, detail="Timestamp out of ±300 s window")
 
     try:

@@ -162,6 +162,13 @@ async def get_peer(
         HTTPException: 404 if peer not found
 
     """
+    # Reject anything that is not a plain id before it reaches the filesystem:
+    # peer_id lands in an "{peer_id}.json" path, so "../" / absolute / leading-dot
+    # values would otherwise read arbitrary JSON files (every sibling peer-id→path
+    # site routes through this kind of guard; this one historically did not).
+    import re as _re  # noqa: PLC0415
+    if not _re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", peer_id or ""):
+        raise HTTPException(status_code=404, detail="Peer not found")
     try:
         origins_dir = _origins_dir()
         origin_file = origins_dir / f"{peer_id}.json"

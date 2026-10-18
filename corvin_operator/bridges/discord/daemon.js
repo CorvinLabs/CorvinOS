@@ -137,6 +137,15 @@ if (!OPERATOR_NAME || OPERATOR_NAME === '(owner)') {
 const { rateAllow, authOk, readOnlyOk } = makeAuth({
   settingsFile: SETTINGS_FILE, currentSettings, loadSettings, logger: log,
   channel: CHANNEL,
+  // Security fix: without this, an empty whitelist made authOk() return true for
+  // EVERY sender. The AutoOwnership wrapper in _isOwnerCheck only covers the
+  // default (auto_owner !== false) path; when an operator sets auto_owner:false
+  // and has not yet populated the whitelist, _isOwnerCheck falls through to
+  // authOk and the bot answered literally anyone, forever. denyOnEmptyWhitelist
+  // makes that fallback fail CLOSED (deny all) unless dev_mode:true is set
+  // explicitly. The default zero-config onboarding is unaffected — it still
+  // runs through AutoOwnership, which locks ownership to the first sender.
+  denyOnEmptyWhitelist: true,
 });
 
 // 2026-07-30: an empty whitelist previously made authOk() return true for

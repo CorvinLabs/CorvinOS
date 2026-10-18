@@ -220,6 +220,23 @@ class A2ADelegationVerifier:
         result.checks_passed.append("Credential found")
 
         # ====================================================================
+        # Check 1b: Credential Must Belong To The Claimed Member
+        # ====================================================================
+        # Without this, a holder of ANY valid credential can sign a task that
+        # claims an arbitrary member_id and have it verified against their own
+        # key — full cross-member impersonation. The signed message includes
+        # member_id, so binding the loaded credential's member_id to the claim
+        # closes that gap (the signature check below then proves key ownership).
+        if credential.member_id != signed_task.member_id:
+            result.checks_failed.append(
+                "Credential does not belong to the claimed member"
+            )
+            result.error_message = "Credential/member mismatch"
+            self._audit(result, "credential_member_mismatch")
+            return result
+        result.checks_passed.append("Credential matches member")
+
+        # ====================================================================
         # Check 2: Credential Must Not Be Expired
         # ====================================================================
 

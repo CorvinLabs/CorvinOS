@@ -31,6 +31,7 @@ import logging
 import time
 import mimetypes
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -66,6 +67,14 @@ logger = logging.getLogger(__name__)
 # Outbound group delivery runs off the request thread: a peer send blocks for
 # up to its timeout, and a group message must not hold the HTTP response.
 _FANOUT_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="group-fanout")
+# Bound the fan-out backlog. The pool has an unbounded submit queue, so without
+# this a peer streaming inbound group messages could grow the queue (each job
+# retains the group dict + text) until the console runs out of memory, and turn
+# the hub into an amplifier against the other members. Over the cap we drop the
+# outbound fan-out (the message is still stored locally) and log it.
+_FANOUT_MAX_PENDING = 256
+_fanout_pending = 0
+_fanout_lock = threading.Lock()
 
 # A group created by an inbound envelope carries this creator prefix. Only a
 # group's ORIGIN instance relays peer messages onward; a mirror never does,
@@ -145,10 +154,29 @@ def _schedule_delivery(
         if p["kind"] == "a2a_peer" and p.get("peer_endpoint_id") and p["peer_endpoint_id"] != exclude
     ]
     if endpoint_ids:
-        _FANOUT_POOL.submit(
-            _deliver_to_peers, tenant_id=tenant_id, group_id=group["group_id"],
-            endpoint_ids=endpoint_ids, text=text, message_id=message_id,
-        )
+        global _fanout_pending
+        with _fanout_lock:
+            if _fanout_pending >= _FANOUT_MAX_PENDING:
+                logger.warning(
+                    "group fan-out backlog at cap (%d) — dropping outbound delivery "
+                    "for group %s (message stored locally)",
+                    _FANOUT_MAX_PENDING, group["group_id"],
+                )
+                return endpoint_ids
+            _fanout_pending += 1
+
+        def _run() -> None:
+            global _fanout_pending
+            try:
+                _deliver_to_peers(
+                    tenant_id=tenant_id, group_id=group["group_id"],
+                    endpoint_ids=endpoint_ids, text=text, message_id=message_id,
+                )
+            finally:
+                with _fanout_lock:
+                    _fanout_pending -= 1
+
+        _FANOUT_POOL.submit(_run)
     return endpoint_ids
 
 
