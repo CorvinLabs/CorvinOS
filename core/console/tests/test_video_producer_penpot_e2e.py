@@ -101,8 +101,10 @@ class PenpotRoutesE2E(unittest.TestCase):
             self.assertEqual(cb.get(f"{V}/assets/{asset['id']}/image").status_code, 404)
 
             self.assertEqual(_post(ca, csrf_a, f"{V}/assets/import-penpot", b"\x89PNG not svg").status_code, 415)
-            hostile = (b'<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><image href="http://127.0.0.1:9/x.png" '
-                       b'width="50" height="50"/><rect width="50" height="50" fill="#112233"/></svg>')
+            # A Penpot shape id is the structure the reader requires (ADR-2257 A, T-0187); a plain SVG is refused.
+            hostile = (b'<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><g id="shape-hostile">'
+                       b'<image href="http://127.0.0.1:9/x.png" width="50" height="50"/>'
+                       b'<rect width="50" height="50" fill="#112233"/></g></svg>')
             h = _post(ca, csrf_a, f"{V}/assets/import-penpot", hostile, "x.svg", caption="Hostile")
             self.assertEqual(h.status_code, 201, h.text)
             self.assertEqual(h.json()["notes"], ["1 image not imported"])
@@ -129,12 +131,13 @@ class PenpotRoutesE2E(unittest.TestCase):
         good = (f'<svg {ns} width="400" height="200" viewBox="0 0 400 200" fill="none"><defs>'
                 '<linearGradient id="g" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff0000"/>'
                 '<stop offset="1" stop-color="#0000ff"/></linearGradient></defs>'
-                '<rect x="20" y="20" width="360" height="160" fill="url(#g)"/></svg>').encode()
+                '<g id="shape-grad"><rect x="20" y="20" width="360" height="160" fill="url(#g)"/></g></svg>').encode()
         stops = "".join(f'<stop offset="{i / 11}" stop-color="#ff0000"/>' for i in range(12))
         hostile = (f'<svg {ns} width="400" height="200" viewBox="0 0 400 200" fill="none"><defs>'
                    f'<linearGradient id="g">{stops}</linearGradient></defs>'
+                   '<g id="shape-grad">'
                    '<rect x="20" y="20" width="360" height="160" fill="url(#g)" stroke="url(#g)"/>'
-                   '<rect x="30" y="30" width="20" height="20" fill="url(http://127.0.0.1:9/x)"/></svg>').encode()
+                   '<rect x="30" y="30" width="20" height="20" fill="url(http://127.0.0.1:9/x)"/></g></svg>').encode()
         with _sandbox(Path(tempfile.mkdtemp()), tenants=("tenant_a",)) as (_c, _t, home, clients):
             ca, csrf_a = clients["tenant_a"]
             r = _post(ca, csrf_a, f"{V}/assets/import-penpot", good, "grad.svg", caption="Gradient")
@@ -161,6 +164,21 @@ class PenpotRoutesE2E(unittest.TestCase):
             for rec in recs:
                 self.assertNotIn("_dropped_fields", rec["details"])
                 self.assertNotIn("127.0.0.1", json.dumps(rec))
+            ok_chain, problems = se.verify_chain(home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl")
+            self.assertTrue(ok_chain, problems)
+
+    def test_a_plain_svg_without_penpot_structure_is_refused_over_http(self):
+        from forge import security_events as se
+
+        plain = (b'<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">'
+                 b'<rect width="50" height="50" fill="#112233"/></svg>')
+        with _sandbox(Path(tempfile.mkdtemp()), tenants=("tenant_a",)) as (_c, _t, home, clients):
+            ca, csrf_a = clients["tenant_a"]
+            r = _post(ca, csrf_a, f"{V}/assets/import-penpot", plain, "plain.svg")
+            self.assertEqual(r.status_code, 422, r.text)
+            self.assertIn("Unknown Penpot structure", r.json()["detail"])
+            recs = _chain_records(home, "tenant_a", "video_producer.asset_uploaded")
+            self.assertEqual([(x["details"]["outcome"], x["details"]["refusal"]) for x in recs], [("refused", "unreadable")])
             ok_chain, problems = se.verify_chain(home / "tenants" / "tenant_a" / "global" / "forge" / "audit.jsonl")
             self.assertTrue(ok_chain, problems)
 
