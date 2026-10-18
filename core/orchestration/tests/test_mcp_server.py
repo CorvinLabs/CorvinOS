@@ -390,6 +390,41 @@ class TestA2ATools(TestOrchestrationServerBase):
         resp = _drive(server, [_call("a2a_send", {"endpoint_id": "x"})])
         self.assertIn("required", resp[0]["error"]["message"])
 
+    def test_a2a_send_attachments_only_is_accepted_and_bad_path_rejected(self):
+        """Attachments-only send passes the arg gate; a missing file is
+        INVALID_PARAMS (never a crash), and the schema advertises the field."""
+        server = self._server()
+        resp = _drive(server, [_call("a2a_send", {
+            "endpoint_id": "x", "attachments": ["/no/such/file.png"],
+        })])
+        self.assertIn("attachment", resp[0]["error"]["message"])
+        resp = _drive(server, [_call("a2a_send", {
+            "endpoint_id": "x", "instruction": "hi", "attachments": "notalist",
+        })])
+        self.assertIn("list of file paths", resp[0]["error"]["message"])
+
+    def test_save_received_attachments_verifies_digest_and_never_overwrites(self):
+        import os, tempfile
+        from corvin_orchestration import mcp_server as ms
+        from a2a_attachments import Attachment
+        good = Attachment.from_bytes(name="a.png", mime="image/png", content=b"PNGD").to_dict()
+        bad = dict(good, name="b.png", sha256="0" * 64)
+        trav = Attachment.from_bytes(name="c.txt", mime="text/plain", content=b"x").to_dict()
+        trav["name"] = "../../evil.txt"
+        cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as d:
+            os.chdir(d)
+            try:
+                r1 = ms._save_received_attachments([good, bad, trav])
+                r2 = ms._save_received_attachments([good])
+                self.assertEqual(r1[0]["bytes"], 4)
+                self.assertIn("error", r1[1])
+                self.assertTrue(r1[2].get("saved_to", "").startswith(str(Path(d).resolve())) or "error" in r1[2])
+                self.assertNotEqual(r1[0]["saved_to"], r2[0]["saved_to"])
+                self.assertFalse((Path(d).parent / "evil.txt").exists())
+            finally:
+                os.chdir(cwd)
+
     def test_a2a_send_resolves_connection_name(self):
         """a2a_send accepts the configured label; the failure (unreachable
         URL) must be a transport error, NOT unknown_endpoint."""

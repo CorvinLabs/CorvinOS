@@ -222,6 +222,26 @@ _CONTROL_CHARS |= {
 }
 
 
+#: ZWJ / ZWNJ are format characters, but also load-bearing content: ZWJ glues
+#: emoji sequences (family, profession, flags-with-gender) and ZWNJ is part of
+#: Persian/Indic orthography. Stripping them unconditionally corrupted such
+#: instructions in transit. The injection vector they were listed for is
+#: splitting ASCII tokens (``</a2a_instruction>``), so a joiner is kept ONLY
+#: when both neighbours are real non-ASCII characters (never another stripped
+#: format char, never ASCII/whitespace).
+_JOINERS = {0x200C, 0x200D}
+
+
+def _joiner_is_legitimate(text: str, i: int) -> bool:
+    if i == 0 or i + 1 >= len(text):
+        return False
+    for n in (text[i - 1], text[i + 1]):
+        o = ord(n)
+        if o < 0x80 or o in _CONTROL_CHARS or n.isspace():
+            return False
+    return True
+
+
 # ── Sanitization errors ───────────────────────────────────────────────────
 
 class InjectionAttempt(Exception):
@@ -402,7 +422,13 @@ def sanitize_instruction(instruction: str) -> str:
         raise InjectionAttempt("instruction_too_long")
 
     # Strip control characters except tab and newline.
-    cleaned_chars = [ch for ch in normalized if ord(ch) not in _CONTROL_CHARS]
+    cleaned_chars = []
+    for i, ch in enumerate(normalized):
+        o = ord(ch)
+        if o not in _CONTROL_CHARS:
+            cleaned_chars.append(ch)
+        elif o in _JOINERS and _joiner_is_legitimate(normalized, i):
+            cleaned_chars.append(ch)
     cleaned = "".join(cleaned_chars)
 
     # Reject any attempt to close the framing block early — both the

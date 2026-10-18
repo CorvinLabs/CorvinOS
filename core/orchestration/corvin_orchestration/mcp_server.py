@@ -100,6 +100,34 @@ def _clamp(value: Any, *, lo: int, hi: int, default: int) -> int:
     return max(lo, min(hi, n))
 
 
+def _save_received_attachments(recv: list) -> list[dict]:
+    """Persist digest-verified peer attachments to ./outputs/a2a_inbox/.
+
+    The sender already validated name/caps/digest; ``decode()`` re-checks the
+    digest. Never raises: a bad item is reported with an ``error`` field.
+    """
+    from a2a_attachments import Attachment as _Att  # type: ignore[import]
+    inbox = Path.cwd() / "outputs" / "a2a_inbox"
+    out: list[dict] = []
+    for item in recv:
+        meta: dict = {"name": str(item.get("name", "")), "mime": item.get("mime"), "sha256": item.get("sha256")}
+        try:
+            raw = _Att.from_dict(item).decode()
+            inbox.mkdir(parents=True, exist_ok=True)
+            safe = Path(meta["name"]).name  # strip any path component
+            dest = inbox / safe
+            n = 1
+            while dest.exists():  # never overwrite an earlier file
+                dest = inbox / f"{dest.stem.rsplit('~', 1)[0]}~{n}{Path(safe).suffix}"
+                n += 1
+            dest.write_bytes(raw)
+            meta.update(bytes=len(raw), saved_to=str(dest))
+        except Exception as exc:  # noqa: BLE001
+            meta["error"] = f"{type(exc).__name__}: {exc}"
+        out.append(meta)
+    return out
+
+
 def _replier_from_channel_id(channel_id: str) -> str:
     """Derive the WF-A3 `replier` identity from a trusted `CORVIN_CHANNEL_ID`
     value ("<bridge>:<chat_key>", set by the bridge adapter at spawn time —
@@ -667,8 +695,18 @@ _A2A_SEND_SCHEMA: dict = {
             "type": ["string", "null"],
             "description": "Optional ADR purpose/consent tag threaded into the signed envelope.",
         },
+        "attachments": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 16,
+            "description": (
+                "Optional local file paths sent as signed attachments (max 16 files, "
+                "1 MiB total). Files the peer returns are saved under "
+                "./outputs/a2a_inbox/ and listed in the result's 'attachments'."
+            ),
+        },
     },
-    "required": ["endpoint_id", "instruction"],
+    "required": ["endpoint_id"],
     "additionalProperties": False,
 }
 
@@ -1211,9 +1249,25 @@ class OrchestrationServer:
             return
         endpoint_ref = str(args.get("endpoint_id") or "")
         instruction = str(args.get("instruction") or "")
-        if not endpoint_ref or not instruction:
-            self._error(msgid, INVALID_PARAMS, "endpoint_id and instruction are required")
+        att_paths = args.get("attachments") or []
+        if not isinstance(att_paths, list) or not all(isinstance(x, str) and x for x in att_paths):
+            self._error(msgid, INVALID_PARAMS, "attachments must be a list of file paths")
             return
+        if not endpoint_ref or not (instruction.strip() or att_paths):
+            self._error(msgid, INVALID_PARAMS, "endpoint_id and instruction (or attachments) are required")
+            return
+        out_atts: list = []
+        if att_paths:
+            try:
+                from a2a_attachments import Attachment as _Att  # type: ignore[import]
+                for ap in att_paths:
+                    pth = Path(ap).expanduser()
+                    if not pth.is_file():
+                        raise ValueError(f"attachment not a file: {ap}")
+                    out_atts.append(_Att.from_file(pth).to_dict())
+            except Exception as exc:  # noqa: BLE001
+                self._error(msgid, INVALID_PARAMS, f"attachment unreadable: {exc}")
+                return
         # Accept the connection name (label) as well as the raw endpoint id.
         try:
             endpoint_id = _RemoteEndpointRegistry().resolve(endpoint_ref)
@@ -1243,6 +1297,7 @@ class OrchestrationServer:
                 lambda: sender.send(
                     endpoint_id, instruction,
                     ttl_s=ttl_s, timeout_s=timeout_s, purpose_id=purpose_id,
+                    attachments=out_atts or None,
                 ),
                 budget_s=wait_s + 15,
             )
@@ -1266,6 +1321,9 @@ class OrchestrationServer:
             envelope["error_category"] = result.error_category
         if hasattr(result, "error_detail") and result.error_detail is not None:
             envelope["error_detail"] = result.error_detail
+        recv = getattr(result, "attachments", None) or []
+        if recv:
+            envelope["attachments"] = _save_received_attachments(recv)
         self._respond(msgid, self._text_result(envelope, is_error=not result.ok))
 
     def _call_a2a_list_endpoints(self, msgid: Any, args: dict) -> None:
