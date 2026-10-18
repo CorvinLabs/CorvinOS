@@ -92,6 +92,30 @@ function Find-Python {
 
 $Python = Find-Python
 
+# Install a bridge's npm dependencies when node_modules is missing or the
+# lockfile-listed modules aren't there (Windows counterpart of bridge.sh's
+# ensure_npm_modules).
+function Install-BridgeNpmModules {
+    param([string]$Dir)
+    if (-not (Test-Path (Join-Path $Dir "package.json"))) { return }
+    $nm = Join-Path $Dir "node_modules"
+    if (Test-Path (Join-Path $nm ".package-lock.json")) { return }
+    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $npm) {
+        Write-Warning "npm not found in PATH -- cannot install bridge dependencies in $Dir. Install Node.js, then run: cd $Dir; npm install"
+        return
+    }
+    Write-Host "  Installing bridge npm dependencies in $Dir ..." -ForegroundColor Cyan
+    $cmd = if (Test-Path (Join-Path $Dir "package-lock.json")) { "ci" } else { "install" }
+    Push-Location $Dir
+    try {
+        & $npm.Source $cmd --no-audit --no-fund 2>&1 | Select-Object -Last 3 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        if ($LASTEXITCODE -ne 0 -and $cmd -eq "ci") {
+            & $npm.Source install --no-audit --no-fund 2>&1 | Select-Object -Last 3 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        }
+    } finally { Pop-Location }
+}
+
 # ── Corvin home ───────────────────────────────────────────────────────────────
 
 if (-not $env:CORVIN_HOME) {
@@ -125,6 +149,12 @@ switch ($Subcommand) {
         # Launch the bridge adapter
         $BridgeScript = Join-Path $ScriptDir "$Bridge\daemon.js"
         if (Test-Path $BridgeScript) {
+            # Make sure the daemon's npm dependencies (discord.js, ...) exist
+            # before launching. Without this a fresh checkout / re-clone crashed
+            # with "Cannot find module 'discord.js'" and the supervisor gave up
+            # after 5 restarts. Mirrors ensure_npm_modules() in bridge.sh.
+            Install-BridgeNpmModules -Dir (Join-Path $ScriptDir $Bridge)
+
             # 2026-08-02: this used to invoke node via the call operator
             # ('&'), which runs it as a DIRECT CHILD of the current
             # PowerShell session, sharing its console. Closing that console/
