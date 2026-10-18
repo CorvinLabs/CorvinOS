@@ -97,10 +97,16 @@ def terminate_process_tree(proc: "subprocess.Popen", *, grace: float = 5.0) -> N
         proc.kill_caller = caller
     except AttributeError:  # pragma: no cover — proc without __dict__
         pass
-    try:
-        _pgid = os.getpgid(proc.pid)
-    except OSError:
-        _pgid = None
+    # os.getpgid does not exist on Windows (AttributeError, not OSError), so
+    # this diagnostic must guard on hasattr — otherwise it escaped as
+    # "module 'os' has no attribute 'getpgid'" and failed the whole turn before
+    # the platform-correct kill branches below ever ran.
+    _pgid = None
+    if hasattr(os, "getpgid"):
+        try:
+            _pgid = os.getpgid(proc.pid)
+        except OSError:
+            _pgid = None
     _kill_log.info("process-group kill pid=%s pgid=%s caller=%s grace=%.1fs",
                    proc.pid, _pgid, caller, grace)
     if hasattr(os, "killpg"):

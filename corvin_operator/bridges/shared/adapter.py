@@ -14299,9 +14299,15 @@ def main() -> int:
             leftover = [p for procs in _running_subprocs.values() for p in procs]
         log(f"drain timeout — SIGTERM {len(leftover)} remaining engine process group(s)")
         for proc in leftover:
+            # os.killpg/os.getpgid are POSIX-only (AttributeError on Windows).
+            # Reuse the platform-correct terminator instead of the raw POSIX call.
             try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-            except (ProcessLookupError, PermissionError, OSError):
+                if hasattr(os, "killpg"):
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                else:
+                    from agents import terminate_process_tree  # noqa: PLC0415
+                    terminate_process_tree(proc, grace=2.0)
+            except (ProcessLookupError, PermissionError, OSError, AttributeError):
                 pass
         time.sleep(3.0)
         _write_shutdown_anchor()

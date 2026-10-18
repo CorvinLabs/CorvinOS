@@ -485,10 +485,14 @@ def _kill(argv: list[str]) -> int:
     if not argv:
         return _err("Usage: kill [-9] <session_id>")
 
+    # signal.SIGKILL does not exist on Windows; fall back to SIGTERM's value
+    # (the Windows kill branch below ignores the signal and force-kills anyway).
     sig = sig_mod.SIGTERM
     args = list(argv)
+    force = False
     if args[0] == "-9":
-        sig = sig_mod.SIGKILL
+        force = True
+        sig = getattr(sig_mod, "SIGKILL", sig_mod.SIGTERM)
         args.pop(0)
     if not args:
         return _err("Usage: kill [-9] <session_id>")
@@ -507,7 +511,21 @@ def _kill(argv: list[str]) -> int:
         return _err(f"no pid recorded for session {session_id!r}; "
                     f"adapter may pre-date Phase-4.1")
     try:
-        os.killpg(pid, sig)
+        if hasattr(os, "killpg"):
+            os.killpg(pid, sig)
+        else:
+            # Windows: no process groups. taskkill /T reaches the whole tree;
+            # /F (force) when -9 was asked, otherwise a graceful request.
+            import subprocess as _sp  # noqa: PLC0415
+            _cmd = ["taskkill", "/PID", str(pid), "/T"]
+            if force:
+                _cmd.append("/F")
+            _rc = _sp.run(_cmd, capture_output=True, text=True)
+            if _rc.returncode == 128:  # "process not found"
+                raise ProcessLookupError(pid)
+            if _rc.returncode not in (0,):
+                return _err(f"taskkill failed for pid {pid}: "
+                            f"{(_rc.stderr or _rc.stdout or '').strip()}")
     except ProcessLookupError:
         # Process already gone — registry will reflect the exit on
         # next adapter poll. Mark it as killed in the registry now so
