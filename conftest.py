@@ -588,6 +588,60 @@ def _chain_violations(before: dict, after: dict) -> "list[str]":
     return out
 
 
+# ── Write fence on the live audit chain (fails at the open, not at the diff) ──
+# The growth check above cannot attribute an append: the running services write
+# the same chain with the same instance id (measured 2026-10-19: a
+# ``remote_trigger_sender.ping`` record every 25-40 s with no test running), so a
+# growth diff either false-trips on every live host or stays silent. This fence
+# refuses the OPEN for write of any protected ``audit.jsonl`` in THIS process, so
+# the test that tries it fails on that line and is named by pytest. Refused
+# opens write nothing. Subprocesses are not covered: they inherit the sandbox
+# CORVIN_HOME, so their writes land in the sandbox anyway. Read-only opens pass.
+import builtins as _builtins
+import errno as _errno
+import io as _io
+
+_CHAIN_NAME = "audit.jsonl"
+_WRITE_MODE_CHARS = frozenset("wax+")
+_O_WRITE = _os.O_WRONLY | _os.O_RDWR | _os.O_APPEND | _os.O_CREAT | _os.O_TRUNC
+_real_io_open = _io.open
+_real_os_open = _os.open
+
+
+def _fenced_chain(file: object) -> bool:
+    if not isinstance(file, (str, bytes, _os.PathLike)):
+        return False  # an integer file descriptor is not a path
+    try:
+        p = _os.fsdecode(_os.fspath(file))
+    except Exception:  # noqa: BLE001
+        return False
+    return _os.path.basename(p) == _CHAIN_NAME and _is_protected(p)
+
+
+def _fence_refusal(file: object) -> "PermissionError":
+    return PermissionError(
+        _errno.EACCES,
+        "corvin test fence: a test opened the LIVE audit chain for writing", str(file))
+
+
+def _fenced_io_open(file, mode="r", *args, **kwargs):
+    if isinstance(mode, str) and (_WRITE_MODE_CHARS & set(mode)) and _fenced_chain(file):
+        raise _fence_refusal(file)
+    return _real_io_open(file, mode, *args, **kwargs)
+
+
+def _fenced_os_open(path, flags, *args, **kwargs):
+    if (flags & _O_WRITE) and _fenced_chain(path):
+        raise _fence_refusal(path)
+    return _real_os_open(path, flags, *args, **kwargs)
+
+
+# builtins.open and pathlib.Path.open both resolve to io.open at call time.
+_io.open = _fenced_io_open
+_builtins.open = _fenced_io_open
+_os.open = _fenced_os_open
+
+
 def pytest_report_header(config):
     return [
         f"corvin isolation: sandbox={_SESSION_SANDBOX}",
@@ -604,6 +658,9 @@ def pytest_sessionstart(session):
 
 
 def pytest_unconfigure(config):
+    _io.open = _real_io_open
+    _builtins.open = _real_io_open
+    _os.open = _real_os_open
     if _SANDBOX_CREATED:
         _shutil.rmtree(_SESSION_SANDBOX, ignore_errors=True)
 

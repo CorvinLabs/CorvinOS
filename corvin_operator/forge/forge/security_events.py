@@ -31,6 +31,7 @@ from __future__ import annotations
 import collections
 import fcntl
 import hashlib
+import errno
 import hmac
 import json
 import math
@@ -5618,6 +5619,27 @@ def _last_hash(path: Path) -> str:
     return ""
 
 
+def _refuse_live_chain_from_test(path: Path) -> None:
+    """Refuse an append that would land in the LIVE repo-local root from a test run.
+
+    ``corvin_home()`` falls back to ``<repo>/.corvin`` when ``CORVIN_HOME`` is unset,
+    and that directory holds the running services' chain. Every chain writer
+    reaches this function with a path it composed itself, so the guard sits here,
+    on the one append primitive, not in the callers. Only a pytest process with
+    no ``CORVIN_HOME`` override is refused; reads and services are untouched.
+    """
+    if not os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("CORVIN_HOME", "").strip():
+        return
+    live_root = (_repo_root() / ".corvin").resolve()
+    if Path(path).resolve().is_relative_to(live_root):
+        raise PermissionError(
+            errno.EACCES,
+            "write_event refused: a test run without CORVIN_HOME may not append to the "
+            "live repo-local chain — set CORVIN_HOME to a sandbox",
+            str(path),
+        )
+
+
 def write_event(
     path: Path,
     event_type: str,
@@ -5637,6 +5659,7 @@ def write_event(
     dropped and recorded under ``_dropped_fields``. ``unfiltered=True`` skips
     the floor for the rare legitimately-long allowlisted field.
     """
+    _refuse_live_chain_from_test(path)
     # F-A1: a hash-less record is admissible for ONE event type only — the gap
     # marker — and even that one is bound to the tail below. Everything else
     # must chain; an unchained write is refused, not silently written into a
