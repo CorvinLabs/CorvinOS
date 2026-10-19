@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed — Video Producer is now CorvinTV: on by default, narrated OpenAI first and edge-tts second
+- **A fresh installation installs and enables CorvinTV** (and the Knowledge Graph) at first boot, with no operator
+  step: it is a first-party plugin now (marketplace `buildin` tier, plugin 1.7.0). Nothing you built on breaks — the
+  registry id `video_producer`, the `/v1/console/video/...` API, the `/video-producer` page, your data folder and the
+  audit event names are unchanged; an install that still carries the old record is upgraded at the next boot, and an
+  operator's uninstall is kept. What it sends where is declared in its manifest and gated per job (OpenAI TTS,
+  edge-tts / Microsoft voices, optionally Anthropic for the storyboard); nothing is contacted at boot.
+- **Narration:** the default engine is now the chain OpenAI → edge-tts. An exhausted, invalid or missing OpenAI key
+  falls back instead of refusing the job; if both decline the job fails with a named error, never a silent video.
+  `OpenAI only` stays selectable. Piper is gone from the video narration (the chat voice bridge is unchanged).
+- The panel's "web slides available" now needs an installed Chromium, not only the Playwright package.
+- Fixed before release: bento scenes silently fell back to the classic slide, ten of 32 worst-case bento layouts
+  overflowed, and with an imported sans-serif style the title slide's two lines overlapped.
+
 ### Added — Automatic model saving: a Free-tier allowance you can tune in Settings
 - Automatic choice of a cheaper model for simple turns is now measured and limited on the Free tier to a share of
   saving per UTC month (default 10 %, floor USD 5); Member is unlimited. Only the **automatic** tiers are limited —
