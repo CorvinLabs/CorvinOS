@@ -83,7 +83,7 @@ def _install_plugin(tenant: str) -> None:
     from corvin_console.routes import marketplace_resolve as _resolve
     from corvin_plugins.state import PluginLifecycle
 
-    plugin_dir, manifest = _resolve.load_manifest("plugin:contributor-media-video_producer")
+    plugin_dir, manifest = _resolve.load_manifest("plugin:buildin-media-corvintv")
     record = _resolve.record_from_manifest(manifest, plugin_dir=plugin_dir)
     lifecycle = PluginLifecycle(tenant_id=tenant, lifecycle_enabled=True)
     lifecycle.install(record, installed_by="vq-e2e")

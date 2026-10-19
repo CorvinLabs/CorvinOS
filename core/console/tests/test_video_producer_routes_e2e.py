@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_admin_route import _sandbox as _base_sandbox  # noqa: E402
 
 _MOD = "corvin_console.routes.video_producer_api"
-_INDEX_ID = "plugin:contributor-media-video_producer"
+_INDEX_ID = "plugin:buildin-media-corvintv"
 
 
 def _install_plugin(tenant: str, *, enable: bool) -> None:

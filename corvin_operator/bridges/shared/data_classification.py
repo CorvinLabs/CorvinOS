@@ -198,7 +198,7 @@ DEFAULT_ENGINE_COMPLIANCE: dict[str, EngineCompliance] = {
               "Used by chat_runtime to classify delegated web-chat turns. "
               "Max classification: INTERNAL without operator override.",
     ),
-    # Console Video Producer job (marketplace plugin contributor/media/video_producer,
+    # Console Video Producer job (marketplace plugin buildin/media/corvintv,
     # started by core/console/corvin_console/routes/video_producer_api.py). Every job
     # sends the LLM-written narration — derived from the user's task text — to Google's
     # public translate TTS endpoint (gTTS), so its floor is US cloud + external egress

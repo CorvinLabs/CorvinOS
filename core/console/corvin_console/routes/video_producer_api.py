@@ -1,7 +1,7 @@
 """FastAPI routes for the Video Producer plugin.
 
 The plugin source (models / storage / skill / async_runner) lives in the
-marketplace (contributor/media/video_producer/src) and is loaded here as ONE
+marketplace (buildin/media/corvintv/src; contributor/media/video_producer/src before 1.7.0) and is loaded here as ONE
 private package. Every route is tenant-scoped: each tenant has its own store
 under ``tenant_home(rec.tenant_id)/video_producer`` and its own settings, so
 no tenant can list, read or download another tenant's jobs.
@@ -51,6 +51,15 @@ _JOB_RUNNER = "process"
 _repo_root = Path(__file__).resolve().parents[4]
 
 
+# Where the plugin source sits inside a Corvin-Marketplace checkout. CorvinTV (until 1.6.0 "Video Producer") moved
+# from the contributor tier to the first-party buildin tier on 2026-10-19; the old place stays as a fallback so a
+# marketplace checkout that has not been updated yet keeps working.
+_PLUGIN_SRC_REL = (
+    Path("plugins") / "buildin" / "media" / "corvintv" / "src",
+    Path("plugins") / "contributor" / "media" / "video_producer" / "src",
+)
+
+
 def _plugin_locations() -> List[tuple]:
     from core.paths.tenant import corvin_home  # honours CORVIN_HOME
 
@@ -59,18 +68,23 @@ def _plugin_locations() -> List[tuple]:
         (home / "tenants" / "_default" / "plugins" / "instances" / "video_producer" / "src", "installed-instance"),
         (home / "plugins" / "media" / "video_producer" / "src", "installed-media"),
         (home / "plugins" / "video_producer" / "src", "installed"),
-        (_repo_root.parent / "Corvin-Marketplace" / "plugins" / "contributor" / "media" / "video_producer" / "src", "sibling-marketplace"),
     ]
-    root = os.environ.get("CORVIN_MARKETPLACE_ROOT")
-    if root:
-        locs.append((Path(root) / "plugins" / "contributor" / "media" / "video_producer" / "src", "dev-env"))
+    roots = [(_repo_root.parent / "Corvin-Marketplace", "sibling-marketplace")]
+    env_root = os.environ.get("CORVIN_MARKETPLACE_ROOT")
+    if env_root:
+        roots.append((Path(env_root), "dev-env"))
+        # bootstrap reads the same variable as the BUILDIN tier directory (.../plugins/buildin), the fresh-install
+        # harness and the pre-push mode set it that way: the plugin is then <root>/media/corvintv/src
+        locs.append((Path(env_root) / "media" / "corvintv" / "src", "dev-env-buildin"))
     # A fresh install has no sibling checkout: the marketplace install syncs the repo
     # from GitHub into <home>/marketplace-cache (bootstrap.ensure_marketplace_source),
     # and that is the ONLY place the plugin source exists there. Until this entry was
     # added the loader never looked in it, so install -> enable -> panel all worked and
     # every /video/* call answered 503.
-    locs.append((home / "marketplace-cache" / "Corvin-Marketplace" / "plugins" / "contributor"
-                 / "media" / "video_producer" / "src", "github-cache"))
+    roots.append((home / "marketplace-cache" / "Corvin-Marketplace", "github-cache"))
+    for root, kind in roots:
+        for rel in _PLUGIN_SRC_REL:
+            locs.append((root / rel, kind))
     return locs
 
 
@@ -273,12 +287,13 @@ class SettingsRequest(BaseModel):
 
 
 # Narration engines the producer really has (skill.SUPPORTED_TTS_ENGINES):
-#   openai  OpenAI TTS (tts-1-hd, voice onyx) — the default; a missing key or an API failure
-#           fails the job instead of silently switching the narrator
-#   auto    the fallback chain: OpenAI -> edge-tts (ADR-2211; no Piper, no silent mock)
+#   openai  OpenAI TTS (tts-1-hd, voice onyx) only; a missing key or an API failure fails the job
+#           instead of switching the narrator (opt-in, for operators who want exactly one voice)
+#   auto    the DEFAULT, the fallback chain: OpenAI -> edge-tts (ADR-2211; no Piper, no silent mock).
+#           An exhausted or invalid key must not stop a video; the job report says which voice spoke
 #   gtts    Google Translate TTS (legacy, no key)
 _TTS_ENGINES = ["openai", "auto", "gtts"]
-_DEFAULT_SETTINGS = {"tts_engine": "openai", "max_duration_minutes": 60}
+_DEFAULT_SETTINGS = {"tts_engine": "auto", "max_duration_minutes": 60}
 # Per tenant, in memory (reset on restart).
 _settings: Dict[str, Dict[str, Any]] = {}
 
@@ -297,7 +312,7 @@ def _tenant_settings(rec) -> Dict[str, Any]:
         "openai_configured": _openai_configured(),
         # The engine jobs really run with: "openai" degrades to "auto" (edge-tts fallback) without a key
         "effective_tts_engine": _effective_tts_engine(s["tts_engine"]),
-        "web_slides_available": importlib.util.find_spec("playwright") is not None,
+        "web_slides_available": _web_slides_available(),
         # Website capture (ADR-2249 D4): usable only when the switch is on AND an egress policy exists
         "capture_enabled": _capture_enabled(rec),
         "capture_policy_configured": _capture_egress_gate(rec.tenant_id) is not None,
@@ -546,6 +561,34 @@ def _ensure_edge_tts() -> bool:
             logger.warning("video producer: edge-tts install via %s failed (%s)", cmd[0], type(e).__name__)
     importlib.invalidate_caches()
     return importlib.util.find_spec("edge_tts") is not None
+
+
+def _playwright_browsers_dir() -> Path:
+    """Where Playwright keeps its browser builds on this host (the same rules as Playwright itself)."""
+    env = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if env == "0":  # browsers live inside the package
+        import playwright  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        return Path(playwright.__file__).resolve().parent / "driver" / "package" / ".local-browsers"
+    if env:
+        return Path(env)
+    if sys.platform == "win32":
+        return Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")) / "ms-playwright"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "ms-playwright"
+    return Path.home() / ".cache" / "ms-playwright"
+
+
+def _web_slides_available() -> bool:
+    """Animated web slides need the ``playwright`` package AND an installed Chromium build. The package alone used to
+    be reported as "available": on an install whose browser download had failed (the installer's step 8b is
+    fail-soft) the panel said yes while every slide silently fell back to the classic slide."""
+    if importlib.util.find_spec("playwright") is None:
+        return False
+    try:
+        return any(p.is_dir() and p.name.startswith("chromium") for p in _playwright_browsers_dir().iterdir())
+    except (OSError, ImportError):
+        return False
 
 
 def _ensure_ffmpeg() -> bool:

@@ -1,7 +1,7 @@
 # Video Producer — operator guide
 
 The console page `/console/app/video-producer` is the studio for the Video
-Producer plugin (`plugins/contributor/media/video_producer` in the
+Producer plugin (`plugins/buildin/media/corvintv` in the
 marketplace; ADR-0692, ADR-0695, ADR-0696). It produces a video from a
 task, plays it, measures it and lets you teach the producer scene by scene.
 
@@ -252,7 +252,7 @@ on :8796 with a throwaway `CORVIN_HOME`, the real report, light and dark theme, 
   console could not import the plugin's `src/` (`models.py`, `storage.py`).
   The loader tries, in order: `<CORVIN_HOME>/tenants/_default/plugins/instances/video_producer/src`,
   `<CORVIN_HOME>/plugins/media/video_producer/src`, `<CORVIN_HOME>/plugins/video_producer/src`,
-  the sibling checkout `../Corvin-Marketplace/plugins/contributor/media/video_producer/src`,
+  the sibling checkout `../Corvin-Marketplace/plugins/buildin/media/corvintv/src`,
   then `CORVIN_MARKETPLACE_ROOT`, then the marketplace cache `<CORVIN_HOME>/marketplace-cache/…`. It runs on
   the first request of a workspace that has the plugin enabled - never at console start, never for a
   workspace that did not enable it (that one gets 404). The overview reports which one loaded

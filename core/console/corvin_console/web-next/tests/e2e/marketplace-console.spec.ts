@@ -68,12 +68,16 @@ test("Browse shows both tiers from the real index; a contributor entry is instal
   await expect(page.getByTestId("tier-buildin-summary")).toContainText(/\d+ of \d+ shown/);
   await expect(page.getByTestId("tier-contributor-summary")).toContainText(/\d+ of \d+ shown/);
   await expect(page.getByTestId("tier-contributor")).toContainText("enabling records your explicit consent");
-  // The Video Producer is a contributor entry and installable from the checkout
+  // CorvinTV (formerly Video Producer) is a first-party buildin entry and installable from the checkout
   // (or already installed — either way it is a real button, never a blocker).
-  const video = page.getByTestId("index-card-plugin:contributor-media-video_producer");
+  const video = page.getByTestId("index-card-plugin:buildin-media-corvintv");
   await expect(video).toBeVisible();
   await expect(video.getByText(/Not installable on this build/)).toHaveCount(0);
   await expect(video.getByRole("button", { name: /^Install$|Manage on the Installed tab|Enable now/ })).toHaveCount(1);
+  // A contributor entry (community origin) is listed and installable too.
+  const contributor = page.getByTestId("index-card-plugin:contributor-integration-slack_notifier");
+  await expect(contributor).toBeVisible();
+  await expect(contributor.getByText(/Not installable on this build/)).toHaveCount(0);
   // The Knowledge Graph (buildin/knowledge_management) is listed and installable too.
   const knowledge = page.getByTestId("index-card-plugin:buildin-knowledge_management-corvin_knowledge");
   await expect(knowledge).toBeVisible();

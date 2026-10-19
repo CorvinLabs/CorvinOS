@@ -82,8 +82,8 @@ export interface Learning {
 
 const BASE = "/video";
 const TTS_LABELS: Record<string, string> = {
-  openai: "OpenAI TTS (default)",
-  auto: "Automatic: OpenAI, then edge-tts",
+  openai: "OpenAI only (no fallback)",
+  auto: "OpenAI first, edge-tts as fallback (default)",
   gtts: "Google TTS (gTTS, legacy)",
 };
 const ACTIVE = ["pending", "storyboard_generating", "skills_running"];
@@ -629,7 +629,7 @@ export function VideoProducerPage() {
     return (
       <div className="max-w-7xl mx-auto p-6">
         <Card className="border-destructive/30 bg-destructive/10"><CardContent className="py-6 flex items-center gap-2 text-destructive text-sm">
-          <AlertCircle size={18} /> {off ? "The Video Producer plugin is not available on this build." : "The video library could not be loaded."}
+          <AlertCircle size={18} /> {off ? "The CorvinTV plugin is not available on this build." : "The video library could not be loaded."}
         </CardContent></Card>
       </div>
     );
@@ -644,7 +644,7 @@ export function VideoProducerPage() {
     <div className="-mx-6 -my-8 h-[calc(100vh-3.5rem)] overflow-y-auto" data-testid="video-producer">
       <div className="flex items-center gap-3 px-6 h-12 border-b border-border">
         <Clapperboard className="w-5 h-5 shrink-0" />
-        <h1 className="text-base font-semibold shrink-0">Video Producer</h1>
+        <h1 className="text-base font-semibold shrink-0">CorvinTV</h1>
         {j && <><span className="text-muted-foreground truncate min-w-0 flex-1 text-sm" title={j.task}>{j.task}</span><StatusPill status={j.status} /></>}
         <Button variant="ghost" size="sm" className="ml-auto shrink-0" aria-label="Refresh" onClick={() => void qc.invalidateQueries({ queryKey: ["video"] })}><RefreshCw className="w-4 h-4" /></Button>
       </div>

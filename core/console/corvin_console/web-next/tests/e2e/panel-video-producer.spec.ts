@@ -8,7 +8,7 @@ import { test, expect } from '../fixtures/panel-fixtures';
 
 test.describe('Video Producer Panel', () => {
   const panelSlug = 'video-producer';
-  const panelTitle = 'Video Producer';
+  const panelTitle = 'CorvinTV';
 
   test('navigates to video-producer and loads', async ({ panelNav }) => {
     await panelNav.goto(panelSlug);

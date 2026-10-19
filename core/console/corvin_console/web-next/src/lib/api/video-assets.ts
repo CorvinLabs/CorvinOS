@@ -97,7 +97,7 @@ export interface CaptureSettings { capture_enabled?: boolean; capture_policy_con
 
 /** Why the capture action cannot be used right now, or null. */
 export function captureBlockedReason(s: CaptureSettings | undefined): string | null {
-  if (!s) return "Loading the Video Producer settings…";
+  if (!s) return "Loading the CorvinTV settings…";
   if (s.capture_host_problem === "no_browser") return "Website capture is not available on this host: Chrome or Chromium is not installed.";
   if (s.capture_host_problem) return "Website capture is not available on this host (it needs Linux or macOS).";
   if (!s.capture_enabled) return "Website capture is off for this workspace. Turn it on under Settings.";

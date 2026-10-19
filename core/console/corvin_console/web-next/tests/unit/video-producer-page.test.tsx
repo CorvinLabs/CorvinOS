@@ -645,6 +645,6 @@ describe("Video Producer studio", () => {
       http.get(`${B}/settings`, () => HttpResponse.json({}, { status: 503 })),
     );
     renderIt();
-    await screen.findByText("The Video Producer plugin is not available on this build.");
+    await screen.findByText("The CorvinTV plugin is not available on this build.");
   });
 });

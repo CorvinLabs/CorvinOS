@@ -255,11 +255,14 @@ def test_manifest_declares_the_marketplace_panel_at_the_mounted_route(client):
 #
 # ADR-0892 amendment (2026-09-20): plugins under plugins/contributor/ of the
 # marketplace checkout resolve with origin=community. Enabling one without
-# consent is refused; with consent the plugin's declared console panel is
-# registered and the capability manifest lists it (sidebar entry under
+# consent is refused. A first-party plugin (plugins/buildin/, origin vetted,
+# requires_consent false) needs none: CorvinTV (formerly Video Producer, moved
+# to buildin on 2026-10-19) is the example; with it the plugin's declared console
+# panel is registered and the capability manifest lists it (sidebar entry under
 # "Marketplace"); disable hides it, uninstall removes it.
 
-_VIDEO = "plugin:contributor-media-video_producer"
+_VIDEO = "plugin:buildin-media-corvintv"
+_COMMUNITY = "plugin:contributor-integration-slack_notifier"   # a real community-origin entry (consent required)
 
 
 def _install(client, index_id: str, **body) -> dict:
@@ -275,45 +278,47 @@ def _manifest_panel_routes(client) -> set[str]:
 
 def test_contributor_entries_are_installable_with_community_origin(client):
     entries = {e["id"]: e for e in _index_entries(client)}
-    assert _VIDEO in entries, "the regenerated index lists the Video Producer"
+    assert _COMMUNITY in entries, "the regenerated index lists the community example"
+    assert entries[_VIDEO]["tier"] == "buildin", "CorvinTV is first-party since 1.7.0"
     contributor = [e for e in entries.values() if e["tier"] == "contributor"]
     assert contributor and all(e["installable"] for e in contributor), [
         (e["id"], e["install_blocker"]) for e in contributor if not e["installable"]]
-    body = _install(client, _VIDEO)
+    body = _install(client, _COMMUNITY)
     assert body["status"] == "completed", body
-    assert body["registry_id"] == "video_producer"
+    assert body["registry_id"] == "slack_notifier"
     assert body["origin"] == "community" and body["requires_consent"] is True
     listed = {p["plugin_id"]: p for p in client.get("/v1/console/plugins").json()["plugins"]}
-    rec = listed["video_producer"]
+    rec = listed["slack_notifier"]
     assert rec["origin"] == "community" and rec["requires_consent"] is True and rec["enabled"] is False
-    # settings start from the manifest's declared defaults, never empty
-    assert rec["settings"]["tts_engine"] == "gtts" and rec["settings"]["max_video_length_minutes"] == 60
-    # gTTS is the only engine the producer implements (ADR-0953); the manifest says so
-    assert rec["settings_schema"]["properties"]["tts_engine"]["enum"] == ["gtts"]
+    # settings start from the manifest's declared schema, never empty
+    assert rec["settings_schema"], rec
 
 
 def test_video_producer_panel_follows_enable_disable_uninstall(client, home):
     _install(client, _VIDEO)
     assert "video-producer" not in _manifest_panel_routes(client), "not enabled yet → no sidebar entry"
 
-    # enable WITHOUT consent → refused (community origin)
-    r = client.post("/v1/console/plugins/video_producer/enable", json={"consent_granted": False})
-    assert r.status_code in (403, 409), r.text
-    assert "video-producer" not in _manifest_panel_routes(client)
+    # first-party (vetted, requires_consent false): enabling needs no consent flag
+    rec = {p["plugin_id"]: p for p in client.get("/v1/console/plugins").json()["plugins"]}["video_producer"]
+    assert rec["origin"] == "vetted" and rec["requires_consent"] is False and rec["display_name"] == "CorvinTV"
+    # settings start from the manifest's declared defaults: the narration chain is the default
+    assert rec["settings"]["tts_engine"] == "auto" and rec["settings"]["max_video_length_minutes"] == 60
+    assert rec["settings_schema"]["properties"]["tts_engine"]["enum"] == ["openai", "auto", "gtts"]
 
-    # enable WITH consent → panel registered, listed by the manifest
-    r = client.post("/v1/console/plugins/video_producer/enable", json={"consent_granted": True})
+    # enable WITHOUT consent → panel registered, listed by the manifest
+    r = client.post("/v1/console/plugins/video_producer/enable", json={"consent_granted": False})
     assert r.status_code == 200, r.text
     assert r.json()["enabled"] is True
     assert "video-producer" in _manifest_panel_routes(client)
     panel = next(p for p in client.get("/v1/console/capabilities/manifest").json()["panels"] if p["route"] == "video-producer")
     assert panel["id"] == "plugin-video_producer" and panel["nav_group"] == "marketplace"
+    assert (panel.get("title") or panel.get("label")) == "CorvinTV", panel
     assert panel["element"] == {"kind": "react-component", "component": "VideoProducerPage"}
     reg = home / "tenants" / "_default" / "plugins" / "panel_registry.json"
     assert reg.is_file() and "plugin-video_producer" in reg.read_text()
 
     # settings are validated against the schema and persisted
-    r = client.post("/v1/console/plugins/video_producer/settings", json={"settings": {"tts_engine": "gtts", "max_video_length_minutes": 5}})
+    r = client.post("/v1/console/plugins/video_producer/settings", json={"settings": {"tts_engine": "auto", "max_video_length_minutes": 5}})
     assert r.status_code == 200, r.text
     assert r.json()["settings"]["max_video_length_minutes"] == 5
     r = client.post("/v1/console/plugins/video_producer/settings", json={"settings": {"tts_engine": "not-an-engine"}})
@@ -425,19 +430,27 @@ def test_install_with_enable_after_install_and_consent_leaves_the_plugin_on(clie
     assert job["status"] == "completed" and job["enabled"] is True, job
 
 
+def test_a_first_party_plugin_enables_after_install_without_a_consent_flag(client):
+    body = _install(client, _VIDEO, enable_after_install=True)
+    assert body["status"] == "completed" and body["enabled"] is True, body
+    assert not body.get("enable_error"), body
+    assert "video-producer" in _manifest_panel_routes(client), "CorvinTV is in the sidebar without a second step"
+    client.post("/v1/console/plugins/video_producer/disable")
+    assert client.delete("/v1/console/plugins/video_producer").status_code == 200
+
+
 def test_enable_after_install_without_consent_stays_installed_and_says_why(client):
-    body = _install(client, _VIDEO, enable_after_install=True, consent_granted=False)
+    body = _install(client, _COMMUNITY, enable_after_install=True, consent_granted=False)
     assert body["status"] == "completed" and body["enabled"] is False, body
     assert "consent" in body["enable_error"].lower(), body
-    assert "video-producer" not in _manifest_panel_routes(client)
-    rec = {p["plugin_id"]: p for p in client.get("/v1/console/plugins").json()["plugins"]}["video_producer"]
+    rec = {p["plugin_id"]: p for p in client.get("/v1/console/plugins").json()["plugins"]}["slack_notifier"]
     assert rec["enabled"] is False
 
 
 def test_a_bare_install_still_leaves_a_consent_gated_plugin_disabled(client):
-    body = _install(client, _VIDEO)
+    body = _install(client, _COMMUNITY)
     assert "enabled" not in body or body["enabled"] in (None, False)
-    rec = {p["plugin_id"]: p for p in client.get("/v1/console/plugins").json()["plugins"]}["video_producer"]
+    rec = {p["plugin_id"]: p for p in client.get("/v1/console/plugins").json()["plugins"]}["slack_notifier"]
     assert rec["enabled"] is False
 
 

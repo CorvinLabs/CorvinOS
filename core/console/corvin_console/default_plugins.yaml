@@ -21,15 +21,21 @@
 # Documentation: docs/claude-ref/default-plugins.md
 schema: 1
 plugins:
-  - index_id: plugin:contributor-media-video_producer
-    registry_id: video_producer
-    name: Video Producer
-    min_version: "1.2.0"
-    enable: false
-    # requires_consent: true in its manifest -> installed, left disabled until the operator enables it
+  - index_id: plugin:buildin-media-corvintv
+    registry_id: video_producer       # the registry id did not change with the rename: installs, data and audit names stay valid
+    name: CorvinTV
+    min_version: "1.7.0"
+    enable: true
+    # First-party (buildin tier -> origin vetted, requires_consent: false), so boot installs AND enables it,
+    # exactly like the Knowledge Graph below: a fresh installation can make a video without a single operator
+    # step. What it sends where is declared in its manifest (egress_hosts, pii_risk: medium) and gated per job by
+    # the console's L34/L35 checks; nothing is contacted at boot. Until 1.6.0 it was the contributor listing
+    # `Video Producer` (community origin, consent on enable): an install that still carries that record is
+    # upgraded to this listing and enabled (PluginLifecycle.upgrade).
+    replaces: plugin:contributor-media-video_producer
     reason: >-
-      Turns a task description into a narrated MP4 (storyboard, narration, animated
-      web slides). First bundled plugin.
+      CorvinTV (formerly Video Producer) turns a task description into a narrated MP4 (storyboard,
+      narration by OpenAI TTS with edge-tts as the fallback, animated web slides). First bundled plugin.
   - index_id: plugin:buildin-knowledge_management-corvin_knowledge
     registry_id: corvin_knowledge
     name: Knowledge Graph

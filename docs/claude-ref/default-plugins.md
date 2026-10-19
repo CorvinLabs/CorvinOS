@@ -6,8 +6,8 @@ plugin, add an entry there; to stop bundling one, remove it (already-installed c
 
 | # | Plugin | Index id | Min. version | Enabled by boot? |
 |---|---|---|---|---|
-| 1 | Video Producer | `plugin:contributor-media-video_producer` | 1.2.0 | No — its manifest has `requires_consent: true`; the operator enables it (Marketplace → Enable) |
-| 2 | Knowledge Graph | `plugin:buildin-knowledge_management-corvin_knowledge` | 1.2.0 | **Yes** — first-party (`buildin` tier: origin `vetted`, `requires_consent: false`, `pii_risk: low`), so boot installs AND enables it; the tenant's knowledge base is created and bound to the board on the next projector tick (see below) |
+| 1 | CorvinTV (formerly Video Producer) | `plugin:buildin-media-corvintv` | 1.7.0 | **Yes** — first-party (`buildin` tier: origin `vetted`, `requires_consent: false`, `pii_risk: medium`), so boot installs AND enables it; the registry id stays `video_producer` |
+| 2 | Knowledge Graph | `plugin:buildin-knowledge_management-corvin_knowledge` | 1.2.0 | **Yes** — first-party (`buildin` tier: origin `vetted`, `requires_consent: false`, `pii_risk: low`), so boot installs AND enables it; the tenant knowledge base is created on the next projector tick (ADR-2265) |
 
 ## Entry format
 
@@ -39,6 +39,32 @@ file is refused as a whole (`DefaultPluginsError`) — it never installs a subse
    written to the ledger, so the next boot tries again.
 5. **Consent is never granted on the operator's behalf** (no auto-admit). A consent-gated plugin is
    installed and left disabled.
+
+## CorvinTV: a fresh install can make a video at once
+
+CorvinTV (until 1.6.0 "Video Producer") is the first entry. Boot installs **and enables** it, so the
+**CorvinTV** panel is in the sidebar and `/v1/console/video/settings` answers on the first start, with no
+operator step. It reached that state the way the Knowledge Graph did: it moved from `plugins/contributor/`
+(community origin, consent on enable) to `plugins/buildin/media/corvintv/` (first-party, reviewed, `vetted`;
+maintainer decision 2026-10-19). `PluginRecord.consent_required()` is not narrowed — the plugin is simply no longer in
+the class that needs consent.
+
+**What it does, stated so nobody has to guess.** Nothing is contacted at boot or in the background. A video is made
+only when an operator asks for one; the narration text (derived from the task, never the task's files) then goes to
+the narration host: **OpenAI TTS first** (needs the operator's key) and **edge-tts** (Microsoft voices, no key) when
+OpenAI declines — an exhausted, invalid or missing key falls back instead of stopping the job; if both decline the job
+fails with a named error, never a silent video. Piper is not part of the chain. Every host is gated per job by the
+console's L34/L35 checks (`egress_gate.DEFAULT_ENGINE_HOSTS`: `api.openai.com`, `speech.platform.bing.com`; the
+optional storyboard backend adds `api.anthropic.com`), and declared in the manifest (`egress_hosts`, `pii_risk: medium`).
+The default engine is `auto` (that chain); `openai` means OpenAI only and refuses instead of falling back. The
+operator can disable or uninstall the plugin at any time; an uninstall sticks (the ledger remembers it was offered).
+
+**The rename (`replaces:` in `default_plugins.yaml`).** The index id changed (`plugin:contributor-media-video_producer`
+→ `plugin:buildin-media-corvintv`); the **registry id `video_producer`, the console API (`/v1/console/video/...`), the
+tenant data folder and every audit event name did not**, so existing installs, videos and automations keep working.
+A tenant that still carries the pre-1.7 community record is **upgraded** to the vetted listing at the next boot and
+enabled; a tenant whose operator uninstalled it keeps it uninstalled. The console loader still finds the old
+marketplace path (`plugins/contributor/media/video_producer`) as a fallback for a checkout that has not been updated.
 
 ## Knowledge Graph: the tenant knowledge base (ADR-2265)
 
@@ -77,9 +103,11 @@ live state per entry: `offered`, `installed`, `enabled`, `installed_version`.
 ## Tests
 
 * `core/console/tests/test_default_plugins.py` — list shape and refusal rules.
+* `core/console/tests/test_default_plugins_corvintv_e2e.py` — fresh tenant: both standard plugins installed and enabled by one `provision`, the real route answers with the default chain; the pre-1.7 record is upgraded; an operator's uninstall is kept.
 * `core/console/corvin_console/web-next/tests/e2e-fresh/default-plugins.spec.ts` — fresh instance, no
-  local marketplace: boot alone installs the Video Producer (disabled), consent gate holds, enable works,
-  sidebar entry appears, uninstall sticks. Run together with `video-producer-lifecycle.spec.ts` (27 tests):
+  local marketplace: boot alone installs AND enables CorvinTV and the Knowledge Graph (no consent step), the
+  sidebar entry is CorvinTV, the panel API answers with the default chain, uninstall sticks. Run together with
+  `video-producer-lifecycle.spec.ts`:
   `cd core/console/corvin_console/web-next && npx playwright test -c playwright.fresh-install.config.ts`
   (needs network and a built SPA — `scripts/console-deploy.sh`).
 * `core/console/corvin_console/web-next/tests/e2e-fresh/knowledge-graph-default.spec.ts` — fresh instance:
@@ -98,5 +126,5 @@ live state per entry: `offered`, `installed`, `enabled`, `installed_version`.
 ## Release hygiene for a bundled plugin
 
 The installer reads **`plugin.yaml`**, not `plugin.json`. Bump `version` in `plugin.yaml` (and `provider.py`)
-together with `plugin.json`, `setup.py` and the four index blocks — Video Producer 1.2.0 shipped with
+together with `plugin.json`, `setup.py` and the four index blocks — CorvinTV (then Video Producer) 1.2.0 shipped with
 `plugin.yaml` still at 1.0.0 and a fresh install recorded 1.0.0. `min_version` here is checked against `plugin.yaml`.

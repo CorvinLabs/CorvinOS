@@ -1,8 +1,8 @@
 /**
- * Video Producer — full plugin lifecycle on a FRESH install, source of truth = GitHub.
+ * CorvinTV (formerly Video Producer) — full plugin lifecycle on a FRESH install, source of truth = GitHub.
  *
- *   fresh install -> install from the marketplace -> enabled -> sidebar panel ->
- *   produce a video -> uninstall -> panel gone
+ *   fresh install (boot already provisioned it: first-party, enabled) -> uninstall -> reinstall from the
+ *   marketplace -> enabled -> sidebar panel -> produce a video -> uninstall -> panel gone
  *
  * plus adversarial cases (double install, uninstall racing an install, uninstall
  * while enabled, repeated/blind uninstall, bad ids, missing CSRF/session, reinstall).
@@ -30,7 +30,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const INDEX_ID = "plugin:contributor-media-video_producer";
+const INDEX_ID = "plugin:buildin-media-corvintv";
 const REGISTRY_ID = "video_producer";
 const GITHUB_RAW = "https://raw.githubusercontent.com/CorvinLabs/Corvin-Marketplace/main";
 const GITHUB_REPO = "https://github.com/CorvinLabs/Corvin-Marketplace.git";
@@ -77,7 +77,7 @@ async function entry(page: Page): Promise<any> {
   const r = await page.request.get(`${MP}/plugins?q=video`);
   expect(r.status()).toBe(200);
   const hit = ((await r.json()).plugins as any[]).find((p) => p.id === INDEX_ID);
-  expect(hit, "Video Producer must be in the marketplace index").toBeTruthy();
+  expect(hit, "CorvinTV must be in the marketplace index").toBeTruthy();
   return hit;
 }
 
@@ -144,7 +144,7 @@ async function runInstallWizard(page: Page): Promise<void> {
   await expect(card).toBeVisible();
   await card.getByRole("button", { name: /^Install$/ }).click();
   const dlg = page.getByRole("dialog");
-  await expect(dlg.getByText(`Install Video Producer`)).toBeVisible();
+  await expect(dlg.getByText(`Install CorvinTV`)).toBeVisible();
   // The wizard auto-advances from "dependencies" after a short delay, so click
   // whichever forward button is currently there until "Install and enable" is pressed.
   for (let i = 0; i < 6; i++) {
@@ -159,7 +159,7 @@ async function runInstallWizard(page: Page): Promise<void> {
 
 // ── tests ────────────────────────────────────────────────────────────────────
 
-test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketplace", () => {
+test.describe("CorvinTV plugin lifecycle — fresh install, GitHub marketplace", () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
   });
@@ -167,14 +167,19 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
   test("0. the backend really is a fresh install with no local marketplace checkout", async ({ page }) => {
     expect(fs.existsSync(path.join(ROOT, "Corvin-Marketplace")), "no sibling checkout next to the exported CorvinOS").toBe(false);
     expect(fs.existsSync(path.join(ROOT, "CorvinOS", ".git")), "git-archive export, not a clone").toBe(false);
-    expect(registryRecordCount()).toBe(0);
-    expect(onDisk()).toEqual({ registry: false, instance: false, panel: false });
+    // CorvinTV is a standard plugin: boot provisions it (installed AND enabled). Whether this file runs first or after
+    // default-plugins.spec (which ends by uninstalling it), the state must be one of the two consistent ones.
     const e = await entry(page);
-    expect({ installed: e.installed, enabled: e.enabled }).toEqual({ installed: false, enabled: false });
-    // nothing in the sidebar yet
+    if (e.installed) {
+      expect(e.enabled, "first-party: boot enables it").toBe(true);
+      expect(registryRecordCount()).toBe(1);
+      expect(onDisk()).toMatchObject({ registry: true });
+    } else {
+      expect(registryRecordCount()).toBe(0);
+      expect(onDisk()).toEqual({ registry: false, instance: false, panel: false });
+    }
     await page.goto("/console/app/marketplace", { waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("marketplace-console")).toBeVisible({ timeout: 45_000 });
-    await expect(sidebarLink(page)).toHaveCount(0);
   });
 
   test("1. the index the console serves is GitHub's (Corvin-Marketplace main), not a local copy", async ({ page }) => {
@@ -221,34 +226,36 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
     await expect(sidebarLink(page)).toHaveCount(1, { timeout: 15_000 });
 
     // The plugin SOURCE on this install is GitHub main, byte for byte.
-    const cache = path.join(HOME, "marketplace-cache", "Corvin-Marketplace", "plugins", "contributor", "media", "video_producer");
+    const cache = path.join(HOME, "marketplace-cache", "Corvin-Marketplace", "plugins", "buildin", "media", "corvintv");
     expect(fs.existsSync(cache), "source was synced from GitHub into the install's own cache").toBe(true);
     for (const f of ["plugin.yaml", "plugin.json", "provider.py"]) {
-      const remote = await raw(`plugins/contributor/media/video_producer/${f}`);
+      const remote = await raw(`plugins/buildin/media/corvintv/${f}`);
       expect(sha(fs.readFileSync(path.join(cache, f))), `${f} == GitHub main`).toBe(sha(remote));
     }
     expect(onDisk().registry).toBe(true);
   });
 
-  test("4. the consent gate holds: a bare API install stays disabled, 'enable after install' needs the consent flag", async ({ page }) => {
+  test("4. first-party means no consent step: a bare install stays disabled until enabled, and enabling needs no consent flag", async ({ page }) => {
     await ensure(page, "uninstalled");
     const bare = await call(page, "POST", `${MP}/plugins/${enc(INDEX_ID)}/install`, { wait: true });
     expect(bare.body?.status, bare.text).toBe("completed");
-    expect((await entry(page)).enabled).toBe(false);
+    expect((await entry(page)).enabled).toBe(false);          // install alone does not switch it on
     await ensure(page, "uninstalled");
 
-    const noConsent = await call(page, "POST", `${MP}/plugins/${enc(INDEX_ID)}/install`, { wait: true, enable_after_install: true });
-    expect(noConsent.body).toMatchObject({ status: "completed", enabled: false });
-    expect(String(noConsent.body.enable_error)).toMatch(/consent/i);
-    expect((await entry(page)).enabled).toBe(false);
+    // vetted origin, requires_consent false: "enable after install" works WITHOUT the consent flag
+    const open = await call(page, "POST", `${MP}/plugins/${enc(INDEX_ID)}/install`, { wait: true, enable_after_install: true });
+    expect(open.body, open.text).toMatchObject({ status: "completed", enabled: true });
+    expect(open.body.enable_error ?? null).toBeNull();
+    expect((await entry(page)).enabled).toBe(true);
     await ensure(page, "uninstalled");
 
+    // an explicit consent flag is harmless
     const consent = await call(page, "POST", `${MP}/plugins/${enc(INDEX_ID)}/install`, { wait: true, enable_after_install: true, consent_granted: true });
     expect(consent.body).toMatchObject({ status: "completed", enabled: true });
     expect((await entry(page)).enabled).toBe(true);
   });
 
-  test("5. enable (consent) -> the Video Producer panel appears in the sidebar and opens", async ({ page }) => {
+  test("5. enable -> the CorvinTV panel appears in the sidebar and opens", async ({ page }) => {
     await ensure(page, "installed");
     await page.goto("/console/app/marketplace?tab=installed", { waitUntil: "domcontentloaded" });
     const row = page.getByTestId(`installed-row-${REGISTRY_ID}`);
@@ -470,7 +477,7 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
     await ensure(page, "enabled");
     // Synthetic deck from the plugin's own fixtures (generated, no real data). Needs python3 + Pillow on the test host.
     const fixtures = process.env.CORVIN_STYLE_FIXTURES_DIR
-      ?? "/home/shumway/projects/Corvin-Marketplace/plugins/contributor/media/video_producer/tests";
+      ?? "/home/shumway/projects/Corvin-Marketplace/plugins/buildin/media/corvintv/tests";
     const deckPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vp-deck-")), "brand.pptx");
     try {
       execFileSync("python3", ["-I", "-c",
@@ -547,7 +554,7 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
     test.setTimeout(240_000);
     await ensure(page, "enabled");
     const fixtures = process.env.CORVIN_STYLE_FIXTURES_DIR
-      ?? "/home/shumway/projects/Corvin-Marketplace/plugins/contributor/media/video_producer/tests";
+      ?? "/home/shumway/projects/Corvin-Marketplace/plugins/buildin/media/corvintv/tests";
     const board = path.join(fixtures, "fixtures", "penpot_board.svg");
     test.skip(!fs.existsSync(board), "the Penpot board fixture is not on this host; set CORVIN_STYLE_FIXTURES_DIR");
 
@@ -738,7 +745,7 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
         "plugin:contributor-media-..%2F..%2Fetc",
         "plugin:buildin-memory-",
         "../../etc/passwd",
-        "plugin:contributor-media-video_producer%00",
+        "plugin:buildin-media-corvintv%00",
         "x".repeat(300),
         "plugin:evil-media-video_producer",
       ];
@@ -751,7 +758,7 @@ test.describe("Video Producer plugin lifecycle — fresh install, GitHub marketp
       expect((await page.request.get(`${API}/plugins`)).status()).toBe(200);
     });
 
-    test("A9. dependency plan: unknown ids are refused; the Video Producer has none missing", async ({ page }) => {
+    test("A9. dependency plan: unknown ids are refused; CorvinTV has none missing", async ({ page }) => {
       const ok = await page.request.get(`${MP}/plugins/${enc(INDEX_ID)}/dependencies`);
       expect(ok.status()).toBe(200);
       expect((await ok.json()).dependency_tree.missing).toBe(false);

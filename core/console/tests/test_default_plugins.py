@@ -16,13 +16,15 @@ def _write(tmp_path: Path, text: str) -> Path:
     return p
 
 
-def test_shipped_list_is_valid_and_starts_with_video_producer():
+def test_shipped_list_is_valid_and_starts_with_corvintv():
     entries = dp.load_list()
     assert entries, "the shipped list must not be empty"
     first = entries[0]
-    assert first["index_id"] == "plugin:contributor-media-video_producer"
-    assert first["registry_id"] == "video_producer"
-    assert first["min_version"] == "1.2.0"
+    assert first["index_id"] == "plugin:buildin-media-corvintv"
+    assert first["registry_id"] == "video_producer"      # the registry id did not change with the rename
+    assert first["min_version"] == "1.7.0"
+    assert first["enable"] is True
+    assert first["replaces"] == "plugin:contributor-media-video_producer"
 
 
 def test_no_duplicates_in_shipped_list():

@@ -16,6 +16,8 @@
 
 # Video producer
 
+> **CorvinTV was called "Video Producer" until plugin version 1.6.0.** Same plugin, new name: it is a first-party plugin that a fresh installation installs and enables, narrates with OpenAI TTS first and edge-tts second, and keeps its registry id (`video_producer`), console API and data folder, so nothing built on it breaks. See [default-plugins.md](../claude-ref/default-plugins.md).
+
 > **Type one sentence, get back a narrated explainer video — produced on your own machine, behind the same gates as every other CorvinOS run.**
 
 <p align="center"><img src="img/video-hero.svg" alt="Pipeline: a text task passes the L44, L34 and L35 gates; an LLM writes a storyboard of up to eight scenes (Claude Sonnet when the L35 and L34 gates admit Anthropic, local Ollama otherwise or on failure); OpenAI TTS narrates each scene; scenes with a template become animated web slides (Pillow stills as the fallback); ffmpeg encodes and joins; output is an MP4 without subtitles, plus poster, slides and quality metrics." width="100%"/></p>
@@ -57,7 +59,7 @@
 - Quality metrics measured from those files (`GET /jobs/{id}/quality-metrics`): ffprobe stream facts, caption coverage, planned vs rendered duration per scene, and a checklist whose score names its denominator — a check whose input is missing is `skip`, never a pass.
 - The job record (status, current step, timings, error) in the tenant's video store. The output folder is fixed per tenant and cannot be redirected through settings.
 
-The plugin's code lives entirely in the Marketplace (`plugins/contributor/media/video_producer`, about 1,000 lines). CorvinOS only hosts the HTTP routes and the panel slot; every route is tenant-scoped through the session record and writes need the session's CSRF token.
+The plugin's code lives entirely in the Marketplace (`plugins/buildin/media/corvintv`, about 1,000 lines). CorvinOS only hosts the HTTP routes and the panel slot; every route is tenant-scoped through the session record and writes need the session's CSRF token.
 
 ## What runs today
 
@@ -144,7 +146,7 @@ curl -s -b "$COOKIE" -o video.mp4 http://127.0.0.1:8765/v1/console/video/videos/
 ## Under the hood
 
 - Host routes: `core/console/corvin_console/routes/video_producer_api.py`; spawn gates `core/console/corvin_console/_spawn_gates.py`.
-- Plugin source: `Corvin-Marketplace/plugins/contributor/media/video_producer/` (`src/skill.py` storyboard + pipeline, `src/async_runner.py`, `src/storage.py`, `panel/`).
+- Plugin source: `Corvin-Marketplace/plugins/buildin/media/corvintv/` (`src/skill.py` storyboard + pipeline, `src/async_runner.py`, `src/storage.py`, `panel/`).
 - `core/skills/video_producer/` in CorvinOS is maintainer tooling, not the shipped plugin.
-- ADRs: plugin-local ADR-0953 in `Corvin-Marketplace/plugins/contributor/media/video_producer/docs/` (removal of the dead render tiers — not Corvin-Knowledge ADR-0953, which is an unrelated console decision); Corvin-Knowledge ADR-2219 (diagram phase), ADR-2221 (image research).
+- ADRs: plugin-local ADR-0953 in `Corvin-Marketplace/plugins/buildin/media/corvintv/docs/` (removal of the dead render tiers — not Corvin-Knowledge ADR-0953, which is an unrelated console decision); Corvin-Knowledge ADR-2219 (diagram phase), ADR-2221 (image research).
 - Related: [Marketplace &amp; plugins](marketplace.md) · [CorvinOS as an OS](operating-system.md) · [Extensibility](extensibility.md)

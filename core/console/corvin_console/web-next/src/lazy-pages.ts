@@ -190,7 +190,7 @@ export const CorvinKnowledgePage = React.lazy(() =>
 );
 
 // Video Producer — the console panel of the contributor plugin
-// plugins/contributor/media/video_producer (ADR-0892). Not a
+// plugins/buildin/media/corvintv (ADR-0892). Not a
 // static panel: it mounts only while the plugin is installed AND enabled
 // (capability manifest → manifestPanelRoutes), like CorvinKnowledgePage.
 export const VideoProducerPage = React.lazy(() =>

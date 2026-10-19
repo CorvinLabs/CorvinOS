@@ -14,7 +14,7 @@ test.describe("Video Quality deep link", () => {
   test("redirects into the Video Producer studio's Quality tab", async ({ page }) => {
     await page.goto(`${BASE_URL}/console/app/video-quality-metrics?job_id=job_2626f1e8`, { waitUntil: "networkidle" });
     await expect(page).toHaveURL(/\/app\/video-producer\?(?=.*job=job_2626f1e8)(?=.*tab=quality)/);
-    await expect(page.locator("h1", { hasText: /Video Producer/ })).toBeVisible();
+    await expect(page.locator("h1", { hasText: /CorvinTV/ })).toBeVisible();
   });
 
   test("without a job id it still lands on the studio", async ({ page }) => {
