@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed — CorvinTV jobs ended "exit code 2" after a marketplace resync, and failed on Windows
+- A console that had loaded CorvinTV before its move to the `buildin` tier kept starting the job process from the old
+  marketplace-cache path after the cache was resynced: every job ended "The job process ended unexpectedly (exit code
+  2)". The console now notices that the loaded plugin source is gone and reloads it from where it is; jobs still
+  running from the old load keep running, are not closed as "interrupted", and stay cancellable. A load that came
+  without a job runner (caught mid-resync) is retried.
+- "Web slides available" now checks the Chromium build the installed Playwright actually launches; after a Playwright
+  upgrade an older build no longer counts, and the missing one is downloaded once in the background.
+- The gateway caps every `/v1/console/video/*` request body (PNG asset uploads at 8 MiB, the rest at 2 MiB) before
+  the session check, so an unauthenticated upload of any size is no longer spooled to disk.
+- Together with CorvinTV's own fixes (no `ffprobe` needed, a font on Windows, Windows job lifecycle; see its release
+  notes), a real job on the Windows host that reported the failure produces its MP4 again.
+
 ### Fixed — the Marketplace says why a listed update cannot be installed
 - `GET /v1/console/api/v1/marketplace/updates` now also returns `stale_source`: installed plugins whose index lists a
   newer version than the plugin source on this host can install (typically a local Corvin-Marketplace checkout that was

@@ -28,6 +28,7 @@ STYLE_BODY_CAPS = {
 VIDEO_BODY_CAPS = {
     **STYLE_BODY_CAPS,
     "/v1/console/video/attachments/extract": 8 * MIB + 256 * 1024,
+    "/v1/console/video/assets": 8 * MIB + 256 * 1024,  # one PNG of up to 8 MiB (the route's own limit)
     "/v1/console/video/assets/import-penpot": 8 * MIB + 256 * 1024,
     "/v1/console/video/jobs": 1 * MIB,
 }
@@ -68,8 +69,13 @@ class BodyTooLarge(Exception):
 
 
 def gateway_cap_for(path: str) -> Optional[int]:
-    """Gateway host: only the upload paths named here are capped (everything else is untouched)."""
-    return VIDEO_BODY_CAPS.get(path)
+    """Gateway host: the Video Producer paths are capped - the named ones at their own size, every other
+    ``/v1/console/video/*`` body (capture, settings, asset PATCH, feedback) at the default - and everything else
+    is untouched. Without that, an unauthenticated body of any size was spooled before the session check ran."""
+    cap = VIDEO_BODY_CAPS.get(path)
+    if cap is None and path.startswith("/v1/console/video/"):
+        cap = BODY_CAP_DEFAULT
+    return cap
 
 
 def make_body_cap_middleware(cap_for: Callable[[str], Optional[int]]):

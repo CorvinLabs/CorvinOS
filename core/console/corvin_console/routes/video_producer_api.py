@@ -112,6 +112,8 @@ def _load_plugin():
         except Exception as e:  # noqa: BLE001 — read routes still work without the producer
             logger.warning("video producer runner unavailable (%s): jobs cannot be started", type(e).__name__)
         logger.info("video producer plugin loaded from %s", kind)
+        global _PLUGIN_SRC, _LOADED_AT
+        _PLUGIN_SRC, _LOADED_AT = src, time.monotonic()
         getter = None
         if runner_mod is not None:
             getter = runner_mod.get_runner
@@ -128,6 +130,15 @@ def _load_plugin():
 # (the router gate) or 503 (the source is missing).
 VideoJob = _get_storage = get_runner = PLUGIN_SOURCE = None
 _load_lock = threading.Lock()
+# The directory the loaded source came from. A marketplace resync replaces <home>/marketplace-cache whole (and
+# CorvinTV moved tier on 2026-10-19), so the files under a long-running console can vanish: every job then
+# started ``python <gone>/job_main.py`` and died with "exit code 2". ``_ensure_plugin`` reloads from wherever
+# the source is now; the runners of a retired load keep their running jobs and stay reachable for cancel.
+_PLUGIN_SRC: Optional[Path] = None
+_RETIRED_RUNNER_GETTERS: List[Any] = []
+# a load whose runner did not import (e.g. caught mid-resync) is retried after this long, not kept for good
+_RUNNER_RETRY_S = 30.0
+_LOADED_AT = 0.0
 
 PLUGIN_ID = "video_producer"
 
@@ -151,11 +162,69 @@ def _ensure_plugin(tenant_id: str) -> bool:
     global VideoJob, _get_storage, get_runner, PLUGIN_SOURCE
     if not _enabled_for(tenant_id):
         return False
-    if _get_storage is None:
+    if _get_storage is None or _plugin_needs_reload():
         with _load_lock:
-            if _get_storage is None:
+            if _get_storage is None or _plugin_needs_reload():
+                opened = _retire_loaded_plugin()
                 VideoJob, _get_storage, get_runner, PLUGIN_SOURCE = _load_plugin()
+                _reopen_stores(opened)
     return True
+
+
+def _plugin_needs_reload() -> bool:
+    """The source the plugin was loaded from no longer holds the job entry point (resync, tier move), or the
+    load came without a runner (caught mid-resync) and is old enough to try again."""
+    src = _PLUGIN_SRC
+    if src is None:
+        return False
+    if not ((src / "__init__.py").is_file() and (src / "job_main.py").is_file()):
+        return True
+    return get_runner is None and time.monotonic() - _LOADED_AT > _RUNNER_RETRY_S
+
+
+def _retire_loaded_plugin() -> List[str]:
+    """Forget the loaded source so ``_load_plugin`` resolves it afresh. Caller holds ``_load_lock``.
+    Returns the store bases this console had already opened (see ``_reopen_stores``)."""
+    global VideoJob, _get_storage, get_runner, PLUGIN_SOURCE, _PLUGIN_SRC
+    if _PLUGIN_SRC is None:
+        return []
+    logger.warning("video producer plugin source %s (%s) is gone or incomplete; reloading", _PLUGIN_SRC, PLUGIN_SOURCE)
+    if get_runner is not None:
+        _RETIRED_RUNNER_GETTERS.append(get_runner)
+    opened = list(getattr(sys.modules.get(f"{_PLUGIN_PKG}.storage"), "_stores", None) or [])
+    for name in [n for n in sys.modules if n == _PLUGIN_PKG or n.startswith(_PLUGIN_PKG + ".")]:
+        sys.modules.pop(name, None)
+    VideoJob = _get_storage = get_runner = PLUGIN_SOURCE = _PLUGIN_SRC = None
+    return opened
+
+
+def _reopen_stores(bases: List[str]) -> None:
+    """Re-open, in the fresh load, the stores the retired one had open - WITHOUT the first-open sweep. That
+    sweep closes every non-terminal job as "interrupted" (it is meant for a console that just started), and on
+    Windows, where job locks do not exist, it would close the jobs this very console is still running."""
+    if _get_storage is None:
+        return
+    for base in bases:
+        try:
+            _get_storage(base, mark_interrupted=False)
+        except TypeError:  # a plugin build without the keyword: leave the store to its first use
+            return
+        except Exception as e:  # noqa: BLE001
+            logger.warning("video producer: store not re-opened after reload (%s)", type(e).__name__)
+
+
+def _cancel_in_any_runner(job_id: str) -> Optional[bool]:
+    """Cancel through the current runner, then through those of a retired load (their jobs still run).
+    None: no runner here can cancel at all."""
+    seen = False
+    for getter in [get_runner, *reversed(_RETIRED_RUNNER_GETTERS)]:
+        cancel = getattr(getter() if getter else None, "cancel_job", None)
+        if cancel is None:
+            continue
+        seen = True
+        if cancel(job_id):
+            return True
+    return False if seen else None
 
 
 async def _require_plugin_enabled(rec=Depends(require_session_csrf_on_mutation)):
@@ -579,16 +648,63 @@ def _playwright_browsers_dir() -> Path:
     return Path.home() / ".cache" / "ms-playwright"
 
 
+def _playwright_chromium_dirs() -> Optional[List[str]]:
+    """The browser directories THIS playwright package launches (``chromium_headless_shell-<rev>``, ``chromium-<rev>``),
+    from its own ``browsers.json``; None when that cannot be read."""
+    import json  # noqa: PLC0415
+
+    try:
+        import playwright  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        spec = Path(playwright.__file__).resolve().parent / "driver" / "package" / "browsers.json"
+        revs = {b["name"]: str(b["revision"]) for b in json.loads(spec.read_text(encoding="utf-8"))["browsers"]}
+        return [f"{name.replace('-', '_')}-{revs[name]}" for name in ("chromium-headless-shell", "chromium")
+                if name in revs]
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _web_slides_available() -> bool:
-    """Animated web slides need the ``playwright`` package AND an installed Chromium build. The package alone used to
-    be reported as "available": on an install whose browser download had failed (the installer's step 8b is
-    fail-soft) the panel said yes while every slide silently fell back to the classic slide."""
+    """Animated web slides need the ``playwright`` package AND the Chromium build THAT package launches. The package
+    alone used to be reported as "available": on an install whose browser download had failed (the installer's step
+    8b is fail-soft) the panel said yes while every slide silently fell back to the classic slide. So did any
+    ``chromium*`` directory - also one left behind by an older playwright: after a playwright upgrade (1243 on disk,
+    1248 wanted, 2026-10-19) every slide degraded. A missing build is downloaded once, in the background."""
     if importlib.util.find_spec("playwright") is None:
         return False
     try:
-        return any(p.is_dir() and p.name.startswith("chromium") for p in _playwright_browsers_dir().iterdir())
+        base = _playwright_browsers_dir()
+        wanted = _playwright_chromium_dirs()
+        if not wanted:
+            return any(p.is_dir() and p.name.startswith("chromium") for p in base.iterdir())
+        if (base / wanted[0]).is_dir():
+            return True
     except (OSError, ImportError):
-        return False
+        pass
+    _install_chromium_in_background()
+    return False
+
+
+_chromium_install_started = False
+
+
+def _install_chromium_in_background() -> None:
+    """``playwright install`` the Chromium build this package needs - once per console process, never blocking a
+    request (a ~150 MB download). Until it lands, slides use the classic renderer, which the panel already says."""
+    global _chromium_install_started
+    if _chromium_install_started:
+        return
+    _chromium_install_started = True
+
+    def _run() -> None:
+        cmd = [sys.executable, "-m", "playwright", "install", "chromium", "chromium-headless-shell"]
+        try:
+            subprocess.run(cmd, check=True, timeout=1800, capture_output=True)  # deadline-exempt: background thread
+            logger.info("video producer: Playwright Chromium installed")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("video producer: Playwright Chromium install failed (%s)", type(e).__name__)
+
+    threading.Thread(target=_run, daemon=True, name="vp-chromium-install").start()
 
 
 def _ensure_ffmpeg() -> bool:
@@ -1312,12 +1428,11 @@ async def cancel_video_job(job_id: str, rec=_SessionRec):
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status in _TERMINAL:
         raise HTTPException(status_code=409, detail=f"The job has already ended ({job.status})")
-    runner = get_runner() if get_runner else None
-    cancel = getattr(runner, "cancel_job", None)
-    if cancel is None:
-        raise HTTPException(status_code=501, detail="This build cannot cancel a running video job")
     # the runner is process-wide, the store is the tenant's: ownership was proven by the lookup above
-    if not await asyncio.to_thread(cancel, job_id):
+    cancelled = await asyncio.to_thread(_cancel_in_any_runner, job_id)
+    if cancelled is None:
+        raise HTTPException(status_code=501, detail="This build cannot cancel a running video job")
+    if not cancelled:
         raise HTTPException(status_code=409, detail="The job is not running in this console process")
     end = time.monotonic() + _CANCEL_WAIT_S
     state = job.status
