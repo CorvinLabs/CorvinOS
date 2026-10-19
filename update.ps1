@@ -279,12 +279,26 @@ function Test-ProcessIsMine {
 $HostNames = @("python.exe", "pythonw.exe", "node.exe", "powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe", "cmd.exe", "uv.exe")
 $ProcPattern = 'corvin_gateway\.app|corvin_console\.standalone|corvinos-serve|corvin-serve|corvin-service|bridges[\\/]shared[\\/]adapter\.py|corvin_operator[\\/]bridges[\\/][a-z]+[\\/]daemon\.js|corvin-supervisor\.ps1|corvin-watchdog'
 
+# The console's Update button starts this script as a CHILD of the console, so the console
+# (which holds the tool venv's python.exe and the port) is one of our ancestors and MUST be
+# stopped: skipping ancestors left the venv locked, `uv tool install` failed with "Access is
+# denied", and so did the rollback. An ancestor is killed on its own (no /T: the tree contains
+# this script); everything else with its tree.
+function Stop-CorvinPid {
+    param([int]$Id, [switch]$Force)
+    $a = @("/PID", "$Id")
+    if ($SelfPids -notcontains $Id) { $a += "/T" }
+    if ($Force) { $a += "/F" }
+    $null = Invoke-Native -Exe "taskkill.exe" -Arguments $a
+    if ($Force) { Stop-Process -Id $Id -Force -ErrorAction SilentlyContinue }
+}
+
 function Get-CorvinProcesses {
     $hits = @()
     $venv = if ($script:ToolEnv) { $script:ToolEnv.ToLowerInvariant() + '\' } else { "" }
     foreach ($p in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
         $procId = [int]$p.ProcessId
-        if ($procId -le 4 -or $SelfPids -contains $procId) { continue }
+        if ($procId -le 4 -or $procId -eq $PID) { continue }
         $name = ([string]$p.Name).ToLowerInvariant()
         $exe  = ([string]$p.ExecutablePath).ToLowerInvariant()
         $cmd  = [string]$p.CommandLine
@@ -360,12 +374,11 @@ function Stop-Console {
         }
     }
     $pids = @(Get-CorvinProcesses)
-    foreach ($id in $pids) { $null = Invoke-Native -Exe "taskkill.exe" -Arguments @("/PID", "$id", "/T") }
+    foreach ($id in $pids) { Stop-CorvinPid -Id $id }
     for ($i = 0; $i -lt 8 -and @(Get-CorvinProcesses).Count -gt 0; $i++) { Start-Sleep -Seconds 1 }
     foreach ($id in @(Get-CorvinProcesses)) {
         # /T: corvinos-serve BLOCKS on a uvicorn child that holds the port.
-        $null = Invoke-Native -Exe "taskkill.exe" -Arguments @("/PID", "$id", "/T", "/F")
-        Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+        Stop-CorvinPid -Id $id -Force
     }
     # Catch-all: whatever of THIS user's still listens on the console port (a
     # console started from a terminal, an old install layout the pattern above
@@ -375,18 +388,17 @@ function Stop-Console {
     for ($i = 0; $i -lt 3; $i++) {
         $held = $false
         foreach ($lp in @(Get-PortListenerPids -TargetPort $Port)) {
-            if ($lp -le 4 -or $SelfPids -contains $lp) { continue }
+            if ($lp -le 4 -or $lp -eq $PID) { continue }
             $cp = Get-CimInstance Win32_Process -Filter "ProcessId=$lp" -ErrorAction SilentlyContinue
             if (-not $cp -or -not (Test-ProcessIsMine $cp)) { continue }
             $held = $true
             $portKills++
-            $null = Invoke-Native -Exe "taskkill.exe" -Arguments @("/PID", "$lp", "/T", "/F")
-            Stop-Process -Id $lp -Force -ErrorAction SilentlyContinue
+            Stop-CorvinPid -Id $lp -Force
             # The launcher (corvinos-serve.exe) waits on its python child; take it too.
             $parent = [int]$cp.ParentProcessId
-            $pp = if ($parent -gt 4 -and $SelfPids -notcontains $parent) { Get-CimInstance Win32_Process -Filter "ProcessId=$parent" -ErrorAction SilentlyContinue } else { $null }
+            $pp = if ($parent -gt 4 -and $parent -ne $PID) { Get-CimInstance Win32_Process -Filter "ProcessId=$parent" -ErrorAction SilentlyContinue } else { $null }
             if ($pp -and ([string]$pp.Name -like 'corvin*') -and (Test-ProcessIsMine $pp)) {
-                $null = Invoke-Native -Exe "taskkill.exe" -Arguments @("/PID", "$parent", "/T", "/F")
+                Stop-CorvinPid -Id $parent -Force
             }
         }
         if (-not $held) { break }
@@ -460,6 +472,10 @@ if ($CorvinRepo) {
     $text = Get-Content -LiteralPath $Receipt -Raw -ErrorAction SilentlyContinue
     if ($text -match 'editable\s*=\s*"([^"]*)"') { $Src = $Matches[1].Replace('\\', '\') }
 }
+# A failed update/rollback can leave the tool venv without its receipt: the checkout this
+# script lives in is then the install to repair (it is what install.ps1 would reinstall).
+if (-not $Src -and -not (Test-Path -LiteralPath $Receipt) -and $PSScriptRoot -and
+    (Test-Path -LiteralPath (Join-Path $PSScriptRoot "pyproject.toml"))) { $Src = $PSScriptRoot }
 if ($Src -and (Test-Path -LiteralPath (Join-Path $Src "pyproject.toml"))) {
     $Kind = if (Test-Path -LiteralPath (Join-Path $Src ".corvin-managed")) { "managed" } else { "checkout" }
 } elseif (Test-Path -LiteralPath (Join-Path $ManagedSrc "pyproject.toml")) {
@@ -884,6 +900,44 @@ function Repair-ConsoleTask {
     }
 }
 
+# A console that dies on its own (killed with the session that started it, an OOM, a crash
+# without a traceback -- measured 2026-10-19: console.log simply stops, task state "Ready")
+# stays down until the next logon, because the autostart task fires once. The task therefore
+# also repeats every 5 minutes and runs an IDEMPOTENT launcher: it exits at once while the port
+# answers, and starts the console only when nothing listens. MultipleInstances=IgnoreNew.
+function Install-ConsoleWatchdog {
+    param($Task)
+    if (-not $Task -or -not $HaveTaskCmdlets) { return }
+    $serve = Get-Command corvinos-serve -ErrorAction SilentlyContinue
+    if (-not $serve) { return }
+    try {
+        $binDir = Join-Path $CorvinHome "bin"
+        $null = New-Item -ItemType Directory -Force -Path $binDir -ErrorAction SilentlyContinue
+        $ps1 = Join-Path $binDir "corvin-ensure-console.ps1"
+        $body = @(
+            '# Generated by update.ps1 -- starts the console only when nothing answers on its port.',
+            "`$port = $Port",
+            "`$serve = '$($serve.Source -replace "'", "''")'",
+            'try { $c = New-Object Net.Sockets.TcpClient; $c.Connect("127.0.0.1", $port); $c.Close(); exit 0 } catch { }',
+            '$me = Get-CimInstance Win32_Process -Filter "Name=''corvinos-serve.exe''" -ErrorAction SilentlyContinue |',
+            '      Where-Object { $_.CreationDate -gt (Get-Date).AddMinutes(-3) }',
+            'if ($me) { exit 0 }   # a console that is still starting (cold start is slow)',
+            'Start-Process -FilePath $serve -ArgumentList @("--no-browser", "--port", "$port") -WindowStyle Hidden'
+        )
+        Set-Content -LiteralPath $ps1 -Value $body -Encoding ASCII
+        $vbs = Join-Path $binDir "$($Task.TaskName).vbs"
+        $cmd = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""$ps1"""
+        Set-Content -LiteralPath $vbs -Value ("CreateObject(""WScript.Shell"").Run """ + $cmd.Replace('"', '""') + """, 0, False") -Encoding ASCII
+        $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B `"$vbs`""
+        $logon  = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+        $repeat = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+        $null = Set-ScheduledTask -TaskName $Task.TaskName -TaskPath $Task.TaskPath -Action $action -Trigger @($logon, $repeat) -ErrorAction Stop
+        Write-Ok "console watchdog active (checks every 5 min)"
+    } catch {
+        Write-LogFile "could not install the console watchdog: $($_.Exception.Message)"
+    }
+}
+
 function Start-ConsoleDirect {
     $serve = Get-Command corvinos-serve -ErrorAction SilentlyContinue
     if (-not $serve) { Write-Warn "corvinos-serve not found -- cannot start the console"; return }
@@ -897,6 +951,7 @@ function Start-ConsoleAgain {
     foreach ($t in @($script:RestartTasks) + @($ConsoleTask)) {
         if (-not $t -or -not ($t.TaskName -like 'CorvinOS-AutoRestart*' -or $t.TaskName -eq 'CorvinOS-Console')) { continue }
         Repair-ConsoleTask $t
+        Install-ConsoleWatchdog $t
     }
     foreach ($t in $script:RestartTasks) {
         try { Start-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -ErrorAction Stop; $started = $started -or ($t.TaskName -like 'CorvinOS-AutoRestart*' -or $t.TaskName -eq 'CorvinOS-Console') } catch { }

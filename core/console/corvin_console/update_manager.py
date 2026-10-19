@@ -437,6 +437,9 @@ class UpdateManager:
                 # console exits 0 at once without running the script (empty log, no progress).
                 kwargs["creationflags"] = (getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
                                            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+                # The updater stops this console; if a Job object (task scheduler, launcher) kills its
+                # members with the console, the updater must not be one of them. Tried first, below.
+                breakaway = 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
             else:
                 kwargs["start_new_session"] = True
             keep = {k: v for k, v in (self._read_state() or {}).items()
@@ -460,7 +463,15 @@ class UpdateManager:
             cmd = isolated_command(src, self.state_path(), log) if isolated else updater_command(src)
             if isolated:
                 kwargs.pop("start_new_session", None)
-            proc = subprocess.Popen(cmd, **kwargs)  # noqa: S603
+            try:
+                if sys.platform == "win32":
+                    proc = subprocess.Popen(cmd, **{**kwargs, "creationflags": kwargs["creationflags"] | breakaway})  # noqa: S603
+                else:
+                    proc = subprocess.Popen(cmd, **kwargs)  # noqa: S603
+            except OSError:  # the job forbids breakaway: start inside it, update.ps1 copes
+                if sys.platform != "win32":
+                    raise
+                proc = subprocess.Popen(cmd, **kwargs)  # noqa: S603
         except BaseException:
             self.lock.release()
             raise
