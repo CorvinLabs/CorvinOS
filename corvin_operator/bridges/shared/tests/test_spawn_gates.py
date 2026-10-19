@@ -131,6 +131,57 @@ class TestCheckL34PromptClassification(unittest.TestCase):
         self.assertIn("Spawn rejected", result)
 
 
+class TestCheckL34SecretKeyFormatsEndToEnd(unittest.TestCase):
+    """T-0231 — real API-key formats must reach the gate as SECRET.
+
+    Runs the REAL ``classify_task`` and a REAL default ``DataFlowGuard`` through
+    ``check_l34`` (only the tenant-file lookup is stubbed), so it proves the
+    prompt is refused on a us_cloud engine, not merely that a regex matches.
+    The keys below are synthetic, never real credentials.
+    """
+
+    _KEYS = (
+        "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-AbCdEf",   # Anthropic
+        "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-AbCdEf",        # OpenAI project
+        "sk-svcacct-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",             # OpenAI service account
+        "sk-admin-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",               # OpenAI admin
+        "sk-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",                     # legacy format (control)
+        "github_pat_11AAAAAAA0AbCdEfGhIjKl_mNoPqRsTuVwXyZ0123456789",  # GitHub fine-grained
+        "gho_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",                    # GitHub OAuth
+    )
+
+    def _guard(self):
+        from data_classification import DataFlowGuard  # type: ignore
+        return DataFlowGuard.from_tenant_config(None)
+
+    def test_each_key_format_classifies_secret(self):
+        from data_classification import DataClassification, classify_task  # type: ignore
+        for key in self._KEYS:
+            with self.subTest(key=key[:14]):
+                self.assertEqual(classify_task(f"please use {key} for the call"),
+                                 DataClassification.SECRET)
+
+    def test_each_key_format_is_refused_on_us_cloud_engine(self):
+        guard = self._guard()
+        for key in self._KEYS:
+            with self.subTest(key=key[:14]):
+                with patch.object(spawn_gates, "_load_l34_guard", return_value=guard):
+                    result = spawn_gates.check_l34(
+                        "claude_code", "_default",
+                        prompt=f"please use {key} for the call", persona="assistant",
+                    )
+                self.assertIsNotNone(result, "a real API key must not reach claude_code")
+                self.assertIn("Spawn rejected", result)
+
+    def test_ordinary_prompt_with_sk_word_is_not_secret(self):
+        from data_classification import DataClassification, classify_task  # type: ignore
+        # Guard against over-matching: short or non-key "sk-" words stay PUBLIC.
+        for text in ("scikit sk-learn is a library", "the sk-ant folder is empty",
+                     "use the github_pat_ prefix check", "gho_ is a prefix"):
+            with self.subTest(text=text):
+                self.assertEqual(classify_task(text), DataClassification.PUBLIC)
+
+
 class TestCheckL34NoCCLocalMode(unittest.TestCase):
     """ADR-2091 removed the ADR-0126 ``cc_local_mode`` remap entirely.
 

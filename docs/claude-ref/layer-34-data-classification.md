@@ -287,11 +287,12 @@ test asserts the set.
 `classify_task(task, persona)` precedence:
 
 1. **Secret pattern bank** (cannot be overridden by a marker).
-   - OpenAI / Anthropic `sk-…`
+   - OpenAI legacy `sk-…` (no dash after the prefix)
+   - Anthropic `sk-ant-…` and OpenAI `sk-proj-…` / `sk-svcacct-…` / `sk-admin-…` (the dash form; these were classified PUBLIC before T-0231)
    - Stripe `sk_live_…`
    - AWS `AKIA…` access-key-id
    - Google `AIza…` API key
-   - GitHub `ghp_…` personal access token
+   - GitHub `gh[ousr]_…` tokens (personal, OAuth, user, server, refresh) and fine-grained `github_pat_…`
    - Slack `xox[bpoa]-…`
    - PEM `-----BEGIN … PRIVATE KEY-----`
    - `password = …` assignment

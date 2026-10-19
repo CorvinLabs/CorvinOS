@@ -75,8 +75,9 @@ for _p in (str(_BRIDGES_SHARED), str(_FORGE_PATH)):
 # importing it here keeps the producer (chat_runtime) and the L34 registry from
 # drifting — the drift that silently blocked every delegated web-chat turn
 # (web:VErk2UPDjg, fixed in 49457d3). Fail-safe default mirrors the registry key
-# so a broken import never changes the routed engine_id (the L34 guard inside
-# spawn_gates already fails closed if data_classification is unimportable).
+# so a broken import never changes the routed engine_id. NOTE: an unimportable
+# data_classification is NOT fail-closed in spawn_gates: _load_l34_guard catches the
+# ImportError, the guard becomes None and check_l34 allows (T-0231).
 try:
     from data_classification import DELEGATION_ENGINE_ID  # type: ignore  # noqa: E402
 except Exception:  # pragma: no cover - defensive; broken install only

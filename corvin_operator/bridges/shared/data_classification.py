@@ -747,7 +747,12 @@ _CLASS_MARKER_RE = re.compile(
 # "we routed it to a local-only engine", which is the safe direction.
 _SECRET_PATTERNS = [
     # Common credential key prefixes
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),                           # OpenAI / Anthropic style
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),                           # OpenAI legacy style
+    # T-0231 — current formats carry a dash right after "sk-", which the legacy
+    # pattern above cannot match (sk-ant-api03-..., sk-proj-... were classified PUBLIC).
+    re.compile(r"sk-(?:ant|proj|svcacct|admin)-[A-Za-z0-9_\-]{20,}"),  # Anthropic / OpenAI project, service account, admin
+    re.compile(r"github_pat_[A-Za-z0-9_]{22,}"),                  # GitHub fine-grained token
+    re.compile(r"gh[ousr]_[A-Za-z0-9]{30,}"),                     # GitHub OAuth / user / server / refresh token
     re.compile(r"sk_live_[A-Za-z0-9]{16,}"),                      # Stripe live
     re.compile(r"AKIA[0-9A-Z]{16}"),                              # AWS access key id
     re.compile(r"AIza[0-9A-Za-z_\-]{30,}"),                       # Google API key
