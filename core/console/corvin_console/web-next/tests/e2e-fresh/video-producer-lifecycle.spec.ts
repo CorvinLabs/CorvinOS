@@ -711,15 +711,25 @@ test.describe("CorvinTV plugin lifecycle — fresh install, GitHub marketplace",
       expect(onDisk().registry).toBe(true);
     });
 
-    test("A5. enabling without consent is refused (409) — the consent gate is not bypassable", async ({ page }) => {
+    test("A5. the consent gate: first-party CorvinTV enables without consent, a community plugin is refused (409)", async ({ page }) => {
+      // CorvinTV is vetted (requires_consent false): no consent flag is needed...
       await ensure(page, "installed");
-      const r = await call(page, "PATCH", `${MP}/plugins/${enc(INDEX_ID)}/enable`, {});
-      expect(r.status, r.text).toBe(409);
-      expect((await entry(page)).enabled).toBe(false);
-      await expect(async () => {
-        const caps = await (await page.request.get(`${API}/capabilities`)).json();
-        expect(caps.plugin_panels).toEqual([]);
-      }).toPass();
+      const ok = await call(page, "PATCH", `${MP}/plugins/${enc(INDEX_ID)}/enable`, {});
+      expect(ok.status, ok.text).toBe(200);
+      expect((await entry(page)).enabled).toBe(true);
+      await ensure(page, "installed");
+      // ...but the gate itself is not gone: a community-origin plugin is still refused without consent.
+      const COMMUNITY = "plugin:contributor-integration-slack_notifier";
+      const inst = await call(page, "POST", `${MP}/plugins/${enc(COMMUNITY)}/install`, { wait: true });
+      expect(inst.body?.status, inst.text).toBe("completed");
+      try {
+        const refused = await call(page, "PATCH", `${MP}/plugins/${enc(COMMUNITY)}/enable`, {});
+        expect(refused.status, refused.text).toBe(409);
+        const hit = ((await (await page.request.get(`${MP}/plugins?q=slack`)).json()).plugins as any[]).find((p) => p.id === COMMUNITY);
+        expect(hit?.enabled).toBe(false);
+      } finally {
+        await call(page, "POST", `${MP}/plugins/${enc(COMMUNITY)}/uninstall`, {});
+      }
     });
 
     test("A6. uninstalling something that is not installed answers 404, not 500", async ({ page }) => {
