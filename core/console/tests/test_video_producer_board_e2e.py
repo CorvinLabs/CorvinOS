@@ -34,7 +34,9 @@ def _board_svg() -> bytes:
 
 
 def _many(n: int) -> bytes:
-    rects = "".join(f'<rect x="{(i * 13) % 1500}" y="{(i * 29) % 800}" width="40" height="30" fill="#3366cc"/>'
+    # Penpot-shaped (the reader refuses an SVG without Penpot shape ids): one shape group per rectangle
+    rects = "".join(f'<g id="shape-00000000-0000-4000-8000-{i:012d}">'
+                    f'<rect x="{(i * 13) % 1500}" y="{(i * 29) % 800}" width="40" height="30" fill="#3366cc"/></g>'
                     for i in range(n))
     return f'<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900">{rects}</svg>'.encode()
 

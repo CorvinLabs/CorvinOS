@@ -207,7 +207,7 @@ class VideoProducerRoutesE2E(unittest.TestCase):
             (ca, csrf_a), (cb, _) = clients["tenant_a"], clients["tenant_b"]
             s = ca.get("/v1/console/video/settings").json()
             self.assertEqual(s["tts_engines"], ["openai", "auto", "gtts"])
-            self.assertEqual(s["tts_engine"], "openai", "OpenAI TTS must be the default narration engine")
+            self.assertEqual(s["tts_engine"], "auto", "the default narration is the chain OpenAI -> edge-tts")
             self.assertTrue(s["openai_configured"])
             self.assertIn("web_slides_available", s)
             self.assertFalse(s["output_folder_editable"])
@@ -349,33 +349,46 @@ class VideoProducerRoutesE2E(unittest.TestCase):
                 r = client.put("/v1/console/video/settings", json={"tts_engine": engine}, headers={"X-CSRF-Token": csrf})
                 self.assertEqual(r.status_code, 200, r.text)
 
-            # default (openai): forbidding OpenAI refuses the job before it exists
-            self._deny_host(home, "api.openai.com")
+            # default (auto = OpenAI -> edge-tts): the chain's second host is part of the gate, so forbidding it
+            # refuses the job before it exists
+            self._deny_host(home, "speech.platform.bing.com")
             r = self._create(client, csrf)
             self.assertEqual(r.status_code, 403, r.text)
             self.assertEqual(runner.calls, [])
             self.assertEqual(client.get("/v1/console/video/jobs").json()["total"], 0)
             self.assertIn("egress.blocked", _chain_text(home))
-            self.assertIn("api.openai.com", _chain_text(home))
+            self.assertIn("speech.platform.bing.com", _chain_text(home))
 
             # ... while forbidding only Google no longer matters for the default engine
             self._deny_host(home, "translate.google.com")
             self.assertEqual(self._create(client, csrf).status_code, 200)
             self.assertEqual(len(runner.calls), 1)
-            self.assertEqual(runner.calls[0][2]["tts_engine"], "openai")
+            self.assertEqual(runner.calls[0][2]["tts_engine"], "auto")
+
+            # openai (strict single tier): forbidding OpenAI refuses the job
+            put_engine("openai")
+            self._deny_host(home, "api.openai.com")
+            r = self._create(client, csrf)
+            self.assertEqual(r.status_code, 403, r.text)
+            self.assertEqual(len(runner.calls), 1)
+            self.assertIn("api.openai.com", _chain_text(home))
+            self._deny_host(home, "translate.google.com")
+            self.assertEqual(self._create(client, csrf).status_code, 200)
+            self.assertEqual(runner.calls[-1][2]["tts_engine"], "openai")
+            n = len(runner.calls)
 
             # gtts: the Google host is the one that counts
             put_engine("gtts")
             r = self._create(client, csrf)
             self.assertEqual(r.status_code, 403, r.text)
-            self.assertEqual(len(runner.calls), 1)
+            self.assertEqual(len(runner.calls), n)
 
             # auto: the edge-tts tier's host must be admitted too
             put_engine("auto")
             self._deny_host(home, "speech.platform.bing.com")
             r = self._create(client, csrf)
             self.assertEqual(r.status_code, 403, r.text)
-            self.assertEqual(len(runner.calls), 1)
+            self.assertEqual(len(runner.calls), n)
             self._deny_host(home, "translate.google.com")
             self.assertEqual(self._create(client, csrf).status_code, 200)
             self.assertEqual(runner.calls[-1][2]["tts_engine"], "auto")
@@ -580,7 +593,7 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
             with mock.patch.object(mod, "_adopt_stored_openai_key", lambda: None):
                 st = client.get("/v1/console/video/settings").json()
                 self.assertFalse(st["openai_configured"])
-                self.assertEqual(st["tts_engine"], "openai")
+                self.assertEqual(st["tts_engine"], "auto")
                 self.assertEqual(st["effective_tts_engine"], "auto")
                 self._benign_l44()
                 resp = client.post("/v1/console/video/jobs", json={"task": "Explain the audit chain."},
@@ -595,6 +608,8 @@ class VideoProducerPluginGateE2E(unittest.TestCase):
             mod = _route_module()
             runner = _RecordingRunner()
             mod.get_runner = lambda: runner
+            put = client.put("/v1/console/video/settings", json={"tts_engine": "openai"}, headers={"X-CSRF-Token": csrf})
+            self.assertEqual(put.status_code, 200, put.text)  # the strict engine is an explicit choice since 1.7.0
             with mock.patch.dict(mod.os.environ, {"CORVIN_TTS_OPENAI_KEY": "sk-test-not-real"}), \
                  mock.patch.object(mod.importlib.util, "find_spec", lambda n, *a, **k: object()):
                 st = client.get("/v1/console/video/settings").json()
