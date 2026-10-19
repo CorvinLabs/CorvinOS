@@ -624,6 +624,8 @@ async def list_updates(
         await asyncio.to_thread(_bootstrap.ensure_marketplace_source, force=True)
         refreshed = True
 
+    stale: list[Dict[str, Any]] = []
+
     def _scan() -> list[Dict[str, Any]]:
         installed = _lifecycle(rec.tenant_id)._registry().records
         out: list[Dict[str, Any]] = []
@@ -634,6 +636,13 @@ async def list_updates(
             if record is None:
                 continue
             latest = latest_version(index_id)
+            listed = str(entry.get("version") or "")
+            # The index lists a newer version than the plugin source can install (an operator-managed checkout that
+            # was never pulled): no update button is possible, so say why instead of showing nothing.
+            if listed and version_is_newer(listed, record.version) and not (latest and version_is_newer(latest, record.version)):
+                stale.append({"plugin_id": index_id, "registry_id": registry_id,
+                              "name": entry.get("name") or record.display_name,
+                              "installed_version": record.version, "index_version": listed})
             if latest and version_is_newer(latest, record.version):
                 out.append({
                     "plugin_id": index_id,
@@ -646,7 +655,7 @@ async def list_updates(
         return out
 
     updates = await asyncio.to_thread(_scan)
-    return {"updates": updates, "count": len(updates), "refreshed": refreshed,
+    return {"updates": updates, "count": len(updates), "refreshed": refreshed, "stale_source": stale,
             "source_managed_by_operator": not _bootstrap.marketplace_source_is_managed()}
 
 

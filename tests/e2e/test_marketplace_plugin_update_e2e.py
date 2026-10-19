@@ -181,3 +181,34 @@ def test_update_keeps_an_enabled_plugin_enabled(env):
     assert r.json()["enabled"] is True
     got = c.get(f"/v1/console/plugins/{PLUGIN_ID}").json()
     assert got["enabled"] is True and got["version"] == "1.2.0"
+
+
+def test_index_newer_than_the_source_is_reported_as_stale_source_not_as_nothing(env):
+    """The live-host case behind "the marketplace has no update button for CorvinTV": the index (GitHub) lists a newer
+    version, but the operator-managed plugin source was never pulled, so nothing can be installed from it. The
+    updates list must say so (``stale_source``) instead of staying silent."""
+    import os
+
+    from corvin_console.routes import marketplace
+
+    c, _write = env
+    _install(c)
+    index = Path(os.environ["CORVIN_MARKETPLACE_INDEX"])
+    entry = {"id": INDEX_ID, "name": "Update Probe", "version": "1.2.0", "tier": "buildin", "category": "memory"}
+    index.write_text(json.dumps({"version": "3", "generated_at": "t1", "plugins": [entry], "by_id": {INDEX_ID: entry}}))
+    marketplace.set_marketplace_index_path(index)
+    marketplace._RESOLVE_CACHE.clear()
+
+    body = c.get(f"{BASE}/updates").json()
+    assert body["count"] == 0 and body["updates"] == []          # nothing installable from the source
+    assert body["stale_source"] == [{"plugin_id": INDEX_ID, "registry_id": PLUGIN_ID, "name": "Update Probe",
+                                     "installed_version": "1.0.0", "index_version": "1.2.0"}]
+    assert body["source_managed_by_operator"] is True
+
+
+def test_no_stale_source_when_the_source_has_the_new_version(env):
+    c, write = env
+    _install(c)
+    write("1.1.0")
+    body = c.get(f"{BASE}/updates").json()
+    assert body["count"] == 1 and body["stale_source"] == []

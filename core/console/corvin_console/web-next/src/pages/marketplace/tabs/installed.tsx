@@ -233,6 +233,18 @@ export function InstalledTab({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
         </button>
         {updates.data?.source_managed_by_operator && " (plugin source is a local checkout — pull it to fetch new versions)"}
       </p>
+      {(updates.data?.stale_source?.length ?? 0) > 0 && (
+        <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5" data-testid="stale-source">
+          <AlertCircle size={12} className="mt-0.5 shrink-0" />
+          <span>
+            {updates.data!.stale_source!.map((u) => `${u.name} ${u.index_version} (installed ${u.installed_version})`).join(", ")}
+            {" "}is listed in the index, but the plugin source on this host does not have it yet, so it cannot be installed from here.
+            {updates.data?.source_managed_by_operator
+              ? " The source is a local checkout: run git pull in the Corvin-Marketplace folder, then press Check for updates."
+              : " Press Check for updates to fetch the newest source."}
+          </span>
+        </p>
+      )}
       {plugins.length === 0 ? (
         <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">
           No plugin is installed for this tenant.

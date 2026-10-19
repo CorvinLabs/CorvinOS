@@ -167,6 +167,8 @@ export interface UpdateList {
   refreshed: boolean;
   /** True for a git checkout / CORVIN_MARKETPLACE_ROOT: the operator updates it. */
   source_managed_by_operator: boolean;
+  /** Installed plugins whose index lists a newer version than the plugin source can install (source not pulled). */
+  stale_source?: { plugin_id: string; registry_id: string; name: string; installed_version: string; index_version: string }[];
 }
 
 export interface UpdateResult {

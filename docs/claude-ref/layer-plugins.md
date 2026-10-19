@@ -2333,7 +2333,7 @@ cache — only the cache is re-synced by `GET /api/v1/marketplace/updates?refres
 
 | Endpoint (under `/v1/console`) | Purpose |
 |---|---|
-| `GET /api/v1/marketplace/updates[?refresh=true]` | installed plugins with a newer source version |
+| `GET /api/v1/marketplace/updates[?refresh=true]` | installed plugins with a newer source version; `stale_source` lists plugins the index offers in a newer version than the source can install (an unpulled local checkout), which the Installed tab shows as a notice |
 | `POST /api/v1/marketplace/plugins/{id}/update` `{approve_escalations}` | `PluginLifecycle.upgrade()` |
 | `GET /api/v1/marketplace/plugins` | each entry also carries `installed_version`, `latest_version`, `update_available` |
 

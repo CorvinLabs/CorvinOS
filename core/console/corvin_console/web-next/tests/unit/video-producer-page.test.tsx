@@ -71,7 +71,7 @@ function handlers() {
     http.get(`${B}/jobs/job_2626f1e8`, () => HttpResponse.json({ ...JOBS.jobs[0], started_at: "2026-09-13T08:11:46", completed_at: "2026-09-13T08:12:16" })),
     http.get(`${B}/jobs/job_2626f1e8/quality-metrics`, () => HttpResponse.json(QUALITY)),
     http.get(`${B}/jobs/job_2626f1e8/learning-metrics`, () => HttpResponse.json({ job_id: "job_2626f1e8", total_feedback_events: 0, approved: 0, rejected: 0, average_confidence: null, events: [], source: "learning.event_store" })),
-    http.get(`${B}/settings`, () => HttpResponse.json({ output_folder: "~/.corvin/video-producer/videos", tts_engine: "openai", tts_engines: ["openai", "auto", "gtts"], max_duration_minutes: 60, openai_configured: true, web_slides_available: false })),
+    http.get(`${B}/settings`, () => HttpResponse.json({ output_folder: "~/.corvin/video-producer/videos", tts_engine: "auto", tts_engines: ["openai", "auto", "gtts"], max_duration_minutes: 60, openai_configured: true, web_slides_available: false })),
     http.post(`${B}/jobs`, async ({ request }) => {
       posted.push({ csrf: request.headers.get("x-csrf-token"), body: (await request.json()) as Record<string, unknown> });
       return HttpResponse.json({ job_id: "job_new0001", status: "pending", created_at: "2026-09-22T10:00:00" });
@@ -292,15 +292,15 @@ describe("Video Producer studio", () => {
     await screen.findByText(/more than 24 hours ago/);
   });
 
-  it("Settings: OpenAI TTS is the selected default, the engines are labelled, and missing capabilities are said out loud", async () => {
+  it("Settings: the chain OpenAI -> edge-tts is the selected default, the engines are labelled, and missing capabilities are said out loud", async () => {
     server.use(...handlers());
     renderIt();
     await screen.findByTestId("video-producer");
     fireEvent.click(await screen.findByText("Settings"));
-    const select = (await screen.findByDisplayValue("OpenAI TTS (default)")) as HTMLSelectElement;
-    expect(select.value).toBe("openai");
+    const select = (await screen.findByDisplayValue("OpenAI first, edge-tts as fallback (default)")) as HTMLSelectElement;
+    expect(select.value).toBe("auto");
     expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
-      "OpenAI TTS (default)", "Automatic: OpenAI, then edge-tts", "Google TTS (gTTS, legacy)",
+      "OpenAI only (no fallback)", "OpenAI first, edge-tts as fallback (default)", "Google TTS (gTTS, legacy)",
     ]);
     expect(screen.queryByTestId("tts-key-warning")).toBeNull();
     expect(screen.getByTestId("web-slides-note").textContent).toMatch(/need Playwright/);
@@ -400,7 +400,7 @@ describe("Video Producer studio", () => {
     await screen.findByTestId("assets-empty");
     expect(screen.getByTestId("penpot-input").getAttribute("accept")).toBe(".svg,image/svg+xml");
     fireEvent.change(screen.getByTestId("penpot-input"), { target: { files: [new File(["<svg/>"], "board.svg", { type: "image/svg+xml" })] } });
-    expect((await screen.findByTestId("penpot-done")).textContent).toMatch(/Board imported as an image \(not imported: 1 image not imported\)/);
+    expect((await screen.findByTestId("penpot-done")).textContent).toMatch(/Board imported \(not imported: 1 image not imported\)/);
     expect(posts).toEqual([{ csrf: "csrf-test", file: "board.svg" }]);
     refuse = true;
     fireEvent.change(screen.getByTestId("penpot-input"), { target: { files: [new File(["x"], "other.svg", { type: "image/svg+xml" })] } });

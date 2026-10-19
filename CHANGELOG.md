@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed — the Marketplace says why a listed update cannot be installed
+- `GET /v1/console/api/v1/marketplace/updates` now also returns `stale_source`: installed plugins whose index lists a
+  newer version than the plugin source on this host can install (typically a local Corvin-Marketplace checkout that was
+  never pulled). The Installed tab shows it as a notice with the fix (`git pull` in that folder, then "Check for
+  updates") instead of showing no update button at all.
+
 ### Changed — Video Producer is now CorvinTV: on by default, narrated OpenAI first and edge-tts second
 - **A fresh installation installs and enables CorvinTV** (and the Knowledge Graph) at first boot, with no operator
   step: it is a first-party plugin now (marketplace `buildin` tier, plugin 1.7.0). Nothing you built on breaks — the
