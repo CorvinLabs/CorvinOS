@@ -65,6 +65,20 @@ def _windows_kill_tree(pid: int) -> None:
         pass
 
 
+def _record_kill(pid: int, signal_name: str, reason: str) -> None:
+    """Durable record of a signal sent to an engine CLI, written BEFORE the signal (P0).
+
+    An exit 143 with no such record is an external sender; see corvin_core.process_signals.
+    Best-effort: the kill proceeds even when the audit chain is unreachable.
+    """
+    try:
+        from corvin_core.process_signals import record_signal  # noqa: PLC0415
+    except ImportError:  # pragma: no cover — bridge-only install without the console package
+        return
+    record_signal(pid=pid, signal_name=signal_name, reason=reason,
+                  tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default")
+
+
 def terminate_process_tree(proc: "subprocess.Popen", *, grace: float = 5.0) -> None:
     """Terminate *proc* AND its whole process group, not just the direct
     child — every engine spawns with ``start_new_session=True`` specifically
@@ -109,6 +123,7 @@ def terminate_process_tree(proc: "subprocess.Popen", *, grace: float = 5.0) -> N
             _pgid = None
     _kill_log.info("process-group kill pid=%s pgid=%s caller=%s grace=%.1fs",
                    proc.pid, _pgid, caller, grace)
+    _record_kill(proc.pid, "SIGTERM", caller)
     if hasattr(os, "killpg"):
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
@@ -131,6 +146,7 @@ def terminate_process_tree(proc: "subprocess.Popen", *, grace: float = 5.0) -> N
     if proc.poll() is None:
         _kill_log.warning("process-group still alive after SIGTERM pid=%s — SIGKILL "
                           "caller=%s", proc.pid, caller)
+        _record_kill(proc.pid, "SIGKILL", f"{caller}:grace_expired")
         if hasattr(os, "killpg"):
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)

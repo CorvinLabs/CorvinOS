@@ -14271,6 +14271,19 @@ def main() -> int:
     # (see _start_telemetry_threads for the review-finding history T2/T3/T5).
     _start_telemetry_threads()
 
+    def _sweep_unit_leftovers_logged() -> None:
+        """PLAN bg-task P2: nothing from this unit may outlive it (see unit_sweep)."""
+        try:
+            from unit_sweep import sweep_unit_leftovers  # noqa: PLC0415
+        except ImportError:  # pragma: no cover — bundled copy without the module
+            return
+        try:
+            n = sweep_unit_leftovers()
+            if n:
+                log(f"drain: swept {n} leftover process(es) from this unit")
+        except Exception as exc:  # noqa: BLE001 — the sweep must never block the exit
+            log(f"drain: unit sweep failed: {type(exc).__name__}: {exc}")
+
     def _drain_and_exit() -> int:
         """Stop accepting work, let in-flight runs finish, then exit.
 
@@ -14290,6 +14303,7 @@ def main() -> int:
                 pending = len(_in_flight)
             if pending == 0:
                 log("drain complete — all in-flight runs finished, exiting")
+                _sweep_unit_leftovers_logged()
                 return 0
             time.sleep(0.5)
         # Budget exhausted: terminate remaining engine process groups so the
@@ -14310,6 +14324,7 @@ def main() -> int:
             except (ProcessLookupError, PermissionError, OSError, AttributeError):
                 pass
         time.sleep(3.0)
+        _sweep_unit_leftovers_logged()
         _write_shutdown_anchor()
         try:
             import logging  # noqa: PLC0415 — not imported at module level

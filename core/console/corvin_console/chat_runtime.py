@@ -455,20 +455,29 @@ def _load_bg_scope() -> Any:  # ADR-2236
     return _BG_SCOPE_MOD or None
 
 
-def _stop_proc(proc: Any, grace_s: float = 5.0) -> None:  # ADR-2236
+def _stop_proc(proc: Any, grace_s: float = 5.0, *, reason: str = "unspecified",  # ADR-2236
+               tenant_id: str = "_default", sid_fingerprint: str | None = None) -> None:
     """SIGTERM first, SIGKILL after *grace_s* if it is still there.
 
     Measured on the real CLI: SIGKILL leaves its background children ORPHANED (still
     running, unowned); SIGTERM lets the CLI end them itself. So a scope is stopped with
     SIGTERM, and SIGKILL stays the fallback for a CLI that does not react.
+
+    Every signal is recorded first (``process_signals``) with the caller's *reason*, so an
+    exit 143 can be matched to who sent it.
     """
-    with contextlib.suppress(ProcessLookupError):
-        proc.terminate()
+    from corvin_core.process_signals import send_signal  # noqa: PLC0415 - leaf module, no cycle
+    import signal as _signal  # noqa: PLC0415
+
+    def _send(sig: int, why: str) -> None:
+        with contextlib.suppress(ProcessLookupError):
+            send_signal(proc.pid, sig, reason=why, tenant_id=tenant_id, sid_fingerprint=sid_fingerprint)
+
+    _send(_signal.SIGTERM, reason)
 
     def _kill_if_alive() -> None:
         if proc.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
+            _send(_signal.SIGKILL, f"{reason}:grace_expired")
 
     try:
         asyncio.get_running_loop().call_later(grace_s, _kill_if_alive)
@@ -1803,6 +1812,13 @@ def note_cancel_reason(tenant_id: str, sid: str, why: str) -> None:
 def _take_cancel_reason(tenant_id: str, sid: str) -> str | None:
     with _live_turns_guard:
         why, at = _CANCEL_WHY.pop((tenant_id, sid), (None, 0.0))
+    return why if why and time.time() - at <= _CANCEL_WHY_TTL_S else None
+
+
+def _peek_cancel_reason(tenant_id: str, sid: str) -> str | None:
+    """The noted cancel reason WITHOUT consuming it (the owner of the turn still reads it)."""
+    with _live_turns_guard:
+        why, at = _CANCEL_WHY.get((tenant_id, sid), (None, 0.0))
     return why if why and time.time() - at <= _CANCEL_WHY_TTL_S else None
 
 
@@ -8140,7 +8156,8 @@ async def _stream_turn_impl(
                                     scope_id=_bg.scope_id, children_open=len(_bg.open_children),
                                     limit_s=int(cap), age_s=int(_bg.oldest_open_age()))
                     _bg_cut = "child_cap"
-                    _stop_proc(proc)
+                    _stop_proc(proc, reason="child_cap", tenant_id=sess.tenant_id,
+                               sid_fingerprint=sid_fingerprint)
                     return
         _bg_watch = asyncio.create_task(_bg_cap_watch())
     try:
@@ -8303,7 +8320,8 @@ async def _stream_turn_impl(
                                         children_open=len(_bg.open_children),    # ADR-2236
                                         wakeups=_bg.wakeups, limit=_bgs.wakeup_max())  # ADR-2236
                         _bg_cut = "wakeup_cap"                                   # ADR-2236
-                        _stop_proc(proc)                                         # ADR-2236
+                        _stop_proc(proc, reason="wakeup_cap", tenant_id=sess.tenant_id,  # ADR-2236
+                                   sid_fingerprint=sid_fingerprint)
                         break                                                    # ADR-2236
                     continue                                                     # ADR-2236
                 if result_text and _this_result:
@@ -8370,10 +8388,16 @@ async def _stream_turn_impl(
             # any other exception). Kill the subprocess so it does not become
             # an orphan that blocks on a full stdout pipe.
             try:
+                # The reason is the operator's cancel if one was noted, else the abnormal exit itself.
+                _why = _peek_cancel_reason(sess.tenant_id, sess.sid) or "turn_aborted"
                 if _bg is not None and _bg.open_children:                        # ADR-2236
-                    _stop_proc(proc)         # SIGKILL would orphan the children  # ADR-2236
+                    _stop_proc(proc, reason=_why, tenant_id=sess.tenant_id,  # SIGKILL would orphan the children
+                               sid_fingerprint=sid_fingerprint)              # ADR-2236
                 else:
-                    proc.kill()
+                    import signal as _signal  # noqa: PLC0415
+                    from corvin_core.process_signals import send_signal  # noqa: PLC0415
+                    send_signal(proc.pid, _signal.SIGKILL, reason=_why,
+                                tenant_id=sess.tenant_id, sid_fingerprint=sid_fingerprint)
             except ProcessLookupError:
                 pass
 
@@ -8417,9 +8441,12 @@ async def _stream_turn_impl(
                                             if _bg_last_interim else result_text))       # ADR-2236
             yield _bg_status_event(_bgs, _bg)                                    # ADR-2236
             _ann_pending = bool(result_text.strip()) and _annotation_enabled()   # ADR-2236
+            # outcome (P1): "process_died" = the CLI was killed with children open, so this
+            # text is a failure notice, not an answer; "cut" = we ended it on purpose; "ok" = clean.
+            _outcome = "process_died" if _bg_cut == "process_died" else ("cut" if _bg_cut else "ok")
             yield {"type": "result", "text": result_text, "usage": last_usage,   # ADR-2236
                    "annotation_pending": _ann_pending, "final": True,            # ADR-2236
-                   "pending_children": 0}                                        # ADR-2236
+                   "pending_children": 0, "outcome": _outcome}                   # ADR-2236
             for _tr in _bg.end_all(time.time()):                                 # ADR-2236
                 _bgs.audit_transition(_bg, _tr)                                  # ADR-2236
             _bgs.emit_audit("bgscope.completed", tenant_id=_bg.tenant_id,        # ADR-2236
@@ -8451,10 +8478,13 @@ async def _stream_turn_impl(
     # exactly this event; skipping it on the empty path would leave the turn
     # permanently unspoken.
     if _ann_pending:
+        # Same outcome rule as the scope-end result: a killed turn's failure notice is not an answer.
+        _ann_outcome = "process_died" if _bg_cut == "process_died" else ("cut" if _bg_cut else "ok")
         yield {"type": "result",
                "text": (result_text + "\n\n" + _ann_suffix) if _ann_suffix else result_text,
                "usage": last_usage,
-               "annotation_pending": False}
+               "annotation_pending": False,
+               "outcome": _ann_outcome}
 
     # What actually served this turn: the model the CLI confirmed in its `init`
     # event and the raw `usage` of its `result` event. Nothing is estimated —

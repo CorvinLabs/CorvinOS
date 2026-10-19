@@ -124,8 +124,19 @@ def _last_event(tasks_dir: Path, task_id: str) -> dict[str, Any]:
     return {}
 
 
+def _strip_restart_prefix(instruction: str) -> str:
+    """The request as the user typed it. Every rerun stores ``PROMPT_PREFIX + request`` as its
+    instruction; reading that back as the request grew the text by one prefix per attempt, so
+    the attempt key changed each time and MAX_ATTEMPTS never applied (measured 2026-10-18:
+    seven stacked prefixes in one chat)."""
+    text = instruction.strip()
+    while text.startswith(PROMPT_PREFIX.strip()):
+        text = text[len(PROMPT_PREFIX.strip()):].lstrip()
+    return text
+
+
 def _key(instruction: str) -> str:
-    return hashlib.sha256(instruction.strip().encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(_strip_restart_prefix(instruction).encode("utf-8")).hexdigest()[:16]
 
 
 def _attempts(tasks_dir: Path) -> dict[str, int]:
@@ -209,7 +220,7 @@ def find_interrupted(tenant_id: str, now: float | None = None) -> list[Candidate
             continue
         if not is_restart_kill(newest, last, marker):
             continue
-        instruction = str((newest.get("input") or {}).get("instruction") or "").strip()
+        instruction = _strip_restart_prefix(str((newest.get("input") or {}).get("instruction") or ""))
         if not instruction:
             continue
         key = _key(instruction)
@@ -218,6 +229,17 @@ def find_interrupted(tenant_id: str, now: float | None = None) -> list[Candidate
                              _attempts(tasks_dir).get(key, 0), failure_class,
                              outbound_tools(tasks_dir, newest["task_id"])))
     return out
+
+
+def _is_answer(event: dict[str, Any]) -> bool:
+    """True only for a result that IS an answer. Measured 2026-10-18: a CLI killed with
+    background children open still yields a ``result`` with a failure notice as its text,
+    and interim notes yield ``result`` too. Both used to count as "recovered"."""
+    if event.get("type") != "result" or not str(event.get("text") or "").strip():
+        return False
+    if event.get("interim"):
+        return False
+    return event.get("outcome", "ok") in ("ok", "cut")
 
 
 async def _run_once(cand: Candidate) -> bool:
@@ -239,7 +261,7 @@ async def _run_once(cand: Candidate) -> bool:
             ) as gen:
                 async for event in gen:
                     live_turns.publish(cand.tenant_id, cand.sid, turn_id, event)
-                    if event.get("type") == "result" and str(event.get("text") or "").strip():
+                    if _is_answer(event):
                         got_output = True
         finally:
             chat_runtime.unregister_live_turn(cand.tenant_id, cand.sid, loop, task)
@@ -312,8 +334,10 @@ async def recover_candidate(cand: Candidate) -> str:
         _notify(cand, "interrupted_resuming", n)
         try:
             if await _run_once(cand):
+                _audit(cand, ok=True, action="chat.turn.recovery_succeeded")
                 _notify(cand, "recovered", n)
                 return "recovered"
+            _audit(cand, ok=False, action="chat.turn.recovery_attempt_failed", reason=f"attempt_{n}_no_answer")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - one chat must not stop the others

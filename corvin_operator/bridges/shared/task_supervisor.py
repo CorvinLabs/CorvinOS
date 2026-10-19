@@ -1073,6 +1073,13 @@ def _terminate(pid: int) -> None:
             subprocess.run(["taskkill", "/PID", str(pid), "/T"],
                            capture_output=True, check=False)
         else:
+            # Recorded before the signal (P0): a worker stopped here shows as a
+            # supervisor action, not as an unexplained exit 143.
+            try:
+                from corvin_core.process_signals import record_signal  # noqa: PLC0415
+                record_signal(pid=int(pid), signal_name="SIGTERM", reason="supervisor_wedge")
+            except ImportError:  # pragma: no cover
+                pass
             os.kill(int(pid), 15)
     except Exception:  # noqa: BLE001
         pass

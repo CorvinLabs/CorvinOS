@@ -9,6 +9,7 @@ subprocess (the fake CLI of the bg-scope harness), the child gets a real SIGTERM
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib
 import json
 import os
@@ -112,6 +113,63 @@ class TurnRecoveryE2E(unittest.TestCase):
             # the request is now answered: nothing left to recover, and it is not retried forever
             self.assertEqual(self.tr.find_interrupted("_default"), [])
         asyncio.run(go())
+
+    def test_reruns_that_die_are_not_recovered_and_the_attempt_budget_holds(self):
+        """PLAN bg-task P1 (measured 2026-10-18): a rerun killed with a child open used to be
+        announced as "recovered" (its failure notice is a result), and the attempt key grew with
+        every prefix, so MAX_ATTEMPTS never applied. Every rerun here is killed as soon as it
+        starts; the budget must end the chain as exhausted, with the request stored once."""
+        pidfile = self.home / "fake.pid"
+
+        def _is_fake_cli(pid: int) -> bool:
+            # The fake CLI writes its pid non-atomically: a read can see a prefix of the number.
+            # Only signal a pid whose command line really is the fake CLI.
+            try:
+                return "fake_claude" in Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace")
+            except OSError:
+                return False
+
+        async def killer(seen: set[str]) -> None:
+            # Runs in the test's own event loop, so a failure surfaces as a task exception
+            # instead of silently ending a helper thread.
+            while True:
+                try:
+                    txt = pidfile.read_text().strip()
+                except OSError:
+                    txt = ""
+                if txt.isdigit() and txt not in seen and _is_fake_cli(int(txt)):
+                    seen.add(txt)
+                    with contextlib.suppress(ProcessLookupError):
+                        os.kill(int(txt), signal.SIGTERM)
+                await asyncio.sleep(0.01)
+
+        async def go():
+            await self._interrupted_turn("summarise the board minutes")
+            self.tr.note_shutdown("_default")
+            # Reruns that hang until the killer arrives: a fast CLI can finish before it does.
+            os.environ.update(kit.fake_env(self.home, "bash_bg_ok", speedup=1.0, silent_s=600.0))
+            pidfile.unlink(missing_ok=True)
+            seen: set[str] = set()
+            watcher = asyncio.create_task(killer(seen))
+            try:
+                return await self.tr.recover_all("_default", delay_s=0)
+            finally:
+                watcher.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watcher
+
+        done = asyncio.run(go())
+        self.assertEqual(done, [(self.sess.sid, "exhausted")])
+        notices = [t["notice"] for t in self.cr.read_turns("_default", self.sess.sid) if t.get("notice")]
+        self.assertNotIn("recovered", notices)
+        self.assertEqual(notices[-1], "gave_up")
+        reruns = [t for t in self._tasks() if t["input"]["instruction"].startswith("[Automatic restart")]
+        self.assertEqual(len(reruns), self.tr.MAX_ATTEMPTS)
+        for t in reruns:   # the request is stored once, not with one more prefix per attempt
+            self.assertEqual(t["input"]["instruction"].count("[Automatic restart"), 1)
+        # an exhausted chain stays visible but is never picked up again at the next boot
+        self.assertTrue(all(c.attempts >= self.tr.MAX_ATTEMPTS for c in self.tr.find_interrupted("_default")))
+        self.assertEqual(asyncio.run(self.tr.recover_all("_default", delay_s=0)), [])
 
     def test_user_is_told_in_the_chat_and_can_read_the_timeline(self):
         """PLAN-0958 P2: one persisted notice per step, no ids, kept out of the worker's history,

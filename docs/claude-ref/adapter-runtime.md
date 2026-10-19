@@ -335,6 +335,36 @@ E2E coverage: `test_adapter_stream_idle.py` —
 2 s token-idle) and `test_tool_backstop_kills_genuinely_hung_tool` (a
 never-returning tool still dies at the backstop).
 
+### Background-task robustness (PLAN bg-task P0–P3, 2026-10-19)
+
+Measured 2026-10-18 on the live install: tasks ended `exit 143` with nothing in the same second that
+could have sent it; interrupted turns were re-run with a growing prefix (the attempt budget never
+applied); and a re-run killed with a child open was announced as "recovered". The mechanisms:
+
+- **Every signal to an engine CLI is recorded first.** `corvin_core.process_signals.record_signal`
+  writes a `console.action_performed` record (`action = process.signal_sent`, `trigger =
+  <SIG>:<reason>`, `target_kind = cli_process`) to the tenant chain, then the signal is sent. The
+  record is best-effort (a failing audit write never blocks a kill). Call sites: `chat_runtime._stop_proc`
+  (reasons `child_cap`, `wakeup_cap`, the operator's cancel or `turn_aborted`),
+  `agents.terminate_process_tree` (reason = calling function), `task_supervisor._terminate`
+  (`supervisor_wedge`). An exit 143 with no such record in the window is an **external** sender.
+- **A turn's `result` carries an `outcome`.** The scope-end and annotation results are tagged
+  `ok` / `cut` (a deliberate child-cap or wake-up stop) / `process_died` (the CLI was killed with a
+  child open; its text is a failure notice). Interim results carry `interim: true`. Only an answer —
+  not interim, not `process_died` — counts as "recovered" (`turn_recovery._is_answer`).
+- **The re-run key is the request, not the prompt.** `turn_recovery._strip_restart_prefix` removes
+  every stacked restart prefix before the attempt key is computed, so `MAX_ATTEMPTS` holds.
+- **Recovery outcomes are audited.** `chat.turn.recovery_started`, `…_attempt_failed`,
+  `…_succeeded`, `…_exhausted`.
+- **The adapter leaves nothing behind.** After the drain, `unit_sweep.sweep_unit_leftovers` SIGTERMs
+  every process left in the unit's own cgroup (cgroup v2), then SIGKILLs the survivors after a grace
+  period. `KillMode` stays `mixed` on purpose: `control-group` would SIGTERM live engine runs at the
+  start of the drain.
+- **Measurement.** `scripts/bg_task_outcome_report.py --home <CORVIN_HOME> --since <date>` reads the task
+  records and the chain (read-only) and prints the acceptance numbers: exit-143 split, stacked
+  prefixes, failures announced as recovered. Baseline 2026-10-15 onwards: 10 stacked prefixes,
+  7 false "recovered", 10 exit-143 without a recorded signal.
+
 ### Open background children (ADR-2236)
 
 A claude process that has started `Bash run_in_background`, a `Monitor` or a background `Agent`
