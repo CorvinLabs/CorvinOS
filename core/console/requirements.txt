@@ -8,6 +8,9 @@ pyyaml
 PyJWT[crypto]
 cryptography
 pytest
+# core/quality_gates (imported by routes/workflows.py at module load): without it the
+# console fails to import and /console is not mounted at all.
+duckdb
 # Voice: TTS + STT (no API key required for edge-tts)
 edge-tts>=7.3.1
 # OS trust store for outbound TLS — lets edge-tts/OpenAI verify against a

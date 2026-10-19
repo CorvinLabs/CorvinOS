@@ -56,7 +56,7 @@ echo "[bootstrap] installing core dependencies"
 # silent 403 and the messenger UI shows "WebSocket not connected".
 "${VENV_DIR}/bin/python" -m pip install --quiet \
   fastapi pydantic httpx "uvicorn[standard]" itsdangerous python-multipart \
-  pyyaml "PyJWT[crypto]" cryptography pytest
+  pyyaml "PyJWT[crypto]" cryptography pytest duckdb
 
 echo "[bootstrap] installing voice dependencies (TTS/STT, no API key required for edge-tts)"
 # edge-tts: Microsoft Edge TTS, no API key, pure-Python — universal TTS fallback.
