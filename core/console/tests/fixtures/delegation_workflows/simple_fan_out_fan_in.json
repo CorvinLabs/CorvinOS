@@ -1,0 +1,48 @@
+{
+  "name": "simple-fan-out-fan-in",
+  "description": "Fiktiver Workflow (a): der Manager verteilt drei unabhängige Recherchen an drei Worker (Fan-out); eine Synthese im COMPLETE fasst sie zusammen (Fan-in).",
+  "prompt": "Recherchiere parallel mit 3 Workern drei fiktive Märkte für Lastenräder und fasse die Ergebnisse zusammen",
+  "manager": [
+    {
+      "decision": "DELEGATE",
+      "reasoning": "drei unabhängige Recherchen, keine Abhängigkeiten untereinander",
+      "subtasks": [
+        {"id": "markt_nord", "instructions": "Recherchiere den fiktiven Markt Norddorf.", "expected_output": {"result": "object"}},
+        {"id": "markt_sued", "instructions": "Recherchiere den fiktiven Markt Südstadt.", "expected_output": {"result": "object"}},
+        {"id": "markt_west", "instructions": "Recherchiere den fiktiven Markt Westhafen.", "expected_output": {"result": "object"}}
+      ]
+    },
+    {
+      "decision": "COMPLETE",
+      "complete_artifacts": {
+        "summary": "Synthese: Norddorf wächst (+12 %), Südstadt stagniert (+1 %), Westhafen schrumpft (-4 %).",
+        "quality_score": 0.9
+      }
+    }
+  ],
+  "workers": {
+    "markt_nord": {
+      "stage": 1,
+      "output": {"status": "success", "confidence": 0.9, "result": {"markt": "Norddorf", "wachstum_pct": 12, "marker": "MARKT_NORD"}},
+      "reported_model": "claude-sonnet-5",
+      "tokens": {"input_tokens": 120, "output_tokens": 340, "cache_read_input_tokens": 5000, "cache_creation_input_tokens": 800}
+    },
+    "markt_sued": {
+      "stage": 1,
+      "output": {"status": "success", "confidence": 0.8, "result": {"markt": "Südstadt", "wachstum_pct": 1, "marker": "MARKT_SUED"}},
+      "reported_model": "claude-sonnet-5",
+      "tokens": {"input_tokens": 98, "output_tokens": 215, "cache_read_input_tokens": 4100, "cache_creation_input_tokens": 600}
+    },
+    "markt_west": {
+      "stage": 1,
+      "output": {"status": "success", "confidence": 0.85, "result": {"markt": "Westhafen", "wachstum_pct": -4, "marker": "MARKT_WEST"}},
+      "reported_model": "claude-sonnet-5",
+      "tokens": {"input_tokens": 143, "output_tokens": 287, "cache_read_input_tokens": 3900, "cache_creation_input_tokens": 700}
+    }
+  },
+  "expect": {
+    "worker_count": 3,
+    "stages": [["markt_nord", "markt_sued", "markt_west"]],
+    "result_contains": ["Norddorf", "Südstadt", "Westhafen"]
+  }
+}

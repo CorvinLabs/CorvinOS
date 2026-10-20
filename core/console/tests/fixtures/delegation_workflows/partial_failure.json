@@ -1,0 +1,34 @@
+{
+  "name": "partial-failure",
+  "description": "Fiktiver Workflow (c): drei Worker laufen parallel, Worker w2 bricht mit einem Engine-Fehler ab. Der Manager sieht den Ausfall im nächsten Schritt und liefert ein ausdrücklich als Teilergebnis gekennzeichnetes COMPLETE; die Lücke darf nicht still bleiben.",
+  "prompt": "Werte parallel mit 3 Workern drei fiktive Quellen zum Thema Wärmepumpen aus und fasse zusammen",
+  "manager": [
+    {
+      "decision": "DELEGATE",
+      "reasoning": "drei unabhängige Quellen",
+      "subtasks": [
+        {"id": "w1", "instructions": "Werte fiktive Quelle Alpha aus.", "expected_output": {"result": "object"}},
+        {"id": "w2", "instructions": "Werte fiktive Quelle Beta aus.", "expected_output": {"result": "object"}},
+        {"id": "w3", "instructions": "Werte fiktive Quelle Gamma aus.", "expected_output": {"result": "object"}}
+      ]
+    },
+    {
+      "decision": "COMPLETE",
+      "complete_artifacts": {
+        "summary": "Teilergebnis: 2 von 3 Quellen ausgewertet. Ausgefallen: w2 (Engine-Fehler). Die Aussage zu Quelle Beta fehlt in dieser Synthese.",
+        "quality_score": 0.6
+      }
+    }
+  ],
+  "workers": {
+    "w1": {"stage": 1, "output": {"status": "success", "confidence": 0.9, "result": {"marker": "QUELLE_ALPHA"}}, "reported_model": "claude-sonnet-5", "tokens": {"input_tokens": 100, "output_tokens": 200, "cache_read_input_tokens": 3000, "cache_creation_input_tokens": 400}},
+    "w2": {"stage": 1, "behavior": "raise", "error": "fixture: Worker-Engine abgebrochen", "reported_model": "", "tokens": {}},
+    "w3": {"stage": 1, "output": {"status": "success", "confidence": 0.8, "result": {"marker": "QUELLE_GAMMA"}}, "reported_model": "claude-sonnet-5", "tokens": {"input_tokens": 90, "output_tokens": 180, "cache_read_input_tokens": 2800, "cache_creation_input_tokens": 350}}
+  },
+  "expect": {
+    "worker_count": 3,
+    "stages": [["w1", "w2", "w3"]],
+    "failed_workers": ["w2"],
+    "result_contains": ["Teilergebnis", "w2"]
+  }
+}

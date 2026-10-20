@@ -1,0 +1,36 @@
+{
+  "name": "artifact-output",
+  "description": "Fiktiver Workflow (d): ein Worker schreibt eine Datei in das Run-Output-Verzeichnis (wie ein Tool-Aufruf im echten Worker). Der Chat muss sie als artifact-Event vor done und im Ergebnis zeigen.",
+  "prompt": "/delegate Schreibe einen fiktiven Marktbericht als Datei und fasse ihn zusammen",
+  "manager": [
+    {
+      "decision": "DELEGATE",
+      "reasoning": "ein Worker schreibt den Bericht",
+      "subtasks": [
+        {"id": "bericht", "instructions": "Schreibe den fiktiven Marktbericht.", "expected_output": {"result": "object"}}
+      ]
+    },
+    {
+      "decision": "COMPLETE",
+      "complete_artifacts": {
+        "summary": "Marktbericht erstellt: E-Bikes wachsen laut fiktiver Quelle um 8 %.",
+        "quality_score": 0.9
+      }
+    }
+  ],
+  "workers": {
+    "bericht": {
+      "stage": 1,
+      "output": {"status": "success", "confidence": 0.9, "result": {"marker": "BERICHT"}},
+      "artifact": {"name": "marktbericht.md", "text": "# Marktbericht (fiktiv)\n\nE-Bikes wachsen um 8 %.\n"},
+      "reported_model": "claude-sonnet-5",
+      "tokens": {"input_tokens": 130, "output_tokens": 310, "cache_read_input_tokens": 4500, "cache_creation_input_tokens": 620}
+    }
+  },
+  "expect": {
+    "worker_count": 1,
+    "stages": [["bericht"]],
+    "artifact_names": ["marktbericht.md"],
+    "result_contains": ["Marktbericht", "8 %"]
+  }
+}
