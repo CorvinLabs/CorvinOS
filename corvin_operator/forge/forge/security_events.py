@@ -162,6 +162,9 @@ EVENT_SEVERITY: dict[str, str] = {
     "workflow.attachment_deleted":  "INFO",
     "workflow.attachment_snapshot": "INFO",
     "workflow.attachment_refused":  "WARNING",
+    # WFB-R1-09 - a DAG-engine (corvin_workflows ClaudeCliEngine) spawn refused by the pre-spawn
+    # gates (L44 / L34 / L35 / capability). Metadata only: no prompt text, no refusal wording.
+    "workflow.spawn_refused":       "WARNING",
     # registry lifecycle (past-tense canonical names, emitted by registry.py)
     "tool.created":              "INFO",
     "tool.deleted":              "INFO",
@@ -3240,6 +3243,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "workflow.attachment_deleted": frozenset({"tenant_id", "wid", "att_id", "sid_fingerprint", "reason_code"}),
     "workflow.attachment_snapshot": frozenset({"tenant_id", "wid", "rid", "att_id", "size_bytes", "sha256_prefix"}),
     "workflow.attachment_refused": frozenset({"tenant_id", "wid", "att_id", "reason_code", "sid_fingerprint"}),
+    "workflow.spawn_refused": frozenset({"tenant_id", "engine_id", "reason_code"}),
     "forge_run.finished": frozenset({
         "tenant_id", "run_id", "run_kind", "status", "artifact_kind", "artifact_id", "event_count", "truncated",
     }),

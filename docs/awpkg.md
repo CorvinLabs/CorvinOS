@@ -123,6 +123,11 @@ headless `claude -p` (tool use disabled, JSON-only responses). Selected via
 `corvin_workflows run <name> --engine claude` (default remains `--engine stub`, the
 deterministic canned-response engine used by tests and CI).
 
+**Pre-spawn gates (ADR-2271):** every `ClaudeCliEngine.spawn` runs the L44 house-rules, capability,
+L34 and L35 gates on the exact payload before `claude -p` starts. A refusal or a gate error raises
+`SpawnRefusedError` without spawning and writes `workflow.spawn_refused` to the tenant's audit chain.
+The console resume route answers such a refusal with HTTP 403 `refused`; the CLI exits non-zero.
+
 Two bundled examples exercise every node type end-to-end, verified against both the stub
 and the real `claude` engine:
 `core/workflows/corvin_workflows/examples/it_support_ticket_agent.awp.yaml` (chatflow) and

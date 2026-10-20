@@ -7,6 +7,8 @@ never requires the `claude` binary to be on PATH — only `--engine claude`
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 import shutil
 import subprocess
@@ -52,6 +54,88 @@ class ClaudeEngineError(RuntimeError):
     pass
 
 
+class SpawnRefusedError(ClaudeEngineError):
+    """A worker spawn the pre-spawn gates refused. Nothing was spawned."""
+
+
+_log = logging.getLogger(__name__)
+_ENGINE_ID = "claude_code"
+_GATE_CHANNEL = "workflow-engine"
+_REASON_GATE_REFUSED = "gate_refused"
+_REASON_GATE_UNAVAILABLE = "gate_unavailable"
+_REFUSAL_UNAVAILABLE = (
+    "[security] Pre-spawn safety gate unavailable — workflow step blocked (fail-closed). "
+    "Contact the operator."
+)
+
+
+def _pre_spawn_refusal(prompt: str, tenant_id: str) -> tuple[str, str] | None:
+    """WFB-R1-09: the four pre-spawn gates the console and bridge run before ANY `claude -p`.
+
+    Returns ``None`` when the spawn is permitted, else ``(reason_code, refusal_text)``. Order and
+    semantics mirror ``corvin_console._spawn_gates.check_console_spawn_or_refusal``: (a) L44
+    house-rules, (b) ADR-0141 Tier-3 capability presence, (c) L34 flow guard, (d) L35 egress. The
+    gates live in ``corvin_operator/bridges/shared`` (already on sys.path via the prompt-guard
+    bootstrap above) and are imported here, not from ``corvin_console``: the scheduler and
+    ``python -m corvin_workflows`` run with ``core/workflows`` alone on PYTHONPATH.
+
+    Fail-closed: an import or gate error refuses the spawn. L44 and L35 each audit their own deny
+    (``house_rules.*``, ``egress.blocked``); L34 audits ``data_flow.blocked``.
+    """
+    try:
+        import spawn_gates as _sg  # type: ignore[import-not-found]
+        import security_capabilities as _caps  # type: ignore[import-not-found]
+    except Exception:  # noqa: BLE001 — a mandatory gate is absent → refuse
+        _log.error("[workflow-engine] pre-spawn gates unimportable — spawn refused (fail-closed)")
+        return _REASON_GATE_UNAVAILABLE, _REFUSAL_UNAVAILABLE
+    try:
+        hr = _sg.check_l44(
+            prompt, tenant_id, persona="assistant", channel=_GATE_CHANNEL,
+            chat_key=_GATE_CHANNEL, engine_id=_ENGINE_ID,
+        )
+        if hr is not None:
+            return _REASON_GATE_REFUSED, hr
+        try:
+            _caps.assert_capabilities_present()
+        except _caps.CapabilityMissingError:
+            _caps.bootstrap_core_capabilities()
+            _caps.assert_capabilities_present()
+        flow = _sg.check_l34(
+            _ENGINE_ID, tenant_id, prompt=prompt, persona="assistant",
+            channel=_GATE_CHANNEL, chat_key=_GATE_CHANNEL,
+        )
+        if flow is not None:
+            return _REASON_GATE_REFUSED, flow
+        egress = _sg.check_l35(
+            _ENGINE_ID, tenant_id, persona="assistant",
+            channel=_GATE_CHANNEL, chat_key=_GATE_CHANNEL,
+        )
+        if egress is not None:
+            return _REASON_GATE_REFUSED, egress
+        return None
+    except Exception as exc:  # noqa: BLE001 — any gate error → refuse, never allow
+        _log.error("[workflow-engine] pre-spawn gate error (%s) — spawn refused (fail-closed)",
+                   type(exc).__name__)
+        return _REASON_GATE_UNAVAILABLE, _REFUSAL_UNAVAILABLE
+
+
+def _audit_spawn_refused(tenant_id: str, reason_code: str) -> None:
+    """WFB-R1-09: audit-first record of a refused DAG spawn, on the tenant's hash chain.
+
+    Metadata only — no prompt, no refusal wording, no agent name. A failing audit write does not
+    re-allow the spawn: the caller raises regardless.
+    """
+    try:
+        import forge.paths as _fp  # type: ignore[import-not-found]
+        import forge.security_events as _se  # type: ignore[import-not-found]
+        _se.write_event(
+            _fp.tenant_audit_chain(tenant_id), "workflow.spawn_refused",
+            details={"tenant_id": tenant_id, "engine_id": _ENGINE_ID, "reason_code": reason_code},
+        )
+    except Exception as exc:  # noqa: BLE001 — the refusal stands even if the record cannot land
+        _log.error("[workflow-engine] spawn_refused audit write failed (%s)", type(exc).__name__)
+
+
 def _extract_json(text: str) -> dict[str, Any]:
     text = text.strip()
     fence = _JSON_FENCE_RE.search(text)
@@ -95,6 +179,9 @@ class ClaudeCliEngine:
     name: str = "claude-cli"
     model: str = _DEFAULT_MODEL
     timeout_s: int = _DEFAULT_TIMEOUT_S
+    # WFB-R1-09: the tenant whose gates and audit chain judge every spawn. CLI / scheduler runs
+    # take it from CORVIN_TENANT_ID; the console passes the authenticated session's tenant.
+    tenant_id: str | None = None
     history: list[EngineCall] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -107,6 +194,16 @@ class ClaudeCliEngine:
     def spawn(self, call: EngineCall) -> dict[str, Any]:
         self.history.append(call)
         prompt = _build_prompt(call)
+        # WFB-R1-09: the gates judge the exact payload the worker receives (instructions, inputs
+        # and upstream state). Refused → audit, then raise; nothing reaches the CLI below.
+        tenant = self.tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+        refusal = _pre_spawn_refusal(prompt, tenant)
+        if refusal is not None:
+            reason_code, text = refusal
+            _audit_spawn_refused(tenant, reason_code)
+            raise SpawnRefusedError(
+                f"spawn refused for agent={call.agent!r}: {text}"
+            )
         # R4: whole-payload guard - `_build_prompt(call)` embeds the workflow
         # step's instructions and upstream node output. POSITIONAL argv, so the
         # sentinel also keeps a `-`-leading payload from becoming a CLI flag.

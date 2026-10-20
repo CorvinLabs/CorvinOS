@@ -1983,6 +1983,19 @@ def reject_run_node(
     )
     return {"ok": True, "status": "rejected"}
 
+def _spawn_refusal_in(result: Any) -> str | None:
+    """WFB-R1-09: the refusal text of the first node the pre-spawn gate refused, else None.
+
+    The DAG runner turns a raised ``SpawnRefusedError`` into a failed node whose error reads
+    ``SpawnRefusedError: <refusal>``; that is the only signal a resumed run carries for it."""
+    prefix = "SpawnRefusedError: "
+    for node in (getattr(result, "nodes", None) or {}).values():
+        err = getattr(node, "error", None) or ""
+        if err.startswith(prefix):
+            return err[len(prefix):]
+    return None
+
+
 @router.post("/workflows/{wid}/runs/{rid}/resume")
 def resume_run(
     wid: str,
@@ -2108,7 +2121,7 @@ def resume_run(
     try:
         result = _resume_awp_workflow(
             rid, body.reply,
-            engine=_AwpClaudeEngine(),
+            engine=_AwpClaudeEngine(tenant_id=rec.tenant_id),
             tenant_id=rec.tenant_id,
             # Console owner is the privileged operator for this tenant — the
             # per-approver binding (WF-A3) is enforced on the bridge path where
@@ -2134,6 +2147,15 @@ def resume_run(
         raise HTTPException(
             http_status.HTTP_500_INTERNAL_SERVER_ERROR, "resume failed",
         ) from exc
+    # WFB-R1-09: the resumed run hit a node whose spawn the pre-spawn gates refused. Nothing was
+    # spawned and the engine already wrote workflow.spawn_refused (audit-first); answer as a
+    # refusal, not as a resumed run.
+    _refused = _spawn_refusal_in(result)
+    if _refused is not None:
+        raise HTTPException(
+            http_status.HTTP_403_FORBIDDEN,
+            detail={"error": "refused", "message": _refused},
+        )
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
