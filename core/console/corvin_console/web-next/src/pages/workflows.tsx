@@ -53,7 +53,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import {
@@ -2600,36 +2599,46 @@ export function WorkflowChatPanel({
   csrf: string;
   onResumed: (status: "confirmed" | "declined" | "sent") => void;
 }) {
-  const [reply, setReply] = React.useState("");
   const [sending, setSending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const bottomRef = React.useRef<HTMLDivElement>(null);
-  const inputRef = React.useRef<HTMLTextAreaElement>(null);
+  const composerRef = React.useRef<WorkflowComposerHandle>(null);
+  const { refresh: refreshAuth } = useAuth();
 
   React.useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [history.length]);
 
   React.useEffect(() => {
-    inputRef.current?.focus();
+    composerRef.current?.focus();
   }, [nodeId]);
 
-  const send = async () => {
-    const text = reply.trim();
+  // The reply goes through the SAME composer as the design chat. The server runs the pre-spawn
+  // gates on it before the run is resumed; if it refuses (403) or fails, the text is put back.
+  const send = React.useCallback(async (text: string) => {
     if (!text || sending) return;
     setSending(true);
     setError(null);
     try {
       const { resumeWorkflowRun } = await import("@/lib/api");
       const res = await resumeWorkflowRun(wid, rid, text, csrf);
-      setReply("");
       onResumed(res.confirmed === undefined ? "sent" : res.confirmed ? "confirmed" : "declined");
     } catch (e) {
+      composerRef.current?.setDraft(text);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSending(false);
     }
-  };
+  }, [wid, rid, csrf, onResumed, sending]);
+
+  const replyAdapter = React.useMemo<ComposerContextAdapter>(() => ({
+    upload: async () => [],
+    extraCommands: NO_DESIGN_COMMANDS,
+    sessionCommands: false,
+    send: (text) => { void send(text); },
+    contextKey: `reply-${wid}-${rid}`,
+    limits: DEFAULT_COMPOSER_LIMITS,
+  }), [send, wid, rid]);
 
   const allTurns: ChatTurn[] = [...history, { role: "assistant", text: prompt, ts: Date.now() / 1000 }];
 
@@ -2666,28 +2675,16 @@ export function WorkflowChatPanel({
         </div>
       )}
 
-      <div className="shrink-0 border-t border-border p-3">
-        <div className="flex gap-2">
-          <Textarea
-            ref={inputRef}
-            value={reply}
-            onChange={(e) => setReply(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            placeholder="Type your reply… (Enter to send)"
-            disabled={sending}
-            className="min-h-[44px] resize-none text-sm"
-            rows={1}
-          />
-          <Button size="sm" onClick={send} disabled={sending || !reply.trim()} className="self-end">
-            {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Send"}
-          </Button>
-        </div>
-      </div>
+      <WorkflowComposer
+        ref={composerRef}
+        csrf={csrf}
+        connected={!sending}
+        placeholder="Type your reply… (Enter to send, hold Space to speak)"
+        adapter={replyAdapter}
+        onAuthExpired={refreshAuth}
+        attachments={false}
+        offlinePlaceholder="Sending…"
+      />
     </div>
   );
 }

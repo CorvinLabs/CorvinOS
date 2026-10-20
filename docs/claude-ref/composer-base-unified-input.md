@@ -509,3 +509,17 @@ UI: `components/workflows/WorkflowComposer.tsx` (paperclip, folder where the bro
 chips, drop via the pane's `useFileDrop` → handle `addFiles`), adapter built in
 `pages/workflows.tsx::ChatPane`. Tests: `core/console/tests/test_workflow_composer.py`,
 `tests/unit/workflow-composer.test.tsx`, `tests/e2e/workflow-composer.spec.ts`.
+
+### Edit window = design chat; run-reply panel (CONCEPT-0115 P4)
+
+Assumption A1 (operator wording "Unterworkflow / Edit-Fenster"; the code has no sub-workflow
+concept — `sub_workflow`/`subworkflow`/`child_workflow`: 0 hits): the editing window of a workflow is
+the design chat in the editor, so P2/P3 already are its migration. No sub-workflow feature was invented.
+
+The one other free-text input of the editor, the `ask_human` reply panel
+(`WorkflowChatPanel`), now uses `WorkflowComposer` too (`attachments={false}`: a reply is text-only).
+Send → `POST …/runs/{rid}/resume`, which runs the pre-spawn gates on the reply; a refusal (403
+`refused`) or failure shows the server's message and puts the text back into the field
+(`WorkflowComposerHandle.setDraft`). The "Optional comment" box of the binary approval bar is a
+comment on a decision, not a message, and stays a plain textarea.
+Tests: `tests/unit/workflow-chat-panel.test.tsx`.

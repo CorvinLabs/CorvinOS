@@ -30,15 +30,20 @@ export interface WorkflowComposerProps {
   onAuthExpired?: () => void;
   /** Hide the paperclip/folder row for a context that takes text only. */
   attachments?: boolean;
+  /** Placeholder while `connected` is false. */
+  offlinePlaceholder?: string;
 }
 
 export interface WorkflowComposerHandle {
   /** Stage files (drag-and-drop on the surrounding pane lands here). */
   addFiles: (files: File[]) => void;
+  /** Put text back into the field — a refused send must not cost the operator their words. */
+  setDraft: (text: string) => void;
+  focus: () => void;
 }
 
 export const WorkflowComposer = React.memo(React.forwardRef<WorkflowComposerHandle, WorkflowComposerProps>(
-  function WorkflowComposer({ csrf, connected, placeholder, adapter, onAuthExpired, attachments = true }, ref) {
+  function WorkflowComposer({ csrf, connected, placeholder, adapter, onAuthExpired, attachments = true, offlinePlaceholder = "Connecting…" }, ref) {
     const fieldRef = React.useRef<ComposerFieldHandle>(null);
     const folderInputRef = React.useRef<HTMLInputElement>(null);
     const [hasText, setHasText] = React.useState(false);
@@ -63,6 +68,8 @@ export const WorkflowComposer = React.memo(React.forwardRef<WorkflowComposerHand
 
     React.useImperativeHandle(ref, () => ({
       addFiles: (files) => { setTruncated(null); void addFiles(files); },
+      setDraft: (text) => fieldRef.current?.setValue(text),
+      focus: () => document.getElementById(`wf-composer-${adapterRef.current.contextKey}`)?.focus(),
     }), [addFiles]);
 
     const submit = React.useCallback((raw: string) => {
@@ -154,7 +161,7 @@ export const WorkflowComposer = React.memo(React.forwardRef<WorkflowComposerHand
           )}
           <ChatComposerField
             ref={fieldRef}
-            placeholder={recording ? "Listening — release Space to stop" : connected ? placeholder : "Connecting…"}
+            placeholder={recording ? "Listening — release Space to stop" : connected ? placeholder : offlinePlaceholder}
             disabled={!connected}
             csrf={csrf}
             onSubmit={submit}
