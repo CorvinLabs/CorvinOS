@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import logging
 import os
 import re
@@ -441,6 +442,186 @@ class ACSResult:
     error: str = ""
     run_dir: Path | None = None
     elapsed_s: float = 0.0
+    # Per-run trace (RunTrace): one dict per step and the loss after each gated COMPLETE.
+    steps: list = field(default_factory=list)
+    loss_history: list = field(default_factory=list)
+
+
+_STEP_DECISIONS = ("DELEGATE", "COMPLETE", "FAIL", "INVALID")
+_STEP_WORKER_STATES = ("success", "partial", "failed")
+
+
+def _finite(value, default=None):
+    """A finite float, or *default*. NaN/inf/None/strings never reach a step or a line."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    return v if math.isfinite(v) else default
+
+
+def _count(value) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _clean_step(kind: str, fields: dict) -> dict:
+    """Reduce a step to known fields of fixed types and value sets.
+
+    The manager's decision word and a worker's status come from model output. Copied through
+    they put a model-written line (a link, an instruction) into the chat and into the
+    console's stored answer, so this is where they stop being text: anything outside the
+    known sets becomes ``INVALID`` / ``unknown``, numbers become finite numbers.
+    """
+    if kind == "decision":
+        dec = str(fields.get("decision", "")).upper()
+        return {"kind": "decision", "iteration": _count(fields.get("iteration")),
+                "decision": dec if dec in _STEP_DECISIONS else "INVALID",
+                "n_subtasks": _count(fields.get("n_subtasks"))}
+    if kind == "worker":
+        status = str(fields.get("status", ""))
+        return {"kind": "worker", "iteration": _count(fields.get("iteration")),
+                "index": _count(fields.get("index")), "of": _count(fields.get("of")),
+                "status": status if status in _STEP_WORKER_STATES else "unknown",
+                "confidence": round(min(1.0, max(0.0, _finite(fields.get("confidence"), 0.0))), 2)}
+    if kind == "gate":
+        return {"kind": "gate", "iteration": _count(fields.get("iteration")),
+                "passed": bool(fields.get("passed")),
+                "loss": _finite(fields.get("loss")), "delta": _finite(fields.get("delta"))}
+    return {"kind": "other"}
+
+
+class RunTrace:
+    """What one run did, step by step — shown to the user, stored with the result.
+
+    A step is a plain dict (``kind`` plus counts, statuses and loss values). It never
+    carries prompt, worker or result text. The observer is best-effort: an observer that
+    raises must never change the run.
+    """
+
+    def __init__(self, on_step=None) -> None:
+        self.steps: list[dict] = []
+        self.losses: list[float] = []
+        self._on_step = on_step
+
+    def emit(self, kind: str, **fields) -> None:
+        step = _clean_step(kind, fields)
+        self.steps.append(step)
+        if self._on_step is not None:
+            try:
+                self._on_step(step)
+            except Exception as exc:  # noqa: BLE001 — observer failure never changes the run
+                log.debug("acs: run observer failed: %r", exc)
+
+
+_WORKER_STATUS_DE = {"success": "erfolgreich", "partial": "teilweise", "failed": "fehlgeschlagen", "unknown": "unbekannt"}
+
+_RUN_STATUS_LABEL = {
+    "success": ("abgeschlossen", "completed"),
+    "budget_exhausted": ("Budget erschöpft, Abbruch", "budget exhausted, stopped early"),
+    "failed": ("fehlgeschlagen", "failed"),
+}
+
+
+def format_acs_step(step: dict, *, german: bool = True) -> str:
+    """One interim status line for a run step, in the native worker's style (🤖 / 📖 …).
+
+    Shown live while the run is going, so the user sees what the manager decided and
+    what each worker returned, not only the final answer.
+    """
+    kind = step.get("kind")
+    it = step.get("iteration", "?")
+    if kind == "decision":
+        dec = str(step.get("decision", "")).upper()
+        n = step.get("n_subtasks", 0)
+        if dec == "DELEGATE" and n:
+            return (f"🧭 Iteration {it}: Manager teilt in {n} Teilaufgaben auf" if german
+                    else f"🧭 Iteration {it}: manager splits into {n} subtasks")
+        if dec == "DELEGATE":
+            return (f"🧭 Iteration {it}: Plan des Managers unbrauchbar" if german
+                    else f"🧭 Iteration {it}: unusable manager plan")
+        if dec == "COMPLETE":
+            return (f"🧭 Iteration {it}: Manager meldet Abschluss" if german
+                    else f"🧭 Iteration {it}: manager reports completion")
+        if dec == "FAIL":
+            return (f"🧭 Iteration {it}: Manager bricht ab" if german
+                    else f"🧭 Iteration {it}: manager gives up")
+        return (f"🧭 Iteration {it}: Antwort des Managers unbrauchbar" if german
+                else f"🧭 Iteration {it}: unusable manager answer")
+    if kind == "worker":
+        idx, of = step.get("index", "?"), step.get("of", "?")
+        raw, conf = str(step.get("status", "?")), step.get("confidence", 0.0)
+        status = _WORKER_STATUS_DE.get(raw, raw) if german else raw
+        return (f"🤖 Worker {idx}/{of}: {status} (Konfidenz {conf})" if german
+                else f"🤖 Worker {idx}/{of}: {status} (confidence {conf})")
+    if kind == "gate":
+        passed = bool(step.get("passed"))
+        loss = step.get("loss")
+        loss_txt = f"{loss:.3f}" if isinstance(loss, (int, float)) else "–"
+        if german:
+            verdict = "bestanden" if passed else "nicht bestanden"
+            return f"📊 Gate Iteration {it}: {verdict}, Loss-Score {loss_txt} (höher = besser)"
+        verdict = "passed" if passed else "not passed"
+        return f"📊 Gate iteration {it}: {verdict}, loss score {loss_txt} (higher is better)"
+    return f"🔧 {kind}"
+
+
+def format_acs_steps(steps: list, *, german: bool = True) -> str:
+    """The run's step lines as one block (for surfaces that cannot stream them live)."""
+    if not steps:
+        return ""
+    heading = "Verlauf" if german else "Steps"
+    return "\n".join([heading] + [format_acs_step(st, german=german) for st in steps])
+
+
+def format_acs_run_summary(res: "ACSResult", *, trigger: str, german: bool = True) -> str:
+    """A short, user-facing account of one ACS run: why it ran, what it did, how it ended.
+
+    Appended to the delegated answer on every surface (console and bridge), so the
+    user can read the outcome without knowing what a manager/worker loop is. Error
+    and budget-breach text is NOT repeated here: the console already explains a
+    budget stop, and an error reaches the user through the failure message.
+    """
+    idx = 0 if german else 1
+    raw_status = str(getattr(res, "status", "") or "")
+    status = _RUN_STATUS_LABEL.get(raw_status, (raw_status, raw_status))[idx]
+    secs = _finite(getattr(res, "elapsed_s", 0.0), 0.0) or 0.0
+    duration = f"{secs:.0f} s" if secs < 90 else f"{secs / 60:.0f} min"
+    # Manager decision rounds: the completing COMPLETE is a round too, and
+    # ``res.iterations`` (the budget counter) does not count it, so the step trace is
+    # the number the user should read. ``res.iterations`` only when no trace exists.
+    _decisions = [st for st in (getattr(res, "steps", None) or []) if st.get("kind") == "decision"]
+    iterations = len(_decisions) if _decisions else int(getattr(res, "iterations", 0) or 0)
+    workers = int(getattr(res, "workers_spawned", 0) or 0)
+    losses = [v for v in (_finite(x) for x in (getattr(res, "loss_history", None) or [])) if v is not None]
+    if losses:
+        trajectory = " → ".join(f"{v:.3f}" for v in losses)
+        loss_de = f"{losses[-1]:.3f} (Verlauf {trajectory})"
+        loss_en = f"{losses[-1]:.3f} (trajectory {trajectory})"
+    else:
+        loss_de = "nicht gemessen (kein abgeschlossener Gate-Schritt)"
+        loss_en = "not measured (no completed gate step)"
+    if german:
+        lines = [
+            "ACS-Lauf",
+            f"- Auslöser: {trigger}",
+            f"- Ergebnis: {status}",
+            f"- Schritte: {iterations} Iteration(en), {workers} Worker",
+            f"- Loss-Score (höher = besser): {loss_de}",
+            f"- Dauer: {duration}",
+        ]
+    else:
+        lines = [
+            "ACS run",
+            f"- Trigger: {trigger}",
+            f"- Outcome: {status}",
+            f"- Steps: {iterations} iteration(s), {workers} worker(s)",
+            f"- Loss score (higher is better): {loss_en}",
+            f"- Duration: {duration}",
+        ]
+    return "\n".join(lines)
 
 
 @dataclass
@@ -462,6 +643,7 @@ class RunContext:
     m4_base_workers: int = 0                               # original max_workers_per_iteration — ADR-0105 M4
     worker_attributions: list = field(default_factory=list)  # list[dict] per-iteration — ADR-0105 M4
     datasource_env: dict = field(default_factory=dict)     # ADR-0127 — DSI conn env for ClaudeCode workers
+    trace: RunTrace = field(default_factory=RunTrace)      # per-step record for the user
     # Adversarial review finding: BudgetEnvelope.check() was called ONLY at
     # the top-level manager loop, against the ROOT budget. Recursive
     # delegation (_dispatch_workers → _run_one → DELEGATE → _dispatch_workers
@@ -2673,6 +2855,9 @@ async def _manager_loop(
                 "run_id": ctx.run_id, "iteration": ctx.iteration,
             })
             log.warning("acs: manager returned non-JSON at iteration %d", ctx.iteration)
+            # A round the manager wasted is still a round: without a step the summary counted
+            # 4 manager calls as 2 iterations and numbered the first visible one "3".
+            ctx.trace.emit("decision", iteration=ctx.iteration + 1, decision="INVALID", n_subtasks=0)
             ctx.iteration += 1
             continue
 
@@ -2686,6 +2871,11 @@ async def _manager_loop(
         )
 
         decision_type = str(decision.get("decision", "")).upper()
+        _subs = decision.get("subtasks")
+        ctx.trace.emit(
+            "decision", iteration=ctx.iteration + 1, decision=decision_type,
+            n_subtasks=len(_subs) if decision_type == "DELEGATE" and _is_valid_subtask_list(_subs) else 0,
+        )
 
         # ADR-0109 M2: manager decision trace — hash only, never content in chain
         _iter_spawn_nonce = str(uuid.uuid4())
@@ -2771,6 +2961,12 @@ async def _manager_loop(
             for wr in worker_results:
                 ctx.state[wr.worker_id] = wr.result
                 ctx.worker_results.append(wr)
+            for _idx, wr in enumerate(worker_results, 1):
+                ctx.trace.emit(
+                    "worker", iteration=ctx.iteration + 1, index=_idx,
+                    of=len(worker_results), status=wr.status,
+                    confidence=round(float(wr.confidence or 0.0), 2),
+                )
 
             _last_iter_workers = list(worker_results)  # ADR-0105 M4: track for attribution
             ctx.iteration += 1
@@ -2850,6 +3046,12 @@ async def _manager_loop(
                 else:
                     loss_total = None
                     loss_delta = None
+                ctx.trace.emit(
+                    "gate", iteration=ctx.iteration + 1,
+                    passed=bool(gate_result.passed), loss=loss_total, delta=loss_delta,
+                )
+                if loss_total is not None:
+                    ctx.trace.losses.append(loss_total)
 
                 # ADR-0105 M4: per-worker attribution proxy
                 if _last_iter_workers:
@@ -3045,7 +3247,9 @@ class ACSRuntime:
         worker_model: str | None = None,
         enable_gate_chain: bool = True,
         session_debug_log: "Path | None" = None,
+        on_step=None,
     ) -> None:
+        self._on_step = on_step
         self._tenant_id = tenant_id
         self._bridge = bridge
         self._chat = chat
@@ -3238,6 +3442,7 @@ class ACSRuntime:
         except ImportError:
             pass
 
+        _trace = RunTrace(self._on_step)
         ctx = RunContext(
             run_id=rid,
             workflow_id=workflow_id,
@@ -3249,6 +3454,7 @@ class ACSRuntime:
             loss_profile=_loss_profile,
             m4_base_workers=budget.max_workers_per_iteration,   # ADR-0105 M4
             datasource_env=_ds_env,                             # ADR-0127
+            trace=_trace,
         )
 
         # Write run manifest
@@ -3350,6 +3556,8 @@ class ACSRuntime:
             )
 
         result.run_dir = run_dir
+        result.steps = list(_trace.steps)
+        result.loss_history = list(_trace.losses)
         # ACO Layer 1: mirror final status to session debug log
         self._dbg(
             "acs.worker.run_done",

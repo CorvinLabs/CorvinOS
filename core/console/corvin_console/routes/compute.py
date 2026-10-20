@@ -2972,7 +2972,7 @@ class ACSRunRequest(BaseModel):
     dry_run: bool = Field(False, description="Validate only — no workers spawned")
     budget_override: dict[str, Any] | None = Field(
         None,
-        description="Override delegation_loop.budget fields (e.g. max_loops, max_depth)",
+        description="Override delegation_loop.budget fields (e.g. max_loops). max_depth is REQUIRED whenever a budget is overridden (rule R31); a missing one fails the run before it starts.",
     )
 
 # D4 (adversarial review 2026-07-20): submit_acs_workflow_run is a SYNCHRONOUS

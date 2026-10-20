@@ -8991,6 +8991,43 @@ def _truncate_at_boundary(text: str, max_chars: int) -> str:
     return window.rstrip() + "…"
 
 
+def _acs_workflow_name(channel: str, suffix: str) -> str:
+    """A workflow name that passes validation rule R2 (``^[a-z][a-z0-9_-]{0,62}[a-z0-9]$``).
+
+    The channel is operator-chosen text ("web chat", "Teams-EU"); built into the name as is it
+    failed R2 and the run silently degraded to the direct turn.
+    """
+    name = re.sub(r"[^a-z0-9_-]+", "-", f"{channel}-{suffix}".lower()).strip("-_")
+    if not name[:1].isalpha():
+        name = "w-" + name
+    name = name[:63].rstrip("-_")
+    return name if len(name) >= 2 else "bridge-delegation"
+
+
+def _build_bridge_acs_spec(prompt: str, channel: str, suffix: str, tenant_id: str) -> dict:
+    """The delegation_loop spec for a bridge turn, with the SAME budget the console applies.
+
+    The console reads the tenant's budget (``delegation_budget.json`` from Settings, then
+    ``spec.web_chat.budget``, then defaults) through ``chat_runtime._delegation_budget``. The bridge
+    spec used to carry ``budget: {}``, which fails rule R31 (``max_depth`` required when a budget is
+    present) and rejected every bridge run; omitting the key fixed that but made the bridge ignore
+    the operator's saved limits (a 4 h wall clock and 36 workers on the live tenant) and run on the
+    engine ceilings (24 h, 64 workers). One source for both surfaces; when it cannot be imported the
+    spec carries no budget key and the engine applies its own defaults.
+    """
+    try:
+        from corvin_console.chat_runtime import _build_delegation_spec, _delegation_budget  # noqa: PLC0415
+        spec = _build_delegation_spec(prompt, dict(_delegation_budget(tenant_id)))
+    except Exception as e:  # noqa: BLE001 — never cost the turn; the engine defaults are valid
+        log(f"bridge ACS spec: console budget unavailable ({type(e).__name__}) — engine defaults")
+        spec = {"awp": "1.0.0", "workflow": {"version": "1.0.0"},
+                "orchestration": {"engine": "delegation_loop", "delegation_loop": {}},
+                "state": {"initial": {"task": prompt}}}
+    spec["workflow"]["name"] = _acs_workflow_name(channel, suffix)
+    spec["workflow"]["description"] = prompt[:500]
+    return spec
+
+
 def _run_acs_delegation(
     prompt: str,
     *,
@@ -9001,6 +9038,10 @@ def _run_acs_delegation(
     log_prefix: str = "delegation",
     quota_channel_suffix: str = "worker",
     workflow_name_suffix: str = "worker-delegation",
+    force_delegate: bool = False,
+    is_big_data: bool = False,
+    mode: str = "native",
+    on_status=None,
 ) -> str | None:
     """Compliance-gated ACS fan-out spawn (ADR-0255).
 
@@ -9060,16 +9101,29 @@ def _run_acs_delegation(
     try:
         import acs_runtime as _acs  # type: ignore  # noqa: PLC0415
         run_id = f"acs-{channel}-{int(time.time())}-{secrets.token_hex(3)}"
-        spec = {
-            "awp": "1.0.0",
-            "workflow": {"name": f"{channel}-{workflow_name_suffix}",
-                         "description": prompt[:500], "version": "1.0.0"},
-            "orchestration": {"engine": "delegation_loop",
-                              "delegation_loop": {"budget": {}}},
-            "state": {"initial": {"task": prompt}},
-        }
-        runtime = _acs.ACSRuntime(tenant_id=tenant_id, bridge=channel, chat=str(chat_key))
+        spec = _build_bridge_acs_spec(prompt, channel, workflow_name_suffix, tenant_id)
+        # Live steps: each manager decision, worker result and gate loss goes out as a
+        # status line, the same channel the native worker's tool-use lines use.
+        def _live_step(step: dict) -> None:
+            if on_status is not None:
+                on_status(_acs.format_acs_step(step, german=_live_german), tool_name="_acs")
+
+        try:
+            from corvin_console.chat_runtime import _prompt_is_german  # noqa: PLC0415
+            _live_german = _prompt_is_german(prompt)
+        except Exception:  # noqa: BLE001 — a missing helper must not cost the run
+            _live_german = True
+        runtime = _acs.ACSRuntime(tenant_id=tenant_id, bridge=channel, chat=str(chat_key),
+                                  on_step=_live_step if on_status is not None else None)
         res = asyncio.run(runtime.run(spec, run_id=run_id))
+        # A run that did not succeed degrades to the direct turn; say WHY. The R31 spec
+        # defect rejected every bridge run at validation for nine days, and the only
+        # trace was "run produced no text" — 21 of 21 bridge ACS decisions were served
+        # by the native turn without anyone seeing the reason.
+        if getattr(res, "status", "success") != "success":
+            _why = " ".join(str(getattr(res, "error", "") or "").split())[:160]
+            log(f"{log_prefix}: run {run_id} ended {getattr(res, 'status', '?')}"
+                f"{': ' + _why if _why else ''}")
     except RuntimeError as e:
         # asyncio.run inside an existing loop, or a runtime-level abort.
         log(f"{log_prefix}: run aborted ({e!r}) — direct turn")
@@ -9092,6 +9146,20 @@ def _run_acs_delegation(
     if not answer:
         log(f"{log_prefix}: run produced no text — direct turn")
         return None
+    # The user sees WHY the fan-out ran and how it ended, not only the answer text.
+    # A summary that cannot be built must never cost the delegated answer.
+    try:
+        from corvin_console.chat_runtime import _prompt_is_german  # noqa: PLC0415
+        _german = _prompt_is_german(prompt)
+    except Exception:  # noqa: BLE001 — a missing helper must not cost the answer
+        _german = True
+    try:
+        from delegation_policy import acs_trigger_label  # noqa: PLC0415
+        _trigger = acs_trigger_label(force_delegate=force_delegate, is_big_data=is_big_data,
+                                     mode=mode, german=_german)
+        answer = f"{answer}\n\n{_acs.format_acs_run_summary(res, trigger=_trigger, german=_german)}"
+    except Exception as e:  # noqa: BLE001
+        log(f"{log_prefix}: run summary skipped ({e!r}) — answer sent without it")
     log(f"{log_prefix}: run {run_id} produced {len(answer)} chars")
     return answer
 
@@ -9103,6 +9171,7 @@ def _maybe_delegate_big_data(
     chat_key: str,
     persona: str | None,
     tenant_id: str | None = None,
+    on_status=None,
 ) -> str | None:
     """Big-data carve-out for the messenger bridges — the ONE auto-delegation
     a ``native`` install performs (CLAUDE.md § Worker Engine Selection).
@@ -9148,7 +9217,9 @@ def _maybe_delegate_big_data(
         prompt, channel=channel, chat_key=chat_key, persona=persona, tenant_id=tid,
         log_prefix="big-data delegation",
         quota_channel_suffix="bigdata",
+        is_big_data=True,
         workflow_name_suffix="bigdata-delegation",
+        on_status=on_status,
     )
 
 
@@ -9466,6 +9537,7 @@ def _maybe_delegate_worker(
     persona: str | None,
     tenant_id: str | None = None,
     meta: dict | None = None,
+    on_status=None,
 ) -> tuple[str | None, str]:
     """Bridge worker-engine parity (ADR-0255).
 
@@ -9502,7 +9574,7 @@ def _maybe_delegate_worker(
         return (
             _maybe_delegate_big_data(
                 prompt, channel=channel, chat_key=chat_key, persona=persona,
-                tenant_id=tid,
+                tenant_id=tid, on_status=on_status,
             ),
             prompt,
         )
@@ -9574,11 +9646,16 @@ def _maybe_delegate_worker(
             if meta is not None and "routed_engine" in meta:
                 meta["routed_engine"] = "native"
             return None, prompt
+        from delegation_policy import is_big_data_task as _is_bd_task  # noqa: PLC0415
         answer = _run_acs_delegation(
             prompt, channel=channel, chat_key=chat_key, persona=persona, tenant_id=tid,
             log_prefix="worker delegation",
             quota_channel_suffix="worker",
             workflow_name_suffix="worker-delegation",
+            force_delegate=force_delegate,
+            is_big_data=_is_bd_task(prompt),
+            mode=mode,
+            on_status=on_status,
         )
         if answer is not None and meta is not None:
             meta["engine"], meta["mode"] = "acs", "delegation_loop"
@@ -12777,6 +12854,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             persona=str((profile or {}).get("persona")
                         or (profile or {}).get("name") or ""),
             meta=_deleg_meta,
+            on_status=_emit_status,
         )
         _TURN_OUTCOME.delegated = answer is not None
         if "routed_engine" not in _deleg_meta:

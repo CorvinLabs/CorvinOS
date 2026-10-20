@@ -594,7 +594,12 @@ def _compute_workflow_loss(
     g3 = next((g for g in gates if g.gate_id == "gate_3_llm_critique"), None)
     if g3 is not None:
         crit = (g3.details or {}).get("critique") or {}
-        L_quality = float(crit.get("score", g3.score))
+        # The critique model reports a score on whatever scale it chose; the loss dimensions are
+        # 0..1 (a 0-10 answer produced a total of 3.99). Clamp, and treat a non-number as no signal.
+        try:
+            L_quality = min(1.0, max(0.0, float(crit.get("score", g3.score))))
+        except (TypeError, ValueError):
+            L_quality = min(1.0, max(0.0, float(g3.score)))
     else:
         L_quality = 1.0  # gate not run → no quality signal → optimistic default
 

@@ -47,6 +47,16 @@ def _force_utf8_stdio() -> None:
 _force_utf8_stdio()
 
 
+# Step lines exactly as acs_runtime.format_acs_step writes them (compass / robot / chart emoji).
+_ACS_STEP_LINE = (r"(?:\U0001F9ED Iteration \d+:|\U0001F916 Worker \d+/\d+:"
+                  r"|\U0001F4CA Gate [Ii]teration \d+:)[^\n]*")
+_ACS_STEPS_RE = re.compile(r"(?m)^(?:Verlauf|Steps)\r?\n(?:" + _ACS_STEP_LINE + r"\r?\n?)+")
+# The run summary starts with the trigger line; its other lines carry the known labels.
+_ACS_SUMMARY_RE = re.compile(
+    r"(?m)^(?:ACS-Lauf|ACS run)\r?\n- (?:Auslöser|Trigger):[^\n]*\r?\n?"
+    r"(?:- (?:Ergebnis|Outcome|Schritte|Steps|Loss-Score|Loss score|Dauer|Duration)\b[^\n]*\r?\n?)*")
+
+
 def strip_code_only(text: str) -> str:
     # Fenced code blocks: drop entirely. Their contents are noise for the
     # summarizer and the prose around them is what we want to read aloud.
@@ -57,6 +67,14 @@ def strip_code_only(text: str) -> str:
     text = re.sub(r"`([^`]+)`", r"\1", text)
     # Table separator rows (---|---|---) — the pipes confuse models, the row is content-free.
     text = re.sub(r"^\s*\|?[\s:|-]+\|[\s:|-]+\|?\s*$", "", text, flags=re.MULTILINE)
+    # The ACS run account (acs_runtime.format_acs_steps / format_acs_run_summary): step lines under
+    # "Verlauf"/"Steps" and the "ACS-Lauf"/"ACS run" key-value block. They show on screen WHAT the run
+    # did; a voice note must speak the answer, and the summarizer otherwise narrates the block
+    # ("der ACS-Lauf wurde ausdrücklich angefordert und ist nach zwei Durchgängen ...").
+    # The patterns are exact on purpose: a heading alone ("Steps", "Verlauf", "ACS run") followed by
+    # ordinary bullets is real answer content (a repair guide, a project history, a charity run).
+    text = _ACS_STEPS_RE.sub("", text)
+    text = _ACS_SUMMARY_RE.sub("", text)
     # Collapse runs of blank lines but keep paragraph breaks.
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()

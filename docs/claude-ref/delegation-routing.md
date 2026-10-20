@@ -230,6 +230,42 @@ to LOOP 0.90 for both Tier-1 routing and the Tier-2 directive, and the
 `mehrere[nrm]?` flexion covers the dative "aus mehreren Quellen" in
 `_TRIAGE_MULTI_RE`/`_TRIAGE_FANOUT_RE`.
 
+**Rule 4 vocabulary and the length measure (2026-10-21, measured on real prompts).**
+`_TRIAGE_CODING_RE` used to know coding NOUNS (`bug`, `code`, `funktion` …). The operator's real work
+orders are imperatives with none of them ("setze das alles um und teste e2e", "Fixe alles",
+"adversarial review bis 0 findings", "git push main"), so most prompts that delegated reached the
+fan-out through rule 5. `_is_coding_shaped` now also counts engineering work orders:
+
+- **specific words count alone** (`_TRIAGE_CODING_RE`): `e2e`, `end-to-end`, `adversarial`,
+  `release <digit>`, `implementier*`, `implementation`, `git push`, `push … auf/to/on main`, `PR`,
+  `migrier*`, `deploy*`, `fixing`, `implementing`;
+- **ambiguous verbs count in pairs** (`_TRIAGE_WORKORDER_WEAK_RE`, two DIFFERENT ones of `fix*`,
+  `behebe*`, `umsetz*`/`setz… um`, `teste/testen/testet`): each has an everyday meaning ("setze den
+  Wecker um 6", "Diät umsetzen", "Wasserschaden beheben", "Medikament testen"), so one is not coding;
+- exact word forms only: "Testbericht", "Testdaten", "Fixkosten", "Corona-Test", "press release",
+  "reparieren" are not coding (`test_everyday_text_is_not_coding_shaped`).
+
+Fan-out markers keep their precedence over the coding carve-out only when they are EXPLICIT
+(`parallel`, `Worker`, `Perspektiven`, `mehrere Quellen`, ADR-0202). The weak ones
+(`_TRIAGE_WEAK_FANOUT_RE`: "für jeden", "for each", "je eine", recherchiere, vergleiche, compare,
+sammle, collect, crawle) no longer outrank a coding prompt: "Fix the login bug and compare the two
+approaches" is coding. The cost is accepted and one-directional: a research prompt that happens to
+contain a broad coding noun (`app`, `programm`, `test`) now takes the direct turn, never the fan-out.
+
+Replaying 878 distinct real prompts (729 ledger turns + 341 console turns) through `HEAD` and the new
+ladder: 106 → 61 delegating, 45 flips (32 by specific vocabulary, 8 by vocabulary plus a pair, 5 by
+the length rule below), every one towards direct, none towards delegation. The change only narrows
+the band, so the ADR-0229 §1 freeze against widening holds; with worker mode `native` such a turn
+reaches ACS only through `/delegate` or the big-data shape either way. The heuristic stays
+vocabulary-based: a feature request phrased without any of these words still looks like a task.
+
+**Length counts prose only** (`_UNBROKEN_BLOB_RE`): a run of 60+ characters from
+`[A-Za-z0-9+/=_\-.:%?&#~@]` (a pasted key, token, URL, hash) is removed before the 400/160
+thresholds. A pasted licence key crossed 400 characters on its own in 5 real delegations and sent a
+secret through several subprocesses. The class is deliberately not `\S`: text written without spaces
+(Japanese) and CSV pastes keep their length. A genuine task whose length comes mostly from URLs
+counts only its prose.
+
 ## 4. Surface-capability matrix
 
 Not every mechanism exists on every surface — a directive must never assume
@@ -494,3 +530,51 @@ threaded through the click handler).
 non-TDE engine, and for the zero-step edge case (`total_steps === 0` — the
 `engine_progress` event never fires for a TDE run with no steps), so a TDE
 turn is never left without an engine attribution line.
+
+## 9. What the user sees from an ACS run (2026-10-21)
+
+A delegated ACS answer is no longer the bare result text. `acs_runtime.RunTrace` records one plain
+dict per step (no prompt, worker or result text) and the run result carries them (`ACSResult.steps`,
+`ACSResult.loss_history`):
+
+| step | line (German; English variants exist) |
+|---|---|
+| manager decision | `🧭 Iteration 1: Manager teilt in 2 Teilaufgaben auf` / `… meldet Abschluss` |
+| worker result | `🤖 Worker 1/2: erfolgreich (Konfidenz 0.95)` |
+| completion gate | `📊 Gate Iteration 2: bestanden, Loss-Score 0.998 (höher = besser)` |
+
+- **Bridge:** the lines go out live through the same status channel the native tool lines use
+  (`process_one` passes `_emit_status` to `_maybe_delegate_worker`, `_run_acs_delegation` hands it to
+  `ACSRuntime(on_step=…)`); the final message is the answer plus the run summary.
+- **Console:** the console does not stream them; the lines are one block before the run summary.
+- **Run summary** (`format_acs_run_summary`): trigger (`/delegate`, large data volume, worker mode
+  `acs`, fan-out request), outcome, **iterations = manager decision rounds** (the trace; the budget
+  counter `ACSResult.iterations` does not count the completing COMPLETE), loss score and its
+  trajectory, duration. A summary or observer that fails never costs the answer.
+- **The "loss" is a score, higher is better** (ADR-0105: accepted when `total >= target`). The
+  default profile has `target = 0.0` and the critique gate is skipped when the worker reports a
+  confidence at or above `critique_confidence_threshold` (0.95), so an unconfigured run saturates
+  near 1.0 and carries no convergence signal (NOTE-0008).
+- **Steps carry no model text.** `RunTrace.emit` reduces a step to known fields: the manager's
+  decision word and a worker's status come from model output, so anything outside
+  `DELEGATE/COMPLETE/FAIL` or `success/partial/failed` is recorded as `INVALID` / `unknown`, numbers
+  are made finite. A manager round whose answer is unreadable is its own `INVALID` step, so the
+  iteration count equals the number of manager calls. An observer that raises an ordinary exception
+  never changes the run; `CancelledError` still propagates (swallowing it would make the run
+  uncancellable), and a slow observer blocks the loop while it runs.
+- **Both surfaces use one budget.** The bridge spec is built by `adapter._build_bridge_acs_spec` from
+  the console's `_delegation_budget` (Settings `delegation_budget.json`, then tenant YAML, then
+  defaults), so the same tenant gets the same limits on both. The workflow name is sanitised to rule
+  R2. If the console module cannot be imported the spec carries no budget key.
+- **A failed run says why.** `_run_acs_delegation` logs `run <id> ended <status>: <error>`. The
+  bridge spec once carried `delegation_loop.budget: {}`, which rule R31 rejects (`max_depth` is
+  required whenever a budget is present); all 21 bridge ACS decisions were served by the native
+  turn and the only trace was "run produced no text". A caller that passes `budget_override` must
+  include `max_depth` for the same reason (the MCP tool sets 4).
+- **Voice:** the blocks are on-screen information. `strip_for_tts.py` (run by both
+  `adapter.build_voice_summary` and the console's `_summarize_for_speech` before the summarizer)
+  removes the step block and the run summary (exact line formats, CRLF-safe: a heading alone such as
+  "Steps" or "ACS run" followed by ordinary bullets is answer content and stays), so a voice note speaks the answer. Measured on a real
+  run: without it the spoken summary narrated "der ACS-Lauf wurde ausdrücklich ... angefordert".
+- **Proof:** `test_acs_run_trace_e2e.py` (real manager loop + gate chain), `test_acs_process_one_e2e.py`
+  (inbox envelope in, outbox files out) and the console routing E2E.

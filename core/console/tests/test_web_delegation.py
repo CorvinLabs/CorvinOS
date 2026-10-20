@@ -35,7 +35,8 @@ from acs_classify import heuristic_classify as _hc  # noqa: E402
     "Analysiere alle Spieltage der Bundesliga und erstelle danach eine "
     "Übersicht der spannendsten Spiele pro Verein.",
     "Create a report comparing three frameworks and then summarize the steps.",
-    "x" * 400,  # long prompts are substantive by definition
+    # Long PROSE is substantive; one unbroken blob of the same length is not (see below).
+    "Erkläre mir bitte ausführlich die Unterschiede zwischen den drei Ansätzen " * 6,
 ])
 def test_triage_delegates_substantive(prompt: str) -> None:
     assert cr._should_delegate_bundled(prompt) is True
@@ -68,6 +69,14 @@ def test_triage_keeps_trivial_direct(prompt: str) -> None:
     # Long coding prompts stay direct too — length alone must not override
     # the coding shape (pre-rework, ≥400 chars force-delegated everything).
     "Fix the bug in the parser module: " + "der Fehler tritt im Code auf " * 20,
+    # A coding task whose wording carries bulk/fan-out markers ("für jeden",
+    # "alle") used to reach rule 3 (_TRIAGE_FANOUT_RE) BEFORE the coding
+    # carve-out, so it was fanned out to ACS. Coding must win over fan-out.
+    "Schreibe ein Python-Modul, das die Konfigurationsdatei einliest, alle Felder "
+    "gegen ein Schema prüft, fehlende Werte mit Defaults ergänzt, die Ergebnisse "
+    "in eine JSON-Datei schreibt und für jeden Schritt einen Testfall in tests/ "
+    "anlegt. Berücksichtige auch Fehlerfälle und leere Eingaben.",
+    "Implementiere für jeden Endpoint in api.py einen Test, der alle Statuscodes prüft",
 ])
 def test_triage_routes_coding_to_direct_claude_code(prompt: str) -> None:
     """Coding-shaped work takes the direct OS-turn (Claude Code's own
@@ -882,3 +891,99 @@ def test_big_data_still_bounded_on_pipe_blob() -> None:
     t = time.time()
     cr._is_big_data_task("|" * 200_000)
     assert time.time() - t < 0.5
+
+
+# ── real-prompt regressions (2026-10-21, measured on 621 historical prompts) ─────
+
+@pytest.mark.parametrize("prompt", [
+    # Developer work orders with none of the coding NOUNS: 34 of the 62 prompts that
+    # used to reach the ACS fan-out through the generic length / strong-verb rule.
+    "Okay, dann setze das alles um und teste End-to-End, indem du mir das Ergebnis zeigst.",
+    "Fixe alles mit zusätzlichem adversarial Review dann Release 1.6",
+    "ok dann leg los und setze es um und teste e2e und mach alles bis done",
+    "Mach von allem was mit dem Lernsystem zu tun hat einen adversarial review bis 0 findings, dann git push main",
+])
+def test_triage_keeps_developer_work_orders_direct(prompt: str) -> None:
+    assert cr._should_delegate_bundled(prompt) is False
+
+
+@pytest.mark.parametrize("prompt", [
+    "hier mein aktivierungs key. " + "A" * 80 + "." + "B" * 120 + "." + "C" * 200,
+    "nimm mal den hier der ist neu: https://example.org/" + "x" * 450,
+])
+def test_triage_pasted_blob_is_not_a_long_task(prompt: str) -> None:
+    """A pasted key/token/URL crosses the 400-char threshold alone and said nothing
+    about the task's size; it also sent a secret through several subprocesses."""
+    assert cr._should_delegate_bundled(prompt) is False
+
+
+# The coding vocabulary is tested DIRECTLY: a delegation-level test cannot tell "not coding" from
+# "coding but a fan-out verb outranked it", which is how the first version of this test proved nothing.
+@pytest.mark.parametrize("prompt", [
+    "Setze den Wecker um 6 Uhr",                     # separable verb + "um"
+    "Wie war der Corona-Test",
+    "IQ-Test Ergebnisse erklären",
+    "Stiftung Warentest Waschmaschinen",
+    "Die Pressemitteilung (press release) ist fertig",
+    "Fahrrad reparieren",
+    "Diät umsetzen",
+    "Umsetzung der Richtlinie im Unternehmen",
+    "Wasserschaden beheben lassen",                  # ONE ambiguous verb is not a work order
+    "Please fix dinner and test drive the car",      # 'fix' + English 'test' (no German suffix)
+    "Push the main door open",
+    "Testbericht, Testdaten und Fixkosten",          # exact word forms only
+])
+def test_everyday_text_is_not_coding_shaped(prompt: str) -> None:
+    assert cr._is_coding_shaped(prompt) is False
+
+
+@pytest.mark.parametrize("prompt", [
+    "Setze die neue Funktion um und teste sie danach",   # two different ambiguous verbs
+    "Behebe den Fehler und teste alles noch einmal",
+    "Fixe das und setze es um",
+    "adversarial review bis 0 findings",                 # specific words count alone
+    "teste das e2e",
+    "dann git push main",
+    "push das auf main",
+    "Release 1.6 vorbereiten",
+    "Review the PR for the payment service",
+    "Deploye den Service",
+    "Migriere die Datenbank",
+    "Fixing the login",
+])
+def test_engineering_work_orders_are_coding_shaped(prompt: str) -> None:
+    assert cr._is_coding_shaped(prompt) is True
+
+
+@pytest.mark.parametrize("prompt", [
+    # These delegated before and must still delegate: a lookalike word is not a coding signal, and
+    # no other fan-out marker is present that could be what keeps them on the fan-out.
+    "Setze den Wecker um 6 Uhr und erstelle mir danach einen ausführlichen Wochenplan für das Training.",
+    "Erstelle einen Überblick über die Fixkosten eines Haushalts mit mehreren Personen und allen Posten.",
+])
+def test_lookalike_words_do_not_pull_a_real_task_off_the_fanout(prompt: str) -> None:
+    assert cr._TRIAGE_FANOUT_RE.search(prompt) is None, "test premise: no fan-out marker present"
+    assert cr._should_delegate_bundled(prompt) is True
+
+
+@pytest.mark.parametrize("prompt", [
+    "Deploye den Service auf den Testserver und prüfe danach die Logs genau.",
+    "Migriere die Datenbank auf das neue Schema und sammle danach alle Fehler aus den Logs.",
+    "Fix the login bug and compare the two approaches in the auth module please, with all the details.",
+])
+def test_weak_fanout_verbs_do_not_outrank_coding(prompt: str) -> None:
+    """vergleiche/compare/sammle/recherchiere are generic; only explicit parallelism outranks coding."""
+    assert cr._should_delegate_bundled(prompt) is False
+
+
+def test_explicit_parallelism_still_outranks_coding() -> None:
+    assert cr._should_delegate_bundled(
+        "Review den Code aus Security-, Performance- und Style-Perspektive parallel") is True
+
+
+def test_text_without_spaces_is_not_mistaken_for_a_pasted_blob() -> None:
+    jp = "これはとても長い依頼です。" * 40            # 520 chars, no spaces
+    csv = ",".join(["12.5", "abc", "7"] * 60)        # data paste, commas break any run
+    assert cr._UNBROKEN_BLOB_RE.search(jp) is None
+    assert cr._UNBROKEN_BLOB_RE.search(csv) is None
+    assert cr._should_delegate_bundled(jp) is True    # unchanged from before the length rule

@@ -3345,12 +3345,22 @@ _TRIAGE_CODING_RE = re.compile(
     r"|endpoint|api|schnittstelle"
     r"|code|quellcode|source\s?file|skript|script"
     r"|implementiere|implement|programmiere"
+    # Engineering work orders that are SPECIFIC enough to count alone. Measured on real prompts
+    # (2026-10-21): most of the prompts that delegated were developer imperatives with none of
+    # the nouns above ("setze das alles um und teste e2e", "adversarial review", "push auf
+    # main"), so they reached the ACS fan-out through the generic length/strong-verb rule.
+    # The ambiguous verbs (fix, behebe, umsetzen, testen) are NOT here: see
+    # _TRIAGE_WORKORDER_WEAK_RE, they need a second one.
+    r"|e2e|end[\s\-]to[\s\-]end|adversarial|release\s+v?\d"
+    r"|implementier\w*|implementation|implementing|implemented|fixing"
+    r"|git\s+push|push(e|en)?\s+(\S+\s+){0,2}(auf|to|on)\s+main"
+    r"|prs?|migrier\w*|migrate[sd]?"
     # Crash/freeze vocabulary (review F5): a bug report rarely names a code
     # token — "die App stürzt ab", "fix the crash", "hängt sich auf" — yet is
     # squarely coding work that must stay on the sequential direct turn.
     r"|crash|absturz|abstürzt|stürzt\s+ab|abgestürzt"
     r"|hängt(\s+sich)?(\s+auf)?|hangs?|freeze[sd]?|einfriert|eingefroren"
-    r"|app|anwendung|programm|deployment|deploy"
+    r"|app|anwendung|programm|deployment|deploy\w*"
     r")\b"
     r"|\.(py|js|ts|tsx|jsx|go|rs|java|c|cpp|h|cs|rb|php|sh|ps1|yaml|yml|json|toml|sql|md)\b"
     r"|```",
@@ -3414,6 +3424,33 @@ _TRIAGE_FANOUT_RE = re.compile(
     r"|vergleiche|compare"
     r"|sammle|collect|crawle"
     r")\b",
+    re.IGNORECASE,
+)
+# One unbroken run of 60+ token characters: a pasted key, token, URL or hash. The class is
+# deliberately NOT \S: text written without spaces (Japanese, Chinese) or with accented letters
+# must keep counting as text, and so must a CSV paste (its commas break the run).
+_UNBROKEN_BLOB_RE = re.compile(r"[A-Za-z0-9+/=_\-.:%?&#~@]{60,}")
+# Ambiguous engineering verbs. Each also has an everyday meaning ("setze den Wecker um 6",
+# "Diät umsetzen", "Wasserschaden beheben", "Medikament testen"), so ONE of them is not coding;
+# two different ones are a work order ("setze das alles um und teste ...").
+_TRIAGE_WORKORDER_WEAK_RE = re.compile(
+    r"\b(?:(?P<fix>fix(?:e|en|t)?)|(?P<behebe>behebe\w*)"
+    r"|(?P<umsetz>umsetz\w*|umgesetzt|setz\w*\s+(?:\S+\s+){0,3}um(?!\s*\d))"
+    r"|(?P<test>test(?:e|en|et)))\b",
+    re.IGNORECASE,
+)
+def _is_coding_shaped(p: str) -> bool:
+    """Coding vocabulary, or an engineering work order (two DIFFERENT ambiguous verbs)."""
+    return bool(_TRIAGE_CODING_RE.search(p)) or (
+        len({m.lastgroup for m in _TRIAGE_WORKORDER_WEAK_RE.finditer(p)}) >= 2)
+
+
+# Fan-out markers that do NOT outrank a coding prompt: per-item quantifiers and the generic
+# research/compare/collect verbs. "Fix the login bug and compare the two fixes" is coding. Explicit
+# parallelism ("parallel", "Worker", "Perspektiven", "mehrere Quellen") still wins (ADR-0202).
+_TRIAGE_WEAK_FANOUT_RE = re.compile(
+    r"für\s+jede[ns]?|for\s+each|je\s+eine?n?"
+    r"|recherchiere|recherchen|research|vergleiche|compare|sammle|collect|crawle",
     re.IGNORECASE,
 )
 
@@ -4076,6 +4113,10 @@ def _should_delegate_bundled(prompt: str) -> bool:
     Regex anchors prevent false-positives: "latest" ≁ test, "prefix" ≁ fix.
     """
     p = prompt.strip()
+    # Length counts prose only. A pasted licence key, JWT or URL is one unbroken run of
+    # 60+ characters and says nothing about the task's size: 5 of 62 real delegations
+    # (2026-10-21) were a pasted key that crossed the 400-character threshold on its own.
+    _plen = len(_UNBROKEN_BLOB_RE.sub(" ", p))
     # Word-boundary match, in lockstep with stream_turn's `_force_delegate`
     # (2026-07-24 refutation: a bare `startswith` here made "/delegatex …"
     # delegate while stream_turn treated it as a plain prompt — two parsers
@@ -4093,7 +4134,7 @@ def _should_delegate_bundled(prompt: str) -> bool:
     # "LOOP … never route into the ACS fan-out"). DELEGATE deliberately stays
     # BELOW rule 1b: a named engine + explicit workers must keep fanning
     # out (F2/F3/F4).
-    _coding = bool(_TRIAGE_CODING_RE.search(p))
+    _coding = _is_coding_shaped(p)
     _bp = _acs_x_blueprint(p)
     # Rule 1b — an EXPLICIT worker/fan-out demand wins over the classifier's
     # product-noun collisions (Apple *Watch* → LOOP 0.85, 4K *Monitor*) AND
@@ -4136,23 +4177,31 @@ def _should_delegate_bundled(prompt: str) -> bool:
                 return False
         elif _bp.confidence >= 0.50:  # LOOP/GOAL/COMPUTE at any real signal
             return False
-    if _TRIAGE_FANOUT_RE.search(p):
+    # A coding task whose ONLY fan-out markers are weak ones (a per-item quantifier like "für
+    # jeden Schritt einen Testfall", or the generic verbs vergleiche/recherchiere/sammle) is still
+    # sequential coding (§6 invariant: coding never routes into the ACS fan-out). Explicit
+    # parallelism ("parallel", "Worker", "Perspektiven", "mehrere Quellen") keeps its precedence over
+    # the coding carve-out below (ADR-0202).
+    _fanout_hits = [m.group(0) for m in _TRIAGE_FANOUT_RE.finditer(p)]
+    if _coding and all(_TRIAGE_WEAK_FANOUT_RE.fullmatch(h) for h in _fanout_hits):
+        return False
+    if _fanout_hits:
         has_verb = bool(_TRIAGE_VERB_RE.search(p) or _TRIAGE_STRONG_RE.search(p))
         has_multi = bool(_TRIAGE_MULTI_RE.search(p))
         # Fan-out markers on smalltalk ("wie vergleiche ich?") still need a
         # substantive shape: a verb plus multi-step/length. (Explicit
         # parallel/worker words already returned True at rule 1b.)
-        if has_verb and (has_multi or len(p) >= 160):
+        if has_verb and (has_multi or _plen >= 160):
             return True
     if _coding:
         return False
-    if len(p) >= 400:
+    if _plen >= 400:
         return True
     if _TRIAGE_STRONG_RE.search(p):
         return True
     has_verb = bool(_TRIAGE_VERB_RE.search(p))
     has_multi = bool(_TRIAGE_MULTI_RE.search(p))
-    return has_verb and (has_multi or len(p) >= 160)
+    return has_verb and (has_multi or _plen >= 160)
 def _is_big_data_task(prompt: str) -> bool:
     """Deterministic big-data signal — the ONE auto-delegation a `native`
     install still performs. The implementation now lives in the shared
@@ -7670,6 +7719,25 @@ async def _stream_turn_impl(
                 else:
                     final = ((f"Delegation fehlgeschlagen: {error_msg[:250]}") if _msg_de
                              else f"Delegation failed: {error_msg[:250]}")
+            # The user sees WHY the fan-out ran and how it ended, not only the answer.
+            # A summary that cannot be built must never cost the delegated answer.
+            try:
+                from delegation_policy import acs_trigger_label as _acs_trigger  # noqa: PLC0415
+                _summary = _acs.format_acs_run_summary(
+                    res,
+                    trigger=_acs_trigger(force_delegate=_force_delegate,
+                                         is_big_data=_is_big_data_task(prompt),
+                                         mode=_worker_mode, german=_msg_de),
+                    german=_msg_de,
+                )
+                # The console cannot stream the steps, so the step lines go in the answer
+                # before the run summary (same order as the bridge's live lines + summary).
+                _steps = _acs.format_acs_steps(getattr(res, "steps", None) or [], german=_msg_de)
+                _tail = f"{_steps}\n\n{_summary}" if _steps else _summary
+                final = f"{final}\n\n{_tail}" if final else _tail
+            except Exception as _sum_exc:  # noqa: BLE001
+                _log.warning("[delegation] run summary skipped (%s) — answer sent without it",
+                             _sum_exc)
             _dbg(sess.workdir, "acs.run.done",
                  run_id=getattr(res, "run_id", run_id),
                  status=res.status,

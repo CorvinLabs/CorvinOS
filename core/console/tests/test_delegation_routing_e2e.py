@@ -46,6 +46,14 @@ def _drain(agen) -> list[dict]:
     return asyncio.run(_collect())
 
 
+# The real run-summary formatter (ACS run summary), loaded once at collection
+# time so the fake acs_runtime below can expose the same function the
+# production module does. Without it the summary is skipped by design.
+_BRIDGES_SHARED = Path(__file__).resolve().parents[3] / "corvin_operator" / "bridges" / "shared"
+if str(_BRIDGES_SHARED) not in sys.path:
+    sys.path.insert(0, str(_BRIDGES_SHARED))
+import acs_runtime as _real_acs_runtime  # noqa: E402
+
 class _FakeACSResult:
     run_id = "acs-e2e-000"
     workflow_id = "wf-e2e"
@@ -58,6 +66,8 @@ class _FakeACSResult:
     budget_breach = False
     elapsed_s = 0.1
     run_dir = None
+    steps = [{"kind": "decision", "iteration": 1, "decision": "COMPLETE", "n_subtasks": 0}]
+    loss_history = [0.5]
 
 
 class _StreamTurnE2EBase(unittest.TestCase):
@@ -138,6 +148,8 @@ class _StreamTurnE2EBase(unittest.TestCase):
 
         acs_mod.ACSRuntime = FakeACSRuntime  # type: ignore[attr-defined]
         acs_mod.ACSResult = _FakeACSResult   # type: ignore[attr-defined]
+        acs_mod.format_acs_run_summary = _real_acs_runtime.format_acs_run_summary  # type: ignore[attr-defined]
+        acs_mod.format_acs_steps = _real_acs_runtime.format_acs_steps  # type: ignore[attr-defined]
         sys.modules["acs_runtime"] = acs_mod
 
     def _no_spawn_guard(self):
@@ -262,6 +274,16 @@ class DelegationRoutingE2ETest(_StreamTurnE2EBase):
         self.assertTrue(self._took_acs(events),
                         "fan-out-shaped research must take the ACS fan-out")
         self.assertEqual(events[-1].get("type"), "done")
+        # The user gets the answer plus a run summary: why it ran, how it ended.
+        shown = " ".join(e.get("text") or "" for e in events
+                         if e.get("type") in ("delta", "result"))
+        self.assertIn("ACS-Lauf", shown)
+        self.assertIn("- Auslöser: ", shown)
+        self.assertIn("- Ergebnis: abgeschlossen", shown)
+        # The step trace is shown before the summary on this surface (no live streaming here).
+        self.assertIn("Verlauf", shown)
+        self.assertIn("🧭 Iteration 1: Manager meldet Abschluss", shown)
+        self.assertIn("- Loss-Score (höher = besser): 0.500", shown)
 
     # ── Rule 7: coding shape → direct, no ACS ────────────────────────────────
 

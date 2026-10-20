@@ -959,3 +959,20 @@ def _is_big_data_task(prompt: str) -> bool:
 def is_big_data_task(prompt: str) -> bool:
     """Public name for the shared big-data signal (see `_is_big_data_task`)."""
     return _is_big_data_task(prompt)
+
+
+def acs_trigger_label(*, force_delegate: bool, is_big_data: bool, mode: str,
+                      german: bool = True) -> str:
+    """Why an ACS run started, in words the user reads in the run summary.
+
+    Mirrors the order of :func:`worker_engine_target`: an explicit ``/delegate``
+    first, then a big-data shape, then the operator's worker-engine setting.
+    """
+    if force_delegate:
+        return "/delegate (ausdrücklich angefordert)" if german else "/delegate (explicitly requested)"
+    if is_big_data:
+        return "große Datenmenge erkannt" if german else "large data volume detected"
+    if mode == "acs":
+        return ('Worker-Modus „acs“ eingestellt' if german
+                else 'worker mode set to "acs"')
+    return "Fan-out-Anfrage" if german else "fan-out request"
