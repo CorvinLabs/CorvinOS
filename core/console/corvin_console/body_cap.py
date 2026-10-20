@@ -46,6 +46,8 @@ BODY_CAPS = {
 BODY_CAP_PREFIXES = {
     # POST /chat/sessions/{sid}/attachments
     "/v1/console/chat/sessions/": 512 * MIB,
+    # POST /workflows/{wid}/attachments (CONCEPT-0115) — same envelope as the chat upload
+    "/v1/console/workflows/": 512 * MIB,
 }
 
 

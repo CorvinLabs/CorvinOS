@@ -444,6 +444,37 @@ def forge_intake_item(*, tenant_id: str, report: dict, run_id: str = "") -> None
     _emit(event, tenant_id=tenant_id, details=details, severity="WARNING" if event.endswith("refused") else None)
 
 
+def workflow_attachment_uploaded(*, tenant_id: str, wid: str, att_id: str, size_bytes: int, mime: str,
+                                 sha256_prefix: str, sid_fingerprint: str) -> None:
+    """CONCEPT-0115: one record per stored workflow attachment. Ids, size, a closed mime shape and a
+    hash prefix only - never the file name or any content."""
+    _emit("workflow.attachment_uploaded", tenant_id=tenant_id,
+          details={"tenant_id": tenant_id, "wid": wid, "att_id": att_id, "size_bytes": int(size_bytes),
+                   "mime": mime, "sha256_prefix": sha256_prefix, "sid_fingerprint": sid_fingerprint})
+
+
+def workflow_attachment_deleted(*, tenant_id: str, wid: str, att_id: str, sid_fingerprint: str,
+                                reason_code: str = "operator") -> None:
+    _emit("workflow.attachment_deleted", tenant_id=tenant_id,
+          details={"tenant_id": tenant_id, "wid": wid, "att_id": att_id,
+                   "sid_fingerprint": sid_fingerprint, "reason_code": reason_code})
+
+
+def workflow_attachment_snapshot(*, tenant_id: str, wid: str, rid: str, att_id: str, size_bytes: int,
+                                 sha256_prefix: str) -> None:
+    _emit("workflow.attachment_snapshot", tenant_id=tenant_id,
+          details={"tenant_id": tenant_id, "wid": wid, "rid": rid, "att_id": att_id,
+                   "size_bytes": int(size_bytes), "sha256_prefix": sha256_prefix})
+
+
+def workflow_attachment_refused(*, tenant_id: str, wid: str, att_id: str, reason_code: str,
+                                sid_fingerprint: str = "") -> None:
+    """A referenced attachment was refused before any spawn (missing, changed, foreign, unreadable)."""
+    _emit("workflow.attachment_refused", tenant_id=tenant_id,
+          details={"tenant_id": tenant_id, "wid": wid, "att_id": att_id[:40],
+                   "reason_code": reason_code, "sid_fingerprint": sid_fingerprint})
+
+
 def session_denied(
     *,
     reason: str,

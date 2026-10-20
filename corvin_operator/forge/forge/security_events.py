@@ -157,6 +157,11 @@ EVENT_SEVERITY: dict[str, str] = {
     "forge_intake.item_admitted": "INFO",
     "forge_intake.item_redacted": "INFO",
     "forge_intake.item_refused":  "WARNING",
+    # CONCEPT-0115 / ADR-2270 - workflow attachment store (console/corvin_console/audit.py::workflow_attachment_*).
+    "workflow.attachment_uploaded": "INFO",
+    "workflow.attachment_deleted":  "INFO",
+    "workflow.attachment_snapshot": "INFO",
+    "workflow.attachment_refused":  "WARNING",
     # registry lifecycle (past-tense canonical names, emitted by registry.py)
     "tool.created":              "INFO",
     "tool.deleted":              "INFO",
@@ -3228,6 +3233,13 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
         "tenant_id", "item_id", "run_id", "kind", "format", "data_class", "size_bytes", "sha256_prefix",
         "pii_kinds_count", "columns", "reason_code",
     }),
+    # CONCEPT-0115 / ADR-2270: ids, a count, a closed mime shape and a hash prefix. NEVER: a file name or any content.
+    "workflow.attachment_uploaded": frozenset({
+        "tenant_id", "wid", "att_id", "size_bytes", "mime", "sha256_prefix", "sid_fingerprint",
+    }),
+    "workflow.attachment_deleted": frozenset({"tenant_id", "wid", "att_id", "sid_fingerprint", "reason_code"}),
+    "workflow.attachment_snapshot": frozenset({"tenant_id", "wid", "rid", "att_id", "size_bytes", "sha256_prefix"}),
+    "workflow.attachment_refused": frozenset({"tenant_id", "wid", "att_id", "reason_code", "sid_fingerprint"}),
     "forge_run.finished": frozenset({
         "tenant_id", "run_id", "run_kind", "status", "artifact_kind", "artifact_id", "event_count", "truncated",
     }),

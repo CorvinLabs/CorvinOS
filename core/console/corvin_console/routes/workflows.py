@@ -2071,6 +2071,20 @@ def resume_run(
             detail="concurrent-workflow limit check unavailable — try again",
         ) from _wf_unexpected
 
+    # CONCEPT-0115: the human's reply is text the resumed run hands to later nodes' engines.
+    # It passes the same four pre-spawn gates BEFORE the checkpoint is claimed; a refusal
+    # leaves the run paused (the operator can answer differently) and spawns nothing.
+    _reply_refusal = _spawn_gates.check_console_spawn_or_refusal(
+        body.reply, tenant_id=rec.tenant_id, persona="assistant",
+        channel="workflow-resume", chat_key=f"workflow-resume:{wid}:{rid}",
+        engine_id="claude_code",
+    )
+    if _reply_refusal is not None:
+        raise HTTPException(
+            http_status.HTTP_403_FORBIDDEN,
+            detail={"error": "refused", "message": _reply_refusal},
+        )
+
     # CON-F3 (ADR-0171): hash-chain every resumed node event into the owner's
     # audit chain (parity with start_run). Each DAGRunner event carrying a
     # node_id becomes an allowlisted console.action_performed with the node id
@@ -3062,6 +3076,22 @@ async def _stream_run(
         run_meta.update({"status": "complete", "ok": True, "finished_at": time.time()})
         _write_atomic(_run_meta_path(tenant_id, wid, rid), run_meta)
         return
+
+    # CONCEPT-0115 (variant b): freeze the workflow's attachments for THIS run. A missing or
+    # changed attachment refuses the run — it is never started with different bytes than were
+    # uploaded. Records go into the run meta; each item is audited (workflow.attachment_snapshot).
+    try:
+        _att_snapshot = await asyncio.get_running_loop().run_in_executor(
+            None, _composer.snapshot_for_run, tenant_id, wid, rid)
+    except _composer.AttachmentError as exc:
+        yield _emit({"type": "error", "ts": time.time(), "message": f"Attachment check failed: {exc}"})
+        run_meta.update({"status": "failed", "ok": False, "error": f"attachment {exc.code}",
+                         "finished_at": time.time()})
+        _write_atomic(_run_meta_path(tenant_id, wid, rid), run_meta)
+        return
+    if _att_snapshot:
+        run_meta["attachments"] = _att_snapshot
+        _write_atomic(_run_meta_path(tenant_id, wid, rid), run_meta)
 
     # Real run: topological execution via claude -p per node, streaming events as each completes.
     try:
@@ -4066,15 +4096,34 @@ def _chat_history_text(chat: list[dict[str, Any]], n: int = 10) -> str:
     for m in chat[-n:]:
         role = m.get("role", "user")
         content = m.get("content", "")
+        if m.get("refused"):  # a gate-refused user line is stored as hash+length only, never replayed
+            continue
         if isinstance(content, str) and content and role in ("user", "assistant"):
             lines.append(f"{'User' if role == 'user' else 'Assistant'}: {content}")
     return "\n".join(lines)
 
-def _generate_awp_yaml(chat: list[dict[str, Any]], user_msg: str, wid: str) -> str | None:
-    """Call Claude to generate a valid AWP YAML from conversation context."""
+def _generate_awp_yaml(chat: list[dict[str, Any]], user_msg: str, wid: str,
+                       tenant_id: str | None = None) -> str | None:
+    """Call Claude to generate a valid AWP YAML from conversation context.
+
+    CONCEPT-0115: this builds its OWN prompt (up to 12 history lines plus the turn) and used
+    to spawn without a gate of its own — the chat prompt's gate saw fewer lines. The gate now
+    classifies the prompt that is actually spawned; a refusal skips the YAML update (the gate
+    has already written its L16 deny event) and no engine is started. ``tenant_id=None`` is
+    refused: an ungated spawn is never the fallback."""
     full_chat = chat + [{"role": "user", "content": user_msg}]
     history = _chat_history_text(full_chat, n=12)
     prompt = _AWP_YAML_PROMPT.format(history=history)
+    if not tenant_id:
+        _log.warning("workflow yaml generation refused: no tenant for the spawn gate (wid=%s)", wid)
+        return None
+    _yaml_refusal = _spawn_gates.check_console_spawn_or_refusal(
+        prompt, tenant_id=tenant_id, persona="assistant",
+        channel="workflow-design-yaml", chat_key=f"workflow-design:{wid}",
+        engine_id="claude_code",
+    )
+    if _yaml_refusal is not None:
+        return None
     raw = _run_claude_for_design(prompt)
     if not raw:
         return None
@@ -4207,6 +4256,7 @@ async def _design_turn(
     tenant_id: str,
     wid: str,
     user_msg: str,
+    attachment_block: str = "",
 ) -> dict[str, Any]:
     meta = _read_json(_meta_path(tenant_id, wid)) or {}
     phase = str(meta.get("phase", "discovering"))
@@ -4269,7 +4319,9 @@ async def _design_turn(
     history = _chat_history_text(chat, n=8)
     lang = _detect_lang(user_msg + " " + history)
     connected_tools = _get_connected_connector_ids(tenant_id)
-    chat_prompt = _build_chat_prompt(phase, nodes_summary, history, user_msg, should_build_yaml, connected_tools, lang)
+    # CONCEPT-0115: the text of the turn's attachments rides in the SAME prompt the gates classify.
+    turn_msg = f"{user_msg}\n\n{attachment_block}" if attachment_block else user_msg
+    chat_prompt = _build_chat_prompt(phase, nodes_summary, history, turn_msg, should_build_yaml, connected_tools, lang)
 
     # ── Round-4 finding #1: fail-closed, audit-first pre-spawn gate ──────────
     # The design-assistant spawns `claude -p` (`_run_claude_for_design`, and the
@@ -4294,7 +4346,7 @@ async def _design_turn(
     # ── Run chat reply and (optionally) YAML generation in parallel ───
     if should_build_yaml:
         chat_task = loop.run_in_executor(None, _run_claude_for_design, chat_prompt)
-        yaml_task = loop.run_in_executor(None, _generate_awp_yaml, chat, user_msg, wid)
+        yaml_task = loop.run_in_executor(None, _generate_awp_yaml, chat, turn_msg, wid, tenant_id)
         results = await asyncio.gather(chat_task, yaml_task, return_exceptions=True)
         raw_reply = results[0] if not isinstance(results[0], BaseException) else ""
         new_yaml = results[1] if not isinstance(results[1], BaseException) else None
@@ -4335,6 +4387,23 @@ async def _design_turn(
         "phase_update": phase_update,
         "summary_card": None,
         "template_offer": None,
+    }
+
+_WITHHELD_TEXT = "(message withheld by a policy gate)"
+
+def _public_chat_line(m: dict[str, Any]) -> dict[str, Any]:
+    """A transcript line as the client sees it. A gate-refused user line is stored as hash +
+    length only (the Session-Ledger rule): it is shown as a placeholder, never as its text."""
+    if m.get("refused"):
+        return {"role": m.get("role", "user"), "content": _WITHHELD_TEXT, "ts": m.get("ts"), "refused": True}
+    return m
+
+def _refused_user_line(user_text: str) -> dict[str, Any]:
+    import hashlib
+    return {
+        "role": "user", "content": "", "ts": time.time(), "refused": True,
+        "user_sha256": hashlib.sha256(user_text.encode("utf-8")).hexdigest(),
+        "user_len": len(user_text),
     }
 
 def _scripted_response(phase: str, user_msg: str) -> str:
@@ -4430,7 +4499,7 @@ async def workflow_chat_ws(
         "phase": meta.get("phase", "discovering"),
         "yaml": yaml_text,
         "graph": _parse_graph(yaml_text),
-        "chat": chat[-50:],
+        "chat": [_public_chat_line(m) for m in chat[-50:]],
     })
 
     if not chat:
@@ -4493,14 +4562,16 @@ async def workflow_chat_ws(
                 continue
 
             user_text = str(data.get("text", "")).strip()[:_MAX_CHAT_MSG_CHARS]
-            if not user_text:
+            raw_att = data.get("attachments")
+            att_ids: list[str] = [str(x) for x in raw_att] if isinstance(raw_att, list) else []
+            if not user_text and not att_ids:
                 continue
 
             # CONCEPT-0115: a `/word` line is a design-chat COMMAND, answered here
             # from the server table. It never spawns an engine, is never charged as
             # a design turn and is never written into the transcript that later
             # design prompts are built from.
-            _cmd = _composer.parse_design_command(user_text)
+            _cmd = _composer.parse_design_command(user_text) if not att_ids else None
             if _cmd is not None:
                 _meta_now = _read_json(_meta_path(rec.tenant_id, wid)) or {}
                 _yaml_now = yaml_p.read_text(encoding="utf-8") if yaml_p.exists() else ""
@@ -4529,6 +4600,23 @@ async def workflow_chat_ws(
                 })
                 continue
 
+            # CONCEPT-0115: attachments are named by id only. The server decides everything:
+            # existence, tenant (the path is built from the session record), size/hash, and
+            # that the designer can read the type. The first failure refuses the whole message
+            # BEFORE any charge, persistence or spawn.
+            att_items: list[tuple[dict[str, Any], Path]] = []
+            if att_ids:
+                try:
+                    att_items = await anyio.to_thread.run_sync(
+                        _composer.resolve_for_message, rec.tenant_id, wid, att_ids, rec.sid_fingerprint)
+                except _composer.AttachmentError as exc:
+                    await websocket.send_json({"type": "error", "code": exc.http_status, "message": str(exc)})
+                    continue
+                if not user_text:
+                    user_text = "Please use the attached file(s) for the workflow."
+            attachment_block = _composer.inline_block(att_items) if att_items else ""
+            att_public = [_composer.public_view(m) for m, _p in att_items]
+
             # ADR-0150 LIC-WFDESIGN-SPAWN-02: each design message spawns 1-2 paid
             # `claude -p`. Charge the SEPARATE chat_turns_per_day axis (interactive,
             # not the compute-workload counter) before spawning; on 402 send an
@@ -4546,7 +4634,29 @@ async def workflow_chat_ws(
                 })
                 continue
 
+            # CONCEPT-0115 gate scope: the operator's words AND the attachment text pass the four
+            # pre-spawn gates BEFORE the line is written to the transcript. A refused line is stored as
+            # hash + length only, so it can never reach a later prompt (the YAML prompt replays 12 lines).
+            _input_refusal = _spawn_gates.check_console_spawn_or_refusal(
+                f"{user_text}\n\n{attachment_block}" if attachment_block else user_text,
+                tenant_id=rec.tenant_id, persona="assistant",
+                channel="workflow-design-input", chat_key=f"workflow-design:{wid}",
+                engine_id="claude_code",
+            )
+            if _input_refusal is not None:
+                refused_line = _refused_user_line(user_text)
+                refusal_reply: dict[str, Any] = {"role": "assistant", "content": _input_refusal, "ts": time.time()}
+                if not (await _append_chat_line_async(rec.tenant_id, wid, refused_line)
+                        and await _append_chat_line_async(rec.tenant_id, wid, refusal_reply)):
+                    await _refuse_chat_lock_busy(websocket, rec, wid, "workflow.design_turn")
+                    continue
+                await websocket.send_json({"type": "message", **_public_chat_line(refused_line)})
+                await websocket.send_json({"type": "message", **refusal_reply})
+                continue
+
             user_msg_obj: dict[str, Any] = {"role": "user", "content": user_text, "ts": time.time()}
+            if att_public:
+                user_msg_obj["attachments"] = att_public
             # Refuse the turn BEFORE spending the design LLM call: a turn whose
             # user message is missing from the transcript would desynchronise
             # the history the next design turn is built from.
@@ -4556,7 +4666,7 @@ async def workflow_chat_ws(
             await websocket.send_json({"type": "message", **user_msg_obj})
             await websocket.send_json({"type": "typing"})
 
-            result = await _design_turn(rec.tenant_id, wid, user_text)
+            result = await _design_turn(rec.tenant_id, wid, user_text, attachment_block)
 
             assistant_payload: dict[str, Any] = {
                 "role": "assistant",
