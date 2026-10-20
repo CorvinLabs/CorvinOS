@@ -1735,7 +1735,7 @@ function EditorToolbar({
   };
 
   return (
-    <div className="flex items-center gap-1.5 border-t border-border bg-background/80 px-4 py-2.5 backdrop-blur">
+    <div className="flex items-center gap-1.5 border-b border-border bg-background/80 px-4 py-2.5 backdrop-blur">
       {!isRunning ? (
         <>
           <Button size="sm" variant="default" onClick={() => onTest(false)} disabled={!yaml.trim()}>
@@ -2999,6 +2999,19 @@ export function WorkflowEditorPage() {
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Center: Canvas */}
         <div className="relative flex flex-1 flex-col min-w-0">
+          <EditorToolbar
+            wid={wid!}
+            csrf={session!.csrf_token}
+            yaml={yaml}
+            onTest={startRun}
+            onStop={stopRun}
+            isRunning={isRunning}
+            hasSchedule={wf.has_schedule}
+            onSchedule={() => setScheduleOpen(true)}
+            onImport={handleImport}
+            graph={graph}
+          />
+          <div className="relative flex flex-1 min-h-0 flex-col">
           <AwpCanvas
             nodes={graph}
             nodeStates={nodeStates}
@@ -3010,7 +3023,7 @@ export function WorkflowEditorPage() {
           {/* M10: Quick-Add FAB */}
           <button
             className={cn(
-              "absolute bottom-14 right-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card shadow-md",
+              "absolute bottom-4 right-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card shadow-md",
               "text-muted-foreground transition-colors hover:border-accent/50 hover:text-accent active:scale-95",
               showQuickAdd && "border-accent/50 bg-accent/10 text-accent",
             )}
@@ -3025,6 +3038,7 @@ export function WorkflowEditorPage() {
               onClose={() => setShowQuickAdd(false)}
             />
           )}
+          </div>
           {/* HITL Approval Bar (binary approve/reject — "approval" node type) */}
           {awaitingApproval && currentRid && (
             <HitlApprovalBar
@@ -3083,18 +3097,6 @@ export function WorkflowEditorPage() {
             csrf={session!.csrf_token}
           />
         </div>
-          <EditorToolbar
-            wid={wid!}
-            csrf={session!.csrf_token}
-            yaml={yaml}
-            onTest={startRun}
-            onStop={stopRun}
-            isRunning={isRunning}
-            hasSchedule={wf.has_schedule}
-            onSchedule={() => setScheduleOpen(true)}
-            onImport={handleImport}
-            graph={graph}
-          />
         </div>
 
         {/* Right: Inspector / Explanation */}
