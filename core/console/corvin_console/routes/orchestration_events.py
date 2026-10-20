@@ -15,6 +15,8 @@ from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from ..chat_runtime import _status_icon  # ADR-2269 one icon vocabulary
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/orchestration", tags=["orchestration"])
@@ -73,7 +75,7 @@ async def websocket_orchestration_events(websocket: WebSocket):
         "batch_id": "batch_1234567",
         "task_count": 3,
         "success_count": 3,
-        "text": "✅ 3 background tasks completed successfully",
+        "text": f"{_status_icon('done')} 3 background tasks completed successfully",
         "voice_attachment_url": "/api/orchestration/voice/batch_1234567.ogg",
         "timestamp": 1695386400.123
     }

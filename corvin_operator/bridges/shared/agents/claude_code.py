@@ -49,6 +49,11 @@ from typing import Any, IO, Iterator
 
 from . import StreamEvent, parse_jsonl_line, terminate_process_tree
 
+try:  # ADR-2269 one icon vocabulary
+    from ..status_markers import icon as _icon
+except ImportError:  # loaded flat
+    from status_markers import icon as _icon  # type: ignore
+
 #: Error text of the StreamEvent emitted when a spawn outlives its
 #: ``timeout``. Public so callers (a2a_worker) can map it to their own
 #: timeout status without string-duplicating it.
@@ -489,7 +494,7 @@ class ClaudeCodeEngine:
         self._eci_resume_session_id = session_id
         return CommandResult(
             success=True,
-            message=f"📌 Session-ID gesetzt: {session_id} — wirkt beim nächsten Turn",
+            message=f"{_icon('decision')} Session-ID gesetzt: {session_id} — wirkt beim nächsten Turn",
         )
 
     def __init__(self, *, binary: str | None = None) -> None:

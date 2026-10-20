@@ -670,6 +670,13 @@ except ImportError:
         _status_markers = None
 
 
+def _chat_status_rule_part() -> list[str]:
+    """ADR-2269: the status-marker rule as a system-prompt part, for engines that take
+    one ``system`` string (Codex, OpenCode). Claude turns get it via system_prompt_for."""
+    rule = _status_markers.status_marker_rule() if _status_markers else ""
+    return [rule] if rule else []
+
+
 def _status_icon(name: str) -> str:
     """Status icon from the one shared vocabulary (``status_markers.icon``)."""
     return _status_markers.icon(name) if _status_markers else ""
@@ -4996,7 +5003,7 @@ def _heartbeat_writer(sender: str, msg_id: str, channel: str, chat_id,
             "channel": channel,
             "to": sender,
             "msg_id": msg_id,
-            "text": "⏳ Processing...",
+            "text": f"{_status_icon('running')} Processing...",
             "_heartbeat": True,
         }
         if chat_id is not None:
@@ -5479,8 +5486,8 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
 _TOOL_ICONS = {
     "Read": "📖", "Edit": "✏️", "Write": "📝", "NotebookEdit": "📓",
     "Bash": "💻", "Grep": "🔎", "Glob": "📁",
-    "WebFetch": "🌐", "WebSearch": "🔍",
-    "Task": "🤖", "TodoWrite": "✅",
+    "WebFetch": "🌐", "WebSearch": _status_icon('investigating'),
+    "Task": "🤖", "TodoWrite": "📝",  # a tool call, not a verified result: the done icon is reserved for that
     "ExitPlanMode": "📋", "EnterPlanMode": "📋",
 }
 
@@ -5489,7 +5496,7 @@ _TOOL_ICONS = {
 # TodoWrite + Task + ExitPlanMode = der grobe Plan, was Claude vorhat.
 _PLAN_LEVEL_TOOLS = frozenset({"TodoWrite", "Task", "ExitPlanMode"})
 
-_TODO_ICONS = {"pending": "⏳", "in_progress": "🔄", "completed": "✅"}
+_TODO_ICONS = {"pending": _status_icon('running'), "in_progress": "🔄", "completed": _status_icon('done')}
 
 
 def _format_tool_use_status(
@@ -5516,7 +5523,7 @@ def _format_tool_use_status(
         lines = ["📋 *Plan:*"]
         for t in todos[:12]:
             status = t.get("status", "pending")
-            tick = _TODO_ICONS.get(status, "⏳")
+            tick = _TODO_ICONS.get(status, _status_icon('running'))
             content = (t.get("content") or "").strip()[:80]
             lines.append(f"{tick} {content}")
         if len(todos) > 12:
@@ -6049,7 +6056,7 @@ def _call_claude_streaming_via_engine(
         if _age > 0.8 * _child_cap_s and not _cap_warned and on_status is not None:
             _cap_warned = True
             try:
-                on_status(f"⚠️ A background task has been running for "
+                on_status(f"{_status_icon('warning')} A background task has been running for "
                           f"{_bgs.human_duration(_age)}; it will be ended after "
                           f"{_bgs.human_duration(_child_cap_s)}.", tool_name="_bgcap")
             except Exception as e:  # noqa: BLE001
@@ -6133,12 +6140,12 @@ def _call_claude_streaming_via_engine(
                         try:
                             _kids = len(_scope.open_children)
                             if _kids:
-                                _hb_text = (f"⏳ {_kids} background "
+                                _hb_text = (f"{_status_icon('running')} {_kids} background "
                                             f"{'task' if _kids == 1 else 'tasks'} running · {label}")
                             else:
-                                _hb_text = (f"{_current_bgstep} · ⏳ {label}"
+                                _hb_text = (f"{_current_bgstep} · {_status_icon('running')} {label}"
                                             if _current_bgstep
-                                            else f"⏳ Noch dabei … ({label})")
+                                            else f"{_status_icon('running')} Noch dabei … ({label})")
                             on_status(
                                 _hb_text,
                                 tool_name="_alive",
@@ -6723,7 +6730,7 @@ def _call_claude_streaming_via_engine(
             _TURN_OUTCOME.failed = "engine_error"
             error_msg = f"Claude API call failed: {error_text[:200]}"
             if "429" in error_text:
-                error_msg += "\n⚠️ Rate limit exceeded — please wait a moment and try again."
+                error_msg += f"\n{_status_icon('warning')} Rate limit exceeded — please wait a moment and try again."
             return with_voice_override(error_msg, "The call to Claude Code failed.")
 
         if rc != 0 and not final_text:
@@ -7042,7 +7049,7 @@ def _call_codex_streaming_via_engine(
 
     # ADR-0123 Tier 1.5: persona os_model pin falls back when no explicit /model set
     model = profile.get("model") or profile.get("_persona_os_model") or None
-    system_parts: list[str] = []
+    system_parts: list[str] = _chat_status_rule_part()  # ADR-2269: same rule as Claude turns
     if (ap := profile.get("append_system")):
         if isinstance(ap, str) and ap.strip():
             system_parts.append(ap.strip())
@@ -7385,7 +7392,7 @@ def _call_opencode_streaming_via_engine(
         or profile.get("_persona_os_model")
         or "ollama-cloud/qwen3-coder-next"
     )
-    system_parts: list[str] = []
+    system_parts: list[str] = _chat_status_rule_part()  # ADR-2269: same rule as Claude turns
     if (ap := profile.get("append_system")):
         if isinstance(ap, str) and ap.strip():
             system_parts.append(ap.strip())
@@ -11696,7 +11703,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                     _stale_env = {
                         "channel": channel, "to": sender,
                         "text": (
-                            f"⚠️ Your message from {int(_age_ms / 3600000)}h ago "
+                            f"{_status_icon('warning')} Your message from {int(_age_ms / 3600000)}h ago "
                             "arrived while I was unavailable and is too old to "
                             "answer reliably now — please resend it if still "
                             "relevant."
@@ -11705,7 +11712,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                     if chat_id is not None:
                         _stale_env["chat_id"] = chat_id
                     OUTBOX.mkdir(parents=True, exist_ok=True)
-                    # encoding pinned: the notice text carries "⚠️"; without
+                    # encoding pinned: the notice text carries the warning icon; without
                     # it Windows cp1252 raises UnicodeEncodeError (a
                     # ValueError, NOT caught by `except OSError`) and the
                     # finished stale-drop bubbles into poison quarantine.
@@ -11796,7 +11803,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             except Exception:  # noqa: BLE001
                 unpinned = []
             if unpinned:
-                lines = ["⚠️ This session has unpinned artifacts:"]
+                lines = [f"{_status_icon('warning')} This session has unpinned artifacts:"]
                 for a in unpinned[:5]:
                     sz_kb = max(1, int(a.get("size", 0)) // 1024)
                     lines.append(f"  • {a.get('name', '?')} ({sz_kb} KB)")
@@ -12939,7 +12946,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         )
         _label = _t.group(1).strip() if _t else "HTTP-Fehlerseite"
         log(f"html-guard: intercepted raw HTML page ({_label!r}) — replacing with error message")
-        answer = f"⚠️ Der Server hat eine Fehlerseite zurückgegeben ({_label}). Bitte versuche es in einem Moment erneut."
+        answer = f"{_status_icon('warning')} Der Server hat eine Fehlerseite zurückgegeben ({_label}). Bitte versuche es in einem Moment erneut."
 
     # Mirror new/regenerated Forge/ACS artifact media into outputs/ so they are
     # picked up as chat attachments (see _mirror_new_artifacts for the mtime-

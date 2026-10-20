@@ -1518,6 +1518,22 @@ at runtime per `adapter.py` system prompt — that is runtime behavior, not repo
 
 ---
 
+## Chat Status Markers (ADR-2269, CONCEPT-0114)
+
+**Vocabulary (one meaning per icon):** ✅ done/verified · ❌ failed/broken · ⚠️ warning/risk ·
+ℹ️ note · 🔍 investigating, still open · ⏳ running/waiting · 💡 suggestion · 📌 decision/result.
+**Source of truth:** `corvin_operator/bridges/shared/status_markers.py` (`STATUS_MARKERS`,
+`status_marker_rule()`, `icon()`). Every chat surface reads it; no other copy of the icons may exist.
+
+- **Interactive Claude Code sessions** follow the same rule in their own replies: sparingly, one icon
+  at the start of a line in result/step/test lists, never as decoration, and ✅ only for verified results.
+- **Never** in code, code comments, commit messages, PR text, file names, logs, JSON/YAML or
+  machine-read output. In chat-output code, take the icon from `icon(name)` / `_status_icon(name)`,
+  never a literal: `test_status_marker_literals.py` fails on a new literal in a chat-output module.
+- Copilot, ACS, the gateway dispatcher and the L38 A2A worker are deliberately outside the rule (ADR-2269).
+
+---
+
 **For full details, read the ref files in `docs/claude-ref/` as tasks require them.**
 
 ---

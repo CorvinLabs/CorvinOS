@@ -26,6 +26,9 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
 
+sys.path.append(str(Path(__file__).resolve().parent.parent / "shared"))  # append: shared/profile.py must not shadow the stdlib
+from status_markers import icon as _icon  # ADR-2269 one icon vocabulary
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,12 +75,12 @@ def _generate_html_body(payload: OrchestrationPayload, console_url: str = "http:
     """
     # Determine status emoji and color
     if payload.event_type == "ORCHESTRATION_COMPLETE_SUCCESS":
-        status_emoji = "✅"
+        status_emoji = _icon('done')
         status_text = "All Tasks Completed Successfully"
         bg_color = "#d4edda"  # Light green
         border_color = "#28a745"  # Green
     else:
-        status_emoji = "⚠️"
+        status_emoji = _icon('warning')
         status_text = "Some Tasks Failed"
         bg_color = "#fff3cd"  # Light yellow
         border_color = "#ffc107"  # Amber
@@ -89,7 +92,7 @@ def _generate_html_body(payload: OrchestrationPayload, console_url: str = "http:
     if payload.success_count > 0:
         task_rows.append(f"""
         <tr>
-            <td style="padding: 8px; border-bottom: 1px solid #ddd;">✅ Successful Tasks</td>
+            <td style="padding: 8px; border-bottom: 1px solid #ddd;">{_icon('done')} Successful Tasks</td>
             <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: right;">{payload.success_count}</td>
             <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: center; color: #28a745; font-weight: bold;">✓</td>
         </tr>
@@ -99,7 +102,7 @@ def _generate_html_body(payload: OrchestrationPayload, console_url: str = "http:
     if payload.failed_tasks:
         task_rows.append(f"""
         <tr>
-            <td style="padding: 8px; border-bottom: 1px solid #ddd;">❌ Failed Tasks</td>
+            <td style="padding: 8px; border-bottom: 1px solid #ddd;">{_icon('failed')} Failed Tasks</td>
             <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: right;">{len(payload.failed_tasks)}</td>
             <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: center; color: #dc3545; font-weight: bold;">✗</td>
         </tr>
@@ -250,7 +253,7 @@ def handle_orchestration_complete(
 
         # Build MIME message
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"✅ Orchestration Complete: {orch.batch_id[:12]}"
+        msg["Subject"] = f"{_icon('done')} Orchestration Complete: {orch.batch_id[:12]}"
         msg["From"] = f"{from_name} <{from_addr}>" if from_name else from_addr
         msg["To"] = user_email
         msg["Date"] = time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime())
@@ -414,7 +417,7 @@ if __name__ == "__main__":
         "task_count": 5,
         "success_count": 5,
         "failed_tasks": [],
-        "text": "✅ 5 background tasks completed successfully in 2m 35s",
+        "text": f"{_icon('done')} 5 background tasks completed successfully in 2m 35s",
         "voice_attachment_path": None,
         "timestamp": time.time(),
         "metadata": {},

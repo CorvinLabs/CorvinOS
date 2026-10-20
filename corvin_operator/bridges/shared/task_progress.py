@@ -60,6 +60,11 @@ import sys
 import time
 from pathlib import Path
 
+try:  # ADR-2269: one icon vocabulary for every chat surface
+    from status_markers import icon as _icon
+except ImportError:  # loaded as a package member
+    from .status_markers import icon as _icon  # type: ignore
+
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
@@ -89,12 +94,12 @@ _STATE_DELIVERED = "delivered"
 # Visual prefix per update kind. Kept here (not at the call sites) so the
 # vocabulary of an autonomous run stays consistent across every producer.
 _KIND_PREFIX = {
-    "progress": "⏳",
+    "progress": _icon('running'),
     "phase": "▶️",
     "resume": "🔁",
     "stall": "⏱️",
-    "warning": "⚠️",
-    "error": "❌",
+    "warning": _icon('warning'),
+    "error": _icon('failed'),
 }
 
 

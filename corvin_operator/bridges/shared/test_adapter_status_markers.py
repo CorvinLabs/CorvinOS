@@ -81,5 +81,74 @@ class BridgeSpawnCarriesStatusMarkers(unittest.TestCase):
             path.unlink(missing_ok=True)
 
 
+class SingleSystemStringEnginesCarryTheRule(unittest.TestCase):
+    """Codex and OpenCode take one ``system`` string, not the Claude prompt file.
+
+    ``_call_codex_streaming_via_engine`` / ``_call_opencode_streaming_via_engine`` assemble
+    their own ``system_parts``; the rule is added there by ``_chat_status_rule_part``. The
+    real functions run up to the engine boundary, where a stub records the ``system``
+    argument and then fails the spawn on purpose (the function returns the failure text).
+    """
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="adapter-sm-cx-"))
+        self._env = {k: os.environ.get(k) for k in
+                     ("CORVIN_HOME", "ADAPTER_INBOX", "ADAPTER_OUTBOX", "ADAPTER_PROCESSED")}
+        os.environ["CORVIN_HOME"] = str(self.tmp)
+        os.environ["ADAPTER_INBOX"] = str(self.tmp / "inbox")
+        os.environ["ADAPTER_OUTBOX"] = str(self.tmp / "outbox")
+        os.environ["ADAPTER_PROCESSED"] = str(self.tmp / "processed")
+        for d in ("inbox", "outbox", "processed"):
+            (self.tmp / d).mkdir(exist_ok=True)
+        sys.modules.pop("adapter", None)
+        import adapter as ad  # noqa: E402
+        import status_markers as sm  # noqa: E402
+        self.ad = ad
+        self.rule = sm.status_marker_rule()
+
+    def tearDown(self) -> None:
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _drive(self, func_name: str, engine_attr: str) -> list:
+        seen: list = []
+        real = getattr(self.ad, engine_attr)
+
+        class _StubEngine:
+            # The engine-trust gate (a pre-spawn gate that stays ON) looks the manifest up by
+            # engine name, so the stub carries the real engine's name.
+            name = real.name
+            _proc = None
+
+            def spawn(self, prompt, **kw):  # noqa: ANN001
+                seen.append(kw.get("system"))
+                raise RuntimeError("stop at the engine boundary")
+                yield  # pragma: no cover — makes this a generator like the real spawn
+
+            def cancel(self) -> None:
+                return None
+
+        setattr(self.ad, engine_attr, _StubEngine)
+        workdir = self.tmp / "wd"
+        workdir.mkdir(exist_ok=True)
+        getattr(self.ad, func_name)(
+            "hello", "discord", "chat_cx", {}, None, "off", workdir, dict(os.environ))
+        return seen
+
+    def test_codex_system_string_carries_the_rule(self) -> None:
+        seen = self._drive("_call_codex_streaming_via_engine", "_CodexCliEngine")
+        self.assertTrue(seen, "the codex path never reached the engine")
+        self.assertIn(self.rule, seen[0] or "")
+
+    def test_opencode_system_string_carries_the_rule(self) -> None:
+        seen = self._drive("_call_opencode_streaming_via_engine", "_OpenCodeEngine")
+        self.assertTrue(seen, "the opencode path never reached the engine")
+        self.assertIn(self.rule, seen[0] or "")
+
+
 if __name__ == "__main__":
     unittest.main()

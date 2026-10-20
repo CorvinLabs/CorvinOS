@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.append(str(Path(__file__).resolve().parent.parent / "shared"))  # append: shared/profile.py must not shadow the stdlib
+from status_markers import icon as _icon  # ADR-2269 one icon vocabulary
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +42,10 @@ def format_orchestration_summary(payload: dict) -> str:
 
     # Header with emoji indicator
     if event_type == "ORCHESTRATION_COMPLETE_SUCCESS":
-        lines.append("<b>✅ All Orchestration Tasks Complete</b>")
+        lines.append(f"<b>{_icon('done')} All Orchestration Tasks Complete</b>")
     elif event_type == "ORCHESTRATION_COMPLETE_MIXED":
         lines.append(
-            f"<b>⚠️  Orchestration Complete: {success_count}/{task_count} Succeeded</b>"
+            f"<b>{_icon('warning')}  Orchestration Complete: {success_count}/{task_count} Succeeded</b>"
         )
     else:
         lines.append(f"<b>🔔 Orchestration Event: {event_type}</b>")

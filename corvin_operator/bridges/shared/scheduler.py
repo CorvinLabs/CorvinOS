@@ -46,6 +46,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:  # ADR-2269: one icon vocabulary for every chat surface
+    from status_markers import icon as _icon
+except ImportError:  # loaded as a package member
+    from .status_markers import icon as _icon  # type: ignore
+
 # Protects all read-modify-write operations on the schedule file.
 _SCHEDULE_LOCK = threading.Lock()
 
@@ -365,7 +370,7 @@ def _run_workflow_to_outbox(
     _start_payload = {
         "msg_id": _start_msg_id,
         "chat_id": str(item["chat_id"]),
-        "text": f"⏳ Workflow `{workflow_name}` gestartet…",
+        "text": f"{_icon('running')} Workflow `{workflow_name}` gestartet…",
         "channel": channel,
         "_scheduled_workflow": True,
         "ts": now,
@@ -382,12 +387,12 @@ def _run_workflow_to_outbox(
             cmd, env=env, capture_output=True, text=True, timeout=120
         )
     except (subprocess.TimeoutExpired, OSError) as e:
-        body = f"⚠ workflow `{workflow_name}` failed to run: {e}"
+        body = f"{_icon('warning')} workflow `{workflow_name}` failed to run: {e}"
         rc = 99
     else:
         body = result.stdout or "(no output)"
         if result.returncode != 0 and result.stderr:
-            body += "\n\n⚠ stderr:\n" + result.stderr[:500]
+            body += f"\n\n{_icon('warning')} stderr:\n" + result.stderr[:500]
         rc = result.returncode
 
     header = (

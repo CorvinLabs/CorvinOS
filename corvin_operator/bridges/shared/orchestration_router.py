@@ -27,6 +27,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
+try:  # ADR-2269: one icon vocabulary for every chat surface
+    from status_markers import icon as _icon
+except ImportError:  # loaded as a package member
+    from .status_markers import icon as _icon  # type: ignore
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 logger = logging.getLogger(__name__)
@@ -247,9 +252,9 @@ def on_orchestration_complete(
 
     # Generate plain-text summary (same for all bridges)
     if event_type == "ORCHESTRATION_COMPLETE_SUCCESS":
-        text = f"✅ {task_count} background tasks completed successfully in {_format_duration(total_duration_secs)}"
+        text = f"{_icon('done')} {task_count} background tasks completed successfully in {_format_duration(total_duration_secs)}"
     else:
-        text = f"⚠️  {success_count} of {task_count} background tasks completed ({len(failed_tasks)} failed)"
+        text = f"{_icon('warning')}  {success_count} of {task_count} background tasks completed ({len(failed_tasks)} failed)"
 
     # Route to all bridges
     return route_event(

@@ -35,6 +35,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+try:  # ADR-2269: one icon vocabulary for every chat surface
+    from status_markers import icon as _icon
+except ImportError:  # loaded as a package member
+    from .status_markers import icon as _icon  # type: ignore
+
 # --- states ---------------------------------------------------------------
 
 RUNNING = "running"
@@ -385,7 +390,7 @@ def interim_suffix(children_open: int) -> str:
     if children_open <= 0:
         return ""
     noun = "background task" if children_open == 1 else "background tasks"
-    return f"⏳ {children_open} {noun} still running — I will report when everything is done."
+    return f"{_icon('running')} {children_open} {noun} still running — I will report when everything is done."
 
 
 def cut_message(reason: str, open_children: list[Child], *, limit: float, partial: str = "") -> str:
@@ -397,10 +402,10 @@ def cut_message(reason: str, open_children: list[Child], *, limit: float, partia
     kinds = ", ".join(sorted({c.kind for c in open_children})) or "background"
     noun = "task was" if n == 1 else "tasks were"
     if reason == "child_cap":
-        head = (f"⚠️ Stopped after {human_duration(limit)}: {n} background {noun} still "
+        head = (f"{_icon('warning')} Stopped after {human_duration(limit)}: {n} background {noun} still "
                 f"running ({kinds}) and {'has' if n == 1 else 'have'} been ended.")
     else:
-        head = (f"⚠️ Stopped: the background work produced more than {int(limit)} updates; "
+        head = (f"{_icon('warning')} Stopped: the background work produced more than {int(limit)} updates; "
                 f"{n} {noun} still running ({kinds}) and {'has' if n == 1 else 'have'} been ended.")
     partial = (partial or "").strip()
     return f"{head}\n\nLast update:\n{partial}" if partial else head
@@ -428,15 +433,15 @@ def status_line(t: Transition) -> str:
     tail = f": {desc}" if desc else ""
     left = t.children_open
     if t.kind == "child_started":
-        return f"⏳ Background {label} started{tail} — {left} running"
+        return f"{_icon('running')} Background {label} started{tail} — {left} running"
     if t.kind == "child_finished":
         more = f" — {left} still running" if left else " — all background work is done"
         if c.state == COMPLETED:
             code = "" if c.exit_code in (None, 0) else f" (exit {c.exit_code})"
-            return f"✅ Background {label} finished{code}{tail}{more}"
+            return f"{_icon('done')} Background {label} finished{code}{tail}{more}"
         if c.state == FAILED:
             code = f" (exit {c.exit_code})" if c.exit_code is not None else ""
-            return f"❌ Background {label} failed{code}{tail}{more}"
+            return f"{_icon('failed')} Background {label} failed{code}{tail}{more}"
         return f"■ Background {label} ended{tail}{more}"
     return ""
 
@@ -500,12 +505,12 @@ def closing_line(children: list[dict]) -> str:
     unknown = [c for c in children if c.get("state") == UNKNOWN]
     noun = "task" if total == 1 else "tasks"
     if failed:
-        return f"❌ Background work finished: {len(failed)} of {total} {noun} failed."
+        return f"{_icon('failed')} Background work finished: {len(failed)} of {total} {noun} failed."
     if unknown:
         # ended without a completed/failed report (killed, stopped): never claim success
         return (f"■ Background work ended: {len(unknown)} of {total} {noun} ended "
                 f"without a clear result.")
-    return f"✅ Background work finished: {total} {noun} done."
+    return f"{_icon('done')} Background work finished: {total} {noun} done."
 
 
 def died_message(open_children: list[Child], *, partial: str = "") -> str:
@@ -516,7 +521,7 @@ def died_message(open_children: list[Child], *, partial: str = "") -> str:
     """
     n = len(open_children)
     kinds = ", ".join(sorted({c.kind for c in open_children})) or "background"
-    head = (f"⚠️ The Claude process ended while {n} background "
+    head = (f"{_icon('warning')} The Claude process ended while {n} background "
             f"{'task was' if n == 1 else 'tasks were'} still running ({kinds}); "
             f"{'it was' if n == 1 else 'they were'} ended with it and the result is incomplete.")
     partial = (partial or "").strip()

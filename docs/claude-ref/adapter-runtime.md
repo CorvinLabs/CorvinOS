@@ -1391,3 +1391,13 @@ the console web chat. It does NOT apply to machine- or peer-facing output — AC
 prompts — nor to the console Assistant widget (its own "short, no lists" style). System-generated chat
 texts (quota/limit notices, background-task acks, worker-finished lines) take their icon from
 `status_markers.icon(name)` — never a literal — so they match what the model is taught.
+
+**Guard and engine coverage (ADR-2269).** `corvin_operator/bridges/shared/test_status_marker_literals.py` scans the
+chat-output modules (AST, docstrings excluded) and fails on a status glyph typed as a string literal, so the
+vocabulary cannot fork; its positive control proves the scan reaches every listed module. Codex and OpenCode take one
+`system` string and get the rule from `adapter._chat_status_rule_part()`; `test_adapter_status_markers.py` drives both
+real functions up to the engine boundary. `test_status_marker_process_one_e2e.py` boots the real adapter daemon: the
+daemon must run in a cgroup of its own, because on shutdown `unit_sweep.sweep_unit_leftovers` terminates everything
+else in its cgroup (the test uses a transient `systemd-run --user --scope`, or skips). Never start the adapter inside
+the runner's cgroup. Handlers that add `bridges/shared` to `sys.path` use `append`, never `insert(0)`:
+`shared/profile.py` would shadow the stdlib `profile`.

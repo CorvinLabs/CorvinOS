@@ -46,6 +46,11 @@ from typing import Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from voice_tag import extract_voice_override  # type: ignore  # noqa: E402
 
+try:  # ADR-2269: one icon vocabulary for every chat surface
+    from status_markers import icon as _icon
+except ImportError:  # loaded as a package member
+    from .status_markers import icon as _icon  # type: ignore
+
 # Delivered records are kept briefly for idempotency/forensics, then pruned.
 CN_DELIVERED_TTL = float(os.environ.get("CN_DELIVERED_TTL", str(24 * 3600)))
 # A pending record never marked done is pruned after this — a producer that
@@ -71,7 +76,7 @@ CN_ORPHAN_DEADLINE = float(os.environ.get("CN_ORPHAN_DEADLINE", str(2 * 3600)))
 # Text delivered when an abandoned task is reaped. Runtime user-facing string.
 CN_ORPHAN_TEXT = os.environ.get(
     "CN_ORPHAN_TEXT",
-    "❌ Task abgebrochen (Worker gestorben) — es kam kein Ergebnis zurück.",
+    f"{_icon('failed')} Task abgebrochen (Worker gestorben) — es kam kein Ergebnis zurück.",
 )
 
 
@@ -402,7 +407,7 @@ def _envelope_for(rec: dict, *, voice_path: str | None = None) -> dict:
     channel = rec.get("channel") or "discord"
     label = rec.get("label") or "background task"
     ok = rec.get("ok")
-    status = "✅" if ok else "⚠️"
+    status = _icon('done') if ok else _icon('warning')
     body = rec.get("text") or ""
     text = f"{status} {label} finished.\n\n{body}".strip()
     env: dict = {

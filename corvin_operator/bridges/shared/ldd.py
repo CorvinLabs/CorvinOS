@@ -46,6 +46,11 @@ import threading
 from pathlib import Path
 from typing import Any, Iterable
 
+try:  # ADR-2269: one icon vocabulary for every chat surface
+    from status_markers import icon as _icon
+except ImportError:  # loaded as a package member
+    from .status_markers import icon as _icon  # type: ignore
+
 
 # ── Canonical layer set ────────────────────────────────────────────────────
 
@@ -456,7 +461,7 @@ def _cli_set(layer: str, mode: str) -> int:
         parent = DEPENDS_ON.get(layer)
         if parent is not None and not is_layer_active(parent):
             print(
-                f"⚠ depends on {parent} (currently OFF) — {layer} stays "
+                f"{_icon('warning')} depends on {parent} (currently OFF) — {layer} stays "
                 f"inactive until you /ldd-set {parent} on"
             )
         return 0

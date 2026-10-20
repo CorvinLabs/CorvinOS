@@ -35,6 +35,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:  # ADR-2269: one icon vocabulary for every chat surface
+    from status_markers import icon as _icon
+except ImportError:  # loaded as a package member
+    from .status_markers import icon as _icon  # type: ignore
+
 # ── Detection ─────────────────────────────────────────────────────────────────
 
 _SIGNIFICANT_TAG_RE = re.compile(r"\[decision:significant\]", re.IGNORECASE)
@@ -210,13 +215,13 @@ def build_decision_prefix(record: DecisionRecord) -> str:
     """Build a notification prefix to prepend to AI responses for significant decisions."""
     if record.risk_tier == "high_risk":
         return (
-            f"⚠️ **[DECISION:{record.decision_id[:8]}]** "
+            f"{_icon('warning')} **[DECISION:{record.decision_id[:8]}]** "
             f"This response involves a significant AI decision. "
             f"Status: **AWAITING HUMAN REVIEW** before action is taken. "
             f"Reviewers: use `/decision-review {record.decision_id[:8]}` to approve or reject.\n\n"
         )
     return (
-        f"ℹ️ [Decision logged: {record.decision_id[:8]}] "
+        f"{_icon('note')} [Decision logged: {record.decision_id[:8]}] "
         f"This response has been recorded as a significant AI decision.\n\n"
     )
 
