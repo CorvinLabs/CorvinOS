@@ -2180,11 +2180,11 @@ def _engine_unavailable_message(engine_id: str) -> str | None:
     non-claude OS engine in Setup, or because the `claude` binary is missing
     on PATH. Returns None when the claude path is good to go.
 
-    This is the MINIMUM-acceptable fix per the runtime's documented scope:
-    the console web-chat does NOT yet route through the WorkerEngine layer
-    (folding that path in is the queued ADR-0037 amendment / ADR-0114 M3),
-    so instead of a raw "claude binary not found" we name the configured
-    engine and point the operator at the Engines page.
+    This guards the direct OS-turn subprocess path only, which drives nothing
+    but ``claude_code``. Delegated turns do not use it: the delegated branch of
+    ``stream_turn`` dispatches through the WorkerEngine layer via
+    ``_worker_engine_target``. So instead of a raw "claude binary not found" we
+    name the configured engine and point the operator at the Engines page.
     """
     # 1. Engines removed by ADR-2091 (Hermes / local Ollama) map to claude_code.
     engine_id = _normalize_legacy_engine_id(engine_id) or "claude_code"

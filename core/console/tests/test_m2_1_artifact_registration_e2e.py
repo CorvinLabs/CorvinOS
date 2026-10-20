@@ -57,6 +57,9 @@ class M21ArtifactRegistrationE2E(unittest.TestCase):
     # When set, the deliverable is written only after ACSRuntime.run has returned,
     # i.e. after the live poll's final sighting: only the post-run scan can see it.
     late_write = False
+    # When set, the deliverable keeps growing inside the post-run stability window
+    # (between the scan's size read and its re-read): it must not be registered.
+    grow_during_window = False
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -175,6 +178,8 @@ class M21ArtifactRegistrationE2E(unittest.TestCase):
             return proc
 
         orig_render = self.cr._render_acs_graph
+        orig_sleep = asyncio.sleep
+        grown: list[bool] = []
 
         def _render_then_late_write(scan_root, *args, **kwargs):
             # Runs in the thread that the turn awaits between the final live poll and
@@ -182,14 +187,30 @@ class M21ArtifactRegistrationE2E(unittest.TestCase):
             # live poll (it sees a file only after two equal sightings) yet still
             # on disk when the post-run scan runs.
             if self.late_write:
+                self._scan_root = Path(scan_root)
                 out = Path(scan_root) / "output"
                 out.mkdir(parents=True, exist_ok=True)
                 (out / "marktbericht.md").write_text(
                     "# Marktbericht\n\nE-Bikes wachsen.\n", encoding="utf-8")
+                # Positive control: a file that stays unchanged must still register.
+                (out / "stabil.md").write_text("# Stabil\n", encoding="utf-8")
             return orig_render(scan_root, *args, **kwargs)
+
+        async def _sleep_then_grow(delay, *args, **kwargs):
+            # The post-run scan sizes each candidate, then waits
+            # _POST_RUN_STABLE_WINDOW_S and re-reads it. Growing the file exactly
+            # in that wait is the only way a size-stability check can be tested.
+            if (self.grow_during_window and not grown
+                    and delay == self.cr._POST_RUN_STABLE_WINDOW_S):
+                grown.append(True)
+                with open(self._scan_root / "output" / "marktbericht.md", "a",
+                          encoding="utf-8") as fh:
+                    fh.write("weitere Zeilen, noch nicht fertig\n")
+            return await orig_sleep(delay, *args, **kwargs)
 
         rec = _Rec()
         return [
+            patch.object(asyncio, "sleep", new=_sleep_then_grow),
             patch.object(self.cr, "_render_acs_graph", new=_render_then_late_write),
             patch.object(asyncio, "create_subprocess_exec", side_effect=_no_spawn),
             patch.object(self.cr, "_delegation_enabled", return_value=True),
@@ -287,6 +308,35 @@ class M21FailedRunArtifactE2E(M21ArtifactRegistrationE2E):
         self.assertEqual(self._artifact_names(events).count("marktbericht.md"), 1, events)
         self.assertEqual(self._persisted_artifact_names(payload).count("marktbericht.md"), 1,
                          payload)
+
+
+class M21GrowingFileNotRegisteredE2E(M21ArtifactRegistrationE2E):
+    """A file still being written when the post-run scan runs is not registered.
+
+    The post-run scan sizes each candidate, waits ``_POST_RUN_STABLE_WINDOW_S``
+    and re-reads it (RT-02). This run's failed worker leaves ``marktbericht.md``
+    growing inside that window: it must not become a chip, on the WS or in
+    GET /turns, while the stable ``stabil.md`` from the same run still does.
+    """
+
+    worker_fails = True
+    worker_sleep_s = 0.0
+    late_write = True
+    grow_during_window = True
+    # Inherited tests assert the successful-run deliverable, which this class's
+    # failing, growing run does not produce. None is not callable, so unittest skips them.
+    test_successful_delegated_run_registers_the_artifact_end_to_end = None
+    test_acs_bookkeeping_is_not_registered_as_an_artifact = None
+
+    def test_file_still_growing_after_the_run_is_not_registered(self) -> None:
+        events, payload = self._run_over_http()
+        self.assertNotIn("marktbericht.md", self._artifact_names(events),
+                         f"half-written deliverable registered over WS: {events}")
+        self.assertNotIn("marktbericht.md", self._persisted_artifact_names(payload),
+                         f"half-written deliverable persisted: {payload}")
+        # Positive control: the scan ran and registered the unchanged file.
+        self.assertIn("stabil.md", self._artifact_names(events), events)
+        self.assertIn("stabil.md", self._persisted_artifact_names(payload), payload)
 
 
 if __name__ == "__main__":
