@@ -222,3 +222,18 @@ export async function deleteWorkflowSchedule(
 ): Promise<{ ok: true }> {
   return api(`/workflows/${encodeURIComponent(wid)}/schedule`, { method: "DELETE", csrf });
 }
+
+// ── Design chat composer (CONCEPT-0115) ─────────────────────────────
+
+/** One slash command of the workflow design chat (server table, never a client constant). */
+export interface WorkflowDesignCommand {
+  cmd: string;
+  args: string;
+  desc: string;
+}
+
+export async function getWorkflowDesignCommands(
+  signal?: AbortSignal,
+): Promise<{ commands: WorkflowDesignCommand[] }> {
+  return api(`/workflow-design/commands`, { signal });
+}

@@ -424,3 +424,30 @@ The adapter carries no decision: tenant, gates, attachment validity and limits a
 re-checked by the server on every request.
 
 Tests: `tests/unit/chat-composer-field.test.tsx`.
+
+### Workflow design chat (CONCEPT-0115 P2)
+
+The workflow editor's design chat (`pages/workflows.tsx::ChatPane`) no longer owns a
+textarea or a recorder. It renders `components/workflows/WorkflowComposer.tsx`, which wraps
+`ChatComposerField` (Enter sends, Shift+Enter newline, mic button, Space-hold, slash palette).
+
+* **Dictation lands in the field.** The old path sent the transcript immediately; now it is
+  inserted and the operator sends it (same as the chat). Web Speech first, MediaRecorder →
+  `POST /voice/transcribe` as fallback.
+* **Space-hold is scoped** (`pushToTalkFocusOnly` → `useVoiceInput({ pushToTalkTarget })`):
+  only while the composer textarea has focus, so Space stays free on the canvas. The chat
+  keeps the page-wide hold.
+* **Slash commands are a server table**: `GET /v1/console/workflow-design/commands`
+  (`routes/workflow_composer.py::DESIGN_COMMANDS`). The design WebSocket parses a bare
+  `/word` line itself (`parse_design_command` / `run_design_command`): `/help`, `/phase`,
+  `/nodes`, `/voice on|off`. A command spawns no engine, is not charged as a design turn,
+  is not written to `<wid>.chat.jsonl` (so it never feeds a later prompt), and writes
+  `console.action_performed` with `action=workflow.design_command`, `trigger=<word>`. An unknown
+  `/word` is answered "unknown command" and never forwarded. A path-like first token
+  (`/home/x`) is ordinary text.
+* The draft lives inside the field (same performance contract as `LocalDraftComposer`:
+  a keystroke re-renders the field, not the message list). `LocalDraftComposer` itself stays
+  unused: the shared field already owns its draft and additionally needs the palette state.
+
+Tests: `tests/unit/workflow-composer.test.tsx`, `core/console/tests/test_workflow_composer.py`
+(HTTP + WebSocket against the console router, sandboxed home), `tests/e2e/workflow-composer.spec.ts`.

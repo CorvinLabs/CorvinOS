@@ -94,6 +94,7 @@ from .. import audit as console_audit
 from .. import _spawn_gates  # shared fail-closed pre-spawn chokepoint (CRITICAL compliance)
 from ..deps import require_csrf, require_session
 from ..utils import read_json_or_none as _read_json
+from . import workflow_composer as _composer  # CONCEPT-0115: design-chat slash commands
 
 # ── Path resolution ────────────────────────────────────────────────────────
 
@@ -4493,6 +4494,39 @@ async def workflow_chat_ws(
 
             user_text = str(data.get("text", "")).strip()[:_MAX_CHAT_MSG_CHARS]
             if not user_text:
+                continue
+
+            # CONCEPT-0115: a `/word` line is a design-chat COMMAND, answered here
+            # from the server table. It never spawns an engine, is never charged as
+            # a design turn and is never written into the transcript that later
+            # design prompts are built from.
+            _cmd = _composer.parse_design_command(user_text)
+            if _cmd is not None:
+                _meta_now = _read_json(_meta_path(rec.tenant_id, wid)) or {}
+                _yaml_now = yaml_p.read_text(encoding="utf-8") if yaml_p.exists() else ""
+                _result = _composer.run_design_command(
+                    _cmd[0], _cmd[1],
+                    phase=str(_meta_now.get("phase", "discovering")),
+                    node_ids=[str(n.get("id", "")) for n in _parse_graph(_yaml_now)] if _yaml_now.strip() else [],
+                    voice_enabled=voice_enabled,
+                )
+                console_audit.action_performed(
+                    tenant_id=rec.tenant_id,
+                    sid_fingerprint=rec.sid_fingerprint,
+                    action="workflow.design_command",
+                    target_kind="workflow",
+                    target_id=wid,
+                    trigger=_cmd[0].lstrip("/")[:32],
+                )
+                if _result.voice is not None:
+                    voice_enabled = _result.voice
+                    await websocket.send_json({"type": "voice_ack", "enabled": voice_enabled, "lang": voice_lang})
+                _now = time.time()
+                await websocket.send_json({"type": "message", "role": "user", "content": user_text, "ts": _now, "command": True})
+                await websocket.send_json({
+                    "type": "message", "role": "assistant", "content": _result.reply,
+                    "ts": _now, "command": True, "persisted": False,
+                })
                 continue
 
             # ADR-0150 LIC-WFDESIGN-SPAWN-02: each design message spawns 1-2 paid

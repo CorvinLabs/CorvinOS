@@ -80,6 +80,8 @@ export interface ChatComposerFieldProps {
   pillCardClassName?: string;
   /** Pass a stable value to keep the draft per context; the chat keeps its own `key`. */
   initialValue?: string;
+  /** Space-hold dictation only while the field has focus (surfaces where Space is also a canvas key). */
+  pushToTalkFocusOnly?: boolean;
 }
 
 // The chat row (attach / mic / send) already draws the one pill border and focus
@@ -105,6 +107,7 @@ export const ChatComposerField = React.memo(
       micTestId = "chat-composer-mic",
       pillCardClassName = NEUTRAL_PILL,
       initialValue = "",
+      pushToTalkFocusOnly = false,
     },
     ref,
   ) {
@@ -174,6 +177,7 @@ export const ChatComposerField = React.memo(
           textareaTestId={textareaTestId}
           micTestId={micTestId}
           pillCardClassName={pillCardClassName}
+          pushToTalkFocusOnly={pushToTalkFocusOnly}
           beforeTextarea={
             <CommandPalette
               matches={slashPalette.matches}

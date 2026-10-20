@@ -82,6 +82,11 @@ export interface UseVoiceInputOptions {
    *  so the speech steers it — CONCEPT-0107). */
   commitOnRelease?: () => boolean;
   onCommit?: (text: string) => void;
+  /** Scope the Space hold to ONE element (CONCEPT-0115). Without it the hold works
+   *  anywhere on the page (the chat). A surface with other Space users — the
+   *  workflow editor's canvas — passes the composer's textarea, so Space is
+   *  intercepted only while that field has focus. */
+  pushToTalkTarget?: () => HTMLElement | null;
 }
 
 export interface UseVoiceInputResult {
@@ -92,7 +97,7 @@ export interface UseVoiceInputResult {
 
 export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
   const { value, onChange, csrf, disabled = false, onError, onAuthExpired, onRecordingChange,
-    commitOnRelease, onCommit } = opts;
+    commitOnRelease, onCommit, pushToTalkTarget } = opts;
 
   const [recording, setRecording] = React.useState(false);
 
@@ -112,6 +117,7 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
   const onRecordingChangeRef = React.useRef(onRecordingChange);
   const commitOnReleaseRef = React.useRef(commitOnRelease);
   const onCommitRef = React.useRef(onCommit);
+  const pttTargetRef = React.useRef(pushToTalkTarget);
   /** Decided at stop: this recording's transcript is committed, not kept. */
   const commitRef = React.useRef(false);
 
@@ -121,6 +127,7 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
   React.useEffect(() => { onRecordingChangeRef.current = onRecordingChange; }, [onRecordingChange]);
   React.useEffect(() => { commitOnReleaseRef.current = commitOnRelease; }, [commitOnRelease]);
   React.useEffect(() => { onCommitRef.current = onCommit; }, [onCommit]);
+  React.useEffect(() => { pttTargetRef.current = pushToTalkTarget; }, [pushToTalkTarget]);
   React.useEffect(() => {
     recordingRef.current = recording;
     if (recording) pttPendingRef.current = false;
@@ -283,6 +290,9 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInputResult {
       if (e.code !== "Space" || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
       if (isNativeSpaceTarget(e.target)) return;
       if (recordingRef.current || disabledRef.current) return;
+      // Scoped hold: only the named element may start a recording.
+      const scope = pttTargetRef.current;
+      if (scope && e.target !== scope()) return;
 
       const inTextarea = isTextarea(e.target);
       if (!inTextarea) e.preventDefault();

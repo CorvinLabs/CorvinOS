@@ -85,6 +85,9 @@ export interface ComposerBaseProps {
   beforeTextarea?: React.ReactNode;
   afterTextarea?: React.ReactNode;
 
+  /** Space-hold dictation only while THIS textarea has focus (default: anywhere on the page). */
+  pushToTalkFocusOnly?: boolean;
+
   /** Optional: override the pill-card class name for styling variations. */
   pillCardClassName?: string;
 }
@@ -177,12 +180,14 @@ const ComposerBaseImpl = React.forwardRef<ComposerBaseHandle, ComposerBaseProps>
       beforeTextarea,
       afterTextarea,
       pillCardClassName,
+      pushToTalkFocusOnly = false,
     },
     ref,
   ) {
     const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
     useAutosizeTextarea(textareaRef, value, maxHeight);
+    const pushToTalkTarget = React.useCallback(() => textareaRef.current, []);
 
     const { recording, startRecording, stopRecording } = useVoiceInput({
       value,
@@ -194,6 +199,7 @@ const ComposerBaseImpl = React.forwardRef<ComposerBaseHandle, ComposerBaseProps>
       onRecordingChange,
       commitOnRelease: commitVoiceOnRelease,
       onCommit: onVoiceCommit,
+      pushToTalkTarget: pushToTalkFocusOnly ? pushToTalkTarget : undefined,
     });
 
     React.useImperativeHandle(

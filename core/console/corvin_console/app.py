@@ -104,6 +104,7 @@ from .routes import (
     forge_intake_api as forge_intake_route,
     chat as chat_route,
     chat_groups as chat_groups_route,
+    workflow_composer as workflow_composer_route,
     voice as voice_route,
     voice_summary as voice_summary_route,
     remediation_routes,
@@ -430,6 +431,8 @@ except Exception as _workflows_exc:
         "Workflows router failed to load (plugin + console fallback unavailable); "
         "workflows feature will not be available: %r", _workflows_exc
     )
+# CONCEPT-0115 / ADR-2270 — workflow design chat uses the main chat's composer.
+router.include_router(workflow_composer_route.router, tags=["console-workflow-composer"])
 router.include_router(connectors_route.router, tags=["console-connectors"])
 router.include_router(setup_route.router, tags=["console-setup"])
 # Phase D extension — settings file watcher SSE stream.

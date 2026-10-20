@@ -26,8 +26,6 @@ import {
   Image,
   Lightbulb,
   Loader2,
-  Mic,
-  MicOff,
   Package,
   Play,
   Plus,
@@ -78,6 +76,7 @@ import {
   deleteRun,
   importWorkflow,
   getLicenseInfo,
+  getWorkflowDesignCommands,
   type ChatEntry,
   type GraphNode,
   type LicenseInfo,
@@ -86,6 +85,8 @@ import {
   type WorkflowRunEvent,
 } from "@/lib/api";
 import { MediaGallery, ImageCard, type MediaItem } from "@/components/media";
+import { WorkflowComposer } from "@/components/workflows/WorkflowComposer";
+import type { SlashCommand } from "@/components/chat/SlashCommandPalette";
 import { DataTable, TableCard, TableOverlay, type DataTableFetchParams, type TableEvent } from "@/components/table";
 
 // ── Shared helpers ────────────────────────────────────────────────────────
@@ -1210,6 +1211,10 @@ function ChatMessage({ msg }: { msg: DesignMessage }) {
   );
 }
 
+// Module-level so the composer's memoised props stay referentially stable
+// while the command table is still loading.
+const NO_DESIGN_COMMANDS: readonly SlashCommand[] = [];
+
 function ChatPane({
   wid,
   initialChat,
@@ -1229,23 +1234,25 @@ function ChatPane({
 }) {
   const [messages, setMessages] = React.useState<DesignMessage[]>(initialChat);
   const [phase, setPhase] = React.useState(initialPhase);
-  const [input, setInput] = React.useState("");
   const [typing, setTyping] = React.useState(false);
   const [pendingOffer, setPendingOffer] = React.useState<{ key: string; yaml: string; confidence: number } | null>(null);
   const [ws, setWs] = React.useState<WebSocket | null>(null);
   const [connected, setConnected] = React.useState(false);
   // Phase 7: voice mode — on by default
   const [voiceEnabled, setVoiceEnabled] = React.useState(true);
-  const [recording, setRecording] = React.useState(false);
-  const [transcribing, setTranscribing] = React.useState(false);
-  const [micError, setMicError] = React.useState<string | null>(null);
   const [ttsPlaying, setTtsPlaying] = React.useState(false);
   // Ref so onopen callback always sees current voiceEnabled
   const voiceEnabledRef = React.useRef(true);
-  const recorderRef = React.useRef<MediaRecorder | null>(null);
-  const chunksRef = React.useRef<Blob[]>([]);
   const bottomRef = React.useRef<HTMLDivElement>(null);
-  const inputRef = React.useRef<HTMLTextAreaElement>(null);
+  // The designer's slash commands come from the server table the WebSocket parses
+  // (never a client constant), so a command can be audited and refused server-side.
+  const designCommands = useQuery({
+    queryKey: ["workflow-design-commands"],
+    queryFn: ({ signal }) => getWorkflowDesignCommands(signal),
+    staleTime: Infinity,
+  });
+  const commandList = designCommands.data?.commands ?? NO_DESIGN_COMMANDS;
+  const { refresh: refreshAuth } = useAuth();
 
   // Keep ref in sync with state
   React.useEffect(() => { voiceEnabledRef.current = voiceEnabled; }, [voiceEnabled]);
@@ -1274,6 +1281,7 @@ function ChatPane({
           setTyping(true);
         } else if (data.type === "voice_ack") {
           voiceEnabledRef.current = data.enabled;
+          setVoiceEnabled(!!data.enabled);
         } else if (data.type === "audio") {
           // Phase 7: decode base64 OGG and play
           try {
@@ -1341,8 +1349,8 @@ function ChatPane({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typing]);
 
-  const send = (text?: string) => {
-    const t = (text ?? input).trim();
+  const send = React.useCallback((text: string) => {
+    const t = text.trim();
     if (!t || !ws || ws.readyState !== WebSocket.OPEN) return;
     const optimistic: DesignMessage = {
       role: "user",
@@ -1352,64 +1360,14 @@ function ChatPane({
     };
     setMessages((prev) => [...prev, optimistic]);
     ws.send(JSON.stringify({ type: "user", text: t }));
-    setInput("");
     setPendingOffer(null);
-  };
+  }, [ws]);
 
   const acceptTemplate = (key: string) => {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "accept_template", key }));
       setPendingOffer(null);
     }
-  };
-
-  // Phase 7: microphone recording with visible error handling
-  const startRecording = async () => {
-    setMicError(null);
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setMicError("Microphone not available in this browser.");
-      return;
-    }
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (err) {
-      setMicError(err instanceof Error ? err.message : "Microphone permission denied.");
-      return;
-    }
-
-    // Pick best supported MIME type
-    const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg"].find(
-      (m) => MediaRecorder.isTypeSupported(m)
-    ) ?? "";
-
-    const rec = new MediaRecorder(stream, mimeType ? { mimeType } : {});
-    chunksRef.current = [];
-    rec.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-    rec.onstop = async () => {
-      stream.getTracks().forEach((t) => t.stop());
-      const blob = new Blob(chunksRef.current, { type: mimeType || "audio/webm" });
-      setRecording(false);
-      setTranscribing(true);
-      try {
-        const { transcribeAudio } = await import("@/lib/api");
-        const result = await transcribeAudio(blob, csrf);
-        if (result.text) send(result.text);
-        else setMicError("No speech detected.");
-      } catch (err) {
-        setMicError(err instanceof Error ? err.message : "Transcription failed.");
-      } finally {
-        setTranscribing(false);
-      }
-    };
-    rec.start();
-    recorderRef.current = rec;
-    setRecording(true);
-  };
-
-  const stopRecording = () => {
-    recorderRef.current?.stop();
-    recorderRef.current = null;
   };
 
   return (
@@ -1479,59 +1437,15 @@ function ChatPane({
         <div ref={bottomRef} />
       </div>
 
-      <div className="shrink-0 border-t border-border p-3">
-        {micError && (
-          <div
-            className="mb-2 flex items-center justify-between rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive cursor-pointer"
-            onClick={() => setMicError(null)}
-          >
-            <span>{micError}</span>
-            <span className="ml-2 opacity-60">✕</span>
-          </div>
-        )}
-        <div className="flex gap-2">
-          <Textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            placeholder={connected ? "Describe your workflow… (Enter to send)" : "Connecting…"}
-            disabled={!connected || transcribing}
-            className="min-h-[60px] resize-none text-sm"
-            rows={2}
-          />
-          <div className="flex flex-col justify-end gap-1.5">
-            <Button
-              size="sm"
-              onClick={() => send()}
-              disabled={!connected || !input.trim()}
-            >
-              Send
-            </Button>
-            <Button
-              size="sm"
-              variant={recording ? "destructive" : "outline"}
-              onClick={recording ? stopRecording : startRecording}
-              disabled={!connected || transcribing}
-              title={recording ? "Stop recording" : "Voice input — click to speak"}
-              className={cn("px-2", recording && "animate-pulse")}
-            >
-              {transcribing ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : recording ? (
-                <MicOff className="h-3.5 w-3.5" />
-              ) : (
-                <Mic className="h-3.5 w-3.5" />
-              )}
-            </Button>
-          </div>
-        </div>
-      </div>
+      <WorkflowComposer
+        contextKey={`design-${wid}`}
+        csrf={csrf}
+        connected={connected}
+        placeholder="Describe your workflow… (Enter to send, / for commands, hold Space to speak)"
+        commands={commandList}
+        onSend={send}
+        onAuthExpired={refreshAuth}
+      />
     </div>
   );
 }
