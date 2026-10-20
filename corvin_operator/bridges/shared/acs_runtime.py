@@ -641,6 +641,19 @@ def _write_audit(tenant_id: str, event_type: str, details: dict) -> None:
         if _FORGE_PATH not in sys.path:
             sys.path.insert(0, _FORGE_PATH)
         from forge import security_events as _sec  # type: ignore[import-untyped]
+        # Tenant attribution: CLAUDE.md requires every event to carry tenant_id, and
+        # the ACS records carried none (the chain file was the only binding). Tag it
+        # ONLY for the process's own tenant: write_event refuses a foreign tenant_id
+        # (AuditTenantMismatch), and a multi-tenant process must not lose another
+        # tenant's records to that refusal. An unresolvable process tenant leaves the
+        # record untagged, as before: untagged beats lost.
+        if tenant_id and "tenant_id" not in details:
+            try:
+                from forge.tenants import current_tenant  # type: ignore[import-untyped]
+                if tenant_id == current_tenant():
+                    details = {**details, "tenant_id": tenant_id}
+            except Exception:  # noqa: BLE001
+                pass
         _sec.write_event(_audit_path(tenant_id), event_type, details=details)
     except Exception as exc:  # noqa: BLE001
         log.debug("acs_runtime: audit write failed (%s): %s", event_type, exc)
