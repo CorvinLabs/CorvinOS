@@ -2997,19 +2997,6 @@ export function WorkflowEditorPage() {
 
       {/* Three-pane layout */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* Left: Chat */}
-        <div className="w-80 shrink-0 border-r border-border flex flex-col overflow-hidden">
-          <ChatPane
-            wid={wid!}
-            initialChat={detail.data.chat}
-            initialPhase={phase}
-            onYamlUpdate={(y) => setYaml(y)}
-            onPhaseUpdate={(p) => setPhase(p)}
-            onGraphUpdate={(g) => setGraph(g)}
-            csrf={session!.csrf_token}
-          />
-        </div>
-
         {/* Center: Canvas */}
         <div className="relative flex flex-1 flex-col min-w-0">
           <AwpCanvas
@@ -3084,6 +3071,18 @@ export function WorkflowEditorPage() {
               </button>
             </div>
           )}
+          {/* Edit window (design chat) directly under the workflow view */}
+          <div data-testid="workflow-edit-window" className="h-72 shrink-0 border-t border-border flex flex-col overflow-hidden">
+          <ChatPane
+            wid={wid!}
+            initialChat={detail.data.chat}
+            initialPhase={phase}
+            onYamlUpdate={(y) => setYaml(y)}
+            onPhaseUpdate={(p) => setPhase(p)}
+            onGraphUpdate={(g) => setGraph(g)}
+            csrf={session!.csrf_token}
+          />
+        </div>
           <EditorToolbar
             wid={wid!}
             csrf={session!.csrf_token}
