@@ -7,7 +7,7 @@
  * is," the same value a real browser supplies at the call site this hook
  * reads from.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as React from "react";
 import { render } from "@testing-library/react";
 import { useAutosizeTextarea } from "@/hooks/use-autosize-textarea";
@@ -25,6 +25,15 @@ function stubScrollHeight(el: HTMLElement, px: number) {
 }
 
 describe("useAutosizeTextarea", () => {
+  // happy-dom answers every CSS.supports query with true; these cases pin the
+  // measured fallback that browsers without field-sizing take.
+  beforeEach(() => {
+    vi.stubGlobal("CSS", { supports: () => false });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("grows the inline height to fit scrollHeight on mount", () => {
     const { getByTestId, rerender } = render(<Probe value="line one" />);
     const ta = getByTestId("ta") as HTMLTextAreaElement;

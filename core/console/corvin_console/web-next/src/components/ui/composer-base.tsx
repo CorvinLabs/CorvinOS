@@ -12,6 +12,17 @@
  * - Forge-specific features: attachments controller, character counter, verdict labels
  *
  * Accepts all controls via optional props; buttons/children render in order.
+ *
+ * Performance contract (2026-10-20, chat typing lag in long sessions):
+ * - `ComposerBase` is wrapped in React.memo. It re-renders only when a prop
+ *   changes, so a parent that re-renders for another reason costs nothing here.
+ *   Inline callbacks/render functions defeat the memo: keep them stable.
+ * - Typing never forces a layout read on the normal path (see
+ *   useAutosizeTextarea).
+ * - To keep the draft out of the parent entirely, use `LocalDraftComposer`:
+ *   it owns the draft text, so a keystroke re-renders the composer alone.
+ *   The parent only sees the text on submit (and per keystroke if it passes
+ *   `onDraftChange`). The controlled `ComposerBase` API is unchanged.
  */
 import * as React from "react";
 import { Mic, MicOff } from "lucide-react";
@@ -139,7 +150,7 @@ function useLongPress(options: {
   return { handleMouseDown, handleMouseUp, handleTouchStart, handleTouchEnd };
 }
 
-export const ComposerBase = React.forwardRef<ComposerBaseHandle, ComposerBaseProps>(
+const ComposerBaseImpl = React.forwardRef<ComposerBaseHandle, ComposerBaseProps>(
   function ComposerBase(
     {
       value,
@@ -297,4 +308,72 @@ export const ComposerBase = React.forwardRef<ComposerBaseHandle, ComposerBasePro
   },
 );
 
+/** Controlled composer: the parent owns `value` and `onChange`. */
+export const ComposerBase = React.memo(ComposerBaseImpl);
 ComposerBase.displayName = "ComposerBase";
+
+export interface LocalDraftComposerProps
+  extends Omit<ComposerBaseProps, "value" | "onChange" | "onSubmit" | "renderPostButton"> {
+  /** Draft text at mount. Read once; later changes go through `resetKey`. */
+  initialValue?: string;
+  /** Change this value to clear the draft (e.g. after the parent sent it).
+   *  Use the sending chat's id, or a counter. */
+  resetKey?: string | number;
+  /** Called on every keystroke. Optional: without it the parent does not
+   *  re-render while the user types. */
+  onDraftChange?: (value: string) => void;
+  /** Called with the draft on Enter. The draft is NOT cleared here; change
+   *  `resetKey` once the send has gone through. */
+  onSubmit: (value: string) => void;
+  /** Send button. Receives the live draft, so it can disable itself when empty. */
+  renderPostButton?: (ctx: { draft: string; submit: () => void }) => React.ReactNode;
+}
+
+/**
+ * ComposerBase with the draft held locally (see the performance contract in
+ * the module comment). Same props as ComposerBase except value/onChange/
+ * onSubmit/renderPostButton, which become the local-draft variants above.
+ */
+export const LocalDraftComposer = React.memo(
+  React.forwardRef<ComposerBaseHandle, LocalDraftComposerProps>(function LocalDraftComposer(
+    { initialValue = "", resetKey, onDraftChange, onSubmit, renderPostButton, ...rest },
+    ref,
+  ) {
+    const [draft, setDraft] = React.useState(initialValue);
+    const [seenResetKey, setSeenResetKey] = React.useState(resetKey);
+    // Latest draft for submit(), so the callbacks keep their identity per keystroke.
+    const draftRef = React.useRef(draft);
+    // Derived-state reset during render (no effect, no extra commit): a changed
+    // resetKey clears the draft before the next paint.
+    if (resetKey !== seenResetKey) {
+      setSeenResetKey(resetKey);
+      setDraft("");
+      draftRef.current = "";
+    }
+
+    const handleChange = React.useCallback(
+      (v: string) => {
+        draftRef.current = v;
+        setDraft(v);
+        onDraftChange?.(v);
+      },
+      [onDraftChange],
+    );
+    const submit = React.useCallback(() => onSubmit(draftRef.current), [onSubmit]);
+    const postButton = renderPostButton
+      ? () => renderPostButton({ draft, submit })
+      : undefined;
+
+    return (
+      <ComposerBase
+        ref={ref}
+        {...rest}
+        value={draft}
+        onChange={handleChange}
+        onSubmit={submit}
+        renderPostButton={postButton}
+      />
+    );
+  }),
+);
+LocalDraftComposer.displayName = "LocalDraftComposer";

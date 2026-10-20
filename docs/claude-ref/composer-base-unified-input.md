@@ -15,7 +15,7 @@
 ### Features
 
 - **Pill-card layout:** `flex items-end gap-2 rounded-2xl border border-border bg-card px-2 py-1.5`
-- **Textarea with autosize:** Grows with content, respects `maxHeight` prop (default 320px)
+- **Textarea with autosize:** Grows with content, respects `maxHeight` prop (default 320px); no layout read per keystroke (see Performance)
 - **Voice input:** Push-to-talk (hold Space ≥400ms) + long-press mic button (>=400ms) for touch
 - **Touch-friendly:** 44px minimum targets on coarse pointers (`h-8 sm:h-10 sm:w-10`)
 - **IME-aware:** Ignores Enter during IME composition (CJK candidate selection)
@@ -167,6 +167,24 @@ ComposerBase
 ```
 
 ---
+
+### Performance (2026-10-20)
+
+Long chat sessions made typing stutter: every keystroke re-rendered the parent and forced a layout read in the autosize hook.
+
+- **`ComposerBase` is `React.memo`.** It re-renders only when a prop changes. Inline callbacks and render functions (`renderPreButtons`, `renderPostButton`, `renderMicButton`, `footer`) defeat the memo, so pass stable references.
+- **Autosize without per-key reads** (`use-autosize-textarea.ts`): where `CSS.supports("field-sizing", "content")` holds, the engine sizes the box and the hook reads nothing (it only sets `max-height`). Otherwise a plain keystroke (one character, no newline) schedules one growth-only measurement per animation frame. Newline, paste, deletion and programmatic changes measure synchronously, as before. Measured (`tests/unit/perf/composer-autosize-reads.test.tsx`): 40 synchronous reads per 20 keystrokes before, 0 after (2 batched reads per frame, fallback path).
+- **`LocalDraftComposer`** keeps the draft in the composer's own state. Typing re-renders only the composer; the parent sees the text on submit, or per keystroke if it passes `onDraftChange`. The draft is cleared by changing `resetKey`, not by the parent writing `value`.
+
+| `LocalDraftComposer` prop | Type | Purpose |
+|---|---|---|
+| `initialValue` | `string` | Draft at mount (read once) |
+| `resetKey` | `string \| number` | Changing it clears the draft (use the chat id, or a counter after sending) |
+| `onDraftChange` | `(v: string) => void` | Optional per-keystroke notification (makes the parent re-render per key) |
+| `onSubmit` | `(v: string) => void` | Called with the live draft on Enter / send; does not clear it |
+| `renderPostButton` | `(ctx: { draft, submit }) => ReactNode` | Send button; receives the draft so it can disable itself |
+
+All other `ComposerBase` props apply unchanged. The controlled `ComposerBase` (`value` + `onChange`) is unchanged.
 
 ## Keyboard Behavior
 
@@ -369,7 +387,8 @@ Rarely needed, but supported:
 - **Chat Composer:** `src/pages/chat.tsx` (lines 1909–2050, uses ComposerBase indirectly)
 - **Forge Composer:** `src/components/forge/ForgeComposer.tsx` (direct ComposerBase consumer)
 - **Voice Hook:** `src/hooks/use-voice-input.ts` (push-to-talk + fallback MediaRecorder)
-- **Autosize Hook:** `src/hooks/use-autosize-textarea.ts` (textarea height auto-grow)
+- **Autosize Hook:** `src/hooks/use-autosize-textarea.ts` (textarea height auto-grow, field-sizing or per-frame measure)
+- **Local draft variant:** `LocalDraftComposer` in `src/components/ui/composer-base.tsx`
 - **Console Design Guide:** `docs/claude-ref/console-design-guide-0-10-34.md` (visual identity)
 
 ---

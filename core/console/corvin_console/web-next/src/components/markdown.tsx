@@ -54,10 +54,22 @@ function MermaidBlock({ code }: { code: string }) {
 
 const PDF_EXT = /\.pdf($|[?#])/i;
 
+// Plugin arrays are module constants: react-markdown re-processes its plugin
+// list on every render when a fresh array is passed, and this renderer runs on
+// every streamed delta.
+const REMARK_PLUGINS = [remarkGfm];
+const REHYPE_PLUGINS = [rehypeHighlight];
+
 interface MarkdownProps {
   text: string;
   /** Compact mode shrinks spacing for chat bubbles. */
   compact?: boolean;
+  /** Set while the text is still being streamed. Only the closed blocks are
+   *  parsed as Markdown then (memoised); the open block at the end is parsed on
+   *  its own, so the cost per delta stays bounded by one block, not the whole
+   *  answer. Omit (or false) once the text is final: the whole text is then
+   *  parsed in one pass, exactly as before. */
+  streaming?: boolean;
   className?: string;
   /** For text written by a remote party (e.g. an A2A peer): render every
    *  image as a link except inline ``data:``/``blob:`` ones. A remote image
@@ -80,6 +92,11 @@ interface MarkdownProps {
 /**
  * GitHub-flavoured Markdown renderer for chat messages.
  *
+ * Wrapped in React.memo: a parent that re-renders for an unrelated reason
+ * (a keystroke in the composer, a background-activity tick) does not re-parse
+ * an unchanged answer. Callers that pass `internalHref` or `resolveImageSrc`
+ * should keep those objects/functions stable, or the memo has no effect.
+ *
  * - Code blocks → highlight.js (github-dark) + a "copy" button.
  * - Images → rendered inline with a max height + lazy loading.
  * - PDF links → styled with an icon + open-in-new-tab affordance.
@@ -89,7 +106,7 @@ interface MarkdownProps {
  *   the Corvin palette via Tailwind classes (NOT @tailwindcss/typography
  *   so we keep full control over spacing and colour).
  */
-export function Markdown({ text, compact, className, blockRemoteImages, resolveImageSrc, internalHref }: MarkdownProps) {
+function MarkdownBody({ text, compact, className, blockRemoteImages, resolveImageSrc, internalHref, streaming }: MarkdownProps) {
   const components: Components = React.useMemo(
     () => ({
       h1: ({ children }) => (
@@ -242,10 +259,103 @@ export function Markdown({ text, compact, className, blockRemoteImages, resolveI
 
   return (
     <div className={cn("markdown-body", className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={components}>
-        {text}
-      </ReactMarkdown>
+      {streaming ? (
+        <StreamingBody text={text} components={components} />
+      ) : (
+        <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={components}>
+          {text}
+        </ReactMarkdown>
+      )}
     </div>
+  );
+}
+
+export const Markdown = React.memo(MarkdownBody);
+
+// ── Streaming split ─────────────────────────────────────────────────────────
+
+/** Where the closed blocks of a growing Markdown text end. */
+export interface StableSplit {
+  /** Text up to the last blank line outside a code fence: complete blocks. */
+  stable: string;
+  /** The rest: the block still being written. */
+  tail: string;
+}
+
+interface SplitScan extends StableSplit {
+  /** The text this scan read; the next scan resumes only if it extends it. */
+  source: string;
+  /** Start of the first line not yet read (a partial line is re-read). */
+  resumeAt: number;
+  fence: string | null;
+}
+
+const FENCE_OPEN = /^(`{3,}|~{3,})/;
+
+/**
+ * Incremental scan: streamed text only grows, so each delta reads just the
+ * lines added since the last scan. A blank line closes a block unless it sits
+ * inside an open fence. Blank lines do NOT close a list, so a loose list is
+ * split at its blank lines mid-stream; the finished answer is parsed whole.
+ */
+function scanStableSplit(text: string, prev: SplitScan | null): SplitScan {
+  const resume = prev !== null && text.startsWith(prev.source);
+  let pos = resume ? prev.resumeAt : 0;
+  let fence = resume ? prev.fence : null;
+  let cut = resume ? prev.stable.length : 0;
+  for (;;) {
+    const nl = text.indexOf("\n", pos);
+    if (nl === -1) break;
+    const trimmed = text.slice(pos, nl).trim();
+    const open = FENCE_OPEN.exec(trimmed);
+    if (fence === null) {
+      if (open) fence = open[1];
+      else if (trimmed === "") cut = nl + 1;
+    } else if (open && open[1][0] === fence[0] && open[1].length >= fence.length && trimmed === open[1]) {
+      fence = null;
+    }
+    pos = nl + 1;
+  }
+  return { source: text, resumeAt: pos, fence, stable: text.slice(0, cut), tail: text.slice(cut) };
+}
+
+/** Stateless form of the split, for callers that have no previous scan. */
+export function splitStableMarkdown(text: string): StableSplit {
+  const scan = scanStableSplit(text, null);
+  return { stable: scan.stable, tail: scan.tail };
+}
+
+const StableBlocks = React.memo(function StableBlocks({
+  text,
+  components,
+}: {
+  text: string;
+  components: Components;
+}) {
+  if (!text) return null;
+  return (
+    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={components}>
+      {text}
+    </ReactMarkdown>
+  );
+});
+
+function StreamingBody({ text, components }: { text: string; components: Components }) {
+  const scanRef = React.useRef<SplitScan | null>(null);
+  const split = React.useMemo(() => {
+    const scan = scanStableSplit(text, scanRef.current);
+    scanRef.current = scan;
+    return scan;
+  }, [text]);
+  return (
+    <>
+      <StableBlocks text={split.stable} components={components} />
+      {split.tail && (
+        <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={components}>
+          {split.tail}
+        </ReactMarkdown>
+      )}
+    </>
   );
 }
 

@@ -59,6 +59,13 @@ Client → server: `user {text, voice_on}`, `cancel`, `ping`.
   as the history arrives. Before 2026-10-09 a restored `[user, empty placeholder]` both blocked
   `loadHistory` and defeated `refreshHistory`'s length comparison against the finished
   `[user, answer]` — the answer never appeared.
+* **sessionStorage mirror write schedule** (`chat-registry.ts`, `chat-message-persistence.ts`):
+  full list at turn end (idle callback) and on `pagehide` / hidden tab; while a turn streams, only
+  the newest 50 messages, at most every 2 s. Writes happen only when the message list changed
+  (identity), never per delta. A quota error keeps the newest 20 messages and logs a warning;
+  a failed write is logged, not swallowed. A reload mid-answer restores the checkpoint, and the
+  server's history replaces it when read. Before 2026-10-20 a 400 ms debounce reset on every
+  delta, so nothing was written while a stream ran longer than that.
 * `refreshHistory` compares by content fingerprint (role, part count, text), not length; it
   never applies a snapshot shorter than the page's own non-restored content.
 * `turn_attach` creates (or, for a known `turn_id`, resets) the assistant bubble and marks the

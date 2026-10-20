@@ -14,7 +14,12 @@ import { parseTurnUsage, type TurnUsage } from "@/lib/turn-usage";
 import { useSyncExternalStore } from "react";
 import { emitCCCEvent } from "./ccc-bus";
 import { getBool, PREF_KEYS } from "./preferences";
-import { persistMessages, loadPersistedMessages, clearPersistedMessages } from "./chat-message-persistence";
+import {
+  persistMessages,
+  loadPersistedMessages,
+  clearPersistedMessages,
+  CHECKPOINT_TAIL,
+} from "./chat-message-persistence";
 import { insertSteerNote, retrySteerState, setSteerState, settleOnDone, type BtwInfo, type BtwState } from "./btw-steer";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -394,19 +399,103 @@ function getOrCreate(sid: string): SessionEntry {
   return sessions.get(sid)!;
 }
 
-// Debounced sessionStorage flush for message persistence — mirrors the
-// `_dbgFlushTimers` pattern below: batching avoids a synchronous
-// JSON.stringify + sessionStorage.setItem on every streamed token.
-const _persistFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+// ── sessionStorage mirror (reload survival) ──────────────────────────────────
+// When the mirror is written (cost is one JSON.stringify of the written slice,
+// so the rule is: never per delta):
+// - turn end (done / cancel / error): the full message list, from an idle
+//   callback — the reload that follows a finished answer keeps all of it;
+// - pagehide / hidden tab: the full list, synchronously (nothing else runs);
+// - while a turn streams: only the newest CHECKPOINT_TAIL messages, at most
+//   once per CHECKPOINT_MS, so a reload mid-answer keeps the text so far.
+// Each write is gated on the messages array's identity: a state change that
+// did not touch the list (bubble flags, background activity) writes nothing.
+// Before this rule a 400 ms trailing debounce reset on every delta, so a
+// stream longer than that wrote nothing at all until it paused.
+const CHECKPOINT_MS = 2_000;
 
-function _schedulePersist(sid: string): void {
-  const existing = _persistFlushTimers.get(sid);
-  if (existing) clearTimeout(existing);
-  _persistFlushTimers.set(sid, setTimeout(() => {
-    _persistFlushTimers.delete(sid);
+interface MirrorState {
+  checkpointTimer: ReturnType<typeof setTimeout> | null;
+  idlePending: boolean;
+  savedFull: ChatMessage[] | null;
+  savedTail: ChatMessage[] | null;
+}
+const _mirrors = new Map<string, MirrorState>();
+
+function _mirrorOf(sid: string): MirrorState {
+  let st = _mirrors.get(sid);
+  if (!st) {
+    st = { checkpointTimer: null, idlePending: false, savedFull: null, savedTail: null };
+    _mirrors.set(sid, st);
+  }
+  return st;
+}
+
+function _cancelCheckpoint(st: MirrorState): void {
+  if (st.checkpointTimer !== null) {
+    clearTimeout(st.checkpointTimer);
+    st.checkpointTimer = null;
+  }
+}
+
+/** Write the full list (if it changed since the last full write) or the streaming checkpoint. */
+function _writeMirror(sid: string, full: boolean): void {
+  const entry = sessions.get(sid);
+  if (!entry) return;
+  const st = _mirrorOf(sid);
+  if (full) {
+    // A full write supersedes any pending checkpoint, which would otherwise
+    // overwrite it with a truncated copy.
+    _cancelCheckpoint(st);
+    if (entry.messages === st.savedFull) return;
+    st.savedFull = entry.messages;
+    persistMessages(sid, entry.messages);
+    return;
+  }
+  if (entry.messages === st.savedTail || entry.messages === st.savedFull) return;
+  st.savedTail = entry.messages;
+  persistMessages(sid, entry.messages, { tail: CHECKPOINT_TAIL });
+}
+
+/** Turn ended: schedule one full write in an idle callback (coalesces repeated notifies). */
+function _scheduleFullMirror(sid: string): void {
+  const st = _mirrorOf(sid);
+  if (st.idlePending) return;
+  st.idlePending = true;
+  const run = () => {
+    st.idlePending = false;
     const entry = sessions.get(sid);
-    if (entry) persistMessages(sid, entry.messages);
-  }, 400));
+    if (entry && !entry.streaming) _writeMirror(sid, true);
+  };
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback(run, { timeout: 1_000 });
+  } else {
+    setTimeout(run, 0);
+  }
+}
+
+/** A delta arrived: at most one checkpoint per CHECKPOINT_MS while streaming. */
+function _scheduleCheckpoint(sid: string): void {
+  const st = _mirrorOf(sid);
+  if (st.checkpointTimer !== null) return;
+  st.checkpointTimer = setTimeout(() => {
+    st.checkpointTimer = null;
+    const entry = sessions.get(sid);
+    if (entry?.streaming) _writeMirror(sid, false);
+  }, CHECKPOINT_MS);
+}
+
+/** Write every session that has unsaved messages now (pagehide / hidden tab). */
+function _flushAllMirrors(): void {
+  for (const sid of sessions.keys()) _writeMirror(sid, true);
+}
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("pagehide", _flushAllMirrors);
+}
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") _flushAllMirrors();
+  });
 }
 
 function makeSnapshot(entry: SessionEntry): SessionState {
@@ -435,7 +524,7 @@ function notifyState(sid: string) {
   if (entry) {
     // Replace snapshot with a new object so Object.is detects the change.
     snapshots.set(sid, makeSnapshot(entry));
-    _schedulePersist(sid);
+    if (!entry.streaming) _scheduleFullMirror(sid);
   }
   stateListeners.get(sid)?.forEach((fn) => fn());
 }
@@ -452,7 +541,7 @@ function notifyDelta(sid: string) {
   const entry = sessions.get(sid);
   if (!entry) return;
   snapshots.set(sid, makeSnapshot(entry));
-  _schedulePersist(sid);
+  _scheduleCheckpoint(sid);
   if (_deltaNotifyTimers.has(sid)) return;
   _deltaNotifyTimers.set(sid, setTimeout(() => {
     _deltaNotifyTimers.delete(sid);
@@ -1277,14 +1366,14 @@ export function closeSession(sid: string): void {
     clearInterval(entry.heartbeatInterval);
     entry.heartbeatInterval = null;
   }
-  // Cancel any pending debounced persist and drop the sessionStorage mirror —
+  // Cancel any pending checkpoint and drop the sessionStorage mirror —
   // otherwise a deleted chat's last messages would resurrect on the next sid
   // reuse (session ids are not reused in practice, but a stale multi-MB
   // sessionStorage entry left behind on every delete is its own leak).
-  const persistTimer = _persistFlushTimers.get(sid);
-  if (persistTimer) {
-    clearTimeout(persistTimer);
-    _persistFlushTimers.delete(sid);
+  const mirror = _mirrors.get(sid);
+  if (mirror) {
+    _cancelCheckpoint(mirror);
+    _mirrors.delete(sid);
   }
   clearPersistedMessages(sid);
   // The debug log (session title, errors, artifact names) is chat content
@@ -1349,8 +1438,8 @@ export function __resetForTests(): void {
     if (e.reconnectTimer) clearTimeout(e.reconnectTimer);
     if (e.heartbeatInterval) clearInterval(e.heartbeatInterval);
   });
-  _persistFlushTimers.forEach((t) => clearTimeout(t));
-  _persistFlushTimers.clear();
+  _mirrors.forEach((st) => _cancelCheckpoint(st));
+  _mirrors.clear();
   _deltaNotifyTimers.forEach((t) => clearTimeout(t));
   _deltaNotifyTimers.clear();
   sessions.clear();
