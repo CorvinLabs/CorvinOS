@@ -2820,6 +2820,75 @@ present-but-rejected key (401) does NOT set it and stays visible.
 
 ---
 
+## Web-chat delegation: fan-out / fan-in (ADR-0114, PLAN-0961)
+
+Design record: `corvin_decisions/decisions/ADR-0114-web-chat-delegation-path.md` (ADR-0114),
+`PLAN-0961` and task `T-0236` in Corvin-Knowledge. This section describes only the path
+the code and the fictional-workflow E2E tests show. Other engines (`tde`) are out of scope.
+
+### The path, step by step
+
+```
+browser ──WS──► chat_stream                     routes/chat.py:556
+                 │ will_delegate() only gates the 503 engine-unavailable refusal (chat.py:901)
+                 ▼
+               _run_turn ──► stream_turn        routes/chat.py:726 → chat_runtime.py:6089
+                 │ _should_delegate()           chat_runtime.py:3979   (triage: heuristic)
+                 │ _worker_engine_target()      chat_runtime.py:4247   (operator mode → target)
+                 │   └─ delegation_policy.resolve_worker_engine   delegation_policy.py:399
+                 │        └─ route_and_record   delegation_policy.py:245 (one routing record per turn)
+                 │ target == "native" → normal Claude Code turn (no fan-out)
+                 │ target == "acs"    → ACS branch (below)
+                 ▼
+               ACSRuntime(...) + runtime.run()  chat_runtime.py:7440 / :7459 → acs_runtime.py:3072
+                 ▼
+               _manager_loop                    acs_runtime.py:2546
+                 │ each iteration: ctx.budget.check() (:2617); breach → audit acs.budget_exhausted, stop
+                 │ manager decides DELEGATE → _dispatch_workers   acs_runtime.py:2765
+                 ▼
+               _dispatch_workers                acs_runtime.py:2128
+                 │ workers of one stage run concurrently; a sub-manager recurses (:2465)
+                 │ per worker: start span (model_id=""), worker call, end span
+                 ▼
+               worker end span (ok)             acs_runtime.py:2427-2440
+                   model_id = attestation["reported_model"]   (_reported_model :1797, set :1977)
+                   **_espan.usage_split(attestation)           (engine_span.py:68)
+                   → input / output / cache_read / cache_write, four billed counts
+```
+
+- **Priced or honestly unpriced.** The span carries the model the engine reported, never a
+  configured guess. If the engine reports no model, `model_id` stays `""` and the span is
+  unpriced. The start span and the failure/cancel end spans write `model_id=""`
+  (`acs_runtime.py:2284`, `:2324`, `:2353`).
+- **Fan-in.** The manager receives each worker's result as text in its next decision input
+  (`[<worker id>] status=…` lines, built near `acs_runtime.py:1066`). A failed worker is named there, not dropped.
+- **Chat stream.** The ACS branch emits `engine: acs`, a `delta` naming the run id, and
+  live artifact deltas, then `done`. A worker failure ends the turn with a result, not a socket close.
+
+### Fictional workflows and the E2E test
+
+- Fixtures: `core/console/tests/fixtures/delegation_workflows/` — four JSON files, each with
+  `manager` decisions, `workers` and `expect`:
+  `simple_fan_out_fan_in.json` (3 parallel workers, one synthesis),
+  `complex_dag.json` (3 stages, parallel branches, fan-in nodes),
+  `partial_failure.json` (worker `w2` raises; the manager must see `[w2] status=failed`),
+  `artifact_output.json` (a worker writes a deliverable that must stream before `done`).
+- Test: `core/console/tests/test_web_delegation_workflows_e2e.py` — 7 tests in 4 classes
+  (`SimpleFanOutFanInE2E`, `ComplexDagE2E`, `PartialFailureE2E`, `ArtifactOutputE2E`).
+  Run: `.venv/bin/python -m pytest core/console/tests/test_web_delegation_workflows_e2e.py` → 7 passed.
+- Boundary, as the test docstring states: only the model-call boundary
+  (`_call_manager_sync` / `_call_worker_sync`) is faked, plus house rules, spawn gates,
+  licence quota and engine resolution. The WebSocket, `stream_turn`, `ACSRuntime`, the span
+  emission and the audit chain are real. Calling `stream_turn` directly does not count.
+- What they prove: fan-out and fan-in over the chat WebSocket; parallelism measured by a
+  `threading.Barrier` per stage (a serial dispatch breaks it); every worker end span is priced
+  with `model_id` and the four-way token split; a failed worker is reported as `acs.worker_error`
+  and the healthy results still reach the manager; the artifact streams before `done`.
+- What they do **not** prove: budget stop (`acs.budget_exhausted`) and cancellation have no
+  assertion in this test file.
+
+---
+
 ## Worker-engine model routing + platform access (ADR-0759, 2026-09-15)
 
 > Operator report: *"Usage could not be read: Not Found"* on `/app/engine-config`.
