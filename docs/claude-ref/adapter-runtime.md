@@ -90,6 +90,27 @@ language. Two long-standing behaviours that broke this were removed:
     `claude` that replays its system prompt, and a CLI-unavailable run with meta-only input) and
     `bridges/shared/test_adapter_voice_guard.py` (adapter side: empty guard → neutral line or silence;
     final gate over the no-stripper head, a custom provider and an appended annex; scrubbed stderr).
+- **Identifiers are described, never spoken (2026-10-20).** The listener has the exact token in
+  the chat text, so the voice says what a thing *is*. Three layers, one rule:
+  `summarize.py::IDENTIFIER_BLOCK` is spliced into all four base prompts by `_system_for` (de/en,
+  with and without a task) and is repeated as item 5 of the SELF-CHECK; the FAITHFULNESS rule
+  ("say only what the original says") had been pushing the model to copy paths and hashes, and
+  the lead-sentence example `die Datei liegt unter foo/bar` taught it to read a path out, so that
+  example is gone. Under the prompt, `voice_output_guard.describe_identifiers` (run inside
+  `sanitize_spoken`, hence on every `summarize.py` output and on the adapter's final gate,
+  `<voice>` overrides included) replaces file paths and names, commit hashes, ADR / PLAN /
+  CONCEPT / task ids, versions, URLs, IP and `localhost:` addresses by a generic description
+  ("eine Python-Datei", "ein Commit", "mehrere Architekturentscheidungen") and `snake_case`
+  names by their words. It fits the article to the preceding word and drops the token when the
+  noun is already there ("Commit c81daf2" → "Commit"). It is a net, not the writer: the model's
+  own description is better, and the generic one carries no role. Ordinary prose is
+  untouched (`und/oder`, `24/7`, dates, `1.000.000`, `Node.js`, plain counts). The assistant's
+  own `<voice>` instruction in `adapter.py` carries the same rule. Not covered by the net:
+  bare function / class names without an underscore, commands and CLI flags (prompt only).
+  Test: the `test_identifiers_*` cases in `test_voice_output_guard.py` (unit, plus a real
+  `summarize.py` subprocess that checks the rule is in the prompt the CLI received and that
+  identifiers in its reply are not spoken) and the two `identifiers` cases in
+  `bridges/shared/test_adapter_voice_guard.py` (through the real `build_voice_summary`).
 - **No verbatim short-circuit.** Both `adapter.py::build_voice_summary` (the
   `len(text) <= max_chars` branch) and `summarize.py` (the in-budget fast-path)
   used to speak a reply as-is, markdown-stripped, whenever it fit the ~400-char
@@ -386,7 +407,8 @@ of the turn — **process EOF with no open child is** (`bg_scope.ScopeTracker`, 
   Callers without a sink keep the legacy rule (the last non-empty result is the return value).
 - **Caps end a runaway scope honestly.** Past `CORVIN_BG_CHILD_MAX` (default **24 h** for an
   interactive turn and for a detached `/task` worker (was 30 min / 2 h until 2026-10-20); the oldest open child, and twice that for the
-  whole scope so a chain of sequential children cannot run for days), or more than
+  whole scope — 48 h at the 24 h default, on the bridge; the console checks only the oldest child's age —
+  so a chain of sequential children cannot outlast that on the bridge), or more than
   `CORVIN_BG_WAKEUP_MAX` (default 25, one billed model turn per wake-up) wake-ups while a child is open,
   the process group is stopped and the final message says what was cut (kinds and count, never a
   description). The cap is checked when the stream is quiet **and after every event**. A cap that is 0,
@@ -425,8 +447,9 @@ of the turn — **process EOF with no open child is** (`bg_scope.ScopeTracker`, 
   SIGKILL leaves its background children orphaned, SIGTERM does not.
 - **Known limits (stated, not hidden).**
   - A scope occupies a bridge worker (`MAX_PARALLEL=4`) and serialises its chat until the last child ends,
-    bounded by `CORVIN_BG_CHILD_MAX`. The old loop did the same but cut a quiet child after 300 s; that is
-    why the interactive default is 30 min, not 2 h. Long background work belongs in `/task`. Releasing the
+    bounded by `CORVIN_BG_CHILD_MAX` (24 h by default since 2026-10-20; it was 30 min because the scope holds a
+    worker and its chat, and an operator who wants that bound back sets `CORVIN_BG_CHILD_MAX=1800`). Long
+    background work belongs in `/task`. Releasing the
     worker after the first result (a detached continuation) is the follow-up.
   - While a child is open the idle watchdog is off, so a hung wake-up API call is bounded only by the cap.
   - `completion_notify.send_interim` writes straight to the outbox; with `proactive_communication` ON the
@@ -442,7 +465,7 @@ of the turn — **process EOF with no open child is** (`bg_scope.ScopeTracker`, 
   no learning outcome) — a backstop for a FUTURE caller: today's callers record completion after the
   scope is closed, so none can trip it, and a capped scope must complete.
 
-Console (`chat_runtime`): the same tracker; interim results carry `interim: true` +
+Console (`chat_runtime`): the same tracker (but only the per-child cap — no whole-scope bound); interim results carry `interim: true` +
 `pending_children`, exactly one result carries `final: true` and is the text that is spoken and
 pinned as the voice key; `bg_status` events report the open count and, per child (last 20), `{id, kind, state, age_s, label}`
 — `label` is the ADR-2236 D9 scrubbed description (`bg_scope.safe_description`: one line, ≤80 chars,

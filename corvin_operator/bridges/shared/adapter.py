@@ -6020,8 +6020,8 @@ def _call_claude_streaming_via_engine(
 
         Checked when the stream is quiet AND after every event: a stream that never idles
         for a second (a model working while a child runs) must not skip the cap. Besides
-        the oldest child's age there is a bound on the whole scope (twice the cap), so a
-        chain of sequential children cannot run for days.
+        the oldest child's age there is a bound on the whole scope (twice the cap, 48 h at
+        the 24 h default), so a chain of sequential children cannot outlast that bound.
         """
         nonlocal _scope_end, _cap_warned, _scope_limit_s
         _open = _scope.open_children

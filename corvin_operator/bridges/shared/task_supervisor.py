@@ -76,10 +76,11 @@ if str(HERE) not in sys.path:
 # counts as one). Past this the run is failed honestly rather than retried.
 SUP_MAX_ATTEMPTS = int(os.environ.get("SUP_MAX_ATTEMPTS", "5"))
 # Total wall clock a run may occupy across ALL attempts. The second, independent
-# bound: 5 attempts that each wedge for 30 min must not add up to 2.5 h of
-# silence. Default 6 h — long enough for real multi-phase work, short enough
-# that a runaway is not a day-long problem.
-SUP_TOTAL_BUDGET = float(os.environ.get("SUP_TOTAL_BUDGET", str(6 * 3600)))
+# bound on the sum of attempts. Default 48 h = twice the per-attempt deadline
+# (bg_task_worker.DEFAULT_TASK_TIMEOUT_S, 24 h): one full-length attempt plus a resume.
+# At the old 6 h a run that a restart killed after hour 7 was failed for good instead
+# of resumed, which is exactly the abort the 24 h deadline was raised to avoid.
+SUP_TOTAL_BUDGET = float(os.environ.get("SUP_TOTAL_BUDGET", str(48 * 3600)))
 # Grace after a launch before the supervisor is willing to believe the worker
 # is dead. Covers interpreter start-up + the heavy `import adapter` before the
 # first heartbeat can possibly be written.

@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import json
 import contextlib
+import math
 import os
 import sys
 import threading
@@ -62,6 +63,54 @@ HERE = Path(__file__).resolve().parent
 # task_supervisor.SUP_HEARTBEAT_STALE (default 600 s) or a healthy worker would
 # be declared wedged and restarted under itself.
 _HEARTBEAT_INTERVAL = float(os.environ.get("CORVIN_BG_TASK_HEARTBEAT", "30"))
+
+
+DEFAULT_TASK_TIMEOUT_S = 86400.0   # 24 h; the same horizon as bg_scope.WORKER_CHILD_MAX_S
+DEFAULT_STREAM_IDLE_S = 3600.0     # silence the engine may keep before the idle watchdog fires
+_TASK_TIMEOUT_BOUNDS = (1.0, 86400.0)   # same clamp as bg_scope._CHILD_MAX_BOUNDS
+
+
+def apply_stream_idle_default(adapter, channel: str) -> bool:
+    """Give a detached worker a 1 h stream-idle limit unless the operator chose one.
+
+    The engine's stream-idle watchdog (``ADAPTER_STREAM_IDLE_TIMEOUT``, built-in 300 s) ends a
+    turn whose CLI sent no event for that long. It fires while the model thinks or writes a long
+    tool input — minutes of silence are normal for a long task — and it was the one limit still
+    cutting detached workers after the 24 h change (reproduced with a real worker and a 320 s
+    silence). An operator's value always wins: the environment first, then the channel's
+    ``stream_idle_timeout_seconds`` (0 there disables the watchdog and is honoured). Only when
+    neither is set the worker uses 1 h, the value the live Discord channel already runs with.
+    Returns True when it set the variable.
+    """
+    if "ADAPTER_STREAM_IDLE_TIMEOUT" in os.environ:
+        return False
+    try:
+        chan_idle = (adapter._load_channel_settings(channel) or {}).get("stream_idle_timeout_seconds")
+    except Exception:  # noqa: BLE001 — unreadable settings are treated as unset
+        chan_idle = None
+    if chan_idle is not None:
+        return False
+    os.environ["ADAPTER_STREAM_IDLE_TIMEOUT"] = str(int(DEFAULT_STREAM_IDLE_S))
+    return True
+
+
+def task_timeout_s() -> float:
+    """Per-attempt wall clock of a detached /task worker (``CORVIN_BG_TASK_TIMEOUT``).
+
+    0, a negative number, NaN, infinity or garbage is REJECTED and the default applies,
+    the same rule as ``bg_scope`` caps: with 0 the deadline loop would end every task two
+    seconds after it started, and NaN/inf would remove the only bound a wedged engine has.
+    A usable value is then CLAMPED into 1 s .. 24 h like the child caps: 1e-9 ended every
+    task at the first 2 s tick just as 0 did, and 1e30 never fired just as inf never did.
+    """
+    raw = os.environ.get("CORVIN_BG_TASK_TIMEOUT", "")
+    try:
+        value = float(raw) if raw.strip() else DEFAULT_TASK_TIMEOUT_S
+    except ValueError:
+        return DEFAULT_TASK_TIMEOUT_S
+    if not math.isfinite(value) or value <= 0:
+        return DEFAULT_TASK_TIMEOUT_S
+    return min(max(value, _TASK_TIMEOUT_BOUNDS[0]), _TASK_TIMEOUT_BOUNDS[1])
 
 
 def _load_cn():
@@ -340,13 +389,14 @@ def main() -> int:
         sys.path.insert(0, str(HERE))
         import adapter  # type: ignore  # heavy but self-contained
 
+        apply_stream_idle_default(adapter, channel)
+        with contextlib.suppress(Exception):
+            adapter._TURN_OUTCOME.timed_out = False   # thread-local; this call is the only turn
+
         # Wall-clock watchdog: on deadline, SIGTERM this worker's own engine
         # subprocess (adapter._cancel_chat operates on THIS process's registry),
         # which unblocks call_claude_streaming with a cancellation string.
-        try:
-            timeout = float(os.environ.get("CORVIN_BG_TASK_TIMEOUT", "86400"))
-        except ValueError:
-            timeout = 86400.0
+        timeout = task_timeout_s()
         timed_out = {"v": False}
         done_evt = threading.Event()
 
@@ -409,6 +459,16 @@ def main() -> int:
             exit_error = "WorkerTimeout"
             text = (f"background task timed out after {int(timeout)}s and was "
                     f"stopped.\n\n{text}".strip())
+        elif getattr(getattr(adapter, "_TURN_OUTCOME", None), "timed_out", False):
+            # The engine's idle watchdog ended the turn and the adapter returned its apology as
+            # ordinary text, so ok=True used to record "finished" for a run that was cut off in
+            # the middle (measured: state done, attempts 1). It is a failed attempt, and under
+            # supervision a continuation point.
+            ok = False
+            resumable = supervised
+            exit_error = "StreamIdleTimeout"
+            text = ("background task stopped: the engine delivered no events for too long."
+                    f"\n\n{text}".strip())
     except Exception as e:  # noqa: BLE001 — never let the worker die silently
         ok = False
         resumable = supervised
