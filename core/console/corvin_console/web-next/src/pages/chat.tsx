@@ -119,6 +119,7 @@ import { AttachmentChip } from "@/components/chat/AttachmentChip";
 import { RecordingOverlay } from "@/components/chat/RecordingOverlay";
 import { useAttachmentUpload } from "@/hooks/use-attachment-upload";
 import { useFileDrop, supportsDirectoryDrop, MAX_DROPPED_FILES } from "@/hooks/use-file-drop";
+import { useVirtualList } from "@/hooks/use-virtual-list";
 import { DropOverlay } from "@/components/chat/DropOverlay";
 import { PanelRight } from "lucide-react";
 
@@ -703,9 +704,12 @@ const AGENTIC_ENGINE_LABELS: Record<string, string> = {
 // Shared with PeerConversation.tsx and GroupConversation.tsx — see
 // components/chat/SlashCommandPalette.tsx.
 
-// Messages mounted initially / revealed per click (the rest stay in memory).
+// History shown initially, revealed per "Show older" click, and the most that
+// can ever be listed. The rows themselves are virtualised (see ChatMessageRows),
+// so this caps the scrollable history, not the mounted DOM.
 const HISTORY_WINDOW = 60;
 const HISTORY_WINDOW_STEP = 100;
+const HISTORY_CAP = 1000;
 
 function ChatPane({
   sid,
@@ -777,17 +781,9 @@ function ChatPane({
   // Last completed TTS text + detected language — used for the replay button.
   const [lastTts, setLastTts] = React.useState<{ text: string; lang: string } | null>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
-  // Whether the view should keep following new content to the bottom.
-  // Updated only from real user scroll events (see effect below) — NOT
-  // recomputed from scrollHeight/scrollTop inside the messages-effect,
-  // because during fast token-by-token streaming `messages` gets a new
-  // reference on every chunk, so that effect's cleanup cancels its own
-  // pending rAF almost every time (starving it) and the geometry read
-  // that did land could be racing a not-yet-painted DOM update. Either
-  // way, one missed correction pushes the gap past the old 120px
-  // threshold and it never recovers — the view visibly stops following
-  // the conversation. Tracking intent from actual scroll input sidesteps
-  // that race entirely.
+  // Whether the view should keep following new content to the bottom. Written
+  // by the scroll tracker in useVirtualList (throttled to one read per frame),
+  // never from a per-token path.
   const stickToBottom = React.useRef(true);
 
   // Read TTS language from the operator's profile (display_language).
@@ -1150,54 +1146,11 @@ function ChatPane({
     return () => clearTimeout(t);
   }, [chatSession.reconnecting]);
 
-  // ── Track whether the view should stick to the bottom ──────────────────────
-  // Driven only by real scroll events, not by re-deriving it from geometry on
-  // every `messages` update (see stickToBottom comment above for why that was
-  // unreliable). Scrolling within 64px of the bottom re-engages sticky mode;
-  // scrolling further up disengages it so reading history isn't interrupted.
-  React.useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, [sid]);
-
-  // ── Auto-scroll on new content ──────────────────────────────────────────────
-  // On the very first batch of messages (initial session load), always jump to
-  // the bottom so the user sees the latest exchange without having to scroll.
-  // On subsequent updates, follow to the bottom whenever stickToBottom is true
-  // (see effect above) — unconditionally, not gated on a fresh geometry read,
-  // so a burst of fast streaming updates can't starve the correction.
-  // isInitialLoad resets to true automatically on every remount (key={activeSid}).
-  const isInitialLoad = React.useRef(true);
-  React.useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !messages.length) return;
-    if (isInitialLoad.current) {
-      isInitialLoad.current = false;
-      stickToBottom.current = true;
-      requestAnimationFrame(() => {
-        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      });
-      return;
-    }
-    if (!stickToBottom.current) return;
-    // Defer to next animation frame so the browser has painted the new node
-    // before we read scrollHeight — avoids a forced synchronous layout on every
-    // streaming token (which was causing jank during fast streaming). Unlike
-    // before, a starved/cancelled frame here just means the current chunk's
-    // scroll lands with the next one — it can't get permanently stuck, since
-    // we're not conditioning the jump on a geometry snapshot that may already
-    // be stale.
-    const raf = requestAnimationFrame(() => {
-      const container = scrollRef.current;
-      if (container) container.scrollTop = container.scrollHeight;
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [messages]);
+  // ── Stick to the bottom ────────────────────────────────────────────────────
+  // stickToBottom is written only by the throttled scroll tracker inside
+  // useVirtualList (within 64px of the end = sticky). The list pins itself to
+  // the end on every commit while it is set, so streaming follows the reply
+  // without this pane re-rendering per token.
 
   // Sending a message is an explicit signal the user wants to follow the
   // conversation again, even if they'd scrolled up to read history.
@@ -1495,45 +1448,25 @@ function ChatPane({
     setAuditTab("tde-graph");
     setAuditOpen(true);
   }, []);
-  // Windowed history: a very long chat mounts only its tail. The start index is
-  // PINNED when the history first arrives (and moves only when the user asks
-  // for older turns) — a "last N" slice would drop the oldest visible bubble on
-  // every new message and shift the page under a reader scrolled up.
+  // Which part of the history is listed. The start index is PINNED when the
+  // history first arrives and moves only when the reader asks for older turns;
+  // a "last N" slice would drop the oldest row on every new message and shift
+  // the page under a reader scrolled up. The list never holds more than
+  // HISTORY_CAP messages, and ChatMessageRows mounts only the visible ones.
   const windowStartRef = React.useRef<number | null>(null);
   const [, bumpWindow] = React.useReducer((n: number) => n + 1, 0);
   if (messages.length === 0) windowStartRef.current = null;
   else if (windowStartRef.current === null) {
     windowStartRef.current = Math.max(0, messages.length - HISTORY_WINDOW);
   }
-  const windowStart = Math.min(windowStartRef.current ?? 0, messages.length);
-  const hiddenCount = windowStart;
-  const scrollAnchorRef = React.useRef<{ height: number; top: number } | null>(null);
+  const capStart = Math.max(0, messages.length - HISTORY_CAP);
+  const windowStart = Math.min(Math.max(windowStartRef.current ?? 0, capStart), messages.length);
+  const hiddenCount = windowStart - capStart;
   const showOlder = React.useCallback(() => {
-    const el = scrollRef.current;
-    if (el) scrollAnchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
     stickToBottom.current = false;
     windowStartRef.current = Math.max(0, (windowStartRef.current ?? 0) - HISTORY_WINDOW_STEP);
     bumpWindow();
   }, []);
-  // Keep the bubble the reader was looking at in place after older ones mount above it.
-  React.useLayoutEffect(() => {
-    const a = scrollAnchorRef.current;
-    const el = scrollRef.current;
-    if (!a || !el) return;
-    scrollAnchorRef.current = null;
-    el.scrollTop = a.top + (el.scrollHeight - a.height);
-  }, [windowStart]);
-  const messageList = React.useMemo(() => {
-    const visible = messages.slice(windowStart);
-    const stamps = visible.map((m) => m.ts);
-    const nowS = Math.floor(Date.now() / 1000);
-    return visible.map((m, i) => (
-      <React.Fragment key={m.id}>
-        {startsNewDay(stamps, i) && <DaySeparator ts={m.ts} nowS={nowS} />}
-        <MessageBubble m={m} onViewTdeGraph={viewTdeGraph} onBtwAction={btwAction} />
-      </React.Fragment>
-    ));
-  }, [messages, viewTdeGraph, btwAction, windowStart]);
 
   const handleVoiceToggle = React.useCallback(() => {
     const next = !voiceOutRef.current;
@@ -1806,7 +1739,14 @@ function ChatPane({
               </Button>
             </div>
           )}
-          {messageList}
+          <ChatMessageRows
+            messages={messages}
+            windowStart={windowStart}
+            scrollRef={scrollRef}
+            stickRef={stickToBottom}
+            onViewTdeGraph={viewTdeGraph}
+            onBtwAction={btwAction}
+          />
           {/* CCC M5 — entity action cards inline below messages */}
           {cccActions.length > 0 && (
             <div className="flex flex-col gap-1 pt-1">
@@ -2327,6 +2267,80 @@ function BtwBubble({ m, onAction }: {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** One message with its day separator and the gap below it. The separator is
+ *  decided against the predecessor's timestamp, not the whole list, so a row
+ *  depends only on its own message and that message's neighbour. Memoised on
+ *  the message object: a streaming delta re-renders only the row it changed. */
+const MessageRow = React.memo(function MessageRow({
+  m,
+  prevTs,
+  rowRef,
+  onViewTdeGraph,
+  onBtwAction,
+}: {
+  m: ChatMessage;
+  prevTs: number | undefined;
+  rowRef: (node: HTMLElement | null) => void;
+  onViewTdeGraph: () => void;
+  onBtwAction: (clientId: string, action: "edit" | "resend") => void;
+}) {
+  const newDay = prevTs === undefined || startsNewDay([prevTs, m.ts], 1);
+  return (
+    <div ref={rowRef} data-row-key={m.id} className="pb-4">
+      {newDay && <DaySeparator ts={m.ts} nowS={Math.floor(Date.now() / 1000)} />}
+      <MessageBubble m={m} onViewTdeGraph={onViewTdeGraph} onBtwAction={onBtwAction} />
+    </div>
+  );
+});
+
+/** The windowed message list. It owns the scroll-driven window state, so a
+ *  scroll step re-renders this list and nothing above it in ChatPane. */
+function ChatMessageRows({
+  messages,
+  windowStart,
+  scrollRef,
+  stickRef,
+  onViewTdeGraph,
+  onBtwAction,
+}: {
+  messages: readonly ChatMessage[];
+  windowStart: number;
+  scrollRef: React.RefObject<HTMLElement>;
+  stickRef: React.MutableRefObject<boolean>;
+  onViewTdeGraph: () => void;
+  onBtwAction: (clientId: string, action: "edit" | "resend") => void;
+}) {
+  const listRef = React.useRef<HTMLDivElement>(null);
+  const visible = messages.slice(windowStart);
+  const keys = visible.map((m) => m.id);
+  const { start, end, padTop, padBottom, measure } = useVirtualList({
+    scrollRef,
+    listRef,
+    keys,
+    stickRef,
+  });
+  return (
+    <div ref={listRef} className="flex flex-col" data-testid="chat-message-rows">
+      <div aria-hidden style={{ height: padTop }} />
+      {visible.slice(start, end).map((m, j) => {
+        const i = start + j;
+        const prevTs = i > 0 ? visible[i - 1].ts : windowStart > 0 ? messages[windowStart - 1].ts : undefined;
+        return (
+          <MessageRow
+            key={m.id}
+            m={m}
+            prevTs={prevTs}
+            rowRef={measure(m.id)}
+            onViewTdeGraph={onViewTdeGraph}
+            onBtwAction={onBtwAction}
+          />
+        );
+      })}
+      <div aria-hidden style={{ height: padBottom }} />
     </div>
   );
 }

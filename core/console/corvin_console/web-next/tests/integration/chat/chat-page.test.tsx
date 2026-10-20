@@ -4,6 +4,11 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { renderWithProviders, createTestQueryClient } from '../../utils/test-utils';
 import { ChatPage } from '../../fixtures/mock-pages';
+import { installFakeScrollLayout } from '../../utils/fake-scroll-layout';
+
+// useVirtualList observes every mounted row with `new ResizeObserver`; the setup
+// mock is an arrow vi.fn and is not constructible (see tests/unit/usage-cost-trend.test.tsx).
+vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
 
 // ── Real-component wiring tests (voice playback) ────────────────────────────
 //
@@ -779,6 +784,12 @@ describe('ChatPage composer isolation (real components)', () => {
 
 // ── Windowed history ────────────────────────────────────────────────────────
 describe('ChatPage windowed history (real components)', () => {
+  let restoreLayout: () => void;
+  beforeEach(() => {
+    restoreLayout = installFakeScrollLayout();
+  });
+  afterEach(() => restoreLayout());
+
   it('mounts only the tail of a long chat and reveals older turns on request', async () => {
     const msgs: ChatMessage[] = Array.from({ length: 150 }, (_, i) => ({
       id: `m${i}`,
@@ -796,12 +807,20 @@ describe('ChatPage windowed history (real components)', () => {
     } as unknown as ReturnType<typeof useChatSession>);
     renderRealChatPage('sid-window-1');
 
+    // The newest turn is mounted; the rest of the 60-turn tail is virtualised, so
+    // only the rows around the viewport are in the DOM.
     expect(await screen.findByText('message-body-149')).toBeTruthy();
-    expect(screen.getByText('message-body-90')).toBeTruthy();
     expect(screen.queryByText('message-body-89')).toBeNull();
+    expect(document.querySelectorAll('[data-row-key]').length).toBeLessThan(60);
 
+    // Turns before the tail are not listed until "Show older" is pressed.
     fireEvent.click(screen.getByTestId('show-older-messages'));
-    expect(screen.getByText('message-body-0')).toBeTruthy();
     expect(screen.queryByTestId('show-older-messages')).toBeNull();
+
+    // The revealed turns are reachable by scrolling to the top.
+    const scroller = document.querySelector<HTMLElement>('.overflow-y-auto')!;
+    scroller.scrollTop = 0;
+    fireEvent.scroll(scroller);
+    expect(await screen.findByText('message-body-0')).toBeTruthy();
   });
 });
