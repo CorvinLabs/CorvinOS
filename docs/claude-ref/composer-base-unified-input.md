@@ -523,3 +523,12 @@ Send → `POST …/runs/{rid}/resume`, which runs the pre-spawn gates on the rep
 (`WorkflowComposerHandle.setDraft`). The "Optional comment" box of the binary approval bar is a
 comment on a decision, not a message, and stays a plain textarea.
 Tests: `tests/unit/workflow-chat-panel.test.tsx`.
+
+### Erasure and cleanup (CONCEPT-0115 P5)
+
+Art. 17: `WorkflowChatHandler` (`erasure_handlers.py`, layer `L-workflows`) removes whole attachment
+directories — store and per-run snapshots — whose `meta.json` names the subject (`uploaded_by` =
+session fingerprint); see `layer-36-erasure.md`. Deleting a workflow removes its `<wid>/` tree
+(attachments included); `DELETE …/attachments/{att_id}` removes one.
+Cleanup: the design chat's own recorder/transcription code and two-row textarea were removed in P2;
+`CreateWorkflowDialog` (name only) and `ScheduleModal` (cron) ask for neither text nor files and stay.

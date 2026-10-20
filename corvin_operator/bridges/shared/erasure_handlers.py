@@ -1702,6 +1702,8 @@ class WorkflowChatHandler:
     user-authored free text, no TTL, no erasure path. The run logs beside them
     (``<wid>/runs/<rid>.jsonl``) carry step output the same way.
 
+    Attachments (CONCEPT-0115) are removed per directory by their ``meta.json`` uploader.
+
     Attribution is line-wise via :data:`_SUBJECT_KEYS` (which is why ``speaker``
     was added to it), plus whole-file removal when the workflow's own metadata
     names the subject as its author/owner. A transcript line carrying no
@@ -1737,6 +1739,12 @@ class WorkflowChatHandler:
                     import shutil
                     shutil.rmtree(run_dir, ignore_errors=True)
                     removed += 1
+            # CONCEPT-0115: uploaded attachments (``<wid>/attachments/<att_id>/`` and the per-run
+            # snapshots ``<wid>/runs/<rid>/attachments/<att_id>/``) are binary files beside a
+            # ``meta.json`` that names the uploader. Remove the WHOLE attachment directory when the
+            # record names the subject — before the generic JSON pass below, which would otherwise
+            # delete only the record and strand the file it describes.
+            removed += _purge_workflow_attachment_dirs(root, subject_id)
             removed += _purge_json_tree(root, subject_id)
         except Exception as exc:  # noqa: BLE001
             return ErasureLayerResult(
@@ -1748,6 +1756,27 @@ class WorkflowChatHandler:
         return _result(self.layer_id, t0, removed, absent=False, absent_reason="",
                        empty_reason="no workflow content matched subject",
                        applied_reason="removed {n} workflow item(s) for subject")
+
+
+def _purge_workflow_attachment_dirs(root: Path, subject_id: str) -> int:
+    """Remove every workflow attachment directory whose ``meta.json`` names the subject.
+
+    ``uploaded_by`` (the console session fingerprint of the uploader) is matched exactly, as are
+    the shared identity keys. A directory whose record is unreadable or names someone else is
+    left alone — never guessed at."""
+    import shutil
+    removed = 0
+    candidates = list(root.glob("*/attachments/*")) + list(root.glob("*/runs/*/attachments/*"))
+    for att_dir in sorted(candidates):
+        if att_dir.is_symlink() or not att_dir.is_dir():
+            continue
+        meta = _load_json(att_dir / "meta.json")
+        if not isinstance(meta, dict):
+            continue
+        if meta.get("uploaded_by") == subject_id or _mentions_subject(meta, subject_id):
+            shutil.rmtree(att_dir, ignore_errors=False)
+            removed += 1
+    return removed
 
 
 @dataclass

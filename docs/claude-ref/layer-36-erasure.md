@@ -428,7 +428,13 @@ silent.
   * `WorkflowChatHandler` (R2-A7) — `<tenant>/workflows/`: the authoring
     transcript `<wid>.chat.jsonl` (verbatim user turns), the run logs under
     `<wid>/runs/`, and the whole workflow when its `.meta.json` names the
-    subject as author/owner
+    subject as author/owner. Since CONCEPT-0115 also the uploaded attachments:
+    `<wid>/attachments/<att_id>/` and the per-run snapshots
+    `<wid>/runs/<rid>/attachments/<att_id>/` are removed WHOLE (file + `meta.json`) when the
+    record's `uploaded_by` (console session fingerprint) or an identity key names the subject;
+    another uploader's attachment is untouched. Single attachments are deleted by
+    `DELETE /v1/console/workflows/{wid}/attachments/{att_id}`. Proof:
+    `core/console/tests/test_workflow_composer.py::test_art17_erasure_removes_the_subjects_attachment_files_and_run_snapshots_only`
   * `BrowserSessionHandler` (R2-A7) — `<tenant>/browser/sessions/<session_id>/`,
     the per-session Chromium user-data dir (cookies, local storage, cached
     pages); attributed by directory name, which is the session id

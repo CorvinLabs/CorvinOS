@@ -429,3 +429,36 @@ orchestration:
         assert [ch for ch, _ in calls] == ["workflow-resume"]
         ok = c.post(f"/v1/console/workflows/wf1/runs/{res.run_id}/resume", json={"reply": "ja"})
         assert ok.status_code == 200, ok.text  # still paused, so the clean reply resumes it
+
+
+# ── Art. 17 (CONCEPT-0115 P5) ──────────────────────────────────────────────
+
+def test_art17_erasure_removes_the_subjects_attachment_files_and_run_snapshots_only(tmp_path):
+    with sandbox(tmp_path) as (app, home, tid, new_client):
+        yaml_text = _TWO_STEP.replace("type: agent\n      agent: assistant\n      depends_on: []",
+                                      "type: code\n      depends_on: []", 1)
+        wf_dir = make_workflow(tid, "wf1", yaml_text, phase="ready")
+        a, b = new_client(), new_client()  # two sessions = two uploader identities
+        att_a = _upload(a, "wf1", [("files", ("mine.txt", b"subject data", "text/plain"))]).json()["attachments"][0]
+        att_b = _upload(b, "wf1", [("files", ("other.txt", b"someone else", "text/plain"))]).json()["attachments"][0]
+        a.post("/v1/console/workflows/wf1/runs", json={"inputs": {}, "dry_run": False})  # snapshots both
+
+        root = _att_dir(tid, "wf1")
+        subject = json.loads((root / att_a["id"] / "meta.json").read_text())["uploaded_by"]
+        other = json.loads((root / att_b["id"] / "meta.json").read_text())["uploaded_by"]
+        assert subject != other
+        snaps = list((wf_dir / "wf1" / "runs").glob(f"*/attachments/{att_a['id']}/data/mine.txt"))
+        assert snaps and root.joinpath(att_a["id"], "data", "mine.txt").exists()
+
+        from erasure_handlers import WorkflowChatHandler
+        res = WorkflowChatHandler(tenant_id=tid).purge(subject, "er-att")
+        assert res.status.value == "applied", res
+
+        # file proof: the subject's bytes are gone from the store AND from every run snapshot ...
+        assert not (root / att_a["id"]).exists()
+        assert not list((wf_dir / "wf1" / "runs").glob(f"*/attachments/{att_a['id']}"))
+        assert not [p for p in home.rglob("*") if p.is_file() and p.read_bytes() == b"subject data"]
+        # ... and the other uploader's attachment, record and snapshot are untouched.
+        assert (root / att_b["id"] / "data" / "other.txt").read_bytes() == b"someone else"
+        assert (root / att_b["id"] / "meta.json").exists()
+        assert list((wf_dir / "wf1" / "runs").glob(f"*/attachments/{att_b['id']}/data/other.txt"))
