@@ -107,3 +107,65 @@ test("design commands are answered by the server without a design turn (needs th
   await expect(page.getByText(/Current design phase: discovering\./)).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText(/Designing workflow/)).toHaveCount(0);
 });
+
+// ── Attachments (CONCEPT-0115 P3) — need a host that serves the attachment routes ──
+
+async function attachmentRoutesLive(request: APIRequestContext): Promise<boolean> {
+  const r = await request.get(`${API}/workflows/${WID}/attachments/0000000000000000`);
+  if (r.status() !== 404) return false;
+  return /attachment not found/.test(await r.text()); // a missing route answers "Not Found"
+}
+
+test("paperclip uploads, shows a chip, removing it deletes the stored file", async ({ page, request }) => {
+  test.skip(!(await attachmentRoutesLive(request)), "running host predates the attachment routes — restart corvin-webui");
+  const ta = await openEditor(page);
+  await expect(ta).toBeEnabled({ timeout: 15_000 });
+  let uploadedId = "";
+  page.on("response", async (res) => {
+    if (res.url().endsWith(`/workflows/${WID}/attachments`) && res.request().method() === "POST") {
+      uploadedId = (await res.json()).attachments[0].id;
+    }
+  });
+  await page.getByTestId("workflow-file-input").setInputFiles({
+    name: "brief.md", mimeType: "text/markdown", buffer: Buffer.from("# brief\nrevenue 7\n"),
+  });
+  const chip = page.getByTestId("attachment-chip");
+  await expect(chip).toContainText("brief.md");
+  await expect.poll(() => uploadedId).not.toBe("");
+  expect((await request.get(`${API}/workflows/${WID}/attachments/${uploadedId}`)).status()).toBe(200);
+  await page.getByTestId("remove-attachment").click();
+  await expect(chip).toHaveCount(0);
+  await expect.poll(async () => (await request.get(`${API}/workflows/${WID}/attachments/${uploadedId}`)).status()).toBe(404);
+});
+
+test("dropping files on the design pane stages them", async ({ page, request }) => {
+  test.skip(!(await attachmentRoutesLive(request)), "running host predates the attachment routes — restart corvin-webui");
+  const ta = await openEditor(page);
+  await expect(ta).toBeEnabled({ timeout: 15_000 });
+  const dt = await page.evaluateHandle(() => {
+    const d = new DataTransfer();
+    d.items.add(new File(["a,b\n1,2\n"], "dropped.csv", { type: "text/csv" }));
+    return d;
+  });
+  const zone = page.getByTestId("workflow-design-dropzone");
+  await zone.dispatchEvent("dragenter", { dataTransfer: dt });
+  await zone.dispatchEvent("dragover", { dataTransfer: dt });
+  await zone.dispatchEvent("drop", { dataTransfer: dt });
+  await expect(page.getByTestId("attachment-chip")).toContainText("dropped.csv");
+  await page.getByTestId("remove-attachment").click(); // leave nothing behind
+});
+
+test("a non-text attachment is refused over the real WebSocket before any engine runs", async ({ page, request }) => {
+  test.skip(!(await attachmentRoutesLive(request)), "running host predates the attachment routes — restart corvin-webui");
+  const ta = await openEditor(page);
+  await expect(ta).toBeEnabled({ timeout: 15_000 });
+  await page.getByTestId("workflow-file-input").setInputFiles({
+    name: "scan.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 not text"),
+  });
+  await expect(page.getByTestId("attachment-chip")).toContainText("scan.pdf");
+  await ta.fill("read it");
+  await page.getByTestId("workflow-composer-send").click();
+  await expect(page.getByTestId("workflow-send-error")).toContainText(/text-based/);
+  await expect(page.getByText("Not sent")).toBeVisible();
+  await expect(page.getByText(/Designing workflow/)).toHaveCount(0);
+});

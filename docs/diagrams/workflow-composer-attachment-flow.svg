@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 360" font-family="sans-serif" font-size="13">
+  <title>Workflow design chat: attachment and gate flow</title>
+  <defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#555"/></marker></defs>
+  <g fill="#f4f1ea" stroke="#555">
+    <rect x="10" y="20" width="170" height="70" rx="8"/>
+    <rect x="230" y="20" width="200" height="70" rx="8"/>
+    <rect x="480" y="20" width="200" height="70" rx="8"/>
+    <rect x="720" y="20" width="170" height="70" rx="8"/>
+    <rect x="230" y="150" width="200" height="70" rx="8"/>
+    <rect x="480" y="150" width="200" height="70" rx="8"/>
+    <rect x="720" y="150" width="170" height="70" rx="8"/>
+    <rect x="480" y="270" width="200" height="70" rx="8"/>
+    <rect x="720" y="270" width="170" height="70" rx="8"/>
+  </g>
+  <g fill="#222">
+    <text x="95" y="50" text-anchor="middle">Composer (browser)</text><text x="95" y="70" text-anchor="middle">clip / folder / drop / chips</text>
+    <text x="330" y="50" text-anchor="middle">POST …/attachments</text><text x="330" y="70" text-anchor="middle">session + CSRF, tenant from session</text>
+    <text x="580" y="50" text-anchor="middle">Store (tenant_home)</text><text x="580" y="70" text-anchor="middle">workflows/&lt;wid&gt;/attachments/&lt;id&gt;</text>
+    <text x="805" y="50" text-anchor="middle">Audit event</text><text x="805" y="70" text-anchor="middle">attachment_uploaded (ids, hash)</text>
+    <text x="330" y="180" text-anchor="middle">WS user frame</text><text x="330" y="200" text-anchor="middle">text + attachment ids</text>
+    <text x="580" y="180" text-anchor="middle">resolve: exists, size, sha256,</text><text x="580" y="200" text-anchor="middle">text type, tenant by path</text>
+    <text x="805" y="180" text-anchor="middle">refuse → error frame</text><text x="805" y="200" text-anchor="middle">+ attachment_refused</text>
+    <text x="580" y="300" text-anchor="middle">Gates L44/L34/L35 on input,</text><text x="580" y="320" text-anchor="middle">chat prompt, YAML prompt</text>
+    <text x="805" y="300" text-anchor="middle">Engine spawn</text><text x="805" y="320" text-anchor="middle">refused → hash+length only</text>
+  </g>
+  <g stroke="#555" fill="none" marker-end="url(#a)">
+    <path d="M180 55 H228"/><path d="M430 55 H478"/><path d="M680 55 H718"/>
+    <path d="M95 90 V185 H228"/><path d="M430 185 H478"/><path d="M680 185 H718"/>
+    <path d="M580 220 V268"/><path d="M680 305 H718"/>
+  </g>
+</svg>

@@ -3,7 +3,7 @@
  * Public surface is unchanged; re-exported via the ../api.ts barrel.
  */
 
-import { api } from "./client";
+import { api, ApiError, BASE } from "./client";
 
 // ── Workflow Builder (ADR-0039) ─────────────────────────────────────
 
@@ -41,6 +41,12 @@ export interface ChatEntry {
   summary_card?: Record<string, unknown>;
   template_offer?: { key: string; yaml: string; confidence: number };
   graph?: GraphNode[];
+  /** Files sent with this user message (ids and display fields only). */
+  attachments?: { id: string; name: string; size: number; mime: string }[];
+  /** A gate-refused user line: its text was never stored (hash + length only). */
+  refused?: boolean;
+  /** Slash-command exchange: answered by the server, never part of the transcript. */
+  command?: boolean;
 }
 
 export interface WorkflowListResponse {
@@ -236,4 +242,51 @@ export async function getWorkflowDesignCommands(
   signal?: AbortSignal,
 ): Promise<{ commands: WorkflowDesignCommand[] }> {
   return api(`/workflow-design/commands`, { signal });
+}
+
+/** A stored workflow attachment as the server describes it: an id, never a path. */
+export interface WorkflowAttachment {
+  id: string;
+  name: string;
+  size: number;
+  mime: string;
+}
+
+// Mirrors attachments_common.ATTACH_MAX_FILES: one request carries at most this many files.
+const WORKFLOW_UPLOAD_BATCH = 10;
+
+export async function uploadWorkflowAttachments(
+  wid: string,
+  files: File[],
+  csrf: string,
+): Promise<WorkflowAttachment[]> {
+  const out: WorkflowAttachment[] = [];
+  for (let i = 0; i < files.length; i += WORKFLOW_UPLOAD_BATCH) {
+    const form = new FormData();
+    for (const f of files.slice(i, i + WORKFLOW_UPLOAD_BATCH)) form.append("files", f, f.name);
+    const res = await fetch(`${BASE}/workflows/${encodeURIComponent(wid)}/attachments`, {
+      method: "POST",
+      headers: { "X-CSRF-Token": csrf },
+      credentials: "include",
+      body: form,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => `HTTP ${res.status}`);
+      let detail = text;
+      try {
+        const json = JSON.parse(text);
+        if (json?.detail) detail = typeof json.detail === "string" ? json.detail : JSON.stringify(json.detail);
+      } catch { /* keep the raw text */ }
+      throw new ApiError(res.status, detail);
+    }
+    out.push(...((await res.json()) as { attachments: WorkflowAttachment[] }).attachments);
+  }
+  return out;
+}
+
+export async function deleteWorkflowAttachment(wid: string, id: string, csrf: string): Promise<{ ok: true }> {
+  return api(`/workflows/${encodeURIComponent(wid)}/attachments/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    csrf,
+  });
 }

@@ -451,3 +451,61 @@ textarea or a recorder. It renders `components/workflows/WorkflowComposer.tsx`, 
 
 Tests: `tests/unit/workflow-composer.test.tsx`, `core/console/tests/test_workflow_composer.py`
 (HTTP + WebSocket against the console router, sandboxed home), `tests/e2e/workflow-composer.spec.ts`.
+
+### Workflow attachments and the gate scope (CONCEPT-0115 P3)
+
+Diagram: `docs/diagrams/workflow-composer-attachment-flow.svg`.
+
+**Store.** `<tenant_home>/workflows/<wid>/attachments/<att_id>/{meta.json,data/<safe_name>}` —
+under the same root as the workflow files (and the Art. 17 handler), never in a worker's cwd.
+`att_id` is 16 hex. The tenant comes ONLY from the session record (`rec.tenant_id`). A client
+names an attachment by id; `load_attachment()` re-checks existence, that the file is a regular
+non-symlink file in the attachment's own `data/` dir, and its size + sha256 on EVERY use.
+
+**Routes** (`routes/workflow_composer.py`, router-level session + CSRF-on-mutation):
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/v1/console/workflows/{wid}/attachments` | multipart `files`; 10 files × 50 MiB per request (`attachments_common`), 100 per workflow; all-or-nothing; returns `{id,name,size,mime}` only (no path) |
+| GET | `/v1/console/workflows/{wid}/attachments/{att_id}` | `serve_headers()` (inline only for safe types, CSP sandbox otherwise) |
+| DELETE | `/v1/console/workflows/{wid}/attachments/{att_id}` | removes the files |
+
+`body_cap.py` lists the upload path (prefix `/v1/console/workflows/` + `/attachments`).
+
+**Design chat.** The WebSocket `user` frame takes `attachments: [att_id]`. The server resolves them
+(`resolve_for_message`): ≤10 per message, UTF-8 text types only (`READABLE_EXTENSIONS` / `text/*`) —
+anything else is storable but refused at send time with an in-band `error` frame (415), because an
+engine prompt is text and L34 classifies exactly the text it is handed. The text (24 KiB/file,
+64 KiB/message) is appended to the turn's prompt, so it passes the gates with the operator's words.
+Attachment text is visible to the designer for the turn it is sent in; later turns see the chat
+history lines (with attachment names), not the file.
+
+**Gate scope (every spawn prompt).**
+
+| Prompt | Gate channel |
+|---|---|
+| operator text + attachment text (before the line is stored) | `workflow-design-input` |
+| the design chat prompt (history + turn) | `workflow-design` |
+| the separately built YAML prompt (12 history lines) — `_generate_awp_yaml` | `workflow-design-yaml` |
+| a human's reply resuming a paused run — `POST …/runs/{rid}/resume` | `workflow-resume` (403 `refused`, run stays paused) |
+
+A refused user line is stored as `{"refused": true, "user_sha256", "user_len"}` — never its text —
+and `_chat_history_text()` skips such lines, so it cannot reach any later prompt.
+`_generate_awp_yaml` without a tenant refuses (never an ungated spawn).
+
+**Runs.** `_stream_run` snapshots the workflow's attachments into
+`<wid>/runs/<rid>/attachments/<att_id>/` before any node starts (variant b of the concept: a run is
+reproducible). A missing or changed attachment refuses the run (`error: attachment changed`).
+Run meta carries `attachments` (id/name/size/mime/sha256_prefix). Node prompts do not read the
+snapshot yet — it is the reproducibility record.
+
+**Audit** (`audit.py::workflow_attachment_*`, registered in BOTH `EVENT_SEVERITY` and
+`_EVENT_ALLOWLIST`): `workflow.attachment_uploaded` (wid, att_id, size_bytes, closed-shape mime,
+sha256_prefix, sid_fingerprint), `workflow.attachment_deleted`, `workflow.attachment_snapshot`,
+`workflow.attachment_refused` (WARNING; closed `reason_code`: bad_id, missing, corrupt, changed,
+not_readable, too_many). Never a file name, never content.
+
+UI: `components/workflows/WorkflowComposer.tsx` (paperclip, folder where the browser supports it,
+chips, drop via the pane's `useFileDrop` → handle `addFiles`), adapter built in
+`pages/workflows.tsx::ChatPane`. Tests: `core/console/tests/test_workflow_composer.py`,
+`tests/unit/workflow-composer.test.tsx`, `tests/e2e/workflow-composer.spec.ts`.

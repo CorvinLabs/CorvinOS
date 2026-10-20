@@ -77,6 +77,8 @@ import {
   importWorkflow,
   getLicenseInfo,
   getWorkflowDesignCommands,
+  uploadWorkflowAttachments,
+  deleteWorkflowAttachment,
   type ChatEntry,
   type GraphNode,
   type LicenseInfo,
@@ -85,8 +87,11 @@ import {
   type WorkflowRunEvent,
 } from "@/lib/api";
 import { MediaGallery, ImageCard, type MediaItem } from "@/components/media";
-import { WorkflowComposer } from "@/components/workflows/WorkflowComposer";
+import { WorkflowComposer, type WorkflowComposerHandle } from "@/components/workflows/WorkflowComposer";
 import type { SlashCommand } from "@/components/chat/SlashCommandPalette";
+import { DropOverlay } from "@/components/chat/DropOverlay";
+import { DEFAULT_COMPOSER_LIMITS, type ComposerAttachmentRef, type ComposerContextAdapter } from "@/components/chat/composer-adapter";
+import { useFileDrop, supportsDirectoryDrop } from "@/hooks/use-file-drop";
 import { DataTable, TableCard, TableOverlay, type DataTableFetchParams, type TableEvent } from "@/components/table";
 
 // ── Shared helpers ────────────────────────────────────────────────────────
@@ -1120,6 +1125,8 @@ function NodeInspector({
 
 interface DesignMessage extends ChatEntry {
   pending?: boolean;
+  /** The server refused the message before any engine ran (error frame). */
+  failed?: boolean;
 }
 
 function TemplateOfferCard({
@@ -1189,6 +1196,16 @@ function ChatMessage({ msg }: { msg: DesignMessage }) {
         )}
       >
         {msg.content}
+        {msg.attachments && msg.attachments.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-1" data-testid="design-message-attachments">
+            {msg.attachments.map((a) => (
+              <span key={a.id} className="rounded bg-background/20 px-1.5 py-0.5 font-mono text-[10px]">
+                {a.name}
+              </span>
+            ))}
+          </div>
+        )}
+        {msg.failed && <div className="mt-1 text-[10px] opacity-80">Not sent</div>}
         {msg.yaml_update && (
           <div className="mt-1.5 flex items-center gap-1 text-[10px] opacity-70">
             <Workflow className="h-3 w-3" />
@@ -1253,6 +1270,8 @@ function ChatPane({
   });
   const commandList = designCommands.data?.commands ?? NO_DESIGN_COMMANDS;
   const { refresh: refreshAuth } = useAuth();
+  const composerRef = React.useRef<WorkflowComposerHandle>(null);
+  const [sendError, setSendError] = React.useState<string | null>(null);
 
   // Keep ref in sync with state
   React.useEffect(() => { voiceEnabledRef.current = voiceEnabled; }, [voiceEnabled]);
@@ -1277,6 +1296,16 @@ function ChatPane({
           if (data.chat?.length) setMessages(data.chat);
           if (data.graph?.length) onGraphUpdate(data.graph);
           if (data.yaml) onYamlUpdate(data.yaml);
+        } else if (data.type === "error") {
+          // The server refused before any engine ran (licence cap, busy lock, bad attachment).
+          setTyping(false);
+          setSendError(String(data.message ?? "The message was not sent."));
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            return last?.pending && last.role === "user"
+              ? [...prev.slice(0, -1), { ...last, pending: false, failed: true }]
+              : prev;
+          });
         } else if (data.type === "typing") {
           setTyping(true);
         } else if (data.type === "voice_ack") {
@@ -1307,6 +1336,9 @@ function ChatPane({
             summary_card: data.summary_card,
             template_offer: data.template_offer,
             graph: data.graph,
+            attachments: data.attachments,
+            refused: data.refused,
+            command: data.command,
           };
           if (data.yaml_update) onYamlUpdate(data.yaml_update);
           if (data.phase_update) {
@@ -1349,19 +1381,39 @@ function ChatPane({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typing]);
 
-  const send = React.useCallback((text: string) => {
+  const send = React.useCallback((text: string, atts: ComposerAttachmentRef[] = []) => {
     const t = text.trim();
-    if (!t || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if ((!t && atts.length === 0) || !ws || ws.readyState !== WebSocket.OPEN) return;
     const optimistic: DesignMessage = {
       role: "user",
-      content: t,
+      content: t || "(attachments)",
       ts: Date.now() / 1000,
       pending: true,
+      attachments: atts.length ? atts.map(({ id, name, size, mime }) => ({ id, name, size, mime })) : undefined,
     };
+    setSendError(null);
     setMessages((prev) => [...prev, optimistic]);
-    ws.send(JSON.stringify({ type: "user", text: t }));
+    ws.send(JSON.stringify({ type: "user", text: t, ...(atts.length ? { attachments: atts.map((a) => a.id) } : {}) }));
     setPendingOffer(null);
   }, [ws]);
+
+  // The design chat's port into the shared composer: uploads land in THIS workflow's store,
+  // commands come from the server table, Send goes over the design socket. The tenant is the
+  // server's decision (session record); nothing here names one.
+  const adapter = React.useMemo<ComposerContextAdapter>(() => ({
+    upload: (files) => uploadWorkflowAttachments(wid, files, csrf),
+    remove: async (att) => { await deleteWorkflowAttachment(wid, att.id, csrf); },
+    extraCommands: commandList,
+    sessionCommands: false,
+    send,
+    contextKey: `design-${wid}`,
+    limits: DEFAULT_COMPOSER_LIMITS,
+  }), [wid, csrf, commandList, send]);
+
+  const { isDragging: paneDragging, dropHandlers: paneDropHandlers } = useFileDrop(
+    (files) => composerRef.current?.addFiles(files),
+    { disabled: !connected },
+  );
 
   const acceptTemplate = (key: string) => {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1371,7 +1423,8 @@ function ChatPane({
   };
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col">
+    <div className="relative flex flex-1 min-h-0 flex-col" data-testid="workflow-design-dropzone" {...paneDropHandlers}>
+      <DropOverlay active={paneDragging} folders={supportsDirectoryDrop} />
       <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
         <PhaseBreadcrumb phase={phase} />
         <div className="flex items-center gap-2">
@@ -1437,13 +1490,23 @@ function ChatPane({
         <div ref={bottomRef} />
       </div>
 
+      {sendError && (
+        <button
+          type="button"
+          className="mx-3 mb-1 flex shrink-0 items-center justify-between rounded-md bg-destructive/10 px-2 py-1.5 text-left text-xs text-destructive"
+          onClick={() => setSendError(null)}
+          data-testid="workflow-send-error"
+        >
+          <span>{sendError}</span>
+          <span className="ml-2 opacity-60" aria-hidden>✕</span>
+        </button>
+      )}
       <WorkflowComposer
-        contextKey={`design-${wid}`}
+        ref={composerRef}
         csrf={csrf}
         connected={connected}
         placeholder="Describe your workflow… (Enter to send, / for commands, hold Space to speak)"
-        commands={commandList}
-        onSend={send}
+        adapter={adapter}
         onAuthExpired={refreshAuth}
       />
     </div>
