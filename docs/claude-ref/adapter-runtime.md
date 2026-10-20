@@ -1360,3 +1360,11 @@ the prompt unchanged. A new meaning is added to `STATUS_MARKERS` and CONCEPT-011
 own prompt text. Proof: `core/console/tests/test_chat_status_markers.py` drives both real builders.
 The prompt only changes for a process started after the edit — restart the console host and the bridge
 daemons (`scripts/safe-restart.sh`) for it to apply.
+
+**Where the rule applies, and where it deliberately does not.** It applies to every surface where the OS
+answers the operator in chat: bridge OS turns (all channels, incl. the detached self-delegation worker) and
+the console web chat. It does NOT apply to machine- or peer-facing output — ACS manager/worker replies
+(structured data), L38 A2A worker replies, the voice summariser, the narrator and the context-synthesis
+prompts — nor to the console Assistant widget (its own "short, no lists" style). System-generated chat
+texts (quota/limit notices, background-task acks, worker-finished lines) take their icon from
+`status_markers.icon(name)` — never a literal — so they match what the model is taught.

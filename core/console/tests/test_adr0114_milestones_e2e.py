@@ -191,7 +191,7 @@ class _DelegatedTurnBase(unittest.TestCase):
     @staticmethod
     def _worker_progress(events: list[dict]) -> list[str]:
         return [e.get("text", "") for e in events
-                if e.get("type") == "delta" and "✓ Worker" in (e.get("text") or "")]
+                if e.get("type") == "delta" and "✅ Worker" in (e.get("text") or "")]
 
     @staticmethod
     def _artifacts(events: list[dict]) -> list[dict]:

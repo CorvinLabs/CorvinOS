@@ -458,6 +458,12 @@ def _load_bg_scope() -> Any:  # ADR-2236
 _STATUS_MARKERS_MOD: Any = None  # CONCEPT-0114 cached module, False when unavailable
 
 
+def _status_icon(name: str) -> str:
+    """Status icon from the one shared vocabulary; empty when the helper is absent."""
+    _status_marker_block()  # loads the module once
+    return _STATUS_MARKERS_MOD.icon(name) if _STATUS_MARKERS_MOD else ""
+
+
 def _status_marker_block() -> str:
     """The chat status-marker rule, shared verbatim with the bridge adapter.
 
@@ -3843,7 +3849,7 @@ def _drain_compute_inbox(sess: "WebChatSession") -> list[dict[str, Any]]:
         description = data.get("description", "compute task")
         status = data.get("status", "completed")
         artifact_paths: list[str] = data.get("artifact_paths", [])
-        icon = "✓" if status == "completed" else "✗"
+        icon = _status_icon("done" if status == "completed" else "failed")
         events.append({
             "type": "delta",
             "text": f"{icon} Compute-Task `{task_id}` fertig: {description}\n",
@@ -7555,13 +7561,13 @@ async def _stream_turn_impl(
                     await asyncio.sleep(2.0)
                     for worker in _new_worker_traces():
                         yield {"type": "delta",
-                               "text": f"✓ Worker {worker} finished\n"}
+                               "text": f"{_status_icon('done')} Worker {worker} finished\n"}
                     for _la in _new_live_artifacts():
                         yield _la
                 # Final poll — catch workers/artifacts that landed in the last window.
                 for worker in _new_worker_traces():
                     yield {"type": "delta",
-                           "text": f"✓ Worker {worker} finished\n"}
+                           "text": f"{_status_icon('done')} Worker {worker} finished\n"}
                 for _la in _new_live_artifacts():
                     yield _la
                 # Await the result — may raise if ACSRuntime encountered an error

@@ -669,6 +669,11 @@ except ImportError:
     except ImportError:
         _status_markers = None
 
+
+def _status_icon(name: str) -> str:
+    """Status icon from the one shared vocabulary (``status_markers.icon``)."""
+    return _status_markers.icon(name) if _status_markers else ""
+
 # i18n — full BCP-47 output-language pin. Optional; when missing, the
 # legacy de/en argv shape stays untouched. Lives in the same shared/
 # dir as profile.py, so the same try/except pattern works.
@@ -8347,14 +8352,14 @@ def _call_claude_streaming_impl(
             from corvin_operator.forge.forge.paths import corvin_home as _ct_home2  # type: ignore
         except ImportError:
             _turn_refused("quota_unavailable", _retry_count)
-            return "⚠ Chat-turn quota enforcement unavailable — refusing turn (fail-closed)."
+            return f"{_status_icon('warning')} Chat-turn quota enforcement unavailable — refusing turn (fail-closed)."
         try:
             _ct_inc2(_ct_home2(), channel=channel, chat_key=chat_key,
                      feature="chat_turns_per_day", counter_file="chat_quota.json")
         except Exception as _ct_exc2:  # noqa: BLE001
             if _ct_err2 is not None and isinstance(_ct_exc2, _ct_err2):
                 _turn_refused("quota", _retry_count)
-                return ("⚠ Free-tier daily chat limit reached (chat_turns_per_day). "
+                return (f"{_status_icon('warning')} Free-tier daily chat limit reached (chat_turns_per_day). "
                         "Upgrade at corvin-labs.com/pricing.")
             # operational error already swallowed by increment_and_check (fail-open)
 
@@ -11964,7 +11969,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 except ValueError:
                     _bg_max = 3
                 if _cn.count_active(sender=sender) >= _bg_max:
-                    ack_text = (f"⚠ You already have {_bg_max} background task(s) "
+                    ack_text = (f"{_status_icon('warning')} You already have {_bg_max} background task(s) "
                                 "running. Wait for one to finish before starting "
                                 "another.")
                     _audit_event(
@@ -12118,7 +12123,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                                           ok=False)
                         except Exception:  # noqa: BLE001
                             pass
-                        ack_text = "⚠ Could not start the background task."
+                        ack_text = f"{_status_icon('warning')} Could not start the background task."
         _ledger_record_side_turn(
             channel, str(chat_key), _task_raw, ack_text, msg_id=str(msg_id or ""),
             sender=str(sender or ""),

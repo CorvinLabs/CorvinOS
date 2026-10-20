@@ -1,6 +1,6 @@
 """E2E — ADR-0114 M2: ACS worker progress reaches the web-chat WebSocket.
 
-M2ProgressE2E in test_adr0114_milestones_e2e.py proves the "✓ Worker … finished"
+M2ProgressE2E in test_adr0114_milestones_e2e.py proves the "✅ Worker … finished"
 delta is produced by ``stream_turn`` — it calls the generator directly and never
 crosses a transport. This file drives the same delegated turn over the REAL chat
 WebSocket (``/v1/console/chat/sessions/{sid}/stream``) and asserts the progress
@@ -25,7 +25,7 @@ class M2ProgressWsE2E(M21ArtifactRegistrationE2E):
                               if e.get("type") == "delta"),
                       "prompt must take the ACS fan-out")
         progress = [e.get("text") or "" for e in events
-                    if e.get("type") == "delta" and "✓ Worker" in (e.get("text") or "")]
+                    if e.get("type") == "delta" and "✅ Worker" in (e.get("text") or "")]
         self.assertEqual(len(progress), 1,
                          f"expected one worker progress frame over WS, got {progress}")
         types_in_order = [e.get("type") for e in events]

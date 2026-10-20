@@ -13,23 +13,50 @@ user's language at runtime.
 """
 from __future__ import annotations
 
+# Icon constants — the ONLY place an icon literal for a status lives. System-generated
+# chat messages (slash-command replies, notifications) take their icon from here via
+# :func:`icon`, so they cannot drift from what the model is taught below.
+DONE = "✅"
+FAILED = "❌"
+WARNING = "⚠️"
+NOTE = "ℹ️"
+INVESTIGATING = "🔍"
+RUNNING = "⏳"
+SUGGESTION = "💡"
+DECISION = "📌"
+
 # (icon, short meaning). Order is the order shown to the model. Exactly one
 # meaning per icon — a second meaning makes the signal worthless.
 STATUS_MARKERS: tuple[tuple[str, str], ...] = (
-    ("✅", "done / succeeded / verified"),
-    ("❌", "failed / rejected / broken"),
-    ("⚠️", "warning / risk / limitation"),
-    ("ℹ️", "note / context"),
-    ("🔍", "investigating / finding still open"),
-    ("⏳", "running / waiting"),
-    ("💡", "suggestion / option for the user"),
-    ("📌", "decision / final result"),
+    (DONE, "done / succeeded / verified"),
+    (FAILED, "failed / rejected / broken"),
+    (WARNING, "warning / risk / limitation"),
+    (NOTE, "note / context"),
+    (INVESTIGATING, "investigating / finding still open"),
+    (RUNNING, "running / waiting"),
+    (SUGGESTION, "suggestion / option for the user"),
+    (DECISION, "decision / final result"),
 )
+
+_BY_NAME = {
+    "done": DONE, "failed": FAILED, "warning": WARNING, "note": NOTE,
+    "investigating": INVESTIGATING, "running": RUNNING,
+    "suggestion": SUGGESTION, "decision": DECISION,
+}
+
+
+def icon(name: str) -> str:
+    """The icon for a status name (``done``, ``failed``, ``warning``, ...).
+
+    Raises ``KeyError`` for an unknown name — a typo must fail a test, not render
+    a missing icon in a chat.
+    """
+    return _BY_NAME[name]
 
 
 def status_marker_rule() -> str:
     """The prompt block that teaches the marker vocabulary and its limits."""
-    legend = "\n".join(f"   {icon} {meaning}" for icon, meaning in STATUS_MARKERS)
+    legend = "\n".join(f"   {glyph} {meaning}" for glyph, meaning in STATUS_MARKERS)
     return (
         "Status markers (use them to make structured replies scannable):\n"
         "   Use exactly these icons, each with its one meaning:\n"

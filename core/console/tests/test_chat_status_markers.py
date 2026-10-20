@@ -72,5 +72,42 @@ class BridgePromptTests(unittest.TestCase):
             self.assertIn(rule, adapter.system_prompt_for(channel))
 
 
+
+class SystemMessagesUseTheSharedVocabularyTests(unittest.TestCase):
+    """System-generated chat texts take their icon from ``status_markers.icon``."""
+
+    def test_icon_lookup_matches_the_taught_vocabulary(self) -> None:
+        import status_markers  # noqa: WPS433
+
+        taught = {i for i, _ in status_markers.STATUS_MARKERS}
+        for name in ("done", "failed", "warning", "note", "investigating",
+                     "running", "suggestion", "decision"):
+            self.assertIn(status_markers.icon(name), taught)
+        with self.assertRaises(KeyError):
+            status_markers.icon("sucess")  # a typo must fail loudly
+
+    def test_console_helper_returns_the_shared_icons(self) -> None:
+        from corvin_console import chat_runtime  # noqa: WPS433
+        import status_markers  # noqa: WPS433
+
+        self.assertEqual(chat_runtime._status_icon("done"), status_markers.DONE)
+        self.assertEqual(chat_runtime._status_icon("failed"), status_markers.FAILED)
+
+    def test_legacy_symbols_are_gone_from_chat_messages(self) -> None:
+        # The three console strings and four adapter strings that used ✓ / ✗ / a bare ⚠
+        # now go through the helper; a literal creeping back in fails here.
+        repo = Path(__file__).resolve().parents[3]
+        for rel in ("core/console/corvin_console/chat_runtime.py",
+                    "corvin_operator/bridges/shared/adapter.py"):
+            text = (repo / rel).read_text(encoding="utf-8")
+            for line in text.splitlines():
+                code = line.split("#", 1)[0]
+                if '"' not in code and "'" not in code:
+                    continue
+                self.assertNotIn('"✓ ', code, f"{rel}: {line.strip()[:80]}")
+                self.assertNotIn('"✗ ', code, f"{rel}: {line.strip()[:80]}")
+                self.assertNotIn('"⚠ ', code, f"{rel}: {line.strip()[:80]}")
+
+
 if __name__ == "__main__":
     unittest.main()
