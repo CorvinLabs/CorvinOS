@@ -102,12 +102,21 @@ def _auth_headers(home: Path) -> Dict[str, str]:
     from .htrace_consent import load_or_create_instance_id  # noqa: PLC0415
     from .htrace_uploader import _load_instance_token, _load_telemetry_token, _telemetry_user_agent  # noqa: PLC0415
 
-    return {
+    headers = {
         "Authorization": f"Bearer {_load_telemetry_token(home)}",
         "X-HTTrace-Instance-Token": _load_instance_token(home),
         "X-HTrace-Instance-Id": load_or_create_instance_id(home),
         "User-Agent": _telemetry_user_agent("OTLP"),
     }
+    # ADR-0681: the client never reports a location. It states only the tier the operator
+    # consented to (same gate as the heartbeat); the intake stamps geo.* from the edge-resolved
+    # heartbeat row of this instance, capped by this tier. Tier 1 = header omitted.
+    from .htrace_consent import effective_geo_tier  # noqa: PLC0415
+
+    tier = effective_geo_tier(home)
+    if tier >= 2:
+        headers["X-HTrace-Geo-Tier"] = str(tier)
+    return headers
 
 
 def _plugin_count() -> int:

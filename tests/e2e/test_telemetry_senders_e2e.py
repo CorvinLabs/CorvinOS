@@ -183,6 +183,45 @@ def test_otlp_export_pushes_the_gauges_with_auth_and_falls_back_on_failure(home,
     assert len(fallback) == 1 and json.loads(fallback[0].read_text().splitlines()[0])["is_alive"] is True
 
 
+def _push_otlp(home, intake, monkeypatch):
+    from corvin_core.aco import otel_bridge as ob
+
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", f"{intake}/v1/telemetry/otlp/v1/metrics")
+    ob.reset_for_tests()
+    assert ob.export_heartbeat_metrics(home, is_alive=True)["ok"] is True
+    return _Intake.received[-1]
+
+
+def test_otlp_request_asks_the_server_for_the_operators_geo_tier_and_never_sends_a_location(home, intake, monkeypatch):
+    """ADR-0681: the client states only the TIER it consented to (default 3, ADR-0208); the server
+    resolves region/city from the edge-resolved heartbeat row. No geo.* data point attribute."""
+    from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
+
+    req = _push_otlp(home, intake, monkeypatch)
+    assert req["headers"]["x-htrace-geo-tier"] == "3"
+    msg = ExportMetricsServiceRequest()
+    msg.ParseFromString(req["body"])
+    dp_keys = {kv.key for rm in msg.resource_metrics for sm in rm.scope_metrics for m in sm.metrics
+               for dp in m.gauge.data_points for kv in dp.attributes}
+    assert not [k for k in dp_keys if k.startswith("geo.")], dp_keys
+    res_keys = {kv.key for rm in msg.resource_metrics for kv in rm.resource.attributes}
+    assert not (res_keys & {"geo.country", "geo.region", "geo.city"}), res_keys
+
+
+def test_otlp_request_omits_the_geo_tier_when_the_operator_opted_out(home, intake, monkeypatch):
+    from corvin_core.aco import htrace_consent as hc
+
+    cfg = hc._tenant_cfg_path(home)
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text("spec:\n  telemetry:\n    geo_tracking_tier: 1\n")
+    assert "x-htrace-geo-tier" not in _push_otlp(home, intake, monkeypatch)["headers"]
+
+
+def test_otlp_request_omits_the_geo_tier_on_the_emergency_opt_out(home, intake, monkeypatch):
+    monkeypatch.setenv("CORVIN_GEO_OPT_OUT", "1")
+    assert "x-htrace-geo-tier" not in _push_otlp(home, intake, monkeypatch)["headers"]
+
+
 # ── 3. stability digest ──────────────────────────────────────────────────────
 
 def test_stability_digest_is_fed_by_flag_evaluations_and_posted_with_auth(home, intake, monkeypatch):
