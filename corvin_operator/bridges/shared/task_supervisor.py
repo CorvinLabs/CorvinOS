@@ -5,8 +5,8 @@ THE PROBLEM this solves
 ``/task`` spawns ONE detached ``bg_task_worker`` process and hopes. Everything
 that can end that process ends the work permanently:
 
-* ``CORVIN_BG_TASK_TIMEOUT`` (default 1800 s) fires → the turn is cancelled and
-  reported as a FAILURE. A genuinely long workflow is killed at 30 minutes.
+* ``CORVIN_BG_TASK_TIMEOUT`` (default 86400 s, was 1800 s) fires → the turn is cancelled and
+  reported as a FAILURE. A workflow longer than the limit is killed at that point.
 * SIGKILL / OOM / reboot → ``completion_notify``'s dead-producer reap converts
   the record into "the background worker stopped without reporting a result".
 * The engine wedges without exiting → nothing notices at all; the record sits

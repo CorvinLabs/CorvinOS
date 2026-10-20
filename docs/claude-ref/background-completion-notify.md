@@ -123,7 +123,7 @@ daemon is required — the detached process IS the worker.
 ### `/task` safeguards & known limits
 
 Hardened after adversarial review:
-- **Bounded:** wall-clock deadline per task (`CORVIN_BG_TASK_TIMEOUT`, default 1800s) — the worker's watchdog SIGTERMs its own engine subprocess on timeout and reports "timed out", so a wedged turn can never run forever.
+- **Bounded:** wall-clock deadline per task (`CORVIN_BG_TASK_TIMEOUT`, default 86400s = 24 h; was 1800s until 2026-10-20) — the worker's watchdog SIGTERMs its own engine subprocess on timeout and reports "timed out", so a wedged turn can never run forever.
 - **Rate-limited:** per-sender concurrency cap (`CORVIN_BG_TASK_MAX`, default 3) — `/task` past the cap is refused, preventing a fork-bomb.
 - **No PII on argv:** the spec (instruction + routing ids) is passed via a `0600` temp file, not `argv` (which is world-readable in `/proc/<pid>/cmdline`); the worker unlinks it on read.
 - **Gated:** runs after the whitelist/authz + license gates; L44 house-rules in the handler AND inside `call_claude_streaming` (L34/L35/CLAG/budget). Audit hash-chain stays intact (the worker inherits `CORVIN_HOME`, cross-process writes serialize on the flock).
@@ -189,7 +189,7 @@ process ended the work permanently:
 
 | What happened | What the user was told | What was true |
 |---|---|---|
-| `CORVIN_BG_TASK_TIMEOUT` fired (30 min) | "timed out and was stopped" | the work was mid-flight and had partial results |
+| `CORVIN_BG_TASK_TIMEOUT` fired (24 h by default) | "timed out and was stopped" | the work was mid-flight and had partial results |
 | SIGKILL / OOM / reboot | "the background worker stopped without reporting a result" (the `CN_PENDING_REAP` path) | nothing was retried |
 | the engine wedged without exiting | *nothing at all* | the record sat pending until `CN_PENDING_MAX_AGE` (7 days), holding a `/task` concurrency slot |
 
@@ -321,7 +321,7 @@ Measured on claude CLI 2.1.294 (details and raw captures: ADR-2236 / PLAN-0938):
     update that lands between two poller ticks into the latest, which is right for status lines and wrong for
     content);
   - the per-attempt wall clock (`CORVIN_BG_TASK_TIMEOUT`) does not COUNT the time a child is open — the
-    adapter bounds the child itself (`CORVIN_BG_CHILD_MAX`, 2 h by default for a worker); before, a 40 min child was cut at 30 min and the
+    adapter bounds the child itself (`CORVIN_BG_CHILD_MAX`, 24 h by default); before, a 40 min child was cut at 30 min and the
     supervisor "resumed" by starting it again;
   - the worker records its open children (kind, age, scrubbed description) in `<task_runs>/<id>.children.json`
     (0600; removed on finish, retire and Art. 17 purge) so `continuation_prompt` can tell a RESUMED attempt

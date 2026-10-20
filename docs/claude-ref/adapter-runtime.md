@@ -373,7 +373,7 @@ of the turn — **process EOF with no open child is** (`bg_scope.ScopeTracker`, 
 `task_*` / `background_tasks_changed` events). Consequences in this loop:
 
 - **No idle kill while a child is open.** The CLI is legitimately silent; `ADAPTER_STREAM_IDLE_TIMEOUT`
-  is replaced by the child's own cap `CORVIN_BG_CHILD_MAX` (default 7200 s, measured from the oldest
+  is replaced by the child's own cap `CORVIN_BG_CHILD_MAX` (default 86400 s = 24 h, measured from the oldest
   open child; a warning status goes out at 80 %). Before this, a quiet child was killed after 300 s
   and — on an existing session — the reset+retry **re-ran the prompt, starting the child a second
   time**.
@@ -384,8 +384,8 @@ of the turn — **process EOF with no open child is** (`bg_scope.ScopeTracker`, 
   with no child open is held as the final candidate — a newer result demotes it to interim, EOF
   promotes it to the one `_final` message. The session ledger records interim and final in order.
   Callers without a sink keep the legacy rule (the last non-empty result is the return value).
-- **Caps end a runaway scope honestly.** Past `CORVIN_BG_CHILD_MAX` (default **30 min** for an
-  interactive turn, **2 h** for a detached `/task` worker; the oldest open child, and twice that for the
+- **Caps end a runaway scope honestly.** Past `CORVIN_BG_CHILD_MAX` (default **24 h** for an
+  interactive turn and for a detached `/task` worker (was 30 min / 2 h until 2026-10-20); the oldest open child, and twice that for the
   whole scope so a chain of sequential children cannot run for days), or more than
   `CORVIN_BG_WAKEUP_MAX` (default 25, one billed model turn per wake-up) wake-ups while a child is open,
   the process group is stopped and the final message says what was cut (kinds and count, never a

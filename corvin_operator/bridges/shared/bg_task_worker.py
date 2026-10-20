@@ -26,7 +26,7 @@ per-task key the adapter mints so the engine call runs in an ISOLATED session �
 it never resumes or overwrites the operator's live chat transcript (ADR-0553 fix,
 live-proven 2026-09-03). Absent (older spec) ⇒ derived here, never the origin.
 
-A wall-clock deadline (CORVIN_BG_TASK_TIMEOUT, default 1800s) bounds the turn:
+A wall-clock deadline (CORVIN_BG_TASK_TIMEOUT, default 86400s = 24 h) bounds the turn:
 a wedged engine that streams/loops forever is stopped and reported, so a
 detached worker can never run unbounded. Never raises to the OS — any failure
 is recorded as a failed completion so the user is still notified.
@@ -172,8 +172,11 @@ def main() -> int:
             pass
 
     # A detached worker may wait on a background child much longer than an interactive turn
-    # (which holds a bridge worker and its chat): 2 h by default, still overridable.
-    os.environ.setdefault("CORVIN_BG_CHILD_MAX", "7200")
+    # (which holds a bridge worker and its chat): 24 h by default, still overridable.
+    os.environ.setdefault("CORVIN_BG_CHILD_MAX", "86400")
+    # The adapter's tool-idle backstop (1800 s default) would end a long silent foreground tool
+    # long before the 24 h wall clock below; the wall clock is the bound for a detached worker.
+    os.environ.setdefault("ADAPTER_TOOL_IDLE_TIMEOUT", "86400")
 
     task_id = spec.get("task_id") or ""
     instruction = spec.get("instruction") or ""
@@ -341,9 +344,9 @@ def main() -> int:
         # subprocess (adapter._cancel_chat operates on THIS process's registry),
         # which unblocks call_claude_streaming with a cancellation string.
         try:
-            timeout = float(os.environ.get("CORVIN_BG_TASK_TIMEOUT", "1800"))
+            timeout = float(os.environ.get("CORVIN_BG_TASK_TIMEOUT", "86400"))
         except ValueError:
-            timeout = 1800.0
+            timeout = 86400.0
         timed_out = {"v": False}
         done_evt = threading.Event()
 

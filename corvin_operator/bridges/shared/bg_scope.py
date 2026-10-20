@@ -343,8 +343,8 @@ def classify_result(raw: dict) -> str:
 
 # --- limits and user-facing text (ADR-2236 D5/D6) ---------------------------
 
-CHILD_MAX_DEFAULT_S = 1800.0     # 30 min for an interactive turn: it holds a bridge worker and its chat
-WORKER_CHILD_MAX_S = 7200.0      # 2 h for a detached /task worker (it sets CORVIN_BG_CHILD_MAX itself)
+CHILD_MAX_DEFAULT_S = 86400.0    # 24 h: the operator wants long background work to finish (was 30 min)
+WORKER_CHILD_MAX_S = 86400.0     # 24 h for a detached /task worker (it sets CORVIN_BG_CHILD_MAX itself; was 2 h)
 WAKEUP_MAX_DEFAULT = 25          # one model turn is billed per wake-up result
 _CHILD_MAX_BOUNDS = (1.0, 86400.0)
 _WAKEUP_BOUNDS = (1.0, 1000.0)
