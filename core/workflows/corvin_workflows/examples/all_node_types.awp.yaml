@@ -1,0 +1,157 @@
+awp: "1.1.0"
+
+workflow:
+  name: all_node_types
+  description: >
+    Reference workflow that uses every node type the runtime ships (agent,
+    fan_out, delegation_loop, code, route in both modes, merge, deliver,
+    answer, ask_human, approval) with a branch, a join, two pauses
+    (ask_human, approval) and a contained failure (retry.error_strategy:
+    fail_branch). Run it deterministically with `--engine stub`; the
+    deliver and answer nodes write to the bridge outbox, which only a
+    running bridge turns into a chat message.
+
+inputs:
+  topic:
+    type: string
+    required: false
+
+orchestration:
+  engine: dag
+  graph:
+    # ---- agent: one engine call -------------------------------------------
+    - id: research
+      type: agent
+      agent: researcher
+      depends_on: []
+      instructions: >
+        List three short findings about the topic as JSON
+        {"items": ["..."], "tone": "calm" | "urgent"}.
+      share_output: [items, tone]
+
+    # ---- fan_out: the same agent once per finding --------------------------
+    - id: expand
+      type: fan_out
+      agent: writer
+      depends_on: [research]
+      items_from: research.items
+      instructions: Write one sentence for the finding in `item`.
+
+    # ---- delegation_loop: a manager delegates to workers, then completes ---
+    - id: plan
+      type: delegation_loop
+      depends_on: [research]
+      instructions: Plan the follow-up work for the findings.
+      config:
+        manager: planner
+        budget:
+          max_loops: 3
+          max_total_workers: 4
+
+    # ---- code: deterministic, sandboxed, never calls the engine -----------
+    - id: score
+      type: code
+      depends_on: [expand]
+      language: python3
+      inputs:
+        count: expand.count
+      source: |
+        def main(count: int) -> dict:
+            return {"points": count * 10, "label": "big" if count >= 3 else "small"}
+      outputs: [points, label]
+
+    # ---- route (classify): the engine picks one class ----------------------
+    - id: triage
+      type: route
+      mode: classify
+      agent: triager
+      depends_on: [plan]
+      input: research.tone
+      classes: [urgent, routine]
+
+    # ---- route (condition): structured comparison, no eval -----------------
+    - id: size_gate
+      type: route
+      mode: condition
+      depends_on: [score]
+      cases:
+        - id: high
+          when: {selector: score.points, op: ">=", value: 30}
+        - id: low
+          when: default
+
+    # ---- the two branches of size_gate (only the chosen one runs) ----------
+    - id: high_path
+      type: agent
+      agent: reviewer
+      branch: high
+      depends_on: [size_gate]
+      instructions: Summarise the high-scoring result.
+
+    - id: low_path
+      type: agent
+      agent: reviewer
+      branch: low
+      depends_on: [size_gate]
+      instructions: Summarise the low-scoring result.
+
+    # ---- merge: deterministic join of both branches and the triage ---------
+    - id: join
+      type: merge
+      depends_on: [high_path, low_path, triage]
+      strategy: concat_list
+      inputs: [high_path.summary, low_path.summary, triage.case]
+      output: report
+
+    # ---- ask_human: pauses until the operator replies -----------------------
+    - id: confirm
+      type: ask_human
+      depends_on: [join]
+      channel: discord
+      chat_id: auto
+      prompt: Should the report be published? Answer yes or no.
+      expect:
+        field: publish
+        type: boolean
+
+    # ---- approval: pauses for an explicit approve / reject ------------------
+    - id: signoff
+      type: approval
+      depends_on: [confirm]
+      message: Final sign-off before the report is sent.
+      timeout_s: 3600
+
+    # ---- deliver: fire-and-forget push to a bridge outbox -------------------
+    - id: notify
+      type: deliver
+      depends_on: [signoff]
+      config:
+        channel: discord
+        chat_id: auto
+        format: markdown
+
+    # ---- answer: the chat reply that ends the turn ---------------------------
+    - id: reply
+      type: answer
+      depends_on: [signoff]
+      channel: discord
+      chat_id: auto
+      text: The report was approved and sent.
+
+    # ---- fail_branch: this node fails, its dependents are skipped, the rest
+    #      of the graph still completes ----------------------------------------
+    - id: flaky
+      type: agent
+      agent: flaky_source
+      depends_on: [research]
+      retry:
+        max_retries: 1
+        retry_interval_s: 0
+        error_strategy: fail_branch
+      instructions: "Always fails in the reference test."
+
+    - id: after_flaky
+      type: agent
+      agent: reviewer
+      depends_on: [flaky]
+      instructions: "Never runs - its only dependency failed."

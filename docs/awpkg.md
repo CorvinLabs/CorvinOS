@@ -52,7 +52,9 @@ A single package can contain multiple workflows mixing any of the AWP node types
 ## AWP node types (ADR-0188)
 
 The `dag` engine (`core/workflows/corvin_workflows/node_types.py`) dispatches on each
-node's `type:` field. Nine types are registered:
+node's `type:` field. Ten types are registered; `examples/all_node_types.awp.yaml` uses every one of
+them (branch, join, two pauses, a contained failure) and `core/workflows/tests/test_all_node_types.py`
+runs it end to end with the stub engine:
 
 | Node type | Role | LLM call? |
 |---|---|---|
@@ -65,11 +67,20 @@ node's `type:` field. Nine types are registered:
 | `route` | Engine-native branching — `mode: condition` (structured `{selector, op, value}`, no `eval()`) or `mode: classify` (LLM-routed into N labeled branches) | `classify` mode only |
 | `answer` | Chatflow terminal — sends a turn's output, never pauses | No |
 | `ask_human` | Pauses the run for a human reply (see below), resumes with the answer injected into state | No |
+| `approval` | Pauses for an operator approve / reject (`message`, optional `timeout_s`, default 3600, max 7 days). Reply `approve[: comment]` / `reject[: comment]`; any other text goes through the same fail-closed yes/no coercion as `ask_human`. A rejection fails the node like any node failure (so `retry.error_strategy: fail_branch` contains it). Never retried | No |
 
 Every node also accepts an optional `retry: {max_retries, retry_interval_s, error_strategy}`
 block. `error_strategy: fail_branch` contains a failure to that node's downstream subgraph
 (marked `skipped`, not executed) instead of aborting the whole run; the default `abort`
-preserves the original all-or-nothing behavior.
+preserves the original all-or-nothing behavior. A `merge` node is the join point of a branch: a
+skipped or failed dependency skips its dependents, EXCEPT a `merge`, which is skipped only when
+*all* of its dependencies are skipped/failed (so `route` -> two branches -> `merge` works).
+
+**Pauses.** `timeout_minutes` (`ask_human`) / `timeout_s` (`approval`) set a deadline stored in the
+checkpoint (`expires_at_ms`); resuming after it raises `PauseExpired` (the checkpoint is kept for
+inspection). `on_timeout.branch` is still declared intent only. A checkpoint also records the
+sha256 of the workflow file it paused from; editing the file afterwards makes the resume raise
+`WorkflowChanged` instead of replaying saved results against a different graph.
 
 **No LLM CLI required for engine-free workflows.** The `workflow_run` MCP tool
 constructs the `claude` engine only when the graph actually contains an

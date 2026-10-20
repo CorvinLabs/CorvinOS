@@ -41,6 +41,18 @@ def _run_path(run_id: str, tenant_id: str | None) -> Path:
     return _runs_dir(tenant_id) / f"{run_id}.json"
 
 
+def file_sha256(path: str | None) -> str | None:
+    """sha256 of the workflow file a run was paused from (WF-06), None if unreadable."""
+    import hashlib
+
+    if not path:
+        return None
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
 def save(
     run_id: str,
     *,
@@ -50,6 +62,7 @@ def save(
     state: dict[str, Any],
     completed_ids: list[str],
     skipped_ids: list[str] | None = None,
+    failed_ids: list[str] | None = None,
     paused_at_node: str,
     prompt: str,
     channel: str | None,
@@ -57,15 +70,18 @@ def save(
     expect: dict[str, Any] | None,
     approver: str | None = None,
     tenant_id: str | None = None,
+    timeout_s: float | None = None,
 ) -> Path:
     payload = {
         "run_id": run_id,
         "workflow_path": workflow_path,
+        "workflow_sha256": file_sha256(workflow_path),
         "workflow_name": workflow_name,
         "inputs": inputs,
         "state": state,
         "completed_ids": completed_ids,
         "skipped_ids": skipped_ids or [],
+        "failed_ids": failed_ids or [],
         "paused_at_node": paused_at_node,
         "prompt": prompt,
         "channel": channel,
@@ -76,6 +92,8 @@ def save(
         "approver": approver if approver is not None else chat_id,
         "status": "paused",
         "paused_at_ms": int(time.time() * 1000),
+        # WF-04: absolute deadline of the wait, None = no deadline.
+        "expires_at_ms": int(time.time() * 1000 + timeout_s * 1000) if timeout_s else None,
     }
     p = _run_path(run_id, tenant_id)
     # Atomic write (tmp file + rename) — a torn write from a crash mid-write

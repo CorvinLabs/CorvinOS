@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+import time as _time_mod
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Callable
@@ -64,6 +65,7 @@ class ResumeContext:
     skipped_ids: set[str]
     paused_at_node: str
     reply: str
+    failed_ids: set[str] = field(default_factory=set)
 
 
 def _topo_levels(graph: list[dict[str, Any]]) -> list[list[str]]:
@@ -92,19 +94,38 @@ def _direct_dependents(graph: list[dict[str, Any]]) -> dict[str, list[str]]:
     return out
 
 
-def _transitive_dependents(dependents: dict[str, list[str]], node_id: str) -> set[str]:
-    """All nodes reachable downstream from node_id (ADR-0188 M3/M4: used to
-    propagate 'skipped' — an unmatched route branch or a fail_branch retry
-    exhaustion — to everything that would otherwise run on dead data)."""
-    seen: set[str] = set()
-    stack = list(dependents.get(node_id, []))
+def _propagate_skip(
+    node_specs: dict[str, dict[str, Any]],
+    dependents: dict[str, list[str]],
+    origins: set[str],
+    dead: set[str],
+) -> set[str]:
+    """Nodes that must be skipped because `origins` died (skipped by a route branch or
+    failed under `fail_branch`). `dead` is every node already skipped or failed and is
+    extended in place; the return value is the newly skipped set, origins excluded.
+
+    ADR-0188 M3/M4 + WF-05: a node whose dependency died is skipped, EXCEPT a `merge`
+    node, which is the join point of a branch: it is skipped only when ALL of its
+    dependencies are dead. Propagating through a join (the previous behaviour) skipped
+    everything downstream of every route -> merge diamond, and still reported the run
+    as complete."""
+    newly: set[str] = set()
+    dead |= origins
+    stack = list(origins)
     while stack:
-        nid = stack.pop()
-        if nid in seen:
-            continue
-        seen.add(nid)
-        stack.extend(dependents.get(nid, []))
-    return seen
+        cur = stack.pop()
+        for nid in dependents.get(cur, []):
+            if nid in dead:
+                continue
+            spec = node_specs[nid]
+            if spec.get("type") == "merge":
+                deps = spec.get("depends_on") or []
+                if not all(d in dead for d in deps):
+                    continue
+            newly.add(nid)
+            dead.add(nid)
+            stack.append(nid)
+    return newly
 
 
 _DEFAULT_ERROR_STRATEGY = "abort"
@@ -123,7 +144,7 @@ _MAX_RETRY_INTERVAL_S = 60.0
 # declared retry block. `ask_human` is already excluded structurally (it raises
 # WorkflowPaused, caught before the retry path).
 # WF-20: ask_human writes to the shared outbox, so a retry would send the message twice.
-_NON_RETRYABLE_TYPES = {"deliver", "answer", "ask_human"}
+_NON_RETRYABLE_TYPES = {"deliver", "answer", "ask_human", "approval"}
 
 
 def _retry_config(node_spec: dict[str, Any]) -> tuple[int, float, str]:
@@ -197,10 +218,19 @@ class DAGRunner:
         engine: Any,
         audit_sink: Callable[[dict[str, Any]], None] | None = None,
         tenant_id: str | None = None,
+        observer: "Callable[[NodeResult], None] | None" = None,
+        console_run: bool = False,
     ) -> None:
         self.doc = doc
         self.engine = engine
         self._audit_sink = audit_sink
+        # WF-03: called with every finished NodeResult (success, failed, skipped) so a
+        # streaming caller (the console) can show each node's output as it lands. The
+        # audit stream deliberately carries no node output.
+        self._observer = observer
+        # WF-02: the run was started from the console — `ask_human` with no resolvable
+        # chat pauses for the console operator instead of failing.
+        self._console_run = console_run
         # WF-A2: the tenant a run belongs to. Threaded into checkpoint.save so a
         # paused run's checkpoint is stored under ITS tenant, not always _default
         # (which made non-default tenants unable to resume — console resume loads
@@ -214,6 +244,14 @@ class DAGRunner:
         self._audit_buffer.append(rec)
         if self._audit_sink is not None:
             self._audit_sink(rec)
+
+    def _observe(self, result: "NodeResult") -> None:
+        if self._observer is None:
+            return
+        try:
+            self._observer(result)
+        except Exception:  # noqa: BLE001 — a display hook never decides a run's outcome
+            _log.warning("workflow observer raised for node %r", result.node_id, exc_info=True)
 
     def run(
         self,
@@ -248,10 +286,12 @@ class DAGRunner:
             state["__replies__"] = {resume.paused_at_node: resume.reply}
             done: set[str] = set(resume.completed_ids)
             skipped: set[str] = set(resume.skipped_ids)
+            failed: set[str] = set(resume.failed_ids)
         else:
-            state = {}
+            state = {"__console_run__": True} if self._console_run else {}
             done = set()
             skipped = set()
+            failed = set()
 
         self._audit(
             "run.started" if not resume else "run.resumed",
@@ -282,6 +322,7 @@ class DAGRunner:
                         output={}, status="skipped",
                     )
                     self._audit("node.skipped", node_id=nid, node_type=ntype)
+                    self._observe(run.nodes[nid])
                     continue
 
                 executor = NODE_TYPES[ntype]["execute"]
@@ -315,6 +356,7 @@ class DAGRunner:
                             state=state, inputs=inputs,
                             done_now=done_now,
                             skipped_now=skipped,
+                            failed_now=failed,
                         )
                         return run
                     except Exception as e:  # noqa: BLE001 — every node failure is reported
@@ -345,10 +387,13 @@ class DAGRunner:
                         started_at=t0, finished_at=t1,
                         output={}, error=err_text, status="failed", attempts=attempts,
                     )
+                    self._observe(run.nodes[nid])
                     if error_strategy == "fail_branch":
                         # Contain the failure to this branch: skip everything
                         # downstream of it, keep running the rest of the graph.
-                        newly_skipped = _transitive_dependents(dependents, nid)
+                        failed.add(nid)
+                        newly_skipped = _propagate_skip(
+                            node_specs, dependents, {nid}, skipped | failed)
                         skipped |= newly_skipped
                         self._audit(
                             "node.branch_failed", node_id=nid,
@@ -374,6 +419,7 @@ class DAGRunner:
                     "node.completed", node_id=nid, node_type=ntype,
                     wall_ms=int((t1 - t0) * 1000), attempts=attempts,
                 )
+                self._observe(run.nodes[nid])
 
                 # route (ADR-0188 M3): skip every directly-dependent node
                 # tagged `branch: <case>` that does not match the chosen case.
@@ -382,7 +428,8 @@ class DAGRunner:
                     for dep_id in dependents.get(nid, []):
                         dep_branch = node_specs[dep_id].get("branch")
                         if dep_branch is not None and dep_branch != chosen:
-                            newly_skipped = {dep_id} | _transitive_dependents(dependents, dep_id)
+                            newly_skipped = {dep_id} | _propagate_skip(
+                                node_specs, dependents, {dep_id}, skipped | failed)
                             skipped |= newly_skipped
                             self._audit(
                                 "node.branch_skipped", node_id=nid, chosen=chosen,
@@ -408,6 +455,7 @@ class DAGRunner:
         inputs: dict[str, Any],
         done_now: set[str],
         skipped_now: set[str],
+        failed_now: set[str] | None = None,
     ) -> None:
         """Persist the checkpoint and mutate `run` in place to state='paused'.
         Split out of run() so the (long) main loop stays readable."""
@@ -425,6 +473,7 @@ class DAGRunner:
             state=persisted_state,
             completed_ids=sorted(done_now),
             skipped_ids=sorted(skipped_now),
+            failed_ids=sorted(failed_now or ()),
             paused_at_node=pause.node_id,
             prompt=pause.prompt,
             channel=pause.channel,
@@ -436,6 +485,7 @@ class DAGRunner:
             # is enforced in resume_workflow().
             approver=pause.chat_id,
             tenant_id=self._tenant_id,
+            timeout_s=pause.timeout_s,
         )
 
         run.state = "paused"
@@ -446,6 +496,16 @@ class DAGRunner:
             "run.paused", run_id=run.run_id, node_id=pause.node_id,
             channel=pause.channel, chat_id=pause.chat_id,
         )
+
+
+class PauseExpired(RuntimeError):
+    """WF-04: the pause's deadline (`timeout_minutes` / `timeout_s`) has passed. The
+    checkpoint is kept for inspection but can no longer be resumed."""
+
+
+class WorkflowChanged(RuntimeError):
+    """WF-06: the workflow file was edited after the run paused. Resuming would replay the
+    saved node results against a different graph (missing nodes, other branches)."""
 
 
 class UnauthorizedReplier(PermissionError):
@@ -494,6 +554,17 @@ def resume_workflow(
             f"directed to a different recipient"
         )
 
+    saved_sha = ckpt.get("workflow_sha256")
+    if saved_sha and _checkpoint.file_sha256(ckpt["workflow_path"]) != saved_sha:
+        raise WorkflowChanged(
+            f"run {run_id!r} paused from a workflow file that has since changed; "
+            "restart the run instead of resuming it"
+        )
+
+    expires_at_ms = ckpt.get("expires_at_ms")
+    if expires_at_ms is not None and int(expires_at_ms) < int(_time_mod.time() * 1000):
+        raise PauseExpired(f"run {run_id!r} was waiting for a reply until its deadline, which has passed")
+
     # CON-F2: atomically claim so concurrent resumes can't double-execute.
     _checkpoint.claim(run_id, tenant_id=tenant_id)
 
@@ -508,6 +579,7 @@ def resume_workflow(
                 state=ckpt["state"],
                 completed_ids=set(ckpt["completed_ids"]),
                 skipped_ids=set(ckpt.get("skipped_ids") or []),
+                failed_ids=set(ckpt.get("failed_ids") or []),
                 paused_at_node=ckpt["paused_at_node"],
                 reply=reply,
             ),

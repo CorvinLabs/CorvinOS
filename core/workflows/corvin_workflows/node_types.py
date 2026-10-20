@@ -18,6 +18,7 @@ Shipped types:
   route             — engine-native branching: condition (structured, no eval) or classify (LLM) (ADR-0188 M3)
   answer            — chatflow terminal: sends a turn's output, never pauses (ADR-0188 M6)
   ask_human         — pauses the run for a human reply via checkpoint/resume (ADR-0188 M5/M6)
+  approval          — pauses for an operator yes/no; a "no" fails the node (console review step)
 """
 from __future__ import annotations
 
@@ -499,13 +500,16 @@ class WorkflowPaused(Exception):
     runner.py, never by the generic `except Exception` failure path."""
 
     def __init__(self, *, node_id: str, prompt: str, channel: str, chat_id: str,
-                 expect: dict[str, Any] | None) -> None:
+                 expect: dict[str, Any] | None, timeout_s: float | None = None) -> None:
         super().__init__(f"workflow paused at node {node_id!r} awaiting a human reply")
         self.node_id = node_id
         self.prompt = prompt
         self.channel = channel
         self.chat_id = chat_id
         self.expect = expect
+        # WF-04: how long the pause may wait. None = no deadline. The runner turns
+        # this into the checkpoint's expires_at_ms; resume refuses an expired pause.
+        self.timeout_s = timeout_s
 
 
 def _validate_ask_human(node: dict[str, Any]) -> None:
@@ -525,6 +529,9 @@ def _validate_ask_human(node: dict[str, Any]) -> None:
     timeout = node.get("timeout_minutes")
     if timeout is not None and (not isinstance(timeout, (int, float)) or timeout <= 0):
         raise ValueError("ask_human node 'timeout_minutes' must be a positive number")
+    # `on_timeout.branch` is declared INTENT (ADR-0188 open question): no wake-up
+    # trigger exists, so it is accepted and ignored. What `timeout_minutes` does enforce
+    # (WF-04) is that a pause past its deadline can no longer be resumed.
     on_timeout = node.get("on_timeout")
     if on_timeout is not None and (not isinstance(on_timeout, dict) or not on_timeout.get("branch")):
         raise ValueError("ask_human node 'on_timeout' requires a 'branch' field")
@@ -584,14 +591,82 @@ def _execute_ask_human(*, node, engine, state, inputs, audit) -> dict[str, Any]:
     prompt = node.get("prompt") or _stringify_for_chat(_resolve_selector(node["prompt_from"], state=state, inputs=inputs))
     channel = node["channel"]
     chat_id = _resolve_chat_id(node, state=state, inputs=inputs)
+    timeout_min = node.get("timeout_minutes")
+    timeout_s = float(timeout_min) * 60.0 if timeout_min is not None else None
     if not chat_id:
+        if state.get("__console_run__"):
+            # WF-02: a console-started run has no chat to message — the operator who
+            # started it answers in the console. Nothing is written to any outbox.
+            audit("ask_human.console_prompt", node_id=node["id"])
+            raise WorkflowPaused(
+                node_id=node["id"], prompt=prompt, channel="console", chat_id="",
+                expect=node.get("expect"), timeout_s=timeout_s,
+            )
         raise RuntimeError(
             f"ask_human node {node['id']!r}: no chat_id resolved (chat_id/chat_id_from/auto all empty)"
         )
     _write_outbox(channel, chat_id, prompt, extra={"_workflow_ask_human": True, "node_id": node["id"]})
     audit("ask_human.sent", node_id=node["id"], channel=channel, chat_id=chat_id)
     raise WorkflowPaused(
-        node_id=node["id"], prompt=prompt, channel=channel, chat_id=chat_id, expect=node.get("expect"),
+        node_id=node["id"], prompt=prompt, channel=channel, chat_id=chat_id,
+        expect=node.get("expect"), timeout_s=timeout_s,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Approval node — a yes/no gate answered by the operator (console review step)
+# ---------------------------------------------------------------------------
+
+_MAX_APPROVAL_TIMEOUT_S = 7 * 24 * 3600
+
+
+class ApprovalRejected(RuntimeError):
+    """The reviewer answered no. A node failure like any other: `retry.error_strategy:
+    fail_branch` contains it to its branch, the default aborts the run."""
+
+
+def _validate_approval(node: dict[str, Any]) -> None:
+    message = node.get("message")
+    if message is not None and (not isinstance(message, str) or not message.strip()):
+        raise ValueError("approval node 'message' must be a non-empty string")
+    timeout = node.get("timeout_s")
+    if timeout is not None:
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+            raise ValueError("approval node 'timeout_s' must be a positive number")
+        if timeout > _MAX_APPROVAL_TIMEOUT_S:
+            raise ValueError(f"approval node 'timeout_s' must be <= {_MAX_APPROVAL_TIMEOUT_S} (7 days)")
+
+
+def _execute_approval(*, node, engine, state, inputs, audit) -> dict[str, Any]:
+    """Pause until the operator approves or rejects. Never calls the engine.
+
+    Same checkpoint/resume mechanism as `ask_human` (the reply is coerced with the
+    same fail-closed boolean rule: anything unrecognised is a rejection), but with
+    no chat transport — the console's approval bar and `corvin-flow resume` answer it.
+    """
+    replies = state.get("__replies__") or {}
+    if node["id"] in replies:
+        raw_reply = str(replies[node["id"]])
+        head = raw_reply.strip().lower()
+        # The console sends the unambiguous "approve[: comment]" / "reject[: comment]";
+        # a free-text reply (CLI resume, bridge) falls back to the fail-closed coercion.
+        if head.startswith("approve"):
+            approved = True
+        elif head.startswith("reject"):
+            approved = False
+        else:
+            approved = _coerce_reply(raw_reply, "boolean")
+        audit("approval.decided", node_id=node["id"], approved=bool(approved))
+        if not approved:
+            raise ApprovalRejected(f"approval {node['id']!r} rejected: {raw_reply[:200] or 'no reason given'}")
+        return {"approved": True, "output": "approved", "comment": raw_reply}
+
+    message = node.get("message") or "Please review the results above and approve or reject to continue."
+    timeout = node.get("timeout_s", 3600)
+    audit("approval.requested", node_id=node["id"])
+    raise WorkflowPaused(
+        node_id=node["id"], prompt=message, channel="console", chat_id="",
+        expect={"field": "approved", "type": "boolean"}, timeout_s=float(timeout),
     )
 
 
@@ -851,6 +926,7 @@ NODE_TYPES: dict[str, dict[str, Any]] = {
     "route": {"validate": _validate_route, "execute": _execute_route},
     "answer": {"validate": _validate_answer, "execute": _execute_answer},
     "ask_human": {"validate": _validate_ask_human, "execute": _execute_ask_human},
+    "approval": {"validate": _validate_approval, "execute": _execute_approval},
 }
 
 
