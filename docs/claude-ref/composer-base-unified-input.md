@@ -395,3 +395,32 @@ Rarely needed, but supported:
 
 **Last Updated:** 2026-10-12  
 **Commit:** `d7699ceb1` (feat: align chat and forge input on shared ComposerBase)
+
+---
+
+## Shared composer field and context adapter (CONCEPT-0115)
+
+The chat's text field is no longer private to `pages/chat.tsx`. It lives in
+`src/components/chat/ChatComposerField.tsx` (exports `ChatComposerField`,
+`ComposerFieldHandle`, `detectEntityHint`) and wraps `ComposerBase` with the slash
+palette, the entity hint and the imperative handle (`getValue`/`setValue`/
+`closePalette`/`stopRecording`). Typed text stays inside the field, so a keystroke
+re-renders the field only.
+
+Defaults reproduce the chat exactly (`textareaId="chat-input"`, the chat table of
+slash commands, no outer pill). A surface customises through props:
+
+| Prop | Purpose |
+|---|---|
+| `extraCommands` + `sessionCommands` | Context commands; `sessionCommands={false}` shows ONLY `extraCommands` (the surface's `/` lines go to another dispatcher) |
+| `textareaId` / `textareaTestId` / `micTestId` | Stable ids per surface |
+| `pillCardClassName` | Outer pill; the default neutralises it because the host row draws the pill |
+| `initialValue` | Seeds the draft (per-context drafts) |
+
+`src/components/chat/composer-adapter.ts` defines the port a surface hands to the shared
+UI (`ComposerContextAdapter`: `upload`, `remove?`, `extraCommands`, `sessionCommands`,
+`send`, `contextKey`, `limits`) and `checkUploadLimits()` for the client-side pre-check.
+The adapter carries no decision: tenant, gates, attachment validity and limits are
+re-checked by the server on every request.
+
+Tests: `tests/unit/chat-composer-field.test.tsx`.
