@@ -660,6 +660,15 @@ except ImportError:
     except ImportError:
         _scheduler_mod = None
 
+# Chat status markers (CONCEPT-0114) — one icon vocabulary shared with the console.
+try:
+    from . import status_markers as _status_markers  # type: ignore
+except ImportError:
+    try:
+        import status_markers as _status_markers  # type: ignore
+    except ImportError:
+        _status_markers = None
+
 # i18n — full BCP-47 output-language pin. Optional; when missing, the
 # legacy de/en argv shape stays untouched. Lives in the same shared/
 # dir as profile.py, so the same try/except pattern works.
@@ -5090,6 +5099,7 @@ def system_prompt_for(channel: str) -> str:
             "task: the worker starts fresh and sees only that text. Use at most "
             "one or two per reply, and only when the work truly is long-running."
         )
+    _status_marker_block = _status_markers.status_marker_rule() if _status_markers else ""
     return f"""You are being addressed through a {label} bridge.
 The human is verified (whitelist) and has explicitly granted you full
 access — you may use any tools.
@@ -5105,6 +5115,8 @@ Reply formatting rules:
    you drop there is automatically attached to the reply on {label} — no
    explicit upload step needed.
 4. Structure long replies with headings / lists, short ones as 1–3 sentences.
+
+{_status_marker_block}
 
 Voice-note override (optional):
    You may include exactly ONE block of the form `<voice>…1–3 sentences…</voice>`

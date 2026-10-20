@@ -455,6 +455,35 @@ def _load_bg_scope() -> Any:  # ADR-2236
     return _BG_SCOPE_MOD or None
 
 
+_STATUS_MARKERS_MOD: Any = None  # CONCEPT-0114 cached module, False when unavailable
+
+
+def _status_marker_block() -> str:
+    """The chat status-marker rule, shared verbatim with the bridge adapter.
+
+    Loaded from corvin_operator/bridges/shared like ``bg_scope`` so Discord and the
+    console speak one icon vocabulary. Empty string (prompt unchanged) when the
+    module cannot be found — a missing helper never breaks a chat turn.
+    """
+    global _STATUS_MARKERS_MOD
+    if _STATUS_MARKERS_MOD is None:
+        _STATUS_MARKERS_MOD = False
+        for parent in Path(__file__).resolve().parents:
+            shared = parent / "corvin_operator" / "bridges" / "shared"
+            if (shared / "status_markers.py").is_file():
+                if str(shared) not in sys.path:
+                    sys.path.insert(0, str(shared))
+                try:
+                    import status_markers as _m  # noqa: PLC0415
+                    _STATUS_MARKERS_MOD = _m
+                except Exception:  # noqa: BLE001
+                    _STATUS_MARKERS_MOD = False
+                break
+    if not _STATUS_MARKERS_MOD:
+        return ""
+    return "\n\n" + _STATUS_MARKERS_MOD.status_marker_rule()
+
+
 def _stop_proc(proc: Any, grace_s: float = 5.0, *, reason: str = "unspecified",  # ADR-2236
                tenant_id: str = "_default", sid_fingerprint: str | None = None) -> None:
     """SIGTERM first, SIGKILL after *grace_s* if it is still there.
@@ -2885,6 +2914,7 @@ def _turn_system_prompt(sess: WebChatSession, task_text: str = "",
     via SessionBridger if available."""
     return (
         _WEB_CHAT_SYSTEM_PROMPT.replace(_LANGUAGE_RULE_AUTODETECT, _language_rule())
+        + _status_marker_block()
         + _attachment_manifest(sess)
         + _persona_prompt_block()
         + _user_profile_block()

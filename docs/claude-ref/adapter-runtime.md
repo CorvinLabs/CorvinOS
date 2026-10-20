@@ -1344,3 +1344,19 @@ together, plus every consumer above, plus both directions against
 `_BRIDGE_CHANNELS` frozenset to any `paths.py` — channel identity there is a
 CHARSET rule (`_BRIDGE_CHANNEL_RE`), and the four frozensets that used to sit
 there were assigned, never read, and stale, so readers took them for canonical.
+
+## Chat status markers — one icon vocabulary on every surface (ADR-2269, CONCEPT-0114)
+
+Replies that report several results use a fixed set of status icons (✅ ❌ ⚠️ ℹ️ 🔍 ⏳ 💡 📌),
+one meaning per icon. The vocabulary and the rule text live ONLY in
+`corvin_operator/bridges/shared/status_markers.py`; both prompt builders append
+`status_marker_rule()`: `adapter.system_prompt_for` (Discord, Telegram, WhatsApp — the same block on
+every channel) and `chat_runtime._turn_system_prompt` (console web chat, loaded from `bridges/shared`
+like `bg_scope`). It is prompt guidance — the bridge never inserts or rewrites icons in a reply.
+
+Limits the rule teaches: sparing, one icon at the start of a line, never inside code, commit messages,
+logs or machine-read output, ✅ only for verified results. Always on (no flag); a missing helper leaves
+the prompt unchanged. A new meaning is added to `STATUS_MARKERS` and CONCEPT-0114, never to a surface's
+own prompt text. Proof: `core/console/tests/test_chat_status_markers.py` drives both real builders.
+The prompt only changes for a process started after the edit — restart the console host and the bridge
+daemons (`scripts/safe-restart.sh`) for it to apply.
