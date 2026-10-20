@@ -2957,6 +2957,19 @@ ADR-0759 pass fixed the gateway dispatcher and ACS; this path was missed.
 | the token split | `engine_span.usage_split()` — ONE normaliser for every emitter. `dispatcher._usage_split` was a private copy of it; a per-path copy is how the same run prices differently depending on who spawned it |
 | an engine that reports a model but no usage | still a span: counted in `total_turns`, never priced → "N runs, none with token data", not "no worker runs" |
 
+**The ACS worker span follows the same rule** (`acs_runtime._call_worker_sync` →
+`_dispatch_workers`). Until this pass its OK END span took `model_id` from the
+configured fallback and carried no token split, so an ACS worker was priced at
+$0.00 or at the config's rate. Now: the END span's `model_id` is
+`attestation["reported_model"]`, read by `agents.attested_model` from the CLI
+envelope (`""` when the engine reported none); the four counts come from
+`engine_span.usage_split(attestation)`. The START span and the ERROR/CANCEL END
+spans carry `model_id: ""` — no engine has reported a model on those paths.
+`attestation["model_id"]` keeps its configured fallback for the other `acs.*`
+events and is never the span's source. Guarded by
+`corvin_operator/bridges/shared/test_acs_worker_span_attestation.py` (4 tests:
+a stub `claude` binary, the real `_dispatch_workers` and `_call_worker_sync`).
+
 Guarded by `tests/e2e/test_a2a_worker_span_priceable_adr0759_e2e.py` (20 tests):
 the real `spawn_a2a_worker` against a stub engine and the REAL chain writer,
 then `compute_cost_efficiency` off that chain, then the status route over

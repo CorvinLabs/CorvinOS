@@ -98,6 +98,14 @@ try:
 except Exception:  # noqa: BLE001
     _espan = None  # type: ignore
 
+# ADR-0759 — the span closes on the model the ENGINE reported, read from the CLI
+# frame by the same helper the A2A and gateway paths use (never from config).
+try:
+    from agents import SpawnResult as _SpawnResult, StreamEvent as _StreamEvent  # type: ignore
+    from agents import attested_model as _attested_model  # type: ignore
+except Exception:  # noqa: BLE001 — a missing helper degrades to an unpriced span
+    _SpawnResult = _StreamEvent = _attested_model = None  # type: ignore
+
 # ADR-2091 — stored legacy engine ids (hermes, local, ...) map to claude_code.
 try:
     from engine_registry import normalize_legacy_engine_id as _normalize_legacy_engine_id  # type: ignore
@@ -1773,6 +1781,24 @@ class _WorkerProcessHolder:
                 pass
 
 
+def _reported_model(frame: dict) -> str:
+    """The model the engine reported in its CLI envelope, ``""`` when none.
+
+    Goes through ``agents.attested_model`` so the ACS span and the A2A / gateway
+    spans read the model from the same frame paths. A missing helper or an
+    unexpected shape yields ``""`` — an unpriced span, not a configured guess.
+    """
+    if _attested_model is None or _SpawnResult is None or _StreamEvent is None:
+        return ""
+    try:
+        result = _SpawnResult(
+            final_text="", events=[_StreamEvent(type="turn_completed", raw=frame)],
+        )
+        return _attested_model(result)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _call_worker_sync(
     prompt: str,
     system: str,
@@ -1893,6 +1919,7 @@ def _call_worker_sync(
         "engine_id": "claude_code",
         "model_id": model,   # configured model as fallback
         "attested": False,   # True only when API response confirms model
+        "reported_model": "",  # ADR-0759: engine-reported model, "" when none
         "locality": _engine_locality(engine_id),  # M9: claude_code → us_cloud
     }
     output_text = raw
@@ -1930,6 +1957,11 @@ def _call_worker_sync(
             if actual_model:
                 attestation["model_id"] = str(actual_model)
                 attestation["attested"] = True
+            # ADR-0759 — the model the engine reported, for the worker END span.
+            # Kept apart from ``model_id`` (which falls back to the configured
+            # model for the other acs.* events) so a span can never be priced
+            # on a guess: "" means the engine reported nothing.
+            attestation["reported_model"] = _reported_model(resp)
             # Real token counts
             usage = resp.get("usage") or {}
             tok_in = int(usage.get("input_tokens") or 0)
@@ -2236,7 +2268,7 @@ async def _dispatch_workers(
                 _write_audit(ctx.tenant_id, _espan.ENGINE_SPAN_START,
                              _espan.start_details(
                                  span_id=_worker_span_id, role="worker",
-                                 engine_id=_engine_id, model_id=worker_model,
+                                 engine_id=_engine_id, model_id="",  # ADR-0759: no model before the engine reports one
                                  parent_span_id=f"spn-{ctx.run_id}-mgr",
                                  run_id=ctx.run_id))
 
@@ -2279,7 +2311,7 @@ async def _dispatch_workers(
                     _write_audit(ctx.tenant_id, _espan.ENGINE_SPAN_END,
                                  _espan.end_details(
                                      span_id=_worker_span_id, role="worker",
-                                     engine_id=_engine_id, model_id=worker_model,
+                                     engine_id=_engine_id, model_id="",  # ADR-0759: unpriced — nothing reported
                                      parent_span_id=f"spn-{ctx.run_id}-mgr",
                                      run_id=ctx.run_id, status="error",
                                      duration_ms=int((time.monotonic() - _spawn_start) * 1000)))
@@ -2308,7 +2340,7 @@ async def _dispatch_workers(
                     _write_audit(ctx.tenant_id, _espan.ENGINE_SPAN_END,
                                  _espan.end_details(
                                      span_id=_worker_span_id, role="worker",
-                                     engine_id=_engine_id, model_id=worker_model,
+                                     engine_id=_engine_id, model_id="",  # ADR-0759: unpriced — nothing reported
                                      parent_span_id=f"spn-{ctx.run_id}-mgr",
                                      run_id=ctx.run_id, status="error",
                                      duration_ms=int((time.monotonic() - _spawn_start) * 1000)))
@@ -2383,13 +2415,16 @@ async def _dispatch_workers(
                              _espan.end_details(
                                  span_id=_worker_span_id, role="worker",
                                  engine_id=attestation.get("engine_id", _engine_id),
-                                 model_id=attestation.get("model_id", worker_model),
+                                 model_id=attestation.get("reported_model", ""),
                                  parent_span_id=f"spn-{ctx.run_id}-mgr",
                                  run_id=ctx.run_id, status="ok",
                                  duration_ms=int((time.monotonic() - _spawn_start) * 1000),
                                  tokens_used=tok,
                                  tool_call_count=_trace_count,
-                                 trace_available=_trace_count > 0))
+                                 trace_available=_trace_count > 0,
+                                 # ADR-0759 — the four billed counts, normalised by
+                                 # the one shared helper (CLI key spellings accepted).
+                                 **_espan.usage_split(attestation)))
 
             wr = _parse_worker_output(text, wid)
 
