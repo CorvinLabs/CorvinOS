@@ -286,5 +286,77 @@ class WorkflowOutboxTargetTests(unittest.TestCase):
                 os.environ.pop("ADAPTER_OUTBOX", None)
 
 
+class ScheduledWorkflowUsesRealEngineTests(unittest.TestCase):
+    """WF-01 — a scheduled run goes through a real subprocess and the real engine.
+
+    The `claude` CLI on PATH is a fake that prints a fixed marker. The marker only
+    reaches the outbox report if the scheduler's subprocess ran ClaudeCliEngine. The
+    stub engine would produce its canned Reuters/Bloomberg data instead.
+    """
+
+    MARKER = "ECHT-CLAUDE-ANTWORT-7f3a"
+
+    def setUp(self):
+        self._td = Path(tempfile.mkdtemp(prefix="sched_wf01_"))
+        self._env_backup = {
+            k: os.environ.get(k)
+            for k in ("ADAPTER_OUTBOX", "PATH", "CORVIN_HOME", "XDG_CONFIG_HOME",
+                      "CORVIN_AUDIT_ANCHOR_KEY")
+        }
+        os.environ["ADAPTER_OUTBOX"] = str(self._td / "outbox")
+        os.environ["CORVIN_HOME"] = str(self._td / "home")
+        os.environ["XDG_CONFIG_HOME"] = str(self._td / "xdg")
+        os.environ["CORVIN_AUDIT_ANCHOR_KEY"] = str(self._td / "anchor.key")
+        bin_dir = self._td / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "claude"
+        fake.write_text(
+            "#!/bin/sh\n"
+            f"printf '%s' '{{\"report_text\": \"{self.MARKER}\"}}'\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        os.environ["PATH"] = str(bin_dir) + os.pathsep + (self._env_backup["PATH"] or "")
+        self.wf_path = self._td / "wf01_reporter.awp.yaml"
+        self.wf_path.write_text(
+            'awp: "1.1.0"\n'
+            "workflow:\n"
+            "  name: wf01_reporter\n"
+            "  description: scheduled single-agent report\n"
+            "orchestration:\n"
+            "  engine: dag\n"
+            "  graph:\n"
+            "    - id: reporter\n"
+            "      type: agent\n"
+            "      agent: reporter\n"
+            "      depends_on: []\n",
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        for k, v in self._env_backup.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        import shutil
+        shutil.rmtree(self._td, ignore_errors=True)
+
+    def test_scheduled_run_uses_real_engine_not_stub(self):
+        item = {
+            "id": "wf01", "channel": "discord", "chat_id": "123456",
+            "workflow_name": str(self.wf_path), "workflow_inputs": {},
+        }
+        ok = scheduler._run_workflow_to_outbox(item, now=1000.0)
+        self.assertTrue(ok)
+        reports = list((self._td / "outbox").glob("sched_wf_wf01_*.json"))
+        self.assertEqual(len(reports), 1)
+        env = json.loads(reports[0].read_text(encoding="utf-8"))
+        self.assertEqual(env["exit_code"], 0, env["text"])
+        self.assertIn(self.MARKER, env["text"])
+        self.assertNotIn("Reuters", env["text"])
+        self.assertNotIn("[STUB", env["text"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

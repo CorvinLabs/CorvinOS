@@ -525,7 +525,13 @@ def _run_workflow_acs(
     return 0 if out.get("status") == "success" else 1
 
 
-def _build_engine(engine_name: str):
+# WF-01: the production default is the real engine. The stub returns canned data
+# (invented articles, posts, scores) and must only run when asked for by name.
+_DEFAULT_ENGINE = "claude"
+
+
+def _build_engine(engine_name: str | None):
+    engine_name = engine_name or _DEFAULT_ENGINE
     if engine_name == "stub":
         return _build_default_stub()
     if engine_name == "claude":
@@ -538,12 +544,17 @@ def _build_engine(engine_name: str):
 def _format_run_result(doc, result, inputs: dict, *, format_: str, engine) -> tuple[str, int]:
     """Shared pretty/json rendering for both a fresh run() and a resume()."""
     history_len = len(getattr(engine, "history", []))
+    # WF-01: a stub run is synthetic and says so in the run record, not only in the audit.
+    engine_name = getattr(engine, "name", "unknown")
+    synthetic = engine_name == "stub"
 
     if format_ == "json":
         payload = {
             "workflow": result.workflow,
             "state": result.state,
             "run_id": result.run_id,
+            "engine": engine_name,
+            "synthetic": synthetic,
             "paused_at_node": result.paused_at_node,
             "paused_prompt": result.paused_prompt,
             "inputs": result.inputs,
@@ -565,6 +576,10 @@ def _format_run_result(doc, result, inputs: dict, *, format_: str, engine) -> tu
 
     icon = {"complete": "✅", "paused": "⏸️", "failed": "❌"}.get(result.state, "❓")
     lines: list[str] = [f"{icon} **{doc.name}** → `{result.state}`"]
+    if synthetic:
+        lines.append(
+            "[STUB] Synthetische Demo-Daten (--engine stub). Keine echten Ergebnisse."
+        )
     if result.state == "paused":
         lines.append(f"Run-ID: `{result.run_id}`  (resume with: `resume {result.run_id} \"<reply>\"`)")
         lines.append(f"Waiting at node `{result.paused_at_node}`: {result.paused_prompt}")
@@ -599,7 +614,7 @@ def _format_run_result(doc, result, inputs: dict, *, format_: str, engine) -> tu
 
 
 def _run_workflow(
-    name: str, raw_inputs: list[str], *, format_: str, dry_run: bool = False, engine_name: str = "stub",
+    name: str, raw_inputs: list[str], *, format_: str, dry_run: bool = False, engine_name: str | None = None,
 ) -> int:
     p = _resolve_workflow_path(name)
     doc = load_workflow(p)
@@ -618,8 +633,16 @@ def _run_workflow(
         print(f"✅ **{doc.name}** validated (dry-run, engine={doc.engine})")
         return 0
 
+    from .engines_claude import ClaudeEngineError
+
     inputs = _parse_kv_inputs(raw_inputs)
-    engine = _build_engine(engine_name)
+    try:
+        engine = _build_engine(engine_name)
+    except ClaudeEngineError as e:
+        # No silent fallback: the real engine is unavailable, so the run does not happen.
+        print(f"ERROR: {e} (use --engine stub only for an explicit synthetic demo run)",
+              file=sys.stderr)
+        return 2
     runner = DAGRunner(doc, engine=engine)
     result = runner.run(inputs=inputs)
 
@@ -628,8 +651,15 @@ def _run_workflow(
     return exit_code
 
 
-def _resume_workflow_cmd(run_id: str, reply: str, *, format_: str, engine_name: str = "stub") -> int:
-    engine = _build_engine(engine_name)
+def _resume_workflow_cmd(run_id: str, reply: str, *, format_: str, engine_name: str | None = None) -> int:
+    from .engines_claude import ClaudeEngineError
+
+    try:
+        engine = _build_engine(engine_name)
+    except ClaudeEngineError as e:
+        print(f"ERROR: {e} (use --engine stub only for an explicit synthetic demo run)",
+              file=sys.stderr)
+        return 2
     try:
         result = resume_workflow(run_id, reply, engine=engine)
     except KeyError as e:
@@ -778,14 +808,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--engine",
         dest="engine_name",
         choices=("stub", "claude"),
-        default="stub",
-        help="'stub' (canned/no tokens, default) or 'claude' (real headless `claude -p` calls)",
+        default=None,
+        help="'claude' (real headless `claude -p` calls, default) or 'stub' (synthetic "
+             "demo data, marked as such in the output)",
     )
     sp = sub.add_parser("resume", help="continue a workflow paused at an ask_human node")
     sp.add_argument("run_id")
     sp.add_argument("reply", help="the human's reply text")
     sp.add_argument("--format", dest="fmt", choices=("pretty", "json"), default="pretty")
-    sp.add_argument("--engine", dest="engine_name", choices=("stub", "claude"), default="stub")
+    sp.add_argument("--engine", dest="engine_name", choices=("stub", "claude"), default=None,
+                    help="'claude' (default) or 'stub' (synthetic demo data)")
     # `schedule` sub-command tree: add / list / rm
     sp = sub.add_parser(
         "schedule",
@@ -824,7 +856,7 @@ def main(argv: list[str] | None = None) -> int:
                              engine_name=getattr(args, "engine_name", "stub"))
     if args.cmd == "resume":
         return _resume_workflow_cmd(args.run_id, args.reply, format_=args.fmt,
-                                     engine_name=getattr(args, "engine_name", "stub"))
+                                     engine_name=getattr(args, "engine_name", None))
     if args.cmd == "schedule":
         if args.sched_cmd == "add":
             return _schedule_workflow(

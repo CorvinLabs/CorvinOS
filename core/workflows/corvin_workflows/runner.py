@@ -122,7 +122,8 @@ _MAX_RETRY_INTERVAL_S = 60.0
 # would double-deliver, so they are NEVER retried regardless of the workflow's
 # declared retry block. `ask_human` is already excluded structurally (it raises
 # WorkflowPaused, caught before the retry path).
-_NON_RETRYABLE_TYPES = {"deliver", "answer"}
+# WF-20: ask_human writes to the shared outbox, so a retry would send the message twice.
+_NON_RETRYABLE_TYPES = {"deliver", "answer", "ask_human"}
 
 
 def _retry_config(node_spec: dict[str, Any]) -> tuple[int, float, str]:
@@ -153,6 +154,16 @@ def _retry_config(node_spec: dict[str, Any]) -> tuple[int, float, str]:
     if node_spec.get("type", "agent") in _NON_RETRYABLE_TYPES:
         max_retries = 0
     return max_retries, interval_s, strategy
+
+
+def _is_spawn_refusal(exc: BaseException) -> bool:
+    """True for a gate-refused worker spawn (WF-20). Imported lazily: the Claude
+    engine module is optional for stub-only use."""
+    try:
+        from .engines_claude import SpawnRefusedError
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(exc, SpawnRefusedError)
 
 
 def _share_output(node_spec: dict[str, Any], output: dict[str, Any]) -> dict[str, Any]:
@@ -246,6 +257,9 @@ class DAGRunner:
             "run.started" if not resume else "run.resumed",
             workflow=self.doc.name,
             run_id=run.run_id,
+            # WF-01: a run record names the engine, so a synthetic (stub) run is
+            # recognisable afterwards.
+            engine=getattr(self.engine, "name", "unknown"),
             input_keys=sorted(inputs.keys()),
             levels=len(levels),
             nodes=len(graph),
@@ -309,6 +323,10 @@ class DAGRunner:
                             "node.attempt_failed", node_id=nid, node_type=ntype,
                             attempt=attempts, error=f"{type(e).__name__}: {e}",
                         )
+                        # WF-20: a spawn the pre-spawn gates refused is final; asking
+                        # again only repeats the refusal (and its audit record).
+                        if _is_spawn_refusal(e):
+                            break
                         if attempts <= max_retries:
                             if interval_s > 0:
                                 _time.sleep(interval_s)
