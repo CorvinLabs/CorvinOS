@@ -58,6 +58,13 @@ echo "[bootstrap] installing core dependencies"
   fastapi pydantic httpx "uvicorn[standard]" itsdangerous python-multipart \
   pyyaml "PyJWT[crypto]" cryptography pytest duckdb
 
+echo "[bootstrap] installing telemetry dependencies (OTLP metrics export, ADR-0680/0681)"
+# pyproject declares these, but a bootstrap-built console venv never installed them: the SDK was
+# missing ("OTEL SDK not available"), so the heartbeat's OTLP push silently fell back to JSON and
+# this host delivered no OpenTelemetry data. Fail-soft: without them telemetry stays on the fallback.
+"${VENV_DIR}/bin/python" -m pip install --quiet "opentelemetry-sdk>=1.20.0" "opentelemetry-exporter-otlp-proto-http>=1.20.0" \
+  || echo "[bootstrap] WARN: opentelemetry packages not installed - OTLP export uses the JSON fallback"
+
 echo "[bootstrap] installing voice dependencies (TTS/STT, no API key required for edge-tts)"
 # edge-tts: Microsoft Edge TTS, no API key, pure-Python — universal TTS fallback.
 # openai + anthropic: SDK for cloud TTS/STT and Claude engine.
