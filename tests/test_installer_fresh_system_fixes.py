@@ -232,6 +232,7 @@ def test_instance_registry_lives_under_corvin_home_and_makes_no_dir_at_import(tm
     ran InstanceRegistry() at module level with the literal
     "~/.corvin/instances.json" and mkdir'd ~/.corvin on every console boot."""
     import importlib
+
     import core.learning.instance_registry as ir
 
     root = tmp_path / "root"
