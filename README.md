@@ -222,7 +222,7 @@ One resolver picks the model for every turn on every surface: conversation → H
 
 <p align="center"><img src="docs/overview/img/token-savings-measured.svg" alt="Measured cost of routed OS turns versus the same tokens on Opus 5.5 and Opus 5" width="100%"/></p>
 
-Measured on the maintainer's install (607 priced turns, 2026-09-24 → 10-04): **$414 actual vs. $629 for the same tokens on Opus 5.5 (−34 %)** and $1,181 on Opus 5 (−65 %). Since three-tier routing went live on 2026-09-28: **−24 %** vs. Opus 5.5. Re-add it yourself from the chain — the page shows how, and what the numbers do *not* say.
+Measured on the maintainer's install (607 priced turns, 2026-09-24 → 10-04): **$414 actual vs. $629 for the same tokens on Opus 5.5 (−34 %)** and $1,181 on Opus 5 (−65 %). Since three-tier routing went live on 2026-09-28 (222 priced turns): **−24 %** vs. Opus 5.5 and −60 % vs. Opus 5 ($344 actual vs. $863). Re-add it yourself from the chain — the page shows how, and what the numbers do *not* say.
 
 <p align="center"><a href="docs/overview/token-savings.md"><strong>→ Token savings, the proof path and how to read the numbers</strong></a></p>
 
