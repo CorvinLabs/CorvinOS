@@ -149,10 +149,12 @@ def test_node_fallback_runs_ensure_node_sh_under_the_resolved_root(tmp_path, mon
     ran = {}
 
     def _run(cmd, **kw):
-        ran.setdefault("cmd", cmd); ran.setdefault("env", kw.get("env", {}))
+        ran.setdefault("cmd", cmd)
+        ran.setdefault("env", kw.get("env", {}))
         (home / "node" / "bin").mkdir(parents=True, exist_ok=True)
         node = home / "node" / "bin" / "node"
-        node.write_text("#!/bin/sh\necho v24.18.0\n"); node.chmod(0o755)
+        node.write_text("#!/bin/sh\necho v24.18.0\n")
+        node.chmod(0o755)
         npm = home / "node" / "bin" / "npm"
         npm.write_text("#!/bin/sh\necho 11\n"); npm.chmod(0o755)
         return mock.Mock(returncode=0, stdout="v24.18.0\n")
