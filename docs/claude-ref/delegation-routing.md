@@ -236,27 +236,32 @@ orders are imperatives with none of them ("setze das alles um und teste e2e", "F
 "adversarial review bis 0 findings", "git push main"), so most prompts that delegated reached the
 fan-out through rule 5. `_is_coding_shaped` now also counts engineering work orders:
 
-- **specific words count alone** (`_TRIAGE_CODING_RE`): `e2e`, `end-to-end`, `adversarial`,
-  `release <digit>`, `implementier*`, `implementation`, `git push`, `push … auf/to/on main`, `PR`,
-  `migrier*`, `deploy*`, `fixing`, `implementing`;
+- **words with no common non-software meaning count alone** (`_TRIAGE_CODING_RE`): `e2e`,
+  `end-to-end`, `adversarial review|test|round`, `release <major.minor>`, `implementier*`, `git push`,
+  `push … auf/to/on main`. Deliberately NOT here, because a review found each in everyday text: bare
+  `adversarial`, `PR`, `migrate`, `deployed`, `implemented`, `Release 2`;
 - **ambiguous verbs count in pairs** (`_TRIAGE_WORKORDER_WEAK_RE`, two DIFFERENT ones of `fix*`,
-  `behebe*`, `umsetz*`/`setz… um`, `teste/testen/testet`): each has an everyday meaning ("setze den
-  Wecker um 6", "Diät umsetzen", "Wasserschaden beheben", "Medikament testen"), so one is not coding;
+  `behebe*`, `umsetz*`/`setz… um`, `teste/testen/testet/testing/test it`): each has an everyday
+  meaning ("setze den Wecker um 6", "Diät umsetzen", "Wasserschaden beheben"), so one is not coding;
 - exact word forms only: "Testbericht", "Testdaten", "Fixkosten", "Corona-Test", "press release",
   "reparieren" are not coding (`test_everyday_text_is_not_coding_shaped`).
 
-Fan-out markers keep their precedence over the coding carve-out only when they are EXPLICIT
-(`parallel`, `Worker`, `Perspektiven`, `mehrere Quellen`, ADR-0202). The weak ones
+Fan-out markers keep their precedence over the coding carve-out only when they are EXPLICIT:
+`worker(n)`, `fan-out`, multi-perspective/multi-source phrasing, or a bare `parallel`/`gleichzeitig`/
+`independently`/`mehrere Varianten` together with a perspective or source noun. The weak ones
 (`_TRIAGE_WEAK_FANOUT_RE`: "für jeden", "for each", "je eine", recherchiere, vergleiche, compare,
-sammle, collect, crawle) no longer outrank a coding prompt: "Fix the login bug and compare the two
-approaches" is coding. The cost is accepted and one-directional: a research prompt that happens to
-contain a broad coding noun (`app`, `programm`, `test`) now takes the direct turn, never the fan-out.
+sammle, collect, crawle) and a BARE `parallel`/`independently` ("a race bug where two threads run
+parallel") no longer outrank a coding prompt. The cost is accepted and one-directional: a research
+prompt that happens to contain a broad coding noun (`app`, `programm`, `test`) now takes the direct
+turn, never the fan-out.
 
-Replaying 878 distinct real prompts (729 ledger turns + 341 console turns) through `HEAD` and the new
-ladder: 106 → 61 delegating, 45 flips (32 by specific vocabulary, 8 by vocabulary plus a pair, 5 by
-the length rule below), every one towards direct, none towards delegation. The change only narrows
-the band, so the ADR-0229 §1 freeze against widening holds; with worker mode `native` such a turn
-reaches ACS only through `/delegate` or the big-data shape either way. The heuristic stays
+Replaying 910 distinct real prompts (ledger turns and console turns; 880 without a leading slash
+command) through the previous ladder and the current one: 106 → 62 delegating, 44 flips, every one
+towards direct, none towards delegation. Switching each mechanism off alone: the new vocabulary
+explains 38 of them, the pasted-blob rule 5, the weak fan-out carve-out 1, the pair rule 0 — the pair
+rule and the ambiguous-fan-out handling are precaution pinned by tests, not by data. The change only
+narrows the band, so the ADR-0229 §1 freeze against widening holds; with worker mode `native` such a
+turn reaches ACS only through `/delegate` or the big-data shape either way. The heuristic stays
 vocabulary-based: a feature request phrased without any of these words still looks like a task.
 
 **Length counts prose only** (`_UNBROKEN_BLOB_RE`): a run of 60+ characters from

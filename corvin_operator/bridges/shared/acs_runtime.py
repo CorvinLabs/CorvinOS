@@ -2839,6 +2839,9 @@ async def _manager_loop(
             _write_audit(ctx.tenant_id, "acs.manager_error", {
                 "run_id": ctx.run_id, "reason": str(exc)[:300],
             })
+            # A manager call that raised is still a manager call: without a step the summary
+            # counted 2 calls as 1 iteration.
+            ctx.trace.emit("decision", iteration=ctx.iteration + 1, decision="INVALID", n_subtasks=0)
             return ACSResult(
                 run_id=ctx.run_id, workflow_id=ctx.workflow_id, status="failed",
                 error=f"manager call failed: {exc}", iterations=ctx.iteration,
@@ -3443,6 +3446,7 @@ class ACSRuntime:
             pass
 
         _trace = RunTrace(self._on_step)
+        _t_run = time.monotonic()
         ctx = RunContext(
             run_id=rid,
             workflow_id=workflow_id,
@@ -3556,6 +3560,10 @@ class ACSRuntime:
             )
 
         result.run_dir = run_dir
+        if not result.elapsed_s:
+            # Result paths that do not carry a duration (the unexpected-error one) showed "0 s"
+            # for a run that took seconds or hours.
+            result.elapsed_s = time.monotonic() - _t_run
         result.steps = list(_trace.steps)
         result.loss_history = list(_trace.losses)
         # ACO Layer 1: mirror final status to session debug log

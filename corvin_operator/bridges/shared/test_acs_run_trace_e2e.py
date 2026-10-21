@@ -75,19 +75,12 @@ def _module_overrides(**mods):
 def _no_real_model_calls(monkeypatch):
     """Hermetic by assertion: the run's own L44 gate would start a real `claude` haiku call (6 per
     run, found by an independent review), so the classifier is pinned, and any attempt to spawn the
-    CLI anyway fails the test instead of spending tokens."""
-    import subprocess
+    CLI or open a network connection anyway fails the test."""
     import house_rules  # type: ignore
+    from acs_test_guards import forbid_real_cli_and_network
     monkeypatch.setattr(house_rules, "_house_rules_classifier",
                         lambda task, rules, auth, **_kw: ("", 1.0, "test-benign"))
-    real_init = subprocess.Popen.__init__
-
-    def guarded(self, args, *a, **k):
-        first = str(args[0] if isinstance(args, (list, tuple)) and args else args)
-        assert "claude" not in Path(first).name, f"test tried to start the real CLI: {args!r}"
-        return real_init(self, args, *a, **k)
-
-    monkeypatch.setattr(subprocess.Popen, "__init__", guarded)
+    forbid_real_cli_and_network(monkeypatch)
 
 
 def _spec():
@@ -225,3 +218,54 @@ def test_a_delegate_with_a_malformed_plan_shows_no_invented_subtask_count(tmp_pa
     first = res.steps[0]
     assert first["decision"] == "DELEGATE" and first["n_subtasks"] == 0
     assert "Plan des Managers unbrauchbar" in _rt.format_acs_step(first, german=True)
+
+
+def test_a_manager_call_that_raises_is_counted_as_an_iteration(tmp_path):
+    """Two manager calls were reported as '1 iteration(s)': the call that raised emitted no step."""
+    calls = {"n": 0}
+
+    def manager(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return json.dumps(DELEGATE), 50
+        raise RuntimeError("engine down")
+
+    with patch.object(_rt, "_call_manager_sync", side_effect=manager), \
+         patch.object(_rt, "_call_worker_sync", side_effect=lambda *a, **k: (WORKER_TEXT, 30, None)), \
+         patch.object(_rt, "_assert_engine_licensed", return_value=None), \
+         patch.object(_rt, "_write_audit", side_effect=lambda *a, **k: None), \
+         patch.object(_rt, "_corvin_home", return_value=tmp_path):
+        res = asyncio.run(_rt.ACSRuntime(tenant_id="_default", bridge="t", chat="t").run(_spec(), run_id="r2"))
+    assert res.status == "failed" and calls["n"] == 2
+    assert [s["decision"] for s in res.steps if s["kind"] == "decision"] == ["DELEGATE", "INVALID"]
+    assert "- Schritte: 2 Iteration(en)" in _rt.format_acs_run_summary(res, trigger="x", german=True)
+
+
+def test_every_result_path_carries_a_duration(tmp_path):
+    """The unexpected-error path built its ACSResult without elapsed_s, so a run of seconds or hours
+    was summarised as 'Dauer: 0 s'."""
+    import time
+
+    async def exploding_loop(ctx, *a, **k):
+        await asyncio.sleep(0.06)
+        raise ValueError("unexpected")
+
+    with patch.object(_rt, "_manager_loop", side_effect=exploding_loop), \
+         patch.object(_rt, "_assert_engine_licensed", return_value=None), \
+         patch.object(_rt, "_write_audit", side_effect=lambda *a, **k: None), \
+         patch.object(_rt, "_corvin_home", return_value=tmp_path):
+        res = asyncio.run(_rt.ACSRuntime(tenant_id="_default", bridge="t", chat="t").run(_spec(), run_id="r3"))
+    assert res.status == "failed" and "unexpected" in res.error
+    assert res.elapsed_s >= 0.05, res.elapsed_s
+
+
+@pytest.mark.parametrize("score,expected", [(0.2, 0.2), (1.0, 1.0), (0.0, 0.0),
+                                            (2, 0.5), (7, 0.5), (10, 0.5), (-0.1, 0.5),
+                                            ("x", 0.5), (True, 1.0), (float("nan"), 0.5)])
+def test_a_critique_score_outside_zero_to_one_is_no_signal_not_a_perfect_score(score, expected):
+    """The prompt asks for 0..1. Clamping turned a 2-out-of-10 into 1.0 (loss total 0.99)."""
+    gates = [_gc.GateResult("gate_1_deliverable", True, 1.0),
+             _gc.GateResult("gate_2_l0_contract", True, 1.0),
+             _gc.GateResult("gate_3_llm_critique", True, 0.5, "", {"critique": {"score": score}})]
+    loss = _gc._compute_workflow_loss(gates, {"confidence": 0.9}, "x" * 50, None, _gc.LossProfile(), 1, None)
+    assert loss.L_quality == pytest.approx(expected)

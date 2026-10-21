@@ -45,6 +45,12 @@ def _import_adapter_offline():
 
 adapter = _import_adapter_offline()
 
+@pytest.fixture(autouse=True)
+def _hermetic(monkeypatch):
+    from acs_test_guards import forbid_real_cli_and_network
+    forbid_real_cli_and_network(monkeypatch)
+
+
 FANOUT = ("Recherchiere parallel mit mehreren Workern, wie sich die Strompreise in "
           "fünf Ländern entwickelt haben, und vergleiche die Quellen im Detail.")
 

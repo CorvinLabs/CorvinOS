@@ -932,6 +932,14 @@ def test_triage_pasted_blob_is_not_a_long_task(prompt: str) -> None:
     "Please fix dinner and test drive the car",      # 'fix' + English 'test' (no German suffix)
     "Push the main door open",
     "Testbericht, Testdaten und Fixkosten",          # exact word forms only
+    # Words a review found in everyday text; none of them is a coding signal on its own.
+    "Die PR-Abteilung plant die Kampagne für Puerto Rico (PR)",
+    "Many birds migrate south in autumn",
+    "The troops were deployed to the border",
+    "The law was implemented in 2019",
+    "Das Release 2 des Albums erscheint im Herbst",
+    "The adversarial system of justice relies on two sides",
+    "Review the PR plan for the new campaign",
 ])
 def test_everyday_text_is_not_coding_shaped(prompt: str) -> None:
     assert cr._is_coding_shaped(prompt) is False
@@ -946,10 +954,9 @@ def test_everyday_text_is_not_coding_shaped(prompt: str) -> None:
     "dann git push main",
     "push das auf main",
     "Release 1.6 vorbereiten",
-    "Review the PR for the payment service",
-    "Deploye den Service",
-    "Migriere die Datenbank",
-    "Fixing the login",
+    "adversarial review of the whole module",
+    "Fix the login flow and test it properly on staging",   # English pair: fix + test it
+    "Fix the login and testing the flow end to end",
 ])
 def test_engineering_work_orders_are_coding_shaped(prompt: str) -> None:
     assert cr._is_coding_shaped(prompt) is True
@@ -967,13 +974,23 @@ def test_lookalike_words_do_not_pull_a_real_task_off_the_fanout(prompt: str) -> 
 
 
 @pytest.mark.parametrize("prompt", [
-    "Deploye den Service auf den Testserver und prüfe danach die Logs genau.",
-    "Migriere die Datenbank auf das neue Schema und sammle danach alle Fehler aus den Logs.",
+    "Behebe den Fehler im Deployment-Skript und sammle danach alle Fehler aus den Logs.",
     "Fix the login bug and compare the two approaches in the auth module please, with all the details.",
+    # A bare parallel / independently / mehrere Varianten is ambiguous (a race bug, flaky tests).
+    "Behebe den Bug im Scheduler: zwei Threads laufen parallel und überschreiben den Zustand.",
+    "Fix the flaky unit tests: each case passes independently but fails together in the suite.",
+    "Implementiere mehrere Varianten der Funktion und teste sie danach durch.",
 ])
 def test_weak_fanout_verbs_do_not_outrank_coding(prompt: str) -> None:
     """vergleiche/compare/sammle/recherchiere are generic; only explicit parallelism outranks coding."""
     assert cr._should_delegate_bundled(prompt) is False
+
+
+def test_parallel_with_a_perspective_or_source_noun_still_fans_out_a_review() -> None:
+    assert cr._should_delegate_bundled(
+        "Review den Code aus Security-, Performance- und Style-Perspektive parallel") is True
+    assert cr._should_delegate_bundled(
+        "Review the code from three perspectives in parallel and compare the findings in detail") is True
 
 
 def test_explicit_parallelism_still_outranks_coding() -> None:

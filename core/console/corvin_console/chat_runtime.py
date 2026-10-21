@@ -3351,16 +3351,19 @@ _TRIAGE_CODING_RE = re.compile(
     # main"), so they reached the ACS fan-out through the generic length/strong-verb rule.
     # The ambiguous verbs (fix, behebe, umsetzen, testen) are NOT here: see
     # _TRIAGE_WORKORDER_WEAK_RE, they need a second one.
-    r"|e2e|end[\s\-]to[\s\-]end|adversarial|release\s+v?\d"
-    r"|implementier\w*|implementation|implementing|implemented|fixing"
+    # Only words that have no common non-software meaning. NOT here, on purpose (a review found
+    # each in everyday text): bare "adversarial" (court systems), "release 2" (an album), PR (a PR
+    # department, Puerto Rico), migrate (birds), deployed (troops), "implemented" (a law).
+    r"|e2e|end[\s\-]to[\s\-]end|adversarial[\s\-]+(?:review|test\w*|runde|round|refutation|widerlegung)"
+    r"|release\s+v?\d+\.\d+"
+    r"|implementier\w*"
     r"|git\s+push|push(e|en)?\s+(\S+\s+){0,2}(auf|to|on)\s+main"
-    r"|prs?|migrier\w*|migrate[sd]?"
     # Crash/freeze vocabulary (review F5): a bug report rarely names a code
     # token — "die App stürzt ab", "fix the crash", "hängt sich auf" — yet is
     # squarely coding work that must stay on the sequential direct turn.
     r"|crash|absturz|abstürzt|stürzt\s+ab|abgestürzt"
     r"|hängt(\s+sich)?(\s+auf)?|hangs?|freeze[sd]?|einfriert|eingefroren"
-    r"|app|anwendung|programm|deployment|deploy\w*"
+    r"|app|anwendung|programm|deployment|deploy"
     r")\b"
     r"|\.(py|js|ts|tsx|jsx|go|rs|java|c|cpp|h|cs|rb|php|sh|ps1|yaml|yml|json|toml|sql|md)\b"
     r"|```",
@@ -3426,7 +3429,8 @@ _TRIAGE_FANOUT_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
-# One unbroken run of 60+ token characters: a pasted key, token, URL or hash. The class is
+# One unbroken run of 60+ token characters: a pasted key, token, URL or long hash (a SHA-1 is 40
+# and a UUID 36 characters, so a list of those still counts as prose). The class is
 # deliberately NOT \S: text written without spaces (Japanese, Chinese) or with accented letters
 # must keep counting as text, and so must a CSV paste (its commas break the run).
 _UNBROKEN_BLOB_RE = re.compile(r"[A-Za-z0-9+/=_\-.:%?&#~@]{60,}")
@@ -3436,7 +3440,7 @@ _UNBROKEN_BLOB_RE = re.compile(r"[A-Za-z0-9+/=_\-.:%?&#~@]{60,}")
 _TRIAGE_WORKORDER_WEAK_RE = re.compile(
     r"\b(?:(?P<fix>fix(?:e|en|t)?)|(?P<behebe>behebe\w*)"
     r"|(?P<umsetz>umsetz\w*|umgesetzt|setz\w*\s+(?:\S+\s+){0,3}um(?!\s*\d))"
-    r"|(?P<test>test(?:e|en|et)))\b",
+    r"|(?P<test>test(?:e|en|et|ing)|test\s+(?:it|this|that|them)))\b",
     re.IGNORECASE,
 )
 def _is_coding_shaped(p: str) -> bool:
@@ -3444,6 +3448,18 @@ def _is_coding_shaped(p: str) -> bool:
     return bool(_TRIAGE_CODING_RE.search(p)) or (
         len({m.lastgroup for m in _TRIAGE_WORKORDER_WEAK_RE.finditer(p)}) >= 2)
 
+
+# Fan-out markers that are ambiguous on their own: "a race bug where two threads run parallel",
+# "flaky tests that pass independently", "implement mehrere Varianten". In a coding prompt they
+# outrank the coding shape only together with a perspective or source noun ("... aus drei
+# Perspektiven parallel"); _EXPLICIT_WORKER_RE's own comment already says a bare "parallel" is not
+# a fan-out request.
+_TRIAGE_AMBIGUOUS_FANOUT_RE = re.compile(
+    r"parallel\w*|gleichzeitig|unabhängig\s+voneinander|independently"
+    r"|mehrere[nrm]?\s+(?:varianten|ansätze|kandidaten)|multiple\s+(?:variants|approaches|candidates)",
+    re.IGNORECASE,
+)
+_TRIAGE_PERSPECTIVE_RE = re.compile(r"perspektiv|perspective|quellen|sources|blickwinkel|angles", re.IGNORECASE)
 
 # Fan-out markers that do NOT outrank a coding prompt: per-item quantifiers and the generic
 # research/compare/collect verbs. "Fix the login bug and compare the two fixes" is coding. Explicit
@@ -4183,7 +4199,12 @@ def _should_delegate_bundled(prompt: str) -> bool:
     # parallelism ("parallel", "Worker", "Perspektiven", "mehrere Quellen") keeps its precedence over
     # the coding carve-out below (ADR-0202).
     _fanout_hits = [m.group(0) for m in _TRIAGE_FANOUT_RE.finditer(p)]
-    if _coding and all(_TRIAGE_WEAK_FANOUT_RE.fullmatch(h) for h in _fanout_hits):
+    _has_perspective = bool(_TRIAGE_PERSPECTIVE_RE.search(p))
+    if _coding and all(
+        _TRIAGE_WEAK_FANOUT_RE.fullmatch(h)
+        or (not _has_perspective and _TRIAGE_AMBIGUOUS_FANOUT_RE.fullmatch(h))
+        for h in _fanout_hits
+    ):
         return False
     if _fanout_hits:
         has_verb = bool(_TRIAGE_VERB_RE.search(p) or _TRIAGE_STRONG_RE.search(p))

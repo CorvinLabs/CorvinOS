@@ -67,7 +67,7 @@ _HEARTBEAT_INTERVAL = float(os.environ.get("CORVIN_BG_TASK_HEARTBEAT", "30"))
 
 DEFAULT_TASK_TIMEOUT_S = 86400.0   # 24 h; the same horizon as bg_scope.WORKER_CHILD_MAX_S
 DEFAULT_STREAM_IDLE_S = 3600.0     # silence the engine may keep before the idle watchdog fires
-_TASK_TIMEOUT_BOUNDS = (1.0, 86400.0)   # same clamp as bg_scope._CHILD_MAX_BOUNDS
+_TASK_TIMEOUT_BOUNDS = (2.0, 86400.0)   # lower: one deadline-loop tick (2 s); upper: bg_scope's ceiling
 
 
 def apply_stream_idle_default(adapter, channel: str) -> bool:
@@ -89,9 +89,37 @@ def apply_stream_idle_default(adapter, channel: str) -> bool:
     except Exception:  # noqa: BLE001 — unreadable settings are treated as unset
         chan_idle = None
     if chan_idle is not None:
-        return False
+        try:
+            float(chan_idle)
+            return False                      # a number the adapter will honour (0 disables)
+        except (TypeError, ValueError):
+            pass                              # "", "1h": the adapter would fall back to 300 s
     os.environ["ADAPTER_STREAM_IDLE_TIMEOUT"] = str(int(DEFAULT_STREAM_IDLE_S))
     return True
+
+
+def engine_cut_reason(adapter) -> str | None:
+    """Why the adapter ended the turn it just ran, or None for a normal ending.
+
+    The adapter returns an apology as ordinary text when the engine is cut or fails, so ``ok=True``
+    recorded "finished" for a run that was cut off. It does record WHY on ``_TURN_OUTCOME``, and it
+    already separates failures (``_ENGINE_FAILURE_REASONS``) from gate refusals, which are answers:
+
+    * ``StreamIdleTimeout`` — the idle watchdog fired (``timed_out`` on the claude path, reason
+      ``timeout`` on the codex/opencode paths);
+    * ``EngineError`` — any other engine failure, including one after background work started
+      (that branch sets only ``failed``, never ``timed_out``).
+    """
+    outcome = getattr(adapter, "_TURN_OUTCOME", None)
+    if outcome is None:
+        return None
+    failed = getattr(outcome, "failed", None)
+    if getattr(outcome, "timed_out", False) or failed == "timeout":
+        return "StreamIdleTimeout"
+    reasons = getattr(adapter, "_ENGINE_FAILURE_REASONS", frozenset({"engine_error", "spawn_timeout"}))
+    if failed in reasons:
+        return "EngineError"
+    return None
 
 
 def task_timeout_s() -> float:
@@ -100,17 +128,19 @@ def task_timeout_s() -> float:
     0, a negative number, NaN, infinity or garbage is REJECTED and the default applies,
     the same rule as ``bg_scope`` caps: with 0 the deadline loop would end every task two
     seconds after it started, and NaN/inf would remove the only bound a wedged engine has.
-    A usable value is then CLAMPED into 1 s .. 24 h like the child caps: 1e-9 ended every
-    task at the first 2 s tick just as 0 did, and 1e30 never fired just as inf never did.
+    A value below the deadline loop's own 2 s tick is rejected too (default applies): it cannot be
+    honoured and would end every task at the first tick exactly as 0 does (1e-9 and 0.5 did). A
+    usable value above 24 h is clamped to 24 h like the child caps: 1e30 never fired just as inf
+    never did.
     """
     raw = os.environ.get("CORVIN_BG_TASK_TIMEOUT", "")
     try:
         value = float(raw) if raw.strip() else DEFAULT_TASK_TIMEOUT_S
     except ValueError:
         return DEFAULT_TASK_TIMEOUT_S
-    if not math.isfinite(value) or value <= 0:
+    if not math.isfinite(value) or value < _TASK_TIMEOUT_BOUNDS[0]:
         return DEFAULT_TASK_TIMEOUT_S
-    return min(max(value, _TASK_TIMEOUT_BOUNDS[0]), _TASK_TIMEOUT_BOUNDS[1])
+    return min(value, _TASK_TIMEOUT_BOUNDS[1])
 
 
 def _load_cn():
@@ -391,7 +421,9 @@ def main() -> int:
 
         apply_stream_idle_default(adapter, channel)
         with contextlib.suppress(Exception):
-            adapter._TURN_OUTCOME.timed_out = False   # thread-local; this call is the only turn
+            # thread-local; this call is the only turn of the process
+            adapter._TURN_OUTCOME.timed_out = False
+            adapter._TURN_OUTCOME.failed = None
 
         # Wall-clock watchdog: on deadline, SIGTERM this worker's own engine
         # subprocess (adapter._cancel_chat operates on THIS process's registry),
@@ -459,16 +491,16 @@ def main() -> int:
             exit_error = "WorkerTimeout"
             text = (f"background task timed out after {int(timeout)}s and was "
                     f"stopped.\n\n{text}".strip())
-        elif getattr(getattr(adapter, "_TURN_OUTCOME", None), "timed_out", False):
-            # The engine's idle watchdog ended the turn and the adapter returned its apology as
-            # ordinary text, so ok=True used to record "finished" for a run that was cut off in
-            # the middle (measured: state done, attempts 1). It is a failed attempt, and under
-            # supervision a continuation point.
+        elif (cut := engine_cut_reason(adapter)) is not None:
+            # The adapter returned its apology as ordinary text, so ok=True used to record "finished"
+            # for a run that was cut off in the middle (measured: state done, attempts 1). It is a
+            # failed attempt, and under supervision a continuation point.
             ok = False
             resumable = supervised
-            exit_error = "StreamIdleTimeout"
-            text = ("background task stopped: the engine delivered no events for too long."
-                    f"\n\n{text}".strip())
+            exit_error = cut
+            why = ("the engine delivered no events for too long" if cut == "StreamIdleTimeout"
+                   else "the engine reported an error")
+            text = f"background task stopped: {why}.\n\n{text}".strip()
     except Exception as e:  # noqa: BLE001 — never let the worker die silently
         ok = False
         resumable = supervised

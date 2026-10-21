@@ -64,6 +64,14 @@ def _module_overrides(**mods):
                 sys.modules[k] = v
 
 
+@pytest.fixture(autouse=True)
+def _hermetic(monkeypatch):
+    """A regression that makes delegation return None falls through to process_one's DIRECT turn
+    (ADAPTER_FAKE_CLAUDE=0 below), which would start the real claude CLI."""
+    from acs_test_guards import forbid_real_cli_and_network
+    forbid_real_cli_and_network(monkeypatch)
+
+
 def _fresh_adapter(monkeypatch, env: dict):
     for k, v in env.items():
         monkeypatch.setenv(k, v)       # restored after the test, never leaked into the next
@@ -256,3 +264,52 @@ def test_any_channel_name_yields_a_workflow_name_that_passes_rule_r2(monkeypatch
     spec = adapter._build_bridge_acs_spec("Vergleiche zwei Dinge", channel, "worker-delegation", "_default")
     res = acs_validator.validate_workflow_dict(spec)
     assert res.ok, (channel, spec["workflow"]["name"], [str(e) for e in res.errors])
+
+
+# --- the spec that actually reaches ACSRuntime.run (a mutant that swapped the budget source back to
+# none, or hard-coded the tenant, left every direct test of _build_bridge_acs_spec green) -----------
+
+def _capture_runtime(rt, store):
+    class _Cap:
+        def __init__(self, **kw):
+            store["init"] = kw
+
+        async def run(self, spec, run_id=None, **kw):
+            store["spec"] = spec
+            return rt.ACSResult(run_id=run_id or "r", workflow_id="w", status="success",
+                                summary=WORKER_TEXT, final_output={"text": WORKER_TEXT})
+    return _Cap
+
+
+def test_the_spec_that_reaches_the_runtime_carries_the_tenants_budget(sandbox, monkeypatch):
+    import acs_runtime as rt
+    import corvin_console.chat_runtime as cr
+    import corvin_console.feature_flags as ff
+
+    adapter = _fresh_adapter(monkeypatch, _env(sandbox))
+    seen: dict = {}
+    quota = types.ModuleType("license.compute_quota")
+    quota.increment_and_check = lambda *a, **k: None
+    asked: list = []
+
+    def budget(tid):
+        asked.append(tid)
+        return {"max_loops": 9, "max_depth": 2, "max_total_workers": 5 if tid == "tenant-x" else 6,
+                "max_wall_time": 700, "timeout_seconds": 300, "max_worker_turns": 11}
+
+    monkeypatch.setattr(cr, "_delegation_budget", budget)
+    with patch.object(ff, "is_enabled", side_effect=lambda fid, tid="_default": fid == "bridge_worker_engine_parity"), \
+         patch.object(ff, "worker_engine_mode", return_value="native"), \
+         patch.object(adapter, "_check_compliance_or_fail", return_value=None), \
+         patch.object(adapter, "_check_egress_or_fail", return_value=None), \
+         patch.object(rt, "ACSRuntime", _capture_runtime(rt, seen)), \
+         patch.object(rt, "_write_audit", side_effect=lambda *a, **k: None), \
+         _module_overrides(**{"license.compute_quota": quota, "acs_runtime": rt}):
+        answer, _ = adapter._maybe_delegate_worker(
+            "/delegate Vergleiche zwei Dinge", channel="sandbox-acs", chat_key="c", persona="",
+            tenant_id="tenant-x")
+    assert answer and answer.startswith(WORKER_TEXT[:30])
+    assert asked == ["tenant-x"], "the budget must be loaded for the turn's own tenant"
+    b = seen["spec"]["orchestration"]["delegation_loop"]["budget"]
+    assert b["max_total_workers"] == 5 and b["max_wall_time"] == 700 and b["max_depth"] == 2
+    assert seen["init"]["tenant_id"] == "tenant-x"
