@@ -6,5 +6,8 @@
   "dependencies": {
     "botbuilder": "^4.23.1",
     "express": "^4.21.2"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

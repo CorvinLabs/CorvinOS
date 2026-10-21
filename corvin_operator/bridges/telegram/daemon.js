@@ -16,7 +16,10 @@ const path = require('path');
 
 require('../shared/js/bridge_state').exitIfDisabled('telegram');
 
-const TelegramBot = require('node-telegram-bot-api');
+// node-telegram-bot-api >= 1.0 ships the class as the `default` / `TelegramBot` export of a
+// namespace (fetch-based, the `request` dependency is gone); 0.x exported the class itself.
+const _ntba = require('node-telegram-bot-api');
+const TelegramBot = _ntba.default || _ntba.TelegramBot || _ntba;
 
 // ── Shared bridge runtime (Phase 2 refactor) ────────────────────────────────
 const { makeLogger }            = require('../shared/js/logger');

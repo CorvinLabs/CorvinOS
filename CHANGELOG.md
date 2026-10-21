@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Security — dependency upgrades closing the Dependabot alerts (2026-10-21)
+- **Python (`uv.lock`, console venv):** PyJWT 2.15.1, aiohttp 3.14.5, urllib3 2.8.0, mcp 2.3.0, multidict 7.1.0,
+  Werkzeug 3.1.9, httpx2 2.16.0, oauthlib 4.0.0 (youtube extra). A running console picks them up at its next restart.
+- **Bridges (npm):** the WhatsApp bridge drops the unused `node-telegram-bot-api` dependency (it pulled the retired
+  `request` chain) and pins `@whiskeysockets/baileys` to the 6.7.x line (6.7.24; `6.17.16` is an older, vulnerable
+  publish that `^` resolved to); the Telegram bridge moves to `node-telegram-bot-api` 1.2 (same v1 surface, fetch-based,
+  no `request`; the daemon reads the class from the module's `default` export); the e-mail bridge moves to nodemailer 10;
+  Slack and Teams carry `overrides` for `form-data`, `qs` and `uuid`; discord.js's `undici`/`ws` are current. Every
+  bridge's `npm audit` reports 0.
+- **Console frontend:** react-router-dom 7.18 (the v6 API the pages use is unchanged), dompurify, katex,
+  postcss-selector-parser and source-map-js via `overrides`, vitest 4.1.11. The only alert left is `braces` ≤ 3.0.3
+  under tailwindcss 3 (no patched release exists; it is a build-time dependency).
+- The bridge and frontend toolchain is the nvm Node 24 the systemd units run (`scripts/ensure-node.sh`); the host's
+  `/usr/bin/node` 18 cannot install baileys 6.7.24 or react-router 7.
+
 ### Fixed — the 14 findings deferred from the 2026-10-21 review (KB tasks T-0238 … T-0251, epic E-035)
 - **A workflow run freezes its attachments by hard link, not by copy.** The run snapshot used to copy every attachment
   (up to 100 × 50 MiB) into `runs/<rid>/attachments/` on every run; it now links the write-once store file (a copy only

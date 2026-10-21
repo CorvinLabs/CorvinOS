@@ -4,6 +4,6 @@
   "private": true,
   "main": "daemon.js",
   "dependencies": {
-    "node-telegram-bot-api": "^0.66.0"
+    "node-telegram-bot-api": "^1.2.0"
   }
 }
