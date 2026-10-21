@@ -488,6 +488,13 @@ one generic `PromptSkill`):
 
 Proof: `tests/skills/test_prompt_skill_adapter_e2e.py`, `tests/e2e/test_prompt_skill_injection_gate_bridge_e2e.py` (through `adapter.process_one`, argv dump, verified chain).
 
+### Imported skills (G9, 2026-10-21)
+
+Skills imported through the Forge Bundle (`skills_installed/`) are handed to SkillForge as `installed.<id>` (scope `user`,
+ungraded, linter fail-closed) at import time and by a bounded boot catch-up, and so reach `prompt.installed.<id>` through
+the same `collect_prompt_sources` path as every other SkillForge skill. Details and proof:
+[forge-bundle.md](forge-bundle.md#installed-skills-become-prompt-skills-g9).
+
 ### Decisions that are NOT Skills (ADR-2175 G5/G6/G9, 2026-10-10)
 
 - **Layer Forge is not a Skill.** It runs minutes (LLM review, gate tests); `Skill.execute()` is budgeted in seconds.

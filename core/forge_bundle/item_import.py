@@ -190,6 +190,7 @@ def _import_single_skill(
             work = Path(tmp) / "src" / detected.item_id
             work.mkdir(parents=True)
             total = 0
+            prompt_body: str | None = None  # the SKILL.md the packager layout drops
             with zipfile.ZipFile(io.BytesIO(detected.data)) as zf:
                 for info in zf.infolist():
                     parts = info.filename.split("/")
@@ -204,6 +205,8 @@ def _import_single_skill(
                         raise ItemImportError("skill ZIP is larger than 50 MiB unpacked")
                     rel = Path(*parts[1:]) if len(parts) > 1 else Path(parts[0])
                     if rel.name in ("SKILL.md", ".corvin-skill.json") and len(rel.parts) == 1:
+                        if rel.name == "SKILL.md" and info.file_size <= 256 * 1024:
+                            prompt_body = zf.read(info).decode("utf-8", "replace")
                         continue
                     dest = work / rel
                     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -239,9 +242,16 @@ def _import_single_skill(
             # Audit failure after install succeeded; log but don't fail
             pass
 
+        # G9: an installed package runs nothing by itself. Its SKILL.md becomes a
+        # SkillForge prompt skill (linter, name prefix and grade gate apply); the
+        # outcome is reported, never assumed.
+        from core.skills.installed_prompt_skills import activate_installed_skill
+
+        activation = activate_installed_skill(
+            detected.item_id, detected.item_version or "", prompt_body or "", tenant_id=tenant_id)
         return {
             "status": "installed",
-            "detail": f"Skill {detected.item_id} installed successfully",
+            "detail": f"Skill {detected.item_id} installed; {activation.describe()}",
         }
     except Exception as exc:  # noqa: BLE001
         # Audit: import failed

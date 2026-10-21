@@ -293,7 +293,15 @@ def _intake_skill(art: ArtifactEntry, env: BundleEnvelope, zf: zipfile.ZipFile, 
     if not ok:
         # The installer's "Error: …" branch carries raw exception text (host paths).
         raise _IntakeFailed("skill installer error" if message.startswith("Error") else f"skill installer refused: {message[:200]}")
-    return "installed", f"{art.id}@{art.version}"
+    # G9: an installed package runs nothing by itself — hand its SKILL.md to SkillForge.
+    from core.skills.installed_prompt_skills import (  # noqa: PLC0415
+        _installed_root, _read_body, activate_installed_skill)
+
+    body = _read_body(_installed_root(), art.id, art.version)
+    if body is None:
+        return "installed", f"{art.id}@{art.version}; stored but not active as a prompt skill: the package has no SKILL.md"
+    activation = activate_installed_skill(art.id, art.version, body, tenant_id=tenant_id)
+    return "installed", f"{art.id}@{art.version}; {activation.describe()}"
 
 
 def clean_layer_manifest(manifest: dict) -> dict:

@@ -200,7 +200,7 @@ refused/failed (JSON on stdout), 2 usage error.
 
 | Kind | Intake | Outcome |
 |---|---|---|
-| skill | `SkillInstaller(<corvin_home>/skills_installed)`, checksum = the envelope's sha256. That store is HOST-WIDE, so only the install owner (owner/admin session of the process tenant) may import a skill — same as the manual skill upload | `installed` |
+| skill | `SkillInstaller(<corvin_home>/skills_installed)`, checksum = the envelope's sha256. That store is HOST-WIDE, so only the install owner (owner/admin session of the process tenant) may import a skill — same as the manual skill upload. After the install the package's `SKILL.md` is handed to SkillForge — see [Installed skills become prompt skills](#installed-skills-become-prompt-skills-g9) | `installed`; the detail says whether the skill is also available as a prompt skill, or why it is stored but not active |
 | layer | `LayerForgeOrchestrator(actor="bundle_import").create_layer_definition` — every gate, enforcement rule and the review run on THIS install. Before that: travelled state dropped, ≤ 16 gates, gate/rule/target/dependency ids short identifiers (they reach Layer Forge's audit records), each gate names ONE test file under `tests/` (no `::node`) | `forged`; detail notes a FLAGGED review on this install, or that Layer Forge wrote the layer but could not record its last step (only when the stored definition equals the bundle's, so a concurrent writer's layer is never reported as ours) |
 | plugin | `StagingManager.validate_zip_file` + `store_staged_upload` as `<id>-<version>.zip`; an identical package already pending is reported, not re-staged; one **already decided** (approved or rejected — `StagingManager.get_decision`, remembered under `plugin_staging/decisions/<upload_id>.json`, keyed on the package's content hash; see [Plugin decision memory](#plugin-decision-memory)) is refused: "already been decided (approved\|rejected)". The memory is a record, not a lock: the owner's manual `/plugin-uploads` re-upload stays possible, and rejection writes the record BEFORE deleting (a failed write leaves the upload pending) | `pending_approval` — approve at `/plugin-uploads/{id}/approve` |
 | tool | `ToolQuarantine.stage` — a name that already exists here (case-insensitively) is refused (`failed`, "already exists"); an entry identical in EVERYTHING the operator reviews (version, description, schema, runtime, code, meta, bundle) is reused, anything else is a new entry | `quarantined` |
@@ -346,6 +346,34 @@ once with a confirmation; a layer's versions are alternatives (one per bundle);
 an unreadable install inventory (503 stage `inventory`) is shown as the
 install's problem, not the bundle's; uploads trigger the same stale-CSRF
 recovery as `api()`.
+
+## Installed skills become prompt skills (G9)
+
+An installed package runs nothing by itself, and `boot_skills` never read `skills_installed/`: until 2026-10-21 a
+skill the console reported as "installed" could not take part in a turn. `core/skills/installed_prompt_skills.py`
+is the one bridge, and it adds no injection path of its own:
+
+* **Where it runs:** after the install in both import paths (`item_import._import_single_skill` — the SKILL.md is read
+  from the uploaded ZIP because the packager layout drops it; `import_module._intake_skill` — read from the installed
+  package) and as a bounded catch-up in `skills.boot.boot_skills` (≤ 3 verified, not-yet-present skills per boot; a
+  quota refusal is retried at the next start).
+* **What it creates:** a SkillForge skill `installed.<id>` (characters SkillForge rejects become `_`) in scope `user`,
+  type `domain`, `meta.origin = forge-bundle-import`. Because it goes through `SkillRegistry.create`, the **linter runs
+  fail-closed** (prompt-injection patterns), the namespace gate applies and the free-tier authoring credit is spent
+  like any authoring.
+* **What it never does:** overwrite a skill of another origin (reported as "already exists"), shadow a curated skill
+  (the `installed.` prefix), read a SKILL.md through a symlink or beyond 256 KiB, or grade the skill.
+* **Why it is safe to enable:** the skill starts **ungraded**, so the injector's grade gate keeps it out of automatic
+  injection. It runs when the operator asks for it by name (`_honor_explicit_requests`) or after real grades.
+  `prompt_skill_adapter` then registers it as `prompt.installed.<id>` (audited, `skill.migrated`).
+* **Outcome is always reported:** the import detail is `available as prompt skill '…'`, `already available…`, or
+  `stored but not active as a prompt skill: <reason>` (linter, quota, name taken, no SKILL.md, SkillForge unavailable).
+  The reason names the matched pattern, never the body.
+
+Proof: `tests/forge_bundle/test_installed_prompt_skills_e2e.py` — real console route (session + CSRF) → production
+readers `collect_prompt_sources` and `boot_skills` → `prompt.installed.<id>` in the audited registry; linter refusal,
+no-overwrite, boot catch-up and the symlink refusal each have a test. Mutation controls: removing the import hook fails
+3 tests, removing the boot catch-up fails 1.
 
 ## Audit events
 
@@ -624,7 +652,7 @@ export → (use in Claude Web) → import back with original identity and versio
   - Plugins answer `400` (a built package on disk is needed; CLI only)
   - Returns ZIP file with `Content-Disposition: attachment`
   - The forge tabs' "Download selected" fetches one ZIP per selected item (there is no multi-item single-ZIP route besides the bundle `POST /export`)
-  - Import (`POST /forge-bundles/import`, multipart field `file`, CSRF) auto-detects a single-item ZIP. Tools go to quarantine, layers pass the same `_check_imported_layer` checks as a bundle, skills are re-packed with `SkillPackager` and installed by `SkillInstaller` (owner/admin only)
+  - Import (`POST /forge-bundles/import`, multipart field `file`, CSRF) auto-detects a single-item ZIP. Tools go to quarantine, layers pass the same `_check_imported_layer` checks as a bundle, skills are re-packed with `SkillPackager` and installed by `SkillInstaller` (owner/admin only), then offered to SkillForge as a prompt skill (see below)
   - Audit event: `forge_bundle.item_exported` (tenant-scoped, hash-chained)
 
 - **CLI:** `scripts/forge_bundle_cli.py export --skill ID@VER` (not yet implemented for per-item; use bundle export for now)

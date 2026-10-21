@@ -148,6 +148,18 @@ def boot_skills(
 
     assert get_registry() is integration.registry  # one global registry, not two
 
+    # G9: imported (skills_installed) packages become SkillForge prompt skills BEFORE the
+    # sync below, so they register as `prompt.installed.<id>` in this same boot. Bounded
+    # (each one spends an authoring credit) and never fatal.
+    try:
+        from .installed_prompt_skills import activate_missing_installed_skills
+
+        for act in activate_missing_installed_skills(tenant_id):
+            if act.status in ("activated", "updated", "refused"):
+                logger.info("installed skill %s: %s", act.skill_id, act.status)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("installed skills not activated (%s)", type(exc).__name__)
+
     # ADR-2175: bundle + SkillForge prompt skills become `prompt.<name>` registry
     # skills (versioned by content hash, `skill.migrated` chained per new hash).
     # Not part of the returned builtin ids; boot must not depend on it.
