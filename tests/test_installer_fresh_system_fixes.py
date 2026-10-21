@@ -156,7 +156,8 @@ def test_node_fallback_runs_ensure_node_sh_under_the_resolved_root(tmp_path, mon
         node.write_text("#!/bin/sh\necho v24.18.0\n")
         node.chmod(0o755)
         npm = home / "node" / "bin" / "npm"
-        npm.write_text("#!/bin/sh\necho 11\n"); npm.chmod(0o755)
+        npm.write_text("#!/bin/sh\necho 11\n")
+        npm.chmod(0o755)
         return mock.Mock(returncode=0, stdout="v24.18.0\n")
 
     monkeypatch.setattr(deps_mod.subprocess, "run", _run)
@@ -220,7 +221,7 @@ def test_piper_progress_without_a_terminal_is_a_few_lines_not_carriage_returns(m
     assert piper_mod._fetch("http://x/model.onnx", tmp_path / "m.onnx") is True
     out = capsys.readouterr().out
     assert "\r" not in out
-    assert [l.split()[0] for l in out.strip().splitlines()] == ["0%", "25%", "50%", "75%", "100%"]
+    assert [line.split()[0] for line in out.strip().splitlines()] == ["0%", "25%", "50%", "75%", "100%"]
 
 
 # ── F17: nothing creates ~/.corvin next to the real runtime root ───────────
