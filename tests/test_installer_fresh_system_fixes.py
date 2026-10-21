@@ -114,7 +114,10 @@ def test_step_17_waits_until_the_spa_answers_200_and_reports_the_seconds(tmp_pat
 
 
 def test_step_17_names_the_real_budget_and_what_it_saw_when_nothing_listens(tmp_path, monkeypatch, capsys):
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
     inst = _installer(tmp_path)
     inst.CONSOLE_PORT = port
     inst.CONSOLE_START_BUDGET_S = 2.0
