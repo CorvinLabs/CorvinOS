@@ -95,7 +95,7 @@ from .. import _spawn_gates  # shared fail-closed pre-spawn chokepoint (CRITICAL
 from ..deps import require_csrf, require_session
 from ..utils import read_json_or_none as _read_json
 from . import workflow_composer as _composer  # CONCEPT-0115: design-chat slash commands
-from . import workflow_dag_run as _dag_run  # ADR-2272: console runs of DAG-engine workflows
+from . import workflow_dag_run as _dag_run  # ADR-2273: console runs of DAG-engine workflows
 
 # ── Path resolution ────────────────────────────────────────────────────────
 
@@ -3380,7 +3380,7 @@ async def _stream_run(
                 except OSError:
                     pass
 
-        # ADR-0188 M7 / ADR-2272: the node types this executor does not implement (code,
+        # ADR-0188 M7 / ADR-2273: the node types this executor does not implement (code,
         # merge, route, answer, ask_human, approval) are run by the shared DAGRunner - the
         # same node semantics as `corvin-flow`, the scheduler and the MCP server - never by
         # a generic `claude -p` step (which would run a `code` node through an LLM and let

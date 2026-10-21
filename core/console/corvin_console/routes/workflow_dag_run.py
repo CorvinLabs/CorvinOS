@@ -1,4 +1,4 @@
-"""Console execution of DAG-engine workflows (ADR-0188 M7, ADR-2272).
+"""Console execution of DAG-engine workflows (ADR-0188 M7, ADR-2273).
 
 The console's own streaming executor (``workflows._stream_run``) only knows
 agent / fan_out / delegation_loop / deliver. A graph that uses ``code``, ``merge``,

@@ -115,7 +115,7 @@ pause is honored again after resume — the skip state survives the checkpoint r
 
 **Console UI:** a run started from the console (`POST /workflows/{wid}/runs`) whose graph uses
 `code`, `merge`, `route`, `answer`, `ask_human` or `approval` is executed by the same `DAGRunner`
-(`core/console/corvin_console/routes/workflow_dag_run.py`, ADR-2272); graphs of only
+(`core/console/corvin_console/routes/workflow_dag_run.py`, ADR-2273); graphs of only
 agent/fan_out/delegation_loop/deliver still use the console's own executor. The workflow YAML is
 snapshotted next to the run, the run id is the checkpoint key, and every event is appended to the
 run log. The SSE stream is a tail of that log and **stays open while the run is paused**:
