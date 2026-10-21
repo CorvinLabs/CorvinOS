@@ -9,6 +9,14 @@ no tracked engine run, so the adapter's own drain never reached them.
 The sweep reads this unit's own cgroup (cgroup v2) and sends SIGTERM to every process in it
 except the adapter itself, waits a grace period, then SIGKILLs the stragglers. It is limited
 to the unit's cgroup on purpose: it never signals a process outside this service.
+
+It runs ONLY when this process is the main process of its own systemd service (parent is the
+systemd manager, cgroup leaf is a ``*.service``). An adapter started from a shell, a test
+runner or a CI job shares its cgroup with the caller: until 2026-10-21 the sweep then
+SIGTERMed pytest, the operator's shell and the Claude Code session that ran the test
+(``test_adapter_skill_inject.py`` → ``proc.terminate()`` → drain → sweep; measured three
+times, exit 143). ``running_as_service_main`` is that gate; a sweep outside it is refused and
+logged, never attempted.
 ``KillMode`` stays ``mixed``: switching to ``control-group`` would send SIGTERM to live engine
 runs at the start of the drain, which is the failure ``mixed`` was chosen to avoid.
 """
@@ -34,6 +42,41 @@ def own_cgroup_procs_file() -> Path | None:
     except OSError:
         return None
     return None
+
+
+def own_cgroup_path() -> str:
+    """The cgroup v2 path of this process (``/proc/self/cgroup`` line ``0::<path>``), or ``""``."""
+    try:
+        for line in Path("/proc/self/cgroup").read_text(encoding="utf-8").splitlines():
+            parts = line.split(":", 2)
+            if len(parts) == 3 and parts[0] == "0":
+                return parts[2]
+    except OSError:
+        return ""
+    return ""
+
+
+def running_as_service_main(*, ppid: int | None = None, cgroup_path: str | None = None) -> bool:
+    """True only when this process is the main process of its own systemd service.
+
+    Two conditions, both required: the parent process is the systemd manager (``comm`` is
+    ``systemd``: the user manager for ``systemctl --user`` units, pid 1 for system units) and
+    the cgroup leaf is a ``*.service``. A process started by a shell, a test runner, a CI job
+    or ``systemd-run --scope`` fails at least one of them and must never sweep: its cgroup is
+    the caller's.
+    """
+    if ppid is None:
+        ppid = os.getppid()
+    try:
+        comm = Path(f"/proc/{ppid}/comm").read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    if comm != "systemd":
+        return False
+    if cgroup_path is None:
+        cgroup_path = own_cgroup_path()
+    leaf = cgroup_path.rstrip("/").rsplit("/", 1)[-1]
+    return leaf.endswith(".service")
 
 
 def _pids_in(procs_file: Path) -> set[int]:
@@ -83,9 +126,14 @@ def sweep_unit_leftovers(*, grace_s: float = 5.0, procs_file: Path | None = None
     """Terminate everything left in this unit's cgroup except this process. 0 when not on cgroup v2.
 
     *procs_file* is injectable so tests never touch a real cgroup (the test runner's own
-    cgroup holds the operator's shell and CLI sessions).
+    cgroup holds the operator's shell and CLI sessions). Without it the real cgroup is read,
+    and only when :func:`running_as_service_main` holds — otherwise nothing is signalled.
     """
     if procs_file is None:
+        if not running_as_service_main():
+            logger.info("unit sweep skipped: not the main process of a systemd service "
+                        "(the cgroup is shared with whoever started this adapter)")
+            return 0
         procs_file = own_cgroup_procs_file()
     if procs_file is None:
         return 0

@@ -1498,6 +1498,11 @@ class TestA2ASubagentGating(unittest.TestCase):
                          "allow_subagents may enable Task")
 
 
+if __name__ == "__main__":  # script mode (run-all-tests.sh): the pytest tier fixture does not apply
+    import a2a_test_tier
+
+    a2a_test_tier.pin_member_tier()
+
 if __name__ == "__main__":
     # Stop the module-level forge patch before unittest's own setup (we
     # manage it per-test in setUp/tearDown above), but keep it running

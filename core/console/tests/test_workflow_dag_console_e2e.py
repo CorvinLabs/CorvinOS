@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from test_workflow_resume_hardening import _sandbox  # noqa: E402  (same sandbox, same dir)
+from test_workflow_resume_hardening import _live_sandbox as _sandbox  # noqa: E402  (same sandbox, same dir)
 
 REPO = Path(__file__).resolve().parents[3]
 EXAMPLE = REPO / "core/workflows/corvin_workflows/examples/all_node_types.awp.yaml"

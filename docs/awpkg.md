@@ -139,7 +139,8 @@ deadline ends as failed (also when nobody has it open: reading the run reaps it)
 **Run lifecycle routes.** `GET /workflows/{wid}/runs/{rid}/stream` replays a run's log and follows it
 (the editor re-attaches to a paused run after a reload); `POST .../cancel` stops a running run before its
 next node, or ends a paused one and removes its checkpoint; `DELETE .../runs/{rid}` cancels, drops the
-checkpoint and snapshot and 404s for an unknown run; deleting a workflow removes the checkpoints of its
+checkpoint, the YAML snapshot and the run's directory (attachment snapshot, artifacts) and 404s for an unknown run;
+closing the run's event stream (reload, navigation) never stops a run — only `POST .../cancel` does; deleting a workflow removes the checkpoints of its
 paused runs. A typed `/resume` reply to an `approval` pause is refused (409: use approve/reject). Workflow
 YAML is limited to 256 KiB and 200 nodes for every writer (PUT /yaml, node routes, design chat), aliases
 are rejected, and all writers serialise on a per-workflow lock. Node edits rewrite the file through
@@ -230,7 +231,7 @@ Checkpoints and schedules are intentionally **excluded**, not missing — see th
 1. **Author** — `corvin pkg init` scaffolds `awpkg.yaml`; `corvin pkg build` produces the ZIP.
 2. **Inspect** — `corvin pkg inspect <file>` is read-only: validates the manifest, lists components, reports warnings. Zero extraction.
 3. **Install** — eight pre-extraction checks must all pass before a single byte is extracted. On success the package lands in the scope directory and a `package.installed` audit event is written.
-4. **Active** — Forge tools appear in the MCP namespace, skills are injected into future bridge turns, personas are available to the cowork resolver, workflows register with the scheduler and slash-command dispatcher.
+4. **Active** — Forge tools appear in the MCP namespace, skills are injected into future bridge turns, personas are available to the cowork resolver, workflows register with the scheduler and slash-command dispatcher. A scheduled console workflow runs as `corvin_workflows run <wid>`, which resolves `<tenant_home>/workflows/<wid>.awp.yaml` before the bundled examples; the cron's fields are read in `schedule.timezone` (IANA name) and `schedule.overrun` (`skip` default · `queue` · `parallel`) decides what a fire does while the previous run of the same schedule is still going. An imported bundle never replaces an existing tool implementation of the same name (`workflow.tool_import_skipped`).
 5. **Remove** — `corvin pkg remove <id>` deletes the scope directory and writes a `package.removed` audit event.
 
 ---

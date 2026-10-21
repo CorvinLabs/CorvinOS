@@ -49,12 +49,20 @@ def _os_pid_exists(pid: int) -> bool:
     if os.name == "nt":
         try:
             import ctypes  # noqa: PLC0415
-            k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            import ctypes.wintypes as wt  # noqa: PLC0415
+            # use_last_error + an explicit HANDLE restype: the default c_int restype truncates a
+            # 64-bit handle and ctypes.GetLastError() can read another call's error, and a wrong
+            # "gone" verdict here reaps a LIVE task.
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+            k32.OpenProcess.restype = wt.HANDLE
+            k32.OpenProcess.argtypes = (wt.DWORD, wt.BOOL, wt.DWORD)
+            k32.GetExitCodeProcess.argtypes = (wt.HANDLE, ctypes.POINTER(wt.DWORD))
+            k32.CloseHandle.argtypes = (wt.HANDLE,)
             h = k32.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED_INFORMATION
             if not h:
                 # 5 = access denied: the process exists. Anything else: gone.
-                return ctypes.GetLastError() == 5
-            code = ctypes.c_ulong(0)
+                return ctypes.get_last_error() == 5
+            code = wt.DWORD(0)
             ok = k32.GetExitCodeProcess(h, ctypes.byref(code))
             k32.CloseHandle(h)
             return bool(ok) and code.value == 259  # STILL_ACTIVE

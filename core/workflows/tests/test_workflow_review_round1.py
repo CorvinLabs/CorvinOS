@@ -103,7 +103,7 @@ class WF01StubIsNeverSilentTests(unittest.TestCase):
         rc, out, _err = self._run_cli(["run", str(_EXAMPLE), "--engine", "stub"])
         self.assertEqual(rc, 0, out)
         self.assertIn("[STUB", out)
-        self.assertIn("Synthetische", out)
+        self.assertIn("Synthetic demo data", out)
 
     def test_explicit_stub_json_payload_flags_engine_and_synthetic(self) -> None:
         rc, out, _err = self._run_cli(

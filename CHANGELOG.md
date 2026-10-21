@@ -2,6 +2,81 @@
 
 ## [Unreleased]
 
+### Fixed — release hardening from the adversarial review of 2026-10-21 (six review rounds over the week's work)
+- **A bridge adapter started from a shell, a test or a CI job no longer terminates every process in its cgroup on
+  shutdown.** The drain-time sweep (`unit_sweep`) runs only when the adapter is the main process of its own systemd
+  service; outside it the sweep is refused and logged. It had killed the test runner, the operator's shell and the
+  Claude Code session that ran a bridge test.
+- **Legacy console workflows report failures as failures.** A node whose worker engine failed, timed out or was missing,
+  or whose prompt a safety gate refused, ends `node_failed` and the run `failed` — before, the error text was the node's
+  "output" and the run reported success. The prompt that is really spawned (upstream output, inputs, skill bodies
+  included) passes the pre-spawn gates, not only the node's instructions.
+- **A scheduled console workflow runs.** `corvin_workflows run <wid>` resolves the tenant's saved workflow, cron fields
+  are read in the schedule's timezone, the overrun policy (skip / queue / parallel) is enforced, an unparseable cron is
+  refused with 400, a crash between a fire and the save no longer re-fires the workflow after a restart, and a corrupt
+  `schedule.json` is never overwritten by the next write.
+- **Workflow runs and pauses clean up.** Deleting a run removes its attachment snapshot and artifacts; an expired pause
+  removes the engine checkpoint (it stayed listed as paused forever); a resume a gate refused is not left resumable and a
+  re-saved checkpoint keeps its deadline; approvals count against the concurrent-run limit; closing the run's event stream
+  (reload, navigation) never cancels the run any more — only "Stop" does.
+- **Workflow backend hardening:** an imported `.awpkg` never replaces an existing tool implementation of the same name; a
+  skill name in a workflow is a name, never a path (a traversal name could read any `SKILL.md`); a present but unreadable
+  `tenant.corvin.yaml` refuses the run instead of dropping the engine policy; skills are read from the run's tenant, not
+  `_default`; the design-chat attachment inliner reads only the capped prefix; Art. 17 erasure also removes the
+  workflow's `.awpkg`; the stub engine's notice is English; the console's OS workers carry the session's tenant so the
+  orchestration MCP server acts for that tenant.
+- **Workflow editor:** the composer refuses the 11th attachment before uploading (the server allows 10 per message);
+  a message the server refuses puts the operator's text and chips back; the design chat reconnects with backoff after a
+  console restart; a failed upload batch removes the already-stored files; the "Upgrade" link appears only for a licence
+  error; four German strings and a German-only "Read aloud" voice are gone; the chat says when older messages are not
+  listed.
+- **L34 data-flow gate fails closed on a load error.** A tenant with a policy file whose `data_classification` module or
+  YAML cannot be loaded refuses the spawn; before, the guard became "no policy" and every prompt, a secret included,
+  reached the engine.
+- **ACS worker spans are priced again.** The model id is read from the CLI envelope's `modelUsage` (the final `result`
+  frame carries no `model` key); the shared `attested_model` helper covers ACS, A2A and the gateway alike.
+- **Spoken answers describe identifiers instead of reading them out** (paths, file names, commit hashes, ticket and ADR
+  ids, versions, URLs), in German and English; any other output language keeps the tokens. Section numbers, program
+  versions, dates and slash words stay spoken; runs of files or commits after a noun that names them are dropped as a whole.
+- **Console tasks:** a task the operator cancelled or a reaper interrupted no longer makes the finishing turn "fail
+  unexpectedly" and lose its streamed text; the kill path works on Windows (no `SIGKILL` there); the failure classifier
+  imports on Windows (turn recovery was silently absent there); a running isolated update is not finalised as
+  "interrupted" by the restarted console; the Windows console watchdog stays out of the updater's way; a Bash command
+  that pushes, sends or uploads marks the turn as not re-runnable after a restart (closed class, never the command);
+  tool-name matching for outbound effects uses word boundaries.
+- **Default plugins and skills:** the pre-1.7 Video Producer record is upgraded to CorvinTV at boot (the first-party
+  listing's wider declarations are approved and named; before, the upgrade was refused on every boot); a re-synced
+  imported skill costs no authoring credit and records its version (every boot spent one); a failed tenant knowledge-base
+  init is retried after ten minutes, not every two seconds; the OTLP exporter follows a geo-tier opt-out at the next push;
+  CorvinTV never installs `edge-tts` from a request (bootstrap/install pin it) and its adopted TTS key no longer reaches
+  OS workers; the OTLP bridge imports on Windows.
+- **A2A:** the one-time invite is verified before it is claimed (a flood of bad-signature calls had kept the real
+  redeemer out); every mounted console route is body-capped on the gateway host, not only the video routes; a Free
+  install answers neither ping nor friendship-ack; an ALLOW of `a2a.network` is audited once per ten minutes per
+  tenant, not on every ping; a dropped group fan-out marks the message `dropped` and returns no endpoint; the A2A
+  protocol E2E hosts bypass only the network gate.
+- **Gateway boot:** a failure to start the telemetry, stability, GitHub-sync or KB-projection loops is logged instead of
+  raising `NameError` (`logging` was never imported).
+- **Fresh install:** the console's own virtualenv (`core/console/bootstrap.sh`, what `corvinos-serve` runs) now installs
+  `pandas`, which the artifact preview needs next to `duckdb` — without it the preview answered "'pandas' is required";
+  the KB projector's `stop()` waits for its tick so a test's projector can never write into the operator's live chain.
+- **Tests that could not pass:** the console DAG E2E tests now run against a real ASGI server (Starlette's `TestClient`
+  buffers an SSE stream that stays open across a pause); the spawn-gate E2E's fake CLI answered the house-rules classifier
+  with its worker marker; the diagnostics review suite is aligned with the current contracts; the MCP A2A tool tests run
+  as a member install; the bg-task timeout test uses the smallest honoured deadline.
+
+### Changed — SkillForge body limit 16 KiB (ADR-2274)
+- The linter limit and the injection cap are both 16 KiB, so a skill the linter accepts is injected whole (the
+  injection cap was 4 KiB). Bound: 5 × 16 KiB per turn; no shipped skill reaches the cap.
+
+### Removed — Task Timeline panel
+- The console panel `/app/task-timeline` is gone; the interruption notices in the chat are the user-visible surface and
+  the per-task timeline endpoint stays for the API.
+
+### Added — strace diagnostics wrapper for the Claude CLI (not activated)
+- `scripts/diagnostics/claude_strace_wrapper.py` records who signals the CLI and when it exits, without prompt content;
+  activation is a deliberate operator step (see its README).
+
 ### Fixed — CorvinTV jobs ended "exit code 2" after a marketplace resync, and failed on Windows
 - A console that had loaded CorvinTV before its move to the `buildin` tier kept starting the job process from the old
   marketplace-cache path after the cache was resynced: every job ended "The job process ended unexpectedly (exit code

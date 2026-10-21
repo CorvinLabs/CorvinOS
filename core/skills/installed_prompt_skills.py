@@ -118,7 +118,10 @@ def activate_installed_skill(skill_id: str, version: str, body_md: str, *,
                                   "a skill with this name already exists and was not imported")
             if (spec.meta or {}).get("source_version") == version:
                 return Activation(skill_id, version, "unchanged", name)
-            reg.update_body(name, scope=existing_scope, body_md=body_md, description=description)
+            # A re-sync of an imported skill is not new authoring: no quota, and the synced
+            # version is recorded so the next boot reads "unchanged".
+            reg.update_body(name, scope=existing_scope, body_md=body_md, description=description,
+                            quota_exempt=True, meta={"source_version": version})
             return Activation(skill_id, version, "updated", name)
         reg.create(scope=SCOPE, name=name, type="domain", body_md=body_md,
                    description=description, overwrite=False,

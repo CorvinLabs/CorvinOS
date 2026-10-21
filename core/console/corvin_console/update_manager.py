@@ -304,6 +304,23 @@ def _scrub(text: str) -> str:
     return text
 
 
+
+def _isolated_run_active() -> bool:
+    """True while a transient ``corvin-update-*`` systemd unit (the isolated updater) is active.
+    False where systemd-run is not used (no unit, or not a Linux systemd host): the in-process
+    lock is then the only truth, as before."""
+    if sys.platform != "linux":
+        return False
+    try:
+        out = subprocess.run(
+            ["systemctl", "--user", "list-units", "--plain", "--no-legend", "--state=active,activating,deactivating",
+             "corvin-update-*"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return any(line.strip().startswith("corvin-update-") for line in out.splitlines())
+
 class UpdateManager:
     def __init__(self, tenant_id: str, state_path: Path | None = None):
         self.tenant_id = tenant_id
@@ -351,7 +368,12 @@ class UpdateManager:
         if not st:
             return None
         events = read_progress(progress_path_for(self.state_path()))
-        if st.get("status") == "running" and not self.lock.locked():
+        if st.get("status") == "running" and not self.lock.locked() and not _isolated_run_active():
+            # No lock in THIS process does not mean the run is over: the updater restarts the
+            # console, and the new process polled this before the transient unit had finished
+            # (verify / wait_live take up to 180 s). Finalising then marked a live run
+            # "interrupted", re-enabled the Update button and let a second run start (review
+            # 2026-10-21). The unit's own existence is the truth on a systemd host.
             if src is None:
                 try:
                     src = find_source_tree()

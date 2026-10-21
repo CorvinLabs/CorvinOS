@@ -325,6 +325,9 @@ export async function uploadWorkflowAttachments(
         const json = JSON.parse(text);
         if (json?.detail) detail = typeof json.detail === "string" ? json.detail : JSON.stringify(json.detail);
       } catch { /* keep the raw text */ }
+      // A later batch failed: the earlier ones are stored but would never be shown, so they
+      // would silently count toward the per-workflow cap. Drop them (best effort) before failing.
+      await Promise.allSettled(out.map((a) => deleteWorkflowAttachment(wid, a.id, csrf)));
       throw new ApiError(res.status, detail);
     }
     out.push(...((await res.json()) as { attachments: WorkflowAttachment[] }).attachments);

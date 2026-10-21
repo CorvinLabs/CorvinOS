@@ -31,6 +31,8 @@ export interface UseAttachmentUploadResult<T extends AttachmentLike> {
   addFiles: (files: File[]) => Promise<void>;
   removeAttachment: (index: number) => void;
   clearAttachments: () => void;
+  /** Put a list back as chips — a refused send must not lose already-uploaded attachments. */
+  restoreAttachments: (atts: T[]) => void;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   onFileInputChange: (evt: React.ChangeEvent<HTMLInputElement>) => void;
 }
@@ -75,9 +77,14 @@ export function useAttachmentUpload<T extends AttachmentLike>(
     setUploadError(null);
   }, []);
 
+  // A refused send puts the already-uploaded attachments back (they are still stored server-side).
+  const restoreAttachments = React.useCallback((atts: T[]) => {
+    setPendingAttachments(atts);
+  }, []);
+
   return {
     pendingAttachments, uploading, uploadError,
-    addFiles, removeAttachment, clearAttachments,
+    addFiles, removeAttachment, clearAttachments, restoreAttachments,
     fileInputRef, onFileInputChange,
   };
 }

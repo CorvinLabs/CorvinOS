@@ -1726,6 +1726,11 @@ function ChatPane({
             />
           )}
           {messages.length === 0 && <EmptyChat onTry={(t) => setInput(t)} />}
+          {capStart > 0 && hiddenCount === 0 && (
+            <p className="text-center text-xs text-muted-foreground py-1" data-testid="history-cap-note">
+              {capStart} older message{capStart === 1 ? "" : "s"} are not listed in this view.
+            </p>
+          )}
           {hiddenCount > 0 && (
             <div className="flex justify-center py-1">
               <Button

@@ -56,7 +56,7 @@ echo "[bootstrap] installing core dependencies"
 # silent 403 and the messenger UI shows "WebSocket not connected".
 "${VENV_DIR}/bin/python" -m pip install --quiet \
   fastapi pydantic httpx "uvicorn[standard]" itsdangerous python-multipart \
-  pyyaml "PyJWT[crypto]" cryptography pytest duckdb
+  pyyaml "PyJWT[crypto]" cryptography pytest duckdb pandas
 
 echo "[bootstrap] installing telemetry dependencies (OTLP metrics export, ADR-0680/0681)"
 # pyproject declares these, but a bootstrap-built console venv never installed them: the SDK was

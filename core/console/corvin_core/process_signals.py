@@ -61,8 +61,30 @@ def send_signal(
     sid_fingerprint: str | None = None,
 ) -> None:
     """Record, then send *sig* to *pid* (process-group aware callers still use os.killpg)."""
-    name = signal.Signals(sig).name
+    try:
+        name = signal.Signals(sig).name
+    except ValueError:                      # a number this platform has no name for (Windows: 9)
+        name = f"SIG{int(sig)}"
     record_signal(pid=pid, signal_name=name, reason=reason,
                   tenant_id=tenant_id, sid_fingerprint=sid_fingerprint)
     if pid:
         os.kill(int(pid), sig)
+
+
+def hard_kill(proc, *, reason: str, tenant_id: str = "_default",
+              sid_fingerprint: str | None = None) -> None:
+    """Record a SIGKILL, then end *proc* the way this platform can.
+
+    POSIX: ``os.kill(pid, SIGKILL)``. Windows has no ``signal.SIGKILL`` — until 2026-10-21 the
+    console's stop path raised ``AttributeError`` there, masked the original error and left
+    the CLI running; ``Popen.kill()`` (TerminateProcess) is the equivalent. The record carries
+    the name ``SIGKILL`` on both so an exit can be attributed the same way.
+    """
+    pid = getattr(proc, "pid", None)
+    record_signal(pid=pid, signal_name="SIGKILL", reason=reason,
+                  tenant_id=tenant_id, sid_fingerprint=sid_fingerprint)
+    sigkill = getattr(signal, "SIGKILL", None)
+    if sigkill is not None and pid:
+        os.kill(int(pid), sigkill)
+    else:
+        proc.kill()

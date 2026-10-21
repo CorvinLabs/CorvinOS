@@ -45,6 +45,37 @@ describe("WorkflowComposer", () => {
     expect(ta.value).toBe("");
   });
 
+  it("a send the adapter refuses synchronously keeps the text and the chips", async () => {
+    const adapter = makeAdapter({ send: vi.fn(() => false) });
+    const { ref, ta } = mount(true, adapter);
+    await act(async () => { ref.current!.addFiles([new File(["a"], "a.txt")]); });
+    await waitFor(() => expect(screen.getAllByTestId("remove-attachment")).toHaveLength(1));
+    fireEvent.change(ta, { target: { value: "keep me" } });
+    fireEvent.keyDown(ta, { key: "Enter" });
+    expect(adapter.send).toHaveBeenCalledTimes(1);
+    expect(ta.value).toBe("keep me");
+    expect(screen.getAllByTestId("remove-attachment")).toHaveLength(1);
+  });
+
+  it("restoreAttachments puts uploaded chips back after a server refusal", async () => {
+    const { ref } = mount();
+    expect(screen.queryAllByTestId("remove-attachment")).toHaveLength(0);
+    await act(async () => { ref.current!.restoreAttachments([{ id: "x1", name: "x.txt", size: 1, mime: "text/plain" }]); });
+    expect(screen.getAllByTestId("remove-attachment")).toHaveLength(1);
+  });
+
+  it("refuses the 11th file before any upload (server allows 10 per message)", async () => {
+    const adapter = makeAdapter();
+    const { ref } = mount(true, adapter);
+    const ten = Array.from({ length: 10 }, (_, i) => new File(["a"], `f${i}.txt`));
+    await act(async () => { ref.current!.addFiles(ten); });
+    await waitFor(() => expect(screen.getAllByTestId("remove-attachment")).toHaveLength(10));
+    await act(async () => { ref.current!.addFiles([new File(["a"], "eleven.txt")]); });
+    expect(adapter.upload).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByTestId("remove-attachment")).toHaveLength(10);
+    expect(screen.getByTestId("workflow-composer").textContent).toMatch(/at most 10 attachments/);
+  });
+
   it("send button is disabled until there is text", () => {
     const { ta } = mount();
     const send = screen.getByTestId("workflow-composer-send") as HTMLButtonElement;

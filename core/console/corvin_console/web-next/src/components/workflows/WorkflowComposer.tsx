@@ -39,6 +39,8 @@ export interface WorkflowComposerHandle {
   addFiles: (files: File[]) => void;
   /** Put text back into the field — a refused send must not cost the operator their words. */
   setDraft: (text: string) => void;
+  /** Put already-uploaded attachments back as chips (a refused send; they are still stored). */
+  restoreAttachments: (atts: ComposerAttachmentRef[]) => void;
   focus: () => void;
 }
 
@@ -55,27 +57,32 @@ export const WorkflowComposer = React.memo(React.forwardRef<WorkflowComposerHand
 
     const adapterRef = React.useRef(adapter);
     adapterRef.current = adapter;
+    // What the composer already holds, read by uploadFn (defined before the hook that owns the list).
+    const pendingCountRef = React.useRef(0);
     const uploadFn = React.useCallback(async (files: File[]) => {
       const a = adapterRef.current;
-      const refusal = checkUploadLimits(files, a.limits);
+      const refusal = checkUploadLimits(files, a.limits, pendingCountRef.current);
       if (refusal) throw new Error(refusal);
       return a.upload(files);
     }, []);
     const {
       pendingAttachments, uploading, uploadError, addFiles,
-      removeAttachment, clearAttachments, fileInputRef, onFileInputChange,
+      removeAttachment, clearAttachments, restoreAttachments, fileInputRef, onFileInputChange,
     } = useAttachmentUpload<ComposerAttachmentRef>({ uploadFn, disabled: !connected });
+    pendingCountRef.current = pendingAttachments.length;
 
     React.useImperativeHandle(ref, () => ({
       addFiles: (files) => { setTruncated(null); void addFiles(files); },
       setDraft: (text) => fieldRef.current?.setValue(text),
+      restoreAttachments,
       focus: () => document.getElementById(`wf-composer-${adapterRef.current.contextKey}`)?.focus(),
-    }), [addFiles]);
+    }), [addFiles, restoreAttachments]);
 
     const submit = React.useCallback((raw: string) => {
       const text = raw.trim();
       if ((!text && pendingAttachments.length === 0) || !connected || uploading) return;
-      adapterRef.current.send(text, pendingAttachments);
+      // A synchronous refusal (socket closing) keeps the draft and the chips.
+      if (adapterRef.current.send(text, pendingAttachments) === false) return;
       fieldRef.current?.setValue("");
       clearAttachments();
     }, [connected, uploading, pendingAttachments, clearAttachments]);

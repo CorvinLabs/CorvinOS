@@ -146,9 +146,10 @@ class TestL34TransientLoadNotCached(unittest.TestCase):
 
         self._dc.load_guard_for_tenant = _flaky
 
-        # First call: loader raises → must return None AND must not cache it.
+        # First call: loader raises → a load-failure marker (check_l34 refuses on it,
+        # 2026-10-21; before: None = allow) AND it must not be cached.
         g1 = spawn_gates._load_l34_guard("_default", self._home)
-        self.assertIsNone(g1)
+        self.assertIsInstance(g1, spawn_gates.L34_GUARD_LOAD_FAILED)
         cache_key = f"_default:{self._home}"
         self.assertNotIn(
             cache_key, spawn_gates._l34_cache,
@@ -158,7 +159,28 @@ class TestL34TransientLoadNotCached(unittest.TestCase):
         # Second call: loader recovers → re-evaluated, real guard returned.
         g2 = spawn_gates._load_l34_guard("_default", self._home)
         self.assertIsNotNone(g2, "loader must be re-evaluated after a transient error")
+        self.assertNotIsInstance(g2, spawn_gates.L34_GUARD_LOAD_FAILED)
         self.assertEqual(calls["n"], 2, "second call must actually re-invoke the loader")
+
+    def test_policy_present_but_unloadable_refuses_the_spawn(self):
+        # ACS-07 (review 2026-10-21): with a policy file on disk and an unloadable guard
+        # (broken venv, renamed module, unreadable yaml) check_l34 used to ALLOW.
+        def _broken(tenant_id, corvin_home=None):
+            raise ImportError("No module named 'yaml'")
+
+        self._dc.load_guard_for_tenant = _broken
+        verdict = spawn_gates.check_l34("claude_code", "_default", classification="secret",
+                                        corvin_home=self._home)
+        self.assertIsNotNone(verdict, "a present-but-unloadable policy must refuse, not allow")
+        self.assertIn("could not be loaded", verdict)
+        self.assertIn("ImportError", verdict)
+        self.assertNotIn(f"_default:{self._home}", spawn_gates._l34_cache)
+
+    def test_no_policy_file_stays_fail_open(self):
+        empty_home = Path(tempfile.mkdtemp(prefix="l34nopolicy_"))
+        self.assertIsNone(spawn_gates._load_l34_guard("_default", empty_home))
+        self.assertIsNone(spawn_gates.check_l34("claude_code", "_default", classification="secret",
+                                                corvin_home=empty_home))
 
 
 # ── H3 — "acs" delegation alias host-map drift ───────────────────────────────

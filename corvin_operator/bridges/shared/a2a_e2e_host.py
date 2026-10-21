@@ -129,6 +129,13 @@ def main() -> int:
     from corvin_console.routes import a2a_pair as ap  # noqa: PLC0415
     from fastapi import HTTPException  # noqa: PLC0415
 
+    # Test host only (zero-config / hub E2E): a2a.network is member-only since 28ad07b54 and
+    # these suites exercise the PROTOCOL of unlicensed-looking fresh instances, not the licence
+    # verdict (which has its own tests). The network gate is the one thing bypassed here;
+    # quotas, HMAC, pairing and every other gate run as shipped.
+    import a2a_license_gate as _gate  # noqa: PLC0415
+    _gate.require_a2a_network = lambda **_k: None
+
     if os.environ.get("E2E_SKIP_L44") == "1":
         # Harness-only: the lifecycle E2E drives a scripted agent, not the live L44
         # classifier (which spawns the real `claude` CLI per task).

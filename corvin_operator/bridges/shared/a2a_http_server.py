@@ -722,6 +722,12 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
         store — replay within the ±30s freshness window is accepted by
         design (a replayed ping only reconfirms liveness).
         """
+        # A free install does not answer the A2A network at all (a2a.network is member-only):
+        # until 2026-10-21 /receive was gated but ping and friendship-ack still answered, so a
+        # free install was distinguishable from one that is not listening.
+        if self.receiver is not None and self.receiver._network_denied():  # noqa: SLF001
+            self._respond(403, b'{"reason":"license_required"}\n')
+            return
         import hashlib
         import hmac as _hmac
         import time as _time_module
@@ -761,6 +767,12 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
         a2a_friendship.process_friendship_ack_request for the full
         verification + write-back + reachability-ping logic (shared core,
         both backends — same pattern as _handle_ping)."""
+        # A free install does not answer the A2A network at all (a2a.network is member-only):
+        # until 2026-10-21 /receive was gated but ping and friendship-ack still answered, so a
+        # free install was distinguishable from one that is not listening.
+        if self.receiver is not None and self.receiver._network_denied():  # noqa: SLF001
+            self._respond(403, b'{"reason":"license_required"}\n')
+            return
         length_hdr = self.headers.get("Content-Length", "0")
         try:
             length = int(length_hdr)

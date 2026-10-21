@@ -356,7 +356,10 @@ is the one bridge, and it adds no injection path of its own:
 * **Where it runs:** after the install in both import paths (`item_import._import_single_skill` — the SKILL.md is read
   from the uploaded ZIP because the packager layout drops it; `import_module._intake_skill` — read from the installed
   package) and as a bounded catch-up in `skills.boot.boot_skills` (≤ 3 verified, not-yet-present skills per boot; a
-  quota refusal is retried at the next start).
+  quota refusal is retried at the next start). A skill already present at the installed version is `unchanged`;
+  one present at an older version is re-synced **without** spending an authoring credit, and the synced version is
+  recorded in `meta.source_version` so the next boot reads `unchanged` (until 2026-10-21 the old version stayed in
+  the meta and every boot re-wrote the body and spent a credit).
 * **What it creates:** a SkillForge skill `installed.<id>` (characters SkillForge rejects become `_`) in scope `user`,
   type `domain`, `meta.origin = forge-bundle-import`. Because it goes through `SkillRegistry.create`, the **linter runs
   fail-closed** (prompt-injection patterns), the namespace gate applies and the free-tier authoring credit is spent

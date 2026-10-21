@@ -390,5 +390,10 @@ class GoogleA2AE2ETest(unittest.TestCase):
         self.assertIn("A2A.", calls_str)
 
 
+if __name__ == "__main__":  # script mode (run-all-tests.sh): the pytest tier fixture does not apply
+    import a2a_test_tier
+
+    a2a_test_tier.pin_member_tier()
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

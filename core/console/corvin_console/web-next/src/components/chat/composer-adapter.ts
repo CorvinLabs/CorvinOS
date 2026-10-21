@@ -23,7 +23,7 @@ export interface ComposerLimits {
   maxBytes: number;
 }
 
-/** Mirrors attachments_common.ATTACH_MAX_FILES / ATTACH_MAX_BYTES on the server. */
+/** Mirrors attachments_common.ATTACH_MAX_FILES / ATTACH_MAX_BYTES and workflow_composer.MAX_ATTACHMENTS_PER_MESSAGE on the server. */
 export const DEFAULT_COMPOSER_LIMITS: ComposerLimits = {
   maxFiles: 10,
   maxBytes: 50 * 1024 * 1024,
@@ -37,23 +37,35 @@ export interface ComposerContextAdapter<A extends ComposerAttachmentRef = Compos
   /** Commands for this context (merged with, or replacing, the chat table). */
   extraCommands: readonly SlashCommand[];
   sessionCommands: boolean;
-  /** Send the draft with its attachments. */
-  send: (text: string, attachments: A[]) => void;
+  /**
+   * Send the draft with its attachments. `false` means the message could not be
+   * handed over at all (socket not open): the composer then keeps the draft and
+   * the chips instead of clearing them.
+   */
+  send: (text: string, attachments: A[]) => void | boolean;
   /** Display/hook key only — never an authority. */
   contextKey: string;
   limits: ComposerLimits;
 }
 
 /**
- * Client-side pre-check so an oversized file is refused before any bytes move
- * (batching into maxFiles-sized requests is the upload client's job). Returns an error message, or null when the batch is acceptable. The server
- * enforces the same limits independently.
+ * Client-side pre-check so an oversized file, or one file too many, is refused
+ * before any bytes move (batching into maxFiles-sized requests is the upload
+ * client's job). `pendingCount` is what the composer already holds: a message
+ * may carry at most `maxFiles` attachments in total, and a refusal here is the
+ * only chance to keep the draft — the server's 413 arrives after the field was
+ * cleared. Returns an error message, or null when the batch is acceptable. The
+ * server enforces the same limits independently.
  */
 export function checkUploadLimits(
   files: readonly File[],
   limits: ComposerLimits,
+  pendingCount = 0,
 ): string | null {
   if (files.length === 0) return null;
+  if (pendingCount + files.length > limits.maxFiles) {
+    return `A message can carry at most ${limits.maxFiles} attachments (${pendingCount} already added).`;
+  }
   const tooBig = files.find((f) => f.size > limits.maxBytes);
   if (tooBig) {
     const mib = Math.floor(limits.maxBytes / (1024 * 1024));

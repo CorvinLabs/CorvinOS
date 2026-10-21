@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import re
 import logging
 import os
 import time
@@ -173,8 +174,14 @@ def outbound_tools(tasks_dir: Path, task_id: str) -> tuple[str, ...]:
         if isinstance(ev, dict) and ev.get("event") == "tool_use":
             name = str(ev.get("tool_name") or "")
             low = name.rsplit("__", 1)[-1].lower()
-            if any(m in low for m in OUTBOUND_MARKERS):
+            # Word-boundary match: "get_post" and "list_posts" are reads, "send_message" is not.
+            words = set(re.split(r"[^a-z0-9]+", low))
+            if words & set(OUTBOUND_MARKERS):
                 found.add(name[:80])
+            elif ev.get("effect_class") == "outbound_possible":
+                # A Bash command whose first word is a sender (git push, curl, gh, mail, ssh …) —
+                # recorded as a class at tool_use time, never the command itself.
+                found.add(f"{name} (outbound command)"[:80])
     return tuple(sorted(found))
 
 

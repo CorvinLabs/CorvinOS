@@ -196,10 +196,21 @@ def provision(tenant_id: str, *, entries: Optional[List[Dict[str, Any]]] = None)
                     if stored is not None and stored.origin is PluginOrigin.COMMUNITY \
                             and record.origin is not PluginOrigin.COMMUNITY \
                             and _vtuple(str(record.version)) > _vtuple(str(stored.version)):
-                        # reclassified listing (community -> first-party): same plugin, narrower
-                        # declarations, so upgrade() needs no escalation approval
-                        life.upgrade(record.plugin_id, record, updated_by="default_plugins")
+                        # Reclassified listing (community -> first-party). The first-party listing
+                        # may declare MORE than the community one did (CorvinTV 1.7.0 widened
+                        # pii_risk and egress over Video Producer 1.6.0): a standard plugin's
+                        # declarations are the maintainer's grant, so the escalation is approved
+                        # here and named in the result and the log. Without approval the upgrade
+                        # was refused on every boot and the plugin stayed community/disabled
+                        # (review 2026-10-21).
+                        _rec, _report = life.upgrade(record.plugin_id, record, updated_by="default_plugins",
+                                                     approve_escalations=True)
                         res["upgraded_from"] = str(stored.version)
+                        _esc = list((_report or {}).get("escalations") or [])
+                        if _esc:
+                            res["approved_escalations"] = _esc
+                            log.info("default plugins: %s %s -> %s approved escalations: %s", iid,
+                                     stored.version, record.version, "; ".join(map(str, _esc)))
                         _audit(tenant_id, "marketplace.upgrade", iid)
                 now = TenantRegistry.load(tenant_id=tenant_id).records.get(record.plugin_id) or record
                 res.update(status="installed", registry_id=record.plugin_id, version=str(now.version),

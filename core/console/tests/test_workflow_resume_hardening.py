@@ -16,6 +16,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -187,3 +188,41 @@ class ResumeHardeningTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+@contextmanager
+def _live_sandbox(tmp_path: Path):
+    """Like ``_sandbox`` but the app runs under a real ASGI server (uvicorn in a thread) and the
+    client is an ``httpx.Client`` against it. Starlette's ``TestClient`` (1.6.0, pinned) runs the
+    app to completion and buffers the body before ``stream()`` returns, so an SSE stream that
+    stays open across a pause can never be read through it — the nine console DAG E2E tests
+    (ADR-2273) timed out on every host (review 2026-10-21). Over a real socket the stream is
+    read while the run is paused, as the browser reads it."""
+    import socket
+    import threading
+
+    import httpx
+    import uvicorn
+
+    with _sandbox(tmp_path) as (test_client, home, tenant_id):
+        app = test_client.app
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
+        server = uvicorn.Server(config)
+        thread = threading.Thread(target=server.run, name="wf-e2e-uvicorn", daemon=True)
+        thread.start()
+        deadline = time.time() + 15
+        while not server.started and time.time() < deadline:
+            time.sleep(0.05)
+        assert server.started, "uvicorn did not start"
+        client = httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=30.0)
+        client.cookies.set("corvin_console_sid", test_client.cookies.get("corvin_console_sid"))
+        client.headers.update({"X-CSRF-Token": test_client.headers["X-CSRF-Token"]})
+        try:
+            yield client, home, tenant_id
+        finally:
+            client.close()
+            server.should_exit = True
+            thread.join(timeout=10)

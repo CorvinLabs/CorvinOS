@@ -91,8 +91,11 @@ at any time; an uninstall sticks (the ledger remembers it was offered).
 
 **Reclassification (`replaces:` in `default_plugins.yaml`).** The index id changed
 (`plugin:contributor-…` → `plugin:buildin-…`). A tenant that still carries the pre-1.2 community
-record is **upgraded** to the vetted listing at the next boot (`PluginLifecycle.upgrade` — the
-declarations only narrow, so no escalation approval) and enabled; a tenant whose operator
+record is **upgraded** to the vetted listing at the next boot (`PluginLifecycle.upgrade` with
+`approve_escalations=True`: a first-party listing may declare MORE than its community predecessor —
+CorvinTV 1.7.0 widened `pii_risk` and egress over Video Producer 1.6.0, and without the approval the
+upgrade was refused on every boot and the plugin stayed community/disabled; the approved escalations
+are named in the boot result and the log) and enabled; a tenant whose operator
 uninstalled the old listing keeps it uninstalled (`status: skipped`).
 
 ## Observe it

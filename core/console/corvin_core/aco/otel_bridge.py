@@ -27,7 +27,10 @@ import json
 import logging
 import os
 import platform as _platform
-import resource
+try:
+    import resource  # POSIX only: absent on Windows, where the RSS attribute is simply left out
+except ImportError:  # pragma: no cover - Windows
+    resource = None  # type: ignore[assignment]
 import sys
 import threading
 import time
@@ -40,6 +43,7 @@ _STATE_FILENAME = "otel_state.json"
 _lock = threading.Lock()
 _exporter: Any = None
 _exporter_endpoint: Optional[str] = None
+_exporter_headers: Optional[Dict[str, str]] = None
 _process_start = time.time()
 
 METRIC_NAMES = ("corvin.instance.online", "corvin.instance.uptime", "corvin.instance.plugin_count", "corvin.instance.memory_usage")
@@ -135,18 +139,23 @@ def _plugin_count() -> int:
 
 def _memory_bytes() -> int:
     try:
-        rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss if resource is not None else 0
         return int(rss_kb) * (1 if sys.platform == "darwin" else 1024)
     except Exception:  # noqa: BLE001
         return 0
 
 
 def _get_exporter(home: Path):
-    """One exporter per process, rebuilt when the endpoint changes."""
-    global _exporter, _exporter_endpoint  # noqa: PLW0603
+    """One exporter per process, rebuilt when the endpoint OR the headers change.
+
+    The headers carry the consented geo tier (``X-HTrace-Geo-Tier``). Rebuilding only on an
+    endpoint change kept the tier captured at boot for the life of the process: an operator's
+    opt-out (tier 1, ``CORVIN_GEO_OPT_OUT``) was ignored until a restart (review 2026-10-21)."""
+    global _exporter, _exporter_endpoint, _exporter_headers  # noqa: PLW0603
     endpoint = resolve_endpoint(home)
+    headers = _auth_headers(home)
     with _lock:
-        if _exporter is not None and _exporter_endpoint == endpoint:
+        if _exporter is not None and _exporter_endpoint == endpoint and _exporter_headers == headers:
             return _exporter
         from core.observability.otel_exporter.exporter import OTELExporter  # noqa: PLC0415
         from .htrace_consent import load_or_create_instance_id  # noqa: PLC0415
@@ -156,10 +165,11 @@ def _get_exporter(home: Path):
             instance_id=load_or_create_instance_id(home),
             json_fallback_dir=fallback_dir(home),
             otel_collector_url=endpoint,
-            headers=_auth_headers(home),
+            headers=headers,
             audit_logger=logging.getLogger("corvin.telemetry.otel"),
         )
         _exporter_endpoint = endpoint
+        _exporter_headers = headers
         return _exporter
 
 
@@ -204,10 +214,11 @@ def export_heartbeat_metrics(home: Path, *, is_alive: bool = True) -> Dict[str, 
 
 
 def reset_for_tests() -> None:
-    global _exporter, _exporter_endpoint  # noqa: PLW0603
+    global _exporter, _exporter_endpoint, _exporter_headers  # noqa: PLW0603
     with _lock:
         _exporter = None
         _exporter_endpoint = None
+        _exporter_headers = None
 
 
 __all__ = ["export_heartbeat_metrics", "resolve_endpoint", "read_state", "state_path", "fallback_dir", "METRIC_NAMES", "ATTRIBUTE_KEYS", "_platform"]

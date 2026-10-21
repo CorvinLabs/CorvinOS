@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -44,13 +45,26 @@ def _resolve_workflow_path(name: str) -> Path:
 
     Order:
       1. literal path that exists on disk
-      2. <bundled>/<name>.awp.yaml (file stem match)
-      3. <bundled>/<name>            (full filename match)
-      4. any bundled file whose `workflow.name:` equals `name`
+      2. <tenant_home>/workflows/<name>.awp.yaml — a workflow saved in the console
+         (the scheduler runs `corvin_workflows run <wid>`; until 2026-10-21 only the
+         bundled examples were searched, so a scheduled console workflow never ran)
+      3. <bundled>/<name>.awp.yaml (file stem match)
+      4. <bundled>/<name>            (full filename match)
+      5. any bundled file whose `workflow.name:` equals `name`
     """
     p = Path(name)
     if p.exists():
         return p
+    if name and "/" not in name and "\\" not in name and ".." not in name:
+        try:
+            from .checkpoint import _paths_module  # noqa: PLC0415
+
+            tenant_dir = _paths_module().tenant_home(os.environ.get("CORVIN_TENANT_ID") or None) / "workflows"
+            candidate = tenant_dir / f"{name}.awp.yaml"
+            if candidate.is_file():
+                return candidate
+        except Exception:  # noqa: BLE001 — no tenant layout here: fall through to the bundle
+            pass
     for variant in (f"{name}.awp.yaml", name):
         candidate = _BUNDLED_DIR / variant
         if candidate.exists():
@@ -578,7 +592,7 @@ def _format_run_result(doc, result, inputs: dict, *, format_: str, engine) -> tu
     lines: list[str] = [f"{icon} **{doc.name}** → `{result.state}`"]
     if synthetic:
         lines.append(
-            "[STUB] Synthetische Demo-Daten (--engine stub). Keine echten Ergebnisse."
+            "[STUB] Synthetic demo data (--engine stub). These are not real results."
         )
     if result.state == "paused":
         lines.append(f"Run-ID: `{result.run_id}`  (resume with: `resume {result.run_id} \"<reply>\"`)")

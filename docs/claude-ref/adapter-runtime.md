@@ -58,6 +58,16 @@ language. Two long-standing behaviours that broke this were removed:
   `strip_for_tts.py`, summarizer crash) and the appended LERN-ZUGABE / metaphor. The pipeline itself
   is `_build_voice_summary_pipeline`; nothing returns past the gate. `sanitize_spoken` drops meta/instruction lines,
   markup and unrendered placeholders and returns `""` when nothing speakable remains.
+  - **Identifiers are described, never read out (2026-10-20/21).** `voice_output_guard.describe_identifiers`
+    (inside `sanitize_spoken`) replaces paths, file names, commit hashes, ticket / ADR / plan ids, versions, URLs
+    and snake_case names by what they are ("eine Python-Datei", "an architecture decision"), in the resolved
+    output language — the summarizer passes `output_language`, the adapter's `_guard_spoken` the resolved voice
+    language; any language without a description table (fr, es, …) keeps the tokens, never a German description.
+    The summarizer prompt carries the same rule (`IDENTIFIER_BLOCK`); the guard is the deterministic net under it.
+    Section numbers ("Abschnitt 3.2.1"), program versions ("Python 3.11.4"), dates, thousands groups and slash
+    words ("und/oder", "Stadt/Land/Fluss") stay spoken; a run of files or commits after a noun that already names
+    them ("in den Dateien a.py, b.py und c.py") is dropped as a whole. Tests: `test_voice_output_guard.py`
+    (85 cases incl. a 50 KB backtracking bound) and `test_adapter_voice_guard.py`.
   - **Empty guard result speaks the neutral announcement, never the raw input.** `""` means "do not
     speak this", so the caller speaks `neutral_announcement(lang)`: one fixed text per language (de:
     "Die Antwort steht im Chat.", en: "The answer is in the chat.") that quotes no input. It is defined
@@ -377,10 +387,16 @@ applied); and a re-run killed with a child open was announced as "recovered". Th
   every stacked restart prefix before the attempt key is computed, so `MAX_ATTEMPTS` holds.
 - **Recovery outcomes are audited.** `chat.turn.recovery_started`, `…_attempt_failed`,
   `…_succeeded`, `…_exhausted`.
-- **The adapter leaves nothing behind.** After the drain, `unit_sweep.sweep_unit_leftovers` SIGTERMs
-  every process left in the unit's own cgroup (cgroup v2), then SIGKILLs the survivors after a grace
+- **The adapter leaves nothing behind — but only as a service.** After the drain, `unit_sweep.sweep_unit_leftovers`
+  SIGTERMs every process left in the unit's own cgroup (cgroup v2), then SIGKILLs the survivors after a grace
   period. `KillMode` stays `mixed` on purpose: `control-group` would SIGTERM live engine runs at the
-  start of the drain.
+  start of the drain. The sweep runs ONLY when the adapter is the main process of its own systemd service
+  (`unit_sweep.running_as_service_main`: parent is the systemd manager AND the cgroup leaf is a `*.service`).
+  Started from a shell, a test runner or a CI job it shares the caller's cgroup; until 2026-10-21 the sweep
+  then terminated pytest, the operator's shell and the Claude Code session running the test
+  (`test_adapter_skill_inject.py` → `proc.terminate()` → drain → sweep, exit 143, three times in one night).
+  Outside a service main process the sweep is refused and logged (`unit sweep skipped`), never attempted;
+  `tests/test_unit_sweep.py::test_sweep_outside_a_service_main_process_signals_nothing` proves it on itself.
 - **Measurement.** `scripts/bg_task_outcome_report.py --home <CORVIN_HOME> --since <date>` reads the task
   records and the chain (read-only) and prints the acceptance numbers: exit-143 split, stacked
   prefixes, failures announced as recovered. Baseline 2026-10-15 onwards: 10 stacked prefixes,
@@ -408,7 +424,9 @@ of the turn — **process EOF with no open child is** (`bg_scope.ScopeTracker`, 
 - **Caps end a runaway scope honestly.** Past `CORVIN_BG_CHILD_MAX` (default **24 h** for an
   interactive turn and for a detached `/task` worker (was 30 min / 2 h until 2026-10-20); the oldest open child, and twice that for the
   whole scope — 48 h at the 24 h default, on the bridge; the console checks only the oldest child's age —
-  so a chain of sequential children cannot outlast that on the bridge), or more than
+  so a chain of sequential children cannot outlast that on the bridge; note that the supervisor's
+  per-attempt deadline counts only time with NO child open, so one attempt can occupy more than 24 h of
+  wall clock — the 48 h supervisor budget is `now - created_at` and is the figure that bounds a task), or more than
   `CORVIN_BG_WAKEUP_MAX` (default 25, one billed model turn per wake-up) wake-ups while a child is open,
   the process group is stopped and the final message says what was cut (kinds and count, never a
   description). The cap is checked when the stream is quiet **and after every event**. A cap that is 0,
@@ -1397,7 +1415,8 @@ chat-output modules (AST, docstrings excluded) and fails on a status glyph typed
 vocabulary cannot fork; its positive control proves the scan reaches every listed module. Codex and OpenCode take one
 `system` string and get the rule from `adapter._chat_status_rule_part()`; `test_adapter_status_markers.py` drives both
 real functions up to the engine boundary. `test_status_marker_process_one_e2e.py` boots the real adapter daemon: the
-daemon must run in a cgroup of its own, because on shutdown `unit_sweep.sweep_unit_leftovers` terminates everything
-else in its cgroup (the test uses a transient `systemd-run --user --scope`, or skips). Never start the adapter inside
-the runner's cgroup. Handlers that add `bridges/shared` to `sys.path` use `append`, never `insert(0)`:
+daemon used to need a cgroup of its own, because on shutdown `unit_sweep.sweep_unit_leftovers` terminated everything
+else in its cgroup (the test uses a transient `systemd-run --user --scope`, or skips). Since 2026-10-21 the sweep
+refuses to run outside a service main process, so an adapter started by a test can no longer kill its runner; the
+scope is still the cleaner way to boot the daemon. Handlers that add `bridges/shared` to `sys.path` use `append`, never `insert(0)`:
 `shared/profile.py` would shadow the stdlib `profile`.

@@ -490,6 +490,39 @@ def _status_marker_block() -> str:
     return "\n\n" + _STATUS_MARKERS_MOD.status_marker_rule()
 
 
+# First words of a shell command that can reach the outside world (or push state out of the
+# workspace): a turn that ran one of these is handed to the user after a restart instead of
+# being re-run (turn_recovery.outbound_tools). Names only — the command is never recorded.
+_OUTBOUND_COMMAND_WORDS = frozenset((
+    "curl", "wget", "gh", "mail", "mailx", "sendmail", "ssh", "scp", "rsync", "sftp", "ftp",
+    "aws", "gcloud", "az", "kubectl", "helm", "docker", "twine", "npm", "yarn", "pnpm",
+    "cargo", "pip", "telegram-send", "slack", "discord",
+))
+
+
+def _bash_effect_class(tool_input: Any) -> str | None:
+    """``"outbound_possible"`` when a Bash command's leading words name a sender, else ``None``.
+    ``git push``/``git send-email`` count; a plain ``git status`` does not."""
+    try:
+        cmd = str((tool_input or {}).get("command") or "").strip()
+    except Exception:  # noqa: BLE001
+        return None
+    if not cmd:
+        return None
+    for segment in re.split(r"\s*(?:&&|\|\||;|\|)\s*", cmd):
+        words = segment.strip().split()
+        while words and (words[0] in ("sudo", "env", "nohup", "time") or "=" in words[0]):
+            words = words[1:]
+        if not words:
+            continue
+        head = words[0].rsplit("/", 1)[-1].lower()
+        if head in _OUTBOUND_COMMAND_WORDS:
+            return "outbound_possible"
+        if head == "git" and len(words) > 1 and words[1].lower() in ("push", "send-email", "request-pull"):
+            return "outbound_possible"
+    return None
+
+
 def _stop_proc(proc: Any, grace_s: float = 5.0, *, reason: str = "unspecified",  # ADR-2236
                tenant_id: str = "_default", sid_fingerprint: str | None = None) -> None:
     """SIGTERM first, SIGKILL after *grace_s* if it is still there.
@@ -501,7 +534,7 @@ def _stop_proc(proc: Any, grace_s: float = 5.0, *, reason: str = "unspecified", 
     Every signal is recorded first (``process_signals``) with the caller's *reason*, so an
     exit 143 can be matched to who sent it.
     """
-    from corvin_core.process_signals import send_signal  # noqa: PLC0415 - leaf module, no cycle
+    from corvin_core.process_signals import hard_kill, send_signal  # noqa: PLC0415 - leaf module, no cycle
     import signal as _signal  # noqa: PLC0415
 
     def _send(sig: int, why: str) -> None:
@@ -512,7 +545,10 @@ def _stop_proc(proc: Any, grace_s: float = 5.0, *, reason: str = "unspecified", 
 
     def _kill_if_alive() -> None:
         if proc.returncode is None:
-            _send(_signal.SIGKILL, f"{reason}:grace_expired")
+            # hard_kill, not send_signal(SIGKILL): Windows has no SIGKILL (Popen.kill there).
+            with contextlib.suppress(ProcessLookupError, OSError):
+                hard_kill(proc, reason=f"{reason}:grace_expired", tenant_id=tenant_id,
+                          sid_fingerprint=sid_fingerprint)
 
     try:
         asyncio.get_running_loop().call_later(grace_s, _kill_if_alive)
@@ -8090,7 +8126,16 @@ async def _stream_turn_impl(
     # Inject CORVIN_SESSION_DIR so the delegation MCP server can locate the
     # session workdir and write WDAT run directories for the Audit graph.
     # Per-subprocess env copy keeps concurrent sessions isolated.
-    _spawn_env = {**os.environ, "CORVIN_SESSION_DIR": str(sess.workdir)}
+    # The worker and every MCP server it starts act for THIS session's tenant: the
+    # orchestration MCP server reads CORVIN_TENANT_ID (d7f9cbb77 took it from the env instead
+    # of a caller-supplied id); without it a tenant-B chat ran and resumed tenant _default's
+    # workflows on a multi-tenant host (review 2026-10-21).
+    _spawn_env = {**os.environ, "CORVIN_SESSION_DIR": str(sess.workdir), "CORVIN_TENANT_ID": str(sess.tenant_id)}
+    # The CorvinTV route adopts the console's stored OpenAI TTS key into this process's
+    # environment for its own jobs; an OS worker (and every MCP child of it) has no business with
+    # it (review 2026-10-21). An operator's own exported key is not touched here.
+    if os.environ.get("CORVIN_TTS_OPENAI_KEY_ADOPTED") == "1":
+        _spawn_env.pop("CORVIN_TTS_OPENAI_KEY", None)
     # ADR-2241 amendment: a PreToolUse hook on Bash snapshots the files a command
     # names BEFORE it runs, so its card can show what it changed. Per-turn dir,
     # removed in the turn's `finally`; a failure here only means "no Bash diff".
@@ -8343,6 +8388,10 @@ async def _stream_turn_impl(
                             safe_input = _sanitize_tool_input(tname, tinput)
 
                             tool_id = str(block.get("id") or "")
+                            # turn_recovery idempotency (ADR-2261): a Bash command whose first word
+                            # is a sender (git push, curl, gh, mail, ssh …) makes the turn
+                            # non-rerunnable. Only a closed class is recorded, never the command.
+                            _effect_class = _bash_effect_class(tinput) if tname == "Bash" else None
                             event_payload = {"kind": "tool", "name": tname, "input": safe_input}
                             if tool_id and tname in _DIFF_TOOLS:
                                 # ADR-2241: the card's diff arrives with the tool's
@@ -8361,6 +8410,7 @@ async def _stream_turn_impl(
                             tm.record_event(task_id, {
                                 "event": "tool_use",
                                 "tool_name": tname,
+                                **({"effect_class": _effect_class} if _effect_class else {}),
                             })
                             _os_tools_called += 1
                             _os_tool_seq += 1
@@ -8533,11 +8583,9 @@ async def _stream_turn_impl(
                     _stop_proc(proc, reason=_why, tenant_id=sess.tenant_id,  # SIGKILL would orphan the children
                                sid_fingerprint=sid_fingerprint)              # ADR-2236
                 else:
-                    import signal as _signal  # noqa: PLC0415
-                    from corvin_core.process_signals import send_signal  # noqa: PLC0415
-                    send_signal(proc.pid, _signal.SIGKILL, reason=_why,
-                                tenant_id=sess.tenant_id, sid_fingerprint=sid_fingerprint)
-            except ProcessLookupError:
+                    from corvin_core.process_signals import hard_kill  # noqa: PLC0415
+                    hard_kill(proc, reason=_why, tenant_id=sess.tenant_id, sid_fingerprint=sid_fingerprint)
+            except (ProcessLookupError, OSError):
                 pass
 
     rc = await proc.wait()
@@ -8766,10 +8814,15 @@ async def _stream_turn_impl(
             # "The turn failed unexpectedly".
             _log.warning("task.completed not recorded for %s: %s", task_id, _te)
     else:
-        tm.record_event(task_id, {
-            "event": "task.failed",
-            "exit_code": rc,
-        })
+        try:
+            tm.record_event(task_id, {
+                "event": "task.failed",
+                "exit_code": rc,
+            })
+        except ValueError as _te:  # InvalidTransitionError: cancelled/interrupted -> failed is refused
+            # The task was already ended by the operator's cancel or a reaper; the streamed text
+            # must still be persisted below instead of ending in "The turn failed unexpectedly".
+            _log.warning("task.failed not recorded for %s: %s", task_id, _te)
 
     # Emit artifact events for files Claude created during this turn.
     if sess.workdir.exists():

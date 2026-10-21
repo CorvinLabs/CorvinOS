@@ -43,6 +43,7 @@ keep the bridges' inbox-based interface and never expose any port.
 from __future__ import annotations
 
 import os
+import logging
 import sys
 from pathlib import Path
 

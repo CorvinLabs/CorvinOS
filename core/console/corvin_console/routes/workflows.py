@@ -531,12 +531,24 @@ def _topo_sort(graph: list[dict[str, Any]]) -> list[str]:
             order.append(nid)
     return order
 
+class NodeExecutionError(RuntimeError):
+    """A legacy-executor node did not produce an answer: the engine failed, timed out, was
+    missing, or a pre-spawn gate refused the prompt. Raised (never returned as text) so the
+    node ends ``node_failed`` and the run ``failed`` — until 2026-10-21 these came back as
+    ``"[error rc=…]"`` / refusal strings and the run reported ``ok: true`` with downstream
+    nodes consuming the error text."""
+
+
 def _run_node_claude(prompt: str, mcp_config: dict | None = None) -> str:
     """Execute a single workflow node via claude -p and return the text output.
 
     When mcp_config is provided (non-empty mcpServers), writes it to a
     temp file and passes --mcp-config so the session MCP tools are available.
     Even an empty mcpServers dict triggers MCP loading in the subprocess.
+
+    Every caller gates the prompt it passes here (the one that is really spawned) through
+    ``_spawn_gates.check_console_spawn_or_refusal`` first; a failure is raised as
+    ``NodeExecutionError``, never returned as text.
     """
     cmd = ["claude", "-p", "--output-format", "text"]
     tmp_path: str | None = None
@@ -566,13 +578,15 @@ def _run_node_claude(prompt: str, mcp_config: dict | None = None) -> str:
         )
         if result.returncode == 0:
             return result.stdout.strip()
-        return f"[error rc={result.returncode}] {result.stderr.strip()[:400]}"
+        raise NodeExecutionError(f"Worker engine ended with exit code {result.returncode}")
     except FileNotFoundError:
-        return "[claude CLI not found]"
+        raise NodeExecutionError("Worker engine unavailable: the claude CLI was not found") from None
     except subprocess.TimeoutExpired:
-        return "[timeout after 180s]"
+        raise NodeExecutionError("Worker engine timed out after 180 s") from None
+    except NodeExecutionError:
+        raise
     except Exception as exc:
-        return f"[exception: {exc}]"
+        raise NodeExecutionError(f"Worker engine failed ({type(exc).__name__})") from exc
     finally:
         if tmp_path:
             try:
@@ -605,13 +619,14 @@ def _build_mcp_with_forge(
         }
     return cfg
 
-def _read_skill_content(skill_name: str) -> str | None:
-    """Read a skill's SKILL.md body from the slot mirror or skill-forge directory."""
+def _read_skill_content(skill_name: str, tenant_id: str = "_default") -> str | None:
+    """Read a skill's SKILL.md body from the slot mirror or the TENANT's skill-forge directory
+    (a tenant must never be handed another tenant's skills; until 2026-10-21 this read `_default`)."""
     slug = re.sub(r"[^a-z0-9_-]", "_", skill_name.lower())
     candidates = [
         _REPO / "corvin_operator" / "skill-forge" / "skills" / "dyn" / slug / "SKILL.md",
-        _forge_paths.tenant_skill_forge_dir("_default") / "user" / slug / "SKILL.md",
-        _forge_paths.tenant_skill_forge_dir("_default") / "project" / slug / "SKILL.md",
+        _forge_paths.tenant_skill_forge_dir(tenant_id) / "user" / slug / "SKILL.md",
+        _forge_paths.tenant_skill_forge_dir(tenant_id) / "project" / slug / "SKILL.md",
     ]
     for p in candidates:
         if p.exists():
@@ -692,7 +707,7 @@ If the task is complete:
             engine_id="claude_code",
         )
         if _mgr_refusal is not None:
-            return _mgr_refusal
+            raise NodeExecutionError(_mgr_refusal)
         manager_raw = _run_node_claude(manager_prompt, mcp_config)
 
         # Parse manager JSON
@@ -743,7 +758,7 @@ Context:
                     engine_id="claude_code",
                 )
                 if _wkr_refusal is not None:
-                    return _wkr_refusal
+                    raise NodeExecutionError(_wkr_refusal)
                 worker_out = _run_node_claude(worker_prompt, mcp_config)
                 worker_results.append({"instructions": worker_instructions, "output": worker_out})
                 workers_spawned += 1
@@ -755,7 +770,7 @@ Context:
             })
         else:
             # Unknown decision — abort
-            return f"[delegation_loop] unknown decision: {decision}"
+            raise NodeExecutionError(f"delegation loop: the manager returned an unknown decision ({decision!r})")
 
     # Budget exhausted
     all_worker_outputs = [
@@ -1645,7 +1660,12 @@ def _resolve_forge_tool(tenant_id: str, tool_name: str) -> bytes | None:
     return json.dumps(bundle, indent=2, ensure_ascii=False).encode("utf-8")
 
 def _resolve_skill(tenant_id: str, skill_name: str) -> bytes | None:
-    """Return SKILL.md bytes for skill_name, checking SkillForge and Claude Code skill dirs."""
+    """Return SKILL.md bytes for skill_name, checking SkillForge and Claude Code skill dirs.
+
+    The name comes from the workflow YAML: it is a directory NAME, never a path. A traversal
+    name (``../../escape``) used to read any SKILL.md the process could reach (2026-10-21)."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", skill_name or "") or ".." in skill_name:
+        return None
     home = _forge_paths.tenant_home(tenant_id)
     user_home = Path.home()
 
@@ -1762,6 +1782,22 @@ def _register_tools_from_zip(
         # Guard against directory traversal
         if py_path.resolve().parent != tools_dir.resolve():
             raise HTTPException(422, f"tool name would escape tools directory")
+        # An existing tool implementation is never replaced by an imported bundle: a bundle is
+        # untrusted content, and until 2026-10-21 it silently overwrote the tenant's own tool of
+        # the same name (review WFB-R1-02). The import is recorded and the existing file kept.
+        if py_path.exists():
+            try:
+                same = py_path.read_text(encoding="utf-8") == code
+            except OSError:
+                same = False
+            if not same:
+                _log.warning("awpkg import: tool %r exists with a different implementation; kept the tenant's",
+                             tool_name)
+                console_audit.action_performed(
+                    tenant_id=tenant_id, sid_fingerprint="", action="workflow.tool_import_skipped",
+                    target_kind="forge_tool", target_id=tool_name,
+                )
+                continue
         py_path.write_text(code, encoding="utf-8")
 
         # Upsert registry entry
@@ -2134,6 +2170,11 @@ def delete_run(
     for p in (_run_meta_path(rec.tenant_id, wid, rid), _run_log_path(rec.tenant_id, wid, rid), snap):
         if p.exists():
             p.unlink()
+    # The run's directory holds the attachment snapshot (ADR-2270) and artifacts; a deleted run
+    # must not keep 50 MiB uploads on disk.
+    run_dir = _runs_dir(rec.tenant_id, wid) / rid
+    if run_dir.is_dir() and not run_dir.is_symlink():
+        shutil.rmtree(run_dir, ignore_errors=True)
     return {"ok": True, "rid": rid}
 
 # ── Human-in-the-Loop (approval) endpoints ────────────────────────────────
@@ -2199,6 +2240,25 @@ def _decide_approval(
     )
     if refusal is not None:
         raise HTTPException(http_status.HTTP_403_FORBIDDEN, detail={"error": "refused", "message": refusal})
+    # An approval resumes the run in the background: it must pass the SAME workflows_concurrent
+    # gate as resume_run / start_run (review 2026-10-21: N approvals at once all ran).
+    _running = _count_running_workflows(rec.tenant_id)
+    try:
+        _lic_assert("workflows_concurrent", _running + 1)
+    except _LicLimitError as _wf_exc:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="workflow.run_approved" if verdict == "approve" else "workflow.run_rejected",
+            target_kind="workflow_run", target_id=f"{wid}/{rid}", reason="quota_exceeded",
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "error": "license_limit", "feature": "workflows_concurrent",
+                "running": _running, "limit": _lic_get_limit("workflows_concurrent"),
+                "msg": str(_wf_exc), "upgrade_url": "https://corvin-labs.com/pricing",
+            },
+        ) from _wf_exc
     cancel = _dag_run.try_begin(rec.tenant_id, wid, rid)
     if cancel is None:
         raise HTTPException(http_status.HTTP_409_CONFLICT, "approval is already being decided")
@@ -2247,7 +2307,8 @@ async def stream_run_events(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> StreamingResponse:
     """Attach to a run: replay its log from the start and follow it until it ends. This is how
-    the editor re-joins a run that is paused (or still running) after a reload."""
+    the editor re-joins a run that is paused (or still running) after a reload. A reader only:
+    closing this stream never stops the run (POST .../cancel does)."""
     _validate_wid(wid)
     _require_workflow(rec.tenant_id, wid)
     _validate_rid(rid)
@@ -2936,15 +2997,23 @@ def _scan_compute_stage_tables(
 
 # ── Compliance helpers (EU AI Act Art. 14 + DSGVO Art. 6) ─────────────────
 
-def _tenant_yaml(tenant_id: str) -> dict[str, Any]:
-    """Load tenant.corvin.yaml; return {} when absent (fail-open for new tenants)."""
+class _TenantYamlUnreadable(RuntimeError):
+    """tenant.corvin.yaml exists but cannot be parsed: a policy MAY be in it."""
+
+
+def _tenant_yaml(tenant_id: str, *, strict: bool = False) -> dict[str, Any]:
+    """Load tenant.corvin.yaml; return {} when absent (fail-open for new tenants).
+
+    With ``strict`` a present-but-unreadable file raises ``_TenantYamlUnreadable`` instead of
+    reading as "no policy": the compliance check must refuse then, not allow."""
+    yaml_path = _forge_paths.tenant_global_dir(tenant_id) / "tenant.corvin.yaml"
     try:
-        yaml_path = _forge_paths.tenant_global_dir(tenant_id) / "tenant.corvin.yaml"
         if yaml_path.exists() and _YAML_OK:
             raw = _yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
             return raw if isinstance(raw, dict) else {}
-    except Exception:
-        pass
+    except Exception as exc:
+        if strict:
+            raise _TenantYamlUnreadable(type(exc).__name__) from exc
     return {}
 
 def _check_compliance_zone(
@@ -2958,7 +3027,17 @@ def _check_compliance_zone(
     Returns an error string if the workflow is blocked; None if allowed.
     The console workflow runner uses 'claude-code' as the sole engine.
     """
-    cfg = _tenant_yaml(tenant_id)
+    try:
+        cfg = _tenant_yaml(tenant_id, strict=True)
+    except _TenantYamlUnreadable as exc:
+        # Fail CLOSED: a corrupt tenant.corvin.yaml used to read as {} — no policy — and the
+        # run was allowed although a forbid_engines list may be in it (review WFB-R1-06).
+        console_audit.action_denied(
+            tenant_id=tenant_id, sid_fingerprint=sid_fingerprint, action="workflow.run_blocked",
+            target_kind="workflow", target_id=wid,
+            reason=f"tenant.corvin.yaml could not be read ({exc})", run_id=rid,
+        )
+        return "The tenant's compliance policy could not be read; the run is refused until the file parses."
     residency = (cfg.get("spec") or {}).get("data_residency") or {}
 
     allowed: list[str] = residency.get("allowed_engines") or []
@@ -3662,7 +3741,7 @@ async def _stream_run(
                 if node_skills:
                     skill_blocks = []
                     for sk in node_skills:
-                        body = _read_skill_content(sk)
+                        body = _read_skill_content(sk, tenant_id)
                         if body:
                             skill_blocks.append(f"<skill:{sk}>\n{body}\n</skill:{sk}>")
                     if skill_blocks:
@@ -3739,7 +3818,7 @@ async def _stream_run(
             if node_skills:
                 skill_blocks = []
                 for sk in node_skills:
-                    body = _read_skill_content(sk)
+                    body = _read_skill_content(sk, tenant_id)
                     if body:
                         skill_blocks.append(f"<skill:{sk}>\n{body}\n</skill:{sk}>")
                 if skill_blocks:
@@ -3762,6 +3841,21 @@ async def _stream_run(
             elif node_tools:
                 mcp_config = {"mcpServers": {}}
 
+            # The prompt that is spawned carries upstream output, inputs and skill bodies on top
+            # of the instructions gated above: gate THAT (ADR-2271 closed the same hole for the
+            # DAG engine; the legacy executor forwarded it ungated until 2026-10-21).
+            _prompt_refusal = _spawn_gates.check_console_spawn_or_refusal(
+                prompt, tenant_id=tenant_id, persona="assistant",
+                channel="workflow", chat_key=f"workflow:{wid}:{node_id}",
+                engine_id="claude_code",
+            )
+            if _prompt_refusal is not None:
+                elapsed = round(time.time() - t0, 2)
+                state[node_id] = {"error": _prompt_refusal}
+                yield _emit({"type": "node_failed", "node_id": node_id,
+                             "error": _prompt_refusal, "elapsed_s": elapsed, "ts": time.time()})
+                all_ok = False
+                break
             try:
                 output_text = await loop.run_in_executor(None, _run_node_claude, prompt, mcp_config)
                 elapsed = round(time.time() - t0, 2)
@@ -3989,6 +4083,14 @@ def set_schedule(
         except Exception:
             pass
 
+    if _SCHEDULER_OK:
+        try:
+            _next, _cron = _sched.parse_when(body.cron, body.timezone or None)
+        except ValueError as exc:                     # unknown timezone
+            raise HTTPException(http_status.HTTP_400_BAD_REQUEST, f"The schedule could not be read: {exc}") from None
+        if _next is None:
+            raise HTTPException(http_status.HTTP_400_BAD_REQUEST,
+                                "The schedule could not be read: not a cron expression, a date or an offset")
     meta["schedule"] = {"cron": body.cron, "timezone": body.timezone, "overrun": body.overrun}
     meta["has_schedule"] = True
     meta["updated_at"] = time.time()
@@ -4002,6 +4104,8 @@ def set_schedule(
                 sender="console",
                 text=f"Scheduled run: workflow {wid}",
                 when=body.cron,
+                timezone=body.timezone or None,
+                overrun=body.overrun,
                 kind="workflow",
                 workflow_name=wid,
                 workflow_inputs={},

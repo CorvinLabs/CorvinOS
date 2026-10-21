@@ -71,13 +71,15 @@ class BodyTooLarge(Exception):
 
 
 def gateway_cap_for(path: str) -> Optional[int]:
-    """Gateway host: the Video Producer paths are capped - the named ones at their own size, every other
-    ``/v1/console/video/*`` body (capture, settings, asset PATCH, feedback) at the default - and everything else
-    is untouched. Without that, an unauthenticated body of any size was spooled before the session check ran."""
-    cap = VIDEO_BODY_CAPS.get(path)
-    if cap is None and path.startswith("/v1/console/video/"):
-        cap = BODY_CAP_DEFAULT
-    return cap
+    """Gateway host: every mounted console route (``/v1/console/*``) is capped exactly as on the
+    standalone host — one cap table for both hosts. Until 2026-10-21 only ``/v1/console/video/*``
+    was capped here, so an unauthenticated multipart body of any size to ``files/upload``,
+    ``packages/upload``, ``workflows/import``, ``voice/transcribe`` … was parsed and spooled to
+    disk before the session check ran (FastAPI reads the form before dependencies). The
+    gateway's own routes are left to their own guards."""
+    if path.startswith("/v1/console/"):
+        return standalone_cap_for(path)
+    return None
 
 
 def make_body_cap_middleware(cap_for: Callable[[str], Optional[int]]):

@@ -35,6 +35,20 @@ class A2ANetworkDenied(PermissionError):
     """Raised when the local installation holds no member credential."""
 
 
+#: (tenant_id) -> monotonic expiry of a remembered ALLOW. The connectivity manager pings every
+#: ~30 s and `require_capability` audits every call: 4 347 identical `license.capability_decision`
+#: records in three days on one idle member install (review 2026-10-21; CLAUDE.md names this
+#: failure class). An ALLOW is therefore re-evaluated (and audited) once per window; a DENY is
+#: never cached, so a lapsed or revoked licence is enforced at the next call after the window.
+_ALLOW_CACHE: dict[str, float] = {}
+ALLOW_CACHE_TTL_S = 600.0
+
+
+def reset_allow_cache() -> None:
+    """Forget remembered ALLOWs (licence reload, tests)."""
+    _ALLOW_CACHE.clear()
+
+
 def require_a2a_network(*, entry_point: str, tenant_id: str | None = None) -> None:
     """Return normally iff this installation may use the A2A network.
 
@@ -56,13 +70,19 @@ def require_a2a_network(*, entry_point: str, tenant_id: str | None = None) -> No
         raise A2ANetworkDenied(
             f"{CAPABILITY} denied: licensing module unavailable (fail-closed)"
         ) from exc
+    import time as _time  # noqa: PLC0415
+
+    tid = tenant_id or current_tenant()
+    if _ALLOW_CACHE.get(tid, 0.0) > _time.monotonic():
+        return
     try:
         decision = require_capability(
             CAPABILITY, requested=1,
-            tenant_id=tenant_id or current_tenant(),
+            tenant_id=tid,
             entry_point=entry_point,
         )
     except LicenseDenied as exc:
+        _ALLOW_CACHE.pop(tid, None)
         raise A2ANetworkDenied(f"{CAPABILITY} denied: {UPGRADE_HINT}") from exc
     except Exception as exc:  # noqa: BLE001 — enforcement failure = deny
         _log.warning("a2a.network enforcement failure (%s): %s",
@@ -72,3 +92,4 @@ def require_a2a_network(*, entry_point: str, tenant_id: str | None = None) -> No
         ) from exc
     if getattr(decision, "decision", None) is not Decision.ALLOW:
         raise A2ANetworkDenied(f"{CAPABILITY} denied: no allow verdict")
+    _ALLOW_CACHE[tid] = _time.monotonic() + ALLOW_CACHE_TTL_S

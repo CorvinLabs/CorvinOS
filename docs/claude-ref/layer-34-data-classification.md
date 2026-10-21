@@ -348,6 +348,10 @@ ships + tests in isolation from the adapter wiring.
 * Don't re-add a bundled engine to `DEFAULT_ENGINE_COMPLIANCE` as `local` to
   "unblock" CONFIDENTIAL/SECRET — a tenant declares its own engine under
   `engine_compliance` (ADR-2091).
+* Don't fail-open the pre-spawn gate on a load error: when a tenant policy file exists but
+  `data_classification` cannot be imported or the yaml cannot be loaded, `spawn_gates.check_l34`
+  refuses the spawn (`L34_GUARD_LOAD_FAILED`, never cached; since 2026-10-21 — before, the guard
+  became `None` and every prompt passed). Only a tenant WITHOUT a policy file is fail-open.
 * Don't fail-open the gate on error: unknown engine / unparseable config must
   still enforce the DEFAULT matrix (which keeps the SECRET floor), never
   allow-all.

@@ -470,7 +470,10 @@ non-symlink file in the attachment's own `data/` dir, and its size + sha256 on E
 | GET | `/v1/console/workflows/{wid}/attachments/{att_id}` | `serve_headers()` (inline only for safe types, CSP sandbox otherwise) |
 | DELETE | `/v1/console/workflows/{wid}/attachments/{att_id}` | removes the files |
 
-`body_cap.py` lists the upload path (prefix `/v1/console/workflows/` + `/attachments`).
+`body_cap.py` lists the upload path (prefix `/v1/console/workflows/` + `/attachments`). Since 2026-10-21 the
+gateway host applies the same table to every mounted `/v1/console/*` route (`gateway_cap_for` →
+`standalone_cap_for`); before, only the video routes were capped there and an unauthenticated multipart body of
+any size was parsed and spooled before the session check.
 
 **Design chat.** The WebSocket `user` frame takes `attachments: [att_id]`. The server resolves them
 (`resolve_for_message`): ≤10 per message, UTF-8 text types only (`READABLE_EXTENSIONS` / `text/*`) —

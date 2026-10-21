@@ -234,18 +234,34 @@ class RunRecorder:
         self.update_meta(status="failed", ok=False, error=message, finished_at=time.time(), awaiting=None)
 
     def expire_if_due(self) -> bool:
-        """A paused run past its deadline can no longer be resumed: end it as failed."""
-        meta = self._read_meta()
-        awaiting = meta.get("awaiting") or {}
-        exp = awaiting.get("expires_at_ms")
-        if meta.get("status") != "paused" or not exp or exp > time.time() * 1000:
-            return False
-        self.emit({"type": "node_failed", "node_id": awaiting.get("node_id"),
-                   "error": "No reply before the deadline - the pause expired"})
-        self.emit({"type": "run_completed", "ok": False, "error": "pause expired"})
-        self.update_meta(status="failed", ok=False, error="pause expired", finished_at=time.time(),
-                         awaiting=None)
-        return True
+        """A paused run past its deadline can no longer be resumed: end it as failed.
+
+        Under one lock, so two readers (the run detail and a stream tail) reaping the same run
+        write the ending once; the engine checkpoint goes with it, otherwise the run stayed in
+        `list_paused` / the MCP `workflow_list_paused` forever and `corvin-flow resume` met
+        `PauseExpired` (review 2026-10-21)."""
+        with _EXPIRE_LOCK:
+            meta = self._read_meta()
+            awaiting = meta.get("awaiting") or {}
+            exp = awaiting.get("expires_at_ms")
+            if meta.get("status") != "paused" or not exp or exp > time.time() * 1000:
+                return False
+            self.emit({"type": "node_failed", "node_id": awaiting.get("node_id"),
+                       "error": "No reply before the deadline - the pause expired"})
+            self.emit({"type": "run_completed", "ok": False, "error": "pause expired"})
+            self.update_meta(status="failed", ok=False, error="pause expired", finished_at=time.time(),
+                             awaiting=None)
+            try:
+                from corvin_workflows import checkpoint as _ckpt  # noqa: PLC0415
+
+                _ckpt.delete(self.rid, tenant_id=self.tenant_id)
+            except Exception:  # noqa: BLE001 — the record is ended; a stale checkpoint is reaped by GC
+                _log.warning("expire_if_due: checkpoint cleanup failed for %s/%s", self.wid, self.rid,
+                             exc_info=True)
+            return True
+
+
+_EXPIRE_LOCK = threading.Lock()
 
 
 def _checkpoint_of(rid: str, tenant_id: str) -> dict[str, Any] | None:
@@ -321,10 +337,13 @@ def _restore_paused(recorder: RunRecorder) -> None:
 def _public_error(exc: BaseException) -> str:
     """Operator-readable, no internals: the type for engine setup problems, the message only
     for the errors this module raises itself."""
-    name = type(exc).__name__
-    if name == "ClaudeEngineError":
+    from corvin_workflows.engines_claude import ClaudeEngineError, SpawnRefusedError
+
+    if isinstance(exc, SpawnRefusedError):
+        return "A step was refused by a safety gate before any worker started"
+    if isinstance(exc, ClaudeEngineError):
         return f"Worker engine unavailable: {exc}"
-    return f"Run failed ({name})"
+    return f"Run failed ({type(exc).__name__})"
 
 
 def run_resume_background(
@@ -358,8 +377,10 @@ async def tail_events(
     recorder: RunRecorder, *, thread: threading.Thread | None = None,
 ) -> AsyncIterator[str]:
     """SSE text for every event of the run's log until a terminal event. Stays open while the
-    run is paused. If the client goes away mid-run the worker is told to stop at the next node;
-    a PAUSED run is left waiting (it can be answered from the run history)."""
+    run is paused. A reader only: a client that goes away (reload, navigation, a closed tab)
+    never stops the run — until 2026-10-21 a disconnect cancelled a running first pass and the
+    resume an approval had just started. Stopping a run is `POST .../cancel`; a run that keeps
+    running without a reader is bounded by its own timeouts and frees its slot when it ends."""
     offset = 0
     pending = b""
     last_sent = time.time()
@@ -399,9 +420,7 @@ async def tail_events(
                 last_sent = time.time()
             await asyncio.sleep(_TAIL_POLL_S)
     finally:
-        meta = recorder._read_meta()
-        if meta.get("status") == "running":
-            request_cancel(recorder.tenant_id, recorder.wid, recorder.rid)
+        pass  # a closed stream is not a cancel (see the docstring)
 
 
 def snapshot_workflow(yaml_text: str, dest: Path) -> Path:

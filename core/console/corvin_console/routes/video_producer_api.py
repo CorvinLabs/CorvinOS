@@ -565,6 +565,8 @@ def _adopt_stored_openai_key() -> None:
         return
     if val:
         os.environ["CORVIN_TTS_OPENAI_KEY"] = val
+        # Marker for chat_runtime: this one was adopted by the console, strip it from worker envs.
+        os.environ["CORVIN_TTS_OPENAI_KEY_ADOPTED"] = "1"
 
 
 def _openai_configured() -> bool:
@@ -602,34 +604,13 @@ def _edge_tts_current() -> bool:
     return parts >= _EDGE_TTS_MIN
 
 
-def _edge_install_commands() -> List[List[str]]:
-    """pip first; a uv-built venv ships no pip, so fall back to ``uv pip`` against this interpreter."""
-    spec = "edge-tts>=" + ".".join(str(n) for n in _EDGE_TTS_MIN)
-    cmds = [[sys.executable, "-m", "pip", "install", "--quiet", "--upgrade", spec]]
-    uv = shutil.which("uv")
-    if uv:
-        cmds.append([uv, "pip", "install", "--quiet", "--python", sys.executable, spec])
-    return cmds
-
-
 def _ensure_edge_tts() -> bool:
-    """edge-tts importable and current? If not, install/upgrade it once (pure Python, ~1 MB, no
-    key) into the console's own environment — the keyless narration fallback must exist on every
-    install and must be a version the service still accepts."""
-    global _edge_install_tried
-    if _edge_tts_current():
-        return True
-    if _edge_install_tried:
-        return importlib.util.find_spec("edge_tts") is not None
-    _edge_install_tried = True
-    for cmd in _edge_install_commands():
-        try:
-            subprocess.run(cmd, check=True, timeout=180, capture_output=True)
-            break
-        except Exception as e:  # noqa: BLE001
-            logger.warning("video producer: edge-tts install via %s failed (%s)", cmd[0], type(e).__name__)
-    importlib.invalidate_caches()
-    return importlib.util.find_spec("edge_tts") is not None
+    """edge-tts importable and current? The package is installed by bootstrap.sh / install.sh
+    (``edge-tts>=7.3.1`` is pinned in pyproject and uv.lock). Until 2026-10-21 this function ran
+    an unpinned ``pip install --upgrade`` from the public index inside the request that found it
+    missing — a supply-chain and availability hazard (up to six minutes blocking on a blackholed
+    network). A missing or outdated package is now reported with the command to run, never run."""
+    return _edge_tts_current()
 
 
 def _playwright_browsers_dir() -> Path:
@@ -739,8 +720,8 @@ def _missing_runtime_dependencies(tts_engine: str = "openai") -> List[str]:
     console process, so a marketplace install cannot add Python packages to it — better a
     named refusal now than a job that dies 40 s in. Playwright is NOT required: without it
     web slides fall back to the classic slide, which the panel shows (``web_slides_available``).
-    Self-healing first: edge-tts is installed on demand and ffmpeg falls back to the bundled
-    imageio-ffmpeg binary, so only a truly unfixable gap is reported."""
+    ffmpeg falls back to the bundled imageio-ffmpeg binary; edge-tts is never installed from here
+    (see ``_ensure_edge_tts``), a missing or outdated one is named with its install command."""
     missing: List[str] = []
     tts_engine = _effective_tts_engine(tts_engine)
     if tts_engine == "gtts" and importlib.util.find_spec("gtts") is None:

@@ -434,13 +434,22 @@ class DAGRunner:
                     run.final_state = state
                     self._audit("run.terminal", state="failed", node_id=nid)
                     if resume is not None and resume.checkpoint:
-                        # A-05: the nodes this pass completed (answer / deliver sent their
-                        # message) must not run again when the operator retries the resume.
-                        self._save_failed_resume_progress(
-                            run=run, resume=resume, state=state, inputs=inputs,
-                            done=(set(run.nodes) | done) - skipped - {nid},
-                            skipped=skipped, failed=failed,
-                        )
+                        if _is_spawn_refusal(last_error):
+                            # ADR-2271: a run whose resumed node a gate refused is not left
+                            # resumable — retrying would repeat the refusal (and its deny
+                            # record) with the same reply. The checkpoint goes.
+                            from . import checkpoint as _checkpoint  # noqa: PLC0415
+
+                            _checkpoint.delete(run.run_id, tenant_id=self._tenant_id)
+                            self._audit("run.resume_refused", node_id=nid)
+                        else:
+                            # A-05: the nodes this pass completed (answer / deliver sent their
+                            # message) must not run again when the operator retries the resume.
+                            self._save_failed_resume_progress(
+                                run=run, resume=resume, state=state, inputs=inputs,
+                                done=(set(run.nodes) | done) - skipped - {nid},
+                                skipped=skipped, failed=failed,
+                            )
                     return run
 
                 # Success — publish projection into state.
@@ -487,8 +496,17 @@ class DAGRunner:
         from . import checkpoint as _checkpoint
 
         old = resume.checkpoint or {}
+        # The pause deadline survives a failed resume: the re-saved checkpoint keeps the
+        # remaining time, it does not become open-ended (review 2026-10-21).
+        remaining_s: float | None = None
+        old_exp = old.get("expires_at_ms")
+        if old_exp is not None:
+            import time as _t  # noqa: PLC0415
+
+            remaining_s = max(1.0, (int(old_exp) - _t.time() * 1000) / 1000.0)
         _checkpoint.save(
             run.run_id,
+            timeout_s=remaining_s,
             workflow_path=self.doc.source_path or old.get("workflow_path", ""),
             workflow_name=self.doc.name,
             inputs=inputs,

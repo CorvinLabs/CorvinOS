@@ -1037,6 +1037,8 @@ function ChatPane({
   const { refresh: refreshAuth } = useAuth();
   const composerRef = React.useRef<WorkflowComposerHandle>(null);
   const [sendError, setSendError] = React.useState<string | null>(null);
+  // The last message handed to the socket, so a server refusal can put it back into the composer.
+  const lastSentRef = React.useRef<{ text: string; atts: ComposerAttachmentRef[] } | null>(null);
 
   // Keep ref in sync with state
   React.useEffect(() => { voiceEnabledRef.current = voiceEnabled; }, [voiceEnabled]);
@@ -1044,14 +1046,27 @@ function ChatPane({
   React.useEffect(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${protocol}//${window.location.host}/v1/console/workflows/${encodeURIComponent(wid)}/chat`;
+    // The socket reconnects with backoff (1 s … 15 s) until the pane unmounts: after a console
+    // restart (its own Update, the watchdog) the composer must not stay on "Connecting…" forever.
+    let current: WebSocket | null = null;
+    let closed = false;
+    let retry = 0;
+    let timer: number | undefined;
+    const connect = () => {
     const socket = new WebSocket(url);
+    current = socket;
 
     socket.onopen = () => {
+      retry = 0;
       setConnected(true);
       // Always send current voice preference immediately on connect
       socket.send(JSON.stringify({ type: "set_voice", enabled: voiceEnabledRef.current, lang: "en" }));
     };
-    socket.onclose = () => setConnected(false);
+    socket.onclose = () => {
+      setConnected(false);
+      if (closed) return;
+      timer = window.setTimeout(connect, Math.min(15_000, 1000 * 2 ** Math.min(retry++, 4)));
+    };
 
     socket.onmessage = (ev) => {
       try {
@@ -1063,8 +1078,15 @@ function ChatPane({
           if (data.yaml) onYamlUpdate(data.yaml);
         } else if (data.type === "error") {
           // The server refused before any engine ran (licence cap, busy lock, bad attachment).
+          // The operator's words and chips go back into the composer: a refusal must not cost them.
           setTyping(false);
           setSendError(String(data.message ?? "The message was not sent."));
+          const sent = lastSentRef.current;
+          if (sent) {
+            lastSentRef.current = null;
+            composerRef.current?.setDraft(sent.text);
+            composerRef.current?.restoreAttachments(sent.atts);
+          }
           setMessages((prev) => {
             const last = prev[prev.length - 1];
             return last?.pending && last.role === "user"
@@ -1132,7 +1154,13 @@ function ChatPane({
     };
 
     setWs(socket);
-    return () => socket.close();
+    };
+    connect();
+    return () => {
+      closed = true;
+      window.clearTimeout(timer);
+      current?.close();
+    };
   }, [wid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-send voice preference whenever it changes or WS reconnects
@@ -1146,9 +1174,15 @@ function ChatPane({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typing]);
 
-  const send = React.useCallback((text: string, atts: ComposerAttachmentRef[] = []) => {
+  const send = React.useCallback((text: string, atts: ComposerAttachmentRef[] = []): boolean => {
     const t = text.trim();
-    if ((!t && atts.length === 0) || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!t && atts.length === 0) return false;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      // `connected` can still be true while the socket is CLOSING: refuse, the composer keeps the draft.
+      setSendError("Not connected - the message was kept. It is sent again once the connection is back.");
+      return false;
+    }
+    lastSentRef.current = { text: t, atts };
     const optimistic: DesignMessage = {
       role: "user",
       content: t || "(attachments)",
@@ -1160,6 +1194,7 @@ function ChatPane({
     setMessages((prev) => [...prev, optimistic]);
     ws.send(JSON.stringify({ type: "user", text: t, ...(atts.length ? { attachments: atts.map((a) => a.id) } : {}) }));
     setPendingOffer(null);
+    return true;
   }, [ws]);
 
   // The design chat's port into the shared composer: uploads land in THIS workflow's store,
@@ -2752,6 +2787,7 @@ export function WorkflowEditorPage() {
     })();
     return () => {
       cancelled = true;
+      attachedRef.current = null; // a cancelled run (StrictMode double-invoke, wid change) may try again
       abortRef.current?.abort();
     };
   }, [wid, attachRun]);
@@ -2932,14 +2968,16 @@ export function WorkflowEditorPage() {
             <div className="flex items-center gap-2 border-t border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-400">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
               <span>{runError}</span>
-              <a
-                href="https://corvin-labs.com/pricing"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="ml-1 underline font-semibold"
-              >
-                Upgrade →
-              </a>
+              {/licen[cs]e|free tier|upgrade/i.test(runError) && (
+                <a
+                  href="https://corvin-labs.com/pricing"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ml-1 underline font-semibold"
+                >
+                  Upgrade →
+                </a>
+              )}
               <button className="ml-auto opacity-60 hover:opacity-100" onClick={() => setRunError(null)}>
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -3331,6 +3369,13 @@ function MarkdownContent({ text }: { text: string }) {
 
 // ── ReadAloudButton ───────────────────────────────────────────────────────
 
+/** Voice for "Read aloud": German output gets the German voice, everything else English. */
+function spokenLanguage(text: string): "de" | "en" {
+  const de = (text.match(/\b(der|die|das|und|nicht|ist|sind|mit|für|eine?[nmrs]?|wurde|auch)\b/gi) ?? []).length;
+  const en = (text.match(/\b(the|and|is|are|was|were|with|for|this|that|of|to)\b/gi) ?? []).length;
+  return de > en ? "de" : "en";
+}
+
 function ReadAloudButton({ text, csrf }: { text: string; csrf?: string }) {
   const [speaking, setSpeaking] = React.useState(false);
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
@@ -3354,7 +3399,7 @@ function ReadAloudButton({ text, csrf }: { text: string; csrf?: string }) {
     setSpeaking(true);
     try {
       const { ttsBlob } = await import("@/lib/api");
-      const blob = await ttsBlob(text.slice(0, 2000), "de", csrf);
+      const blob = await ttsBlob(text.slice(0, 2000), spokenLanguage(text), csrf);
       if (!blob.size) { setSpeaking(false); return; }
 
       // User clicked Stop while we were fetching → discard
@@ -3637,7 +3682,7 @@ export function WorkflowRunDetailPage() {
                 : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >
-            📋 Tabellen
+            📋 Tables
             {tableItems.length > 0 && (
               <span className="rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 px-1.5 text-[10px] font-semibold">
                 {tableItems.length}
@@ -3704,9 +3749,9 @@ export function WorkflowRunDetailPage() {
               <Card>
                 <CardContent className="py-12 text-center">
                   <span className="text-3xl block mb-2">📋</span>
-                  <p className="text-sm font-medium">Keine Tabellen-Outputs.</p>
+                  <p className="text-sm font-medium">No table outputs.</p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    CSV-, Parquet- und JSON-Artefakte von Workflow-Nodes erscheinen hier.
+                    CSV, Parquet and JSON artifacts from workflow nodes appear here.
                   </p>
                 </CardContent>
               </Card>
@@ -3732,7 +3777,7 @@ export function WorkflowRunDetailPage() {
                       {wid && rid && (
                         <DataTable
                           compact
-                          title={`Vorschau: ${tbl.filename}`}
+                          title={`Preview: ${tbl.filename}`}
                           defaultPerPage={10}
                           fetchPage={(params: DataTableFetchParams) =>
                             getWorkflowRunTablePage(wid, rid, tbl.filename, {

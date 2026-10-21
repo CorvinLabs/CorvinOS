@@ -363,6 +363,14 @@ orchestration:
 
 
 class TestA2ATools(TestOrchestrationServerBase):
+    def setUp(self):
+        super().setUp()
+        # a2a.network is member-only (ADR-0700 §2.1, gate 28ad07b54): these tests cover the
+        # tool mechanics on a licensed install; the gate's own verdict has its own tests.
+        tier = mock.patch("corvin_operator.license.capability_api.active_tier", lambda **_k: "member")
+        tier.start()
+        self.addCleanup(tier.stop)
+
     def _write_endpoint(self, endpoint_id: str = "test-peer", label: str = "Test Peer") -> None:
         cfg = {
             "endpoint_id": endpoint_id,

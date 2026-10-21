@@ -101,8 +101,13 @@ class CorvinTVIsProvisionedAndEnabledByBoot(unittest.TestCase):
         with _sandbox(self.tmp) as (client, csrf, home, _):
             plugin_dir, manifest = mr.load_manifest(_NEW)
             current = mr.record_from_manifest(manifest, plugin_dir=plugin_dir)
+            # The real 1.6.0 declarations (Corvin-Marketplace a3a60b4~1): pii_risk low and two
+            # egress hosts. 1.7.0 widens both, so the boot upgrade must approve that escalation —
+            # a legacy record built from the NEW declarations never exercised this branch.
             legacy = dataclasses.replace(current, version="1.6.0", origin=PluginOrigin.COMMUNITY,
-                                         requires_consent=True, display_name="Video Producer")
+                                         requires_consent=True, display_name="Video Producer",
+                                         pii_risk=type(current.pii_risk)("low"),
+                                         egress_hosts=("translate.google.com", "api.anthropic.com"))
             self.assertTrue(legacy.consent_required())
             mi._lifecycle("_default").install(legacy, installed_by="test:legacy")
             self.dp._write_ledger("_default", {"offered": {_OLD: {"registry_id": "video_producer", "version": "1.6.0"}}})

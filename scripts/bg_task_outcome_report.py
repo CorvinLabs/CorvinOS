@@ -110,7 +110,9 @@ def build_report(home: Path, since: float) -> dict:
     signals = _signal_times(home)
     statuses = Counter(str(t.get("status")) for t in tasks)
 
-    exit143 = [t for t in tasks if t.get("exit_code") == 143]
+    # A SIGTERM death is 143 on the bridge (shell convention) and -15 on the console (Popen); both
+    # are in RESTART_EXIT_CODES, so both count here — counting 143 alone undercounted console turns.
+    exit143 = [t for t in tasks if t.get("exit_code") in (143, -15)]
     explained, external = 0, 0
     for t in exit143:
         end = t.get("ended_at") or 0

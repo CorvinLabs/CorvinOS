@@ -315,8 +315,11 @@ def test_task_command_empty_usage() -> None:
 
 
 def test_worker_wall_clock_timeout() -> None:
-    """A wedged engine turn must be bounded: with a 1s deadline and a 3s fake
-    engine, the completion is marked timed-out (not lost, not run forever)."""
+    """A wedged engine turn must be bounded: with a 2 s deadline (the lower bound of
+    ``bg_task_worker._TASK_TIMEOUT_BOUNDS`` — one deadline-loop tick; a smaller value is
+    rejected and falls back to the 24 h default, which is why "1" stopped testing anything
+    on 2026-10-21) and a 5 s fake engine, the completion is marked timed-out (not lost,
+    not run forever)."""
     with tempfile.TemporaryDirectory() as td:
         home, outbox = Path(td) / "home", Path(td) / "outbox"
         env = os.environ.copy()
@@ -324,8 +327,8 @@ def test_worker_wall_clock_timeout() -> None:
         env["CORVIN_HOME"] = str(home)
         env["ADAPTER_OUTBOX"] = str(outbox)
         env["ADAPTER_FAKE_CLAUDE"] = "1"
-        env["ADAPTER_FAKE_DELAY"] = "3"          # engine "runs" 3s
-        env["CORVIN_BG_TASK_TIMEOUT"] = "1"       # deadline 1s
+        env["ADAPTER_FAKE_DELAY"] = "5"          # engine "runs" 5 s
+        env["CORVIN_BG_TASK_TIMEOUT"] = "2"       # deadline 2 s = the smallest honoured value
         reg = (f"import sys; sys.path.insert(0, r'{HERE}'); "
                "import completion_notify as cn; "
                "cn.register('bgt_to', channel='signal', chat_id='+49', sender='+49')")

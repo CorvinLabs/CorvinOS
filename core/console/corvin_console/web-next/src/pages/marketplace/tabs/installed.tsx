@@ -241,7 +241,7 @@ export function InstalledTab({ onGoTo }: { onGoTo: (tab: TabId) => void }) {
             {" "}is listed in the index, but the plugin source on this host does not have it yet, so it cannot be installed from here.
             {updates.data?.source_managed_by_operator
               ? " The source is a local checkout: run git pull in the Corvin-Marketplace folder, then press Check for updates."
-              : " Press Check for updates to fetch the newest source."}
+              : " Press Check for updates to refresh the plugin source; if it stays listed here, the newer version is not published in the source yet."}
           </span>
         </p>
       )}

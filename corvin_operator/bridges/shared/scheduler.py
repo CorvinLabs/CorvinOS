@@ -36,13 +36,14 @@ indicators all keep working without changes.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import shutil
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -71,20 +72,28 @@ def _schedule_file() -> Path:
 
 # Persistent location; follows the corvinOS root by default.
 SCHEDULE_FILE = _schedule_file()
+logger = logging.getLogger(__name__)
 
 
 # ─── load / save (atomic) ──────────────────────────────────────────────────
 
-def load() -> list[dict[str, Any]]:
+class ScheduleFileCorrupt(RuntimeError):
+    """schedule.json exists but is not valid JSON. Readers treat it as empty; WRITERS refuse,
+    so the next add/remove does not overwrite the tasks that could not be parsed (silent loss
+    until 2026-10-21). The operator repairs or moves the file."""
+
+
+def load(*, for_write: bool = False) -> list[dict[str, Any]]:
     """Read the schedule file; missing file → empty list."""
     try:
         return json.loads(SCHEDULE_FILE.read_text())
     except FileNotFoundError:
         return []
-    except json.JSONDecodeError:
-        # Corrupt file: keep going with an empty list rather than crashing
-        # the adapter. The user can `/schedule list` to see it's empty and
-        # re-add tasks.
+    except json.JSONDecodeError as exc:
+        if for_write:
+            raise ScheduleFileCorrupt(f"{SCHEDULE_FILE} is not valid JSON ({exc.msg} at {exc.pos})") from exc
+        # Corrupt file: a READER keeps going with an empty list rather than crashing the
+        # adapter loop; the file itself is left for the operator to repair.
         return []
 
 
@@ -147,28 +156,68 @@ def _matches_cron(cron: str, dt: datetime) -> bool:
     )
 
 
-def _advance_cron(cron: str, after_ts: float, max_iter: int = 366 * 24 * 60) -> float:
-    """Return the next minute-aligned epoch ts >= after_ts that matches `cron`.
+def _tzinfo(tz: str | None):
+    """The zone a cron's fields are read in: the schedule's own IANA zone, else the host's local
+    time (the pre-2026-10-21 behaviour; the console stored a timezone that was never applied)."""
+    if not tz:
+        return None
+    from zoneinfo import ZoneInfo  # noqa: PLC0415
+
+    try:
+        return ZoneInfo(str(tz))
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"unknown timezone: {tz!r}") from exc
+
+
+def _advance_cron(cron: str, after_ts: float, tz: str | None = None, max_iter: int = 366 * 24 * 60) -> float:
+    """Return the next minute-aligned epoch ts >= after_ts that matches `cron`, with the cron's
+    hour/day fields read in *tz* (IANA name) or local time.
 
     Iterates minute-by-minute. Capped at one year to prevent runaways.
     """
-    start = datetime.fromtimestamp(after_ts).replace(second=0, microsecond=0)
+    zone = _tzinfo(tz)
+    fields = cron.split()
+    if len(fields) != 5:
+        raise ValueError(f"cron expression must have 5 fields, got: {cron!r}")
+    minutes = _parse_field(fields[0], 0, 59)
+    hours = _parse_field(fields[1], 0, 23)
+    doms = _parse_field(fields[2], 1, 31)
+    months = _parse_field(fields[3], 1, 12)
+    dows = {(d % 7) for d in _parse_field(fields[4], 0, 7)}
+    start = datetime.fromtimestamp(after_ts, zone).replace(second=0, microsecond=0)
     # Step forward one minute first so calling _advance_cron immediately after
     # a fire doesn't re-fire the same minute.
-    cur = start
+    cur = datetime.fromtimestamp(start.timestamp() + 60, zone).replace(second=0, microsecond=0)
+    limit = start + timedelta(days=366)
+    # Skip whole months, days and hours whose fields cannot match instead of walking every
+    # minute of a year on the adapter loop (a rare cron cost ~1.3 s per advance, WFB-R1-17).
     for _ in range(max_iter):
-        cur = datetime.fromtimestamp(cur.timestamp() + 60).replace(
-            second=0, microsecond=0
-        )
-        if _matches_cron(cron, cur):
+        if cur > limit:
+            break
+        if cur.month not in months:
+            nxt = (cur.replace(day=1, hour=0, minute=0) + timedelta(days=32)).replace(day=1)
+            cur = nxt
+            continue
+        if cur.day not in doms or ((cur.weekday() + 1) % 7) not in dows:
+            cur = cur.replace(hour=0, minute=0) + timedelta(days=1)
+            continue
+        if cur.hour not in hours:
+            cur = cur.replace(minute=0) + timedelta(hours=1)
+            continue
+        if cur.minute not in minutes:
+            cur = cur + timedelta(minutes=1)
+            continue
+        if _matches_cron(cron, cur):          # the authoritative check, DST folds included
             return cur.timestamp()
+        cur = cur + timedelta(minutes=1)
     raise ValueError(f"no matching minute within a year for cron: {cron!r}")
 
 
 # ─── public API ────────────────────────────────────────────────────────────
 
-def parse_when(spec: str) -> tuple[float | None, str | None]:
-    """Parse the user-provided `when` string into (next_run_ts, cron_or_None).
+def parse_when(spec: str, tz: str | None = None) -> tuple[float | None, str | None]:
+    """Parse the user-provided `when` string into (next_run_ts, cron_or_None). A cron is
+    evaluated in *tz* (IANA name) when given.
 
     Accepted forms:
       - ISO 8601 datetime (`2026-05-06T08:00`, `2026-05-06 08:00:00+02:00`)
@@ -200,7 +249,7 @@ def parse_when(spec: str) -> tuple[float | None, str | None]:
     parts = spec.split()
     if len(parts) == 5 and not any(":" in p or "-" in p and len(p) > 5 for p in parts):
         try:
-            ts = _advance_cron(spec, time.time())
+            ts = _advance_cron(spec, time.time(), tz)
             return (ts, spec)
         except ValueError:
             return (None, None)
@@ -217,6 +266,37 @@ def parse_when(spec: str) -> tuple[float | None, str | None]:
         return (None, None)
 
 
+#: Scheduled workflow task ids whose run is in progress right now (overrun policy "skip").
+_RUNNING_WORKFLOW_TASKS: set[str] = set()
+
+
+def _persist_fired_state(it: dict[str, Any], now: float, *, restore: bool = False) -> None:
+    """Write one entry's post-fire state (next cron occurrence, or dropped for a one-shot) to the
+    schedule file under the lock, merging with whatever was added or removed meanwhile. With
+    ``restore`` the original entry is written back (the fire did not happen)."""
+    tid = it.get("id", "")
+    if restore:
+        replacement: dict[str, Any] | None = it
+    elif it.get("cron"):
+        try:
+            replacement = {**it, "next_run": _advance_cron(it["cron"], now, it.get("timezone")), "last_fire": now}
+        except ValueError:
+            replacement = None                      # bad cron → one-shot, dropped
+    else:
+        replacement = None
+    with _SCHEDULE_LOCK:
+        try:
+            current = load(for_write=True)
+        except ScheduleFileCorrupt as exc:
+            logger.warning("schedule: %s — the fired state of %s was not persisted", exc, tid)
+            return
+        merged = [replacement if x.get("id") == tid and replacement is not None else x
+                  for x in current if not (x.get("id") == tid and replacement is None)]
+        if replacement is not None and not any(x.get("id") == tid for x in current):
+            merged.append(replacement)
+        save(merged)
+
+
 def add_task(
     *,
     channel: str,
@@ -229,8 +309,14 @@ def add_task(
     workflow_name: str | None = None,
     workflow_inputs: dict[str, Any] | None = None,
     tenant_id: str = "_default",
+    timezone: str | None = None,
+    overrun: str = "skip",
 ) -> dict[str, Any]:
-    """Add a new schedule entry. Returns the entry; raises ValueError on bad `when`.
+    """Add a new schedule entry. Returns the entry; raises ValueError on bad `when` or `timezone`.
+
+    `timezone` (IANA name, e.g. "Europe/Berlin") is the zone a cron's fields are read in; it is
+    stored with the entry and applied at every advance. Until 2026-10-21 the console stored it
+    and the scheduler read every cron in the host's local time.
 
     `when` is parsed by `parse_when`. For recurring tasks pass a cron string.
 
@@ -247,7 +333,8 @@ def add_task(
     if kind == "workflow":
         if not workflow_name:
             raise ValueError("kind=workflow requires workflow_name")
-    next_ts, cron = parse_when(when)
+    _tzinfo(timezone)                      # raises ValueError for an unknown zone
+    next_ts, cron = parse_when(when, timezone)
     if next_ts is None:
         raise ValueError(f"could not parse `when`: {when!r}")
     item: dict[str, Any] = {
@@ -264,11 +351,16 @@ def add_task(
         "last_fire": 0.0,
         "kind": kind,
     }
+    if timezone:
+        item["timezone"] = timezone
     if kind == "workflow":
+        if overrun not in ("skip", "queue", "parallel"):
+            raise ValueError(f"unknown overrun policy: {overrun!r}")
+        item["overrun"] = overrun
         item["workflow_name"] = workflow_name
         item["workflow_inputs"] = dict(workflow_inputs or {})
     with _SCHEDULE_LOCK:
-        items = load()
+        items = load(for_write=True)   # a corrupt file is never overwritten
         items.append(item)
         save(items)
     return item
@@ -288,7 +380,7 @@ def list_tasks(*, channel: str | None = None, chat_id: str | None = None) -> lis
 def remove_task(task_id: str) -> bool:
     """Remove the entry with the given id. Returns True iff something was removed."""
     with _SCHEDULE_LOCK:
-        items = load()
+        items = load(for_write=True)   # a corrupt file is never overwritten
         new = [i for i in items if i.get("id") != task_id]
         if len(new) != len(items):
             save(new)
@@ -470,9 +562,23 @@ def materialize_due(inbox_dir: Path, now: float | None = None) -> list[dict[str,
 
         kind = it.get("kind", "text")
         if kind == "workflow":
-            ok = _run_workflow_to_outbox(it, now=now)
+            # Overrun policy (console `schedule.overrun`): "skip" drops a fire while the previous
+            # run of the same task is still going (another tick / thread), "queue" and
+            # "parallel" let it fire. Until 2026-10-21 the policy was stored and never read.
+            if it.get("id") in _RUNNING_WORKFLOW_TASKS and (it.get("overrun") or "skip") == "skip":
+                keep.append(it)
+                continue
+            # Persist the advanced state FIRST: a crash between the run and the save used to make
+            # the restarted adapter run the same workflow again (review WFB-R1-16). A failed
+            # outbox write puts the original entry back below, so a retry is still possible.
+            _persist_fired_state(it, now)
+            _RUNNING_WORKFLOW_TASKS.add(it.get("id", ""))
+            try:
+                ok = _run_workflow_to_outbox(it, now=now)
+            finally:
+                _RUNNING_WORKFLOW_TASKS.discard(it.get("id", ""))
             if not ok:
-                # Outbox write failed — keep the task, retry next tick.
+                _persist_fired_state(it, now, restore=True)
                 keep.append(it)
                 continue
         else:
@@ -504,7 +610,7 @@ def materialize_due(inbox_dir: Path, now: float | None = None) -> list[dict[str,
         fired.append({**it, "last_fire": now})
         if it.get("cron"):
             try:
-                next_run = _advance_cron(it["cron"], now)
+                next_run = _advance_cron(it["cron"], now, it.get("timezone"))
             except ValueError:
                 # Bad cron → treat as one-shot, drop it.
                 continue
@@ -518,7 +624,11 @@ def materialize_due(inbox_dir: Path, now: float | None = None) -> list[dict[str,
             # then merge our cron-advancement updates. This prevents the TOCTOU
             # race where a concurrent add_task/remove_task call is overwritten
             # by a stale save of the pre-fire snapshot.
-            current = load()
+            try:
+                current = load(for_write=True)
+            except ScheduleFileCorrupt as exc:
+                logger.warning("schedule: %s — cron advancement not persisted this tick", exc)
+                return fired
             merged: list[dict[str, Any]] = []
             seen_ids: set[str] = set()
             for it in current:

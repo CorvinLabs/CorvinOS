@@ -744,5 +744,10 @@ class TestEnvelopeSigning(unittest.TestCase):
         self.assertEqual(len(tampered_calls), 1)
 
 
+if __name__ == "__main__":  # script mode (run-all-tests.sh): the pytest tier fixture does not apply
+    import a2a_test_tier
+
+    a2a_test_tier.pin_member_tier()
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

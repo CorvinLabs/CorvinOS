@@ -48,6 +48,8 @@ _MIN_FILES = (
     "audit.py",
     "instance_identity.py",
     "a2a_friendship.py",
+    "_bounded_lock.py",   # imported by a2a_friendship since 31fcaa19f
+    "_compat_fcntl.py",   # imported by _bounded_lock
     "a2a_attachments.py",
     "a2a_manifest.py",
     "paths.py",

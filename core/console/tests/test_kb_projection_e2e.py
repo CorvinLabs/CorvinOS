@@ -405,6 +405,9 @@ class KbProjectionE2E(unittest.TestCase):
                 _t.sleep(0.2)
             self.assertGreaterEqual(client.get(f"{_URL}/kb/status").json()["drift_total"], 1)
             self.assertEqual(self._items(client)[f"kb:{self.t2['uid']}"]["status"], "open")
+            # Stop INSIDE the sandbox: a tick that outlives it runs against the restored
+            # process environment — on a developer machine the live `.corvin` chain.
+            kb_projection.stop("_default")
 
     def _sync_tick(self):
         from corvin_console import kb_projection

@@ -71,6 +71,7 @@ _lock = threading.Lock()
 _state: dict[str, dict[str, Any]] = {}
 _started: set[str] = set()
 _stops: dict[str, threading.Event] = {}
+_threads: dict[str, threading.Thread] = {}
 
 
 class KbTransitionRefused(service.TaskTrackingError):
@@ -183,15 +184,22 @@ def ensure_tenant_kb(tenant_id: str) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         return {"status": "error", "error": f"plugin source not found: {type(exc).__name__}: {exc}"[:300]}
     if not init.is_file():
-        return {"status": "error", "error": "the installed Knowledge Graph plugin predates kb_init.py — update it"}
-    r = subprocess.run([sys.executable, str(init), "--target", str(tenant_kb_path(tenant_id))],
-                       capture_output=True, text=True, timeout=120, env=_env("kb-init"))
+        return _kg_failed_outcome(tenant_id, {"status": "error",
+                                              "error": "the installed Knowledge Graph plugin predates kb_init.py — update it"})
+    try:
+        r = subprocess.run([sys.executable, str(init), "--target", str(tenant_kb_path(tenant_id))],
+                           capture_output=True, text=True, timeout=120, env=_env("kb-init"))
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return _kg_failed_outcome(tenant_id, {"status": "error", "error": f"kb_init did not finish: {type(exc).__name__}"})
     try:
         res = json.loads(r.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError):
         res = {"status": "error", "error": (r.stderr or r.stdout).strip()[-300:]}
     if res.get("status") in ("created", "ok", "upgraded"):
         _kg_ensured.add(tenant_id)
+        _kg_failed.pop(tenant_id, None)
+    else:
+        return _kg_failed_outcome(tenant_id, res)
     if res.get("status") in ("created", "upgraded"):
         try:
             from . import audit as console_audit  # noqa: PLC0415
@@ -203,6 +211,20 @@ def ensure_tenant_kb(tenant_id: str) -> dict[str, Any]:
         except Exception:  # noqa: BLE001 — the KB's own git history records it too
             log.warning("tenant KB audit record failed", exc_info=True)
     log.info("tenant knowledge base for %s: %s", tenant_id, res.get("status"))
+    return res
+
+
+#: tenant -> (retry-after monotonic, last outcome). A refused or failed kb_init used to run on
+#: EVERY 2-s projector tick (30 subprocesses and 30 log lines a minute, forever — review
+#: 2026-10-21); now it is retried after KB_INIT_RETRY_S and logged once per attempt.
+_kg_failed: dict[str, tuple[float, dict[str, Any]]] = {}
+KB_INIT_RETRY_S = 600.0
+
+
+def _kg_failed_outcome(tenant_id: str, res: dict[str, Any]) -> dict[str, Any]:
+    _kg_failed[tenant_id] = (time.monotonic() + KB_INIT_RETRY_S, res)
+    log.warning("tenant knowledge base for %s: %s (%s) — next attempt in %d s", tenant_id,
+                res.get("status"), str(res.get("error") or res.get("reason") or "")[:160], int(KB_INIT_RETRY_S))
     return res
 
 
@@ -299,7 +321,11 @@ def sync(tenant_id: str, *, force: bool = False) -> dict[str, Any]:
             and tenant_id not in _kg_ensured and kg_plugin_state(tenant_id) == "enabled"):
         # the tenant's own KB: create it on the first tick after the plugin was enabled, and
         # refresh its engine once per process (a plugin update ships a newer kb.py)
-        ens = ensure_tenant_kb(tenant_id)
+        failed = _kg_failed.get(tenant_id)
+        if failed is not None and failed[0] > time.monotonic():
+            ens = failed[1]                     # back-off: the last outcome stands for now
+        else:
+            ens = ensure_tenant_kb(tenant_id)
         repo = kb_repo()
         if repo is None:
             st = {"state": "error", "error": f"tenant knowledge base: {ens.get('error') or ens.get('status')}",
@@ -544,15 +570,22 @@ def start(tenant_id: Optional[str] = None) -> bool:
     # (a periodic run holds _lock for its subprocesses and would delay the first sync)
     _last_periodic.setdefault(t, time.time())
     _stops[t] = threading.Event()
-    threading.Thread(target=_loop, args=(t, _stops[t]), name=f"kb-projection-{t}", daemon=True).start()
+    _threads[t] = threading.Thread(target=_loop, args=(t, _stops[t]), name=f"kb-projection-{t}", daemon=True)
+    _threads[t].start()
     log.info("kb projection started for tenant %s (KB: %s)", t, kb_repo() or "none yet")
     return True
 
 
-def stop(tenant_id: Optional[str] = None) -> None:
-    """Stop the projector thread (tests; a host shutting down). It may be started again."""
+def stop(tenant_id: Optional[str] = None, *, join_s: float = 30.0) -> None:
+    """Stop the projector thread and WAIT for its tick to end (tests; a host shutting down). It
+    may be started again. Returning before the thread ended let a tick that was already running
+    finish against whatever environment the caller restored next — in a test, the process-level
+    CORVIN_HOME, i.e. the operator's live chain (review 2026-10-21)."""
     t = tenant_id or kb_tenant()
     ev = _stops.pop(t, None)
     if ev is not None:
         ev.set()
+    th = _threads.pop(t, None)
+    if th is not None and th is not threading.current_thread():
+        th.join(timeout=join_s)
     _started.discard(t)

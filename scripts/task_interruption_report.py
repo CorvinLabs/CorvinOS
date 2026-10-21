@@ -120,7 +120,9 @@ def dir_view(tasks_root: Path, marker: object, is_restart_kill, restart_codes: f
             continue
         meta = _read_json(meta_file)
         status = meta.get("status")
-        if not meta.get("task_id") or status not in ("completed", "failed", "cancelled"):
+        # "interrupted" (PLAN-0958 P1: reaped orphans, killed workers) is the status this report
+        # exists for; skipping it dropped every post-P1 C1 case from the table.
+        if not meta.get("task_id") or status not in ("completed", "failed", "cancelled", "interrupted"):
             continue
         events = _events(meta_file.with_name(meta_file.stem + ".events.jsonl"))
         tools = [e.get("tool_name") or "" for e in events if e.get("event") == "tool_use"]

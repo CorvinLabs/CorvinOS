@@ -262,7 +262,8 @@ def inline_block(items: list[tuple[dict[str, Any], Path]]) -> str:
     parts: list[str] = []
     budget = MAX_INLINE_BYTES_PER_MESSAGE
     for meta, path in items:
-        raw = path.read_bytes()[: min(MAX_INLINE_BYTES_PER_FILE, budget)]
+        with path.open("rb") as fh:                      # read only the capped prefix, never 50 MiB
+            raw = fh.read(min(MAX_INLINE_BYTES_PER_FILE, budget))
         budget -= len(raw)
         text = raw.decode("utf-8", errors="replace")
         trunc = " (truncated)" if meta["size"] > len(raw) else ""

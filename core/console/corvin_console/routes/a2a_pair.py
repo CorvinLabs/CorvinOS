@@ -591,18 +591,20 @@ def pair_accept(body: AcceptRequest) -> dict[str, Any]:
     """
     pending_file = _pending_dir() / f"{body.accept_id}.json"
     processed_file = _pending_dir() / f"{body.accept_id}.used"
+    # Verify FIRST, claim SECOND. The invite used to be claimed (renamed) before the signature
+    # was checked and restored afterwards; a flood of bad-signature calls then kept it in the
+    # claimed state most of the time and the legitimate redeemer got 404 (measured 189 of 200
+    # attempts, review 2026-10-21). Reading the pending file never consumes it; the rename
+    # below is still the one-time-use point, so two VALID concurrent accepts resolve to one.
     try:
-        os.rename(pending_file, processed_file)
+        invite = json.loads(pending_file.read_text("utf-8"))
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Unknown or already-used invite")
-
-    try:
-        invite = json.loads(processed_file.read_text("utf-8"))
     except Exception:
         raise HTTPException(status_code=500, detail="Could not read pending invite")
 
     if time.time() > invite.get("expires_at", 0):
-        processed_file.unlink(missing_ok=True)
+        pending_file.unlink(missing_ok=True)
         raise HTTPException(status_code=410, detail="Invite expired")
 
     accept_key: str = invite["accept_key"]
@@ -615,24 +617,21 @@ def pair_accept(body: AcceptRequest) -> dict[str, Any]:
         "redeemer_label": body.redeemer_label,
         "origin_id_for_us": body.origin_id_for_us,
     }
-    # A failed signature/timestamp check must NOT burn the invite: otherwise any
-    # unauthenticated caller who learns the (uuid4) accept_id can send one bad
-    # request and permanently break the legitimate redeemer's pairing. Restore
-    # the pending file so the real redeemer can still accept. A bad-signature
-    # caller gains nothing — it never learns the secret accept_key.
-    def _restore_pending() -> None:
-        try:
-            os.rename(processed_file, pending_file)
-        except OSError:
-            processed_file.unlink(missing_ok=True)
-
+    # A failed signature/timestamp check must NOT burn the invite: any unauthenticated
+    # caller who learns the (uuid4) accept_id could otherwise break the legitimate
+    # redeemer's pairing. Nothing has been claimed yet, so a bad caller changes nothing
+    # and learns nothing (the secret accept_key never leaves the file).
     if not _verify(accept_key, json.dumps(check_payload, sort_keys=True), body.signature):
-        _restore_pending()
         raise HTTPException(status_code=403, detail="Invalid signature")
 
     if abs(time.time() - body.ts) > 300:
-        _restore_pending()
         raise HTTPException(status_code=422, detail="Timestamp out of ±300 s window")
+
+    # The claim: exactly one valid accept wins the rename.
+    try:
+        os.rename(pending_file, processed_file)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Unknown or already-used invite")
 
     try:
         r2i_hmac: str = invite["r2i_hmac_key"]

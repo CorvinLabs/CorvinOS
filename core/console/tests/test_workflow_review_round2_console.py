@@ -12,7 +12,7 @@ import yaml
 from test_workflow_dag_console_e2e import (  # noqa: F401
     _make, _paused_at, _rid, _stream_in_thread, _stub_factory, _wait,
 )
-from test_workflow_resume_hardening import _sandbox  # noqa: F401
+from test_workflow_resume_hardening import _live_sandbox as _sandbox  # noqa: F401
 
 APPROVAL = yaml.safe_dump({
     "awp": "1.1.0", "workflow": {"name": "appr", "description": "d"},
@@ -179,3 +179,11 @@ def test_b09_media_zip_skips_symlinks(env, tmp_path):
     import io, zipfile
     names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
     assert names == ["real.png"]
+
+
+def test_public_error_names_a_refused_spawn_and_an_unavailable_engine():
+    from corvin_console.routes import workflow_dag_run as d
+    from corvin_workflows.engines_claude import ClaudeEngineError, SpawnRefusedError
+    assert "safety gate" in d._public_error(SpawnRefusedError("x"))
+    assert d._public_error(ClaudeEngineError("no cli")).startswith("Worker engine unavailable")
+    assert d._public_error(ValueError("secret path /etc")) == "Run failed (ValueError)"

@@ -306,6 +306,14 @@ def attested_model(result: SpawnResult) -> str:
 
     Scans the drained frames newest-first, so a late ``result`` frame wins over
     the ``system.init`` frame if they ever disagree (a mid-turn downgrade).
+
+    The final ``result`` frame of ``claude -p --output-format json`` carries NO
+    ``model`` key at all (verified on a real capture, 2026-10-21): the model is
+    only in ``modelUsage``, keyed by model id. A caller that sees only that frame
+    (the ACS worker reads the JSON envelope, not the stream) would otherwise get
+    ``""`` for every run — the ADR-0759 "0 priced runs" failure again. One
+    ``modelUsage`` key is the model; several name the one with the most output
+    tokens (a sub-agent model never outweighs the turn's own).
     """
     for ev in reversed(result.events):
         raw = ev.raw
@@ -319,6 +327,18 @@ def attested_model(result: SpawnResult) -> str:
                     break
             if isinstance(node, str) and node.strip():
                 return node.strip()
+        usage_by_model = raw.get("modelUsage")
+        if isinstance(usage_by_model, dict):
+            best, best_out = "", -1
+            for model_id, usage in usage_by_model.items():
+                if not isinstance(model_id, str) or not model_id.strip():
+                    continue
+                out = usage.get("outputTokens") if isinstance(usage, dict) else None
+                out = out if isinstance(out, (int, float)) else 0
+                if out > best_out:
+                    best, best_out = model_id.strip(), out
+            if best:
+                return best
     return ""
 
 

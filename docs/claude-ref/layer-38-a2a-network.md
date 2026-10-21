@@ -219,6 +219,19 @@ Registered in `corvin_operator/forge/forge/security_events.py`:
 
 ---
 
+## Member-only network (`a2a.network`, gate 28ad07b54)
+
+A Free install takes no part in the A2A network: the sender refuses every send and ping
+(`rejected`, "A2A network requires a member seat"), and the receiver answers `/v1/a2a/receive`,
+`/v1/a2a/ping` and `/v1/a2a/friendship-ack` with 403 `license_required` (since 2026-10-21 — before,
+ping and friendship-ack still answered, so a free install was distinguishable from one that is not
+listening). The verdict is `license.capability_decision` on the chain; an ALLOW is remembered for
+10 minutes per tenant (`a2a_license_gate.ALLOW_CACHE_TTL_S`, `reset_allow_cache()` on licence
+reload) because the connectivity manager pings every ~30 s and one idle member install wrote 4 347
+identical records in three days; a DENY is never cached. The protocol E2E hosts
+(`a2a_e2e_host.py`, the quota script) bypass exactly this gate and nothing else — they test the
+protocol of fresh instances, the gate's verdict has its own tests.
+
 ## Licence quota enforcement — pairing routes
 
 All console pairing paths enforce `a2a_peers_max` (ADR-0094) before writing

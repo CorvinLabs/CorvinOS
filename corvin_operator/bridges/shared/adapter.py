@@ -5138,6 +5138,12 @@ Voice-note override (optional):
    of a structured reply (lists, code, tables) would lose load-bearing meaning
    — write the spoken version yourself in your own voice. Skip the tag when
    the chat-text already reads well aloud.
+   Write it for the ear: describe, do not read out. Never speak paths, file
+   names, commit hashes, ticket / ADR / plan numbers, version numbers, URLs,
+   function or variable names or command lines — the reader has them in the
+   chat-text. Say what they are instead ("the configuration file for the voice
+   output", "the commit that reworked the summary"). Plain counts such as
+   "three files" or "153 tests" stay. No markdown, no bullets, no status icons.
 
 When information is missing or unclear, ask back:
 5. If the task is missing important information (goal, scope, target,
@@ -9741,12 +9747,12 @@ def build_voice_summary(text: str, max_chars: int = 400,
     spoken = _build_voice_summary_pipeline(text, max_chars, override, task)
     if not spoken:
         return spoken
-    guarded = _guard_spoken(spoken)
+    lang = _resolve_voice_output_language(override or text) or ""
+    guarded = _guard_spoken(spoken, lang or None)
     if guarded:
         return guarded
     log("build_voice_summary: final spoken text was instruction/markup only "
         "— speaking the neutral announcement")
-    lang = _resolve_voice_output_language(override or text) or ""
     return _neutral_announcement(
         "en" if lang.split("-", 1)[0].lower() == "en" else "de")
 
@@ -9791,7 +9797,7 @@ def _build_voice_summary_pipeline(text: str, max_chars: int,
     # produce near-silent audio. Fall through to the summarizer in that case.
     _MIN_OVERRIDE_CHARS = 10
     if override is not None and len(override.strip()) >= _MIN_OVERRIDE_CHARS:
-        spoken = _strip_for_speech(_guard_spoken(override.strip()))
+        spoken = _strip_for_speech(_guard_spoken(override.strip(), _resolve_voice_output_language(override) or None))
         if spoken:
             return _with_annexes(spoken)
         log("build_voice_summary: <voice> override was instruction/markup "
@@ -9943,7 +9949,7 @@ def _build_voice_summary_pipeline(text: str, max_chars: int,
             env=env, timeout=150, check=True,
         )
         out_raw = proc.stdout.strip()
-        out = _guard_spoken(out_raw)
+        out = _guard_spoken(out_raw, output_language or None)
         # summarize.py always exits 0 and prints SOMETHING even when both LLM
         # backends failed and it fell through to its near-verbatim structural
         # fallback — that degraded result previously looked identical, from
@@ -9994,7 +10000,7 @@ def _build_voice_summary_pipeline(text: str, max_chars: int,
             + (f" — stderr: {stderr_tail}" if stderr_tail else ""))
         # The head of the raw answer is spoken only after the guard has passed
         # it; if the guard leaves nothing, the neutral line is spoken instead.
-        head = _guard_spoken(_truncate_at_boundary(text, max_chars))
+        head = _guard_spoken(_truncate_at_boundary(text, max_chars), _resolve_voice_output_language(text) or None)
         if not head:
             log("build_voice_summary: answer head is instruction/markup text only "
                 "— speaking the neutral announcement")
@@ -10025,18 +10031,20 @@ def _guard_module():
         return None
 
 
-def _guard_spoken(s: str) -> str:
+def _guard_spoken(s: str, lang: str | None = None) -> str:
     """Final gate before TTS: drop instruction/markup/placeholder text.
 
     Returns "" when nothing human-speakable is left. The caller must then speak
     ``_neutral_announcement`` — never the input. Fail-closed: if the guard module
     cannot be loaded or raises, "" is returned, so nothing unguarded is spoken.
+    *lang* is the resolved voice output language: identifiers in the text are
+    described in that language (German / English), left as they are otherwise.
     """
     mod = _guard_module()
     if mod is None:
         return ""
     try:
-        return mod.sanitize_spoken(s)
+        return mod.sanitize_spoken(s, lang) if lang else mod.sanitize_spoken(s)
     except Exception:  # noqa: BLE001
         return ""
 

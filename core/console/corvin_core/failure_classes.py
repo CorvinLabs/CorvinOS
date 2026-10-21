@@ -55,7 +55,9 @@ class Classification:
 
 # Exit statuses a signal death produces: -N (asyncio / subprocess) and 128+N (shell wrapper).
 # SIGTERM and SIGKILL are the two a service stop sends (systemd: SIGTERM, then SIGKILL).
-_SIGNAL_NUMBERS = (signal.SIGTERM, signal.SIGKILL)
+# signal.SIGKILL does not exist on Windows (importing this module there raised AttributeError and
+# took turn_recovery, the adapter's exit classifier and the interruption report with it, 2026-10-21).
+_SIGNAL_NUMBERS = (int(signal.SIGTERM), int(getattr(signal, "SIGKILL", 9)))
 RESTART_EXIT_CODES: frozenset[int] = frozenset(
     {-int(n) for n in _SIGNAL_NUMBERS} | {128 + int(n) for n in _SIGNAL_NUMBERS} | {-1}
 )

@@ -1729,7 +1729,7 @@ class WorkflowChatHandler:
                 if not _mentions_subject(_load_json(meta), subject_id):
                     continue
                 wid = meta.name[: -len(".meta.json")]
-                for extra in (root / f"{wid}.chat.jsonl", root / f"{wid}.awp.yaml",
+                for extra in (root / f"{wid}.chat.jsonl", root / f"{wid}.awp.yaml", root / f"{wid}.awpkg",
                               meta):
                     if extra.exists():
                         extra.unlink()

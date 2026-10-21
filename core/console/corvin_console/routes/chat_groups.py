@@ -162,7 +162,15 @@ def _schedule_delivery(
                     "for group %s (message stored locally)",
                     _FANOUT_MAX_PENDING, group["group_id"],
                 )
-                return endpoint_ids
+                # The sender must learn that no peer was reached: the stored message stayed
+                # "pending" forever and the route answered as if delivered (review 2026-10-21).
+                if message_id:
+                    try:
+                        _store.set_delivery(_a2a_paths.tenant_global_dir(tenant_id), group["group_id"],
+                                            message_id, "dropped")
+                    except Exception:  # noqa: BLE001 — the log line above stands
+                        logger.warning("group fan-out: could not mark message %s dropped", message_id)
+                return []
             _fanout_pending += 1
 
         def _run() -> None:

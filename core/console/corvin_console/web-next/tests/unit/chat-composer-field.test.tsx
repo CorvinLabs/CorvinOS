@@ -76,4 +76,12 @@ describe("checkUploadLimits", () => {
     expect(checkUploadLimits([big], DEFAULT_COMPOSER_LIMITS)).toMatch(/larger than 50 MiB/);
     expect(checkUploadLimits([new File(["x"], "a.txt")], DEFAULT_COMPOSER_LIMITS)).toBeNull();
   });
+
+  it("refuses one file too many, counting what the composer already holds (server: 10 per message)", () => {
+    const files = Array.from({ length: 11 }, (_, i) => new File(["x"], `f${i}.txt`));
+    expect(checkUploadLimits(files, DEFAULT_COMPOSER_LIMITS)).toMatch(/at most 10 attachments/);
+    expect(checkUploadLimits(files.slice(0, 10), DEFAULT_COMPOSER_LIMITS)).toBeNull();
+    expect(checkUploadLimits(files.slice(0, 1), DEFAULT_COMPOSER_LIMITS, 10)).toMatch(/10 already added/);
+    expect(checkUploadLimits(files.slice(0, 1), DEFAULT_COMPOSER_LIMITS, 9)).toBeNull();
+  });
 });

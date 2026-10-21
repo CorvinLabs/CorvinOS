@@ -38,6 +38,10 @@ for p in ("corvin_operator/bridges/shared", "corvin_operator/forge", "core/conso
     sys.path.insert(0, str(R / p))
 import unittest.mock as mock
 _se = mock.MagicMock(); _se.write_event = mock.MagicMock(return_value={"hash": "x"})
+# This test is about the COMPUTE-UNIT quota of a free peer; the member-only network gate
+# (28ad07b54) would refuse every send before the quota is reached, so it alone is bypassed.
+import a2a_license_gate as _gate
+_gate.require_a2a_network = lambda **_k: None
 import remote_trigger_receiver as rtr
 rtr._forge_se = _se
 import remote_trigger_sender as rts

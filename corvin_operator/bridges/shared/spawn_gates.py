@@ -36,6 +36,26 @@ _log = logging.getLogger(__name__)
 
 _l34_cache: dict[str, dict] = {}
 _l34_cache_lock = threading.Lock()
+
+
+class _L34GuardLoadFailed:
+    """Returned by ``_load_l34_guard`` when a tenant policy EXISTS but could not be loaded.
+
+    Distinct from ``None`` (no policy, the operator's opt-in default, fail-open). A policy that
+    is present but unreadable, or a ``data_classification`` module that cannot be imported,
+    is a gate error: ``check_l34`` refuses the spawn (fail-closed, like its classify and
+    validate handlers and like ``check_l44``). Until 2026-10-21 this case returned ``None``
+    and every prompt — a secret included — reached the engine unchecked.
+    """
+
+    def __init__(self, error: str) -> None:
+        self.error = error
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostics
+        return f"<L34 guard load failed: {self.error}>"
+
+
+L34_GUARD_LOAD_FAILED = _L34GuardLoadFailed
 _l35_cache: dict[str, dict] = {}
 _l35_cache_lock = threading.Lock()
 # L44 caches the per-tenant house-rules OVERLAY load only (mtime-keyed on
@@ -77,10 +97,12 @@ def _sibling_paths():
 
 
 def _load_l34_guard(tenant_id: str, corvin_home: Path | None):
-    """Return a mtime-cached DataFlowGuard for *tenant_id*, or None.
+    """Return a mtime-cached DataFlowGuard for *tenant_id*, None, or a load-failure marker.
 
-    Cache is invalidated when ``tenant.corvin.yaml`` mtime changes.
-    Operational errors (missing module, unreadable yaml) fail-open → None.
+    Cache is invalidated when ``tenant.corvin.yaml`` mtime changes. ``None`` means the
+    tenant has no policy file (fail-open by design). A policy file that is present but
+    cannot be loaded (missing module, unreadable yaml) yields an ``_L34GuardLoadFailed``
+    marker — never cached — and ``check_l34`` refuses on it.
     """
     home = _resolve_corvin_home(corvin_home)
     cfg_path = home / "tenants" / tenant_id / "global" / "tenant.corvin.yaml"
@@ -101,8 +123,8 @@ def _load_l34_guard(tenant_id: str, corvin_home: Path | None):
             from data_classification import load_guard_for_tenant  # type: ignore
             guard = load_guard_for_tenant(tenant_id, corvin_home=home)
         except Exception as exc:  # noqa: BLE001
-            _log.warning("spawn_gates: L34 guard load failed (%r) — re-evaluate next call", exc)
-            guard = None
+            _log.warning("spawn_gates: L34 guard load failed (%r) — fail-closed, re-evaluate next call", exc)
+            guard = _L34GuardLoadFailed(type(exc).__name__)
             load_error = True
 
     # Only cache a DEFINITIVE result. A transient load error (config present but
@@ -131,9 +153,10 @@ def check_l34(
 ) -> "str | None":
     """ADR-0042 / L34 pre-spawn data-classification gate.
 
-    Returns ``None`` when the spawn is permitted (gate passes, no tenant
-    config, or operational error — fail-open).  Returns a user-facing
-    refusal string when the gate explicitly denies.
+    Returns ``None`` when the spawn is permitted (gate passes, or no tenant
+    config — the opt-in default, fail-open).  Returns a user-facing refusal
+    string when the gate denies, AND when a present policy could not be loaded,
+    classified or validated (gate error — fail-closed, like ``check_l44``).
 
     Two classification modes:
 
@@ -161,6 +184,18 @@ def check_l34(
     guard = _load_l34_guard(tenant, corvin_home)
     if guard is None:
         return None
+    if isinstance(guard, _L34GuardLoadFailed):
+        # Fail CLOSED: a tenant policy exists, so the operator asked for the gate, and
+        # we cannot evaluate it. Waving the spawn through would send a possibly SECRET
+        # prompt to an engine the policy may forbid.
+        _log.warning("spawn_gates.check_l34: policy present but guard unavailable (%s) — fail-closed",
+                     guard.error)
+        return (
+            "[data-flow] Spawn rejected: the tenant data-classification policy exists but "
+            f"could not be loaded for engine '{engine_id}' (gate error: {guard.error}). "
+            "Fail-closed per tenant data-classification policy. Operator: check the "
+            "data_classification module and tenant.corvin.yaml::spec.data_classification."
+        )
 
     if classification is None:
         try:
