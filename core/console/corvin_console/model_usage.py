@@ -78,6 +78,8 @@ class _ModelRow:
     ok: int = 0
     failed: int = 0
     unfinished: int = 0
+    #: cut off by the console itself (rc -1): neither ok nor failed
+    cancelled: int = 0
     total_duration_ms: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -227,7 +229,12 @@ def _collect(path: Path, since_ts: float = 0.0) -> dict[str, _Observation]:
             target.cache_write_tokens += _as_int(details.get("cache_creation_input_tokens"))
             target.duration_ms = target.duration_ms or _as_float(details.get("duration_ms"))
             if not target.status:
-                target.status = "ok" if _as_int(details.get("exit_code")) == 0 else "error"
+                _rc = _as_int(details.get("exit_code"))
+                # -1 is the console's own cut-off code (operator stop, host shutdown,
+                # vanished consumer — chat_runtime's cancel path), never the engine's
+                # verdict: 5 of 36 turns on a fresh system read "failed" after four
+                # restarts and one stop (round 2, 2026-10-21). Keep it apart.
+                target.status = "ok" if _rc == 0 else ("cancelled" if _rc == -1 else "error")
 
     # A turn that got an os-role span contributed its tokens to that span above;
     # keeping its os_turns entry too would count the turn twice.
@@ -436,7 +443,7 @@ def model_usage(tenant_id: str) -> dict[str, Any]:
         "providers": [],
         "roles": [],
         "totals": {
-            "turns": 0, "ok": 0, "failed": 0, "unfinished": 0,
+            "turns": 0, "ok": 0, "failed": 0, "cancelled": 0, "unfinished": 0,
             "total_tokens": 0, "input_tokens": 0, "output_tokens": 0,
             "cache_read_tokens": 0, "cache_write_tokens": 0,
         },
@@ -451,6 +458,8 @@ def model_usage(tenant_id: str) -> dict[str, Any]:
         row.turns += 1
         if not obs.finished:
             row.unfinished += 1
+        elif obs.status == "cancelled":
+            row.cancelled += 1
         elif obs.status and obs.status != "ok":
             row.failed += 1
         else:
@@ -503,6 +512,7 @@ def model_usage(tenant_id: str) -> dict[str, Any]:
             "share_pct": _share(row.turns, total_turns),
             "ok": row.ok,
             "failed": row.failed,
+            "cancelled": row.cancelled,
             "unfinished": row.unfinished,
             "success_pct": _share(row.ok, row.ok + row.failed),
             "avg_duration_ms": round(row.total_duration_ms / row.turns, 1) if row.turns else 0.0,
@@ -543,7 +553,7 @@ def model_usage(tenant_id: str) -> dict[str, Any]:
     for obs in observations.values():
         role = obs.role or "unknown"
         acc = role_acc.setdefault(role, {
-            "role": role, "turns": 0, "ok": 0, "failed": 0, "unfinished": 0,
+            "role": role, "turns": 0, "ok": 0, "failed": 0, "cancelled": 0, "unfinished": 0,
             "total_tokens": 0, "input_tokens": 0, "output_tokens": 0,
             "cache_read_tokens": 0, "cache_write_tokens": 0,
             "total_duration_ms": 0.0,
@@ -552,6 +562,8 @@ def model_usage(tenant_id: str) -> dict[str, Any]:
         acc["turns"] += 1
         if not obs.finished:
             acc["unfinished"] += 1
+        elif obs.status == "cancelled":
+            acc["cancelled"] += 1
         elif obs.status and obs.status != "ok":
             acc["failed"] += 1
         else:
@@ -592,6 +604,7 @@ def model_usage(tenant_id: str) -> dict[str, Any]:
         "turns": total_turns,
         "ok": sum(r.ok for r in rows.values()),
         "failed": sum(r.failed for r in rows.values()),
+        "cancelled": sum(r.cancelled for r in rows.values()),
         "unfinished": sum(r.unfinished for r in rows.values()),
         "total_tokens": total_tokens_all,
         "input_tokens": sum(r.input_tokens for r in rows.values()),

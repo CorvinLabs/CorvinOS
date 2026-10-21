@@ -135,3 +135,23 @@ def audio_kind(data: bytes) -> str:
     if data[:4] == b"RIFF":
         return "wav"
     return "unknown"
+
+
+def product_python() -> str:
+    """The installed product's interpreter (where piper-tts, edge-tts, pywhispercpp live):
+    CORVIN_FRESH_PYTHON, else the uv tool venv the installer creates, else this interpreter."""
+    import shutil
+    import sys
+    env = os.environ.get("CORVIN_FRESH_PYTHON", "").strip()
+    if env:
+        return env
+    tool = Path.home() / ".local" / "share" / "uv" / "tools" / "corvinos" / "bin" / "python"
+    if tool.exists():
+        return str(tool)
+    serve = shutil.which("corvinos-serve")
+    if serve:
+        cand = Path(serve).resolve().parent / "python"
+        if cand.exists():
+            return str(cand)
+    return sys.executable
+

@@ -336,7 +336,8 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
   const network = feed.data?.network;
   // One rule for every composer control: no endpoint, no member seat, or the peer ended
   // the pairing — each with its own notice in the header (2026-10-21).
-  const cannotSend = peer?.can_send === false || (network ? !network.allowed : false) || Boolean(peer?.peer_revoked_at);
+  const cannotSend = peer?.can_send === false || (network ? !network.allowed : false) || Boolean(peer?.peer_revoked_at)
+    || Boolean(peer?.peer_network_denied_at);
   const { recording, startRecording, stopRecording } = useVoiceInput({
     value: text, onChange: setText, csrf, disabled: busy || cannotSend,
     onError: setError,
@@ -453,6 +454,13 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
                 data-testid="peer-revoked-notice"
                 title={`${label} ended this pairing on ${new Date(peer.peer_revoked_at * 1000).toLocaleString()}. The history stays readable; to pair again, remove the connection in the peer settings and import a new token.`}>
                 <AlertTriangle className="h-3 w-3" /> pairing ended by {label} ·
+              </span>
+            )}
+            {!peer?.peer_revoked_at && peer?.peer_network_denied_at && (
+              <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
+                data-testid="peer-no-seat-notice"
+                title={`${label}'s install answered on ${new Date(peer.peer_network_denied_at * 1000).toLocaleString()} that it has no member seat for the A2A network. Nothing can be exchanged until it has one.`}>
+                <AlertTriangle className="h-3 w-3" /> {label} has no member seat ·
               </span>
             )}
             {peer?.task_capacity === "limit_reached" && (
@@ -626,6 +634,7 @@ export function PeerConversation({ peerId, csrf }: { peerId: string; csrf: strin
                   ? "Pairing removed — this conversation is read-only"
                   : network && !network.allowed ? "A2A needs a member seat on this install"
                   : peer?.peer_revoked_at ? `${label} ended this pairing`
+                  : peer?.peer_network_denied_at ? `${label} has no member seat`
                   : peer?.can_send === false ? "Sending to this agent is disabled" : `Message ${label}…`}
                 disabled={cannotSend || recording || busy}
                 className="min-h-[2rem] flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"

@@ -186,7 +186,18 @@ def _project_current() -> dict[str, Any]:
     d = _profile.load(force=True)
     identity = {k: d.get(k) for k in _IDENTITY_KEYS}
     audience = {k: d.get(k) for k in _AUDIENCE_KEYS}
-    return {"identity": identity, "audience": audience, "extra": d.get("_extra") or {}}
+    return {
+        "identity": identity,
+        "audience": audience,
+        "extra": d.get("_extra") or {},
+        # WHO set display_language: "operator" (a pin — the reply AND the spoken
+        # language), "installer" (the locale seed — a default the user's own
+        # language overrides) or "" (unset). The SPA's TTS pin and the Voice
+        # page's preview read this; without it the chat page spoke a German
+        # answer with the English voice on every seeded `en` install
+        # (measured on a fresh system 2026-10-21, round 2).
+        "display_language_source": _profile.display_language_source(d),
+    }
 
 
 def _apply_section(current: dict[str, Any], section_body: Any | None, keys: tuple[str, ...]) -> dict[str, Any]:
@@ -297,9 +308,12 @@ def profile_write(
             _apply_section(d, body.identity, _IDENTITY_KEYS)
             _apply_section(d, body.audience, _AUDIENCE_KEYS)
             if body.identity is not None and "display_language" in body.identity.model_fields_set:
-                # The operator chose a language: it is a pin from now on, not
-                # the installer's locale seed (profile.display_language_pin).
-                _profile.mark_display_language_operator(d)
+                # The operator CHOSE a language only when the write changes it (or sets one where
+                # none was): the profile page autosaves the whole identity object after any keystroke,
+                # so a PUT that echoes the installer's seed back is not a choice — it re-pinned the
+                # seed on a name edit (round 2, 2026-10-21, static cluster finding 3).
+                if str(d.get("display_language") or "") != _lang_before:
+                    _profile.mark_display_language_operator(d)
             _profile._validate_tts_voices(d)
 
         _profile.mutate(_apply_write)

@@ -1293,6 +1293,22 @@ This change is **structural** — adapter spawn shape changed (stream-json
 input, stdin pipe). After updating, `bash corvin_operator/bridges/bridge.sh
 restart` is required for the running adapter to pick it up.
 
+### A missing offline voice fetches itself (round 2, 2026-10-21)
+
+The installer fetches the Piper model of the install-time language only, and the console provisions
+one only on a Settings change. With the seed being a default (not a pin), a German chat on an `en`
+install is normal — and with edge-tts unreachable (measured with `speech.platform.bing.com`
+blocked in the container) `/voice/tts` and the automatic recap fell back to Piper's wrong-language
+last resort: German text spoken by `en_US-lessac-medium`, on every turn, with nothing ever
+fetching the German model. `say.py::_piper_model_for` now requests the missing model in a detached
+process the first time it takes that last resort (`_request_missing_piper_model`, at most once per
+10 min per language, marker `.fetch-requested-<lang>` next to the models; same shape as
+`lang_cli._provision_voice`), so the next synthesis speaks the right voice. Unknown languages and
+exact matches never spawn. `POST /voice/summarize` without `lang` follows the text's language
+(it defaulted to German). Guards: `corvin_operator/voice/scripts/test_say_missing_model_fetch.py`,
+`core/console/tests/test_voice_summary_language.py::SummarizeRouteLanguageTests`,
+`tests/e2e/fresh_system/test_fresh_voice_summary_live.py::test_summarize_without_a_language_follows_the_text`.
+
 ### Automatic recaps speak the chat's language (2026-10-21)
 
 `generate_and_persist_session_summary` and `generate_and_persist_task_summary` (and the owed-task

@@ -135,3 +135,54 @@ class TestNoIngressPortAnnouncementWhileDown(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestPeerWithoutSeatIsNamed(_Pair):
+    """Round 2 of the fresh-system review (2026-10-21): a member install paired with a peer that
+    has no member seat read ACTIVE / online "via relay" while every task was refused, and the
+    dialog's hint said "set your own A2A URL". The peer's hello answer (403 ``license_required``)
+    now stamps ``_peer_network_denied_at`` on both records; the next hello it accepts clears it."""
+
+    def setUp(self):
+        super().setUp()
+        for d in (self.O, self.E):   # an ordinary, activated pairing
+            c = json.loads((d / f"{self.tok.kid}.json").read_text())
+            c["state"], c["enabled"], c["url"] = "ACTIVE", True, "http://10.0.0.2:8775"
+            ft._atomic_write(d / f"{self.tok.kid}.json", c)
+
+    def _refresh(self, hello):
+        with mock.patch.object(ft, "retry_friendship_ack", return_value=hello), \
+             mock.patch.object(ac, "_ping_peer", return_value=(False, None)):
+            return ac.refresh_friendship(self.tok.kid, origins_dir=self.O, endpoints_dir=self.E)
+
+    def test_no_seat_answer_is_stamped_and_an_accepted_hello_clears_it(self):
+        res = self._refresh({"ok": False, "error": "http_403:license_required"})
+        self.assertEqual((res["state"], res["peer_knows_us"]), ("UNREACHABLE", False))
+        for d in (self.O, self.E):
+            c = json.loads((d / f"{self.tok.kid}.json").read_text())
+            self.assertGreater(c["_peer_network_denied_at"], 0, d)
+        self._refresh({"ok": True, "reachable": True, "via": "direct"})
+        for d in (self.O, self.E):
+            self.assertNotIn("_peer_network_denied_at", json.loads((d / f"{self.tok.kid}.json").read_text()))
+
+    def test_a_signed_ping_the_peer_answers_clears_it_too(self):
+        self._refresh({"ok": False, "error": "http_403:license_required"})
+        self.assertIn("_peer_network_denied_at", self.origin())
+        with mock.patch.object(ft, "retry_friendship_ack", return_value={"ok": False, "error": "unreachable"}), \
+             mock.patch.object(ac, "_ping_peer", return_value=(True, "direct")):
+            ac.refresh_friendship(self.tok.kid, origins_dir=self.O, endpoints_dir=self.E)
+        self.assertNotIn("_peer_network_denied_at", self.origin())
+
+    def test_a_plain_403_is_revoked_not_no_seat(self):
+        self._refresh({"ok": False, "error": "http_403"})
+        o = self.origin()
+        self.assertFalse(o["_peer_knows_us"])
+        self.assertNotIn("_peer_network_denied_at", o)
+
+    def test_direct_403_body_reason_travels_in_the_hello_error(self):
+        import io
+        import urllib.error as _ue
+        exc = _ue.HTTPError("http://x", 403, "Forbidden", {}, io.BytesIO(b'{"reason":"license_required"}\n'))
+        self.assertEqual(ft._http_error_reason(exc), "license_required")
+        exc2 = _ue.HTTPError("http://x", 403, "Forbidden", {}, io.BytesIO(b"<html>"))
+        self.assertIsNone(ft._http_error_reason(exc2))

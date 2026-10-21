@@ -405,6 +405,22 @@ applied); and a re-run killed with a child open was announced as "recovered". Th
   contradicted it).
   Proof: `core/console/tests/test_shutdown_live_turns.py`; on a fresh system
   `tests/e2e/fresh_system/test_fresh_chat_live.py::test_restart_mid_turn_keeps_the_streamed_answer`.
+- **A turn whose answer was already delivered is never re-run (round 2, 2026-10-21).** The cancel
+  path tells the finaliser what the client already had (`sess.in_flight_answered`): the closing
+  result (`final`) or an interim answer with background children still open (`children_open`,
+  ADR-2236). Such a task is `interrupted` with NO signal exit code — `turn_recovery.is_restart_kill`
+  keys on a C1 exit, so it is not a candidate — the text is kept without the "cancelled" marker
+  (`[background work interrupted here]` when children were cut), and only cut-off background work
+  gets the C1 `needs_user` notice ("interrupted by a service restart … does NOT continue on its
+  own"). Measured before the fix on a fresh system: a restart inside a background scope persisted
+  `GESTARTET\n[answer cancelled here]`, recovery re-ran the request — the answer twice and the
+  `sleep 240` background job twice. `open_children` is not consulted at cancel time: the
+  restart's SIGTERM reaches the child first and the CLI has already reported it finished. Proof:
+  `test_chat_turn_task_finalized_on_disconnect.py::test_a_shutdown_after_the_answer_is_not_re_run`,
+  `tests/e2e/fresh_system/test_fresh_chat_live.py::test_restart_inside_a_background_scope_keeps_the_answer_and_does_not_re_run`.
+  The audit pair still closes with `os_turn.completed exit_code -1` and the OS span with
+  `status: cancelled`; `model_usage` counts such turns as `cancelled`, apart from `failed`
+  (the Models panel read five console cut-offs as engine failures, 86 % success, on a fresh system).
 - **The re-run key is the request, not the prompt.** `turn_recovery._strip_restart_prefix` removes
   every stacked restart prefix before the attempt key is computed, so `MAX_ATTEMPTS` holds. Since
   2026-10-21 (BGT-15) a re-run no longer stores the prefix at all: `turn_recovery._run_once` calls
@@ -985,6 +1001,19 @@ only (no legacy `sessions/`, which had made `tenant_migrate` write its record in
 `global/forge` chain). **Must NOT do:** resolve the root in a module of its own — call
 `paths.corvin_home()`; write a unit/plist without `CORVIN_HOME`.
 
+**The Claude Code hooks (`corvin_operator/voice/hooks/`) are the one place that runs OUTSIDE a
+unit and possibly outside the checkout** (Claude Code copies the plugin into
+`~/.claude/plugins/cache/…`). Their inlined resolver is `CORVIN_HOME` → the checkout marker
+`.corvin_repo` above the hook file → the root `corvin-install` recorded in
+`<voice config>/installer.json` (`corvin_home`) → `~/.corvin`. Until 2026-10-21 (round 2) they
+also accepted any ancestor with a `plugins/` directory as "the checkout" — which, from the cache,
+is `~/.claude` — and `web_trust_gate` wrote its audit record to the pre-ADR-0007
+`<home>/global/forge/audit.jsonl` (a second live chain → `audit_chain_split`); it now writes the
+tenant chain. The hooks run through `hooks/with_python.sh`: a fresh system has no `python3` on
+PATH (uv's Python lives in the corvinos tool venv only), and `python3 …` commands exited 127 —
+the L10 path gate never ran. The voice plugin's tag updater (`scripts/autoupdate.sh`, a
+`SessionStart` hook) stands down in a CorvinOS checkout: `update.sh` is the one updater.
+
 Verification happens in two complementary steps:
 
 1. **Self-test** (`_check_chain_anchor()`) calls `verify_chain_anchor(..., emit=False)` —
@@ -1491,3 +1520,11 @@ else in its cgroup (the test uses a transient `systemd-run --user --scope`, or s
 refuses to run outside a service main process, so an adapter started by a test can no longer kill its runner; the
 scope is still the cleaner way to boot the daemon. Handlers that add `bridges/shared` to `sys.path` use `append`, never `insert(0)`:
 `shared/profile.py` would shadow the stdlib `profile`.
+
+### The bridges' Python interpreter (2026-10-21)
+
+Every bridge daemon spawns the product's CLIs through `shared/js/python_bin.js::pythonBin()`:
+`CORVIN_PYTHON` (baked into every unit by the installer, the corvinos tool venv's interpreter) →
+`PYTHON` → `python3` on PATH → the tool venv at uv's default location → the literal `python3`. A README
+install on a bare system has no `python3`; before the resolver every slash command would have failed
+with ENOENT there. The Claude Code hooks resolve the same way through `voice/hooks/with_python.sh`.

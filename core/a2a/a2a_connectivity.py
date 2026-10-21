@@ -213,7 +213,7 @@ def refresh_friendship(
             hello_via = str(result.get("via") or "direct")
         else:
             hello_error = str(result.get("error") or "failed")
-            if hello_error == "http_403":
+            if hello_error.startswith("http_403"):
                 # The peer answered and does not recognise the pairing
                 # (revoked on their side): say so instead of keeping a stale
                 # "they know us".
@@ -245,6 +245,15 @@ def refresh_friendship(
                 cfg["state"] = "ACTIVE" if reachable else "UNREACHABLE"
             cfg["_peer_knows_us"] = peer_knows_us
             cfg["_peer_reports_reachable"] = peer_reports_reachable
+            # The peer answered the hello with "no member seat" (a2a.network is member-only):
+            # nothing can be exchanged until it has one. Cleared by the next hello it accepts.
+            # Cleared by the next hello it accepts — or by a signed ping it answers, since its
+            # ping handler refuses without a seat too (hellos run at the health interval, pings
+            # every minute: a seat that arrived must not read "no seat" for minutes).
+            if hello_error == "http_403:license_required":
+                cfg["_peer_network_denied_at"] = now
+            elif reachable or (hello and hello_error is None):
+                cfg.pop("_peer_network_denied_at", None)
             if via is not None:
                 cfg["_last_via"] = via
             if reachable:
@@ -435,7 +444,9 @@ class ConnectivityManager:
         cfg = a2a_ingress.load_config()
         outcome = self.ingress.ensure(cfg)
         if outcome == "started":
-            _log.warning("A2A ingress listening on %s:%d (A2A routes only)", cfg.host, cfg.port)
+            # The normal outcome of every boot — INFO, not a warning (fresh-system
+            # review 2026-10-21: it was one of two WARNING lines on a clean boot).
+            _log.info("A2A ingress listening on %s:%d (A2A routes only)", cfg.host, cfg.port)
             _audit("A2A.ingress_state", "INFO", reason="started", source=str(cfg.port))
             self.wake()  # advertised URL may change → re-announce
         elif outcome == "failed":
@@ -502,7 +513,9 @@ class ConnectivityManager:
         if stored == desired:
             return
         ft.set_my_url(desired)
-        _log.warning("A2A advertised URL updated (%s, port %d)", source, port)
+        # Expected on every boot with --lan (the LAN address is detected and
+        # announced) — INFO; it was the second WARNING of a clean first boot.
+        _log.info("A2A advertised URL updated (%s, port %d)", source, port)
         _audit("A2A.my_url_updated", "INFO", reason=source, source=str(port))
         self.wake()  # every peer must hear the new address
 
@@ -605,8 +618,10 @@ class ConnectivityManager:
             if self._known_states.get(kid) == token:
                 return
             self._known_states[kid] = token
-        _log.warning("A2A connection %s… is %s (via %s)", kid[:8], state,
-                     summary.get("via") or "-")
+        # A healthy transition is information; only a degraded one is a warning (the journal of a
+        # fresh install carried "is active (via direct)" at WARNING on every boot, 2026-10-21).
+        (_log.info if state == "active" else _log.warning)(
+            "A2A connection %s… is %s (via %s)", kid[:8], state, summary.get("via") or "-")
         _audit("A2A.connection_state", "INFO" if state == "active" else "WARNING",
                endpoint_id=kid, reason=state, source=str(summary.get("via") or "none"),
                reachable=bool(summary.get("reachable")))

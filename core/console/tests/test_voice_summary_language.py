@@ -115,3 +115,24 @@ class ChatLanguageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SummarizeRouteLanguageTests(unittest.TestCase):
+    """`POST /voice/summarize` without `lang` summarises in the TEXT's language
+    (round 2, 2026-10-21): it defaulted to German, so an English text on an
+    English install came back as a German recap."""
+
+    def test_explicit_de_en_win_and_omitted_follows_the_text(self):
+        with patch.object(voice_routes, "_profile_module", _Profile), patch.object(voice_routes, "_PROFILE_OK", True):
+            self.assertEqual(voice_routes._summarize_lang("de", "Leaves turn red in autumn."), "de")
+            self.assertEqual(voice_routes._summarize_lang("EN", "Die Blätter werden im Herbst rot."), "en")
+            self.assertEqual(voice_routes._summarize_lang(None,
+                "Leaves turn red in autumn because chlorophyll breaks down and the anthocyanins become visible."), "en")
+            self.assertEqual(voice_routes._summarize_lang("",
+                "Die Blätter werden im Herbst rot, weil das Chlorophyll abgebaut wird und die Anthocyane sichtbar werden."), "de")
+            # language-less text → the install default (the seed), not German
+            self.assertEqual(voice_routes._summarize_lang(None, "42 7 1999"), "en")
+
+    def test_request_model_accepts_omitted_lang(self):
+        self.assertIsNone(voice_routes.SummarizeRequest(text="x").lang)
+

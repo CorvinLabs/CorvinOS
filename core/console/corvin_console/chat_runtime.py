@@ -748,6 +748,15 @@ class WebChatSession:
     # turn ends without one. One turn per session at a time (_session_turn_lock in
     # routes/chat.py), so a single slot is sufficient.
     in_flight_task: tuple[Path, str] | None = field(default=None, repr=False)
+    # Set by _stream_turn_impl's cancel path when the turn had ALREADY delivered its
+    # answer ("final": the closing result was yielded; "children_open": the answer
+    # was yielded while background children were still running, ADR-2236). Read
+    # once by _finalize_in_flight_task: such a turn is never re-run by turn
+    # recovery — measured on a fresh system 2026-10-21 (round 2): a restart during
+    # a background scope persisted "GESTARTET\n[answer cancelled here]", recovery
+    # re-ran the request and the user got the answer twice plus a second copy of
+    # the background job.
+    in_flight_answered: str = field(default="", repr=False)
 
     @property
     def chat_key(self) -> str:
@@ -6200,6 +6209,7 @@ def _finalize_in_flight_task(sess: WebChatSession) -> str | None:
     Returns the finalized task_id, or None when there was nothing to finalize.
     """
     slot, sess.in_flight_task = sess.in_flight_task, None
+    answered, sess.in_flight_answered = sess.in_flight_answered, ""
     if slot is None:
         return None
     tasks_dir, task_id = slot
@@ -6227,13 +6237,21 @@ def _finalize_in_flight_task(sess: WebChatSession) -> str | None:
             _log.info("finalized task %s (chat=%s) as cancelled by the operator", task_id, sess.chat_key)
             return task_id
         reason_code = why or "turn_closed_without_terminal_event"
+        if answered:
+            # The answer was delivered before the cut (the cancel path persisted it).
+            # No signal exit code: turn_recovery.is_restart_kill reads only a C1 exit
+            # as "re-run after the restart", and re-running a request whose answer
+            # exists repeats the answer. Background children that were still open
+            # did NOT continue — say so (C9 "does NOT continue on its own"); a turn
+            # whose closing result was out lost nothing and gets no notice.
+            reason_code = f"{reason_code}_after_answer"
         tm.record_event(
             task_id,
             # A host shutdown is a signal exit for turn_recovery.is_restart_kill
             # (classify_failure: RESTART_EXIT_CODES → C1): a turn that produced
             # no output is re-run after the restart, exactly like a reaped orphan.
             {"event": "task.interrupted", "reason": reason_code,
-             "exit_code": -1 if reason_code == "shutdown" else None},
+             "exit_code": -1 if (reason_code == "shutdown" and not answered) else None},
             reason="turn interrupted before any terminal event",
             tenant_id=sess.tenant_id,
         )
@@ -6242,7 +6260,7 @@ def _finalize_in_flight_task(sess: WebChatSession) -> str | None:
         # "interrupted by a service restart … continues automatically" when it re-runs
         # the turn. A C9 "does NOT continue on its own" right before that contradicted it
         # (measured 2026-10-21).
-        if reason_code != "shutdown":
+        if answered == "children_open" or (reason_code != "shutdown" and not answered):
             _notify_system_interruption(sess, tm, task_id, reason_code)
     except Exception:  # noqa: BLE001 — bookkeeping must never break a turn
         _log.debug("could not finalize in-flight task %s", task_id, exc_info=True)
@@ -6264,7 +6282,10 @@ def _notify_system_interruption(sess: WebChatSession, tm: Any, task_id: str, rea
         instruction = str((getattr(task, "input", None) or {}).get("instruction") or "")
         task_notices.emit(
             sess, "needs_user", task_id=task_id,
-            failure_class="C4" if reason_code == "detached_timeout" else "C9",
+            # C1 = a service restart (cut-off background work after the answer,
+            # round 2); C4 = the detached-turn time limit; anything else is C9.
+            failure_class=("C4" if reason_code == "detached_timeout"
+                           else "C1" if reason_code.startswith("shutdown") else "C9"),
             instruction=instruction, attempt=0, max_attempts=0,
         )
     except Exception:  # noqa: BLE001
@@ -6936,7 +6957,9 @@ async def _stream_turn_impl(
                     span_id=_os_span_id, role="os",
                     engine_id=_os_engine, model_id=_os_model_used,
                     run_id=_os_turn_id, turn_id=_os_turn_id,
-                    status="ok" if rc == 0 else "error",
+                    # -1 is the console's own cut-off (cancel / shutdown), not an
+                    # engine failure: the Models panel counts it apart (model_usage).
+                    status="ok" if rc == 0 else ("cancelled" if rc == -1 else "error"),
                     duration_ms=int((time.monotonic() - _os_turn_start) * 1000),
                     tool_call_count=_os_tools_called,
                 )
@@ -8635,6 +8658,24 @@ async def _stream_turn_impl(
         # already catches both). Emit the paired completion before re-raising.
         _audit_emit(sess, "web.turn.cancelled")
         _os_emit_completed(rc=-1)
+        # Was the ANSWER already delivered? `result_text` is set when the closing
+        # result was yielded; `_bg_last_interim` when the answer went out as an
+        # interim result with background children still open (ADR-2236). Then the
+        # text is complete — mark only what was really cut (the background work),
+        # and tell the finaliser so turn recovery does not re-run the request
+        # (round 2, 2026-10-21: a restart inside a background scope repeated the
+        # answer and started the background job a second time).
+        # (`open_children` is NOT consulted: the restart's SIGTERM reaches the
+        # background child first, the CLI reports it finished and the set is
+        # already empty when this handler runs — measured on the fresh system.)
+        if result_text.strip():
+            sess.in_flight_answered = "final"
+            _cut_marker = ""
+        elif _bg_last_interim.strip():
+            sess.in_flight_answered = "children_open"
+            _cut_marker = "\n[background work interrupted here]"
+        else:
+            _cut_marker = "\n[answer cancelled here]"
         # The user already saw the streamed part of the answer: keep it, marked,
         # so the session ledger re-supplies what was said instead of "(no text
         # answer)" (review R5-7). Synchronous file I/O — no await after a cancel.
@@ -8642,7 +8683,7 @@ async def _stream_turn_impl(
             try:
                 _append_turn(sess, "assistant",
                              [{"kind": "text",
-                               "text": "".join(final_text_parts) + "\n[answer cancelled here]"}],
+                               "text": "".join(final_text_parts) + _cut_marker}],
                              cli_spawned=True)
             except Exception:  # noqa: BLE001
                 pass

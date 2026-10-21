@@ -89,7 +89,8 @@ git-ignored — and `~/.config/corvin-voice`) are never touched by an update.
 
 Because the install is editable, the code that runs **is** your clone. Everything the install generates —
 the Node.js runtime, the services' state, the audit chain — lives in ONE place, `.corvin/` inside the clone
-(`CORVIN_HOME`); nothing is written to `~/.corvin`. On Linux, with passwordless `sudo` available, optional
+(`CORVIN_HOME`); on Linux and macOS nothing is written to `~/.corvin` (`install.ps1` keeps
+`%USERPROFILE%\.corvin` unless `CORVIN_HOME` is set). On Linux, with passwordless `sudo` available, optional
 system tools (`jq`, `espeak-ng`, `poppler-utils`, `pandoc`, `pulseaudio-utils`, `gnupg`) are installed through
 `apt`/`dnf`/`pacman`; without it they are skipped and the exact command is printed — nothing else elevates,
 and nothing ever prompts for a password.

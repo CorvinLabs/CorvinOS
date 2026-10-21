@@ -1253,6 +1253,59 @@ promised path looks like there, and what it took:
   tier alone pinned the Free compute pool (10 runs/day) refused the 11th worker run with `quota`. `tests/federation/conftest.py` carries the same pin — without it every catalog refresh
   there answered 502 from the day the gate landed.
 
+### Round 2 — refuting the fixes above (2026-10-21, same two containers reinstalled from `main`)
+
+- **The gate had a transport hole.** `a2a_http_server` answers ping and friendship-ack with 403
+  `license_required` on a Free install; the relay listener (`a2a_relay.RelayListener._handle_deliver`)
+  dispatched both. A member install therefore read its Free peer *ACTIVE / online via relay* while every task
+  was refused opaquely. The listener now answers `{"reason": "license_required"}` for both control messages
+  when `receiver._network_denied()` is `True` (a verdict, never a test double's attribute); task envelopes
+  were already refused inside `receive()`.
+- **The peer's missing seat is a fact the sender can show.** `send_friendship_ack` reads the 403 body
+  (`_http_error_reason`) and returns `http_403:license_required` (direct, or the sealed relay answer);
+  `refresh_friendship` stamps `_peer_network_denied_at` on origin and endpoint records and clears it on the next
+  accepted hello or answered signed ping (the peer's ping handler refuses without a seat too, and hellos run
+  only every `HEALTHY_INTERVAL_S` = 600 s). `connections`, `diagnostics` and `a2a_feed._peers` expose
+  `peer_network_denied_at`; the UI shows *PEER HAS NO MEMBER SEAT* / *<peer> has no member seat* and mutes
+  the "set your own A2A URL" hint. A plain 403 (no body reason) still means "revoked on their side".
+- **The CLI siblings of the 402:** `corvin_a2a._network_refusal()` runs the same gate before
+  `create-token` and `import-token` (exit 1, nothing written). Measured before the fix: the Free install
+  created the token, imported a member's token, printed `state=UNREACHABLE` and the member side accepted the
+  ack — a pairing that could never carry anything.
+- **Chain growth from the gate.** Three sources, all measured on the Free container: (1) the console's
+  status reads — `a2a_network_status()` called `require_a2a_network`, whose DENY was audited on every call,
+  and the thread polls the feed every 4 s (10 reads → 10 deny records); (2) the peer's probes — 68
+  `remote_trigger_receiver.receive` denies + 20 own-ping denies in ten idle minutes; (3) on a MEMBER install
+  `validator.reload_from_disk` cleared the gate's ALLOW cache on EVERY authenticated console request (27
+  `console.a2a_pair` allow records in 15 min). Now: `a2a_license_gate.network_status()` is the status read
+  (30 s, both verdicts), `require_a2a_network` remembers a DENY for `DENY_CACHE_TTL_S` = 60 s (fail-closed:
+  only the deny→allow transition can lag, and `reset_allow_cache` — now called only when the token on disk
+  changed — forgets it at once), the ALLOW cache keeps its 600 s. After the fix: 2 records in 2 idle minutes.
+- **Verified, no defect:** `model_pin` + `a2a_worker`'s `normalise_pin` on every spawn site (the receiver
+  task path, a conversation's local turn, `/ask @mine`, delegate); the presence nudge coalesces (20 failing
+  sends → 3 `A2A.ping_result`, no 60/min ping-limit contact); attachment/issued_at/TTL-replay edges answer
+  opaquely except `replay` (`tests/e2e/fresh_system/a2a_edges_driver.py`); with the peer's direct address
+  blackholed a message rides the production relay and the worker's answer returns `via: relay` in ~7 s
+  (`A2A.relay_fallback_used reason=connection_failed` → `A2A.response_received status=ok via=relay`).
+- **Chat-staged two-step confirm, proven (round 1 believed the tool was not attached):** with the
+  `a2a_send_from_chat` flag on, the console chat's worker has `mcp__forge__a2a_send`; a real turn staged a pending
+  record (`requested_by: chat_mcp_tool`, "not sent yet … confirm it in the Relay panel within 10 minutes"), the
+  operator's `POST /a2a/feed/send/confirm/<id>` answered 202 and the peer's worker replied `STAGED`; a second
+  confirm of the same id is 404. `require_ibc` switched on by hand on one side refuses the other with
+  `identity_required` ("… setting require_ibc to false on their side"); the refusing side's chain names
+  `instance_attestation_required_but_absent`. Both are in the two-instance suite.
+- **Status vs decision:** `a2a_network_status()` serves READS from the gate's memo; `friendship/create`,
+  `friendship/import` and `POST /a2a/feed/send` call it with `fresh=True` (the gate itself). The sender's
+  feed-row closing on a refusal (`feed_task_recorded`) stays: a seat can lapse between the console's check and
+  `send()`, and without it the row read *queued* forever (`test_free_refusal_closes_the_feed_row_the_console_recorded`).
+- **Still open:** a message to a peer that is down with the relay on is *delivery unconfirmed* and is not
+  delivered when the peer returns (T-0252; the envelope TTL 60 s < the relay queue TTL 300 s) — no
+  sender-side outbox exists. `require_ibc` has no product toggle (an origin-file edit); it is permissive on
+  every fresh pairing (ADR-2099).
+- **Journal:** "relay listener connected", "connection … is active (via …)" and "Prometheus client not
+  available" are INFO now; "relay listener started (default relay)" stays WARNING on purpose (a third-party
+  relay sees routing metadata).
+
 ### Continuous watch — `a2a_live_watch.py` (2026-10-09)
 
 **Goal:** A2A works on every freshly installed instance. **Success = a pass says `healthy`.** One pass

@@ -373,6 +373,21 @@ class TestSenderE2E(unittest.TestCase):
         self.assertFalse(result.ok)
         wake.assert_called_once_with(ENDPOINT_ID)
 
+    def test_free_refusal_closes_the_feed_row_the_console_recorded(self):
+        """The console records the outbound feed row BEFORE send() (feed_task_recorded) and answers
+        402 from the gate's status; a seat that lapses between that read and the send (or a status
+        served from the gate's 30 s memo) reaches send() with the row already "queued" — the
+        refusal must close it (round 2, 2026-10-21: the branch had no test and was called dead)."""
+        from unittest.mock import patch
+        recorded = []
+        with patch.object(rts, "_network_denied", return_value="a2a.network denied: A2A network requires a member seat"), \
+             patch.object(rts, "_record_feed_response", side_effect=lambda eid, res, label=None: recorded.append((eid, res))):
+            sender = rts.RemoteTriggerSender(endpoints_dir=self.endpoints_dir)
+            result = sender.send(ENDPOINT_ID, instruction="hi", timeout_s=2, feed_task_recorded=True)
+        self.assertEqual((result.status, result.error_category), ("rejected", rts.ErrorCategory.REJECTED))
+        self.assertEqual([r[0] for r in recorded], [ENDPOINT_ID])
+        self.assertEqual(recorded[0][1].task_id, result.task_id)
+
     def test_replay_rejected_by_receiver(self):
         sender = rts.RemoteTriggerSender(endpoints_dir=self.endpoints_dir)
         # First request succeeds

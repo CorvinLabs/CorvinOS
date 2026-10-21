@@ -2886,7 +2886,11 @@ def _voice_segment_sync(
 class SummarizeRequest(BaseModel):
     """Summarize a response for TTS playback."""
     text: str = Field(..., min_length=1, max_length=20000)
-    lang: str = Field(default="de", description="Language: 'de' or 'en'")
+    # None → the language of the TEXT (operator pin → detection → the install
+    # default), like every other voice surface. It defaulted to "de", so an
+    # English text summarised without an explicit lang came back in German
+    # (measured on a fresh `en` install, round 2, 2026-10-21).
+    lang: str | None = Field(default=None, description="Language: 'de' or 'en'; omitted = the text's own language")
     max_chars: int = Field(default=400, ge=100, le=2000)
 
 
@@ -2895,6 +2899,18 @@ class SummarizeResponse(BaseModel):
     summary: str
     original_len: int
     summary_len: int
+
+
+def _summarize_lang(requested: str | None, text: str) -> str:
+    """The base prompt summarize.py gets: ``de`` or ``en``. An explicit de/en wins;
+    otherwise the text's own language through the shared resolver (operator pin →
+    confident de/en detection → the installer's seed → system locale), ``en`` for
+    anything that is not German — never a hardcoded German default."""
+    req = (requested or "").strip().lower()
+    if req in ("de", "en"):
+        return req
+    resolved = (_resolve_voice_output_language(text) or "").lower()
+    return "de" if resolved.startswith("de") else "en"
 
 
 @router.post("/voice/summarize", response_model=SummarizeResponse)
@@ -2929,9 +2945,7 @@ def voice_summarize(
         rec.tenant_id, rec.sid_fingerprint, audit_action="voice.summarize",
     )
 
-    # Validate language
-    if body.lang not in ("de", "en"):
-        body.lang = "de"
+    lang = _summarize_lang(body.lang, body.text)
 
     try:
         # Call summarize.py with stdin input
@@ -2939,7 +2953,7 @@ def voice_summarize(
             [
                 sys.executable,
                 str(summarize_path),
-                "--lang", body.lang,
+                "--lang", lang,
                 "--max-chars", str(body.max_chars),
             ],
             input=body.text,

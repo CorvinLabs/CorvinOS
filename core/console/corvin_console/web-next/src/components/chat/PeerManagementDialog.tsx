@@ -1333,8 +1333,15 @@ function FriendshipConnectionsList() {
                       ENDED BY PEER
                     </Badge>
                   ) : null}
+                  {!c.peer_revoked_at && c.peer_network_denied_at ? (
+                    <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30 text-[10px]"
+                      data-testid="peer-no-seat-badge"
+                      title={`The peer's install answered on ${new Date(c.peer_network_denied_at * 1000).toLocaleString()} that it has no member seat for the A2A network. Nothing can be exchanged until it has one; the next hello it accepts clears this.`}>
+                      PEER HAS NO MEMBER SEAT
+                    </Badge>
+                  ) : null}
                   <PeerKnowsUsHint state={c.state} peerKnowsUs={c.peer_knows_us}
-                    muted={Boolean(c.peer_revoked_at) || (network ? !network.allowed : false)} />
+                    muted={Boolean(c.peer_revoked_at) || Boolean(c.peer_network_denied_at) || (network ? !network.allowed : false)} />
                   <div className="ml-auto flex gap-1.5 shrink-0">
                     {c.presence === "offline" && (
                       <EnableRelayPrompt

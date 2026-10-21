@@ -255,28 +255,42 @@ def _pair_write_lock():
 
 _NETWORK_DENIED_MSG = (
     "A2A is member-only on this install: pairing, pings and messages need a member seat. "
-    "Until one is active, a token can be created or imported but the peer can never be reached "
-    "and nothing is sent."
+    "Until one is active, no token can be created or imported and nothing is sent."
 )
 
 
-def a2a_network_status() -> dict[str, Any]:
+def a2a_network_status(*, fresh: bool = False) -> dict[str, Any]:
     """``{"allowed": bool, "reason": str | None, "detail": str | None}`` — the ``a2a.network``
     verdict (member-only, gate 28ad07b54) as every console read reports it.
+
+    READS reuse the gate's remembered verdict (``a2a_license_gate.network_status``, 30 s); a WRITE
+    (``friendship/create``, ``friendship/import``, ``POST /a2a/feed/send``) passes ``fresh=True`` and
+    asks the gate itself — a refused decision, not a status badge.
 
     Measured on two fresh (Free) installs, 2026-10-21: the import answered ``ok: true`` /
     ``UNREACHABLE``, the dialog said *peer can't reach you back — set your own A2A URL*, every
     ping wrote a deny record to the chain — and nothing said "member seat". Fail-closed like
     the gate itself: an unavailable checker reads as not allowed.
     """
+    # A status read, not an enforcement point: the gate remembers the verdict for a short window
+    # (``a2a_license_gate.STATUS_CACHE_TTL_S``) so the console's polls do not write a deny record
+    # to the chain every 4 s on a Free install (round 2, 2026-10-21). Sends still re-check.
     try:
         import a2a_license_gate as _gate  # type: ignore[import-not-found]  # noqa: PLC0415
-        _gate.require_a2a_network(entry_point="console.a2a_pair")
-    except Exception as exc:  # noqa: BLE001 — any failure is a refusal, never a pass
-        reason = "member_seat_required"
-        if not isinstance(exc, getattr(sys.modules.get("a2a_license_gate"), "A2ANetworkDenied", ())):
-            reason = "licence_check_unavailable"
-        return {"allowed": False, "reason": reason, "detail": _NETWORK_DENIED_MSG}
+        if fresh:
+            try:
+                _gate.require_a2a_network(entry_point="console.a2a_pair")
+                verdict: dict[str, Any] = {"allowed": True, "reason": None}
+            except _gate.A2ANetworkDenied as exc:
+                verdict = {"allowed": False, "reason": "licence_check_unavailable"
+                           if "unavailable" in str(exc) else "member_seat_required"}
+        else:
+            verdict = _gate.network_status(entry_point="console.a2a_pair")
+    except Exception:  # noqa: BLE001 — any failure is a refusal, never a pass
+        verdict = {"allowed": False, "reason": "licence_check_unavailable"}
+    if not verdict.get("allowed"):
+        return {"allowed": False, "reason": str(verdict.get("reason") or "member_seat_required"),
+                "detail": _NETWORK_DENIED_MSG}
     return {"allowed": True, "reason": None, "detail": None}
 
 
@@ -288,7 +302,7 @@ def _require_a2a_network_for_pairing() -> None:
     neither the ack nor a ping — CHANGELOG 2026-10-21) and would only fill the chain with
     deny records at every backoff step.
     """
-    status = a2a_network_status()
+    status = a2a_network_status(fresh=True)
     if status["allowed"]:
         return
     raise HTTPException(status_code=402, detail={
@@ -1841,6 +1855,9 @@ def friendship_connections(
             # The peer's signed revoke notice (a2a_friendship._process_revoke_notice) — the
             # record is kept for the operator to remove; nothing can be sent over it.
             "peer_revoked_at": cfg.get("_peer_revoked_at"),
+            # The peer's hello answer was "no member seat" (a2a_connectivity.refresh_friendship):
+            # it is not "unreachable" and not "does not know us" — it cannot join the network.
+            "peer_network_denied_at": cfg.get("_peer_network_denied_at"),
         }
 
     for path in sorted(_endpoints_dir().glob("*.json")):
@@ -1857,6 +1874,8 @@ def friendship_connections(
             seen[kid]["url"] = url
             if not seen[kid].get("peer_revoked_at"):
                 seen[kid]["peer_revoked_at"] = cfg.get("_peer_revoked_at")
+            if not seen[kid].get("peer_network_denied_at"):
+                seen[kid]["peer_network_denied_at"] = cfg.get("_peer_network_denied_at")
         else:
             seen[kid] = {
                 "kid": kid,
@@ -1869,6 +1888,7 @@ def friendship_connections(
                 "peer_knows_us": bool(cfg.get("_peer_knows_us", False)),
                 "peer_reports_reachable": bool(cfg.get("_peer_reports_reachable", False)),
                 "via": cfg.get("_last_via"),
+                "peer_network_denied_at": cfg.get("_peer_network_denied_at"),
             }
 
     # ``state`` is what the last writer claimed; ``presence`` is the measured,
@@ -2110,6 +2130,7 @@ def a2a_diagnostics(
             "last_check_at": cfg.get("_last_check_at"),
             "has_peer_url": bool(cfg.get("url")),
             "peer_revoked_at": cfg.get("_peer_revoked_at"),
+            "peer_network_denied_at": cfg.get("_peer_network_denied_at"),
         })
     pending = sorted(p.stem for p in _pending_friendships_dir().glob("*.json")) \
         if _pending_friendships_dir().exists() else []

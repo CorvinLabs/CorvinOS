@@ -2,6 +2,134 @@
 
 ## [Unreleased]
 
+### Fixed — peers and A2A, round 2 (refutation of the 2026-10-21 fixes on two fresh Ubuntu 24.04 containers)
+- **A Free install answered pings and friendship acks over the relay.** The HTTP ingress refuses both with
+  403 `license_required` (a2a.network is member-only), the relay listener dispatched them — so a member install
+  showed its Free peer *ACTIVE / online via relay* while every task was refused "without naming a reason".
+  The listener now answers the same `license_required` on every transport (`a2a_relay.py`).
+- **A peer that has no member seat is named.** The peer's hello answer (403 `license_required`, direct or via
+  relay) stamps `_peer_network_denied_at` on the connection (`a2a_friendship.send_friendship_ack` keeps the
+  reason, `a2a_connectivity.refresh_friendship` writes it; cleared by the next hello or signed ping the peer
+  accepts). `friendship/connections`, `a2a/diagnostics` and the feed's peers carry `peer_network_denied_at`;
+  the peer dialog shows *PEER HAS NO MEMBER SEAT*, the thread says *<peer> has no member seat* and disables
+  the composer, and the "set your own A2A URL" hint is muted. Before, such a peer read as "peer can't reach
+  you back" with the wrong advice.
+- **`corvin-a2a create-token` / `import-token` refuse on a Free install like the console does** (exit 1,
+  "A2A network requires a member seat … nothing was written"). They created the token, wrote the origin and
+  endpoint files and printed `state=UNREACHABLE` while the console answered 402.
+- **Status reads no longer write a deny record per poll.** `a2a_network_status()` (every `connections`,
+  `diagnostics` and `GET /a2a/feed` read — the thread polls the feed every 4 s) called the enforcement gate,
+  and a DENY was audited on every evaluation: a Free install with one peer chat open wrote a
+  `license.capability_decision` + `license.free_tier` pair every 4 s. `a2a_license_gate.network_status()`
+  remembers the verdict for 30 s (status only; `friendship/create`, `friendship/import` and `POST /a2a/feed/send`
+  ask the gate fresh, and sends and pings keep enforcing). The notice no longer claims a token "can be created or
+  imported"; the live suite unpins both containers when it ends.
+- **The gate remembers a DENY for 60 s.** An idle Free install that a member peer keeps probing wrote 68
+  `remote_trigger_receiver.receive` denies and 20 of its own ping denies in ten minutes. A remembered DENY
+  delays only the deny→allow transition, and the licence reload that loads a new token forgets it at once.
+- **`validator.reload_from_disk` reset the gate's caches on EVERY call** — including the one every
+  authenticated console request makes — so with the console open the ALLOW was re-evaluated (and audited) on
+  every ping and send on a member install (27 `console.a2a_pair` allow records in 15 min, measured). The reset
+  now happens only when the token on disk actually changed.
+- **Routine boot lines are INFO, not WARNING:** "relay listener connected", "connection … is active",
+  "Prometheus client not available; metrics disabled". The journal of a fresh install carried them at WARNING
+  on every boot; the degraded transitions (`one_way`, `unreachable`) and "relay listener started (default
+  relay)" (a trust-model fact) stay WARNING.
+- **Group chat says that no agent answers a group message** (ADR-2218 human-only path): the delivery badge
+  reads *Delivered to N connected instances · people there read it, no agent answers* with the way to get an
+  agent's answer in its tooltip. The CLI's two German strings are English.
+- **Chat-staged two-step confirm proven end to end** (round 1 believed the `a2a_send` MCP tool was not attached on
+  a fresh install): with `a2a_send_from_chat` on, a real chat turn's worker called `mcp__forge__a2a_send`, staged a
+  pending record ("Staged the message … not sent yet … confirm it in the Relay panel within 10 minutes"), the
+  operator's confirm answered 202 and the peer's worker replied `STAGED`; the confirm is one-time. `require_ibc`
+  switched on by hand on one side refuses the other with `identity_required` and the way out named.
+- **Verified, no defect (round 2):** every spawn site of a federated agent normalises the model through
+  `model_pin` + `a2a_worker`'s `normalise_pin` (a provider-qualified id is stripped like an operator pin);
+  the presence nudge coalesces — twenty failing sends in one second caused three probes, no ping storm; the
+  attachment edges (16 ok / 17 refused, digest mismatch, `../` name, duplicate name), the issued_at window
+  (±290 s accepted, ±310 s refused) and a replay after the envelope's TTL all answer the same opaque
+  `rejected` (only `replay` is named); a message to a peer whose direct address is unreachable goes through
+  the production relay and the worker's answer comes back `via: relay` in ~7 s.
+- **Fresh-system E2E (two instances):** `tests/e2e/fresh_system/test_fresh_a2a_two_instances_live.py` adds
+  the CLI refusal, the status-read growth bound, the envelope edges (`a2a_edges_driver.py`) and the
+  no-seat peer; unit tests: `test_a2a_license_gate.py` (new), `test_a2a_network_gate_routes.py` (new),
+  `test_corvin_a2a_network_gate.py` (new, with a tier-pin `conftest.py` for the CLI tests),
+  `test_a2a_relay.py` (Free relay listener), `test_a2a_connectivity_r3.py` (the no-seat marker),
+  `peer-conversation-network-notice.test.tsx` (the notice).
+
+### Fixed — installation and first boot, round 2 (refutation on a fresh Ubuntu 24.04, 2026-10-21)
+- **The Claude Code hooks ran nowhere on a fresh system.** `hooks.json` started every hook as `python3 …`;
+  a system installed per the README has no `python3` on PATH (uv's Python lives in the corvinos tool
+  venv only), so each hook exited 127 and the fail-closed L10 path gate, the web-trust gate and the
+  elevation gate never executed (measured: every hook exited 127; through the launcher a ledger write is denied, exit 2). The hooks run
+  through `hooks/with_python.sh` (python3 → `CORVIN_PYTHON` → the tool venv → `python`), and
+  `stop_hook.sh` puts the venv on PATH.
+- **The voice plugin's tag updater hammered the operator's checkout at every Claude session start.**
+  `scripts/autoupdate.sh` (a `SessionStart` hook) ran `git fetch --tags --prune-tags` under an 8 s kill on
+  the CorvinOS clone — 173 release tags, and on a shallow clone 5–42 MB of `tmp_pack` garbage left in
+  `.git/objects/pack` per session (eight files within fifteen minutes of the first boot) — and would have detached HEAD onto a
+  tag that `update.sh` then refuses to update. It stands down in a CorvinOS checkout (`.corvin_repo`):
+  `update.sh` is the one updater.
+- **A fresh install reported a CRITICAL "possible G-vector attack" on its first boot.** The licence
+  loader wrote `license.token_source` 55 ms before it created `instance_seed.key`, then found the seed
+  "NEWLY CREATED on an existing audit chain" and recorded `audit.instance_seed_rotated` CRITICAL on a
+  system nobody had touched. The seed is created before the boot's first audit record.
+- **The auto-update check was invisible.** `update_manager` logged under its module name, outside the
+  `corvin.` namespace the hosts' handlers listen to — a check that fetched, stalled and was killed at its
+  timeout left no line; and both hosts (gateway + mounted console) scheduled it, so two `git fetch`
+  raced on one checkout. One scheduling per process; the outcome is one journal line.
+- **Hooks from the plugin cache resolved `~/.claude/.corvin`.** The inlined root resolver accepted any
+  ancestor with a `plugins/` directory as "the checkout" — from `~/.claude/plugins/cache/…` that is
+  `~/.claude`. Now: `CORVIN_HOME` → `.corvin_repo` marker → the root `corvin-install` recorded in
+  `installer.json` → `~/.corvin`; `web_trust_gate` writes the tenant chain, not the pre-ADR-0007
+  `<home>/global/forge/audit.jsonl` (a second live chain). `core/paths/tenant.py` answers
+  `<checkout>/.corvin` for a checkout like the other three resolvers (it adopted it only once the
+  directory existed).
+- **Windows twin of the one-root split.** `install.ps1` prepared `~\.corvin` on a FRESH clone (it adopted
+  `<checkout>\.corvin` only if it already existed) while every Python resolver answers `<checkout>\.corvin`,
+  and the logon task carried no `CORVIN_HOME`. The installer and `update.ps1` resolve `<checkout>\.corvin`;
+  the task's VBS wrapper sets `CORVIN_HOME`. (Read-through — no Windows system in this review.)
+- **A crash-looping console is restarted forever, silently.** The round-1 `reset-failed` let the watchdog
+  re-arm the unit's start limit every ~80 s (measured: 25 crashes in 5 min, 29.7 s CPU, no watchdog line).
+  The watchdog now restarts three times a minute apart, then once per 30 minutes, each attempt a
+  WARNING/ERROR journal line naming `journalctl --user -u corvin-webui`.
+- **A wget-only system failed its own install.** Phase 0 accepts wget without curl, but the console probe
+  and the Claude Code download were curl-only: the console came up and `install.sh` exited 2 "did not
+  come up". Every download and probe goes through one helper with a wget fallback.
+- **The Node.js archive is verified.** `ensure-node.sh` defined `_sha256_of` and never called it — the Node
+  runtime that builds and serves the console was the one unverified download; it is now checked against
+  the release's `SHASUMS256.txt` before extraction (fail-closed), including under a root path with a space.
+- **macOS:** `install.sh` no longer reports "Watchdog setup encountered an error" (there is no systemd
+  user session to register a unit with — launchd's KeepAlive keeps the console alive); the console is
+  restarted through `launchctl kickstart`, not by killing the agent's child (which launchd respawned
+  into a port fight); the launchd log hint names the resolved root.
+- **Clean first boot:** `A2A ingress listening`, `A2A advertised URL updated`, the house-rules
+  `CLI resolved ✓` line and the seal-stub notice are INFO (the stub is every build's normal state — no
+  build ships the compiled seal). A clean boot now carries no WARNING/CRITICAL line (measured).
+- **`update.sh` re-provisions units written before 2026-10-21** (a webui unit still on `StartLimitBurst=5`,
+  an adapter unit without `CORVIN_HOME`) by re-running the installer's service registration; the Windows
+  supervisor's comments no longer claim to mirror a `StartLimitBurst=5` the Linux unit no longer has.
+- **Harness:** `fresh.sh install` keeps the install output as `~/install.log` in the system; the live
+  install test asserts the `[Step 17]` block is present before asserting its wording (it read
+  `/tmp/corvinos-install.log`, which never holds that line).
+
+### Fixed — static adversarial review of the fresh-system fixes (round 2, 2026-10-21)
+- **`/v1/approvals` approve/reject/revoke act only inside the caller's tenant.** The gateway guard compares a
+  token's tenant with a `{tid}` path parameter; these routes take the tenant as a query parameter, so once the
+  router was mounted again a token issued for one tenant could approve another tenant's records (the routes
+  checked the gate's tenant against the query, never the caller's). A principal with a different tenant now
+  answers 403 `tenant-mismatch`; the local loopback operator and a same-tenant token are unchanged.
+- **The Phase 1d plugin registry never overwrites the plugin state registry.** Both readers share one
+  `registry.yaml`; with the state schema now recognised quietly, `corvin plugin install|uninstall|enable|disable`
+  would have loaded "no entries", appended one and saved — replacing the state registry's records (the default
+  plugins) with a one-entry list. Every writer refuses with a clear error while the file is in the state schema.
+- **A canonical plugin manifest that appears and vanishes again is reported again** (the once-per-path memo is
+  cleared when the file is found).
+- **Docs:** the installation guide no longer names `~/.corvin` for the audit chain, bridge settings, backups and
+  uninstall (`<checkout>/.corvin`); the licensing reference no longer says "Free: 1 peer" for `a2a.network`; the
+  README says where Windows keeps the runtime root. The migration helper's chain path is pinned to
+  `tenant_audit_chain()` by a test.
+
 ### Fixed — peers and A2A between two fresh systems (two bare Ubuntu 24.04 containers, 2026-10-21)
 - **A peer the sender could not reach is shown offline at once.** Presence comes from the connectivity probe
   (every 60 s); a send that failed with the peer's console down left the feed saying *online* for up to a minute.
@@ -35,6 +163,47 @@
   delegate, an agent-to-agent conversation with an operator message, pause/resume/stop, restart mid-conversation,
   revoke and re-pair.
 
+### Fixed — chat and voice, round 2 (refutation of the fresh-system fixes, 2026-10-21)
+- **The console speaks a reply in the operator's pin only.** `GET /v1/console/profile` now reports
+  `profile.display_language_source` (`operator` / `installer` / `""`); the chat page pinned its spoken language on
+  ANY `display_language`, so on a seeded `en` install every German answer was spoken with the English voice and the
+  on-demand session recap was made in English. The Settings → Voice preview mirrors the real language rule (it
+  printed "(default; still match the user's actual writing language)" for a pin) and says when the value is the
+  installer's locale seed.
+- **`/lang` on a bridge no longer reports the installer's seed as a preference** (`lang_cli.py show`: `set` is the
+  operator's pin only, `source` says who set it), and the **bot-disclosure card takes the profile's language** when
+  the daemon has none of its own — it read `settings.lang || 'en'`, a key nothing writes, so a German install
+  greeted every new user in English.
+- **`POST /v1/console/voice/summarize` without `lang` summarises in the text's language** (operator pin →
+  detection → install default) instead of German.
+- **The profile page's autosave no longer turns the installer's seed into a pin.** `PUT /v1/console/profile`
+  marked `display_language` as the operator's choice whenever the key was present, and the page sends the whole
+  identity after any keystroke — editing the name re-pinned the seed. A pin is recorded only when the value
+  changes (static review finding 3, patch B).
+- **A restart inside a turn's background scope no longer repeats the answer.** The round-1 shutdown fix finalised
+  every cut-off turn as a recovery candidate; a turn whose answer was already delivered (interim result with a
+  background child still open, or the closing result) was persisted as "…\n[answer cancelled here]" and re-run —
+  the answer twice, the background job twice. The cancel path now records that the answer was out: the text is
+  kept with `[background work interrupted here]` (or unmarked), the task is `interrupted` without a signal exit
+  code (never a recovery candidate), and only cut-off background work gets the "does NOT continue on its own"
+  notice.
+- **The Models panel counts console cut-offs as `cancelled`, not `failed`.** An operator stop or a service
+  restart closes the OS turn with the console's own `exit_code -1` / span `status: cancelled`; `model_usage`
+  reported them as engine failures (5 of 36 turns, 86 % success, on a fresh system that had no failure). Rows,
+  roles and totals carry `cancelled`; `success_pct` is over the engine's own verdicts.
+- **The installer verifies that Chromium launches before saying "agent browsing is ready".** On a bare Ubuntu
+  24.04 the download succeeded, the step printed "ready", and the first launch died with "error while loading
+  shared libraries: libglib-2.0.so.0". The step now launches headless Chromium once and, when that fails, names
+  the missing library and the `playwright install-deps chromium` remedy instead.
+- **A missing offline voice fetches itself.** Only the install-time language's Piper model is fetched, so with
+  edge-tts unreachable a German chat on an `en` install was spoken by the English voice on every turn (the recap
+  too) and nothing ever fetched the German model. `say.py` now requests the missing model in a detached process
+  the first time it takes its wrong-language last resort (once per 10 min per language).
+- **Fresh-system live E2E, round 2:** `test_fresh_chat_live.py` adds the profile provenance, attachments read by
+  the next turn, `/btw` from a second socket steering the live turn, and the background-scope restart;
+  `test_fresh_voice_summary_live.py` adds `/voice/summarize` without a language and a Piper WAV through
+  `/voice/transcribe`.
+
 ### Fixed — chat and voice summary on a fresh system (measured on a bare Ubuntu 24.04 container, 2026-10-21)
 - **The bot answers in the user's language on a fresh install.** The installer seeds `display_language` from the
   system locale, and every reply-language rule (console system prompt, closing block, turn language resolver, the
@@ -65,6 +234,11 @@
   assertions; `CORVIN_FRESH_E2E=1`).
 
 ### Fixed — boot noise that every install logged (fresh system and host alike, 2026-10-21)
+- **Bridge slash commands work on a system without `python3`.** A README install on a bare Ubuntu has uv's
+  Python in the corvinos tool venv only; the bridges spawned the literal `python3` for every CLI (`/lang`,
+  `/profile`, consent, A2A, workflows, earcons — 52 sites). `shared/js/python_bin.js` resolves the interpreter
+  once (`CORVIN_PYTHON` → `PYTHON` → `python3` on PATH → the tool venv) and the installer bakes
+  `CORVIN_PYTHON` into every unit it writes, like the Claude Code hooks' launcher does for the hooks.
 - **A console that was restarted a few times no longer stays dead for five minutes.** The installer's units
   allowed 5 starts per 300 s and systemd counts deliberate starts too: the install's own start, the auto-update's
   restart and three operator restarts left `corvin-webui` in `start-limit-hit`, and the watchdog's `restart` failed

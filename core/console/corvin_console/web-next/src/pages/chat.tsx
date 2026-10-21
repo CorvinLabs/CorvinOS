@@ -98,6 +98,7 @@ import {
   useStreamStates,
 } from "@/lib/streaming-state";
 import { useVoicePlayback, type VoiceState } from "@/lib/useVoicePlayback";
+import { ttsFallbackLanguage, ttsLanguageChoice } from "@/lib/tts-language";
 import { ChatAvatar } from "@/components/chat/ChatAvatar";
 import { DaySeparator } from "@/components/chat/DaySeparator";
 import { CHAT_ROLE_MARK, messageTime, messageTimeFull, startsNewDay } from "@/lib/chat-time";
@@ -807,21 +808,22 @@ function ChatPane({
   // detection used to override it, so a Deutsch profile still got English voice
   // — and a single CJK character anywhere in the reply (a quoted string, a code
   // sample) flipped detectTtsLang to "zh" and spoke the whole answer in Chinese.
+  // Only the OPERATOR's pin counts (lib/tts-language.ts): the installer's locale
+  // seed is a default, and treating it as a pin spoke German answers with the
+  // English voice on every seeded `en` install (round 2, 2026-10-21).
   const ttsLangPinned: boolean = React.useMemo(
-    () => Boolean((profileQ.data?.profile?.identity?.display_language ?? "").trim()),
+    () => Boolean(ttsLanguageChoice(profileQ.data?.profile).pin),
     [profileQ.data],
   );
   // Profile display_language as the spoken language when pinned; otherwise the
   // fallback detectTtsLang uses when its own signal is ambiguous.
   const ttsLang: string = React.useMemo(() => {
-    const raw = profileQ.data?.profile?.identity?.display_language ?? "";
-    if (raw.trim()) return raw.trim();
-    // Profile not loaded yet / display_language unset → the browser's own UI
-    // language (the user's actual language) instead of a hard "en", base subtag
-    // only ("de-DE" → "de"). Mirrors the backend OS-locale fallback tier so the
-    // console and the bridge agree on an unseeded box.
+    // Pin or seed → that language; profile not loaded yet / unset → the
+    // browser's own UI language (the user's actual language) instead of a hard
+    // "en", base subtag only ("de-DE" → "de"). Mirrors the backend OS-locale
+    // fallback tier so the console and the bridge agree on an unseeded box.
     const nav = (typeof navigator !== "undefined" && navigator.language) || "";
-    return nav.split("-")[0].toLowerCase() || "en";
+    return ttsFallbackLanguage(profileQ.data?.profile, nav);
   }, [profileQ.data]);
 
   // The WebSocket onmessage handler is bound once per `sid` mount.

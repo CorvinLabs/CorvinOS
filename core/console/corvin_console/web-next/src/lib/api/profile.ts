@@ -37,10 +37,18 @@ export interface AudienceFields {
   tts_provider?: string | null;
 }
 
+/** Who set `identity.display_language` — `routes/profile.py::_project_current`.
+ *  "operator": a pin (Settings → Profile, `/lang set`) — reply AND spoken language.
+ *  "installer": the locale seed of the installer — a DEFAULT the user's own
+ *  language overrides. "" when unset. Absent on a backend older than 2026-10-21,
+ *  which treated every value as a pin. */
+export type DisplayLanguageSource = "operator" | "installer" | "";
+
 export interface ProfileSnapshot {
   identity: IdentityFields;
   audience: AudienceFields;
   extra: Record<string, unknown>;
+  display_language_source?: DisplayLanguageSource;
 }
 
 export interface ProfileResponse {

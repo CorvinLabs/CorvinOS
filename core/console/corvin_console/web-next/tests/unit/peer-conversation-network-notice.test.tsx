@@ -60,6 +60,19 @@ describe("PeerConversation — why nothing can be sent", () => {
     expect(screen.queryByTestId("peer-network-notice")).toBeNull();
   });
 
+  it("a peer whose install has no member seat is named, and the composer is disabled", async () => {
+    // round 2 (2026-10-21): the PEER's hello answer was "license_required" — before, the thread read
+    // as an ordinary unreachable peer and the pairing hint said "set your own A2A URL".
+    feed({ peer_network_denied_at: 1_792_600_008 }, { allowed: true, reason: null, detail: null });
+    renderIt();
+    const notice = await screen.findByTestId("peer-no-seat-notice");
+    expect(notice.textContent).toContain("Test Peer has no member seat");
+    expect(notice.getAttribute("title")).toContain("no member seat for the A2A network");
+    expect(sendButton().disabled).toBe(true);
+    expect(screen.queryByTestId("peer-network-notice")).toBeNull();
+    expect(screen.queryByTestId("peer-revoked-notice")).toBeNull();
+  });
+
   it("an allowed, live pairing shows neither and keeps the composer usable", async () => {
     feed({}, { allowed: true, reason: null, detail: null });
     renderIt();

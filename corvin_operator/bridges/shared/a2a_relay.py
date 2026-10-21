@@ -1025,8 +1025,8 @@ class RelayListener:
 
             await _register_new(kids)
             self.status.update(connected=True, last_error=None, connected_since=time.time())
-            _log.warning("A2A relay listener connected: %s (%d kid(s))",
-                         self._relay_url, len(kids_by_id))
+            _log.info("A2A relay listener connected: %s (%d kid(s))",
+                      self._relay_url, len(kids_by_id))
 
             async def _refresh_loop() -> None:
                 # A pairing made after connect must be reachable without a
@@ -1173,7 +1173,19 @@ class RelayListener:
         #     so a peer replaying bad deliveries could keep us in a reconnect storm
         #     and offline. A dead socket is still noticed by the next `ws.recv()`.
         try:
-            if "ping_id" in payload:
+            # a2a.network is member-only: the HTTP server answers ping and friendship-ack with
+            # 403 ``license_required`` on a Free install, the relay listener answered them
+            # (measured 2026-10-21, round 2: a member peer showed the Free peer ACTIVE / online
+            # "via relay" while every task was refused). Same verdict on every transport.
+            _control = "ping_id" in payload or (
+                "peer_url" in payload and "kid" in payload and "task_id" not in payload)
+            # ``is True``: the receiver's verdict is a bool; a test double's attribute is not a verdict.
+            _denied = getattr(self._receiver, "_network_denied", None)
+            if _control and callable(_denied) and _denied() is True:
+                if _my_instance and payload.get("_relay_sender_instance_id") == _my_instance:
+                    return
+                response_dict = {"reason": "license_required"}
+            elif "ping_id" in payload:
                 # Ping request (ADR-0199). No signed sender_instance_id slot
                 # exists in ping_request's HMAC-covered canonical — adding
                 # one would break the direct-HTTP path's backward

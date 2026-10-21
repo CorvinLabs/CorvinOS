@@ -87,13 +87,15 @@ def _peers() -> list[dict[str, Any]]:
             p = peers.setdefault(pid, {
                 "peer_id": pid, "label": None, "state": None,
                 "can_send": False, "can_receive": False, "enabled": False,
-                "peer_revoked_at": None,
+                "peer_revoked_at": None, "peer_network_denied_at": None,
             })
             p["label"] = p["label"] or _rtl._label_out(cfg)
             p["state"] = p["state"] or cfg.get("state")
             # The peer ended the pairing (signed revoke notice): the thread stays readable,
             # the composer says so instead of "unreachable".
             p["peer_revoked_at"] = p.get("peer_revoked_at") or cfg.get("_peer_revoked_at")
+            # The peer's install has no member seat (its hello answer): the composer says so.
+            p["peer_network_denied_at"] = p.get("peer_network_denied_at") or cfg.get("_peer_network_denied_at")
             p["enabled"] = p["enabled"] or bool(cfg.get("enabled", False))
             if kind == "endpoint":
                 p["can_send"] = bool(cfg.get("enabled", False))
@@ -311,7 +313,7 @@ def a2a_feed_send(rec: Session, body: _SendBody) -> dict[str, Any]:
     # a2a.network is member-only: say so HERE, with the pairing routes' 402, instead of
     # recording a "queued" row the sender then refuses (2026-10-21: the row never resolved).
     from .a2a_pair import a2a_network_status  # noqa: PLC0415
-    network = a2a_network_status()
+    network = a2a_network_status(fresh=True)   # a send is a decision: ask the gate, not the badge
     if not network["allowed"]:
         raise HTTPException(status_code=402, detail={
             "error": "license_limit", "feature": "a2a.network", "reason": network["reason"],

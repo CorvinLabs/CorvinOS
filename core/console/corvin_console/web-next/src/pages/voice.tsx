@@ -116,13 +116,19 @@ type SaveStatus = "idle" | "saving" | "saved" | "error";
 type ErrorKind = "save" | "reset";
 type SaveArgs = { identity: IdentityFields; audience: AudienceFields };
 
-/** Client-side mirror of profile.for_system_prompt() for live preview. */
-function computeSystemBlock(id: IdentityFields): string {
+/** Client-side mirror of profile.for_system_prompt() for live preview.
+ *  `seeded` = the language on screen is still the installer's locale seed (a
+ *  default); anything the operator picked here is a pin and reads as one. The
+ *  preview used to say "(default; still match the user's actual writing
+ *  language)" for every value — the opposite of what a pin does. */
+function computeSystemBlock(id: IdentityFields, seeded: boolean): string {
   const lines: string[] = [];
   if (id.name) lines.push(`- Name: ${id.name}`);
   if (id.display_language)
     lines.push(
-      `- Language: ${id.display_language} (default; still match the user's actual writing language)`,
+      seeded
+        ? `- Language: reply in the language the user writes in (German message → German reply, English message → English reply). When the message has no language of its own, reply in ${id.display_language} (the install default).`
+        : `- Language: ALWAYS answer in ${id.display_language}. This is the operator's explicit setting and overrides the language of the incoming message — do not switch languages because a message, a quoted snippet or a code sample is in another language.`,
     );
   if (id.tone) lines.push(`- Tone: ${id.tone}`);
   if (id.timezone) lines.push(`- Timezone: ${id.timezone}`);
@@ -241,7 +247,18 @@ export function VoicePage() {
   });
 
   // Live system prompt block — recomputed locally so it updates as you type.
-  const systemBlock = React.useMemo(() => computeSystemBlock(identity), [identity]);
+  // The value on screen is the installer's seed only while it is untouched:
+  // the moment the operator picks a language it becomes a pin (the PUT marks it).
+  const languageSeeded = React.useMemo(
+    () =>
+      profileQ.data?.profile?.display_language_source === "installer" &&
+      (identity.display_language ?? "") === (profileQ.data?.profile?.identity?.display_language ?? ""),
+    [profileQ.data, identity.display_language],
+  );
+  const systemBlock = React.useMemo(
+    () => computeSystemBlock(identity, languageSeeded),
+    [identity, languageSeeded],
+  );
 
   const updateIdentity = <K extends keyof IdentityFields>(key: K, value: IdentityFields[K]) => {
     setIdentity((s) => ({ ...s, [key]: value }));
@@ -385,6 +402,12 @@ export function VoicePage() {
                   </option>
                 ))}
               </Select>
+              {languageSeeded && (
+                <p className="mt-1 text-xs text-muted-foreground" data-testid="display-language-seeded">
+                  Detected from the system locale at install. Replies and speech follow the language
+                  you write in; choose a language here to make it the fixed reply language.
+                </p>
+              )}
             </Field>
             <Field label="Tone">
               <Input

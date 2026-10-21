@@ -985,7 +985,7 @@ def _cmd_invite(args: argparse.Namespace) -> int:
             _os.makedirs("outputs", exist_ok=True)
             img = qr.make_image()
             img.save(out_path)
-            print(f"# QR-Code gespeichert: {out_path}")
+            print(f"# QR code saved: {out_path}")
         except ImportError:
             print("# (qrcode package not installed — ASCII QR unavailable)", file=sys.stderr)
 
@@ -1206,8 +1206,32 @@ def _maybe_enable_relay_fallback(*, reason: str) -> None:
         pass
 
 
+def _network_refusal() -> str | None:
+    """The ``a2a.network`` verdict for this install as ONE line, or ``None`` when allowed.
+
+    The network is member-only (gate 28ad07b54). The console answers ``friendship/create`` and
+    ``friendship/import`` with 402 ``member_seat_required`` before any file is written (2026-10-21);
+    the CLI wrote the token and the origin/endpoint files anyway and printed a pairing state
+    (``UNREACHABLE``) that could never change — measured on a fresh install, round 2. Same gate,
+    same fail-closed rule: an unavailable checker is a refusal, never a pass.
+    """
+    try:
+        import a2a_license_gate as _gate  # type: ignore[import-not-found]  # noqa: PLC0415
+        _gate.require_a2a_network(entry_point="corvin_a2a.cli")
+    except Exception as exc:  # noqa: BLE001 — any failure is a refusal
+        denied = getattr(sys.modules.get("a2a_license_gate"), "A2ANetworkDenied", ())
+        why = "A2A network requires a member seat" if isinstance(exc, denied) else "licence check unavailable"
+        return (f"error: {why} — A2A is member-only on this install: pairing, pings and messages "
+                "need a member seat; nothing was written (https://corvin-labs.com/pricing)")
+    return None
+
+
 def _cmd_create_token(args: argparse.Namespace) -> int:
     """Generate a friendship token.  Writes nothing to disk."""
+    refusal = _network_refusal()
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 1
     url = args.url.strip().rstrip("/") if args.url else None
     label = args.label.strip() if args.label else None
     ttl: float | None = None
@@ -1265,7 +1289,7 @@ def _cmd_create_token(args: argparse.Namespace) -> int:
 
     if args.remember_url and url:
         _friendship.set_my_url(url)
-        print(f"[info] Eigene URL gespeichert: {url}", file=sys.stderr)
+        print(f"[info] own URL saved: {url}", file=sys.stderr)
 
     if getattr(args, "json", False):
         print(json.dumps({
@@ -1310,7 +1334,7 @@ def _cmd_create_token(args: argparse.Namespace) -> int:
             out_path = _os.path.join("outputs", "friendship-qr.png")
             _os.makedirs("outputs", exist_ok=True)
             qr.make_image().save(out_path)
-            print(f"# QR-Code gespeichert: {out_path}")
+            print(f"# QR code saved: {out_path}")
         except ImportError:
             print("# (qrcode package not installed — QR unavailable)", file=sys.stderr)
 
@@ -1319,6 +1343,10 @@ def _cmd_create_token(args: argparse.Namespace) -> int:
 
 def _cmd_import_token(args: argparse.Namespace) -> int:
     """Import a friendship token: write origin + endpoint files."""
+    refusal = _network_refusal()
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 1
     token_str = args.token.strip()
     try:
         token = _friendship.parse_and_verify(token_str)

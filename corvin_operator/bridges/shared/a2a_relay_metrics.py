@@ -90,7 +90,7 @@ class RelayMetricsCollector:
     def _init_metrics(self) -> None:
         """Initialize all Prometheus metrics."""
         if not PROMETHEUS_AVAILABLE or self.registry is None:
-            _log.warning("Prometheus client not available; metrics disabled")
+            _log.info("Prometheus client not available; metrics disabled")  # optional dependency, not a fault
             return
 
         try:

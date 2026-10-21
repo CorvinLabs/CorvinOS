@@ -301,6 +301,9 @@ export interface FriendshipConnection {
   /** Unix seconds of the peer's signed revoke notice: the PEER ended this pairing. The record
    *  stays until the operator removes it; nothing can be sent over it and it holds no seat. */
   peer_revoked_at?: number | null;
+  /** Unix seconds of the peer's last hello answer "no member seat": the PEER's install cannot
+   *  join the member-only network, so nothing can be exchanged until it has a seat. */
+  peer_network_denied_at?: number | null;
   /** Measured reachability — the same rule as A2AFeedPeer.presence. */
   presence?: A2APresence;
   last_check_at?: number | null;
@@ -618,6 +621,8 @@ export interface A2AFeedPeer {
   task_capacity?: "available" | "limit_reached" | null;
   /** The peer ended the pairing (its signed revoke notice); see FriendshipConnection.peer_revoked_at. */
   peer_revoked_at?: number | null;
+  /** The peer's install has no member seat; see FriendshipConnection.peer_network_denied_at. */
+  peer_network_denied_at?: number | null;
 }
 
 export type A2APresence = "online" | "offline" | "unknown" | "pending" | "disabled" | "removed";

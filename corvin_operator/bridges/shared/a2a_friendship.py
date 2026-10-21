@@ -1987,6 +1987,11 @@ def _ack_round_trip(
         # device, a 5xx from a proxy) says nothing about the peer: try the
         # relay before giving up.
         if exc.code in (400, 402, 403):
+            # A 403 whose body names ``license_required`` is the peer saying it has no member
+            # seat (a2a_http_server, gate 28ad07b54) — not "revoked": keep the reason so the
+            # connection can show it instead of "set your own A2A URL" (round 2, 2026-10-21).
+            if exc.code == 403 and _http_error_reason(exc) == "license_required":
+                return {"ok": False, "error": "http_403:license_required"}
             return {"ok": False, "error": f"http_{exc.code}"}
         payload = _relay_send_ack(kid, hmac_key, req_body, timeout_s)
         if payload is None:
@@ -2015,6 +2020,8 @@ def _ack_round_trip(
             # rejection), but over the relay it arrived AEAD-sealed under the
             # pairing key — map it like the direct path's HTTP 402.
             return {"ok": False, "error": "http_402"}
+        if via == "relay" and payload.get("reason") == "license_required":
+            return {"ok": False, "error": "http_403:license_required"}  # same as the direct 403
         return {"ok": False, "error": "unsigned_response"}
     body_for_verify = {k: v for k, v in payload.items() if k != "signature"}
     expected = _hmac.new(
@@ -2032,6 +2039,17 @@ def _ack_round_trip(
         "peer_bind_pub": payload.get("bind_pub"),  # recv_key-verified above
         "via": via,
     }
+
+
+def _http_error_reason(exc: Any) -> str | None:
+    """The ``reason`` of a small JSON error body, or None (never raises)."""
+    try:
+        raw = exc.read(4096)
+        body = json.loads(raw.decode("utf-8"))
+        reason = body.get("reason") if isinstance(body, dict) else None
+        return reason if isinstance(reason, str) else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def send_friendship_ack(

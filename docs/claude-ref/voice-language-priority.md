@@ -45,6 +45,29 @@ German question got *"Die Operatorvorgabe lautet, dass ich immer auf Englisch an
 Guard: `corvin_operator/bridges/shared/test_profile_language_pin.py`,
 `tests/e2e/fresh_system/test_fresh_chat_live.py::test_the_bot_answers_in_the_users_language`.
 
+### Every reader of the provenance (round 2, 2026-10-21)
+
+The split above is only complete when every surface that *speaks* or *greets* reads the same
+provenance. Three readers still took the value for a pin and were fixed in round 2:
+
+| Reader | Before | Now |
+|---|---|---|
+| console chat page (`web-next/src/pages/chat.tsx`, `lib/tts-language.ts`) | any `identity.display_language` pinned the SPOKEN language — a German answer on a seeded `en` install was spoken with the English voice, and the on-demand session recap was made in English | `GET /v1/console/profile` → `profile.display_language_source` (`operator` / `installer` / `""`); only `operator` pins, the seed is the fallback for a language-less reply. A backend without the field keeps pin behaviour |
+| Settings → Voice preview (`pages/voice.tsx`) | the client-side mirror of `for_system_prompt()` printed *"(default; still match the user's actual writing language)"* for every value — the opposite of a pin | mirrors the real rule (pin → `ALWAYS answer in …`, seed → auto-detect + install default) and shows *"Detected from the system locale at install"* under the selector while the seed is untouched |
+| `/lang` on a bridge (`lang_cli.py show`) | `set: true` for the seed → *"Language set to English"* | `set` is the operator's pin only; a seed answers *"No language preference set. Defaulting to English (en)."* with `source: installer` |
+| bot-disclosure card (`in_chat_commands.js::disclosureCardText`, Discord/WhatsApp daemons) | `settings.lang \|\| 'en'` — a settings key nothing writes, so every card was English | a daemon without a language of its own leaves `lang` unset and the card takes the profile's language (seed or pin — both are the right default for a greeting), else English |
+| `POST /v1/console/voice/summarize` | `lang` defaulted to `de`: an English text summarised in German | omitted → the text's own language through `_resolve_voice_output_language` (pin → detection → seed → locale), `de`/`en` explicit wins |
+
+Verified on a fresh container (round 2): seed `en` → *"42?"* answered in English (`source: system`),
+German in → German out, English in → English out; `PUT /profile {display_language: de}` →
+*"Snow is white."* asked in English answered *in German*; clearing it restores auto-detect; the installer
+seed run again (update / reinstall) re-seeds an empty value and never demotes a pin; a hand-written
+profile without `_meta`, or with a non-dict `_meta`, is a pin (old-install behaviour, documented above).
+Guards: `core/console/tests/test_profile_routes.py::ProfileLanguageProvenanceTests`,
+`web-next/tests/unit/lib/tts-language.test.ts`, `corvin_operator/voice/scripts/test_lang_cli.py`,
+`corvin_operator/bridges/shared/js/test_disclosure_dispatcher.js` (card language from the profile),
+`core/console/tests/test_voice_summary_language.py::SummarizeRouteLanguageTests`.
+
 ## Detection (`detect_language`)
 
 1. **Script-level** (`_detect_script_language`) — CJK, Hangul, Arabic, Hebrew, Cyrillic, Greek,

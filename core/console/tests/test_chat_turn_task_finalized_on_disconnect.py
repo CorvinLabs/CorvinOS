@@ -243,6 +243,38 @@ class TestAnInterruptedTurnIsFinalized(_ChatTurnTaskTestBase):
         self.assertEqual(self._events(task_id), ["task.created", "task.started", "task.cancelled"])
         self.assertFalse([t for t in chat_runtime.read_turns(self.sess.tenant_id, self.sess.sid) if t.get("notice")])
 
+    def test_a_shutdown_after_the_answer_is_not_re_run(self) -> None:
+        """Round 2 (2026-10-21): a host shutdown that cuts a turn AFTER its answer was
+        delivered must not hand the request to turn recovery — re-running it repeats
+        the answer (and a background job). The cancel path records the fact in
+        ``sess.in_flight_answered``; the finaliser then writes no signal exit code,
+        which is the one thing ``turn_recovery.is_restart_kill`` keys on."""
+        from corvin_console import turn_recovery
+        for answered, expect_notice in (("final", False), ("children_open", True), ("", False)):
+            with self.subTest(answered=answered):
+                sess = self.sess
+                task_id = self._start_real_task(sess, instruction=f"turn {answered or 'cut'}")
+                sess.in_flight_answered = answered
+                chat_runtime.note_cancel_reason(sess.tenant_id, sess.sid, "shutdown")
+                self.assertEqual(chat_runtime._finalize_in_flight_task(sess), task_id)
+                self.assertEqual(sess.in_flight_answered, "", "consumed by the finaliser")
+                task = self.tm().get_task(task_id)
+                self.assertEqual(task.status.value, "interrupted")
+                meta = json.loads((self.tasks_dir / f"{task_id}.json").read_text(encoding="utf-8"))
+                last = turn_recovery._last_event(self.tasks_dir, task_id)
+                if answered:
+                    self.assertIsNone(task.exit_code)
+                    self.assertFalse(turn_recovery.is_restart_kill(meta, last, time.time()),
+                                     "an answered turn is never a recovery candidate")
+                else:
+                    self.assertEqual(task.exit_code, -1)
+                    self.assertTrue(turn_recovery.is_restart_kill(meta, last, time.time()))
+                events = self._events(task_id)
+                self.assertIn("task.interrupted", events)
+                # the notice (task.notice) follows the terminal event only for cut-off background work
+                self.assertEqual(events[-1] == "task.notice", expect_notice,
+                                 "only cut-off background work is reported as 'does not continue'")
+
     def test_five_disconnects_do_not_kill_the_chat(self) -> None:
         """The actual user-visible failure: the FIFTH leak, not the first.
 

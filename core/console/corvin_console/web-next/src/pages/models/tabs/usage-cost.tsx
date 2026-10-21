@@ -201,7 +201,8 @@ export function UsageCostTab() {
                   Of {d.successTurns} turn{d.successTurns === 1 ? "" : "s"} that reported a
                   completion in this window — not a content-quality score. A turn still
                   running reports none and is outside this rate; the Model Usage panel below
-                  counts it as unfinished.
+                  counts it as unfinished. A turn you stopped, or a service restart cut off, is
+                  counted as cancelled — never as a failure of the engine.
                 </>
               ) : (
                 <>No turn reported a completion in this window.</>

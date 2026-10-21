@@ -652,10 +652,69 @@ def _piper_model_for(lang: str) -> Path | None:
                 f"say.py: no Piper model for '{lang}' — falling back to "
                 f"{Path(any_model).name} (wrong-language speech)\n"
             )
+            _request_missing_piper_model(lang)
             return Path(any_model)
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+# Re-request a missing model at most this often (the download itself is one
+# detached process; voice_models serialises concurrent requests per language).
+_MISSING_MODEL_REQUEST_INTERVAL_S = 600.0
+
+
+def _request_missing_piper_model(lang: str) -> str:
+    """Fetch the offline voice for *lang* in a DETACHED process the first time
+    the wrong-language last resort is taken for it, at most once per
+    ``_MISSING_MODEL_REQUEST_INTERVAL_S`` (marker file next to the models).
+
+    The installer only fetches the install-time language and the console only
+    provisions on a Settings change. With the installer's seed being a default
+    rather than a pin (2026-10-21) a German chat on an ``en`` install is normal —
+    and when edge-tts is unreachable its recap was spoken by the English Piper
+    voice, every time, with nothing ever fetching the German one (measured on a
+    fresh system, round 2). Returns ``started`` | ``recent`` | ``unknown_lang`` |
+    ``unavailable`` | ``failed``; never raises. Same detached shape as
+    ``lang_cli._provision_voice``.
+    """
+    import importlib.util  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    code = (lang or "").strip().lower()
+    if not code:
+        return "unknown_lang"
+    try:
+        spec = importlib.util.find_spec("corvinOS.shared.voice_models")
+    except (ImportError, ValueError):
+        spec = None
+    if spec is None:
+        return "unavailable"
+    try:
+        from corvinOS.shared import voice_models as _vm  # noqa: PLC0415
+        if _vm.stem_for(code) is None:
+            return "unknown_lang"
+    except Exception:  # noqa: BLE001
+        return "unavailable"
+    marker = _PIPER_MODEL_DIR / f".fetch-requested-{code.replace('/', '_')}"
+    try:
+        if marker.exists() and time.time() - marker.stat().st_mtime < _MISSING_MODEL_REQUEST_INTERVAL_S:
+            return "recent"
+        _PIPER_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except OSError:
+        pass
+    kw: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL, "close_fds": True}
+    if os.name == "nt":
+        kw["creationflags"] = 0x00000008 | 0x08000000  # DETACHED_PROCESS | CREATE_NO_WINDOW
+    else:
+        kw["start_new_session"] = True
+    try:
+        subprocess.Popen([sys.executable, "-m", "corvinOS.shared.voice_models", code], **kw)
+    except OSError:
+        return "failed"
+    sys.stderr.write(f"say.py: fetching the Piper model for '{code}' in the background\n")
+    return "started"
 
 
 def _piper_model_exact(lang: str) -> Path | None:

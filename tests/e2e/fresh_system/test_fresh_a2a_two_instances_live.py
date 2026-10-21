@@ -87,6 +87,9 @@ class Console:
     def delete(self, path: str) -> tuple[int, Any]:
         return self.call("DELETE", path)
 
+    def put(self, path: str, body: Any) -> tuple[int, Any]:
+        return self.call("PUT", path, body)
+
 
 def _sq(s: str) -> str:
     return "'" + s.replace("'", "'\"'\"'") + "'"
@@ -154,9 +157,11 @@ def consoles():
 
 
 @pytest.fixture(scope="module")
-def pairing(consoles):
+def pairing(consoles, request):
     """Phase 1 (Free) then phase 2 (member): a clean ACTIVE pairing B<->C, executor off."""
     b, c = consoles
+    # Leave the product as shipped (Free) for whoever uses these systems next (round 2, static review).
+    request.addfinalizer(lambda: [member_pin(n, "off") for n in (B, C)])
     # ── 1. the fresh install as shipped: Free, and the network is member-only ─────────────
     member_pin(C, "off")
     code, body = c.post("/remote-trigger/pair/friendship/create", {"label": "x"})
@@ -170,6 +175,22 @@ def pairing(consoles):
         assert body["network"]["reason"] == "member_seat_required", body["network"]
     cli = ex(C, "corvin-a2a send does-not-matter 'hi' --timeout 10; true")
     assert '"status": "rejected"' in cli and "member seat" in cli, cli
+    # round 2: the CLI's token commands refuse like the console does, and write nothing
+    for cmd in ("corvin-a2a create-token --url http://corvin-c:8775 --label x --json",
+                "corvin-a2a import-token corvin-a2a:ft1:xx.yy"):
+        out = ex(C, f"{cmd}; echo rc=$?")
+        assert "rc=1" in out and "member seat" in out and "corvin-a2a:ft1:" not in out.split("rc=")[0].replace(cmd, ""), (cmd, out)
+    # round 2: a status read is not an enforcement point — twenty polls of the feed and the
+    # connections (what one open peer chat does in 80 s) write at most one deny record
+    def _console_denies():
+        return len([r for r in chain_rows(C, "license.capability_decision")
+                    if r["details"].get("entry_point") == "console.a2a_pair"])
+    before = _console_denies()
+    for _ in range(10):
+        assert c.get("/a2a/feed?limit=1")[0] == 200
+        assert c.get("/remote-trigger/pair/friendship/connections")[0] == 200
+    grown = _console_denies() - before
+    assert grown <= 1, f"{grown} deny records for 20 status reads"
     # ── 2. member seat on both sides (test pin, see a2a_member_pin.sh) ─────────────────────
     member_pin(C, "on")
     member_pin(B, "on")
@@ -218,6 +239,25 @@ def test_observer_send_is_recorded_on_both_chains_but_runs_nothing(consoles, pai
     spawned = [r for r in chain_rows(B, acc["task_id"]) if r["event_type"] == "A2A.engine_spawned"]
     assert spawned and spawned[0]["details"]["status"] == "skipped_m1", spawned
     assert [r for r in chain_rows(C, acc["task_id"]) if r["event_type"] == "A2A.envelope_sent"], "C's chain lacks envelope_sent"
+
+
+def test_envelope_edges_are_refused_opaquely(consoles, pairing):
+    """Attacker side at the raw ingress (observer mode, so nothing runs): the attachment count /
+    digest / name / duplicate edges, the ±300 s issued_at window, a replay after the envelope's
+    own TTL. Every refusal is the same opaque shape; only ``replay`` is named (closed vocabulary)."""
+    kid = pairing
+    subprocess.run(["docker", "cp", str(HERE / "a2a_edges_driver.py"), f"{C}:/home/tester/a2a_edges_driver.py"], check=True)
+    out = ex(C, f"export PYTHONPATH={PIN_PYTHONPATH}; {PY} -I /home/tester/a2a_edges_driver.py {kid} http://{B}:8775/v1/a2a/receive", timeout=300)
+    lines = {ln.split(":", 1)[0].strip(): ln.split(":", 1)[1] for ln in out.splitlines() if ":" in ln}
+    for ok in ("16 files", "skew -290s", "skew +290s", "ttl5 first"):
+        assert "'ok'" in lines[ok] or "'filtered'" in lines[ok], (ok, lines.get(ok), out)
+    for refused in ("17 files", "sha mismatch", "traversal", "dup name", "skew -310s", "skew +310s"):
+        assert "'rejected'" in lines[refused] and lines[refused].rstrip().endswith("{})"), (refused, lines.get(refused), out)
+    assert "'rejected'" in lines["ttl5 replay"] and "'replay'" in lines["ttl5 replay"], lines["ttl5 replay"]
+    reasons = [r["details"]["reason"] for r in chain_rows(B, "A2A.request_rejected")][-8:]
+    for expected in ("attachments_too_many", "attachment_digest_mismatch", "attachment_name_chars",
+                     "attachment_duplicate_name", "time_window", "replay"):
+        assert expected in reasons, (expected, reasons)   # the receiver names it only to its own chain
 
 
 def test_executor_send_runs_a_real_worker_and_prices_the_span(consoles, pairing):
@@ -291,6 +331,10 @@ def test_house_rules_refuse_prohibited_content_on_the_executor(consoles, pairing
 def federation(consoles, pairing):
     b, c = consoles
     kid = pairing
+    # Federation needs an origin that may run workers (``federation_no_worker`` otherwise); the
+    # executor test sets it too, but the fixture must not depend on test order (round 2).
+    code, patched = b.patch(f"/remote-trigger/origins/{kid}", {"spawn_worker": True})
+    assert code == 200 and patched["spawn_worker"] is True, (code, patched)
     for con in (b, c):
         code, agent = con.post("/federation/default-agent")
         assert code in (200, 201) and agent["agent_id"] == "claude-code" and agent["engine_type"] == "claude_code", (code, agent)
@@ -404,6 +448,61 @@ def test_group_message_lands_in_the_peers_mirrored_group(consoles, federation):
     c.delete(f"/chat/groups/{gid}")
 
 
+def test_chat_staged_send_needs_the_operators_confirm(consoles, federation):
+    """ADR-2099 Phase 2: with ``a2a_send_from_chat`` on, a REAL chat turn's worker calls the
+    ``a2a_send`` MCP tool, which only stages a pending record; the operator's confirm (CSRF
+    session) turns it into the send and the peer's worker answers. Round 1 believed the tool was
+    not attached on a fresh install; it is, once the flag is on (measured 2026-10-21)."""
+    b, c = consoles
+    kid = federation
+    code, flag = b.put("/settings/features/a2a_send_from_chat", {"enabled": True})
+    assert code == 200 and flag["enabled"] is True, (code, flag)
+    code, patched = c.patch(f"/remote-trigger/origins/{kid}", {"spawn_worker": True})   # C runs B's message
+    assert code == 200 and patched["spawn_worker"] is True, (code, patched)
+    try:
+        t0 = time.time()
+        subprocess.run(["docker", "cp", str(HERE / "a2a_chat_send_driver.py"), f"{B}:/home/tester/a2a_chat_send_driver.py"], check=True)
+        out = ex(B, "cd ~/CorvinOS && uvx --with httpx --with websockets --with pytest python /home/tester/a2a_chat_send_driver.py "
+                    f"{kid} 'Use your a2a_send tool to stage this exact message for the A2A peer whose peer_id is {kid}: "
+                    "Reply with exactly the word STAGED. Then tell me what you staged. If you have no such tool, say exactly NO_A2A_TOOL.'",
+                 timeout=400)
+        assert "NO_A2A_TOOL" not in out and "mcp__forge__a2a_send" in out, out
+        print(out[out.index("ANSWER:"):][:400])
+        code, pending = b.get("/a2a/feed/send/pending")
+        mine = [p for p in pending["pending"] if p["peer_id"] == kid and "STAGED" in p["text"]]
+        assert mine and mine[0]["requested_by"] == "chat_mcp_tool", pending
+        assert not [m for m in feed_rows(b) if m["kind"] == "task" and "word STAGED" in m["text"] and m["ts"] >= t0], "staged, not sent"
+        code, acc = b.post(f"/a2a/feed/send/confirm/{mine[0]['pending_id']}")
+        assert code == 202 and acc["accepted"], (code, acc)
+        rep = response_for(b, acc["task_id"])
+        assert rep["status"] == "ok" and rep["data"].get("output", "").strip().upper() == "STAGED", rep
+        assert b.post(f"/a2a/feed/send/confirm/{mine[0]['pending_id']}")[0] == 404   # one-time use
+    finally:
+        b.put("/settings/features/a2a_send_from_chat", {"enabled": False})
+
+
+def test_require_ibc_on_one_side_is_named_on_the_other(consoles, federation):
+    """ADR-2099 permissive mode: a fresh pairing carries ``require_ibc: false`` and the product has no
+    toggle; switched on by hand on the peer, every task from an instance without an identity
+    certificate is refused ``identity_required`` with the way out named."""
+    b, c = consoles
+    kid = federation
+    origin = f"/home/tester/CorvinOS/corvin_operator/cowork/remote_origins/{kid}.json"
+    def _set(flag: str):
+        ex(C, f"{PY} - <<'EOF'\nimport json\np={origin!r}\nd=json.load(open(p))\nd['require_ibc']={flag}\njson.dump(d, open(p, 'w'))\nEOF")
+    _set("True")
+    try:
+        code, acc = b.post("/a2a/feed/send", {"peer_id": kid, "text": "Reply with exactly the word IBCTEST", "timeout_s": 30})
+        assert code == 202, (code, acc)
+        rep = response_for(b, acc["task_id"], timeout=60)
+        assert rep["status"] == "rejected" and rep["data"].get("reason") == "identity_required", rep
+        assert "require_ibc" in (rep["error"] or ""), rep
+        assert any(r["details"]["reason"] == "instance_attestation_required_but_absent"
+                   for r in chain_rows(C, acc["task_id"]) if r["event_type"] == "A2A.request_rejected"), "C did not name the refusal to its own chain"
+    finally:
+        _set("False")
+
+
 # ── 5. adversarial: restart, a peer that is down, revoke, re-pair ───────────────────────────
 
 def test_restart_mid_conversation_marks_it_interrupted(consoles, federation):
@@ -441,6 +540,32 @@ def test_a_peer_that_is_down_is_reported_not_faked(consoles, pairing):
         ex(C, "systemctl --user start corvin-webui")
         wait_for(lambda: "200" in ex(C, "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/v1/console/healthz"),
                  timeout=120, what="C back")
+
+
+def test_a_peer_without_a_seat_is_named_not_unreachable(consoles, pairing):
+    """Round 2: the member install B paired with C after C lost its seat (Free again). Before, B read
+    ACTIVE / online "via relay" (the Free relay listener still answered pings), every task was
+    refused opaquely and the hint said "set your own A2A URL"."""
+    b, c = consoles
+    kid = pairing
+    member_pin(C, "off")
+    restart_console(B)           # the first connectivity pass says hello → 403 license_required
+    def _named():
+        _, conns = b.get("/remote-trigger/pair/friendship/connections")
+        mine = [x for x in conns["connections"] if x["kid"] == kid]
+        return mine[0] if mine and mine[0].get("peer_network_denied_at") else None
+    conn = wait_for(_named, timeout=90, what="peer_network_denied_at on B")
+    assert conn["state"] == "UNREACHABLE" and conn["presence"] == "offline" and conn["peer_knows_us"] is False, conn
+    _, feed = b.get("/a2a/feed?limit=1")
+    peer = [p for p in feed["peers"] if p["peer_id"] == kid][0]
+    assert peer["peer_network_denied_at"] and peer["presence"] == "offline", peer
+    member_pin(C, "on")
+    restart_console(B)
+    def _cleared():
+        _, conns = b.get("/remote-trigger/pair/friendship/connections")
+        mine = [x for x in conns["connections"] if x["kid"] == kid]
+        return mine[0] if mine and not mine[0].get("peer_network_denied_at") and mine[0]["presence"] == "online" else None
+    assert wait_for(_cleared, timeout=90, what="marker cleared once the seat is back")
 
 
 def test_revoke_is_named_on_the_other_side_and_repairing_works(consoles, pairing):

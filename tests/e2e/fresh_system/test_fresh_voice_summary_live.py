@@ -15,6 +15,7 @@ from fresh_console import (
     final_result,
     login,
     new_session,
+    product_python,
     skip_unless_fresh,
     wait_for,
     ws_turn,
@@ -113,3 +114,37 @@ def test_on_demand_session_recap_and_tts(console):
         assert r.headers.get("x-corvin-tts-provider"), r.headers
         assert "openai" not in r.headers.get("x-corvin-tts-provider", ""), "no key → never OpenAI"
     assert answer_text(ws_turn(cookie, sid, "Antworte nur mit PONG.")).upper().find("PONG") >= 0
+
+
+def test_summarize_without_a_language_follows_the_text(console):
+    """`POST /voice/summarize` defaulted to German: an English text came back as a German recap."""
+    c, _ = console
+    text = ("Leaves turn red in autumn because chlorophyll breaks down and anthocyanins, produced from "
+            "sugars trapped in the leaf, become visible. Cold nights and sunny days make the colours stronger.")
+    r = c.post("/voice/summarize", json={"text": text}, timeout=120)
+    assert r.status_code == 200, r.text[:300]
+    low = r.json()["summary"].lower()
+    assert ("leaf" in low or "leaves" in low or "autumn" in low or "chlorophyll" in low) and " der " not in f" {low} ", low
+
+
+def test_transcribe_a_wav_from_the_installed_piper(console):
+    """A real WAV from the installed offline voice through the real STT route (local Whisper)."""
+    import subprocess
+    from pathlib import Path
+    c, _ = console
+    say = Path(__file__).resolve().parents[3] / "corvin_operator" / "voice" / "scripts" / "say.py"
+    wav = Path("/tmp") / "fresh_piper_sample.wav"
+    # say.py needs the PRODUCT's interpreter (piper-tts lives there), not the test runner's
+    py = product_python()
+    proc = subprocess.run([py, str(say), str(wav), "The train to Hamburg leaves at nine from platform three.",
+                           "en", "", "piper"], capture_output=True, text=True, timeout=300)
+    if proc.returncode != 0 or not wav.exists():
+        pytest.skip(f"piper not usable here: {proc.stderr[-200:]}")
+    r = c.post("/voice/transcribe", files={"audio": ("sample.wav", wav.read_bytes(), "audio/wav")},
+               data={"lang": "en"}, timeout=600)
+    assert r.status_code == 200, (r.status_code, r.text[:300])
+    body = r.json()
+    assert body["ok"] and body["provider"], body
+    low = body["text"].lower()
+    assert "hamburg" in low and ("nine" in low or "9" in low), body["text"]
+

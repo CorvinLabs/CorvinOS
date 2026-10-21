@@ -181,6 +181,45 @@ class ProfileGetTests(unittest.TestCase):
             self.assertEqual(r.status_code, 401)
 
 
+class ProfileLanguageProvenanceTests(unittest.TestCase):
+    """GET /profile says WHO set display_language (round 2, 2026-10-21): the SPA
+    pins its spoken language on the operator's choice only — the installer's
+    locale seed used to be read as a pin and a German answer got the English
+    voice on every seeded `en` install."""
+
+    def test_seed_pin_and_clear_are_reported(self):
+        with _sandbox() as ctx:
+            import profile as prof  # the sandboxed bridges/shared module
+            self.assertEqual(ctx["client"].get("/v1/console/profile").json()["profile"]["display_language_source"], "")
+            prof.seed_display_language("en")
+            body = ctx["client"].get("/v1/console/profile").json()
+            self.assertEqual(body["profile"]["display_language_source"], "installer")
+            self.assertEqual(body["profile"]["identity"]["display_language"], "en")
+            self.assertIn("reply in the language the user writes in", body["system_block"])
+            # the profile page autosaves the WHOLE identity after any keystroke: a
+            # PUT that echoes the seed back (name edit) is not a choice (static
+            # cluster finding 3, patch B)
+            r = ctx["client"].put("/v1/console/profile", headers=_auth_headers(ctx),
+                                  json={"identity": {"name": "Alice", "display_language": "en"},
+                                        "re_auth_token": ctx["token"]})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["profile"]["display_language_source"], "installer")
+            # the operator picks a language in Settings → Profile: a pin from now on
+            r = ctx["client"].put("/v1/console/profile", headers=_auth_headers(ctx),
+                                  json={"identity": {"display_language": "de"}, "re_auth_token": ctx["token"]})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["profile"]["display_language_source"], "operator")
+            self.assertIn("ALWAYS answer in de", ctx["client"].get("/v1/console/profile").json()["system_block"])
+            # an unrelated save keeps the pin; clearing the field un-sets it
+            r = ctx["client"].put("/v1/console/profile", headers=_auth_headers(ctx),
+                                  json={"identity": {"name": "Silvio"}, "re_auth_token": ctx["token"]})
+            self.assertEqual(r.json()["profile"]["display_language_source"], "operator")
+            r = ctx["client"].put("/v1/console/profile", headers=_auth_headers(ctx),
+                                  json={"identity": {"display_language": None}, "re_auth_token": ctx["token"]})
+            self.assertEqual(r.json()["profile"]["display_language_source"], "")
+            self.assertIsNone(r.json()["profile"]["identity"]["display_language"])
+
+
 class ProfileWriteIdentityTests(unittest.TestCase):
     def test_identity_round_trip_with_reauth(self):
         with _sandbox() as ctx:

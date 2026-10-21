@@ -401,6 +401,30 @@ class TestRelayListenerPingAckDispatch(unittest.TestCase):
         pt = ft.decrypt_from_relay(k, sent["nonce"], sent["ciphertext"])
         self.assertEqual(json.loads(pt), {"ok": True, "task_id": "p1"})
 
+    def test_free_install_answers_relay_ping_and_ack_with_license_required(self):
+        """a2a.network is member-only: the HTTP server answers ping and friendship-ack with 403
+        ``license_required`` on a Free install; the relay listener dispatched both (2026-10-21,
+        round 2 — a member peer showed its Free peer ACTIVE / online "via relay")."""
+        import unittest.mock as mock
+        k = _key()
+        receiver = mock.Mock()
+        receiver._network_denied.return_value = True
+        lst = self._listener(receiver, pending_dir="/tmp/nope", endpoints_dir="/tmp/nope")
+        for payload in ({"ping_id": "p1", "issued_at": 123, "origin_id": "o1", "signature": "sig"},
+                        {"peer_url": "http://x", "kid": "meKid", "issued_at": 1, "signature": "s"}):
+            nonce, ct = ft.encrypt_for_relay(k, json.dumps(payload).encode("utf-8"))
+            delivery = {"to_kid": "meKid", "from_kid": "peerKid", "nonce": nonce, "ciphertext": ct, "task_id": "t1"}
+            ws = _FakeWS()
+            with mock.patch("a2a_http_server.process_ping_request") as ppr, \
+                 mock.patch("a2a_friendship.process_friendship_ack_request") as pfar:
+                asyncio.run(lst._handle_deliver(ws, delivery, {"meKid": k}))
+            ppr.assert_not_called()
+            pfar.assert_not_called()
+            self.assertEqual(len(ws.sent), 1, payload)
+            sent = json.loads(ws.sent[0])
+            pt = ft.decrypt_from_relay(k, sent["nonce"], sent["ciphertext"])
+            self.assertEqual(json.loads(pt), {"reason": "license_required"})
+
     def test_ping_self_delivery_is_refused(self):
         import unittest.mock as mock
         k = _key()

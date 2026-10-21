@@ -455,6 +455,8 @@ export interface ModelUsageRow {
   share_pct: number;
   ok: number;
   failed: number;
+  /** cut off by the console itself (operator stop, host restart): neither ok nor failed */
+  cancelled?: number;
   unfinished: number;
   success_pct: number;
   avg_duration_ms: number;
@@ -488,6 +490,8 @@ export interface RoleUsageRow {
   turns: number;
   ok: number;
   failed: number;
+  /** cut off by the console itself (operator stop, host restart): neither ok nor failed */
+  cancelled?: number;
   unfinished: number;
   success_pct: number;
   share_pct: number;
@@ -525,6 +529,7 @@ export interface ModelUsageResponse {
     turns: number;
     ok: number;
     failed: number;
+    cancelled?: number;
     unfinished: number;
     total_tokens: number;
     input_tokens: number;
