@@ -78,8 +78,8 @@ class TestLinuxSystemServiceManager:
             content = (Path(tmp) / "corvin-webui.service").read_text()
             assert "User=silvio" in content
             assert "root" not in content.lower()
-            assert "StartLimitIntervalSec=300" in content
-            assert "StartLimitBurst=5" in content
+            assert "StartLimitIntervalSec=120" in content
+            assert "StartLimitBurst=8" in content
             assert "WantedBy=multi-user.target" in content
 
     def test_pre_exec_adds_execstartpre_and_widened_start_timeout(self):

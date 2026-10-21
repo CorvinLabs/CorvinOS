@@ -204,12 +204,18 @@ class LinuxServiceManager(ServiceManager):
             f"Description={description or f'Corvin {name} service'}",
             "After=network-online.target",
             # Bounded restart (ADR-0184 Stufe-1): without a start-limit, a unit
-            # stuck in a crash loop restarts every RestartSec forever. Cap it
-            # at 5 restarts per 5-minute window — after that systemd stops
-            # trying and the failure is visible in `systemctl --user status`
-            # instead of spinning silently.
-            "StartLimitIntervalSec=300",
-            "StartLimitBurst=5",
+            # stuck in a crash loop restarts every RestartSec forever. The cap
+            # is 8 starts per 2-minute window — the same budget as the shipped
+            # core/gateway/systemd/corvin-webui.service — after which systemd
+            # stops trying and the failure is visible in `systemctl --user
+            # status`. systemd counts EVERY start, deliberate ones too: with
+            # the old 5-per-300 s the installer's start, the auto-update's
+            # restart and three operator restarts within five minutes left
+            # the console "start-limit-hit" for the rest of the window
+            # (measured on a fresh system, 2026-10-21). A crash loop at
+            # RestartSec=10 still stops within the window.
+            "StartLimitIntervalSec=120",
+            "StartLimitBurst=8",
             "",
             "[Service]",
             *service_lines,

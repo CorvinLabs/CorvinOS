@@ -407,6 +407,8 @@ restart_all() {
         systemctl --user daemon-reload >/dev/null 2>&1 || true
         for _u in $(systemctl --user list-unit-files 'corvin-*.service' --no-legend 2>/dev/null | awk '{print $1}'); do
             systemctl --user is-enabled --quiet "$_u" 2>/dev/null || continue
+            # a unit that tripped its start limit refuses restart until reset-failed
+            systemctl --user reset-failed "$_u" >>"$LOG" 2>&1 || true
             systemctl --user restart "$_u" >>"$LOG" 2>&1 || true
         done
     elif [ "$OS" = Darwin ] && ls "$HOME"/Library/LaunchAgents/com.corvin.*.plist >/dev/null 2>&1; then

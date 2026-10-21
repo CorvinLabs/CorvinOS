@@ -161,9 +161,9 @@ class LinuxSystemServiceManager(SystemServiceManager):
             f"Description={description or f'Corvin {name} service (always-on)'}",
             "After=network-online.target",
             # ADR-0184 Stufe-1's bounded-restart cap, applied here too — same
-            # 5-per-300s shape as the user-level unit in service_manager.py.
-            "StartLimitIntervalSec=300",
-            "StartLimitBurst=5",
+            # 8-per-120s shape as the user-level unit in service_manager.py.
+            "StartLimitIntervalSec=120",
+            "StartLimitBurst=8",
             "",
             "[Service]",
             *service_lines,

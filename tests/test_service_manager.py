@@ -83,8 +83,8 @@ class TestLinuxServiceManager:
             )
 
             content = (Path(tmpdir) / "corvin-test.service").read_text()
-            assert "StartLimitIntervalSec=300" in content
-            assert "StartLimitBurst=5" in content
+            assert "StartLimitIntervalSec=120" in content
+            assert "StartLimitBurst=8" in content
 
 
 class TestRestartService:

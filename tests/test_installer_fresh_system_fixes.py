@@ -243,3 +243,17 @@ def test_instance_registry_lives_under_corvin_home_and_makes_no_dir_at_import(tm
     reg.register_instance("inst-1", "host", "2.0.0")
     assert (root / "instances.json").is_file()
     assert not (fake_home / ".corvin").exists()
+
+
+def test_every_product_restart_path_clears_a_tripped_start_limit():
+    """systemd counts every start toward StartLimitBurst, deliberate ones too; a unit that
+    tripped it refuses `restart` for the rest of the window. The watchdog, update.sh and the
+    installer's restore path therefore reset-failed first (fresh system, 2026-10-21: the
+    console sat in start-limit-hit while the watchdog kept failing to restart it)."""
+    root = Path(__file__).resolve().parents[1]
+    watchdog = (root / "scripts" / "setup.sh").read_text(encoding="utf-8")
+    assert "systemctl --user reset-failed corvin-webui.service 2>/dev/null; systemctl --user restart corvin-webui.service" in watchdog
+    updater = (root / "update.sh").read_text(encoding="utf-8")
+    assert 'systemctl --user reset-failed "$_u"' in updater
+    core = (root / "corvinOS" / "installer" / "core.py").read_text(encoding="utf-8")
+    assert '["systemctl", "--user", "reset-failed", "corvin-webui.service"]' in core

@@ -65,6 +65,12 @@
   assertions; `CORVIN_FRESH_E2E=1`).
 
 ### Fixed — boot noise that every install logged (fresh system and host alike, 2026-10-21)
+- **A console that was restarted a few times no longer stays dead for five minutes.** The installer's units
+  allowed 5 starts per 300 s and systemd counts deliberate starts too: the install's own start, the auto-update's
+  restart and three operator restarts left `corvin-webui` in `start-limit-hit`, and the watchdog's `restart` failed
+  against it for the rest of the window (measured on a fresh system). The units now carry the budget of the shipped
+  `core/gateway/systemd/corvin-webui.service` (8 per 120 s; a crash loop at `RestartSec=10` still stops within
+  it), and the watchdog, `update.sh` and the installer's restore path `reset-failed` before they restart.
 - **The Phase 1d plugin-registry reader recognises state.TenantRegistry's schema.** Both readers share one
   `registry.yaml`; the list-schema reader parsed the mapping's keys as entries and warned
   `'str' object has no attribute 'items'` twice per boot. It now leaves a state-schema file alone (DEBUG).

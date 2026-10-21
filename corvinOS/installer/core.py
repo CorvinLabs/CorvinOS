@@ -966,6 +966,12 @@ class CorvinInstaller:
             # no-op and the pre-restore process would survive untouched,
             # reproducing the exact race restart_service() was added to
             # close elsewhere in this file (2026-08-02).
+            # A unit that tripped its start limit refuses `restart` for the rest
+            # of the window; clear it first (2026-10-21).
+            subprocess.run(
+                ["systemctl", "--user", "reset-failed", "corvin-webui.service"],
+                capture_output=True, check=False,
+            )
             result = subprocess.run(
                 ["systemctl", "--user", "restart", "corvin-webui.service"],
                 capture_output=True, check=False,
