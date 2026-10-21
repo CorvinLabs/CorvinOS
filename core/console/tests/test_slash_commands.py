@@ -89,7 +89,7 @@ def test_pointer_commands_return_guidance():
 
 
 def test_bridge_only_commands_are_explained():
-    for t in ("/go", "/propose do x", "/btw note", "/share"):
+    for t in ("/go", "/propose do x", "/share"):
         out = _h(t)
         assert "bridge" in out.lower() and "console" in out.lower()
 

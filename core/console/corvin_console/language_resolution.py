@@ -87,14 +87,36 @@ def load_profile_language(tenant_id: str) -> Optional[str]:
 
         import profile as profile_mod  # type: ignore
 
-        prof = profile_mod.load()  # XDG-aware, same resolver as console/routes/profile.py
-        if prof and isinstance(prof, dict):
-            lang = prof.get("display_language")
-            if lang and isinstance(lang, str):
-                return lang.strip() or None
+        # Only the OPERATOR'S pin is a profile language for the resolver; the
+        # installer's locale seed is the system default (load_default_language),
+        # so a seeded install resolves the turn from the user's own text.
+        lang = profile_mod.display_language_pin()
+        if lang and isinstance(lang, str):
+            return lang.strip() or None
     except Exception as e:
         _log.debug(f"Failed to load profile language: {e}")
 
+    return None
+
+
+def load_default_language(tenant_id: str) -> Optional[str]:
+    """The configured language regardless of who set it (operator pin or
+    installer seed) — the resolver's system default, used only when neither
+    the user's text nor the response carries a language of its own."""
+    try:
+        import sys
+        from pathlib import Path
+        repo_root = Path(__file__).parent.parent.parent.parent
+        bridges_shared = repo_root / "corvin_operator" / "bridges" / "shared"
+        if str(bridges_shared) not in sys.path:
+            sys.path.insert(0, str(bridges_shared))
+        import profile as profile_mod  # type: ignore
+
+        lang = profile_mod.display_language_default()
+        if lang and isinstance(lang, str):
+            return lang.strip() or None
+    except Exception as e:
+        _log.debug(f"Failed to load default language: {e}")
     return None
 
 

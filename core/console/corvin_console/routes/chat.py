@@ -845,6 +845,38 @@ async def chat_stream(
                     await websocket.send_json({"type": "delta", "text": _sc_reply})
                     await websocket.send_json({"type": "done"})
                     continue
+                # `/btw` typed over the WebSocket (ADR-2220 / CONCEPT-0107): the
+                # SPA never sends it here — it strips the prefix when nothing
+                # runs and POSTs /chat/sessions/{sid}/btw while a reply streams —
+                # but an API client may, and until 2026-10-21 the dispatcher
+                # answered "not available in the web console". Same semantics
+                # as the SPA: steer the chat's live turn (started from another
+                # socket) if there is one, else it is simply the next message.
+                _btw_head, _, _btw_rest = prompt.partition(" ")
+                if _btw_head.lower() == "/btw":
+                    _btw_text = _btw_rest.strip()
+                    if not _btw_text:
+                        await websocket.send_json({"type": "error", "message":
+                                                   "Type a note after /btw to steer the running reply."})
+                        continue
+                    if live_turns.live_turn_id(rec.tenant_id, sid) is not None:
+                        try:
+                            _btw_out = await chat_runtime.inject_btw_web(sess, _btw_text, via="text")
+                            _btw_status, _btw_reason = _btw_out.status, _btw_out.reason
+                        except Exception:  # noqa: BLE001 — a steering failure never drops the socket
+                            logger.exception("ws /btw injection failed (sid=%s)", sid)
+                            _btw_status, _btw_reason = "refused", "error"
+                        with contextlib.suppress(Exception):
+                            console_audit.action_performed(
+                                tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+                                action="chat.btw.sent", target_kind="chat", target_id=sid,
+                                trigger=f"{_btw_status}:ws",
+                            )
+                        await websocket.send_json({"type": "btw_status", "status": _btw_status,
+                                                   **({"reason": _btw_reason} if _btw_reason else {})})
+                        await websocket.send_json({"type": "done"})
+                        continue
+                    prompt = _btw_text   # nothing is running: an ordinary message
                 # ADR-0193: no more pre-turn browser classification/routing here.
                 # The native corvin-browser MCP tool is available to the model's
                 # own tool-use reasoning in the normal turn below — exactly like

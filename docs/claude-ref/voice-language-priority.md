@@ -22,6 +22,29 @@ The profile is canonical *by design*: a user who configured Deutsch keeps Deutsc
 English prompt. `resolve(..., force_input_detection=True)` is the only bypass and has no
 production caller — it exists for tests.
 
+### Installer seed vs operator pin (2026-10-21)
+
+`display_language` has two writers with two meanings, and the profile records which one
+wrote it (`profile.py`: `_meta.display_language_source`):
+
+| Writer | Provenance | `display_language_pin()` | `display_language_default()` | Reply-language rule |
+|---|---|---|---|---|
+| installer (`corvinOS/installer/steps/piper.py::_seed_profile_display_language` → `profile.seed_display_language`) | `installer` | `""` | the seed | auto-detect per message; the seed only decides language-less input |
+| operator (`/lang set`, `PUT /v1/console/profile`, `profile.set_value`) | `operator` | the pin | the pin | `ALWAYS reply in <pin>` — overrides the message language |
+| a profile written before the marker existed | `operator` | the value | the value | as a pin (unchanged behaviour) |
+
+Row 1 of the table above therefore means the **operator's pin**: the console
+(`chat_runtime._language_rule`, `_language_closing_block`, `language_resolution.load_profile_language`),
+the bridge adapter (`_pinned_display_language`, `_resolve_voice_output_language`) and the voice
+routes (`_resolve_voice_output_language`) all read `display_language_pin()`; the seed enters only
+as `system_default` (`language_resolution.load_default_language`) and as the TTS fallback. The
+seed never overwrites a value and an operator write always un-seeds (`set_value`,
+`mark_display_language_operator`). Measured before the split, on a fresh `en_US` container: a
+German question got *"Die Operatorvorgabe lautet, dass ich immer auf Englisch antworte"* —
+`language_context.source` was `profile`, `profile_set: true`, for a value nobody had chosen.
+Guard: `corvin_operator/bridges/shared/test_profile_language_pin.py`,
+`tests/e2e/fresh_system/test_fresh_chat_live.py::test_the_bot_answers_in_the_users_language`.
+
 ## Detection (`detect_language`)
 
 1. **Script-level** (`_detect_script_language`) — CJK, Hangul, Arabic, Hebrew, Cyrillic, Greek,

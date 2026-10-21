@@ -5044,7 +5044,11 @@ def _pinned_display_language() -> str:
     if _voice_profile is None or _i18n is None:
         return ""
     try:
-        raw = _voice_profile.load().get("display_language") or ""
+        # The installer's locale seed is NOT a pin (profile.seed_display_language):
+        # only the operator's own choice overrides the user's language.
+        pin_fn = getattr(_voice_profile, "display_language_pin", None)
+        raw = (pin_fn() if pin_fn is not None
+               else _voice_profile.load().get("display_language")) or ""
         return _i18n.normalise(raw) if raw else ""
     except Exception:  # noqa: BLE001
         return ""
@@ -8852,7 +8856,9 @@ def _resolve_voice_output_language(candidate_text: str) -> str:
     output_language = ""
     if _voice_profile is not None and _i18n is not None:
         try:
-            raw = _voice_profile.load().get("display_language") or ""
+            pin_fn = getattr(_voice_profile, "display_language_pin", None)   # operator pin only
+            raw = (pin_fn() if pin_fn is not None
+                   else _voice_profile.load().get("display_language")) or ""
             if raw:  # Only if explicitly set by user
                 output_language = _i18n.normalise(raw)
                 if output_language:
@@ -8864,7 +8870,16 @@ def _resolve_voice_output_language(candidate_text: str) -> str:
     detected = _detect_confident_de_en(candidate_text)
     if detected:
         return detected
-    # ── (3) Fallback: system locale ──────────────────────────────────────────
+    # ── (3) Fallback: the installer's seed (system locale at install time),
+    #        then the live system locale ───────────────────────────────────
+    if _voice_profile is not None and _i18n is not None:
+        try:
+            seeded = getattr(_voice_profile, "display_language_default", lambda: "")() or ""
+            output_language = _i18n.normalise(seeded) if seeded else ""
+            if output_language:
+                return output_language
+        except Exception:  # noqa: BLE001
+            pass
     if _i18n is not None:
         try:
             output_language = _i18n.system_language()

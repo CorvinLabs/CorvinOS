@@ -901,7 +901,10 @@ def provider_status() -> dict[str, dict]:
             # "not installed" on uv-tool installs where the synth path works.
             piper_installed = _resolve_piper_binary() is not None
         model_present = any(
-            _piper_model_for(lang) is not None for lang in _PIPER_MODELS
+            # Exact per-language lookup: _piper_model_for's last resort returns
+            # ANY model and writes "falling back ... (wrong-language speech)" to
+            # stderr — once per language without a model, on every status call.
+            _piper_model_exact(lang) is not None for lang in _PIPER_MODELS
         )
         ready = piper_installed and model_present
         if ready:

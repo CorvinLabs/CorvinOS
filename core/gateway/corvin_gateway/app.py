@@ -667,6 +667,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:  # noqa: BLE001 - shutdown must not raise
             pass
     finally:
+        # Live chat turns first, while the loop is alive: uvicorn re-raises the
+        # SIGTERM after this lifespan returns, so a turn still pending then is
+        # killed without its finaliser (chat_runtime.shutdown_live_turns).
+        try:
+            from corvin_console import chat_runtime as _cr_down
+            await _cr_down.shutdown_live_turns()
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            pass
         # Timestamp for the next start: a turn finalized by THIS shutdown is re-run there.
         try:
             from corvin_console import turn_recovery as _tr_down

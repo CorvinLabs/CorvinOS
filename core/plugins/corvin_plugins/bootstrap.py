@@ -1364,6 +1364,16 @@ def _bootstrap_state_registry(
     loaded: list[str] = []
     for plugin_id in order:
         record = tenant_registry.records[plugin_id]
+        if not record.class_path:
+            # A record-only entry: registered by other means (a marketplace
+            # plugin whose surface is its panel / its files, an entry point
+            # already loaded at boot — state.TenantRegistry.enable: "None means
+            # no class_path, nothing to load"). Not a failure: until 2026-10-21
+            # every boot of every install logged an ERROR and audited
+            # plugin.load_failed for the two default plugins (Knowledge Graph,
+            # CorvinTV) — measured on a fresh system.
+            log.debug("plugin %r is record-only (no class_path) — nothing to load", plugin_id)
+            continue
         if _load_one(
             record,
             tenant_id=tenant_id,

@@ -219,8 +219,9 @@ class EngineSettingUpdate(BaseModel):
 
 class EngineHealthResponse(BaseModel):
     """Health check response."""
-    healthy: bool = Field(True, description="Always True for Claude Code")
-    message: str = Field("Claude Code is ready", description="Status message")
+    healthy: bool = Field(True, description="The configured OS engine can serve a chat turn")
+    message: str = Field("Claude Code is ready",
+                         description="Status message; the chat's own refusal text when unhealthy")
 
 
 class EngineCatalogResponse(BaseModel):
@@ -541,11 +542,21 @@ def _assess_model_compliance(engine_models: "dict[str, EngineModelConfig]", tena
 def get_engine_health(
     _rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> EngineHealthResponse:
-    """Health check for Claude Code engine."""
-    return EngineHealthResponse(
-        healthy=True,
-        message="Claude Code is ready",
-    )
+    """Health check for the configured OS engine — the same cheap, subprocess-
+    free probe the chat uses before it charges a turn
+    (``chat_runtime.get_engine_unavailable_message``): engine selectable by
+    the web chat, ``claude`` binary present, signed in (OAuth session, API key
+    or a Bedrock/Vertex/Foundry flag). Until 2026-10-21 this answered a
+    constant ``healthy=True`` for a missing or signed-out CLI."""
+    from .. import chat_runtime  # noqa: PLC0415 — avoid import cycle at module load
+    try:
+        msg = chat_runtime.get_engine_unavailable_message(_rec.tenant_id)
+    except Exception:  # noqa: BLE001 — a probe error is "unknown", never a crash
+        _log.warning("engine health probe failed", exc_info=True)
+        return EngineHealthResponse(healthy=False, message="engine probe failed")
+    if msg:
+        return EngineHealthResponse(healthy=False, message=msg)
+    return EngineHealthResponse(healthy=True, message="Claude Code is ready")
 
 
 @router.get("/catalog", response_model=EngineCatalogResponse)

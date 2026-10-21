@@ -17,6 +17,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Manifest paths whose absence was already reported in this process (see load_manifest).
+_ABSENCE_REPORTED: set = set()
+
 
 @dataclass
 class PluginEntry:
@@ -83,7 +86,16 @@ class CanonicalManifestManager:
         """
         try:
             if not os.path.exists(self.manifest_url):
-                logger.warning(f"Manifest not found: {self.manifest_url}, returning empty manifest")
+                # The drift detector polls every 30 s; an install without a
+                # canonical manifest (every install today — nothing writes one)
+                # logged this WARNING 1 500+ times per day. Once per manager.
+                # Once per PATH per process: the detector builds a new manager
+                # on every poll, so a per-instance flag would not help.
+                if self.manifest_url not in _ABSENCE_REPORTED:
+                    _ABSENCE_REPORTED.add(self.manifest_url)
+                    logger.info(f"Manifest not found: {self.manifest_url}, returning empty manifest")
+                else:
+                    logger.debug(f"Manifest not found: {self.manifest_url}, returning empty manifest")
                 # Cache the empty manifest too: get_plugin()/add_plugin() read
                 # self.current_manifest after calling this, and a None there
                 # crashed the first add_plugin() on a fresh install.

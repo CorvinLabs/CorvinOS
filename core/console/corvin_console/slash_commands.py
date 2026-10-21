@@ -69,8 +69,11 @@ _PASSTHROUGH_CMDS = frozenset({"/delegate", "/use-engine", "/engine-auto", "/deb
 # reach the server, give a pointer instead of an LLM turn.
 _CLIENT_SIDE = frozenset({"/stop", "/cancel", "/halt", "/new", "/clear", "/reset"})
 
-# Bridge/messenger runtime concepts with no web-console equivalent.
-_BRIDGE_ONLY = frozenset({"/go", "/propose", "/btw", "/share"})
+# Bridge/messenger runtime concepts with no web-console equivalent. `/btw` is
+# NOT one of them since ADR-2220: the console steers a running reply through
+# POST /chat/sessions/{sid}/btw, and the WebSocket handler (routes/chat.py)
+# maps a typed `/btw …` onto that path before this dispatcher runs.
+_BRIDGE_ONLY = frozenset({"/go", "/propose", "/share"})
 
 
 def is_ccc(text: str) -> bool:
@@ -365,11 +368,15 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
                 "is not available in the web console.")
 
     if cmd in _CLIENT_SIDE:
-        _hint = {
-            "/stop": "the **Stop** button", "/cancel": "the **Stop** button",
-            "/halt": "the **Stop** button", "/new": "the **New chat** button",
-            "/clear": "the **New chat** button", "/reset": "the **New chat** button",
+        # "to new this session" (2026-10-21) — the verb is the action, not the command word.
+        _hint, _verb = {
+            "/stop": ("the **Stop** button", "stop the running reply"),
+            "/cancel": ("the **Stop** button", "cancel the running reply"),
+            "/halt": ("the **Stop** button", "halt the running reply"),
+            "/new": ("the **New chat** button", "start a new chat"),
+            "/clear": ("the **New chat** button", "clear this chat"),
+            "/reset": ("the **New chat** button", "reset this chat"),
         }[cmd]
-        return f"Use {_hint} to {cmd.lstrip('/')} this session."
+        return f"Use {_hint} to {_verb}."
 
     return f"Unknown command `{cmd}`. Type `/help` for the list."

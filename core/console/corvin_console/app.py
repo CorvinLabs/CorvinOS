@@ -966,6 +966,15 @@ def create_app() -> FastAPI:
             )
 
         yield
+        # Live chat turns first, while the loop is alive (see
+        # chat_runtime.shutdown_live_turns: uvicorn re-raises the SIGTERM after
+        # the lifespan returns, so a pending turn would be killed unfinalised).
+        try:
+            from . import chat_runtime as _cr_down
+
+            await _cr_down.shutdown_live_turns()
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            pass
         try:
             from . import turn_recovery
 

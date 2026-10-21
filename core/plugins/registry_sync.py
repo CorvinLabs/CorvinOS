@@ -178,7 +178,9 @@ class PluginRegistrySynchronizer:
         # Load canonical manifest
         manifest = self.manifest_manager.load_manifest()
         if not manifest.plugins:
-            logger.warning("No plugins in canonical manifest")
+            # Every 30 s from the drift detector; an install without a canonical
+            # manifest has nothing to compare — not a warning (1 500+/day).
+            logger.debug("No plugins in canonical manifest")
             return drifts
 
         # Verify each canonical plugin

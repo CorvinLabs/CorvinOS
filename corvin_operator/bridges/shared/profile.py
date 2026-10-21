@@ -287,6 +287,11 @@ def set_value(key: str, value: Any) -> dict[str, Any]:
                 d.pop(key, None)
             else:
                 d[key] = value
+            if key == "display_language":
+                # Every caller of set_value is an OPERATOR write (`/lang set`,
+                # the console, Claude on the user's behalf): the language is
+                # now a pin, not the installer's locale guess.
+                mark_display_language_operator(d)
         else:
             extra = dict(d.get("_extra") or {})
             if value is None:
@@ -295,6 +300,79 @@ def set_value(key: str, value: Any) -> dict[str, Any]:
                 extra[key] = value
             d["_extra"] = extra
     return mutate(_apply)
+
+
+# ─── display_language provenance ──────────────────────────────────────────
+#
+# `display_language` has TWO writers with different meanings: the installer
+# SEEDS it from the detected system locale (a default, so the greeting, the
+# console locale and the offline voice have a language from the first boot),
+# and the operator PINS it (Settings → Profile, `/lang set`). The system
+# prompts treat a pin as authoritative — "reply in de even when the message
+# is English" (maintainer decision 2026-07-20) — which is right for a pin and
+# wrong for a seed: a fresh install on an `en_US` box refused to answer a
+# German question in German ("the operator set English", measured on a fresh
+# container 2026-10-21). The provenance lives under the hidden `_meta` key so
+# the value itself keeps serving every reader that only needs *a* language.
+
+_LANG_SOURCE_KEY = "display_language_source"
+LANG_SOURCE_INSTALLER = "installer"
+
+
+def _meta(d: dict[str, Any]) -> dict[str, Any]:
+    m = d.get("_meta")
+    return m if isinstance(m, dict) else {}
+
+
+def mark_display_language_operator(d: dict[str, Any]) -> None:
+    """Record that `d["display_language"]` was written by the operator (in
+    place, no save). Called by every operator write path; a profile dict
+    that is being merged by hand (console PUT) calls it itself."""
+    m = _meta(d)
+    if m.pop(_LANG_SOURCE_KEY, None) is not None:
+        if m:
+            d["_meta"] = m
+        else:
+            d.pop("_meta", None)
+
+
+def seed_display_language(lang: str) -> dict[str, Any]:
+    """Installer seed: set `display_language` to *lang* ONLY when none is set
+    yet, and mark it as the installer's locale guess. Never overwrites an
+    operator pin and never re-marks one as seeded. Returns the profile."""
+    lang = (lang or "").strip()
+
+    def _apply(d: dict[str, Any]) -> None:
+        if not lang or str(d.get("display_language") or "").strip():
+            return
+        d["display_language"] = lang
+        d["_meta"] = dict(_meta(d), **{_LANG_SOURCE_KEY: LANG_SOURCE_INSTALLER})
+    return mutate(_apply)
+
+
+def display_language_source(d: dict[str, Any] | None = None) -> str:
+    """"operator" | "installer" | "" (unset) for the profile (or for *d*)."""
+    d = load() if d is None else d
+    if not str(d.get("display_language") or "").strip():
+        return ""
+    src = _meta(d).get(_LANG_SOURCE_KEY)
+    return LANG_SOURCE_INSTALLER if src == LANG_SOURCE_INSTALLER else "operator"
+
+
+def display_language_pin(d: dict[str, Any] | None = None) -> str:
+    """The language the OPERATOR pinned, or "" — the only value a reply-
+    language rule may treat as authoritative over the user's own language."""
+    d = load() if d is None else d
+    return (str(d.get("display_language") or "").strip()
+            if display_language_source(d) == "operator" else "")
+
+
+def display_language_default(d: dict[str, Any] | None = None) -> str:
+    """The configured language regardless of who set it — for readers that
+    need *a* language (UI locale, greeting, offline voice, a fallback when a
+    text's language cannot be told), never for overriding the user."""
+    d = load() if d is None else d
+    return str(d.get("display_language") or "").strip()
 
 
 def reset() -> None:
@@ -322,7 +400,7 @@ def for_system_prompt() -> str:
     lines: list[str] = []
     if d.get("name"):
         lines.append(f"- Name: {d['name']}")
-    if d.get("display_language"):
+    if display_language_pin(d):
         # AUTHORITATIVE (maintainer decision 2026-07-20). This used to read
         # "(default; still match the user's actual writing language)", which
         # explicitly told the model to OVERRIDE the setting — so an operator with
@@ -335,6 +413,16 @@ def for_system_prompt() -> str:
             f"operator's explicit setting and overrides the language of the "
             f"incoming message — do not switch languages because a message, a "
             f"quoted snippet or a code sample is in another language."
+        )
+    elif display_language_default(d):
+        # Installer seed (system locale): a DEFAULT, not a pin. The user's own
+        # language wins; the seed only decides what to do when a message has no
+        # language of its own (a bare number, a URL, a code snippet).
+        lines.append(
+            f"- Language: reply in the language the user writes in (German message "
+            f"→ German reply, English message → English reply). When the message "
+            f"has no language of its own, reply in {d['display_language']} "
+            f"(the install default)."
         )
     if d.get("tone"):
         lines.append(f"- Tone: {d['tone']}")

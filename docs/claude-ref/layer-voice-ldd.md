@@ -1293,9 +1293,30 @@ This change is **structural** — adapter spawn shape changed (stream-json
 input, stdin pipe). After updating, `bash corvin_operator/bridges/bridge.sh
 restart` is required for the running adapter to pick it up.
 
+### Automatic recaps speak the chat's language (2026-10-21)
+
+`generate_and_persist_session_summary` and `generate_and_persist_task_summary` (and the owed-task
+marker) take `lang=None` and resolve it through `routes/voice.py::chat_language(tenant_id, sid)`:
+the `language_context.resolved_lang` of the chat's latest persisted turn (the user's own
+language, or the operator's pin), else the profile's configured language (pin or installer seed,
+`profile.display_language_default()`), else `en`. Until then both defaulted to `lang="de"`, so an
+English chat on an English install got German recaps. Only the de/en summarizer templates exist;
+another resolved language keeps the German template and passes `--output-language` where the
+pipeline supports it. Proof: `tests/e2e/fresh_system/test_fresh_voice_summary_live.py::test_english_chat_gets_an_english_recap`.
+
+`/voice/status`'s Piper row is a READ: `say.provider_status()` resolves each language with
+`_piper_model_exact`, never `_piper_model_for`, whose last resort returns any model and writes
+`no Piper model for '<lang>' — falling back … (wrong-language speech)` to stderr — one such line
+per language without a model, in the journal, on every status call.
+
 ### Web console — /btw v2 (CONCEPT-0107, ADR-2220 amendment, 2026-10-13)
 
 The console's `/btw` is a **conversation event**, not an API call with a flash message.
+A `/btw …` typed over the chat WebSocket (an API client — the SPA never sends it that way)
+gets the SPA's semantics in `routes/chat.py::chat_stream`: with a live turn of the chat it is
+injected through `chat_runtime.inject_btw_web` and answered with `{"type": "btw_status",
+"status": …}` + `done`; with nothing running the prefix is stripped and it is the next message.
+`slash_commands._BRIDGE_ONLY` no longer lists it (it answered "not available in the web console").
 
 - **No prefix while a reply streams.** Every submit during a running turn — Enter (composer
   or page-global), the send button that appears next to Stop when the composer has text, or a

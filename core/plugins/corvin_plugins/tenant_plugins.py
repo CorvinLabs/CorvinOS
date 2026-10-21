@@ -89,10 +89,22 @@ class TenantPluginRegistry:
 
                 data = yaml.safe_load(self.registry_path.read_text(encoding="utf-8"))
                 if data and isinstance(data, dict):
-                    self.plugins = [
-                        TenantPluginEntry.from_dict(p)
-                        for p in data.get("plugins", [])
-                    ]
+                    entries = data.get("plugins", [])
+                    if isinstance(entries, dict):
+                        # state.TenantRegistry's schema (``spec:`` + a plugin_id →
+                        # record MAPPING) in the same registry.yaml. That registry
+                        # owns the file on every install; this reader keeps the
+                        # Phase 1d list schema. Until 2026-10-21 it tried to parse
+                        # the mapping's keys as entries and warned
+                        # "'str' object has no attribute 'items'" twice per boot
+                        # on every install (measured on a fresh system).
+                        log.debug(
+                            "registry %s is in state.TenantRegistry's schema — "
+                            "no Phase 1d entries", self.registry_path,
+                        )
+                        self.plugins = []
+                        return
+                    self.plugins = [TenantPluginEntry.from_dict(p) for p in entries]
                     self.schema_version = data.get("schema_version", "1.0")
             except Exception as exc:
                 log.warning(f"failed to load registry from {self.registry_path}: {exc}")

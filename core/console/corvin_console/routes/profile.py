@@ -296,6 +296,10 @@ def profile_write(
             # same object, so no separate merge/save step is needed here.
             _apply_section(d, body.identity, _IDENTITY_KEYS)
             _apply_section(d, body.audience, _AUDIENCE_KEYS)
+            if body.identity is not None and "display_language" in body.identity.model_fields_set:
+                # The operator chose a language: it is a pin from now on, not
+                # the installer's locale seed (profile.display_language_pin).
+                _profile.mark_display_language_operator(d)
             _profile._validate_tts_voices(d)
 
         _profile.mutate(_apply_write)

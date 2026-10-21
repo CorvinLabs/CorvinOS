@@ -218,7 +218,8 @@ from .execution_context import (  # noqa: E402
     ExecutionContextBuilder, EngineId, DelegationMode, detect_model_source,
 )
 from .language_resolution import (  # noqa: E402  — ADR-0650 Phase 4 turn language
-    load_profile_language, resolve_turn_language, store_language_context_in_metadata,
+    load_default_language, load_profile_language, resolve_turn_language,
+    store_language_context_in_metadata,
 )
 
 # Canonical bridge audit chain (L16) — os_turn.* traceability for web turns
@@ -1867,6 +1868,44 @@ def _cancel_live_turns(tenant_id: str, sid: str) -> None:
             pass
 
 
+async def shutdown_live_turns(timeout_s: float = 20.0) -> int:
+    """Host shutdown: cancel every running console turn and WAIT (bounded) for its
+    own finaliser — the ``CancelledError`` path of ``_stream_turn_impl`` pairs the
+    ADR-0171 audit (``web.turn.cancelled`` + ``os_turn.completed`` rc -1), persists
+    the streamed text (``[answer cancelled here]``) and ``_finalize_in_flight_task``
+    records the task ``interrupted`` so the next boot's turn recovery can re-run it.
+
+    Why the lifespan must do this itself: uvicorn's ``capture_signals`` re-raises the
+    SIGTERM with the default handler right after the graceful shutdown, so the
+    interpreter dies by signal BEFORE ``asyncio.run``'s task cleanup — a turn still
+    pending after the lifespan shutdown is killed silently: no audit pair, no
+    persisted answer, no notice (measured on a fresh system 2026-10-21: a complete
+    answer the client had already received vanished from the chat, and the task
+    HAD output so recovery never re-ran it). Returns how many turns were cancelled.
+    """
+    with _live_turns_guard:
+        entries = [(key, loop, task) for key, tasks in _live_turns.items() for (loop, task) in tasks]
+    if not entries:
+        return 0
+    here = asyncio.get_running_loop()
+    waiting: list[Any] = []
+    for (tenant_id, sid), loop, task in entries:
+        note_cancel_reason(tenant_id, sid, "shutdown")
+        if loop is here:
+            task.cancel()
+            waiting.append(task)
+        else:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(task.cancel)
+    if waiting:
+        done, pending = await asyncio.wait(waiting, timeout=timeout_s)
+        if pending:
+            _log.warning("host shutdown: %d chat turn(s) did not finalize within %.0fs",
+                         len(pending), timeout_s)
+    _log.info("host shutdown: cancelled %d live chat turn(s)", len(entries))
+    return len(entries)
+
+
 # PLAN-0958 P5: WHY a live turn is being cancelled, so its finalizer can tell an operator's stop
 # (final, silent apart from the stop itself) from a system cut-off (interrupted, the user is told).
 _CANCEL_WHY: dict[tuple[str, str], tuple[str, float]] = {}
@@ -2359,6 +2398,26 @@ _WEB_CHAT_SYSTEM_PROMPT = (
 )
 
 
+def _profile_language() -> tuple[str, str]:
+    """``(pin, default)`` of the profile's display language: the OPERATOR's pin
+    (authoritative over the user's language) and the configured value
+    regardless of who set it (the installer's locale seed counts here only).
+    A profile module without the provenance helpers (an older copy, a test
+    stub exposing only ``load``) reports its value as a pin — the behaviour
+    every install had before 2026-10-21."""
+    if _voice_profile is None:
+        return "", ""
+    try:
+        pin_fn = getattr(_voice_profile, "display_language_pin", None)
+        if pin_fn is not None:
+            return (str(pin_fn() or "").strip(),
+                    str(_voice_profile.display_language_default() or "").strip())
+        lang = str((_voice_profile.load() or {}).get("display_language") or "").strip()
+        return lang, lang
+    except Exception:  # noqa: BLE001 — an unreadable profile never breaks the prompt
+        return "", ""
+
+
 def _language_rule() -> str:
     """The LANGUAGE paragraph, chosen by whether the operator pinned one.
 
@@ -2372,13 +2431,16 @@ def _language_rule() -> str:
     of the two rules removes the contradiction instead of hoping the later line
     wins.
     """
-    lang = ""
-    if _voice_profile is not None:
-        try:
-            lang = (_voice_profile.load() or {}).get("display_language") or ""
-        except Exception:  # noqa: BLE001
-            lang = ""
-    if not str(lang).strip():
+    # Only an OPERATOR pin is authoritative. The installer seeds
+    # display_language from the system locale (profile.seed_display_language);
+    # that seed is a default for language-less input, never a reason to
+    # answer a German question in English.
+    lang, default = _profile_language()
+    if not lang:
+        if default:
+            return (_LANGUAGE_RULE_AUTODETECT
+                    + f" When the message has no language of its own, reply in "
+                      f"{default} (the install default).")
         return _LANGUAGE_RULE_AUTODETECT
     return (
         f"LANGUAGE: ALWAYS reply in {lang}. This is the operator's explicit "
@@ -2863,14 +2925,9 @@ def _sync_acs_result_to_transcript(sess: WebChatSession, res: Any, run_id: str,
 
 def _language_closing_block() -> str:
     """The final, standalone language instruction — empty when no Display
-    Language is pinned (then the base auto-detect rule stands alone)."""
-    lang = ""
-    if _voice_profile is not None:
-        try:
-            lang = (_voice_profile.load() or {}).get("display_language") or ""
-        except Exception:  # noqa: BLE001
-            lang = ""
-    lang = str(lang).strip()
+    Language is pinned by the OPERATOR (then the base auto-detect rule stands
+    alone; the installer's locale seed is a default, not a pin)."""
+    lang, _default = _profile_language()
     if not lang:
         return ""
     return (
@@ -6172,11 +6229,21 @@ def _finalize_in_flight_task(sess: WebChatSession) -> str | None:
         reason_code = why or "turn_closed_without_terminal_event"
         tm.record_event(
             task_id,
-            {"event": "task.interrupted", "reason": reason_code, "exit_code": None},
+            # A host shutdown is a signal exit for turn_recovery.is_restart_kill
+            # (classify_failure: RESTART_EXIT_CODES → C1): a turn that produced
+            # no output is re-run after the restart, exactly like a reaped orphan.
+            {"event": "task.interrupted", "reason": reason_code,
+             "exit_code": -1 if reason_code == "shutdown" else None},
             reason="turn interrupted before any terminal event",
             tenant_id=sess.tenant_id,
         )
-        _notify_system_interruption(sess, tm, task_id, reason_code)
+        # A host shutdown posts no notice here: the streamed text (if any) ends with
+        # "[answer cancelled here]", and turn recovery at the next start posts its own
+        # "interrupted by a service restart … continues automatically" when it re-runs
+        # the turn. A C9 "does NOT continue on its own" right before that contradicted it
+        # (measured 2026-10-21).
+        if reason_code != "shutdown":
+            _notify_system_interruption(sess, tm, task_id, reason_code)
     except Exception:  # noqa: BLE001 — bookkeeping must never break a turn
         _log.debug("could not finalize in-flight task %s", task_id, exc_info=True)
         return None
@@ -6299,6 +6366,7 @@ async def _stream_turn_impl(
             user_text=prompt,
             response_text="",  # not produced yet; profile/input decide the turn
             profile_lang=load_profile_language(sess.tenant_id),
+            system_default=load_default_language(sess.tenant_id) or "en",
         )
         _lang_meta: dict[str, Any] = {}
         store_language_context_in_metadata(_lang_meta, _lang_ctx)

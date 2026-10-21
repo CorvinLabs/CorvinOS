@@ -845,7 +845,11 @@ def _resolve_voice_output_language(candidate_text: str) -> str:
     output_language = ""
     if _PROFILE_OK and _profile_module is not None:
         try:
-            raw = _profile_module.load().get("display_language") or ""
+            # The operator's pin only — the installer's locale seed is a
+            # default (profile.seed_display_language), applied in step (3).
+            pin_fn = getattr(_profile_module, "display_language_pin", None)
+            raw = (pin_fn() if pin_fn is not None
+                   else _profile_module.load().get("display_language")) or ""
             if raw:  # Only if explicitly set by user
                 if _I18N_OK and _i18n is not None:
                     output_language = _i18n.normalise(raw)
@@ -860,7 +864,16 @@ def _resolve_voice_output_language(candidate_text: str) -> str:
         if detected:
             return detected
 
-    # ── (3) Fallback: German default ─────────────────────────────────────────
+    # ── (3) Fallback: the installer's seed (system locale), then German ──────
+    if _PROFILE_OK and _profile_module is not None:
+        try:
+            seeded = getattr(_profile_module, "display_language_default", lambda: "")() or ""
+            if seeded and _I18N_OK and _i18n is not None:
+                output_language = _i18n.normalise(seeded)
+                if output_language:
+                    return output_language
+        except Exception:  # noqa: BLE001
+            pass
     return "de"
 
 
@@ -2148,8 +2161,36 @@ def should_auto_generate_session_summary(tenant_id: str, sid: str, turn_count: i
     return (turn_count - last) >= _AUTO_SUMMARY_MIN_TURN_DELTA
 
 
+def chat_language(tenant_id: str, sid: str) -> str:
+    """The language an AUTOMATIC recap of this chat is made in: the language
+    the backend resolved for the chat's latest turn (``language_context`` on
+    the persisted turn — the user's own language, or the operator's pin), else
+    the profile's configured language (operator pin or installer seed), else
+    English. Until 2026-10-21 every automatic session/task recap was German
+    regardless — measured on a fresh ``en`` install: German summaries of an
+    English-configured chat."""
+    from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
+    try:
+        for turn in reversed(_cr.read_turns(tenant_id, sid, limit=20)):
+            ctx = turn.get("language_context") or {}
+            lang = str(ctx.get("resolved_lang") or "").strip()
+            if lang:
+                return lang
+    except Exception:  # noqa: BLE001 — the language is advisory, never a reason to skip the recap
+        _log.debug("chat language lookup failed for %s:%s", tenant_id, sid, exc_info=True)
+    if _PROFILE_OK and _profile_module is not None:
+        try:
+            default = getattr(_profile_module, "display_language_default",
+                              lambda: _profile_module.load().get("display_language"))()
+            if default:
+                return str(default)
+        except Exception:  # noqa: BLE001
+            pass
+    return "en"
+
+
 def generate_and_persist_session_summary(
-    tenant_id: str, sid: str, *, lang: str = "de", trigger: str = "auto",
+    tenant_id: str, sid: str, *, lang: str | None = None, trigger: str = "auto",
 ) -> bool:
     """Generate a fresh whole-session recap and persist it durably.
 
@@ -2170,6 +2211,7 @@ def generate_and_persist_session_summary(
     sess = _cr.get_session(tenant_id, sid)
     if sess is None:
         return _session_summary_failed(tenant_id, sid, "no-session")
+    lang = lang or chat_language(tenant_id, sid)
 
     try:
         # Same voice-axis metering as the on-demand route — see its call for
@@ -2434,7 +2476,8 @@ def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
 
 def owe_task_summary(tenant_id: str, sid: str, task_id: str, *,
                      user_text: str, answer_text: str,
-                     completed_at: float | None = None) -> bool:
+                     completed_at: float | None = None,
+                     lang: str | None = None) -> bool:
     """Durably record that *task_id* is owed a voice summary. Idempotent: a
     task that already has its summary, or an existing marker, is left alone
     (a marker keeps its attempt count)."""
@@ -2453,6 +2496,9 @@ def owe_task_summary(tenant_id: str, sid: str, task_id: str, *,
             "completed_at": completed_at if completed_at is not None else time.time(),
             "user_text": user_text[:_MARKER_USER_CLIP],
             "answer_text": answer_text[:_MARKER_ANSWER_CLIP],
+            # The chat's language at completion, so a retry after a restart
+            # speaks the same language the turn was in.
+            "lang": lang or chat_language(tenant_id, sid),
         })
     except OSError:
         _log.warning("task summary marker failed for %s:%s/%s", tenant_id, sid, task_id,
@@ -2482,11 +2528,12 @@ def run_owed_task_summary(tenant_id: str, sid: str, task_id: str) -> str:
         user_text, answer_text = str(data["user_text"]), str(data["answer_text"])
         attempts = int(data.get("attempts", 0)) + 1
         completed_at = float(data["completed_at"]) if data.get("completed_at") else None
+        lang = str(data.get("lang") or "") or None
     except (OSError, ValueError, KeyError, TypeError):
         return "none"
     if generate_and_persist_task_summary(
             tenant_id, sid, task_id, user_text=user_text, answer_text=answer_text,
-            completed_at=completed_at):
+            completed_at=completed_at, lang=lang):
         marker.unlink(missing_ok=True)
         return "done"
     if attempts >= _TASK_SUMMARY_MAX_ATTEMPTS:
@@ -2521,7 +2568,7 @@ def _persisted_task_text(ddir: Path, task_id: str) -> str:
 
 def generate_and_persist_task_summary(
     tenant_id: str, sid: str, task_id: str, *,
-    user_text: str, answer_text: str, lang: str = "de",
+    user_text: str, answer_text: str, lang: str | None = None,
     completed_at: float | None = None,
 ) -> bool:
     """Summarise ONE completed task and persist its audio under its task_id.
@@ -2553,6 +2600,7 @@ def generate_and_persist_task_summary(
         return False
 
     ddir = _task_summary_dir(tenant_id, sid)
+    lang = lang or chat_language(tenant_id, sid)
     resolved_lang = lang if lang in ("de", "en") else "de"
     # A retry after a TTS failure already has its text: do not pay for it twice.
     recap_text = _persisted_task_text(ddir, task_id)

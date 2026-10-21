@@ -346,13 +346,19 @@ class TestBootstrapTenant(unittest.TestCase):
         self.lc.install(record, installed_by="test")
         self.lc.enable("test.no-class-path", consent_granted_by="test")
         self._clear_runtime()
-        with self.assertLogs("corvin.plugins.bootstrap", level="ERROR"):
+        # Record-only (no class_path) is a legitimate state — state.TenantRegistry
+        # enables such a record with activated=False — so since 2026-10-21 it is
+        # skipped at DEBUG, never an ERROR + plugin.load_failed on every boot.
+        with self.assertLogs("corvin.plugins.bootstrap", level="DEBUG") as logs:
             self.assertEqual(
                 bootstrap.bootstrap_tenant(
                     tenant_id="_default", corvin_home=self.home, lifecycle_enabled=True
                 ),
                 [],
             )
+        self.assertTrue(any("record-only" in line for line in logs.output), logs.output)
+        self.assertFalse(any(":ERROR:" in line or "ERROR:corvin.plugins.bootstrap" in line
+                             for line in logs.output), logs.output)
 
     def test_corrupt_registry_loads_nothing_but_does_not_raise(self):
         from corvin_plugins.state import registry_path

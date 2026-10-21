@@ -76,3 +76,61 @@ def test_console_keeps_autodetect_when_no_language_pinned(monkeypatch):
     monkeypatch.setattr(cr, "_voice_profile", _P3)
     assert cr._language_rule() == cr._LANGUAGE_RULE_AUTODETECT   # unchanged default
     assert cr._language_closing_block() == ""                    # no closing block
+
+
+# ── Installer seed vs operator pin (2026-10-21) ──────────────────────────────
+# The installer seeds display_language from the system locale. That is a
+# DEFAULT: a fresh en_US install answered a German question in English
+# ("the operator set English") until the seed got its own provenance.
+
+def test_installer_seed_is_a_default_not_a_pin(tmp_path, monkeypatch):
+    monkeypatch.setattr(p, "PROFILE_FILE", tmp_path / "profile.json")
+    p.seed_display_language("en")
+    assert p.display_language_source() == "installer"
+    assert p.display_language_pin() == ""
+    assert p.display_language_default() == "en"
+    line = p.for_system_prompt()
+    assert "ALWAYS answer in" not in line
+    assert "reply in the language the user writes in" in line
+    assert "reply in en (the install default)" in line
+
+
+def test_seed_never_overwrites_and_operator_write_unseeds(tmp_path, monkeypatch):
+    monkeypatch.setattr(p, "PROFILE_FILE", tmp_path / "profile.json")
+    p.seed_display_language("en")
+    p.seed_display_language("de")                      # a second seed is ignored
+    assert p.display_language_default() == "en"
+    p.set_value("display_language", "de")              # /lang set, console, Claude
+    assert p.display_language_source() == "operator"
+    assert p.display_language_pin() == "de"
+    assert "ALWAYS answer in de" in p.for_system_prompt()
+    p.seed_display_language("fr")                      # the installer never demotes a pin
+    assert p.display_language_pin() == "de"
+
+
+def test_profile_without_provenance_is_a_pin(tmp_path, monkeypatch):
+    """Profiles written before the marker existed keep the behaviour they had."""
+    monkeypatch.setattr(p, "PROFILE_FILE", tmp_path / "profile.json")
+    p.save({"display_language": "de"})
+    assert p.display_language_source() == "operator"
+    assert p.display_language_pin() == "de"
+
+
+def test_console_autodetects_with_the_seed_as_default(monkeypatch):
+    import importlib
+    cr = importlib.import_module("corvin_console.chat_runtime")
+
+    class _Seeded:
+        @staticmethod
+        def load(*a, **k): return {"display_language": "en",
+                                   "_meta": {"display_language_source": "installer"}}
+        @staticmethod
+        def display_language_pin(): return ""
+        @staticmethod
+        def display_language_default(): return "en"
+    monkeypatch.setattr(cr, "_voice_profile", _Seeded)
+    rule = cr._language_rule()
+    assert rule.startswith(cr._LANGUAGE_RULE_AUTODETECT)
+    assert "reply in en (the install default)" in rule
+    assert "ALWAYS reply in" not in rule
+    assert cr._language_closing_block() == ""

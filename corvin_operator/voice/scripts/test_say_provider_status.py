@@ -110,7 +110,7 @@ class PiperStatusTests(unittest.TestCase):
     def test_binary_present_but_no_model_reports_not_ready(self):
         with mock.patch.dict(sys.modules, {"piper": None}), \
              mock.patch.object(_say, "_resolve_piper_binary", return_value="/usr/bin/piper"), \
-             mock.patch.object(_say, "_piper_model_for", return_value=None):
+             mock.patch.object(_say, "_piper_model_exact", return_value=None):
             status = _say.provider_status()
         self.assertTrue(status["piper"]["package_installed"])
         self.assertFalse(status["piper"]["model_present"])
@@ -120,10 +120,26 @@ class PiperStatusTests(unittest.TestCase):
     def test_binary_and_model_present_reports_ready(self):
         with mock.patch.dict(sys.modules, {"piper": None}), \
              mock.patch.object(_say, "_resolve_piper_binary", return_value="/usr/bin/piper"), \
-             mock.patch.object(_say, "_piper_model_for", return_value=Path("/fake/model.onnx")):
+             mock.patch.object(_say, "_piper_model_exact", return_value=Path("/fake/model.onnx")):
             status = _say.provider_status()
         self.assertTrue(status["piper"]["ready"])
         self.assertTrue(status["piper"]["model_present"])
+
+
+    def test_status_probe_never_takes_the_wrong_language_fallback(self):
+        """provider_status is a READ: it must not print `_piper_model_for`'s
+        "falling back ... (wrong-language speech)" line for every language that
+        has no model — which it did on every /voice/status call (2026-10-21)."""
+        import io
+        with mock.patch.dict(sys.modules, {"piper": None}), \
+             mock.patch.object(_say, "_resolve_piper_binary", return_value="/usr/bin/piper"), \
+             mock.patch.object(_say, "_piper_model_for",
+                               side_effect=AssertionError("status must use _piper_model_exact")), \
+             mock.patch.object(_say, "_piper_model_exact", return_value=None), \
+             mock.patch.object(sys, "stderr", io.StringIO()) as err:
+            status = _say.provider_status()
+        self.assertFalse(status["piper"]["model_present"])
+        self.assertNotIn("wrong-language", err.getvalue())
 
 
 class NeverRaisesTests(unittest.TestCase):

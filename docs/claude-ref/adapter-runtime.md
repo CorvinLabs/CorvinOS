@@ -390,6 +390,21 @@ applied); and a re-run killed with a child open was announced as "recovered". Th
   failure) and "The turn was cut at the scope limit …" (a notice); `ok` renders nothing. Proof over
   the real WebSocket route: `core/console/tests/test_chat_turn_outcome_ws_e2e.py`; renderer:
   `web-next/tests/unit/chat-turn-outcome.test.ts`.
+- **The host shutdown finalises the live turns itself** (`chat_runtime.shutdown_live_turns`, called
+  by BOTH lifespans before `turn_recovery.note_shutdown`). uvicorn's `capture_signals` re-raises the
+  captured SIGTERM with the default handler right after the graceful shutdown, so the interpreter
+  dies by signal BEFORE `asyncio.run`'s task cleanup — a turn still pending after the lifespan
+  returns is killed with no `web.turn.cancelled`, no `os_turn.completed`, no persisted text and no
+  notice (measured on a fresh system 2026-10-21: a complete answer the client had already received
+  vanished from the chat, and because the task HAD output, recovery never re-ran it). Now every
+  registered turn is cancelled with reason `shutdown` and awaited (bounded, 20 s): its own
+  finaliser pairs the audit, keeps the streamed text (`[answer cancelled here]`) and records the
+  task `interrupted` with `exit_code -1`, so a turn without output is re-run by the recovery below;
+  it posts no `needs_user` notice of its own (the recovery's "interrupted by a service restart …
+  continues automatically" is the one the user sees, and a C9 "does NOT continue" right before it
+  contradicted it).
+  Proof: `core/console/tests/test_shutdown_live_turns.py`; on a fresh system
+  `tests/e2e/fresh_system/test_fresh_chat_live.py::test_restart_mid_turn_keeps_the_streamed_answer`.
 - **The re-run key is the request, not the prompt.** `turn_recovery._strip_restart_prefix` removes
   every stacked restart prefix before the attempt key is computed, so `MAX_ATTEMPTS` holds. Since
   2026-10-21 (BGT-15) a re-run no longer stores the prefix at all: `turn_recovery._run_once` calls
