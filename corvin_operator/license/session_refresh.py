@@ -505,7 +505,20 @@ def check_public_key_integrity() -> bool:
     for kid, server_key in server_ring.items():
         if not server_key:
             continue
-        local_key = _local_ring.get(kid, "")
+        # The server publishes the "lic-vN" / "ibc-vN" aliases of every session
+        # key (ADR-0102 / ADR-0145: one keypair, three token classes told apart
+        # by the kid prefix). The local ring stores the keypair ONCE, under
+        # "sess-vN", and validator.py / instance_identity.py resolve the aliases
+        # to it — so compare the alias against that entry instead of warning
+        # "update CorvinOS" twice on every boot of an up-to-date install
+        # (measured on a fresh install of main, 2026-10-21). A genuinely new
+        # session key still shows up as an unknown "sess-" kid below.
+        lookup_kid = kid
+        for _alias in ("lic-", "ibc-"):
+            if kid.startswith(_alias):
+                lookup_kid = "sess-" + kid[len(_alias):]
+                break
+        local_key = _local_ring.get(lookup_kid, "")
         if not local_key:
             # Server has a kid the local ring doesn't know yet — expected during rotation.
             _log.warning(

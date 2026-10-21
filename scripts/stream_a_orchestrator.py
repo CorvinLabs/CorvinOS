@@ -216,7 +216,8 @@ class StreamAOrchestrator:
         print(f"{'E2E Integration Tests':<30} {self.results['phases'].get('e2e_tests', {}).get('status', '⚠️  UNKNOWN'):<20}")
         print(f"{'Load Testing':<30} {self.results['phases'].get('load_tests', {}).get('status', '⚠️  UNKNOWN'):<20}")
         print(f"{'SLI Verification':<30} {'✅ PASS' if sli_pass else '❌ FAIL':<20}")
-        print(f"{'P0 Issues':<30} {'✅ NONE' if no_p0_issues else f'❌ {len(self.results[\"p0_issues\"])}':<20}")
+        p0_cell = "✅ NONE" if no_p0_issues else f"❌ {len(self.results['p0_issues'])}"
+        print(f"{'P0 Issues':<30} {p0_cell:<20}")
 
         print(f"\n{'='*50}")
         print(f"FINAL VERDICT: {self.results['verdict']}")

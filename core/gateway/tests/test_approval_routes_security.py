@@ -13,21 +13,21 @@ Tests for two critical vulnerabilities fixed:
    - Only enum values accepted (GDPR Art. 5 compliant)
 """
 
-import pytest
-from fastapi.testclient import TestClient
-from unittest.mock import Mock, patch, MagicMock
-from fastapi import HTTPException, status
 from datetime import datetime
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
+from fastapi import HTTPException, status
+from fastapi.testclient import TestClient
 
 from core.gateway.routes.approval_routes import (
-    approval_router,
-    ApprovalActionRequest,
     ApprovalActionReasonEnum,
-    ApprovalStatusResponse,
+    ApprovalActionRequest,
     ApprovalDecisionEnum,
+    ApprovalStatusResponse,
+    approval_router,
     set_approval_gate,
 )
-
 
 # ============================================================================
 # Fixtures
@@ -82,7 +82,7 @@ def mock_current_user():
 @pytest.fixture
 def test_client(mock_approval_gate):
     """Create FastAPI TestClient with mocked approval gate."""
-    from fastapi import FastAPI, Depends
+    from fastapi import Depends, FastAPI
 
     app = FastAPI()
     app.include_router(approval_router)
@@ -381,3 +381,79 @@ class TestApprovalRoutesIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ============================================================================
+# The REAL principal dependency (2026-10-21): built on the gateway guard's
+# ``request.state.principal``, never on a module that does not exist.
+# ============================================================================
+
+class TestRealPrincipalDependency:
+    def _call(self, state_setup):
+        from fastapi import Depends, FastAPI, Request
+
+        from core.gateway.routes.approval_routes import get_current_user
+        app = FastAPI()
+
+        @app.middleware("http")
+        async def _state(request: Request, call_next):
+            state_setup(request)
+            return await call_next(request)
+
+        @app.get("/who")
+        def who(p=Depends(get_current_user)):
+            return {"user_id": p.user_id, "tenant_id": p.tenant_id}
+
+        return TestClient(app).get("/who")
+
+    def test_request_that_never_passed_the_guard_is_rejected(self):
+        r = self._call(lambda req: None)
+        assert r.status_code == 401
+
+    def test_loopback_caller_without_token_is_the_local_operator(self):
+        def setup(req):
+            req.state.principal = None
+        r = self._call(setup)
+        assert r.status_code == 200
+        assert r.json() == {"user_id": "local-operator", "tenant_id": "_default"}
+
+    def test_resolved_jwt_is_attributed_by_tenant_and_label(self):
+        from corvin_gateway.auth import ResolvedToken
+
+        def setup(req):
+            req.state.principal = ResolvedToken(tenant_id="acme", label="alice", fingerprint="ab12")
+        r = self._call(setup)
+        assert r.status_code == 200
+        assert r.json() == {"user_id": "acme:alice", "tenant_id": "acme"}
+
+
+def test_the_gateway_mounts_the_approval_routes():
+    """Before the fix the import of ``core.gateway.auth`` failed and the
+    gateway silently ran without /v1/approvals (every install, every boot)."""
+    import importlib
+    app_mod = importlib.import_module("corvin_gateway.app")
+
+    def _paths(routes):  # FastAPI >= 0.156 keeps an included router nested
+        for r in routes:
+            if getattr(r, "path", None):
+                yield r.path
+            inner = getattr(r, "original_router", None) or getattr(r, "router", None)
+            if inner is not None:
+                yield from _paths(getattr(inner, "routes", []) or [])
+
+    paths = set(_paths(app_mod.app.routes))
+    assert any(p.startswith("/v1/approvals/") for p in paths), sorted(paths)[:20]
+    # The lifespan's init block (app.py "L5 k=2 — OperatorApprovalGate"), line
+    # for line: it is what used to die on the import above.
+    import os
+
+    from corvin_plugins.providers import audit_backend
+
+    from core.gateway.routes import approval_routes
+    from core.skills.feedback_stability import OperatorApprovalGate
+    gate = OperatorApprovalGate(
+        tenant_id="_default", auto_approval_confidence_threshold=0.8,
+        approval_ttl_hours=12, audit_backend=audit_backend,
+        corvin_home=os.environ.get("CORVIN_HOME"),
+    )
+    approval_routes.set_approval_gate(gate)

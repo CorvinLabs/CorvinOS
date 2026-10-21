@@ -1,4 +1,4 @@
-"""Windows ``.cmd``/``.bat`` shim spawning — cmd.exe-safe argument quoting.
+r"""Windows ``.cmd``/``.bat`` shim spawning — cmd.exe-safe argument quoting.
 
 npm ships CLI tools (``claude``, ``codex``, ``opencode``, ``copilot``) as
 ``*.cmd`` shims, which ``CreateProcess`` cannot launch directly (WinError 193),

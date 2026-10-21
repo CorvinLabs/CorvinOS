@@ -7,6 +7,18 @@
   Debian/Ubuntu; the script is bash and died at its line 9 with a syntax error, so every fresh Debian/Ubuntu install
   was left without a chat engine until `corvin-install` retried later. The installer now refuses only when bash itself
   is missing, and says so.
+- **The `/v1/approvals` routes are mounted again, and the OperatorApprovalGate initialises.** `approval_routes.py`
+  imported `core.gateway.auth`, a module that does not exist, so every boot of every install logged "Failed to
+  initialize OperatorApprovalGate (approval endpoints disabled)" and the routes were never there; their own security
+  test module could not even import. The principal now comes from the gateway's global guard (`request.state.principal`):
+  a resolved JWT is attributed as `<tenant>:<label>`, the local loopback operator as `local-operator`, and a request that
+  never passed the guard is rejected.
+- **No more "update CorvinOS" key-ring warnings on an up-to-date install.** The licence server publishes the `lic-vN`
+  and `ibc-vN` aliases of every session key; the boot-time integrity check now resolves them to the `sess-vN` entry (as
+  the token verifiers already do) and compares the key, instead of warning twice per boot. A genuinely new `sess-` kid
+  still warns; a tampered alias is a CRITICAL mismatch.
+- **Python 3.14 (what `uv` picks on a bare system) imports every module cleanly**: an invalid `\`` escape in the
+  Windows shim docstring is gone; `scripts/stream_a_orchestrator.py` parses on 3.11 again.
 - **The local Node.js runtime extracts without `xz`.** `scripts/ensure-node.sh` only knew the `.tar.xz` build; a
   minimal Ubuntu (containers, cloud-minimal images) has no xz-utils, tar failed twice and the script "fell back to the
   system Node.js", which does not exist on such a system — no SPA build. It now takes nodejs.org's `.tar.gz` build when

@@ -10,15 +10,65 @@ All endpoints are audit-logged (fail-closed pattern).
 """
 
 import asyncio
+from dataclasses import dataclass
 import logging
 from fastapi import APIRouter, HTTPException, status, Query, Depends
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from enum import Enum
-from core.gateway.auth import get_current_user  # JWT principal extraction
+from fastapi import Request
+
+
+@dataclass(frozen=True)
+class OperatorPrincipal:
+    """Who approved/rejected/revoked — attributed in the audit record."""
+    user_id: str
+    tenant_id: str
+
+
+def get_current_user(request: Request) -> OperatorPrincipal:
+    """The caller's identity, as the gateway's global guard resolved it.
+
+    ``corvin_gateway.app._jwt_guard`` runs on every request: a non-loopback
+    caller without a valid Bearer JWT never reaches a handler (401), a valid
+    JWT is stored on ``request.state.principal`` and a loopback caller without
+    a token (the local operator) leaves it ``None``. This dependency only
+    turns that into an attributable principal — it never widens admission.
+
+    Until 2026-10-21 this symbol was imported from ``core.gateway.auth``, a
+    module that does not exist: the import failed, the gateway logged
+    "Failed to initialize OperatorApprovalGate (approval endpoints disabled)"
+    at every boot and no /v1/approvals route was ever mounted (seen on a fresh
+    install and on the maintainer's host alike).
+
+    Fail-closed: a request that did not pass through the guard at all (no
+    ``principal`` attribute on its state) is rejected.
+    """
+    state = request.state
+    if not hasattr(state, "principal"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"reason": "unauthenticated-request"},
+        )
+    principal = state.principal
+    if principal is None:
+        return OperatorPrincipal(user_id="local-operator", tenant_id="_default")
+    tenant_id = str(getattr(principal, "tenant_id", "") or "_default")
+    label = str(getattr(principal, "label", "") or "")
+    fingerprint = str(getattr(principal, "fingerprint", "") or "")
+    return OperatorPrincipal(
+        user_id=f"{tenant_id}:{label or fingerprint or 'token'}", tenant_id=tenant_id,
+    )
 
 logger = logging.getLogger(__name__)
+
+def _principal(request: Request) -> OperatorPrincipal:
+    """Indirection so ``get_current_user`` is looked up at request time (the
+    security tests patch the module attribute; a dependency bound at import
+    would keep calling the original)."""
+    return get_current_user(request)
+
 
 approval_router = APIRouter(prefix="/v1/approvals", tags=["approvals"])
 
@@ -269,7 +319,7 @@ async def approve_request(
     approval_id: str,
     request: ApprovalActionRequest,
     tenant_id: str = Query("_default", description="Tenant ID (default: _default)"),
-    current_user=Depends(get_current_user),  # JWT principal (fail-closed)
+    current_user=Depends(_principal),  # JWT principal (fail-closed)
 ) -> ApprovalActionResponse:
     """
     Operator approves a pending approval request.
@@ -361,7 +411,7 @@ async def reject_request(
     approval_id: str,
     request: ApprovalActionRequest,
     tenant_id: str = Query("_default", description="Tenant ID (default: _default)"),
-    current_user=Depends(get_current_user),  # JWT principal (fail-closed)
+    current_user=Depends(_principal),  # JWT principal (fail-closed)
 ) -> ApprovalActionResponse:
     """
     Operator rejects a pending approval request.
@@ -446,7 +496,7 @@ async def revoke_approval(
     approval_id: str,
     request: ApprovalActionRequest,
     tenant_id: str = Query("_default", description="Tenant ID (default: _default)"),
-    current_user=Depends(get_current_user),  # JWT principal (fail-closed)
+    current_user=Depends(_principal),  # JWT principal (fail-closed)
 ) -> ApprovalActionResponse:
     """
     Operator revokes a previously-approved change.
