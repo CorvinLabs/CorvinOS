@@ -2,7 +2,21 @@
 
 ## [Unreleased]
 
+### Fixed — the promised fresh-system install (`git clone` + `./install.sh` on a bare Ubuntu 24.04, 2026-10-21)
+- **Claude Code is installed under `bash`.** `install.sh` ran the official installer with `sh`, which is dash on
+  Debian/Ubuntu; the script is bash and died at its line 9 with a syntax error, so every fresh Debian/Ubuntu install
+  was left without a chat engine until `corvin-install` retried later. The installer now refuses only when bash itself
+  is missing, and says so.
+- **The local Node.js runtime extracts without `xz`.** `scripts/ensure-node.sh` only knew the `.tar.xz` build; a
+  minimal Ubuntu (containers, cloud-minimal images) has no xz-utils, tar failed twice and the script "fell back to the
+  system Node.js", which does not exist on such a system — no SPA build. It now takes nodejs.org's `.tar.gz` build when
+  `xz` is absent (gzip is everywhere).
+
 ### Security — dependency upgrades closing the Dependabot alerts (2026-10-21)
+- **Python 3.10 is no longer supported** (`requires-python >= 3.11`; 3.10 reached end of life in October 2026). It was
+  the only reason `uv.lock` still carried Pillow 12 — Pillow 13.0.0 (nine advisories) needs 3.11 — and the installer
+  CI matrix ran it for nothing. certifi 2026.10.19 and vite 6.4.5 close the remaining lock-file alerts; the one alert
+  left open is `braces` under tailwindcss 3's chokidar, for which no patched release exists.
 - **Python (`uv.lock`, console venv):** PyJWT 2.15.1, aiohttp 3.14.5, urllib3 2.8.0, mcp 2.3.0, multidict 7.1.0,
   Werkzeug 3.1.9, httpx2 2.16.0, oauthlib 4.0.0 (youtube extra). A running console picks them up at its next restart.
 - **Bridges (npm):** the WhatsApp bridge drops the unused `node-telegram-bot-api` dependency (it pulled the retired

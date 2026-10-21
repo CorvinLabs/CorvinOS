@@ -41,7 +41,17 @@ case "${UNAME_M}" in
 esac
 
 NODE_FILENAME="node-v${NODE_VERSION}-${PLATFORM}-${ARCH}"
-DOWNLOAD_URL="https://nodejs.org/dist/v${NODE_VERSION}/${NODE_FILENAME}.tar.xz"
+# nodejs.org ships every build as .tar.xz AND .tar.gz. A minimal Debian/Ubuntu
+# (containers, cloud-minimal images) has no `xz`, and tar cannot extract .tar.xz
+# without it — measured 2026-10-21 on a fresh ubuntu:24.04: "xz: Cannot exec",
+# twice, then "falling back to system Node.js" which does not exist, so the
+# console had no SPA build. gzip is everywhere; take .tar.gz when xz is missing.
+if command -v xz >/dev/null 2>&1; then
+    ARCHIVE_EXT="tar.xz"
+else
+    ARCHIVE_EXT="tar.gz"
+fi
+DOWNLOAD_URL="https://nodejs.org/dist/v${NODE_VERSION}/${NODE_FILENAME}.${ARCHIVE_EXT}"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper functions
@@ -94,7 +104,7 @@ _log "Downloading Node.js from ${DOWNLOAD_URL} ..."
 _tmp_dir=$(mktemp -d) || _fail "mktemp failed"
 trap "rm -rf '$_tmp_dir'" EXIT
 
-_archive="${_tmp_dir}/${NODE_FILENAME}.tar.xz"
+_archive="${_tmp_dir}/${NODE_FILENAME}.${ARCHIVE_EXT}"
 
 # Download with curl or wget
 if command -v curl >/dev/null 2>&1; then
@@ -113,13 +123,10 @@ _log "Extracting to ${NODE_ROOT} ..."
 
 # Extract to temp location
 _extract_tmp="${_tmp_dir}/${NODE_FILENAME}"
-if command -v xz >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
-    tar -xf "${_archive}" -C "${_tmp_dir}" || _fail "tar extraction failed"
-elif command -v tar >/dev/null 2>&1; then
-    tar -xJf "${_archive}" -C "${_tmp_dir}" || _fail "tar extraction failed"
-else
-    _fail "tar not found (required for extraction)"
-fi
+command -v tar >/dev/null 2>&1 || _fail "tar not found (required for extraction)"
+# -xf autodetects gzip and xz; the archive format was chosen above to match the
+# decompressor this system has.
+tar -xf "${_archive}" -C "${_tmp_dir}" || _fail "tar extraction failed"
 
 [ -d "${_extract_tmp}" ] || _fail "Extraction directory not found"
 

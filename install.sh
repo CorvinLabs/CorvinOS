@@ -228,8 +228,13 @@ if [ "$SKIP_CLAUDE" != "1" ]; then
         # installer is unattended by design (one run, no questions).
         echo "  Claude Code not found — installing it ..."
         _claude_install_sh="$(mktemp "${TMPDIR:-/tmp}/claude-install.XXXXXX")" || die "mktemp failed"
-        if curl -fsSL --max-time 60 -o "$_claude_install_sh" "https://claude.ai/install.sh" 2>/dev/null \
-           && _await "Installing Claude Code" sh "$_claude_install_sh"; then
+        # The official installer is a bash script (`#!/bin/bash`, arrays, `[[`):
+        # under `sh` (dash on Debian/Ubuntu) it dies at line 9 with a syntax error
+        # and every fresh Debian/Ubuntu install was left without a chat engine.
+        if ! command -v bash >/dev/null 2>&1; then
+            printf '  %s bash not found — Claude Code not installed; chat needs it (https://claude.ai/install.sh).\n' "$(_yellow '⚠')"
+        elif curl -fsSL --max-time 60 -o "$_claude_install_sh" "https://claude.ai/install.sh" 2>/dev/null \
+           && _await "Installing Claude Code" bash "$_claude_install_sh"; then
             export PATH="$HOME/.local/bin:$HOME/.claude/local:$PATH"
             CLAUDE_CODE_PATH="$(command -v claude 2>/dev/null || true)"
             [ -n "$CLAUDE_CODE_PATH" ] || printf '  %s Claude Code installed but not on PATH yet — open a new terminal later.\n' "$(_yellow '⚠')"
