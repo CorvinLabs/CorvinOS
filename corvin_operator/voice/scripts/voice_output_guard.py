@@ -16,6 +16,11 @@ never falls back to the raw input text.
 Twin consumers: ``summarize.py`` (every LLM output, all surfaces) and
 ``adapter.build_voice_summary`` (final gate, also for ``<voice>`` overrides).
 Both load it by file path, so it must stay import-free of the repo.
+
+The same gate describes identifiers instead of letting TTS spell them
+(``describe_identifiers``): paths, file names, commit hashes, ticket / ADR ids,
+versions and URLs are replaced by what they are. The reader has the exact token
+in the chat text.
 """
 
 from __future__ import annotations
@@ -105,7 +110,8 @@ _PROTOCOL_BOUNDARY = re.compile(
 )
 _TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9_:-]*(?:\s[^<>]{0,120})?/?>")
 _PLACEHOLDER = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}|\$\{[^}]*\}|%\([A-Za-z_]+\)s|<[A-Z_]{3,}>")
-_MD_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+# Bounded and newline-free: the unbounded form backtracked quadratically on "[" * 50000 (6.6 s).
+_MD_LINK = re.compile(r"!?\[([^\]\n]{0,200})\]\([^)\n]{0,500}\)")
 _MD_NOISE = re.compile(r"(?m)^\s*(?:#{1,6}\s+|[-*+]\s+|>\s+|\d+[.)]\s+)")
 _EMPHASIS = re.compile(r"(\*{1,3}|_{2,3}|~{2})([^*_~\n]+)\1")
 _SPACES = re.compile(r"[ \t ]+")
@@ -143,14 +149,264 @@ def neutral_announcement(lang: str = "de") -> str:
 
 def speak_or_announce(text: str, lang: str = "de") -> str:
     """Speakable form of *text*, or the neutral announcement — never the raw input."""
-    return sanitize_spoken(text) or neutral_announcement(lang)
+    return sanitize_spoken(text, lang) or neutral_announcement(lang)
 
 
-def sanitize_spoken(text: str) -> str:
+# -- Identifiers are described, never spoken (2026-10-20) ---------------------
+#
+# A listener hears a path, a commit hash or a ticket number as a stream of
+# meaningless syllables, and the same token is already in the chat text. The
+# summarizer prompt asks the model to describe such things; this is the
+# deterministic net under that request, and it also covers a `<voice>` block the
+# assistant wrote itself (no LLM pass there). It only handles classes that are
+# unambiguous in running prose. A generic description ("eine Python-Datei")
+# is the fallback: the model's own, specific description is better, so this
+# fires only for what slipped through.
+#
+# Each class maps to a key; a hit becomes a marker first so that runs of the same
+# kind collapse ("mehrere Architekturentscheidungen") and the article can be fitted
+# to the word in front of it before the final text is produced.
+
+# key -> (gender, singular, plural, nouns that already name the thing)
+_DESC_DE = {
+    "py": ("f", "Python-Datei", "Python-Dateien", "f"), "ts": ("f", "TypeScript-Datei", "TypeScript-Dateien", "f"),
+    "js": ("f", "JavaScript-Datei", "JavaScript-Dateien", "f"), "json": ("f", "JSON-Datei", "JSON-Dateien", "f"),
+    "md": ("n", "Markdown-Dokument", "Markdown-Dokumente", "f"), "conf": ("f", "Konfigurationsdatei", "Konfigurationsdateien", "f"),
+    "sh": ("n", "Shell-Skript", "Shell-Skripte", "f"), "txt": ("f", "Textdatei", "Textdateien", "f"),
+    "css": ("f", "Stylesheet-Datei", "Stylesheet-Dateien", "f"), "html": ("f", "HTML-Seite", "HTML-Seiten", "f"),
+    "img": ("f", "Bilddatei", "Bilddateien", "f"), "audio": ("f", "Audiodatei", "Audiodateien", "f"),
+    "video": ("f", "Videodatei", "Videodateien", "f"), "pptx": ("f", "Präsentation", "Präsentationen", "f"),
+    "docx": ("n", "Word-Dokument", "Word-Dokumente", "f"), "table": ("f", "Tabelle", "Tabellen", "f"),
+    "pdf": ("n", "PDF-Dokument", "PDF-Dokumente", "f"), "sql": ("f", "SQL-Datei", "SQL-Dateien", "f"),
+    "log": ("f", "Logdatei", "Logdateien", "f"), "file": ("f", "Datei", "Dateien", "f"),
+    "dir": ("m", "Ordner", "Ordner", "d"), "url": ("f", "Webadresse", "Webadressen", "u"),
+    "local": ("f", "lokale Adresse", "lokale Adressen", "u"), "ip": ("f", "IP-Adresse", "IP-Adressen", "u"),
+    "commit": ("m", "Commit", "Commits", "c"), "adr": ("f", "Architekturentscheidung", "Architekturentscheidungen", "a"),
+    "plan": ("m", "Umsetzungsplan", "Umsetzungspläne", "p"), "concept": ("n", "Konzept", "Konzepte", "k"),
+    "review": ("n", "Review", "Reviews", "r"), "idea": ("f", "Idee", "Ideen", "i"),
+    "note": ("f", "Notiz", "Notizen", "n"), "task": ("f", "Aufgabe", "Aufgaben", "t"),
+    "epic": ("n", "Epic", "Epics", "e"), "init": ("f", "Initiative", "Initiativen", "x"),
+    "version": ("f", "Version", "Versionen", "v"),
+}
+_DESC_EN = {
+    "py": ("a", "Python file", "Python files"), "ts": ("a", "TypeScript file", "TypeScript files"),
+    "js": ("a", "JavaScript file", "JavaScript files"), "json": ("a", "JSON file", "JSON files"),
+    "md": ("a", "Markdown document", "Markdown documents"), "conf": ("a", "configuration file", "configuration files"),
+    "sh": ("a", "shell script", "shell scripts"), "txt": ("a", "text file", "text files"),
+    "css": ("a", "stylesheet", "stylesheets"), "html": ("an", "HTML page", "HTML pages"),
+    "img": ("an", "image file", "image files"), "audio": ("an", "audio file", "audio files"),
+    "video": ("a", "video file", "video files"), "pptx": ("a", "presentation", "presentations"),
+    "docx": ("a", "Word document", "Word documents"), "table": ("a", "spreadsheet", "spreadsheets"),
+    "pdf": ("a", "PDF document", "PDF documents"), "sql": ("an", "SQL file", "SQL files"),
+    "log": ("a", "log file", "log files"), "file": ("a", "file", "files"),
+    "dir": ("a", "folder", "folders"), "url": ("a", "web address", "web addresses"),
+    "local": ("a", "local address", "local addresses"), "ip": ("an", "IP address", "IP addresses"),
+    "commit": ("a", "commit", "commits"), "adr": ("an", "architecture decision", "architecture decisions"),
+    "plan": ("an", "implementation plan", "implementation plans"), "concept": ("a", "concept", "concepts"),
+    "review": ("a", "review", "reviews"), "idea": ("an", "idea", "ideas"),
+    "note": ("a", "note", "notes"), "task": ("a", "task", "tasks"),
+    "epic": ("an", "epic", "epics"), "init": ("an", "initiative", "initiatives"),
+    "version": ("a", "version", "versions"),
+}
+# A word right before the token that already names the thing ("Commit c81daf2",
+# "die Datei foo.py", "version 1.4.1"): the token is dropped, the noun stays.
+_OWN_NOUNS = {
+    "file": ("datei", "dateien", "skript", "modul", "pfad", "file", "files", "script", "module", "path"),
+    "dir": ("ordner", "verzeichnis", "pfad", "folder", "directory", "path"),
+    "url": ("link", "url", "webadresse", "adresse", "address", "website"),
+    "local": ("adresse", "address"), "ip": ("ip", "adresse", "address"),
+    "commit": ("commit", "commits", "sha", "hash"),
+    "adr": ("adr", "entscheidung", "architekturentscheidung", "decision"),
+    "plan": ("plan", "umsetzungsplan"), "concept": ("konzept", "concept"), "review": ("review",),
+    "idea": ("idee", "idea"), "note": ("notiz", "note"), "task": ("aufgabe", "ticket", "task"),
+    "epic": ("epic",), "init": ("initiative", "initiative"), "version": ("version", "release"),
+}
+_FILE_KEYS = frozenset(k for k, v in _DESC_DE.items() if v[3] == "f")
+# "Die Datei heißt README.md", "the script called deploy.sh": the token is a name, the noun before it says what it is.
+_NAMING_WORDS = frozenset(("heißt", "heisst", "namens", "genannt", "named", "called"))
+
+_EXT_KEYS = {
+    "py": "py", "pyi": "py", "ts": "ts", "tsx": "ts", "js": "js", "jsx": "js", "mjs": "js",
+    "json": "json", "jsonl": "json", "md": "md", "yaml": "conf", "yml": "conf", "toml": "conf",
+    "ini": "conf", "cfg": "conf", "env": "conf", "sh": "sh", "txt": "txt", "css": "css",
+    "html": "html", "svg": "img", "png": "img", "jpg": "img", "jpeg": "img", "gif": "img",
+    "mp3": "audio", "ogg": "audio", "wav": "audio", "mp4": "video", "pptx": "pptx", "potx": "pptx",
+    "docx": "docx", "xlsx": "table", "csv": "table", "pdf": "pdf", "sql": "sql", "log": "log",
+    "lock": "file",
+}
+# "Node.js" and friends are product names, not files.
+_JS_PRODUCTS = frozenset({"node", "next", "vue", "react", "chart", "d3", "three", "express", "nuxt", "vite", "p5"})
+_DIR_HEADS = frozenset({"core", "src", "docs", "tests", "test", "scripts", "home", "usr", "etc", "var", "tmp",
+                        "opt", "lib", "bin", "app", "pages", "components", "corvin_operator", "node_modules"})
+
+_URL = re.compile(r"https?://[^\s<>\"')\]]*[^\s<>\"')\].,;:!?]", re.IGNORECASE)
+_LOCAL = re.compile(r"(?<![\w.])localhost:\d{2,5}(?:/[^\s<>\"')\]]*)?", re.IGNORECASE)
+_SEG = r"\.?[\w\-@+]+(?:\.[\w\-@+]+)*"       # a path segment (".vite" allowed) never ends in the sentence's period
+_FILE = re.compile(
+    r"(?<![\w/.\-@+])(?:[A-Za-z]:)?(?:(?:~|\.{1,2})?/)?(?:[\w.\-@+]+/)*[\w@+][\w.\-@+]*\.("
+    + "|".join(sorted(_EXT_KEYS, key=len, reverse=True)) + r")(?::\d+)?(?!\w)", re.IGNORECASE)
+_DIR = re.compile(
+    r"(?<![\w/.\-@+])(?:(?:~|\.{1,2})(?:/" + _SEG + r")+|(?:[A-Za-z]:)?(?:/" + _SEG + r"){2,}"
+    r"|(?:[A-Za-z]:/)?" + _SEG + r"(?:/" + _SEG + r")+)/?")
+_IPV4 = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?::\d{2,5})?(?!\w|\.\d)")
+_HASH = re.compile(r"(?<![\w/#.\-])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w\-])")
+_KB_ID = re.compile(r"\b(?:(ADR)|(PLAN)|(CONCEPT)|(REVIEW)|(IDEA)|(NOTE))-\d{1,5}\b|\b(?:(T)-\d{4}|(E)-\d{3}|(I)-\d{2})\b")
+_KB_KEYS = ("adr", "plan", "concept", "review", "idea", "note", "task", "epic", "init")
+_VERSION = re.compile(r"(?<![\w.\-])v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z][0-9A-Za-z.\-]*)?(?!\w|\.\d)")
+_SNAKE = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b")
+
+_DATE_OR_THOUSANDS = re.compile(r"\d{1,2}\.\d{1,2}\.\d{2,4}|\d{1,3}(?:\.\d{3})+")
+_PREV_WORD = re.compile(r"([^\W\d_][\w\-]*)[\s:,(]*$")
+_RUN = re.compile(r"\x01(\w+)\x01(?:\s*(?:,|und|and|sowie|&)\s*\x01\1\x01)+")
+_MIXED_RUN = re.compile(r"\x01\w+\x01(?:\s*(?:,|und|and|sowie|&)\s*\x01\w+\x01)+")
+
+
+def _mixed_files_cb(m: "re.Match[str]") -> str:
+    """A run of files of different kinds ("a.py, b.ts, c.md") is "several files"."""
+    keys = re.findall(r"\x01(\w+)\x01", m.group(0))
+    if len(keys) >= 2 and all(k in _FILE_KEYS for k in keys):
+        return "\x02file\x02"
+    return m.group(0)
+_MARK = re.compile(r"([\x01\x02])(\w+)\1")
+_DE_HINT = re.compile(r"\b(?:der|die|das|und|nicht|ist|sind|ich|du|wir|mit|für|eine?[nm]?|den|dem|zu|auf|im|wurde|noch)\b", re.I)
+_EN_HINT = re.compile(r"\b(?:the|and|is|are|was|were|with|for|this|that|of|to|in|on|it|you|we)\b", re.I)
+
+# Words after which the bare noun is right (an article or contraction is there).
+_DET_DE = frozenset("der die das dem den des ein eine einer einem einen eines dieser diese diesem diesen dieses "
+                    "jener jene jenes seine seiner seinem ihre unsere meine deine im am zum zur vom beim".split())
+_DET_EN = frozenset("the this that these those a an its their our my your his her".split())
+_DAT_PREP_DE = frozenset("aus von mit bei nach zu in an auf unter vor neben zwischen gegenüber".split())
+
+
+def guess_lang(text: str) -> str:
+    """``"en"`` when *text* reads as English, ``"de"`` otherwise."""
+    return "en" if len(_EN_HINT.findall(text)) > len(_DE_HINT.findall(text)) else "de"
+
+
+def _prev_word(s: str, pos: int) -> str:
+    m = _PREV_WORD.search(s[max(0, pos - 40):pos])
+    return m.group(1).lower() if m else ""
+
+
+def _mark(m: "re.Match[str]", key: str) -> str:
+    """Marker for one hit. Whether the word before it already names the thing is decided in
+    ``_resolve`` — after runs collapsed, so "in den Dateien a.py, b.py und c.py" drops the
+    whole run and not just its first token."""
+    return f"\x01{key}\x01"
+
+
+def _file_cb(m: "re.Match[str]") -> str:
+    ext = m.group(1).lower()
+    stem = m.group(0).rsplit("/", 1)[-1].rsplit(".", 1)[0].lower()
+    if ext == "js" and stem in _JS_PRODUCTS:
+        return m.group(0)
+    return _mark(m, _EXT_KEYS[ext])
+
+
+def _dir_cb(m: "re.Match[str]") -> str:
+    token = m.group(0)
+    if token[0] in "/~." or re.match(r"[A-Za-z]:/", token):
+        return _mark(m, "dir")
+    segs = [x for x in token.split("/") if x]
+    if all(x.isdigit() for x in segs):
+        return token                       # "24/7", "1/2"
+    if segs[0].lower() in _DIR_HEADS or any(x.startswith(".") for x in segs):
+        return _mark(m, "dir")             # "docs/claude-ref/", "node_modules/.vite"
+    if len(segs) >= 4 or (len(segs) >= 3 and any(re.search(r"[._\-@+]", x) for x in segs)):
+        return _mark(m, "dir")
+    return token                           # "und/oder", "Stadt/Land/Fluss"
+
+
+_VERSION_NOUNS = frozenset(("version", "versionen", "release", "releases", "build", "tag", "v"))
+
+
+def _version_cb(m: "re.Match[str]") -> str:
+    """Only a token that IS a version is described: a ``v`` prefix, a pre-release suffix, or a
+    version noun in front of it. "Abschnitt 3.2.1", "Python 3.11.4" and dates stay spoken."""
+    tok = m.group(0)
+    if _DATE_OR_THOUSANDS.fullmatch(tok):
+        return tok
+    if tok[0] in "vV" or "-" in tok or "+" in tok or _prev_word(m.string, m.start()) in _VERSION_NOUNS:
+        return _mark(m, "version")
+    return tok
+
+
+def _kb_cb(m: "re.Match[str]") -> str:
+    idx = next(i for i, g in enumerate(m.groups()) if g)
+    return _mark(m, _KB_KEYS[idx])
+
+
+def _resolve(m: "re.Match[str]", lang: str) -> str:
+    plural = m.group(1) == "\x02"
+    key = m.group(2)
+    prev = _prev_word(m.string, m.start())
+    group = "file" if key in _FILE_KEYS else key
+    if prev in _OWN_NOUNS.get(group, ()) or prev in _NAMING_WORDS:
+        return ""                          # "Commit c81daf2" → "Commit", "Die Datei heißt README.md" → "Die Datei heißt"
+    if lang == "en":
+        art, one, many = _DESC_EN[key]
+        if prev in _DET_EN:
+            return many if plural else one
+        return f"several {many}" if plural else f"{art} {one}"
+    gender, one, many, _ = _DESC_DE[key]
+    if prev in _DET_DE:
+        return many if plural else one
+    dative = prev in _DAT_PREP_DE
+    if plural:
+        many_d = many if many.endswith(("n", "s")) else many + "n"
+        return f"mehreren {many_d}" if dative else f"mehrere {many}"
+    art = ("einer" if gender == "f" else "einem") if dative else ("eine" if gender == "f" else "ein")
+    return f"{art} {one}"
+
+
+def describe_identifiers(text: str, lang: str | None = None) -> str:
+    """Replace file paths, commit hashes, ticket/ADR ids, versions, URLs and
+    snake_case names by a spoken description. Prose is left alone: only forms that
+    cannot be ordinary words are touched (a lone slash, a date, "Node.js" and a
+    plain number all survive). Never raises.
+
+    *lang* is the resolved output language of the spoken text. Descriptions exist
+    for German and English; for any other language the text is returned unchanged
+    (the token is spoken as is) — never a German description inside a French
+    sentence. Only when *lang* is omitted is the language guessed from the text."""
+    if not text:
+        return text
+    if lang is not None and lang.split("-", 1)[0].lower() not in ("de", "en"):
+        return text
+    try:
+        s = text.replace("\x01", "").replace("\x02", "")
+        s = _URL.sub(lambda m: _mark(m, "url"), s)
+        s = _LOCAL.sub(lambda m: _mark(m, "local"), s)
+        s = _FILE.sub(_file_cb, s)
+        s = _DIR.sub(_dir_cb, s)
+        s = _IPV4.sub(lambda m: _mark(m, "ip"), s)
+        s = _HASH.sub(lambda m: _mark(m, "commit"), s)
+        s = _KB_ID.sub(_kb_cb, s)
+        s = _VERSION.sub(_version_cb, s)
+        s = _SNAKE.sub(lambda m: m.group(0).replace("_", " "), s)
+        s = _RUN.sub(lambda m: f"\x02{m.group(1)}\x02", s)
+        s = _MIXED_RUN.sub(_mixed_files_cb, s)
+        code = lang or guess_lang(s)
+        code = "en" if code.split("-", 1)[0].lower() == "en" else "de"
+        s = _MARK.sub(lambda m: _resolve(m, code), s)
+        s = re.sub(r"\(\s*\)", "", s)
+        s = re.sub(r"[ \t]{2,}", " ", s)
+        s = re.sub(r"\s+([,.;:!?])", r"\1", s)
+        s = re.sub(r":\s*([.,;!?])", r"\1", s)      # "2 commits:." → "2 commits."
+        s = re.sub(r",\s*,", ",", s)
+        s = re.sub(r"\s+([,.;:!?])", r"\1", s)
+        return s.strip()
+    except Exception:  # noqa: BLE001 — a failed rewrite must not silence the answer
+        return text
+
+
+def sanitize_spoken(text: str, lang: str | None = None) -> str:
     """Return *text* reduced to speakable prose, or ``""`` if it is unusable.
 
     Never raises. ``""`` means "do not speak this" — the caller must fall
-    back, not substitute the raw input.
+    back, not substitute the raw input. Identifiers are described, not spoken
+    (:func:`describe_identifiers`); *lang* picks the language of the description
+    and is guessed from the text when omitted.
     """
     if not text or not text.strip():
         return ""
@@ -181,6 +437,7 @@ def sanitize_spoken(text: str) -> str:
     s = _EMPHASIS.sub(r"\2", s)
     s = s.replace("`", "")
     s = _SPACES.sub(" ", re.sub(r"\s*\n\s*", " ", s)).strip()
+    s = describe_identifiers(s, lang)
     # Nothing but symbols/digits left (e.g. "---", "…") is not speech.
     if len(s) < _MIN_SPEAKABLE_CHARS or not re.search(r"[^\W\d_]{2,}", s):
         return ""

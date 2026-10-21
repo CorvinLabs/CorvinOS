@@ -188,6 +188,13 @@ def _fake_claude(tmp: Path, mode: str) -> Path:
         f"mode = {mode!r}\n"
         "if mode == 'echo':\n"
         "    sys.stdout.write(prompt)\n"
+        "elif mode == 'ids':\n"
+        "    sys.stdout.write('Die Änderung steckt in core/console/corvin_console/routes/chat.py, '\n"
+        "                     'Commit c81daf266, siehe ADR-2271 und https://example.org/x/y, '\n"
+        "                     'Version 1.4.1 ist live.')\n"
+        "elif mode == 'rule_check':\n"
+        "    sys.stdout.write('Die Regel ist im Prompt.' if 'KENNUNGEN WERDEN BESCHRIEBEN' in prompt\n"
+        "                     else 'Die Regel fehlt im Prompt.')\n"
         "else:\n"
         "    sys.stdout.write('Der Build ist grün, die Migration ist durch.')\n",
         encoding="utf-8")
@@ -330,3 +337,99 @@ def test_e2e_meta_only_variants_on_degraded_path_print_only_neutral_line(
     assert meta_only.strip() not in out
     for line in meta_only.splitlines():
         assert line.strip() not in out or not line.strip()
+
+
+# -- Identifiers are described, not spoken (2026-10-20) ----------------------
+
+@pytest.mark.parametrize("said, expected", [
+    ("Geändert in /home/shumway/projects/CorvinOS/core/console/chat.py.",
+     "Geändert in einer Python-Datei."),
+    ("Die Datei registry.tsx wurde angepasst.", "Die Datei wurde angepasst."),
+    ("Das steckt in Commit c81daf266.", "Das steckt in Commit."),
+    ("Der Fix kam mit c81daf266 auf main.", "Der Fix kam mit einem Commit auf main."),
+    ("Siehe ADR-2271 und ADR-2269 sowie T-0203.",
+     "Siehe mehrere Architekturentscheidungen sowie eine Aufgabe."),
+    ("Die ADR-2271 beschreibt es.", "Die Architekturentscheidung beschreibt es."),
+    ("Version 1.4.1 läuft.", "Version läuft."),
+    ("Es läuft auf http://127.0.0.1:8765/console/app/x.", "Es läuft auf einer Webadresse."),
+    ("Das Skript scripts/console-deploy.sh baut es.", "Das Skript baut es."),
+    ("Der Ordner docs/claude-ref/ ist neu.", "Der Ordner ist neu."),
+    ("Die Funktion build_voice_summary prüft das.", "Die Funktion build voice summary prüft das."),
+])
+def test_identifiers_are_described_not_spoken(said: str, expected: str) -> None:
+    assert guard.sanitize_spoken(said, "de") == expected
+
+
+def test_identifiers_english() -> None:
+    out = guard.sanitize_spoken("I changed core/console/web-next/src/pages/x.tsx in commit 229cc7c42 for v2.3.0.")
+    assert out == "I changed a TypeScript file in commit for a version."
+
+
+@pytest.mark.parametrize("prose", [
+    "Das geht und/oder jenes, rund um die Uhr, also 24/7.",
+    "Am 20.10.2026 gab es 1.000.000 Aufrufe und 153 Tests liefen durch.",
+    "Node.js läuft und die Rate liegt bei 3,5 Prozent.",
+    "Die Dateien liegen im Frontend und die Zahl 8765 ist ein Port.",
+    "Variante A oder Variante B, Stufe 2 von 3, Plan B.",
+])
+def test_ordinary_prose_with_slashes_dates_and_numbers_is_untouched(prose: str) -> None:
+    assert guard.sanitize_spoken(prose, "de") == prose
+
+
+@pytest.mark.parametrize("said, expected", [
+    # review 2026-10-21 (ACS-03..05): prose that only LOOKS like an identifier stays spoken
+    ("Siehe Abschnitt 3.2.1 und Kapitel 2.4.7 sowie Punkt 1.1.1.", "Siehe Abschnitt 3.2.1 und Kapitel 2.4.7 sowie Punkt 1.1.1."),
+    ("Python 3.11.4 ist Pflicht.", "Python 3.11.4 ist Pflicht."),
+    ("Das ist Stadt/Land/Fluss.", "Das ist Stadt/Land/Fluss."),
+    ("Schnick/Schnack/Schnuck.", "Schnick/Schnack/Schnuck."),
+    ("Wir liefern v2.3.0-rc1 morgen.", "Wir liefern eine Version morgen."),
+    # runs after a noun that already names the thing drop as a whole
+    ("In den Dateien a.py, b.py und c.py.", "In den Dateien."),
+    ("Es gibt 3 Dateien: a.py, b.ts, c.md.", "Es gibt 3 Dateien."),
+    ("Die Datei heißt README.md", "Die Datei heißt"),
+    ("Geändert wurden a.py, b.ts und c.md.", "Geändert wurden mehrere Dateien."),
+    ("Der Fehler steckt in core/console/app.py:444.", "Der Fehler steckt in einer Python-Datei."),
+    ("Der Cache liegt in node_modules/.vite.", "Der Cache liegt in einem Ordner."),
+    ("Der Pfad C:/Users/x/y.txt ist neu.", "Der Pfad ist neu."),
+    ("Die Hosts-Datei liegt unter /etc/hosts.", "Die Hosts-Datei liegt unter einem Ordner."),
+])
+def test_identifier_description_round2(said: str, expected: str) -> None:
+    assert guard.sanitize_spoken(said, "de") == expected
+
+
+def test_english_run_of_commits_after_the_noun() -> None:
+    assert guard.sanitize_spoken("I pushed 2 commits: 1f4da0f8a and 9a7c1eb58.", "en") == "I pushed 2 commits."
+    assert guard.sanitize_spoken("Changed foo.py.", "en") == "Changed a Python file."
+
+
+def test_unsupported_output_language_keeps_identifiers_instead_of_german_descriptions() -> None:
+    fr = "J'ai modifié le fichier foo.py et poussé le commit c81daf266, voir ADR-2271."
+    assert guard.sanitize_spoken(fr, "fr") == fr
+    assert guard.sanitize_spoken(fr, "es-ES") == fr
+    assert "Python" not in guard.sanitize_spoken(fr, "fr")
+
+
+def test_markdown_link_pattern_is_bounded() -> None:
+    import time
+    t0 = time.monotonic()
+    guard.sanitize_spoken("[" * 50000)
+    guard.sanitize_spoken("[x](" + "y" * 50000)
+    assert time.monotonic() - t0 < 1.0
+
+
+def test_describe_identifiers_never_raises_or_leaves_markers() -> None:
+    for text in ("", "   ", "\x01adr\x01 und \x02file\x02", "a" * 5000 + "/b/c/d.py"):
+        out = guard.describe_identifiers(text)
+        assert "\x01" not in out and "\x02" not in out
+
+
+def test_e2e_summarize_rule_reaches_the_model_prompt(tmp_path: Path) -> None:
+    # The fake CLI answers from the prompt it was really sent: the rule must be in it.
+    assert _run(tmp_path, "rule_check") == "Die Regel ist im Prompt."
+
+
+def test_e2e_identifiers_in_model_output_are_not_spoken(tmp_path: Path) -> None:
+    out = _run(tmp_path, "ids")
+    for token in ("chat.py", "core/console", "c81daf266", "ADR-2271", "https://", "1.4.1"):
+        assert token not in out, f"identifier was spoken: {token!r} in {out!r}"
+    assert "Änderung" in out and "Architekturentscheidung" in out

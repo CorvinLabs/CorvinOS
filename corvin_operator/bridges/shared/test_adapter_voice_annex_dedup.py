@@ -56,11 +56,11 @@ def _instrument(adapter):
 
     def fake_appendix(text: str, *, lang: str = "de") -> str:
         calls["appendix"] += 1
-        return text + " Und zur Einordnung, DOPPELT_ANNEX."
+        return text + " Und zur Einordnung, DOPPELTANNEX."
 
     def fake_metapher(text: str, *, lang: str = "de") -> str:
         calls["metapher"] += 1
-        return text + " Bildlich gesprochen, DOPPELT_METAPHER."
+        return text + " Bildlich gesprochen, DOPPELTMETAPHER."
 
     adapter._append_lern_zugabe = fake_appendix
     adapter._append_metapher = fake_metapher
@@ -97,8 +97,8 @@ def test_override_with_both_markers_is_not_doubled() -> None:
         f"LERN-ZUGABE re-appended although already present (calls={calls})")
     assert calls["metapher"] == 0, (
         f"metapher re-appended although already present (calls={calls})")
-    assert "DOPPELT_ANNEX" not in out
-    assert "DOPPELT_METAPHER" not in out
+    assert "DOPPELTANNEX" not in out
+    assert "DOPPELTMETAPHER" not in out
     print(f"  OK — no re-append (appendix={calls['appendix']}, "
           f"metapher={calls['metapher']})")
 
@@ -125,7 +125,7 @@ def test_override_without_markers_still_gets_annex() -> None:
                                       override="Nackte Antwort ganz ohne Zugabe.")
     assert calls["appendix"] == 1, "annex must be added once when absent"
     assert calls["metapher"] == 1, "metapher must be added once when absent"
-    assert "DOPPELT_ANNEX" in out and "DOPPELT_METAPHER" in out
+    assert "DOPPELTANNEX" in out and "DOPPELTMETAPHER" in out
     print("  OK — each added exactly once when absent")
 
 

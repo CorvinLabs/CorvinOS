@@ -19,6 +19,8 @@ announcement, or nothing when the guard itself cannot be loaded.
      lines are dropped by the final gate, the content stays
   9. summarizer prints nothing but quotes the user's text on stderr → the
      logged stderr is scrubbed (PII floor), the quote never reaches the log
+ 10. identifiers (paths, hashes, ADR / task ids, versions, URLs) in a `<voice>`
+     override or in the summarizer's output are described, never spoken
 """
 from __future__ import annotations
 
@@ -190,6 +192,43 @@ def test_empty_summary_stderr_is_scrubbed_in_log() -> None:
         print("  OK — stderr is scrubbed before it is logged")
 
 
+IDS_IN = ("Die Seite ist raus. Geändert wurde core/console/corvin_console/web-next/src/panels/registry.tsx "
+          "in Commit c81daf266, mehr dazu in ADR-2271 und T-0203, siehe http://127.0.0.1:8765/console/app/x.")
+ID_TOKENS = ("registry.tsx", "core/console", "c81daf266", "ADR-2271", "T-0203", "127.0.0.1", "http")
+
+
+def _assert_described(spoken: str) -> None:
+    for token in ID_TOKENS:
+        assert token not in spoken, f"identifier spoken: {token!r} in {spoken!r}"
+    assert "Die Seite ist raus" in spoken, spoken
+    assert "TypeScript-Datei" in spoken and "Architekturentscheidung" in spoken, spoken
+
+
+def test_voice_override_identifiers_are_described() -> None:
+    _section("<voice> override with paths / hashes / ids → described, not spoken")
+    with tempfile.TemporaryDirectory() as td:
+        scripts_dir, _, _ = _install_fakes(Path(td))
+        adapter = _fresh_adapter_with_scripts_dir(scripts_dir)
+        adapter._audience_demands_appendix = lambda block: False
+        adapter._audience_demands_metapher = lambda block: False
+        spoken = adapter.build_voice_summary("irrelevant", max_chars=400, override=IDS_IN)
+        _assert_described(spoken)
+        print("  OK — the override path (no LLM) describes identifiers")
+
+
+def test_summarizer_output_identifiers_are_described() -> None:
+    _section("summarizer output with paths / hashes / ids → described, not spoken")
+    with tempfile.TemporaryDirectory() as td:
+        scripts_dir, _, _ = _install_fakes(Path(td))
+        _write_summarizer(scripts_dir, f"print({IDS_IN!r})\n")
+        adapter = _fresh_adapter_with_scripts_dir(scripts_dir)
+        adapter._audience_demands_appendix = lambda block: False
+        adapter._audience_demands_metapher = lambda block: False
+        spoken = adapter.build_voice_summary(RAW_ANSWER, max_chars=400)
+        _assert_described(spoken)
+        print("  OK — the summarizer path describes identifiers")
+
+
 def main() -> int:
     try:
         test_guard_rejects_instruction_only_text()
@@ -201,6 +240,8 @@ def main() -> int:
         test_custom_summary_provider_output_passes_final_gate()
         test_appended_annex_passes_final_gate()
         test_empty_summary_stderr_is_scrubbed_in_log()
+        test_voice_override_identifiers_are_described()
+        test_summarizer_output_identifiers_are_described()
         print("\nAll adapter voice-guard tests passed.")
         return 0
     except AssertionError as e:

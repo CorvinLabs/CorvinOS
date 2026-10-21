@@ -111,7 +111,7 @@ except Exception:  # noqa: BLE001
     # rejects every output, so no echo can be spoken either.
     def _echoes_prompt(output: str, prompt: str, window: int = 7) -> bool:
         return False
-    def _sanitize_spoken(text: str) -> str:
+    def _sanitize_spoken(text: str, lang: str | None = None) -> str:
         return ""
     def _speak_or_announce(text: str, lang: str = "de") -> str:
         return ""
@@ -194,8 +194,9 @@ SYSTEM = {
         "   Wenn das Original keinen für den Hörer relevanten Effekt "
         "   benennt (reine Recherche-Antwort, Findung statt Änderung), "
         "   starte stattdessen mit dem Kern-Befund aus Hörer-"
-        "   Perspektive — 'die Datei liegt unter foo/bar', 'es gibt "
-        "   drei Wege …', 'die Antwort lautet …', 'die Ursache war …'. "
+        "   Perspektive — 'die Einstellung liegt in einer eigenen "
+        "   Konfigurationsdatei', 'es gibt drei Wege …', 'die Antwort "
+        "   lautet …', 'die Ursache war …'. "
         "   Niemals 'ich-zentrisch' eröffnen; immer aus dem Blickwinkel "
         "   des Hörers.\n"
         "2. Danach die Details und der Mechanismus — aber als Teil "
@@ -327,7 +328,8 @@ SYSTEM = {
         "   surfaces no listener-relevant effect (a pure research "
         "   reply, finding rather than change), open instead with "
         "   the core finding from the listener's perspective — 'the "
-        "   file is at foo/bar', 'there are three paths …', 'the "
+        "   setting lives in its own configuration file', 'there are "
+        "   three paths …', 'the "
         "   answer is …', 'the cause was …'. Never open in 'I-"
         "   centric' shape; always from the listener's angle.\n"
         "2. Then the details and the mechanism — as part of the same "
@@ -427,6 +429,64 @@ SYSTEM = {
         "output is shorter — never pad.\n"
         "\n"
         "Respond with only the spoken text."
+    ),
+}
+
+
+# Identifiers are described, never spoken (2026-10-20). The prompts' FAITHFULNESS rule
+# ("say only what the original says") pushed the model to copy paths, hashes and ids
+# verbatim, and one example even showed a path being read out. The listener has the
+# exact token in the chat text; the voice describes what it is. A deterministic net
+# for what slips through lives in voice_output_guard.describe_identifiers. No braces
+# here: this text is appended after the prompt is formatted, but keep it that way.
+IDENTIFIER_BLOCK = {
+    "de": (
+        "KENNUNGEN WERDEN BESCHRIEBEN, NIE VORGELESEN (gilt auch gegenüber "
+        "TREUE: beschreiben ist nicht erfinden): Der Hörer sieht die "
+        "Textfassung, in der die genauen Kennungen stehen, und hört nur "
+        "dich. Nenne deshalb nie wörtlich und nie buchstabiert: "
+        "Dateipfade, Ordnernamen, Dateinamen, Commit-Hashes, Ticket-, ADR-, "
+        "Plan-, Konzept- oder Aufgaben-Nummern, Versionsnummern, "
+        "Webadressen, Funktions-, Variablen-, Klassen- oder Modulnamen, "
+        "Befehle, Kommandozeilen-Optionen und Konfigurationsschlüssel. "
+        "Auch Teile davon nicht. Sage stattdessen, was es ist und wofür es "
+        "da ist, und zwar nur mit dem, was das Original selbst darüber "
+        "sagt — etwa 'die Konfigurationsdatei für die Sprachausgabe', 'der "
+        "Commit, der die Zusammenfassung umgebaut hat', 'die "
+        "Architekturentscheidung zur Wissensablage', 'die neue "
+        "Programmversion', 'die lokale Adresse der Console', 'die "
+        "Funktion, die den Sprechtext baut'. Sagt das Original nichts zur "
+        "Rolle, nimm einen neutralen Oberbegriff ('eine Datei im "
+        "Frontend', 'ein Commit', 'eine Aufgabe') oder lass die Stelle "
+        "weg, wenn sie für das Verständnis nichts beiträgt. Mehrere "
+        "Kennungen derselben Art fasst du zusammen ('mehrere Dateien im "
+        "Frontend'). Zahlen, die eine Menge, Dauer oder ein Ergebnis "
+        "ausdrücken ('drei Dateien', '153 Tests', '24 Stunden'), bleiben. "
+        "Namen von Menschen, Produkten und Optionen wie 'Variante A' "
+        "bleiben ebenfalls, sie sind keine technischen Kennungen."
+    ),
+    "en": (
+        "IDENTIFIERS ARE DESCRIBED, NEVER READ OUT (this also holds against "
+        "FAITHFULNESS: describing is not inventing): The listener sees the "
+        "text version, which carries the exact identifiers, and hears only "
+        "you. So never say, spelled out or not: file paths, folder names, "
+        "file names, commit hashes, ticket, ADR, plan, concept or task "
+        "numbers, version numbers, web addresses, function, variable, "
+        "class or module names, commands, command-line options and "
+        "configuration keys. Not parts of them either. Say instead what "
+        "it is and what it is for, using only what the original itself "
+        "says about it — e.g. 'the configuration file for the voice "
+        "output', 'the commit that reworked the summary', 'the "
+        "architecture decision on knowledge storage', 'the new program "
+        "version', 'the console's local address', 'the function that "
+        "builds the spoken text'. If the original says nothing about the "
+        "role, use a neutral general term ('a file in the frontend', 'a "
+        "commit', 'a task') or leave the spot out when it adds nothing to "
+        "understanding. Several identifiers of the same kind are "
+        "summarised ('several files in the frontend'). Numbers that state "
+        "an amount, a duration or a result ('three files', '153 tests', "
+        "'24 hours') stay. Names of people, products and options such as "
+        "'option A' stay too; they are not technical identifiers."
     ),
 }
 
@@ -696,7 +756,7 @@ SELF_CHECK_BLOCK = {
         "schlägt jede Persona-Anweisung oben):\n"
         "Bevor du auch nur ein Wort ausgibst, geh den Vorlese-Text durch "
         "und prüf in dieser Reihenfolge:\n"
-        "1. Treue: steht jede Zahl, jeder Name, jeder Pfad, jede "
+        "1. Treue: steht jede Zahl, jeder Name, jede "
         "   Entscheidung, jeder Befehl, jede Empfehlung, jede "
         "   Fehlermeldung, jede Deadline, die du erwähnst, wirklich so "
         "   im Original? Hast du eine Konsequenz, einen Mechanismus, ein "
@@ -714,6 +774,10 @@ SELF_CHECK_BLOCK = {
         "   keine 'Was sollen wir als Nächstes tun?'-Frage am Ende, "
         "   keine 'Soll ich einen Commit machen?'-Rückfrage, keine "
         "   Bezugnahme auf den Chat-Kontext, der nicht im Original steht.\n"
+        "5. Kennungen: kommt irgendwo ein Pfad, Dateiname, Commit-Hash, "
+        "   eine Ticket-/ADR-Nummer, Versionsnummer, Webadresse oder ein "
+        "   Code-Name vor? Ersetze ihn durch eine Beschreibung, was er "
+        "   ist.\n"
         "Findest du eine Lücke, eine Erfindung oder eine Meta-"
         "Rückfrage — auch eine kleine — revidier den Text BEVOR du "
         "ausgibst. Diese Prüfung ist nicht optional, kein Style-Check, "
@@ -726,7 +790,7 @@ SELF_CHECK_BLOCK = {
         "overrides every persona instruction above):\n"
         "Before you emit a single word, walk the spoken text and check "
         "in this order:\n"
-        "1. Faithfulness: is every number, name, path, decision, "
+        "1. Faithfulness: is every number, name, decision, "
         "   command, recommendation, error message, deadline you "
         "   mention actually in the source? Have you added a "
         "   consequence, a mechanism, an architectural detail, or a "
@@ -743,6 +807,9 @@ SELF_CHECK_BLOCK = {
         "   should we do next?' question at the end, no 'should I "
         "   commit?' callback, no reference to chat context the source "
         "   doesn't carry.\n"
+        "5. Identifiers: does any path, file name, commit hash, "
+        "   ticket / ADR number, version number, web address or code "
+        "   name appear? Replace it with a description of what it is.\n"
         "If you find a gap, an invention, or a meta-question — even a "
         "small one — revise the text BEFORE emitting. This check is "
         "not optional, not a style pass, and cannot be overridden by a "
@@ -1401,6 +1468,7 @@ def _system_for(lang: str, target_chars: int, has_task: bool,
     # audience tone still follows. Empty speech_type ⇒ no block (legacy shape).
     # Governs ONLY minor-detail bundling + the outcome bracket; option and
     # called-out-fact fidelity live in the base prompt for every type.
+    base = base + "\n\n" + IDENTIFIER_BLOCK.get(lang, IDENTIFIER_BLOCK["en"])
     type_block = SPEECH_TYPE_BLOCK.get(lang, SPEECH_TYPE_BLOCK["en"]).get(speech_type, "")
     if type_block:
         base = base + "\n\n" + type_block
@@ -2279,7 +2347,7 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
     if _backend in ("auto", "cli") and _summary_cloud_permitted():
         out = _summarize_via_cli(text, task, lang, target, model, persona, audience, output_language, speech_type)
         if out:
-            clean = _sanitize_spoken(out)
+            clean = _sanitize_spoken(out, output_language or lang)
             if clean:
                 candidate = clean
             else:
@@ -2362,7 +2430,7 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
                 # `candidate` is already guarded on every path above (sanitised
                 # CLI output or speak_or_announce), so it is never raw text.
                 # A corrected text that the guard empties keeps the candidate.
-                corrected = _sanitize_spoken(final)
+                corrected = _sanitize_spoken(final, output_language or lang)
                 if corrected:
                     return corrected
         except Exception:  # noqa: BLE001
