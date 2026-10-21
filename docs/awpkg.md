@@ -113,21 +113,18 @@ fail-closed whole-word matching against affirmative/negative word lists — an u
 reply is never treated as consent). A `route(mode: condition)` decision made *before* the
 pause is honored again after resume — the skip state survives the checkpoint round-trip.
 
-**Console UI:** `WorkflowChatPanel` (`core/console/corvin_console/web-next/src/pages/
-workflows.tsx`) renders a real chat window — conversation bubbles + a free-text reply
-box — for `ask_human` pauses, distinct from the older binary `HitlApprovalBar` (approve/
-reject, for the separate "approval" node type used by the console's own hand-rolled
-executor). `POST /workflows/{wid}/runs/{rid}/resume` bridges to
-`corvin_workflows.resume_workflow()`. **Known gap:** the console's `start_run` endpoint
-still uses its own separate node executor (not `corvin_workflows.DAGRunner`), so today a
-run only has a resumable checkpoint once that executor is extended to delegate
-`engine: chat` workflows to `DAGRunner` — tracked as ADR-0188 follow-up work, not
-silently glossed over. **Fail-closed until then:** `start_run` now *refuses* any workflow
-whose graph contains a node type its executor does not implement (`code`, `merge`,
-`route`, `answer`, `ask_human`) rather than silently running it as a generic `claude -p`
-step — which would execute a deterministic `code` node via an LLM and, worse, let an LLM
-"answer" an `ask_human` consent gate (a human-in-the-loop bypass). Such workflows must be
-run with the `corvin-flow` CLI (the full `DAGRunner`) until M7 lands.
+**Console UI:** a run started from the console (`POST /workflows/{wid}/runs`) whose graph uses
+`code`, `merge`, `route`, `answer`, `ask_human` or `approval` is executed by the same `DAGRunner`
+(`core/console/corvin_console/routes/workflow_dag_run.py`, ADR-2272); graphs of only
+agent/fan_out/delegation_loop/deliver still use the console's own executor. The workflow YAML is
+snapshotted next to the run, the run id is the checkpoint key, and every event is appended to the
+run log. The SSE stream is a tail of that log and **stays open while the run is paused**:
+`ask_human` shows the reply panel (`node_awaiting_reply`, answered with
+`POST .../runs/{rid}/resume`), `approval` shows the approve/reject bar (`node_awaiting_approval`,
+`POST .../approve|reject`, which resume in the background). `GET .../approval` reports the pending
+question of a paused run. An `ask_human` whose `chat_id` resolves to nothing (`auto` in a console
+run) pauses for the console operator and writes nothing to any outbox. A paused run past its
+deadline ends as failed; a workflow edited while a run waits does not change that run.
 
 **Real LLM engine:** `corvin_workflows.engines_claude.ClaudeCliEngine` shells out to
 headless `claude -p` (tool use disabled, JSON-only responses). Selected via
