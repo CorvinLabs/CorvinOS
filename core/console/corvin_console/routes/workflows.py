@@ -207,6 +207,20 @@ def _bounded_flock(lock_path: Path, what: str, *, timeout: float | None = None):
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
 
 
+def _yaml_lock(tenant_id: str, wid: str):
+    """B-02: every writer of a workflow's YAML (node routes, PUT /yaml, the design chat, a
+    template accept) takes this lock for its whole read-modify-write, so two edits can no
+    longer overwrite each other (16 concurrent node adds kept 2)."""
+    return _bounded_flock(
+        _workflows_dir(tenant_id) / f"{wid}.yaml.lock", f"workflow yaml {wid!r}", timeout=5.0,
+    )
+
+
+def _locked_write_yaml(tenant_id: str, wid: str, text: str) -> None:
+    with _yaml_lock(tenant_id, wid):
+        _write_atomic(_yaml_path(tenant_id, wid), text)
+
+
 # ── License gate (soft dep) ───────────────────────────────────────────────
 _OPERATOR = _REPO / "corvin_operator"
 if str(_OPERATOR) not in sys.path:
@@ -302,6 +316,8 @@ _VOICE_SCRIPTS = _REPO / "corvin_operator" / "voice" / "scripts"
 _WID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _RID_BYTES = 8
 _MAX_YAML_BYTES = 256 * 1024   # 256 KiB
+_MAX_GRAPH_NODES = 200
+_STALE_RUN_S = 2 * 3600
 _MAX_CHAT_MSG_CHARS = 4000
 
 router = APIRouter()
@@ -357,6 +373,12 @@ def _count_running_workflows(tenant_id: str) -> int:
                 try:
                     meta = json.loads(meta_file.read_text(encoding="utf-8"))
                     if meta.get("status") == "running":
+                        # B-07: a run whose process died stays "running" forever; without a
+                        # sign of life for _STALE_RUN_S it no longer holds a concurrency slot.
+                        last = max(float(meta.get("started_at") or 0), float(meta.get("heartbeat_at") or 0))
+                        rid_ = meta_file.name[: -len(".meta.json")]
+                        if time.time() - last > _STALE_RUN_S and not _dag_run.is_active(tenant_id, wf_dir.name, rid_):
+                            continue
                         count += 1
                 except Exception:
                     pass  # one unreadable meta file: bounded under-count, skip it
@@ -906,8 +928,17 @@ def _validate_yaml_str(raw: str) -> None:
     """
     if not _YAML_OK:
         return  # can't validate without PyYAML; allow through
+    if len(raw.encode("utf-8")) > _MAX_YAML_BYTES:
+        raise HTTPException(http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            f"Workflow YAML exceeds {_MAX_YAML_BYTES // 1024} KiB")
     try:
+        # B-10: aliases expand into shared objects that the JSON responses then serialise in
+        # full (an alias bomb); no workflow needs them.
+        if any(isinstance(ev, _yaml.AliasEvent) for ev in _yaml.parse(raw)):
+            raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "YAML aliases (&anchor / *alias) are not supported")
         parsed = _yaml.safe_load(raw)
+    except HTTPException:
+        raise
     except Exception as exc:
         _log.error("YAML parsing failed", exc_info=True)
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "Invalid workflow YAML syntax") from exc
@@ -915,6 +946,9 @@ def _validate_yaml_str(raw: str) -> None:
         return
     orch = parsed.get("orchestration") if isinstance(parsed, dict) else None
     graph = orch.get("graph") if isinstance(orch, dict) else None
+    if isinstance(graph, list) and len(graph) > _MAX_GRAPH_NODES:
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST,
+                            f"A workflow may have at most {_MAX_GRAPH_NODES} nodes")
     if not graph:
         return  # draft state — defer terminal validation until nodes exist
     fd, tmp = tempfile.mkstemp(suffix=".awp.yaml")
@@ -1226,7 +1260,18 @@ def delete_workflow(
         except Exception:
             pass
     base = _workflows_dir(rec.tenant_id)
-    for suffix in (".awp.yaml", ".meta.json", ".chat.jsonl"):
+    # B-05: paused runs of this workflow keep a checkpoint under <tenant>/workflow_runs/;
+    # with the workflow gone nothing could ever resume or clean them.
+    runs_d = base / wid / "runs"
+    if _AWP_OK and runs_d.is_dir():
+        for mf in runs_d.glob("*.meta.json"):
+            rid_ = mf.name[: -len(".meta.json")]
+            _dag_run.request_cancel(rec.tenant_id, wid, rid_)
+            try:
+                _awp_checkpoint.delete(rid_, tenant_id=rec.tenant_id)
+            except Exception:  # noqa: BLE001
+                _log.warning("delete_workflow: checkpoint cleanup failed for %s/%s", wid, rid_, exc_info=True)
+    for suffix in (".awp.yaml", ".meta.json", ".chat.jsonl", ".yaml.lock"):
         p = base / f"{wid}{suffix}"
         if p.exists():
             p.unlink()
@@ -1263,7 +1308,11 @@ def put_workflow_yaml(
     _validate_wid(wid)
     meta = _require_workflow(rec.tenant_id, wid)
     _validate_yaml_str(body.yaml)
-    _write_atomic(_yaml_path(rec.tenant_id, wid), body.yaml)
+    try:
+        _locked_write_yaml(rec.tenant_id, wid, body.yaml)
+    except WorkflowLockBusy as exc:
+        raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "the workflow is being edited elsewhere - try again") from exc
     _write_awpkg_sidecar(rec.tenant_id, wid)
     meta["updated_at"] = time.time()
     _write_atomic(_meta_path(rec.tenant_id, wid), meta)
@@ -1294,6 +1343,19 @@ def _mutate_graph_node(
 ) -> dict[str, Any]:
     if not _YAML_OK:
         raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE, "PyYAML not available")
+    try:
+        with _yaml_lock(tenant_id, wid):
+            return _mutate_graph_node_locked(tenant_id, wid, mutate)
+    except WorkflowLockBusy as exc:
+        raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "the workflow is being edited elsewhere - try again") from exc
+
+
+def _mutate_graph_node_locked(
+    tenant_id: str,
+    wid: str,
+    mutate: Callable[[list[dict[str, Any]]], None],
+) -> dict[str, Any]:
     yaml_p = _yaml_path(tenant_id, wid)
     raw = yaml_p.read_text(encoding="utf-8") if yaml_p.exists() else ""
     try:
@@ -1311,8 +1373,10 @@ def _mutate_graph_node(
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "orchestration.graph must be a list")
     mutate(graph)
     orch["graph"] = graph
+    # NOTE: the round trip through safe_load/safe_dump drops YAML comments and formatting
+    # (documented; the design chat and this editor own the file's shape).
     new_yaml = _yaml.safe_dump(doc, allow_unicode=True, sort_keys=False, default_flow_style=False)
-    _validate_yaml_str(new_yaml)
+    _validate_yaml_str(new_yaml)  # size, aliases, node count and the whole AWP rule set
     _write_atomic(yaml_p, new_yaml)
     _write_awpkg_sidecar(tenant_id, wid)
     meta = _read_json(_meta_path(tenant_id, wid)) or {}
@@ -2009,7 +2073,7 @@ def list_runs(
     for mf in sorted(runs_d.glob("*.meta.json")):
         data = _read_json(mf)
         if data:
-            items.append(data)
+            items.append(_reap_expired_pause(rec.tenant_id, rec.sid_fingerprint, wid, data))
     items.sort(key=lambda x: x.get("started_at", 0), reverse=True)
     return {"wid": wid, "count": len(items), "runs": items}
 
@@ -2025,6 +2089,7 @@ def get_run(
     meta = _read_json(_run_meta_path(rec.tenant_id, wid, rid))
     if meta is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "run not found")
+    meta = _reap_expired_pause(rec.tenant_id, rec.sid_fingerprint, wid, meta)
     events: list[dict[str, Any]] = []
     log_p = _run_log_path(rec.tenant_id, wid, rid)
     if log_p.exists():
@@ -2046,6 +2111,8 @@ def delete_run(
     _validate_wid(wid)
     _validate_rid(rid)
     _require_workflow(rec.tenant_id, wid)
+    if not _run_meta_path(rec.tenant_id, wid, rid).exists() and not _run_log_path(rec.tenant_id, wid, rid).exists():
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "run not found")
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
@@ -2070,6 +2137,18 @@ def delete_run(
     return {"ok": True, "rid": rid}
 
 # ── Human-in-the-Loop (approval) endpoints ────────────────────────────────
+
+def _reap_expired_pause(tenant_id: str, sid_fp: str, wid: str, meta: dict[str, Any]) -> dict[str, Any]:
+    """B-07: a paused run past its deadline ends as failed even if nobody has the stream open."""
+    aw = meta.get("awaiting") if meta.get("status") == "paused" else None
+    exp = (aw or {}).get("expires_at_ms")
+    if exp and exp < time.time() * 1000:
+        rid = str(meta.get("rid", ""))
+        rec_ = _make_run_recorder(tenant_id, sid_fp, wid, rid, [])
+        if rec_.expire_if_due():
+            return _read_json(_run_meta_path(tenant_id, wid, rid)) or meta
+    return meta
+
 
 def _awaiting_of(tenant_id: str, wid: str, rid: str) -> dict[str, Any] | None:
     meta = _read_json(_run_meta_path(tenant_id, wid, rid)) or {}
@@ -2341,6 +2420,12 @@ def resume_run(
 
     # CON-F3 (ADR-0171): every resumed node event goes to the owner's audit chain AND to the
     # run's own log (same trail as the first pass, so run history shows the whole run).
+    _aw = _awaiting_of(rec.tenant_id, wid, rid)
+    if _aw is not None and _aw.get("kind") == "approval":
+        # B-06: an approval is decided through approve/reject (its own audit record and
+        # button semantics); a typed reply here would skip both.
+        raise HTTPException(http_status.HTTP_409_CONFLICT,
+                            "this run waits for an approval - use approve or reject")
     graph = _graph_of_run(rec.tenant_id, wid, rid)
     _ensure_run_meta(rec.tenant_id, wid, rid)
     recorder = _make_run_recorder(rec.tenant_id, rec.sid_fingerprint, wid, rid, graph)
@@ -2520,9 +2605,8 @@ def download_run_media_zip(
     """Bulk download all run media as ZIP (ADR-0091 M4)."""
     import io
 
-    for v in (wid, rid):
-        if "/" in v or v.startswith(".."):
-            raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid id")
+    _validate_wid(wid)
+    _validate_rid(rid)
 
     tid = rec.tenant_id
     artifacts_dir = _run_artifacts_dir(tid, wid, rid)
@@ -2533,7 +2617,11 @@ def download_run_media_zip(
             try:
                 for f in sorted(artifacts_dir.iterdir()):
                     ext = f.suffix.lower()
-                    if f.is_file() and ext in _MEDIA_EXTENSIONS and not f.stem.endswith("_thumb"):
+                    # B-09: a symlink named x.png must not pull its target into the archive
+                    # (serve_run_media resolves and contains; so does this).
+                    if (f.is_file() and not f.is_symlink() and ext in _MEDIA_EXTENSIONS
+                            and not f.stem.endswith("_thumb")
+                            and artifacts_dir.resolve() in f.resolve().parents):
                         zf.write(f, arcname=f.name)
             except OSError:
                 pass
@@ -4634,9 +4722,10 @@ async def _design_turn(
     if new_yaml:
         # Validate before writing
         try:
-            if _YAML_OK:
-                _yaml.safe_load(new_yaml)  # basic parse check
-            _write_atomic(_yaml_path(tenant_id, wid), new_yaml)
+            # B-08: the generated YAML passes the same gate as a manual save (size, aliases,
+            # node types, selectors, branches); an invalid draft is reported, not written.
+            _validate_yaml_str(new_yaml)
+            await anyio.to_thread.run_sync(_locked_write_yaml, tenant_id, wid, new_yaml)
             _write_awpkg_sidecar(tenant_id, wid)
             yaml_update = new_yaml
             meta["updated_at"] = time.time()
@@ -4807,7 +4896,7 @@ async def workflow_chat_ws(
                 key = str(data.get("key", ""))
                 if key in _TEMPLATES:
                     tmpl_yaml = _TEMPLATES[key]["yaml"]
-                    _write_atomic(_yaml_path(rec.tenant_id, wid), tmpl_yaml)
+                    await anyio.to_thread.run_sync(_locked_write_yaml, rec.tenant_id, wid, tmpl_yaml)
                     meta["phase"] = "detailing"
                     meta["updated_at"] = time.time()
                     _write_atomic(_meta_path(rec.tenant_id, wid), meta)

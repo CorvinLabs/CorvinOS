@@ -134,7 +134,17 @@ run log. The SSE stream is a tail of that log and **stays open while the run is 
 `POST .../approve|reject`, which resume in the background). `GET .../approval` reports the pending
 question of a paused run. An `ask_human` whose `chat_id` resolves to nothing (`auto` in a console
 run) pauses for the console operator and writes nothing to any outbox. A paused run past its
-deadline ends as failed; a workflow edited while a run waits does not change that run.
+deadline ends as failed (also when nobody has it open: reading the run reaps it); a workflow edited while a run waits does not change that run.
+
+**Run lifecycle routes.** `GET /workflows/{wid}/runs/{rid}/stream` replays a run's log and follows it
+(the editor re-attaches to a paused run after a reload); `POST .../cancel` stops a running run before its
+next node, or ends a paused one and removes its checkpoint; `DELETE .../runs/{rid}` cancels, drops the
+checkpoint and snapshot and 404s for an unknown run; deleting a workflow removes the checkpoints of its
+paused runs. A typed `/resume` reply to an `approval` pause is refused (409: use approve/reject). Workflow
+YAML is limited to 256 KiB and 200 nodes for every writer (PUT /yaml, node routes, design chat), aliases
+are rejected, and all writers serialise on a per-workflow lock. Node edits rewrite the file through
+`safe_dump`, which drops YAML comments. A `running` run with no sign of life for 2 h holds no
+`workflows_concurrent` slot.
 
 **Real LLM engine:** `corvin_workflows.engines_claude.ClaudeCliEngine` shells out to
 headless `claude -p` (tool use disabled, JSON-only responses). Selected via
