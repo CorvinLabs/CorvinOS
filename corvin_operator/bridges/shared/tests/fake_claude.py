@@ -20,6 +20,10 @@ Environment:
                         first ``result`` (simulates a quiet child)
   FAKE_CLAUDE_PIDFILE   write this process' pid here (liveness assertions)
   FAKE_CLAUDE_SPAWNLOG  append one line per spawn here (re-run detection)
+  FAKE_CLAUDE_EOF_KILL_S  REAL seconds after stdin reaches EOF at which the CLI kills its
+                        background children and exits (the real CLI does this 600 s after EOF,
+                        measured 2026-10-21): a ``stopped`` task_notification per open child,
+                        then exit 0. Unset = never (the old fake).
   FAKE_CLAUDE_CHILD_PIDFILE  start a REAL background child (`sleep 300`) in this process'
                         group and write its pid here, so "the child is gone" is a fact about a
                         process and not about a mock. SIGTERM ends the child and then the CLI —
@@ -33,6 +37,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 
@@ -65,6 +70,22 @@ def main() -> int:
     if "stream-json" in argv and "--input-format" in argv:
         sys.stdin.readline()  # the initial user message
 
+    eof_kill = os.environ.get("FAKE_CLAUDE_EOF_KILL_S")
+    open_ids: dict[str, None] = {}
+    out_lock = threading.Lock()
+    if eof_kill and "stream-json" in argv and "--input-format" in argv:
+        def _watch_stdin() -> None:
+            sys.stdin.read()                      # returns at EOF (the engine closed stdin)
+            time.sleep(float(eof_kill))
+            with out_lock:
+                for tid in list(open_ids):
+                    sys.stdout.write(json.dumps({"type": "system", "subtype": "task_notification",
+                                                 "task_id": tid, "status": "stopped",
+                                                 "summary": ""}) + "\n")
+                sys.stdout.flush()
+                os._exit(0)
+        threading.Thread(target=_watch_stdin, daemon=True).start()
+
     path = os.environ["FAKE_CLAUDE_FIXTURE"]
     speedup = float(os.environ.get("FAKE_CLAUDE_SPEEDUP", "1") or "1")
     silent = float(os.environ.get("FAKE_CLAUDE_SILENT_S", "0") or "0")
@@ -87,8 +108,13 @@ def main() -> int:
                 child.terminate()
             break
         out = {k: v for k, v in ev.items() if k != "_t"}
-        sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        with out_lock:
+            if out.get("subtype") == "task_started":
+                open_ids[str(out.get("task_id"))] = None
+            elif out.get("subtype") == "task_notification":
+                open_ids.pop(str(out.get("task_id")), None)
+            sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
         if ev.get("type") == "result" and not seen_first_result:
             seen_first_result = True
             extra += silent

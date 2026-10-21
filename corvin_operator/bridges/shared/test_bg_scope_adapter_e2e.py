@@ -115,3 +115,20 @@ def test_mixed_children_are_each_audited_once(sandbox, monkeypatch):
 def test_turn_without_children_writes_no_bgscope_records(sandbox, monkeypatch):
     ans, recs, _, _ = _run(monkeypatch, sandbox, "plain_no_children")
     assert ans.strip() == "ok" and recs == []
+
+
+def test_stdin_stays_open_while_a_child_runs_so_the_cli_does_not_cut_it(sandbox, monkeypatch):
+    """The real CLI kills its background children 600 s after stdin EOF (measured 2026-10-21:
+    stdin closed -> Agent child killed at +607 s; stdin open -> it ran 820 s to its end). The
+    engine used to close stdin at the first result. The fake CLI mimics the cut (1.5 s after
+    EOF at 4x speed); the child here works ~5 s, so only a held-open stdin lets it finish."""
+    events = kit.load_fixture("agent_bg")
+    first_result = next(e["_t"] for e in events if e.get("type") == "result")
+    for e in events:
+        if e["_t"] > first_result:
+            e["_t"] += 20.0
+    fx = kit.write_fixture(sandbox / "fx", "agent_bg_long", events)
+    monkeypatch.setenv("FAKE_CLAUDE_EOF_KILL_S", "1.5")
+    _, recs, _, _ = _run(monkeypatch, sandbox, fx)
+    fin = [r["details"] for r in recs if r["event_type"] == "bgscope.child_finished"]
+    assert [f["state"] for f in fin] == ["completed"], fin

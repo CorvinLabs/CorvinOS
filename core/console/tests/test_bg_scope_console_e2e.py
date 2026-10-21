@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -81,6 +82,52 @@ class ConsoleBackgroundScopeE2E(unittest.TestCase):
     @staticmethod
     def _results(events):
         return [e for e in events if e.get("type") == "result"]
+
+    # ------------------------------------------------------------------------
+    def test_stdin_stays_open_while_a_child_runs_so_the_cli_does_not_cut_it(self):
+        """Measured 2026-10-21: the real CLI kills its background children 600 s after stdin
+        EOF. The console used to close stdin at the first result, so a sub-agent that ran
+        longer than 10 minutes was cut and the turn ended with no closing message.
+        The fake CLI mimics that cut (1.5 s after EOF at 4x speed); the child here runs ~5 s."""
+        events = kit.load_fixture("agent_bg")
+        first_result = next(e["_t"] for e in events if e.get("type") == "result")
+        for e in events:
+            if e["_t"] > first_result:
+                e["_t"] += 20.0          # the child works 20 captured seconds = 5 s wall
+        fx = kit.write_fixture(self.home / "fx", "agent_bg_long", events)
+        ev = self._turn(fx, env={"FAKE_CLAUDE_EOF_KILL_S": "1.5"})
+        final = [r for r in self._results(ev) if r.get("final")]
+        self.assertEqual(len(final), 1, ev)
+        self.assertEqual(final[0].get("outcome"), "ok", final[0])
+        self.assertIn("fertig", final[0]["text"].lower())
+        self.assertNotIn("without a clear result", final[0]["text"])
+
+    def test_a_child_cut_by_the_cli_is_reported_in_the_persisted_answer(self):
+        """The CLI cut a child (state unknown) and exited without a wake-up result - the shape
+        of the 2026-10-21 incident. The user must be told in the answer that is PERSISTED, not
+        only in a transient final event: the turn used to end with the stale interim text and no
+        closing message, so the saved chat showed a task that simply stopped."""
+        events = kit.load_fixture("agent_bg")
+        first_result = next(i for i, e in enumerate(events) if e.get("type") == "result")
+        started = next(e for e in events if e.get("subtype") == "task_started")
+        t = events[first_result]["_t"]
+        cut = events[: first_result + 1] + [
+            {"type": "system", "subtype": "task_updated", "task_id": started["task_id"],
+             "patch": {"status": "killed"}, "_t": t + 1.0},
+            {"type": "system", "subtype": "task_notification", "task_id": started["task_id"],
+             "status": "stopped", "summary": "", "_t": t + 1.0},
+            {"type": "system", "subtype": "background_tasks_changed", "tasks": [], "_t": t + 1.0},
+            {"type": "_eof", "rc": 0, "_t": t + 1.5},
+        ]
+        fx = kit.write_fixture(self.home / "fx2", "agent_bg_cut", cut)
+        ev = self._turn(fx)
+        final = [r for r in self._results(ev) if r.get("final")]
+        self.assertEqual(len(final), 1, ev)
+        self.assertIn("without a clear result", final[0]["text"])
+        # the persisted assistant turn carries the same closing line
+        turns = self.cr.read_turns("_default", self.sess.sid)
+        persisted = json.dumps(turns, ensure_ascii=False)
+        self.assertIn("without a clear result", persisted)
 
     # ------------------------------------------------------------------------
     def test_first_result_is_interim_and_exactly_one_result_is_final(self):

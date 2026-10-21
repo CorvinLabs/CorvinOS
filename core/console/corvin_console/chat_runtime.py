@@ -8268,6 +8268,7 @@ async def _stream_turn_impl(
     _bg_held = ""            # ADR-2236 delay-by-one: newest result seen while NO child was open
     _bg_last_interim = ""    # ADR-2236
     _bg_cut: str | None = None   # ADR-2236 "child_cap" | "wakeup_cap"
+    _bg_stdin_held = False   # ADR-2236 stdin kept open while a background child runs
     _bg_watch = None         # ADR-2236 cap watchdog task
     _bg_t0 = time.time()     # ADR-2236
     if _bg is not None:      # ADR-2236
@@ -8302,6 +8303,10 @@ async def _stream_turn_impl(
                     _bgs.audit_transition(_bg, _tr)                             # ADR-2236
                 if _bg_trs:                                                     # ADR-2236
                     yield _bg_status_event(_bgs, _bg)                           # ADR-2236
+                if _bg_stdin_held and not _bg.open_children:                    # ADR-2236
+                    _bg_stdin_held = False                                      # last child ended: let the CLI EOF
+                    with contextlib.suppress(OSError, BrokenPipeError, RuntimeError):
+                        proc.stdin.close()
             if etype == "system" and evt.get("subtype") == "init":
                 # Subprocess-confirmed model — authoritative over the
                 # requested one (CLI may alias/upgrade model ids).
@@ -8403,8 +8408,14 @@ async def _stream_turn_impl(
                     _btw_stdin_registered = False
                     with _running_stdins_web_guard:
                         _btw_stdin_closed.add(sess.chat_key)
-                    with contextlib.suppress(OSError, BrokenPipeError, RuntimeError):
-                        proc.stdin.close()
+                    # The CLI kills its background children 600 s after stdin EOF (measured
+                    # 2026-10-21), so with a child still running stdin stays open and is
+                    # closed below once the last child has ended.
+                    if _bg is not None and _bg.open_children:
+                        _bg_stdin_held = True
+                    else:
+                        with contextlib.suppress(OSError, BrokenPipeError, RuntimeError):
+                            proc.stdin.close()
                     # The reply may keep streaming (annotation, background
                     # children), but it can no longer be steered: say so, so
                     # the composer stops offering it (CONCEPT-0107).
@@ -8504,6 +8515,9 @@ async def _stream_turn_impl(
         # the honest invariant to keep.
         if _bg_watch is not None:                                                # ADR-2236
             _bg_watch.cancel()                                                   # ADR-2236
+        if _bg_stdin_held and proc.stdin is not None:                            # ADR-2236
+            with contextlib.suppress(OSError, BrokenPipeError, RuntimeError):
+                proc.stdin.close()
         if _bash_snap:
             _bash_diff.remove_snap_dir(_bash_snap)   # ADR-2241 amendment
         if _btw_stdin_registered:
@@ -8562,8 +8576,18 @@ async def _stream_turn_impl(
             else:                                                                # ADR-2236
                 # The closing message is the newest result seen while no child was open;
                 # if the model produced none, a deterministic line (never the first answer again).
-                result_text = (_bg_held or (_bgs.closing_line(_bgs.children_facts(_bg))  # ADR-2236
-                                            if _bg_last_interim else result_text))       # ADR-2236
+                if _bg_held:                                                             # ADR-2236
+                    result_text = _bg_held                                               # ADR-2236
+                elif _bg_last_interim:                                                   # ADR-2236
+                    # No closing answer from the model (a child was cut and the CLI exited
+                    # without a wake-up result): the deterministic line is part of the turn,
+                    # so it is persisted and spoken like any other text - a final event alone
+                    # left the saved chat ending on the stale "still running" message.
+                    _closing = _bgs.closing_line(_bgs.children_facts(_bg))               # ADR-2236
+                    final_text_parts.append("\n\n" + _closing)                          # ADR-2236
+                    assistant_parts.append({"kind": "text", "text": "\n\n" + _closing})
+                    yield {"type": "delta", "text": "\n\n" + _closing}                   # ADR-2236
+                    result_text = _closing                                               # ADR-2236
             yield _bg_status_event(_bgs, _bg)                                    # ADR-2236
             _ann_pending = bool(result_text.strip()) and _annotation_enabled()   # ADR-2236
             # outcome (P1): "process_died" = the CLI was killed with children open, so this

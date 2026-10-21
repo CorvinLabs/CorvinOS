@@ -346,6 +346,19 @@ Measured on claude CLI 2.1.294 (details and raw captures: ADR-2236 / PLAN-0938):
   it has no milestone voice. The detached `/task` worker keeps its single voice note on the completion
   (`_maybe_voice`) with the same facts appended; its failed-child milestone is text.
 
+**stdin stays open while a child runs (measured 2026-10-21).** The claude CLI kills its background
+children **600 s after stdin reaches EOF** — a sub-agent started with `run_in_background` was stopped at
++607 s with stdin closed and ran to its end (820 s) with stdin open (probe: `claude-playground/bg-agent-cutoff`).
+Both the console (`chat_runtime.stream_turn`, `_bg_stdin_held`) and the bridge engine
+(`agents/claude_code.py`, `stdin_held`) used to close stdin at the first `result`, so any child that needed
+more than ten minutes was cut: its state ended `unknown`, and the CLI exited without a wake-up result. They now
+leave stdin open (the `/btw` window still closes at the first result) and close it when the last child has
+ended or the turn is torn down. Second defect: in that case the deterministic closing line
+(`bg_scope.closing_line`) was only yielded as a transient `final` event; it is now also appended to the
+persisted assistant turn, so a saved chat no longer ends on the stale "still running" message. Proof:
+`test_bg_scope_console_e2e.py` and `test_bg_scope_adapter_e2e.py` (the fake CLI mimics the cut with
+`FAKE_CLAUDE_EOF_KILL_S`).
+
 Test harness (T-0070): `shared/tests/fixtures/bgscope/*.jsonl` are scrubbed captures from the real CLI
 (`tests/capture_bgscope_fixture.py` regenerates them), `tests/fake_claude.py` replays one as a REAL
 subprocess selected through `CORVIN_CLAUDE_BIN`, `test_bg_scope_contract.py` pins the schema the tracker will

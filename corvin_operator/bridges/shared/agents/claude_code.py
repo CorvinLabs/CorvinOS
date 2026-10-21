@@ -49,6 +49,14 @@ from typing import Any, IO, Iterator
 
 from . import StreamEvent, parse_jsonl_line, terminate_process_tree
 
+try:  # ADR-2236: background children decide when stdin may be closed
+    from ..bg_scope import ScopeTracker as _ScopeTracker
+except ImportError:  # loaded flat
+    try:
+        from bg_scope import ScopeTracker as _ScopeTracker  # type: ignore
+    except ImportError:  # pragma: no cover - feature inert, old behaviour
+        _ScopeTracker = None  # type: ignore
+
 try:  # ADR-2269 one icon vocabulary
     from ..status_markers import icon as _icon
 except ImportError:  # loaded flat
@@ -1152,6 +1160,11 @@ class ClaudeCodeEngine:
 
         completed = False
         terminal = False  # error event = stop the iterator immediately
+        # The CLI kills its background children 600 s after stdin reaches EOF (measured
+        # 2026-10-21: closed -> Agent child killed at +607 s, open -> ran 820 s to its end).
+        # So stdin stays open while a child is running and is closed once none is left.
+        bg = _ScopeTracker("engine") if _ScopeTracker is not None else None
+        stdin_held = False
         try:
             for raw_line in proc.stdout:
                 if fired.is_set() or time.time() - start_time > timeout:
@@ -1165,11 +1178,23 @@ class ClaudeCodeEngine:
                 if obj is None:
                     continue
 
+                if bg is not None and obj.get("type") == "system":
+                    bg.feed(obj)
+                    if stdin_held and not bg.open_children:
+                        stdin_held = False
+                        self.close_stdin()
+
                 for event in self._normalise_all(obj):
                     if event.type == "error":
                         event = self._enrich_naked_error(event)
                     yield event
                     if event.type == "turn_completed":
+                        if bg is not None:
+                            bg.note_result(obj)
+                            if bg.open_children and prompt_via_stdin and self._stdin is not None:
+                                stdin_held = True
+                                completed = True
+                                continue
                         # Stream-json input keeps stdin open across turns
                         # so mid-stream `/btw` injections can produce
                         # further turn_completed events. Close stdin on
