@@ -36,6 +36,7 @@ if str(HERE) not in sys.path:
 _REAL_MODULES = (
     "bg_task_worker.py", "completion_notify.py", "task_supervisor.py",
     "task_progress.py", "voice_tag.py", "provenance.py", "paths.py",
+    "status_markers.py",    # imported by completion_notify / task_progress since ADR-2269
 )
 
 _STUB_ADAPTER = '''"""Stub engine for the worker E2E — see the module docstring."""
