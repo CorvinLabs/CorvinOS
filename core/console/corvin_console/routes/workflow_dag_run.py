@@ -141,7 +141,11 @@ class RunRecorder:
         write_meta: Callable[[dict[str, Any]], None],
         node_types: dict[str, str],
         audit: Callable[[dict[str, Any]], None] | None = None,
+        alive: Callable[[], bool] = lambda: True,
     ) -> None:
+        # `alive` is False once the run record was deleted: a worker still finishing its
+        # current node must not resurrect the log or the meta of a deleted run.
+        self._alive = alive
         self.tenant_id = tenant_id
         self.wid = wid
         self.rid = rid
@@ -154,12 +158,16 @@ class RunRecorder:
 
     # -- low level -----------------------------------------------------------------
     def emit(self, event: dict[str, Any]) -> None:
+        if not self._alive():
+            return
         line = json.dumps({**event, "ts": event.get("ts", time.time())}, ensure_ascii=False)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.log_path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
 
     def update_meta(self, **fields: Any) -> None:
+        if not self._alive():
+            return
         meta = self._read_meta()
         meta.update(fields)
         meta["heartbeat_at"] = time.time()

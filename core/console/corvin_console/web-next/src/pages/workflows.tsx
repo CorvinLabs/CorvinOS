@@ -71,6 +71,7 @@ import {
   listWorkflows,
   putWorkflowYaml,
   addWorkflowNode,
+  cancelWorkflowRun,
   putWorkflowSchedule,
   deleteWorkflowSchedule,
   deleteRun,
@@ -154,8 +155,10 @@ function formatDuration(started: number, finished: number | null): string {
 
 // ── SVG Canvas ───────────────────────────────────────────────────────────
 
+type NodeStateValue = "idle" | "running" | "ok" | "failed" | "waiting" | "skipped";
+
 interface NodeState {
-  [nodeId: string]: "idle" | "running" | "ok" | "failed" | "waiting";
+  [nodeId: string]: NodeStateValue;
 }
 
 const NODE_TYPE_COLOR: Record<string, string> = {
@@ -189,7 +192,8 @@ const NODE_TYPE_ICON: Record<string, string> = {
   agent: "→",
 };
 
-function nodeColor(type: string, state: "idle" | "running" | "ok" | "failed" | "waiting"): string {
+function nodeColor(type: string, state: NodeStateValue): string {
+  if (state === "skipped") return "hsl(var(--muted-foreground) / 0.45)";
   if (state === "waiting") return "hsl(38 85% 65%)";
   if (state === "running") return "hsl(38 90% 55%)";
   if (state === "ok") return "hsl(142 60% 50%)";
@@ -658,7 +662,7 @@ function AwpCanvas({
               <text x={40} y={30} fontSize={9.5} fontWeight="600"
                 fill={color} fontFamily="inherit" letterSpacing="0.02em">
                 {node.type.toUpperCase()}
-                {state === "waiting" ? " ⏸" : state === "running" ? " ⟳" : state === "ok" ? " ✓" : state === "failed" ? " ✗" : ""}
+                {state === "waiting" ? " ⏸" : state === "running" ? " ⟳" : state === "ok" ? " ✓" : state === "failed" ? " ✗" : state === "skipped" ? " ⤼" : ""}
               </text>
               <text x={12} y={47} fontSize={8}
                 fill="hsl(var(--muted-foreground)/0.7)" fontFamily="inherit">
@@ -715,7 +719,7 @@ function NodeInspector({
   onNodeChanged,
 }: {
   node: GraphNode | null;
-  nodeState?: "idle" | "running" | "ok" | "failed" | "waiting";
+  nodeState?: NodeStateValue;
   wid?: string;
   allNodeIds?: string[];
   csrf?: string;
@@ -2231,9 +2235,11 @@ function HitlApprovalBar({
   const [comment, setComment] = React.useState("");
   const [loading, setLoading] = React.useState<"approving" | "rejecting" | null>(null);
   const [expanded, setExpanded] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
 
   const handle = async (action: "approve" | "reject") => {
     setLoading(action === "approve" ? "approving" : "rejecting");
+    setError(null);
     try {
       if (action === "approve") {
         await approveRunNode(wid, rid, comment, csrf);
@@ -2242,15 +2248,16 @@ function HitlApprovalBar({
         await rejectRunNode(wid, rid, comment, csrf);
         onDecision("rejected");
       }
-    } catch {
-      // stay visible so user can retry
+    } catch (e) {
+      // stay visible so the user can retry, and say why it did not work
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(null);
     }
   };
 
   return (
-    <div className="border-t border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40">
+    <div data-testid="approval-bar" className="border-t border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40">
       <button
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-amber-700 dark:text-amber-400"
         onClick={() => setExpanded((v) => !v)}
@@ -2269,6 +2276,9 @@ function HitlApprovalBar({
             value={comment}
             onChange={(e) => setComment(e.target.value)}
           />
+          {error && (
+            <p data-testid="approval-error" className="rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">{error}</p>
+          )}
           <div className="flex gap-2">
             <Button
               size="sm"
@@ -2565,18 +2575,102 @@ export function WorkflowEditorPage() {
     }
   };
 
-  const startRun = async (dry: boolean) => {
-    if (!session || !wid) return;
+  // Folds one run event into the editor state. Functional updates only: this runs inside a
+  // long-lived stream loop, so anything read from the render closure would be stale.
+  const applyRunEvent = (evt: WorkflowRunEvent): "ended" | undefined => {
+    const id = evt.node_id;
+    const clearBars = (nodeId: string) => {
+      setAwaitingApproval((p) => (p?.nodeId === nodeId ? null : p));
+      setAwaitingReply((p) => (p?.nodeId === nodeId ? null : p));
+    };
+    if (evt.type === "node_started" && id) {
+      setNodeStates((prev) => ({ ...prev, [id]: "running" }));
+    } else if (evt.type === "node_awaiting_approval" && id) {
+      setNodeStates((prev) => ({ ...prev, [id]: "waiting" }));
+      setAwaitingApproval({ nodeId: id, message: evt.message ?? "Please review and approve or reject to continue." });
+    } else if (evt.type === "node_awaiting_reply" && id) {
+      // ADR-0188 ask_human — chatflow reply, distinct from binary approve/reject.
+      setNodeStates((prev) => ({ ...prev, [id]: "waiting" }));
+      setAwaitingReply((prev) => ({
+        nodeId: id,
+        prompt: evt.message ?? "",
+        history: prev && prev.nodeId === id ? prev.history : [],
+      }));
+    } else if (evt.type === "node_skipped" && id) {
+      setNodeStates((prev) => ({ ...prev, [id]: "skipped" }));
+    } else if (evt.type === "node_completed" && id) {
+      setNodeStates((prev) => ({ ...prev, [id]: "ok" }));
+      clearBars(id);
+    } else if (evt.type === "node_failed" && id) {
+      setNodeStates((prev) => ({ ...prev, [id]: "failed" }));
+      clearBars(id);
+    } else if (evt.type === "error") {
+      setRunError(evt.message ?? evt.error ?? "The run failed.");
+      return "ended";
+    } else if (evt.type === "run_completed") {
+      if (!evt.ok) setRunError(evt.error ?? "The run failed.");
+      void qc.invalidateQueries({ queryKey: ["workflow-runs", wid] });
+      return "ended";
+    }
+    return undefined;
+  };
+
+  // Reads one run's SSE stream (a fresh run, or a re-attach to a paused one) into the editor.
+  const consumeRunStream = async (res: Response) => {
+    const runId = res.headers.get("X-Run-Id");
+    if (runId) setCurrentRid(runId);
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let ended = false;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        let evt: WorkflowRunEvent;
+        try {
+          evt = JSON.parse(line.slice(6));
+        } catch {
+          continue; // malformed frame
+        }
+        if (applyRunEvent(evt) === "ended") ended = true;
+      }
+    }
+    // A node still "running" when the stream is over did not finish: never leave a spinner.
+    setNodeStates((prev) => {
+      const next: NodeState = {};
+      for (const [k, v] of Object.entries(prev)) next[k] = v === "running" ? (ended ? "failed" : "idle") : v;
+      return next;
+    });
+    if (!ended) setRunError((prev) => prev ?? "The connection to the run ended before it finished - see Run history.");
+  };
+
+  const resetRunUi = () => {
     setIsRunning(true);
     setRunError(null);
     setNodeStates({});
     setAwaitingApproval(null);
     setAwaitingReply(null);
     setCurrentRid(null);
+  };
 
+  const finishRunUi = () => {
+    setIsRunning(false);
+    setAwaitingApproval(null);
+    setAwaitingReply(null);
+    abortRef.current = null;
+  };
+
+  const startRun = async (dry: boolean) => {
+    if (!session || !wid) return;
+    resetRunUi();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-
     try {
       const res = await fetch(`/v1/console/workflows/${encodeURIComponent(wid)}/runs`, {
         method: "POST",
@@ -2588,85 +2682,76 @@ export function WorkflowEditorPage() {
         body: JSON.stringify({ inputs: {}, dry_run: dry }),
         signal: ctrl.signal,
       });
-
-      if (res.status === 402) {
-        const body = await res.json().catch(() => ({})) as Record<string, unknown>;
-        const detail = body?.detail as Record<string, unknown> | undefined;
-        const msg = (detail?.msg ?? detail?.error ?? "License limit reached — upgrade for concurrent workflow runs.") as string;
-        setRunError(msg);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        const detail = body?.detail as unknown;
+        const obj = detail && typeof detail === "object" ? (detail as Record<string, unknown>) : undefined;
+        const fallback = res.status === 402
+          ? "License limit reached — upgrade for concurrent workflow runs."
+          : `The run could not be started (HTTP ${res.status}).`;
+        setRunError(String(obj?.msg ?? obj?.message ?? obj?.error ?? (typeof detail === "string" ? detail : fallback)));
         return;
       }
-
-      // Capture run ID from response header
-      const runId = res.headers.get("X-Run-Id");
-      if (runId) setCurrentRid(runId);
-
-      const reader = res.body?.getReader();
-      if (!reader) return;
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const evt: WorkflowRunEvent = JSON.parse(line.slice(6));
-              if (evt.type === "node_started" && evt.node_id) {
-                setNodeStates((prev) => ({ ...prev, [evt.node_id!]: "running" }));
-              } else if (evt.type === "node_awaiting_approval" && evt.node_id) {
-                setNodeStates((prev) => ({ ...prev, [evt.node_id!]: "waiting" }));
-                setAwaitingApproval({ nodeId: evt.node_id, message: evt.message ?? "Please review and approve or reject to continue." });
-              } else if (evt.type === "node_awaiting_reply" && evt.node_id) {
-                // ADR-0188 ask_human — chatflow reply, distinct from binary approve/reject.
-                setNodeStates((prev) => ({ ...prev, [evt.node_id!]: "waiting" }));
-                setAwaitingReply((prev) => ({
-                  nodeId: evt.node_id!,
-                  prompt: evt.message ?? "",
-                  history: prev && prev.nodeId === evt.node_id ? prev.history : [],
-                }));
-              } else if (evt.type === "node_completed" && evt.node_id) {
-                setNodeStates((prev) => ({ ...prev, [evt.node_id!]: "ok" }));
-                if (awaitingApproval?.nodeId === evt.node_id) setAwaitingApproval(null);
-                if (awaitingReply?.nodeId === evt.node_id) setAwaitingReply(null);
-              } else if (evt.type === "node_failed" && evt.node_id) {
-                setNodeStates((prev) => ({ ...prev, [evt.node_id!]: "failed" }));
-                if (awaitingApproval?.nodeId === evt.node_id) setAwaitingApproval(null);
-                if (awaitingReply?.nodeId === evt.node_id) setAwaitingReply(null);
-              } else if (evt.type === "run_completed") {
-                await qc.invalidateQueries({ queryKey: ["workflow-runs", wid] });
-              }
-              // Capture rid from first event that carries it
-              if (!currentRid && (evt as WorkflowRunEvent & { rid?: string }).rid) {
-                setCurrentRid((evt as WorkflowRunEvent & { rid?: string }).rid!);
-              }
-            } catch {
-              // skip malformed
-            }
-          }
-        }
-      }
+      await consumeRunStream(res);
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
-        // surface error if needed
+        setRunError(`The run stream failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     } finally {
-      setIsRunning(false);
-      setAwaitingApproval(null);
-      setAwaitingReply(null);
-      abortRef.current = null;
+      finishRunUi();
     }
   };
 
+  // Re-joins a run that is waiting for an answer (after a reload or after leaving the page).
+  const attachRun = React.useCallback(async (rid: string) => {
+    if (!wid) return;
+    resetRunUi();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    try {
+      const res = await fetch(`/v1/console/workflows/${encodeURIComponent(wid)}/runs/${encodeURIComponent(rid)}/stream`, {
+        credentials: "include",
+        signal: ctrl.signal,
+      });
+      if (!res.ok) return;
+      await consumeRunStream(res);
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") setRunError(`The run stream failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      finishRunUi();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wid]);
+
+  const attachedRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!wid || attachedRef.current === wid) return;
+    attachedRef.current = wid;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await listRuns(wid);
+        const waiting = list.runs.find((r) => r.status === "paused" && !r.dry_run);
+        if (waiting && !cancelled) await attachRun(waiting.rid);
+      } catch {
+        /* the list is best effort: a failure here only means no re-attach */
+      }
+    })();
+    return () => {
+      cancelled = true;
+      abortRef.current?.abort();
+    };
+  }, [wid, attachRun]);
+
   const stopRun = () => {
     abortRef.current?.abort();
-    setIsRunning(false);
-    setAwaitingApproval(null);
-    setAwaitingReply(null);
+    if (session && wid && currentRid) {
+      cancelWorkflowRun(wid, currentRid, session.csrf_token).catch((e) => {
+        const status = (e as { status?: number }).status;
+        if (status !== 409 && status !== 404) setRunError(`Stop failed: ${e instanceof Error ? e.message : String(e)}`);
+      });
+    }
+    finishRunUi();
   };
 
   // Phase 5: import a workflow file into the current editor slot

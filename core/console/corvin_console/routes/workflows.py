@@ -431,6 +431,16 @@ def _read_chat(tenant_id: str, wid: str) -> list[dict[str, Any]]:
                 pass
     return lines
 
+_RID_RE = re.compile(r"^[0-9a-f]{8,32}$")
+
+
+def _validate_rid(rid: str) -> str:
+    """Run ids are token_hex values; anything else cannot name a run (404, not a file lookup)."""
+    if not _RID_RE.match(rid):
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "run not found")
+    return rid
+
+
 def _validate_wid(wid: str) -> str:
     if not _WID_RE.match(wid):
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, f"invalid workflow id: {wid!r}")
@@ -2010,6 +2020,7 @@ def get_run(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
     _validate_wid(wid)
+    _validate_rid(rid)
     _require_workflow(rec.tenant_id, wid)
     meta = _read_json(_run_meta_path(rec.tenant_id, wid, rid))
     if meta is None:
@@ -2033,6 +2044,7 @@ def delete_run(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
     _validate_wid(wid)
+    _validate_rid(rid)
     _require_workflow(rec.tenant_id, wid)
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
@@ -2041,7 +2053,18 @@ def delete_run(
         target_kind="workflow_run",
         target_id=f"{wid}/{rid}",
     )
-    for p in (_run_meta_path(rec.tenant_id, wid, rid), _run_log_path(rec.tenant_id, wid, rid)):
+    # A run that is still executing is told to stop; a paused one loses its checkpoint, so
+    # nothing can resume a run whose record is gone.
+    _dag_run.request_cancel(rec.tenant_id, wid, rid)
+    snap = _dag_snapshot_path(rec.tenant_id, wid, rid)
+    if _AWP_OK:
+        try:
+            ckpt = _awp_checkpoint.load(rid, tenant_id=rec.tenant_id)
+            if ckpt is not None and str(ckpt.get("workflow_path")) == str(snap):
+                _awp_checkpoint.delete(rid, tenant_id=rec.tenant_id)
+        except Exception:  # noqa: BLE001
+            _log.warning("delete_run: checkpoint cleanup failed for %s/%s", wid, rid, exc_info=True)
+    for p in (_run_meta_path(rec.tenant_id, wid, rid), _run_log_path(rec.tenant_id, wid, rid), snap):
         if p.exists():
             p.unlink()
     return {"ok": True, "rid": rid}
@@ -2064,6 +2087,7 @@ def get_approval_state(
 ) -> dict[str, Any]:
     """The run's pending question, if it is paused (approval bar / reply panel state)."""
     _validate_wid(wid)
+    _validate_rid(rid)
     _require_workflow(rec.tenant_id, wid)
     aw = _awaiting_of(rec.tenant_id, wid, rid)
     if aw is None:
@@ -2076,6 +2100,7 @@ def _decide_approval(
     wid: str, rid: str, verdict: str, comment: str, rec: session_auth.SessionRecord,
 ) -> dict[str, Any]:
     _validate_wid(wid)
+    _validate_rid(rid)
     _require_workflow(rec.tenant_id, wid)
     if not _AWP_OK:
         raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE, "AWP workflow stack not available")
@@ -2135,6 +2160,69 @@ def reject_run_node(
     """Reject a paused `approval` node - the node fails and the run ends (or the branch is
     contained, with `retry.error_strategy: fail_branch`)."""
     return _decide_approval(wid, rid, "reject", body.comment, rec)
+
+@router.get("/workflows/{wid}/runs/{rid}/stream")
+async def stream_run_events(
+    wid: str,
+    rid: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> StreamingResponse:
+    """Attach to a run: replay its log from the start and follow it until it ends. This is how
+    the editor re-joins a run that is paused (or still running) after a reload."""
+    _validate_wid(wid)
+    _require_workflow(rec.tenant_id, wid)
+    _validate_rid(rid)
+    if _read_json(_run_meta_path(rec.tenant_id, wid, rid)) is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "run not found")
+    graph = _graph_of_run(rec.tenant_id, wid, rid)
+    recorder = _make_run_recorder(rec.tenant_id, rec.sid_fingerprint, wid, rid, graph)
+    return StreamingResponse(
+        _dag_run.tail_events(recorder),
+        media_type="text/event-stream",
+        headers={"X-Run-Id": rid, "Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/workflows/{wid}/runs/{rid}/cancel")
+def cancel_run(
+    wid: str,
+    rid: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """Stop a run for good: a running one is told to stop before its next node, a paused one
+    is ended and its checkpoint removed (so it can no longer be answered)."""
+    _validate_wid(wid)
+    _require_workflow(rec.tenant_id, wid)
+    _validate_rid(rid)
+    meta = _read_json(_run_meta_path(rec.tenant_id, wid, rid))
+    if meta is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "run not found")
+    status = meta.get("status")
+    if status == "running":
+        _dag_run.request_cancel(rec.tenant_id, wid, rid)
+        outcome = "stopping"
+    elif status == "paused":
+        if _AWP_OK:
+            try:
+                _awp_checkpoint.delete(rid, tenant_id=rec.tenant_id)
+            except Exception:  # noqa: BLE001
+                _log.warning("cancel: checkpoint delete failed for %s/%s", wid, rid, exc_info=True)
+        recorder = _make_run_recorder(rec.tenant_id, rec.sid_fingerprint, wid, rid, [])
+        recorder.emit({"type": "run_completed", "ok": False, "error": "cancelled"})
+        recorder.update_meta(status="failed", ok=False, error="cancelled", finished_at=time.time(),
+                             awaiting=None)
+        outcome = "cancelled"
+    else:
+        raise HTTPException(http_status.HTTP_409_CONFLICT, f"run is already {status}")
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="workflow.run_cancelled",
+        target_kind="workflow_run",
+        target_id=f"{wid}/{rid}",
+    )
+    return {"ok": True, "status": outcome}
+
 
 def _spawn_refusal_in(result: Any) -> str | None:
     """WFB-R1-09: the refusal text of the first node the pre-spawn gate refused, else None.
@@ -3197,6 +3285,7 @@ def _make_run_recorder(
         write_meta=lambda m: _write_atomic(meta_p, m),
         node_types={str(n.get("id")): str(n.get("type", "agent")) for n in graph if isinstance(n, dict)},
         audit=_run_audit_sink(tenant_id, sid_fingerprint, wid, rid),
+        alive=meta_p.exists,
     )
 
 

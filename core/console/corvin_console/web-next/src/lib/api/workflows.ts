@@ -80,6 +80,13 @@ export interface RunMeta {
   finished_at: number | null;
   ok: boolean | null;
   error: string | null;
+  /** Set while status is "paused": the question the run is waiting on. */
+  awaiting?: {
+    node_id: string;
+    kind: "approval" | "ask_human";
+    message: string;
+    expires_at_ms: number | null;
+  } | null;
 }
 
 export interface RunDetailResponse {
@@ -88,7 +95,7 @@ export interface RunDetailResponse {
 }
 
 export interface WorkflowRunEvent {
-  type: "node_started" | "node_completed" | "node_failed" | "node_awaiting_approval" | "node_awaiting_reply" | "run_completed" | "run_paused" | "error" | "media" | "table";
+  type: "node_started" | "node_completed" | "node_failed" | "node_skipped" | "node_awaiting_approval" | "node_awaiting_reply" | "run_completed" | "run_paused" | "error" | "media" | "table";
   ts: number;
   node_id?: string;
   tokens?: number;
@@ -328,6 +335,17 @@ export async function uploadWorkflowAttachments(
 export async function deleteWorkflowAttachment(wid: string, id: string, csrf: string): Promise<{ ok: true }> {
   return api(`/workflows/${encodeURIComponent(wid)}/attachments/${encodeURIComponent(id)}`, {
     method: "DELETE",
+    csrf,
+  });
+}
+
+export async function cancelWorkflowRun(
+  wid: string,
+  rid: string,
+  csrf: string,
+): Promise<{ ok: true; status: "stopping" | "cancelled" }> {
+  return api(`/workflows/${encodeURIComponent(wid)}/runs/${encodeURIComponent(rid)}/cancel`, {
+    method: "POST",
     csrf,
   });
 }
