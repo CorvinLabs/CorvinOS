@@ -178,6 +178,11 @@ os.environ['CORVIN_FORCE_SCOPE'] = sys.argv[7]
 os.environ['CORVIN_CHANNEL_ID'] = sys.argv[3]
 sys.path.insert(0, sys.argv[4])  # skill-forge
 sys.path.insert(0, sys.argv[5])  # forge
+# The free tier allows 5 skill writes per UTC day (ADR-2095). This helper seeds
+# fixtures, not the licence gate: pin the tier to member, as the skill-forge
+# conftest does, so case E's seven fixtures are not refused by the quota.
+from corvin_operator.license import capability_api
+capability_api.active_tier = lambda **_k: 'member'
 from skill_forge.multi_registry import MultiSkillRegistry
 mr = MultiSkillRegistry(channel_id=sys.argv[3])
 payload = json.loads(sys.argv[6])
@@ -592,18 +597,20 @@ def case_hot_reload_per_message(failures: list[str]) -> None:
 
 
 def case_body_cap_truncates(failures: list[str]) -> None:
-    print("\n=== case H: oversized skill body is truncated to cap with marker ===")
+    print("\n=== case H: a body at the linter limit is injected whole; the cap truncates only beyond 16 KiB ===")
     sandbox = _make_sandbox("h")
     home = sandbox / "home"
     slot = sandbox / "slot"
     chat_key = "chat-H"
     cid = _resolve_chat_channel_id(chat_key)
-    # Build a body > 16 KiB (the cap, ADR-2274). Begin with MARKER-START, then filler,
+    # ADR-2274: the linter refuses bodies over 16 KiB and the injection cap is also
+    # 16 KiB, so a linter-accepted skill is injected whole. This body is just under
+    # the limit (~15.5 KiB) and must reach the prompt untruncated. Begin with MARKER-START, then filler,
     # then MARKER-AFTER-CAP at the very end (which must NOT survive truncation).
     body = (
         "# demo.bigbody\n\n"
         "MARKER-START — first 80 chars are visible regardless of cap.\n\n"
-        + ("repeat-block. " * 1400)       # ~ 19.6 KiB of filler
+        + ("repeat-block. " * 1100)       # ~ 15.4 KiB of filler
         + "\nMARKER-AFTER-CAP must not appear in the injected prompt.\n"
     )
     _create_skill(
@@ -629,19 +636,21 @@ def case_body_cap_truncates(failures: list[str]) -> None:
         sp = system_prompt_from_args(args)
         if "MARKER-START" not in sp:
             raise AssertionError(f"start-of-body missing; tail={sp[-400:]!r}")
-        if "MARKER-AFTER-CAP" in sp:
-            raise AssertionError(
-                "MARKER-AFTER-CAP leaked past the body cap — truncation broke"
-            )
-        if "truncated" not in sp:
-            raise AssertionError(
-                f"truncation marker missing; tail={sp[-400:]!r}"
-            )
+        if "MARKER-AFTER-CAP" not in sp:
+            raise AssertionError("a body under the 16 KiB cap was truncated (MARKER-AFTER-CAP missing)")
+        if "truncated" in sp:
+            raise AssertionError("truncation marker present for a body under the cap")
         if "</auto_skill>" not in sp:
-            raise AssertionError(
-                f"close-tag missing after truncation; tail={sp[-400:]!r}"
-            )
-        print("PASS: oversized body truncated cleanly with marker, wrapper closes")
+            raise AssertionError(f"close-tag missing; tail={sp[-400:]!r}")
+        print("PASS: body under the 16 KiB cap is injected whole, wrapper closes")
+        # The cap itself still works: a body beyond it is cut with the marker.
+        sys.path.insert(0, str(_BRIDGES_DIR))
+        import skill_inject as _si  # noqa: PLC0415
+        over = "x" * 20000 + " tail-marker"
+        capped = _si._cap_body(over)
+        if "tail-marker" in capped or "truncated to 16384 bytes" not in capped:
+            raise AssertionError("_cap_body does not cut a 20 KB body at 16 KiB with the marker")
+        print("PASS: _cap_body cuts a 20 KB body at 16 KiB with the marker")
     except AssertionError as ex:
         failures.append(f"case-H: {ex}")
         print(f"FAIL: case-H: {ex}")
