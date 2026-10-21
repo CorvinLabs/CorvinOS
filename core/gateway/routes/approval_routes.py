@@ -70,6 +70,26 @@ def _principal(request: Request) -> OperatorPrincipal:
     return get_current_user(request)
 
 
+def _require_principal_tenant(current_user: object, tenant_id: str) -> None:
+    """A principal may act only inside its own tenant.
+
+    The gateway's ``_jwt_guard`` compares a token's tenant with a ``{tid}``
+    PATH parameter only; these routes take the tenant as a QUERY parameter,
+    so until 2026-10-21 (round 2) a token issued for tenant ``acme`` could
+    approve, reject or revoke ``_default``'s records — the routes checked the
+    gate's tenant against the query, never the caller's. Unreachable while
+    the router was not mounted; live since the mount was repaired.
+    A principal without a tenant (the existing tests' plain mocks) is not
+    widened by this check — only a stated, different tenant is refused.
+    """
+    principal_tenant = getattr(current_user, "tenant_id", None)
+    if isinstance(principal_tenant, str) and principal_tenant and principal_tenant != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"reason": "tenant-mismatch", "tenant_id": tenant_id},
+        )
+
+
 approval_router = APIRouter(prefix="/v1/approvals", tags=["approvals"])
 
 
@@ -353,6 +373,7 @@ async def approve_request(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Tenant mismatch: {tenant_id} != {gate.tenant_id}",
         )
+    _require_principal_tenant(current_user, tenant_id)
 
     try:
         # Extract operator_id from JWT principal (fail-closed)
@@ -445,6 +466,7 @@ async def reject_request(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Tenant mismatch: {tenant_id} != {gate.tenant_id}",
         )
+    _require_principal_tenant(current_user, tenant_id)
 
     try:
         # Extract operator_id from JWT principal (fail-closed)
@@ -530,6 +552,7 @@ async def revoke_approval(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Tenant mismatch: {tenant_id} != {gate.tenant_id}",
         )
+    _require_principal_tenant(current_user, tenant_id)
 
     try:
         # Extract operator_id from JWT principal (fail-closed)

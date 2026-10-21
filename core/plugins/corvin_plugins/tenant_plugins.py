@@ -59,6 +59,11 @@ class TenantPluginRegistry:
     tenant_id: str = "_default"
     plugins: List[TenantPluginEntry] = field(default_factory=list)
     schema_version: str = "1.0"
+    # True after load_registry() found state.TenantRegistry's mapping schema in
+    # registry.yaml: this reader then has NO entries, and a save would replace
+    # the state registry's records (the default plugins among them) with an
+    # empty Phase 1d list. Every writer refuses while this is set.
+    foreign_schema: bool = field(default=False, repr=False)
 
     @property
     def plugins_dir(self) -> Path:
@@ -103,7 +108,9 @@ class TenantPluginRegistry:
                             "no Phase 1d entries", self.registry_path,
                         )
                         self.plugins = []
+                        self.foreign_schema = True
                         return
+                    self.foreign_schema = False
                     self.plugins = [TenantPluginEntry.from_dict(p) for p in entries]
                     self.schema_version = data.get("schema_version", "1.0")
             except Exception as exc:
@@ -112,8 +119,25 @@ class TenantPluginRegistry:
         else:
             self.plugins = []
 
+    def _refuse_if_foreign(self) -> None:
+        """Never overwrite state.TenantRegistry's file with the Phase 1d list.
+
+        Round 2 of the fresh-system review (2026-10-21): with the schema
+        mismatch now recognised silently at DEBUG, ``corvin plugin install``
+        (ops/launcher plugin_runtime_cmd) would load "no entries", append one
+        and save — replacing the state registry's records (Knowledge Graph,
+        CorvinTV) with a one-entry list. The CLI gets an error instead.
+        """
+        if self.foreign_schema:
+            raise RuntimeError(
+                f"{self.registry_path} is owned by the plugin state registry "
+                "(corvin_plugins.state.TenantRegistry); the Phase 1d registry "
+                "will not overwrite it — use the console's plugin install path"
+            )
+
     def save_registry(self) -> None:
         """Persist registry to disk."""
+        self._refuse_if_foreign()
         self._ensure_dirs()
         import yaml
 
@@ -142,6 +166,7 @@ class TenantPluginRegistry:
         Raises an error if the plugin is already installed.
         """
         self.load_registry()
+        self._refuse_if_foreign()  # before anything is copied into installed/
 
         # Check if already registered
         if any(p.plugin_id == plugin_id for p in self.plugins):

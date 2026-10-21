@@ -39,6 +39,7 @@ sys.path.insert(0, str(REPO / "corvin_operator" / "forge"))
 
 from forge.tenant_migrate import (  # noqa: E402
     DEFAULT_TENANT_ID,
+    _canonical_chain,
     migrate_to_default_tenant_if_needed,
 )
 
@@ -311,6 +312,26 @@ class AuditEventEmittedTests(_SandboxBase):
         lines = moved.read_text().strip().splitlines()
         self.assertEqual(json.loads(lines[-1])["event_type"], "tenant.path_migrated")
         self.assertTrue((self.home / "global").is_symlink())
+
+
+class CanonicalChainSsotTests(_SandboxBase):
+    def test_the_helpers_chain_is_the_resolvers_chain(self):
+        """``_canonical_chain(home)`` composes the tenant chain path by hand
+        because it is bound to the ``home`` it migrates, not to the process
+        env (CLAUDE.md: every chain path resolves through
+        ``tenant_audit_chain``). This pins the two to the same answer so a
+        later change to ``forge.paths`` cannot leave the migration record in
+        a sibling chain again (round 2, 2026-10-21)."""
+        from forge.paths import tenant_audit_chain
+        saved = os.environ.get("CORVIN_HOME")
+        os.environ["CORVIN_HOME"] = str(self.home)
+        try:
+            self.assertEqual(_canonical_chain(self.home), tenant_audit_chain(DEFAULT_TENANT_ID))
+        finally:
+            if saved is None:
+                os.environ.pop("CORVIN_HOME", None)
+            else:
+                os.environ["CORVIN_HOME"] = saved
 
 
 if __name__ == "__main__":

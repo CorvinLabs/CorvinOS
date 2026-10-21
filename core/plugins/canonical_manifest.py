@@ -104,6 +104,9 @@ class CanonicalManifestManager:
                 )
                 return self.current_manifest
 
+            # Present: forget the absence so a later disappearance is reported
+            # at INFO again instead of staying DEBUG for the process lifetime.
+            _ABSENCE_REPORTED.discard(self.manifest_url)
             with open(self.manifest_url, "r") as f:
                 manifest_dict = json.load(f)
 

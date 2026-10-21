@@ -317,7 +317,7 @@ Anyone with your user account or root can read it. An encrypted per-tenant store
 
 Audit chains: `corvinos audit verify` checks the canonical chain (exit 1 if broken);
 `corvinos audit verify --path <file>` checks any other `audit.jsonl`, e.g. a tenant's
-`~/.corvin/tenants/<tenant>/global/forge/audit.jsonl`.
+`<checkout>/.corvin/tenants/<tenant>/global/forge/audit.jsonl`.
 
 ```
 
@@ -341,7 +341,7 @@ Audit chains: `corvinos audit verify` checks the canonical chain (exit 1 if brok
 
 **Option 2: Manual**
 ```bash
-vim ~/.corvin/bridges/discord/settings.json
+vim <checkout>/.corvin/bridges/discord/settings.json
 ```
 
 Example `settings.json`:
@@ -461,7 +461,7 @@ Or use nvm (Linux/macOS): `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm
 
 ```bash
 corvinos audit verify                                                    # canonical chain
-corvinos audit verify --path ~/.corvin/tenants/_default/global/forge/audit.jsonl   # a tenant chain
+corvinos audit verify --path <checkout>/.corvin/tenants/_default/global/forge/audit.jsonl   # a tenant chain
 corvinos audit health                                                    # chain ok + record count
 ```
 
@@ -486,7 +486,7 @@ Useful after pulling source changes that include frontend updates, or when the c
 ## Uninstalling
 
 ```bash
-corvin-uninstall   # removes services; prompts whether to keep ~/.corvin/ data
+corvin-uninstall   # removes services; prompts whether to keep <checkout>/.corvin/ data
 ```
 
 To reinstall later with existing data, run the installer from your checkout again:
@@ -506,17 +506,17 @@ corvin-install
 # Additional tenant
 export CORVIN_TENANT_ID=production
 corvin-install
-# Creates: ~/.corvin/tenants/production/
+# Creates: <checkout>/.corvin/tenants/production/
 ```
 
 ---
 
 ## Next Steps
 
-1. **Configure bridges** → Settings → Bridges in the web console, or edit `~/.corvin/bridges/<bridge>/settings.json`
+1. **Configure bridges** → Settings → Bridges in the web console, or edit `<checkout>/.corvin/bridges/<bridge>/settings.json`
 2. **Test connections** → send a test message to each bridge
 3. **Check logs** → `journalctl --user -u corvin-adapter -f` (Linux) or the console Logs page
-4. **Backup** → back up `~/.corvin/` and `~/.config/corvin-voice/` periodically
+4. **Backup** → back up `<checkout>/.corvin/` (`%USERPROFILE%\.corvin\` on Windows) and `~/.config/corvin-voice/` periodically
 5. **Updates** → `sh update.sh` (Windows: `update.ps1`) from your checkout; see [UPGRADE_GUIDE.md](UPGRADE_GUIDE.md)
 
 ---

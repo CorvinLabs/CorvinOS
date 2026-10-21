@@ -457,3 +457,48 @@ def test_the_gateway_mounts_the_approval_routes():
         corvin_home=os.environ.get("CORVIN_HOME"),
     )
     approval_routes.set_approval_gate(gate)
+
+
+# ============================================================================
+# Round 2 (2026-10-21): a principal acts only inside its own tenant. The
+# gateway guard compares a token's tenant with a {tid} PATH parameter; these
+# routes take the tenant as a QUERY parameter, so a token for "acme" could
+# approve/reject/revoke "_default"'s records once the router was mounted.
+# ============================================================================
+
+class TestPrincipalTenantIsolation:
+    def _client(self, mock_approval_gate, principal):
+        from fastapi import FastAPI, Request
+
+        from core.gateway.routes.approval_routes import approval_router
+        app = FastAPI()
+
+        @app.middleware("http")
+        async def _state(request: Request, call_next):
+            request.state.principal = principal
+            return await call_next(request)
+
+        app.include_router(approval_router)
+        set_approval_gate(mock_approval_gate)
+        return TestClient(app)
+
+    @pytest.mark.parametrize("action", ["approve", "reject", "revoke"])
+    def test_a_token_of_another_tenant_cannot_act_on_default(self, mock_approval_gate, action):
+        from corvin_gateway.auth import ResolvedToken
+        client = self._client(mock_approval_gate, ResolvedToken(tenant_id="acme", label="alice", fingerprint="ab12"))
+        r = client.post(f"/v1/approvals/skill-1/approval-1/{action}?tenant_id=_default",
+                        json={"reason": "approved"})
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["reason"] == "tenant-mismatch"
+        mock_approval_gate.operator_approve.assert_not_called()
+        mock_approval_gate.operator_reject.assert_not_called()
+        mock_approval_gate.operator_revoke.assert_not_called()
+
+    def test_the_local_operator_and_a_default_token_still_act(self, mock_approval_gate):
+        from corvin_gateway.auth import ResolvedToken
+        for principal in (None, ResolvedToken(tenant_id="_default", label="alice", fingerprint="ab12")):
+            client = self._client(mock_approval_gate, principal)
+            r = client.post("/v1/approvals/skill-1/approval-1/approve?tenant_id=_default",
+                            json={"reason": "approved"})
+            assert r.status_code == 200, r.text
+            assert r.json()["success"] is True

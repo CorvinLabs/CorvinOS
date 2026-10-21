@@ -79,3 +79,55 @@ def test_an_absent_manifest_is_reported_once_per_path(tmp_path, caplog):
     assert all(r.levelno == logging.DEBUG for r in found[1:])
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert Path(missing).exists() is False
+
+
+# ── Round 2 (2026-10-21): the quiet reader must not become a silent writer ──
+
+def test_the_list_schema_reader_never_overwrites_the_state_registry(home, tmp_path):
+    """``corvin plugin install`` (ops/launcher plugin_runtime_cmd) loads the
+    Phase 1d registry, appends an entry and saves. With the state schema now
+    recognised at DEBUG, that save would replace state.TenantRegistry's
+    records (the default plugins) with a one-entry list. It must refuse, and
+    the file must stay byte-identical."""
+    from corvin_plugins.tenant_plugins import TenantPluginRegistry
+
+    reg_file = home / "tenants" / "_default" / "plugins" / "registry.yaml"
+    original = (
+        "spec:\n  schema_version: '1.0'\n"
+        "plugins:\n  corvin_knowledge:\n    plugin_id: corvin_knowledge\n    version: 1.2.0\n"
+    )
+    reg_file.write_text(original, encoding="utf-8")
+    src = tmp_path / "plug"
+    src.mkdir()
+    (src / "plugin.json").write_text("{}", encoding="utf-8")
+
+    reg = TenantPluginRegistry(tenant_id="_default")
+    reg.load_registry()
+    assert reg.foreign_schema is True
+    with pytest.raises(RuntimeError, match="state registry"):
+        reg.register_plugin("evil", src, {"version": "0.1.0"})
+    with pytest.raises(RuntimeError):
+        reg.save_registry()
+    assert reg_file.read_text(encoding="utf-8") == original
+    assert not (home / "tenants" / "_default" / "plugins" / "installed" / "evil").exists()
+
+    # A Phase 1d file is still writable.
+    reg_file.write_text("schema_version: '1.0'\nplugins: []\n", encoding="utf-8")
+    reg.load_registry()
+    assert reg.foreign_schema is False
+    reg.save_registry()
+
+
+def test_a_manifest_that_appears_and_vanishes_is_reported_again(tmp_path, caplog):
+    from core.plugins import canonical_manifest as cm
+
+    path = tmp_path / "canonical_manifest.json"
+    cm._ABSENCE_REPORTED.discard(str(path))
+    with caplog.at_level(logging.DEBUG):
+        cm.CanonicalManifestManager(manifest_url=str(path)).load_manifest()      # INFO
+        path.write_text('{"plugins": [], "timestamp": "t"}', encoding="utf-8")
+        cm.CanonicalManifestManager(manifest_url=str(path)).load_manifest()      # present
+        path.unlink()
+        cm.CanonicalManifestManager(manifest_url=str(path)).load_manifest()      # INFO again
+    found = [r.levelno for r in caplog.records if "Manifest not found" in r.getMessage()]
+    assert found == [logging.INFO, logging.INFO], found

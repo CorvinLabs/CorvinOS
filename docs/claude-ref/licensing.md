@@ -200,8 +200,10 @@ else:
 ### Class N Quotas (Network-Verified)
 
 For `a2a.network` (peers_max):
-- Free: 1 peer (hardcoded, not counter-based)
-- Member: unlimited
+- Free: NOT on the network at all — `require_a2a_network` denies pairing, pings and every exchange
+  (402 `license_limit` / `a2a.network` / `member_seat_required` in the console since 2026-10-21;
+  the old "1 peer" allowance is gone with gate 28ad07b54)
+- Member: `a2a_peers_max` applies (a pairing the peer ended holds no seat)
 - Enforcement: MC carries no peer quota; existence of valid MC = unlimited
 
 For `marketplace.publish`:
